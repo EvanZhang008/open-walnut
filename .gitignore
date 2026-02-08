@@ -1,0 +1,38 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+coverage/
+*.png
+.playwright-mcp/
+
+# Auto Claude data directory
+.auto-claude/
+
+# Auto Claude generated files
+.auto-claude-security.json
+.auto-claude-status
+.claude_settings.json
+.worktrees/
+.security-key
+logs/security/
+
+# Test artifacts
+test-results/
+
+# Build symlink (created by test-server for Playwright)
+src/web/static
+
+# Task planning artifacts
+.tasks/
+
+# Claude local data (keep skills and commands)
+.claude/*
+!.claude/skills/
+!.claude/commands/
+
+# Generated snapshots
+todo-snapshot.md
+
+# Playwright report artifacts
+playwright-report/
