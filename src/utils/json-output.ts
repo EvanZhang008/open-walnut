@@ -1,0 +1,6 @@
+/**
+ * Output structured JSON to stdout. Used by --json mode.
+ */
+export function outputJson(data: unknown): void {
+  console.log(JSON.stringify(data, null, 2));
+}
