@@ -1,0 +1,10 @@
+{
+  "id": "local",
+  "name": "Local",
+  "description": "Local-only tasks — no external sync",
+  "version": "1.0.0",
+  "configSchema": {
+    "type": "object",
+    "properties": {}
+  }
+}
