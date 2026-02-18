@@ -1,0 +1,17 @@
+{
+  "id": "ms-todo",
+  "name": "Microsoft To-Do",
+  "description": "Two-way sync with Microsoft To-Do",
+  "version": "1.0.0",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "client_id": { "type": "string" },
+      "list_mapping": { "type": "object" }
+    },
+    "required": ["client_id"]
+  },
+  "uiHints": {
+    "client_id": { "label": "Client ID", "help": "Azure AD application client ID" }
+  }
+}
