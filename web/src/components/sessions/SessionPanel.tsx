@@ -1,0 +1,420 @@
+import { useState, useEffect, useCallback, useRef, Component, type ReactNode, type ErrorInfo } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { SessionChatHistory } from './SessionChatHistory';
+import { SessionNotes } from './SessionNotes';
+import { UserMessagesSummary } from './UserMessagesSummary';
+import { PlanPreviewSection } from './PlanPreviewSection';
+import { ChatInput } from '@/components/chat/ChatInput';
+import { useSessionSend } from '@/hooks/useSessionSend';
+import { useSessionStream } from '@/hooks/useSessionStream';
+import { useSlashCommands } from '@/hooks/useSlashCommands';
+import { useSessionHistory } from '@/hooks/useSessionHistory';
+import type { ImageAttachment } from '@/api/chat';
+import { useEvent } from '@/hooks/useWebSocket';
+import { fetchSession, executePlanContinue, executePlanSession } from '@/api/sessions';
+import { fetchTask } from '@/api/tasks';
+import { timeAgo } from '@/utils/time';
+import { WorkStatusPicker } from './WorkStatusPicker';
+import { SessionCopyButtons } from './SessionCopyButtons';
+import { ModelPicker } from './ModelPicker';
+import { wsClient } from '@/api/ws';
+import type { SessionRecord } from '@/types/session';
+
+interface SessionPanelErrorBoundaryProps {
+  sessionId: string;
+  onClose: () => void;
+  children: ReactNode;
+}
+
+interface SessionPanelErrorBoundaryState {
+  hasError: boolean;
+}
+
+class SessionPanelErrorBoundary extends Component<SessionPanelErrorBoundaryProps, SessionPanelErrorBoundaryState> {
+  constructor(props: SessionPanelErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(): SessionPanelErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('SessionPanel crashed:', error, info.componentStack);
+  }
+
+  componentDidUpdate(prevProps: SessionPanelErrorBoundaryProps) {
+    if (this.state.hasError && prevProps.sessionId !== this.props.sessionId) {
+      this.setState({ hasError: false });
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="session-panel" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '12px', padding: '24px' }}>
+          <p style={{ color: 'var(--fg-muted)', margin: 0 }}>Something went wrong loading this session.</p>
+          <button
+            className="btn btn-sm btn-primary"
+            onClick={() => {
+              sessionStorage.removeItem('walnut-home-session-panel');
+              this.props.onClose();
+            }}
+          >
+            Close panel
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+interface SessionPanelProps {
+  sessionId: string;
+  onClose: () => void;
+  onTaskClick?: (taskId: string) => void;
+  onSessionClick?: (sessionId: string) => void;
+  /** Called when "Clear Context & Execute" creates a new session — parent should switch to it. */
+  onSessionReplaced?: (newSessionId: string) => void;
+}
+
+export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, onSessionReplaced }: SessionPanelProps) {
+  const navigate = useNavigate();
+  const [session, setSession] = useState<SessionRecord | null>(null);
+  const [loading, setLoading] = useState(true);
+  const { optimisticMsgs, sendError, send, interruptSend, handleMessagesDelivered, handleBatchCompleted, handleEditQueued, handleDeleteQueued, addExternalQueued, clearCommitted } = useSessionSend(sessionId);
+  const { isStreaming } = useSessionStream(sessionId);
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  // Slash command autocomplete for session input
+  const { items: slashCommands, search: searchSlashCommands } = useSlashCommands(session?.cwd);
+
+  // Model picker state
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+
+  const handleControlCommand = useCallback((command: string) => {
+    if (command === 'model') {
+      setModelPickerOpen(true);
+    }
+  }, []);
+
+  const handleModelSwitch = useCallback((model: string, immediate: boolean) => {
+    setModelPickerOpen(false);
+    // Send RPC with model switch (empty message is fine -- backend handles it via pendingModel)
+    wsClient.sendRpc('session:send', {
+      sessionId,
+      message: '',
+      model,
+      interrupt: immediate || undefined,
+    }).catch((err) => {
+      console.error('Model switch failed:', err);
+    });
+  }, [sessionId]);
+
+  // Fetch messages for the UserMessagesSummary
+  const { messages: historyMessages, loading: historyLoading } = useSessionHistory(sessionId);
+
+  // Scroll-to-message handler for UserMessagesSummary
+  const handleMessageClick = useCallback((messageIndex: number) => {
+    const container = bodyRef.current?.querySelector('.session-history');
+    if (!container) return;
+    const target = container.querySelector(`[data-msg-index="${messageIndex}"]`);
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      target.classList.add('user-messages-highlight');
+      setTimeout(() => target.classList.remove('user-messages-highlight'), 1500);
+    }
+  }, []);
+
+  // Task title for the breadcrumb link
+  const [taskTitle, setTaskTitle] = useState<string | null>(null);
+
+  // Fetch session metadata
+  useEffect(() => {
+    let cancelled = false;
+    setSession(null);
+    setLoading(true);
+    setTaskTitle(null);
+    fetchSession(sessionId).then((s) => {
+      if (!cancelled) {
+        setSession(s);
+        setLoading(false);
+        // Fetch associated task title
+        if (s?.taskId) {
+          fetchTask(s.taskId).then((t) => {
+            if (!cancelled) setTaskTitle(t.title);
+          }).catch(() => {});
+        }
+      }
+    }).catch(() => {
+      if (!cancelled) setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [sessionId]);
+
+  // Merge event data directly on status changes (avoids stale DB reads)
+  useEvent('session:status-changed', (data) => {
+    const d = data as { sessionId?: string; process_status?: string; work_status?: string; activity?: string; mode?: string; planCompleted?: boolean };
+    if (d.sessionId === sessionId) {
+      setSession(prev => prev ? {
+        ...prev,
+        process_status: (d.process_status ?? prev.process_status) as SessionRecord['process_status'],
+        work_status: (d.work_status ?? prev.work_status) as SessionRecord['work_status'],
+        activity: d.activity ?? prev.activity,
+        mode: (d.mode ?? prev.mode) as SessionRecord['mode'],
+        ...(d.planCompleted ? { planCompleted: true } : {}),
+        lastActiveAt: new Date().toISOString(),
+      } : prev);
+    }
+  });
+
+  useEvent('session:result', (data) => {
+    const d = data as { sessionId?: string };
+    if (d.sessionId === sessionId) {
+      fetchSession(sessionId).then((s) => { if (s) setSession(s); }).catch(() => {});
+    }
+  });
+
+  useEvent('session:error', (data) => {
+    const d = data as { sessionId?: string };
+    if (d.sessionId === sessionId) {
+      fetchSession(sessionId).then((s) => { if (s) setSession(s); }).catch(() => {});
+    }
+  });
+
+  // Execute plan buttons state
+  const [executing, setExecuting] = useState(false);
+  const [executeError, setExecuteError] = useState<string | null>(null);
+  const [executeStarted, setExecuteStarted] = useState(false);
+
+  // Reset execute state when session changes
+  useEffect(() => {
+    setExecuting(false);
+    setExecuteError(null);
+    setExecuteStarted(false);
+  }, [sessionId]);
+
+  const showExecuteButtons =
+    session?.planCompleted === true
+    && session?.work_status !== 'error'
+    && !executeStarted;
+
+  const handleExecuteContinue = useCallback(async () => {
+    setExecuting(true);
+    setExecuteError(null);
+    try {
+      await executePlanContinue(sessionId);
+      setExecuteStarted(true);
+    } catch (err) {
+      setExecuteError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setExecuting(false);
+    }
+  }, [sessionId]);
+
+  const handleClearContextExecute = useCallback(async () => {
+    setExecuting(true);
+    setExecuteError(null);
+    try {
+      const result = await executePlanSession(sessionId);
+      setExecuteStarted(true);
+      if (result.sessionId) {
+        onSessionReplaced?.(result.sessionId);
+      }
+    } catch (err) {
+      setExecuteError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setExecuting(false);
+    }
+  }, [sessionId, onSessionReplaced]);
+
+  const handleSend = useCallback((message: string, images?: ImageAttachment[]) => {
+    send(sessionId, message, images);
+  }, [sessionId, send]);
+
+  const handleInterruptSend = useCallback((message: string, images?: ImageAttachment[]) => {
+    interruptSend(sessionId, message, images);
+  }, [sessionId, interruptSend]);
+
+  const handleEdit = useCallback((queueId: string, newText: string) => {
+    handleEditQueued(sessionId, queueId, newText);
+  }, [sessionId, handleEditQueued]);
+
+  const handleDelete = useCallback((queueId: string) => {
+    handleDeleteQueued(sessionId, queueId);
+  }, [sessionId, handleDeleteQueued]);
+
+  const ps = session?.process_status;
+  const ws = session?.work_status;
+
+  // Header content
+  const title = session?.title || session?.description || session?.slug || null;
+  const sessionsPageUrl = `/sessions?id=${sessionId}`;
+
+  return (
+    <SessionPanelErrorBoundary sessionId={sessionId} onClose={onClose}>
+      <div className="session-panel">
+        <div className="session-panel-header">
+          <div className="session-panel-header-top">
+            <div className="session-panel-title-area">
+              {title
+                ? <span className="session-panel-title" title={title}>{title}</span>
+                : <span className="session-panel-title text-muted">Untitled session</span>
+              }
+              {!loading && session?.provider === 'embedded' && (
+                <span
+                  className="session-panel-badge"
+                  style={{
+                    color: 'var(--accent)',
+                    background: 'color-mix(in srgb, var(--accent) 10%, transparent)',
+                    fontSize: '10px',
+                    fontWeight: 600,
+                  }}
+                >
+                  🤖 Embedded
+                </span>
+              )}
+              {!loading && ps && ws && (
+                <WorkStatusPicker
+                  sessionId={sessionId}
+                  processStatus={ps}
+                  workStatus={ws}
+                  size="sm"
+                />
+              )}
+              {loading && <span className="session-panel-badge" style={{ color: 'var(--fg-muted)' }}>Loading...</span>}
+            </div>
+            <button className="session-panel-close" onClick={onClose} title="Close session panel">&times;</button>
+          </div>
+          {session?.taskId && (
+            <div
+              className="session-panel-task-link"
+              role="button"
+              tabIndex={0}
+              onClick={() => onTaskClick?.(session.taskId!)}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onTaskClick?.(session.taskId!); }}
+              title={taskTitle ? `Go to task: ${taskTitle}` : `Go to task ${session.taskId}`}
+            >
+              <span className="session-panel-task-icon">&#x1F4CB;</span>
+              <span className="session-panel-task-title">{taskTitle || session.taskId}</span>
+              <span className="session-panel-task-arrow">&#x2197;</span>
+            </div>
+          )}
+          <div className="session-panel-meta">
+            <span
+              className="session-panel-id session-panel-id-link"
+              role="button"
+              tabIndex={0}
+              onClick={() => navigate(sessionsPageUrl)}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate(sessionsPageUrl); }}
+              title={`Open in Sessions page\n${sessionId}`}
+            >
+              {sessionId} &#x2197;
+            </span>
+            <SessionCopyButtons sessionId={sessionId} />
+            {session?.host && (
+              <span
+                className="session-panel-host"
+                style={{
+                  background: 'var(--bg-tertiary)',
+                  color: 'var(--fg-muted)',
+                  padding: '1px 5px',
+                  borderRadius: '4px',
+                  fontSize: '10px',
+                  fontWeight: 600,
+                }}
+                title={session.hostname || session.host}
+              >
+                SSH: {session.host}
+              </span>
+            )}
+            {session?.project && <span className="session-panel-project" title={session.cwd || session.project}>{session.project}</span>}
+            {session?.lastActiveAt && <span className="session-panel-time">{timeAgo(session.lastActiveAt)}</span>}
+          </div>
+        </div>
+
+        {showExecuteButtons && (
+          <div style={{ padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <button
+              className="execute-plan-btn"
+              onClick={handleExecuteContinue}
+              disabled={executing}
+              style={{ padding: '5px 12px', fontSize: '12px', borderRadius: '6px' }}
+            >
+              {executing ? 'Starting\u2026' : '\u25B6 Execute'}
+            </button>
+            <button
+              className="execute-plan-btn-secondary"
+              onClick={handleClearContextExecute}
+              disabled={executing}
+              style={{ padding: '4px 10px', fontSize: '11px', borderRadius: '6px' }}
+            >
+              Clear Context & Execute
+            </button>
+            {executeError && (
+              <span className="text-xs" style={{ color: 'var(--error)' }}>{executeError}</span>
+            )}
+          </div>
+        )}
+        {executeStarted && (
+          <p className="text-xs text-muted" style={{ padding: '4px 12px', margin: 0 }}>
+            Execution started.
+          </p>
+        )}
+        {session && <PlanPreviewSection session={session} />}
+        <UserMessagesSummary
+          messages={historyMessages}
+          loading={historyLoading}
+          onMessageClick={handleMessageClick}
+        />
+        <SessionNotes
+          sessionId={sessionId}
+          initialNote={session?.human_note}
+        />
+        <div className="session-panel-body" ref={bodyRef}>
+          <SessionChatHistory
+            key={sessionId}
+            sessionId={sessionId}
+            workStatus={session?.work_status}
+            optimisticMessages={optimisticMsgs}
+            onMessagesDelivered={handleMessagesDelivered}
+            onBatchCompleted={handleBatchCompleted}
+            onEditQueued={handleEdit}
+            onDeleteQueued={handleDelete}
+            onAgentQueued={addExternalQueued}
+            onClearCommitted={clearCommitted}
+            onTaskClick={onTaskClick}
+            onSessionClick={onSessionClick}
+          />
+        </div>
+
+        <div className="session-panel-input">
+          {sendError && (
+            <div className="text-xs" style={{ color: 'var(--error)', padding: '4px 12px' }}>
+              {sendError}
+            </div>
+          )}
+          <ChatInput
+            onSend={handleSend}
+            onInterruptSend={handleInterruptSend}
+            isStreaming={isStreaming}
+            placeholder="Send a message to this session... (/ for commands)"
+            showCommands={false}
+            sessionCommands={slashCommands}
+            searchSessionCommands={searchSlashCommands}
+            onControlCommand={handleControlCommand}
+          />
+          {modelPickerOpen && (
+            <ModelPicker
+              currentModel="opus"
+              onSwitch={handleModelSwitch}
+              onClose={() => setModelPickerOpen(false)}
+            />
+          )}
+        </div>
+      </div>
+    </SessionPanelErrorBoundary>
+  );
+}
