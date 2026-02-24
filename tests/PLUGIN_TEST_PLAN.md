@@ -509,23 +509,14 @@ These hit real external APIs. Gated by `isLiveTest()` and credential checks. Exp
 **G1.2: migration roundtrip: legacy ms_todo_id -> ext['ms-todo']**
 - Create a task with legacy fields. Run migration. Verify ext structure. Push to MS To-Do. Verify sync works with new ext format.
 
-### G2. Plugin-A Live Lifecycle (`tests/integrations/plugin-a-plugin.live.test.ts`)
+### G2. Additional Plugin Live Lifecycle
 
-**Gate**: `describe.skipIf(!isLiveTest() || !hasPluginCredentials())`
+**Gate**: `describe.skipIf(!isLiveTest() || !hasPluginCredentials('plugin-name'))`
 
-Add a `hasPluginCredentials()` helper to `tests/helpers/live.ts` that checks for plugin-a env vars.
+Use the generic `hasPluginCredentials(name)` helper from `tests/helpers/live.ts` to gate plugin-specific live tests.
 
 **G2.1: full lifecycle: create -> update -> phase change -> syncPoll**
-- Same pattern as G1.1 but for plugin-a.
-
-### G3. Plugin-B Live Lifecycle (`tests/integrations/plugin-b-plugin.live.test.ts`)
-
-**Gate**: `describe.skipIf(!isLiveTest() || !hasPluginCredentials())`
-
-Add a `hasPluginCredentials()` helper.
-
-**G3.1: full lifecycle: create -> update -> phase change -> syncPoll**
-- Same pattern as G1.1 but for plugin-b.
+- Same pattern as G1.1 but for the target plugin.
 
 ---
 

@@ -117,7 +117,7 @@ The session input sends messages **directly to the Claude Code CLI process** —
 ## Common Actions
 
 ### Create a Task + Session
-Talk to the main agent: `"Create task 'My Task' in Personal/Walnut, start a bypass session with prompt 'Just say HI'"`
+Talk to the main agent: `"Create task 'My Task' in Projects/Walnut, start a bypass session with prompt 'Just say HI'"`
 
 Session modes: **bypass** (execute immediately), **plan** (investigate → write plan → ExitPlanMode)
 

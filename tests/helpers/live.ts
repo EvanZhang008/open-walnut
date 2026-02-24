@@ -57,25 +57,13 @@ function readConfigSync(): Record<string, unknown> | null {
 }
 
 /**
- * Returns true when plugin-a credentials are available.
- * Checks config.yaml for plugins.plugin-a.base_url and plugins.plugin-a.auth.token.
+ * Returns true when a named plugin has credentials configured.
+ * Checks config.yaml for plugins.<name> with at least one key present.
  */
-export function hasPluginCredentials(): boolean {
+export function hasPluginCredentials(name: string): boolean {
   const config = readConfigSync();
   if (!config) return false;
   const plugins = config.plugins as Record<string, unknown> | undefined;
-  const pluginA = plugins?.['plugin-a'] as Record<string, unknown> | undefined;
-  return !!(pluginA?.base_url && (pluginA?.auth as Record<string, unknown>)?.token);
-}
-
-/**
- * Returns true when plugin-b credentials are available.
- * Checks config.yaml for plugins.plugin-b with cookie-based auth — checks if config has room_id.
- */
-export function hasPluginCredentials(): boolean {
-  const config = readConfigSync();
-  if (!config) return false;
-  const plugins = config.plugins as Record<string, unknown> | undefined;
-  const pluginB = plugins?.['plugin-b'] as Record<string, unknown> | undefined;
-  return !!pluginB?.room_id;
+  const plugin = plugins?.[name] as Record<string, unknown> | undefined;
+  return !!plugin && Object.keys(plugin).length > 0;
 }

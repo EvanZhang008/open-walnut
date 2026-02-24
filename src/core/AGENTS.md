@@ -43,7 +43,7 @@ Tasks can declare dependencies on other tasks via `task.depends_on: string[]` (a
 
 **Sync**: `autoPushIfConfigured()` calls `sync.updateDependencies(task, task.depends_on ?? [])` after the parallel field batch. Each plugin decides how to represent dependencies on its platform:
 - **MS To-Do**: `DependsOn: id1,id2` header in comment body (informational only, roundtripped via `composeMsTodoBody()`/`parseMsTodoBody()`).
-- **External plugin**: Dual sync — comment `DependsOn:` header (backward compat) + native Relationships API (`addRelationships`/`removeRelationships` with `reason: IsBlockedBy`). The `syncPluginRelationships()` function in the plugin computes a delta against `ext.plugin.relationships` (previous state) and pushes add/remove to the API. On pull, `deltaPull` resolves relationship URIs back to local task IDs.
+- **Other plugins**: Can implement native dependency APIs if the platform supports them. The plugin computes a delta against previous state and pushes add/remove operations.
 
 Store version: v4 (`migrateToV4DependsOn`). The `depends_on` field is optional.
 

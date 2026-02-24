@@ -8,6 +8,8 @@
   },
   "main": "./dist/cli.js",
   "scripts": {
+    "postinstall": "cd web && npm install",
+    "start": "npm run web:build && node dist/cli.js web --port 3456",
     "build": "tsup && cp -r src/data dist/",
     "dev": "tsup --watch",
     "test": "node scripts/test-parallel.mjs",

@@ -7,7 +7,7 @@ requires:
 
 # /verify — Walnut End-to-End Verification
 
-**FIRST ACTION**: Read `walnut-console-ops` skill (`.claude/skills/walnut-console-ops/SKILL.md`) for the UI layout and interaction patterns. Every verification session needs this context.
+**FIRST ACTION**: Read `walnut-console-ops` skill (`.claude/skills/walnut-console-ops/SKILL.md` relative to project root) for the UI layout and interaction patterns. Every verification session needs this context.
 
 ## The Core Problem This Skill Solves
 
@@ -187,7 +187,7 @@ Use Playwright MCP tools for pure frontend verification:
    ```
 
 2. **Talk to the main agent via console chat** — use the main chat input (placeholder: "Type a message...") to ask the agent to exercise the feature. Be explicit about what you want:
-   > "Create a task 'Verify SCP Transfer' in Personal/Walnut. Start a bypass session on remote-host. In the session prompt, include a reference to the image ~/.walnut/images/verify-test.png and ask the session to confirm what path it sees for that file."
+   > "Create a task 'Verify SCP Transfer' in Projects/Walnut. Start a bypass session on remote-host. In the session prompt, include a reference to the image ~/.walnut/images/verify-test.png and ask the session to confirm what path it sees for that file."
 
 3. **Wait for the agent to respond** — the agent will create the task, start the session, and reply with a session link. Screenshot the response.
 

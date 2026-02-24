@@ -5,7 +5,7 @@
  * git operations through a serial queue to prevent index.lock conflicts.
  *
  * This replaces ad-hoc git commands in hooks (on-stop, on-compact) and the
- * server's gitPullMybot() on session events.
+ * server's gitPullWalnut() on session events.
  */
 
 import { execFile } from 'node:child_process';

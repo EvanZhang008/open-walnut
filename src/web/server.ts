@@ -6,6 +6,7 @@
  */
 
 import { createServer, type Server as HttpServer } from 'node:http'
+import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import express from 'express'
@@ -45,7 +46,7 @@ import { getTask, listTasks } from '../core/task-manager.js'
 import { log } from '../logging/index.js'
 import { usageTracker } from '../core/usage/index.js'
 import * as chatHistory from '../core/chat-history.js'
-import { gitPullMybot } from '../integrations/git-sync.js'
+import { gitPullWalnut } from '../integrations/git-sync.js'
 import { registry } from '../core/integration-registry.js'
 import { loadPlugins, migrateConfigToPlugins, runPluginMigrations } from '../core/integration-loader.js'
 import type { SyncPollContext } from '../core/integration-types.js'
@@ -355,10 +356,22 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
   // -- Static files (production only) --
   if (!dev) {
-    // Use import.meta.url so the path resolves correctly regardless of cwd.
-    // Compiled server lives at dist/web/server.js → static dir is dist/web/static/
-    const __serverDir = path.dirname(fileURLToPath(import.meta.url))
-    const staticDir = path.join(__serverDir, 'static')
+    // Resolve static dir by walking up from the current file.
+    // tsup inlines this into both dist/web/server.js and dist/cli.js,
+    // so import.meta.url varies per bundle — walk up to find dist/web/static/.
+    const staticDir = (() => {
+      let dir = path.dirname(fileURLToPath(import.meta.url))
+      for (let i = 0; i < 5; i++) {
+        const candidate = path.join(dir, 'web', 'static', 'index.html')
+        try { if (fs.statSync(candidate).isFile()) return path.join(dir, 'web', 'static') } catch {}
+        // Also check if we're already in dist/web/
+        const direct = path.join(dir, 'static', 'index.html')
+        try { if (fs.statSync(direct).isFile()) return path.join(dir, 'static') } catch {}
+        dir = path.dirname(dir)
+      }
+      // Fallback: assume dist/web/static relative to cwd
+      return path.join(process.cwd(), 'dist', 'web', 'static')
+    })()
     app.use(express.static(staticDir))
     // SPA fallback: serve index.html for non-API routes
     app.use((req, res, next) => {
@@ -380,7 +393,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   registerSessionChatRpc()
 
   // -- Pull latest data from git (remote hooks may have pushed new data) --
-  await gitPullMybot()
+  await gitPullWalnut()
 
   // -- Prewarm task store: force load + migration before accepting requests --
   // Without this, early HTTP requests can hit an uninitialized store and return [].
@@ -670,7 +683,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
       // Git pull: fetch data pushed by remote hooks (best-effort)
       try {
-        await gitPullMybot()
+        await gitPullWalnut()
         log.web.info('git pull completed for session result')
       } catch (err) {
         log.web.warn('git pull failed after session result', { error: String(err) })
@@ -780,7 +793,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     if (event.name === 'session:error') {
       // Git pull: fetch data pushed by remote hooks (best-effort)
       try {
-        await gitPullMybot()
+        await gitPullWalnut()
         log.web.info('git pull completed for session error')
       } catch (err) {
         log.web.warn('git pull failed after session error', { error: String(err) })

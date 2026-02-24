@@ -12,7 +12,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { listAvailableSkills } from '../../core/skill-loader.js'
-import { listCommands as listMybotCommands } from '../../core/command-store.js'
+import { listCommands as listWalnutCommands } from '../../core/command-store.js'
 import { parseFrontmatter } from '../../utils/frontmatter.js'
 import { CLAUDE_HOME } from '../../constants.js'
 
@@ -105,7 +105,7 @@ export function createSlashCommandsRouter(): Router {
           })),
         ),
         // 2. Walnut commands
-        listMybotCommands().then((all) =>
+        listWalnutCommands().then((all) =>
           all.map((c): SlashCommandItem => ({
             name: c.name,
             description: c.description,

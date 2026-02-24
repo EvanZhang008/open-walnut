@@ -178,7 +178,7 @@ export function autoSync(): void {
  * Used by the server to fetch data pushed by remote hooks.
  * Silently does nothing if ~/.walnut/ is not a git repo or has no remote.
  */
-export async function gitPullMybot(): Promise<void> {
+export async function gitPullWalnut(): Promise<void> {
   try {
     if (!isGitAvailable() || !isRepo() || !hasRemote()) return;
     execSync('git pull --ff-only', {
