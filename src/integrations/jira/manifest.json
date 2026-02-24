@@ -1,0 +1,26 @@
+{
+  "id": "jira",
+  "name": "Jira",
+  "description": "Two-way sync with Jira Cloud/Server",
+  "version": "1.0.0",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "base_url": { "type": "string" },
+      "auth": { "type": "object" },
+      "project_key": { "type": "string" },
+      "category": { "type": "string" },
+      "issue_type": { "type": "string" },
+      "assignee_filter": { "type": "string" },
+      "jql_filter": { "type": "string" },
+      "sync_interval_ms": { "type": "number" },
+      "project_mapping": { "type": "object" }
+    },
+    "required": ["base_url"]
+  },
+  "uiHints": {
+    "base_url": { "label": "Jira Base URL", "help": "e.g. https://yourteam.atlassian.net" },
+    "project_key": { "label": "Default Project Key", "help": "e.g. PROJ" },
+    "category": { "label": "Category", "help": "Walnut category reserved for Jira tasks" }
+  }
+}
