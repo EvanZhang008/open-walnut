@@ -1,8 +1,8 @@
 # Walnut
 
-**A personal AI autopilot that tracks your entire life — work projects, personal errands, tax deadlines, appointments, side projects, knowledge — and manages AI agent sessions on your behalf.**
+**Walnut is a personal AI autopilot that tracks your entire life — work projects, personal errands, tax deadlines, appointments, side projects, knowledge — and manages AI agent sessions on your behalf.**
 
-Walnut runs 100% locally. Your data never leaves your machine — all tasks, notes, memory, and sessions stay in `~/.walnut/` as plain files you can read, back up, and delete anytime. No cloud database. No third-party accounts. No telemetry. You have full control.
+It runs 100% locally. Your data never leaves your machine — all tasks, notes, memory, and sessions stay in `~/.walnut/` as plain files you can read, back up, and delete anytime. No cloud database. No third-party accounts. No telemetry. You have full control.
 
 ## What It Does
 
