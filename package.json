@@ -10,7 +10,7 @@
   "scripts": {
     "postinstall": "cd web && npm install",
     "start": "npm run web:build && node dist/cli.js web --port 3456",
-    "build": "tsup && cp -r src/data dist/",
+    "build": "tsup && cp -r src/data dist/ && for d in src/integrations/*/manifest.json; do cp \"$d\" \"dist/integrations/$(basename $(dirname $d))/\"; done",
     "dev": "tsup --watch",
     "test": "node scripts/test-parallel.mjs",
     "test:unit": "vitest run --config vitest.unit.config.ts",

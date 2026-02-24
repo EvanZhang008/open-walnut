@@ -567,6 +567,11 @@ async function pushToPlugin(
         if (found) {
           found.ext = { ...found.ext, ...result as Record<string, unknown> };
           found.sync_error = undefined;
+          // Derive external_url from plugin display metadata if not already set
+          if (!found.external_url && plugin.display?.getExternalUrl) {
+            const url = plugin.display.getExternalUrl(found);
+            if (url) found.external_url = url;
+          }
           await writeStore(store);
           bus.emit(EventNames.TASK_UPDATED, { task: found }, ['web-ui'], { source: 'sync' });
         }
@@ -611,8 +616,23 @@ async function pushToPlugin(
  * Replaces the old integration-specific autoPushIfConfigured().
  */
 async function autoPushIfConfigured(task: Task): Promise<SyncResult> {
+  if (task.source === 'local') return { success: true };
   const plugin = registry.get(task.source);
-  if (!plugin || task.source === 'local') return { success: true };
+  if (!plugin) {
+    // Plugin not loaded — set sync_error so the user sees something went wrong
+    const message = `Plugin "${task.source}" not loaded — task not synced`;
+    log.task.warn('sync skipped: plugin not loaded', { taskId: task.id, source: task.source });
+    await withWriteLock(async () => {
+      const store = await readStore();
+      const found = store.tasks.find(t => t.id === task.id);
+      if (found && found.sync_error !== message) {
+        found.sync_error = message;
+        await writeStore(store);
+        bus.emit(EventNames.TASK_UPDATED, { task: found }, ['web-ui'], { source: 'sync' });
+      }
+    });
+    return { success: false, error: message };
+  }
 
   // For new tasks without ext data, do a full create
   const hasRemoteId = task.ext && Object.keys(task.ext).length > 0;
@@ -1042,6 +1062,7 @@ export interface UpdateTaskInput {
   add_depends_on?: string[];      // Add dependency IDs (idempotent)
   remove_depends_on?: string[];   // Remove specific dependency IDs
   set_depends_on?: string[];      // Replace all dependencies (overwrite)
+  cwd?: string;                   // Task-level cwd override. Empty string clears.
 }
 
 /**
@@ -1152,6 +1173,11 @@ export async function updateTask(idPrefix: string, updates: UpdateTaskInput): Pr
   // Sprint: direct field or via sprint:* tag convention
   if (updates.sprint !== undefined) {
     task.sprint = updates.sprint || undefined;
+  }
+
+  // Task-level cwd override
+  if (updates.cwd !== undefined) {
+    task.cwd = updates.cwd || undefined;  // empty string clears
   }
 
   // Intercept sprint:* convention tags → redirect to task.sprint field
