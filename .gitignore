@@ -4,6 +4,7 @@ dist/
 .DS_Store
 coverage/
 *.png
+!docs/*.png
 .playwright-mcp/
 
 # Auto Claude data directory
