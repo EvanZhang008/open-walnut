@@ -1,8 +1,8 @@
 # Walnut
 
-**A local-first personal AI butler that tracks your entire life — work projects, personal tasks, appointments, finances, knowledge — and manages AI agent sessions on your behalf.**
+**Your data never leaves your machine.** Walnut is a personal AI assistant that runs 100% locally — all your tasks, notes, memory, and sessions stay in `~/.walnut/` as plain files you can read, back up, and delete anytime. No cloud database. No third-party accounts. No telemetry. You have full control.
 
-Everything runs on your machine. Your data stays in `~/.walnut/`. No cloud accounts, no third-party databases, no telemetry. You own it all.
+It tracks your entire life — work projects, personal errands, tax deadlines, appointments, side projects, knowledge — and manages AI agent sessions on your behalf.
 
 ## What It Does
 
