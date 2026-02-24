@@ -1,80 +1,135 @@
 # Walnut
 
-**Personal AI butler that manages tasks, runs Claude Code sessions, and accumulates project knowledge — all from a single web UI.**
+**A local-first personal AI butler that tracks your entire life — work projects, personal tasks, appointments, finances, knowledge — and manages AI agent sessions on your behalf.**
 
-Walnut is a self-hosted task management system with an embedded AI agent. You talk to it in natural language, and it creates tasks, spawns coding sessions, syncs with Microsoft To-Do, and builds a searchable memory of everything you work on.
+Everything runs on your machine. Your data stays in `~/.walnut/`. No cloud accounts, no third-party databases, no telemetry. You own it all.
+
+## What It Does
+
+Walnut is a single system that replaces scattered to-do apps, note-taking tools, and manual AI workflows. You talk to it in natural language, and it:
+
+- **Creates and manages tasks** across your entire life — work projects, personal errands ("file my taxes"), recurring appointments, side projects, anything.
+- **Spawns AI coding sessions** attached to tasks — Claude Code sessions that run autonomously, report back when done, and store their output alongside the task.
+- **Builds a memory** of everything — per-project knowledge files, daily logs, session summaries. Full-text search and vector search across all of it.
+- **Syncs with external tools** — Microsoft To-Do, Jira, and any custom integration via the plugin system. Changes flow both ways.
+- **Runs on a schedule** — cron jobs, daily checklists, recurring reminders. The agent handles them and only notifies you when something needs your attention.
+
+You interact through a web UI or CLI. The AI agent has 30+ tools and full context about your tasks, memory, sessions, and integrations. It doesn't just answer questions — it takes action.
 
 ## Screenshots
 
-### Chat with the AI agent to create tasks
+### Talk to the agent, get things done
 
 ![Create a task through chat](docs/demo-create-task.png)
 
-Ask Walnut to create tasks, set priorities, assign due dates — it handles the category/project hierarchy automatically.
+> "I need to file my tax before this week. Make it high priority and star."
+>
+> Walnut creates the category, project, and task — sets priority, due date, and star — in one shot.
 
-### Start Claude Code sessions directly from tasks
+### AI sessions that work for you
 
 ![Start a coding session](docs/demo-start-session.png)
 
-Walnut can spawn Claude Code sessions attached to any task. Sessions run in plan or bypass mode, and their output is tracked alongside the task.
+> The agent spawns a Claude Code session attached to the task. It runs in plan mode, reports progress, and you can check on it anytime from the session panel.
 
 ## Features
 
-- **AI Chat Agent** — Talk to Walnut in natural language. It has 30+ tools to manage your tasks, memory, sessions, and integrations.
-- **Task Management** — 4-layer hierarchy (Category > Project > Task > Subtask) with priorities, phases, dependencies, due dates, and starring.
-- **Claude Code Sessions** — Spawn AI coding sessions from any task. Sessions run via the Claude Code SDK with full tool access.
-- **Memory System** — Per-project markdown memory files, daily logs, and session summaries. Full-text search + vector search (via Ollama embeddings).
-- **Microsoft To-Do Sync** — Two-way sync with Microsoft To-Do lists. Tasks, phases, priorities, and notes stay in sync.
-- **Plugin System** — External plugins loaded from `~/.walnut/plugins/`. Implement the `IntegrationSync` interface to add new integrations.
-- **Cron Jobs** — Schedule recurring tasks with natural language or cron expressions. The agent can respond to cron triggers.
-- **Heartbeat Checklists** — Daily/weekly checklists in markdown that the agent can run through.
-- **Web Dashboard** — React SPA with task board, session viewer, memory browser, search, usage tracking, and more.
-- **CLI** — Full-featured command-line interface for all operations.
+### Task Management
+- 4-layer hierarchy: **Category > Project > Task > Subtask**
+- Priorities, phases (7-state lifecycle), dependencies, due dates, starring
+- Task dependencies with cycle detection
+- Quick-add from the UI or natural language through chat
+
+### AI Agent
+- 30+ tools: create/update/query tasks, read/write memory, spawn sessions, search, manage cron jobs, and more
+- Full context window: the agent sees your tasks, memory, active sessions, and integrations
+- Manages Claude Code sessions — starts them, monitors progress, captures output
+- You get notified when a session finishes or needs input. Otherwise it works silently.
+
+### Memory System
+- Per-project markdown files at `~/.walnut/memory/projects/{category}/{project}/`
+- Daily logs, session summaries, and manual notes
+- SQLite FTS5 full-text search + BGE-M3 vector search (via local Ollama)
+- The agent reads and writes memory as it works — knowledge accumulates over time
+
+### Integrations
+- **Microsoft To-Do** — two-way sync of tasks, phases, priorities, notes
+- **Jira** — sync with Jira issues via the plugin system
+- **Git-sync** — auto-commit `~/.walnut/` data to a git repo for backup
+- **Plugin system** — drop a plugin into `~/.walnut/plugins/` with a `manifest.json` and implement the `IntegrationSync` interface
+
+### Sessions
+- Spawn Claude Code sessions from any task via the Claude Agent SDK
+- Plan mode (investigate first, then execute) or bypass mode (execute immediately)
+- Session output tracked in the task panel — conversation history, tool calls, status
+- Multi-session support with a 2-slot model per task
+- Remote session support via SSH
+
+### Scheduling
+- Cron jobs with natural language or cron expressions
+- Heartbeat checklists — daily/weekly markdown checklists the agent runs through
+- The agent responds to triggers autonomously and logs the results
+
+### Web Dashboard
+- Task board with filters, search, categories, and project tabs
+- Session viewer with real-time streaming
+- Memory browser and editor
+- Context inspector — see exactly what the agent sees
+- Usage tracking and cost breakdown
+- Timeline view
+
+### Local-First
+- All data in `~/.walnut/` — plain JSON, markdown, and SQLite files
+- No external database, no cloud dependency for core functionality
+- Integrations (To-Do, Jira) are optional plugins
+- Runs as a local Express server on your machine
 
 ## Quick Start
 
 ```bash
 git clone https://github.com/EvanZhang008/walnut.git
 cd walnut
-npm install       # installs backend + frontend deps
-npm start         # builds and starts server on http://localhost:3456
+npm install       # installs backend + frontend dependencies
+npm start         # builds everything and starts on http://localhost:3456
 ```
 
 Open [http://localhost:3456](http://localhost:3456) in your browser.
 
-## Prerequisites
+### Prerequisites
 
 - **Node.js** >= 22
-- **AWS credentials** for Claude via Bedrock (or configure a different provider in `~/.walnut/config.yaml`)
-- **Ollama** (optional) — for local embedding-based vector search
+- **AWS credentials** for Claude via Bedrock (or configure another provider in `~/.walnut/config.yaml`)
+- **Ollama** (optional) — enables local vector search for memory
 
 ## Configuration
 
-Walnut stores all data in `~/.walnut/`. Configuration is in `~/.walnut/config.yaml`:
+All configuration lives in `~/.walnut/config.yaml`:
 
 ```yaml
-# AI model configuration
+# AI model
 model: claude-sonnet-4-20250514
 aws_region: us-west-2
 
-# Microsoft To-Do sync (optional)
+# Microsoft To-Do (optional)
 plugins:
   ms-todo:
     enabled: true
     client_id: YOUR_AZURE_AD_CLIENT_ID
 
-# Heartbeat (optional)
+# Heartbeat checklists (optional)
 heartbeat:
   enabled: true
 ```
 
-Run `walnut auth` to set up Microsoft To-Do OAuth if needed.
+Run `walnut auth` to set up Microsoft To-Do OAuth.
+
+External plugins (Jira, custom integrations) go in `~/.walnut/plugins/{plugin-name}/`.
 
 ## Project Structure
 
 ```
 src/
-  agent/          # AI agent: tools, context builder, loop, caching
+  agent/          # AI agent: 30+ tools, context builder, loop, caching
   commands/       # CLI commands (start, chat, tasks, sessions, web, ...)
   core/           # Data layer: task-manager, memory, sessions, cron, config
   heartbeat/      # Daily/weekly checklist runner
@@ -84,32 +139,29 @@ src/
   providers/      # Session providers (Claude Code SDK, SSH, subagent)
   session-server/ # Multi-session server via Claude Agent SDK
   utils/          # Shared utilities
-  web/            # Express server, REST routes, WebSocket
+  web/            # Express server, REST API, WebSocket
 web/              # React frontend (Vite + TypeScript)
 tests/            # Unit, integration, e2e, and Playwright browser tests
 ```
 
-See [ARCHITECTURE.md](./ARCHITECTURE.md) for detailed system design.
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full system design.
 
 ## Development
 
 ```bash
 npm run dev           # Watch mode (backend only)
-npm run web:dev       # Watch mode (backend + frontend with HMR)
-npm run lint          # TypeScript type checking
-npm run test          # Run all tests (unit + integration + e2e)
+npm run web:dev       # Full dev mode with frontend HMR
+npm run lint          # TypeScript type check
+npm test              # Run all tests
 npm run test:unit     # Unit tests only
-npm run test:e2e      # End-to-end tests only
+npm run test:e2e      # End-to-end tests
 ```
-
-## Scripts
 
 | Command | Description |
 |---------|-------------|
 | `npm start` | Build and start production server on port 3456 |
-| `npm run dev` | Watch mode for backend TypeScript |
-| `npm run web:dev` | Full dev mode with frontend HMR |
-| `npm run web:build` | Production build (backend + frontend) |
+| `npm run web:dev` | Dev mode with hot reload |
+| `npm run web:build` | Production build |
 | `npm test` | Run all tests |
 | `npm run lint` | TypeScript type check |
 
@@ -117,9 +169,10 @@ npm run test:e2e      # End-to-end tests only
 
 - **Backend**: Node.js, Express, TypeScript, better-sqlite3
 - **Frontend**: React, Vite, TypeScript
-- **AI**: Anthropic Claude via AWS Bedrock (Claude Agent SDK)
-- **Testing**: Vitest (unit/integration/e2e), Playwright (browser)
-- **Sync**: Microsoft Graph API (To-Do), plugin system for extensibility
+- **AI**: Anthropic Claude via AWS Bedrock, Claude Agent SDK
+- **Search**: SQLite FTS5 + BGE-M3 embeddings (Ollama)
+- **Testing**: Vitest, Playwright
+- **Integrations**: Microsoft Graph API, Jira, plugin system
 
 ## License
 
