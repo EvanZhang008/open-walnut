@@ -42,6 +42,13 @@ import { SessionPill } from './SessionPill';
 import { PersonIcon } from '../common/PersonIcon';
 import { useVerticalSplitter } from '@/hooks/useVerticalSplitter';
 import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
+import { ProjectDetailPane } from './ProjectDetailPane';
+import { CategoryDetailPane } from './CategoryDetailPane';
+
+type DetailTarget =
+  | { type: 'project'; category: string; project: string }
+  | { type: 'category'; category: string }
+  | null;
 
 interface TodoPanelProps {
   tasks: Task[];
@@ -60,9 +67,7 @@ interface TodoPanelProps {
   onReorder?: (category: string, project: string, taskIds: string[]) => void;
   onMoveTask?: (taskId: string, category: string, project: string, insertNearTaskId?: string) => void;
   onOpenSession?: (sessionId: string) => void;
-  onToggleTriage?: () => void;
   onOpenTriageForTask?: (taskId: string) => void;
-  triagePanelOpen?: boolean;
   operationError?: string | null;
   onClearOperationError?: () => void;
   onOperationError?: (msg: string) => void;
@@ -848,17 +853,32 @@ function TaskDetailPane({ task, onClose, onOpenSession, onOpenTriageForTask, sty
 
   // Fetch session records for title resolution (API filters out embedded agent runs)
   const [sessionRecords, setSessionRecords] = useState<Map<string, SessionRecord>>(new Map());
-  // hasSessions is true when we have real (non-embedded) session records for this task.
-  const hasSessions = sessionRecords.size > 0;
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  // Show sessions section based on task data (allSessionIds) — not on the async API result.
+  // This prevents the section from disappearing/flickering when the fetch is in progress or fails.
+  const hasSessions = allSessionIds.length > 0;
   useEffect(() => {
-    if (!allSessionIds.length) { setSessionRecords(new Map()); return; }
+    if (!allSessionIds.length) { setSessionRecords(new Map()); setSessionsLoading(false); return; }
     let cancelled = false;
+    setSessionsLoading(true);
     fetchSessionsForTask(task.id).then((sessions) => {
       if (cancelled) return;
       const map = new Map<string, SessionRecord>();
       for (const s of sessions) map.set(s.claudeSessionId, s);
       setSessionRecords(map);
-    }).catch(() => { /* non-critical */ });
+    }).catch(() => {
+      // Retry once on failure — transient network/server errors shouldn't hide sessions
+      if (cancelled) return;
+      setTimeout(() => {
+        if (cancelled) return;
+        fetchSessionsForTask(task.id).then((sessions) => {
+          if (cancelled) return;
+          const map = new Map<string, SessionRecord>();
+          for (const s of sessions) map.set(s.claudeSessionId, s);
+          setSessionRecords(map);
+        }).catch(() => { /* give up silently after retry */ });
+      }, 1000);
+    }).finally(() => { if (!cancelled) setSessionsLoading(false); });
     return () => { cancelled = true; };
   }, [task.id, allSessionIds.join(',')]);
 
@@ -923,79 +943,113 @@ function TaskDetailPane({ task, onClose, onOpenSession, onOpenTriageForTask, sty
 
       {hasSessions && (
         <div className="todo-detail-section">
-          <div className="todo-detail-section-label">Sessions ({sessionRecords.size})</div>
+          <div className="todo-detail-section-label">Sessions ({sessionRecords.size || allSessionIds.length})</div>
           <div className="todo-detail-sessions">
-            {allSessionIds.filter((sid) => sessionRecords.has(sid)).map((sid) => {
-              const record = sessionRecords.get(sid);
-              const processStatus = record?.process_status || 'stopped';
-              const workStatus = record?.work_status || 'agent_complete';
-              const label = record?.title || 'Untitled session';
-              const ago = timeAgo(record?.lastActiveAt || record?.startedAt || '');
-              const isPlan = record?.mode === 'plan';
-              const modeLabel = record?.mode && record.mode !== 'default' && record.mode !== 'plan' && !record?.planCompleted ? record.mode : null;
-              const statusLabel = (WORK_LABELS[workStatus] ?? workStatus) + (modeLabel ? ` · ${modeLabel}` : '');
-              return (
-                <div
-                  key={sid}
-                  className="todo-detail-session-item"
-                  title={sid}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => {
-                    if (onOpenSession) {
-                      onOpenSession(sid);
-                    } else {
-                      navigate(`/sessions?id=${sid}`);
-                    }
-                  }}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenSession ? onOpenSession(sid) : navigate(`/sessions?id=${sid}`); } }}
-                >
-                  {/* Row 1: process dot + title + time + open-tab */}
-                  <div className="todo-detail-session-row1">
-                    <span
-                      className="todo-detail-session-dot"
-                      style={{ background: processDotColors[processStatus] ?? 'var(--fg-muted)' }}
-                    />
-                    {isPlan && (
-                      <span className="todo-detail-plan-badge">Plan</span>
-                    )}
-                    <span className="todo-detail-session-title">{label}</span>
-                    {ago && <span className="todo-detail-session-time">{ago}</span>}
-                    <span
-                      className="session-id-mono text-xs"
-                      role="button"
-                      title={`Session ID: ${sid}\nClick to open in Sessions page`}
-                      onClick={(e) => { e.stopPropagation(); onOpenSession ? onOpenSession(sid) : navigate(`/sessions?id=${sid}`); }}
-                    >
-                      {sid.slice(0, 8)} &#x2197;
-                    </span>
-                  </div>
-                  {/* Row 2: work_status pill + activity */}
-                  <div className="todo-detail-session-meta">
-                    <span
-                      className="todo-detail-ws-pill"
-                      style={{
-                        color: workStatusColors[workStatus] ?? 'var(--fg-muted)',
-                        borderColor: workStatusColors[workStatus] ?? 'var(--fg-muted)',
-                      }}
-                    >
-                      {statusLabel}
-                    </span>
-                    {record?.activity && workStatus === 'in_progress' && (
-                      <span className="text-xs text-muted" style={{ fontStyle: 'italic' }}>
-                        — {record.activity}
-                      </span>
-                    )}
-                  </div>
-                  {/* Row 3: cwd (conditional) */}
-                  {record?.cwd && (
-                    <div className="todo-detail-session-cwd">
-                      &#x1F4C1; {truncateCwd(record.cwd)}
+            {sessionsLoading && sessionRecords.size === 0 ? (
+              // While loading, show a placeholder using task-level session status (available immediately)
+              allSessionIds.map((sid) => {
+                const taskStatus = task.session_status;
+                const processStatus = taskStatus?.process_status || 'stopped';
+                const workStatus = taskStatus?.work_status || 'agent_complete';
+                const isPlan = taskStatus?.mode === 'plan';
+                const statusLabel = WORK_LABELS[workStatus] ?? workStatus;
+                return (
+                  <div
+                    key={sid}
+                    className="todo-detail-session-item"
+                    title={sid}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => onOpenSession ? onOpenSession(sid) : navigate(`/sessions?id=${sid}`)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenSession ? onOpenSession(sid) : navigate(`/sessions?id=${sid}`); } }}
+                  >
+                    <div className="todo-detail-session-row1">
+                      <span className="todo-detail-session-dot" style={{ background: processDotColors[processStatus] ?? 'var(--fg-muted)' }} />
+                      {isPlan && <span className="todo-detail-plan-badge">Plan</span>}
+                      <span className="todo-detail-session-title text-muted">Loading…</span>
+                      <span className="session-id-mono text-xs" title={`Session ID: ${sid}`}>{sid.slice(0, 8)} &#x2197;</span>
                     </div>
-                  )}
-                </div>
-              );
-            })}
+                    <div className="todo-detail-session-meta">
+                      <span className="todo-detail-ws-pill" style={{ color: workStatusColors[workStatus] ?? 'var(--fg-muted)', borderColor: workStatusColors[workStatus] ?? 'var(--fg-muted)' }}>
+                        {statusLabel}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              allSessionIds.filter((sid) => sessionRecords.has(sid)).map((sid) => {
+                const record = sessionRecords.get(sid);
+                const processStatus = record?.process_status || 'stopped';
+                const workStatus = record?.work_status || 'agent_complete';
+                const label = record?.title || 'Untitled session';
+                const ago = timeAgo(record?.lastActiveAt || record?.startedAt || '');
+                const isPlan = record?.mode === 'plan';
+                const modeLabel = record?.mode && record.mode !== 'default' && record.mode !== 'plan' && !record?.planCompleted ? record.mode : null;
+                const statusLabel = (WORK_LABELS[workStatus] ?? workStatus) + (modeLabel ? ` · ${modeLabel}` : '');
+                return (
+                  <div
+                    key={sid}
+                    className="todo-detail-session-item"
+                    title={sid}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => {
+                      if (onOpenSession) {
+                        onOpenSession(sid);
+                      } else {
+                        navigate(`/sessions?id=${sid}`);
+                      }
+                    }}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenSession ? onOpenSession(sid) : navigate(`/sessions?id=${sid}`); } }}
+                  >
+                    {/* Row 1: process dot + title + time + open-tab */}
+                    <div className="todo-detail-session-row1">
+                      <span
+                        className="todo-detail-session-dot"
+                        style={{ background: processDotColors[processStatus] ?? 'var(--fg-muted)' }}
+                      />
+                      {isPlan && (
+                        <span className="todo-detail-plan-badge">Plan</span>
+                      )}
+                      <span className="todo-detail-session-title">{label}</span>
+                      {ago && <span className="todo-detail-session-time">{ago}</span>}
+                      <span
+                        className="session-id-mono text-xs"
+                        role="button"
+                        title={`Session ID: ${sid}\nClick to open in Sessions page`}
+                        onClick={(e) => { e.stopPropagation(); onOpenSession ? onOpenSession(sid) : navigate(`/sessions?id=${sid}`); }}
+                      >
+                        {sid.slice(0, 8)} &#x2197;
+                      </span>
+                    </div>
+                    {/* Row 2: work_status pill + activity */}
+                    <div className="todo-detail-session-meta">
+                      <span
+                        className="todo-detail-ws-pill"
+                        style={{
+                          color: workStatusColors[workStatus] ?? 'var(--fg-muted)',
+                          borderColor: workStatusColors[workStatus] ?? 'var(--fg-muted)',
+                        }}
+                      >
+                        {statusLabel}
+                      </span>
+                      {record?.activity && workStatus === 'in_progress' && (
+                        <span className="text-xs text-muted" style={{ fontStyle: 'italic' }}>
+                          — {record.activity}
+                        </span>
+                      )}
+                    </div>
+                    {/* Row 3: cwd (conditional) */}
+                    {record?.cwd && (
+                      <div className="todo-detail-session-cwd">
+                        &#x1F4C1; {truncateCwd(record.cwd)}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
           </div>
         </div>
       )}
@@ -1062,7 +1116,7 @@ function TaskDetailPane({ task, onClose, onOpenSession, onOpenTriageForTask, sty
 
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onCyclePriority, onFocusTask, onClearFocus, focusedTaskId, favorites, ordering, onReorder, onMoveTask, onOpenSession, onToggleTriage, onOpenTriageForTask, triagePanelOpen, operationError, onClearOperationError, onOperationError }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onCyclePriority, onFocusTask, onClearFocus, focusedTaskId, favorites, ordering, onReorder, onMoveTask, onOpenSession, onOpenTriageForTask, operationError, onClearOperationError, onOperationError }: TodoPanelProps) {
   // Hide .metadata* tasks (project/category configuration tasks, not user-visible)
   const tasks = useMemo(() => rawTasks.filter((t) => !t.title.startsWith('.metadata')), [rawTasks]);
   const navigate = useNavigate();
@@ -1083,6 +1137,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(() => readSetFromStorage(LS_COLLAPSED_PROJS_KEY));
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const [activeDragType, setActiveDragType] = useState<string | null>(null);
+  const [detailTarget, setDetailTarget] = useState<DetailTarget>(null);
 
   // Search state
   const { query: searchQuery, setQuery: setSearchQuery, results: searchResults, isSearching, clearSearch } = useTaskSearch();
@@ -1857,8 +1912,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [collapsedProjects]);
 
   const handleTaskClick = useCallback((task: Task) => {
+    setDetailTarget(null);
     onFocusTask ? onFocusTask(task) : navigate(`/tasks/${task.id}`);
   }, [onFocusTask, navigate]);
+
+  const showProjectDetail = useCallback((category: string, project: string) => {
+    setDetailTarget({ type: 'project', category, project });
+    onClearFocus?.();
+  }, [onClearFocus]);
+
+  const showCategoryDetail = useCallback((category: string) => {
+    setDetailTarget({ type: 'category', category });
+    onClearFocus?.();
+  }, [onClearFocus]);
 
   const handleUpdateTitle = useCallback((id: string, title: string) => {
     if (onUpdate) onUpdate(id, { title });
@@ -1866,7 +1932,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   return (
     <div className={`todo-panel${splitterResizing ? ' splitter-resizing' : ''}`} ref={splitterContainerRef}>
-      {/* Category tabs + Triage toggle */}
+      {/* Category tabs */}
       <div className="todo-panel-tabs-row">
         <div className="todo-panel-tabs">
           {hasStarredContent && (
@@ -1907,15 +1973,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             </DragOverlay>
           </DndContext>
         </div>
-        {onToggleTriage && (
-          <button
-            className={`todo-panel-tab todo-panel-tab-triage${triagePanelOpen ? ' todo-panel-tab-active' : ''}`}
-            onClick={onToggleTriage}
-            title="Triage History"
-          >
-            Triage
-          </button>
-        )}
       </div>
 
       {/* Search bar */}
@@ -2125,7 +2182,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         </div>
       )}
 
-      <div className="todo-panel-list" style={focusedTask ? { flex: `${1 - detailRatio} 1 0%` } : undefined}>
+      <div className="todo-panel-list" style={(focusedTask || detailTarget) ? { flex: `${1 - detailRatio} 1 0%` } : undefined}>
         {loading && (
           <div className="empty-state" style={{ padding: '24px 8px' }}>
             <div className="spinner" style={{ width: 20, height: 20, borderWidth: 2, margin: '0 auto' }} />
@@ -2186,13 +2243,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         {({ isOver: isHeaderOver, setNodeRef: setHeaderRef }) => (
                           <div ref={setHeaderRef} className={`todo-group-category-header${isHeaderOver ? ' header-drop-active' : ''}`}>
                             <span className="group-drag-handle" {...dragHandleProps}>&#x2807;</span>
-                            <button className="todo-group-category-header-toggle" onClick={() => toggleCategory(category)}>
-                              <span className="todo-group-arrow">{isCategoryCollapsed(category) ? '\u25B6' : '\u25BC'}</span>
-                              <span className="todo-group-category-name">{category}</span>
-                              <span className="todo-group-count text-xs text-muted">
-                                {directTasks.length + projects.reduce((sum, p) => sum + p.tasks.length, 0)}
-                              </span>
-                            </button>
+                            <div className="todo-group-header-controls">
+                              <button className="todo-group-arrow-btn" onClick={() => toggleCategory(category)} title="Collapse/Expand">
+                                {isCategoryCollapsed(category) ? '\u25B6' : '\u25BC'}
+                              </button>
+                              <button className="todo-group-name-btn" onClick={() => showCategoryDetail(category)} title="View category details">
+                                <span className="todo-group-category-name">{category}</span>
+                                <span className="todo-group-count text-xs text-muted">
+                                  {directTasks.length + projects.reduce((sum, p) => sum + p.tasks.length, 0)}
+                                </span>
+                              </button>
+                            </div>
                             {favorites && (
                               <button
                                 className="todo-group-fav-btn"
@@ -2235,11 +2296,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                         {({ isOver: isProjHeaderOver, setNodeRef: setProjHeaderRef }) => (
                                           <div ref={setProjHeaderRef} className={`todo-group-project-header${isProjHeaderOver ? ' header-drop-active' : ''}`}>
                                             <span className="group-drag-handle" {...projDragProps}>&#x2807;</span>
-                                            <button className="todo-group-project-header-toggle" onClick={() => toggleProject(projKey)}>
-                                              <span className="todo-group-arrow">{isProjectCollapsed(projKey) ? '\u25B6' : '\u25BC'}</span>
-                                              <span className="todo-group-project-name">{project}</span>
-                                              <span className="todo-group-count text-xs text-muted">{projTasks.length}</span>
-                                            </button>
+                                            <div className="todo-group-header-controls">
+                                              <button className="todo-group-arrow-btn" onClick={() => toggleProject(projKey)} title="Collapse/Expand">
+                                                {isProjectCollapsed(projKey) ? '\u25B6' : '\u25BC'}
+                                              </button>
+                                              <button className="todo-group-name-btn" onClick={() => showProjectDetail(category, project)} title="View project details">
+                                                <span className="todo-group-project-name">{project}</span>
+                                                <span className="todo-group-count text-xs text-muted">{projTasks.length}</span>
+                                              </button>
+                                            </div>
                                             {favorites && (
                                               <button
                                                 className="todo-group-fav-btn"
@@ -2306,11 +2371,27 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         )}
       </div>
 
-      {/* Drag handle + Detail pane for focused task */}
-      {focusedTask && <div className="todo-detail-splitter" onMouseDown={splitterMouseDown} />}
-      {focusedTask && (
+      {/* Detail pane: task, project, or category */}
+      {(focusedTask || detailTarget) && <div className="todo-detail-splitter" onMouseDown={splitterMouseDown} />}
+      {focusedTask ? (
         <TaskDetailPane task={focusedTask} onClose={onClearFocus} onOpenSession={onOpenSession} onOpenTriageForTask={onOpenTriageForTask} style={{ flex: `${detailRatio} 1 0%` }} />
-      )}
+      ) : detailTarget?.type === 'project' ? (
+        <ProjectDetailPane
+          category={detailTarget.category}
+          project={detailTarget.project}
+          tasks={tasks}
+          onClose={() => setDetailTarget(null)}
+          style={{ flex: `${detailRatio} 1 0%` }}
+        />
+      ) : detailTarget?.type === 'category' ? (
+        <CategoryDetailPane
+          category={detailTarget.category}
+          tasks={tasks}
+          onClose={() => setDetailTarget(null)}
+          onShowProject={(cat, proj) => setDetailTarget({ type: 'project', category: cat, project: proj })}
+          style={{ flex: `${detailRatio} 1 0%` }}
+        />
+      ) : null}
 
       {operationError && (
         <div className="todo-panel-add-error" role="alert">
