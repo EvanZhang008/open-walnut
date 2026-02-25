@@ -856,30 +856,33 @@ function TaskDetailPane({ task, onClose, onOpenSession, onOpenTriageForTask, sty
   const [sessionsLoading, setSessionsLoading] = useState(false);
   // Show sessions section based on task data (allSessionIds) — not on the async API result.
   // This prevents the section from disappearing/flickering when the fetch is in progress or fails.
-  const hasSessions = allSessionIds.length > 0;
+  // After fetch completes, refine to only show if API returned actual records (filters embedded runs).
+  const hasSessions = sessionsLoading ? allSessionIds.length > 0 : (sessionRecords.size > 0 || allSessionIds.length > 0);
   useEffect(() => {
     if (!allSessionIds.length) { setSessionRecords(new Map()); setSessionsLoading(false); return; }
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
     setSessionsLoading(true);
-    fetchSessionsForTask(task.id).then((sessions) => {
+
+    const applyResults = (sessions: SessionRecord[]) => {
       if (cancelled) return;
       const map = new Map<string, SessionRecord>();
       for (const s of sessions) map.set(s.claudeSessionId, s);
       setSessionRecords(map);
-    }).catch(() => {
-      // Retry once on failure — transient network/server errors shouldn't hide sessions
+      setSessionsLoading(false);
+    };
+
+    fetchSessionsForTask(task.id).then(applyResults).catch(() => {
+      // Retry once after 1s — transient errors shouldn't hide sessions
       if (cancelled) return;
-      setTimeout(() => {
+      retryTimer = setTimeout(() => {
         if (cancelled) return;
-        fetchSessionsForTask(task.id).then((sessions) => {
-          if (cancelled) return;
-          const map = new Map<string, SessionRecord>();
-          for (const s of sessions) map.set(s.claudeSessionId, s);
-          setSessionRecords(map);
-        }).catch(() => { /* give up silently after retry */ });
+        fetchSessionsForTask(task.id).then(applyResults).catch(() => {
+          if (!cancelled) setSessionsLoading(false);
+        });
       }, 1000);
-    }).finally(() => { if (!cancelled) setSessionsLoading(false); });
-    return () => { cancelled = true; };
+    });
+    return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
   }, [task.id, allSessionIds.join(',')]);
 
   // Live-update session records when status/mode changes via WebSocket
@@ -943,7 +946,7 @@ function TaskDetailPane({ task, onClose, onOpenSession, onOpenTriageForTask, sty
 
       {hasSessions && (
         <div className="todo-detail-section">
-          <div className="todo-detail-section-label">Sessions ({sessionRecords.size || allSessionIds.length})</div>
+          <div className="todo-detail-section-label">Sessions ({sessionsLoading && !sessionRecords.size ? allSessionIds.length : sessionRecords.size})</div>
           <div className="todo-detail-sessions">
             {sessionsLoading && sessionRecords.size === 0 ? (
               // While loading, show a placeholder using task-level session status (available immediately)
