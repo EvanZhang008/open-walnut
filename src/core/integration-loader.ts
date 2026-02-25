@@ -40,6 +40,64 @@ import type {
 
 const log = createSubsystemLogger('plugin-loader');
 
+// ── On-the-fly bundling for external .ts plugins ──
+// External plugins ship as .ts source with relative imports that reference the
+// walnut src/ tree (e.g. '../../core/config-manager.js'). These paths only
+// resolve correctly when the plugin is inside src/integrations/. At runtime,
+// plugins live in ~/.walnut/plugins/ so the paths break. We use esbuild to
+// bundle the plugin on-the-fly, rebasing parent imports to the real src/ tree.
+async function bundleExternalPlugin(
+  pluginDir: string,
+  entryFile: string,
+): Promise<string | null> {
+  try {
+    const { build } = await import('esbuild');
+    const os = await import('node:os');
+    const pluginName = path.basename(pluginDir);
+    const outfile = path.join(os.tmpdir(), `walnut-plugin-${pluginName}-${Date.now()}.mjs`);
+
+    await build({
+      entryPoints: [entryFile],
+      outfile,
+      bundle: true,
+      format: 'esm',
+      platform: 'node',
+      target: 'node22',
+      external: ['better-sqlite3'],
+      logLevel: 'silent',
+      plugins: [{
+        name: 'rebase-walnut-imports',
+        setup(b) {
+          // Rebase parent-directory imports (../../core/, ../../utils/, etc.)
+          // to the walnut src/ tree so they resolve correctly.
+          b.onResolve({ filter: /^\.\.\// }, (args) => {
+            const subPath = path.relative(pluginDir, args.importer);
+            const assumedImporter = path.join(BUILTIN_DIR, pluginName, subPath);
+            const resolved = path.resolve(path.dirname(assumedImporter), args.path);
+            // Try .ts extension (esbuild resolves .js → .ts naturally in the src tree)
+            for (const candidate of [
+              resolved.replace(/\.js$/, '.ts'),
+              resolved,
+              path.join(resolved.replace(/\.js$/, ''), 'index.ts'),
+            ]) {
+              try { if (fs.statSync(candidate).isFile()) return { path: candidate }; } catch { /* next */ }
+            }
+            return undefined;
+          });
+        },
+      }],
+    });
+
+    return outfile;
+  } catch (err) {
+    log.warn('failed to bundle external plugin', {
+      dir: pluginDir,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
 // ── Built-in integrations dir resolution ──
 // Same walk-up pattern used by BUILTIN_COMMANDS_DIR in constants.ts.
 // In dev (tsx): import.meta.url → src/core/integration-loader.ts → walk up to find src/integrations/
@@ -313,18 +371,40 @@ async function loadPlugin(
     }
   }
 
-  // Dynamic import — try index.ts first (dev), then index.js, then index.mjs
+  // Dynamic import — find entry point and load it.
+  // For external .ts plugins, use esbuild to bundle on-the-fly (resolves parent imports).
+  // For built-in plugins, the compiled .js is already in dist/integrations/.
   let registerFn: ((api: PluginApi) => void | Promise<void>) | null = null;
-  const candidates = ['index.ts', 'index.js', 'index.mjs'];
+  const candidates = ['index.ts', 'plugin.ts', 'index.js', 'plugin.js', 'index.mjs'];
+  let bundledFile: string | null = null;
 
   for (const filename of candidates) {
     const entryPath = path.join(pluginDir, filename);
     try {
       await fsp.access(entryPath, fs.constants.R_OK);
+
+      // External .ts plugins need esbuild bundling (parent imports break otherwise)
+      if (!isBuiltin && filename.endsWith('.ts')) {
+        bundledFile = await bundleExternalPlugin(pluginDir, entryPath);
+        if (bundledFile) {
+          const mod = await import(pathToFileURL(bundledFile).href);
+          if (typeof mod.default === 'function') {
+            registerFn = mod.default;
+            break;
+          }
+        }
+        // Bundling failed or no default export — try next candidate
+        continue;
+      }
+
+      // Built-in plugins or .js/.mjs: direct import
       const moduleUrl = pathToFileURL(entryPath).href;
       const mod = await import(moduleUrl);
-      registerFn = mod.default;
-      break;
+      if (typeof mod.default === 'function') {
+        registerFn = mod.default;
+        break;
+      }
+      // File loaded but no default export — try next candidate
     } catch {
       // Try next candidate
     }
@@ -332,6 +412,7 @@ async function loadPlugin(
 
   if (!registerFn || typeof registerFn !== 'function') {
     log.warn('No valid entry point found', { id: pluginId, dir: pluginDir, tried: candidates });
+    if (bundledFile) try { await fsp.unlink(bundledFile); } catch { /* cleanup */ }
     return;
   }
 
@@ -410,7 +491,7 @@ export async function loadPlugins(registry: IntegrationRegistry): Promise<void> 
     await loadPlugin(dir, true, pluginConfigs, registry);
   }
 
-  // Load external plugins
+  // Load external plugins (esbuild bundles .ts plugins on-the-fly)
   for (const { dir } of externals) {
     await loadPlugin(dir, false, pluginConfigs, registry);
   }
