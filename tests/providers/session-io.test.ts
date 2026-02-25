@@ -20,7 +20,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 // Isolate all file I/O to a temp directory
 vi.mock('../../src/constants.js', () => createMockConstants())
 
-import { LocalIO, RemoteIO, createSessionIO, findLocalImagePaths, transferImagesForRemoteSession, buildRemoteCommand, buildRemotePreamble, REMOTE_BASE_PATH } from '../../src/providers/session-io.js'
+import { LocalIO, RemoteIO, createSessionIO, findLocalImagePaths, transferImagesForRemoteSession, buildRemoteCommand, buildRemotePreamble, wrapInLoginShell, REMOTE_BASE_PATH } from '../../src/providers/session-io.js'
 import { SESSION_STREAMS_DIR, WALNUT_HOME } from '../../src/constants.js'
 
 const tmpBase = WALNUT_HOME
@@ -484,13 +484,15 @@ describe('RemoteIO', () => {
       // Host string: user@hostname
       expect(sshArgs.some((a) => a === 'admin@remote.example.com')).toBe(true)
 
-      // The last arg is the full remote command
+      // The last arg is the full remote command wrapped in login shell
       const remoteCmd = sshArgs[sshArgs.length - 1]
+      expect(remoteCmd).toContain('$SHELL -lc')
       expect(remoteCmd).toContain('mkdir -p')
       expect(remoteCmd).toContain('mkfifo')
       expect(remoteCmd).toContain('claude')
       expect(remoteCmd).toContain('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1')
-      expect(remoteCmd).toContain("cd '/home/admin/project'")
+      // cd path is inside the shell-quoted wrapper, so quotes are escaped
+      expect(remoteCmd).toContain('/home/admin/project')
       // Initial message should be embedded in the remote command
       expect(remoteCmd).toContain('printf')
 
@@ -692,20 +694,15 @@ describe('buildRemotePreamble', () => {
     const preamble = buildRemotePreamble()
     expect(preamble).toContain('$HOME/.local/bin')
     expect(preamble).toContain('$HOME/.npm-global/bin')
-    // No shell_setup → no extra commands
-    expect(preamble).not.toContain('2>/dev/null || true')
   })
 
   it('includes shell_setup when provided', () => {
     const preamble = buildRemotePreamble('source $HOME/.nvm/nvm.sh')
     expect(preamble).toContain('source $HOME/.nvm/nvm.sh')
-    // Wrapped with error guard
     expect(preamble).toContain('|| true')
   })
 
   it('exits cleanly (code 0) even when shell_setup fails', () => {
-    // Critical: preamble must always exit 0 so downstream && chains
-    // (CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, initial message printf) are not skipped.
     const { execFileSync } = require('node:child_process')
     const preamble = buildRemotePreamble('source /nonexistent/path/nvm.sh')
     const result = execFileSync('bash', ['-c', `${preamble} && echo "DOWNSTREAM_OK"`], {
@@ -714,15 +711,37 @@ describe('buildRemotePreamble', () => {
     })
     expect(result.trim()).toBe('DOWNSTREAM_OK')
   })
+})
 
-  it('exits cleanly (code 0) without shell_setup', () => {
-    const { execFileSync } = require('node:child_process')
-    const preamble = buildRemotePreamble()
-    const result = execFileSync('bash', ['-c', `${preamble} && echo "DOWNSTREAM_OK"`], {
-      encoding: 'utf-8',
-      timeout: 5000,
-    })
-    expect(result.trim()).toBe('DOWNSTREAM_OK')
+describe('wrapInLoginShell', () => {
+  it('wraps command in $SHELL -lc', () => {
+    const wrapped = wrapInLoginShell('echo hello')
+    expect(wrapped).toContain('$SHELL -lc')
+    expect(wrapped).toContain('echo hello')
+  })
+
+  it('injects shell_setup inside the login shell before the command', () => {
+    const wrapped = wrapInLoginShell('echo hello', 'source $HOME/.nvm/nvm.sh')
+    expect(wrapped).toContain('source $HOME/.nvm/nvm.sh')
+    expect(wrapped).toContain('|| true')
+    expect(wrapped).toContain('echo hello')
+    // shell_setup should come BEFORE the main command
+    const setupIdx = wrapped.indexOf('nvm.sh')
+    const cmdIdx = wrapped.indexOf('echo hello')
+    expect(setupIdx).toBeLessThan(cmdIdx)
+  })
+
+  it('works without shell_setup', () => {
+    const wrapped = wrapInLoginShell('claude -p')
+    expect(wrapped).toContain('$SHELL -lc')
+    expect(wrapped).toContain('claude -p')
+    expect(wrapped).not.toContain('|| true')
+  })
+
+  it('shell-quotes the inner command for safety', () => {
+    const wrapped = wrapInLoginShell("echo 'hello world'")
+    // The inner command should be quoted
+    expect(wrapped).toMatch(/\$SHELL -lc '/)
   })
 })
 
@@ -731,11 +750,6 @@ describe('buildRemoteCommand', () => {
     const cmd = buildRemoteCommand(['-p', '--output-format', 'stream-json'])
     expect(cmd).toContain('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1')
     expect(cmd).toContain('claude')
-  })
-
-  it('includes shell_setup when provided', () => {
-    const cmd = buildRemoteCommand(['-p'], undefined, 'source $HOME/.nvm/nvm.sh')
-    expect(cmd).toContain('source $HOME/.nvm/nvm.sh')
   })
 
   it('includes cd when cwd is provided', () => {

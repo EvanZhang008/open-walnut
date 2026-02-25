@@ -301,18 +301,13 @@ export const REMOTE_BASE_PATH = 'export PATH="$HOME/.local/bin:$HOME/.npm-global
 /**
  * Build the full remote preamble: base PATH + optional user shell_setup + env vars.
  *
- * Non-interactive SSH sessions don't source .bashrc/.profile, so tools
- * managed by node version managers (nvm, fnm, volta, asdf, etc.) aren't
- * in PATH. When Claude CLI is installed via npm (not standalone), it needs
- * node to run. The `shell_setup` config field lets users add whatever
- * environment setup their host needs:
+ * Non-interactive SSH doesn't source .bashrc/.zshrc, so tools like nvm/fnm/volta
+ * aren't in PATH. The `shell_setup` config field lets users add custom env setup:
  *
  *   hosts:
  *     mydev:
  *       hostname: dev.example.com
- *       shell_setup: 'source $HOME/.nvm/nvm.sh 2>/dev/null'   # nvm
- *       # shell_setup: 'eval "$(fnm env)" 2>/dev/null'        # fnm
- *       # shell_setup: 'export VOLTA_HOME="$HOME/.volta"; export PATH="$VOLTA_HOME/bin:$PATH"'  # volta
+ *       shell_setup: 'source $HOME/.nvm/nvm.sh 2>/dev/null'
  *
  * @param shellSetup — optional shell snippet from config.hosts[].shell_setup
  */
@@ -320,10 +315,34 @@ export function buildRemotePreamble(shellSetup?: string): string {
   const parts = [REMOTE_BASE_PATH]
   if (shellSetup) {
     // User's shell_setup runs after base PATH; `|| true` ensures exit 0
-    // even if the setup fails (e.g. nvm not installed on a fresh host).
+    // so downstream && chains are not short-circuited when setup fails.
     parts.push(`(${shellSetup}) 2>/dev/null || true`)
   }
   return parts.join('; ')
+}
+
+/**
+ * Wrap a remote command to run inside the user's login shell.
+ *
+ * SSH non-interactive commands (`ssh host 'cmd'`) don't source profile files
+ * (.bashrc, .zshrc, .profile, etc.) — unlike tmux which spawns `$SHELL -l`.
+ * This means node version managers (nvm, fnm, volta, asdf) aren't loaded.
+ *
+ * Fix: wrap the command in `$SHELL -lc '...'` so the remote shell runs as a
+ * login shell and sources all profile files automatically.
+ * `$SHELL` is always set by sshd to the user's login shell (from /etc/passwd).
+ *
+ * When `shell_setup` is configured, it's injected INSIDE the login shell
+ * (after profiles are loaded) for additional setup that profiles miss.
+ */
+export function wrapInLoginShell(cmd: string, shellSetup?: string): string {
+  const parts: string[] = []
+  if (shellSetup) {
+    parts.push(`(${shellSetup}) 2>/dev/null || true`)
+  }
+  parts.push(cmd)
+  const inner = parts.join('; ')
+  return `$SHELL -lc ${shellQuote(inner)}`
 }
 
 /**
@@ -435,7 +454,8 @@ export class RemoteIO implements SessionIO {
     // 4. Starts claude reading from the FIFO, writing to JSONL
     // 5. Tails the JSONL to stdout (so SSH connection streams it back)
     const quotedArgs = claudeArgs.map((a) => shellQuote(a))
-    const preamble = `${buildRemotePreamble(this.sshTarget.shell_setup)} && CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`
+    // shell_setup is handled by wrapInLoginShell() below — preamble only needs base PATH
+    const preamble = `${REMOTE_BASE_PATH} && CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`
 
     const setupCmds = [
       `mkdir -p ${shellQuote(remoteDir)}`,
@@ -514,6 +534,11 @@ export class RemoteIO implements SessionIO {
       fullCmd = `${setupCmds.join(' && ')} && ${claudeCmd}`
     }
 
+    // Wrap in a login shell so profile files (.bashrc, .zshrc, .profile) are
+    // sourced — same as tmux. This ensures node version managers (nvm, fnm,
+    // volta) are loaded automatically. $SHELL is set by sshd.
+    const wrappedCmd = wrapInLoginShell(fullCmd, this.sshTarget.shell_setup)
+
     // Build SSH args
     const hostString = this.sshTarget.user
       ? `${this.sshTarget.user}@${this.sshTarget.hostname}`
@@ -528,7 +553,7 @@ export class RemoteIO implements SessionIO {
     if (this.sshTarget.port) {
       sshArgs.push('-p', String(this.sshTarget.port))
     }
-    sshArgs.push(hostString, fullCmd)
+    sshArgs.push(hostString, wrappedCmd)
 
     // Local output file — SSH stdout (which is remote tail -f) goes here.
     // On resume (append=true), append to preserve previous turns' data.
