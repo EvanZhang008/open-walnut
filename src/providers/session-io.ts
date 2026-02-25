@@ -15,9 +15,9 @@
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
+import { spawn, execFile, execFileSync, type ChildProcess } from 'node:child_process'
 import { JsonlTailer } from '../core/jsonl-tailer.js'
-import { SESSION_STREAMS_DIR } from '../constants.js'
+import { SESSION_STREAMS_DIR, REMOTE_IMAGES_DIR } from '../constants.js'
 import { log } from '../logging/index.js'
 
 // ── SessionIO interface ──
@@ -291,13 +291,41 @@ export function shellQuote(s: string): string {
 }
 
 /**
+ * PATH setup for remote SSH commands.
+ *
+ * Non-interactive SSH sessions don't source .bashrc/.profile, so tools
+ * managed by nvm (like node) aren't in PATH. When Claude CLI is installed
+ * via npm (not standalone), it needs node to run. This preamble:
+ *   1. Adds the standard install locations (~/.local/bin, ~/.npm-global/bin)
+ *   2. Auto-detects a working nvm node (tries newest first, falls back to older)
+ *   3. APPENDS nvm bin to PATH (not prepend) so standalone claude in
+ *      ~/.local/bin takes priority over any npm-installed claude in nvm dirs
+ *   4. Gracefully no-ops when nvm isn't installed
+ *
+ * Why iterate instead of picking the latest? On older machines (e.g. Amazon
+ * Linux 2 with GLIBC < 2.27), newer node versions (18+) fail with
+ * `/lib64/libc.so.6: version 'GLIBC_2.28' not found`. The loop finds the
+ * newest node that actually runs on the host.
+ */
+export const REMOTE_PATH_SETUP = [
+  'export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"',
+  // Try nvm nodes from newest to oldest; use the first that starts successfully
+  'NVM_BIN=""',
+  'for d in $(ls -d "$HOME/.nvm/versions/node"/*/bin 2>/dev/null | sort -Vr); do "$d/node" -e 0 2>/dev/null && NVM_BIN="$d" && break; done',
+  // APPEND (not prepend) — nvm provides `node`, but standalone claude in ~/.local/bin stays first.
+  // `|| true` ensures exit code 0 so downstream `&&` chains (CLAUDE_CODE_DISABLE_BACKGROUND_TASKS,
+  // initial message printf) are not short-circuited when nvm is absent.
+  '[ -n "$NVM_BIN" ] && export PATH="$PATH:$NVM_BIN" || true',
+].join('; ')
+
+/**
  * Build the remote shell command string for SSH execution.
  * Produces: `cd '/path' && CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude <args>`
  * All arguments are shell-quoted for safety on the remote shell.
  */
 export function buildRemoteCommand(claudeArgs: string[], cwd?: string): string {
   const quotedArgs = claudeArgs.map((a) => shellQuote(a))
-  const preamble = 'export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH" && CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1'
+  const preamble = `${REMOTE_PATH_SETUP} && CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`
   const claudeCmd = `${preamble} claude ${quotedArgs.join(' ')}`
   if (cwd) {
     return `cd ${shellQuote(cwd)} && ${claudeCmd}`
@@ -328,6 +356,11 @@ export class RemoteIO implements SessionIO {
 
   /** Remote directory where transferred images are stored (for cleanup). */
   remoteImagesDir?: string
+
+  /** Expose SSH target for downstream consumers (e.g. remote image download). */
+  get target(): SshTarget {
+    return this.sshTarget
+  }
 
   readonly processName = 'ssh'
 
@@ -394,7 +427,7 @@ export class RemoteIO implements SessionIO {
     // 4. Starts claude reading from the FIFO, writing to JSONL
     // 5. Tails the JSONL to stdout (so SSH connection streams it back)
     const quotedArgs = claudeArgs.map((a) => shellQuote(a))
-    const preamble = 'export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH" && CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1'
+    const preamble = `${REMOTE_PATH_SETUP} && CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`
 
     const setupCmds = [
       `mkdir -p ${shellQuote(remoteDir)}`,
@@ -886,6 +919,101 @@ export async function transferImagesForRemoteSession(
     remoteDir,
     host: sshTarget.hostname,
   })
+
+  return rewritten
+}
+
+// ── Remote → local image download (reverse proxy) ──
+
+/**
+ * Find remote image file paths referenced in a text string.
+ * Unlike findLocalImagePaths(), skips the local fs.statSync check
+ * (we can't stat remote files). Returns deduplicated path list.
+ */
+export function findRemoteImagePaths(text: string): string[] {
+  const matches = text.match(IMAGE_PATH_RE)
+  if (!matches) return []
+  return [...new Set(matches)]
+}
+
+/**
+ * Download a single file from the remote host via SCP.
+ * Returns true on success, false on failure (graceful degradation).
+ */
+export function downloadRemoteImage(
+  sshTarget: SshTarget,
+  remotePath: string,
+  localPath: string,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    // Ensure local directory exists
+    const dir = path.dirname(localPath)
+    fs.mkdirSync(dir, { recursive: true })
+
+    const hostString = sshTarget.user
+      ? `${sshTarget.user}@${sshTarget.hostname}`
+      : sshTarget.hostname
+
+    // SCP uses -P for port (not -p)
+    const scpArgs = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no']
+    if (sshTarget.port) scpArgs.push('-P', String(sshTarget.port))
+    scpArgs.push(`${hostString}:${remotePath}`, localPath)
+
+    execFile('scp', scpArgs, { timeout: 30_000 }, (err) => {
+      if (err) {
+        log.session.warn('remote image download failed', {
+          remotePath,
+          localPath,
+          host: sshTarget.hostname,
+          error: err.message,
+        })
+        resolve(false)
+      } else {
+        log.session.debug('remote image downloaded', { remotePath, localPath, host: sshTarget.hostname })
+        resolve(true)
+      }
+    })
+  })
+}
+
+/**
+ * Rewrite remote image paths in text to local paths, and fire-and-forget
+ * SCP downloads for images not yet on disk.
+ *
+ * Synchronously rewrites ALL detected paths (so downstream events use local paths).
+ * The actual download happens asynchronously — by the time a human looks at the
+ * image in the UI, the SCP (~100-500ms on LAN) is complete.
+ *
+ * @param cache — per-session Map<remotePath, localPath> to avoid re-downloading
+ */
+export function rewriteRemoteImagePaths(
+  text: string,
+  sshTarget: SshTarget,
+  sessionId: string,
+  cache: Map<string, string>,
+): string {
+  const remotePaths = findRemoteImagePaths(text)
+  if (remotePaths.length === 0) return text
+
+  let rewritten = text
+  for (const remotePath of remotePaths) {
+    // Check cache first
+    let localPath = cache.get(remotePath)
+    if (!localPath) {
+      // Compute local target: ~/.walnut/images/remote/{sessionId}/{filename}
+      localPath = path.join(REMOTE_IMAGES_DIR, sessionId, path.basename(remotePath))
+      cache.set(remotePath, localPath)
+
+      // If not already downloaded, fire-and-forget SCP
+      if (!fs.existsSync(localPath)) {
+        downloadRemoteImage(sshTarget, remotePath, localPath).catch(() => {
+          // Already logged inside downloadRemoteImage
+        })
+      }
+    }
+
+    rewritten = rewritten.split(remotePath).join(localPath)
+  }
 
   return rewritten
 }

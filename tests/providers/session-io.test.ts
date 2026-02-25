@@ -20,7 +20,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 // Isolate all file I/O to a temp directory
 vi.mock('../../src/constants.js', () => createMockConstants())
 
-import { LocalIO, RemoteIO, createSessionIO, findLocalImagePaths, transferImagesForRemoteSession } from '../../src/providers/session-io.js'
+import { LocalIO, RemoteIO, createSessionIO, findLocalImagePaths, transferImagesForRemoteSession, buildRemoteCommand, REMOTE_PATH_SETUP } from '../../src/providers/session-io.js'
 import { SESSION_STREAMS_DIR, WALNUT_HOME } from '../../src/constants.js'
 
 const tmpBase = WALNUT_HOME
@@ -491,6 +491,9 @@ describe('RemoteIO', () => {
       expect(remoteCmd).toContain('claude')
       expect(remoteCmd).toContain('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1')
       expect(remoteCmd).toContain("cd '/home/admin/project'")
+      // Verify nvm detection is present in the remote command
+      expect(remoteCmd).toContain('NVM_BIN')
+      expect(remoteCmd).toContain('.nvm/versions/node')
       // Initial message should be embedded in the remote command
       expect(remoteCmd).toContain('printf')
 
@@ -680,6 +683,64 @@ describe('RemoteIO', () => {
     })
     io.remoteImagesDir = '/tmp/walnut-images/abc123'
     expect(io.remoteImagesDir).toBe('/tmp/walnut-images/abc123')
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════
+//  Section 3b: REMOTE_PATH_SETUP & buildRemoteCommand
+// ═══════════════════════════════════════════════════════════════════
+
+describe('REMOTE_PATH_SETUP', () => {
+  it('includes ~/.local/bin and ~/.npm-global/bin', () => {
+    expect(REMOTE_PATH_SETUP).toContain('$HOME/.local/bin')
+    expect(REMOTE_PATH_SETUP).toContain('$HOME/.npm-global/bin')
+  })
+
+  it('includes nvm auto-detection for node', () => {
+    expect(REMOTE_PATH_SETUP).toContain('.nvm/versions/node')
+    expect(REMOTE_PATH_SETUP).toContain('NVM_BIN')
+  })
+
+  it('exits cleanly (code 0) when nvm is absent', () => {
+    // Critical: REMOTE_PATH_SETUP must always exit 0 so downstream && chains
+    // (CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, initial message printf) are not skipped.
+    const { execFileSync } = require('node:child_process')
+    // Run in a clean env with a fake HOME that has no .nvm directory
+    const result = execFileSync('bash', ['-c', `HOME=/tmp/nonexistent-walnut-test-home; ${REMOTE_PATH_SETUP}; echo "EXIT:$?"`], {
+      encoding: 'utf-8',
+      timeout: 5000,
+    })
+    expect(result.trim()).toBe('EXIT:0')
+  })
+
+  it('downstream && chain works when nvm is absent', () => {
+    // Verify that commands chained after REMOTE_PATH_SETUP with && still execute
+    const { execFileSync } = require('node:child_process')
+    const result = execFileSync('bash', ['-c', `HOME=/tmp/nonexistent-walnut-test-home; ${REMOTE_PATH_SETUP} && echo "DOWNSTREAM_OK"`], {
+      encoding: 'utf-8',
+      timeout: 5000,
+    })
+    expect(result.trim()).toBe('DOWNSTREAM_OK')
+  })
+})
+
+describe('buildRemoteCommand', () => {
+  it('includes nvm detection in PATH preamble', () => {
+    const cmd = buildRemoteCommand(['-p', '--output-format', 'stream-json'])
+    expect(cmd).toContain('NVM_BIN')
+    expect(cmd).toContain('.nvm/versions/node')
+    expect(cmd).toContain('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1')
+    expect(cmd).toContain('claude')
+  })
+
+  it('includes cd when cwd is provided', () => {
+    const cmd = buildRemoteCommand(['-p'], '/home/user/project')
+    expect(cmd).toContain("cd '/home/user/project'")
+  })
+
+  it('omits cd when no cwd', () => {
+    const cmd = buildRemoteCommand(['-p'])
+    expect(cmd).not.toMatch(/\bcd\b/)
   })
 })
 
