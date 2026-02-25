@@ -40,6 +40,7 @@ export function createMockConstants(prefix = 'walnut-test') {
     SESSION_STREAMS_DIR: path.join(tmpBase, 'sessions', 'streams'),
     SESSION_QUEUE_FILE: path.join(tmpBase, 'session-message-queue.json'),
     IMAGES_DIR: path.join(tmpBase, 'images'),
+    REMOTE_IMAGES_DIR: path.join(tmpBase, 'images', 'remote'),
     HEARTBEAT_FILE: path.join(tmpBase, 'HEARTBEAT.md'),
     LOG_DIR: path.join(tmpBase, 'logs'),
     LOG_PREFIX: 'walnut-test-',

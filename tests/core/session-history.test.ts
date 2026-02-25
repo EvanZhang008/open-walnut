@@ -240,7 +240,7 @@ describe('extractPlanContent', () => {
       ] } },
     ]);
 
-    const plan = extractPlanContent('plan-write', '/test');
+    const plan = await extractPlanContent('plan-write', '/test');
     expect(plan).toBe('# Plan\n\n## Step 1\nDo things');
   });
 
@@ -251,7 +251,7 @@ describe('extractPlanContent', () => {
       ] } },
     ]);
 
-    const plan = extractPlanContent('plan-exit', '/test');
+    const plan = await extractPlanContent('plan-exit', '/test');
     expect(plan).toBe('Simple plan text');
   });
 
@@ -261,12 +261,12 @@ describe('extractPlanContent', () => {
       msg('a1', 'assistant', 'Hi there'),
     ]);
 
-    const plan = extractPlanContent('no-plan', '/test');
+    const plan = await extractPlanContent('no-plan', '/test');
     expect(plan).toBeNull();
   });
 
-  it('returns null for missing session file', () => {
-    const plan = extractPlanContent('nonexistent', '/test');
+  it('returns null for missing session file', async () => {
+    const plan = await extractPlanContent('nonexistent', '/test');
     expect(plan).toBeNull();
   });
 
@@ -276,7 +276,7 @@ describe('extractPlanContent', () => {
     await fsp.mkdir(dir, { recursive: true });
     await fsp.writeFile(path.join(dir, 'empty.jsonl'), '');
 
-    const plan = extractPlanContent('empty', '/test');
+    const plan = await extractPlanContent('empty', '/test');
     expect(plan).toBeNull();
   });
 
@@ -291,7 +291,7 @@ describe('extractPlanContent', () => {
       ] } },
     ]);
 
-    const plan = extractPlanContent('plan-both', '/test');
+    const plan = await extractPlanContent('plan-both', '/test');
     expect(plan).toBe('Detailed plan from Write');
   });
 });

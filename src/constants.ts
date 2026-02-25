@@ -81,6 +81,7 @@ export const USAGE_DB_FILE = path.join(WALNUT_HOME, 'usage.sqlite');
 export const SESSION_STREAMS_DIR = path.join(WALNUT_HOME, 'sessions', 'streams');
 export const SESSION_QUEUE_FILE = path.join(WALNUT_HOME, 'session-message-queue.json');
 export const IMAGES_DIR = path.join(WALNUT_HOME, 'images');
+export const REMOTE_IMAGES_DIR = path.join(IMAGES_DIR, 'remote');
 export const HEARTBEAT_FILE = path.join(WALNUT_HOME, 'HEARTBEAT.md');
 export const COMMANDS_DIR = path.join(WALNUT_HOME, 'commands');
 // Resolve builtin commands dir. tsup inlines this into each entry point

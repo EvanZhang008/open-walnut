@@ -5,7 +5,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { log } from '../../logging/index.js'
 import { listSessions, getRecentSessions, getSessionSummaries, getSessionsForTask, getSessionByClaudeId, updateSessionRecord, isTriageSession } from '../../core/session-tracker.js'
-import { readSessionHistory, extractPlanContent } from '../../core/session-history.js'
+import { readSessionHistory, extractPlanContent, rewriteHistoryRemoteImages } from '../../core/session-history.js'
 import { listTasks } from '../../core/task-manager.js'
 import { getConfig } from '../../core/config-manager.js'
 import { bus, EventNames, eventData } from '../../core/event-bus.js'
@@ -281,10 +281,15 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
     const record = await getSessionByClaudeId(sessionId)
     const cwd = record?.cwd
 
-    const messages = await readSessionHistory(sessionId, cwd, record?.host, record?.outputFile)
+    let messages = await readSessionHistory(sessionId, cwd, record?.host, record?.outputFile)
     if (messages.length === 0 && !record) {
       res.status(404).json({ error: 'Session not found' })
       return
+    }
+
+    // Rewrite remote image paths to local paths for remote sessions
+    if (record?.host) {
+      messages = await rewriteHistoryRemoteImages(messages, record.host, sessionId)
     }
 
     res.json({ messages })
@@ -321,7 +326,7 @@ sessionsRouter.get('/:sessionId/plan', async (req: Request, res: Response, next:
     // Strategy 2: extractPlanContent from JSONL (Write to plans/ or ExitPlanMode.input.plan)
     const planRecord = isFollowedLink ? await getSessionByClaudeId(planSessionId) : record
     if (planRecord) {
-      const extracted = extractPlanContent(planSessionId, planRecord.cwd)
+      const extracted = await extractPlanContent(planSessionId, planRecord.cwd, planRecord.host)
       if (extracted) {
         res.json({
           content: extracted,

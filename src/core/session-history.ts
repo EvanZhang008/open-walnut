@@ -5,13 +5,25 @@
  *   ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl
  *
  * Path encoding: /Users/foo/bar → -Users-foo-bar (replace / with -)
+ *
+ * File access for both local and remote sessions is handled by
+ * SessionFileReader (session-file-reader.ts).
  */
 
 import fs from 'node:fs';
-import path from 'node:path';
-import { CLAUDE_HOME, SESSION_STREAMS_DIR } from '../constants.js';
-import { getConfig } from './config-manager.js';
 import { log } from '../logging/index.js';
+import {
+  encodeProjectPath,
+  findLocalJsonlPath,
+  readSessionJsonlContent,
+  readSubagentContents,
+} from './session-file-reader.js';
+import { rewriteRemoteImagePaths } from '../providers/session-io.js';
+import type { SshTarget } from '../providers/session-io.js';
+
+// Re-export for backward compatibility
+export { encodeProjectPath };
+export { findLocalJsonlPath as findSessionJsonlPath } from './session-file-reader.js';
 
 export interface SessionHistoryTool {
   name: string;
@@ -40,126 +52,6 @@ export interface PaginationMeta {
   pageSize: number;
   total: number;
   totalPages: number;
-}
-
-/**
- * Encode a working directory path the way Claude Code does.
- * /Users/foo/bar → -Users-foo-bar
- */
-export function encodeProjectPath(cwd: string): string {
-  return cwd.replaceAll('/', '-');
-}
-
-/**
- * Find the local streaming capture file in SESSION_STREAMS_DIR for a session.
- * These files are created when sessions are run (local or remote via SSH stdout pipe).
- */
-function findLocalStreamPath(sessionId: string): string | null {
-  try {
-    const files = fs.readdirSync(SESSION_STREAMS_DIR);
-    for (const file of files) {
-      if (!file.endsWith('.jsonl')) continue;
-      const filePath = path.join(SESSION_STREAMS_DIR, file);
-      try {
-        const firstLine = fs.readFileSync(filePath, 'utf-8').split('\n')[0];
-        if (firstLine) {
-          const parsed = JSON.parse(firstLine);
-          if (parsed.sessionId === sessionId || parsed.session_id === sessionId) {
-            return filePath;
-          }
-        }
-      } catch {
-        // Skip unparseable files
-      }
-    }
-  } catch {
-    // SESSION_STREAMS_DIR doesn't exist
-  }
-  return null;
-}
-
-/**
- * Build the remote JSONL path on a remote host.
- * Claude Code stores sessions at ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl
- */
-function buildRemoteJsonlPath(sessionId: string, cwd?: string): string {
-  if (cwd) {
-    const encoded = encodeProjectPath(cwd);
-    return `~/.claude/projects/${encoded}/${sessionId}.jsonl`;
-  }
-  // Without cwd, use a glob pattern to find the file
-  return `~/.claude/projects/*/${sessionId}.jsonl`;
-}
-
-/**
- * Read session JSONL content from a remote host via SSH.
- * Returns the raw JSONL content string, or null on failure.
- */
-async function readRemoteJsonlContent(host: string, sessionId: string, cwd?: string): Promise<string | null> {
-  try {
-    const config = await getConfig();
-    const hostConfig = config.hosts?.[host];
-    if (!hostConfig) {
-      log.session.warn('SSH fallback: unknown host', { host, sessionId });
-      return null;
-    }
-
-    const target = hostConfig.user ? `${hostConfig.user}@${hostConfig.hostname}` : hostConfig.hostname;
-    const sshArgs = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no'];
-    if (hostConfig.port) {
-      sshArgs.push('-p', String(hostConfig.port));
-    }
-
-    const remotePath = buildRemoteJsonlPath(sessionId, cwd);
-    const useGlob = !cwd;
-
-    // When cwd is unknown, use a glob to find the file on the remote
-    const remoteCmd = useGlob
-      ? `for f in ${remotePath}; do [ -f "$f" ] && cat "$f" && exit 0; done; exit 1`
-      : `cat '${remotePath}'`;
-
-    const { execSync } = await import('node:child_process');
-    const content = execSync(
-      `ssh ${sshArgs.join(' ')} ${target} "${remoteCmd}"`,
-      { encoding: 'utf-8', timeout: 15000, stdio: ['pipe', 'pipe', 'pipe'] },
-    );
-    return content || null;
-  } catch (err) {
-    log.session.debug('SSH fallback failed', {
-      host,
-      sessionId,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return null;
-  }
-}
-
-/**
- * Find the JSONL file for a session.
- * If cwd provided, check the exact encoded path.
- * Fallback: search all project dirs for the session ID.
- */
-export function findSessionJsonlPath(sessionId: string, cwd?: string): string | null {
-  const projectsDir = path.join(CLAUDE_HOME, 'projects');
-
-  if (cwd) {
-    const encoded = encodeProjectPath(cwd);
-    const filePath = path.join(projectsDir, encoded, `${sessionId}.jsonl`);
-    if (fs.existsSync(filePath)) return filePath;
-  }
-
-  // Fallback: search all project directories
-  try {
-    const dirs = fs.readdirSync(projectsDir);
-    for (const dir of dirs) {
-      const filePath = path.join(projectsDir, dir, `${sessionId}.jsonl`);
-      if (fs.existsSync(filePath)) return filePath;
-    }
-  } catch {
-    // projects dir doesn't exist
-  }
-
-  return null;
 }
 
 // ── Internal: raw JSONL line shape ──
@@ -192,11 +84,11 @@ interface RawJsonlLine {
 }
 
 /**
- * Core parsing logic: parse JSONL content and return deduplicated SessionHistoryMessage[].
- * Accepts either a file path (reads from disk) or raw content string (for SSH fallback).
+ * Core parsing logic: parse raw JSONL content string into SessionHistoryMessage[].
+ * Deduplicates by message.id, handles queue-operations, groups child messages
+ * by parent_tool_use_id (from stream capture).
  */
-function parseSessionMessages(filePathOrContent: string, isRawContent = false): SessionHistoryMessage[] {
-  const content = isRawContent ? filePathOrContent : fs.readFileSync(filePathOrContent, 'utf-8');
+function parseSessionMessages(content: string): SessionHistoryMessage[] {
   const lines = content.split('\n').filter(Boolean);
 
   // Parse all lines
@@ -452,61 +344,27 @@ function parseSessionMessages(filePathOrContent: string, isRawContent = false): 
 }
 
 /**
- * Read subagent JSONL files for a session.
- * Claude Code stores each Task subagent's full conversation at:
- *   ~/.claude/projects/<encoded-cwd>/<session-id>/subagents/agent-<agentId>.jsonl
+ * Read subagent messages for a session (local or remote).
+ * Uses readSubagentContents() from session-file-reader for transparent access.
  *
  * Returns a Map<agentId, SessionHistoryMessage[]> with parsed child messages.
  */
-function readSubagentMessages(sessionId: string, cwd?: string): Map<string, SessionHistoryMessage[]> {
+async function readSubagentMessages(sessionId: string, cwd?: string, host?: string): Promise<Map<string, SessionHistoryMessage[]>> {
   const result = new Map<string, SessionHistoryMessage[]>();
-  const projectsDir = path.join(CLAUDE_HOME, 'projects');
 
-  // Find the session directory (which contains the subagents/ folder)
-  const candidates: string[] = [];
-  if (cwd) {
-    const encoded = encodeProjectPath(cwd);
-    candidates.push(path.join(projectsDir, encoded, sessionId));
-  }
-  // Fallback: search all project directories
-  try {
-    for (const dir of fs.readdirSync(projectsDir)) {
-      const candidate = path.join(projectsDir, dir, sessionId);
-      if (!candidates.includes(candidate)) candidates.push(candidate);
-    }
-  } catch { /* projects dir doesn't exist */ }
-
-  for (const sessionDir of candidates) {
-    const subagentsDir = path.join(sessionDir, 'subagents');
-    if (!fs.existsSync(subagentsDir)) continue;
-
+  const rawContents = await readSubagentContents(sessionId, cwd, host);
+  for (const [agentId, content] of rawContents) {
     try {
-      const files = fs.readdirSync(subagentsDir);
-      for (const file of files) {
-        if (!file.startsWith('agent-') || !file.endsWith('.jsonl')) continue;
-        // Extract agentId from filename: agent-a05f354d2ba698034.jsonl → a05f354d2ba698034
-        const agentId = file.slice('agent-'.length, -'.jsonl'.length);
-        const filePath = path.join(subagentsDir, file);
-        try {
-          const messages = parseSessionMessages(filePath);
-          if (messages.length > 0) {
-            result.set(agentId, messages);
-          }
-        } catch (err) {
-          log.session.debug('failed to parse subagent JSONL', {
-            sessionId, agentId, filePath,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
+      const messages = parseSessionMessages(content);
+      if (messages.length > 0) {
+        result.set(agentId, messages);
       }
     } catch (err) {
-      log.session.debug('failed to read subagents dir', {
-        sessionId, subagentsDir,
+      log.session.debug('failed to parse subagent JSONL', {
+        sessionId, agentId,
         error: err instanceof Error ? err.message : String(err),
       });
     }
-    // Found the session dir with subagents — no need to check more candidates
-    if (result.size > 0) break;
   }
 
   return result;
@@ -532,84 +390,30 @@ function attachSubagentMessages(messages: SessionHistoryMessage[], subagentMap: 
  * Read and parse session history from Claude Code's JSONL file.
  * Returns an ordered array of user/assistant messages.
  *
- * When `host` is provided and local files aren't found, falls back to reading
- * from the remote machine via SSH. Local streaming files (SESSION_STREAMS_DIR)
- * are checked first since they're immediately available.
- *
- * When `outputFile` is provided (from the session record), it is tried as a
- * direct fallback before SSH — useful for sessions that died before the JSONL
- * was renamed to the canonical path (e.g. resume-failure phantom sessions).
+ * Uses readSessionJsonlContent() for transparent local/remote file access.
+ * When `host` is provided, falls back to reading from the remote host via SSH.
  */
 export async function readSessionHistory(sessionId: string, cwd?: string, host?: string, outputFile?: string): Promise<SessionHistoryMessage[]> {
   let messages: SessionHistoryMessage[] | null = null;
 
-  // 1. Try local canonical path (~/.claude/projects/...)
-  const filePath = findSessionJsonlPath(sessionId, cwd);
-  if (filePath) {
+  const result = await readSessionJsonlContent(sessionId, cwd, host, outputFile);
+  if (result) {
     try {
-      messages = parseSessionMessages(filePath);
+      messages = parseSessionMessages(result.content);
     } catch (err) {
-      log.session.warn('failed to read session history', {
-        sessionId,
+      log.session.warn('failed to parse session history', {
+        sessionId, source: result.source,
         error: err instanceof Error ? err.message : String(err),
       });
-      // Fall through to other strategies
-    }
-  }
-
-  // 2. Try local streaming capture (SESSION_STREAMS_DIR — available for both local and SSH sessions)
-  if (!messages) {
-    const streamPath = findLocalStreamPath(sessionId);
-    if (streamPath) {
-      try {
-        messages = parseSessionMessages(streamPath);
-      } catch (err) {
-        log.session.warn('failed to read session stream file', {
-          sessionId,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-  }
-
-  // 2.5 Try the direct outputFile path from the session record — handles cases where
-  // the tmp file was never renamed to the canonical path (e.g. session died before init).
-  if (!messages && outputFile) {
-    try {
-      if (fs.existsSync(outputFile)) {
-        messages = parseSessionMessages(outputFile);
-      }
-    } catch (err) {
-      log.session.warn('failed to read session outputFile', {
-        sessionId,
-        outputFile,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  // 3. SSH fallback: read from remote host when host is provided
-  if (!messages && host) {
-    const remoteContent = await readRemoteJsonlContent(host, sessionId, cwd);
-    if (remoteContent) {
-      try {
-        messages = parseSessionMessages(remoteContent, true);
-      } catch (err) {
-        log.session.warn('failed to parse remote session history', {
-          sessionId,
-          host,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
     }
   }
 
   if (!messages) return [];
 
-  // 4. Check for Task tool_use blocks with agentIds — attach subagent child messages
+  // Attach subagent child messages (works for both local and remote sessions)
   const hasTaskTools = messages.some(m => m.tools?.some(t => t.name === 'Task' && t.agentId));
   if (hasTaskTools) {
-    const subagentMap = readSubagentMessages(sessionId, cwd);
+    const subagentMap = await readSubagentMessages(sessionId, cwd, host);
     attachSubagentMessages(messages, subagentMap);
   }
 
@@ -620,13 +424,29 @@ export async function readSessionHistory(sessionId: string, cwd?: string, host?:
  * Extract only the plan content from a session's JSONL file.
  * Scans for Write→~/.claude/plans/ and ExitPlanMode tool_use blocks
  * without building the full message array — lightweight fast path.
+ *
+ * Supports both local and remote sessions via readSessionJsonlContent().
  */
-export function extractPlanContent(sessionId: string, cwd?: string): string | null {
-  const filePath = findSessionJsonlPath(sessionId, cwd);
-  if (!filePath) return null;
+export async function extractPlanContent(sessionId: string, cwd?: string, host?: string): Promise<string | null> {
+  // Try local first (fast path)
+  const localPath = findLocalJsonlPath(sessionId, cwd);
+  let content: string | undefined;
+
+  if (localPath) {
+    try {
+      content = fs.readFileSync(localPath, 'utf-8');
+    } catch { /* fall through */ }
+  }
+
+  // If no local content and host provided, try remote
+  if (!content && host) {
+    const result = await readSessionJsonlContent(sessionId, cwd, host);
+    if (result) content = result.content;
+  }
+
+  if (!content) return null;
 
   try {
-    const content = fs.readFileSync(filePath, 'utf-8');
     const lines = content.split('\n').filter(Boolean);
 
     let lastWrittenPlan: string | null = null;
@@ -708,14 +528,29 @@ export interface RecoveredSessionState {
  * truth (Claude CLI's own JSONL) instead of our potentially-incomplete stream
  * capture file.
  *
+ * Supports both local and remote sessions via readSessionJsonlContent().
  * Scans forward through the file, keeping only the LAST value of each field.
  */
-export function recoverStateFromJsonl(sessionId: string, cwd?: string): RecoveredSessionState | null {
-  const filePath = findSessionJsonlPath(sessionId, cwd);
-  if (!filePath) return null;
+export async function recoverStateFromJsonl(sessionId: string, cwd?: string, host?: string): Promise<RecoveredSessionState | null> {
+  // Try local first (fast path — most common case for crash recovery)
+  const localPath = findLocalJsonlPath(sessionId, cwd);
+  let content: string | undefined;
+
+  if (localPath) {
+    try {
+      content = fs.readFileSync(localPath, 'utf-8');
+    } catch { /* fall through */ }
+  }
+
+  // If no local content and host provided, try remote
+  if (!content && host) {
+    const result = await readSessionJsonlContent(sessionId, cwd, host);
+    if (result) content = result.content;
+  }
+
+  if (!content) return null;
 
   try {
-    const content = fs.readFileSync(filePath, 'utf-8');
     const lines = content.split('\n').filter(Boolean);
 
     const state: RecoveredSessionState = {};
@@ -780,8 +615,6 @@ export function recoverStateFromJsonl(sessionId: string, cwd?: string): Recovere
           //
           // Therefore we detect EnterPlanMode from the tool_use block as the
           // authoritative signal that the session switched to plan mode.
-          // Empirically verified across 5+ test sessions — see session a5742374,
-          // 8a9962d9, e89fc530 where canonical JSONL has zero permissionMode=plan.
           if (name === 'EnterPlanMode') {
             state.mode = 'plan';
           }
@@ -860,4 +693,52 @@ export async function readSessionHistoryPaginated(
     });
     return { messages: [], pagination: { page, pageSize, total: 0, totalPages: 0 } };
   }
+}
+
+/**
+ * Rewrite remote image paths in session history messages to local paths.
+ * Used when replaying history for a remote session — downloads images that
+ * aren't already cached locally and rewrites paths so the UI can render them.
+ */
+export async function rewriteHistoryRemoteImages(
+  messages: SessionHistoryMessage[],
+  host: string,
+  sessionId: string,
+): Promise<SessionHistoryMessage[]> {
+  // Resolve sshTarget from config.hosts
+  let sshTarget: SshTarget | undefined
+  try {
+    const { getConfig } = await import('./config-manager.js')
+    const config = await getConfig()
+    const hostDef = config.hosts?.[host]
+    if (hostDef) {
+      const hostname = hostDef.hostname ?? (hostDef as Record<string, unknown>).ssh as string | undefined
+      if (hostname) {
+        sshTarget = { hostname, user: hostDef.user, port: hostDef.port }
+      }
+    }
+  } catch {
+    log.session.warn('failed to resolve host config for history image rewrite', { host, sessionId })
+  }
+
+  if (!sshTarget) return messages
+
+  const cache = new Map<string, string>()
+
+  for (const msg of messages) {
+    // Rewrite text content
+    if (msg.text) {
+      msg.text = rewriteRemoteImagePaths(msg.text, sshTarget, sessionId, cache)
+    }
+    // Rewrite tool results
+    if (msg.tools) {
+      for (const tool of msg.tools) {
+        if (tool.result) {
+          tool.result = rewriteRemoteImagePaths(tool.result, sshTarget, sessionId, cache)
+        }
+      }
+    }
+  }
+
+  return messages
 }
