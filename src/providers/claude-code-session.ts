@@ -33,7 +33,7 @@ import { isProcessAlive } from '../utils/process.js'
 import { SESSION_STREAMS_DIR } from '../constants.js'
 import { log } from '../logging/index.js'
 import { markProcessing, removeProcessed, revertToPending, loadQueue, getAllSessionsWithPending, enqueueMessage } from '../core/session-message-queue.js'
-import { createSessionIO, LocalIO, RemoteIO, transferImagesForRemoteSession } from './session-io.js'
+import { createSessionIO, LocalIO, RemoteIO, transferImagesForRemoteSession, rewriteRemoteImagePaths } from './session-io.js'
 import type { SessionIO, SshTarget } from './session-io.js'
 import { recoverStateFromJsonl } from '../core/session-history.js'
 import type { SessionRecord, SessionMode, ProcessStatus, WorkStatus, SessionProvider } from '../core/types.js'
@@ -197,6 +197,8 @@ export class ClaudeCodeSession {
   private _lastPlanWriteContent: string | null = null
   /** True when we've already auto-replied to AskUserQuestion this turn. Reset on new turn. */
   private _askUserIntercepted = false
+  /** Per-session cache for remote→local image path rewriting (avoids re-downloading). */
+  private _remoteImageCache = new Map<string, string>()
 
   /** Resolves with the Claude session ID once the system init event arrives. */
   readonly sessionReady: Promise<string>
@@ -471,10 +473,10 @@ export class ClaudeCodeSession {
    * Attach to an existing running process (for reconnection after restart).
    * Does NOT spawn — just tails the output file and monitors PID.
    */
-  static attachToExisting(
+  static async attachToExisting(
     record: SessionRecord,
     cliCommand?: string,
-  ): ClaudeCodeSession {
+  ): Promise<ClaudeCodeSession> {
     const session = new ClaudeCodeSession(record.taskId, record.project, cliCommand)
     session.claudeSessionId = record.claudeSessionId
     session.pid = record.pid ?? null
@@ -534,7 +536,7 @@ export class ClaudeCodeSession {
     // before an async updateSessionRecord() completed. The CloudCode JSONL
     // is maintained by Claude CLI itself and always has the ground truth.
     try {
-      const recovered = recoverStateFromJsonl(record.claudeSessionId, record.cwd)
+      const recovered = await recoverStateFromJsonl(record.claudeSessionId, record.cwd, record.host)
       if (recovered) {
         if (recovered.mode) session._mode = recovered.mode as SessionMode
         if (recovered.planFile) session.planFile = recovered.planFile
@@ -829,6 +831,17 @@ export class ClaudeCodeSession {
   }
 
   /**
+   * Rewrite remote image paths in text to local paths for remote sessions.
+   * No-op for local sessions or when io is not RemoteIO.
+   */
+  private rewriteRemoteImages(text: string): string {
+    if (!this._host || !this.io || !(this.io instanceof RemoteIO)) return text
+    const sshTarget = (this.io as RemoteIO).target
+    const sessionId = this.claudeSessionId ?? 'unknown'
+    return rewriteRemoteImagePaths(text, sshTarget, sessionId, this._remoteImageCache)
+  }
+
+  /**
    * Handle a single JSONL line from the stream-json output.
    * Parses the JSON, extracts the event type, and emits bus events.
    */
@@ -970,14 +983,16 @@ export class ClaudeCodeSession {
         const parentToolUseId = msg.parent_tool_use_id ?? undefined
         for (const block of msg.message.content) {
           if (block.type === 'text' && block.text) {
+            // Rewrite remote image paths to local paths (no-op for local sessions)
+            const text = this.rewriteRemoteImages(block.text)
             if (this.fullText.length < MAX_FULL_TEXT) {
-              this.fullText += block.text
+              this.fullText += text
             }
             log.session.debug('JSONL event: text-delta', { sessionId: this.claudeSessionId, taskId: this.taskId })
             bus.emit(EventNames.SESSION_TEXT_DELTA, {
               sessionId: this.claudeSessionId,
               taskId: this.taskId,
-              delta: block.text,
+              delta: text,
             }, ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
           } else if (block.type === 'tool_use') {
             this._activity = `Using ${block.name}`
@@ -1097,9 +1112,11 @@ export class ClaudeCodeSession {
         const userParentToolUseId = msg.parent_tool_use_id ?? undefined
         for (const block of msg.message.content) {
           if (block.type === 'tool_result') {
-            const resultContent = typeof block.content === 'string'
+            const rawResult = typeof block.content === 'string'
               ? block.content
               : (block.content != null ? JSON.stringify(block.content) : '')
+            // Rewrite remote image paths in tool results (no-op for local sessions)
+            const resultContent = this.rewriteRemoteImages(rawResult)
             log.session.debug('JSONL event: tool-result', { sessionId: this.claudeSessionId, taskId: this.taskId, toolUseId: block.tool_use_id })
             bus.emit(EventNames.SESSION_TOOL_RESULT, {
               sessionId: this.claudeSessionId,
@@ -1115,11 +1132,27 @@ export class ClaudeCodeSession {
 
       case 'result': {
         const result = event as StreamResultEvent
-        if (result.session_id) {
+
+        // On error, keep the original session ID so events reach the frontend
+        // (Claude CLI assigns a new throwaway ID even when --resume fails)
+        if (result.session_id && !result.is_error) {
           this.claudeSessionId = result.session_id
         }
 
-        const resultText = result.result ?? this.fullText
+        // Extract error messages from the result (e.g. "No conversation found with session ID: ...")
+        let resultText = result.result ?? this.fullText
+        const resultErrors = Array.isArray((result as Record<string, unknown>).errors)
+          ? ((result as Record<string, unknown>).errors as string[])
+          : undefined
+        if (result.is_error && resultErrors?.length) {
+          let errorMsg = resultErrors.join('; ')
+          // Add cwd hint — Claude CLI uses cwd to resolve session storage path,
+          // so a renamed/moved project directory causes "No conversation found"
+          if (errorMsg.includes('No conversation found')) {
+            errorMsg += ` (cwd: ${this._cwd ?? 'unknown'} — the project directory may have changed since this session was created)`
+          }
+          resultText = errorMsg
+        }
 
         log.session.info('session result received', {
           sessionId: this.claudeSessionId,
@@ -1127,6 +1160,7 @@ export class ClaudeCodeSession {
           cost: result.total_cost_usd,
           isError: result.is_error,
           hasFifo: this.io?.hasPipe ?? false,
+          ...(resultErrors?.length ? { errors: resultErrors } : {}),
         })
 
         if (this.claudeSessionId) {
@@ -1295,44 +1329,42 @@ export class SessionRunner {
    * Optionally reconnect to sessions that survived a server restart.
    */
   init(reconnectable?: SessionRecord[]): void {
-    // Reconnect to surviving sessions
-    if (reconnectable?.length) {
-      for (const record of reconnectable) {
-        try {
-          const session = ClaudeCodeSession.attachToExisting(record, this.cliCommand)
-          const mapKey = record.taskId || `reconnected-${record.claudeSessionId}`
-          this.sessions.set(mapKey, session)
-          log.session.info('reconnected to surviving session', {
-            sessionId: record.claudeSessionId,
-            taskId: record.taskId,
-            pid: record.pid,
-          })
-        } catch (err) {
-          log.session.warn('failed to reconnect to session', {
-            sessionId: record.claudeSessionId,
-            error: err instanceof Error ? err.message : String(err),
-          })
+    // Reconnect to surviving sessions + startup recovery (async)
+    const startupRecovery = async () => {
+      // Phase 1: reconnect to surviving sessions
+      if (reconnectable?.length) {
+        for (const record of reconnectable) {
+          try {
+            const session = await ClaudeCodeSession.attachToExisting(record, this.cliCommand)
+            const mapKey = record.taskId || `reconnected-${record.claudeSessionId}`
+            this.sessions.set(mapKey, session)
+            log.session.info('reconnected to surviving session', {
+              sessionId: record.claudeSessionId,
+              taskId: record.taskId,
+              pid: record.pid,
+            })
+          } catch (err) {
+            log.session.warn('failed to reconnect to session', {
+              sessionId: record.claudeSessionId,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          }
         }
       }
-    }
 
-
-    // ── Startup recovery: load queue from disk, re-process pending messages ──
-    // Collect Claude session IDs of reconnected (alive) sessions so we skip them.
-    // Their process is still running and will emit results normally via the tailer.
-    const reconnectedSessionIds = new Set<string>()
-    for (const [, session] of this.sessions) {
-      if (session.sessionId && session.active) {
-        reconnectedSessionIds.add(session.sessionId)
+      // Phase 2: load queue from disk, re-process pending messages
+      // Collect Claude session IDs of reconnected (alive) sessions so we skip them.
+      // Their process is still running and will emit results normally via the tailer.
+      const reconnectedSessionIds = new Set<string>()
+      for (const [, session] of this.sessions) {
+        if (session.sessionId && session.active) {
+          reconnectedSessionIds.add(session.sessionId)
+        }
       }
-    }
 
-    loadQueue().then(async () => {
+      await loadQueue()
       const pendingSessions = await getAllSessionsWithPending()
       for (const sessionId of pendingSessions) {
-        // Skip sessions that have a surviving reconnected process.
-        // The tailer is already attached — when the process finishes its turn,
-        // SESSION_RESULT will fire and processNext will handle any remaining queue.
         if (reconnectedSessionIds.has(sessionId)) {
           log.session.info('startup recovery: skipping session with alive process', { sessionId })
           continue
@@ -1342,8 +1374,10 @@ export class SessionRunner {
           log.session.error('startup queue recovery failed', { sessionId, error: err instanceof Error ? err.message : String(err) })
         })
       }
-    }).catch((err) => {
-      log.session.error('failed to load session message queue', { error: err instanceof Error ? err.message : String(err) })
+    }
+
+    startupRecovery().catch((err) => {
+      log.session.error('startup recovery failed', { error: err instanceof Error ? err.message : String(err) })
     })
 
     bus.subscribe('session-runner', async (event) => {
@@ -1384,6 +1418,7 @@ export class SessionRunner {
           // process_status:'running' records after the process exits.
           {
             const isError = event.name === EventNames.SESSION_ERROR
+              || (eventData<'session:result'>(event) as { isError?: boolean }).isError === true
             // For FIFO sessions (agent_complete but process still alive),
             // only persist stopped status when the process is actually dead.
             const cliSession = this.findSessionByClaudeId(sessionId)
@@ -1671,7 +1706,7 @@ export class SessionRunner {
       if (!hostname) {
         throw new Error(`Host "${data.host}" is missing 'hostname' field in config.yaml`)
       }
-      sshTarget = { hostname, user: hostDef.user, port: hostDef.port }
+      sshTarget = { hostname, user: hostDef.user, port: hostDef.port, shell_setup: hostDef.shell_setup }
     }
 
     // Transfer local images to remote host before spawning session
@@ -2205,7 +2240,7 @@ export class SessionRunner {
               if (hostDef) {
                 const hostname = hostDef.hostname ?? (hostDef as Record<string, unknown>).ssh as string | undefined
                 if (hostname) {
-                  sshTarget = { hostname, user: hostDef.user, port: hostDef.port }
+                  sshTarget = { hostname, user: hostDef.user, port: hostDef.port, shell_setup: hostDef.shell_setup }
                 }
               }
             } catch {
@@ -2265,7 +2300,7 @@ export class SessionRunner {
           if (hostDef) {
             const hostname = hostDef.hostname ?? (hostDef as Record<string, unknown>).ssh as string | undefined
             if (hostname) {
-              resumeSshTarget = { hostname, user: hostDef.user, port: hostDef.port }
+              resumeSshTarget = { hostname, user: hostDef.user, port: hostDef.port, shell_setup: hostDef.shell_setup }
             }
           }
         } catch {

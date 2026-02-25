@@ -64,6 +64,8 @@ export interface Task {
   needs_attention?: boolean;
   /** Last sync error message — set on push failure, cleared on success. */
   sync_error?: string;
+  /** Task-level working directory override. Takes precedence over project default_cwd in session resolution. */
+  cwd?: string;
   /** Plugin-specific extension data. Keys are plugin IDs (e.g. 'ms-todo', 'plugin-a'). */
   ext?: Record<string, unknown>;
 }
@@ -216,6 +218,9 @@ export interface Config {
     label?: string;
     /** Session server WebSocket URL for this host. Overrides CLI for this host. */
     session_server_url?: string;
+    /** Shell snippet run before claude on remote sessions (e.g. 'source $HOME/.nvm/nvm.sh').
+     *  Use to set up PATH for node managers (nvm, fnm, volta, asdf) or other env. */
+    shell_setup?: string;
   }>;
   /** Per-host maximum concurrent CLI session limits.
    *  'local' key = sessions without a host.

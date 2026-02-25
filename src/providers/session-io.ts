@@ -281,6 +281,8 @@ export interface SshTarget {
   hostname: string
   user?: string
   port?: number
+  /** Optional shell snippet run before claude (e.g. nvm/fnm/volta setup). */
+  shell_setup?: string
 }
 
 /**
@@ -291,41 +293,47 @@ export function shellQuote(s: string): string {
 }
 
 /**
- * PATH setup for remote SSH commands.
+ * Base PATH setup for remote SSH commands.
+ * Adds common install locations (~/.local/bin, ~/.npm-global/bin).
+ */
+export const REMOTE_BASE_PATH = 'export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"'
+
+/**
+ * Build the full remote preamble: base PATH + optional user shell_setup + env vars.
  *
  * Non-interactive SSH sessions don't source .bashrc/.profile, so tools
- * managed by nvm (like node) aren't in PATH. When Claude CLI is installed
- * via npm (not standalone), it needs node to run. This preamble:
- *   1. Adds the standard install locations (~/.local/bin, ~/.npm-global/bin)
- *   2. Auto-detects a working nvm node (tries newest first, falls back to older)
- *   3. APPENDS nvm bin to PATH (not prepend) so standalone claude in
- *      ~/.local/bin takes priority over any npm-installed claude in nvm dirs
- *   4. Gracefully no-ops when nvm isn't installed
+ * managed by node version managers (nvm, fnm, volta, asdf, etc.) aren't
+ * in PATH. When Claude CLI is installed via npm (not standalone), it needs
+ * node to run. The `shell_setup` config field lets users add whatever
+ * environment setup their host needs:
  *
- * Why iterate instead of picking the latest? On older machines (e.g. Amazon
- * Linux 2 with GLIBC < 2.27), newer node versions (18+) fail with
- * `/lib64/libc.so.6: version 'GLIBC_2.28' not found`. The loop finds the
- * newest node that actually runs on the host.
+ *   hosts:
+ *     mydev:
+ *       hostname: dev.example.com
+ *       shell_setup: 'source $HOME/.nvm/nvm.sh 2>/dev/null'   # nvm
+ *       # shell_setup: 'eval "$(fnm env)" 2>/dev/null'        # fnm
+ *       # shell_setup: 'export VOLTA_HOME="$HOME/.volta"; export PATH="$VOLTA_HOME/bin:$PATH"'  # volta
+ *
+ * @param shellSetup — optional shell snippet from config.hosts[].shell_setup
  */
-export const REMOTE_PATH_SETUP = [
-  'export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"',
-  // Try nvm nodes from newest to oldest; use the first that starts successfully
-  'NVM_BIN=""',
-  'for d in $(ls -d "$HOME/.nvm/versions/node"/*/bin 2>/dev/null | sort -Vr); do "$d/node" -e 0 2>/dev/null && NVM_BIN="$d" && break; done',
-  // APPEND (not prepend) — nvm provides `node`, but standalone claude in ~/.local/bin stays first.
-  // `|| true` ensures exit code 0 so downstream `&&` chains (CLAUDE_CODE_DISABLE_BACKGROUND_TASKS,
-  // initial message printf) are not short-circuited when nvm is absent.
-  '[ -n "$NVM_BIN" ] && export PATH="$PATH:$NVM_BIN" || true',
-].join('; ')
+export function buildRemotePreamble(shellSetup?: string): string {
+  const parts = [REMOTE_BASE_PATH]
+  if (shellSetup) {
+    // User's shell_setup runs after base PATH; `|| true` ensures exit 0
+    // even if the setup fails (e.g. nvm not installed on a fresh host).
+    parts.push(`(${shellSetup}) 2>/dev/null || true`)
+  }
+  return parts.join('; ')
+}
 
 /**
  * Build the remote shell command string for SSH execution.
  * Produces: `cd '/path' && CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude <args>`
  * All arguments are shell-quoted for safety on the remote shell.
  */
-export function buildRemoteCommand(claudeArgs: string[], cwd?: string): string {
+export function buildRemoteCommand(claudeArgs: string[], cwd?: string, shellSetup?: string): string {
   const quotedArgs = claudeArgs.map((a) => shellQuote(a))
-  const preamble = `${REMOTE_PATH_SETUP} && CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`
+  const preamble = `${buildRemotePreamble(shellSetup)} && CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`
   const claudeCmd = `${preamble} claude ${quotedArgs.join(' ')}`
   if (cwd) {
     return `cd ${shellQuote(cwd)} && ${claudeCmd}`
@@ -427,7 +435,7 @@ export class RemoteIO implements SessionIO {
     // 4. Starts claude reading from the FIFO, writing to JSONL
     // 5. Tails the JSONL to stdout (so SSH connection streams it back)
     const quotedArgs = claudeArgs.map((a) => shellQuote(a))
-    const preamble = `${REMOTE_PATH_SETUP} && CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`
+    const preamble = `${buildRemotePreamble(this.sshTarget.shell_setup)} && CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`
 
     const setupCmds = [
       `mkdir -p ${shellQuote(remoteDir)}`,
