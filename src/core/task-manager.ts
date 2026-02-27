@@ -222,6 +222,7 @@ async function migrateRemoveEmbeddedSessionIds(store: TaskStore): Promise<boolea
   if (embeddedIds.size === 0) return false;
 
   for (const task of store.tasks) {
+    if (!task.session_ids) { task.session_ids = []; changed = true; }
     const before = task.session_ids.length;
     task.session_ids = task.session_ids.filter((sid) => !embeddedIds.has(sid));
     if (task.session_ids.length !== before) changed = true;
@@ -615,7 +616,7 @@ async function pushToPlugin(
  * Full task push — calls createTask for new tasks or pushes all fields for existing.
  * Replaces the old integration-specific autoPushIfConfigured().
  */
-async function autoPushIfConfigured(task: Task): Promise<SyncResult> {
+export async function autoPushIfConfigured(task: Task): Promise<SyncResult> {
   if (task.source === 'local') return { success: true };
   const plugin = registry.get(task.source);
   if (!plugin) {
@@ -640,43 +641,23 @@ async function autoPushIfConfigured(task: Task): Promise<SyncResult> {
     return pushToPlugin(task, 'createTask');
   }
 
-  // For existing tasks, push all fields (plugins can batch internally)
-  try {
-    const sync = plugin.sync;
-    const extBefore = JSON.stringify(task.ext);
-    await Promise.allSettled([
-      sync.updateTitle(task, task.title),
-      sync.updateDescription(task, task.description),
-      sync.updatePhase(task, task.phase),
-      sync.updatePriority(task, task.priority),
-    ]);
+  // For existing tasks, push all fields via pushToPlugin (handles sync_error automatically)
+  const results = await Promise.allSettled([
+    pushToPlugin(task, 'updateTitle', task.title),
+    pushToPlugin(task, 'updateDescription', task.description),
+    pushToPlugin(task, 'updatePhase', task.phase),
+    pushToPlugin(task, 'updatePriority', task.priority),
+  ]);
 
-    // Sync dependencies separately (not in the parallel batch) since it
-    // needs a relationship delta computation against ext plugin relationships.
-    await sync.updateDependencies(task, task.depends_on ?? []).catch((err) => {
-      log.task.warn('dependency sync failed', { taskId: task.id, error: err instanceof Error ? err.message : String(err) });
-    });
+  // Sync dependencies separately (not in the parallel batch) since it
+  // needs a relationship delta computation against ext plugin relationships.
+  await pushToPlugin(task, 'updateDependencies', task.depends_on ?? []);
 
-    // pushTask may have created a new remote item (if ext was missing/corrupted)
-    // and updated task.ext in memory. Persist any ext changes to disk.
-    if (JSON.stringify(task.ext) !== extBefore) {
-      await withWriteLock(async () => {
-        const store = await readStore();
-        const found = store.tasks.find(t => t.id === task.id);
-        if (found && JSON.stringify(found.ext) !== JSON.stringify(task.ext)) {
-          found.ext = task.ext;
-          found.sync_error = undefined;
-          await writeStore(store);
-          log.task.info('persisted ext data after update-path push', { taskId: task.id });
-        }
-      });
-    }
-
-    return { success: true };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { success: false, error: message };
-  }
+  // Check if any push failed (catch both rejected promises and explicit failures)
+  const anyFailed = results.some(r =>
+    r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.success),
+  );
+  return anyFailed ? { success: false, error: 'partial sync failure' } : { success: true };
 }
 
 /**
@@ -1927,6 +1908,7 @@ export async function linkSession(
 
     const task = matches[0];
     task.session_id = sessionId;
+    if (!task.session_ids) task.session_ids = [];
     if (!task.session_ids.includes(sessionId)) {
       task.session_ids.push(sessionId);
     }

@@ -1124,7 +1124,7 @@ function startPluginSyncPolling(): void {
       if (syncing) return
       syncing = true
       try {
-        const { listTasks, updateTaskRaw, addTaskFull, deleteTask } = await import('../core/task-manager.js')
+        const { listTasks, updateTaskRaw, addTaskFull, deleteTask, autoPushIfConfigured } = await import('../core/task-manager.js')
         const localTasks = await listTasks()
 
         // Step 1: Retry unsynced tasks (source matches plugin but no ext data yet)
@@ -1149,14 +1149,36 @@ function startPluginSyncPolling(): void {
           }
         }
 
+        // Step 1.5: Retry tasks with sync_error that already have ext data
+        // These are tasks that were created successfully but had a subsequent push failure
+        const MAX_ERROR_RETRIES_PER_CYCLE = 5
+        const errorRetries = localTasks.filter(
+          (t) => t.source === plugin.id && t.sync_error && t.ext && t.ext[plugin.id] && t.status !== 'done',
+        ).slice(0, MAX_ERROR_RETRIES_PER_CYCLE)
+        for (const task of errorRetries) {
+          try {
+            await autoPushIfConfigured(task)
+          } catch (err) {
+            log.web.debug(`${plugin.id} sync: error retry push failed`, {
+              taskId: task.id,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          }
+        }
+
         // Step 2: Build SyncPollContext and run delta pull
         const ctx: SyncPollContext = {
           getTasks: () => localTasks,
           updateTask: async (id, updates) => {
-            await updateTaskRaw(id, updates)
+            // Clear stale sync_error when a remote pull successfully updates the task
+            const existingTask = localTasks.find(t => t.id === id)
+            const effectiveUpdates = (existingTask?.sync_error && !('sync_error' in updates))
+              ? { ...updates, sync_error: undefined }
+              : updates
+            await updateTaskRaw(id, effectiveUpdates)
             const updatedTask = localTasks.find(t => t.id === id)
             if (updatedTask) {
-              Object.assign(updatedTask, updates)
+              Object.assign(updatedTask, effectiveUpdates)
               bus.emit(EventNames.TASK_UPDATED, { task: updatedTask }, ['web-ui'], { source: `${plugin.id}-sync` })
             }
             // Return updated task (or fetch fresh if not in local list)

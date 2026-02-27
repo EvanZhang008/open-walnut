@@ -9,7 +9,7 @@ let configFile: string;
 vi.mock('../../src/constants.js', () => createMockConstants());
 
 // Import after mocking
-import { addTask, listTasks, completeTask, getDashboardData, reorderTasks, deleteTask, linkActiveSession, clearActiveSession, linkSessionSlot, clearSessionSlot, ActiveSessionError, updateTask, getProjectMetadata } from '../../src/core/task-manager.js';
+import { addTask, listTasks, completeTask, getDashboardData, reorderTasks, deleteTask, linkActiveSession, clearActiveSession, linkSessionSlot, clearSessionSlot, ActiveSessionError, updateTask, getProjectMetadata, autoPushIfConfigured, updateTaskRaw } from '../../src/core/task-manager.js';
 import { WALNUT_HOME, TASKS_FILE, CONFIG_FILE } from '../../src/constants.js';
 
 beforeEach(async () => {
@@ -612,5 +612,130 @@ describe('updateTask — parent_task_id re-parenting', () => {
     const tasks = await listTasks();
     const reloaded = tasks.find((t) => t.id === child.id);
     expect(reloaded!.parent_task_id).toBe(newParent.id);
+  });
+});
+
+describe('updateTask — cwd', () => {
+  it('sets cwd on a task', async () => {
+    const { task } = await addTask({ title: 'Task with cwd' });
+    expect(task.cwd).toBeUndefined();
+
+    const { task: updated } = await updateTask(task.id, { cwd: '/workspace/special' });
+    expect(updated.cwd).toBe('/workspace/special');
+  });
+
+  it('clears cwd with empty string', async () => {
+    const { task } = await addTask({ title: 'Task to clear cwd' });
+    await updateTask(task.id, { cwd: '/workspace/special' });
+
+    const { task: cleared } = await updateTask(task.id, { cwd: '' });
+    expect(cleared.cwd).toBeUndefined();
+  });
+
+  it('persists cwd across reads', async () => {
+    const { task } = await addTask({ title: 'Persist cwd' });
+    await updateTask(task.id, { cwd: '/workspace/persistent' });
+
+    const tasks = await listTasks();
+    const found = tasks.find(t => t.id === task.id);
+    expect(found?.cwd).toBe('/workspace/persistent');
+  });
+
+  it('does not change cwd when not provided', async () => {
+    const { task } = await addTask({ title: 'No cwd change' });
+    await updateTask(task.id, { cwd: '/workspace/keep' });
+
+    // Update title only — cwd should remain
+    const { task: updated } = await updateTask(task.id, { title: 'Renamed' });
+    expect(updated.cwd).toBe('/workspace/keep');
+    expect(updated.title).toBe('Renamed');
+  });
+});
+
+describe('autoPushIfConfigured sync_error lifecycle', () => {
+  // Helper: create a mock sync with all methods succeeding by default
+  function createMockSync(overrides: Record<string, ReturnType<typeof vi.fn>> = {}) {
+    return {
+      createTask: vi.fn().mockResolvedValue(null),
+      deleteTask: vi.fn(),
+      updateTitle: vi.fn().mockResolvedValue(undefined),
+      updateDescription: vi.fn().mockResolvedValue(undefined),
+      updateSummary: vi.fn(),
+      updateNote: vi.fn(),
+      updateConversationLog: vi.fn(),
+      updatePriority: vi.fn().mockResolvedValue(undefined),
+      updatePhase: vi.fn().mockResolvedValue(undefined),
+      updateDueDate: vi.fn(),
+      updateStar: vi.fn(),
+      updateCategory: vi.fn(),
+      updateDependencies: vi.fn().mockResolvedValue(undefined),
+      associateSubtask: vi.fn(),
+      disassociateSubtask: vi.fn(),
+      syncPoll: vi.fn(),
+      ...overrides,
+    };
+  }
+
+  // Helper: register a test plugin (idempotent)
+  async function registerTestPlugin(id: string, syncOverrides: Record<string, ReturnType<typeof vi.fn>> = {}) {
+    const { registry } = await import('../../src/core/integration-registry.js');
+    if (!registry.has(id)) {
+      registry.register(id, {
+        id,
+        name: `Test Plugin (${id})`,
+        config: {},
+        sync: createMockSync(syncOverrides) as any,
+        migrations: [],
+        httpRoutes: [],
+      });
+    }
+  }
+
+  it('clears sync_error when all plugin updates succeed', async () => {
+    await registerTestPlugin('test-plugin');
+
+    const { task } = await addTask({ title: 'Sync error task', category: 'test', project: 'test' });
+    await updateTaskRaw(task.id, {
+      source: 'test-plugin',
+      ext: { 'test-plugin': { id: 'remote-123' } },
+      sync_error: 'Taskei auth expired (HTTP 302 redirect)',
+    } as any);
+
+    const before = (await listTasks()).find(t => t.id === task.id)!;
+    expect(before.sync_error).toBe('Taskei auth expired (HTTP 302 redirect)');
+
+    const result = await autoPushIfConfigured(before);
+    expect(result.success).toBe(true);
+
+    const after = (await listTasks()).find(t => t.id === task.id)!;
+    expect(after.sync_error).toBeUndefined();
+  });
+
+  it('sets sync_error when a plugin update fails', async () => {
+    await registerTestPlugin('test-fail-plugin', {
+      updateTitle: vi.fn().mockRejectedValue(new Error('HTTP 302 redirect')),
+    });
+
+    const { task } = await addTask({ title: 'Fail sync task', category: 'test', project: 'test' });
+    await updateTaskRaw(task.id, {
+      source: 'test-fail-plugin',
+      ext: { 'test-fail-plugin': { id: 'remote-456' } },
+    } as any);
+
+    const before = (await listTasks()).find(t => t.id === task.id)!;
+    expect(before.sync_error).toBeUndefined();
+
+    const result = await autoPushIfConfigured(before);
+    expect(result.success).toBe(false);
+
+    const after = (await listTasks()).find(t => t.id === task.id)!;
+    expect(after.sync_error).toBeDefined();
+    expect(after.sync_error).toContain('HTTP 302 redirect');
+  });
+
+  it('skips local-source tasks', async () => {
+    const { task } = await addTask({ title: 'Local task' });
+    const result = await autoPushIfConfigured(task);
+    expect(result.success).toBe(true);
   });
 });
