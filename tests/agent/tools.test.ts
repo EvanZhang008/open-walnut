@@ -554,6 +554,32 @@ describe('start_session tool', () => {
     expect(result).toContain('already complete');
   });
 
+  it('blocks start_session when task already has any session (strict 1-session-per-task)', async () => {
+    const addResult = await executeTool('create_task', { title: 'Already has session' });
+    const idMatch = addResult.match(/\[([^\]]+)\]/);
+    const taskId = idMatch![1];
+
+    // Manually link a stopped session to the task (simulating a previous session)
+    const { linkSession } = await import('../../src/core/task-manager.js');
+    await linkSession(taskId, 'old-stopped-session-001');
+
+    // Attempting to start a new session should be blocked
+    const result = await executeTool('start_session', {
+      task_id: taskId,
+      working_directory: '/tmp/test',
+      prompt: 'new work',
+    });
+
+    const parsed = JSON.parse(result);
+    expect(parsed.blocked).toBe(true);
+    expect(parsed.reason).toContain('Task already has a session');
+    expect(parsed.session_ids).toContain('old-stopped-session-001');
+    expect(parsed.hint).toContain('send_to_session');
+    expect(parsed.hint).toContain('create_task');
+    // sessionRunner.startSession should NOT have been called
+    expect(startSessionSpy).not.toHaveBeenCalled();
+  });
+
   it('returns error for nonexistent task', async () => {
     const result = await executeTool('start_session', {
       task_id: 'nonexistent-id',

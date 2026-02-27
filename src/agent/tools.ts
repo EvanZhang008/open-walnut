@@ -32,6 +32,7 @@ import {
   getSessionsForTask,
   getSessionByClaudeId,
   updateSessionRecord,
+  importSessionRecord,
   checkSessionLimit,
   TRIAGE_AGENTS,
 } from '../core/session-tracker.js';
@@ -93,6 +94,49 @@ export interface ToolDefinition {
 
 function json(data: unknown): string {
   return JSON.stringify(data, null, 2);
+}
+
+/**
+ * Resolve host and working directory for a session via the 4-priority inheritance chain.
+ * Shared by start_session and import_session.
+ *
+ * Resolution chain:
+ *   CWD:  ① explicit param → ② task.cwd → ③ parent chain walk → ④ project metadata (default_cwd)
+ *   Host: ① explicit param → ② project metadata (default_host)
+ */
+async function resolveSessionContext(
+  task: Task | null,
+  explicitHost?: string,
+  explicitCwd?: string,
+): Promise<{ resolvedHost: string | undefined; resolvedCwd: string | undefined }> {
+  let resolvedHost = explicitHost;
+  let resolvedCwd = explicitCwd;
+
+  // Priority 2 & 3: task cwd → walk up parent chain
+  if (!resolvedCwd && task) {
+    let current: Task | undefined = task;
+    const seen = new Set<string>();  // cycle guard
+    while (current && !resolvedCwd) {
+      if (current.cwd) {
+        resolvedCwd = current.cwd;
+        break;
+      }
+      if (!current.parent_task_id || seen.has(current.parent_task_id)) break;
+      seen.add(current.id);
+      current = await getTask(current.parent_task_id).catch(() => undefined);
+    }
+  }
+
+  // Priority 4: project/category metadata
+  if (task && (!resolvedHost || !resolvedCwd)) {
+    const metadata = await getProjectMetadata(task.category, task.project);
+    if (metadata) {
+      if (!resolvedHost) resolvedHost = metadata.default_host as string | undefined;
+      if (!resolvedCwd) resolvedCwd = metadata.default_cwd as string | undefined;
+    }
+  }
+
+  return { resolvedHost, resolvedCwd };
 }
 
 /** Build a blocked response for session concurrency limit. */
@@ -575,6 +619,8 @@ For projects (type='project'): set default_host and default_cwd for remote sessi
         add_depends_on: { type: 'array', items: { type: 'string' }, description: 'Add dependency IDs (idempotent). Tasks with incomplete deps are "blocked".' },
         remove_depends_on: { type: 'array', items: { type: 'string' }, description: 'Remove specific dependency IDs.' },
         set_depends_on: { type: 'array', items: { type: 'string' }, description: 'Replace all dependencies (overwrite). Pass empty array to clear.' },
+        // Task-level cwd
+        cwd: { type: 'string', description: 'Task-level working directory override. Takes precedence over project default_cwd when starting sessions. Empty string clears.' },
         // Project fields
         default_host: { type: 'string', description: 'SSH host alias for remote sessions (type=project).' },
         default_cwd: { type: 'string', description: 'Default working directory (type=project).' },
@@ -620,7 +666,8 @@ For projects (type='project'): set default_host and default_cwd for remote sessi
           params.add_tags !== undefined || params.remove_tags !== undefined ||
           params.set_tags !== undefined ||
           params.add_depends_on !== undefined || params.remove_depends_on !== undefined ||
-          params.set_depends_on !== undefined;
+          params.set_depends_on !== undefined ||
+          params.cwd !== undefined;
 
         if (hasStructural) {
           try {
@@ -641,6 +688,7 @@ For projects (type='project'): set default_host and default_cwd for remote sessi
               add_depends_on: params.add_depends_on as string[] | undefined,
               remove_depends_on: params.remove_depends_on as string[] | undefined,
               set_depends_on: params.set_depends_on as string[] | undefined,
+              cwd: params.cwd as string | undefined,
             });
             bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'agent' });
             if (params.phase === 'AGENT_COMPLETE') {
@@ -946,10 +994,9 @@ For projects (type='project'): set default_host and default_cwd for remote sessi
     name: 'start_session',
     description: `Start a NEW session — either a CLI Claude Code session or an embedded subagent run. A task_id, title, and prompt are required.
 
-Each task has ONE session slot. If the slot is occupied by an active session (running or
-in-progress), this tool returns a BLOCKED response with the existing session info.
-Use send_to_session to resume that session instead, or create a child task
-(create_task with parent_task_id) for parallel work.
+Each task allows exactly ONE session — ever. If the task already has a session (active, stopped,
+or completed), this tool returns a BLOCKED response. Use send_to_session to continue in the
+existing session, or create a child task (create_task with parent_task_id) for a fresh session.
 
 Per-host concurrency limits: Each host (local or remote) has a maximum number of
 concurrent CLI sessions (default: local=7, remote=20, configurable via session_limits
@@ -1024,22 +1071,28 @@ and is always allowed.`,
           }
         }
 
-        // ── Single-slot check — task.session_id with backward compat for old 2-slot fields ──
+        // ── Strict 1-session-per-task: block if task already has ANY session (active or stopped) ──
         if (task) {
-          const { getActiveSession } = await import('../core/session-tracker.js');
-          const existing = await getActiveSession(task);
+          const existingSessionIds = (task.session_ids ?? []).filter(Boolean);
+          if (existingSessionIds.length > 0) {
+            const latestId = task.session_id ?? existingSessionIds[existingSessionIds.length - 1];
+            // Best-effort lookup for richer context; gracefully degrade if store is unavailable
+            let latestSession: { claudeSessionId: string; title: string; work_status: string; process_status: string } | null = null;
+            try {
+              latestSession = latestId ? await getSessionByClaudeId(latestId) : null;
+            } catch { /* store unavailable — proceed with session IDs only */ }
 
-          if (existing) {
             return json({
               blocked: true,
-              reason: 'Session slot is occupied by an active session.',
-              existing_session: {
-                session_id: existing.claudeSessionId,
-                title: existing.title,
-                work_status: existing.work_status,
-                process_status: existing.process_status,
-              },
-              hint: `Use send_to_session({ session_id: "${existing.claudeSessionId}", message: "..." }) to resume the existing session, or create a child task with create_task({ parent_task_id: "${task.id}", title: "..." }) for parallel work.`,
+              reason: 'Task already has a session. Each task allows only ONE session (strict enforcement).',
+              session_ids: existingSessionIds,
+              existing_session: latestSession ? {
+                session_id: latestSession.claudeSessionId,
+                title: latestSession.title,
+                work_status: latestSession.work_status,
+                process_status: latestSession.process_status,
+              } : null,
+              hint: `Use send_to_session({ session_id: "${latestId}", message: "..." }) to continue in the existing session, or create a new task / subtask with create_task({ parent_task_id: "${task.id}", title: "..." }) for a fresh session.`,
             });
           }
         }
@@ -1062,17 +1115,12 @@ and is always allowed.`,
           return `Embedded session started (agent: ${agentLabel})${embeddedTaskPart}. Running in background.`;
         }
 
-        // CLI runner — resolve host and cwd via resolution chain
-        let resolvedHost = params.host as string | undefined;
-        let resolvedCwd = params.working_directory as string | undefined;
-
-        if (task && (!resolvedHost || !resolvedCwd)) {
-          const metadata = await getProjectMetadata(task.category, task.project);
-          if (metadata) {
-            if (!resolvedHost) resolvedHost = metadata.default_host as string | undefined;
-            if (!resolvedCwd) resolvedCwd = metadata.default_cwd as string | undefined;
-          }
-        }
+        // CLI runner — resolve host and cwd via shared resolution chain
+        const { resolvedHost, resolvedCwd } = await resolveSessionContext(
+          task,
+          params.host as string | undefined,
+          params.working_directory as string | undefined,
+        );
 
         // Validate: remote sessions MUST have a cwd
         if (resolvedHost && !resolvedCwd) {
@@ -1117,6 +1165,136 @@ and is always allowed.`,
           return `CLI session ${sRef} started${hostNote} for task ${taskRef(task.id, task.title)}. Running in background.`;
         }
         return `Taskless CLI session ${sRef} started${hostNote}. Running in background.`;
+      } catch (err) {
+        return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    },
+  },
+
+  {
+    name: 'import_session',
+    description: `Import an external Claude Code session into Walnut (backfill). Use this to bring
+sessions started outside Walnut (e.g. via \`claude -p\` on a remote machine) under full Walnut
+management — history viewing, send_to_session, UI tracking, etc.
+
+The session must already exist as a JSONL file on the local or remote machine.
+host and working_directory are optional — if omitted, they inherit from the task's project/category
+defaults (same resolution chain as start_session).`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        session_id: { type: 'string', description: 'Claude Code session UUID to import.' },
+        task_id: { type: 'string', description: 'Task ID or prefix to associate this session with.' },
+        working_directory: { type: 'string', description: 'Working directory where the session ran. Optional — inherits from task/project defaults if omitted.' },
+        host: { type: 'string', description: 'SSH host alias where the session ran. Optional — inherits from project default_host if omitted. Omit for local sessions.' },
+        title: { type: 'string', description: 'Custom title. If omitted, extracted from the first user message in the JSONL.' },
+        work_status: { type: 'string', enum: ['agent_complete', 'completed', 'await_human_action'], description: 'Work status for the imported session. Default: agent_complete.' },
+      },
+      required: ['session_id', 'task_id'],
+    },
+    async execute(params) {
+      try {
+        const sessionId = params.session_id as string;
+        const taskIdPrefix = params.task_id as string;
+
+        // ① Resolve task
+        const task = await getTask(taskIdPrefix);
+
+        // ② Check if session is already tracked
+        const existing = await getSessionByClaudeId(sessionId);
+        if (existing) {
+          return `Error: Session ${sessionId} is already tracked (task: ${existing.taskId}). Use send_to_session to interact with it.`;
+        }
+
+        // ③ Resolve host/cwd via shared inheritance chain
+        const { resolvedHost, resolvedCwd } = await resolveSessionContext(
+          task,
+          params.host as string | undefined,
+          params.working_directory as string | undefined,
+        );
+
+        // ④ Validate host exists in config (if resolved)
+        if (resolvedHost) {
+          const config = await getConfig();
+          if (!config.hosts?.[resolvedHost]) {
+            return `Error: Unknown host "${resolvedHost}". Configure it in config.yaml under hosts.${resolvedHost}`;
+          }
+        }
+
+        // ⑤ Validate JSONL exists (local/remote transparent)
+        const { readSessionJsonlContent, canonicalJsonlPath, remoteJsonlPath } = await import('../core/session-file-reader.js');
+        const jsonlResult = await readSessionJsonlContent(sessionId, resolvedCwd, resolvedHost);
+
+        if (!jsonlResult) {
+          const paths: string[] = [];
+          if (resolvedCwd) paths.push(canonicalJsonlPath(sessionId, resolvedCwd));
+          if (resolvedHost && resolvedCwd) paths.push(`${resolvedHost}:${remoteJsonlPath(sessionId, resolvedCwd)}`);
+          else if (resolvedHost) paths.push(`${resolvedHost}:${remoteJsonlPath(sessionId)}`);
+          return `Error: JSONL file not found for session ${sessionId}. Looked in:\n${paths.map(p => `  - ${p}`).join('\n')}\nCheck that the session_id, host, and working_directory are correct.`;
+        }
+
+        // ⑥ Extract metadata from JSONL
+        const lines = jsonlResult.content.split('\n').filter(Boolean);
+        let firstTimestamp: string | undefined;
+        let lastTimestamp: string | undefined;
+        let messageCount = 0;
+        let extractedTitle: string | undefined;
+
+        for (const line of lines) {
+          try {
+            const entry = JSON.parse(line);
+            // Count user and assistant messages
+            if (entry.type === 'human' || entry.type === 'assistant' || entry.role === 'user' || entry.role === 'assistant') {
+              messageCount++;
+            }
+            // Extract timestamps
+            const ts = entry.timestamp || entry.createdAt;
+            if (ts) {
+              if (!firstTimestamp) firstTimestamp = ts;
+              lastTimestamp = ts;
+            }
+            // Extract title from first user message
+            if (!extractedTitle && (entry.type === 'human' || entry.role === 'user')) {
+              const text = typeof entry.message === 'string' ? entry.message
+                : entry.message?.content?.[0]?.text
+                || entry.content?.[0]?.text
+                || (typeof entry.content === 'string' ? entry.content : undefined);
+              if (text) {
+                extractedTitle = text.slice(0, 80).replace(/\n/g, ' ');
+              }
+            }
+          } catch { /* skip malformed lines */ }
+        }
+
+        const title = (params.title as string) || extractedTitle || `Imported session ${sessionId.slice(0, 8)}`;
+        const workStatus = (params.work_status as 'agent_complete' | 'completed' | 'await_human_action') ?? 'agent_complete';
+
+        // ⑦ Create SessionRecord (stopped — no running process)
+        const record = await importSessionRecord({
+          claudeSessionId: sessionId,
+          taskId: task.id,
+          project: task.project,
+          cwd: resolvedCwd,
+          host: resolvedHost,
+          title,
+          work_status: workStatus,
+          startedAt: firstTimestamp,
+          lastActiveAt: lastTimestamp,
+          messageCount,
+        });
+
+        // ⑧ Link to task
+        const { linkSession } = await import('../core/task-manager.js');
+        await linkSession(task.id, sessionId);
+
+        // ⑨ Emit task updated event
+        bus.emit(EventNames.TASK_UPDATED, { taskId: task.id }, [], { source: 'agent' });
+
+        // ⑩ Return success
+        const sRef = sessionRef(record.claudeSessionId, record.title ?? title);
+        const hostNote = resolvedHost ? ` (${resolvedHost})` : '';
+        const cwdNote = resolvedCwd ? ` cwd=${resolvedCwd}` : '';
+        return `Imported session ${sRef}${hostNote}${cwdNote} → task ${taskRef(task.id, task.title)}. Messages: ${messageCount}, source: ${jsonlResult.source}.`;
       } catch (err) {
         return `Error: ${err instanceof Error ? err.message : String(err)}`;
       }
@@ -1281,7 +1459,7 @@ and is always allowed.`,
         // ── plan_only: lightweight plan extraction ──
         if (planOnly) {
           const { extractPlanContent } = await import('../core/session-history.js');
-          const plan = extractPlanContent(sessionId, record?.cwd);
+          const plan = await extractPlanContent(sessionId, record?.cwd, record?.host);
           if (!plan) {
             return 'No plan found in this session. The session may not have used ExitPlanMode or written to ~/.claude/plans/.';
           }
