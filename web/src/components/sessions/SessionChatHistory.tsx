@@ -4,7 +4,7 @@ import { useSessionHistory } from '@/hooks/useSessionHistory';
 import { useSessionStream, type StreamingBlock } from '@/hooks/useSessionStream';
 import { useEvent } from '@/hooks/useWebSocket';
 import { useLightbox } from '@/hooks/useLightbox';
-import { SessionMessage, PlanCard, CollapsedPlanWrite } from './SessionMessage';
+import { SessionMessage, PlanCard, CollapsedPlanWrite, GenericToolCall } from './SessionMessage';
 import { LoadingSpinner } from '../common/LoadingSpinner';
 import { Lightbox } from '../common/Lightbox';
 import type { SessionHistoryMessage } from '@/types/session';
@@ -238,31 +238,17 @@ const StreamingBlockView = memo(function StreamingBlockView({ block, onTaskClick
     return <CollapsedPlanWrite filePath={block.input.file_path} />;
   }
 
-  // Tool call block
-  const inputSummary = block.input
-    ? Object.entries(block.input)
-        .map(([k, v]) => {
-          const val = typeof v === 'string' ? v : JSON.stringify(v);
-          return `${k}: ${val.length > 60 ? val.slice(0, 60) + '...' : val}`;
-        })
-        .join(', ')
-    : '';
-
-  const statusClass = block.status === 'error' ? 'chat-tool-block-error'
-    : block.status === 'done' ? 'chat-tool-block-done' : 'chat-tool-block-calling';
-
+  // Tool call block — reuse GenericToolCall for full expand/collapse support
+  const toolObj = { name: block.name ?? 'unknown', input: block.input ?? {} };
+  const status = block.status === 'error' ? 'error' : block.status === 'done' ? 'done' : 'calling';
   return (
-    <div className={`chat-tool-block ${statusClass}`}>
-      <div className="chat-tool-block-header">
-        <span className="chat-tool-block-icon">
-          {block.status === 'error' ? '\u2717' : block.status === 'done' ? '\u2713' : '\u25B6'}
-        </span>
-        <span className="chat-tool-block-name">{block.name}</span>
-        {inputSummary && (
-          <span className="chat-tool-block-summary">{inputSummary}</span>
-        )}
-      </div>
-    </div>
+    <GenericToolCall
+      tool={toolObj}
+      status={status}
+      result={block.result}
+      onTaskClick={onTaskClick}
+      onSessionClick={onSessionClick}
+    />
   );
 });
 

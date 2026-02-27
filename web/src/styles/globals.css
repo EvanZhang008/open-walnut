@@ -233,6 +233,14 @@ input:focus, textarea:focus, select:focus {
   color: var(--fg);
 }
 
+.sidebar-walnut-icon {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  vertical-align: -4px;
+  display: inline-block;
+}
+
 .sidebar-nav {
   flex: 1;
   padding: 8px;
@@ -3192,6 +3200,101 @@ input:focus, textarea:focus, select:focus {
   font-size: 12px;
   line-height: 1.5;
   color: var(--fg-muted);
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+/* Metadata row (ID, category, due, etc.) */
+.chat-task-context-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  padding: 4px 0;
+  font-size: 11px;
+  color: var(--fg-muted);
+  line-height: 1.4;
+}
+
+/* Section dividers (description, summary, note, etc.) */
+.chat-task-context-section {
+  padding: 4px 0;
+}
+
+.chat-task-context-section + .chat-task-context-section {
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+  padding-top: 4px;
+}
+
+.chat-task-context-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--fg-muted);
+  margin-bottom: 2px;
+}
+
+/* Scrollable text within sections */
+.chat-task-context-text {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+/* Inline badges in collapsed header */
+.chat-task-context-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+}
+
+.chat-task-context-badges .badge {
+  font-size: 10px;
+  padding: 0 4px;
+  line-height: 1.5;
+}
+
+/* Session slot rows */
+.chat-task-context-session {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0;
+  font-size: 12px;
+}
+
+.chat-task-context-session-type {
+  font-weight: 500;
+  color: var(--fg-muted);
+  min-width: 36px;
+}
+
+.chat-task-context-session-id {
+  color: var(--accent);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.chat-task-context-session-id:hover {
+  text-decoration: underline;
+}
+
+.chat-task-context-session-status {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+/* Subtask list within expanded context */
+.chat-task-context-subtasks {
+  max-height: 160px;
+  overflow-y: auto;
 }
 
 /* ===== Route Info (on session messages) ===== */
@@ -3292,6 +3395,10 @@ input:focus, textarea:focus, select:focus {
   font-size: 12px;
   background: var(--bg-tertiary);
   transition: background 0.15s;
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  font-family: inherit;
 }
 
 .chat-tool-block-header:hover {
@@ -3328,6 +3435,16 @@ input:focus, textarea:focus, select:focus {
 .chat-tool-block-arrow {
   font-size: 9px;
   color: var(--fg-muted);
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.chat-tool-block-calling-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse-dot 1.5s infinite;
   flex-shrink: 0;
   margin-left: auto;
 }
@@ -4715,6 +4832,11 @@ img[data-lightbox-src],
   padding: 4px 0;
 }
 
+/* Flat mode (ungrouped) list container */
+.todo-flat-results {
+  padding: 4px 0;
+}
+
 /* Context pill shown in search results (category / project) */
 .todo-search-context-pill {
   display: inline-flex;
@@ -5143,6 +5265,61 @@ img[data-lightbox-src],
   color: var(--fg-muted);
   text-transform: uppercase;
   letter-spacing: 0.3px;
+}
+
+.todo-detail-meta {
+  margin-bottom: 12px;
+}
+
+.todo-detail-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg-primary);
+  line-height: 1.35;
+  margin-bottom: 6px;
+}
+
+.todo-detail-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.todo-detail-badges .badge-phase {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.todo-detail-priority-pill {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.todo-detail-priority-pill.priority-immediate { background: rgba(255, 59, 48, 0.12); color: var(--error); }
+.todo-detail-priority-pill.priority-important { background: rgba(255, 149, 0, 0.12); color: #FF9500; }
+.todo-detail-priority-pill.priority-backlog { background: var(--bg-tertiary); color: var(--fg-muted); }
+
+.todo-detail-sprint-pill {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 500;
+  line-height: 1.4;
+  background: rgba(0, 122, 255, 0.08);
+  color: var(--accent);
+}
+
+.todo-detail-dates {
+  display: flex;
+  gap: 0;
+  flex-wrap: wrap;
 }
 
 .todo-detail-section {
@@ -5685,6 +5862,198 @@ img[data-lightbox-src],
 
 .todo-group-project-name {
   flex: 1;
+}
+
+/* Split header controls: arrow button + name button */
+.todo-group-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.todo-group-arrow-btn {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: var(--fg-muted);
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.todo-group-arrow-btn:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+
+.todo-group-name-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.todo-group-category-header .todo-group-name-btn {
+  color: var(--fg-secondary);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.todo-group-project-header .todo-group-name-btn {
+  color: var(--fg-muted);
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.todo-group-name-btn:hover {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+/* Project / Category detail pane styles */
+.detail-source-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.detail-source-badge.source-local {
+  background: color-mix(in srgb, var(--fg-muted) 12%, transparent);
+  color: var(--fg-muted);
+}
+.detail-source-badge.source-ms-todo {
+  background: color-mix(in srgb, #0078d4 15%, transparent);
+  color: #0078d4;
+}
+.detail-source-badge.source-taskei {
+  background: color-mix(in srgb, #ff9900 15%, transparent);
+  color: #ff9900;
+}
+
+.detail-section {
+  margin-bottom: 12px;
+}
+.detail-section-title {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--fg-muted);
+  margin-bottom: 6px;
+}
+
+.detail-setting-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+}
+.detail-setting-label {
+  flex-shrink: 0;
+  width: 70px;
+  font-weight: 500;
+  color: var(--fg-muted);
+}
+.detail-setting-value {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+  transition: background 0.15s;
+}
+.detail-setting-value:hover {
+  background: var(--bg-hover);
+}
+.detail-setting-input {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 6px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12px;
+  outline: none;
+}
+
+.detail-stat-grid {
+  display: flex;
+  gap: 12px;
+}
+.detail-stat-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.detail-stat-number {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--fg);
+  line-height: 1;
+}
+.detail-stat-label {
+  font-size: 10px;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+}
+
+.detail-project-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.detail-project-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  text-align: left;
+  color: var(--fg);
+  transition: background 0.15s;
+}
+.detail-project-row:hover {
+  background: var(--bg-hover);
+}
+.detail-project-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.detail-project-count {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--fg-muted);
+  font-weight: 500;
+}
+
+.detail-memory-text {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  line-height: 1.5;
+  margin: 0;
 }
 
 /* Favorite star button on category/project headers */

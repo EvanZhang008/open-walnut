@@ -2,6 +2,7 @@ import { useState, useCallback, useMemo, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { SessionHistoryMessage, SessionHistoryTool } from '@/types/session';
 import { renderMarkdownWithRefs, extractMarkdownFields, injectJsonIdLinks } from '@/utils/markdown';
+import { useLivePlanContent } from '@/contexts/PlanContentContext';
 
 interface SessionMessageProps {
   message: SessionHistoryMessage;
@@ -46,9 +47,14 @@ export function CollapsedPlanWrite({ filePath }: { filePath: string }) {
   );
 }
 
-/** Accent-bordered card rendering the plan markdown, collapsible */
+/** Accent-bordered card rendering the plan markdown, collapsible.
+ *  Consumes PlanContentContext to show live plan content (bypasses memo).
+ *  Falls back to the snapshot `content` prop when context is null (initial load, non-plan session). */
 export function PlanCard({ content }: { content: string }) {
+  const livePlan = useLivePlanContent();
+  const displayContent = livePlan ?? content;
   const [open, setOpen] = useState(true);
+  const html = useMemo(() => renderMarkdownWithRefs(displayContent), [displayContent]);
   return (
     <div className="session-plan-card">
       <button className="session-plan-card-header" onClick={() => setOpen((p) => !p)}>
@@ -59,7 +65,7 @@ export function PlanCard({ content }: { content: string }) {
         <div className="session-plan-card-body">
           <div
             className="markdown-body"
-            dangerouslySetInnerHTML={{ __html: renderMarkdownWithRefs(content) }}
+            dangerouslySetInnerHTML={{ __html: html }}
           />
         </div>
       )}
@@ -72,13 +78,17 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-interface GenericToolCallProps {
+export interface GenericToolCallProps {
   tool: { name: string; input: Record<string, unknown> };
+  /** Tool execution status. Defaults to 'done' (preserves history behavior). */
+  status?: 'calling' | 'done' | 'error';
+  /** Tool result text (streaming path provides this separately from tool.result). */
+  result?: string;
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
 }
 
-function GenericToolCall({ tool, onTaskClick, onSessionClick }: GenericToolCallProps) {
+export function GenericToolCall({ tool, status = 'done', result, onTaskClick, onSessionClick }: GenericToolCallProps) {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const safeInput = (tool.input && typeof tool.input === 'object') ? tool.input : {};
@@ -88,6 +98,11 @@ function GenericToolCall({ tool, onTaskClick, onSessionClick }: GenericToolCallP
       return `${k}: ${val.length > 60 ? val.slice(0, 60) + '...' : val}`;
     })
     .join(', ');
+
+  // Dynamic icon and class based on status
+  const statusIcon = status === 'error' ? '\u2717' : status === 'done' ? '\u2713' : '\u25B6';
+  const statusClass = status === 'error' ? 'chat-tool-block-error'
+    : status === 'done' ? 'chat-tool-block-done' : 'chat-tool-block-calling';
 
   // Detect long multiline string values in input and render as markdown.
   // Only computed when expanded (open) to avoid eager parsing cost.
@@ -104,6 +119,12 @@ function GenericToolCall({ tool, onTaskClick, onSessionClick }: GenericToolCallP
     const jsonStr = JSON.stringify(safeInput, null, 2);
     return injectJsonIdLinks(escapeHtml(jsonStr));
   }, [safeInput, open]);
+
+  // Result rendered as markdown (only when expanded)
+  const resultHtml = useMemo(() => {
+    if (!open || !result) return '';
+    return renderMarkdownWithRefs(result.length > 3000 ? result.slice(0, 3000) : result);
+  }, [result, open]);
 
   // Click handler for pill links inside <pre> (event delegation)
   const handlePreClick = useCallback((e: React.MouseEvent<HTMLPreElement>) => {
@@ -128,13 +149,14 @@ function GenericToolCall({ tool, onTaskClick, onSessionClick }: GenericToolCallP
   }, [navigate, onTaskClick, onSessionClick]);
 
   return (
-    <div className="chat-tool-block chat-tool-block-done">
+    <div className={`chat-tool-block ${statusClass}`}>
       <button className="chat-tool-block-header" onClick={() => setOpen((p) => !p)}>
-        <span className="chat-tool-block-icon">{'\u2713'}</span>
+        <span className="chat-tool-block-icon">{statusIcon}</span>
         <span className="chat-tool-block-name">{tool.name}</span>
         {!open && inputSummary && (
           <span className="chat-tool-block-summary">{inputSummary}</span>
         )}
+        {status === 'calling' && <span className="chat-tool-block-calling-dot" />}
         <span className="chat-tool-block-arrow">{open ? '\u25BC' : '\u25B6'}</span>
       </button>
       {open && (
@@ -150,6 +172,13 @@ function GenericToolCall({ tool, onTaskClick, onSessionClick }: GenericToolCallP
               </div>
             ))}
           </div>
+          {resultHtml && (
+            <div className="chat-tool-block-section">
+              <div className="chat-tool-block-section-label">Result</div>
+              <div className="chat-tool-block-result markdown-body"
+                   dangerouslySetInnerHTML={{ __html: resultHtml }} />
+            </div>
+          )}
         </div>
       )}
     </div>
