@@ -47,7 +47,8 @@ const TASK_ID_TITLED_RE = /\[([a-z0-9]{7,10}-[a-f0-9]{4})\|([^\]]+)\]/;
 // 1. /api/images/<hash>.ext — uploaded images served by the app
 // 2. /api/local-image?path=... — already-proxied local image URLs
 // 3. Absolute Unix paths with 2+ segments (/dir/file.png) — local files proxied via /api/local-image
-const IMAGE_PATH_RE = /(\/api\/(?:images|local-image\?path=)[\w./%?=&-]+\.(?:png|jpe?g|gif|webp)|\/[\w./-]+\/[\w.-]+\.(?:png|jpe?g|gif|webp))/i;
+//    Allows spaces in paths (common in macOS screenshots like "Screenshot 2026-02-17 at 11.12.47 PM.png")
+const IMAGE_PATH_RE = /(\/api\/(?:images|local-image\?path=)[\w./%?=&-]+\.(?:png|jpe?g|gif|webp)|\/[\w. /-]+\/[\w. -]+\.(?:png|jpe?g|gif|webp))/i;
 
 /** Check if a local URL matches an image path that should be rendered inline */
 function isImageHref(href: string): boolean {

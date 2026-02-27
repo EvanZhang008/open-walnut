@@ -29,7 +29,7 @@ vi.mock('node:child_process', async (importOriginal) => {
   }
 })
 
-import { findRemoteImagePaths, downloadRemoteImage, rewriteRemoteImagePaths } from '../../src/providers/session-io.js'
+import { findImagePaths, findRemoteImagePaths, downloadRemoteImage, rewriteRemoteImagePaths } from '../../src/providers/session-io.js'
 import { WALNUT_HOME, SESSION_STREAMS_DIR, REMOTE_IMAGES_DIR } from '../../src/constants.js'
 
 const tmpBase = WALNUT_HOME
@@ -209,5 +209,89 @@ describe('rewriteRemoteImagePaths', () => {
 
     // No SCP should be triggered — file already exists
     expect(mockExecFile).not.toHaveBeenCalled()
+  })
+
+  it('handles paths with spaces in backticks', () => {
+    const text = 'See `/workplace/user/Screenshot 2026-02-17 at 11.12.47 PM.png` for details'
+    const cache = new Map<string, string>()
+    const result = rewriteRemoteImagePaths(text, { hostname: 'h' }, 'sess-space', cache)
+
+    expect(result).not.toContain('/workplace/user/Screenshot 2026-02-17 at 11.12.47 PM.png')
+    expect(result).toContain('images/remote/sess-space/Screenshot 2026-02-17 at 11.12.47 PM.png')
+    expect(cache.size).toBe(1)
+  })
+
+  it('handles paths with spaces in double quotes', () => {
+    const text = 'File at "/tmp/walnut-images/abc/My Screenshot.png" saved'
+    const cache = new Map<string, string>()
+    const result = rewriteRemoteImagePaths(text, { hostname: 'h' }, 'sess-dq', cache)
+
+    expect(result).not.toContain('/tmp/walnut-images/abc/My Screenshot.png')
+    expect(result).toContain('images/remote/sess-dq/My Screenshot.png')
+  })
+})
+
+describe('findImagePaths (space-aware path detection)', () => {
+  it('finds unquoted paths without spaces', () => {
+    const paths = findImagePaths('/tmp/test.png and /home/user/photo.jpg')
+    expect(paths).toHaveLength(2)
+    expect(paths).toContain('/tmp/test.png')
+    expect(paths).toContain('/home/user/photo.jpg')
+  })
+
+  it('finds backtick-quoted paths with spaces', () => {
+    const paths = findImagePaths('See `/workplace/Screenshot 2026-02-17 at 11.12.47 PM.png` here')
+    expect(paths).toHaveLength(1)
+    expect(paths[0]).toBe('/workplace/Screenshot 2026-02-17 at 11.12.47 PM.png')
+  })
+
+  it('finds double-quoted paths with spaces', () => {
+    const paths = findImagePaths('File at "/tmp/My Folder/image file.png" done')
+    expect(paths).toHaveLength(1)
+    expect(paths[0]).toBe('/tmp/My Folder/image file.png')
+  })
+
+  it('finds single-quoted paths with spaces', () => {
+    const paths = findImagePaths("File at '/tmp/My Folder/image file.png' done")
+    expect(paths).toHaveLength(1)
+    expect(paths[0]).toBe('/tmp/My Folder/image file.png')
+  })
+
+  it('finds paths in JSON values', () => {
+    const json = '{"file_path": "/workspace/remote/Screenshot 2026.png", "other": 123}'
+    const paths = findImagePaths(json)
+    expect(paths).toHaveLength(1)
+    expect(paths[0]).toBe('/workspace/remote/Screenshot 2026.png')
+  })
+
+  it('finds both quoted (spaced) and unquoted (no-space) paths in same text', () => {
+    const text = 'Unquoted /tmp/simple.png and quoted `/home/user/My Screenshot.jpg` together'
+    const paths = findImagePaths(text)
+    expect(paths).toHaveLength(2)
+    expect(paths).toContain('/tmp/simple.png')
+    expect(paths).toContain('/home/user/My Screenshot.jpg')
+  })
+
+  it('deduplicates across quoted and unquoted matches', () => {
+    const text = '/tmp/same.png and "/tmp/same.png" and `/tmp/same.png`'
+    const paths = findImagePaths(text)
+    expect(paths).toHaveLength(1)
+    expect(paths[0]).toBe('/tmp/same.png')
+  })
+
+  it('does not match non-image extensions', () => {
+    const paths = findImagePaths('`/tmp/file.txt` and "/home/doc.pdf"')
+    expect(paths).toHaveLength(0)
+  })
+
+  it('handles the real-world failing example', () => {
+    const text = 'Screenshot saved to `/home/user/projects/my-app-main/src/my-app/Screenshot 2026-02-17 at 11.12.47 PM.png`'
+    const paths = findImagePaths(text)
+    expect(paths).toHaveLength(1)
+    expect(paths[0]).toBe('/home/user/projects/my-app-main/src/my-app/Screenshot 2026-02-17 at 11.12.47 PM.png')
+  })
+
+  it('returns empty for text without image paths', () => {
+    expect(findImagePaths('Hello world')).toHaveLength(0)
   })
 })

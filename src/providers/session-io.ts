@@ -871,18 +871,60 @@ export function createSessionIO(
 
 // ── Image transfer for remote sessions ──
 
-/** Regex matching absolute paths to common image file extensions. */
-const IMAGE_PATH_RE = /(\/[\w./_-]+\.(?:png|jpg|jpeg|gif|webp|bmp|tiff))\b/gi
+/** Image extensions we recognize. */
+const IMG_EXT = 'png|jpg|jpeg|gif|webp|bmp|tiff'
+
+/**
+ * Unquoted path regex — no spaces allowed (safe default for free text).
+ * Matches: /some/path/image.png
+ */
+const UNQUOTED_IMAGE_RE = new RegExp(`(\\/[\\w./_-]+\\.(?:${IMG_EXT}))\\b`, 'gi')
+
+/**
+ * Quoted/backtick path regex — allows spaces in paths.
+ * Matches: `/path with spaces/image.png` or "/path with spaces/image.png"
+ * or '/path with spaces/image.png'
+ * The path must start with / and end with an image extension.
+ */
+const QUOTED_IMAGE_RE = new RegExp(
+  `[\`"'](\\/[\\w./ _-]+\\.(?:${IMG_EXT}))[\`"']`,
+  'gi',
+)
+
+/**
+ * Find absolute image paths in text, handling both spaced and non-spaced paths.
+ *
+ * Two-pass detection:
+ *   1. Quoted/backtick paths (can contain spaces): `/path with spaces/img.png`
+ *   2. Unquoted paths (no spaces, safe default): /path/img.png
+ *
+ * Returns deduplicated list of paths (without surrounding quotes).
+ */
+export function findImagePaths(text: string): string[] {
+  const found = new Set<string>()
+
+  // Pass 1: paths inside backticks, double quotes, or single quotes (may have spaces)
+  let m: RegExpExecArray | null
+  QUOTED_IMAGE_RE.lastIndex = 0
+  while ((m = QUOTED_IMAGE_RE.exec(text)) !== null) {
+    found.add(m[1])
+  }
+
+  // Pass 2: unquoted paths (no spaces)
+  UNQUOTED_IMAGE_RE.lastIndex = 0
+  while ((m = UNQUOTED_IMAGE_RE.exec(text)) !== null) {
+    found.add(m[1])
+  }
+
+  return [...found]
+}
 
 /**
  * Find local image file paths referenced in a text string.
  * Returns deduplicated list of paths that actually exist on the local filesystem.
  */
 export function findLocalImagePaths(text: string): string[] {
-  const matches = text.match(IMAGE_PATH_RE)
-  if (!matches) return []
-  const unique = [...new Set(matches)]
-  return unique.filter((p) => {
+  return findImagePaths(text).filter((p) => {
     try { return fs.statSync(p).isFile() } catch { return false }
   })
 }
@@ -964,9 +1006,7 @@ export async function transferImagesForRemoteSession(
  * (we can't stat remote files). Returns deduplicated path list.
  */
 export function findRemoteImagePaths(text: string): string[] {
-  const matches = text.match(IMAGE_PATH_RE)
-  if (!matches) return []
-  return [...new Set(matches)]
+  return findImagePaths(text)
 }
 
 /**
