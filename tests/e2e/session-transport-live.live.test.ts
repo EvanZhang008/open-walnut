@@ -124,7 +124,7 @@ interface HostDef {
 
 function resolveDevboxTarget(): HostDef | null {
   try {
-    const configPath = path.join(os.homedir(), '.walnut', 'config.yaml')
+    const configPath = path.join(os.homedir(), '.walnut', 'config.yaml') // safe: production-path — live test reads real config
     const content = fsSync.readFileSync(configPath, 'utf-8')
     const config = yaml.load(content) as { hosts?: Record<string, HostDef> }
     return config?.hosts?.devbox ?? null

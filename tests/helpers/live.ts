@@ -45,10 +45,15 @@ export function hasMsGraphCredentials(): boolean {
   return !!(process.env.MS_TODO_ACCESS_TOKEN || process.env.MS_TODO_REFRESH_TOKEN);
 }
 
-/** Read and parse ~/.walnut/config.yaml synchronously (for credential gate checks). */
+/** Read and parse config.yaml synchronously (for credential gate checks). */
 function readConfigSync(): Record<string, unknown> | null {
   try {
-    const home = process.env.WALNUT_HOME || path.join(os.homedir(), '.walnut');
+    const home = process.env.WALNUT_HOME || path.join(os.homedir(), '.walnut'); // safe: production-path — only used in live-test mode
+    // Guard: outside live-test mode, never read from production path
+    const prodHome = path.join(os.homedir(), '.walnut');
+    if (!isLiveTest() && (home === prodHome || home.startsWith(prodHome + path.sep))) {
+      return null;
+    }
     const content = fs.readFileSync(path.join(home, 'config.yaml'), 'utf-8');
     return (yaml.load(content) as Record<string, unknown>) ?? null;
   } catch {

@@ -18,7 +18,7 @@ beforeAll(() => {
 beforeEach(async () => {
   tmpHome = path.join(os.tmpdir(), `walnut-integ-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   await fs.mkdir(tmpHome, { recursive: true });
-  // Override HOME so that ~/.walnut resolves to our temp dir
+  // Override HOME so that ~/.walnut resolves to our temp dir // safe: production-path — test overrides HOME to temp
   env = { ...process.env, HOME: tmpHome } as Record<string, string>;
 });
 
