@@ -199,6 +199,9 @@ export interface Config {
     categories?: string[];
     projects?: string[];
   };
+  focus_bar?: {
+    pinned_tasks?: string[];
+  };
   ordering?: {
     categories?: string[];
     projects?: Record<string, string[]>;
@@ -334,6 +337,8 @@ export interface ChatEntry {
   sessionId?: string;          // Linked session ID (e.g. embedded triage run ID)
   // Compaction marker
   compacted?: boolean;         // true = excluded from model context, kept for scroll-back
+  // Per-field content hashes for task context dedup (keys like "note:{taskId}", "pm:life/tax")
+  contextHashes?: Record<string, string>;
 }
 
 export interface ChatHistoryStore {

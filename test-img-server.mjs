@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import fsp from 'node:fs/promises';
 
-const IMAGES_DIR = path.join(process.env.HOME, '.walnut', 'images');
+const IMAGES_DIR = path.join(process.env.WALNUT_HOME || path.join(process.env.HOME, '.walnut'), 'images'); // safe: production-path
 const EXT_TO_MIME = { png: 'image/png', jpg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
 
 const app = express();

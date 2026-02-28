@@ -6,6 +6,7 @@
  * runs the agent loop, and persists the new turn to disk.
  */
 
+import crypto from 'node:crypto'
 import type { WebSocket } from 'ws'
 import type { MessageParam } from '../../agent/model.js'
 import type { DisplayMessageBlock } from '../../core/types.js'
@@ -17,9 +18,11 @@ import { usageTracker } from '../../core/usage/index.js'
 import * as chatHistory from '../../core/chat-history.js'
 import { drainPendingCronNotifications } from '../server.js'
 import { getTask, appendConversationLog } from '../../core/task-manager.js'
+import { getProjectMemory } from '../../core/project-memory.js'
 import { getSessionByClaudeId } from '../../core/session-tracker.js'
 import { saveImageToDisk } from './images.js'
 import { compressForApi } from '../../utils/image-compress.js'
+import { truncateToTokenBudget } from '../../utils/token-truncate.js'
 import { log } from '../../logging/index.js'
 import { enqueueMainAgentTurn } from '../agent-turn-queue.js'
 import { triggerBackgroundCompaction } from '../background-compaction.js'
@@ -186,6 +189,185 @@ export function buildTaskContextPrefix(ctx: TaskContext | null | undefined): str
 
   lines.push('[/Task Context]')
   return lines.join('\n') + '\n\n'
+}
+
+// ── Token budgets for enriched task context ──
+const ENRICHED_BUDGETS = {
+  description: 1000,
+  summary: 500,
+  note: 2000,
+  projectMemory: 2000,
+  parentMemory: 1000,
+  conversationLog: 500,
+} as const;
+
+/** SHA256 hash of a string. Returns empty string for empty/null input. */
+function contentHash(text: string | null | undefined): string {
+  if (!text) return '';
+  return crypto.createHash('sha256').update(text).digest('hex');
+}
+
+/**
+ * Load hierarchical project memory: parent (category) + self (project).
+ * Returns { parentPath, parentContent, selfPath, selfContent }.
+ */
+function loadHierarchicalMemory(category: string, project: string): {
+  parentPath: string | null; parentContent: string | null;
+  selfPath: string; selfContent: string | null;
+} {
+  const catLower = category.toLowerCase();
+  const projLower = project.toLowerCase();
+  const selfPath = `${catLower}/${projLower}`;
+
+  // Self = project-level memory
+  const selfContent = getProjectMemory(selfPath);
+
+  // Parent = category-level memory (only if project !== category, i.e. 2 levels)
+  let parentPath: string | null = null;
+  let parentContent: string | null = null;
+  if (projLower !== catLower) {
+    parentPath = catLower;
+    parentContent = getProjectMemory(catLower);
+  }
+
+  return { parentPath, parentContent, selfPath, selfContent };
+}
+
+interface EnrichedResult {
+  prefix: string;
+  hashes: Record<string, string>;
+}
+
+/**
+ * Build enriched task context by loading full task + hierarchical project memory.
+ * Per-level hash dedup: only injects fields whose content changed since last injection.
+ *
+ * Falls back to buildTaskContextPrefix on any error.
+ */
+export async function enrichTaskContext(ctx: TaskContext): Promise<EnrichedResult> {
+  const task = await getTask(ctx.id);
+
+  // Load hierarchical memory
+  const mem = loadHierarchicalMemory(task.category, task.project);
+
+  // Compute current hashes — keyed by content source path
+  const currentHashes: Record<string, string> = {};
+  if (task.note) currentHashes[`note:${task.id}`] = contentHash(task.note);
+  if (task.description) currentHashes[`desc:${task.id}`] = contentHash(task.description);
+  if (task.summary) currentHashes[`summary:${task.id}`] = contentHash(task.summary);
+  if (mem.selfContent) currentHashes[`pm:${mem.selfPath}`] = contentHash(mem.selfContent);
+  if (mem.parentPath && mem.parentContent) currentHashes[`pm:${mem.parentPath}`] = contentHash(mem.parentContent);
+
+  // Get last injected hashes from chat history
+  const lastHashes = await chatHistory.getLastContextHashes();
+
+  // Helper: check if content changed
+  const unchanged = (key: string): boolean => {
+    return !!currentHashes[key] && lastHashes[key] === currentHashes[key];
+  };
+
+  // Build enriched context lines
+  const lines: string[] = [
+    '[Task Context — The user has selected this task in the UI. Their message below is about this task. Answer in the context of this task.]',
+  ];
+
+  // Metadata — always injected (small, ~200 tok)
+  lines.push(`ID: ${task.id}`);
+  lines.push(`Title: ${task.title}`);
+  if (task.phase) lines.push(`Phase: ${task.phase}`);
+  if (task.status) lines.push(`Status: ${task.status}`);
+  if (task.priority && task.priority !== 'none') lines.push(`Priority: ${task.priority}`);
+  if (task.starred) lines.push(`Starred: yes`);
+  if (task.category) lines.push(`Category: ${task.category}`);
+  if (task.project && task.project !== task.category) lines.push(`Project: ${task.project}`);
+  if (ctx.source) lines.push(`Source: ${ctx.source}`);
+  if (task.due_date) lines.push(`Due: ${task.due_date}`);
+  if (task.created_at) lines.push(`Created: ${task.created_at}`);
+
+  // Description
+  if (task.description) {
+    const key = `desc:${task.id}`;
+    if (unchanged(key)) {
+      lines.push(`Description: [unchanged since last injection]`);
+    } else {
+      lines.push(`Description: ${truncateToTokenBudget(task.description, ENRICHED_BUDGETS.description)}`);
+    }
+  }
+
+  // Summary
+  if (task.summary) {
+    const key = `summary:${task.id}`;
+    if (unchanged(key)) {
+      lines.push(`Summary: [unchanged since last injection]`);
+    } else {
+      lines.push(`Summary: ${truncateToTokenBudget(task.summary, ENRICHED_BUDGETS.summary)}`);
+    }
+  }
+
+  // Note — the most important field
+  if (task.note) {
+    const key = `note:${task.id}`;
+    if (unchanged(key)) {
+      lines.push(`Note: [unchanged since last injection]`);
+    } else {
+      lines.push(`Note:\n${truncateToTokenBudget(task.note, ENRICHED_BUDGETS.note)}`);
+    }
+  }
+
+  // Conversation log
+  if (task.conversation_log) {
+    const tokens = task.conversation_log.length / 3.5; // rough estimate
+    if (tokens <= ENRICHED_BUDGETS.conversationLog) {
+      lines.push(`Conversation Log (recent):\n${task.conversation_log}`);
+    } else {
+      // Tail-truncate: keep the most recent entries
+      const charBudget = Math.floor(ENRICHED_BUDGETS.conversationLog * 3.5);
+      const raw = task.conversation_log.slice(-charBudget);
+      const headingIdx = raw.indexOf('### ');
+      const truncated = '[older entries omitted]\n' + (headingIdx >= 0 ? raw.slice(headingIdx) : raw).trim();
+      lines.push(`Conversation Log (recent):\n${truncated}`);
+    }
+  }
+
+  // Parent memory (category level)
+  if (mem.parentPath && mem.parentContent) {
+    const key = `pm:${mem.parentPath}`;
+    const label = task.category;
+    if (unchanged(key)) {
+      lines.push(`\n[Category Memory: ${label}] [unchanged since last injection]`);
+    } else {
+      lines.push(`\n[Category Memory: ${label}]\n${truncateToTokenBudget(mem.parentContent, ENRICHED_BUDGETS.parentMemory)}`);
+    }
+  }
+
+  // Project memory (self level)
+  if (mem.selfContent) {
+    const key = `pm:${mem.selfPath}`;
+    const label = task.project;
+    if (unchanged(key)) {
+      lines.push(`\n[Project Memory: ${label}] [unchanged since last injection]`);
+    } else {
+      lines.push(`\n[Project Memory: ${label}]\n${truncateToTokenBudget(mem.selfContent, ENRICHED_BUDGETS.projectMemory)}`);
+    }
+  }
+
+  // Session slots — same as buildTaskContextPrefix
+  if (ctx.plan_session_id) {
+    const ss = ctx.plan_session_status;
+    const parts = ss ? [ss.process_status, ss.work_status, ...(ss.activity ? [ss.activity] : [])].join(', ') : '';
+    lines.push(`Plan session: ${ctx.plan_session_id}${parts ? ` (${parts})` : ''}`);
+  }
+  if (ctx.exec_session_id) {
+    const ss = ctx.exec_session_status;
+    const parts = ss ? [ss.process_status, ss.work_status, ...(ss.activity ? [ss.activity] : [])].join(', ') : '';
+    lines.push(`Exec session: ${ctx.exec_session_id}${parts ? ` (${parts})` : ''}`);
+  }
+
+  lines.push('[/Task Context]');
+  return {
+    prefix: lines.join('\n') + '\n\n',
+    hashes: currentHashes,
+  };
 }
 
 /**
@@ -434,7 +616,23 @@ export function registerChatRpc(): void {
 
     // Pre-process images outside the queue (save to disk, prepare base64 blocks).
     // This avoids holding the queue while doing disk I/O for image uploads.
-    const contextPrefix = taskContext ? buildTaskContextPrefix(taskContext) : ''
+
+    // Enrich task context with full content + hash dedup; fall back to truncated prefix on error
+    let contextPrefix = ''
+    let contextHashes: Record<string, string> | undefined
+    if (taskContext) {
+      try {
+        const enriched = await enrichTaskContext(taskContext)
+        contextPrefix = enriched.prefix
+        contextHashes = enriched.hashes
+      } catch (err) {
+        log.web.warn('enrichTaskContext failed, falling back to buildTaskContextPrefix', {
+          taskId: taskContext.id,
+          error: err instanceof Error ? err.message : String(err),
+        })
+        contextPrefix = buildTaskContextPrefix(taskContext)
+      }
+    }
 
     let savedImages: Array<{ filePath: string; filename: string; mediaType: string }> = []
     let imageContentBlocks: unknown[] | null = null
@@ -573,8 +771,12 @@ export function registerChatRpc(): void {
         // Replace base64 image blocks with path-based blocks before persisting
         const persistMsgs = replaceImagesWithPaths(resolvedMsgs, savedImages)
 
-        // Persist to disk
-        await chatHistory.addAIMessages(persistMsgs, { displayText: message })
+        // Persist to disk (include contextHashes for dedup on next turn)
+        await chatHistory.addAIMessages(persistMsgs, {
+          displayText: message,
+          ...(contextHashes && { contextHashes }),
+          ...(taskContext?.id && { taskId: taskContext.id }),
+        })
         log.agent.info('agent response persisted', { taskId: taskContext?.id, messageCount: newApiMsgs.length })
 
         // Signal turn complete to the client (resets isStreaming).

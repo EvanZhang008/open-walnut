@@ -23,7 +23,7 @@ interface ChatMessageProps {
   taskContext?: TaskContext;
   routeInfo?: RouteInfo;
   timestamp?: string;
-  source?: 'cron' | 'triage' | 'session' | 'session-error' | 'agent-error' | 'subagent' | 'compaction' | 'compacting' | 'heartbeat';
+  source?: 'cron' | 'triage' | 'triage-notify' | 'session' | 'session-error' | 'agent-error' | 'subagent' | 'compaction' | 'compacting' | 'heartbeat';
   cronJobName?: string;
   notification?: boolean;
   queued?: boolean;
@@ -240,44 +240,161 @@ function CompactionDetails({ details }: { details: string }) {
   );
 }
 
-function TaskContextSection({ ctx }: { ctx: TaskContext }) {
+// Phase symbols matching StatusBadge (inline, no import needed)
+const PHASE_SYMBOLS: Record<string, string> = {
+  TODO: '\u25CB', IN_PROGRESS: '\u25D0', AGENT_COMPLETE: '\u2713',
+  AWAIT_HUMAN_ACTION: '\u229A', PEER_CODE_REVIEW: '\u22C8',
+  RELEASE_IN_PIPELINE: '\u25B7', COMPLETE: '\u2713\u2713',
+};
+
+// Truncation limits matching buildTaskContextPrefix in src/web/routes/chat.ts:128-188
+const TRUNC = { description: 300, summary: 200, note: 500, conversationLog: 400 } as const;
+
+function truncText(text: string, limit: number): string {
+  return text.length > limit ? text.slice(0, limit) + ' [truncated]' : text;
+}
+
+/** Tail-truncate conversation log, snapping to nearest ### heading (matches backend logic) */
+function truncConversationLog(log: string): string {
+  if (log.length <= TRUNC.conversationLog) return log;
+  const raw = log.slice(log.length - TRUNC.conversationLog);
+  const headingIdx = raw.indexOf('### ');
+  const tail = headingIdx >= 0 ? raw.slice(headingIdx) : raw;
+  return '[older entries omitted]\n' + tail.trim();
+}
+
+interface TaskContextSectionProps {
+  ctx: TaskContext;
+  onSessionClick?: (sessionId: string) => void;
+}
+
+function TaskContextSection({ ctx, onSessionClick }: TaskContextSectionProps) {
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const subtasksDone = ctx.subtasks?.filter(s => s.done).length ?? 0;
   const subtasksTotal = ctx.subtasks?.length ?? 0;
+
+  const handleSessionClick = useCallback((id: string) => {
+    if (onSessionClick) onSessionClick(id);
+    else navigate(`/sessions?id=${id}`);
+  }, [onSessionClick, navigate]);
+
+  const hasDescription = !!ctx.description;
+  const hasSummary = !!ctx.summary;
+  const hasNote = !!ctx.note;
+  const hasConvLog = !!ctx.conversation_log;
+  const hasPlanSession = !!ctx.plan_session_id;
+  const hasExecSession = !!ctx.exec_session_id;
+  const hasSessions = hasPlanSession || hasExecSession;
+  const hasSubtasks = (ctx.subtasks?.length ?? 0) > 0;
 
   return (
     <div className="chat-task-context">
       <button className="chat-task-context-toggle" onClick={() => setOpen(p => !p)}>
         <span className="chat-task-context-icon">{open ? '\u25BC' : '\u25B6'}</span>
         <span className="chat-task-context-label">
-          Task: {ctx.title}
-          {ctx.status && <span className="text-xs text-muted" style={{ marginLeft: 6 }}>({ctx.status})</span>}
+          Task Context &middot; {ctx.title}
+        </span>
+        <span className="chat-task-context-badges">
+          {ctx.phase && (
+            <span className={`badge badge-phase-${ctx.phase.toLowerCase()}`}>
+              {PHASE_SYMBOLS[ctx.phase] ?? '?'} {ctx.phase.replace(/_/g, ' ').toLowerCase().replace(/^\w/, c => c.toUpperCase())}
+            </span>
+          )}
+          {ctx.priority && ctx.priority !== 'none' && (
+            <span className="badge" style={{ color: ctx.priority === 'high' ? 'var(--error)' : ctx.priority === 'medium' ? 'var(--warning)' : 'var(--fg-muted)' }}>
+              {ctx.priority === 'high' ? '!!' : ctx.priority === 'medium' ? '!' : '\u2013'} {ctx.priority}
+            </span>
+          )}
+          {ctx.starred && <span style={{ fontSize: 11, color: 'var(--warning)' }}>{'\u2605'}</span>}
+          {subtasksTotal > 0 && (
+            <span style={{ fontSize: 10, color: 'var(--fg-muted)' }}>{subtasksDone}/{subtasksTotal}</span>
+          )}
         </span>
       </button>
       {open && (
         <div className="chat-task-context-content">
-          <div className="text-xs text-muted" style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '4px 0' }}>
+          {/* Metadata row */}
+          <div className="chat-task-context-meta">
             <span><strong>ID:</strong> {ctx.id}</span>
             {ctx.category && (
               <span><strong>Category:</strong> {ctx.category}{ctx.project && ctx.project !== ctx.category ? ` / ${ctx.project}` : ''}</span>
             )}
-            {subtasksTotal > 0 && (
-              <span><strong>Subtasks:</strong> {subtasksDone}/{subtasksTotal} done</span>
-            )}
-            {ctx.description && (
-              <span><strong>Description:</strong> {ctx.description.length > 100 ? ctx.description.slice(0, 100) + '...' : ctx.description}</span>
-            )}
-            {ctx.summary && (
-              <span><strong>Summary:</strong> {ctx.summary.length > 100 ? ctx.summary.slice(0, 100) + '...' : ctx.summary}</span>
-            )}
+            {ctx.source && <span><strong>Source:</strong> {ctx.source}</span>}
+            {ctx.due_date && <span><strong>Due:</strong> {ctx.due_date}</span>}
+            {ctx.created_at && <span><strong>Created:</strong> {ctx.created_at.slice(0, 10)}</span>}
           </div>
-          {ctx.subtasks && ctx.subtasks.length > 0 && (
-            <div className="text-xs" style={{ marginTop: 4 }}>
-              {ctx.subtasks.map(s => (
-                <div key={s.id} style={{ opacity: s.done ? 0.5 : 1 }}>
-                  [{s.done ? 'x' : ' '}] {s.title}
+
+          {/* Text sections — truncation matches backend buildTaskContextPrefix */}
+          {hasDescription && (
+            <div className="chat-task-context-section">
+              <div className="chat-task-context-section-label">Description</div>
+              <div className="chat-task-context-text">{truncText(ctx.description, TRUNC.description)}</div>
+            </div>
+          )}
+          {hasSummary && (
+            <div className="chat-task-context-section">
+              <div className="chat-task-context-section-label">Summary</div>
+              <div className="chat-task-context-text">{truncText(ctx.summary, TRUNC.summary)}</div>
+            </div>
+          )}
+          {hasNote && (
+            <div className="chat-task-context-section">
+              <div className="chat-task-context-section-label">Note</div>
+              <div className="chat-task-context-text">{truncText(ctx.note, TRUNC.note)}</div>
+            </div>
+          )}
+          {hasConvLog && (
+            <div className="chat-task-context-section">
+              <div className="chat-task-context-section-label">Conversation Log (recent)</div>
+              <div className="chat-task-context-text">{truncConversationLog(ctx.conversation_log!)}</div>
+            </div>
+          )}
+
+          {/* Session slots */}
+          {hasSessions && (
+            <div className="chat-task-context-section">
+              <div className="chat-task-context-section-label">Sessions</div>
+              {hasPlanSession && (
+                <div className="chat-task-context-session">
+                  <span className="chat-task-context-session-type">Plan</span>
+                  <span className="chat-task-context-session-id" onClick={() => handleSessionClick(ctx.plan_session_id!)}>
+                    {ctx.plan_session_id!.slice(0, 8)}&hellip;
+                  </span>
+                  {ctx.plan_session_status && (
+                    <span className="chat-task-context-session-status">
+                      ({ctx.plan_session_status.process_status}, {ctx.plan_session_status.work_status.replace(/_/g, ' ')})
+                    </span>
+                  )}
                 </div>
-              ))}
+              )}
+              {hasExecSession && (
+                <div className="chat-task-context-session">
+                  <span className="chat-task-context-session-type">Exec</span>
+                  <span className="chat-task-context-session-id" onClick={() => handleSessionClick(ctx.exec_session_id!)}>
+                    {ctx.exec_session_id!.slice(0, 8)}&hellip;
+                  </span>
+                  {ctx.exec_session_status && (
+                    <span className="chat-task-context-session-status">
+                      ({ctx.exec_session_status.process_status}, {ctx.exec_session_status.work_status.replace(/_/g, ' ')})
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Subtasks */}
+          {hasSubtasks && (
+            <div className="chat-task-context-section">
+              <div className="chat-task-context-section-label">Subtasks ({subtasksDone}/{subtasksTotal})</div>
+              <div className="chat-task-context-subtasks text-xs">
+                {ctx.subtasks!.map(s => (
+                  <div key={s.id} style={{ opacity: s.done ? 0.5 : 1 }}>
+                    [{s.done ? 'x' : ' '}] {s.title}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>
@@ -1054,7 +1171,7 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
         )}
         {role === 'user' ? (
           <div className="chat-message-content">
-            {taskContext && <TaskContextSection ctx={taskContext} />}
+            {taskContext && <TaskContextSection ctx={taskContext} onSessionClick={onSessionClick} />}
             {routeInfo && <RouteInfoSection info={routeInfo} taskLookup={taskLookup} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />}
             {images && images.length > 0 && (
               <div className="chat-message-images">

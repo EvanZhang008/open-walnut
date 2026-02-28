@@ -2,6 +2,10 @@ import { useState, useCallback, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { CronToast } from '../common/CronToast';
+import { DataSafetyBanner } from '../common/DataSafetyBanner';
+import { FocusDock } from '../dock/FocusDock';
+import { useFocusBar } from '@/hooks/useFocusBar';
+import { useTasks } from '@/hooks/useTasks';
 
 interface AppShellProps {
   children: ReactNode;
@@ -21,6 +25,8 @@ export function AppShell({ children }: AppShellProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(readCollapsed);
   const location = useLocation();
   const isMainPage = location.pathname === '/';
+  const { tasks } = useTasks();
+  const focusBar = useFocusBar(tasks);
 
   const toggleSidebar = useCallback(() => {
     setSidebarOpen((prev) => !prev);
@@ -42,6 +48,7 @@ export function AppShell({ children }: AppShellProps) {
 
   return (
     <div className="app-shell">
+      <DataSafetyBanner />
       <button className="sidebar-toggle" onClick={toggleSidebar} aria-label="Toggle sidebar">
         &#9776;
       </button>
@@ -51,11 +58,14 @@ export function AppShell({ children }: AppShellProps) {
         onToggleCollapse={toggleSidebarCollapse}
       />
       {sidebarOpen && <div className="sidebar-overlay" onClick={closeSidebar} />}
-      <main
-        className="main-content"
-        style={isMainPage ? { padding: 0, overflow: 'hidden' } : undefined}
-      >
-        {children}
+      <main className="main-content">
+        <div
+          className="app-content-area"
+          style={isMainPage ? { padding: 0, overflow: 'hidden' } : undefined}
+        >
+          {children}
+        </div>
+        <FocusDock focusBar={focusBar} isChatActive={isMainPage} />
       </main>
       <CronToast />
     </div>

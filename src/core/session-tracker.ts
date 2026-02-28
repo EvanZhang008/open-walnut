@@ -431,6 +431,62 @@ export async function createSessionRecord(
 }
 
 /**
+ * Import an external session record (e.g. a `claude -p` session started outside Walnut).
+ * Created directly as stopped — no running process to track.
+ * Throws if a record with the same Claude session ID already exists.
+ */
+export async function importSessionRecord(opts: {
+  claudeSessionId: string;
+  taskId: string;
+  project: string;
+  cwd?: string;
+  host?: string;
+  title?: string;
+  work_status?: 'agent_complete' | 'completed' | 'await_human_action';
+  startedAt?: string;
+  lastActiveAt?: string;
+  messageCount?: number;
+}): Promise<SessionRecord> {
+  return withWriteLock(async () => {
+    const store = await readStore();
+    const existing = store.sessions.find((s) => s.claudeSessionId === opts.claudeSessionId);
+    if (existing) {
+      throw new Error(
+        `Session ${opts.claudeSessionId} is already tracked (task: ${existing.taskId}). ` +
+        `Use send_to_session to interact with it.`,
+      );
+    }
+
+    const now = new Date().toISOString();
+    const record: SessionRecord = {
+      claudeSessionId: opts.claudeSessionId,
+      taskId: opts.taskId,
+      project: opts.project,
+      process_status: 'stopped',
+      work_status: opts.work_status ?? 'agent_complete',
+      mode: 'default',
+      last_status_change: now,
+      startedAt: opts.startedAt ?? now,
+      lastActiveAt: opts.lastActiveAt ?? now,
+      messageCount: opts.messageCount ?? 0,
+      ...(opts.cwd ? { cwd: opts.cwd } : {}),
+      ...(opts.host ? { host: opts.host } : {}),
+      ...(opts.title ? { title: opts.title } : {}),
+    };
+
+    store.sessions.push(record);
+    await writeStore(store);
+    log.session.info('imported external session', {
+      sessionId: opts.claudeSessionId,
+      taskId: opts.taskId,
+      project: opts.project,
+      host: opts.host,
+    });
+    return record;
+  });
+}
+
+/**
  * Update an existing session's fields.
  */
 export async function updateSessionRecord(

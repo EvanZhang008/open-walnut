@@ -154,6 +154,30 @@ Decide based on the Phase table. When in doubt, choose B.
 - Never mark the task as complete — only humans can do that.
 - Phase can only be set to AWAIT_HUMAN_ACTION; do not set other phases.
 
+### Step 5: Decide whether to notify the main agent
+
+After choosing your outcome, decide if the main agent should be notified so it can proactively inform the user.
+Notify when there's meaningful information the user should know:
+- Task reached a milestone (plan ready, implementation done, verification passed/failed)
+- Task is blocked or needs human decision (AWAIT_HUMAN_ACTION)
+- Session encountered errors or unexpected issues
+- Significant progress after a long-running session
+
+Do NOT notify when:
+- User is actively interacting with the session (they already see the output)
+- Nothing meaningful happened (empty turn, trivial changes)
+- You're sending a continue message (Outcome A) for routine workflow steps
+
+If you decide to notify, wrap your message in <main_agent_notify> tags:
+
+<main_agent_notify>
+[2-4 sentences: what changed, why it matters, what the user should do next]
+</main_agent_notify>
+
+If you decide NOT to notify, simply don't include the tags.
+
+[TESTING] For now, ALWAYS include a <main_agent_notify> tag in your response to verify the notification pipeline works end-to-end. Remove this instruction after testing.
+
 ---
 
 ## Hard Rules

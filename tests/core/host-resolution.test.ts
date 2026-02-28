@@ -16,7 +16,8 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
 
-import { addTask, getProjectMetadata } from '../../src/core/task-manager.js';
+import { addTask, getProjectMetadata, getTask, updateTask } from '../../src/core/task-manager.js';
+import type { Task } from '../../src/core/types.js';
 import { WALNUT_HOME, CONFIG_FILE } from '../../src/constants.js';
 
 beforeEach(async () => {
@@ -30,9 +31,12 @@ afterEach(async () => {
 /**
  * Simulate the host/cwd resolution chain from start_session tool.
  * This is the exact logic from src/agent/tools.ts, extracted for testing.
+ *
+ * Resolution chain:
+ *   ① explicit param → ② task.cwd → ③ parent chain → ④ project metadata → ⑤ error
  */
 async function resolveHostAndCwd(
-  task: { category: string; project: string } | null,
+  task: { id?: string; category: string; project: string; cwd?: string; parent_task_id?: string } | null,
   paramsHost?: string,
   paramsCwd?: string,
 ): Promise<{
@@ -43,6 +47,22 @@ async function resolveHostAndCwd(
   let resolvedHost = paramsHost;
   let resolvedCwd = paramsCwd;
 
+  // Priority 2 & 3: task cwd → walk up parent chain
+  if (!resolvedCwd && task) {
+    let current: typeof task | undefined = task;
+    const seen = new Set<string>();
+    while (current && !resolvedCwd) {
+      if (current.cwd) {
+        resolvedCwd = current.cwd;
+        break;
+      }
+      if (!current.parent_task_id || seen.has(current.parent_task_id)) break;
+      if (current.id) seen.add(current.id);
+      current = await getTask(current.parent_task_id).catch(() => undefined) as typeof task | undefined;
+    }
+  }
+
+  // Priority 4: project/category metadata
   if (task && (!resolvedHost || !resolvedCwd)) {
     const metadata = await getProjectMetadata(task.category, task.project);
     if (metadata) {
@@ -235,6 +255,119 @@ describe('Host/CWD resolution chain', () => {
 
     expect(result.resolvedHost).toBeUndefined(); // local
     expect(result.resolvedCwd).toBe('/workspace/local-project');
+    expect(result.error).toBeUndefined();
+  });
+});
+
+describe('Task-level cwd resolution', () => {
+  it('task.cwd overrides project default_cwd', async () => {
+    // Set up project with default_cwd
+    await addTask({
+      title: '.metadata_project',
+      category: 'Work',
+      project: 'HomeLab',
+      description: 'default_cwd: /workspace/project-default',
+    });
+
+    // Create a task with its own cwd
+    const { task } = await addTask({ title: 'Special task', category: 'Work', project: 'HomeLab' });
+    await updateTask(task.id, { cwd: '/workspace/task-override' });
+    const updated = await getTask(task.id);
+
+    const result = await resolveHostAndCwd(
+      { id: updated.id, category: updated.category, project: updated.project, cwd: updated.cwd },
+      undefined, // no explicit host
+      undefined, // no explicit cwd
+    );
+
+    expect(result.resolvedCwd).toBe('/workspace/task-override');
+    expect(result.error).toBeUndefined();
+  });
+
+  it('explicit param overrides task.cwd', async () => {
+    const { task } = await addTask({ title: 'Task with cwd', category: 'Work', project: 'HomeLab' });
+    await updateTask(task.id, { cwd: '/workspace/task-cwd' });
+    const updated = await getTask(task.id);
+
+    const result = await resolveHostAndCwd(
+      { id: updated.id, category: updated.category, project: updated.project, cwd: updated.cwd },
+      undefined,
+      '/workspace/explicit',  // explicit param wins
+    );
+
+    expect(result.resolvedCwd).toBe('/workspace/explicit');
+    expect(result.error).toBeUndefined();
+  });
+
+  it('subtask inherits cwd from parent task', async () => {
+    const { task: parent } = await addTask({ title: 'Parent', category: 'Work', project: 'HomeLab' });
+    await updateTask(parent.id, { cwd: '/workspace/parent-cwd' });
+
+    const { task: child } = await addTask({
+      title: 'Child',
+      category: 'Work',
+      project: 'HomeLab',
+      parent_task_id: parent.id,
+    });
+
+    // Child has no cwd — should inherit from parent
+    const result = await resolveHostAndCwd(
+      { id: child.id, category: child.category, project: child.project, cwd: child.cwd, parent_task_id: child.parent_task_id },
+      undefined,
+      undefined,
+    );
+
+    expect(result.resolvedCwd).toBe('/workspace/parent-cwd');
+    expect(result.error).toBeUndefined();
+  });
+
+  it('subtask cwd overrides parent cwd', async () => {
+    const { task: parent } = await addTask({ title: 'Parent', category: 'Work', project: 'HomeLab' });
+    await updateTask(parent.id, { cwd: '/workspace/parent-cwd' });
+
+    const { task: child } = await addTask({
+      title: 'Child',
+      category: 'Work',
+      project: 'HomeLab',
+      parent_task_id: parent.id,
+    });
+    await updateTask(child.id, { cwd: '/workspace/child-cwd' });
+    const updatedChild = await getTask(child.id);
+
+    const result = await resolveHostAndCwd(
+      { id: updatedChild.id, category: updatedChild.category, project: updatedChild.project, cwd: updatedChild.cwd, parent_task_id: updatedChild.parent_task_id },
+      undefined,
+      undefined,
+    );
+
+    expect(result.resolvedCwd).toBe('/workspace/child-cwd');
+    expect(result.error).toBeUndefined();
+  });
+
+  it('falls back to project metadata when no task cwd in chain', async () => {
+    await addTask({
+      title: '.metadata_project',
+      category: 'Work',
+      project: 'HomeLab',
+      description: 'default_cwd: /workspace/project-default',
+    });
+
+    const { task: parent } = await addTask({ title: 'Parent no cwd', category: 'Work', project: 'HomeLab' });
+    const { task: child } = await addTask({
+      title: 'Child no cwd',
+      category: 'Work',
+      project: 'HomeLab',
+      parent_task_id: parent.id,
+    });
+
+    // Neither parent nor child has cwd → falls back to project metadata
+    const result = await resolveHostAndCwd(
+      { id: child.id, category: child.category, project: child.project, cwd: child.cwd, parent_task_id: child.parent_task_id },
+      undefined,
+      undefined,
+    );
+
+    expect(result.resolvedCwd).toBe('/workspace/project-default');
     expect(result.error).toBeUndefined();
   });
 });

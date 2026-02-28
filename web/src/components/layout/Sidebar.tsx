@@ -20,7 +20,7 @@ export function Sidebar({ open, collapsed, onToggleCollapse }: SidebarProps) {
           <HamburgerIcon />
         </button>
         <span className="sidebar-label">
-          <span className="font-mono">&gt;_</span> Walnut
+          <WalnutIcon /> Walnut
         </span>
       </div>
       <nav className="sidebar-nav">
@@ -195,6 +195,16 @@ function MemoryIcon() {
       <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
       <line x1="8" y1="7" x2="16" y2="7" />
       <line x1="8" y1="11" x2="14" y2="11" />
+    </svg>
+  );
+}
+
+function WalnutIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" strokeLinecap="round" strokeLinejoin="round" className="sidebar-walnut-icon">
+      <ellipse cx="11.5" cy="12" rx="7.5" ry="10" fill="currentColor" />
+      <ellipse cx="12.5" cy="12" rx="7.5" ry="10" fill="currentColor" />
+      <line x1="12" y1="2" x2="12" y2="22" stroke="var(--bg-secondary)" strokeWidth="1.5" />
     </svg>
   );
 }

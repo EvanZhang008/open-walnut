@@ -28,7 +28,7 @@ export interface ChatMessage {
   images?: ImageAttachment[];
   taskContext?: TaskContext;
   timestamp?: string;
-  source?: 'cron' | 'triage' | 'session' | 'session-error' | 'agent-error' | 'subagent' | 'compaction' | 'compacting' | 'heartbeat';
+  source?: 'cron' | 'triage' | 'triage-notify' | 'session' | 'session-error' | 'agent-error' | 'subagent' | 'compaction' | 'compacting' | 'heartbeat';
   cronJobName?: string;
   notification?: boolean;
   queued?: boolean;

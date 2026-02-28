@@ -483,6 +483,26 @@ function entryToDisplayMessage(entry: ChatEntry): DisplayMessage {
   };
 }
 
+/**
+ * Scan non-compacted entries and collect the most recent contextHashes.
+ * Merges hashes across entries — for each key, the latest entry's hash wins.
+ * Used by enrichTaskContext to determine which content fields changed.
+ */
+export async function getLastContextHashes(): Promise<Record<string, string>> {
+  const store = await readStore();
+  const entries = store.entries ?? [];
+  const merged: Record<string, string> = {};
+
+  for (const entry of entries) {
+    if (entry.compacted) continue;
+    if (entry.contextHashes) {
+      Object.assign(merged, entry.contextHashes);
+    }
+  }
+
+  return merged;
+}
+
 // ── Public API: writing ──
 
 /**
@@ -491,7 +511,7 @@ function entryToDisplayMessage(entry: ChatEntry): DisplayMessage {
  */
 export async function addAIMessages(
   msgs: MessageParam[],
-  options?: { displayText?: string; source?: ChatEntry['source'] },
+  options?: { displayText?: string; source?: ChatEntry['source']; contextHashes?: Record<string, string>; taskId?: string },
 ): Promise<void> {
   if (msgs.length === 0) return;
   return withWriteLock(async () => {
@@ -506,9 +526,11 @@ export async function addAIMessages(
         content,
         timestamp: now,
       };
-      // Attach displayText to the first user message in this batch only
+      // Attach displayText + contextHashes + taskId to the first user message in this batch only
       if (options?.displayText && role === 'user' && !displayTextAttached) {
         entry.displayText = options.displayText;
+        if (options.contextHashes) entry.contextHashes = options.contextHashes;
+        if (options.taskId) entry.taskId = options.taskId;
         displayTextAttached = true;
       }
       if (options?.source) {

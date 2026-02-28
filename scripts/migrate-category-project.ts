@@ -11,7 +11,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const WALNUT_HOME = path.join(process.env.HOME ?? '', '.walnut');
+const WALNUT_HOME = process.env.WALNUT_HOME ?? path.join(process.env.HOME ?? '', '.walnut'); // safe: production-path
 const TASKS_FILE = path.join(WALNUT_HOME, 'tasks.json');
 
 interface TaskStore {

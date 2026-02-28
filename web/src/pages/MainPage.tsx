@@ -5,6 +5,7 @@ import { useChat, type TaskContext, type ImageAttachment } from '@/hooks/useChat
 import { useWebSocket, useEvent } from '@/hooks/useWebSocket';
 import { useTasks } from '@/hooks/useTasks';
 import { useFavorites } from '@/hooks/useFavorites';
+import { useFocusBar } from '@/hooks/useFocusBar';
 import { useOrdering } from '@/hooks/useOrdering';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { ChatPanel } from '@/components/chat/ChatPanel';
@@ -38,6 +39,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const { connectionState } = useWebSocket();
   const { tasks, loading, toggleComplete, setPhase, star, create, update, reorder, moveTask, operationError, clearOperationError, showOperationError } = useTasks();
   const favorites = useFavorites();
+  const focusBar = useFocusBar(tasks);
+  const pinnedTaskIdSet = useMemo(() => new Set(focusBar.pinnedIds), [focusBar.pinnedIds]);
   const ordering = useOrdering();
   const [focusedTask, setFocusedTask] = useState<Task | null>(null);
   const inspector = useContextInspector();
@@ -119,6 +122,28 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     else sessionStorage.removeItem(SS_SESSION_KEY);
   }, [sessionPanelId]);
 
+  // ── Listen for FocusDock events ──
+  useEffect(() => {
+    const handleDockTask = (e: Event) => {
+      const { taskId, sessionId } = (e as CustomEvent).detail as { taskId: string; sessionId?: string };
+      const task = taskMapRef.current.get(taskId);
+      if (task) setFocusedTask(task);
+      if (sessionId) setSessionPanelId(sessionId);
+    };
+    const handleDockChat = () => {
+      // Focus main chat: clear focused task + close session panel
+      setFocusedTask(null);
+      setSessionPanelId(null);
+      setTriagePanelOpen(false);
+    };
+    window.addEventListener('dock:activate-task', handleDockTask);
+    window.addEventListener('dock:activate-chat', handleDockChat);
+    return () => {
+      window.removeEventListener('dock:activate-task', handleDockTask);
+      window.removeEventListener('dock:activate-chat', handleDockChat);
+    };
+  }, []);
+
   // Persist & restore todo panel scroll position (once after initial load)
   const restoredScrollRef = useRef(false);
   useEffect(() => {
@@ -164,16 +189,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, []);
 
   // ── Triage panel handlers ──
-  const handleToggleTriage = useCallback(() => {
-    setTriagePanelOpen((prev) => {
-      if (!prev) {
-        setSessionPanelId(null); // Close session when opening triage
-        setTriageTaskId(null); // Show all when toggling from header button
-      }
-      return !prev;
-    });
-  }, []);
-
   const handleOpenTriageForTask = useCallback((taskId: string) => {
     setTriagePanelOpen(true);
     setTriageTaskId(taskId);
@@ -492,9 +507,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onReorder={reorder}
           onMoveTask={moveTask}
           onOpenSession={handleToggleSession}
-          onToggleTriage={handleToggleTriage}
           onOpenTriageForTask={handleOpenTriageForTask}
-          triagePanelOpen={triagePanelOpen}
+          onPinTask={focusBar.pin}
+          onUnpinTask={focusBar.unpin}
+          pinnedTaskIds={pinnedTaskIdSet}
           operationError={operationError}
           onClearOperationError={clearOperationError}
           onOperationError={showOperationError}

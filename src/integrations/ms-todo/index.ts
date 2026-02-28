@@ -15,8 +15,18 @@ export default function register(api: PluginApi): void {
       }
       return null;
     },
-    async deleteTask(_task: Task) {
-      // MS To-Do doesn't support deletion via Graph API in current implementation
+    async deleteTask(task: Task) {
+      const { deleteMsTodoTask, registerDeletedMsIds } = await import('../microsoft-todo.js');
+      // Register ID in ignore list FIRST — even if remote delete fails, pull won't re-import
+      await registerDeletedMsIds(task);
+      const msId = (task.ext?.['ms-todo'] as Record<string, unknown>)?.id as string | undefined;
+      const listId = (task.ext?.['ms-todo'] as Record<string, unknown>)?.list_id as string | undefined;
+      if (!msId || !listId) return;
+      try {
+        await deleteMsTodoTask(listId, msId);
+      } catch {
+        // Task may already be gone on remote — acceptable
+      }
     },
     async updateTitle(task: Task) {
       const { autoPushTask } = await import('../microsoft-todo.js');

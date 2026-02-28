@@ -68,6 +68,9 @@ interface TodoPanelProps {
   onMoveTask?: (taskId: string, category: string, project: string, insertNearTaskId?: string) => void;
   onOpenSession?: (sessionId: string) => void;
   onOpenTriageForTask?: (taskId: string) => void;
+  onPinTask?: (taskId: string) => void;
+  onUnpinTask?: (taskId: string) => void;
+  pinnedTaskIds?: Set<string>;
   operationError?: string | null;
   onClearOperationError?: () => void;
   onOperationError?: (msg: string) => void;
@@ -254,6 +257,8 @@ interface SortableTaskItemProps {
   onCyclePriority?: (id: string) => void;
   onUpdateTitle?: (id: string, title: string) => void;
   onOpenSession?: (sessionId: string) => void;
+  onPinTask?: (taskId: string) => void;
+  isPinned?: boolean;
   searchContext?: string; // Category/Project context pill shown in search mode
   searchMatchField?: string;  // Best keyword field ('title','note',etc.) or 'semantic'
   searchScore?: number;       // Combined normalized score [0,1]
@@ -261,7 +266,7 @@ interface SortableTaskItemProps {
   searchSemanticScore?: number; // Normalized semantic contribution [0,1]
 }
 
-function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount, onClick, onSetPhase, onStar, onCyclePriority, onUpdateTitle, onOpenSession, searchContext, searchMatchField, searchScore, searchKeywordScore, searchSemanticScore }: SortableTaskItemProps) {
+function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount, onClick, onSetPhase, onStar, onCyclePriority, onUpdateTitle, onOpenSession, onPinTask, isPinned, searchContext, searchMatchField, searchScore, searchKeywordScore, searchSemanticScore }: SortableTaskItemProps) {
   const integrations = useIntegrations();
   const {
     attributes,
@@ -606,6 +611,18 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount
           >
             {task.starred ? '\u2605' : '\u2606'}
           </button>
+        )}
+        {onPinTask && !isPinned && (
+          <button
+            className="task-pin-btn"
+            onClick={(e) => { e.stopPropagation(); onPinTask(task.id); }}
+            title="Pin to Focus Dock"
+          >
+            &#x1F4CC;
+          </button>
+        )}
+        {isPinned && (
+          <span className="task-pinned-indicator" title="Pinned to Focus Dock">&#x1F4CC;</span>
         )}
       </div>
     </div>
@@ -1167,7 +1184,7 @@ function TaskDetailPane({ task, onClose, onOpenSession, onOpenTriageForTask, sty
 
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onCyclePriority, onFocusTask, onClearFocus, focusedTaskId, favorites, ordering, onReorder, onMoveTask, onOpenSession, onOpenTriageForTask, operationError, onClearOperationError, onOperationError }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onCyclePriority, onFocusTask, onClearFocus, focusedTaskId, favorites, ordering, onReorder, onMoveTask, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, pinnedTaskIds, operationError, onClearOperationError, onOperationError }: TodoPanelProps) {
   // Hide .metadata* tasks (project/category configuration tasks, not user-visible)
   const tasks = useMemo(() => rawTasks.filter((t) => !t.title.startsWith('.metadata')), [rawTasks]);
   const navigate = useNavigate();
@@ -2284,6 +2301,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   onCyclePriority={onCyclePriority}
                   onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
                   onOpenSession={onOpenSession}
+                  onPinTask={onPinTask}
+                  isPinned={pinnedTaskIds?.has(task.id)}
                   searchContext={`${task.category}${task.project && task.project !== task.category ? ` / ${task.project}` : ''}`}
                   searchMatchField={searchMeta.get(task.id)?.matchField}
                   searchScore={searchMeta.get(task.id)?.score}
@@ -2311,6 +2330,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                 onCyclePriority={onCyclePriority}
                 onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
                 onOpenSession={onOpenSession}
+                onPinTask={onPinTask}
+                isPinned={pinnedTaskIds?.has(task.id)}
                 searchContext={`${task.category}${task.project && task.project !== task.category ? ` / ${task.project}` : ''}`}
               />
             ))}
@@ -2373,6 +2394,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                 onCyclePriority={onCyclePriority}
                                 onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
                                 onOpenSession={onOpenSession}
+                                onPinTask={onPinTask}
+                                isPinned={pinnedTaskIds?.has(task.id)}
                               />
                             ))}
                           </SortableContext>
@@ -2424,6 +2447,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                               onCyclePriority={onCyclePriority}
                                               onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
                                               onOpenSession={onOpenSession}
+                                              onPinTask={onPinTask}
+                                              isPinned={pinnedTaskIds?.has(task.id)}
                                             />
                                           ))}
                                         </SortableContext>

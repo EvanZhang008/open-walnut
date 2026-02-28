@@ -11,7 +11,10 @@ import {
   createCategory,
   getStoreCategories,
   updateCategorySource,
+  getProjectMetadata,
+  setProjectMetadata,
 } from '../../core/task-manager.js'
+import { getProjectSummary } from '../../core/project-memory.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import type { TaskSource } from '../../core/types.js'
 
@@ -109,6 +112,76 @@ categoriesRouter.post('/rename', async (req: Request, res: Response, next: NextF
       })
       return
     }
+    next(err)
+  }
+})
+
+// GET /api/categories/:name/projects — list projects in a category with metadata + task counts
+categoriesRouter.get('/:name/projects', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const categoryName = decodeURIComponent(req.params.name as string)
+    const tasks = await listTasks()
+    const storeCategories = await getStoreCategories()
+
+    // Determine category source
+    const catRecord = storeCategories[categoryName]
+    const source = catRecord?.source ?? tasks.find((t) => t.category === categoryName)?.source ?? 'local'
+
+    // Collect projects and task counts (exclude .metadata* tasks)
+    const projMap = new Map<string, { todo: number; active: number; done: number }>()
+    for (const t of tasks) {
+      if (t.category !== categoryName) continue
+      if (t.title.startsWith('.metadata')) continue
+      const proj = t.project || categoryName
+      if (!projMap.has(proj)) projMap.set(proj, { todo: 0, active: 0, done: 0 })
+      const entry = projMap.get(proj)!
+      if (t.phase === 'TODO') entry.todo++
+      else if (t.phase === 'COMPLETE') entry.done++
+      else entry.active++
+    }
+
+    // Build response with metadata + memory summary for each project
+    const projects = await Promise.all(
+      [...projMap.entries()].map(async ([name, counts]) => {
+        const metadata = await getProjectMetadata(categoryName, name)
+        const summary = getProjectSummary(`${categoryName}/${name}`)
+        return {
+          name,
+          metadata: metadata ?? {},
+          memorySummary: summary?.description ?? null,
+          counts,
+        }
+      }),
+    )
+
+    const totalCounts = { todo: 0, active: 0, done: 0 }
+    for (const p of projects) {
+      totalCounts.todo += p.counts.todo
+      totalCounts.active += p.counts.active
+      totalCounts.done += p.counts.done
+    }
+
+    res.json({ category: categoryName, source, projects, totalCounts })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// PATCH /api/categories/:category/projects/:project/metadata — update project metadata (cwd, host)
+categoriesRouter.patch('/:category/projects/:project/metadata', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const category = decodeURIComponent(req.params.category as string)
+    const project = decodeURIComponent(req.params.project as string)
+    const settings = req.body as Record<string, unknown>
+
+    if (!settings || typeof settings !== 'object') {
+      res.status(400).json({ error: 'body must be a JSON object' })
+      return
+    }
+
+    const result = await setProjectMetadata(category, project, settings)
+    res.json(result)
+  } catch (err) {
     next(err)
   }
 })

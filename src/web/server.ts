@@ -23,6 +23,7 @@ import { memoryRouter } from './routes/memory.js'
 import { configRouter } from './routes/config.js'
 import { categoriesRouter } from './routes/categories.js'
 import { favoritesRouter } from './routes/favorites.js'
+import { focusRouter } from './routes/focus.js'
 import { orderingRouter } from './routes/ordering.js'
 import { chatHistoryRouter } from './routes/chat-history.js'
 import { contextInspectorRouter } from './routes/context-inspector.js'
@@ -46,7 +47,7 @@ import { getTask, listTasks } from '../core/task-manager.js'
 import { log } from '../logging/index.js'
 import { usageTracker } from '../core/usage/index.js'
 import * as chatHistory from '../core/chat-history.js'
-import { gitPullWalnut } from '../integrations/git-sync.js'
+import { gitPullWalnut, ensureRepo, commitIfDirty, isGitAvailable } from '../integrations/git-sync.js'
 import { registry } from '../core/integration-registry.js'
 import { loadPlugins, migrateConfigToPlugins, runPluginMigrations } from '../core/integration-loader.js'
 import type { SyncPollContext } from '../core/integration-types.js'
@@ -90,6 +91,16 @@ let cronServiceInstance: CronService | null = null
 let healthMonitor: SessionHealthMonitor | null = null
 let heartbeatHandle: HeartbeatRunnerHandle | null = null
 let memoryWatcherHandle: { stop: () => void } | null = null
+let gitAutoCommitHandle: { stop: () => void; health: GitAutoCommitHealth } | null = null
+
+// ── Git auto-commit health state ──
+
+interface GitAutoCommitHealth {
+  protected: boolean
+  error?: string
+  lastCommitAt?: string
+  consecutiveFailures: number
+}
 
 // ── Pending cron notifications for next-cycle delivery ──
 // Queued when wakeMode is 'next-cycle'; injected into agent context on next user chat message.
@@ -341,6 +352,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/config', configRouter)
   app.use('/api/categories', categoriesRouter)
   app.use('/api/favorites', favoritesRouter)
+  app.use('/api/focus', focusRouter)
   app.use('/api/ordering', orderingRouter)
   app.use('/api/chat', chatHistoryRouter)
   app.use('/api/context', contextInspectorRouter)
@@ -353,6 +365,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/heartbeat', (await import('./routes/heartbeat.js')).heartbeatRouter)
   app.use('/api/timeline', timelineRouter)
   app.use('/api/integrations', integrationsRouter)
+  app.get('/api/git-sync/status', (_req, res) => {
+    const health = gitAutoCommitHandle?.health ?? { protected: false, error: 'not started', consecutiveFailures: 0 }
+    res.json(health)
+  })
 
   // -- Static files (production only) --
   if (!dev) {
@@ -463,6 +479,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // -- Reconcile embeddings (non-blocking background task) --
   // Runs after FTS index so chunk embeddings have data to work with.
   reconcileEmbeddingsBackground()
+
+  // -- Git auto-commit polling (30s interval) --
+  gitAutoCommitHandle = startGitAutoCommit()
 
   // -- Init SubagentRunner + SessionRunner --
   subagentRunner.init()
@@ -838,34 +857,99 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const subagentTaskRef = taskId ? await resolveTaskRef(taskId) : null
 
       // Check if this is a triage agent result — compact notification only
-      const { DEFAULT_TRIAGE_AGENT_ID } = await import('../core/agent-registry.js')
+      const { DEFAULT_TRIAGE_AGENT_ID, DEFAULT_MESSAGE_SEND_TRIAGE_AGENT_ID } = await import('../core/agent-registry.js')
       const { getConfig: getTriageConf } = await import('../core/config-manager.js')
       const triageConf2 = await getTriageConf()
       const triageAgentId = triageConf2.agent?.session_triage_agent ?? DEFAULT_TRIAGE_AGENT_ID
-      const isTriageResult = agentId === triageAgentId
+      const triageAgentIds = new Set([triageAgentId, DEFAULT_MESSAGE_SEND_TRIAGE_AGENT_ID])
+      const isTriageResult = triageAgentIds.has(agentId)
 
       if (isTriageResult) {
         // Triage result: store full triage output for main chat (auto-collapsed in UI)
-        // Strip <memory_update>...</memory_update> blocks — internal stateful memory, not user-facing
-        const cleanedResult = result.replace(/<memory_update>[\s\S]*?<\/memory_update>/g, '').trim() || 'triage completed'
+        // Strip internal tags — not user-facing
+        const cleanedResult = result
+          .replace(/<memory_update>[\s\S]*?<\/memory_update>/g, '')
+          .replace(/<main_agent_notify>[\s\S]*?<\/main_agent_notify>/g, '')
+          .trim() || 'triage completed'
+
+        // Check if triage wants the main agent notified — determines the "UI Only" badge
+        const notifyMatch = result.match(/<main_agent_notify>([\s\S]*?)<\/main_agent_notify>/)
+        const willNotifyMainAgent = !!(notifyMatch && taskId)
+
+        // notification: true → "UI Only" badge (main agent can't see it)
+        // notification: false → no badge (main agent will be notified and respond)
         const triageContent = `**Triage** (${subagentTaskRef ?? `[${taskId}]`}): ${cleanedResult}`
         const triageTimestamp = new Date().toISOString()
         await chatHistory.addNotification({
           role: 'assistant', content: triageContent,
-          source: 'triage', notification: true, taskId,
+          source: 'triage', notification: !willNotifyMainAgent, taskId,
           sessionId: runId,
           timestamp: triageTimestamp,
         })
-        log.web.info('triage notification saved to chat', { taskId, sessionId: runId })
+        log.web.info('triage notification saved to chat', { taskId, sessionId: runId, willNotifyMainAgent })
 
         // Push compact notification directly to browser (no extra HTTP round-trip)
         bus.emit(EventNames.CHAT_HISTORY_UPDATED, {
-          entry: { role: 'assistant', content: triageContent, source: 'triage', notification: true, taskId, sessionId: runId, timestamp: triageTimestamp },
+          entry: { role: 'assistant', content: triageContent, source: 'triage', notification: !willNotifyMainAgent, taskId, sessionId: runId, timestamp: triageTimestamp },
         }, ['web-ui'])
 
         // Wake heartbeat after session triage
         if (heartbeatHandle) {
           heartbeatHandle.requestNow('session-ended', `Session for task ${taskId} just completed and was triaged.`)
+        }
+        if (notifyMatch && taskId) {
+          const triageUpdate = notifyMatch[1].trim()
+          log.web.info('triage wants to notify main agent', { taskId, triageUpdate: triageUpdate.slice(0, 200) })
+
+          // Fire-and-forget: enqueue a main agent turn with task note + triage update
+          void enqueueMainAgentTurn('triage:notify', async () => {
+            try {
+              const task = await getTask(taskId)
+              const taskNote = task?.note ?? '(no note yet)'
+              const taskTitle = task ? `${task.project ?? task.category} / ${task.title}` : taskId
+              const taskRef = task ? `[${task.id}]` : `[${taskId}]`
+
+              const prompt = `[Triage Notification] Task "${taskTitle}" ${taskRef}\n\n<task_note>\n${taskNote}\n</task_note>\n\n<triage_update>\n${triageUpdate}\n</triage_update>\n\nInform the user concisely (2-4 sentences) about this task's status.\nFocus on what the triage update says — that's the new information.\nThe task note provides full context if needed.\nDo not use tools.`
+
+              const { runAgentLoop } = await import('../agent/loop.js')
+              const { estimateMessagesTokens } = await import('../core/daily-log.js')
+              const history = await chatHistory.getApiMessages()
+              const historyTokens = estimateMessagesTokens(history)
+              log.web.info('triage:notify main agent turn starting', {
+                taskId,
+                historyMessages: history.length,
+                historyTokens: `~${Math.round(historyTokens / 1000)}K`,
+              })
+
+              const agentResult = await runAgentLoop(prompt, history, {
+                onTextDelta: (delta) => broadcastEvent('agent:text-delta', { delta, source: 'triage-notify' }),
+                onThinking: (text) => broadcastEvent('agent:thinking', { text }),
+                onToolCall: (toolName, input) => broadcastEvent('agent:tool-call', { toolName, input }),
+                onToolResult: (toolName, result) => broadcastEvent('agent:tool-result', { toolName, result }),
+                onToolActivity: (activity) => broadcastEvent('agent:tool-activity', activity),
+                onUsage: (u) => {
+                  try { usageTracker.record({ source: 'triage-notify', model: u.model ?? 'unknown', input_tokens: u.input_tokens, output_tokens: u.output_tokens, cache_creation_input_tokens: u.cache_creation_input_tokens, cache_read_input_tokens: u.cache_read_input_tokens }) } catch {}
+                },
+              }, { source: 'triage-notify' })
+
+              if (agentResult.response) {
+                broadcastEvent('agent:response', { text: agentResult.response, source: 'triage-notify' })
+              }
+              const newApiMsgs = agentResult.messages.slice(history.length)
+              await chatHistory.addAIMessages(newApiMsgs, { source: 'triage-notify' })
+              log.web.info('triage:notify main agent done', { taskId, newMessages: newApiMsgs.length })
+              triggerBackgroundCompaction('triage:notify')
+            } catch (err) {
+              const errMsg = err instanceof Error ? err.message : String(err)
+              log.web.error('triage:notify main agent failed', { taskId, error: errMsg })
+              broadcastEvent('agent:error', { error: `Triage notify failed for task ${taskId}: ${errMsg}` })
+              await chatHistory.addNotification({
+                role: 'assistant',
+                content: `**Triage Notify Error** (${taskId}): ${errMsg}`,
+                source: 'agent-error', notification: true,
+              })
+            }
+          })
         }
       } else {
         // Non-triage subagent: persist full result as notification
@@ -968,6 +1052,77 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       resolve(httpServer!)
     })
   })
+}
+
+// ── Git auto-commit polling ──
+
+const GIT_POLL_INTERVAL_MS = 30_000
+
+function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth } {
+  const health: GitAutoCommitHealth = { protected: false, consecutiveFailures: 0 }
+
+  const emitStatus = () => {
+    broadcastEvent('git-sync:status', health)
+  }
+
+  // Check git availability
+  const repo = ensureRepo()
+  if (!repo.available) {
+    const msg = repo.error ?? 'git not available'
+    console.error(`\u26A0 WARNING: data NOT protected \u2014 ${msg}`)
+    log.git.warn('data not protected', { error: msg })
+    health.error = msg
+    emitStatus()
+    return { stop() {}, health }
+  }
+
+  health.protected = true
+
+  // Commit any leftover dirty state from a previous crash
+  try {
+    if (commitIfDirty()) {
+      health.lastCommitAt = new Date().toISOString()
+      log.git.info('committed leftover dirty state on startup')
+    }
+  } catch (err) {
+    log.git.warn('startup commit failed', { error: String(err) })
+  }
+
+  // Pull remote if configured
+  try { gitPullWalnut() } catch (err) {
+    log.git.warn('startup git pull failed', { error: String(err) })
+  }
+
+  const timer = setInterval(() => {
+    try {
+      if (commitIfDirty()) {
+        health.lastCommitAt = new Date().toISOString()
+        health.consecutiveFailures = 0
+        health.error = undefined
+        log.git.debug('auto-committed')
+      }
+    } catch (err) {
+      health.consecutiveFailures++
+      health.error = err instanceof Error ? err.message : String(err)
+      log.git.warn('auto-commit failed', {
+        error: health.error,
+        consecutiveFailures: health.consecutiveFailures,
+      })
+      emitStatus()
+    }
+  }, GIT_POLL_INTERVAL_MS)
+
+  log.git.info('git auto-commit started', { intervalMs: GIT_POLL_INTERVAL_MS })
+  emitStatus()
+
+  return {
+    stop() {
+      clearInterval(timer)
+      // Final commit on shutdown
+      try { commitIfDirty() } catch {}
+    },
+    health,
+  }
 }
 
 /**
@@ -1257,6 +1412,10 @@ export async function stopServer(): Promise<void> {
   if (memoryWatcherHandle) {
     memoryWatcherHandle.stop()
     memoryWatcherHandle = null
+  }
+  if (gitAutoCommitHandle) {
+    gitAutoCommitHandle.stop()
+    gitAutoCommitHandle = null
   }
   bus.unsubscribe('web-ui')
   bus.unsubscribe('main-ai')

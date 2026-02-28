@@ -14,6 +14,7 @@
 
 import type { AgentDefinition, ContextSourceId, Task } from '../core/types.js';
 import { estimateTokens } from '../core/daily-log.js';
+import { truncateToTokenBudget } from '../utils/token-truncate.js';
 import { log } from '../logging/index.js';
 
 // ── Default token budgets per source ──
@@ -32,23 +33,6 @@ const DEFAULT_BUDGETS: Record<ContextSourceId, number> = {
 const AUTO_SOURCES: ContextSourceId[] = ['task_details', 'project_memory'];
 
 // ── Individual loaders ──
-
-function truncateToTokenBudget(text: string, budget: number): string {
-  const tokens = estimateTokens(text);
-  if (tokens <= budget) return text;
-
-  // Approximate character budget (conservative: ~3.5 chars per token)
-  const charBudget = Math.floor(budget * 3.5);
-  let truncated = text.slice(0, charBudget);
-
-  // Find last word boundary to avoid cutting mid-word
-  const lastSpace = truncated.lastIndexOf(' ');
-  if (lastSpace > charBudget * 0.8) {
-    truncated = truncated.slice(0, lastSpace);
-  }
-
-  return truncated + '\n\n[...truncated]';
-}
 
 function formatTaskDetails(task: Task): string {
   const lines = [

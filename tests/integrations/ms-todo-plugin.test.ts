@@ -14,6 +14,8 @@ const mockDeltaPull = vi.fn();
 vi.mock('../../src/integrations/microsoft-todo.js', () => ({
   autoPushTask: (...args: unknown[]) => mockAutoPushTask(...args),
   deltaPull: (...args: unknown[]) => mockDeltaPull(...args),
+  deleteMsTodoTask: vi.fn().mockResolvedValue(undefined),
+  registerDeletedMsIds: vi.fn().mockResolvedValue(undefined),
 }));
 
 import register from '../../src/integrations/ms-todo/index.js';

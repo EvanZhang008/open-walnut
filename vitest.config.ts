@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    globalSetup: ['tests/setup/global-setup.ts'],
     include: ['tests/**/*.test.ts'],
     exclude: ['tests/e2e/**/*.test.ts', 'tests/commands/**/*.test.ts', '**/*.live.test.ts'],
     pool: 'forks',

@@ -191,6 +191,39 @@ export async function gitPullWalnut(): Promise<void> {
   }
 }
 
+/**
+ * Commit all dirty changes with an auto-save message.
+ * Returns true if a commit was made, false if working tree was clean.
+ */
+export function commitIfDirty(): boolean {
+  const status = gitSafe('status --porcelain');
+  if (!status || status.trim().length === 0) return false;
+
+  const lines = status.split('\n').filter((l) => l.trim());
+  const timestamp = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  git('add -A');
+  gitSafe(`commit -m "auto-save ${timestamp} (${lines.length} files)"`);
+  return true;
+}
+
+/**
+ * Ensure ~/.walnut/ is a git repo. Initializes if needed.
+ * Returns { available: true } if git works, or { available: false, error } if not.
+ */
+export function ensureRepo(): { available: boolean; error?: string } {
+  if (!isGitAvailable()) {
+    return { available: false, error: 'git not found in PATH' };
+  }
+  if (!isRepo()) {
+    try {
+      initSync();
+    } catch (err) {
+      return { available: false, error: `git init failed: ${err instanceof Error ? err.message : String(err)}` };
+    }
+  }
+  return { available: true };
+}
+
 export function getSyncStatus(): SyncStatus {
   if (!isRepo()) {
     return {

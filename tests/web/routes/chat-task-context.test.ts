@@ -14,7 +14,9 @@ import { createMockConstants } from '../../helpers/mock-constants.js';
 
 vi.mock('../../../src/constants.js', () => createMockConstants());
 
-import { buildTaskContextPrefix } from '../../../src/web/routes/chat.js';
+import { buildTaskContextPrefix, enrichTaskContext } from '../../../src/web/routes/chat.js';
+import * as taskManager from '../../../src/core/task-manager.js';
+import * as projectMemory from '../../../src/core/project-memory.js';
 
 // ═══════════════════════════════════════════════════════════════════
 //  Unit tests: buildTaskContextPrefix
@@ -234,6 +236,176 @@ describe('buildTaskContextPrefix', () => {
     expect(prefix).toContain('ID: min');
     expect(prefix).toContain('Title: Minimal');
     expect(prefix).toContain('[/Task Context]');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+//  Unit tests: enrichTaskContext
+// ═══════════════════════════════════════════════════════════════════
+
+describe('enrichTaskContext', () => {
+  const makeTestTask = (overrides = {}) => ({
+    id: 'task-001',
+    title: 'Fix Tax Filing',
+    category: 'Life',
+    project: 'Tax',
+    status: 'todo' as const,
+    phase: 'IN_PROGRESS' as const,
+    priority: 'medium' as const,
+    starred: false,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-02T00:00:00Z',
+    note: '## Goal\nFix the tax filing issue',
+    description: 'A detailed description of the tax filing problem',
+    summary: 'Tax filing needs attention',
+    conversation_log: '',
+    source: 'local',
+    tags: [],
+    depends_on: [],
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('loads full task content (not truncated)', async () => {
+    const longNote = 'Important note content. '.repeat(100); // ~2400 chars
+    vi.spyOn(taskManager, 'getTask').mockResolvedValue(makeTestTask({ note: longNote }) as any);
+    vi.spyOn(projectMemory, 'getProjectMemory').mockReturnValue(null);
+    vi.spyOn(chatHistory, 'getLastContextHashes').mockResolvedValue({});
+
+    const result = await enrichTaskContext({ id: 'task-001', title: 'Fix Tax Filing' });
+
+    expect(result.prefix).toContain('[Task Context');
+    expect(result.prefix).toContain('ID: task-001');
+    expect(result.prefix).toContain('Title: Fix Tax Filing');
+    // Note should be much longer than the old 500-char limit
+    expect(result.prefix).toContain('Important note content');
+    expect(result.prefix).toContain('[/Task Context]');
+  });
+
+  it('includes project memory when available', async () => {
+    vi.spyOn(taskManager, 'getTask').mockResolvedValue(makeTestTask() as any);
+    vi.spyOn(projectMemory, 'getProjectMemory').mockImplementation((path: string) => {
+      if (path === 'life/tax') return '---\nname: Tax Project\n---\n## Memory entry\nTax-specific memory content';
+      if (path === 'life') return '---\nname: Life\n---\n## Memory entry\nLife category memory content';
+      return null;
+    });
+    vi.spyOn(chatHistory, 'getLastContextHashes').mockResolvedValue({});
+
+    const result = await enrichTaskContext({ id: 'task-001', title: 'Fix Tax Filing' });
+
+    expect(result.prefix).toContain('[Category Memory: Life]');
+    expect(result.prefix).toContain('Life category memory content');
+    expect(result.prefix).toContain('[Project Memory: Tax]');
+    expect(result.prefix).toContain('Tax-specific memory content');
+  });
+
+  it('returns hashes keyed by content source path', async () => {
+    vi.spyOn(taskManager, 'getTask').mockResolvedValue(makeTestTask() as any);
+    vi.spyOn(projectMemory, 'getProjectMemory').mockImplementation((path: string) => {
+      if (path === 'life/tax') return 'project memory content';
+      if (path === 'life') return 'category memory content';
+      return null;
+    });
+    vi.spyOn(chatHistory, 'getLastContextHashes').mockResolvedValue({});
+
+    const result = await enrichTaskContext({ id: 'task-001', title: 'Fix Tax Filing' });
+
+    // Should have hash keys for task-specific and path-based content
+    expect(result.hashes).toHaveProperty('note:task-001');
+    expect(result.hashes).toHaveProperty('desc:task-001');
+    expect(result.hashes).toHaveProperty('summary:task-001');
+    expect(result.hashes).toHaveProperty('pm:life/tax');
+    expect(result.hashes).toHaveProperty('pm:life');
+    // Hashes should be SHA256 hex strings (64 chars)
+    expect(result.hashes['note:task-001']).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it('marks unchanged fields when hashes match', async () => {
+    const task = makeTestTask();
+    vi.spyOn(taskManager, 'getTask').mockResolvedValue(task as any);
+    vi.spyOn(projectMemory, 'getProjectMemory').mockReturnValue(null);
+
+    // First call — get the hashes
+    vi.spyOn(chatHistory, 'getLastContextHashes').mockResolvedValue({});
+    const first = await enrichTaskContext({ id: 'task-001', title: 'Fix Tax Filing' });
+
+    // Second call — same hashes already injected
+    vi.spyOn(chatHistory, 'getLastContextHashes').mockResolvedValue(first.hashes);
+    const second = await enrichTaskContext({ id: 'task-001', title: 'Fix Tax Filing' });
+
+    expect(second.prefix).toContain('Note: [unchanged since last injection]');
+    expect(second.prefix).toContain('Description: [unchanged since last injection]');
+    expect(second.prefix).toContain('Summary: [unchanged since last injection]');
+  });
+
+  it('injects changed fields when hash differs', async () => {
+    vi.spyOn(projectMemory, 'getProjectMemory').mockReturnValue(null);
+
+    // First call
+    vi.spyOn(taskManager, 'getTask').mockResolvedValue(makeTestTask({ note: 'old note' }) as any);
+    vi.spyOn(chatHistory, 'getLastContextHashes').mockResolvedValue({});
+    const first = await enrichTaskContext({ id: 'task-001', title: 'Fix Tax Filing' });
+
+    // Second call — note changed
+    vi.spyOn(taskManager, 'getTask').mockResolvedValue(makeTestTask({ note: 'new note content' }) as any);
+    vi.spyOn(chatHistory, 'getLastContextHashes').mockResolvedValue(first.hashes);
+    const second = await enrichTaskContext({ id: 'task-001', title: 'Fix Tax Filing' });
+
+    // Note changed → full injection
+    expect(second.prefix).toContain('new note content');
+    expect(second.prefix).not.toContain('Note: [unchanged since last injection]');
+    // Description unchanged → marked
+    expect(second.prefix).toContain('Description: [unchanged since last injection]');
+  });
+
+  it('shares parent memory hash across tasks in same category', async () => {
+    vi.spyOn(projectMemory, 'getProjectMemory').mockImplementation((path: string) => {
+      if (path === 'life') return 'shared life memory';
+      if (path === 'life/tax') return 'tax memory';
+      if (path === 'life/sport') return 'sport memory';
+      return null;
+    });
+
+    // Task 1: life/tax
+    vi.spyOn(taskManager, 'getTask').mockResolvedValue(makeTestTask({
+      id: 'task-tax', project: 'Tax',
+    }) as any);
+    vi.spyOn(chatHistory, 'getLastContextHashes').mockResolvedValue({});
+    const first = await enrichTaskContext({ id: 'task-tax', title: 'Tax Task' });
+
+    // Task 2: life/sport — parent memory hash should match
+    vi.spyOn(taskManager, 'getTask').mockResolvedValue(makeTestTask({
+      id: 'task-sport', project: 'Sport',
+      note: 'different note', description: 'different desc', summary: 'different summary',
+    }) as any);
+    vi.spyOn(chatHistory, 'getLastContextHashes').mockResolvedValue(first.hashes);
+    const second = await enrichTaskContext({ id: 'task-sport', title: 'Sport Task' });
+
+    // Parent memory (pm:life) should be unchanged since hash matches
+    expect(second.prefix).toContain('[Category Memory: Life] [unchanged since last injection]');
+    // Project memory is different path (pm:life/sport vs pm:life/tax)
+    expect(second.prefix).toContain('[Project Memory: Sport]');
+    expect(second.prefix).toContain('sport memory');
+  });
+
+  it('omits project line when project equals category', async () => {
+    vi.spyOn(taskManager, 'getTask').mockResolvedValue(makeTestTask({
+      category: 'Inbox', project: 'Inbox',
+    }) as any);
+    vi.spyOn(projectMemory, 'getProjectMemory').mockReturnValue(null);
+    vi.spyOn(chatHistory, 'getLastContextHashes').mockResolvedValue({});
+
+    const result = await enrichTaskContext({ id: 'task-001', title: 'Test' });
+
+    expect(result.prefix).toContain('Category: Inbox');
+    expect(result.prefix).not.toContain('Project:');
   });
 });
 

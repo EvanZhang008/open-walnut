@@ -6,12 +6,14 @@ import { fileURLToPath } from 'node:url';
 export const WALNUT_HOME = resolveWalnutHome();
 
 /**
- * Resolve WALNUT_HOME with a guard against leaked ephemeral env vars.
+ * Resolve WALNUT_HOME with guards against:
+ * 1. Test processes touching production data (~/.walnut/)
+ * 2. Leaked ephemeral env vars from parent processes
  *
- * The ephemeral launcher (`walnut web --ephemeral`) sets WALNUT_HOME to a tmpdir
- * AND WALNUT_EPHEMERAL=1. If a non-ephemeral process inherits WALNUT_HOME pointing
- * at a tmpdir (without WALNUT_EPHEMERAL=1), it was leaked from a parent — override
- * to ~/.walnut/ to prevent the production server from running against empty temp data.
+ * Test guard: When VITEST or NODE_ENV=test is detected, WALNUT_HOME is forced to
+ * a temp dir (/tmp/walnut-test-{pid}/) unless WALNUT_HOME is already explicitly
+ * set to a non-production path. This prevents `fs.rm(WALNUT_HOME)` in test
+ * setup/teardown from nuking real user data.
  *
  * This guard MUST live here because constants.ts is evaluated at import time via
  * static import chains (cli.ts → logging → constants.ts), before any command handler
@@ -19,23 +21,59 @@ export const WALNUT_HOME = resolveWalnutHome();
  */
 function resolveWalnutHome(): string {
   const envHome = process.env.WALNUT_HOME
-  if (!envHome) return path.join(os.homedir(), '.walnut')
+  const productionHome = path.join(os.homedir(), '.walnut')
+  const isTestEnv = !!(process.env.VITEST || process.env.VITEST_WORKER_ID || process.env.NODE_ENV === 'test')
+
+  // Test guard: never let tests touch ~/.walnut/
+  if (isTestEnv) {
+    // If WALNUT_HOME is explicitly set to a non-production path, trust it
+    if (envHome && envHome !== productionHome && !envHome.startsWith(productionHome + path.sep)) {
+      assertNotProductionPath(envHome)
+      return envHome
+    }
+    // Force to isolated temp dir
+    const testHome = path.join(os.tmpdir(), `walnut-test-${process.pid}`)
+    process.env.WALNUT_HOME = testHome
+    return testHome
+  }
+
+  if (!envHome) return productionHome
 
   // Ephemeral child processes set WALNUT_EPHEMERAL=1 — trust WALNUT_HOME as-is
   if (process.env.WALNUT_EPHEMERAL === '1') return envHome
 
   // Check if WALNUT_HOME looks like an ephemeral temp dir (leaked from parent)
   if (isEphemeralTmpDir(envHome)) {
-    const defaultHome = path.join(os.homedir(), '.walnut')
     process.stderr.write(
       `WARNING: WALNUT_HOME=${envHome} looks like a leaked ephemeral temp dir.\n` +
-      `  Overriding to ${defaultHome}. Set WALNUT_EPHEMERAL=1 to suppress.\n`,
+      `  Overriding to ${productionHome}. Set WALNUT_EPHEMERAL=1 to suppress.\n`,
     )
-    process.env.WALNUT_HOME = defaultHome
-    return defaultHome
+    process.env.WALNUT_HOME = productionHome
+    return productionHome
   }
 
   return envHome
+}
+
+/**
+ * Layer 2 self-validation: in test environments, throws if a resolved path
+ * lands inside ~/.walnut/ (the production data directory).
+ * No-op in production to avoid overhead.
+ */
+export function assertNotProductionPath(inputPath: string): void {
+  const isTestEnv = !!(process.env.VITEST || process.env.VITEST_WORKER_ID || process.env.NODE_ENV === 'test')
+  if (!isTestEnv) return
+
+  const resolved = path.resolve(inputPath)
+  const prodHome = path.join(os.homedir(), '.walnut')
+
+  if (resolved === prodHome || resolved.startsWith(prodHome + path.sep)) {
+    throw new Error(
+      `SAFETY: Test process attempted to use production path: ${resolved}\n` +
+      `  This would destroy real user data in ~/.walnut/.\n` +
+      `  Set WALNUT_HOME to a temp directory or let constants.ts auto-assign one.`,
+    )
+  }
 }
 
 /**

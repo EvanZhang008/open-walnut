@@ -72,6 +72,7 @@ export interface ChatEntry {
   taskId?: string;
   sessionId?: string;  // Linked session ID (e.g. embedded triage run ID)
   compacted?: boolean;
+  contextHashes?: Record<string, string>;
 }
 
 /** @deprecated Use ChatEntry instead */

@@ -406,6 +406,22 @@ async function readStore(): Promise<TaskStore> {
 }
 
 async function writeStore(store: TaskStore): Promise<void> {
+  // Backup-on-empty safety net: if about to write 0 tasks but disk has tasks,
+  // save a backup first so data can be recovered.
+  if (store.tasks.length === 0) {
+    try {
+      const existing = await readJsonFile<TaskStore>(TASKS_FILE);
+      if (existing && existing.tasks && existing.tasks.length > 0) {
+        const backupPath = TASKS_FILE.replace(/\.json$/, '.backup.json');
+        await writeJsonFile(backupPath, existing);
+        log.task.warn('backup-on-empty: saved backup before writing empty store', {
+          backupPath, previousTaskCount: existing.tasks.length,
+        });
+      }
+    } catch {
+      // No existing file or read failed — safe to write empty
+    }
+  }
   await writeJsonFile(TASKS_FILE, store);
 }
 
@@ -613,11 +629,31 @@ async function pushToPlugin(
 }
 
 /**
+ * Per-task push mutex: prevents concurrent pushes of the same task.
+ * When multiple callers try to push the same task (e.g. parallel field updates
+ * from updateTask fire-and-forget), the second caller awaits the first's promise.
+ */
+const pushInflight = new Map<string, Promise<SyncResult>>();
+
+/**
  * Full task push — calls createTask for new tasks or pushes all fields for existing.
  * Replaces the old integration-specific autoPushIfConfigured().
+ * Per-task mutex prevents concurrent pushes (Layer 1).
  */
 export async function autoPushIfConfigured(task: Task): Promise<SyncResult> {
   if (task.source === 'local') return { success: true };
+
+  // Layer 1: per-task mutex — deduplicate concurrent pushes
+  const existing = pushInflight.get(task.id);
+  if (existing) return existing;
+
+  const promise = autoPushIfConfiguredImpl(task);
+  pushInflight.set(task.id, promise);
+  try { return await promise; }
+  finally { pushInflight.delete(task.id); }
+}
+
+async function autoPushIfConfiguredImpl(task: Task): Promise<SyncResult> {
   const plugin = registry.get(task.source);
   if (!plugin) {
     // Plugin not loaded — set sync_error so the user sees something went wrong
@@ -641,6 +677,28 @@ export async function autoPushIfConfigured(task: Task): Promise<SyncResult> {
     return pushToPlugin(task, 'createTask');
   }
 
+  // Layer 2: detect list migration BEFORE parallel field pushes.
+  // If the task's project/category changed (list changed), do a single push first
+  // to handle DELETE+CREATE atomically, then do parallel field updates (PATCH path).
+  const needsListMigration = await detectListMigration(task);
+  if (needsListMigration) {
+    // Single push handles DELETE old + CREATE new + updates ext in memory
+    const migrateResult = await pushToPlugin(task, 'updateTitle', task.title);
+    if (!migrateResult.success) return migrateResult;
+
+    // Persist ext to disk immediately so parallel pushes see new list_id
+    await persistTaskExt(task);
+
+    // Re-read task from store to get fresh ext data for subsequent pushes
+    const freshTask = await withWriteLock(async () => {
+      const store = await readStore();
+      return store.tasks.find(t => t.id === task.id);
+    });
+    if (freshTask) {
+      Object.assign(task, freshTask);
+    }
+  }
+
   // For existing tasks, push all fields via pushToPlugin (handles sync_error automatically)
   const results = await Promise.allSettled([
     pushToPlugin(task, 'updateTitle', task.title),
@@ -658,6 +716,38 @@ export async function autoPushIfConfigured(task: Task): Promise<SyncResult> {
     r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.success),
   );
   return anyFailed ? { success: false, error: 'partial sync failure' } : { success: true };
+}
+
+/**
+ * Detect if a task's target MS To-Do list has changed (Layer 2).
+ * Compares the stored list_id in ext with the resolved list_id from current category/project.
+ */
+async function detectListMigration(task: Task): Promise<boolean> {
+  if (task.source !== 'ms-todo') return false;
+  const currentListId = (task.ext?.['ms-todo'] as Record<string, unknown>)?.list_id as string | undefined;
+  if (!currentListId) return false;
+  try {
+    const { resolveListIdForTask } = await import('../integrations/microsoft-todo.js');
+    const targetListId = await resolveListIdForTask(task);
+    return currentListId !== targetListId;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Persist a task's ext data to disk immediately (Layer 5).
+ * Used after pushTask modifies ext in memory to prevent data loss on crash.
+ */
+async function persistTaskExt(task: Task): Promise<void> {
+  await withWriteLock(async () => {
+    const store = await readStore();
+    const found = store.tasks.find(t => t.id === task.id);
+    if (found && task.ext) {
+      found.ext = { ...found.ext, ...task.ext };
+      await writeStore(store);
+    }
+  });
 }
 
 /**
