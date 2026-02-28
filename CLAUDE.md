@@ -260,7 +260,7 @@ Each plugin has a `manifest.json`, an entry point (`index.ts`), and registers vi
 | **local** | In-repo | Universal fallback (no external sync) | `src/integrations/local/` |
 | **ms-todo** | In-repo | Two-way sync with Microsoft To-Do | `src/integrations/ms-todo/` |
 | *(external)* | Plugin | Additional sync plugins installed at `~/.walnut/plugins/` | User-provided |
-| **git-sync** | Standalone | Version-controlled backup of task/memory data | `src/integrations/git-sync.ts` |
+| **git-sync** | Standalone | Version-controlled backup of task/memory data + auto-commit polling | `src/integrations/git-sync.ts` |
 
 **In-repo** plugins ship with the package. **Internal** plugins are company-specific and can be relocated to `~/.walnut/plugins/` for external deployment (see README.md in each plugin dir). The loader discovers both locations identically.
 
@@ -353,6 +353,10 @@ src/
 │   └── memory-index.sqlite  # FTS5 search index
 └── hook-errors.log      # Silent hook error log
 ```
+
+## Git Auto-Commit (`src/web/server.ts` → `src/integrations/git-sync.ts`)
+
+`startGitAutoCommit()` runs at server startup: ensures `~/.walnut/` is a git repo (`ensureRepo()`), commits any leftover dirty state, pulls remote, then polls every 30s (`commitIfDirty()`). Health state (`GitAutoCommitHealth`) tracks `protected`, `consecutiveFailures`, `error`. Status exposed via `GET /api/git-sync/status` and pushed to frontend via `git-sync:status` WebSocket event. `DataSafetyBanner` (red, non-dismissible) appears when git is unavailable or commits fail 3+ times. `task-manager.ts` has a backup-on-empty safety net: saves `tasks.backup.json` before writing an empty store when disk has existing tasks.
 
 ## E2E-First Development Workflow
 
