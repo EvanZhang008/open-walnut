@@ -78,7 +78,7 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-export interface GenericToolCallProps {
+interface GenericToolCallProps {
   tool: { name: string; input: Record<string, unknown> };
   /** Tool execution status. Defaults to 'done' (preserves history behavior). */
   status?: 'calling' | 'done' | 'error';
@@ -172,7 +172,7 @@ export function GenericToolCall({ tool, status = 'done', result, onTaskClick, on
               </div>
             ))}
           </div>
-          {resultHtml && (
+          {status !== 'calling' && resultHtml && (
             <div className="chat-tool-block-section">
               <div className="chat-tool-block-section-label">Result</div>
               <div className="chat-tool-block-result markdown-body"

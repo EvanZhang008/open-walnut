@@ -3446,7 +3446,6 @@ input:focus, textarea:focus, select:focus {
   background: var(--accent);
   animation: pulse-dot 1.5s infinite;
   flex-shrink: 0;
-  margin-left: auto;
 }
 
 .chat-tool-block-body {
