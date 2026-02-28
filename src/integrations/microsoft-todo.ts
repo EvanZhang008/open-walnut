@@ -65,6 +65,8 @@ interface DeltaState {
   deltaLinks: Record<string, string>;
   listNames: Record<string, string>;
   lastSync: string;
+  /** Remote MS To-Do IDs that were intentionally deleted locally — skip on pull */
+  deletedMsIds?: string[];
 }
 
 interface MSTodoTask {
@@ -436,7 +438,7 @@ export function clearListIdCache(): void {
  * Resolve the MS To-Do list ID for a task.
  * Builds the list name from category + project (e.g. "Work / HomeLab").
  */
-async function resolveListIdForTask(task: Task): Promise<string> {
+export async function resolveListIdForTask(task: Task): Promise<string> {
   const listName = buildListName(task.category, task.project);
   return resolveListId(listName);
 }
@@ -729,8 +731,12 @@ export async function pushTask(task: Task): Promise<string> {
           'DELETE',
           `/me/todo/lists/${oldListId}/tasks/${existingMsTodoId}`,
         );
-      } catch {
-        // Old task may already be gone — continue with create
+      } catch (err) {
+        // Old task may already be gone — log warning and continue with create
+        log.web.warn('MS To-Do: failed to delete task from old list during migration', {
+          taskId: task.id, oldListId, msTaskId: existingMsTodoId,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
       const created = await graphRequest<MSTodoTask>(
         token,
@@ -739,6 +745,15 @@ export async function pushTask(task: Task): Promise<string> {
         msBody,
       );
       msTaskId = created.id;
+
+      // Layer 3: track old ID in previous_ids for pull-side dedup
+      const prevIds = ((msExt(task) as any)?.previous_ids as string[] ?? []).slice();
+      if (!prevIds.includes(existingMsTodoId)) prevIds.push(existingMsTodoId);
+      // Cap at 10 to prevent unbounded growth
+      if (prevIds.length > 10) prevIds.splice(0, prevIds.length - 10);
+      if (!task.ext) task.ext = {};
+      if (!task.ext['ms-todo']) task.ext['ms-todo'] = {};
+      (task.ext['ms-todo'] as Record<string, unknown>).previous_ids = prevIds;
     } else {
       // Same list — update in place
       try {
@@ -758,6 +773,16 @@ export async function pushTask(task: Task): Promise<string> {
           msBody,
         );
         msTaskId = created.id;
+
+        // Track old ID as previous if we had to re-create
+        if (existingMsTodoId !== msTaskId) {
+          const prevIds = ((msExt(task) as any)?.previous_ids as string[] ?? []).slice();
+          if (!prevIds.includes(existingMsTodoId)) prevIds.push(existingMsTodoId);
+          if (prevIds.length > 10) prevIds.splice(0, prevIds.length - 10);
+          if (!task.ext) task.ext = {};
+          if (!task.ext['ms-todo']) task.ext['ms-todo'] = {};
+          (task.ext['ms-todo'] as Record<string, unknown>).previous_ids = prevIds;
+        }
       }
     }
   } else {
@@ -890,29 +915,65 @@ export async function getMsTodoSyncStatus(): Promise<MsTodoSyncStatus> {
   };
 }
 
-// -- Auto-push (fire-and-forget) --
+// -- Deleted ID tracking (prevents re-import of intentionally deleted tasks) --
+
+/**
+ * Register a remote MS To-Do task ID as "deleted locally".
+ * The next pull will skip any remote task with this ID instead of re-importing it.
+ * Also registers any previous_ids associated with the task.
+ */
+export async function registerDeletedMsIds(task: Task): Promise<void> {
+  const msId = getMsTodoId(task);
+  const prev = (msExt(task) as any)?.previous_ids as string[] | undefined;
+  const idsToRegister = [msId, ...(prev ?? [])].filter(Boolean) as string[];
+  if (idsToRegister.length === 0) return;
+
+  const deltaState = await readJsonFile<DeltaState>(DELTA_FILE, {
+    deltaLinks: {},
+    listNames: {},
+    lastSync: '',
+  });
+  const existing = new Set(deltaState.deletedMsIds ?? []);
+  for (const id of idsToRegister) existing.add(id);
+  // Cap at 500 entries to prevent unbounded growth
+  const arr = [...existing];
+  deltaState.deletedMsIds = arr.length > 500 ? arr.slice(arr.length - 500) : arr;
+  await writeJsonFile(DELTA_FILE, deltaState);
+}
+
+// -- Auto-push (fire-and-forget with per-task dedup) --
+
+/** Inflight push promises keyed by task ID. Prevents duplicate concurrent pushes. */
+const pushInflight = new Map<string, Promise<string | null>>();
 
 /**
  * Push a single task to Microsoft To-Do. Returns the ms_todo_id on success, null on failure.
  * Designed for fire-and-forget usage — never throws.
+ * Per-task dedup: concurrent calls for the same task reuse the inflight promise.
  */
 export async function autoPushTask(task: Task): Promise<string | null> {
-  try {
-    return await pushTask(task);
-  } catch {
-    return null;
-  }
+  const key = task.id;
+  const existing = pushInflight.get(key);
+  if (existing) return existing;
+
+  const promise = pushTask(task)
+    .catch(() => null)
+    .finally(() => pushInflight.delete(key));
+  pushInflight.set(key, promise);
+  return promise;
 }
 
 // -- Shared pull-reconcile logic --
 
-async function reconcilePulledTasks(
+/** @internal Exported for testing. */
+export async function reconcilePulledTasks(
   msTasks: MSTodoTask[],
   list: MSTodoList,
   localByMsId: Map<string, Task>,
   updateLocalTask: (id: string, updates: Partial<Task>) => Promise<void>,
   addLocalTask: (task: Omit<Task, 'id'>) => Promise<Task>,
   token?: string,
+  deletedMsIds?: Set<string>,
 ): Promise<number> {
   let count = 0;
   const { group: listCategory, listName: listProject } = parseGroupFromCategory(list.displayName);
@@ -920,15 +981,15 @@ async function reconcilePulledTasks(
     // Skip tasks with missing or empty titles (tombstones, partial delta responses)
     if (!msTask.title || msTask.title.trim() === '') continue;
 
+    // Skip tasks that were intentionally deleted locally (Layer 0b)
+    if (deletedMsIds?.has(msTask.id)) continue;
+
     const existing = localByMsId.get(msTask.id);
     if (existing) {
       const remoteUpdated = new Date(msTask.lastModifiedDateTime).getTime();
       const localUpdated = new Date(existing.updated_at).getTime();
-      const categoryMismatch = existing.category !== listCategory || existing.project !== listProject;
-      if (remoteUpdated > localUpdated || categoryMismatch) {
-        const updates = remoteUpdated > localUpdated
-          ? mapToLocal(msTask, list.displayName)
-          : { category: listCategory, project: listProject };
+      if (remoteUpdated > localUpdated) {
+        const updates = mapToLocal(msTask, list.displayName);
 
         // Checklist-to-subtask sync removed (subtasks are now child tasks)
 
@@ -1000,6 +1061,13 @@ function buildLocalByMsId(localTasks: Task[]): Map<string, Task> {
   for (const t of localTasks) {
     const msId = getMsTodoId(t);
     if (msId) map.set(msId, t);
+    // Layer 4: also map previous_ids so orphaned remote tasks are recognized
+    const prevIds = (msExt(t) as any)?.previous_ids as string[] | undefined;
+    if (prevIds) {
+      for (const oldId of prevIds) {
+        if (!map.has(oldId)) map.set(oldId, t);
+      }
+    }
   }
   return map;
 }
@@ -1071,11 +1139,15 @@ export async function deltaPull(
     }
   }
 
+  // -- Load deleted MS IDs ignore set (Layer 0b) --
+  // Use deltaState already loaded above (it has deletedMsIds from disk)
+  const deletedMsIds = new Set(deltaState.deletedMsIds ?? []);
+
   // -- Pull task-level delta changes --
   for (const list of lists) {
     const { tasks: msTasks } = await pullTasks(list.id);
     if (msTasks.length === 0) continue;
-    const count = await reconcilePulledTasks(msTasks, list, localByMsId, updateLocalTask, addLocalTask, token);
+    const count = await reconcilePulledTasks(msTasks, list, localByMsId, updateLocalTask, addLocalTask, token, deletedMsIds);
     if (count > 0) hasChanges = true;
   }
 
@@ -1127,11 +1199,19 @@ export async function syncTasks(
     }
   }
 
+  // Load deleted MS IDs ignore set (Layer 0b)
+  const deltaState = await readJsonFile<DeltaState>(DELTA_FILE, {
+    deltaLinks: {},
+    listNames: {},
+    lastSync: '',
+  });
+  const deletedMsIds = new Set(deltaState.deletedMsIds ?? []);
+
   // Pull changes from each list
   for (const list of lists) {
     try {
       const { tasks: msTasks } = await pullTasks(list.id);
-      const count = await reconcilePulledTasks(msTasks, list, localByMsId, updateLocalTask, addLocalTask, token);
+      const count = await reconcilePulledTasks(msTasks, list, localByMsId, updateLocalTask, addLocalTask, token, deletedMsIds);
       result.pulled += count;
     } catch (err) {
       result.errors.push(`Pull failed for list "${list.displayName}": ${err}`);
