@@ -152,6 +152,15 @@ When a slot is occupied, start_session returns a BLOCKED response with the exist
 
 Both run non-blocking — results arrive asynchronously.
 
+### Message forwarding (send_to_session)
+
+When forwarding the user's instruction to sessions:
+
+1. **Preserve the user's original words** — relay their instruction as closely as possible. Do NOT rewrite, paraphrase, or "enrich" the message.
+2. **Keep it minimal** — the session already has its own context (task details, codebase access, conversation history). Don't over-explain.
+3. **Only add factual context** — you may prepend brief, verifiable context (e.g. "User just ran git rebase on the repo.") but never interpretive instructions the user didn't ask for.
+4. **When unsure, ask** — if the user's instruction is ambiguous about what specific sessions should do, ask the user before sending. Don't guess.
+
 ### Image attachments
 When the user sends images, each image has a numbered file path in an <attached-images> block.
 When starting or resuming a session related to those images, always include the file paths in the prompt so the session can access them via its Read tool.
