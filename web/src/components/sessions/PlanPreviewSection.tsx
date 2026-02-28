@@ -1,17 +1,23 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PlanCard } from './SessionMessage';
-import { useSessionPlan } from '@/hooks/useSessionPlan';
 import type { SessionRecord } from '@/types/session';
+import type { SessionPlanResponse } from '@/api/sessions';
 
 const PLAN_POLL_INTERVAL = 15_000; // 15s
 
-export function PlanPreviewSection({ session }: { session: SessionRecord }) {
+interface PlanPreviewSectionProps {
+  session: SessionRecord;
+  plan: SessionPlanResponse | null;
+  loading: boolean;
+  refresh: () => Promise<void>;
+}
+
+export function PlanPreviewSection({ session, plan, loading, refresh }: PlanPreviewSectionProps) {
   const navigate = useNavigate();
   const hasPlan = !!session.planCompleted;
   const isFromPlan = !!session.fromPlanSessionId;
   const shouldFetch = hasPlan || isFromPlan;
-  const { plan, loading, refresh } = useSessionPlan(session.claudeSessionId, shouldFetch);
   const [open, setOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -23,7 +29,6 @@ export function PlanPreviewSection({ session }: { session: SessionRecord }) {
   // Auto-poll for plan updates while session is running
   useEffect(() => {
     if (!shouldFetch) return;
-    // Only poll when session is still running (plan may still be updating)
     const isRunning = session.process_status === 'running';
     if (!isRunning) return;
 

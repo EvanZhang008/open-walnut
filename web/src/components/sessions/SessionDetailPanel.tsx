@@ -7,6 +7,8 @@ import { WorkStatusPicker } from './WorkStatusPicker';
 import { SessionCopyButtons } from './SessionCopyButtons';
 import { updateSession, executePlanSession, executePlanContinue } from '@/api/sessions';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
+import { useSessionPlan } from '@/hooks/useSessionPlan';
+import { PlanContentContext } from '@/contexts/PlanContentContext';
 import type { SessionRecord } from '@/types/session';
 import { timeAgo } from '@/utils/time';
 
@@ -127,6 +129,12 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
   const sessionId_ = session?.claudeSessionId || '';
   const { messages: historyMessages, loading: historyLoading } = useSessionHistory(sessionId_ || null);
 
+  // Lift plan hook here so we can provide plan content via context to all PlanCards
+  const hasPlan = !!session?.planCompleted;
+  const isFromPlan = !!session?.fromPlanSessionId;
+  const shouldFetchPlan = hasPlan || isFromPlan;
+  const { plan, loading: planLoading, refresh: planRefresh } = useSessionPlan(sessionId_ || undefined, shouldFetchPlan);
+
   // Scroll-to-message: find the message element in SessionChatHistory by data-msg-index
   const handleMessageClick = useCallback((messageIndex: number) => {
     const container = panelRef.current?.querySelector('.session-history');
@@ -207,215 +215,219 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
   const taskLabel = taskTitle || session.taskId;
   const hasDetails = !!(session.project || session.startedAt || session.cwd || session.host || session.activity || session.description);
 
+  const planContentValue = plan?.content ?? null;
+
   return (
-    <div className="session-detail-panel" ref={panelRef}>
-      <div className="session-detail-header">
-        {/* Title row with badges */}
-        <div className="session-detail-title-row">
-          <EditableTitle sessionId={sessionId} title={title} onSaved={onTitleChanged} />
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            {isPlan && (
-              <span
-                className="session-detail-badge"
-                style={{ color: '#fff', background: 'var(--accent)', fontWeight: 600, fontSize: '11px' }}
-              >
-                Plan
-              </span>
-            )}
-            {isEmbedded && (
-              <span className="session-detail-badge session-detail-badge-embedded">
-                Embedded
-              </span>
-            )}
-            {session.host && (
-              <span
-                className="session-detail-badge"
-                style={{ color: 'var(--fg-muted)', background: 'var(--bg-tertiary)', fontSize: '11px', fontWeight: 600 }}
-                title={session.hostname || session.host}
-              >
-                SSH: {session.host}
-              </span>
-            )}
-            {showModeBadge && (
-              <span
-                className="session-detail-badge"
-                style={{ color: 'var(--fg-muted)', background: 'var(--bg-tertiary)', fontSize: '11px' }}
-              >
-                {session.mode}
-              </span>
-            )}
-            <WorkStatusPicker
-              sessionId={sessionId}
-              processStatus={ps}
-              workStatus={ws}
-              size="md"
-            />
+    <PlanContentContext.Provider value={planContentValue}>
+      <div className="session-detail-panel" ref={panelRef}>
+        <div className="session-detail-header">
+          {/* Title row with badges */}
+          <div className="session-detail-title-row">
+            <EditableTitle sessionId={sessionId} title={title} onSaved={onTitleChanged} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              {isPlan && (
+                <span
+                  className="session-detail-badge"
+                  style={{ color: '#fff', background: 'var(--accent)', fontWeight: 600, fontSize: '11px' }}
+                >
+                  Plan
+                </span>
+              )}
+              {isEmbedded && (
+                <span className="session-detail-badge session-detail-badge-embedded">
+                  Embedded
+                </span>
+              )}
+              {session.host && (
+                <span
+                  className="session-detail-badge"
+                  style={{ color: 'var(--fg-muted)', background: 'var(--bg-tertiary)', fontSize: '11px', fontWeight: 600 }}
+                  title={session.hostname || session.host}
+                >
+                  SSH: {session.host}
+                </span>
+              )}
+              {showModeBadge && (
+                <span
+                  className="session-detail-badge"
+                  style={{ color: 'var(--fg-muted)', background: 'var(--bg-tertiary)', fontSize: '11px' }}
+                >
+                  {session.mode}
+                </span>
+              )}
+              <WorkStatusPicker
+                sessionId={sessionId}
+                processStatus={ps}
+                workStatus={ws}
+                size="md"
+              />
+            </div>
           </div>
-        </div>
 
-        {/* Compact meta bar */}
-        <div className="session-detail-meta-bar">
-          {session.taskId && (
-            <a href={`/tasks/${session.taskId}`} className="session-detail-link" title={`Task: ${session.taskId}`}>
-              {taskLabel}
-            </a>
-          )}
-          {session.messageCount != null && session.messageCount > 0 && (
-            <span>{session.messageCount} msgs</span>
-          )}
-          {session.lastActiveAt && (
-            <span title={new Date(session.lastActiveAt).toLocaleString()}>{timeAgo(session.lastActiveAt)}</span>
-          )}
-          {sessionId && <SessionCopyButtons sessionId={sessionId} />}
-        </div>
+          {/* Compact meta bar */}
+          <div className="session-detail-meta-bar">
+            {session.taskId && (
+              <a href={`/tasks/${session.taskId}`} className="session-detail-link" title={`Task: ${session.taskId}`}>
+                {taskLabel}
+              </a>
+            )}
+            {session.messageCount != null && session.messageCount > 0 && (
+              <span>{session.messageCount} msgs</span>
+            )}
+            {session.lastActiveAt && (
+              <span title={new Date(session.lastActiveAt).toLocaleString()}>{timeAgo(session.lastActiveAt)}</span>
+            )}
+            {sessionId && <SessionCopyButtons sessionId={sessionId} />}
+          </div>
 
-        {/* Collapsible details */}
-        {hasDetails && (
-          <div className="session-detail-collapse">
-            <button
-              className="session-detail-collapse-toggle"
-              onClick={() => setDetailsOpen(!detailsOpen)}
-            >
-              <span className="session-detail-collapse-arrow">{detailsOpen ? '\u25BE' : '\u25B8'}</span>
-              Details
-            </button>
-            {detailsOpen && (
-              <div className="session-detail-collapse-body">
-                <div className="session-detail-info-grid">
-                  {session.project && (
-                    <div className="session-detail-info-row">
-                      <span className="session-detail-info-label">Project</span>
-                      <span className="session-detail-info-value">{session.project}</span>
-                    </div>
-                  )}
-                  {session.startedAt && (
-                    <div className="session-detail-info-row">
-                      <span className="session-detail-info-label">Started</span>
-                      <span className="session-detail-info-value">{formatDate(session.startedAt)}</span>
-                    </div>
-                  )}
-                  {session.cwd && (
-                    <div className="session-detail-info-row">
-                      <span className="session-detail-info-label">Working Dir</span>
-                      <span className="session-detail-info-value"><code className="session-detail-code">{session.cwd}</code></span>
-                    </div>
-                  )}
-                  {session.host && (
-                    <div className="session-detail-info-row">
-                      <span className="session-detail-info-label">Host</span>
-                      <span className="session-detail-info-value">
-                        <span
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                          }}
-                        >
+          {/* Collapsible details */}
+          {hasDetails && (
+            <div className="session-detail-collapse">
+              <button
+                className="session-detail-collapse-toggle"
+                onClick={() => setDetailsOpen(!detailsOpen)}
+              >
+                <span className="session-detail-collapse-arrow">{detailsOpen ? '\u25BE' : '\u25B8'}</span>
+                Details
+              </button>
+              {detailsOpen && (
+                <div className="session-detail-collapse-body">
+                  <div className="session-detail-info-grid">
+                    {session.project && (
+                      <div className="session-detail-info-row">
+                        <span className="session-detail-info-label">Project</span>
+                        <span className="session-detail-info-value">{session.project}</span>
+                      </div>
+                    )}
+                    {session.startedAt && (
+                      <div className="session-detail-info-row">
+                        <span className="session-detail-info-label">Started</span>
+                        <span className="session-detail-info-value">{formatDate(session.startedAt)}</span>
+                      </div>
+                    )}
+                    {session.cwd && (
+                      <div className="session-detail-info-row">
+                        <span className="session-detail-info-label">Working Dir</span>
+                        <span className="session-detail-info-value"><code className="session-detail-code">{session.cwd}</code></span>
+                      </div>
+                    )}
+                    {session.host && (
+                      <div className="session-detail-info-row">
+                        <span className="session-detail-info-label">Host</span>
+                        <span className="session-detail-info-value">
                           <span
                             style={{
-                              background: 'var(--bg-tertiary)',
-                              color: 'var(--fg-muted)',
-                              padding: '1px 6px',
-                              borderRadius: '4px',
-                              fontSize: '11px',
-                              fontWeight: 600,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
                             }}
                           >
-                            SSH
+                            <span
+                              style={{
+                                background: 'var(--bg-tertiary)',
+                                color: 'var(--fg-muted)',
+                                padding: '1px 6px',
+                                borderRadius: '4px',
+                                fontSize: '11px',
+                                fontWeight: 600,
+                              }}
+                            >
+                              SSH
+                            </span>
+                            {session.host}
                           </span>
-                          {session.host}
                         </span>
-                      </span>
-                    </div>
-                  )}
-                  {session.activity && (
-                    <div className="session-detail-info-row">
-                      <span className="session-detail-info-label">Activity</span>
-                      <span className="session-detail-info-value" style={{ fontStyle: 'italic' }}>{session.activity}</span>
-                    </div>
-                  )}
-                  {session.description && (
-                    <div className="session-detail-info-row">
-                      <span className="session-detail-info-label">Description</span>
-                      <span className="session-detail-info-value">{session.description}</span>
-                    </div>
-                  )}
+                      </div>
+                    )}
+                    {session.activity && (
+                      <div className="session-detail-info-row">
+                        <span className="session-detail-info-label">Activity</span>
+                        <span className="session-detail-info-value" style={{ fontStyle: 'italic' }}>{session.activity}</span>
+                      </div>
+                    )}
+                    {session.description && (
+                      <div className="session-detail-info-row">
+                        <span className="session-detail-info-label">Description</span>
+                        <span className="session-detail-info-value">{session.description}</span>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        <PlanPreviewSection session={session} />
-
-        {summary && (
-          <p className="session-detail-summary text-sm">{summary}</p>
-        )}
-        {(showExecuteButtons || executeStarted) && (
-          <div className="execute-plan-section">
-            <button className="execute-plan-toggle" onClick={() => setExecuteOpen(o => !o)}>
-              <span className="execute-plan-arrow">{executeOpen ? '\u25BE' : '\u25B8'}</span>
-              <span className="execute-plan-label">
-                {executeStarted ? 'Execution Started' : 'Execute Plan'}
-              </span>
-              {!executeStarted && !executeOpen && (
-                <span className="execute-plan-hint">2 options</span>
               )}
-            </button>
-            {executeOpen && !executeStarted && showExecuteButtons && (
-              <div className="execute-plan-body">
-                <div className="execute-plan-options">
-                  <button
-                    className="execute-plan-btn"
-                    onClick={handleExecuteContinue}
-                    disabled={executing}
-                  >
-                    {executing ? 'Starting\u2026' : '\u25B6 Execute'}
-                    <span className="execute-plan-btn-desc">Resume with full permissions</span>
-                  </button>
-                  <button
-                    className="execute-plan-btn-secondary"
-                    onClick={handleClearContextExecute}
-                    disabled={executing}
-                  >
-                    Clear Context & Execute
-                    <span className="execute-plan-btn-desc">Fresh session with plan injected</span>
-                  </button>
-                </div>
-                {executeError && (
-                  <div className="execute-plan-error">{executeError}</div>
+            </div>
+          )}
+
+          <PlanPreviewSection session={session} plan={plan} loading={planLoading} refresh={planRefresh} />
+
+          {summary && (
+            <p className="session-detail-summary text-sm">{summary}</p>
+          )}
+          {(showExecuteButtons || executeStarted) && (
+            <div className="execute-plan-section">
+              <button className="execute-plan-toggle" onClick={() => setExecuteOpen(o => !o)}>
+                <span className="execute-plan-arrow">{executeOpen ? '\u25BE' : '\u25B8'}</span>
+                <span className="execute-plan-label">
+                  {executeStarted ? 'Execution Started' : 'Execute Plan'}
+                </span>
+                {!executeStarted && !executeOpen && (
+                  <span className="execute-plan-hint">2 options</span>
                 )}
-              </div>
-            )}
-            {executeOpen && executeStarted && (
-              <div className="execute-plan-body">
-                <p className="execute-plan-started">Session is now executing the plan.</p>
-              </div>
-            )}
-          </div>
-        )}
+              </button>
+              {executeOpen && !executeStarted && showExecuteButtons && (
+                <div className="execute-plan-body">
+                  <div className="execute-plan-options">
+                    <button
+                      className="execute-plan-btn"
+                      onClick={handleExecuteContinue}
+                      disabled={executing}
+                    >
+                      {executing ? 'Starting\u2026' : '\u25B6 Execute'}
+                      <span className="execute-plan-btn-desc">Resume with full permissions</span>
+                    </button>
+                    <button
+                      className="execute-plan-btn-secondary"
+                      onClick={handleClearContextExecute}
+                      disabled={executing}
+                    >
+                      Clear Context & Execute
+                      <span className="execute-plan-btn-desc">Fresh session with plan injected</span>
+                    </button>
+                  </div>
+                  {executeError && (
+                    <div className="execute-plan-error">{executeError}</div>
+                  )}
+                </div>
+              )}
+              {executeOpen && executeStarted && (
+                <div className="execute-plan-body">
+                  <p className="execute-plan-started">Session is now executing the plan.</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        <UserMessagesSummary
+          messages={historyMessages}
+          loading={historyLoading}
+          onMessageClick={handleMessageClick}
+        />
+        <SessionNotes
+          sessionId={sessionId}
+          initialNote={session.human_note}
+        />
+        <SessionChatHistory
+          key={sessionId}
+          sessionId={sessionId}
+          workStatus={session.work_status}
+          optimisticMessages={optimisticMessages}
+          onMessagesDelivered={onMessagesDelivered}
+          onBatchCompleted={onBatchCompleted}
+          onEditQueued={onEditQueued}
+          onDeleteQueued={onDeleteQueued}
+          onAgentQueued={onAgentQueued}
+          onClearCommitted={onClearCommitted}
+        />
       </div>
-      <UserMessagesSummary
-        messages={historyMessages}
-        loading={historyLoading}
-        onMessageClick={handleMessageClick}
-      />
-      <SessionNotes
-        sessionId={sessionId}
-        initialNote={session.human_note}
-      />
-      <SessionChatHistory
-        key={sessionId}
-        sessionId={sessionId}
-        workStatus={session.work_status}
-        optimisticMessages={optimisticMessages}
-        onMessagesDelivered={onMessagesDelivered}
-        onBatchCompleted={onBatchCompleted}
-        onEditQueued={onEditQueued}
-        onDeleteQueued={onDeleteQueued}
-        onAgentQueued={onAgentQueued}
-        onClearCommitted={onClearCommitted}
-      />
-    </div>
+    </PlanContentContext.Provider>
   );
 }
