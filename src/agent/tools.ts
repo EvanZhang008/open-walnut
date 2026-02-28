@@ -798,16 +798,18 @@ For projects (type='project'): set default_host and default_cwd for remote sessi
 
   {
     name: 'memory',
-    description: 'Manage long-term memory. Actions: "append" (add to daily log and/or project memory — use target param to choose), "update_summary" (update project summary), "update_global" (update global MEMORY.md), "read" (read project or global memory).',
+    description: 'Manage long-term memory. Actions: "append" (add to daily log and/or project memory — use target param to choose), "update_summary" (update project summary), "update_global" (update global MEMORY.md), "read" (read project or global memory), "edit" (⚠️ DESTRUCTIVE — replace or remove text in project memory by content matching, like the Edit tool. Omit new_content to delete. Data cannot be recovered. Only use when user explicitly requests. Prefer append to correct information over editing.).',
     input_schema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['append', 'update_summary', 'update_global', 'read'], description: 'The memory operation to perform' },
-        project_path: { type: 'string', description: 'Project path (e.g. "work/event-service"). Required for update_summary, optional for append and read.' },
+        action: { type: 'string', enum: ['append', 'update_summary', 'update_global', 'read', 'edit'], description: 'The memory operation to perform' },
+        project_path: { type: 'string', description: 'Project path (e.g. "work/event-service"). Required for update_summary and edit, optional for append and read.' },
         content: { type: 'string', description: 'Content to write. Required for append and update_global.' },
         name: { type: 'string', description: 'Project name. Required for update_summary.' },
         description: { type: 'string', description: 'Project description. Required for update_summary.' },
         target: { type: 'string', enum: ['daily', 'project', 'both'], description: 'Write target for append. "daily" = daily log only, "project" = project memory only (requires project_path), "both" = both (default).' },
+        old_content: { type: 'string', description: 'Text to find in project memory (exact match). Required for edit. Use "read" first to see current content.' },
+        new_content: { type: 'string', description: 'Replacement text for edit. Omit or empty string to delete the matched text.' },
       },
       required: ['action'],
     },
@@ -880,7 +882,26 @@ For projects (type='project'): set default_host and default_cwd for remote sessi
         return content ?? 'No global memory file found.';
       }
 
-      return `Error: Unknown action "${action}". Use append, update_summary, update_global, or read.`;
+      if (action === 'edit') {
+        const projectPath = params.project_path as string;
+        const oldContent = params.old_content as string;
+        if (!projectPath) return 'Error: project_path is required for edit action.';
+        if (!oldContent) return 'Error: old_content is required for edit action.';
+        const newContent = (params.new_content as string) ?? '';
+        try {
+          const { editProjectMemory } = await import('../core/project-memory.js');
+          const result = editProjectMemory(projectPath, oldContent, newContent);
+          return json({
+            status: newContent ? 'updated' : 'deleted',
+            old_content: result.oldContent,
+            new_content: result.newContent,
+          });
+        } catch (err) {
+          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      }
+
+      return `Error: Unknown action "${action}". Use append, update_summary, update_global, read, or edit.`;
     },
   },
 

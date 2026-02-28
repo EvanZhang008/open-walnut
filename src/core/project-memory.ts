@@ -253,6 +253,37 @@ export function getAllProjectSummaries(): ProjectSummary[] {
 }
 
 /**
+ * Edit project memory by content matching (find old_content, replace with new_content).
+ * old_content must match exactly once. Omit/empty new_content = delete.
+ */
+export function editProjectMemory(
+  projectPath: string,
+  oldContent: string,
+  newContent?: string,
+): { oldContent: string; newContent: string } {
+  const memFile = path.join(PROJECTS_MEMORY_DIR, projectPath, 'MEMORY.md');
+  let content: string;
+  try {
+    content = fs.readFileSync(memFile, 'utf-8');
+  } catch {
+    throw new Error(`No memory file found for project "${projectPath}".`);
+  }
+
+  if (!oldContent) throw new Error('old_content cannot be empty.');
+  const replacement = newContent ?? '';
+
+  const count = content.split(oldContent).length - 1;
+  if (count === 0) throw new Error('old_content not found in project memory.');
+  if (count > 1) throw new Error(`old_content matches ${count} locations — provide more surrounding context to make it unique.`);
+
+  let updated = content.replace(oldContent, replacement);
+  // Clean up triple+ blank lines left by deletions
+  updated = updated.replace(/\n{3,}/g, '\n\n');
+  fs.writeFileSync(memFile, updated, 'utf-8');
+  return { oldContent, newContent: replacement };
+}
+
+/**
  * Get the full content of a project's MEMORY.md.
  */
 export function getProjectMemory(projectPath: string): string | null {

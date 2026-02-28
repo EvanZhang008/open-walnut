@@ -193,6 +193,107 @@ describe('memory tool integration', () => {
     expect(fs.existsSync(projectMemPath)).toBe(false);
   });
 
+  it('edit replaces content in project memory via tool', async () => {
+    await executeTool('memory', {
+      action: 'append',
+      content: 'Wrong fact: Earth is flat',
+      project_path: 'work/api',
+      target: 'project',
+    });
+
+    const editResult = await executeTool('memory', {
+      action: 'edit',
+      project_path: 'work/api',
+      old_content: 'Wrong fact: Earth is flat',
+      new_content: 'Correct fact: Earth is round',
+    });
+
+    // Verify result
+    expect(editResult).toContain('updated');
+    expect(editResult).toContain('Correct fact: Earth is round');
+
+    // Verify file content
+    const readResult = await executeTool('memory', {
+      action: 'read',
+      project_path: 'work/api',
+    });
+    expect(readResult).toContain('Correct fact: Earth is round');
+    expect(readResult).not.toContain('Earth is flat');
+  });
+
+  it('edit with empty new_content deletes content', async () => {
+    await executeTool('memory', {
+      action: 'append',
+      content: 'Keep this',
+      project_path: 'work/api',
+      target: 'project',
+    });
+
+    await executeTool('memory', {
+      action: 'append',
+      content: 'Remove this junk',
+      project_path: 'work/api',
+      target: 'project',
+    });
+
+    const editResult = await executeTool('memory', {
+      action: 'edit',
+      project_path: 'work/api',
+      old_content: 'Remove this junk',
+      new_content: '',
+    });
+
+    expect(editResult).toContain('deleted');
+
+    const readResult = await executeTool('memory', {
+      action: 'read',
+      project_path: 'work/api',
+    });
+    expect(readResult).toContain('Keep this');
+    expect(readResult).not.toContain('Remove this junk');
+  });
+
+  it('edit returns error when old_content not found', async () => {
+    await executeTool('memory', {
+      action: 'append',
+      content: 'Some content',
+      project_path: 'work/api',
+      target: 'project',
+    });
+
+    const result = await executeTool('memory', {
+      action: 'edit',
+      project_path: 'work/api',
+      old_content: 'nonexistent text',
+      new_content: 'replacement',
+    });
+
+    expect(result).toContain('Error');
+    expect(result).toContain('not found');
+  });
+
+  it('edit returns error when project_path missing', async () => {
+    const result = await executeTool('memory', {
+      action: 'edit',
+      old_content: 'some text',
+      new_content: 'new text',
+    });
+
+    expect(result).toContain('Error');
+    expect(result).toContain('project_path');
+  });
+
+  it('edit returns error when old_content missing', async () => {
+    const result = await executeTool('memory', {
+      action: 'edit',
+      project_path: 'work/api',
+      new_content: 'new text',
+    });
+
+    expect(result).toContain('Error');
+    expect(result).toContain('old_content');
+  });
+
   it('append with target="project" skips daily log on disk', async () => {
     await executeTool('memory', {
       action: 'append',

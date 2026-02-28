@@ -13,6 +13,7 @@ import {
   ensureProjectDir,
   appendProjectMemory,
   updateProjectSummary,
+  editProjectMemory,
   getAllProjectSummaries,
   getProjectMemory,
   getProjectSummary,
@@ -235,6 +236,76 @@ describe('getProjectSummary', () => {
 
   it('returns null for non-existent project', () => {
     expect(getProjectSummary('nonexistent')).toBeNull();
+  });
+});
+
+describe('editProjectMemory', () => {
+  it('replaces matched text with new content', () => {
+    appendProjectMemory('work/api', 'Old fact about the API', 'agent');
+    const result = editProjectMemory('work/api', 'Old fact about the API', 'Corrected fact about the API');
+    expect(result.oldContent).toBe('Old fact about the API');
+    expect(result.newContent).toBe('Corrected fact about the API');
+
+    const content = getProjectMemory('work/api')!;
+    expect(content).toContain('Corrected fact about the API');
+    expect(content).not.toContain('Old fact about the API');
+  });
+
+  it('deletes matched text when new_content is empty', () => {
+    appendProjectMemory('work/api', 'Keep this entry', 'agent');
+    appendProjectMemory('work/api', 'Delete this entry', 'agent');
+    editProjectMemory('work/api', 'Delete this entry');
+
+    const content = getProjectMemory('work/api')!;
+    expect(content).toContain('Keep this entry');
+    expect(content).not.toContain('Delete this entry');
+  });
+
+  it('cleans up triple+ blank lines after deletion', () => {
+    appendProjectMemory('work/api', 'First entry', 'agent');
+    appendProjectMemory('work/api', 'Middle entry', 'agent');
+    appendProjectMemory('work/api', 'Last entry', 'agent');
+
+    // Delete the middle entry content — the ## header + content block
+    const content = getProjectMemory('work/api')!;
+    const middleMatch = content.match(/## .+? — agent \[work\/api\]\nMiddle entry\n\n/);
+    expect(middleMatch).not.toBeNull();
+    editProjectMemory('work/api', middleMatch![0]);
+
+    const updated = getProjectMemory('work/api')!;
+    expect(updated).not.toContain('Middle entry');
+    // No triple blank lines
+    expect(updated).not.toMatch(/\n{3,}/);
+  });
+
+  it('throws when old_content not found', () => {
+    appendProjectMemory('work/api', 'Some content', 'agent');
+    expect(() => editProjectMemory('work/api', 'nonexistent text', 'new')).toThrow('not found');
+  });
+
+  it('throws when old_content matches multiple locations', () => {
+    appendProjectMemory('work/api', 'duplicate text here', 'agent');
+    appendProjectMemory('work/api', 'duplicate text here', 'agent');
+    expect(() => editProjectMemory('work/api', 'duplicate text here', 'fixed')).toThrow('2 locations');
+  });
+
+  it('throws for non-existent project', () => {
+    expect(() => editProjectMemory('nonexistent', 'old', 'new')).toThrow('No memory file found');
+  });
+
+  it('throws when old_content is empty string', () => {
+    appendProjectMemory('work/api', 'Some content', 'agent');
+    expect(() => editProjectMemory('work/api', '', 'new')).toThrow('cannot be empty');
+  });
+
+  it('preserves YAML frontmatter when editing log content', () => {
+    appendProjectMemory('work/api', 'Some content', 'agent');
+    updateProjectSummary('work/api', 'API Service', 'Our API');
+    editProjectMemory('work/api', 'Some content', 'Updated content');
+
+    const content = getProjectMemory('work/api')!;
+    expect(content).toContain('name: API Service');
+    expect(content).toContain('Updated content');
   });
 });
 
