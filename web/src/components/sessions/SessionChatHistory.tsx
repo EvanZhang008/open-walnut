@@ -161,6 +161,8 @@ function OptimisticImagePreviews({ images }: { images?: ImageAttachment[] }) {
 interface SessionChatHistoryProps {
   sessionId: string;
   workStatus?: string;
+  /** Initial prompt text to display at the top of the timeline (first user message). */
+  initialPrompt?: string;
   optimisticMessages?: OptimisticMessage[];
   onMessagesDelivered?: (count: number) => void;
   onBatchCompleted?: (count: number) => void;
@@ -448,7 +450,7 @@ function buildTimeline(
   return items;
 }
 
-export function SessionChatHistory({ sessionId, workStatus, optimisticMessages, onMessagesDelivered, onBatchCompleted, onEditQueued, onDeleteQueued, onAgentQueued, onClearCommitted, onTaskClick, onSessionClick }: SessionChatHistoryProps) {
+export function SessionChatHistory({ sessionId, workStatus, initialPrompt, optimisticMessages, onMessagesDelivered, onBatchCompleted, onEditQueued, onDeleteQueued, onAgentQueued, onClearCommitted, onTaskClick, onSessionClick }: SessionChatHistoryProps) {
   const [historyVersion, setHistoryVersion] = useState(0);
   const awaitingRefresh = useRef(false);
   const pendingBatchTotal = useRef(0);
@@ -700,6 +702,18 @@ export function SessionChatHistory({ sessionId, workStatus, optimisticMessages, 
   return (
     <>
       <div className="session-history" ref={containerRef} onClick={handleContainerClick}>
+        {/* Initial prompt — the first user message that started this session */}
+        {initialPrompt && (
+          <div className="session-msg session-msg-user session-initial-prompt">
+            <div className="session-msg-header">
+              <span className="session-msg-role">You</span>
+              <span className="session-initial-prompt-label">Initial Prompt</span>
+            </div>
+            <div className="session-msg-content">
+              <div className="markdown-body">{initialPrompt}</div>
+            </div>
+          </div>
+        )}
         {/* Persisted history messages */}
         {messages.map((m, i) => (
           <div key={i} data-msg-index={i}>

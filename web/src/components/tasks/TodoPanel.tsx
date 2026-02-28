@@ -207,6 +207,7 @@ const LS_COLLAPSED_CATS_KEY = 'walnut-todo-collapsed-cats';
 const LS_COLLAPSED_PROJS_KEY = 'walnut-todo-collapsed-projs';
 const LS_FILTERS_COLLAPSED_KEY = 'walnut-todo-filters-collapsed';
 const LS_SORT_KEY = 'walnut-todo-sortBy';
+const LS_GROUP_KEY = 'walnut-todo-groupBy';
 
 function readSetFromStorage(key: string): Set<string> {
   try {
@@ -252,6 +253,7 @@ interface SortableTaskItemProps {
   onStar?: (id: string) => void;
   onCyclePriority?: (id: string) => void;
   onUpdateTitle?: (id: string, title: string) => void;
+  onOpenSession?: (sessionId: string) => void;
   searchContext?: string; // Category/Project context pill shown in search mode
   searchMatchField?: string;  // Best keyword field ('title','note',etc.) or 'semantic'
   searchScore?: number;       // Combined normalized score [0,1]
@@ -259,7 +261,7 @@ interface SortableTaskItemProps {
   searchSemanticScore?: number; // Normalized semantic contribution [0,1]
 }
 
-function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount, onClick, onSetPhase, onStar, onCyclePriority, onUpdateTitle, searchContext, searchMatchField, searchScore, searchKeywordScore, searchSemanticScore }: SortableTaskItemProps) {
+function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount, onClick, onSetPhase, onStar, onCyclePriority, onUpdateTitle, onOpenSession, searchContext, searchMatchField, searchScore, searchKeywordScore, searchSemanticScore }: SortableTaskItemProps) {
   const integrations = useIntegrations();
   const {
     attributes,
@@ -495,6 +497,10 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount
             execStatus={task.exec_session_status}
             sessionIds={task.session_ids}
             mode={task.session_status?.mode ?? task.exec_session_status?.mode ?? task.plan_session_status?.mode}
+            onClick={onOpenSession ? () => {
+              const sid = task.session_id || task.exec_session_id || task.plan_session_id;
+              if (sid) onOpenSession(sid);
+            } : undefined}
           />
           {!!(task as Record<string, unknown>).is_blocked && !isDone && (
             <span className="task-blocked-badge" title="Blocked by dependencies">
@@ -728,20 +734,33 @@ function orderedSort(items: string[], orderList: string[]): string[] {
 
 // ── Sort comparators ──
 
-type SortBy = 'priority' | 'date';
+type SortBy = 'priority' | 'date' | 'updated';
+type GroupBy = 'category' | 'none';
 
 const PRIORITY_RANK: Record<string, number> = { immediate: 0, important: 1, backlog: 2, none: 3 };
 
 function readSortBy(): SortBy {
   try {
     const v = localStorage.getItem(LS_SORT_KEY);
-    if (v === 'priority' || v === 'date') return v;
+    if (v === 'priority' || v === 'date' || v === 'updated') return v;
   } catch { /* ignore */ }
   return 'priority';
 }
 
 function persistSortBy(v: SortBy) {
   try { localStorage.setItem(LS_SORT_KEY, v); } catch { /* ignore */ }
+}
+
+function readGroupBy(): GroupBy {
+  try {
+    const v = localStorage.getItem(LS_GROUP_KEY);
+    if (v === 'category' || v === 'none') return v;
+  } catch { /* ignore */ }
+  return 'category';
+}
+
+function persistGroupBy(v: GroupBy) {
+  try { localStorage.setItem(LS_GROUP_KEY, v); } catch { /* ignore */ }
 }
 
 /** Sort tasks by priority (Immediate → Important → Backlog → None), then by created_at descending within same priority */
@@ -758,6 +777,13 @@ function compareDate(a: Task, b: Task): number {
   const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
   const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
   return tb - ta; // newest first
+}
+
+/** Sort tasks by updated_at descending (most recently modified first) */
+function compareUpdated(a: Task, b: Task): number {
+  const ta = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+  const tb = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+  return tb - ta; // most recently updated first
 }
 
 // ── Type-aware collision detection ──
@@ -942,6 +968,28 @@ function TaskDetailPane({ task, onClose, onOpenSession, onOpenTriageForTask, sty
         {onClose && (
           <button className="todo-detail-close" onClick={onClose} aria-label="Close detail panel" title="Close">&times;</button>
         )}
+      </div>
+
+      {/* Task metadata — always visible */}
+      <div className="todo-detail-meta">
+        <div className="todo-detail-title">{task.title}</div>
+        <div className="todo-detail-badges">
+          <span className={`badge-phase badge-phase-${task.phase?.toLowerCase()}`}>
+            {PHASE_ICON[task.phase] ?? '○'} {PHASE_LABEL[task.phase] ?? task.phase}
+          </span>
+          {task.priority && task.priority !== 'none' && (
+            <span className={`todo-detail-priority-pill priority-${task.priority}`}>
+              {PRIORITY_ICON[task.priority]} {PRIORITY_LABEL[task.priority]}
+            </span>
+          )}
+          {task.sprint && (
+            <span className="todo-detail-sprint-pill">{task.sprint}</span>
+          )}
+        </div>
+        <div className="todo-detail-dates text-xs text-muted">
+          {task.created_at && <span>Created {timeAgo(task.created_at)}</span>}
+          {task.updated_at && <span> · Updated {timeAgo(task.updated_at)}</span>}
+        </div>
       </div>
 
       {hasSessions && (
@@ -1130,6 +1178,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const [sourceFilter, setSourceFilter] = useState<string>('all');
   const [tagFilter, setTagFilter] = useState('');
   const [sortBy, setSortBy] = useState<SortBy>(readSortBy);
+  const [groupBy, setGroupBy] = useState<GroupBy>(readGroupBy);
   const [filtersCollapsed, setFiltersCollapsed] = useState(() => {
     try { return localStorage.getItem(LS_FILTERS_COLLAPSED_KEY) !== '0'; } catch { return true; }
   });
@@ -1382,7 +1431,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // --- Parent-anchored sort with child grouping ---
   // Produces a sorted ID order where children always follow their parent.
   const computeSortOrder = useCallback((items: Task[]): string[] => {
-    const cmp = sortBy === 'priority' ? comparePriority : compareDate;
+    const cmpMap: Record<SortBy, (a: Task, b: Task) => number> = { priority: comparePriority, date: compareDate, updated: compareUpdated };
+    const cmp = cmpMap[sortBy] ?? compareDate;
 
     // Partition tasks into top-level (+ orphans) vs children-of-visible-parent
     const topLevel: Task[] = [];
@@ -1574,8 +1624,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tasks, showCompleted, priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, activeCategory, favorites]);
 
-  // Build category -> project -> tasks hierarchy
+  // Build category -> project -> tasks hierarchy (skipped in flat mode)
   const grouped = useMemo(() => {
+    if (groupBy === 'none') return [];
     const map = new Map<string, { direct: Task[]; projects: Map<string, Task[]> }>();
     for (const task of sorted) {
       const cat = task.category || 'Uncategorized';
@@ -1602,7 +1653,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         projects: projNames.map((proj) => ({ project: proj, tasks: entry.projects.get(proj)! })),
       };
     });
-  }, [sorted, ordering?.categoryOrder, ordering?.projectOrder]);
+  }, [sorted, groupBy, ordering?.categoryOrder, ordering?.projectOrder]);
 
   // Child task maps: parentId → count, and set of child task IDs
   // Only tasks whose parent is VISIBLE in the current list are treated as children.
@@ -1998,6 +2049,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           {activeFilterCount > 0 && <span className="filter-active-count">{activeFilterCount}</span>}
         </button>
         <div className="filter-toolbar-actions">
+          <button
+            className={`filter-chip-standalone${groupBy === 'none' ? ' active' : ''}`}
+            onClick={() => { const v = groupBy === 'none' ? 'category' : 'none'; setGroupBy(v); persistGroupBy(v); }}
+            title={groupBy === 'none' ? 'Switch to grouped view' : 'Switch to flat list'}
+          >
+            Flat
+          </button>
           <div className="sort-toggle" title="Sort order">
             <button
               className={`sort-toggle-btn${sortBy === 'priority' ? ' active' : ''}`}
@@ -2009,7 +2067,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
               className={`sort-toggle-btn${sortBy === 'date' ? ' active' : ''}`}
               onClick={() => { setSortBy('date'); persistSortBy('date'); }}
             >
-              T&#x2193;
+              C&#x2193;
+            </button>
+            <button
+              className={`sort-toggle-btn${sortBy === 'updated' ? ' active' : ''}`}
+              onClick={() => { setSortBy('updated'); persistSortBy('updated'); }}
+            >
+              U&#x2193;
             </button>
           </div>
           <button
@@ -2019,7 +2083,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           >
             {showCompleted ? 'Hide \u2713' : 'Show \u2713'}
           </button>
-          {grouped.length > 0 && (
+          {groupBy !== 'none' && grouped.length > 0 && (
             <button
               className="filter-chip-standalone"
               onClick={handleCollapseExpandAll}
@@ -2219,6 +2283,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   onStar={onStar}
                   onCyclePriority={onCyclePriority}
                   onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
+                  onOpenSession={onOpenSession}
                   searchContext={`${task.category}${task.project && task.project !== task.category ? ` / ${task.project}` : ''}`}
                   searchMatchField={searchMeta.get(task.id)?.matchField}
                   searchScore={searchMeta.get(task.id)?.score}
@@ -2229,8 +2294,30 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             })()}
           </div>
         )}
+        {/* Flat mode: ungrouped list sorted by selected sort option */}
+        {!loading && !isSearchMode && groupBy === 'none' && sorted.length > 0 && (
+          <div className="todo-flat-results">
+            {sorted.map((task) => (
+              <SortableTaskItem
+                key={task.id}
+                task={task}
+                isFocused={focusedTaskId === task.id}
+                isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
+                isChild={childTaskIds.has(task.id)}
+                childCount={childCountMap.get(task.id)}
+                onClick={() => handleTaskClick(task)}
+                onSetPhase={onSetPhase ?? ((id) => onComplete(id))}
+                onStar={onStar}
+                onCyclePriority={onCyclePriority}
+                onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
+                onOpenSession={onOpenSession}
+                searchContext={`${task.category}${task.project && task.project !== task.category ? ` / ${task.project}` : ''}`}
+              />
+            ))}
+          </div>
+        )}
         {/* Normal mode: grouped hierarchy */}
-        {!loading && !isSearchMode && (
+        {!loading && !isSearchMode && groupBy !== 'none' && (
           <DndContext
             sensors={sensors}
             collisionDetection={typeAwareCollision}
@@ -2285,6 +2372,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                 onStar={onStar}
                                 onCyclePriority={onCyclePriority}
                                 onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
+                                onOpenSession={onOpenSession}
                               />
                             ))}
                           </SortableContext>
@@ -2335,6 +2423,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                               onStar={onStar}
                                               onCyclePriority={onCyclePriority}
                                               onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
+                                              onOpenSession={onOpenSession}
                                             />
                                           ))}
                                         </SortableContext>

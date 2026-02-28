@@ -16,9 +16,8 @@ export function SessionRow({ session, selected, onClick }: SessionRowProps) {
   const workStatus = session.work_status || 'agent_complete';
   const ago = timeAgo(session.lastActiveAt || session.startedAt);
 
-  const isPlan = session.mode === 'plan';
-  const modeLabel = session.mode && session.mode !== 'default' && session.mode !== 'plan' && !session.planCompleted ? session.mode : null;
-  const statusLabel = (WORK_LABELS[workStatus] ?? workStatus) + (modeLabel ? ` - ${modeLabel}` : '');
+  const statusLabel = WORK_LABELS[workStatus] ?? workStatus;
+  const modeIcon = session.mode === 'plan' ? '\uD83D\uDCCB Plan' : session.mode && session.mode !== 'default' ? '\u26A1 Bypass' : null;
 
   return (
     <div
@@ -33,12 +32,12 @@ export function SessionRow({ session, selected, onClick }: SessionRowProps) {
           className="session-status-dot"
           style={{ background: PROCESS_COLORS[processStatus] ?? 'var(--fg-muted)' }}
         />
-        {isPlan && (
+        {modeIcon && (
           <span
             className="text-xs"
             style={{
-              background: 'var(--accent)',
-              color: '#fff',
+              background: 'var(--bg-tertiary)',
+              color: 'var(--fg-muted)',
               padding: '1px 5px',
               borderRadius: '4px',
               fontSize: '10px',
@@ -46,7 +45,7 @@ export function SessionRow({ session, selected, onClick }: SessionRowProps) {
               flexShrink: 0,
             }}
           >
-            Plan
+            {modeIcon}
           </span>
         )}
         {session.provider === 'embedded' && (

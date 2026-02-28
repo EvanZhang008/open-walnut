@@ -171,9 +171,7 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
   const title = session.title || session.description || session.slug || sessionId || 'Untitled session';
   const ps = session.process_status ?? 'stopped';
   const ws = session.work_status ?? 'completed';
-  const isPlan = session.mode === 'plan';
   const isEmbedded = session.provider === 'embedded';
-  const showModeBadge = !isEmbedded && !session.planCompleted && session.mode && session.mode !== 'default' && session.mode !== 'plan';
   const showExecuteButtons =
     session.planCompleted === true
     && ws !== 'error'
@@ -225,12 +223,12 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
           <div className="session-detail-title-row">
             <EditableTitle sessionId={sessionId} title={title} onSaved={onTitleChanged} />
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              {isPlan && (
+              {session.mode && session.mode !== 'default' && (
                 <span
                   className="session-detail-badge"
-                  style={{ color: '#fff', background: 'var(--accent)', fontWeight: 600, fontSize: '11px' }}
+                  style={{ color: 'var(--fg-muted)', background: 'var(--bg-tertiary)', fontWeight: 600, fontSize: '11px' }}
                 >
-                  Plan
+                  {session.mode === 'plan' ? '\uD83D\uDCCB Plan' : '\u26A1 Bypass'}
                 </span>
               )}
               {isEmbedded && (
@@ -245,14 +243,6 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
                   title={session.hostname || session.host}
                 >
                   SSH: {session.host}
-                </span>
-              )}
-              {showModeBadge && (
-                <span
-                  className="session-detail-badge"
-                  style={{ color: 'var(--fg-muted)', background: 'var(--bg-tertiary)', fontSize: '11px' }}
-                >
-                  {session.mode}
                 </span>
               )}
               <WorkStatusPicker
@@ -419,6 +409,7 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
           key={sessionId}
           sessionId={sessionId}
           workStatus={session.work_status}
+          initialPrompt={historyMessages.find(m => m.role === 'user')?.text}
           optimisticMessages={optimisticMessages}
           onMessagesDelivered={onMessagesDelivered}
           onBatchCompleted={onBatchCompleted}

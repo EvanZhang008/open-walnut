@@ -378,6 +378,7 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
             key={sessionId}
             sessionId={sessionId}
             workStatus={session?.work_status}
+            initialPrompt={historyMessages.find(m => m.role === 'user')?.text}
             optimisticMessages={optimisticMsgs}
             onMessagesDelivered={handleMessagesDelivered}
             onBatchCompleted={handleBatchCompleted}

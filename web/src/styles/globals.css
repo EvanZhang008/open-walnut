@@ -2063,6 +2063,16 @@ input:focus, textarea:focus, select:focus {
   font-size: 12px;
 }
 
+/* Initial Prompt label — subtle indicator next to "You" */
+.session-initial-prompt-label {
+  font-size: 10px;
+  color: var(--fg-muted);
+  background: var(--bg-tertiary);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
 .session-msg-content {
   word-break: break-word;
 }
@@ -9057,6 +9067,15 @@ img[data-lightbox-src],
   background: var(--bg-secondary);
   padding-left: 9px;
   font-weight: 500;
+}
+
+/* Clickable session pill — one-click to open session panel */
+.task-session-pill-clickable {
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+.task-session-pill-clickable:hover {
+  filter: brightness(0.85);
 }
 
 .task-session-dot {
