@@ -125,6 +125,16 @@ Before a feature is done, verify:
 - [ ] **Playwright screenshot** — if the feature has UI, capture it in a real browser
 - [ ] **All tests pass** — `npm test && npm run test:e2e`
 
+## Production Data Protection (4-Layer Defense)
+
+Tests MUST NOT touch `~/.walnut/`. Four layers enforce this:
+- **L1**: `tests/setup/global-setup.ts` (vitest globalSetup) sets `WALNUT_HOME=/tmp/walnut-test-global/` before any fork.
+- **L2**: `assertNotProductionPath()` in `src/constants.ts` throws if a test process resolves inside `~/.walnut/`.
+- **L3**: All scripts that reference `~/.walnut/` either import from `constants.ts` or annotate with `// safe: production-path`.
+- **L4**: `scripts/lint-production-paths.sh` (wired as `npm run lint:paths`) greps for hardcoded production paths; CI fails on violations.
+
+To add a new file that legitimately references `~/.walnut/`: add `// safe: production-path` on the same line, or add the file to `ALLOWED_FILES` in the lint script.
+
 ## Session Context Enrichment
 
 When a session starts via `start_session`, `buildSessionContext(taskId)` in `src/agent/session-context.ts` assembles a bounded context block (~3000 tokens) from task metadata, subtasks, notes, prior session summaries, and project memory. This is passed to `claude -p` via `--append-system-prompt`. The triage agent also receives recent conversation history for better post-session processing. See `src/providers/claude-code-session.ts` (handleStart) and `src/web/server.ts` (triage handler).
