@@ -124,6 +124,9 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [executeOpen, setExecuteOpen] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  // Track latest sessionId so async callbacks can detect navigation
+  const sessionIdRef = useRef(session?.claudeSessionId);
+  sessionIdRef.current = session?.claudeSessionId;
 
   // Fetch messages for the UserMessagesSummary
   const sessionId_ = session?.claudeSessionId || '';
@@ -193,13 +196,14 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
 
   /** "Clear Context & Execute" — creates a fresh session, old one is absorbed. */
   const handleClearContextExecute = async () => {
+    const clickedSessionId = sessionIdRef.current; // snapshot at click time
     setExecuting(true);
     setExecuteError(null);
     try {
       const result = await executePlanSession(sessionId);
       setExecuteStarted(true);
-      // The new session has a different ID — tell parent to switch
-      if (result.sessionId) {
+      // Only navigate if user is still viewing the same session
+      if (result.sessionId && sessionIdRef.current === clickedSessionId) {
         onSessionReplaced?.(result.sessionId);
       }
     } catch (err) {

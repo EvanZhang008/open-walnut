@@ -87,6 +87,9 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
   const { optimisticMsgs, sendError, send, interruptSend, handleMessagesDelivered, handleBatchCompleted, handleEditQueued, handleDeleteQueued, addExternalQueued, clearCommitted } = useSessionSend(sessionId);
   const { isStreaming } = useSessionStream(sessionId);
   const bodyRef = useRef<HTMLDivElement>(null);
+  // Track latest sessionId so async callbacks can detect navigation
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
 
   // Slash command autocomplete for session input
   const { items: slashCommands, search: searchSlashCommands } = useSlashCommands(session?.cwd);
@@ -215,12 +218,14 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
   }, [sessionId]);
 
   const handleClearContextExecute = useCallback(async () => {
+    const clickedSessionId = sessionIdRef.current; // snapshot at click time
     setExecuting(true);
     setExecuteError(null);
     try {
       const result = await executePlanSession(sessionId);
       setExecuteStarted(true);
-      if (result.sessionId) {
+      // Only navigate if user is still viewing the same session
+      if (result.sessionId && sessionIdRef.current === clickedSessionId) {
         onSessionReplaced?.(result.sessionId);
       }
     } catch (err) {
