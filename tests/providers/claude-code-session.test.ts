@@ -959,8 +959,8 @@ describe('SessionRunner context enrichment', () => {
 // ══════════════════════════════════════════════════════════════════
 
 describe('ClaudeCodeSession.attachToExisting', () => {
-  it('creates a session from a SessionRecord without spawning', () => {
-    const session = ClaudeCodeSession.attachToExisting({
+  it('creates a session from a SessionRecord without spawning', async () => {
+    const session = await ClaudeCodeSession.attachToExisting({
       claudeSessionId: 'test-session-id',
       taskId: 'task-123',
       project: 'proj',
@@ -984,8 +984,8 @@ describe('ClaudeCodeSession.attachToExisting', () => {
     session.detach();
   });
 
-  it('restores host field from SessionRecord', () => {
-    const session = ClaudeCodeSession.attachToExisting({
+  it('restores host field from SessionRecord', async () => {
+    const session = await ClaudeCodeSession.attachToExisting({
       claudeSessionId: 'ssh-session-id',
       taskId: 'task-ssh',
       project: 'proj',
@@ -1006,8 +1006,8 @@ describe('ClaudeCodeSession.attachToExisting', () => {
     session.detach();
   });
 
-  it('host is null when not in SessionRecord', () => {
-    const session = ClaudeCodeSession.attachToExisting({
+  it('host is null when not in SessionRecord', async () => {
+    const session = await ClaudeCodeSession.attachToExisting({
       claudeSessionId: 'local-session-id',
       taskId: 'task-local',
       project: 'proj',

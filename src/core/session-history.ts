@@ -85,8 +85,7 @@ interface RawJsonlLine {
 
 /**
  * Core parsing logic: parse raw JSONL content string into SessionHistoryMessage[].
- * Deduplicates by message.id, handles queue-operations, groups child messages
- * by parent_tool_use_id (from stream capture).
+ * Deduplicates by message.id, handles queue-operations.
  */
 function parseSessionMessages(content: string): SessionHistoryMessage[] {
   const lines = content.split('\n').filter(Boolean);
@@ -108,8 +107,6 @@ function parseSessionMessages(content: string): SessionHistoryMessage[] {
     timestamp: string;
     model?: string;
     usage?: { input_tokens: number; output_tokens: number };
-    /** parent_tool_use_id from stream capture — non-null for subagent child events */
-    parentToolUseId?: string;
     contentBlocks: Array<{
       type: string;
       text?: string;
@@ -166,7 +163,6 @@ function parseSessionMessages(content: string): SessionHistoryMessage[] {
     if (!raw.message?.role || !['user', 'assistant'].includes(raw.message.role)) continue;
 
     const msgId = raw.message.id ?? raw.uuid ?? `${raw.timestamp}-${rawMessages.indexOf(raw)}`;
-    const parentToolUseId = raw.parent_tool_use_id ?? undefined;
     const existing = messageMap.get(msgId);
 
     if (existing) {
@@ -180,17 +176,12 @@ function parseSessionMessages(content: string): SessionHistoryMessage[] {
       if (raw.message.usage) {
         existing.usage = raw.message.usage;
       }
-      // Capture parentToolUseId if not already set
-      if (parentToolUseId && !existing.parentToolUseId) {
-        existing.parentToolUseId = parentToolUseId;
-      }
     } else {
       messageMap.set(msgId, {
         role: raw.message.role,
         timestamp: raw.timestamp ?? new Date().toISOString(),
         model: raw.message.model,
         usage: raw.message.usage,
-        parentToolUseId,
         contentBlocks: raw.message.content
           ? (typeof raw.message.content === 'string'
             ? [{ type: 'text' as const, text: raw.message.content }]
@@ -301,46 +292,10 @@ function parseSessionMessages(content: string): SessionHistoryMessage[] {
       ...(thinking ? { thinking } : {}),
       ...(msg.model ? { model: msg.model } : {}),
       ...(msg.usage ? { usage: msg.usage } : {}),
-      // Internal: track parentToolUseId for post-processing (stripped before return)
-      ...(msg.parentToolUseId ? { _parentToolUseId: msg.parentToolUseId } as Record<string, unknown> : {}),
     });
   }
 
-  // ── Post-processing: group child messages by parentToolUseId ──
-  // Stream capture JSONL includes parent_tool_use_id on every child event.
-  // Separate child messages and attach them to their parent Task tool_use.
-  const childMessagesByParent = new Map<string, SessionHistoryMessage[]>();
-  const parentMessages: SessionHistoryMessage[] = [];
-
-  for (const msg of result) {
-    const ptid = (msg as unknown as Record<string, unknown>)._parentToolUseId as string | undefined;
-    // Clean up internal field
-    delete (msg as unknown as Record<string, unknown>)._parentToolUseId;
-    if (ptid) {
-      const arr = childMessagesByParent.get(ptid);
-      if (arr) arr.push(msg);
-      else childMessagesByParent.set(ptid, [msg]);
-    } else {
-      parentMessages.push(msg);
-    }
-  }
-
-  // Attach child messages to their parent Task tool_use blocks
-  if (childMessagesByParent.size > 0) {
-    for (const msg of parentMessages) {
-      if (!msg.tools) continue;
-      for (const tool of msg.tools) {
-        if (tool.name === 'Task' && tool.toolUseId && childMessagesByParent.has(tool.toolUseId)) {
-          // Only set childMessages if not already populated (subagent JSONL takes precedence)
-          if (!tool.childMessages) {
-            tool.childMessages = childMessagesByParent.get(tool.toolUseId);
-          }
-        }
-      }
-    }
-  }
-
-  return childMessagesByParent.size > 0 ? parentMessages : result;
+  return result;
 }
 
 /**
