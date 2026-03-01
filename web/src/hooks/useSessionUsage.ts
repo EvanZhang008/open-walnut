@@ -35,12 +35,24 @@ export function useSessionUsage(sessionId: string | null): SessionUsage {
   return usage;
 }
 
-/** Normalize a Claude model ID to a short display name. */
+/**
+ * Normalize a Claude model ID to a readable display name with version.
+ * "claude-opus-4-6" → "Opus 4.6", "claude-sonnet-4-5-20251001" → "Sonnet 4.5"
+ */
 export function formatModelName(model: string | undefined): string {
   if (!model) return '';
   const lower = model.toLowerCase();
-  if (lower.includes('opus')) return 'Opus';
-  if (lower.includes('sonnet')) return 'Sonnet';
-  if (lower.includes('haiku')) return 'Haiku';
-  return model;
+  // Extract family name
+  let family = '';
+  if (lower.includes('opus')) family = 'Opus';
+  else if (lower.includes('sonnet')) family = 'Sonnet';
+  else if (lower.includes('haiku')) family = 'Haiku';
+  else return model;
+  // Extract version: match "family-X-Y" pattern → "X.Y"
+  const versionMatch = lower.match(/(?:opus|sonnet|haiku)-(\d+)-(\d+)/);
+  if (versionMatch) return `${family} ${versionMatch[1]}.${versionMatch[2]}`;
+  // Fallback: match "family-X" → "X"
+  const majorMatch = lower.match(/(?:opus|sonnet|haiku)-(\d+)/);
+  if (majorMatch) return `${family} ${majorMatch[1]}`;
+  return family;
 }

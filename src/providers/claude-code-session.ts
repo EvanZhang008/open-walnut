@@ -1307,7 +1307,7 @@ export class ClaudeCodeSession {
               + (usage.cache_read_input_tokens ?? 0)
             // All current Claude models have 200K context window
             const contextWindowSize = 200_000
-            const contextPercent = Math.round(totalInput / contextWindowSize * 100)
+            const contextPercent = Math.min(100, Math.round(totalInput / contextWindowSize * 100))
             // Update model if reported on this message
             const msgModel = msg.message.model
             if (typeof msgModel === 'string' && msgModel) {

@@ -246,6 +246,14 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
                   {session.mode === 'plan' ? '\uD83D\uDCCB Plan' : '\u26A1 Bypass'}
                 </span>
               )}
+              {session.archived && (
+                <span
+                  className="session-detail-badge"
+                  style={{ color: '#f59e0b', background: '#f59e0b20', fontWeight: 600, fontSize: '11px' }}
+                >
+                  Archived
+                </span>
+              )}
               {isEmbedded && (
                 <span className="session-detail-badge session-detail-badge-embedded">
                   Embedded
@@ -301,6 +309,26 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
               <span title={new Date(session.lastActiveAt).toLocaleString()}>{timeAgo(session.lastActiveAt)}</span>
             )}
             {sessionId && <SessionCopyButtons sessionId={sessionId} cwd={session.cwd} />}
+            {ps === 'stopped' && !session.archived && (
+              <button
+                className="btn btn-sm"
+                style={{ fontSize: '0.7rem', padding: '1px 6px', opacity: 0.7 }}
+                onClick={() => updateSession(sessionId, { archived: true })}
+                title="Archive this session"
+              >
+                Archive
+              </button>
+            )}
+            {session.archived && (
+              <button
+                className="btn btn-sm"
+                style={{ fontSize: '0.7rem', padding: '1px 6px' }}
+                onClick={() => updateSession(sessionId, { archived: false })}
+                title="Unarchive this session"
+              >
+                Unarchive
+              </button>
+            )}
           </div>
 
           {/* Collapsible details */}

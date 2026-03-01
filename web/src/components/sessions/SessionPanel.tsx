@@ -17,6 +17,7 @@ import { timeAgo } from '@/utils/time';
 import { WorkStatusPicker } from './WorkStatusPicker';
 import { SessionCopyButtons } from './SessionCopyButtons';
 import { ModelPicker } from './ModelPicker';
+import { useSessionUsage, formatModelName } from '@/hooks/useSessionUsage';
 import { wsClient } from '@/api/ws';
 import type { SessionRecord } from '@/types/session';
 
@@ -118,6 +119,14 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
 
   // Fetch messages for the UserMessagesSummary
   const { messages: historyMessages, loading: historyLoading } = useSessionHistory(sessionId);
+
+  // Real-time model + context window usage
+  const liveUsage = useSessionUsage(sessionId);
+  const historyModel = !historyLoading && historyMessages.length > 0
+    ? [...historyMessages].reverse().find(m => m.role === 'assistant' && m.model)?.model
+    : undefined;
+  const displayModel = formatModelName(liveUsage.model || session?.model || historyModel);
+  const contextPercent = liveUsage.contextPercent;
 
   // Scroll-to-message handler for UserMessagesSummary
   const handleMessageClick = useCallback((messageIndex: number) => {
@@ -318,7 +327,7 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
             >
               {sessionId} &#x2197;
             </span>
-            <SessionCopyButtons sessionId={sessionId} />
+            <SessionCopyButtons sessionId={sessionId} cwd={session?.cwd} />
             {session?.host && (
               <span
                 className="session-panel-host"
@@ -336,6 +345,24 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
               </span>
             )}
             {session?.project && <span className="session-panel-project" title={session.cwd || session.project}>{session.project}</span>}
+            {displayModel && (
+              <span className="session-detail-model-pill" title={liveUsage.model || session?.model || historyModel || ''}>
+                {displayModel}
+                {contextPercent != null && (
+                  <span
+                    className="session-detail-context-pct"
+                    style={{
+                      color: contextPercent > 80 ? 'var(--danger, #ff3b30)'
+                        : contextPercent > 50 ? 'var(--warning, #ff9500)'
+                        : 'var(--fg-muted)',
+                    }}
+                    title={`Context: ${contextPercent}%${liveUsage.inputTokens ? ` (${Math.round(liveUsage.inputTokens / 1000)}K)` : ''}`}
+                  >
+                    {' '}{contextPercent}%
+                  </span>
+                )}
+              </span>
+            )}
             {session?.lastActiveAt && <span className="session-panel-time">{timeAgo(session.lastActiveAt)}</span>}
           </div>
         </div>
