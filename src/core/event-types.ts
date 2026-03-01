@@ -141,6 +141,15 @@ export interface SessionSystemEventPayload {
   detail?: string;
 }
 
+export interface SessionUsageUpdateEvent {
+  sessionId: string;
+  model?: string;
+  /** Context window usage percentage (0–100). */
+  contextPercent?: number;
+  /** Total input tokens for the latest API call (incl. cache). */
+  inputTokens?: number;
+}
+
 // ── Subagent events ──
 
 export interface SubagentStartEvent {
@@ -256,6 +265,7 @@ export interface EventPayloadMap {
   'session:batch-completed': SessionBatchCompletedEvent;
   'session:message-queued': SessionMessageQueuedEvent;
   'session:system-event': SessionSystemEventPayload;
+  'session:usage-update': SessionUsageUpdateEvent;
 
   'subagent:start': SubagentStartEvent;
   'subagent:send': SubagentSendEvent;

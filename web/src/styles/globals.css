@@ -1748,6 +1748,16 @@ input:focus, textarea:focus, select:focus {
   opacity: 0.5;
 }
 
+.session-detail-model-pill {
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.session-detail-context-pct {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
 .session-detail-meta-bar .session-detail-copyable {
   margin: 0;
 }

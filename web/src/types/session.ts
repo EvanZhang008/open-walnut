@@ -27,6 +27,8 @@ export interface SessionRecord {
   fromPlanSessionId?: string;
   provider?: SessionProvider;
   human_note?: string;
+  /** Claude model used by this session (e.g. "claude-opus-4-6"). */
+  model?: string;
 }
 
 export interface SessionTreeTask {

@@ -8,6 +8,7 @@ import { SessionCopyButtons } from './SessionCopyButtons';
 import { updateSession, executePlanSession, executePlanContinue } from '@/api/sessions';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
 import { useSessionPlan } from '@/hooks/useSessionPlan';
+import { useSessionUsage, formatModelName } from '@/hooks/useSessionUsage';
 import { PlanContentContext } from '@/contexts/PlanContentContext';
 import type { SessionRecord } from '@/types/session';
 import { timeAgo } from '@/utils/time';
@@ -138,6 +139,12 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
   const shouldFetchPlan = hasPlan || isFromPlan;
   const { plan, loading: planLoading, refresh: planRefresh } = useSessionPlan(sessionId_ || undefined, shouldFetchPlan);
 
+  // Real-time model + context window usage
+  const liveUsage = useSessionUsage(sessionId_ || null);
+  // For display: prefer live data, fall back to SessionRecord.model for stopped sessions
+  const displayModel = formatModelName(liveUsage.model || session?.model);
+  const contextPercent = liveUsage.contextPercent;
+
   // Scroll-to-message: find the message element in SessionChatHistory by data-msg-index
   const handleMessageClick = useCallback((messageIndex: number) => {
     const container = panelRef.current?.querySelector('.session-history');
@@ -265,13 +272,31 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
                 {taskLabel}
               </a>
             )}
+            {displayModel && (
+              <span className="session-detail-model-pill">
+                {displayModel}
+                {contextPercent != null && (
+                  <span
+                    className="session-detail-context-pct"
+                    style={{
+                      color: contextPercent > 80 ? 'var(--danger, #ff3b30)'
+                        : contextPercent > 50 ? 'var(--warning, #ff9500)'
+                        : 'var(--fg-muted)',
+                    }}
+                    title={`Context window: ${contextPercent}%${liveUsage.inputTokens ? ` (${Math.round(liveUsage.inputTokens / 1000)}K tokens)` : ''}`}
+                  >
+                    {' '}{contextPercent}%
+                  </span>
+                )}
+              </span>
+            )}
             {session.messageCount != null && session.messageCount > 0 && (
               <span>{session.messageCount} msgs</span>
             )}
             {session.lastActiveAt && (
               <span title={new Date(session.lastActiveAt).toLocaleString()}>{timeAgo(session.lastActiveAt)}</span>
             )}
-            {sessionId && <SessionCopyButtons sessionId={sessionId} />}
+            {sessionId && <SessionCopyButtons sessionId={sessionId} cwd={session.cwd} />}
           </div>
 
           {/* Collapsible details */}

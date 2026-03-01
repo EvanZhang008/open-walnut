@@ -50,6 +50,7 @@ export const EventNames = {
   SESSION_BATCH_COMPLETED: 'session:batch-completed',
   SESSION_MESSAGE_QUEUED: 'session:message-queued',
   SESSION_SYSTEM_EVENT: 'session:system-event',
+  SESSION_USAGE_UPDATE: 'session:usage-update',
 
   // Chat history events
   CHAT_HISTORY_UPDATED: 'chat:history-updated',

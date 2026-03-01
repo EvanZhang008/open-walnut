@@ -190,6 +190,8 @@ export class ClaudeCodeSession {
   private _workStatus: WorkStatus = 'in_progress'
   private _mode: SessionMode = 'default'
   private _activity: string | undefined
+  /** Model ID from JSONL system init + assistant messages. */
+  private _model: string | undefined
   /** The session ID we expect after a --resume. If Claude returns a different ID,
    *  we rename the existing record instead of creating a phantom new one. */
   private _expectedSessionId: string | null = null
@@ -1089,6 +1091,14 @@ export class ClaudeCodeSession {
 
           // Re-emit status now that claudeSessionId is set (first emit at spawn had null ID)
           this.emitStatusChanged(this._workStatus)
+
+          // Capture model from init event
+          if (typeof sys.model === 'string' && sys.model) {
+            this._model = sys.model
+            import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+              updateSessionRecord(newId, { model: sys.model as string }).catch(() => {}),
+            )
+          }
         }
 
         // Parse permissionMode from ANY system event (init or status).
@@ -1278,6 +1288,31 @@ export class ClaudeCodeSession {
               input: block.input,
               ...(exitPlanContent ? { planContent: exitPlanContent } : {}),
               ...(parentToolUseId ? { parentToolUseId } : {}),
+            }, ['main-ai'], { source: 'session-runner' })
+          }
+        }
+
+        // ── Emit context window usage from assistant message ──
+        if (this.claudeSessionId && msg.message) {
+          const usage = msg.message.usage as Record<string, number> | undefined
+          if (usage) {
+            // total input = non-cached + cache creation + cache read
+            const totalInput = (usage.input_tokens ?? 0)
+              + (usage.cache_creation_input_tokens ?? 0)
+              + (usage.cache_read_input_tokens ?? 0)
+            // All current Claude models have 200K context window
+            const contextWindowSize = 200_000
+            const contextPercent = Math.round(totalInput / contextWindowSize * 100)
+            // Update model if reported on this message
+            const msgModel = msg.message.model
+            if (typeof msgModel === 'string' && msgModel) {
+              this._model = msgModel
+            }
+            bus.emit(EventNames.SESSION_USAGE_UPDATE, {
+              sessionId: this.claudeSessionId,
+              model: this._model,
+              contextPercent,
+              inputTokens: totalInput,
             }, ['main-ai'], { source: 'session-runner' })
           }
         }

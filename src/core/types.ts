@@ -390,6 +390,8 @@ export interface SessionRecord {
   human_note?: string;
   pendingModel?: string;
   pendingMode?: string;
+  /** Claude model used by this session (e.g. "claude-opus-4-6"). */
+  model?: string;
   /** This session was absorbed into another; hidden from UI. */
   absorbed?: boolean;
   /** Plan text stored on execution session (from absorbed plan session). */

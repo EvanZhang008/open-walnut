@@ -639,6 +639,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         sessionStreamBuffer.appendSystem(sessionId, variant, message, detail)
         sendStreamEvent(sessionId, event.name, event.data)
       }
+    } else if (event.name === 'session:usage-update') {
+      const { sessionId } = eventData<'session:usage-update'>(event)
+      if (sessionId) {
+        sendStreamEvent(sessionId, event.name, event.data)
+      }
     }
 
     // ── Non-streaming events: broadcast to all clients (low-frequency, needed everywhere) ──
