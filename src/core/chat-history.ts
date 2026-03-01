@@ -593,11 +593,11 @@ export async function getTriageEntries(
     (e) => e.source === 'triage' && !e.compacted,
   );
 
-  const total = triage.length;
-
   if (taskId) {
     triage = triage.filter((e) => e.taskId === taskId);
   }
+
+  const total = triage.length;
 
   // Newest first, apply limit
   triage.reverse();
