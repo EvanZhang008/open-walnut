@@ -54,8 +54,13 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
     : 'var(--fg-muted)';
 
   const handleClick = useCallback(() => {
-    onActivate(task.id, sessionId ?? undefined);
-  }, [task.id, sessionId, onActivate]);
+    // Toggle: if already active, deactivate (hide panel); otherwise activate
+    if (isActive) {
+      emitDockActivateChat();
+    } else {
+      onActivate(task.id, sessionId ?? undefined);
+    }
+  }, [task.id, sessionId, onActivate, isActive]);
 
   const handleUnpin = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
