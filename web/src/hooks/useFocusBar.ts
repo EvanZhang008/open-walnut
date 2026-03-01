@@ -26,6 +26,15 @@ export function useFocusBar(tasks: Task[]): UseFocusBarReturn {
   // Re-sync when config changes (from other tabs/agents)
   useEvent('config:changed', () => { fetchPinned(); });
 
+  // Auto-unpin completed tasks
+  useEvent('task:completed', (data: unknown) => {
+    const { id } = data as { id: string };
+    if (pinnedIds.includes(id)) {
+      focusApi.unpinTask(id).catch(() => {});
+      setPinnedIds((prev) => prev.filter((pid) => pid !== id));
+    }
+  });
+
   const pin = useCallback(async (taskId: string) => {
     const data = await focusApi.pinTask(taskId);
     if (data?.pinned_tasks) setPinnedIds(data.pinned_tasks);

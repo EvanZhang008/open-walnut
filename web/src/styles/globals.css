@@ -9903,11 +9903,36 @@ img[data-lightbox-src],
 
 .dock-task-header {
   display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px 4px;
+  flex-shrink: 0;
+}
+
+.dock-task-header-top {
+  display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 8px 4px;
-  min-height: 26px;
-  flex-shrink: 0;
+}
+
+.dock-task-status-labels {
+  display: flex;
+  gap: 6px;
+  padding-left: 13px;
+}
+
+.dock-task-phase-label {
+  font-size: 9px;
+  font-weight: 500;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.dock-task-session-label {
+  font-size: 9px;
+  font-weight: 500;
+  color: var(--accent);
 }
 
 .dock-task-status-dot {

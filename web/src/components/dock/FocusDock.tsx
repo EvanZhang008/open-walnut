@@ -19,6 +19,19 @@ function emitDockActivateChat() {
   window.dispatchEvent(new CustomEvent('dock:activate-chat'));
 }
 
+// ── Human-readable status labels ──
+
+const PHASE_LABELS: Record<string, string> = {
+  TODO: 'To Do', IN_PROGRESS: 'In Progress', BLOCKED: 'Blocked',
+  AGENT_COMPLETE: 'Agent Complete', AWAIT_HUMAN: 'Await Human',
+  COMPLETE: 'Complete',
+};
+
+const WORK_LABELS: Record<string, string> = {
+  in_progress: 'Running', agent_complete: 'Agent Done',
+  await_human_action: 'Await Human', completed: 'Completed', error: 'Error',
+};
+
 // ── Dock height constants ──
 
 const DOCK_HEIGHT_KEY = 'walnut-dock-height';
@@ -50,8 +63,10 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
   const sessionId = task.session_id ?? null;
   const isStreaming = task.session_status?.process_status === 'running';
 
+  const ps = task.session_status?.process_status ?? 'stopped';
+  const ws = task.session_status?.work_status ?? null;
   const statusColor = task.session_status
-    ? compositeColor(task.session_status.process_status ?? 'stopped', task.session_status.work_status ?? 'completed')
+    ? compositeColor(ps, ws ?? 'completed')
     : 'var(--fg-muted)';
 
   const handleClick = useCallback(() => {
@@ -83,17 +98,23 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
       onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); handleClick(); } }}
     >
       <div className="dock-task-header">
-        <span className="dock-task-status-dot" style={{ background: statusColor }} />
-        {isStreaming && <span className="dock-task-streaming-dot" />}
-        <span className="dock-task-title" title={task.title}>{task.title}</span>
-        <button
-          className="dock-task-unpin"
-          onClick={handleUnpin}
-          title="Unpin from Focus Dock"
-          aria-label="Unpin task"
-        >
-          &times;
-        </button>
+        <div className="dock-task-header-top">
+          <span className="dock-task-status-dot" style={{ background: statusColor }} />
+          {isStreaming && <span className="dock-task-streaming-dot" />}
+          <span className="dock-task-title" title={task.title}>{task.title}</span>
+          <button
+            className="dock-task-unpin"
+            onClick={handleUnpin}
+            title="Unpin from Focus Dock"
+            aria-label="Unpin task"
+          >
+            &times;
+          </button>
+        </div>
+        <div className="dock-task-status-labels">
+          <span className="dock-task-phase-label">{PHASE_LABELS[task.phase ?? ''] ?? task.phase ?? 'To Do'}</span>
+          {ws && <span className="dock-task-session-label">{WORK_LABELS[ws] ?? ws}</span>}
+        </div>
       </div>
       <div className="dock-task-body">
         {sessionId ? (
