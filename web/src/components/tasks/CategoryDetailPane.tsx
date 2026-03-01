@@ -1,5 +1,6 @@
 import { useMemo, type CSSProperties } from 'react';
 import type { Task } from '@walnut/core';
+import { useIntegrations, getIntegrationMeta } from '../../hooks/useIntegrations';
 
 interface CategoryDetailPaneProps {
   category: string;
@@ -10,6 +11,8 @@ interface CategoryDetailPaneProps {
 }
 
 export function CategoryDetailPane({ category, tasks, onClose, onShowProject, style }: CategoryDetailPaneProps) {
+  const integrations = useIntegrations();
+
   // Compute project list with counts from props
   const { projects, totalCounts, source } = useMemo(() => {
     const projMap = new Map<string, { todo: number; active: number; done: number }>();
@@ -40,7 +43,14 @@ export function CategoryDetailPane({ category, tasks, onClose, onShowProject, st
     <div className="todo-detail-pane category-detail-pane" style={style}>
       <div className="todo-detail-header">
         <span className="todo-detail-category">{category}</span>
-        <span className={`detail-source-badge source-${source}`}>{source}</span>
+        {(() => {
+          const meta = getIntegrationMeta(integrations, source);
+          return meta ? (
+            <span className="detail-source-badge" style={{ background: `color-mix(in srgb, ${meta.badgeColor} 15%, transparent)`, color: meta.badgeColor }}>{meta.name}</span>
+          ) : (
+            <span className={`detail-source-badge source-${source}`}>{source}</span>
+          );
+        })()}
         <button className="todo-detail-close" onClick={onClose} title="Close">&times;</button>
       </div>
 

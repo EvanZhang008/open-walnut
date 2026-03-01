@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, type CSSProperties } from 'react';
 import type { Task } from '@walnut/core';
+import { useIntegrations, getIntegrationMeta } from '../../hooks/useIntegrations';
 
 interface ProjectMetadata {
   default_cwd?: string;
@@ -16,6 +17,7 @@ interface ProjectDetailPaneProps {
 }
 
 export function ProjectDetailPane({ category, project, tasks, onClose, style }: ProjectDetailPaneProps) {
+  const integrations = useIntegrations();
   const [metadata, setMetadata] = useState<ProjectMetadata>({});
   const [memorySummary, setMemorySummary] = useState<string | null>(null);
   const [editingField, setEditingField] = useState<string | null>(null);
@@ -87,7 +89,14 @@ export function ProjectDetailPane({ category, project, tasks, onClose, style }: 
     <div className="todo-detail-pane project-detail-pane" style={style}>
       <div className="todo-detail-header">
         <span className="todo-detail-category">{category} / {project}</span>
-        <span className={`detail-source-badge source-${source}`}>{source}</span>
+        {(() => {
+          const meta = getIntegrationMeta(integrations, source);
+          return meta ? (
+            <span className="detail-source-badge" style={{ background: `color-mix(in srgb, ${meta.badgeColor} 15%, transparent)`, color: meta.badgeColor }}>{meta.name}</span>
+          ) : (
+            <span className={`detail-source-badge source-${source}`}>{source}</span>
+          );
+        })()}
         <button className="todo-detail-close" onClick={onClose} title="Close">&times;</button>
       </div>
 

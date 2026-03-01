@@ -698,11 +698,11 @@ describe('autoPushIfConfigured sync_error lifecycle', () => {
     await updateTaskRaw(task.id, {
       source: 'test-plugin',
       ext: { 'test-plugin': { id: 'remote-123' } },
-      sync_error: 'Taskei auth expired (HTTP 302 redirect)',
+      sync_error: 'Sync auth expired (HTTP 302 redirect)',
     } as any);
 
     const before = (await listTasks()).find(t => t.id === task.id)!;
-    expect(before.sync_error).toBe('Taskei auth expired (HTTP 302 redirect)');
+    expect(before.sync_error).toBe('Sync auth expired (HTTP 302 redirect)');
 
     const result = await autoPushIfConfigured(before);
     expect(result.success).toBe(true);

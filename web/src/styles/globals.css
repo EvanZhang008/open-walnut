@@ -5949,14 +5949,6 @@ img[data-lightbox-src],
   background: color-mix(in srgb, var(--fg-muted) 12%, transparent);
   color: var(--fg-muted);
 }
-.detail-source-badge.source-ms-todo {
-  background: color-mix(in srgb, #0078d4 15%, transparent);
-  color: #0078d4;
-}
-.detail-source-badge.source-taskei {
-  background: color-mix(in srgb, #ff9900 15%, transparent);
-  color: #ff9900;
-}
 
 .detail-section {
   margin-bottom: 12px;
