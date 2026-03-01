@@ -16,15 +16,19 @@ import type { SessionRecord, Task, WorkStatus } from '../../core/types.js'
 /** Recompute process_status live via PID check (for GET responses). */
 function enrichWithLiveStatus(sessions: SessionRecord[]): SessionRecord[] {
   for (const s of sessions) {
-    if (s.work_status === 'completed' || s.work_status === 'error') {
-      s.process_status = 'stopped'
-      continue
-    }
     // Embedded/SDK sessions have no OS process — trust the stored status
     if (s.provider === 'embedded' || s.provider === 'sdk') continue
+    // Always check PID when available — even for terminal work_status.
+    // A resumed session may have a live process while the DB hasn't caught up yet.
+    // Previously, terminal states were short-circuited to 'stopped' without PID check,
+    // which caused the "Stopped + Completed" bug when a session was resumed from
+    // a terminal state.
     if (s.pid != null) {
       const processName = s.host ? 'ssh' : 'claude'
       s.process_status = isProcessAlive(s.pid, processName) ? 'running' : 'stopped'
+    } else if (s.work_status === 'completed' || s.work_status === 'error') {
+      // No PID to check and work is done — safe to force stopped
+      s.process_status = 'stopped'
     }
   }
   return sessions

@@ -381,14 +381,14 @@ export async function createSessionRecord(
       if (cwd) existing.cwd = cwd;
       if (extra?.pid != null) {
         existing.pid = extra.pid;
-        // Reset status when a new process starts (new PID = new process)
+        // Reset status when a new process starts (new PID = new process).
+        // Always reset work_status — a new PID means the session was actively resumed,
+        // even from terminal states (completed/error).
         if (existing.process_status !== 'running') {
           existing.process_status = 'running';
           existing.last_status_change = now;
         }
-        if (!TERMINAL_WORK_STATUSES.has(existing.work_status)) {
-          existing.work_status = 'in_progress';
-        }
+        existing.work_status = 'in_progress';
       }
       if (extra?.outputFile) existing.outputFile = extra.outputFile;
       if (extra?.mode) existing.mode = extra.mode;

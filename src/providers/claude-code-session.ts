@@ -437,14 +437,18 @@ export class ClaudeCodeSession {
     this.pid = proc.pid ?? null
     proc.unref()
 
-    // On resume: immediately persist outputFile + PID so the record is correct
+    // On resume: immediately persist outputFile + PID + status so the record is correct
     // even if the session dies before the init event arrives (e.g. resume failure).
+    // work_status must also be reset — otherwise sessions resumed from terminal states
+    // (completed/error) keep the old work_status, and enrichWithLiveStatus() forces
+    // process_status='stopped' without checking PID.
     if (isResume && resumeSessionId) {
       import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
         updateSessionRecord(resumeSessionId, {
           outputFile: this._outputFile ?? undefined,
           pid: this.pid ?? undefined,
           process_status: 'running',
+          work_status: 'in_progress',
         }).catch(() => {}),
       ).catch(() => {})
     }
@@ -2052,11 +2056,11 @@ export class SessionRunner {
 
     await this.sdkClient.sendMessage({ sessionId, message })
 
-    // Update session record (skip terminal states — completed/error should not be resurrected)
+    // Update session record — always reset on send (user is actively resuming)
     try {
-      const { getSessionByClaudeId, updateSessionRecord, TERMINAL_WORK_STATUSES } = await import('../core/session-tracker.js')
+      const { getSessionByClaudeId, updateSessionRecord } = await import('../core/session-tracker.js')
       const rec = await getSessionByClaudeId(sessionId)
-      if (rec && !TERMINAL_WORK_STATUSES.has(rec.work_status) && rec.work_status !== 'in_progress') {
+      if (rec && rec.work_status !== 'in_progress') {
         await updateSessionRecord(sessionId, {
           work_status: 'in_progress',
           activity: 'Processing follow-up...',
@@ -2106,7 +2110,7 @@ export class SessionRunner {
     // alive, processNext() writes via stdin pipe without spawning a new process, so
     // createSessionRecord() is never called and work_status would stay stale.
     try {
-      const { getSessionByClaudeId, updateSessionRecord, TERMINAL_WORK_STATUSES } = await import('../core/session-tracker.js')
+      const { getSessionByClaudeId, updateSessionRecord } = await import('../core/session-tracker.js')
       const record = await getSessionByClaudeId(sessionId)
       if (record) {
         // Phase rollback
@@ -2119,8 +2123,12 @@ export class SessionRunner {
             log.session.info('handleSend: rolled back phase to IN_PROGRESS', { taskId: record.taskId, oldPhase: task.phase })
           }
         }
-        // Reset work_status — align with handleSendSdk()
-        if (!TERMINAL_WORK_STATUSES.has(record.work_status) && record.work_status !== 'in_progress') {
+        // Reset work_status unconditionally — a user sending a message means the
+        // session is being actively resumed, even from terminal states (completed/error).
+        // Skipping terminal states caused the "Stopped + Completed" bug where a resumed
+        // session's DB record kept the old terminal status, and enrichWithLiveStatus()
+        // would force process_status='stopped' for completed sessions without checking PID.
+        if (record.work_status !== 'in_progress') {
           await updateSessionRecord(sessionId, {
             work_status: 'in_progress',
             activity: 'Processing follow-up...',
