@@ -506,6 +506,7 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount
             onClick={onOpenSession ? () => {
               const sid = task.session_id || task.exec_session_id || task.plan_session_id;
               if (sid) onOpenSession(sid);
+              onClick(); // Also select the task
             } : undefined}
           />
           {!!(task as Record<string, unknown>).is_blocked && !isDone && (
