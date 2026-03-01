@@ -2856,6 +2856,11 @@ input:focus, textarea:focus, select:focus {
   user-select: none;
 }
 
+.chat-notification-header .chat-message-role {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 /* "UI Only" badge — small muted pill next to role label */
 .chat-ui-only-badge {
   display: inline-block;
@@ -2869,6 +2874,7 @@ input:focus, textarea:focus, select:focus {
   padding: 1px 5px;
   margin-left: 6px;
   vertical-align: middle;
+  white-space: nowrap;
 }
 
 /* Collapsed summary text — shown inline when notification is collapsed */
