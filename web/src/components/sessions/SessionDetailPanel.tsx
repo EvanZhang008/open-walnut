@@ -141,8 +141,12 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
 
   // Real-time model + context window usage
   const liveUsage = useSessionUsage(sessionId_ || null);
-  // For display: prefer live data, fall back to SessionRecord.model for stopped sessions
-  const displayModel = formatModelName(liveUsage.model || session?.model);
+  // Fallback: derive model from last assistant message in history
+  const historyModel = !historyLoading && historyMessages.length > 0
+    ? [...historyMessages].reverse().find(m => m.role === 'assistant' && m.model)?.model
+    : undefined;
+  // Priority: live WebSocket > SessionRecord > history-derived
+  const displayModel = formatModelName(liveUsage.model || session?.model || historyModel);
   const contextPercent = liveUsage.contextPercent;
 
   // Scroll-to-message: find the message element in SessionChatHistory by data-msg-index
