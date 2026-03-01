@@ -144,7 +144,7 @@ export interface SessionSystemEventPayload {
 export interface SessionUsageUpdateEvent {
   sessionId: string;
   model?: string;
-  /** Context window usage percentage (0–100). */
+  /** Context window usage percentage (0–100+, may exceed 100 near compaction). */
   contextPercent?: number;
   /** Total input tokens for the latest API call (incl. cache). */
   inputTokens?: number;

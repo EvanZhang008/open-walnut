@@ -105,7 +105,12 @@ interface StreamMessageEvent {
     model?: string
     content: ContentBlock[]
     stop_reason?: string | null
-    usage?: { input_tokens: number; output_tokens: number }
+    usage?: {
+      input_tokens: number
+      output_tokens: number
+      cache_creation_input_tokens?: number
+      cache_read_input_tokens?: number
+    }
   }
   session_id: string
 }
@@ -418,7 +423,7 @@ export class ClaudeCodeSession {
       proc = spawn(this.cliCommand, args, {
         detached: true,
         stdio: [pipeFd, outputFd, stderrFd],
-        cwd: cwd ?? process.cwd(),
+        cwd: cwd ?? (() => { throw new Error('BUG: cwd must be resolved before spawn — never fall back to process.cwd()') })(),
         env: { ...cleanEnv, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' },
       })
 
@@ -1294,10 +1299,10 @@ export class ClaudeCodeSession {
 
         // ── Emit context window usage from assistant message ──
         if (this.claudeSessionId && msg.message) {
-          const usage = msg.message.usage as Record<string, number> | undefined
+          const usage = msg.message.usage
           if (usage) {
             // total input = non-cached + cache creation + cache read
-            const totalInput = (usage.input_tokens ?? 0)
+            const totalInput = usage.input_tokens
               + (usage.cache_creation_input_tokens ?? 0)
               + (usage.cache_read_input_tokens ?? 0)
             // All current Claude models have 200K context window

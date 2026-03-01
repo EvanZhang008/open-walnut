@@ -273,7 +273,7 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
               </a>
             )}
             {displayModel && (
-              <span className="session-detail-model-pill">
+              <span className="session-detail-model-pill" title={liveUsage.model || session?.model || ''}>
                 {displayModel}
                 {contextPercent != null && (
                   <span

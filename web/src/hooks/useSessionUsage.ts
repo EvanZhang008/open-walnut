@@ -1,9 +1,9 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useEvent } from './useWebSocket';
 
 export interface SessionUsage {
   model?: string;
-  /** Context window usage percentage (0–100). */
+  /** Context window usage percentage (0–100, may exceed 100 near compaction). */
   contextPercent?: number;
   /** Total input tokens for the latest API call (incl. cache). */
   inputTokens?: number;
@@ -16,6 +16,9 @@ export interface SessionUsage {
  */
 export function useSessionUsage(sessionId: string | null): SessionUsage {
   const [usage, setUsage] = useState<SessionUsage>({});
+
+  // Reset when navigating between sessions to avoid showing stale data
+  useEffect(() => { setUsage({}); }, [sessionId]);
 
   const handler = useCallback((data: unknown) => {
     const d = data as { sessionId?: string; model?: string; contextPercent?: number; inputTokens?: number };
