@@ -6,7 +6,7 @@ import type { Task } from '@walnut/core';
 import type { MessageBlock, ThinkingBlock, ToolCallBlock, ImageBlock, TaskContext, ImageAttachment } from '@/hooks/useChat';
 import { useLightbox } from '@/hooks/useLightbox';
 import { Lightbox } from '@/components/common/Lightbox';
-import { entityRefsToHtml, renderMarkdownWithRefs, renderToolResultWithRefs, extractMarkdownFields } from '@/utils/markdown';
+import { entityRefsToHtml, renderToolResultWithRefs, extractMarkdownFields } from '@/utils/markdown';
 export interface RouteInfo {
   direction: 'sent' | 'received';
   event: string;
@@ -184,6 +184,14 @@ function formatTimestamp(ts: string | undefined): string {
 export function renderMarkdown(text: string): string {
   const preprocessed = entityRefsToHtml(text);
   const raw = marked.parse(preprocessed);
+  return typeof raw === 'string' ? DOMPurify.sanitize(raw, { ADD_ATTR: ['data-task-id', 'data-session-id', 'data-lightbox-src', 'loading'] }) : '';
+}
+
+/** Inline-only markdown: renders bold, links, task pills — no <p> wrapper.
+ *  Used for single-line contexts like collapsed summaries. */
+export function renderInlineMarkdown(text: string): string {
+  const preprocessed = entityRefsToHtml(text);
+  const raw = marked.parseInline(preprocessed);
   return typeof raw === 'string' ? DOMPurify.sanitize(raw, { ADD_ATTR: ['data-task-id', 'data-session-id', 'data-lightbox-src', 'loading'] }) : '';
 }
 
@@ -1089,7 +1097,7 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
           <span
             className="chat-collapsed-summary"
             onClick={handleContentClick}
-            dangerouslySetInnerHTML={{ __html: renderMarkdownWithRefs(collapsedSummary) }}
+            dangerouslySetInnerHTML={{ __html: renderInlineMarkdown(collapsedSummary) }}
           />
         )}
         {time && <div className="chat-message-time">{time}</div>}
