@@ -65,7 +65,7 @@ export function AppShell({ children }: AppShellProps) {
         >
           {children}
         </div>
-        <FocusDock focusBar={focusBar} isChatActive={isMainPage} />
+        <FocusDock focusBar={focusBar} />
       </main>
       <CronToast />
     </div>

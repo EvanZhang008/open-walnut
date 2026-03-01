@@ -4409,7 +4409,8 @@ img[data-lightbox-src],
 
 .main-page {
   display: flex;
-  height: 100vh;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -9722,9 +9723,7 @@ img[data-lightbox-src],
 
 .focus-dock {
   display: flex;
-  align-items: stretch;
-  gap: 8px;
-  padding: 8px 12px;
+  flex-direction: column;
   border-top: 1px solid var(--border);
   background: var(--bg-secondary);
   min-height: 48px;
@@ -9732,7 +9731,35 @@ img[data-lightbox-src],
 }
 
 .focus-dock:not(.focus-dock-empty) {
-  min-height: 110px;
+  min-height: 120px;
+}
+
+/* ── Resize handle ── */
+
+.dock-resize-handle {
+  height: 6px;
+  cursor: row-resize;
+  background: transparent;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.dock-resize-handle:hover,
+.dock-resize-handle:active {
+  background: var(--accent);
+  opacity: 0.3;
+}
+
+/* ── Content row (chat + cards) ── */
+
+.dock-content {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  padding: 4px 12px 8px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* ── Chat dock item ── */
@@ -9795,7 +9822,6 @@ img[data-lightbox-src],
 .dock-task-card {
   flex: 1;
   min-width: 160px;
-  max-width: 280px;
   display: flex;
   flex-direction: column;
   border-radius: var(--radius-sm);
@@ -9828,6 +9854,7 @@ img[data-lightbox-src],
   gap: 6px;
   padding: 6px 8px 4px;
   min-height: 26px;
+  flex-shrink: 0;
 }
 
 .dock-task-status-dot {
@@ -9878,33 +9905,27 @@ img[data-lightbox-src],
   color: var(--error);
 }
 
-/* ── Card preview body ── */
+/* ── Card session body ── */
 
-.dock-task-preview {
+.dock-task-body {
   flex: 1;
-  padding: 0 8px 6px;
-  overflow: hidden;
+  overflow-y: auto;
   min-height: 0;
+  padding: 0 4px 4px;
+  font-size: 12px;
 }
 
-.dock-task-preview-text {
-  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
-  font-size: 10px;
-  line-height: 1.4;
-  color: var(--fg-secondary);
-  white-space: pre-wrap;
-  word-break: break-all;
-  margin: 0;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 4;
-  -webkit-box-orient: vertical;
+.dock-task-body .session-history {
+  font-size: 11px;
+  padding: 8px;
+  gap: 8px;
 }
 
 .dock-task-no-session {
   font-size: 10px;
   color: var(--fg-muted);
   font-style: italic;
+  padding: 8px;
 }
 
 /* ── Pin button in TodoPanel ── */

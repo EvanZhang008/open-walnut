@@ -1,7 +1,7 @@
-import { useCallback, memo } from 'react';
+import { useState, useCallback, useEffect, useRef, memo } from 'react';
 import type { Task } from '@walnut/core';
-import { useSessionStream, type StreamingBlock } from '@/hooks/useSessionStream';
 import { compositeColor } from '@/utils/session-status';
+import { SessionChatHistory } from '@/components/sessions/SessionChatHistory';
 import type { UseFocusBarReturn } from '@/hooks/useFocusBar';
 
 // ── Custom events for Dock ↔ MainPage communication ──
@@ -16,6 +16,24 @@ function emitDockActivateChat() {
   window.dispatchEvent(new CustomEvent('dock:activate-chat'));
 }
 
+// ── Dock height constants ──
+
+const DOCK_HEIGHT_KEY = 'walnut-dock-height';
+const DOCK_HEIGHT_DEFAULT = 200;
+const DOCK_HEIGHT_MIN = 120;
+const DOCK_HEIGHT_MAX = 500;
+
+function readDockHeight(): number {
+  try {
+    const stored = localStorage.getItem(DOCK_HEIGHT_KEY);
+    if (stored) {
+      const v = parseInt(stored, 10);
+      if (!isNaN(v)) return Math.min(DOCK_HEIGHT_MAX, Math.max(DOCK_HEIGHT_MIN, v));
+    }
+  } catch { /* ignore */ }
+  return DOCK_HEIGHT_DEFAULT;
+}
+
 // ── DockTaskCard ──
 
 interface DockTaskCardProps {
@@ -26,8 +44,8 @@ interface DockTaskCardProps {
 }
 
 const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, onUnpin }: DockTaskCardProps) {
-  const sessionId = task.session_id || null;
-  const { blocks, isStreaming } = useSessionStream(sessionId);
+  const sessionId = task.session_id ?? null;
+  const isStreaming = task.session_status?.process_status === 'running';
 
   const statusColor = task.session_status
     ? compositeColor(task.session_status.process_status ?? 'stopped', task.session_status.work_status ?? 'completed')
@@ -42,23 +60,18 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
     onUnpin(task.id);
   }, [task.id, onUnpin]);
 
-  // Extract preview text: last text block, last ~4 lines
-  const previewText = getPreviewText(blocks);
-
-  const truncatedTitle = task.title.length > 22 ? task.title.slice(0, 20) + '\u2026' : task.title;
-
   return (
     <div
       className={`dock-task-card${isActive ? ' dock-task-active' : ''}`}
       onClick={handleClick}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter') handleClick(); }}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick(); } }}
     >
       <div className="dock-task-header">
         <span className="dock-task-status-dot" style={{ background: statusColor }} />
         {isStreaming && <span className="dock-task-streaming-dot" />}
-        <span className="dock-task-title" title={task.title}>{truncatedTitle}</span>
+        <span className="dock-task-title" title={task.title}>{task.title}</span>
         <button
           className="dock-task-unpin"
           onClick={handleUnpin}
@@ -68,9 +81,9 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
           &times;
         </button>
       </div>
-      <div className="dock-task-preview">
-        {previewText ? (
-          <pre className="dock-task-preview-text">{previewText}</pre>
+      <div className="dock-task-body">
+        {sessionId ? (
+          <SessionChatHistory sessionId={sessionId} />
         ) : (
           <span className="dock-task-no-session">No active session</span>
         )}
@@ -78,18 +91,6 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
     </div>
   );
 });
-
-/** Extract the last ~4 lines from the last text block for preview. */
-function getPreviewText(blocks: StreamingBlock[]): string | null {
-  for (let i = blocks.length - 1; i >= 0; i--) {
-    const b = blocks[i];
-    if (b.type === 'text' && b.content.trim()) {
-      const lines = b.content.trimEnd().split('\n');
-      return lines.slice(-4).join('\n');
-    }
-  }
-  return null;
-}
 
 // ── ChatDockItem ──
 
@@ -104,7 +105,7 @@ const ChatDockItem = memo(function ChatDockItem({ isActive }: ChatDockItemProps)
       onClick={emitDockActivateChat}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter') emitDockActivateChat(); }}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); emitDockActivateChat(); } }}
       title="Main Chat"
     >
       <span className="dock-chat-icon">&#x1F4AC;</span>
@@ -118,36 +119,86 @@ const ChatDockItem = memo(function ChatDockItem({ isActive }: ChatDockItemProps)
 
 interface FocusDockProps {
   focusBar: UseFocusBarReturn;
-  activeDockTaskId?: string | null;
-  isChatActive?: boolean;
 }
 
-export function FocusDock({ focusBar, activeDockTaskId, isChatActive = true }: FocusDockProps) {
+export function FocusDock({ focusBar }: FocusDockProps) {
   const { pinnedTasks, unpin } = focusBar;
 
-  const handleActivate = useCallback((taskId: string, sessionId?: string) => {
-    emitDockActivateTask(taskId, sessionId);
+  // Self-manage active state by listening to custom events
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onTask = (e: Event) => {
+      const { taskId } = (e as CustomEvent).detail as { taskId: string };
+      setActiveTaskId(taskId);
+    };
+    const onChat = () => setActiveTaskId(null);
+    window.addEventListener('dock:activate-task', onTask);
+    window.addEventListener('dock:activate-chat', onChat);
+    return () => {
+      window.removeEventListener('dock:activate-task', onTask);
+      window.removeEventListener('dock:activate-chat', onChat);
+    };
   }, []);
 
-  const handleUnpin = useCallback((taskId: string) => {
-    unpin(taskId);
-  }, [unpin]);
+  // Resizable dock height — all refs for stable drag closure
+  const [dockHeight, setDockHeight] = useState(readDockHeight);
+  const dockHeightRef = useRef(dockHeight);
+  dockHeightRef.current = dockHeight;
+  const resizingRef = useRef(false);
+  const startYRef = useRef(0);
+  const startHeightRef = useRef(0);
+
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    resizingRef.current = true;
+    startYRef.current = e.clientY;
+    startHeightRef.current = dockHeightRef.current;
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!resizingRef.current) return;
+      const delta = startYRef.current - ev.clientY;
+      setDockHeight(Math.min(DOCK_HEIGHT_MAX, Math.max(DOCK_HEIGHT_MIN, startHeightRef.current + delta)));
+    };
+
+    const onMouseUp = () => {
+      resizingRef.current = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      try { localStorage.setItem(DOCK_HEIGHT_KEY, String(dockHeightRef.current)); } catch { /* ignore */ }
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  }, []); // stable — uses only refs
 
   const hasPinnedTasks = pinnedTasks.length > 0;
 
   return (
-    <div className={`focus-dock${hasPinnedTasks ? '' : ' focus-dock-empty'}`}>
-      <ChatDockItem isActive={!!isChatActive && !activeDockTaskId} />
-      {hasPinnedTasks && <div className="dock-divider" />}
-      {pinnedTasks.map((task) => (
-        <DockTaskCard
-          key={task.id}
-          task={task}
-          isActive={activeDockTaskId === task.id}
-          onActivate={handleActivate}
-          onUnpin={handleUnpin}
-        />
-      ))}
+    <div
+      className={`focus-dock${hasPinnedTasks ? '' : ' focus-dock-empty'}`}
+      style={hasPinnedTasks ? { height: dockHeight } : undefined}
+    >
+      {hasPinnedTasks && (
+        <div className="dock-resize-handle" onMouseDown={handleResizeStart} />
+      )}
+      <div className="dock-content">
+        <ChatDockItem isActive={!activeTaskId} />
+        {hasPinnedTasks && <div className="dock-divider" />}
+        {pinnedTasks.map((task) => (
+          <DockTaskCard
+            key={task.id}
+            task={task}
+            isActive={activeTaskId === task.id}
+            onActivate={emitDockActivateTask}
+            onUnpin={unpin}
+          />
+        ))}
+      </div>
     </div>
   );
 }
