@@ -1138,6 +1138,30 @@ input:focus, textarea:focus, select:focus {
   background: var(--accent-subtle);
 }
 
+/* Child task indentation in search results */
+.search-result-child {
+  margin-left: 24px;
+  border-left: 2px solid var(--border-secondary);
+  padding-left: 10px;
+}
+
+.badge-child {
+  background: var(--bg-secondary);
+  color: var(--fg-muted);
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.search-auto-expanded-badge {
+  font-size: 9px;
+  color: var(--fg-muted);
+  background: var(--bg-secondary);
+  padding: 1px 4px;
+  border-radius: 3px;
+  opacity: 0.7;
+}
+
 .search-result-body {
   flex: 1;
   min-width: 0;
@@ -9919,6 +9943,8 @@ img[data-lightbox-src],
 
 .dock-task-body {
   flex: 1;
+  display: flex;
+  flex-direction: column-reverse;
   overflow-y: auto;
   min-height: 0;
   padding: 0 4px 4px;
@@ -9936,6 +9962,48 @@ img[data-lightbox-src],
   color: var(--fg-muted);
   font-style: italic;
   padding: 8px;
+}
+
+/* ── Card send input ── */
+
+.dock-task-input {
+  display: flex;
+  gap: 4px;
+  padding: 4px 6px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.dock-task-input-field {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--fg);
+  outline: none;
+}
+
+.dock-task-input-field:focus {
+  border-color: var(--accent);
+}
+
+.dock-task-send-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.dock-task-send-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* ── Pin button in TodoPanel ── */

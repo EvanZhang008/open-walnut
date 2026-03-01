@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef, memo } from 'react';
 import type { Task } from '@walnut/core';
 import { compositeColor } from '@/utils/session-status';
 import { SessionChatHistory } from '@/components/sessions/SessionChatHistory';
+import { wsClient } from '@/api/ws';
 import type { UseFocusBarReturn } from '@/hooks/useFocusBar';
 
 // ── Custom events for Dock ↔ MainPage communication ──
@@ -46,6 +47,7 @@ interface DockTaskCardProps {
 const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, onUnpin }: DockTaskCardProps) {
   const sessionId = task.session_id ?? null;
   const isStreaming = task.session_status?.process_status === 'running';
+  const [msgText, setMsgText] = useState('');
 
   const statusColor = task.session_status
     ? compositeColor(task.session_status.process_status ?? 'stopped', task.session_status.work_status ?? 'completed')
@@ -59,6 +61,12 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
     e.stopPropagation();
     onUnpin(task.id);
   }, [task.id, onUnpin]);
+
+  const handleSend = useCallback(() => {
+    if (!sessionId || !msgText.trim()) return;
+    wsClient.rpc('session:send', { sessionId, message: msgText.trim() }).catch(() => {});
+    setMsgText('');
+  }, [sessionId, msgText]);
 
   return (
     <div
@@ -88,6 +96,26 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
           <span className="dock-task-no-session">No active session</span>
         )}
       </div>
+      {sessionId && (
+        <div className="dock-task-input" onClick={(e) => e.stopPropagation()}>
+          <input
+            type="text"
+            className="dock-task-input-field"
+            placeholder="Send message..."
+            value={msgText}
+            onChange={(e) => setMsgText(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); handleSend(); } }}
+          />
+          <button
+            className="dock-task-send-btn"
+            onClick={(e) => { e.stopPropagation(); handleSend(); }}
+            disabled={!msgText.trim()}
+            title="Send to session"
+          >
+            &#x27A4;
+          </button>
+        </div>
+      )}
     </div>
   );
 });
