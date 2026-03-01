@@ -47,6 +47,9 @@ export class SessionHealthMonitor {
 
     if (sessions.length === 0) return
 
+    // Detect stale await_human_action sessions (stuck sub-agents)
+    await this.checkStaleAwaitingSessions(sessions, updateSessionRecord)
+
     for (const session of sessions) {
       // SDK and embedded sessions have no PID — skip PID-based health checks.
       // SDK: managed by session server. Embedded: in-process, status managed by SubagentRunner.
@@ -117,6 +120,54 @@ export class SessionHealthMonitor {
           newProcessStatus,
           workStatus: session.work_status,
         })
+      }
+    }
+  }
+
+  /**
+   * Detect sessions that are "running" with await_human_action but haven't produced
+   * any JSONL output for a long time. These sessions likely have stuck sub-agents.
+   * Emits a status change event so the UI shows a warning.
+   */
+  private async checkStaleAwaitingSessions(
+    sessions: Array<{ claudeSessionId: string; taskId?: string; pid?: number; process_status?: string; work_status?: string; outputFile?: string; lastActiveAt?: string }>,
+    updateSessionRecord: (id: string, update: Record<string, unknown>) => Promise<void>,
+  ): Promise<void> {
+    const STALE_THRESHOLD_MS = 60 * 60 * 1000  // 1 hour with no output = stale
+
+    for (const session of sessions) {
+      if (session.process_status !== 'running') continue
+      if (session.work_status !== 'await_human_action') continue
+      if (!session.outputFile) continue
+
+      // Check if the JSONL output file has been written to recently
+      try {
+        const stat = fs.statSync(session.outputFile)
+        const ageMs = Date.now() - stat.mtimeMs
+        if (ageMs < STALE_THRESHOLD_MS) continue  // Still active
+
+        // Output is stale — update activity to warn user
+        const staleMinutes = Math.round(ageMs / 60_000)
+        log.session.warn('health monitor: await_human_action session has stale output', {
+          sessionId: session.claudeSessionId,
+          taskId: session.taskId,
+          staleMinutes,
+        })
+
+        await updateSessionRecord(session.claudeSessionId, {
+          activity: `Possibly stuck — no output for ${staleMinutes} min`,
+          last_status_change: new Date().toISOString(),
+        })
+
+        bus.emit(EventNames.SESSION_STATUS_CHANGED, {
+          sessionId: session.claudeSessionId,
+          taskId: session.taskId,
+          process_status: 'running',
+          work_status: 'await_human_action',
+          activity: `Possibly stuck — no output for ${staleMinutes} min`,
+        }, ['*'], { source: 'health-monitor' })
+      } catch {
+        // Can't stat file — skip
       }
     }
   }
