@@ -69,7 +69,9 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
 
   const handleSend = useCallback((text: string, images?: ImageAttachment[]) => {
     if (!sessionId || !text.trim()) return;
-    wsClient.rpc('session:send', { sessionId, message: text.trim(), images }).catch(() => {});
+    const payload: Record<string, unknown> = { sessionId, message: text.trim() };
+    if (images?.length) payload.images = images.map(img => ({ data: img.data, mediaType: img.mediaType }));
+    wsClient.sendRpc('session:send', payload).catch(() => {});
   }, [sessionId]);
 
   return (
@@ -104,7 +106,6 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
         <div className="dock-task-input" onClick={(e) => e.stopPropagation()}>
           <ChatInput
             onSend={handleSend}
-            isStreaming={isStreaming}
             placeholder="Send message..."
             showCommands={false}
           />
