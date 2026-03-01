@@ -3,7 +3,7 @@ import type { Task } from '@walnut/core';
 import { compositeColor } from '@/utils/session-status';
 import { SessionChatHistory } from '@/components/sessions/SessionChatHistory';
 import { ChatInput } from '@/components/chat/ChatInput';
-import { wsClient } from '@/api/ws';
+import { useSessionSend } from '@/hooks/useSessionSend';
 import type { ImageAttachment } from '@/api/chat';
 import type { UseFocusBarReturn } from '@/hooks/useFocusBar';
 
@@ -82,12 +82,13 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
     onUnpin(task.id);
   }, [task.id, onUnpin]);
 
+  // Reuse the same send hook as SessionPanel — optimistic messages + delivery tracking
+  const { optimisticMsgs, send, handleMessagesDelivered, handleBatchCompleted, clearCommitted } = useSessionSend(sessionId);
+
   const handleSend = useCallback((text: string, images?: ImageAttachment[]) => {
     if (!sessionId || !text.trim()) return;
-    const payload: Record<string, unknown> = { sessionId, message: text.trim() };
-    if (images?.length) payload.images = images.map(img => ({ data: img.data, mediaType: img.mediaType }));
-    wsClient.sendRpc('session:send', payload).catch(() => {});
-  }, [sessionId]);
+    send(sessionId, text.trim(), images);
+  }, [sessionId, send]);
 
   return (
     <div
@@ -118,7 +119,13 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
       </div>
       <div className="dock-task-body">
         {sessionId ? (
-          <SessionChatHistory sessionId={sessionId} />
+          <SessionChatHistory
+            sessionId={sessionId}
+            optimisticMessages={optimisticMsgs}
+            onMessagesDelivered={handleMessagesDelivered}
+            onBatchCompleted={handleBatchCompleted}
+            onClearCommitted={clearCommitted}
+          />
         ) : (
           <span className="dock-task-no-session">No active session</span>
         )}
