@@ -423,7 +423,7 @@ export class ClaudeCodeSession {
       proc = spawn(this.cliCommand, args, {
         detached: true,
         stdio: [pipeFd, outputFd, stderrFd],
-        cwd: cwd ?? (() => { throw new Error('BUG: cwd must be resolved before spawn — never fall back to process.cwd()') })(),
+        cwd: cwd ?? (() => { log.session.warn('spawn fallback: cwd not resolved — using process.cwd()', { taskId: this.taskId }); return process.cwd() })(),
         env: { ...cleanEnv, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' },
       })
 
@@ -1850,9 +1850,45 @@ export class SessionRunner {
     host?: string
     fromPlanSessionId?: string
   }): Promise<{ sessionReady: Promise<string>; title: string }> {
-    const { taskId, cwd, project, mode, model } = data
+    const { taskId, project, mode, model } = data
+    let cwd = data.cwd
     let { message } = data
     log.session.info('starting session', { taskId: taskId || '(taskless)', project, host: data.host })
+
+    // Resolve cwd if not provided — defense-in-depth for RPC/bus paths that
+    // bypass the agent tool's resolveSessionContext().
+    if (!cwd && taskId) {
+      try {
+        const { getTask, getProjectMetadata } = await import('../core/task-manager.js')
+        const task = await getTask(taskId)
+        if (task) {
+          // Walk parent chain for task.cwd
+          let current: typeof task | undefined = task
+          const seen = new Set<string>()
+          while (current && !cwd) {
+            if (current.cwd) { cwd = current.cwd; break }
+            if (!current.parent_task_id || seen.has(current.parent_task_id)) break
+            seen.add(current.id)
+            current = await getTask(current.parent_task_id).catch(() => undefined)
+          }
+          // Project metadata default_cwd
+          if (!cwd) {
+            const metadata = await getProjectMetadata(task.category, task.project)
+            if (metadata?.default_cwd) cwd = metadata.default_cwd as string
+          }
+          // Last resort: project memory directory
+          if (!cwd) {
+            const { PROJECTS_MEMORY_DIR } = await import('../constants.js')
+            const path = await import('node:path')
+            const nodeFs = await import('node:fs')
+            const projectDir = path.join(PROJECTS_MEMORY_DIR, task.category.toLowerCase(), task.project.toLowerCase())
+            if (nodeFs.existsSync(projectDir)) cwd = projectDir
+          }
+        }
+      } catch (err) {
+        log.session.warn('handleStart: cwd resolution failed', { taskId, error: err instanceof Error ? err.message : String(err) })
+      }
+    }
 
     // Prune completed taskless sessions to prevent unbounded Map growth
     for (const [key, s] of this.sessions) {
@@ -2016,8 +2052,40 @@ export class SessionRunner {
   }): Promise<{ claudeSessionId: string; title: string }> {
     if (!this.sdkClient) throw new Error('SDK client not configured')
 
-    const { taskId, message, cwd, project, mode } = data
+    const { taskId, message, project, mode } = data
+    let cwd = data.cwd
     log.session.info('starting SDK session', { taskId: taskId || '(taskless)', project, host: data.host })
+
+    // Resolve cwd if not provided (same chain as handleStart)
+    if (!cwd && taskId) {
+      try {
+        const { getTask: getTaskFn, getProjectMetadata } = await import('../core/task-manager.js')
+        const task = await getTaskFn(taskId)
+        if (task) {
+          let current: typeof task | undefined = task
+          const seen = new Set<string>()
+          while (current && !cwd) {
+            if (current.cwd) { cwd = current.cwd; break }
+            if (!current.parent_task_id || seen.has(current.parent_task_id)) break
+            seen.add(current.id)
+            current = await getTaskFn(current.parent_task_id).catch(() => undefined)
+          }
+          if (!cwd) {
+            const metadata = await getProjectMetadata(task.category, task.project)
+            if (metadata?.default_cwd) cwd = metadata.default_cwd as string
+          }
+          if (!cwd) {
+            const { PROJECTS_MEMORY_DIR } = await import('../constants.js')
+            const path = await import('node:path')
+            const nodeFs = await import('node:fs')
+            const projectDir = path.join(PROJECTS_MEMORY_DIR, task.category.toLowerCase(), task.project.toLowerCase())
+            if (nodeFs.existsSync(projectDir)) cwd = projectDir
+          }
+        }
+      } catch (err) {
+        log.session.warn('handleStartSdk: cwd resolution failed', { taskId, error: err instanceof Error ? err.message : String(err) })
+      }
+    }
 
     // Auto-generate title (same logic as CLI path)
     let taskTitle: string | undefined

@@ -57,6 +57,8 @@ Each task has typed session fields instead of an unbounded array: `plan_session_
 
 Each project can have a hidden `.metadata` task whose `description` contains YAML config (e.g., `default_host: remote-dev\ndefault_cwd: /home/user/project`). Retrieved via `getProjectMetadata(category, project)` in `task-manager.ts`. `.metadata` tasks are filtered from `query_tasks`, REST endpoints, and the TodoPanel UI. Used by `start_session` for host/cwd resolution.
 
+**Session CWD resolution chain** (5 priorities, in `resolveSessionContext()` in `tools.ts`): ① explicit `working_directory` param → ② `task.cwd` → ③ parent task chain walk → ④ project metadata `default_cwd` → ⑤ project memory directory (`~/.walnut/memory/projects/{category}/{project}/`). The same chain runs in `handleStart()`/`handleStartSdk()` in `claude-code-session.ts` as defense-in-depth for the RPC/bus path. If all 5 priorities fail, the agent tool returns an actionable error message.
+
 ### Subtask model: two systems (child tasks vs. embedded subtasks)
 
 Walnut has two subtask mechanisms. **Child tasks are the canonical model; embedded subtasks are legacy.**

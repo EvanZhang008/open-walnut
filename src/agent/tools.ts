@@ -97,11 +97,11 @@ function json(data: unknown): string {
 }
 
 /**
- * Resolve host and working directory for a session via the 4-priority inheritance chain.
+ * Resolve host and working directory for a session via the 5-priority inheritance chain.
  * Shared by start_session and import_session.
  *
  * Resolution chain:
- *   CWD:  ① explicit param → ② task.cwd → ③ parent chain walk → ④ project metadata (default_cwd)
+ *   CWD:  ① explicit param → ② task.cwd → ③ parent chain walk → ④ project metadata (default_cwd) → ⑤ project memory dir
  *   Host: ① explicit param → ② project metadata (default_host)
  */
 async function resolveSessionContext(
@@ -133,6 +133,18 @@ async function resolveSessionContext(
     if (metadata) {
       if (!resolvedHost) resolvedHost = metadata.default_host as string | undefined;
       if (!resolvedCwd) resolvedCwd = metadata.default_cwd as string | undefined;
+    }
+  }
+
+  // Priority 5: project memory directory as last-resort fallback
+  // Better than home dir — at least scoped to the project context
+  if (!resolvedCwd && task) {
+    const { PROJECTS_MEMORY_DIR } = await import('../constants.js');
+    const { default: path } = await import('node:path');
+    const { default: fs } = await import('node:fs');
+    const projectDir = path.join(PROJECTS_MEMORY_DIR, task.category.toLowerCase(), task.project.toLowerCase());
+    if (fs.existsSync(projectDir)) {
+      resolvedCwd = projectDir;
     }
   }
 
@@ -1166,9 +1178,12 @@ and is always allowed.`,
           }
         }
 
-        // Local sessions still require a cwd
+        // Local sessions still require a cwd — give actionable guidance
         if (!resolvedCwd) {
-          return 'Error: working_directory is required for CLI sessions.';
+          const hint = task
+            ? ` Set working_directory explicitly, or configure a default via update_task(id:'${task.id}', cwd:'/path') or update_task(type:'project', category:'${task.category}', project:'${task.project}', default_cwd:'/path').`
+            : ' Provide working_directory for taskless sessions.';
+          return `Error: No working directory resolved for this session.${hint}`;
         }
 
         // ── Per-host session concurrency limit check ──
