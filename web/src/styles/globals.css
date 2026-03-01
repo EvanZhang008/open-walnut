@@ -1141,7 +1141,7 @@ input:focus, textarea:focus, select:focus {
 /* Child task indentation in search results */
 .search-result-child {
   margin-left: 24px;
-  border-left: 2px solid var(--border-secondary);
+  border-left: 2px solid var(--border-strong);
   padding-left: 10px;
 }
 
@@ -5110,7 +5110,7 @@ img[data-lightbox-src],
 /* Child task indentation */
 .todo-panel-item-child {
   margin-left: 20px;
-  border-left: 2px solid var(--border-secondary);
+  border-left: 2px solid var(--border-strong);
   padding-left: 8px;
 }
 
@@ -9964,46 +9964,28 @@ img[data-lightbox-src],
   padding: 8px;
 }
 
-/* ── Card send input ── */
+/* ── Card send input (compact ChatInput reuse) ── */
 
 .dock-task-input {
-  display: flex;
-  gap: 4px;
-  padding: 4px 6px;
+  flex-shrink: 0;
   border-top: 1px solid var(--border);
-  flex-shrink: 0;
 }
 
-.dock-task-input-field {
-  flex: 1;
-  min-width: 0;
+.dock-task-input .chat-input-container {
+  padding: 4px 6px;
+}
+
+.dock-task-input .chat-input-textarea {
   font-size: 11px;
-  padding: 3px 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--fg);
-  outline: none;
+  min-height: 24px;
+  max-height: 48px;
+  padding: 4px 8px;
 }
 
-.dock-task-input-field:focus {
-  border-color: var(--accent);
-}
-
-.dock-task-send-btn {
-  background: var(--accent);
-  color: #fff;
-  border: none;
-  border-radius: var(--radius-sm);
-  padding: 2px 8px;
-  font-size: 12px;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-
-.dock-task-send-btn:disabled {
-  opacity: 0.4;
-  cursor: default;
+.dock-task-input .chat-input-send {
+  width: 28px;
+  height: 28px;
+  font-size: 14px;
 }
 
 /* ── Pin button in TodoPanel ── */
