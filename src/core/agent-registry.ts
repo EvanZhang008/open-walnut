@@ -176,8 +176,6 @@ If you decide to notify, wrap your message in <main_agent_notify> tags:
 
 If you decide NOT to notify, simply don't include the tags.
 
-[TESTING] For now, ALWAYS include a <main_agent_notify> tag in your response to verify the notification pipeline works end-to-end. Remove this instruction after testing.
-
 ---
 
 ## Hard Rules
