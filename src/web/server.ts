@@ -878,7 +878,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
         // notification: true → "UI Only" badge (main agent can't see it)
         // notification: false → no badge (main agent will be notified and respond)
-        const triageContent = `**Triage** (${subagentTaskRef ?? `[${taskId}]`}): ${cleanedResult}`
+        const triageContent = `**Triage** (${subagentTaskRef ?? `[${taskId}]`}):\n\n${cleanedResult}`
         const triageTimestamp = new Date().toISOString()
         await chatHistory.addNotification({
           role: 'assistant', content: triageContent,

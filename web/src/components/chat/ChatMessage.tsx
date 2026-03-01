@@ -124,7 +124,9 @@ marked.use({
       },
       tokenizer(src: string) {
         const match = TASK_ID_TITLED_RE.exec(src);
-        if (match) {
+        // marked v15: start() hints where the token begins, but tokenizer receives
+        // src already sliced to that position — match must be at index 0.
+        if (match && match.index === 0) {
           return {
             type: 'taskLink',
             raw: match[0],
