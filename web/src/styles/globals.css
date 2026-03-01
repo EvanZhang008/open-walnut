@@ -367,9 +367,12 @@ input:focus, textarea:focus, select:focus {
 
 .app-content-area {
   flex: 1;
+  display: flex;
+  flex-direction: column;
   overflow-y: auto;
   padding: 24px;
   min-width: 0;
+  min-height: 0;
 }
 
 /* Mobile sidebar toggle */
@@ -4398,6 +4401,13 @@ img[data-lightbox-src],
    When navigating to other pages, this class hides it.
    Uses visibility:hidden instead of display:none to keep the component
    fully rendered (preserving scroll positions, layout state, etc). */
+.main-page-wrapper {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .main-page-wrapper-hidden {
   visibility: hidden !important;
   height: 0 !important;
