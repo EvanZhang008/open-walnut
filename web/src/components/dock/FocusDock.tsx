@@ -75,10 +75,10 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
   return (
     <div
       className={`dock-task-card${isActive ? ' dock-task-active' : ''}`}
-      onClick={handleClick}
+      onClick={(e) => { if (e.target === e.currentTarget || (e.target as HTMLElement).closest('.dock-task-header')) handleClick(); }}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick(); } }}
+      onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); handleClick(); } }}
     >
       <div className="dock-task-header">
         <span className="dock-task-status-dot" style={{ background: statusColor }} />
