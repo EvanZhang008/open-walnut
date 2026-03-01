@@ -26,10 +26,10 @@ import { TRIAGE_AGENTS as TRIAGE_AGENT_IDS } from '../core/session-tracker.js';
 import { getAgent } from '../core/agent-registry.js';
 import { getConfig } from '../core/config-manager.js';
 import { buildSubagentSystemPrompt, buildSubagentToolSet } from '../agent/subagent-context.js';
-import { buildStatefulMemorySection, extractMemoryUpdate } from '../agent/stateful-memory.js';
+import { buildStatefulMemorySection } from '../agent/stateful-memory.js';
 import { buildFilteredSkillsPrompt } from '../core/skill-loader.js';
 import { loadContextSources } from '../agent/context-sources.js';
-import { getProjectMemory, appendProjectMemory, updateProjectSummary } from '../core/project-memory.js';
+import { getProjectMemory } from '../core/project-memory.js';
 import { SESSION_STREAMS_DIR } from '../constants.js';
 import { log } from '../logging/index.js';
 import { usageTracker } from '../core/usage/index.js';
@@ -458,26 +458,7 @@ export class SubagentRunner {
         }, ['*'], { source: 'subagent-runner' });
       }
 
-      // If stateful: persist memory update (use resolvedStateful for {auto}-resolved path)
-      if (resolvedStateful && result.response) {
-        try {
-          const memoryUpdate = extractMemoryUpdate(result.response);
-          if (memoryUpdate) {
-            updateProjectSummary(resolvedStateful.memory_project, agentDef.name, memoryUpdate);
-          }
-          appendProjectMemory(
-            resolvedStateful.memory_project,
-            result.response.slice(0, 500),
-            resolvedStateful.memory_source ?? agentDef.id,
-          );
-          log.subagent.info('stateful memory updated', { runId: run.runId, memoryProject: resolvedStateful.memory_project });
-        } catch (err) {
-          log.subagent.warn('stateful memory update failed', {
-            runId: run.runId,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
+      // Memory is now agent-driven: the agent uses the `memory` tool directly.
 
       log.subagent.info('run completed', {
         runId: run.runId,

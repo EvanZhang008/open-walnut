@@ -245,8 +245,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const { getAgent } = await import('../core/agent-registry.js')
       const { runAgentLoop } = await import('../agent/loop.js')
       const { buildSubagentSystemPrompt, buildSubagentToolSet } = await import('../agent/subagent-context.js')
-      const { buildStatefulMemorySection, extractMemoryUpdate } = await import('../agent/stateful-memory.js')
-      const { getProjectMemory, appendProjectMemory, updateProjectSummary } = await import('../core/project-memory.js')
+      const { buildStatefulMemorySection } = await import('../agent/stateful-memory.js')
+      const { getProjectMemory } = await import('../core/project-memory.js')
 
       const agentDef = await getAgent(agentId)
       if (!agentDef) return { status: 'error' as const, error: `agent "${agentId}" not found` }
@@ -295,25 +295,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           source: `cron-action-${agentId}`,
         })
 
-        // If stateful: persist memory update
-        if (agentDef.stateful && result.response) {
-          try {
-            const update = extractMemoryUpdate(result.response)
-            if (update) {
-              updateProjectSummary(agentDef.stateful.memory_project, agentDef.name, update)
-            }
-            appendProjectMemory(
-              agentDef.stateful.memory_project,
-              result.response.slice(0, 500),
-              agentDef.stateful.memory_source ?? agentDef.id,
-            )
-          } catch (memErr) {
-            log.subagent.warn('stateful memory persist failed', {
-              agent: agentId,
-              error: memErr instanceof Error ? memErr.message : String(memErr),
-            })
-          }
-        }
+        // Memory is now agent-driven: the agent uses the `memory` tool directly.
 
         return { status: 'ok' as const, summary: result.response?.slice(0, 2000) }
       } catch (err) {
