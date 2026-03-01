@@ -548,8 +548,12 @@ export class ClaudeCodeSession {
     // for tailing the local JSONL output file (works for both local and remote sessions —
     // remote sessions also have a local output file from SSH stdout).
     // Pipe recovery only succeeds for local sessions (remote FIFOs live on the remote host).
+    //
+    // CRITICAL: Pass record.outputFile so LocalIO uses the correct path from when the
+    // session was created. Without this, SESSION_STREAMS_DIR (a module-level constant)
+    // may point to a different directory after server restart (e.g. if WALNUT_HOME changed).
     if (record.claudeSessionId) {
-      session.io = createSessionIO(record.claudeSessionId, undefined, undefined)
+      session.io = createSessionIO(record.claudeSessionId, undefined, undefined, record.outputFile)
       session.io.recoverPipe(record.claudeSessionId)
     }
 

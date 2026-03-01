@@ -90,8 +90,8 @@ export class LocalIO implements SessionIO {
 
   readonly processName = 'claude'
 
-  constructor(tmpId: string) {
-    this._outputFile = path.join(SESSION_STREAMS_DIR, `${tmpId}.jsonl`)
+  constructor(tmpId: string, outputFileOverride?: string) {
+    this._outputFile = outputFileOverride ?? path.join(SESSION_STREAMS_DIR, `${tmpId}.jsonl`)
   }
 
   get outputFile(): string {
@@ -245,7 +245,10 @@ export class LocalIO implements SessionIO {
   }
 
   recoverPipe(sessionId: string): void {
-    const candidatePipe = path.join(SESSION_STREAMS_DIR, `${sessionId}.pipe`)
+    // Use the outputFile's directory (not SESSION_STREAMS_DIR) — after server restart
+    // the constant may point to a different dir than where the session was created.
+    const streamsDir = path.dirname(this._outputFile)
+    const candidatePipe = path.join(streamsDir, `${sessionId}.pipe`)
     try {
       const stat = fs.statSync(candidatePipe)
       if (stat.isFIFO()) {
@@ -862,11 +865,12 @@ export function createSessionIO(
   tmpId: string,
   host?: string,
   sshTarget?: SshTarget,
+  outputFileOverride?: string,
 ): SessionIO {
   if (host && sshTarget) {
     return new RemoteIO(tmpId, host, sshTarget)
   }
-  return new LocalIO(tmpId)
+  return new LocalIO(tmpId, outputFileOverride)
 }
 
 // ── Image transfer for remote sessions ──
