@@ -3494,10 +3494,14 @@ input:focus, textarea:focus, select:focus {
 
 .chat-tool-block-body {
   border-top: 1px solid var(--border);
+  overflow: hidden;
+  min-width: 0;
 }
 
 .chat-tool-block-section {
   padding: 6px 10px;
+  overflow: hidden;
+  min-width: 0;
 }
 
 .chat-tool-block-section + .chat-tool-block-section {
@@ -4289,6 +4293,21 @@ input:focus, textarea:focus, select:focus {
   display: inline-block;
   width: 100%;
   margin: 8px 0;
+}
+
+/* Tool result images container (session panel) */
+.tool-result-images {
+  margin: 8px 0;
+}
+
+.tool-result-images img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+.tool-result-image-item {
+  margin-bottom: 8px;
 }
 
 .inline-image-path {

@@ -281,7 +281,7 @@ function StreamingTaskGroup({ taskBlock, childBlocks, onTaskClick, onSessionClic
         <span className="task-group-icon">
           {isError ? '\u2717' : isDone ? '\u2713' : '\u25B6'}
         </span>
-        <span className="task-group-label">Task</span>
+        <span className="task-group-label">{taskBlock.name}</span>
         {subagentType && <span className="task-group-agent-type">{subagentType}</span>}
         <span className="task-group-description">{description}</span>
         {!open && toolCount > 0 && (
@@ -311,27 +311,30 @@ type GroupedStreamItem =
   | { kind: 'block'; block: StreamingBlock; index: number }
   | { kind: 'task-group'; taskBlock: StreamingBlock & { type: 'tool_call' }; childBlocks: StreamingBlock[]; index: number };
 
+/** Tool names whose streaming child blocks should be grouped under them. */
+const GROUPABLE_STREAM_TOOLS = new Set(['Task', 'Agent']);
+
 function groupStreamingBlocks(blocks: StreamingBlock[]): GroupedStreamItem[] {
-  // Find all Task tool_call blocks (these are potential parents)
-  const taskToolUseIds = new Set<string>();
+  // Find all groupable tool_call blocks (Task, Agent) — these are potential parents
+  const parentToolUseIds = new Set<string>();
   for (const b of blocks) {
-    if (b.type === 'tool_call' && b.name === 'Task') {
-      taskToolUseIds.add(b.toolUseId);
+    if (b.type === 'tool_call' && GROUPABLE_STREAM_TOOLS.has(b.name)) {
+      parentToolUseIds.add(b.toolUseId);
     }
   }
 
-  if (taskToolUseIds.size === 0) {
-    // No Task blocks — return flat list
+  if (parentToolUseIds.size === 0) {
+    // No groupable blocks — return flat list
     return blocks.map((block, index) => ({ kind: 'block', block, index }));
   }
 
-  // Group child blocks under their parent Task
+  // Group child blocks under their parent
   const childBlocksByParent = new Map<string, StreamingBlock[]>();
   const consumedIndices = new Set<number>();
 
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i];
-    if (b.type === 'tool_call' && b.parentToolUseId && taskToolUseIds.has(b.parentToolUseId)) {
+    if (b.type === 'tool_call' && b.parentToolUseId && parentToolUseIds.has(b.parentToolUseId)) {
       const arr = childBlocksByParent.get(b.parentToolUseId);
       if (arr) arr.push(b);
       else childBlocksByParent.set(b.parentToolUseId, [b]);
@@ -344,7 +347,7 @@ function groupStreamingBlocks(blocks: StreamingBlock[]): GroupedStreamItem[] {
   for (let i = 0; i < blocks.length; i++) {
     if (consumedIndices.has(i)) continue;
     const b = blocks[i];
-    if (b.type === 'tool_call' && b.name === 'Task') {
+    if (b.type === 'tool_call' && GROUPABLE_STREAM_TOOLS.has(b.name)) {
       result.push({
         kind: 'task-group',
         taskBlock: b,

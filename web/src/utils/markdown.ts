@@ -129,6 +129,64 @@ export function extractMarkdownFields(
     .map(([k, v]) => ({ key: k, html: renderMarkdownWithRefs(v as string) }));
 }
 
+// ── Tool result image detection & rendering ──
+
+/** Image file extension pattern */
+const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp)$/i;
+
+/** Match absolute image file paths in text (allows spaces/hyphens in path segments) */
+const IMAGE_PATH_IN_TEXT_RE = /(\/(?:[\w. -]+\/)+[\w. -]+\.(?:png|jpe?g|gif|webp))/gi;
+
+/**
+ * Extract base64 images from Anthropic content-block JSON format.
+ * Handles both array and single-object forms:
+ *   [{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBOR..."}}]
+ *   {"type":"image","source":{"type":"base64","data":"..."}}
+ */
+export function extractContentBlockImages(result: string): { imageSrcs: string[]; textParts: string[] } | null {
+  const trimmed = result.trimStart();
+  if ((trimmed[0] !== '[' && trimmed[0] !== '{') || !result.includes('"base64"')) return null;
+
+  try {
+    const parsed = JSON.parse(result);
+    const blocks = Array.isArray(parsed) ? parsed : [parsed];
+    const imageSrcs: string[] = [];
+    const textParts: string[] = [];
+
+    for (const block of blocks) {
+      if (typeof block !== 'object' || block === null) continue;
+      const b = block as Record<string, unknown>;
+      if (b.type === 'image') {
+        const source = b.source as Record<string, unknown> | undefined;
+        if (source?.type === 'base64' && typeof source.data === 'string') {
+          const mt = typeof source.media_type === 'string' ? source.media_type : 'image/png';
+          imageSrcs.push(`data:${mt};base64,${source.data}`);
+        }
+      } else if (b.type === 'text' && typeof b.text === 'string') {
+        textParts.push(b.text);
+      }
+    }
+
+    return imageSrcs.length > 0 ? { imageSrcs, textParts } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Find absolute image file paths in text (JSON values or plain text) */
+export function findImagePaths(text: string): string[] {
+  const re = new RegExp(IMAGE_PATH_IN_TEXT_RE.source, 'gi');
+  const paths: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) paths.push(m[1]);
+  return [...new Set(paths)];
+}
+
+/** Check if a file path looks like an image file */
+export function isImageFilePath(p: string): boolean {
+  return IMAGE_EXT_RE.test(p);
+}
+
 /**
  * Render a note string as sanitized HTML with markdown support.
  * All <a> links open in a new tab with noopener/noreferrer.

@@ -1,7 +1,10 @@
 import { useState, useCallback, useMemo, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { SessionHistoryMessage, SessionHistoryTool } from '@/types/session';
-import { renderMarkdownWithRefs, extractMarkdownFields, injectJsonIdLinks } from '@/utils/markdown';
+import {
+  renderMarkdownWithRefs, extractMarkdownFields, injectJsonIdLinks,
+  extractContentBlockImages, findImagePaths, isImageFilePath,
+} from '@/utils/markdown';
 import { useLivePlanContent } from '@/contexts/PlanContentContext';
 
 interface SessionMessageProps {
@@ -88,9 +91,11 @@ interface GenericToolCallProps {
   onSessionClick?: (sessionId: string) => void;
 }
 
-export function GenericToolCall({ tool, status = 'done', result, onTaskClick, onSessionClick }: GenericToolCallProps) {
+export function GenericToolCall({ tool, status = 'done', result: resultProp, onTaskClick, onSessionClick }: GenericToolCallProps) {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  // Merge result from explicit prop (streaming path) and tool.result (persisted history path)
+  const result = resultProp ?? (tool as { result?: string }).result;
   const safeInput = (tool.input && typeof tool.input === 'object') ? tool.input : {};
   const inputSummary = Object.entries(safeInput)
     .map(([k, v]) => {
@@ -120,11 +125,44 @@ export function GenericToolCall({ tool, status = 'done', result, onTaskClick, on
     return injectJsonIdLinks(escapeHtml(jsonStr));
   }, [safeInput, open]);
 
-  // Result rendered as markdown (only when expanded)
-  const resultHtml = useMemo(() => {
-    if (!open || !result) return '';
-    return renderMarkdownWithRefs(result.length > 3000 ? result.slice(0, 3000) : result);
+  // Result rendering with image detection (base64 content blocks + file paths)
+  const { resultImages, resultTextHtml } = useMemo(() => {
+    if (!open || !result) return { resultImages: null as null | { src: string; key: string; caption?: string }[], resultTextHtml: '' };
+
+    // 1. Check for Anthropic content blocks with base64 images
+    const extracted = extractContentBlockImages(result);
+    if (extracted) {
+      const images = extracted.imageSrcs.map((src, i) => ({ src, key: `b64-${i}` }));
+      const text = extracted.textParts.length > 0
+        ? renderMarkdownWithRefs(extracted.textParts.join('\n').slice(0, 3000))
+        : '';
+      return { resultImages: images, resultTextHtml: text };
+    }
+
+    // 2. Check for image file paths in result text
+    const paths = findImagePaths(result);
+    const images = paths.length > 0
+      ? paths.map((p, i) => ({
+          src: `/api/local-image?path=${encodeURIComponent(p)}`,
+          key: `path-${i}`,
+          caption: p,
+        }))
+      : null;
+
+    // 3. Render remaining text as markdown (with truncation)
+    const text = renderMarkdownWithRefs(result.length > 3000 ? result.slice(0, 3000) : result);
+    return { resultImages: images, resultTextHtml: text };
   }, [result, open]);
+
+  // Input image preview: if file_path/path points to an image file, show thumbnail
+  const inputImageSrc = useMemo(() => {
+    if (!open) return null;
+    const fp = safeInput.file_path ?? safeInput.path;
+    if (typeof fp !== 'string' || !isImageFilePath(fp)) return null;
+    // Skip if result already has images (avoids showing same image twice for Read tool)
+    if (resultImages && resultImages.length > 0) return null;
+    return `/api/local-image?path=${encodeURIComponent(fp)}`;
+  }, [safeInput, open, resultImages]);
 
   // Click handler for pill links inside <pre> (event delegation)
   const handlePreClick = useCallback((e: React.MouseEvent<HTMLPreElement>) => {
@@ -171,12 +209,29 @@ export function GenericToolCall({ tool, status = 'done', result, onTaskClick, on
                      dangerouslySetInnerHTML={{ __html: f.html }} />
               </div>
             ))}
+            {inputImageSrc && (
+              <div className="tool-result-images">
+                <img src={inputImageSrc} className="inline-image" data-lightbox-src={inputImageSrc} loading="lazy" />
+              </div>
+            )}
           </div>
-          {status !== 'calling' && resultHtml && (
+          {status !== 'calling' && (resultImages || resultTextHtml) && (
             <div className="chat-tool-block-section">
               <div className="chat-tool-block-section-label">Result</div>
-              <div className="chat-tool-block-result markdown-body"
-                   dangerouslySetInnerHTML={{ __html: resultHtml }} />
+              {resultImages && (
+                <div className="tool-result-images">
+                  {resultImages.map(img => (
+                    <div key={img.key} className="tool-result-image-item">
+                      <img src={img.src} className="inline-image" data-lightbox-src={img.src} loading="lazy" />
+                      {img.caption && <span className="inline-image-path">{img.caption}</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {resultTextHtml && (
+                <div className="chat-tool-block-result markdown-body"
+                     dangerouslySetInnerHTML={{ __html: resultTextHtml }} />
+              )}
             </div>
           )}
         </div>
@@ -198,14 +253,17 @@ interface SessionToolCallProps {
   onSessionClick?: (sessionId: string) => void;
 }
 
-/** Collapsible group for a Task tool call with child messages from subagent JSONL */
+/** Tool names that should render as collapsible groups with child messages. */
+const GROUPABLE_HISTORY_TOOLS = new Set(['Task', 'Agent']);
+
+/** Collapsible group for a Task/Agent tool call with child messages */
 function TaskGroup({ tool, onTaskClick, onSessionClick }: SessionToolCallProps) {
   const [open, setOpen] = useState(false);
   const description = typeof tool.input?.description === 'string'
     ? tool.input.description
     : typeof tool.input?.prompt === 'string'
       ? (tool.input.prompt as string).slice(0, 80) + ((tool.input.prompt as string).length > 80 ? '...' : '')
-      : 'Task';
+      : tool.name;
   const subagentType = typeof tool.input?.subagent_type === 'string' ? tool.input.subagent_type : '';
   const childCount = tool.childMessages?.length ?? 0;
   const toolCount = tool.childMessages?.reduce((n, m) => n + (m.tools?.length ?? 0), 0) ?? 0;
@@ -218,7 +276,7 @@ function TaskGroup({ tool, onTaskClick, onSessionClick }: SessionToolCallProps) 
         <span className="task-group-icon">
           {hasResult ? '\u2713' : '\u25B6'}
         </span>
-        <span className="task-group-label">Task</span>
+        <span className="task-group-label">{tool.name}</span>
         {subagentType && <span className="task-group-agent-type">{subagentType}</span>}
         <span className="task-group-description">{description}</span>
         {!open && toolCount > 0 && (
@@ -248,8 +306,8 @@ function TaskGroup({ tool, onTaskClick, onSessionClick }: SessionToolCallProps) 
 }
 
 function SessionToolCall({ tool, onTaskClick, onSessionClick }: SessionToolCallProps) {
-  // Task tool with childMessages or agentId → render as collapsible TaskGroup
-  if (tool.name === 'Task' && (tool.childMessages || tool.agentId || tool.result)) {
+  // Task/Agent tool with childMessages or agentId → render as collapsible group
+  if (GROUPABLE_HISTORY_TOOLS.has(tool.name) && (tool.childMessages || tool.agentId || tool.result)) {
     return <TaskGroup tool={tool} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />;
   }
 
