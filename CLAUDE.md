@@ -215,7 +215,7 @@ Singleton `bus`. Named subscribers, destination routing (events with `destinatio
 | **Subtask** | `subtask:added`, `subtask:toggled`, `subtask:deleted` |
 | **Agent** | `agent:text-delta`, `agent:tool-activity`, `agent:tool-call`, `agent:tool-result`, `agent:thinking`, `agent:response`, `agent:error` |
 | **Session** | `session:start`, `session:send`, `session:started`, `session:ended`, `session:result`, `session:error` |
-| **Session streaming** | `session:text-delta`, `session:tool-use`, `session:tool-result`, `session:status-changed`, `session:messages-delivered`, `session:batch-completed`, `session:message-queued` |
+| **Session streaming** | `session:text-delta`, `session:tool-use`, `session:tool-result`, `session:status-changed`, `session:usage-update`, `session:messages-delivered`, `session:batch-completed`, `session:message-queued` |
 | **Subagent** | `subagent:start`, `subagent:send`, `subagent:started`, `subagent:result`, `subagent:error` |
 | **Chat** | `chat:history-updated`, `chat:compacting`, `chat:compacted` |
 | **Cron** | `cron:job-added`, `cron:job-updated`, `cron:job-removed`, `cron:job-started`, `cron:job-finished`, `cron:notification` |
