@@ -191,6 +191,7 @@ If you decide NOT to notify, simply don't include the tags.
                   'send_to_session', 'query_tasks', 'memory', 'search'],
   context_sources: [
     { id: 'project_task_list', enabled: true },
+    { id: 'session_history', enabled: true },
   ],
   stateful: {
     memory_project: '{auto}/triage',
