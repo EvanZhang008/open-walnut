@@ -33,6 +33,11 @@
   --heartbeat: #FF6B6B;
   --overlay-bg: rgba(0, 0, 0, 0.3);
 
+  /* Entity ref colors — task=blue (accent), session=purple */
+  --session-ref: #5856D6;
+  --session-ref-subtle: rgba(88, 86, 214, 0.08);
+  --session-ref-subtle-hover: rgba(88, 86, 214, 0.16);
+
   color-scheme: light dark;
 }
 
@@ -56,6 +61,9 @@
   --card-shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.3);
   --heartbeat: #FF8787;
   --overlay-bg: rgba(0, 0, 0, 0.5);
+  --session-ref: #5E5CE6;
+  --session-ref-subtle: rgba(94, 92, 230, 0.12);
+  --session-ref-subtle-hover: rgba(94, 92, 230, 0.24);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -2927,6 +2935,16 @@ input:focus, textarea:focus, select:focus {
   text-decoration: underline;
 }
 
+.chat-collapsed-summary a.session-link {
+  color: var(--session-ref);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.chat-collapsed-summary a.session-link:hover {
+  text-decoration: underline;
+}
+
 /* Collapse toggle arrow */
 .chat-collapse-toggle {
   font-size: 0.7em;
@@ -3089,35 +3107,15 @@ input:focus, textarea:focus, select:focus {
   text-decoration: none;
   padding: 1px 6px;
   border-radius: 4px;
-  background: rgba(88, 86, 214, 0.08);
-  color: #5856D6;
+  background: var(--session-ref-subtle);
+  color: var(--session-ref);
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
 
 .markdown-body a.session-link:hover {
-  background: rgba(88, 86, 214, 0.16);
+  background: var(--session-ref-subtle-hover);
   text-decoration: none;
-}
-
-[data-theme="dark"] .markdown-body a.session-link {
-  background: rgba(94, 92, 230, 0.12);
-  color: #5E5CE6;
-}
-
-[data-theme="dark"] .markdown-body a.session-link:hover {
-  background: rgba(94, 92, 230, 0.24);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .markdown-body a.session-link {
-    background: rgba(94, 92, 230, 0.12);
-    color: #5E5CE6;
-  }
-
-  :root:not([data-theme]) .markdown-body a.session-link:hover {
-    background: rgba(94, 92, 230, 0.24);
-  }
 }
 
 /* Tables in markdown */
@@ -3629,32 +3627,12 @@ input:focus, textarea:focus, select:focus {
 }
 
 .chat-tool-block-result a.session-link {
-  background: rgba(88, 86, 214, 0.08);
-  color: #5856D6;
+  background: var(--session-ref-subtle);
+  color: var(--session-ref);
 }
 
 .chat-tool-block-result a.session-link:hover {
-  background: rgba(88, 86, 214, 0.16);
-}
-
-[data-theme="dark"] .chat-tool-block-result a.session-link {
-  background: rgba(94, 92, 230, 0.12);
-  color: #5E5CE6;
-}
-
-[data-theme="dark"] .chat-tool-block-result a.session-link:hover {
-  background: rgba(94, 92, 230, 0.24);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .chat-tool-block-result a.session-link {
-    background: rgba(94, 92, 230, 0.12);
-    color: #5E5CE6;
-  }
-
-  :root:not([data-theme]) .chat-tool-block-result a.session-link:hover {
-    background: rgba(94, 92, 230, 0.24);
-  }
+  background: var(--session-ref-subtle-hover);
 }
 
 /* ── Task Group — collapsible subagent container ── */
@@ -3823,32 +3801,12 @@ input:focus, textarea:focus, select:focus {
 }
 
 .chat-tool-block-pre a.session-link {
-  background: rgba(88, 86, 214, 0.08);
-  color: #5856D6;
+  background: var(--session-ref-subtle);
+  color: var(--session-ref);
 }
 
 .chat-tool-block-pre a.session-link:hover {
-  background: rgba(88, 86, 214, 0.16);
-}
-
-[data-theme="dark"] .chat-tool-block-pre a.session-link {
-  background: rgba(94, 92, 230, 0.12);
-  color: #5E5CE6;
-}
-
-[data-theme="dark"] .chat-tool-block-pre a.session-link:hover {
-  background: rgba(94, 92, 230, 0.24);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .chat-tool-block-pre a.session-link {
-    background: rgba(94, 92, 230, 0.12);
-    color: #5E5CE6;
-  }
-
-  :root:not([data-theme]) .chat-tool-block-pre a.session-link:hover {
-    background: rgba(94, 92, 230, 0.24);
-  }
+  background: var(--session-ref-subtle-hover);
 }
 
 /* Markdown expansion for long input field values */
@@ -9711,6 +9669,16 @@ img[data-lightbox-src],
 }
 
 .triage-session-task-ref a.task-link:hover {
+  text-decoration: underline;
+}
+
+.triage-session-task-ref a.session-link {
+  color: var(--session-ref);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.triage-session-task-ref a.session-link:hover {
   text-decoration: underline;
 }
 
