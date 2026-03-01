@@ -2362,8 +2362,13 @@ export class SessionRunner {
 
           // ── FIFO stall detection ──
           // Claude CLI may stop reading from stdin FIFO after completing a --resume turn.
-          // If no JSONL output appears within 30s, the FIFO delivery silently failed.
+          // If no JSONL output appears within the timeout, the FIFO delivery silently failed.
           // Kill the stalled process and fall back to --resume spawn.
+          //
+          // Timeout is 120s (not 30s) because large-context sessions (e.g. 789K tokens)
+          // have very long time-to-first-token on API calls. 30s was killing sessions
+          // that were legitimately processing a large context.
+          const STALL_TIMEOUT_MS = 120_000
           const outputFile = targetSession.outputFile
           if (outputFile) {
             let sizeAtWrite = -1
@@ -2377,11 +2382,11 @@ export class SessionRunner {
               try { currentSize = fs.statSync(outputFile).size } catch { /* ignore */ }
 
               if (currentSize <= sizeAtWrite) {
-                log.session.warn('FIFO stall detected — no JSONL output after 30s, killing stalled process', {
+                log.session.warn('FIFO stall detected — no JSONL output, killing stalled process', {
                   sessionId,
                   taskId: targetSession!.taskId,
                   pid: targetSession!.processPid,
-                  stallDurationMs: 30_000,
+                  stallDurationMs: STALL_TIMEOUT_MS,
                   sizeAtWrite,
                   currentSize,
                 })
@@ -2403,7 +2408,7 @@ export class SessionRunner {
                   })
                 })
               }
-            }, 30_000)
+            }, STALL_TIMEOUT_MS)
 
             // If the session produces a result normally, cancel the stall timer.
             // We listen for JSONL activity via a one-shot tailer size check isn't needed —
