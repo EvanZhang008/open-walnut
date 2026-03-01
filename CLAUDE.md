@@ -2,6 +2,21 @@
 
 > For full system deep-dives and diagrams, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
+## CRITICAL: Open Source Repository — No Internal/Sensitive Information
+
+**This is a PUBLIC open-source project on GitHub. Every commit, file, and message is visible to the entire internet.**
+
+You MUST NOT include any of the following in code, comments, commit messages, file names, documentation, or any other content:
+- **Company-internal names**: product names, service names, tool names, team names, project codenames, or any proprietary terminology from any employer
+- **Personal information**: real names (other than the repo owner), email addresses, employee IDs, phone numbers, addresses
+- **Internal infrastructure**: hostnames, internal URLs, IP addresses, account IDs, ARNs, internal API endpoints
+- **Credentials & secrets**: tokens, passwords, API keys, certificates, cookie values
+- **Internal processes**: oncall procedures, ticket systems, internal wikis, deployment pipelines specific to an employer
+
+When referencing external integrations or plugins, use **generic descriptions** (e.g., "external sync plugin", "company-internal tool") instead of actual product names. If an external/internal plugin must exist, it belongs in `~/.walnut/plugins/` (external, never committed) — not in this repo.
+
+**When in doubt, leave it out.**
+
 ## What & Why
 
 Walnut is a personal AI butler that manages tasks, accumulates knowledge, and runs AI sessions — all centered around one idea: **tasks are the atom of everything**. Tasks live in a Category → Project hierarchy, can spawn Claude Code sessions, and connect to a rich memory system. The AI agent has access to your full context (tasks, memory, sessions, skills, tools) and acts on your behalf.
