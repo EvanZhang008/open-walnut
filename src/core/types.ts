@@ -230,6 +230,11 @@ export interface Config {
    *  Other keys = host aliases from config.hosts (e.g. 'devbox', 'nas-server').
    *  Default: local=7, remote hosts=20. */
   session_limits?: Record<string, number>;
+  session?: {
+    /** How many minutes an idle FIFO session stays alive before being auto-killed.
+     *  Set to 0 to disable idle timeout entirely. Default: 30. */
+    idle_timeout_minutes?: number;
+  };
   heartbeat?: import('../heartbeat/types.js').HeartbeatConfig;
   tools?: {
     exec?: {

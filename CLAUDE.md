@@ -167,7 +167,7 @@ Sessions are detached `claude -p` child processes writing to a JSONL file. `Sess
 
 **NEVER force-kill Claude Code processes** — this bypasses the on-stop hook and loses knowledge capture. See [ARCHITECTURE.md — Session Start Diagram](./ARCHITECTURE.md#session-start-diagram) and [Session Lifecycle Detail](./ARCHITECTURE.md#claude-code-session-lifecycle--detail).
 
-**Idle timeout**: Local FIFO sessions auto-kill after 5 minutes of idle (`IDLE_TIMEOUT_MS` in `claude-code-session.ts`). Graceful two-phase shutdown (SIGINT → SIGTERM) preserves session state for `--resume`. Timer is cancelled on new messages, restored on server restart. SSH sessions are excluded.
+**Idle timeout**: Local FIFO sessions auto-kill after 30 minutes of idle (configurable via `config.session.idle_timeout_minutes`, 0 = disabled). Graceful two-phase shutdown (SIGINT → SIGTERM) preserves session state for `--resume`. Timer is cancelled on new messages, restored on server restart. SSH sessions and `await_human_action` sessions are excluded.
 
 **Mid-session model switching**: Users can switch the Claude model via the `/model` control command in session chat. `pendingModel` is saved on the `SessionRecord` at the RPC layer (before message enqueue), consumed by `processNext()` which forces a `--resume` spawn with the new `--model` flag. Model values are validated against an allowlist (`opus`, `sonnet`, `haiku`) in `session-chat.ts`. UI: `ModelPicker` component in `web/src/components/sessions/ModelPicker.tsx`.
 
