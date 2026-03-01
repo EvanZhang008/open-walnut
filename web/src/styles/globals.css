@@ -1486,7 +1486,17 @@ input:focus, textarea:focus, select:focus {
   background: var(--bg-tertiary);
 }
 
-.session-tree-session-selected {
+.session-tree-session:focus {
+  outline: none;
+}
+
+.session-tree-session:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.session-tree-session-selected,
+.session-tree-session-selected:active {
   background: var(--accent-subtle);
   box-shadow: inset 2px 0 0 var(--accent);
 }
@@ -2246,11 +2256,21 @@ input:focus, textarea:focus, select:focus {
 }
 
 .session-row:hover {
-  background: var(--hover-bg);
+  background: var(--bg-tertiary);
 }
 
-.session-row-selected {
-  background: var(--hover-bg);
+.session-row:focus {
+  outline: none;
+}
+
+.session-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.session-row-selected,
+.session-row-selected:active {
+  background: var(--accent-subtle);
   border-left: 3px solid var(--accent);
   padding-left: 11px;
 }
