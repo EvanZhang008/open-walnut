@@ -37,7 +37,8 @@ export function useSessionUsage(sessionId: string | null): SessionUsage {
 
 /**
  * Normalize a Claude model ID to a readable display name with version.
- * "claude-opus-4-6" → "Opus 4.6", "claude-sonnet-4-5-20251001" → "Sonnet 4.5"
+ * "claude-opus-4-6" → "Opus 4.6"
+ * "global.anthropic.claude-opus-4-6-v1[1m]" → "Opus 4.6 1M"
  */
 export function formatModelName(model: string | undefined): string {
   if (!model) return '';
@@ -48,11 +49,20 @@ export function formatModelName(model: string | undefined): string {
   else if (lower.includes('sonnet')) family = 'Sonnet';
   else if (lower.includes('haiku')) family = 'Haiku';
   else return model;
+  // Detect 1M extended context from init model string
+  const is1M = lower.includes('[1m]');
+  const suffix = is1M ? ' 1M' : '';
   // Extract version: match "family-X-Y" pattern → "X.Y"
   const versionMatch = lower.match(/(?:opus|sonnet|haiku)-(\d+)-(\d+)/);
-  if (versionMatch) return `${family} ${versionMatch[1]}.${versionMatch[2]}`;
+  if (versionMatch) return `${family} ${versionMatch[1]}.${versionMatch[2]}${suffix}`;
   // Fallback: match "family-X" → "X"
   const majorMatch = lower.match(/(?:opus|sonnet|haiku)-(\d+)/);
-  if (majorMatch) return `${family} ${majorMatch[1]}`;
-  return family;
+  if (majorMatch) return `${family} ${majorMatch[1]}${suffix}`;
+  return `${family}${suffix}`;
+}
+
+/** Detect context window size from model string. Returns tokens. */
+export function getContextWindowSize(model: string | undefined): number {
+  if (model?.toLowerCase().includes('[1m]')) return 1_000_000;
+  return 200_000;
 }

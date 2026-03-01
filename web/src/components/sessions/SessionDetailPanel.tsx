@@ -8,7 +8,7 @@ import { SessionCopyButtons } from './SessionCopyButtons';
 import { updateSession, executePlanSession, executePlanContinue } from '@/api/sessions';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
 import { useSessionPlan } from '@/hooks/useSessionPlan';
-import { useSessionUsage, formatModelName } from '@/hooks/useSessionUsage';
+import { useSessionUsage, formatModelName, getContextWindowSize } from '@/hooks/useSessionUsage';
 import { PlanContentContext } from '@/contexts/PlanContentContext';
 import type { SessionRecord } from '@/types/session';
 import { timeAgo } from '@/utils/time';
@@ -141,13 +141,23 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
 
   // Real-time model + context window usage
   const liveUsage = useSessionUsage(sessionId_ || null);
-  // Fallback: derive model from last assistant message in history
-  const historyModel = !historyLoading && historyMessages.length > 0
-    ? [...historyMessages].reverse().find(m => m.role === 'assistant' && m.model)?.model
+  // Fallback: derive model + context % from last assistant message in history
+  const lastAssistant = !historyLoading && historyMessages.length > 0
+    ? [...historyMessages].reverse().find(m => m.role === 'assistant' && m.model)
     : undefined;
   // Priority: live WebSocket > SessionRecord > history-derived
-  const displayModel = formatModelName(liveUsage.model || session?.model || historyModel);
-  const contextPercent = liveUsage.contextPercent;
+  const rawModel = liveUsage.model || session?.model || lastAssistant?.model;
+  const displayModel = formatModelName(rawModel);
+  // Context %: live WS first, then compute from history usage
+  let contextPercent = liveUsage.contextPercent;
+  if (contextPercent == null && lastAssistant?.usage) {
+    const u = lastAssistant.usage as Record<string, number>;
+    const totalInput = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
+    if (totalInput > 0) {
+      const ctxSize = getContextWindowSize(rawModel);
+      contextPercent = Math.min(100, Math.round(totalInput / ctxSize * 100));
+    }
+  }
 
   // Scroll-to-message: find the message element in SessionChatHistory by data-msg-index
   const handleMessageClick = useCallback((messageIndex: number) => {
@@ -205,7 +215,7 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
     }
   };
 
-  /** "Clear Context & Execute" — creates a fresh session, old one is absorbed. */
+  /** "Clear Context & Execute" — creates a fresh session, old one is archived (reason: plan_executed). */
   const handleClearContextExecute = async () => {
     const clickedSessionId = sessionIdRef.current; // snapshot at click time
     setExecuting(true);
@@ -251,7 +261,7 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
                   className="session-detail-badge"
                   style={{ color: '#f59e0b', background: '#f59e0b20', fontWeight: 600, fontSize: '11px' }}
                 >
-                  Archived
+                  Archived{session.archive_reason ? ` · ${session.archive_reason === 'plan_executed' ? 'plan executed' : session.archive_reason}` : ''}
                 </span>
               )}
               {isEmbedded && (

@@ -195,8 +195,10 @@ export class ClaudeCodeSession {
   private _workStatus: WorkStatus = 'in_progress'
   private _mode: SessionMode = 'default'
   private _activity: string | undefined
-  /** Model ID from JSONL system init + assistant messages. */
+  /** Model ID from JSONL assistant messages (e.g. "claude-opus-4-6"). */
   private _model: string | undefined
+  /** Full model string from system init (e.g. "global.anthropic.claude-opus-4-6-v1[1m]"). */
+  private _initModel: string | undefined
   /** The session ID we expect after a --resume. If Claude returns a different ID,
    *  we rename the existing record instead of creating a phantom new one. */
   private _expectedSessionId: string | null = null
@@ -1097,9 +1099,13 @@ export class ClaudeCodeSession {
           // Re-emit status now that claudeSessionId is set (first emit at spawn had null ID)
           this.emitStatusChanged(this._workStatus)
 
-          // Capture model from init event
+          // Capture model from init event (full string with provider prefix + [1m] suffix)
           if (typeof sys.model === 'string' && sys.model) {
-            this._model = sys.model
+            this._initModel = sys.model
+            // Extract short model ID for display (e.g. "claude-opus-4-6")
+            // Init model format: "global.anthropic.claude-opus-4-6-v1[1m]"
+            const shortModel = sys.model.replace(/^.*\./, '').replace(/[-_]v\d+.*$/, '') || sys.model
+            this._model = shortModel
             import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
               updateSessionRecord(newId, { model: sys.model as string }).catch(() => {}),
             )
@@ -1305,8 +1311,9 @@ export class ClaudeCodeSession {
             const totalInput = usage.input_tokens
               + (usage.cache_creation_input_tokens ?? 0)
               + (usage.cache_read_input_tokens ?? 0)
-            // All current Claude models have 200K context window
-            const contextWindowSize = 200_000
+            // Detect context window size from init model string: [1m] → 1M, default 200K
+            const is1M = this._initModel?.includes('[1m]') ?? false
+            const contextWindowSize = is1M ? 1_000_000 : 200_000
             const contextPercent = Math.min(100, Math.round(totalInput / contextWindowSize * 100))
             // Update model if reported on this message
             const msgModel = msg.message.model

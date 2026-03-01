@@ -17,7 +17,7 @@ import { timeAgo } from '@/utils/time';
 import { WorkStatusPicker } from './WorkStatusPicker';
 import { SessionCopyButtons } from './SessionCopyButtons';
 import { ModelPicker } from './ModelPicker';
-import { useSessionUsage, formatModelName } from '@/hooks/useSessionUsage';
+import { useSessionUsage, formatModelName, getContextWindowSize } from '@/hooks/useSessionUsage';
 import { wsClient } from '@/api/ws';
 import type { SessionRecord } from '@/types/session';
 
@@ -122,11 +122,20 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
 
   // Real-time model + context window usage
   const liveUsage = useSessionUsage(sessionId);
-  const historyModel = !historyLoading && historyMessages.length > 0
-    ? [...historyMessages].reverse().find(m => m.role === 'assistant' && m.model)?.model
+  const lastAssistant = !historyLoading && historyMessages.length > 0
+    ? [...historyMessages].reverse().find(m => m.role === 'assistant' && m.model)
     : undefined;
-  const displayModel = formatModelName(liveUsage.model || session?.model || historyModel);
-  const contextPercent = liveUsage.contextPercent;
+  const rawModel = liveUsage.model || session?.model || lastAssistant?.model;
+  const displayModel = formatModelName(rawModel);
+  let contextPercent = liveUsage.contextPercent;
+  if (contextPercent == null && lastAssistant?.usage) {
+    const u = lastAssistant.usage as Record<string, number>;
+    const totalInput = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
+    if (totalInput > 0) {
+      const ctxSize = getContextWindowSize(rawModel);
+      contextPercent = Math.min(100, Math.round(totalInput / ctxSize * 100));
+    }
+  }
 
   // Scroll-to-message handler for UserMessagesSummary
   const handleMessageClick = useCallback((messageIndex: number) => {
@@ -346,7 +355,7 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
             )}
             {session?.project && <span className="session-panel-project" title={session.cwd || session.project}>{session.project}</span>}
             {displayModel && (
-              <span className="session-detail-model-pill" title={liveUsage.model || session?.model || historyModel || ''}>
+              <span className="session-detail-model-pill" title={rawModel || ''}>
                 {displayModel}
                 {contextPercent != null && (
                   <span
