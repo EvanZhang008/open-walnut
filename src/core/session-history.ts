@@ -83,6 +83,61 @@ interface RawJsonlLine {
   };
 }
 
+/** Tool names whose child messages (identified by parent_tool_use_id) should be grouped. */
+const GROUPABLE_TOOL_NAMES = new Set(['Task', 'Agent']);
+
+/**
+ * Group inline subagent children under their parent tool calls.
+ * For Agent tools (Claude Code subagents), child messages live in the same JSONL
+ * with parent_tool_use_id pointing to the parent tool_use block.
+ * This function moves those children into tool.childMessages and removes them
+ * from the flat result array.
+ */
+function groupInlineChildren(
+  result: SessionHistoryMessage[],
+  parentIds: (string | undefined)[],
+): SessionHistoryMessage[] {
+  // Build map: parentToolUseId → child result indices
+  const childIndicesByParent = new Map<string, number[]>();
+  for (let i = 0; i < result.length; i++) {
+    const pid = parentIds[i];
+    if (!pid) continue;
+    const arr = childIndicesByParent.get(pid);
+    if (arr) arr.push(i);
+    else childIndicesByParent.set(pid, [i]);
+  }
+  if (childIndicesByParent.size === 0) return result;
+
+  // Attach children to parent tools (Agent, Task, etc.)
+  for (const msg of result) {
+    if (!msg.tools) continue;
+    for (const tool of msg.tools) {
+      if (!tool.toolUseId || !GROUPABLE_TOOL_NAMES.has(tool.name)) continue;
+      const childIndices = childIndicesByParent.get(tool.toolUseId);
+      if (!childIndices) continue;
+      // Don't overwrite childMessages already populated by readSubagentContents
+      if (tool.childMessages && tool.childMessages.length > 0) continue;
+      tool.childMessages = childIndices.map(i => result[i]);
+    }
+  }
+
+  // Remove consumed children from the flat list
+  const consumed = new Set<number>();
+  for (const indices of childIndicesByParent.values()) {
+    // Only remove if actually attached to a parent tool
+    const parentToolUseId = parentIds[indices[0]];
+    if (!parentToolUseId) continue;
+    const isAttached = result.some(m =>
+      m.tools?.some(t => t.toolUseId === parentToolUseId && t.childMessages && t.childMessages.length > 0)
+    );
+    if (isAttached) {
+      for (const i of indices) consumed.add(i);
+    }
+  }
+  if (consumed.size === 0) return result;
+  return result.filter((_, i) => !consumed.has(i));
+}
+
 /**
  * Core parsing logic: parse raw JSONL content string into SessionHistoryMessage[].
  * Deduplicates by message.id, handles queue-operations.
@@ -107,6 +162,7 @@ function parseSessionMessages(content: string): SessionHistoryMessage[] {
     timestamp: string;
     model?: string;
     usage?: { input_tokens: number; output_tokens: number };
+    parentToolUseId?: string;
     contentBlocks: Array<{
       type: string;
       text?: string;
@@ -176,12 +232,17 @@ function parseSessionMessages(content: string): SessionHistoryMessage[] {
       if (raw.message.usage) {
         existing.usage = raw.message.usage;
       }
+      // Inherit parent_tool_use_id from any line in the group
+      if (raw.parent_tool_use_id && !existing.parentToolUseId) {
+        existing.parentToolUseId = raw.parent_tool_use_id;
+      }
     } else {
       messageMap.set(msgId, {
         role: raw.message.role,
         timestamp: raw.timestamp ?? new Date().toISOString(),
         model: raw.message.model,
         usage: raw.message.usage,
+        parentToolUseId: raw.parent_tool_use_id ?? undefined,
         contentBlocks: raw.message.content
           ? (typeof raw.message.content === 'string'
             ? [{ type: 'text' as const, text: raw.message.content }]
@@ -220,6 +281,9 @@ function parseSessionMessages(content: string): SessionHistoryMessage[] {
   // Convert to SessionHistoryMessage array
   // Track the last plan content written to ~/.claude/plans/ across messages
   let lastPlanContent: string | null = null;
+
+  // Parallel array tracking which parentToolUseId each result entry belongs to
+  const resultParentIds: (string | undefined)[] = [];
 
   const result: SessionHistoryMessage[] = [];
   for (const [, msg] of messageMap) {
@@ -293,9 +357,13 @@ function parseSessionMessages(content: string): SessionHistoryMessage[] {
       ...(msg.model ? { model: msg.model } : {}),
       ...(msg.usage ? { usage: msg.usage } : {}),
     });
+    resultParentIds.push(msg.parentToolUseId);
   }
 
-  return result;
+  // Group inline subagent children (e.g. Agent tool calls from Claude Code).
+  // Unlike Task tools (which have separate JSONL files), Agent children are inline
+  // in the same JSONL with parent_tool_use_id linking them to the parent tool_use.
+  return groupInlineChildren(result, resultParentIds);
 }
 
 /**
@@ -370,6 +438,40 @@ export async function readSessionHistory(sessionId: string, cwd?: string, host?:
   if (hasTaskTools) {
     const subagentMap = await readSubagentMessages(sessionId, cwd, host);
     attachSubagentMessages(messages, subagentMap);
+  }
+
+  // Refresh plan content from disk (local sessions only).
+  // The plan file may have been updated after the initial Write captured in the JSONL
+  // (e.g., agent continued editing the plan). Replace ExitPlanMode planContent
+  // with the latest disk version so the PlanCard shows current content on first load.
+  if (!host) {
+    let planFilePath: string | undefined;
+    for (const msg of messages) {
+      if (!msg.tools) continue;
+      for (const tool of msg.tools) {
+        if (tool.name === 'Write' && typeof tool.input?.file_path === 'string'
+          && tool.input.file_path.includes('.claude/plans/')) {
+          planFilePath = tool.input.file_path;
+        }
+      }
+    }
+    if (planFilePath) {
+      try {
+        const diskContent = fs.readFileSync(planFilePath, 'utf-8');
+        if (diskContent) {
+          for (const msg of messages) {
+            if (!msg.tools) continue;
+            for (const tool of msg.tools) {
+              if (tool.name === 'ExitPlanMode' && tool.planContent) {
+                tool.planContent = diskContent;
+              }
+            }
+          }
+        }
+      } catch {
+        // Plan file may have been deleted — use JSONL content as fallback
+      }
+    }
   }
 
   return messages;
