@@ -535,15 +535,15 @@ export const tools: ToolDefinition[] = [
           if (!project) return 'Error: "project" is required for type=project';
           const result = await createProject(category, project);
 
-          // Prompt AI to configure working directory for the new project
+          // Prompt AI to confirm working directory with the user
           const metadata = await getProjectMetadata(result.category, result.project);
           let response = `Project created: "${result.project}" in category "${result.category}" (source: ${result.source})`;
           if (!metadata?.default_cwd) {
             const { PROJECTS_MEMORY_DIR } = await import('../constants.js');
             const { default: path } = await import('node:path');
             const memDir = path.join(PROJECTS_MEMORY_DIR, result.category.toLowerCase(), result.project.toLowerCase());
-            response += `\n⚠️ No working directory configured. Sessions will fall back to: ${memDir}`;
-            response += `\nSet the correct path: update_task type=project, category="${result.category}", project="${result.project}", default_cwd="/path/to/code"`;
+            response += `\n⚠️ No default_cwd set — sessions will use: ${memDir}`;
+            response += `\nPlease confirm with the user what the correct working directory should be for this project, then set it via default_cwd.`;
           }
           return response;
         }
