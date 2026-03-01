@@ -19,6 +19,8 @@ interface ServerSearchResult {
   snippet: string;
   path?: string;
   taskId?: string;
+  parentTaskId?: string;
+  isAutoExpanded?: boolean;
   score: number;
   matchField: string;
 }
@@ -42,6 +44,7 @@ export async function searchAll(q: string, options?: SearchOptions): Promise<Sea
         snippet: item.snippet,
         score: item.score,
         matchField: item.matchField,
+        isAutoExpanded: item.isAutoExpanded,
         // Fill required Task fields with defaults for display
         status: 'todo',
         priority: 'none',
@@ -55,7 +58,8 @@ export async function searchAll(q: string, options?: SearchOptions): Promise<Sea
         summary: '',
         note: '',
         phase: 'TODO',
-      } as Task & { snippet: string; score: number; matchField: string });
+        ...(item.parentTaskId ? { parent_task_id: item.parentTaskId } : {}),
+      } as Task & { snippet: string; score: number; matchField: string; isAutoExpanded?: boolean });
     } else {
       memories.push({
         path: item.path ?? item.title,

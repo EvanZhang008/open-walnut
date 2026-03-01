@@ -7,8 +7,10 @@ interface MemoryResult {
   excerpt: string;
 }
 
+type SearchTask = Task & { snippet?: string; score?: number; matchField?: string; isAutoExpanded?: boolean };
+
 interface SearchResultsProps {
-  tasks: Task[];
+  tasks: SearchTask[];
   memories: MemoryResult[];
   query: string;
 }
@@ -26,21 +28,36 @@ export function SearchResults({ tasks, memories, query }: SearchResultsProps) {
       {tasks.length > 0 && (
         <div className="search-group">
           <h3 className="search-group-title">Tasks ({tasks.length})</h3>
-          {tasks.map((task) => (
-            <div
-              key={task.id}
-              className="search-result-item"
-              onClick={() => navigate(`/tasks/${task.id}`)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => { if (e.key === 'Enter') navigate(`/tasks/${task.id}`); }}
-            >
-              <span className="badge badge-todo">Task</span>
-              <span className="search-result-title">{task.title}</span>
-              <PriorityBadge priority={task.priority} />
-              <span className="text-xs text-muted">{task.project}</span>
-            </div>
-          ))}
+          {tasks.map((task) => {
+            const isChild = !!task.parent_task_id;
+            const isAutoExpanded = !!(task as SearchTask).isAutoExpanded;
+
+            return (
+              <div
+                key={task.id}
+                className={[
+                  'search-result-item',
+                  isChild ? 'search-result-child' : '',
+                ].filter(Boolean).join(' ')}
+                onClick={() => navigate(`/tasks/${task.id}`)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => { if (e.key === 'Enter') navigate(`/tasks/${task.id}`); }}
+              >
+                <span className={`badge ${isChild ? 'badge-child' : 'badge-todo'}`}>
+                  {isChild ? '↳ Child' : 'Task'}
+                </span>
+                <span className="search-result-title">{task.title}</span>
+                <PriorityBadge priority={task.priority} />
+                {isAutoExpanded && (
+                  <span className="search-auto-expanded-badge" title="Auto-expanded from parent">
+                    auto
+                  </span>
+                )}
+                <span className="text-xs text-muted">{task.project}</span>
+              </div>
+            );
+          })}
         </div>
       )}
 

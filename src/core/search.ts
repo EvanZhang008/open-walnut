@@ -9,6 +9,8 @@ export interface SearchResult {
   snippet: string;
   path?: string;
   taskId?: string;
+  parentTaskId?: string;  // populated for child tasks
+  isAutoExpanded?: boolean; // true if included because parent matched (not direct hit)
   score: number;        // combined normalized score
   matchField: string;   // 'semantic' | field name of best keyword match
   keywordScore?: number;  // normalized BM25 contribution [0,1], undefined if no keyword match
@@ -240,6 +242,7 @@ async function vectorSearchTasks(
           title: task?.title ?? r.id,
           snippet: task ? extractSnippet(task.title + '. ' + (task.description || task.summary || ''), query) : '',
           taskId: r.id,
+          parentTaskId: task?.parent_task_id,
           score: r.score,
           matchField: 'semantic',
         };
@@ -374,6 +377,7 @@ export async function search(
             title: task.title,
             snippet: extractSnippet(snippetSource, normalizedQuery),
             taskId: task.id,
+            parentTaskId: task.parent_task_id,
             score: bestScore,
             matchField,
           });
@@ -450,7 +454,7 @@ export async function search(
   // ── keyword-only mode: return BM25 results directly ──
   if (mode === 'keyword') {
     bm25Results.sort((a, b) => b.score - a.score);
-    return bm25Results.slice(0, limit);
+    return expandChildTasks(bm25Results.slice(0, limit));
   }
 
   // ── Vector path ──
@@ -475,7 +479,7 @@ export async function search(
   // ── semantic-only mode: return vector results directly ──
   if (mode === 'semantic') {
     vectorResults.sort((a, b) => b.score - a.score);
-    return vectorResults.slice(0, limit);
+    return expandChildTasks(vectorResults.slice(0, limit));
   }
 
   // ── hybrid mode: RRF fusion ──
@@ -484,9 +488,64 @@ export async function search(
 
   if (vectorResults.length === 0) {
     // No vector results (Ollama unavailable or empty index) — fall back to BM25
-    return bm25Results.slice(0, limit);
+    return expandChildTasks(bm25Results.slice(0, limit));
   }
 
   const fused = normalizedFuse(bm25Results, vectorResults, 0.4);
-  return fused.slice(0, limit);
+  return expandChildTasks(fused.slice(0, limit));
+}
+
+/**
+ * Auto-expand child tasks for matched parents.
+ * For each parent task in results, inserts its children right after it
+ * (if not already present). Children are marked with isAutoExpanded=true.
+ */
+async function expandChildTasks(results: SearchResult[]): Promise<SearchResult[]> {
+  // Collect parent task IDs (tasks that are NOT children themselves)
+  const taskResults = results.filter((r) => r.type === 'task' && !r.parentTaskId);
+  if (taskResults.length === 0) return results;
+
+  const parentFullIds = taskResults.map((r) => r.taskId!);
+  const existingIds = new Set(results.filter((r) => r.taskId).map((r) => r.taskId!));
+
+  // Load all tasks to find children
+  const allTasks = await listTasks();
+
+  // parent_task_id may be a prefix — resolve to full parent ID via prefix match
+  const childrenByParent = new Map<string, typeof allTasks>();
+  for (const task of allTasks) {
+    if (!task.parent_task_id || existingIds.has(task.id)) continue;
+    // Match: task.parent_task_id is a prefix of one of our parent full IDs
+    const matchedParent = parentFullIds.find((pid) => pid.startsWith(task.parent_task_id!));
+    if (matchedParent) {
+      const children = childrenByParent.get(matchedParent) ?? [];
+      children.push(task);
+      childrenByParent.set(matchedParent, children);
+    }
+  }
+
+  if (childrenByParent.size === 0) return results;
+
+  // Insert children after their parent
+  const expanded: SearchResult[] = [];
+  for (const result of results) {
+    expanded.push(result);
+    if (result.type === 'task' && result.taskId && childrenByParent.has(result.taskId)) {
+      const children = childrenByParent.get(result.taskId)!;
+      for (const child of children) {
+        expanded.push({
+          type: 'task',
+          title: child.title,
+          snippet: '',
+          taskId: child.id,
+          parentTaskId: child.parent_task_id,
+          isAutoExpanded: true,
+          score: result.score * 0.9,
+          matchField: 'child',
+        });
+      }
+    }
+  }
+
+  return expanded;
 }
