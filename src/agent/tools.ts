@@ -534,7 +534,18 @@ export const tools: ToolDefinition[] = [
           if (!category) return 'Error: "category" is required for type=project';
           if (!project) return 'Error: "project" is required for type=project';
           const result = await createProject(category, project);
-          return `Project created: "${result.project}" in category "${result.category}" (source: ${result.source})`;
+
+          // Prompt AI to configure working directory for the new project
+          const metadata = await getProjectMetadata(result.category, result.project);
+          let response = `Project created: "${result.project}" in category "${result.category}" (source: ${result.source})`;
+          if (!metadata?.default_cwd) {
+            const { PROJECTS_MEMORY_DIR } = await import('../constants.js');
+            const { default: path } = await import('node:path');
+            const memDir = path.join(PROJECTS_MEMORY_DIR, result.category.toLowerCase(), result.project.toLowerCase());
+            response += `\n⚠️ No working directory configured. Sessions will fall back to: ${memDir}`;
+            response += `\nSet the correct path: update_task type=project, category="${result.category}", project="${result.project}", default_cwd="/path/to/code"`;
+          }
+          return response;
         }
 
         // type === 'task' (default)
