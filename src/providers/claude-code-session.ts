@@ -1304,17 +1304,24 @@ export class ClaudeCodeSession {
         }
 
         // ── Emit context window usage from assistant message ──
+        // Context % = totalInput / contextWindowSize * 100
+        //   totalInput = input_tokens + cache_creation_input_tokens + cache_read_input_tokens
+        //   These three fields are mutually exclusive (no overlap):
+        //     - input_tokens: tokens NOT read from or written to cache
+        //     - cache_creation_input_tokens: tokens written to cache this request
+        //     - cache_read_input_tokens: tokens read from cache
+        //   Their sum = total prompt size = context window usage.
+        //   NOT capped at 100 — values >100% indicate wrong contextWindowSize detection.
         if (this.claudeSessionId && msg.message) {
           const usage = msg.message.usage
           if (usage) {
-            // total input = non-cached + cache creation + cache read
             const totalInput = usage.input_tokens
               + (usage.cache_creation_input_tokens ?? 0)
               + (usage.cache_read_input_tokens ?? 0)
             // Detect context window size from init model string: [1m] → 1M, default 200K
             const is1M = this._initModel?.includes('[1m]') ?? false
             const contextWindowSize = is1M ? 1_000_000 : 200_000
-            const contextPercent = Math.min(100, Math.round(totalInput / contextWindowSize * 100))
+            const contextPercent = Math.round(totalInput / contextWindowSize * 100)
             // Update model if reported on this message
             const msgModel = msg.message.model
             if (typeof msgModel === 'string' && msgModel) {

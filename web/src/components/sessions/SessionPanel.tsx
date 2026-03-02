@@ -133,7 +133,7 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
     const totalInput = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
     if (totalInput > 0) {
       const ctxSize = getContextWindowSize(rawModel);
-      contextPercent = Math.min(100, Math.round(totalInput / ctxSize * 100));
+      contextPercent = Math.round(totalInput / ctxSize * 100);
     }
   }
 
