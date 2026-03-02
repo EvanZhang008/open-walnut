@@ -14,7 +14,7 @@
 
 import type { AgentDefinition, ContextSourceId, Task } from '../core/types.js';
 import { estimateTokens } from '../core/daily-log.js';
-import { truncateToTokenBudget } from '../utils/token-truncate.js';
+import { truncateToTokenBudget, truncateToTokenBudgetTail } from '../utils/token-truncate.js';
 import { log } from '../logging/index.js';
 
 // ── Default token budgets per source ──
@@ -111,14 +111,20 @@ async function loadSessionHistory(sessionId: string, budget: number): Promise<st
   const messages = await readSessionHistory(sessionId);
   if (messages.length === 0) return '(no session history)';
 
-  // Format messages into readable text, most recent first for tail-truncation
-  const lines = messages.map((m) => {
-    const prefix = m.role === 'user' ? 'User' : 'Assistant';
-    const toolInfo = m.tools?.length ? ` [tools: ${m.tools.map((t) => t.name).join(', ')}]` : '';
-    return `**${prefix}**${toolInfo}: ${m.text}`;
-  });
+  // Assistant-only + [index] prefix + per-message truncation + tail truncation
+  const MAX_PER_MSG = 500;
+  const lines: string[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    if (m.role !== 'assistant') continue;
+    const toolInfo = m.tools?.length ? ` [${m.tools.map((t) => t.name).join(', ')}]` : '';
+    const text = m.text.length > MAX_PER_MSG
+      ? m.text.slice(0, MAX_PER_MSG) + `... [${m.text.length} chars]`
+      : m.text;
+    lines.push(`[${i}] Assistant${toolInfo}: ${text}`);
+  }
 
-  return truncateToTokenBudget(lines.join('\n\n'), budget);
+  return truncateToTokenBudgetTail(lines.join('\n'), budget);
 }
 
 async function loadConversationLog(task: Task, budget: number): Promise<string> {

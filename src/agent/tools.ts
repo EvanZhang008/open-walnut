@@ -941,33 +941,42 @@ For projects (type='project'): set default_host and default_cwd for remote sessi
   // ── Session Tools ──
   {
     name: 'list_sessions',
-    description: 'List tracked sessions — both CLI (Claude Code) sessions and embedded subagent runs. Absorbed (replaced) plan sessions are hidden by default.',
+    description: 'List tracked sessions — both CLI (Claude Code) sessions and embedded subagent runs. Archived sessions (including auto-archived plan sessions) are hidden by default.',
     input_schema: {
       type: 'object',
       properties: {
         work_status: { type: 'string', enum: ['in_progress', 'agent_complete', 'await_human_action', 'completed', 'error'], description: 'Filter by work status' },
-        task_id: { type: 'string', description: 'Filter sessions for a specific task' },
+        task_id: { type: 'string', description: 'Filter sessions for a specific task (supports ID prefix)' },
         runner: { type: 'string', enum: ['cli', 'embedded', 'all'], description: 'Filter by runner type. Default: all.' },
-        include_absorbed: { type: 'boolean', description: 'Include absorbed (replaced) plan sessions. Default: false.' },
         include_triage: { type: 'boolean', description: 'Include triage/message-send-triage subagent sessions. Default: false — these are high-volume internal housekeeping runs.' },
+        include_archived: { type: 'boolean', description: 'Include archived sessions (manually archived + auto-archived plan sessions). Default: false.' },
       },
     },
     async execute(params) {
       const runnerFilter = (params.runner as string) ?? 'all';
-      const includeAbsorbed = params.include_absorbed === true;
       const includeTriage = params.include_triage === true;
+      const includeArchived = params.include_archived === true;
       const results: Array<Record<string, unknown>> = [];
+
+      // Resolve task_id prefix to full ID (consistent with other tools)
+      let resolvedTaskId: string | undefined;
+      if (params.task_id) {
+        try {
+          const task = await getTask(params.task_id as string);
+          resolvedTaskId = task.id;
+        } catch {
+          return `Error: No task found matching "${params.task_id}"`;
+        }
+      }
 
       // CLI sessions
       if (runnerFilter === 'all' || runnerFilter === 'cli') {
-        const sessions = params.task_id
-          ? await getSessionsForTask(params.task_id as string)
+        const sessions = resolvedTaskId
+          ? await getSessionsForTask(resolvedTaskId)
           : await listSessions();
-        // Filter out embedded sessions (they belong in the embedded section),
-        // absorbed sessions, and apply work_status filter
         let filtered = sessions.filter((s) => s.provider !== 'embedded');
-        if (!includeAbsorbed) {
-          filtered = filtered.filter((s) => !s.absorbed);
+        if (!includeArchived) {
+          filtered = filtered.filter((s) => !s.archived);
         }
         if (params.work_status) {
           filtered = filtered.filter((s) => s.work_status === params.work_status);
@@ -986,6 +995,7 @@ For projects (type='project'): set default_host and default_cwd for remote sessi
             started: s.startedAt,
             last_active: s.lastActiveAt,
             message_count: s.messageCount,
+            ...(s.archived ? { archived: true, archive_reason: s.archive_reason } : {}),
           });
         }
       }
@@ -998,8 +1008,8 @@ For projects (type='project'): set default_host and default_cwd for remote sessi
           if (!includeTriage) {
             runs = runs.filter((r) => !TRIAGE_AGENTS.has(r.agentId));
           }
-          if (params.task_id) {
-            runs = runs.filter((r) => r.taskId === params.task_id);
+          if (resolvedTaskId) {
+            runs = runs.filter((r) => r.taskId === resolvedTaskId);
           }
           if (params.work_status) {
             runs = runs.filter((r) => r.status === params.work_status);
@@ -1125,27 +1135,36 @@ and is always allowed.`,
           }
         }
 
-        // ── Strict 1-session-per-task: block if task already has ANY session (active or stopped) ──
+        // ── Strict 1-session-per-task: block if task already has a non-archived session ──
         if (task) {
-          const existingSessionIds = (task.session_ids ?? []).filter(Boolean);
-          if (existingSessionIds.length > 0) {
-            const latestId = task.session_id ?? existingSessionIds[existingSessionIds.length - 1];
-            // Best-effort lookup for richer context; gracefully degrade if store is unavailable
-            let latestSession: { claudeSessionId: string; title: string; work_status: string; process_status: string } | null = null;
-            try {
-              latestSession = latestId ? await getSessionByClaudeId(latestId) : null;
-            } catch { /* store unavailable — proceed with session IDs only */ }
-
+          const allSessions = await getSessionsForTask(task.id);
+          const activeSessions = allSessions.filter(s => !s.archived);
+          if (activeSessions.length > 0) {
+            const latest = activeSessions[activeSessions.length - 1];
             return json({
               blocked: true,
               reason: 'Task already has a session. Each task allows only ONE session (strict enforcement).',
-              session_ids: existingSessionIds,
-              existing_session: latestSession ? {
-                session_id: latestSession.claudeSessionId,
-                title: latestSession.title,
-                work_status: latestSession.work_status,
-                process_status: latestSession.process_status,
-              } : null,
+              session_ids: activeSessions.map(s => s.claudeSessionId),
+              existing_session: {
+                session_id: latest.claudeSessionId,
+                title: latest.title,
+                work_status: latest.work_status,
+                process_status: latest.process_status,
+              },
+              hint: `Use send_to_session({ session_id: "${latest.claudeSessionId}", message: "..." }) to continue in the existing session, or create a new task / subtask with create_task({ parent_task_id: "${task.id}", title: "..." }) for a fresh session.`,
+            });
+          }
+          // Fallback: check task.session_ids for IDs not in the session store
+          // (e.g. linked via linkSession but never created as a full record)
+          const storeIds = new Set(allSessions.map(s => s.claudeSessionId));
+          const orphanIds = (task.session_ids ?? []).filter(sid => sid && !storeIds.has(sid));
+          if (orphanIds.length > 0) {
+            const latestId = orphanIds[orphanIds.length - 1];
+            return json({
+              blocked: true,
+              reason: 'Task already has a session. Each task allows only ONE session (strict enforcement).',
+              session_ids: orphanIds,
+              existing_session: null,
               hint: `Use send_to_session({ session_id: "${latestId}", message: "..." }) to continue in the existing session, or create a new task / subtask with create_task({ parent_task_id: "${task.id}", title: "..." }) for a fresh session.`,
             });
           }
@@ -1452,12 +1471,15 @@ defaults (same resolution chain as start_session).`,
 
   {
     name: 'get_session_history',
-    description: 'Read the conversation history of a session. Provide session_id for CLI sessions or run_id for embedded subagent runs. Supports plan_only (extract plan without loading full history), pagination (reverse, page 1 = newest), and summarize (delegate to configured summarizer agent).',
+    description: 'Read the conversation history of a session. Default overview: each message prefixed with [index] and truncated to 500 chars. Use role to filter, index to drill into a specific message with full text + tool results.',
     input_schema: {
       type: 'object',
       properties: {
         session_id: { type: 'string', description: 'Claude session ID (for CLI sessions)' },
         run_id: { type: 'string', description: 'Subagent run ID (for embedded sessions)' },
+        role: { type: 'string', enum: ['user', 'assistant'], description: 'Filter messages by role (default: all)' },
+        index: { type: 'number', description: 'Return full content of message at this 0-based index, including complete tool inputs and results' },
+        include_tool_output: { type: 'boolean', description: 'In overview mode, include first 200 chars of each tool result (default: false)' },
         plan_only: { type: 'boolean', description: 'Return only the plan content from this session (lightweight — skips full history parsing)' },
         page_size: { type: 'number', description: 'Messages per page for reverse pagination. Page 1 = most recent messages.' },
         page: { type: 'number', description: '1-based page number from newest. Requires page_size.' },
@@ -1493,6 +1515,9 @@ defaults (same resolution chain as start_session).`,
         const pageSize = params.page_size as number | undefined;
         const page = params.page as number | undefined;
         const summarize = params.summarize as boolean | undefined;
+        const roleFilter = params.role as 'user' | 'assistant' | undefined;
+        const drillIndex = params.index as number | undefined;
+        const includeToolOutput = params.include_tool_output as boolean | undefined;
 
         // Validate mutual exclusivity
         if (planOnly && summarize) {
@@ -1527,6 +1552,30 @@ defaults (same resolution chain as start_session).`,
         if (summarize) {
           const { summarizeSession } = await import('./tools/session-summarizer.js');
           return await summarizeSession(sessionId, record ?? null);
+        }
+
+        // ── drill-in: full content of a specific message ──
+        if (drillIndex !== undefined) {
+          const { readSessionHistory } = await import('../core/session-history.js');
+          const allMessages = await readSessionHistory(sessionId, record?.cwd, record?.host, record?.outputFile);
+          if (drillIndex < 0 || drillIndex >= allMessages.length) {
+            return `Error: index ${drillIndex} out of range (0-${allMessages.length - 1}).`;
+          }
+          const m = allMessages[drillIndex];
+          const MAX_DRILL_CHARS = 20_000;
+          return json({
+            index: drillIndex,
+            role: m.role,
+            text: m.text.slice(0, MAX_DRILL_CHARS),
+            timestamp: m.timestamp,
+            tools: m.tools?.map(t => ({
+              name: t.name,
+              input: t.input,
+              result: t.result?.slice(0, MAX_DRILL_CHARS),
+            })),
+            thinking: m.thinking?.slice(0, 2000),
+            total_messages: allMessages.length,
+          });
         }
 
         // ── pagination: reverse-paginated history ──
@@ -1565,7 +1614,7 @@ defaults (same resolution chain as start_session).`,
           });
         }
 
-        // ── default: full history with budget truncation (existing behavior) ──
+        // ── default: overview with [index] prefix, role filter, budget truncation ──
         const { readSessionHistory } = await import('../core/session-history.js');
         const messages = await readSessionHistory(sessionId, record?.cwd, record?.host, record?.outputFile);
 
@@ -1573,12 +1622,22 @@ defaults (same resolution chain as start_session).`,
           return 'No history found for this session.';
         }
 
+        // Apply role filter (preserve original indices)
+        const indexed = messages.map((m, i) => ({ ...m, originalIndex: i }));
+        const filtered = roleFilter
+          ? indexed.filter(m => m.role === roleFilter)
+          : indexed;
+
+        if (filtered.length === 0) {
+          return `No ${roleFilter} messages found in this session (${messages.length} total messages).`;
+        }
+
         // Budget-based truncation: full text for short/medium sessions,
         // proportional allocation for very long ones (~20k tokens max)
         const MAX_TOTAL_CHARS = 80_000;
-        const totalChars = messages.reduce((sum, m) => sum + m.text.length, 0);
+        const totalChars = filtered.reduce((sum, m) => sum + m.text.length, 0);
 
-        return json(messages.map(m => {
+        return json(filtered.map(m => {
           let text = m.text;
           if (totalChars > MAX_TOTAL_CHARS && m.text.length > 500) {
             const budget = Math.max(500, Math.floor((m.text.length / totalChars) * MAX_TOTAL_CHARS));
@@ -1586,12 +1645,21 @@ defaults (same resolution chain as start_session).`,
               text = m.text.slice(0, budget) + `\n... [truncated, ${m.text.length} chars total]`;
             }
           }
-          return {
+          const entry: Record<string, unknown> = {
+            index: m.originalIndex,
             role: m.role,
             text,
             tools: m.tools?.map(t => t.name),
             timestamp: m.timestamp,
           };
+          // Include tool output snippets if requested
+          if (includeToolOutput && m.tools?.length) {
+            entry.tool_outputs = m.tools.map(t => ({
+              name: t.name,
+              result: t.result?.slice(0, 200),
+            }));
+          }
+          return entry;
         }));
       } catch (err) {
         return `Error: ${err instanceof Error ? err.message : String(err)}`;
@@ -1601,7 +1669,7 @@ defaults (same resolution chain as start_session).`,
 
   {
     name: 'update_session',
-    description: 'Update a Claude Code session — title, work status, or activity. Always set a descriptive title when a session lacks one or when the scope changes. Agent can set work_status to await_human_action or agent_complete. Use await_human_action when a critical decision needs human input. Keep sessions at agent_complete and resume via send_to_session until work is truly done. Only humans can set completed. Cannot set in_progress or error (system-managed).',
+    description: 'Update a Claude Code session — title, work status, activity, or archive state. Always set a descriptive title when a session lacks one or when the scope changes. Agent can set work_status to await_human_action or agent_complete. Use await_human_action when a critical decision needs human input. Keep sessions at agent_complete and resume via send_to_session until work is truly done. Only humans can set completed. Cannot set in_progress or error (system-managed). Set archived=true to archive a stopped session (frees the task session slot so a new session can start).',
     input_schema: {
       type: 'object',
       properties: {
@@ -1609,6 +1677,8 @@ defaults (same resolution chain as start_session).`,
         title: { type: 'string', description: 'Short title / one-sentence summary for the session' },
         work_status: { type: 'string', enum: ['await_human_action', 'agent_complete'], description: 'New work status. await_human_action = critical decision needs human input. agent_complete = session turn finished, can be resumed. Only humans can set completed.' },
         activity: { type: 'string', description: 'Freetext activity description (e.g. "planning", "testing")' },
+        archived: { type: 'boolean', description: 'Archive (true) or unarchive (false) a session. Session must be stopped before archiving. Archived sessions free the task session slot.' },
+        archive_reason: { type: 'string', description: 'Why this session is being archived (e.g. "wrong directory", "obsolete"). Optional.' },
       },
       required: ['session_id'],
     },
@@ -1618,6 +1688,52 @@ defaults (same resolution chain as start_session).`,
         const title = params.title as string | undefined;
         const workStatus = params.work_status as WorkStatus | undefined;
         const activity = params.activity as string | undefined;
+        const archived = params.archived as boolean | undefined;
+        const archiveReason = params.archive_reason as string | undefined;
+
+        // Handle archive/unarchive
+        if (archived !== undefined) {
+          const session = await getSessionByClaudeId(sessionId);
+          if (!session) return `Error: Session not found: ${sessionId}`;
+
+          if (archived) {
+            if (session.process_status === 'running') {
+              return `Error: Stop session before archiving. Session ${sessionId} is still running.`;
+            }
+            await updateSessionRecord(sessionId, {
+              archived: true,
+              ...(archiveReason ? { archive_reason: archiveReason } : {}),
+            });
+            // Release task session slot
+            if (session.taskId) {
+              try {
+                const { clearSession, clearSessionSlot } = await import('../core/task-manager.js');
+                await clearSession(session.taskId, sessionId);
+                await clearSessionSlot(session.taskId, sessionId);
+              } catch { /* task may not exist */ }
+            }
+            bus.emit(EventNames.SESSION_STATUS_CHANGED, {
+              sessionId,
+              taskId: session.taskId,
+              process_status: session.process_status,
+              work_status: session.work_status,
+              archived: true,
+            }, ['*'], { source: 'agent' });
+            const sRef = sessionRef(sessionId, session.title ?? sessionId.slice(0, 16));
+            return `Session ${sRef} archived${archiveReason ? ` (${archiveReason})` : ''}. Task session slot freed — you can now start a new session for this task.`;
+          } else {
+            await updateSessionRecord(sessionId, { archived: false, archive_reason: undefined });
+            bus.emit(EventNames.SESSION_STATUS_CHANGED, {
+              sessionId,
+              taskId: session.taskId,
+              process_status: session.process_status,
+              work_status: session.work_status,
+              archived: false,
+            }, ['*'], { source: 'agent' });
+            const sRef = sessionRef(sessionId, session.title ?? sessionId.slice(0, 16));
+            return `Session ${sRef} unarchived.`;
+          }
+        }
 
         const updates: Record<string, unknown> = {};
         if (title !== undefined) updates.title = title;

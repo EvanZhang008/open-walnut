@@ -35,7 +35,7 @@ export const turnCompleteTriageHook: SessionHookDefinition = {
       const triageAgentId = config.agent?.session_triage_agent ?? DEFAULT_TRIAGE_AGENT_ID;
 
       const sessionType = p.isPlanSession ? 'plan-mode ' : '';
-      const triageTask = `A Claude Code ${sessionType}session just finished for task ${p.taskId}. Session ID: ${p.sessionId}.\n\nResult:\n${(p.result ?? '').slice(0, 4000)}`;
+      const triageTask = `A Claude Code ${sessionType}session just finished for task ${p.taskId}. Session ID: ${p.sessionId}. Turn index: ${p.turnIndex ?? 'unknown'}.\n\nThe <session_history> context below contains recent assistant messages with [index] labels. Use these to determine the current phase. If you need full details of a specific message, call get_session_history with index=N.`;
 
       bus.emit('subagent:start', {
         agentId: triageAgentId,

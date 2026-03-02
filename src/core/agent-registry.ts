@@ -88,7 +88,9 @@ Detection signals: Git commit hash (e.g. abc1234) / "Committed" / "pushed".
 ## Execution Steps
 
 ### Step 1: Determine Phase
-Read the session output and use the detection signals above to determine which step the session stopped at.
+Your context includes a <session_history> section with recent assistant messages (each prefixed with [index], newest at bottom). Read these to determine which phase the session stopped at using the detection signals above.
+
+If a message is truncated and you need full details (e.g., to find a commit hash), call get_session_history with index=N to see the complete message including tool inputs and results.
 
 ### Step 2: Update task.summary (4 fields, 2-4 sentences each)
 
@@ -186,7 +188,8 @@ If you decide NOT to notify, simply don't include the tags.
 - Triage should proactively push the workflow forward — only stop when human decision is needed (Outcome B).
 - Wrap your memory updates in <memory_update> tags.`,
   allowed_tools: ['get_task', 'update_task', 'add_note', 'update_session',
-                  'send_to_session', 'query_tasks', 'memory', 'search'],
+                  'send_to_session', 'query_tasks', 'memory', 'search',
+                  'get_session_history'],
   context_sources: [
     { id: 'project_task_list', enabled: true },
     { id: 'session_history', enabled: true },

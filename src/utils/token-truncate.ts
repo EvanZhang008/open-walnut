@@ -26,3 +26,23 @@ export function truncateToTokenBudget(text: string, budget: number): string {
 
   return truncated + '\n\n[...truncated]';
 }
+
+/**
+ * Truncate text to fit within a token budget, keeping the END (most recent content).
+ * Mirror of truncateToTokenBudget but preserves the tail instead of the head.
+ */
+export function truncateToTokenBudgetTail(text: string, budget: number): string {
+  const tokens = estimateTokens(text);
+  if (tokens <= budget) return text;
+
+  const charBudget = Math.floor(budget * 3.5);
+  let truncated = text.slice(-charBudget);
+
+  // Snap to word boundary from the left (first space after cut point)
+  const firstSpace = truncated.indexOf(' ');
+  if (firstSpace > 0 && firstSpace < charBudget * 0.2) {
+    truncated = truncated.slice(firstSpace + 1);
+  }
+
+  return '[...earlier messages omitted]\n\n' + truncated;
+}
