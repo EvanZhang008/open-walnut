@@ -284,7 +284,7 @@ describe('findImagePaths (space-aware path detection)', () => {
     expect(paths).toHaveLength(0)
   })
 
-  it('handles the real-world failing example', () => {
+  it('handles paths with spaces and nested directories', () => {
     const text = 'Screenshot saved to `/home/user/projects/my-app-main/src/my-app/Screenshot 2026-02-17 at 11.12.47 PM.png`'
     const paths = findImagePaths(text)
     expect(paths).toHaveLength(1)
