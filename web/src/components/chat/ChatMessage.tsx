@@ -1092,7 +1092,7 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
         {roleLabel}
         <span className="chat-ui-only-badge">UI Only</span>
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden', flex: 1 }}>
         {isCollapsed && collapsedSummary && (
           <span
             className="chat-collapsed-summary"
