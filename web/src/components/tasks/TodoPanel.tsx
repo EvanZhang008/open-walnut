@@ -905,10 +905,30 @@ function TaskDetailPane({ task, onClose, onOpenSession, onOpenTriageForTask, sty
   // Fetch session records for title resolution (API filters out embedded agent runs)
   const [sessionRecords, setSessionRecords] = useState<Map<string, SessionRecord>>(new Map());
   const [sessionsLoading, setSessionsLoading] = useState(false);
+  // Separate archived from visible sessions once records are loaded.
+  // Before records load, we can't know which are archived — show all as placeholder.
+  const { visibleSessionIds, archivedCount } = useMemo(() => {
+    if (sessionRecords.size === 0) return { visibleSessionIds: allSessionIds, archivedCount: 0 };
+    const visible: string[] = [];
+    let archived = 0;
+    for (const sid of allSessionIds) {
+      const rec = sessionRecords.get(sid);
+      if (rec?.archived) { archived++; continue; }
+      // Keep IDs that either have a non-archived record or haven't been fetched yet
+      if (rec || !sessionRecords.size) visible.push(sid);
+    }
+    // Also include API-returned non-archived sessions not in allSessionIds (e.g. embedded)
+    for (const [sid, rec] of sessionRecords) {
+      if (rec.archived) continue;
+      if (!allSessionIds.includes(sid)) visible.push(sid);
+    }
+    return { visibleSessionIds: visible, archivedCount: archived };
+  }, [allSessionIds, sessionRecords]);
+
   // Show sessions section based on task data (allSessionIds) — not on the async API result.
   // This prevents the section from disappearing/flickering when the fetch is in progress or fails.
   // After fetch completes, refine to only show if API returned actual records (filters embedded runs).
-  const hasSessions = sessionsLoading ? allSessionIds.length > 0 : (sessionRecords.size > 0 || allSessionIds.length > 0);
+  const hasSessions = sessionsLoading ? allSessionIds.length > 0 : (visibleSessionIds.length > 0 || allSessionIds.length > 0);
   useEffect(() => {
     if (!allSessionIds.length) { setSessionRecords(new Map()); setSessionsLoading(false); return; }
     let cancelled = false;
@@ -1019,7 +1039,7 @@ function TaskDetailPane({ task, onClose, onOpenSession, onOpenTriageForTask, sty
 
       {hasSessions && (
         <div className="todo-detail-section">
-          <div className="todo-detail-section-label">Sessions ({sessionsLoading && !sessionRecords.size ? allSessionIds.length : sessionRecords.size})</div>
+          <div className="todo-detail-section-label">Sessions ({sessionsLoading && !sessionRecords.size ? allSessionIds.length : visibleSessionIds.length})</div>
           <div className="todo-detail-sessions">
             {sessionsLoading && sessionRecords.size === 0 ? (
               // While loading, show a placeholder using task-level session status (available immediately)
@@ -1054,7 +1074,7 @@ function TaskDetailPane({ task, onClose, onOpenSession, onOpenTriageForTask, sty
                 );
               })
             ) : (
-              allSessionIds.filter((sid) => sessionRecords.has(sid)).map((sid) => {
+              visibleSessionIds.filter((sid) => sessionRecords.has(sid)).map((sid) => {
                 const record = sessionRecords.get(sid);
                 const processStatus = record?.process_status || 'stopped';
                 const workStatus = record?.work_status || 'agent_complete';
@@ -2295,14 +2315,47 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           <div className="todo-search-results">
             {(() => {
               const searchMeta = new Map(searchResults?.map(r => [r.taskId, r]) ?? []);
-              return searchFiltered.map((task) => (
+              // Compute child maps from searchFiltered (cross-category)
+              const searchChildIds = new Set<string>();
+              const searchChildCount = new Map<string, number>();
+              const searchIds = new Set(searchFiltered.map(t => t.id));
+              for (const task of searchFiltered) {
+                if (task.parent_task_id) {
+                  const parent = searchFiltered.find(t => t.id.startsWith(task.parent_task_id!));
+                  if (parent) {
+                    searchChildIds.add(task.id);
+                    searchChildCount.set(parent.id, (searchChildCount.get(parent.id) ?? 0) + 1);
+                  }
+                }
+              }
+              // Sort: parents first, children right after their parent
+              const ordered: typeof searchFiltered = [];
+              const emitted = new Set<string>();
+              for (const task of searchFiltered) {
+                if (emitted.has(task.id)) continue;
+                if (searchChildIds.has(task.id)) continue; // skip children on first pass
+                emitted.add(task.id);
+                ordered.push(task);
+                // Insert children right after parent
+                for (const child of searchFiltered) {
+                  if (!emitted.has(child.id) && child.parent_task_id && task.id.startsWith(child.parent_task_id)) {
+                    emitted.add(child.id);
+                    ordered.push(child);
+                  }
+                }
+              }
+              // Append any remaining (orphan children whose parent wasn't found)
+              for (const task of searchFiltered) {
+                if (!emitted.has(task.id)) ordered.push(task);
+              }
+              return ordered.map((task) => (
                 <SortableTaskItem
                   key={task.id}
                   task={task}
                   isFocused={focusedTaskId === task.id}
                   isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
-                  isChild={childTaskIds.has(task.id)}
-                  childCount={childCountMap.get(task.id)}
+                  isChild={searchChildIds.has(task.id)}
+                  childCount={searchChildCount.get(task.id)}
                   onClick={() => handleTaskClick(task)}
                   onSetPhase={onSetPhase ?? ((id) => onComplete(id))}
                   onStar={onStar}
