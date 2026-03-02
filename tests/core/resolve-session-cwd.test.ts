@@ -47,20 +47,24 @@ describe('session cwd resolution', () => {
       if (metadata?.default_cwd) resolvedCwd = metadata.default_cwd as string
     }
 
-    // Priority 5: project memory directory
+    // Priority 5: project memory directory (always create it)
     if (!resolvedCwd) {
       const dir = path.join(PROJECTS_MEMORY_DIR, task.category.toLowerCase(), task.project.toLowerCase())
-      if (fs.existsSync(dir)) resolvedCwd = dir
+      fs.mkdirSync(dir, { recursive: true })
+      resolvedCwd = dir
     }
 
     expect(resolvedCwd).toBe(projectMemDir)
     expect(resolvedCwd).toContain('testcat/testproj')
   })
 
-  it('Priority 5: returns undefined when project memory dir does not exist', async () => {
+  it('Priority 5: always resolves — creates the memory dir if it does not exist', async () => {
     const { task } = await addTask({ title: 'test no memory dir', category: 'NoCat', project: 'NoProj' })
 
-    // Do NOT create the memory directory
+    // Do NOT pre-create the memory directory — Priority 5 should create it
+    const expectedDir = path.join(PROJECTS_MEMORY_DIR, 'nocat', 'noproj')
+    expect(fs.existsSync(expectedDir)).toBe(false)
+
     let resolvedCwd: string | undefined
 
     if (task.cwd) resolvedCwd = task.cwd
@@ -71,12 +75,15 @@ describe('session cwd resolution', () => {
       if (metadata?.default_cwd) resolvedCwd = metadata.default_cwd as string
     }
 
+    // Priority 5: project memory directory (always create it)
     if (!resolvedCwd) {
       const dir = path.join(PROJECTS_MEMORY_DIR, task.category.toLowerCase(), task.project.toLowerCase())
-      if (fs.existsSync(dir)) resolvedCwd = dir
+      fs.mkdirSync(dir, { recursive: true })
+      resolvedCwd = dir
     }
 
-    expect(resolvedCwd).toBeUndefined()
+    expect(resolvedCwd).toBe(expectedDir)
+    expect(fs.existsSync(expectedDir)).toBe(true)
   })
 
   it('Priority 2 wins over Priority 5 when task.cwd is set', async () => {

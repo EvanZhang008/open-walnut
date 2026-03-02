@@ -143,9 +143,8 @@ async function resolveSessionContext(
     const { default: path } = await import('node:path');
     const { default: fs } = await import('node:fs');
     const projectDir = path.join(PROJECTS_MEMORY_DIR, task.category.toLowerCase(), task.project.toLowerCase());
-    if (fs.existsSync(projectDir)) {
-      resolvedCwd = projectDir;
-    }
+    fs.mkdirSync(projectDir, { recursive: true });
+    resolvedCwd = projectDir;
   }
 
   return { resolvedHost, resolvedCwd };

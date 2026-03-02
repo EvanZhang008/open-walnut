@@ -1896,7 +1896,8 @@ export class SessionRunner {
             const path = await import('node:path')
             const nodeFs = await import('node:fs')
             const projectDir = path.join(PROJECTS_MEMORY_DIR, task.category.toLowerCase(), task.project.toLowerCase())
-            if (nodeFs.existsSync(projectDir)) cwd = projectDir
+            nodeFs.mkdirSync(projectDir, { recursive: true })
+            cwd = projectDir
           }
         }
       } catch (err) {
@@ -2093,7 +2094,8 @@ export class SessionRunner {
             const path = await import('node:path')
             const nodeFs = await import('node:fs')
             const projectDir = path.join(PROJECTS_MEMORY_DIR, task.category.toLowerCase(), task.project.toLowerCase())
-            if (nodeFs.existsSync(projectDir)) cwd = projectDir
+            nodeFs.mkdirSync(projectDir, { recursive: true })
+            cwd = projectDir
           }
         }
       } catch (err) {
