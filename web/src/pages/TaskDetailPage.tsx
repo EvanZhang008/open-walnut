@@ -3,7 +3,7 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import type { Task } from '@walnut/core';
 import { renderNoteMarkdown } from '@/utils/markdown';
 import { fetchTask, toggleCompleteTask, starTask, addNote, updateNote, updateDescription, deleteTask, addTag, removeTag, addDependency, removeDependency } from '@/api/tasks';
-import { fetchSessionsForTask } from '@/api/sessions';
+import { fetchSessionsForTask, updateSession } from '@/api/sessions';
 import type { SessionRecord } from '@walnut/core';
 import { PriorityBadge } from '@/components/common/PriorityBadge';
 import { StatusBadge } from '@/components/common/StatusBadge';
@@ -35,6 +35,7 @@ export function TaskDetailPage() {
   const [showDepPicker, setShowDepPicker] = useState(false);
   const [depSearch, setDepSearch] = useState('');
   const [depSearchResults, setDepSearchResults] = useState<Task[]>([]);
+  const [archivedOpen, setArchivedOpen] = useState(false);
   const descRef = useRef<HTMLTextAreaElement>(null);
   const noteRef = useRef<HTMLTextAreaElement>(null);
   const sessionSend = useSessionSend(activeSessionId);
@@ -155,9 +156,9 @@ export function TaskDetailPage() {
     }
   });
   useEvent('session:status-changed', (data) => {
-    const { sessionId, taskId, mode, work_status, process_status, planCompleted } = data as {
+    const { sessionId, taskId, mode, work_status, process_status, planCompleted, archived } = data as {
       sessionId?: string; taskId?: string; mode?: string;
-      work_status?: string; process_status?: string; planCompleted?: boolean;
+      work_status?: string; process_status?: string; planCompleted?: boolean; archived?: boolean;
     };
     if (taskId !== id || !sessionId) return;
     setSessionRecords((prev) => {
@@ -169,6 +170,7 @@ export function TaskDetailPage() {
       if (work_status !== undefined) patched.work_status = work_status as SessionRecord['work_status'];
       if (process_status !== undefined) patched.process_status = process_status as SessionRecord['process_status'];
       if (planCompleted !== undefined) patched.planCompleted = planCompleted;
+      if (archived !== undefined) patched.archived = archived;
       updated.set(sessionId, patched);
       return updated;
     });
@@ -234,15 +236,24 @@ export function TaskDetailPage() {
 
 
   const activeSessionIds = useMemo(
-    () => [task?.plan_session_id, task?.exec_session_id].filter(Boolean) as string[],
-    [task?.plan_session_id, task?.exec_session_id],
+    () => [task?.plan_session_id, task?.exec_session_id]
+      .filter((sid): sid is string => !!sid && !sessionRecords.get(sid)?.archived),
+    [task?.plan_session_id, task?.exec_session_id, sessionRecords],
   );
   // Merge task.session_ids with API-returned sessions (embedded sessions may not be in session_ids)
-  const otherSessionIds = useMemo(() => {
+  const { otherSessionIds, archivedSessionIds } = useMemo(() => {
     const taskSids = task?.session_ids ?? [];
     const apiSids = [...sessionRecords.keys()];
     const allSids = [...new Set([...taskSids, ...apiSids])];
-    return allSids.filter((sid) => !activeSessionIds.includes(sid));
+    const nonActive = allSids.filter((sid) => !activeSessionIds.includes(sid));
+    const archived: string[] = [];
+    const other: string[] = [];
+    for (const sid of nonActive) {
+      const rec = sessionRecords.get(sid);
+      if (rec?.archived) archived.push(sid);
+      else other.push(sid);
+    }
+    return { otherSessionIds: other, archivedSessionIds: archived };
   }, [task?.session_ids, sessionRecords, activeSessionIds]);
 
   const renderedNote = useMemo(
@@ -506,9 +517,82 @@ export function TaskDetailPage() {
                   {record?.work_status && (
                     <span className="text-xs text-muted">{record.work_status}</span>
                   )}
+                  {record?.process_status === 'stopped' && (
+                    <button
+                      className="btn btn-sm"
+                      style={{ fontSize: '0.7rem', padding: '1px 6px', opacity: 0.7 }}
+                      onClick={() => updateSession(sid, { archived: true }).then(() => {
+                        setSessionRecords(prev => {
+                          const m = new Map(prev);
+                          const r = m.get(sid);
+                          if (r) m.set(sid, { ...r, archived: true });
+                          return m;
+                        });
+                        loadTask();
+                      })}
+                    >
+                      Archive
+                    </button>
+                  )}
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* Archived Sessions */}
+      {archivedSessionIds.length > 0 && (
+        <div className="card mb-4">
+          <div className="session-detail-collapse">
+            <button
+              className="session-detail-collapse-toggle"
+              onClick={() => setArchivedOpen(!archivedOpen)}
+            >
+              <span className="session-detail-collapse-arrow">{archivedOpen ? '\u25BE' : '\u25B8'}</span>
+              Archived Sessions ({archivedSessionIds.length})
+            </button>
+            {archivedOpen && (
+              <div className="session-detail-collapse-body">
+                <div className="flex flex-col gap-2">
+                  {archivedSessionIds.map((sid) => {
+                    const record = sessionRecords.get(sid);
+                    const label = record?.title || sid.slice(0, 12) + '\u2026';
+                    return (
+                      <div key={sid} className="flex items-center gap-2" style={{ opacity: 0.6 }}>
+                        <span className="session-pill-status-dot dot-completed" />
+                        <span
+                          className="session-id-pill"
+                          title={sid}
+                          onClick={() => navigate(`/sessions?id=${sid}`)}
+                        >
+                          {label}
+                        </span>
+                        {record?.archive_reason && (
+                          <span className="text-xs text-muted" style={{ fontStyle: 'italic' }}>
+                            {record.archive_reason === 'plan_executed' ? 'plan executed' : record.archive_reason}
+                          </span>
+                        )}
+                        <button
+                          className="btn btn-sm"
+                          style={{ fontSize: '0.7rem', padding: '1px 6px' }}
+                          onClick={() => updateSession(sid, { archived: false }).then(() => {
+                            setSessionRecords(prev => {
+                              const m = new Map(prev);
+                              const r = m.get(sid);
+                              if (r) m.set(sid, { ...r, archived: false });
+                              return m;
+                            });
+                          })}
+                        >
+                          Unarchive
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

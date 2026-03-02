@@ -94,6 +94,17 @@ async function readStore(): Promise<SessionStoreV2> {
     }
   }
 
+  // Migrate absorbed → archived + archive_reason (unified hidden-session model)
+  for (const session of store.sessions) {
+    const legacy = session as unknown as Record<string, unknown>;
+    if (legacy.absorbed) {
+      session.archived = true;
+      session.archive_reason ??= 'plan_executed';
+      delete legacy.absorbed;
+      migrated = true;
+    }
+  }
+
   if (migrated) {
     log.session.info('migrated legacy session records', { count: store.sessions.length });
     await writeStore(store);
@@ -139,7 +150,7 @@ export const TERMINAL_WORK_STATUSES = new Set(['completed', 'error']);
 export async function listNonTerminalSessions(): Promise<SessionRecord[]> {
   const store = await readStore();
   return store.sessions.filter(
-    (s) => !TERMINAL_WORK_STATUSES.has(s.work_status),
+    (s) => !TERMINAL_WORK_STATUSES.has(s.work_status) && !s.archived,
   );
 }
 
@@ -178,6 +189,7 @@ export async function getActiveSessionsByHost(): Promise<Record<string, SessionR
   const result: Record<string, SessionRecord[]> = {};
   const staleIds: string[] = [];
   for (const s of store.sessions) {
+    if (s.archived) continue;
     if (s.process_status !== 'running') continue;
     if (s.work_status !== 'in_progress') continue;
     if (!isSessionProcessAlive(s)) {
@@ -206,6 +218,7 @@ export async function getAllAliveSessionsByHost(): Promise<Record<string, Sessio
   const result: Record<string, SessionRecord[]> = {};
   const staleIds: string[] = [];
   for (const s of store.sessions) {
+    if (s.archived) continue;
     if (s.process_status !== 'running') continue;
     if (!isSessionProcessAlive(s)) {
       staleIds.push(s.claudeSessionId);
@@ -285,6 +298,7 @@ export async function checkSessionLimit(
   const staleIds: string[] = [];
 
   for (const s of store.sessions) {
+    if (s.archived) continue;
     if (s.process_status !== 'running') continue;
     if (!isSessionProcessAlive(s)) {
       staleIds.push(s.claudeSessionId);
@@ -552,6 +566,7 @@ export async function linkSessionToTask(claudeSessionId: string, taskId: string)
 /**
  * Mark all sessions in the given list as completed.
  * Skips sessions that are already in a terminal state (completed/error).
+ * Also kills any orphaned OS processes (best-effort, fire-and-forget).
  * Returns the number of sessions actually updated.
  */
 export async function completeTaskSessions(sessionIds: string[]): Promise<number> {
@@ -560,10 +575,15 @@ export async function completeTaskSessions(sessionIds: string[]): Promise<number
     const store = await readStore();
     const now = new Date().toISOString();
     let updated = 0;
+    const pidsToKill: number[] = [];
     for (const sid of sessionIds) {
       const session = store.sessions.find((s) => s.claudeSessionId === sid);
       if (!session) continue;
       if (TERMINAL_WORK_STATUSES.has(session.work_status)) continue;
+      // Collect PIDs to kill (CLI sessions only — embedded/SDK have no OS process)
+      if (session.pid != null && session.provider !== 'embedded' && session.provider !== 'sdk') {
+        pidsToKill.push(session.pid);
+      }
       session.work_status = 'completed';
       session.process_status = 'stopped';
       session.last_status_change = now;
@@ -573,6 +593,10 @@ export async function completeTaskSessions(sessionIds: string[]): Promise<number
     if (updated > 0) {
       await writeStore(store);
       log.session.info('completing task sessions', { sessionIds: sessionIds.join(','), count: updated });
+      // Best-effort kill orphaned processes outside the write lock
+      for (const pid of pidsToKill) {
+        try { process.kill(pid, 'SIGINT'); } catch { /* already dead */ }
+      }
     }
     return updated;
   });
@@ -589,9 +613,8 @@ export async function getSlotSession(
   const sessionId = slot === 'plan' ? task.plan_session_id : task.exec_session_id;
   if (!sessionId) return null;
   const rec = await getSessionByClaudeId(sessionId);
-  // Slot is empty if the session no longer exists, or has been fully completed/errored.
-  // Only 'completed' (human-set) and 'error' release the slot.
-  if (!rec || rec.work_status === 'completed' || rec.work_status === 'error') return null;
+  // Slot is empty if the session no longer exists, has been archived, or has been fully completed/errored.
+  if (!rec || rec.archived || rec.work_status === 'completed' || rec.work_status === 'error') return null;
   return rec;
 }
 
@@ -610,7 +633,7 @@ export async function getActiveSession(task: Task): Promise<SessionRecord | null
 
   for (const sessionId of candidates) {
     const rec = await getSessionByClaudeId(sessionId);
-    if (rec && rec.process_status === 'running') return rec;
+    if (rec && !rec.archived && rec.process_status === 'running') return rec;
   }
   return null;
 }

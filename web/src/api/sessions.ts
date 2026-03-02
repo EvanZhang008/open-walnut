@@ -26,7 +26,7 @@ export async function fetchSessionHistory(sessionId: string): Promise<SessionHis
   return res.messages;
 }
 
-export async function updateSession(sessionId: string, updates: { title?: string; human_note?: string; work_status?: string }): Promise<SessionRecord> {
+export async function updateSession(sessionId: string, updates: { title?: string; human_note?: string; work_status?: string; archived?: boolean; archive_reason?: string }): Promise<SessionRecord> {
   const res = await apiPatch<{ session: SessionRecord }>(`/api/sessions/${sessionId}`, updates);
   return res.session;
 }

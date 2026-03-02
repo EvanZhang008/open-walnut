@@ -116,6 +116,7 @@ export interface SessionStatusChangedEvent {
   mode?: SessionMode;
   planCompleted?: boolean;
   fromPlanSessionId?: string;
+  archived?: boolean;
 }
 
 export interface SessionMessagesDeliveredEvent {

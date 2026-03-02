@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 
 interface SessionCopyButtonsProps {
   sessionId: string;
+  cwd?: string;
 }
 
 function CopyChip({ label, value }: { label: string; value: string }) {
@@ -29,13 +30,14 @@ function CopyChip({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function SessionCopyButtons({ sessionId }: SessionCopyButtonsProps) {
+export function SessionCopyButtons({ sessionId, cwd }: SessionCopyButtonsProps) {
   if (!sessionId) return null;
+  const cdPrefix = cwd ? `cd ${cwd} && ` : '';
   return (
     <span className="session-copy-buttons">
       <CopyChip label="ID" value={sessionId} />
-      <CopyChip label="Resume" value={`claude -r ${sessionId}`} />
-      <CopyChip label="Fork" value={`claude --fork-session -r ${sessionId}`} />
+      <CopyChip label="Resume" value={`${cdPrefix}claude -r ${sessionId}`} />
+      <CopyChip label="Fork" value={`${cdPrefix}claude --fork-session -r ${sessionId}`} />
     </span>
   );
 }

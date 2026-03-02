@@ -392,8 +392,10 @@ export interface SessionRecord {
   pendingMode?: string;
   /** Claude model used by this session (e.g. "claude-opus-4-6"). */
   model?: string;
-  /** This session was absorbed into another; hidden from UI. */
-  absorbed?: boolean;
-  /** Plan text stored on execution session (from absorbed plan session). */
+  /** Archived — hidden from UI but data preserved. */
+  archived?: boolean;
+  /** Why this session was archived (e.g. "plan_executed", user-provided reason). */
+  archive_reason?: string;
+  /** Plan text stored on execution session (from the archived plan session). */
   planContent?: string;
 }

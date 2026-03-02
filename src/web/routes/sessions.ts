@@ -6,7 +6,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { log } from '../../logging/index.js'
 import { listSessions, getRecentSessions, getSessionSummaries, getSessionsForTask, getSessionByClaudeId, updateSessionRecord, isTriageSession } from '../../core/session-tracker.js'
 import { readSessionHistory, extractPlanContent, rewriteHistoryRemoteImages } from '../../core/session-history.js'
-import { listTasks } from '../../core/task-manager.js'
+import { listTasks, getTask } from '../../core/task-manager.js'
 import { getConfig } from '../../core/config-manager.js'
 import { bus, EventNames, eventData } from '../../core/event-bus.js'
 import { isProcessAlive } from '../../utils/process.js'
@@ -18,14 +18,21 @@ function enrichWithLiveStatus(sessions: SessionRecord[]): SessionRecord[] {
   for (const s of sessions) {
     // Embedded/SDK sessions have no OS process — trust the stored status
     if (s.provider === 'embedded' || s.provider === 'sdk') continue
-    // Always check PID when available — even for terminal work_status.
-    // A resumed session may have a live process while the DB hasn't caught up yet.
-    // Previously, terminal states were short-circuited to 'stopped' without PID check,
-    // which caused the "Stopped + Completed" bug when a session was resumed from
-    // a terminal state.
+
     if (s.pid != null) {
-      const processName = s.host ? 'ssh' : 'claude'
-      s.process_status = isProcessAlive(s.pid, processName) ? 'running' : 'stopped'
+      if (s.process_status === 'running') {
+        // Verify PID liveness only for sessions the DB thinks are running.
+        // This catches processes that died without triggering normal shutdown.
+        const processName = s.host ? 'ssh' : 'claude'
+        if (!isProcessAlive(s.pid, processName)) {
+          s.process_status = 'stopped'
+        }
+      }
+      // If DB says 'stopped', trust it — it was set explicitly by session-end,
+      // health-monitor, reconciler, or user action. Don't re-check PID because
+      // the process may be orphaned/zombie (still alive but session is done).
+      // When a session resumes, createSessionRecord() sets process_status='running'
+      // in the DB before any API response, so there's no "Stopped + Completed" regression.
     } else if (s.work_status === 'completed' || s.work_status === 'error') {
       // No PID to check and work is done — safe to force stopped
       s.process_status = 'stopped'
@@ -79,7 +86,7 @@ sessionsRouter.get('/tree', async (req: Request, res: Response, next: NextFuncti
       // Triage subagent runs are high-volume housekeeping — exclude from session tree.
       // Non-triage embedded sessions (e.g. general agent) are shown.
       if (isTriageSession(s)) continue
-      if (s.absorbed) continue
+      if (s.archived) continue
       if (hideCompleted && s.work_status === 'completed') continue
       if (!s.taskId || !taskMap.has(s.taskId)) {
         orphanSessions.push(s)
@@ -148,7 +155,7 @@ sessionsRouter.get('/tree', async (req: Request, res: Response, next: NextFuncti
 sessionsRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const all = await listSessions()
-    const sessions = all.filter(s => !isTriageSession(s) && !s.absorbed)
+    const sessions = all.filter(s => !isTriageSession(s) && !s.archived)
     res.json({ sessions: await enrichWithHostnames(enrichWithLiveStatus(sessions)) })
   } catch (err) {
     next(err)
@@ -160,7 +167,7 @@ sessionsRouter.get('/recent', async (req: Request, res: Response, next: NextFunc
   try {
     const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 10
     const all = await getRecentSessions(limit)
-    const sessions = all.filter(s => !isTriageSession(s) && !s.absorbed)
+    const sessions = all.filter(s => !isTriageSession(s) && !s.archived)
     res.json({ sessions: await enrichWithHostnames(enrichWithLiveStatus(sessions)) })
   } catch (err) {
     next(err)
@@ -181,9 +188,15 @@ sessionsRouter.get('/summaries', async (req: Request, res: Response, next: NextF
 // GET /api/sessions/task/:taskId
 sessionsRouter.get('/task/:taskId', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const all = await getSessionsForTask(String(req.params.taskId))
-    // Exclude triage subagent runs and absorbed plan sessions
-    const sessions = all.filter(s => !isTriageSession(s) && !s.absorbed)
+    // Resolve task ID prefix to full ID (frontend may pass short prefix from URL params)
+    let taskId = String(req.params.taskId)
+    try {
+      const task = await getTask(taskId)
+      taskId = task.id
+    } catch { /* task not found — use raw param as-is */ }
+    const all = await getSessionsForTask(taskId)
+    // Exclude triage subagent runs (archived sessions kept — frontend needs them for collapsed section)
+    const sessions = all.filter(s => !isTriageSession(s))
     res.json({ sessions: await enrichWithHostnames(enrichWithLiveStatus(sessions)) })
   } catch (err) {
     next(err)
@@ -208,7 +221,7 @@ sessionsRouter.get('/:sessionId', async (req: Request, res: Response, next: Next
 // PATCH /api/sessions/:sessionId
 sessionsRouter.patch('/:sessionId', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { title, work_status, activity, human_note } = req.body as { title?: string; work_status?: WorkStatus; activity?: string; human_note?: string }
+    const { title, work_status, activity, human_note, archived, archive_reason } = req.body as { title?: string; work_status?: WorkStatus; activity?: string; human_note?: string; archived?: boolean; archive_reason?: string }
 
     if (title !== undefined && (typeof title !== 'string' || title.length > 500)) {
       res.status(400).json({ error: 'title must be a string (max 500 chars)' })
@@ -228,6 +241,26 @@ sessionsRouter.patch('/:sessionId', async (req: Request, res: Response, next: Ne
       }
     }
 
+    if (archived !== undefined && typeof archived !== 'boolean') {
+      res.status(400).json({ error: 'archived must be a boolean' })
+      return
+    }
+
+    const sessionId = String(req.params.sessionId)
+
+    // Archive/unarchive: validate session is stopped before archiving
+    if (archived === true) {
+      const existing = await getSessionByClaudeId(sessionId)
+      if (!existing) {
+        res.status(404).json({ error: 'session not found' })
+        return
+      }
+      if (existing.process_status === 'running') {
+        res.status(400).json({ error: 'Stop session before archiving' })
+        return
+      }
+    }
+
     const updates: Partial<SessionRecord> = {}
     if (title !== undefined) updates.title = title
     if (work_status !== undefined) {
@@ -237,13 +270,17 @@ sessionsRouter.patch('/:sessionId', async (req: Request, res: Response, next: Ne
     }
     if (activity !== undefined) updates.activity = activity
     if (human_note !== undefined) updates.human_note = human_note
+    if (archived !== undefined) {
+      updates.archived = archived
+      if (archived && archive_reason) updates.archive_reason = archive_reason
+      if (!archived) updates.archive_reason = undefined  // clear reason on unarchive
+    }
 
-    const sessionId = String(req.params.sessionId)
     const updated = await updateSessionRecord(sessionId, updates)
     log.web.info('session updated via REST', { sessionId, fields: Object.keys(updates) })
 
     // Emit status change so frontend updates in real time
-    if (work_status !== undefined) {
+    if (work_status !== undefined || archived !== undefined) {
       bus.emit(EventNames.SESSION_STATUS_CHANGED, {
         sessionId,
         taskId: updated.taskId,
@@ -252,7 +289,18 @@ sessionsRouter.patch('/:sessionId', async (req: Request, res: Response, next: Ne
         activity: updated.activity,
         mode: updated.mode,
         ...(updated.planCompleted ? { planCompleted: true } : {}),
+        ...(archived !== undefined ? { archived } : {}),
       }, ['web-ui'])
+    }
+
+    // Archive: clear task session slot to free it for new sessions
+    if (archived === true && updated.taskId) {
+      try {
+        const { clearSession, clearSessionSlot } = await import('../../core/task-manager.js')
+        await clearSession(updated.taskId, sessionId)
+        const { task } = await clearSessionSlot(updated.taskId, sessionId)
+        bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'session-archived' })
+      } catch { /* task may not exist */ }
     }
 
     // When work is marked fully completed (human verification done), clear the task session slot.
@@ -429,12 +477,30 @@ sessionsRouter.post('/:sessionId/execute', async (req: Request, res: Response, n
     // Use host from request body, or inherit from the plan session
     const execHost = host ?? record?.host
 
-    // Mark old plan session as absorbed (hidden from UI) and preserve planContent
+    // Archive the plan session (hidden from UI) and preserve planContent
     await updateSessionRecord(planSessionId, {
-      absorbed: true,
+      archived: true,
+      archive_reason: 'plan_executed',
       planContent: planResult.content,
     })
-    log.web.info('execute: marked plan session as absorbed', { planSessionId })
+    log.web.info('execute: archived plan session', { planSessionId })
+
+    // Clear task session slot so UI no longer shows archived plan as active
+    if (taskId) {
+      try {
+        const { clearSession, clearSessionSlot } = await import('../../core/task-manager.js')
+        await clearSession(taskId, planSessionId)
+        const { task } = await clearSessionSlot(taskId, planSessionId)
+        bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'session-archived' })
+      } catch { /* task may not exist */ }
+    }
+
+    // Notify frontend about the archive
+    bus.emit(EventNames.SESSION_STATUS_CHANGED, {
+      sessionId: planSessionId,
+      taskId: taskId ?? '',
+      archived: true,
+    }, ['web-ui'])
 
     // Set up a temporary bus listener BEFORE emitting SESSION_START so we
     // catch the status-changed event that carries the new session's ID.

@@ -209,7 +209,8 @@ input:focus, textarea:focus, select:focus {
 }
 
 ::selection {
-  background: var(--accent-subtle);
+  background: #0055CC;
+  color: #fff;
 }
 
 /* ===== Layout ===== */
@@ -1494,19 +1495,18 @@ input:focus, textarea:focus, select:focus {
   background: var(--bg-tertiary);
 }
 
-.session-tree-session:focus {
+.session-tree-session:focus,
+.session-tree-session:focus-visible {
   outline: none;
 }
 
-.session-tree-session:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-
+.session-tree-session:active,
 .session-tree-session-selected,
-.session-tree-session-selected:active {
+.session-tree-session-selected:active,
+.session-tree-session-selected:focus {
   background: var(--accent-subtle);
   box-shadow: inset 2px 0 0 var(--accent);
+  -webkit-tap-highlight-color: transparent;
 }
 
 .session-tree-session-title {
@@ -2267,20 +2267,19 @@ input:focus, textarea:focus, select:focus {
   background: var(--bg-tertiary);
 }
 
-.session-row:focus {
+.session-row:focus,
+.session-row:focus-visible {
   outline: none;
 }
 
-.session-row:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-
+.session-row:active,
 .session-row-selected,
-.session-row-selected:active {
+.session-row-selected:active,
+.session-row-selected:focus {
   background: var(--accent-subtle);
   border-left: 3px solid var(--accent);
   padding-left: 11px;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .session-row-top {

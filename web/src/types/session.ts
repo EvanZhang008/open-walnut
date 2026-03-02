@@ -29,6 +29,10 @@ export interface SessionRecord {
   human_note?: string;
   /** Claude model used by this session (e.g. "claude-opus-4-6"). */
   model?: string;
+  /** Archived — hidden from UI but data preserved. */
+  archived?: boolean;
+  /** Why this session was archived (e.g. "plan_executed", user-provided reason). */
+  archive_reason?: string;
 }
 
 export interface SessionTreeTask {
