@@ -2914,13 +2914,14 @@ input:focus, textarea:focus, select:focus {
   white-space: nowrap;
 }
 
-/* Collapsed summary text — shown inline when notification is collapsed */
+/* Collapsed summary text — wraps up to 2 lines, then clamps with ellipsis */
 .chat-collapsed-summary {
   font-size: 0.8em;
   color: var(--text-secondary);
-  white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   flex: 1 1 0;
   min-width: 0;
 }
