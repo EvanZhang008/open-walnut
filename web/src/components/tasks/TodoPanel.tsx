@@ -1355,8 +1355,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const isStarred = !!task.starred;
       const isCatFav = favorites?.isCategoryFavorite(cat) ?? false;
       const isProjFav = favorites?.isProjectFavorite(task.project) ?? false;
-      const isChildOfStarred = !!task.parent_task_id && tasks.some(p => p.starred && p.id.startsWith(task.parent_task_id!));
-      if (!isStarred && !isCatFav && !isProjFav && !isChildOfStarred) {
+      if (!isStarred && !isCatFav && !isProjFav && !isChildOfStarredParent(task)) {
         setActiveCategory(cat);
         persistTab(cat);
       }
@@ -1494,6 +1493,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return ids;
   }, [tasks]);
 
+  // Stable array for iteration (avoids Array.from inside filter loops)
+  const starredIdsArr = useMemo(() => Array.from(starredTaskIds), [starredTaskIds]);
+
+  // Helper: check if a task is a child of a starred parent (handles prefix parent_task_id)
+  const isChildOfStarredParent = useCallback((t: Task) => {
+    return !!t.parent_task_id && starredIdsArr.some(sid => sid.startsWith(t.parent_task_id!));
+  }, [starredIdsArr]);
+
   const filtered = useMemo(() => {
     return tasks.filter((t) => {
       if (!showCompleted && t.status === 'done' && phaseFilter !== 'COMPLETE') {
@@ -1520,15 +1527,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         const isStarred = !!t.starred;
         const isCatFavorite = favorites?.isCategoryFavorite(t.category) ?? false;
         const isProjFavorite = favorites?.isProjectFavorite(t.project) ?? false;
-        const isChildOfStarred = !!t.parent_task_id && Array.from(starredTaskIds).some(sid => sid.startsWith(t.parent_task_id!));
-        return isStarred || isCatFavorite || isProjFavorite || isChildOfStarred;
+        return isStarred || isCatFavorite || isProjFavorite || isChildOfStarredParent(t);
       }
 
       if (activeCategory && t.category !== activeCategory) return false;
       return true;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tasks, showCompleted, priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, activeCategory, favorites]);
+  }, [tasks, showCompleted, priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, activeCategory, favorites, isChildOfStarredParent]);
 
   // --- Search filtering: intersect filtered tasks with search results ---
   const searchFiltered = useMemo(() => {
@@ -1667,8 +1673,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // Shared predicates to avoid duplication across filter dimensions.
     const matchesCategory = (t: Task) => {
       if (activeCategory === STARRED_TAB) {
-        const isChildOfStarred = !!t.parent_task_id && Array.from(starredTaskIds).some(sid => sid.startsWith(t.parent_task_id!));
-        return !!t.starred || (favorites?.isCategoryFavorite(t.category) ?? false) || (favorites?.isProjectFavorite(t.project) ?? false) || isChildOfStarred;
+        return !!t.starred || (favorites?.isCategoryFavorite(t.category) ?? false) || (favorites?.isProjectFavorite(t.project) ?? false) || isChildOfStarredParent(t);
       }
       return !activeCategory || t.category === activeCategory;
     };
@@ -1764,7 +1769,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
     return { priority, phase, session, source, tagCounts, totalForPriority: forPriority.length, totalForPhase, totalForSession: forSession.length, totalForTags: forTags.length };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tasks, showCompleted, priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, activeCategory, favorites]);
+  }, [tasks, showCompleted, priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, activeCategory, favorites, isChildOfStarredParent]);
 
   // Build category -> project -> tasks hierarchy (skipped in flat mode)
   const grouped = useMemo(() => {

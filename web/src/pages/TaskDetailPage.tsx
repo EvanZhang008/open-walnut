@@ -435,26 +435,29 @@ export function TaskDetailPage() {
       </div>
 
       {/* Parent Task */}
-      {((task as Record<string, unknown>).parent as { id: string; title: string; phase: string; status: string } | undefined) ? (
-        <div className="card mb-4" style={{ padding: '12px 16px' }}>
-          <span style={{ fontSize: '0.7rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px', opacity: 0.5 }}>Parent Task</span>
-          <div
-            style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: 4, cursor: 'pointer' }}
-            onClick={() => navigate(`/tasks/${((task as Record<string, unknown>).parent as { id: string }).id}`)}
-          >
-            <span style={{
-              width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-              background: ((task as Record<string, unknown>).parent as { phase: string }).phase === 'IN_PROGRESS' ? '#007aff'
-                : ((task as Record<string, unknown>).parent as { phase: string }).phase === 'AGENT_COMPLETE' ? 'var(--error)'
-                : ((task as Record<string, unknown>).parent as { phase: string }).phase === 'AWAIT_HUMAN_ACTION' ? 'var(--error)'
-                : 'var(--text-secondary)',
-            }} />
-            <span style={{ fontSize: '0.9rem' }}>
-              {((task as Record<string, unknown>).parent as { title: string }).title}
-            </span>
+      {(() => {
+        const parent = (task as Record<string, unknown>).parent as { id: string; title: string; phase: string; status: string } | undefined;
+        if (!parent) return null;
+        return (
+          <div className="card mb-4" style={{ padding: '12px 16px' }}>
+            <span style={{ fontSize: '0.7rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px', opacity: 0.5 }}>Parent Task</span>
+            <div
+              style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: 4, cursor: 'pointer' }}
+              onClick={() => navigate(`/tasks/${parent.id}`)}
+            >
+              <span style={{
+                width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+                background: parent.status === 'done' ? '#34c759'
+                  : parent.phase === 'IN_PROGRESS' ? '#007aff'
+                  : parent.phase === 'AGENT_COMPLETE' ? 'var(--error)'
+                  : parent.phase === 'AWAIT_HUMAN_ACTION' ? 'var(--error)'
+                  : 'var(--text-secondary)',
+              }} />
+              <span style={{ fontSize: '0.9rem' }}>{parent.title}</span>
+            </div>
           </div>
-        </div>
-      ) : null}
+        );
+      })()}
 
       {/* Child Tasks */}
       {((task as Record<string, unknown>).children as Array<{ id: string; title: string; phase: string; status: string; priority: string }> | undefined)?.length ? (
