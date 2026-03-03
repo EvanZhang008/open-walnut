@@ -858,17 +858,19 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // notification: false → no badge (main agent will be notified and respond)
         const triageContent = `**Triage** (${subagentTaskRef ?? `[${taskId}]`}):\n\n${cleanedResult}`
         const triageTimestamp = new Date().toISOString()
+        const notifyContent = triageUpdate || undefined
         await chatHistory.addNotification({
           role: 'assistant', content: triageContent,
           source: 'triage', notification: !willNotifyMainAgent, taskId,
           sessionId: runId,
           timestamp: triageTimestamp,
+          notifyContent,
         })
         log.web.info('triage notification saved to chat', { taskId, sessionId: runId, willNotifyMainAgent })
 
         // Push compact notification directly to browser (no extra HTTP round-trip)
         bus.emit(EventNames.CHAT_HISTORY_UPDATED, {
-          entry: { role: 'assistant', content: triageContent, source: 'triage', notification: !willNotifyMainAgent, taskId, sessionId: runId, timestamp: triageTimestamp },
+          entry: { role: 'assistant', content: triageContent, source: 'triage', notification: !willNotifyMainAgent, taskId, sessionId: runId, timestamp: triageTimestamp, notifyContent },
         }, ['web-ui'])
 
         // Wake heartbeat after session triage
@@ -927,6 +929,24 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
               })
             }
           })
+        }
+
+        // Safety net: if triage completed but task is still at AGENT_COMPLETE,
+        // the triage failed to act (e.g. chose Outcome A without calling send_to_session,
+        // or errored mid-execution). Fall back to AWAIT_HUMAN_ACTION so the user sees it.
+        if (taskId) {
+          setTimeout(async () => {
+            try {
+              const task = await getTask(taskId)
+              if (task && task.phase === 'AGENT_COMPLETE') {
+                const { updateTask } = await import('../core/task-manager.js')
+                await updateTask(taskId, { phase: 'AWAIT_HUMAN_ACTION', needs_attention: true })
+                log.web.warn('triage safety net: task still AGENT_COMPLETE after triage, falling back to AWAIT_HUMAN_ACTION', { taskId })
+              }
+            } catch (err) {
+              log.web.warn('triage safety net error', { taskId, error: err instanceof Error ? err.message : String(err) })
+            }
+          }, 5000) // 5s delay: give send_to_session time to roll back phase to IN_PROGRESS
         }
       } else {
         // Non-triage subagent: persist full result as notification

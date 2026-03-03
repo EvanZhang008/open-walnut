@@ -200,7 +200,13 @@ If you decide NOT to notify (the common case), simply don't include the tags.
 - Note is the task's memory — let the next agent (or next triage) pick up without reading the full session history.
 - **Self-contained writing**: All written text must avoid vague references. Every sentence must be independently understandable.
 - Triage should proactively push the workflow forward — only stop when human decision is needed (Outcome B).
-- Wrap your memory updates in <memory_update> tags.`,
+- Wrap your memory updates in <memory_update> tags.
+
+## Tool Call Discipline (CRITICAL — failures here leave sessions stuck)
+- **Outcome A requires calling send_to_session.** Do NOT describe what to send in text — actually call the tool. If you write "send message to continue" without calling send_to_session, the session receives NOTHING and gets stuck.
+- **Execute ALL tool calls BEFORE writing conclusions.** Interleave tool calls as you go (get_task → update_task → add_note → send_to_session). Only write summary text after all tools are done.
+- **NEVER include <main_agent_notify> tags when choosing Outcome A.** Outcome A = routine continuation. If you wrote notify tags and then reconsidered, the tags are ALREADY in your output and WILL trigger a notification. Think first, then write.
+- If you run out of tool rounds before calling send_to_session, the session will be stuck. Prioritize: get_task (round 1), update_task (round 2), send_to_session (round 3). Skip add_note if rounds are tight — a missing note update is far less harmful than a stuck session.`,
   allowed_tools: ['get_task', 'update_task', 'add_note',
                   'send_to_session', 'query_tasks', 'memory', 'search',
                   'get_session_history'],

@@ -171,6 +171,10 @@ export class ClaudeCodeSession {
   private _active = false
   private _exitCode: number | null = null
   private resultEmitted = false
+  /** Guards against PID-death handler emitting a duplicate SESSION_RESULT
+   *  after the JSONL tailer already emitted one for the same turn.
+   *  Set to true after every emit; reset to false when a new turn starts (writeMessage). */
+  private _turnResultEmitted = false
   private io: SessionIO | null = null
   private livenessTimer: ReturnType<typeof setInterval> | null = null
   private _outputFile: string | null = null
@@ -357,6 +361,7 @@ export class ClaudeCodeSession {
     this._workStatus = 'in_progress'
     this._exitCode = null
     this.resultEmitted = false
+    this._turnResultEmitted = false
     this._askUserIntercepted = false
     this.fullText = ''
     this._cwd = cwd ?? null
@@ -671,6 +676,7 @@ export class ClaudeCodeSession {
     this._processStatus = 'running'  // Back to running from idle
     this._activity = undefined
     this.resultEmitted = false
+    this._turnResultEmitted = false  // New turn starting — allow result emission
     this._askUserIntercepted = false
     this.emitStatusChanged('in_progress', prevWorkStatus)
     log.session.info('message sent to session via FIFO', { taskId: this.taskId, sessionId: this.claudeSessionId, messageLength: message.length })
@@ -835,7 +841,10 @@ export class ClaudeCodeSession {
         // After server restart + reconnection, resultEmitted is pre-set to true
         // when the session already had a terminal work_status, preventing duplicate
         // synthetic results that would re-trigger triage.
-        if (!this.resultEmitted) {
+        // Also skip if _turnResultEmitted — the tailer already emitted a result for
+        // this turn (race: tailer saw process as alive → FIFO path → resultEmitted=false,
+        // then process exited → PID-death handler fires with resultEmitted=false).
+        if (!this.resultEmitted && !this._turnResultEmitted) {
           // Try to read stderr file for error details
           let stderr = ''
           if (this._outputFile) {
@@ -1298,6 +1307,7 @@ export class ClaudeCodeSession {
 
         this.emitStatusChanged(result.is_error ? 'error' : 'agent_complete', 'in_progress')
 
+        this._turnResultEmitted = true
         log.session.info('session result emitted', { sessionId: this.claudeSessionId, taskId: this.taskId, resultLength: resultText?.length ?? 0 })
         bus.emit(EventNames.SESSION_RESULT, {
           sessionId: this.claudeSessionId,

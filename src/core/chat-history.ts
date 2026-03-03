@@ -555,6 +555,7 @@ export async function addNotification(msg: {
   notification?: boolean;
   taskId?: string;
   sessionId?: string;
+  notifyContent?: string;
 }): Promise<void> {
   return withWriteLock(async () => {
     const store = await readStore();
@@ -569,6 +570,7 @@ export async function addNotification(msg: {
       taskId: msg.taskId,
     };
     if (msg.sessionId) entry.sessionId = msg.sessionId;
+    if (msg.notifyContent) entry.notifyContent = msg.notifyContent;
     store.entries!.push(entry);
     await writeStore(store);
     log.agent.debug('chat notification added', { source: msg.source, role: msg.role });

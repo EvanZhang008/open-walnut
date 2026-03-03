@@ -222,13 +222,17 @@ export class SessionHookDispatcher {
       case EventNames.SESSION_SEND: {
         const state = this.getOrCreateState(sessionId);
         state.awaitingFirstResponse = true;
-        results.push({
-          hookPoint: 'onMessageSend',
-          extraPayload: {
-            message: data.message as string,
-            isResume: state.turnIndex > 0,
-          } satisfies Partial<OnMessageSendPayload>,
-        });
+        // Skip onMessageSend for automated sources (triage send_to_session, subagent-runner).
+        // User-initiated sources (web-ui, cli, web-api) fire hooks normally.
+        if (event.source !== 'agent' && event.source !== 'subagent-runner') {
+          results.push({
+            hookPoint: 'onMessageSend',
+            extraPayload: {
+              message: data.message as string,
+              isResume: state.turnIndex > 0,
+            } satisfies Partial<OnMessageSendPayload>,
+          });
+        }
         break;
       }
 

@@ -105,7 +105,7 @@ describe('SessionHookDispatcher', () => {
 
       bus.emit(EventNames.SESSION_SEND, {
         sessionId: 's1', message: 'hello', taskId: 'task-1',
-      }, ['*']);
+      }, ['*'], { source: 'web-ui' });
 
       await tick();
 
@@ -297,7 +297,7 @@ describe('SessionHookDispatcher', () => {
       const handler = vi.fn();
       dispatcher.init([makeHook({ hooks: ['onMessageSend'], handler })]);
 
-      bus.emit(EventNames.SESSION_SEND, { sessionId: 's1', message: 'first' }, ['*']);
+      bus.emit(EventNames.SESSION_SEND, { sessionId: 's1', message: 'first' }, ['*'], { source: 'web-ui' });
       await tick();
 
       expect(handler).toHaveBeenCalledTimes(1);
@@ -308,8 +308,8 @@ describe('SessionHookDispatcher', () => {
       const handler = vi.fn();
       dispatcher.init([makeHook({ hooks: ['onMessageSend'], handler })]);
 
-      // First send
-      bus.emit(EventNames.SESSION_SEND, { sessionId: 's1', message: 'first' }, ['*']);
+      // First send (source: 'web-ui' to trigger onMessageSend)
+      bus.emit(EventNames.SESSION_SEND, { sessionId: 's1', message: 'first' }, ['*'], { source: 'web-ui' });
       await tick();
       // Simulate response to complete the first turn
       bus.emit(EventNames.SESSION_TEXT_DELTA, { sessionId: 's1', text: 'resp' }, ['*']);
@@ -318,11 +318,36 @@ describe('SessionHookDispatcher', () => {
       await tick();
 
       // Second send — should be a resume
-      bus.emit(EventNames.SESSION_SEND, { sessionId: 's1', message: 'follow up' }, ['*']);
+      bus.emit(EventNames.SESSION_SEND, { sessionId: 's1', message: 'follow up' }, ['*'], { source: 'web-ui' });
       await tick();
 
       expect(handler).toHaveBeenCalledTimes(2);
       expect(handler.mock.calls[1][0].isResume).toBe(true);
+    });
+
+    it('session:send with source=agent does NOT trigger onMessageSend', async () => {
+      const handler = vi.fn();
+      dispatcher.init([makeHook({ hooks: ['onMessageSend'], handler })]);
+
+      bus.emit(EventNames.SESSION_SEND, { sessionId: 's1', message: 'triage continue' }, ['*'], { source: 'agent' });
+      await tick();
+
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it('session:send with source=agent still sets awaitingFirstResponse', async () => {
+      const turnStartHandler = vi.fn();
+      dispatcher.init([makeHook({ hooks: ['onTurnStart'], handler: turnStartHandler })]);
+
+      // Agent-source send: no onMessageSend, but should still track state
+      bus.emit(EventNames.SESSION_SEND, { sessionId: 's1', message: 'continue' }, ['*'], { source: 'agent' });
+      await tick();
+
+      // Text delta should trigger onTurnStart (proves awaitingFirstResponse was set)
+      bus.emit(EventNames.SESSION_TEXT_DELTA, { sessionId: 's1', text: 'working...' }, ['*']);
+      await tick();
+
+      expect(turnStartHandler).toHaveBeenCalledTimes(1);
     });
 
     it('session:tool-use triggers onTurnStart if awaiting first response', async () => {
