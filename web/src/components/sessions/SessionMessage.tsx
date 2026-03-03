@@ -335,6 +335,12 @@ export const SessionMessage = memo(function SessionMessage({ message, sessionCwd
   const time = formatTime(timestamp);
   const isUser = role === 'user';
 
+  // Detect image paths in assistant text and render inline previews
+  const textImagePaths = useMemo(() => {
+    if (!text || isUser) return [];
+    return findImagePaths(text);
+  }, [text, isUser]);
+
   // Intercept clicks on entity ref links for SPA navigation
   const handleContentClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
@@ -374,6 +380,19 @@ export const SessionMessage = memo(function SessionMessage({ message, sessionCwd
             className="markdown-body"
             dangerouslySetInnerHTML={{ __html: renderMarkdownWithRefs(text) }}
           />
+        )}
+        {textImagePaths.length > 0 && (
+          <div className="tool-result-images">
+            {textImagePaths.map((p, i) => {
+              const src = `/api/local-image?path=${encodeURIComponent(resolveImagePath(p, sessionCwd))}`;
+              return (
+                <div key={i} className="tool-result-image-item">
+                  <img src={src} className="inline-image" data-lightbox-src={src} loading="lazy" />
+                  <span className="inline-image-path">{p}</span>
+                </div>
+              );
+            })}
+          </div>
         )}
       </div>
       {!isUser && usage && (

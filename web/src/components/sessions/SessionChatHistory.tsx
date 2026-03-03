@@ -9,7 +9,7 @@ import { LoadingSpinner } from '../common/LoadingSpinner';
 import { Lightbox } from '../common/Lightbox';
 import type { SessionHistoryMessage } from '@/types/session';
 import type { ImageAttachment } from '@/api/chat';
-import { renderMarkdownWithRefs } from '@/utils/markdown';
+import { renderMarkdownWithRefs, findImagePaths, resolveImagePath } from '@/utils/markdown';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
@@ -177,9 +177,10 @@ interface SessionChatHistoryProps {
 }
 
 /** Memoized text block that caches renderMarkdownWithRefs output */
-function StreamingTextBlock({ content, onTaskClick, onSessionClick }: { content: string; onTaskClick?: (taskId: string) => void; onSessionClick?: (sessionId: string) => void }) {
+function StreamingTextBlock({ content, sessionCwd, onTaskClick, onSessionClick }: { content: string; sessionCwd?: string; onTaskClick?: (taskId: string) => void; onSessionClick?: (sessionId: string) => void }) {
   const navigate = useNavigate();
   const html = useMemo(() => renderMarkdownWithRefs(content), [content]);
+  const imagePaths = useMemo(() => findImagePaths(content), [content]);
   const handleClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
     const taskAnchor = target.closest('a.task-link') as HTMLAnchorElement | null;
@@ -201,18 +202,33 @@ function StreamingTextBlock({ content, onTaskClick, onSessionClick }: { content:
     }
   }, [navigate, onTaskClick, onSessionClick]);
   return (
-    <div
-      className="markdown-body"
-      onClick={handleClick}
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
+    <>
+      <div
+        className="markdown-body"
+        onClick={handleClick}
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+      {imagePaths.length > 0 && (
+        <div className="tool-result-images">
+          {imagePaths.map((p, i) => {
+            const src = `/api/local-image?path=${encodeURIComponent(resolveImagePath(p, sessionCwd))}`;
+            return (
+              <div key={i} className="tool-result-image-item">
+                <img src={src} className="inline-image" data-lightbox-src={src} loading="lazy" />
+                <span className="inline-image-path">{p}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </>
   );
 }
 
 /** Render a single streaming block */
 const StreamingBlockView = memo(function StreamingBlockView({ block, sessionCwd, onTaskClick, onSessionClick }: { block: StreamingBlock; sessionCwd?: string; onTaskClick?: (taskId: string) => void; onSessionClick?: (sessionId: string) => void }) {
   if (block.type === 'text') {
-    return <StreamingTextBlock content={block.content} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />;
+    return <StreamingTextBlock content={block.content} sessionCwd={sessionCwd} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />;
   }
 
   if (block.type === 'system') {
@@ -580,20 +596,58 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
   // Cleanup timeout on unmount
   useEffect(() => () => { if (batchTimeoutRef.current) clearTimeout(batchTimeoutRef.current); }, []);
 
+  // Scroll to bottom on initial load — fires multiple times to catch async layout shifts (images, code blocks)
   useEffect(() => {
     if (!loading && messages.length > 0 && !hasScrolledRef.current && containerRef.current) {
       hasScrolledRef.current = true;
-      requestAnimationFrame(() => {
+      const scrollToEnd = () => {
         if (containerRef.current) {
+          programmaticScroll.current = true;
           containerRef.current.scrollTop = containerRef.current.scrollHeight;
+          lastScrollTop.current = containerRef.current.scrollTop;
+          requestAnimationFrame(() => { programmaticScroll.current = false; });
         }
-      });
+      };
+      // Immediate + delayed catches to handle async content rendering
+      requestAnimationFrame(scrollToEnd);
+      const t1 = setTimeout(scrollToEnd, 150);
+      const t2 = setTimeout(scrollToEnd, 400);
+      return () => { clearTimeout(t1); clearTimeout(t2); };
     }
   }, [loading, messages]);
 
-  // Scroll-anchor: only auto-scroll during streaming if user is near the bottom.
+  // ── Smart auto-scroll: scroll to bottom on new content, but pause when user scrolls up ──
+  // When the user manually scrolls up, we lock auto-scroll for USER_SCROLL_LOCK_MS.
+  // After the lock expires, the next new content triggers auto-scroll to bottom.
   const SCROLL_THRESHOLD = 300;
+  const USER_SCROLL_LOCK_MS = 15_000;
 
+  const userScrollLockUntil = useRef(0); // timestamp when lock expires
+  const lastScrollTop = useRef(0);
+  const programmaticScroll = useRef(false); // flag to distinguish our scrolls from user scrolls
+
+  // Detect user scroll-up: set a 15s lock
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      if (programmaticScroll.current) return; // ignore our own scrolls
+      const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - SCROLL_THRESHOLD;
+      // User scrolled up away from bottom → lock auto-scroll
+      if (!nearBottom && el.scrollTop < lastScrollTop.current) {
+        userScrollLockUntil.current = Date.now() + USER_SCROLL_LOCK_MS;
+      }
+      // User scrolled back to bottom manually → clear lock
+      if (nearBottom) {
+        userScrollLockUntil.current = 0;
+      }
+      lastScrollTop.current = el.scrollTop;
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []); // stable — containerRef doesn't change
+
+  // Auto-scroll on new streaming content, respecting the user-scroll lock
   const streamScrollRaf = useRef<number | null>(null);
   useEffect(() => {
     if ((isStreaming || (optimisticMessages && optimisticMessages.length > 0)) && containerRef.current) {
@@ -602,10 +656,13 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
         streamScrollRaf.current = null;
         const el = containerRef.current;
         if (!el) return;
-        const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - SCROLL_THRESHOLD;
-        if (nearBottom) {
-          el.scrollTop = el.scrollHeight;
-        }
+        // If user-scroll lock is active, don't auto-scroll
+        if (userScrollLockUntil.current > Date.now()) return;
+        // Lock expired or never set → scroll to bottom
+        programmaticScroll.current = true;
+        el.scrollTop = el.scrollHeight;
+        lastScrollTop.current = el.scrollTop;
+        requestAnimationFrame(() => { programmaticScroll.current = false; });
       });
     }
   }, [blocks, isStreaming, optimisticMessages]);
