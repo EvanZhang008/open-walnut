@@ -1,8 +1,22 @@
+import React from 'react';
+
 const MODELS = [
   { id: 'opus', label: 'Opus', description: 'Most capable' },
+  { id: 'opus-1m', label: 'Opus 1M', description: '1M context window' },
   { id: 'sonnet', label: 'Sonnet', description: 'Balanced' },
+  { id: 'sonnet-1m', label: 'Sonnet 1M', description: '1M context window' },
   { id: 'haiku', label: 'Haiku', description: 'Fastest' },
 ] as const;
+
+/** Normalize a raw model string (e.g. init event model) to our picker IDs */
+function normalizeModelId(raw?: string): string {
+  if (!raw) return 'opus';
+  const lower = raw.toLowerCase();
+  const is1m = lower.includes('[1m]');
+  if (lower.includes('haiku')) return 'haiku';
+  if (lower.includes('sonnet')) return is1m ? 'sonnet-1m' : 'sonnet';
+  return is1m ? 'opus-1m' : 'opus';
+}
 
 interface ModelPickerProps {
   currentModel?: string;
@@ -11,10 +25,14 @@ interface ModelPickerProps {
 }
 
 export function ModelPicker({ currentModel, onSwitch, onClose }: ModelPickerProps) {
-  // Normalize current model to match our model IDs
-  const normalizedCurrent = currentModel?.toLowerCase().includes('haiku') ? 'haiku'
-    : currentModel?.toLowerCase().includes('sonnet') ? 'sonnet'
-    : 'opus';
+  const normalizedCurrent = normalizeModelId(currentModel);
+
+  // Close on Escape key
+  React.useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
 
   return (
     <div className="model-picker">

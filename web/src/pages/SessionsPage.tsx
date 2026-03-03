@@ -289,7 +289,7 @@ export function SessionsPage() {
             />
             {modelPickerOpen && (
               <ModelPicker
-                currentModel="opus"
+                currentModel={selectedSession?.model}
                 onSwitch={handleModelSwitch}
                 onClose={() => setModelPickerOpen(false)}
               />
