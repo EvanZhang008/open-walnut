@@ -49,9 +49,8 @@ interface UseSessionStreamReturn {
  *
  * On mount / sessionId change:
  *  1. Sends `session:stream-subscribe` RPC to the server
- *  2. Server registers this client for targeted streaming events
- *  3. Returns a snapshot of the current buffer (catch-up)
- *  4. Incremental events arrive only for the subscribed session
+ *  2. Server returns a snapshot of the current buffer (catch-up)
+ *  3. Incremental events arrive via broadcast; client filters by sessionId
  */
 export function useSessionStream(sessionId: string | null): UseSessionStreamReturn {
   const [blocks, setBlocks] = useState<StreamingBlock[]>([]);
@@ -110,11 +109,9 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, wsConnected]);
 
-  // ── Re-subscribe on session:status-changed → in_progress ──
-  // This catches cases where the server-side subscription became stale
-  // (e.g., brief WS reconnect, timing edge case). The broadcast event
-  // `session:status-changed` always arrives reliably — use it to
-  // re-establish the targeted stream subscription.
+  // ── Re-fetch snapshot on session:status-changed → in_progress ──
+  // When a session transitions to in_progress (e.g., after WS reconnect or
+  // timing edge case), re-fetch the snapshot to catch up on any missed events.
 
   const doResubscribe = useCallback((sid: string) => {
     if (resubscribePending.current) return; // avoid duplicate RPCs
@@ -184,7 +181,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     };
   }, [sessionId]);
 
-  // ── Incremental updates (only received for the subscribed session via server-side filtering) ──
+  // ── Incremental updates (broadcast to all clients; filtered by sessionId client-side) ──
 
   // Handle text deltas — batch via rAF to coalesce rapid tokens into ~60 renders/sec
   const textDeltaRaf = useRef<number | null>(null);

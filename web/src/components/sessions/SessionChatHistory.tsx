@@ -473,6 +473,10 @@ function buildTimeline(
   return items;
 }
 
+// ── Auto-scroll constants ──
+const SCROLL_THRESHOLD = 300;  // px from bottom to consider "near bottom"
+const USER_SCROLL_LOCK_MS = 15_000;  // pause auto-scroll for 15s when user scrolls up
+
 export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessionCwd, optimisticMessages, onMessagesDelivered, onBatchCompleted, onEditQueued, onDeleteQueued, onAgentQueued, onClearCommitted, onTaskClick, onSessionClick }: SessionChatHistoryProps) {
   const [historyVersion, setHistoryVersion] = useState(0);
   const awaitingRefresh = useRef(false);
@@ -581,7 +585,12 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
   // Scroll to bottom on initial load
   const hasScrolledRef = useRef(false);
 
-  // Reset on session switch (consolidated — includes scroll flag + blockIndexMap)
+  // ── Smart auto-scroll refs (declared early so session-switch reset can clear them) ──
+  const userScrollLockUntil = useRef(0); // timestamp when lock expires
+  const lastScrollTop = useRef(0);
+  const programmaticScrollUntil = useRef(0); // timestamp-based guard for programmatic scrolls
+
+  // Reset on session switch (consolidated — includes scroll flag + blockIndexMap + scroll lock)
   useEffect(() => {
     setHistoryVersion(0);
     awaitingRefresh.current = false;
@@ -590,23 +599,28 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     setEditingId(null);
     hasScrolledRef.current = false;
     blockIndexMap.current.clear();
+    userScrollLockUntil.current = 0;
+    lastScrollTop.current = 0;
+    programmaticScrollUntil.current = 0;
     if (batchTimeoutRef.current) { clearTimeout(batchTimeoutRef.current); batchTimeoutRef.current = null; }
   }, [sessionId]);
 
   // Cleanup timeout on unmount
   useEffect(() => () => { if (batchTimeoutRef.current) clearTimeout(batchTimeoutRef.current); }, []);
 
+  // Helper: scroll to bottom and mark as programmatic (suppresses user-scroll detection for 100ms)
+  const scrollToBottom = (el: HTMLElement) => {
+    programmaticScrollUntil.current = Date.now() + 100;
+    el.scrollTop = el.scrollHeight;
+    lastScrollTop.current = el.scrollTop;
+  };
+
   // Scroll to bottom on initial load — fires multiple times to catch async layout shifts (images, code blocks)
   useEffect(() => {
     if (!loading && messages.length > 0 && !hasScrolledRef.current && containerRef.current) {
       hasScrolledRef.current = true;
       const scrollToEnd = () => {
-        if (containerRef.current) {
-          programmaticScroll.current = true;
-          containerRef.current.scrollTop = containerRef.current.scrollHeight;
-          lastScrollTop.current = containerRef.current.scrollTop;
-          requestAnimationFrame(() => { programmaticScroll.current = false; });
-        }
+        if (containerRef.current) scrollToBottom(containerRef.current);
       };
       // Immediate + delayed catches to handle async content rendering
       requestAnimationFrame(scrollToEnd);
@@ -619,19 +633,16 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
   // ── Smart auto-scroll: scroll to bottom on new content, but pause when user scrolls up ──
   // When the user manually scrolls up, we lock auto-scroll for USER_SCROLL_LOCK_MS.
   // After the lock expires, the next new content triggers auto-scroll to bottom.
-  const SCROLL_THRESHOLD = 300;
-  const USER_SCROLL_LOCK_MS = 15_000;
+  // User scrolling back to bottom clears the lock immediately.
 
-  const userScrollLockUntil = useRef(0); // timestamp when lock expires
-  const lastScrollTop = useRef(0);
-  const programmaticScroll = useRef(false); // flag to distinguish our scrolls from user scrolls
-
-  // Detect user scroll-up: set a 15s lock
+  // Detect user scroll-up: set a 15s lock.
+  // Re-attaches when loading finishes (containerRef becomes available).
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     const onScroll = () => {
-      if (programmaticScroll.current) return; // ignore our own scrolls
+      // Ignore programmatic scrolls (timestamp-based guard, robust against multi-fire)
+      if (Date.now() < programmaticScrollUntil.current) return;
       const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - SCROLL_THRESHOLD;
       // User scrolled up away from bottom → lock auto-scroll
       if (!nearBottom && el.scrollTop < lastScrollTop.current) {
@@ -645,7 +656,7 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
-  }, []); // stable — containerRef doesn't change
+  }, [loading]); // re-run when loading finishes so containerRef.current is available
 
   // Auto-scroll on new streaming content, respecting the user-scroll lock
   const streamScrollRaf = useRef<number | null>(null);
@@ -659,10 +670,7 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
         // If user-scroll lock is active, don't auto-scroll
         if (userScrollLockUntil.current > Date.now()) return;
         // Lock expired or never set → scroll to bottom
-        programmaticScroll.current = true;
-        el.scrollTop = el.scrollHeight;
-        lastScrollTop.current = el.scrollTop;
-        requestAnimationFrame(() => { programmaticScroll.current = false; });
+        scrollToBottom(el);
       });
     }
   }, [blocks, isStreaming, optimisticMessages]);

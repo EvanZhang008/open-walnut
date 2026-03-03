@@ -614,7 +614,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // -- Main AI triage: process session results with AI judgment --
   // All session events now route through main-ai first; forward to web-ui for display.
   bus.subscribe('main-ai', async (event) => {
-    // ── Streaming events: buffer server-side + send only to subscribed clients ──
+    // ── Streaming events: buffer server-side + broadcast to all clients (filtered client-side) ──
     if (event.name === 'session:text-delta') {
       const { sessionId, delta } = eventData<'session:text-delta'>(event)
       if (sessionId) {
