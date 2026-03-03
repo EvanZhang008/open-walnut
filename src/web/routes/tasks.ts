@@ -253,6 +253,13 @@ tasksRouter.get('/:id', async (req: Request, res: Response, next: NextFunction) 
         id: t.id, title: t.title, phase: t.phase, status: t.status, priority: t.priority,
       }))
     }
+    // Parent task — resolve parent_task_id (may be prefix) to actual parent info
+    if (enriched.parent_task_id) {
+      const parent = allTasks.find((t) => t.id.startsWith(enriched.parent_task_id!))
+      if (parent) {
+        taskWithDeps.parent = { id: parent.id, title: parent.title, phase: parent.phase, status: parent.status }
+      }
+    }
     res.json({ task: taskWithDeps })
   } catch (err) {
     next(err)

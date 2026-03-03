@@ -440,7 +440,8 @@ input:focus, textarea:focus, select:focus {
 .badge-phase-investigation { background: rgba(88, 86, 214, 0.12); color: #5856D6; }
 .badge-phase-todo { background: var(--bg-tertiary); color: var(--fg-muted); }
 .badge-phase-in_progress { background: rgba(0, 122, 255, 0.12); color: var(--accent); }
-.badge-phase-agent_complete { background: rgba(255, 149, 0, 0.12); color: #FF9500; }
+.badge-phase-agent_complete { background: rgba(255, 59, 48, 0.12); color: var(--error); }
+.badge-phase-await_human_action { background: rgba(255, 59, 48, 0.12); color: var(--error); }
 .badge-phase-human_verification { background: rgba(255, 107, 0, 0.12); color: #FF6B00; }
 .badge-phase-peer_code_review { background: rgba(175, 82, 222, 0.12); color: #AF52DE; }
 .badge-phase-release_in_pipeline { background: rgba(48, 176, 199, 0.12); color: #30B0C7; }
@@ -450,7 +451,8 @@ input:focus, textarea:focus, select:focus {
 .task-phase-investigation { color: #5856D6; }
 .task-phase-todo { color: var(--fg-muted); }
 .task-phase-in_progress { color: var(--accent); }
-.task-phase-agent_complete { color: #FF9500; }
+.task-phase-agent_complete { color: var(--error); }
+.task-phase-await_human_action { color: var(--error); }
 .task-phase-human_verification { color: #FF6B00; }
 .task-phase-peer_code_review { color: #AF52DE; }
 .task-phase-release_in_pipeline { color: #30B0C7; }
@@ -9136,11 +9138,11 @@ img[data-lightbox-src],
   box-shadow: 0 1px 3px rgba(52, 199, 89, 0.3);
 }
 
-/* agent_complete: amber — agent turn done, process stopped, can be resumed */
+/* agent_complete: red — needs human review/confirm */
 .task-session-pill-agent-complete {
   color: #fff;
-  background: var(--warning);
-  box-shadow: 0 1px 3px rgba(255, 159, 10, 0.3);
+  background: var(--error);
+  box-shadow: 0 1px 3px rgba(255, 59, 48, 0.3);
 }
 
 /* error: red — session encountered an error */
@@ -9157,11 +9159,11 @@ img[data-lightbox-src],
   box-shadow: 0 1px 3px rgba(0, 122, 255, 0.3);
 }
 
-/* await_human_action: amber — session pending human action */
+/* await_human_action: red — session pending human action */
 .task-session-pill-await-human {
   color: #fff;
-  background: var(--warning);
-  box-shadow: 0 1px 3px rgba(255, 159, 10, 0.3);
+  background: var(--error);
+  box-shadow: 0 1px 3px rgba(255, 59, 48, 0.3);
 }
 
 .task-session-pill-history {

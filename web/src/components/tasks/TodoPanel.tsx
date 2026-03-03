@@ -906,6 +906,12 @@ function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenTriageFo
     return allTasks.filter((t) => t.parent_task_id && task.id.startsWith(t.parent_task_id));
   }, [allTasks, task.id]);
 
+  // Parent task — resolve parent_task_id (may be a prefix) to the actual parent
+  const parentTask = useMemo(() => {
+    if (!allTasks || !task.parent_task_id) return null;
+    return allTasks.find((t) => t.id.startsWith(task.parent_task_id!)) ?? null;
+  }, [allTasks, task.parent_task_id]);
+
   // Build a comprehensive set of all session IDs from both session_ids array and slot fields.
   // This prevents the Sessions section from disappearing when session_ids is stale but slots are set.
   const allSessionIds = useMemo(() => {
@@ -1051,6 +1057,34 @@ function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenTriageFo
         </div>
       </div>
 
+      {parentTask && (
+        <div className="todo-detail-section">
+          <div className="todo-detail-section-label">Parent Task</div>
+          <div
+            className="todo-detail-child-item"
+            role="button"
+            tabIndex={0}
+            onClick={() => onFocusChild ? onFocusChild(parentTask) : navigate(`/tasks/${parentTask.id}`)}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onFocusChild ? onFocusChild(parentTask) : navigate(`/tasks/${parentTask.id}`); } }}
+          >
+            <span
+              className="todo-detail-child-dot"
+              style={{
+                background: parentTask.status === 'done' ? '#34c759'
+                  : parentTask.phase === 'IN_PROGRESS' ? '#007aff'
+                  : parentTask.phase === 'AGENT_COMPLETE' ? 'var(--error)'
+                  : parentTask.phase === 'AWAIT_HUMAN_ACTION' ? 'var(--error)'
+                  : 'var(--fg-muted)',
+              }}
+            />
+            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {parentTask.title}
+            </span>
+            <span className="text-xs text-muted">{PHASE_LABEL[parentTask.phase] ?? parentTask.phase}</span>
+          </div>
+        </div>
+      )}
+
       {hasSessions && (
         <div className="todo-detail-section">
           <div className="todo-detail-section-label">Sessions ({sessionsLoading && !sessionRecords.size ? allSessionIds.length : visibleSessionIds.length})</div>
@@ -1182,7 +1216,8 @@ function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenTriageFo
                   style={{
                     background: child.status === 'done' ? '#34c759'
                       : child.phase === 'IN_PROGRESS' ? '#007aff'
-                      : child.phase === 'AWAIT_HUMAN_ACTION' ? '#ff9f0a'
+                      : child.phase === 'AGENT_COMPLETE' ? 'var(--error)'
+                      : child.phase === 'AWAIT_HUMAN_ACTION' ? 'var(--error)'
                       : 'var(--fg-muted)',
                     opacity: child.status === 'done' ? 0.5 : 1,
                   }}
@@ -1320,7 +1355,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const isStarred = !!task.starred;
       const isCatFav = favorites?.isCategoryFavorite(cat) ?? false;
       const isProjFav = favorites?.isProjectFavorite(task.project) ?? false;
-      if (!isStarred && !isCatFav && !isProjFav) {
+      const isChildOfStarred = !!task.parent_task_id && tasks.some(p => p.starred && p.id.startsWith(task.parent_task_id!));
+      if (!isStarred && !isCatFav && !isProjFav && !isChildOfStarred) {
         setActiveCategory(cat);
         persistTab(cat);
       }
@@ -1451,6 +1487,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return hasStarredTasks || hasFavorites;
   }, [tasks, favorites?.hasFavorites]);
 
+  // Precompute: IDs of starred tasks (used to auto-include their children in starred view)
+  const starredTaskIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const t of tasks) { if (t.starred) ids.add(t.id); }
+    return ids;
+  }, [tasks]);
+
   const filtered = useMemo(() => {
     return tasks.filter((t) => {
       if (!showCompleted && t.status === 'done' && phaseFilter !== 'COMPLETE') {
@@ -1472,11 +1515,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       if (tagFilter && (!t.tags || !t.tags.includes(tagFilter))) return false;
 
       // Starred tab: show starred tasks + tasks in favorited categories/projects
+      // Also include children of starred parents (handles prefix parent_task_id)
       if (activeCategory === STARRED_TAB) {
         const isStarred = !!t.starred;
         const isCatFavorite = favorites?.isCategoryFavorite(t.category) ?? false;
         const isProjFavorite = favorites?.isProjectFavorite(t.project) ?? false;
-        return isStarred || isCatFavorite || isProjFavorite;
+        const isChildOfStarred = !!t.parent_task_id && Array.from(starredTaskIds).some(sid => sid.startsWith(t.parent_task_id!));
+        return isStarred || isCatFavorite || isProjFavorite || isChildOfStarred;
       }
 
       if (activeCategory && t.category !== activeCategory) return false;
@@ -1622,7 +1667,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // Shared predicates to avoid duplication across filter dimensions.
     const matchesCategory = (t: Task) => {
       if (activeCategory === STARRED_TAB) {
-        return !!t.starred || (favorites?.isCategoryFavorite(t.category) ?? false) || (favorites?.isProjectFavorite(t.project) ?? false);
+        const isChildOfStarred = !!t.parent_task_id && Array.from(starredTaskIds).some(sid => sid.startsWith(t.parent_task_id!));
+        return !!t.starred || (favorites?.isCategoryFavorite(t.category) ?? false) || (favorites?.isProjectFavorite(t.project) ?? false) || isChildOfStarred;
       }
       return !activeCategory || t.category === activeCategory;
     };
