@@ -33,8 +33,8 @@ export const PROCESS_COLORS: Record<ProcessStatus, string> = {
 
 export const WORK_COLORS: Record<WorkStatus, string> = {
   in_progress: 'var(--accent)',
-  agent_complete: 'var(--warning)',
-  await_human_action: 'var(--warning)',
+  agent_complete: 'var(--error)',
+  await_human_action: 'var(--error)',
   completed: 'var(--fg-muted)',
   error: 'var(--error)',
 };

@@ -457,6 +457,9 @@ input:focus, textarea:focus, select:focus {
 .task-phase-peer_code_review { color: #AF52DE; }
 .task-phase-release_in_pipeline { color: #30B0C7; }
 .task-phase-complete { color: var(--success); }
+/* Higher specificity overrides for phases that must win over .task-status-* */
+.task-status-btn.task-phase-agent_complete { color: var(--error); }
+.task-status-btn.task-phase-await_human_action { color: var(--error); }
 
 /* Phase picker dropdown */
 .phase-picker-wrapper { position: relative; }
