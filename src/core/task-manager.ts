@@ -711,6 +711,12 @@ async function autoPushIfConfiguredImpl(task: Task): Promise<SyncResult> {
   // needs a relationship delta computation against ext plugin relationships.
   await pushToPlugin(task, 'updateDependencies', task.depends_on ?? []);
 
+  // Persist ext changes made by plugin sync methods (e.g. comment_id, comment_hash).
+  // Plugins mutate task.ext in memory during push — this writes those changes to disk.
+  if (task.ext && Object.keys(task.ext).length > 0) {
+    await persistTaskExt(task);
+  }
+
   // Check if any push failed (catch both rejected promises and explicit failures)
   const anyFailed = results.some(r =>
     r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.success),
