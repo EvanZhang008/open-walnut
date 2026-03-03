@@ -1,8 +1,8 @@
-# Walnut — A Web UI for Claude Code + Personal Productivity System
+# Walnut — AI-Native Personal Productivity System with Claude Code Web UI
 
-**The missing GUI for Claude Code. Manage tasks, take notes, run multi-session coding agents, and track everything — all from one local-first web dashboard.**
+**An AI agent that manages your projects, notes, and coding sessions — with the missing web UI for Claude Code built in.**
 
-Walnut gives Claude Code a proper web interface: real-time session streaming, a visual task board, persistent memory, and an AI agent that ties it all together. Think of it as your personal command center — project tracking, note-taking, and AI coding sessions in one place.
+Walnut is not just a dashboard — it's an AI-native app. A built-in AI agent with 30+ tools manages your tasks, accumulates knowledge, spawns and monitors Claude Code sessions, and acts on your behalf. It also gives Claude Code a proper web interface: real-time session streaming, multi-session monitoring, visual task boards, and persistent memory. Think of it as an AI butler that happens to have a beautiful UI.
 
 > **Philosophy**: Walnut is human-first. It amplifies *your* productivity — not by building a swarm of agents talking to each other, but by giving *you* superpowers. You stay in control. The AI handles the grunt work, surfaces what matters, and gets out of your way. The goal is simple: make your day smooth, focused, and productive.
 
