@@ -23,9 +23,6 @@ let wss: WebSocketServer | null = null
 const clients = new Set<Client>()
 const rpcMethods = new Map<string, RpcHandler>()
 
-// ── Per-client session stream subscription ──
-const streamSubscriptions = new Map<Client, string>()  // client → sessionId
-
 const PING_INTERVAL_MS = 30_000
 
 let pingTimer: ReturnType<typeof setInterval> | null = null
@@ -67,43 +64,12 @@ export function sendToClient(ws: WebSocket, name: string, data: unknown): void {
   }
 }
 
-// ── Stream subscription helpers ──
-
-function findClientByWs(ws: WebSocket): Client | undefined {
-  for (const client of clients) {
-    if (client.ws === ws) return client
-  }
-  return undefined
-}
-
 /**
- * Subscribe a WebSocket client to streaming events for a specific session.
- * Each client can only subscribe to one session at a time (replaces previous subscription).
+ * Send a streaming event to all connected clients.
+ * Clients filter by sessionId on the frontend side.
  */
-export function subscribeToStream(ws: WebSocket, sessionId: string): void {
-  const client = findClientByWs(ws)
-  if (client) {
-    streamSubscriptions.set(client, sessionId)
-    log.ws.info('stream subscription', { sessionId, action: 'subscribe' })
-  }
-}
-
-/**
- * Send a streaming event only to clients subscribed to the given session.
- */
-export function sendStreamEvent(sessionId: string, name: string, data: unknown): void {
-  let subscriberCount = 0
-  for (const [, sid] of streamSubscriptions) {
-    if (sid === sessionId) subscriberCount++
-  }
-  log.ws.debug('stream event', { sessionId, name, subscriberCount })
-  for (const [client, subscribedId] of streamSubscriptions) {
-    if (subscribedId === sessionId && client.ws.readyState === WebSocket.OPEN) {
-      client.seq++
-      const frame: WsFrame = { type: 'event', name, data, seq: client.seq }
-      client.ws.send(JSON.stringify(frame))
-    }
-  }
+export function sendStreamEvent(_sessionId: string, name: string, data: unknown): void {
+  broadcastEvent(name, data)
 }
 
 /**
@@ -183,17 +149,11 @@ export function attachWss(server: HttpServer): WebSocketServer {
     })
 
     ws.on('close', () => {
-      const streamedSessionId = streamSubscriptions.get(client)
-      if (streamedSessionId) {
-        log.ws.info('streaming client disconnected', { sessionId: streamedSessionId })
-      }
-      streamSubscriptions.delete(client)
       clients.delete(client)
       log.ws.info('client disconnected', { clientCount: clients.size })
     })
 
     ws.on('error', () => {
-      streamSubscriptions.delete(client)
       clients.delete(client)
       log.ws.warn('client error, removing', { clientCount: clients.size })
     })
@@ -204,7 +164,6 @@ export function attachWss(server: HttpServer): WebSocketServer {
     for (const client of clients) {
       if (!client.alive) {
         client.ws.terminate()
-        streamSubscriptions.delete(client)
         clients.delete(client)
         continue
       }
@@ -229,7 +188,6 @@ export function closeWss(): void {
     client.ws.terminate()
   }
   clients.clear()
-  streamSubscriptions.clear()
 
   if (wss) {
     wss.close()

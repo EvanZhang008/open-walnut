@@ -746,20 +746,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       }
 
       try {
-        // Update session status to turn_completed, but don't overwrite terminal states
-        // (completed, error) that were already set.
-        const { updateSessionRecord, getSessionByClaudeId: getSession, TERMINAL_WORK_STATUSES } = await import('../core/session-tracker.js')
-        const currentSession = await getSession(sessionId)
-        const shouldUpdateWorkStatus = currentSession && !TERMINAL_WORK_STATUSES.has(currentSession.work_status)
-
-        await updateSessionRecord(sessionId, {
-          process_status: 'stopped',
-          ...(shouldUpdateWorkStatus ? { work_status: 'agent_complete' as const } : {}),
-          activity: undefined,
-          last_status_change: new Date().toISOString(),
-        }).catch((err) => {
-          log.web.warn('failed to update session record', { sessionId, error: err instanceof Error ? err.message : String(err) })
-        })
+        // Session record update is handled by session-runner (claude-code-session.ts)
+        // which correctly sets idle vs stopped based on FIFO process liveness.
+        // server.ts must NOT overwrite process_status — it lacks process state info.
 
         // Do NOT clear session slot here — turn_completed means the session
         // can still be resumed via send_to_session. The slot stays linked so the

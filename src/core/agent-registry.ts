@@ -155,6 +155,7 @@ Note update rules:
 Decide based on the Phase table. When in doubt, choose B.
 - Never mark the task as complete — only humans can do that.
 - Phase can only be set to AWAIT_HUMAN_ACTION; do not set other phases.
+- Do NOT change session work_status — it is system-managed. Only update the task.
 
 ### Step 5: Decide whether to notify the main agent
 
@@ -200,7 +201,7 @@ If you decide NOT to notify (the common case), simply don't include the tags.
 - **Self-contained writing**: All written text must avoid vague references. Every sentence must be independently understandable.
 - Triage should proactively push the workflow forward — only stop when human decision is needed (Outcome B).
 - Wrap your memory updates in <memory_update> tags.`,
-  allowed_tools: ['get_task', 'update_task', 'add_note', 'update_session',
+  allowed_tools: ['get_task', 'update_task', 'add_note',
                   'send_to_session', 'query_tasks', 'memory', 'search',
                   'get_session_history'],
   context_sources: [

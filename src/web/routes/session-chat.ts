@@ -6,7 +6,7 @@
  * SessionRunner (subscribed to the bus) handles the actual session management.
  */
 
-import { registerMethod, subscribeToStream } from '../ws/handler.js'
+import { registerMethod } from '../ws/handler.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { getSessionByClaudeId, updateSessionRecord } from '../../core/session-tracker.js'
 import { enqueueMessage, editMessage, deleteMessage, getQueue } from '../../core/session-message-queue.js'
@@ -107,7 +107,7 @@ export function registerSessionChatRpc(): void {
     }
 
     // Validate and normalize model value (allowlist check)
-    const ALLOWED_MODELS = new Set(['opus', 'sonnet', 'haiku'])
+    const ALLOWED_MODELS = new Set(['opus', 'opus-1m', 'sonnet', 'sonnet-1m', 'haiku'])
     const model = typeof data.model === 'string' && ALLOWED_MODELS.has(data.model) ? data.model : undefined
 
     // Save pendingModel/pendingMode to the session record BEFORE enqueuing the message.
@@ -189,7 +189,7 @@ export function registerSessionChatRpc(): void {
     return { messages: await getQueue(data.sessionId) }
   })
 
-  registerMethod('session:stream-subscribe', (payload: unknown, ws) => {
+  registerMethod('session:stream-subscribe', (payload: unknown, _ws) => {
     if (typeof payload !== 'object' || payload === null) {
       throw new Error('session:stream-subscribe requires an object payload')
     }
@@ -199,7 +199,6 @@ export function registerSessionChatRpc(): void {
       throw new Error('session:stream-subscribe requires sessionId (string)')
     }
 
-    subscribeToStream(ws, data.sessionId)
     return sessionStreamBuffer.getSnapshot(data.sessionId)
   })
 }
