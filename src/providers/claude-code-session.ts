@@ -164,27 +164,16 @@ export { buildRemoteCommand } from './session-io.js'
 const MAX_FULL_TEXT = 100 * 1024 // 100KB cap on accumulated text
 const LIVENESS_INTERVAL_MS = 3000
 
-/**
- * How long (ms) a FIFO-mode session can sit idle (agent_complete but process still alive)
- * before being automatically killed to free resources. Default: 30 minutes.
- * Configurable via config.yaml `session.idle_timeout_minutes`. Set to 0 to disable.
- * The session can still be resumed via --resume after being killed.
- */
-const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000
-
 export class ClaudeCodeSession {
   private pid: number | null = null
   private fullText = ''
   private claudeSessionId: string | null = null
   private _cwd: string | null = null
   private _active = false
+  private _exitCode: number | null = null
   private resultEmitted = false
   private io: SessionIO | null = null
   private livenessTimer: ReturnType<typeof setInterval> | null = null
-  /** Timer that auto-kills idle FIFO sessions after IDLE_TIMEOUT_MS */
-  private idleTimer: ReturnType<typeof setTimeout> | null = null
-  /** Cancellation flag for the async idle timeout callback (survives idleTimer = null) */
-  private _idleCancelled = false
   private _outputFile: string | null = null
   private cliCommand: string
   /** Host key from config.hosts — null means local execution */
@@ -226,17 +215,12 @@ export class ClaudeCodeSession {
   private _resolveSessionReady!: (id: string) => void
   private _rejectSessionReady!: (err: Error) => void
 
-  /** Configurable idle timeout for this session instance (ms). 0 = disabled. */
-  private idleTimeoutMs: number
-
   constructor(
     readonly taskId: string,
     readonly project: string,
     cliCommand?: string,
-    idleTimeoutMs?: number,
   ) {
     this.cliCommand = cliCommand ?? 'claude'
-    this.idleTimeoutMs = idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS
     this.sessionReady = new Promise<string>((resolve, reject) => {
       this._resolveSessionReady = resolve
       this._rejectSessionReady = reject
@@ -325,7 +309,14 @@ export class ClaudeCodeSession {
     } else {
       this._mode = 'default'
     }
-    args.push('--model', model ?? 'opus')
+    // Map internal model IDs to CLI --model values
+    // '*-1m' variants → full model ID with [1m] suffix for 1M context window
+    const MODEL_CLI_MAP: Record<string, string> = {
+      'opus-1m': 'claude-opus-4-6[1m]',
+      'sonnet-1m': 'claude-sonnet-4-6[1m]',
+    }
+    const cliModel = MODEL_CLI_MAP[model ?? ''] ?? (model || 'opus')
+    args.push('--model', cliModel)
     if (resumeSessionId) {
       this.claudeSessionId = resumeSessionId
       this._expectedSessionId = resumeSessionId  // track expected ID to detect resume failure
@@ -354,8 +345,7 @@ export class ClaudeCodeSession {
       try { process.kill(this.pid, 'SIGTERM') } catch { /* already dead */ }
     }
     this.resultEmitted = true  // Suppress spurious events from old process
-    // Cancel idle timeout + stop monitoring (tailer + liveness) BEFORE nulling IO
-    this.cancelIdleTimeout()
+    // Stop monitoring (tailer + liveness) BEFORE nulling IO
     this.stopMonitoring()
     if (this.io) {
       this.io.deletePipe()
@@ -365,6 +355,7 @@ export class ClaudeCodeSession {
     this._active = true
     this._processStatus = 'running'
     this._workStatus = 'in_progress'
+    this._exitCode = null
     this.resultEmitted = false
     this._askUserIntercepted = false
     this.fullText = ''
@@ -487,6 +478,17 @@ export class ClaudeCodeSession {
       }
     })
 
+    // Capture exit code for diagnostic error messages
+    proc.on('exit', (code, signal) => {
+      this._exitCode = code
+      if (code !== 0 && code !== null) {
+        log.session.warn('session process exited with non-zero code', {
+          taskId: this.taskId, pid: proc.pid, exitCode: code, signal,
+          isRemote: !!sshTarget,
+        })
+      }
+    })
+
     // Emit status change
     this.emitStatusChanged('in_progress')
 
@@ -506,9 +508,8 @@ export class ClaudeCodeSession {
   static async attachToExisting(
     record: SessionRecord,
     cliCommand?: string,
-    idleTimeoutMs?: number,
   ): Promise<ClaudeCodeSession> {
-    const session = new ClaudeCodeSession(record.taskId, record.project, cliCommand, idleTimeoutMs)
+    const session = new ClaudeCodeSession(record.taskId, record.project, cliCommand)
     session.claudeSessionId = record.claudeSessionId
     session.pid = record.pid ?? null
     session._outputFile = record.outputFile ?? null
@@ -619,22 +620,6 @@ export class ClaudeCodeSession {
 
     session.startLivenessMonitor()
 
-    // Restore idle timeout for sessions that were already idle before server restart.
-    // Without this, a session that completed its turn before the restart would sit
-    // idle indefinitely — exactly the resource leak the idle timeout prevents.
-    // Includes await_human_action — these sessions also get idle timeout but with
-    // output staleness checks (sub-agents producing output will keep the timer resetting).
-    const idleStatuses: WorkStatus[] = ['agent_complete', 'await_human_action', 'error']
-    if (
-      session.io?.hasPipe &&
-      session._host === null &&
-      idleStatuses.includes(session._workStatus) &&
-      session._processStatus === 'running' &&
-      session.pid !== null
-    ) {
-      session.startIdleTimeout()
-    }
-
     return session
   }
 
@@ -644,7 +629,6 @@ export class ClaudeCodeSession {
    */
   detach(): void {
     log.session.info('session detached', { taskId: this.taskId, pid: this.pid, hasPipe: this.io?.hasPipe })
-    this.cancelIdleTimeout()
     this.stopMonitoring()
     // Keep IO — named FIFO persists on disk and can be reopened after restart
     this._active = false
@@ -657,7 +641,6 @@ export class ClaudeCodeSession {
   kill(): void {
     log.session.info('session killed', { taskId: this.taskId, pid: this.pid })
     this.resultEmitted = true
-    this.cancelIdleTimeout()
     this.stopMonitoring()
     this.io?.deletePipe()
 
@@ -681,12 +664,11 @@ export class ClaudeCodeSession {
    */
   writeMessage(message: string): boolean {
     if (!this.io) return false
-    // Cancel idle timeout — session is receiving new work
-    this.cancelIdleTimeout()
     const ok = this.io.write(message)
     if (!ok) return false
     const prevWorkStatus = this._workStatus
     this._workStatus = 'in_progress'
+    this._processStatus = 'running'  // Back to running from idle
     this._activity = undefined
     this.resultEmitted = false
     this._askUserIntercepted = false
@@ -709,7 +691,6 @@ export class ClaudeCodeSession {
    */
   async gracefulStop(): Promise<void> {
     if (this.pid === null) return
-    this.cancelIdleTimeout()
     const pid = this.pid
     const processName = this.io?.processName ?? 'claude'
     if (!isProcessAlive(pid, processName)) return
@@ -759,7 +740,6 @@ export class ClaudeCodeSession {
     // Delete FIFO first to prevent further input
     this.io?.deletePipe()
     this.resultEmitted = true
-    this.cancelIdleTimeout()
     this.stopMonitoring()
 
     if (this.pid !== null) {
@@ -825,8 +805,31 @@ export class ClaudeCodeSession {
         this._processStatus = 'stopped'
         this.stopLivenessMonitor()
 
-        // Reject sessionReady if it hasn't resolved yet (process died before init)
-        this._rejectSessionReady(new Error('process died before session init'))
+        // Reject sessionReady with detailed diagnostics.
+        // The generic "process died before session init" is useless for debugging.
+        // Include: exit code, stderr, whether it's SSH or local, and the PID.
+        let initStderr = ''
+        if (this._outputFile) {
+          try {
+            initStderr = fs.readFileSync(this._outputFile + '.err', 'utf-8').slice(0, 2048).trim()
+          } catch { /* no stderr file */ }
+        }
+        const parts = ['process died before session init']
+        if (this._host) parts.push(`[SSH → ${this._host}]`)
+        if (this._exitCode !== null) parts.push(`[exit code: ${this._exitCode}]`)
+        if (this.pid) parts.push(`[pid: ${this.pid}]`)
+        if (initStderr) parts.push(`stderr: ${initStderr}`)
+        else parts.push('(no stderr captured)')
+        const errMsg = parts.join(' ')
+        log.session.error('session init failed', {
+          taskId: this.taskId,
+          pid: this.pid,
+          exitCode: this._exitCode,
+          host: this._host,
+          stderr: initStderr || undefined,
+          outputFile: this._outputFile,
+        })
+        this._rejectSessionReady(new Error(errMsg))
 
         // If no result was emitted by the tailer, determine fallback behavior.
         // After server restart + reconnection, resultEmitted is pre-set to true
@@ -886,135 +889,6 @@ export class ClaudeCodeSession {
   private stopMonitoring(): void {
     this.stopLivenessMonitor()
     this.io?.stopTail()
-  }
-
-  /**
-   * Start idle timeout for FIFO-mode sessions that have finished a turn.
-   * After IDLE_TIMEOUT_MS with no new messages, gracefully kill the process
-   * and mark it as stopped — freeing OS resources while preserving session
-   * state for future --resume.
-   *
-   * Only applies to local FIFO sessions. SSH sessions use a different stdin
-   * mechanism and SIGINT targeting the local SSH wrapper may not propagate
-   * reliably to the remote claude process.
-   */
-  private startIdleTimeout(): void {
-    if (this._host !== null) return
-    if (!this.io?.hasPipe) return
-    if (this.idleTimeoutMs <= 0) return  // Disabled via config (0 = no idle timeout)
-
-    this.cancelIdleTimeout()
-    this._idleCancelled = false
-    this.idleTimer = setTimeout(async () => {
-      this.idleTimer = null
-      if (this._idleCancelled) return
-      if (this._workStatus === 'in_progress') return
-      if (this.pid === null) return
-
-      // await_human_action sessions: check if the JSONL output file is still being
-      // written to. Sub-agents (Team, Agent) produce JSONL events — if the file is
-      // stale, the session is stuck. If active, restart the timer and check again later.
-      if (this._workStatus === 'await_human_action') {
-        if (!this.isOutputStale()) {
-          this.startIdleTimeout()  // Output still active — check again later
-          return
-        }
-        log.session.info('idle timeout: await_human_action session has stale output', {
-          sessionId: this.claudeSessionId, taskId: this.taskId, idleMs: this.idleTimeoutMs,
-        })
-        // Fall through to kill — session's sub-agents appear stuck
-      }
-      const processName = this.io?.processName ?? 'claude'
-      if (!isProcessAlive(this.pid, processName)) return
-
-      log.session.info('idle timeout: killing idle FIFO session', {
-        sessionId: this.claudeSessionId,
-        taskId: this.taskId,
-        pid: this.pid,
-        idleMs: this.idleTimeoutMs,
-      })
-
-      // Suppress spurious events from liveness monitor, delete FIFO, stop monitoring.
-      // Safe to stop tailer before process exits because resultEmitted = true
-      // prevents any further event emission from the liveness check.
-      this.resultEmitted = true
-      this.io?.deletePipe()
-      this.stopMonitoring()
-
-      // Graceful two-phase kill: SIGINT (Claude saves state) → SIGTERM fallback
-      const pid = this.pid
-      try { process.kill(pid, 'SIGINT') } catch { /* already dead */ }
-      const deadline1 = Date.now() + 5_000
-      while (Date.now() < deadline1 && isProcessAlive(pid, processName)) {
-        if (this._idleCancelled) return
-        await new Promise(r => setTimeout(r, 200))
-      }
-      if (isProcessAlive(pid, processName)) {
-        try { process.kill(pid, 'SIGTERM') } catch { /* already dead */ }
-        const deadline2 = Date.now() + 2_000
-        while (Date.now() < deadline2 && isProcessAlive(pid, processName)) {
-          if (this._idleCancelled) return
-          await new Promise(r => setTimeout(r, 200))
-        }
-      }
-
-      if (this._idleCancelled) return
-
-      this._active = false
-      this._processStatus = 'stopped'
-      this._activity = undefined
-
-      if (this.claudeSessionId) {
-        try {
-          const { updateSessionRecord } = await import('../core/session-tracker.js')
-          await updateSessionRecord(this.claudeSessionId, {
-            process_status: 'stopped',
-            work_status: this._workStatus,
-            activity: undefined,
-            last_status_change: new Date().toISOString(),
-          })
-        } catch (err) {
-          log.session.warn('idle timeout: failed to persist stopped status', {
-            sessionId: this.claudeSessionId,
-            error: err instanceof Error ? err.message : String(err),
-          })
-        }
-      }
-
-      this.emitStatusChanged(this._workStatus)
-      log.session.info('idle timeout: session process stopped', {
-        sessionId: this.claudeSessionId,
-        taskId: this.taskId,
-        pid,
-      })
-    }, this.idleTimeoutMs)
-    this.idleTimer.unref()
-  }
-
-  /**
-   * Cancel the idle timeout (e.g., when a new message arrives).
-   * Sets _idleCancelled flag to also abort an in-flight async kill loop.
-   */
-  private cancelIdleTimeout(): void {
-    this._idleCancelled = true
-    if (this.idleTimer) {
-      clearTimeout(this.idleTimer)
-      this.idleTimer = null
-    }
-  }
-
-  /**
-   * Check if the JSONL output file is stale (no writes within idleTimeoutMs).
-   * Used to detect stuck await_human_action sessions where sub-agents stopped producing output.
-   */
-  private isOutputStale(): boolean {
-    if (!this._outputFile) return true
-    try {
-      const stat = fs.statSync(this._outputFile)
-      return (Date.now() - stat.mtimeMs) > this.idleTimeoutMs
-    } catch {
-      return true  // Can't stat → treat as stale
-    }
   }
 
   /**
@@ -1404,14 +1278,9 @@ export class ClaudeCodeSession {
           // stream-json FIFO mode: process is still alive between turns
           // Keep process running, ready for next writeMessage()
           this._workStatus = result.is_error ? 'error' : 'agent_complete'
+          this._processStatus = 'idle'  // Turn done, process alive, waiting for next writeMessage()
           this._activity = undefined
           this.resultEmitted = false  // Ready for next turn
-          // Keep _active = true, _processStatus = 'running', monitoring alive
-
-          // Start idle timeout — kill the process if no new messages arrive
-          // within IDLE_TIMEOUT_MS. Prevents idle FIFO sessions from consuming
-          // OS resources indefinitely. Session can be resumed via --resume after kill.
-          this.startIdleTimeout()
         } else {
           // Process is exiting (SSH, interrupted, or natural exit)
           this.resultEmitted = true
@@ -1493,8 +1362,6 @@ export class SessionRunner {
   private batchCounts = new Map<string, number>()
   /** Safety timers that auto-clear stuck activeProcessing entries */
   private activeProcessingTimers = new Map<string, ReturnType<typeof setTimeout>>()
-  /** Idle timeout for sessions (ms), read from config.session.idle_timeout_minutes. */
-  private idleTimeoutMs: number = DEFAULT_IDLE_TIMEOUT_MS
 
   /** SDK session server client (set via setSdkClient when session_server.enabled) */
   private sdkClient: SessionServerClient | null = null
@@ -1567,32 +1434,14 @@ export class SessionRunner {
    * Subscribe to the event bus and handle session lifecycle events.
    * Optionally reconnect to sessions that survived a server restart.
    */
-  /** Read idle timeout from config (fire-and-forget). Default is used until read completes. */
-  private readIdleTimeoutConfig(): void {
-    import('../core/config-manager.js').then(({ getConfig }) =>
-      getConfig().then((config) => {
-        const mins = config.session?.idle_timeout_minutes
-        if (mins != null && mins >= 0) {
-          this.idleTimeoutMs = mins === 0 ? 0 : mins * 60 * 1000
-          log.session.info('idle timeout configured', { minutes: mins, ms: this.idleTimeoutMs })
-        }
-      }),
-    ).catch(() => {
-      // Config not available — use default (30 min)
-    })
-  }
-
   init(reconnectable?: SessionRecord[]): void {
-    // Read idle timeout from config (non-blocking — doesn't delay startup recovery)
-    this.readIdleTimeoutConfig()
-
     // Reconnect to surviving sessions + startup recovery (async)
     const startupRecovery = async () => {
       // Phase 1: reconnect to surviving sessions
       if (reconnectable?.length) {
         for (const record of reconnectable) {
           try {
-            const session = await ClaudeCodeSession.attachToExisting(record, this.cliCommand, this.idleTimeoutMs)
+            const session = await ClaudeCodeSession.attachToExisting(record, this.cliCommand)
             const mapKey = record.taskId || `reconnected-${record.claudeSessionId}`
             this.sessions.set(mapKey, session)
             log.session.info('reconnected to surviving session', {
@@ -1679,7 +1528,10 @@ export class SessionRunner {
             // For FIFO sessions (agent_complete but process still alive),
             // only persist stopped status when the process is actually dead.
             const cliSession = this.findSessionByClaudeId(sessionId)
-            const isProcessStillAlive = cliSession?.active && cliSession?.processStatus === 'running'
+            // FIFO sessions transition to 'idle' after turn complete (process alive, waiting for input).
+            // Both 'running' and 'idle' mean the OS process is alive.
+            const isProcessStillAlive = cliSession?.active
+              && (cliSession?.processStatus === 'running' || cliSession?.processStatus === 'idle')
 
             if (!isProcessStillAlive) {
               import('../core/session-tracker.js').then(({ updateSessionRecord }) => {
@@ -1691,9 +1543,12 @@ export class SessionRunner {
                 }).catch(() => {})
               }).catch(() => {})
             } else {
-              // FIFO session: process is alive between turns (agent_complete but running)
+              // FIFO session: process is alive between turns — mark idle so the
+              // health monitor's Layer 3 idle timeout can catch leaked processes.
+              // Previously left as 'running', which bypassed idle timeout checks.
               import('../core/session-tracker.js').then(({ updateSessionRecord }) => {
                 updateSessionRecord(sessionId, {
+                  process_status: 'idle',
                   work_status: isError ? 'error' : 'agent_complete',
                   activity: undefined,
                   last_status_change: new Date().toISOString(),
@@ -1809,6 +1664,54 @@ export class SessionRunner {
   }
 
   /**
+   * Kill orphaned claude processes from stopped/terminal sessions.
+   * Scans sessions.json for sessions with PIDs where process_status is 'stopped'
+   * or work_status is terminal, but the OS process is still alive.
+   * This prevents accumulation of zombie claude processes over time.
+   */
+  private async killOrphanedSessionProcesses(): Promise<void> {
+    try {
+      const { listSessions } = await import('../core/session-tracker.js')
+      const { TERMINAL_WORK_STATUSES } = await import('../core/session-tracker.js')
+      const sessions = await listSessions()
+
+      let killed = 0
+      for (const s of sessions) {
+        if (s.pid == null) continue
+        if (s.provider === 'embedded' || s.provider === 'sdk') continue
+
+        // Kill processes for sessions that are stopped or in terminal state
+        const shouldBeDeadByStatus = s.process_status === 'stopped'
+        const shouldBeDeadByWork = TERMINAL_WORK_STATUSES.has(s.work_status)
+        if (!shouldBeDeadByStatus && !shouldBeDeadByWork) continue
+
+        const processName = s.host ? 'ssh' : 'claude'
+        if (!isProcessAlive(s.pid, processName)) continue
+
+        // Process is alive but session is done — kill it
+        log.session.warn('killing orphaned session process', {
+          sessionId: s.claudeSessionId,
+          taskId: s.taskId,
+          pid: s.pid,
+          process_status: s.process_status,
+          work_status: s.work_status,
+        })
+
+        try { process.kill(s.pid, 'SIGTERM') } catch { /* already dead */ }
+        killed++
+      }
+
+      if (killed > 0) {
+        log.session.info('killed orphaned session processes', { count: killed })
+      }
+    } catch (err) {
+      log.session.warn('killOrphanedSessionProcesses failed', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  /**
    * Find an in-memory CLI session by its Claude session ID.
    */
   private findSessionByClaudeId(claudeSessionId: string): ClaudeCodeSession | undefined {
@@ -1912,6 +1815,11 @@ export class SessionRunner {
       }
     }
 
+    // Kill orphaned processes from stopped/terminal sessions to prevent accumulation.
+    // Over time, claude processes can leak (e.g. idle timeout GC'd, server restart
+    // orphaned the in-process timer). This ensures we don't exhaust OS resources.
+    await this.killOrphanedSessionProcesses()
+
     const mapKey = taskId || `taskless-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     if (taskId) {
       const existing = this.sessions.get(taskId)
@@ -1921,7 +1829,7 @@ export class SessionRunner {
         })
       }
     }
-    const session = new ClaudeCodeSession(taskId, project ?? '', this.cliCommand, this.idleTimeoutMs)
+    const session = new ClaudeCodeSession(taskId, project ?? '', this.cliCommand)
     if (data.fromPlanSessionId) session.fromPlanSessionId = data.fromPlanSessionId
     this.sessions.set(mapKey, session)
 
@@ -2563,7 +2471,7 @@ export class SessionRunner {
         const { getSessionByClaudeId } = await import('../core/session-tracker.js')
         const record = await getSessionByClaudeId(sessionId)
         if (record) {
-          const session = new ClaudeCodeSession(record.taskId, record.project, this.cliCommand, this.idleTimeoutMs)
+          const session = new ClaudeCodeSession(record.taskId, record.project, this.cliCommand)
           this.sessions.set(record.taskId, session)
 
           // Resolve SSH target if session has a stored host

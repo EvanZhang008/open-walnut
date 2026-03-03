@@ -9,6 +9,8 @@
  *      → Check output file for result line → agent_complete or error
  *      → Clear task session slot only on error (agent_complete keeps slot for resume)
  *      → Emit session:status-changed
+ *   4. Check idle timeout (Layer 3): kill idle sessions past the configured threshold.
+ *      Uses persistent last_status_change timestamp — survives server restarts.
  */
 
 import fs from 'node:fs'
@@ -17,6 +19,8 @@ import { isProcessAlive } from '../utils/process.js'
 import { bus, EventNames } from './event-bus.js'
 
 const HEALTH_CHECK_INTERVAL_MS = 30_000
+/** Default idle timeout: 30 minutes */
+const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000
 
 export class SessionHealthMonitor {
   private timer: ReturnType<typeof setInterval> | null = null
@@ -38,6 +42,9 @@ export class SessionHealthMonitor {
   async check(): Promise<void> {
     const { listNonTerminalSessions, updateSessionRecord } = await import('./session-tracker.js')
 
+    // Kill orphaned processes from terminal/stopped sessions (leaked processes)
+    await this.killOrphanedProcesses()
+
     let sessions
     try {
       sessions = await listNonTerminalSessions()
@@ -50,6 +57,9 @@ export class SessionHealthMonitor {
     // Detect stale await_human_action sessions (stuck sub-agents)
     await this.checkStaleAwaitingSessions(sessions, updateSessionRecord)
 
+    // Layer 3: idle timeout — kill idle sessions past the configured threshold
+    await this.checkIdleTimeout(sessions, updateSessionRecord)
+
     for (const session of sessions) {
       // SDK and embedded sessions have no PID — skip PID-based health checks.
       // SDK: managed by session server. Embedded: in-process, status managed by SubagentRunner.
@@ -57,75 +67,158 @@ export class SessionHealthMonitor {
 
       const processName = session.host ? 'ssh' : 'claude'
       const alive = session.pid != null && isProcessAlive(session.pid, processName)
-      const newProcessStatus = alive ? 'running' : 'stopped'
 
-      if (newProcessStatus === session.process_status) continue
+      // Determine expected process status from PID liveness
+      // alive=true: could be 'running' or 'idle' (don't override idle→running)
+      // alive=false: must be 'stopped'
+      if (!alive && session.process_status !== 'stopped') {
+        const now = new Date().toISOString()
 
-      // Process status changed
-      const now = new Date().toISOString()
+        if (session.process_status === 'running' && session.work_status === 'in_progress') {
+          // Process died while work was in progress — determine outcome
+          const hasResult = session.outputFile ? this.outputFileHasResult(session.outputFile) : false
+          const newWorkStatus = hasResult ? 'agent_complete' as const : 'error' as const
 
-      if (newProcessStatus === 'stopped' && session.work_status === 'in_progress') {
-        // Process died while work was in progress — determine outcome
-        const hasResult = session.outputFile ? this.outputFileHasResult(session.outputFile) : false
-        const newWorkStatus = hasResult ? 'agent_complete' as const : 'error' as const
+          await updateSessionRecord(session.claudeSessionId, {
+            process_status: 'stopped',
+            work_status: newWorkStatus,
+            activity: undefined,
+            last_status_change: now,
+          })
 
-        await updateSessionRecord(session.claudeSessionId, {
-          process_status: 'stopped',
-          work_status: newWorkStatus,
-          activity: undefined,
-          last_status_change: now,
-        })
-
-        // Only clear session slot on error — agent_complete sessions keep
-        // their slot so the UI shows them and they can be resumed.
-        if (newWorkStatus === 'error' && session.taskId) {
-          try {
-            const { clearSessionSlot } = await import('./task-manager.js')
-            const { task } = await clearSessionSlot(session.taskId, session.claudeSessionId)
-            bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'session-error' })
-          } catch (err) {
-            log.session.warn('health monitor: failed to clear session slot', {
-              sessionId: session.claudeSessionId,
-              taskId: session.taskId,
-              error: err instanceof Error ? err.message : String(err),
-            })
+          // Only clear session slot on error — agent_complete sessions keep
+          // their slot so the UI shows them and they can be resumed.
+          if (newWorkStatus === 'error' && session.taskId) {
+            try {
+              const { clearSessionSlot } = await import('./task-manager.js')
+              const { task } = await clearSessionSlot(session.taskId, session.claudeSessionId)
+              bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'session-error' })
+            } catch (err) {
+              log.session.warn('health monitor: failed to clear session slot', {
+                sessionId: session.claudeSessionId,
+                taskId: session.taskId,
+                error: err instanceof Error ? err.message : String(err),
+              })
+            }
           }
+
+          log.session.info('health monitor: session process died', {
+            sessionId: session.claudeSessionId,
+            taskId: session.taskId,
+            newWorkStatus,
+          })
+
+          bus.emit(EventNames.SESSION_STATUS_CHANGED, {
+            sessionId: session.claudeSessionId,
+            taskId: session.taskId,
+            process_status: 'stopped',
+            work_status: newWorkStatus,
+            previousWorkStatus: 'in_progress',
+          }, ['*'], { source: 'health-monitor', urgency: 'urgent' })
+        } else {
+          // Process died while idle or in non-in_progress state — just update process_status
+          await updateSessionRecord(session.claudeSessionId, {
+            process_status: 'stopped',
+            last_status_change: now,
+          })
+
+          log.session.debug('health monitor: process status updated', {
+            sessionId: session.claudeSessionId,
+            taskId: session.taskId,
+            pid: session.pid,
+            previousProcessStatus: session.process_status,
+            workStatus: session.work_status,
+          })
         }
-
-        log.session.info('health monitor: session process died', {
-          sessionId: session.claudeSessionId,
-          taskId: session.taskId,
-          newWorkStatus,
-        })
-
-        bus.emit(EventNames.SESSION_STATUS_CHANGED, {
-          sessionId: session.claudeSessionId,
-          taskId: session.taskId,
-          process_status: 'stopped',
-          work_status: newWorkStatus,
-          previousWorkStatus: 'in_progress',
-        }, ['*'], { source: 'health-monitor', urgency: 'urgent' })
-      } else {
-        // Process status changed but work_status is already terminal-ish
-        // (agent_complete, await_human_action) — just update process_status
-        await updateSessionRecord(session.claudeSessionId, {
-          process_status: newProcessStatus,
-          last_status_change: now,
-        })
-
-        log.session.debug('health monitor: process status updated', {
-          sessionId: session.claudeSessionId,
-          taskId: session.taskId,
-          pid: session.pid,
-          newProcessStatus,
-          workStatus: session.work_status,
-        })
       }
     }
   }
 
   /**
-   * Detect sessions that are "running" with await_human_action but haven't produced
+   * Layer 3: Idle timeout via persistent timestamps.
+   * Scans process_status === 'idle' sessions, checks (now - last_status_change) against
+   * the configured idle_timeout_minutes. Kills sessions that have been idle too long.
+   *
+   * Skips await_human_action sessions — they're waiting for user input, not truly idle.
+   * SSH sessions are also skipped (SIGINT over SSH is unreliable).
+   */
+  private async checkIdleTimeout(
+    sessions: Array<{ claudeSessionId: string; taskId?: string; pid?: number; process_status?: string; work_status?: string; host?: string; last_status_change?: string; provider?: string }>,
+    updateSessionRecord: (id: string, update: Record<string, unknown>) => Promise<unknown>,
+  ): Promise<void> {
+    // Read config to get idle_timeout_minutes
+    let idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS
+    try {
+      const { getConfig } = await import('./config-manager.js')
+      const config = await getConfig()
+      const mins = config.session?.idle_timeout_minutes
+      if (mins != null) {
+        idleTimeoutMs = mins === 0 ? 0 : mins * 60 * 1000
+      }
+    } catch {
+      // Config not available — use default
+    }
+
+    // 0 = disabled
+    if (idleTimeoutMs <= 0) return
+
+    const now = Date.now()
+
+    for (const session of sessions) {
+      if (session.process_status !== 'idle') continue
+      if (session.work_status === 'await_human_action') continue  // waiting for user, not idle
+      if (session.host) continue  // SSH sessions — skip (SIGINT unreliable)
+      if (session.provider === 'sdk' || session.provider === 'embedded') continue
+      if (session.pid == null) continue
+
+      // Check timestamp
+      const statusChangeTime = session.last_status_change
+        ? new Date(session.last_status_change).getTime()
+        : 0
+      const idleDurationMs = now - statusChangeTime
+      if (idleDurationMs < idleTimeoutMs) continue
+
+      const idleMinutes = Math.round(idleDurationMs / 60_000)
+      log.session.info('health monitor: idle timeout — killing session', {
+        sessionId: session.claudeSessionId,
+        taskId: session.taskId,
+        pid: session.pid,
+        idleMinutes,
+        thresholdMinutes: Math.round(idleTimeoutMs / 60_000),
+      })
+
+      // Graceful kill: SIGINT first, deferred SIGTERM fallback after 5s.
+      // Does NOT busy-wait — fires SIGTERM via setTimeout so the health check continues.
+      const pid = session.pid
+
+      try { process.kill(pid, 'SIGINT') } catch { /* already dead */ }
+
+      // Deferred SIGTERM fallback — fire-and-forget, doesn't block health check loop
+      setTimeout(() => {
+        const processName = 'claude'
+        if (isProcessAlive(pid, processName)) {
+          try { process.kill(pid, 'SIGTERM') } catch { /* already dead */ }
+        }
+      }, 5_000)
+
+      const updateNow = new Date().toISOString()
+      await updateSessionRecord(session.claudeSessionId, {
+        process_status: 'stopped',
+        activity: undefined,
+        last_status_change: updateNow,
+      })
+
+      bus.emit(EventNames.SESSION_STATUS_CHANGED, {
+        sessionId: session.claudeSessionId,
+        taskId: session.taskId,
+        process_status: 'stopped',
+        work_status: session.work_status,
+      }, ['*'], { source: 'health-monitor' })
+    }
+  }
+
+  /**
+   * Detect sessions that are "idle" with await_human_action but haven't produced
    * any JSONL output for a long time. These sessions likely have stuck sub-agents.
    * Emits a status change event so the UI shows a warning.
    */
@@ -136,7 +229,8 @@ export class SessionHealthMonitor {
     const STALE_THRESHOLD_MS = 60 * 60 * 1000  // 1 hour with no output = stale
 
     for (const session of sessions) {
-      if (session.process_status !== 'running') continue
+      // Check both running and idle — await_human_action can be in either state
+      if (session.process_status === 'stopped') continue
       if (session.work_status !== 'await_human_action') continue
       if (!session.outputFile) continue
 
@@ -162,13 +256,57 @@ export class SessionHealthMonitor {
         bus.emit(EventNames.SESSION_STATUS_CHANGED, {
           sessionId: session.claudeSessionId,
           taskId: session.taskId,
-          process_status: 'running',
+          process_status: session.process_status,
           work_status: 'await_human_action',
           activity: `Possibly stuck — no output for ${staleMinutes} min`,
         }, ['*'], { source: 'health-monitor' })
       } catch {
         // Can't stat file — skip
       }
+    }
+  }
+
+  /**
+   * Kill orphaned OS processes from sessions that are in terminal state
+   * (completed/error) or marked stopped but whose process is still alive.
+   * These are invisible to the normal health checks (which only scan non-terminal sessions)
+   * and accumulate over time, eventually exhausting OS resources.
+   */
+  private async killOrphanedProcesses(): Promise<void> {
+    try {
+      const { listSessions, TERMINAL_WORK_STATUSES } = await import('./session-tracker.js')
+      const sessions = await listSessions()
+
+      let killed = 0
+      for (const s of sessions) {
+        if (s.pid == null) continue
+        if (s.provider === 'embedded' || s.provider === 'sdk') continue
+
+        // Only target sessions that SHOULD have no running process
+        const isTerminal = TERMINAL_WORK_STATUSES.has(s.work_status)
+        const isStopped = s.process_status === 'stopped'
+        if (!isTerminal && !isStopped) continue
+
+        const processName = s.host ? 'ssh' : 'claude'
+        if (!isProcessAlive(s.pid, processName)) continue
+
+        log.session.warn('health monitor: killing orphaned process', {
+          sessionId: s.claudeSessionId,
+          taskId: s.taskId,
+          pid: s.pid,
+          process_status: s.process_status,
+          work_status: s.work_status,
+        })
+
+        try { process.kill(s.pid, 'SIGTERM') } catch { /* already dead */ }
+        killed++
+      }
+
+      if (killed > 0) {
+        log.session.info('health monitor: killed orphaned processes', { count: killed })
+      }
+    } catch {
+      // Non-critical — will retry on next health check
     }
   }
 

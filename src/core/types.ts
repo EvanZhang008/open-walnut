@@ -234,6 +234,9 @@ export interface Config {
     /** How many minutes an idle FIFO session stays alive before being auto-killed.
      *  Set to 0 to disable idle timeout entirely. Default: 30. */
     idle_timeout_minutes?: number;
+    /** Maximum number of idle sessions per host before evicting the oldest.
+     *  Default: local=30, remote=40. Set to 0 to disable idle limit. */
+    max_idle?: number;
   };
   heartbeat?: import('../heartbeat/types.js').HeartbeatConfig;
   tools?: {
@@ -358,7 +361,7 @@ export interface ChatHistoryStore {
   entries?: ChatEntry[];
 }
 
-export type ProcessStatus = 'running' | 'stopped';
+export type ProcessStatus = 'running' | 'idle' | 'stopped';
 export type WorkStatus = 'in_progress' | 'agent_complete' | 'await_human_action' | 'completed' | 'error';
 export type SessionMode = 'bypass' | 'accept' | 'default' | 'plan';
 export type SessionProvider = 'cli' | 'sdk' | 'embedded';

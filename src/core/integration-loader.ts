@@ -508,8 +508,9 @@ export async function loadPlugins(registry: IntegrationRegistry): Promise<void> 
 // Known non-plugin top-level config keys — everything else is treated as a legacy plugin key.
 const KNOWN_NON_PLUGIN_KEYS = new Set([
   'version', 'user', 'defaults', 'provider', 'agent', 'local',
-  'favorites', 'ordering', 'session_server', 'hosts', 'session_limits',
+  'favorites', 'ordering', 'session_server', 'hosts', 'session_limits', 'session',
   'heartbeat', 'tools', 'search', 'git_versioning', 'session_hooks', 'plugins',
+  'focus_bar',
 ]);
 
 /**

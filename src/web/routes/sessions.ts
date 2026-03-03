@@ -20,8 +20,8 @@ function enrichWithLiveStatus(sessions: SessionRecord[]): SessionRecord[] {
     if (s.provider === 'embedded' || s.provider === 'sdk') continue
 
     if (s.pid != null) {
-      if (s.process_status === 'running') {
-        // Verify PID liveness only for sessions the DB thinks are running.
+      if (s.process_status === 'running' || s.process_status === 'idle') {
+        // Verify PID liveness for sessions the DB thinks are alive (running or idle).
         // This catches processes that died without triggering normal shutdown.
         const processName = s.host ? 'ssh' : 'claude'
         if (!isProcessAlive(s.pid, processName)) {
@@ -255,7 +255,7 @@ sessionsRouter.patch('/:sessionId', async (req: Request, res: Response, next: Ne
         res.status(404).json({ error: 'session not found' })
         return
       }
-      if (existing.process_status === 'running') {
+      if (existing.process_status !== 'stopped') {
         res.status(400).json({ error: 'Stop session before archiving' })
         return
       }
@@ -411,9 +411,9 @@ sessionsRouter.post('/:sessionId/execute-continue', async (req: Request, res: Re
     // Update mode to bypass for execution
     await updateSessionRecord(session.claudeSessionId, { mode: 'bypass' })
 
-    // If session is still running (plan completed but process idle), stop it first
+    // If session process is alive (running or idle), stop it first
     // so it restarts with bypass permissions via --resume
-    const needsInterrupt = session.process_status === 'running'
+    const needsInterrupt = session.process_status !== 'stopped'
 
     // Enqueue message and emit SESSION_SEND (same pattern as send_to_session)
     const message = 'Execute the plan. Implement all steps as planned.'

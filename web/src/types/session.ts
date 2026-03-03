@@ -1,4 +1,4 @@
-export type ProcessStatus = 'running' | 'stopped';
+export type ProcessStatus = 'running' | 'idle' | 'stopped';
 export type WorkStatus = 'in_progress' | 'agent_complete' | 'await_human_action' | 'completed' | 'error';
 export type SessionMode = 'bypass' | 'accept' | 'default' | 'plan';
 export type SessionProvider = 'cli' | 'sdk' | 'embedded';

@@ -105,6 +105,16 @@ async function readStore(): Promise<SessionStoreV2> {
     }
   }
 
+  // Migrate process_status: running sessions that are not in_progress → idle
+  // This handles the transition to the 3-state ProcessStatus model.
+  for (const session of store.sessions) {
+    if (session.process_status === 'running' && session.work_status !== 'in_progress') {
+      (session as unknown as Record<string, string>).process_status = 'idle';
+      session.last_status_change ??= session.lastActiveAt;
+      migrated = true;
+    }
+  }
+
   if (migrated) {
     log.session.info('migrated legacy session records', { count: store.sessions.length });
     await writeStore(store);
@@ -158,18 +168,21 @@ export async function listNonTerminalSessions(): Promise<SessionRecord[]> {
 const DEFAULT_LOCAL_LIMIT = 7;
 const DEFAULT_REMOTE_LIMIT = 20;
 
-/** Hard cap on total alive processes per host (idle + active). */
-const MAX_TOTAL_ALIVE = 20;
+/** Default idle session limits per host (Layer 2). */
+const DEFAULT_LOCAL_IDLE_LIMIT = 30;
+const DEFAULT_REMOTE_IDLE_LIMIT = 40;
 
 /**
  * Check if a session's OS process is actually alive.
  * SDK/embedded sessions trust process_status; CLI sessions verify via PID.
  * Returns false for anomalous records (no PID).
+ *
+ * Both 'running' and 'idle' mean the process is alive (idle = turn done, waiting for input).
  */
 function isSessionProcessAlive(s: SessionRecord): boolean {
   // SDK and embedded sessions have no PID — trust process_status directly.
   // SDK: managed by session server. Embedded: in-process, managed by SubagentRunner.
-  if (s.provider === 'sdk' || s.provider === 'embedded') return s.process_status === 'running';
+  if (s.provider === 'sdk' || s.provider === 'embedded') return s.process_status !== 'stopped';
   if (s.pid == null) return false;
   const processName = s.host ? 'ssh' : 'claude';
   return isProcessAlive(s.pid, processName);
@@ -177,10 +190,11 @@ function isSessionProcessAlive(s: SessionRecord): boolean {
 
 /**
  * Get actively-processing sessions grouped by host.
- * Only counts sessions that are both alive AND work_status='in_progress'.
+ * Only counts sessions with process_status='running' (actively processing a turn).
+ * Idle sessions (turn complete, waiting for input) are NOT included.
  * These are the sessions actually consuming API/compute resources.
  *
- * Side-effect: any stale records (process_status='running' but PID dead)
+ * Side-effect: any stale records (process alive in DB but PID dead)
  * are asynchronously corrected in sessions.json to prevent future
  * ghost-slot accumulation.
  */
@@ -191,7 +205,6 @@ export async function getActiveSessionsByHost(): Promise<Record<string, SessionR
   for (const s of store.sessions) {
     if (s.archived) continue;
     if (s.process_status !== 'running') continue;
-    if (s.work_status !== 'in_progress') continue;
     if (!isSessionProcessAlive(s)) {
       staleIds.push(s.claudeSessionId);
       continue;
@@ -206,11 +219,11 @@ export async function getActiveSessionsByHost(): Promise<Record<string, SessionR
 }
 
 /**
- * Get all alive sessions grouped by host (regardless of work_status).
- * Includes idle sessions (agent_complete, await_human_action).
- * Used for total process cap enforcement.
+ * Get all alive sessions grouped by host (both running and idle).
+ * Includes idle sessions (turn complete, waiting for input).
+ * Used for idle limit enforcement and diagnostics.
  *
- * Side-effect: any stale records (process_status='running' but PID dead)
+ * Side-effect: any stale records (process alive in DB but PID dead)
  * are asynchronously corrected in sessions.json.
  */
 export async function getAllAliveSessionsByHost(): Promise<Record<string, SessionRecord[]>> {
@@ -219,7 +232,7 @@ export async function getAllAliveSessionsByHost(): Promise<Record<string, Sessio
   const staleIds: string[] = [];
   for (const s of store.sessions) {
     if (s.archived) continue;
-    if (s.process_status !== 'running') continue;
+    if (s.process_status === 'stopped') continue;  // only running + idle
     if (!isSessionProcessAlive(s)) {
       staleIds.push(s.claudeSessionId);
       continue;
@@ -257,15 +270,19 @@ export const getRunningSessionsByHost = getActiveSessionsByHost;
 
 export interface SessionLimitResult {
   allowed: boolean;
-  /** Current active (in_progress) count for this host */
+  /** Current active (running) count for this host */
   running: number;
   /** Configured active limit for this host */
   limit: number;
   /** The active sessions on this host (for diagnostics) */
   runningSessions: SessionRecord[];
-  /** Total alive processes on this host (active + idle) */
+  /** Total alive processes on this host (running + idle) */
   totalAlive?: number;
-  /** Sessions that were auto-evicted to stay under the total alive cap */
+  /** Current idle count for this host */
+  idleCount?: number;
+  /** Configured idle limit for this host */
+  maxIdle?: number;
+  /** Sessions that were auto-evicted to stay under the idle limit */
   evicted?: SessionRecord[];
 }
 
@@ -273,42 +290,49 @@ export interface SessionLimitResult {
  * Check whether a new session can be started on the given host.
  *
  * Two-tier limit:
- *   1. Active limit (per-host, default local=7): only in_progress sessions count.
- *      Idle sessions (agent_complete, await_human_action) do NOT block new work.
- *   2. Total alive cap (MAX_TOTAL_ALIVE=20): hard cap on total OS processes.
+ *   1. Processing limit (per-host, default local=7): only running sessions count.
+ *      Idle sessions do NOT block new work.
+ *   2. Idle limit (per-host, default local=30, remote=40): cap on idle processes.
  *      When exceeded, the oldest idle session is gracefully stopped (SIGINT)
- *      to make room.
+ *      to make room. Does NOT block new sessions.
  *
  * @param host — host alias from config.hosts, or undefined/null for local.
  * @param sessionLimits — the config.session_limits object (may be undefined).
+ * @param sessionConfig — the config.session object (may be undefined).
  */
 export async function checkSessionLimit(
   host: string | undefined | null,
   sessionLimits?: Record<string, number>,
+  sessionConfig?: { idle_timeout_minutes?: number; max_idle?: number },
 ): Promise<SessionLimitResult> {
   const key = host || 'local';
   const rawLimit = sessionLimits?.[key]
     ?? (key === 'local' ? DEFAULT_LOCAL_LIMIT : DEFAULT_REMOTE_LIMIT);
   const limit = Math.max(1, rawLimit); // Floor at 1 to prevent zero/negative blocking all sessions
 
+  // Idle limit: from config.session.max_idle, or per-host defaults
+  const maxIdle = sessionConfig?.max_idle
+    ?? (key === 'local' ? DEFAULT_LOCAL_IDLE_LIMIT : DEFAULT_REMOTE_IDLE_LIMIT);
+
   // Single store read — avoids double-read race and double PID-liveness scan.
   const store = await readStore();
-  const activeSessions: SessionRecord[] = [];
-  const allAliveSessions: SessionRecord[] = [];
+  const runningSessions: SessionRecord[] = [];
+  const idleSessions: SessionRecord[] = [];
   const staleIds: string[] = [];
 
   for (const s of store.sessions) {
     if (s.archived) continue;
-    if (s.process_status !== 'running') continue;
+    if (s.process_status === 'stopped') continue;
     if (!isSessionProcessAlive(s)) {
       staleIds.push(s.claudeSessionId);
       continue;
     }
     const sKey = s.host || 'local';
     if (sKey !== key) continue;
-    allAliveSessions.push(s);
-    if (s.work_status === 'in_progress') {
-      activeSessions.push(s);
+    if (s.process_status === 'running') {
+      runningSessions.push(s);
+    } else if (s.process_status === 'idle') {
+      idleSessions.push(s);
     }
   }
 
@@ -316,21 +340,20 @@ export async function checkSessionLimit(
     fixStaleRecords(staleIds);
   }
 
-  // Tier 2: total alive cap — auto-evict idle CLI sessions if exceeded
+  // Tier 2: idle limit — auto-evict oldest idle CLI sessions if exceeded
   const evicted: SessionRecord[] = [];
 
-  if (allAliveSessions.length >= MAX_TOTAL_ALIVE) {
+  if (maxIdle > 0 && idleSessions.length >= maxIdle) {
     // Only evict CLI sessions (they have PIDs we can SIGINT).
     // SDK/embedded sessions have no PID — evicting them has no effect on actual resources.
-    const idleSessions = allAliveSessions
-      .filter(s => s.work_status !== 'in_progress' && s.provider !== 'sdk' && s.provider !== 'embedded')
+    const evictable = idleSessions
+      .filter(s => s.provider !== 'sdk' && s.provider !== 'embedded')
       .sort((a, b) => a.lastActiveAt.localeCompare(b.lastActiveAt));
 
-    const needToEvict = allAliveSessions.length - MAX_TOTAL_ALIVE + 1; // +1 for the new session
-    for (let i = 0; i < needToEvict && i < idleSessions.length; i++) {
-      const victim = idleSessions[i];
-      // Graceful stop: SIGINT lets Claude Code save session state
-      log.session.warn('evicting session for capacity', { sessionId: victim.claudeSessionId, pid: victim.pid });
+    const needToEvict = idleSessions.length - maxIdle + 1; // +1 to make room for one more
+    for (let i = 0; i < needToEvict && i < evictable.length; i++) {
+      const victim = evictable[i];
+      log.session.warn('evicting idle session for capacity', { sessionId: victim.claudeSessionId, pid: victim.pid });
       if (victim.pid != null) {
         try { process.kill(victim.pid, 'SIGINT') } catch (err) { log.session.warn('SIGINT failed during eviction', { pid: victim.pid, error: String(err) }); }
       }
@@ -344,15 +367,18 @@ export async function checkSessionLimit(
     }
   }
 
-  const allowed = activeSessions.length < limit;
-  log.session.info('session limit check', { host: key, active: activeSessions.length, limit, allowed, totalAlive: allAliveSessions.length - evicted.length });
+  const allowed = runningSessions.length < limit;
+  const totalAlive = runningSessions.length + idleSessions.length - evicted.length;
+  log.session.info('session limit check', { host: key, running: runningSessions.length, limit, idle: idleSessions.length, maxIdle, allowed, totalAlive });
 
   return {
     allowed,
-    running: activeSessions.length,
+    running: runningSessions.length,
     limit,
-    runningSessions: activeSessions,
-    totalAlive: allAliveSessions.length - evicted.length,
+    runningSessions,
+    totalAlive,
+    idleCount: idleSessions.length - evicted.length,
+    maxIdle,
     evicted: evicted.length > 0 ? evicted : undefined,
   };
 }
@@ -619,9 +645,9 @@ export async function getSlotSession(
 }
 
 /**
- * Get the active (running) session for a task using the new 1-slot model.
+ * Get the active (alive) session for a task using the new 1-slot model.
  * Falls back to exec_session_id / plan_session_id for backward compat during migration.
- * Returns the session record if found and process_status is 'running', else null.
+ * Returns the session record if found and process is alive (running or idle), else null.
  */
 export async function getActiveSession(task: Task): Promise<SessionRecord | null> {
   // Try new single slot first
@@ -633,7 +659,7 @@ export async function getActiveSession(task: Task): Promise<SessionRecord | null
 
   for (const sessionId of candidates) {
     const rec = await getSessionByClaudeId(sessionId);
-    if (rec && !rec.archived && rec.process_status === 'running') return rec;
+    if (rec && !rec.archived && rec.process_status !== 'stopped') return rec;
   }
   return null;
 }

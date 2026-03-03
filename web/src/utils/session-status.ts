@@ -11,6 +11,7 @@ import type { ProcessStatus, WorkStatus } from '@/types/session';
 
 export const PROCESS_LABELS: Record<ProcessStatus, string> = {
   running: 'Running',
+  idle: 'Idle',
   stopped: 'Stopped',
 };
 
@@ -26,6 +27,7 @@ export const WORK_LABELS: Record<WorkStatus, string> = {
 
 export const PROCESS_COLORS: Record<ProcessStatus, string> = {
   running: 'var(--success)',
+  idle: 'var(--warning)',
   stopped: 'var(--fg-muted)',
 };
 
@@ -40,9 +42,10 @@ export const WORK_COLORS: Record<WorkStatus, string> = {
 // ── Composite helpers ──
 
 /** Single color for indicators that can only show one color (e.g. SessionPill dot).
- *  Running process = green; otherwise fall back to work_status color. */
+ *  Running = green, idle = amber/warning, stopped = fall back to work_status color. */
 export function compositeColor(ps: ProcessStatus, ws: WorkStatus): string {
   if (ps === 'running') return PROCESS_COLORS.running;
+  if (ps === 'idle') return PROCESS_COLORS.idle;
   return WORK_COLORS[ws] ?? 'var(--fg-muted)';
 }
 

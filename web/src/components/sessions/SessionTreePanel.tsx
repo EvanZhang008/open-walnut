@@ -6,7 +6,7 @@ import type {
 } from '@/types/session';
 import { WORK_LABELS, PROCESS_LABELS, compositeColor } from '@/utils/session-status';
 
-type ProcessFilter = 'all' | 'running' | 'stopped';
+type ProcessFilter = 'all' | 'running' | 'idle' | 'stopped';
 type WorkFilter = 'all' | 'in_progress' | 'agent_complete' | 'await_human_action' | 'completed' | 'error';
 type TaskFilter = 'all' | 'starred' | 'high';
 
@@ -76,6 +76,7 @@ function sessionCount(tasks: SessionTreeTask[]): number {
 const PROCESS_FILTERS: { label: string; value: ProcessFilter }[] = [
   { label: 'All', value: 'all' },
   { label: PROCESS_LABELS.running, value: 'running' },
+  { label: PROCESS_LABELS.idle, value: 'idle' },
   { label: PROCESS_LABELS.stopped, value: 'stopped' },
 ];
 

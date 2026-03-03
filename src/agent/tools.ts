@@ -559,7 +559,12 @@ export const tools: ToolDefinition[] = [
         if (!parentTaskId && category) {
           const categories = await getStoreCategories();
           const catLower = category.toLowerCase();
-          const catExists = Object.keys(categories).some(k => k.toLowerCase() === catLower);
+          let catExists = Object.keys(categories).some(k => k.toLowerCase() === catLower);
+          // Also check task-derived categories (consistent with query_tasks behavior)
+          if (!catExists) {
+            const tasks = await listTasks();
+            catExists = tasks.some(t => t.category.toLowerCase() === catLower);
+          }
           if (!catExists) {
             return `Error: Category "${category}" does not exist. Create it first:\n  create_task type=category, name="${category}", source="local" (or "ms-todo")`;
           }
@@ -1218,7 +1223,7 @@ and is always allowed.`,
         // ── Per-host session concurrency limit check ──
         {
           const config = await getConfig();
-          const limitResult = await checkSessionLimit(resolvedHost, config.session_limits);
+          const limitResult = await checkSessionLimit(resolvedHost, config.session_limits, config.session);
           if (!limitResult.allowed) return buildSessionLimitBlocked(resolvedHost, limitResult);
         }
 
@@ -1696,8 +1701,8 @@ defaults (same resolution chain as start_session).`,
           if (!session) return `Error: Session not found: ${sessionId}`;
 
           if (archived) {
-            if (session.process_status === 'running') {
-              return `Error: Stop session before archiving. Session ${sessionId} is still running.`;
+            if (session.process_status !== 'stopped') {
+              return `Error: Stop session before archiving. Session ${sessionId} process is still alive (${session.process_status}).`;
             }
             await updateSessionRecord(sessionId, {
               archived: true,

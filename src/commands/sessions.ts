@@ -41,7 +41,9 @@ export async function runSessions(globals: GlobalOptions): Promise<void> {
       chalk.dim;
 
     const workStatus = wsColor(padRight(session.work_status, 18));
-    const procStatus = session.process_status === 'running' ? chalk.green(padRight('●', 8)) : chalk.dim(padRight('○', 8));
+    const procStatus = session.process_status === 'running' ? chalk.green(padRight('●', 8))
+      : session.process_status === 'idle' ? chalk.yellow(padRight('◉', 8))
+      : chalk.dim(padRight('○', 8));
     const project = padRight(session.project, 16);
     const task = padRight(session.taskId?.slice(0, 10) ?? '-', 12);
     const lastActive = padRight(shortDate(session.lastActiveAt), 14);

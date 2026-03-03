@@ -96,15 +96,19 @@ export async function reconcileSessions(): Promise<ReconcileResult> {
     // Check if this session has detached-mode fields and its process is still alive
     const processName = session.host ? 'ssh' : 'claude'
     if (session.pid != null && session.outputFile && isProcessAlive(session.pid, processName)) {
-      // Process is alive — mark as running and keep current work_status
+      // Process is alive — determine correct process_status:
+      //   running = actively processing (work_status is in_progress)
+      //   idle = turn complete, waiting for input
+      const correctProcessStatus = session.work_status === 'in_progress' ? 'running' : 'idle'
       await updateSessionRecord(session.claudeSessionId, {
-        process_status: 'running',
+        process_status: correctProcessStatus,
       }).catch(() => {})
 
       log.session.info('session reconciler: session still alive', {
         sessionId: session.claudeSessionId,
         taskId: session.taskId || '(none)',
         pid: session.pid,
+        processStatus: correctProcessStatus,
       })
       reconnectable.push(session)
       continue

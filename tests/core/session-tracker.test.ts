@@ -454,25 +454,20 @@ describe('checkSessionLimit — idle sessions do not block', () => {
   });
 });
 
-describe('checkSessionLimit — total alive cap with eviction', () => {
-  it('evicts oldest idle session when total alive reaches cap', async () => {
-    // Create 20 sessions — all idle except s20 (active).
-    // Sessions are created sequentially, so s1 has the earliest lastActiveAt.
-    // Note: updateSessionRecord always overwrites lastActiveAt with now(),
-    // so ordering is determined by execution order, not explicit values.
-    for (let i = 1; i <= 20; i++) {
+describe('checkSessionLimit — idle limit with eviction', () => {
+  it('evicts oldest idle session when idle count reaches max_idle', async () => {
+    // Create 6 sessions — all idle (migration will set process_status='idle').
+    // Use max_idle=5 so 6 idle sessions triggers eviction.
+    for (let i = 1; i <= 6; i++) {
       await createSessionRecord(`s${i}`, `t${i}`, 'p', undefined, { pid: 1000 + i });
-      if (i <= 19) {
-        await updateSessionRecord(`s${i}`, { work_status: 'agent_complete' });
-      }
-      // s20 stays in_progress (the only active one)
+      await updateSessionRecord(`s${i}`, { work_status: 'agent_complete' });
     }
 
-    // At 20 total alive, starting a new session should evict the oldest idle
-    const result = await checkSessionLimit(undefined, { local: 7 });
-    expect(result.allowed).toBe(true); // Only 1 active < 7
+    // With max_idle=5, having 6 idle sessions should trigger eviction
+    const result = await checkSessionLimit(undefined, { local: 7 }, { max_idle: 5 });
+    expect(result.allowed).toBe(true); // 0 running < 7
     expect(result.evicted).toBeDefined();
-    expect(result.evicted).toHaveLength(1);
+    expect(result.evicted).toHaveLength(2); // evict 6-5+1=2 to make room
     expect(result.evicted![0].claudeSessionId).toBe('s1'); // oldest idle
 
     // Verify the evicted session is now stopped
@@ -480,16 +475,27 @@ describe('checkSessionLimit — total alive cap with eviction', () => {
     expect(evictedSession!.process_status).toBe('stopped');
   });
 
-  it('does not evict when under total alive cap', async () => {
-    // 5 sessions — well under 20 cap
-    for (let i = 1; i <= 5; i++) {
+  it('does not evict when under idle limit', async () => {
+    // 5 sessions — at the max_idle=5 cap but not over
+    for (let i = 1; i <= 4; i++) {
       await createSessionRecord(`s${i}`, `t${i}`, 'p', undefined, { pid: 1000 + i });
       await updateSessionRecord(`s${i}`, { work_status: 'agent_complete' });
     }
 
-    const result = await checkSessionLimit(undefined, { local: 7 });
+    const result = await checkSessionLimit(undefined, { local: 7 }, { max_idle: 5 });
     expect(result.allowed).toBe(true);
     expect(result.evicted).toBeUndefined();
+  });
+
+  it('returns idleCount and maxIdle in result', async () => {
+    for (let i = 1; i <= 3; i++) {
+      await createSessionRecord(`s${i}`, `t${i}`, 'p', undefined, { pid: 1000 + i });
+      await updateSessionRecord(`s${i}`, { work_status: 'agent_complete' });
+    }
+
+    const result = await checkSessionLimit(undefined, { local: 7 }, { max_idle: 10 });
+    expect(result.idleCount).toBe(3);
+    expect(result.maxIdle).toBe(10);
   });
 });
 
