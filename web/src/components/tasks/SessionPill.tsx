@@ -41,6 +41,8 @@ interface SessionPillProps {
   mode?: string;
   /** Click handler — when provided, pill becomes clickable (one-click to open session). */
   onClick?: (e: React.MouseEvent) => void;
+  /** Whether this session is currently open in a session column. */
+  isActive?: boolean;
 }
 
 /** Human-readable work_status label from central constants. */
@@ -70,9 +72,10 @@ function stateClassLegacy(plan: SessionStatus | undefined, exec: SessionStatus |
   return 'agent-complete';
 }
 
-export function SessionPill({ sessionId, sessionStatus, planSessionId, execSessionId, planStatus, execStatus, sessionIds, mode, onClick }: SessionPillProps) {
+export function SessionPill({ sessionId, sessionStatus, planSessionId, execSessionId, planStatus, execStatus, sessionIds, mode, onClick, isActive }: SessionPillProps) {
   const clickable = !!onClick;
   const clickClass = clickable ? ' task-session-pill-clickable' : '';
+  const activeClass = isActive ? ' task-session-pill-active' : '';
   const handleClick = clickable ? (e: React.MouseEvent) => { e.stopPropagation(); onClick!(e); } : undefined;
 
   // Resolve mode label: Plan or Bypass (only these two matter to the user)
@@ -90,7 +93,7 @@ export function SessionPill({ sessionId, sessionStatus, planSessionId, execSessi
       : 'Session';
 
     return (
-      <span className={`task-session-pill task-session-pill-${cls}${clickClass}`} title={title} onClick={handleClick}>
+      <span className={`task-session-pill task-session-pill-${cls}${clickClass}${activeClass}`} title={title} onClick={handleClick}>
         <span className={`task-session-dot task-session-dot-${cls}`} />
         {isEmbedded ? '\uD83E\uDD16 ' : ''}Session · {modeLabel} · {wl} / {pl}
       </span>
@@ -105,7 +108,7 @@ export function SessionPill({ sessionId, sessionStatus, planSessionId, execSessi
   if (!hasPlan && !hasExec) {
     if (sessionIds && sessionIds.length > 0) {
       return (
-        <span className={`task-session-pill task-session-pill-history${clickClass}`} title={`${sessionIds.length} past session(s)`} onClick={handleClick}>
+        <span className={`task-session-pill task-session-pill-history${clickClass}${activeClass}`} title={`${sessionIds.length} past session(s)`} onClick={handleClick}>
           {sessionIds.length} session{sessionIds.length !== 1 ? 's' : ''}
         </span>
       );

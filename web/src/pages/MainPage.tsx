@@ -24,8 +24,53 @@ import type { CommandContext } from '@/commands/types';
 const PRIORITY_CYCLE: Record<string, 'immediate' | 'important' | 'backlog' | 'none'> = { none: 'backlog', backlog: 'important', important: 'immediate', immediate: 'none', high: 'none', low: 'important', medium: 'important' };
 
 const SS_TASK_KEY = 'walnut-home-focused-task';
-const SS_SESSION_KEY = 'walnut-home-session-panel';
+const SS_SESSION_COLUMNS_KEY = 'walnut-home-session-columns';
 const SS_TODO_SCROLL_KEY = 'walnut-home-todo-scroll';
+const SS_CHAT_VISIBLE_KEY = 'walnut-home-chat-visible';
+
+// Legacy key for migration
+const SS_SESSION_KEY_LEGACY = 'walnut-home-session-panel';
+
+// ── Session column queue helpers (max 3, or max 2 if triage open) ──
+
+const MAX_COLUMNS = 3;
+const SESSION_WIDTH_BY_COUNT = [0, 35, 45, 55]; // 1 col=35%, 2=45%, 3=55%
+
+function addSessionColumn(cols: string[], id: string, triageOpen: boolean): string[] {
+  const max = triageOpen ? MAX_COLUMNS - 1 : MAX_COLUMNS;
+  // Deduplicate: remove existing, then push to rightmost
+  const filtered = cols.filter(c => c !== id);
+  const next = [...filtered, id];
+  // Evict leftmost if over max
+  return next.length > max ? next.slice(next.length - max) : next;
+}
+
+function removeSessionColumn(cols: string[], id: string): string[] {
+  return cols.filter(c => c !== id);
+}
+
+function replaceSessionColumn(cols: string[], oldId: string, newId: string): string[] {
+  const idx = cols.indexOf(oldId);
+  if (idx === -1) return cols;
+  const next = [...cols];
+  next[idx] = newId;
+  return next;
+}
+
+/** Load session columns from sessionStorage, with migration from legacy single-session key */
+function loadSessionColumns(): string[] {
+  const saved = sessionStorage.getItem(SS_SESSION_COLUMNS_KEY);
+  if (saved) {
+    try { return JSON.parse(saved); } catch { /* fall through */ }
+  }
+  // Migrate from legacy single-session key
+  const legacy = sessionStorage.getItem(SS_SESSION_KEY_LEGACY);
+  if (legacy) {
+    sessionStorage.removeItem(SS_SESSION_KEY_LEGACY);
+    return [legacy];
+  }
+  return [];
+}
 
 interface MainPageProps {
   /** Whether MainPage is currently visible (route is /) */
@@ -45,15 +90,23 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const [focusedTask, setFocusedTask] = useState<Task | null>(null);
   const inspector = useContextInspector();
 
-  // Session panel state — restore from sessionStorage
-  const [sessionPanelId, setSessionPanelId] = useState<string | null>(
-    () => sessionStorage.getItem(SS_SESSION_KEY)
+  // Chat panel visibility — toggle via Focus Dock "Chat" button
+  const [chatVisible, setChatVisible] = useState<boolean>(
+    () => sessionStorage.getItem(SS_CHAT_VISIBLE_KEY) !== 'false'
   );
 
-  // Triage panel state — shares the middle slot with session panel
+  // Session columns state — up to 3 sessions displayed side by side
+  const [sessionColumns, setSessionColumns] = useState<string[]>(loadSessionColumns);
+
+  // Triage panel state — shares the first column slot with sessions
   const [triagePanelOpen, setTriagePanelOpen] = useState(false);
+  const triageOpenRef = useRef(triagePanelOpen);
+  triageOpenRef.current = triagePanelOpen;
   // Task ID for filtered triage panel (null = show all)
   const [triageTaskId, setTriageTaskId] = useState<string | null>(null);
+
+  // Set of session IDs currently open in columns — for active pill indicators
+  const openSessionIdSet = useMemo(() => new Set(sessionColumns), [sessionColumns]);
 
   // Task lookup map for resolving task IDs to names in tool call UI
   const taskMap = useMemo(() => new Map(tasks.map(t => [t.id, t])), [tasks]);
@@ -64,6 +117,15 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Resizable panels
   const todoPanel = useResizablePanel('walnut-todo-width', 25);
   const sessionPanel = useResizablePanel('walnut-session-panel-width-v2', 35);
+
+  // Graduated session area width — set directly when column count changes
+  const prevColCountRef = useRef(0);
+  useEffect(() => {
+    const count = sessionColumns.length + (triagePanelOpen ? 1 : 0);
+    if (count === prevColCountRef.current) return;
+    prevColCountRef.current = count;
+    if (count > 0) sessionPanel.setPct(SESSION_WIDTH_BY_COUNT[Math.min(count, 3)]);
+  }, [sessionColumns.length, triagePanelOpen, sessionPanel.setPct]);
 
   // Keep focusedTask in sync with latest data from tasks array (handles WS updates from other sources)
   useEffect(() => {
@@ -103,13 +165,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         if (task) setFocusedTask(task);
       }
     }
-    if (!sessionPanelId) {
-      const savedSession = sessionStorage.getItem(SS_SESSION_KEY);
-      if (savedSession) setSessionPanelId(savedSession);
+    if (sessionColumns.length === 0) {
+      const restored = loadSessionColumns();
+      if (restored.length > 0) setSessionColumns(restored);
     }
-  }, [visible, tasks, focusedTask, sessionPanelId]);
+  }, [visible, tasks, focusedTask, sessionColumns]);
 
-  // Persist focusedTask.id and sessionPanelId to sessionStorage
+  // Persist focusedTask.id to sessionStorage
   // Guard: don't clear until restore has run, otherwise the initial null state
   // wipes the saved value before it can be read back.
   useEffect(() => {
@@ -118,9 +180,15 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, [focusedTask?.id]);
 
   useEffect(() => {
-    if (sessionPanelId) sessionStorage.setItem(SS_SESSION_KEY, sessionPanelId);
-    else sessionStorage.removeItem(SS_SESSION_KEY);
-  }, [sessionPanelId]);
+    if (sessionColumns.length > 0) sessionStorage.setItem(SS_SESSION_COLUMNS_KEY, JSON.stringify(sessionColumns));
+    else sessionStorage.removeItem(SS_SESSION_COLUMNS_KEY);
+  }, [sessionColumns]);
+
+  // Persist chatVisible + broadcast to FocusDock
+  useEffect(() => {
+    sessionStorage.setItem(SS_CHAT_VISIBLE_KEY, String(chatVisible));
+    window.dispatchEvent(new CustomEvent('main:chat-visible', { detail: { visible: chatVisible } }));
+  }, [chatVisible]);
 
   // ── Listen for FocusDock events ──
   useEffect(() => {
@@ -128,13 +196,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       const { taskId, sessionId } = (e as CustomEvent).detail as { taskId: string; sessionId?: string };
       const task = taskMapRef.current.get(taskId);
       if (task) setFocusedTask(task);
-      if (sessionId) setSessionPanelId(sessionId);
+      if (sessionId) setSessionColumns(prev => addSessionColumn(prev, sessionId, triageOpenRef.current));
     };
     const handleDockChat = () => {
-      // Focus main chat: clear focused task + close session panel
-      setFocusedTask(null);
-      setSessionPanelId(null);
-      setTriagePanelOpen(false);
+      // Toggle main chat panel visibility
+      setChatVisible(prev => !prev);
     };
     window.addEventListener('dock:activate-task', handleDockTask);
     window.addEventListener('dock:activate-chat', handleDockChat);
@@ -166,33 +232,40 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     return () => { el.removeEventListener('scroll', onScroll); clearTimeout(timer); };
   }, [loading]);
 
-  // ── Session panel handlers ──
+  // ── Session column handlers ──
+  // Clicking a session pill always opens/moves to rightmost — use close button to dismiss
   const handleToggleSession = useCallback((sessionId: string) => {
-    setSessionPanelId((prev) => prev === sessionId ? null : sessionId);
-    setTriagePanelOpen(false); // Close triage when opening session
+    setSessionColumns(prev => addSessionColumn(prev, sessionId, triageOpenRef.current));
   }, []);
 
-  const handleSessionReplaced = useCallback((newSessionId: string) => {
-    setSessionPanelId(newSessionId);
+  // Per-column close handler factory
+  const handleCloseSession = useCallback((sessionId: string) => {
+    setSessionColumns(prev => removeSessionColumn(prev, sessionId));
+  }, []);
+
+  // Per-column session-replaced handler factory (plan→exec transitions)
+  const handleSessionReplaced = useCallback((oldId: string, newId: string) => {
+    setSessionColumns(prev => replaceSessionColumn(prev, oldId, newId));
   }, []);
 
   // Auto-switch session panel when "Clear Context & Execute" creates a new exec session
   useEvent('session:status-changed', (data: unknown) => {
     const d = data as { sessionId?: string; fromPlanSessionId?: string };
-    if (d.fromPlanSessionId && d.sessionId && d.fromPlanSessionId === sessionPanelId) {
-      setSessionPanelId(d.sessionId);
+    if (d.fromPlanSessionId && d.sessionId) {
+      setSessionColumns(prev =>
+        prev.includes(d.fromPlanSessionId!)
+          ? replaceSessionColumn(prev, d.fromPlanSessionId!, d.sessionId!)
+          : prev
+      );
     }
   });
-
-  const handleCloseSession = useCallback(() => {
-    setSessionPanelId(null);
-  }, []);
 
   // ── Triage panel handlers ──
   const handleOpenTriageForTask = useCallback((taskId: string) => {
     setTriagePanelOpen(true);
     setTriageTaskId(taskId);
-    setSessionPanelId(null); // Close session when opening triage
+    // Trim sessions to max-1 if triage is opening
+    setSessionColumns(prev => prev.length > MAX_COLUMNS - 1 ? prev.slice(prev.length - (MAX_COLUMNS - 1)) : prev);
   }, []);
 
   const handleCloseTriage = useCallback(() => {
@@ -200,10 +273,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     setTriageTaskId(null);
   }, []);
 
-  // Handle session click from chat: focus the associated task + open session panel
+  // Handle session click from chat: focus the associated task + open session column
   const handleSessionClick = useCallback(async (sessionId: string) => {
-    // Open the session panel
-    setSessionPanelId(sessionId);
+    // Add session column
+    setSessionColumns(prev => addSessionColumn(prev, sessionId, triageOpenRef.current));
     // Fetch session to find its associated task
     try {
       const session = await fetchSession(sessionId);
@@ -334,8 +407,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   return (
     <div className="main-page" style={{ position: 'relative' }}>
 
-      {/* Chat Panel (left, flex) */}
-      <div className="main-page-chat">
+      {/* Chat Panel (left, flex) — collapsible via Focus Dock toggle */}
+      <div className={`main-page-chat${chatVisible ? '' : ' collapsed'}`}>
         <div className="chat-page">
           <div className="page-header flex justify-between items-center">
             <div>
@@ -451,34 +524,41 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         </div>
       </div>
 
-      {/* Middle Panel Resize Handle (session or triage) */}
-      {(sessionPanelId || triagePanelOpen) && (
+      {/* Sessions Area Resize Handle */}
+      {(sessionColumns.length > 0 || triagePanelOpen) && (
         <div className="session-resize-handle" onMouseDown={sessionPanel.handleResizeStart} />
       )}
 
-      {/* Middle Panel — session OR triage (between chat and todo) */}
+      {/* Sessions Area — triage (first slot) + up to 3 session columns */}
       <div
         ref={sessionPanel.panelRef}
-        className={`main-page-session${!sessionPanelId && !triagePanelOpen ? ' collapsed' : ''}`}
-        style={sessionPanelId || triagePanelOpen ? { width: sessionPanel.width } : undefined}
+        className={`main-page-sessions-area${sessionColumns.length === 0 && !triagePanelOpen ? ' collapsed' : ''}`}
+        style={sessionColumns.length > 0 || triagePanelOpen ? { width: sessionPanel.width } : undefined}
       >
-        {sessionPanelId && (
-          <SessionPanel
-            sessionId={sessionPanelId}
-            onClose={handleCloseSession}
-            onTaskClick={handleFocusTaskById}
-            onSessionClick={handleSessionClick}
-            onSessionReplaced={handleSessionReplaced}
-          />
+        {triagePanelOpen && (
+          <div className="main-page-session-column" key="__triage__">
+            <TriagePanel
+              onClose={handleCloseTriage}
+              taskId={triageTaskId ?? undefined}
+              onTaskClick={handleFocusTaskById}
+              onSessionClick={handleSessionClick}
+            />
+          </div>
         )}
-        {!sessionPanelId && triagePanelOpen && (
-          <TriagePanel
-            onClose={handleCloseTriage}
-            taskId={triageTaskId ?? undefined}
-            onTaskClick={handleFocusTaskById}
-            onSessionClick={handleSessionClick}
-          />
-        )}
+        {sessionColumns.map((sid, idx) => {
+          const needsDivider = idx > 0 || triagePanelOpen;
+          return (
+            <div className="main-page-session-column" key={sid} style={needsDivider ? { borderLeft: '1px solid var(--border)' } : undefined}>
+              <SessionPanel
+                sessionId={sid}
+                onClose={() => handleCloseSession(sid)}
+                onTaskClick={handleFocusTaskById}
+                onSessionClick={handleSessionClick}
+                onSessionReplaced={(newId) => handleSessionReplaced(sid, newId)}
+              />
+            </div>
+          );
+        })}
       </div>
 
       {/* Todo Resize Handle */}
@@ -507,6 +587,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onReorder={reorder}
           onMoveTask={moveTask}
           onOpenSession={handleToggleSession}
+          openSessionIds={openSessionIdSet}
           onOpenTriageForTask={handleOpenTriageForTask}
           onPinTask={focusBar.pin}
           onUnpinTask={focusBar.unpin}

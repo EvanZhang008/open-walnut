@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 
 const PANEL_PCT_MIN = 10;  // minimum 10% of viewport
-const PANEL_PCT_MAX = 50;  // maximum 50% of viewport
+const PANEL_PCT_MAX = 70;  // maximum 70% of viewport (supports multi-column sessions)
 const PANEL_PCT_DEFAULT = 20;
 
 function clampPct(pct: number): number {
@@ -31,6 +31,10 @@ function readStoredPct(key: string, defaultPct: number): number {
 interface UseResizablePanelReturn {
   /** CSS width string, e.g. "20%" */
   width: string;
+  /** Raw percentage value */
+  pct: number;
+  /** Programmatically set the panel width (clamped to min/max) */
+  setPct: (pct: number) => void;
   panelRef: React.RefObject<HTMLDivElement | null>;
   handleResizeStart: (e: React.MouseEvent) => void;
 }
@@ -80,5 +84,7 @@ export function useResizablePanel(storageKey: string, defaultPct = PANEL_PCT_DEF
     try { localStorage.setItem(storageKey, String(pct)); } catch { /* ignore */ }
   }, [pct, storageKey]);
 
-  return { width: `${pct}%`, panelRef, handleResizeStart };
+  const setClampedPct = useCallback((v: number) => setPct(clampPct(v)), []);
+
+  return { width: `${pct}%`, pct, setPct: setClampedPct, panelRef, handleResizeStart };
 }
