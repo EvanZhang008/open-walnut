@@ -496,15 +496,19 @@ export class RemoteIO implements SessionIO {
       // connection drops (server kills SSH process → remote shell exits →
       // trap fires → cleanup). Without the trap, Claude/tail/sleep would be
       // orphaned on the remote machine.
+      // Remote stderr goes to a .err file instead of /dev/null.
+      // After claude exits, cat the stderr to SSH stderr (fd 2) so the local
+      // .err file captures it for the "process died before session init" diagnostic.
+      const remoteStderrFile = `${shellQuote(this.remoteOutputPath)}.err`
       const execSection = [
         `sleep infinity > ${shellQuote(this.remotePipePath)} &`,
         `WRITER_PID=$!`,
-        `claude ${quotedArgs.join(' ')} < ${shellQuote(this.remotePipePath)} > ${shellQuote(this.remoteOutputPath)} 2>/dev/null &`,
+        `claude ${quotedArgs.join(' ')} < ${shellQuote(this.remotePipePath)} > ${shellQuote(this.remoteOutputPath)} 2>${remoteStderrFile} &`,
         `CLAUDE_PID=$!`,
         `sleep 0.5`,
         `tail -f -c +1 ${shellQuote(this.remoteOutputPath)} &`,
         `TAIL_PID=$!`,
-        `trap 'kill $CLAUDE_PID $TAIL_PID $WRITER_PID 2>/dev/null' EXIT`,
+        `trap 'kill $CLAUDE_PID $TAIL_PID $WRITER_PID 2>/dev/null; cat ${remoteStderrFile} >&2 2>/dev/null' EXIT`,
         `wait $CLAUDE_PID 2>/dev/null`,
         `sleep 2`,
         `kill $TAIL_PID 2>/dev/null`,
@@ -513,15 +517,16 @@ export class RemoteIO implements SessionIO {
       claudeCmd = `${setupSection}; ${execSection}`
     } else {
       // Resume case: no initial message, just start claude with FIFO
+      const remoteStderrFile = `${shellQuote(this.remoteOutputPath)}.err`
       const execSection = [
         `sleep infinity > ${shellQuote(this.remotePipePath)} &`,
         `WRITER_PID=$!`,
-        `claude ${quotedArgs.join(' ')} < ${shellQuote(this.remotePipePath)} > ${shellQuote(this.remoteOutputPath)} 2>/dev/null &`,
+        `claude ${quotedArgs.join(' ')} < ${shellQuote(this.remotePipePath)} > ${shellQuote(this.remoteOutputPath)} 2>${remoteStderrFile} &`,
         `CLAUDE_PID=$!`,
         `sleep 0.5`,
         `tail -f -c +1 ${shellQuote(this.remoteOutputPath)} &`,
         `TAIL_PID=$!`,
-        `trap 'kill $CLAUDE_PID $TAIL_PID $WRITER_PID 2>/dev/null' EXIT`,
+        `trap 'kill $CLAUDE_PID $TAIL_PID $WRITER_PID 2>/dev/null; cat ${remoteStderrFile} >&2 2>/dev/null' EXIT`,
         `wait $CLAUDE_PID 2>/dev/null`,
         `sleep 2`,
         `kill $TAIL_PID 2>/dev/null`,
