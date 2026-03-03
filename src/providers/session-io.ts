@@ -319,7 +319,9 @@ export function buildRemotePreamble(shellSetup?: string): string {
   if (shellSetup) {
     // User's shell_setup runs after base PATH; `|| true` ensures exit 0
     // so downstream && chains are not short-circuited when setup fails.
-    parts.push(`(${shellSetup}) 2>/dev/null || true`)
+    // IMPORTANT: Use { ...; } (group command) NOT (...) (subshell).
+    // Tools like nvm/fnm modify PATH — subshell changes are lost on exit.
+    parts.push(`{ ${shellSetup}; } 2>/dev/null || true`)
   }
   return parts.join('; ')
 }
@@ -341,7 +343,9 @@ export function buildRemotePreamble(shellSetup?: string): string {
 export function wrapInLoginShell(cmd: string, shellSetup?: string): string {
   const parts: string[] = []
   if (shellSetup) {
-    parts.push(`(${shellSetup}) 2>/dev/null || true`)
+    // IMPORTANT: Use { ...; } (group command) NOT (...) (subshell).
+    // Tools like nvm/fnm modify PATH — subshell changes are lost on exit.
+    parts.push(`{ ${shellSetup}; } 2>/dev/null || true`)
   }
   parts.push(cmd)
   const inner = parts.join('; ')
