@@ -296,10 +296,37 @@ export function shellQuote(s: string): string {
 }
 
 /**
- * Base PATH setup for remote SSH commands.
- * Adds common install locations (~/.local/bin, ~/.npm-global/bin).
+ * Base PATH setup + node auto-discovery for remote SSH commands.
+ *
+ * Non-interactive SSH doesn't load shell profiles, so node version managers
+ * (nvm, fnm, volta, asdf) aren't activated. This preamble auto-detects them.
+ *
+ * Guard: if `node` is already in PATH, the entire if-block is skipped (zero overhead).
+ * Order: nvm (most popular) > fnm > volta > asdf/mise.
  */
-export const REMOTE_BASE_PATH = 'export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"'
+export const REMOTE_BASE_PATH = [
+  'export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"',
+  // Auto-detect node version managers when node is not in PATH.
+  // nvm: source nvm.sh, then try to activate a version. Common failure:
+  //   default=system but no system node → iterate installed versions (newest
+  //   first) and pick the first where `node -v` succeeds (skips GLIBC-
+  //   incompatible builds automatically). --delete-prefix handles .npmrc
+  //   prefix conflicts that block nvm use.
+  // fnm/volta/asdf: just set up PATH, they auto-resolve the active version.
+  'if ! command -v node >/dev/null 2>&1; then'
+    + ' if [ -s "$HOME/.nvm/nvm.sh" ]; then'
+    + '   . "$HOME/.nvm/nvm.sh" 2>/dev/null;'
+    + '   if ! command -v node >/dev/null 2>&1; then'
+    + '     for v in $(ls -1r "$NVM_DIR/versions/node/" 2>/dev/null); do'
+    + '       nvm use --delete-prefix "$v" 2>/dev/null && node -v 2>/dev/null && break;'
+    + '     done;'
+    + '   fi;'
+    + ' elif [ -x "$HOME/.fnm/fnm" ]; then eval "$("$HOME/.fnm/fnm" env)" 2>/dev/null;'
+    + ' elif [ -d "$HOME/.volta" ]; then export PATH="$HOME/.volta/bin:$PATH";'
+    + ' elif [ -s "$HOME/.asdf/asdf.sh" ]; then . "$HOME/.asdf/asdf.sh" 2>/dev/null;'
+    + ' fi;'
+    + ' fi',
+].join('; ')
 
 /**
  * Build the full remote preamble: base PATH + optional user shell_setup + env vars.
