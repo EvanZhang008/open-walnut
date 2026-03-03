@@ -306,13 +306,26 @@ export function shellQuote(s: string): string {
  */
 export const REMOTE_BASE_PATH = [
   'export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"',
-  // Auto-detect node version managers when node is not in PATH.
-  // nvm: source nvm.sh, then try to activate a version. Common failure:
-  //   default=system but no system node → iterate installed versions (newest
-  //   first) and pick the first where `node -v` succeeds (skips GLIBC-
-  //   incompatible builds automatically). --delete-prefix handles .npmrc
-  //   prefix conflicts that block nvm use.
-  // fnm/volta/asdf: just set up PATH, they auto-resolve the active version.
+  // Source the user's shell RC file to get their full environment (nvm, pyenv,
+  // conda, rbenv, etc.) — just like their interactive terminal/tmux session.
+  //
+  // Why this works: `$SHELL -lc` only sources .zprofile/.profile, NOT .bashrc/.zshrc.
+  // Most tools (nvm, pyenv, conda) are configured in .bashrc/.zshrc, so they're missing.
+  // Explicitly sourcing the RC file fills this gap.
+  //
+  // Why not just use `-i` flag? Interactive mode causes plugins (oh-my-zsh, iTerm2
+  // shell integration, p10k) to write escape codes to STDOUT, corrupting our JSONL
+  // data stream. Instead, we source the RC file with stdout/stderr redirected to
+  // /dev/null — PATH and env var changes persist (process-level), noise is discarded.
+  //
+  // fd 3 trick: save stdout → source with output suppressed → restore stdout.
+  'exec 3>&1;'
+    + ' if [ -f "$HOME/.zshrc" ]; then . "$HOME/.zshrc" >/dev/null 2>/dev/null;'
+    + ' elif [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc" >/dev/null 2>/dev/null;'
+    + ' fi;'
+    + ' exec 1>&3 3>&-',
+  // Fallback auto-discovery if the RC file didn't provide node (e.g., no RC file,
+  // or nvm default is broken). Tries nvm > fnm > volta > asdf.
   // Use `||` instead of `if !` — zsh non-interactive mode has issues with `if ! cmd`
   'command -v node >/dev/null 2>&1 || {'
     + ' if [ -s "$HOME/.nvm/nvm.sh" ]; then'
