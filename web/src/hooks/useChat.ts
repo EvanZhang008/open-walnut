@@ -454,24 +454,31 @@ export function useChat(): UseChatReturn {
     );
   });
 
-  // Handle tool result
+  // Handle tool result — search ALL messages (not just the last) because sourced
+  // messages (session:result, triage notifications, etc.) can insert between
+  // agent:tool-call and agent:tool-result, pushing the target message out of
+  // upsertLastAssistant's reach and leaving tool_call blocks stuck on 'calling'.
   useEvent('agent:tool-result', (data) => {
     const { toolName, result } = data as { toolName: string; result: string };
-    const src = currentSourceRef.current;
-    setMessages((prev) =>
-      upsertLastAssistant(prev, (blocks, content) => {
-        // Find the last tool_call block with this name that's still 'calling'
-        const updated = [...blocks];
-        for (let i = updated.length - 1; i >= 0; i--) {
-          const b = updated[i];
+    setMessages((prev) => {
+      const updated = [...prev];
+      // Search backwards through all messages for the matching tool_call block
+      for (let msgIdx = updated.length - 1; msgIdx >= 0; msgIdx--) {
+        const msg = updated[msgIdx];
+        if (msg.role !== 'assistant' || !msg.blocks) continue;
+        const blocks = msg.blocks;
+        for (let i = blocks.length - 1; i >= 0; i--) {
+          const b = blocks[i];
           if (b.type === 'tool_call' && b.name === toolName && b.status === 'calling') {
-            updated[i] = { ...b, status: isToolResultError(result) ? 'error' : 'done', result };
-            break;
+            const newBlocks = [...blocks];
+            newBlocks[i] = { ...b, status: isToolResultError(result) ? 'error' : 'done', result };
+            updated[msgIdx] = { ...msg, blocks: newBlocks };
+            return updated;
           }
         }
-        return { blocks: updated, content };
-      }, src),
-    );
+      }
+      return prev; // no matching block found — return unchanged
+    });
   });
 
   // Handle tool activity indicators (keep transient spinner, skip session events)
@@ -486,6 +493,29 @@ export function useChat(): UseChatReturn {
     const { source } = (data ?? {}) as { source?: string };
     setToolActivity(null);
     refreshStats();
+
+    // Safety net: force-close any remaining 'calling' tool_call blocks.
+    // By the time agent:response fires, the entire turn is complete — all tools
+    // have returned. Any block still in 'calling' state was missed (e.g. due to
+    // a sourced message inserting between tool-call and tool-result events).
+    setMessages((prev) => {
+      let changed = false;
+      const updated = prev.map((msg) => {
+        if (msg.role !== 'assistant' || !msg.blocks) return msg;
+        const hasStale = msg.blocks.some(b => b.type === 'tool_call' && b.status === 'calling');
+        if (!hasStale) return msg;
+        changed = true;
+        return {
+          ...msg,
+          blocks: msg.blocks.map(b =>
+            b.type === 'tool_call' && b.status === 'calling'
+              ? { ...b, status: 'done' as const }
+              : b
+          ),
+        };
+      });
+      return changed ? updated : prev;
+    });
 
     // Retroactively tag the streaming assistant message with its source
     // (heartbeat/cron/triage text-deltas may create the message before source is known)
@@ -609,6 +639,27 @@ export function useChat(): UseChatReturn {
     const { error: errMsg } = data as { error: string };
     setError(errMsg);
     setToolActivity(null);
+
+    // Safety net: force-close any remaining 'calling' tool_call blocks on error
+    setMessages((prev) => {
+      let changed = false;
+      const updated = prev.map((msg) => {
+        if (msg.role !== 'assistant' || !msg.blocks) return msg;
+        const hasStale = msg.blocks.some(b => b.type === 'tool_call' && b.status === 'calling');
+        if (!hasStale) return msg;
+        changed = true;
+        return {
+          ...msg,
+          blocks: msg.blocks.map(b =>
+            b.type === 'tool_call' && b.status === 'calling'
+              ? { ...b, status: 'error' as const }
+              : b
+          ),
+        };
+      });
+      return changed ? updated : prev;
+    });
+
     // Let the user see the error, then drain remaining queued messages
     if (queueRef.current.length > 0) {
       drainTimerRef.current = setTimeout(() => { drainTimerRef.current = null; drainOrStop(); }, 1500);
