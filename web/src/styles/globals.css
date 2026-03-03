@@ -4469,6 +4469,27 @@ img[data-lightbox-src],
   flex-direction: column;
   padding: 24px;
   height: 100%;
+  transition: flex 0.25s ease, padding 0.25s ease, opacity 0.2s ease;
+}
+
+.main-page-chat.collapsed {
+  flex: 0 0 0px;
+  padding: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* When chat is hidden, let session panel grow to fill space */
+.main-page-chat.collapsed ~ .main-page-session:not(.collapsed) {
+  flex: 1;
+  min-width: 0;
+}
+
+/* When chat is hidden AND no session open, let todo fill space */
+.main-page-chat.collapsed ~ .main-page-session.collapsed ~ .main-page-todo {
+  flex: 1;
+  min-width: 0;
 }
 
 .main-page-chat .chat-page {
@@ -8334,11 +8355,13 @@ img[data-lightbox-src],
 
 .model-picker-options {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
 .model-picker-option {
-  flex: 1;
+  flex: 1 1 calc(33.3% - 6px);
+  min-width: 100px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -10026,8 +10049,8 @@ img[data-lightbox-src],
 
 .dock-task-input .chat-input-textarea {
   font-size: 11px;
-  min-height: 24px;
-  max-height: 48px;
+  min-height: 40px;
+  max-height: 120px;
   padding: 4px 8px;
 }
 

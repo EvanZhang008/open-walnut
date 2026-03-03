@@ -4,6 +4,7 @@ import { compositeColor } from '@/utils/session-status';
 import { SessionChatHistory } from '@/components/sessions/SessionChatHistory';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { useSessionSend } from '@/hooks/useSessionSend';
+import { useSlashCommands } from '@/hooks/useSlashCommands';
 import type { ImageAttachment } from '@/api/chat';
 import type { UseFocusBarReturn } from '@/hooks/useFocusBar';
 
@@ -85,6 +86,9 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
   // Reuse the same send hook as SessionPanel — optimistic messages + delivery tracking
   const { optimisticMsgs, send, handleMessagesDelivered, handleBatchCompleted, clearCommitted } = useSessionSend(sessionId);
 
+  // Slash command autocomplete (same as SessionPanel)
+  const { items: slashCommands, search: searchSlashCommands } = useSlashCommands();
+
   const handleSend = useCallback((text: string, images?: ImageAttachment[]) => {
     if (!sessionId || !text.trim()) return;
     send(sessionId, text.trim(), images);
@@ -134,8 +138,9 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
         <div className="dock-task-input" onClick={(e) => e.stopPropagation()}>
           <ChatInput
             onSend={handleSend}
-            placeholder="Send message..."
-            showCommands={false}
+            placeholder="Send message... (/ for commands)"
+            sessionCommands={slashCommands}
+            searchSessionCommands={searchSlashCommands}
           />
         </div>
       )}
@@ -177,6 +182,10 @@ export function FocusDock({ focusBar }: FocusDockProps) {
 
   // Self-manage active state by listening to custom events
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  // Track main chat panel visibility (toggled via Chat button)
+  const [chatVisible, setChatVisible] = useState<boolean>(
+    () => sessionStorage.getItem('walnut-home-chat-visible') !== 'false'
+  );
 
   useEffect(() => {
     const onTask = (e: Event) => {
@@ -184,11 +193,17 @@ export function FocusDock({ focusBar }: FocusDockProps) {
       setActiveTaskId(taskId);
     };
     const onChat = () => setActiveTaskId(null);
+    const onChatVisibility = (e: Event) => {
+      const { visible } = (e as CustomEvent).detail as { visible: boolean };
+      setChatVisible(visible);
+    };
     window.addEventListener('dock:activate-task', onTask);
     window.addEventListener('dock:activate-chat', onChat);
+    window.addEventListener('main:chat-visible', onChatVisibility);
     return () => {
       window.removeEventListener('dock:activate-task', onTask);
       window.removeEventListener('dock:activate-chat', onChat);
+      window.removeEventListener('main:chat-visible', onChatVisibility);
     };
   }, []);
 
@@ -238,7 +253,7 @@ export function FocusDock({ focusBar }: FocusDockProps) {
         <div className="dock-resize-handle" onMouseDown={handleResizeStart} />
       )}
       <div className="dock-content">
-        <ChatDockItem isActive={!activeTaskId} />
+        <ChatDockItem isActive={chatVisible} />
         {hasPinnedTasks && <div className="dock-divider" />}
         {pinnedTasks.map((task) => (
           <DockTaskCard
