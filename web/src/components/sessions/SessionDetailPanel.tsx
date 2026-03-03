@@ -481,6 +481,7 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
           sessionId={sessionId}
           workStatus={session.work_status}
           initialPrompt={historyMessages.find(m => m.role === 'user')?.text}
+          sessionCwd={session.cwd}
           optimisticMessages={optimisticMessages}
           onMessagesDelivered={onMessagesDelivered}
           onBatchCompleted={onBatchCompleted}

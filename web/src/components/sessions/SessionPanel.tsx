@@ -59,7 +59,7 @@ class SessionPanelErrorBoundary extends Component<SessionPanelErrorBoundaryProps
           <button
             className="btn btn-sm btn-primary"
             onClick={() => {
-              sessionStorage.removeItem('walnut-home-session-panel');
+              sessionStorage.removeItem('walnut-home-session-columns');
               this.props.onClose();
             }}
           >
@@ -420,6 +420,7 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
             sessionId={sessionId}
             workStatus={session?.work_status}
             initialPrompt={historyMessages.find(m => m.role === 'user')?.text}
+            sessionCwd={session?.cwd}
             optimisticMessages={optimisticMsgs}
             onMessagesDelivered={handleMessagesDelivered}
             onBatchCompleted={handleBatchCompleted}
@@ -450,7 +451,7 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
           />
           {modelPickerOpen && (
             <ModelPicker
-              currentModel="opus"
+              currentModel={rawModel}
               onSwitch={handleModelSwitch}
               onClose={() => setModelPickerOpen(false)}
             />

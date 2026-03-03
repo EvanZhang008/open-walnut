@@ -137,6 +137,9 @@ const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp)$/i;
 /** Match absolute image file paths in text (allows spaces/hyphens in path segments) */
 const IMAGE_PATH_IN_TEXT_RE = /(\/(?:[\w. -]+\/)+[\w. -]+\.(?:png|jpe?g|gif|webp))/gi;
 
+/** Match relative image file paths like "screenshot.png" or "subdir/file.png" */
+const RELATIVE_IMAGE_PATH_RE = /(?:^|[\s"'=:(])(([\w][\w.-]*\/)*[\w][\w.-]*\.(?:png|jpe?g|gif|webp))(?=[\s"'),;\]}]|$)/gi;
+
 /**
  * Extract base64 images from Anthropic content-block JSON format.
  * Handles both array and single-object forms:
@@ -173,18 +176,33 @@ export function extractContentBlockImages(result: string): { imageSrcs: string[]
   }
 }
 
-/** Find absolute image file paths in text (JSON values or plain text) */
+/** Find image file paths in text — both absolute (/path/to/img.png) and relative (img.png) */
 export function findImagePaths(text: string): string[] {
-  const re = new RegExp(IMAGE_PATH_IN_TEXT_RE.source, 'gi');
   const paths: string[] = [];
+  // Pass 1: absolute paths
+  let re = new RegExp(IMAGE_PATH_IN_TEXT_RE.source, 'gi');
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) paths.push(m[1]);
+  // Pass 2: relative paths (skip any already captured as absolute)
+  const absSet = new Set(paths);
+  re = new RegExp(RELATIVE_IMAGE_PATH_RE.source, 'gi');
+  while ((m = re.exec(text)) !== null) {
+    const p = m[1];
+    if (!p.startsWith('/') && !absSet.has(p)) paths.push(p);
+  }
   return [...new Set(paths)];
 }
 
 /** Check if a file path looks like an image file */
 export function isImageFilePath(p: string): boolean {
   return IMAGE_EXT_RE.test(p);
+}
+
+/** Resolve an image path: absolute paths pass through, relative paths get cwd prepended */
+export function resolveImagePath(path: string, cwd?: string): string {
+  if (path.startsWith('/')) return path;
+  if (cwd) return `${cwd.replace(/\/$/, '')}/${path}`;
+  return path;
 }
 
 /**

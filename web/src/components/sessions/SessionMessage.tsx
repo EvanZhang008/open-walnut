@@ -3,12 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import type { SessionHistoryMessage, SessionHistoryTool } from '@/types/session';
 import {
   renderMarkdownWithRefs, extractMarkdownFields, injectJsonIdLinks,
-  extractContentBlockImages, findImagePaths, isImageFilePath,
+  extractContentBlockImages, findImagePaths, isImageFilePath, resolveImagePath,
 } from '@/utils/markdown';
 import { useLivePlanContent } from '@/contexts/PlanContentContext';
 
 interface SessionMessageProps {
   message: SessionHistoryMessage;
+  sessionCwd?: string;
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
 }
@@ -87,11 +88,13 @@ interface GenericToolCallProps {
   status?: 'calling' | 'done' | 'error';
   /** Tool result text (streaming path provides this separately from tool.result). */
   result?: string;
+  /** Session working directory — used to resolve relative image paths */
+  sessionCwd?: string;
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
 }
 
-export function GenericToolCall({ tool, status = 'done', result: resultProp, onTaskClick, onSessionClick }: GenericToolCallProps) {
+export function GenericToolCall({ tool, status = 'done', result: resultProp, sessionCwd, onTaskClick, onSessionClick }: GenericToolCallProps) {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   // Merge result from explicit prop (streaming path) and tool.result (persisted history path)
@@ -143,7 +146,7 @@ export function GenericToolCall({ tool, status = 'done', result: resultProp, onT
     const paths = findImagePaths(result);
     const images = paths.length > 0
       ? paths.map((p, i) => ({
-          src: `/api/local-image?path=${encodeURIComponent(p)}`,
+          src: `/api/local-image?path=${encodeURIComponent(resolveImagePath(p, sessionCwd))}`,
           key: `path-${i}`,
           caption: p,
         }))
@@ -152,17 +155,17 @@ export function GenericToolCall({ tool, status = 'done', result: resultProp, onT
     // 3. Render remaining text as markdown (with truncation)
     const text = renderMarkdownWithRefs(result.length > 3000 ? result.slice(0, 3000) : result);
     return { resultImages: images, resultTextHtml: text };
-  }, [result, open]);
+  }, [result, open, sessionCwd]);
 
-  // Input image preview: if file_path/path points to an image file, show thumbnail
+  // Input image preview: if file_path/path/filename points to an image file, show thumbnail
   const inputImageSrc = useMemo(() => {
     if (!open) return null;
-    const fp = safeInput.file_path ?? safeInput.path;
+    const fp = safeInput.file_path ?? safeInput.path ?? safeInput.filename;
     if (typeof fp !== 'string' || !isImageFilePath(fp)) return null;
     // Skip if result already has images (avoids showing same image twice for Read tool)
     if (resultImages && resultImages.length > 0) return null;
-    return `/api/local-image?path=${encodeURIComponent(fp)}`;
-  }, [safeInput, open, resultImages]);
+    return `/api/local-image?path=${encodeURIComponent(resolveImagePath(fp, sessionCwd))}`;
+  }, [safeInput, open, resultImages, sessionCwd]);
 
   // Click handler for pill links inside <pre> (event delegation)
   const handlePreClick = useCallback((e: React.MouseEvent<HTMLPreElement>) => {
@@ -249,6 +252,7 @@ function getExitPlanContent(tool: { input: Record<string, unknown>; planContent?
 
 interface SessionToolCallProps {
   tool: SessionHistoryTool;
+  sessionCwd?: string;
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
 }
@@ -257,7 +261,7 @@ interface SessionToolCallProps {
 const GROUPABLE_HISTORY_TOOLS = new Set(['Task', 'Agent']);
 
 /** Collapsible group for a Task/Agent tool call with child messages */
-function TaskGroup({ tool, onTaskClick, onSessionClick }: SessionToolCallProps) {
+function TaskGroup({ tool, sessionCwd, onTaskClick, onSessionClick }: SessionToolCallProps) {
   const [open, setOpen] = useState(false);
   const description = typeof tool.input?.description === 'string'
     ? tool.input.description
@@ -287,7 +291,7 @@ function TaskGroup({ tool, onTaskClick, onSessionClick }: SessionToolCallProps) 
         <div className="task-group-body">
           {tool.childMessages && tool.childMessages.length > 0 ? (
             tool.childMessages.map((child, ci) => (
-              <SessionMessage key={ci} message={child} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />
+              <SessionMessage key={ci} message={child} sessionCwd={sessionCwd} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />
             ))
           ) : tool.result ? (
             <div className="task-group-result">
@@ -305,10 +309,10 @@ function TaskGroup({ tool, onTaskClick, onSessionClick }: SessionToolCallProps) 
   );
 }
 
-function SessionToolCall({ tool, onTaskClick, onSessionClick }: SessionToolCallProps) {
+function SessionToolCall({ tool, sessionCwd, onTaskClick, onSessionClick }: SessionToolCallProps) {
   // Task/Agent tool with childMessages or agentId → render as collapsible group
   if (GROUPABLE_HISTORY_TOOLS.has(tool.name) && (tool.childMessages || tool.agentId || tool.result)) {
-    return <TaskGroup tool={tool} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />;
+    return <TaskGroup tool={tool} sessionCwd={sessionCwd} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />;
   }
 
   // ExitPlanMode with plan content → render PlanCard
@@ -322,10 +326,10 @@ function SessionToolCall({ tool, onTaskClick, onSessionClick }: SessionToolCallP
     return <CollapsedPlanWrite filePath={tool.input.file_path as string} />;
   }
 
-  return <GenericToolCall tool={tool} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />;
+  return <GenericToolCall tool={tool} sessionCwd={sessionCwd} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />;
 }
 
-export const SessionMessage = memo(function SessionMessage({ message, onTaskClick, onSessionClick }: SessionMessageProps) {
+export const SessionMessage = memo(function SessionMessage({ message, sessionCwd, onTaskClick, onSessionClick }: SessionMessageProps) {
   const { role, text, timestamp, tools, thinking, model, usage } = message;
   const navigate = useNavigate();
   const time = formatTime(timestamp);
@@ -363,7 +367,7 @@ export const SessionMessage = memo(function SessionMessage({ message, onTaskClic
       <div className="session-msg-content" onClick={handleContentClick}>
         {thinking && <SessionThinking text={thinking} />}
         {tools && tools.length > 0 && tools.map((t, i) => (
-          <SessionToolCall key={i} tool={t} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />
+          <SessionToolCall key={i} tool={t} sessionCwd={sessionCwd} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />
         ))}
         {text && (
           <div

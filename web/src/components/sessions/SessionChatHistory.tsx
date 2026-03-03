@@ -163,6 +163,8 @@ interface SessionChatHistoryProps {
   workStatus?: string;
   /** Initial prompt text to display at the top of the timeline (first user message). */
   initialPrompt?: string;
+  /** Session working directory — used to resolve relative image paths in tool results */
+  sessionCwd?: string;
   optimisticMessages?: OptimisticMessage[];
   onMessagesDelivered?: (count: number) => void;
   onBatchCompleted?: (count: number) => void;
@@ -208,7 +210,7 @@ function StreamingTextBlock({ content, onTaskClick, onSessionClick }: { content:
 }
 
 /** Render a single streaming block */
-const StreamingBlockView = memo(function StreamingBlockView({ block, onTaskClick, onSessionClick }: { block: StreamingBlock; onTaskClick?: (taskId: string) => void; onSessionClick?: (sessionId: string) => void }) {
+const StreamingBlockView = memo(function StreamingBlockView({ block, sessionCwd, onTaskClick, onSessionClick }: { block: StreamingBlock; sessionCwd?: string; onTaskClick?: (taskId: string) => void; onSessionClick?: (sessionId: string) => void }) {
   if (block.type === 'text') {
     return <StreamingTextBlock content={block.content} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />;
   }
@@ -248,6 +250,7 @@ const StreamingBlockView = memo(function StreamingBlockView({ block, onTaskClick
       tool={toolObj}
       status={status}
       result={block.result}
+      sessionCwd={sessionCwd}
       onTaskClick={onTaskClick}
       onSessionClick={onSessionClick}
     />
@@ -258,11 +261,12 @@ const StreamingBlockView = memo(function StreamingBlockView({ block, onTaskClick
 interface StreamingTaskGroupProps {
   taskBlock: StreamingBlock & { type: 'tool_call' };
   childBlocks: StreamingBlock[];
+  sessionCwd?: string;
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
 }
 
-function StreamingTaskGroup({ taskBlock, childBlocks, onTaskClick, onSessionClick }: StreamingTaskGroupProps) {
+function StreamingTaskGroup({ taskBlock, childBlocks, sessionCwd, onTaskClick, onSessionClick }: StreamingTaskGroupProps) {
   const [open, setOpen] = useState(true); // Default open during streaming
   const description = typeof taskBlock.input?.description === 'string'
     ? taskBlock.input.description
@@ -292,7 +296,7 @@ function StreamingTaskGroup({ taskBlock, childBlocks, onTaskClick, onSessionClic
       {open && (
         <div className="task-group-body">
           {childBlocks.map((child, ci) => (
-            <StreamingBlockView key={ci} block={child} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />
+            <StreamingBlockView key={ci} block={child} sessionCwd={sessionCwd} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />
           ))}
           {childBlocks.length === 0 && !isDone && (
             <div className="task-group-empty">Working...</div>
@@ -453,7 +457,7 @@ function buildTimeline(
   return items;
 }
 
-export function SessionChatHistory({ sessionId, workStatus, initialPrompt, optimisticMessages, onMessagesDelivered, onBatchCompleted, onEditQueued, onDeleteQueued, onAgentQueued, onClearCommitted, onTaskClick, onSessionClick }: SessionChatHistoryProps) {
+export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessionCwd, optimisticMessages, onMessagesDelivered, onBatchCompleted, onEditQueued, onDeleteQueued, onAgentQueued, onClearCommitted, onTaskClick, onSessionClick }: SessionChatHistoryProps) {
   const [historyVersion, setHistoryVersion] = useState(0);
   const awaitingRefresh = useRef(false);
   const pendingBatchTotal = useRef(0);
@@ -720,7 +724,7 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, optim
         {/* Persisted history messages */}
         {messages.map((m, i) => (
           <div key={i} data-msg-index={i}>
-            <SessionMessage message={m} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />
+            <SessionMessage message={m} sessionCwd={sessionCwd} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />
           </div>
         ))}
 
@@ -779,6 +783,7 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, optim
                         <StreamingTaskGroup
                           taskBlock={grouped.taskBlock}
                           childBlocks={grouped.childBlocks}
+                          sessionCwd={sessionCwd}
                           onTaskClick={onTaskClick}
                           onSessionClick={onSessionClick}
                         />
@@ -802,7 +807,7 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, optim
                       </div>
                     )}
                     <div className={isFirst ? 'session-msg-content' : ''}>
-                      <StreamingBlockView block={item.block} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />
+                      <StreamingBlockView block={item.block} sessionCwd={sessionCwd} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />
                     </div>
                   </div>
                 );
@@ -831,7 +836,7 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, optim
 
               return (
                 <div key={`u-${m.queueId}`} className={wrapperClass}>
-                  <SessionMessage message={m} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />
+                  <SessionMessage message={m} sessionCwd={sessionCwd} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />
                   <OptimisticImagePreviews images={m.images} />
                   {m.status === 'received' && (
                     <>
