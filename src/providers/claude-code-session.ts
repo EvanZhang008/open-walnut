@@ -36,9 +36,8 @@ import { markProcessing, removeProcessed, revertToPending, loadQueue, getAllSess
 import { createSessionIO, LocalIO, RemoteIO, transferImagesForRemoteSession, rewriteRemoteImagePaths } from './session-io.js'
 import type { SessionIO, SshTarget } from './session-io.js'
 import { recoverStateFromJsonl } from '../core/session-history.js'
-import type { SessionRecord, SessionMode, ProcessStatus, WorkStatus, SessionProvider } from '../core/types.js'
+import type { SessionRecord, SessionMode, ProcessStatus, WorkStatus } from '../core/types.js'
 import type { SessionServerClient } from './session-server-client.js'
-// Unused session-server types removed (EventFrame, SessionInitData, etc.)
 
 // ── JSONL types from `claude -p --output-format stream-json --verbose` ──
 
@@ -209,6 +208,7 @@ export class ClaudeCodeSession {
   private _askUserIntercepted = false
   /** Per-session cache for remote→local image path rewriting (avoids re-downloading). */
   private _remoteImageCache = new Map<string, string>()
+
 
   /** Resolves with the Claude session ID once the system init event arrives. */
   readonly sessionReady: Promise<string>
@@ -1196,9 +1196,14 @@ export class ClaudeCodeSession {
             const is1M = this._initModel?.includes('[1m]') ?? false
             const contextWindowSize = is1M ? 1_000_000 : 200_000
             const contextPercent = Math.round(totalInput / contextWindowSize * 100)
-            // Update model if reported on this message
+            // Use assistant message model only as fallback when init event didn't
+            // provide one. Init model is the source of truth — it reflects the
+            // configured --model flag. Claude Code routes Agent subagent calls to
+            // cheaper models (Haiku), and those appear as assistant messages with a
+            // different model string. Legit model switches (via /model command)
+            // trigger a --resume which fires a new init event, updating _model there.
             const msgModel = msg.message.model
-            if (typeof msgModel === 'string' && msgModel) {
+            if (typeof msgModel === 'string' && msgModel && !this._model) {
               this._model = msgModel
             }
             bus.emit(EventNames.SESSION_USAGE_UPDATE, {

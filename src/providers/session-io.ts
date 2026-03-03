@@ -309,36 +309,42 @@ export const REMOTE_BASE_PATH = [
   // Source the user's shell RC file to get their full environment (nvm, pyenv,
   // conda, rbenv, etc.) — just like their interactive terminal/tmux session.
   //
-  // Why this works: `$SHELL -lc` only sources .zprofile/.profile, NOT .bashrc/.zshrc.
-  // Most tools (nvm, pyenv, conda) are configured in .bashrc/.zshrc, so they're missing.
+  // Why: `$SHELL -lc` only sources .zprofile/.profile, NOT .bashrc/.zshrc.
+  // Most tools (nvm, pyenv, conda) are configured in .bashrc/.zshrc.
   // Explicitly sourcing the RC file fills this gap.
   //
-  // Why not just use `-i` flag? Interactive mode causes plugins (oh-my-zsh, iTerm2
-  // shell integration, p10k) to write escape codes to STDOUT, corrupting our JSONL
-  // data stream. Instead, we source the RC file with stdout/stderr redirected to
-  // /dev/null — PATH and env var changes persist (process-level), noise is discarded.
+  // Why not `-i` flag? Interactive mode causes plugins (oh-my-zsh, iTerm2,
+  // p10k) to write escape codes to STDOUT, corrupting our JSONL stream.
   //
-  // fd 3 trick: save stdout → source with output suppressed → restore stdout.
-  'exec 3>&1;'
-    + ' if [ -f "$HOME/.zshrc" ]; then . "$HOME/.zshrc" >/dev/null 2>/dev/null;'
-    + ' elif [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc" >/dev/null 2>/dev/null;'
-    + ' fi;'
-    + ' exec 1>&3 3>&-',
+  // Match RC file to $SHELL: zsh sources .zshrc, bash sources .bashrc.
+  // Redirect >/dev/null 2>&1: suppress all output from interactive plugins
+  // while preserving PATH/env changes (process-level, not stdout-level).
+  //
+  // Note: some RC files have interactive guards ([[ $- != *i* ]] && return)
+  // that skip setup in non-interactive mode. The fallback chain below handles
+  // that case. RC sourcing still helps for pyenv, conda, and other tools
+  // that don't guard on interactivity.
+  'case "$SHELL" in'
+    + ' */zsh) [ -f "$HOME/.zshrc" ] && . "$HOME/.zshrc" >/dev/null 2>&1 ;;'
+    + ' */bash) [ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc" >/dev/null 2>&1 ;;'
+    + ' esac',
   // Fallback auto-discovery if the RC file didn't provide node (e.g., no RC file,
-  // or nvm default is broken). Tries nvm > fnm > volta > asdf.
-  // Use `||` instead of `if !` — zsh non-interactive mode has issues with `if ! cmd`
+  // interactive guard skipped setup, or nvm default is broken).
+  // Tries nvm > fnm > volta > asdf. All stdout suppressed to avoid JSONL pollution.
+  // Use `||` instead of `if !` — zsh non-interactive mode has issues with `if ! cmd`.
+  // Ends with `true` to ensure exit code 0 for downstream `&&` chains.
   'command -v node >/dev/null 2>&1 || {'
     + ' if [ -s "$HOME/.nvm/nvm.sh" ]; then'
-    + '   . "$HOME/.nvm/nvm.sh" 2>/dev/null;'
+    + '   . "$HOME/.nvm/nvm.sh" >/dev/null 2>&1;'
     + '   command -v node >/dev/null 2>&1 || {'
     + '     for v in $(ls -1r "$NVM_DIR/versions/node/" 2>/dev/null); do'
-    + '       nvm use --delete-prefix "$v" 2>/dev/null && node -v 2>/dev/null && break;'
+    + '       nvm use --delete-prefix "$v" >/dev/null 2>&1 && node -v >/dev/null 2>&1 && break;'
     + '     done; };'
-    + ' elif [ -x "$HOME/.fnm/fnm" ]; then eval "$("$HOME/.fnm/fnm" env)" 2>/dev/null;'
+    + ' elif [ -x "$HOME/.fnm/fnm" ]; then eval "$("$HOME/.fnm/fnm" env)" >/dev/null 2>&1;'
     + ' elif [ -d "$HOME/.volta" ]; then export PATH="$HOME/.volta/bin:$PATH";'
-    + ' elif [ -s "$HOME/.asdf/asdf.sh" ]; then . "$HOME/.asdf/asdf.sh" 2>/dev/null;'
+    + ' elif [ -s "$HOME/.asdf/asdf.sh" ]; then . "$HOME/.asdf/asdf.sh" >/dev/null 2>&1;'
     + ' fi;'
-    + ' }',
+    + ' true; }',
 ].join('; ')
 
 /**
