@@ -1673,7 +1673,7 @@ defaults (same resolution chain as start_session).`,
 
   {
     name: 'update_session',
-    description: 'Update a Claude Code session — title, work status, activity, or archive state. Always set a descriptive title when a session lacks one or when the scope changes. Agent can set work_status to await_human_action or agent_complete. Use await_human_action when a critical decision needs human input. Keep sessions at agent_complete and resume via send_to_session until work is truly done. Only humans can set completed. Cannot set in_progress or error (system-managed). Set archived=true to archive a stopped session (frees the task session slot so a new session can start).',
+    description: 'Update a Claude Code session — title, work status, activity, or archive state. Always set a descriptive title when a session lacks one or when the scope changes. Agent can set work_status to await_human_action or agent_complete. Use await_human_action when a critical decision needs human input. Keep sessions at agent_complete and resume via send_to_session until work is truly done. Only humans can set completed. Cannot set in_progress or error (system-managed). ⚠️ NEVER set archived=true unless the user EXPLICITLY asks for it. Do NOT archive sessions proactively — even if they appear idle, error, or completed. The user may still be actively working on the task.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1681,7 +1681,7 @@ defaults (same resolution chain as start_session).`,
         title: { type: 'string', description: 'Short title / one-sentence summary for the session' },
         work_status: { type: 'string', enum: ['await_human_action', 'agent_complete'], description: 'New work status. await_human_action = critical decision needs human input. agent_complete = session turn finished, can be resumed. Only humans can set completed.' },
         activity: { type: 'string', description: 'Freetext activity description (e.g. "planning", "testing")' },
-        archived: { type: 'boolean', description: 'Archive (true) or unarchive (false) a session. Session must be stopped before archiving. Archived sessions free the task session slot.' },
+        archived: { type: 'boolean', description: '⚠️ NEVER set archived=true unless the user EXPLICITLY requests archiving. Do NOT archive sessions proactively — even if they appear idle, error, or completed. The user may still be actively working on the task. Archive (true) or unarchive (false) a session. Session must be stopped before archiving. Archived sessions free the task session slot.' },
         archive_reason: { type: 'string', description: 'Why this session is being archived (e.g. "wrong directory", "obsolete"). Optional.' },
       },
       required: ['session_id'],
