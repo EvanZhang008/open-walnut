@@ -709,12 +709,12 @@ export function registerChatRpc(): void {
           onThinking: (text) => {
             sendToClient(client, EventNames.AGENT_THINKING, { text })
           },
-          onToolCall: (toolName, input) => {
+          onToolCall: (toolName, input, toolUseId) => {
             toolsUsedInTurn.add(toolName)
-            sendToClient(client, EventNames.AGENT_TOOL_CALL, { toolName, input })
+            sendToClient(client, EventNames.AGENT_TOOL_CALL, { toolName, input, toolUseId })
           },
-          onToolResult: (toolName, result) => {
-            sendToClient(client, EventNames.AGENT_TOOL_RESULT, { toolName, result })
+          onToolResult: (toolName, result, toolUseId) => {
+            sendToClient(client, EventNames.AGENT_TOOL_RESULT, { toolName, result, toolUseId })
           },
           onUsage: (usage) => {
             bus.emit('agent:usage', { usage }, ['web-ui'], { source: 'agent' })

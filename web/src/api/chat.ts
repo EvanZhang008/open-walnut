@@ -9,6 +9,7 @@ export interface ThinkingBlock {
 export interface ToolCallBlock {
   type: 'tool_call';
   name: string;
+  toolUseId?: string;
   input?: Record<string, unknown>;
   result?: string;
   status: 'calling' | 'done' | 'error';

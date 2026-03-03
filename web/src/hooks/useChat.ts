@@ -444,32 +444,32 @@ export function useChat(): UseChatReturn {
 
   // Handle tool call start
   useEvent('agent:tool-call', (data) => {
-    const { toolName, input } = data as { toolName: string; input: Record<string, unknown> };
+    const { toolName, input, toolUseId } = data as { toolName: string; input: Record<string, unknown>; toolUseId?: string };
     const src = currentSourceRef.current;
     setMessages((prev) =>
       upsertLastAssistant(prev, (blocks, content) => ({
-        blocks: [...blocks, { type: 'tool_call', name: toolName, input, status: 'calling' }],
+        blocks: [...blocks, { type: 'tool_call', name: toolName, toolUseId, input, status: 'calling' }],
         content,
       }), src),
     );
   });
 
-  // Handle tool result — search ALL messages (not just the last) because sourced
-  // messages (session:result, triage notifications, etc.) can insert between
-  // agent:tool-call and agent:tool-result, pushing the target message out of
-  // upsertLastAssistant's reach and leaving tool_call blocks stuck on 'calling'.
+  // Handle tool result — match by unique toolUseId for deterministic pairing.
+  // Searches all messages (not just last) because sourced messages can interleave.
   useEvent('agent:tool-result', (data) => {
-    const { toolName, result } = data as { toolName: string; result: string };
+    const { toolName, result, toolUseId } = data as { toolName: string; result: string; toolUseId?: string };
     setMessages((prev) => {
       const updated = [...prev];
-      // Search backwards through all messages for the matching tool_call block
       for (let msgIdx = updated.length - 1; msgIdx >= 0; msgIdx--) {
         const msg = updated[msgIdx];
         if (msg.role !== 'assistant' || !msg.blocks) continue;
         const blocks = msg.blocks;
         for (let i = blocks.length - 1; i >= 0; i--) {
           const b = blocks[i];
-          if (b.type === 'tool_call' && b.name === toolName && b.status === 'calling') {
+          if (b.type !== 'tool_call' || b.status !== 'calling') continue;
+          // Match by unique ID when available, fall back to name
+          const match = toolUseId ? b.toolUseId === toolUseId : b.name === toolName;
+          if (match) {
             const newBlocks = [...blocks];
             newBlocks[i] = { ...b, status: isToolResultError(result) ? 'error' : 'done', result };
             updated[msgIdx] = { ...msg, blocks: newBlocks };
@@ -477,7 +477,7 @@ export function useChat(): UseChatReturn {
           }
         }
       }
-      return prev; // no matching block found — return unchanged
+      return prev;
     });
   });
 

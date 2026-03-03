@@ -28,8 +28,8 @@ export interface AgentCallbacks {
   onTextDelta?: (delta: string) => void;
   onToolActivity?: (activity: ToolActivity) => void;
   onThinking?: (text: string) => void;
-  onToolCall?: (toolName: string, input: Record<string, unknown>) => void;
-  onToolResult?: (toolName: string, result: string) => void;
+  onToolCall?: (toolName: string, input: Record<string, unknown>, toolUseId: string) => void;
+  onToolResult?: (toolName: string, result: string, toolUseId: string) => void;
   onUsage?: (usage: UsageStats) => void;
 }
 
@@ -387,7 +387,7 @@ export async function runAgentLoop(
         inputKeys: Object.keys(toolUse.input),
       });
       callbacks?.onToolActivity?.({ toolName: toolUse.name, status: 'calling' });
-      callbacks?.onToolCall?.(toolUse.name, toolUse.input);
+      callbacks?.onToolCall?.(toolUse.name, toolUse.input, toolUse.id);
 
       const toolResult = await executeToolLocal(toolUse.name, toolUse.input);
 
@@ -397,7 +397,7 @@ export async function runAgentLoop(
       const displayResult = typeof toolResult === 'string'
         ? toolResult
         : toolResult.map(b => b.type === 'text' ? (b as { text: string }).text : '[image]').join('\n');
-      callbacks?.onToolResult?.(toolUse.name, displayResult);
+      callbacks?.onToolResult?.(toolUse.name, displayResult, toolUse.id);
 
       toolResults.push({
         type: 'tool_result',
