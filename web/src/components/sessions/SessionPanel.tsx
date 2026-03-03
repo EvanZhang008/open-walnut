@@ -13,6 +13,7 @@ import type { ImageAttachment } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
 import { fetchSession, executePlanContinue, executePlanSession } from '@/api/sessions';
 import { fetchTask } from '@/api/tasks';
+import { fetchPinnedTasks, pinTask, unpinTask } from '@/api/focus';
 import { timeAgo } from '@/utils/time';
 import { WorkStatusPicker } from './WorkStatusPicker';
 import { SessionCopyButtons } from './SessionCopyButtons';
@@ -152,21 +153,55 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
   // Task title for the breadcrumb link
   const [taskTitle, setTaskTitle] = useState<string | null>(null);
 
+  // Pin state — self-contained (calls focus API directly)
+  const [pinned, setPinned] = useState(false);
+  const [pinBusy, setPinBusy] = useState(false);
+
+  // Check if this session's task is pinned (on mount + config changes)
+  const refreshPinState = useCallback((taskId: string | undefined) => {
+    if (!taskId) return;
+    fetchPinnedTasks()
+      .then((data) => setPinned(data.pinned_tasks.includes(taskId)))
+      .catch(() => {});
+  }, []);
+
+  useEvent('config:changed', () => { refreshPinState(session?.taskId); });
+
+  const handleTogglePin = useCallback(async () => {
+    if (!session?.taskId || pinBusy) return;
+    setPinBusy(true);
+    try {
+      if (pinned) {
+        await unpinTask(session.taskId);
+        setPinned(false);
+      } else {
+        await pinTask(session.taskId);
+        setPinned(true);
+      }
+    } catch (err) {
+      console.error('Pin toggle failed:', err);
+    } finally {
+      setPinBusy(false);
+    }
+  }, [session?.taskId, pinned, pinBusy]);
+
   // Fetch session metadata
   useEffect(() => {
     let cancelled = false;
     setSession(null);
     setLoading(true);
     setTaskTitle(null);
+    setPinned(false);
     fetchSession(sessionId).then((s) => {
       if (!cancelled) {
         setSession(s);
         setLoading(false);
-        // Fetch associated task title
+        // Fetch associated task title + pin state
         if (s?.taskId) {
           fetchTask(s.taskId).then((t) => {
             if (!cancelled) setTaskTitle(t.title);
           }).catch(() => {});
+          refreshPinState(s.taskId);
         }
       }
     }).catch(() => {
@@ -309,7 +344,20 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
               )}
               {loading && <span className="session-panel-badge" style={{ color: 'var(--fg-muted)' }}>Loading...</span>}
             </div>
-            <button className="session-panel-close" onClick={onClose} title="Close session panel">&times;</button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
+              {session?.taskId && (
+                <button
+                  className={`session-panel-pin${pinned ? ' pinned' : ''}`}
+                  onClick={handleTogglePin}
+                  disabled={pinBusy}
+                  title={pinned ? 'Unpin from Focus Bar' : 'Pin to Focus Bar'}
+                  aria-label={pinned ? 'Unpin from Focus Bar' : 'Pin to Focus Bar'}
+                >
+                  {pinned ? '\u{1F4CC}' : '\u{1F4CC}'}
+                </button>
+              )}
+              <button className="session-panel-close" onClick={onClose} title="Close session panel">&times;</button>
+            </div>
           </div>
           {session?.taskId && (
             <div

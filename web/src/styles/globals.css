@@ -4730,6 +4730,37 @@ img[data-lightbox-src],
   color: var(--fg);
 }
 
+.session-panel-pin {
+  background: none;
+  border: none;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  opacity: 0.4;
+  transition: opacity 0.15s, background 0.15s;
+  flex-shrink: 0;
+}
+
+.session-panel-pin:hover {
+  opacity: 0.7;
+  background: var(--bg-tertiary);
+}
+
+.session-panel-pin.pinned {
+  opacity: 1;
+}
+
+.session-panel-pin.pinned:hover {
+  opacity: 0.8;
+}
+
+.session-panel-pin:disabled {
+  cursor: default;
+  opacity: 0.2;
+}
+
 .session-panel-meta {
   display: flex;
   align-items: center;
