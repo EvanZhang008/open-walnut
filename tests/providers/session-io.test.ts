@@ -486,7 +486,7 @@ describe('RemoteIO', () => {
 
       // The last arg is the full remote command wrapped in login shell
       const remoteCmd = sshArgs[sshArgs.length - 1]
-      expect(remoteCmd).toContain('$SHELL -ilc')
+      expect(remoteCmd).toContain('$SHELL -lc')
       expect(remoteCmd).toContain('mkdir -p')
       expect(remoteCmd).toContain('mkfifo')
       expect(remoteCmd).toContain('claude')
@@ -714,9 +714,9 @@ describe('buildRemotePreamble', () => {
 })
 
 describe('wrapInLoginShell', () => {
-  it('wraps command in $SHELL -ilc', () => {
+  it('wraps command in $SHELL -lc', () => {
     const wrapped = wrapInLoginShell('echo hello')
-    expect(wrapped).toContain('$SHELL -ilc')
+    expect(wrapped).toContain('$SHELL -lc')
     expect(wrapped).toContain('echo hello')
   })
 
@@ -733,7 +733,7 @@ describe('wrapInLoginShell', () => {
 
   it('works without shell_setup', () => {
     const wrapped = wrapInLoginShell('claude -p')
-    expect(wrapped).toContain('$SHELL -ilc')
+    expect(wrapped).toContain('$SHELL -lc')
     expect(wrapped).toContain('claude -p')
     expect(wrapped).not.toContain('|| true')
   })
@@ -741,7 +741,7 @@ describe('wrapInLoginShell', () => {
   it('shell-quotes the inner command for safety', () => {
     const wrapped = wrapInLoginShell("echo 'hello world'")
     // The inner command should be quoted
-    expect(wrapped).toMatch(/\$SHELL -ilc '/)
+    expect(wrapped).toMatch(/\$SHELL -lc '/)
   })
 })
 

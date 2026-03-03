@@ -313,19 +313,19 @@ export const REMOTE_BASE_PATH = [
   //   incompatible builds automatically). --delete-prefix handles .npmrc
   //   prefix conflicts that block nvm use.
   // fnm/volta/asdf: just set up PATH, they auto-resolve the active version.
-  'if ! command -v node >/dev/null 2>&1; then'
+  // Use `||` instead of `if !` — zsh non-interactive mode has issues with `if ! cmd`
+  'command -v node >/dev/null 2>&1 || {'
     + ' if [ -s "$HOME/.nvm/nvm.sh" ]; then'
     + '   . "$HOME/.nvm/nvm.sh" 2>/dev/null;'
-    + '   if ! command -v node >/dev/null 2>&1; then'
+    + '   command -v node >/dev/null 2>&1 || {'
     + '     for v in $(ls -1r "$NVM_DIR/versions/node/" 2>/dev/null); do'
     + '       nvm use --delete-prefix "$v" 2>/dev/null && node -v 2>/dev/null && break;'
-    + '     done;'
-    + '   fi;'
+    + '     done; };'
     + ' elif [ -x "$HOME/.fnm/fnm" ]; then eval "$("$HOME/.fnm/fnm" env)" 2>/dev/null;'
     + ' elif [ -d "$HOME/.volta" ]; then export PATH="$HOME/.volta/bin:$PATH";'
     + ' elif [ -s "$HOME/.asdf/asdf.sh" ]; then . "$HOME/.asdf/asdf.sh" 2>/dev/null;'
     + ' fi;'
-    + ' fi',
+    + ' }',
 ].join('; ')
 
 /**
@@ -354,21 +354,20 @@ export function buildRemotePreamble(shellSetup?: string): string {
 }
 
 /**
- * Wrap a remote command to run inside the user's login+interactive shell.
+ * Wrap a remote command to run inside the user's login shell.
  *
- * SSH non-interactive commands (`ssh host 'cmd'`) don't source profile files.
- * Even `$SHELL -lc` (login) misses `.bashrc`/`.zshrc` — those are only sourced
- * for INTERACTIVE shells. This means nvm, pyenv, rbenv, conda, and any tool
- * configured in `.bashrc`/`.zshrc` won't be available.
+ * Uses `$SHELL -lc` (login + command). This sources `.zprofile`/`.profile`
+ * but NOT `.bashrc`/`.zshrc` (those require interactive mode).
  *
- * Fix: `$SHELL -ilc` — login + interactive + command. This gives the exact same
- * environment as the user's terminal/tmux session. The `-i` flag causes `.zshrc`
- * (zsh) or `.bashrc` (bash) to be sourced. Combined with `-c`, the shell runs
- * the command and exits — it doesn't enter a REPL.
+ * We intentionally do NOT use `-i` (interactive) because:
+ *   - SSH stdout is our data channel (JSONL stream from remote claude)
+ *   - Interactive plugins (iTerm2 shell integration, oh-my-zsh, p10k)
+ *     emit escape codes to stdout, corrupting the JSONL stream
+ *   - This is an architecture conflict, not a fixable side effect
  *
- * Minor side effect: interactive plugins (oh-my-zsh, p10k, iTerm2 shell
- * integration) may emit terminal escape codes to stderr. These are harmless
- * since we redirect stderr to a .err file on the remote side.
+ * Instead, node/tools are found via:
+ *   1. REMOTE_BASE_PATH auto-discovery (nvm > fnm > volta > asdf)
+ *   2. User's `shell_setup` config for edge cases
  */
 export function wrapInLoginShell(cmd: string, shellSetup?: string): string {
   const parts: string[] = []
@@ -379,7 +378,7 @@ export function wrapInLoginShell(cmd: string, shellSetup?: string): string {
   }
   parts.push(cmd)
   const inner = parts.join('; ')
-  return `$SHELL -ilc ${shellQuote(inner)}`
+  return `$SHELL -lc ${shellQuote(inner)}`
 }
 
 /**
