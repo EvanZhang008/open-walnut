@@ -68,10 +68,38 @@ async function enrichTasksWithSessionStatus(tasks: Task[]): Promise<Task[]> {
     if (t.exec_session_id) sessionIds.add(t.exec_session_id)
     if (t.session_ids) for (const sid of t.session_ids) sessionIds.add(sid)
   }
+
+  // Single read of the session store — avoids N file reads via getSessionByClaudeId.
+  // Graceful degradation: if session store is unreadable, return tasks without enrichment.
+  let allSessions: Awaited<ReturnType<typeof listSessions>>
+  try {
+    allSessions = await listSessions()
+  } catch (err) {
+    log.web.warn('session enrichment skipped — failed to read session store', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return tasks
+  }
+
+  // Build reverse map: taskId → session records that reference it.
+  // This catches sessions linked via session record's taskId field even when
+  // the task's session_ids/session_id fields are out of sync (e.g., linkSessionSlot
+  // failed due to file lock contention or ambiguous prefix).
+  // Excludes embedded subagent runs (triage, general agent) — these are high-volume
+  // housekeeping sessions that should not appear in the session pill.
+  const taskIds = new Set(tasks.map((t) => t.id))
+  const sessionsByTaskId = new Map<string, typeof allSessions>()
+  for (const rec of allSessions) {
+    if (rec.taskId && taskIds.has(rec.taskId) && rec.provider !== 'embedded') {
+      sessionIds.add(rec.claudeSessionId)
+      let list = sessionsByTaskId.get(rec.taskId)
+      if (!list) { list = []; sessionsByTaskId.set(rec.taskId, list) }
+      list.push(rec)
+    }
+  }
+
   if (sessionIds.size === 0) return tasks
 
-  // Single read of the session store — avoids N file reads via getSessionByClaudeId
-  const allSessions = await listSessions()
   const sessionMap = new Map<string, SessionInfo>()
   for (const rec of allSessions) {
     if (sessionIds.has(rec.claudeSessionId)) {
@@ -90,9 +118,38 @@ async function enrichTasksWithSessionStatus(tasks: Task[]): Promise<Task[]> {
   return tasks.map((t) => {
     const enriched: Task = { ...t }
 
+    // Merge sessions discovered via session record's taskId but missing from task fields.
+    // This heals the data inconsistency where linkSessionSlot/linkSession failed (e.g., file
+    // lock contention) but createSessionRecord succeeded — the session record has taskId set
+    // but the task's session_ids/session_id were never updated.
+    const taskSessions = sessionsByTaskId.get(t.id)
+    if (taskSessions) {
+      if (!enriched.session_ids) enriched.session_ids = []
+      for (const rec of taskSessions) {
+        if (!enriched.session_ids.includes(rec.claudeSessionId)) {
+          enriched.session_ids.push(rec.claudeSessionId)
+        }
+      }
+      // Backfill session_id with most recent non-archived session (iterate in reverse
+      // since allSessions is in insertion/chronological order)
+      if (!enriched.session_id) {
+        for (let i = taskSessions.length - 1; i >= 0; i--) {
+          if (!taskSessions[i].archived) {
+            enriched.session_id = taskSessions[i].claudeSessionId
+            break
+          }
+        }
+      }
+    }
+
+    // Filter archived sessions early — all downstream logic only sees live sessions.
+    if (enriched.session_ids) {
+      enriched.session_ids = enriched.session_ids.filter(sid => !sessionMap.get(sid)?.archived)
+    }
+
     // Enrich the new single-slot session_status from task.session_id
-    const singleInfo = t.session_id ? sessionMap.get(t.session_id) : undefined
-    if (singleInfo) {
+    const singleInfo = enriched.session_id ? sessionMap.get(enriched.session_id) : undefined
+    if (singleInfo && !singleInfo.archived) {
       enriched.session_status = {
         work_status: singleInfo.work_status,
         process_status: singleInfo.process_status,
@@ -115,12 +172,12 @@ async function enrichTasksWithSessionStatus(tasks: Task[]): Promise<Task[]> {
     // older tasks created before exec_session_id tracking was added.
     // Only infer from non-terminal sessions (completed/error sessions fall
     // through to the "N sessions" history pill instead).
-    if ((!enriched.plan_session_status || !enriched.exec_session_status) && t.session_ids?.length) {
+    if ((!enriched.plan_session_status || !enriched.exec_session_status) && enriched.session_ids?.length) {
       // Iterate in reverse so the most recent session wins (session_ids is chronological)
-      for (let i = t.session_ids.length - 1; i >= 0; i--) {
-        const sid = t.session_ids[i]
+      for (let i = enriched.session_ids.length - 1; i >= 0; i--) {
+        const sid = enriched.session_ids[i]
         // Skip sessions already covered by slot fields
-        if (sid === t.plan_session_id || sid === t.exec_session_id) continue
+        if (sid === enriched.plan_session_id || sid === enriched.exec_session_id) continue
         const info = sessionMap.get(sid)
         if (!info || !isActiveSession(info)) continue
         if (!enriched.plan_session_status && info.mode === 'plan') {
@@ -133,9 +190,9 @@ async function enrichTasksWithSessionStatus(tasks: Task[]): Promise<Task[]> {
 
     // Collect all unique work_statuses across all sessions for this task
     const allSids = new Set<string>()
-    if (t.plan_session_id) allSids.add(t.plan_session_id)
-    if (t.exec_session_id) allSids.add(t.exec_session_id)
-    if (t.session_ids) for (const sid of t.session_ids) allSids.add(sid)
+    if (enriched.plan_session_id) allSids.add(enriched.plan_session_id)
+    if (enriched.exec_session_id) allSids.add(enriched.exec_session_id)
+    if (enriched.session_ids) for (const sid of enriched.session_ids) allSids.add(sid)
     if (allSids.size > 0) {
       const statuses = new Set<WorkStatus>()
       for (const sid of allSids) {
@@ -143,11 +200,6 @@ async function enrichTasksWithSessionStatus(tasks: Task[]): Promise<Task[]> {
         if (info) statuses.add(info.work_status)
       }
       if (statuses.size > 0) enriched.session_work_statuses = [...statuses]
-    }
-
-    // Filter archived sessions from session_ids so frontend counts/pills are correct
-    if (enriched.session_ids) {
-      enriched.session_ids = enriched.session_ids.filter(sid => !sessionMap.get(sid)?.archived)
     }
     return enriched
   })

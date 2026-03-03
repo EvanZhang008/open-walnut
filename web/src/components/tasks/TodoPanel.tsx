@@ -8,7 +8,7 @@ import { fetchTriageHistory } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
 import { timeAgo } from '@/utils/time';
 import type { ProcessStatus, WorkStatus } from '@walnut/core';
-import { WORK_LABELS, WORK_COLORS, PROCESS_COLORS } from '@/utils/session-status';
+import { WORK_LABELS, WORK_COLORS, PROCESS_COLORS, resolveTaskSessionId } from '@/utils/session-status';
 import type { UseFavoritesReturn } from '@/hooks/useFavorites';
 import type { UseOrderingReturn } from '@/hooks/useOrdering';
 import { PriorityBadge } from '../common/PriorityBadge';
@@ -487,16 +487,6 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount
           )}
         </div>
         <div className="todo-item-meta-row">
-          {dueDateInfo && (
-            <span className={`todo-item-due-pill${dueDateInfo.overdue ? ' todo-item-due-overdue' : ''}`}>
-              {dueDateInfo.label}
-            </span>
-          )}
-          {task.sprint && (
-            <span className="todo-item-sprint-pill" title={`Sprint: ${task.sprint}`}>
-              {task.sprint}
-            </span>
-          )}
           <SessionPill
             sessionId={task.session_id}
             sessionStatus={task.session_status}
@@ -509,14 +499,25 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount
             isActive={openSessionIds ? !!(
               (task.session_id && openSessionIds.has(task.session_id)) ||
               (task.exec_session_id && openSessionIds.has(task.exec_session_id)) ||
-              (task.plan_session_id && openSessionIds.has(task.plan_session_id))
+              (task.plan_session_id && openSessionIds.has(task.plan_session_id)) ||
+              (task.session_ids?.some(sid => openSessionIds.has(sid)))
             ) : false}
             onClick={onOpenSession ? () => {
-              const sid = task.session_id || task.exec_session_id || task.plan_session_id;
+              const sid = resolveTaskSessionId(task);
               if (sid) onOpenSession(sid);
               onClick(); // Also select the task
             } : undefined}
           />
+          {dueDateInfo && (
+            <span className={`todo-item-due-pill${dueDateInfo.overdue ? ' todo-item-due-overdue' : ''}`}>
+              {dueDateInfo.label}
+            </span>
+          )}
+          {task.sprint && (
+            <span className="todo-item-sprint-pill" title={`Sprint: ${task.sprint}`}>
+              {task.sprint}
+            </span>
+          )}
           {!!(task as Record<string, unknown>).is_blocked && !isDone && (
             <span className="task-blocked-badge" title="Blocked by dependencies">
               blocked
