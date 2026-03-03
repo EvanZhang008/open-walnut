@@ -179,8 +179,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           const result = await runAgentLoop(cronPrompt, history, {
             onTextDelta: (delta) => broadcastEvent('agent:text-delta', { delta, source: 'cron' }),
             onThinking: (text) => broadcastEvent('agent:thinking', { text }),
-            onToolCall: (toolName, input) => broadcastEvent('agent:tool-call', { toolName, input }),
-            onToolResult: (toolName, result) => broadcastEvent('agent:tool-result', { toolName, result }),
+            onToolCall: (toolName, input, toolUseId) => broadcastEvent('agent:tool-call', { toolName, input, toolUseId }),
+            onToolResult: (toolName, result, toolUseId) => broadcastEvent('agent:tool-result', { toolName, result, toolUseId }),
             onToolActivity: (activity) => broadcastEvent('agent:tool-activity', activity),
             // onText intentionally NOT provided — fires per text block per round.
             // agent:response is fired ONCE below after the loop completes.
@@ -1173,8 +1173,8 @@ async function startHeartbeatIfConfigured(): Promise<void> {
           const result = await runAgentLoop(prompt, history, {
             onTextDelta: (delta) => broadcastEvent('agent:text-delta', { delta, source: 'heartbeat' }),
             onThinking: (text) => broadcastEvent('agent:thinking', { text }),
-            onToolCall: (toolName, input) => broadcastEvent('agent:tool-call', { toolName, input }),
-            onToolResult: (toolName, result) => broadcastEvent('agent:tool-result', { toolName, result }),
+            onToolCall: (toolName, input, toolUseId) => broadcastEvent('agent:tool-call', { toolName, input, toolUseId }),
+            onToolResult: (toolName, result, toolUseId) => broadcastEvent('agent:tool-result', { toolName, result, toolUseId }),
             onToolActivity: (activity) => broadcastEvent('agent:tool-activity', activity),
             // onText intentionally NOT provided — fires per text block per round.
             // agent:response is fired ONCE below after the loop completes (same

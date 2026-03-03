@@ -297,6 +297,26 @@ interface UseChatReturn {
   loadOlderMessages: () => void;
 }
 
+/** Force-close any tool_call blocks still in 'calling' state (safety net for turn completion). */
+function closeStaleToolCalls(prev: ChatMessage[], finalStatus: 'done' | 'error' = 'done'): ChatMessage[] {
+  let changed = false;
+  const updated = prev.map((msg) => {
+    if (msg.role !== 'assistant' || !msg.blocks) return msg;
+    const hasStale = msg.blocks.some(b => b.type === 'tool_call' && b.status === 'calling');
+    if (!hasStale) return msg;
+    changed = true;
+    return {
+      ...msg,
+      blocks: msg.blocks.map(b =>
+        b.type === 'tool_call' && b.status === 'calling'
+          ? { ...b, status: finalStatus as const }
+          : b
+      ),
+    };
+  });
+  return changed ? updated : prev;
+}
+
 /** Helper: update the last assistant message's blocks, or create one.
  *  When `currentSource` is provided, only appends to the last assistant if its
  *  source matches — otherwise creates a new message. This prevents heartbeat/cron
@@ -494,28 +514,8 @@ export function useChat(): UseChatReturn {
     setToolActivity(null);
     refreshStats();
 
-    // Safety net: force-close any remaining 'calling' tool_call blocks.
-    // By the time agent:response fires, the entire turn is complete — all tools
-    // have returned. Any block still in 'calling' state was missed (e.g. due to
-    // a sourced message inserting between tool-call and tool-result events).
-    setMessages((prev) => {
-      let changed = false;
-      const updated = prev.map((msg) => {
-        if (msg.role !== 'assistant' || !msg.blocks) return msg;
-        const hasStale = msg.blocks.some(b => b.type === 'tool_call' && b.status === 'calling');
-        if (!hasStale) return msg;
-        changed = true;
-        return {
-          ...msg,
-          blocks: msg.blocks.map(b =>
-            b.type === 'tool_call' && b.status === 'calling'
-              ? { ...b, status: 'done' as const }
-              : b
-          ),
-        };
-      });
-      return changed ? updated : prev;
-    });
+    // Safety net: force-close any stale 'calling' tool blocks (turn is complete)
+    setMessages((prev) => closeStaleToolCalls(prev, 'done'));
 
     // Retroactively tag the streaming assistant message with its source
     // (heartbeat/cron/triage text-deltas may create the message before source is known)
@@ -640,25 +640,8 @@ export function useChat(): UseChatReturn {
     setError(errMsg);
     setToolActivity(null);
 
-    // Safety net: force-close any remaining 'calling' tool_call blocks on error
-    setMessages((prev) => {
-      let changed = false;
-      const updated = prev.map((msg) => {
-        if (msg.role !== 'assistant' || !msg.blocks) return msg;
-        const hasStale = msg.blocks.some(b => b.type === 'tool_call' && b.status === 'calling');
-        if (!hasStale) return msg;
-        changed = true;
-        return {
-          ...msg,
-          blocks: msg.blocks.map(b =>
-            b.type === 'tool_call' && b.status === 'calling'
-              ? { ...b, status: 'error' as const }
-              : b
-          ),
-        };
-      });
-      return changed ? updated : prev;
-    });
+    // Safety net: force-close stale 'calling' blocks (tool may have succeeded, result was lost)
+    setMessages((prev) => closeStaleToolCalls(prev, 'done'));
 
     // Let the user see the error, then drain remaining queued messages
     if (queueRef.current.length > 0) {
