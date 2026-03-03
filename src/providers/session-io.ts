@@ -354,18 +354,21 @@ export function buildRemotePreamble(shellSetup?: string): string {
 }
 
 /**
- * Wrap a remote command to run inside the user's login shell.
+ * Wrap a remote command to run inside the user's login+interactive shell.
  *
- * SSH non-interactive commands (`ssh host 'cmd'`) don't source profile files
- * (.bashrc, .zshrc, .profile, etc.) — unlike tmux which spawns `$SHELL -l`.
- * This means node version managers (nvm, fnm, volta, asdf) aren't loaded.
+ * SSH non-interactive commands (`ssh host 'cmd'`) don't source profile files.
+ * Even `$SHELL -lc` (login) misses `.bashrc`/`.zshrc` — those are only sourced
+ * for INTERACTIVE shells. This means nvm, pyenv, rbenv, conda, and any tool
+ * configured in `.bashrc`/`.zshrc` won't be available.
  *
- * Fix: wrap the command in `$SHELL -lc '...'` so the remote shell runs as a
- * login shell and sources all profile files automatically.
- * `$SHELL` is always set by sshd to the user's login shell (from /etc/passwd).
+ * Fix: `$SHELL -ilc` — login + interactive + command. This gives the exact same
+ * environment as the user's terminal/tmux session. The `-i` flag causes `.zshrc`
+ * (zsh) or `.bashrc` (bash) to be sourced. Combined with `-c`, the shell runs
+ * the command and exits — it doesn't enter a REPL.
  *
- * When `shell_setup` is configured, it's injected INSIDE the login shell
- * (after profiles are loaded) for additional setup that profiles miss.
+ * Minor side effect: interactive plugins (oh-my-zsh, p10k, iTerm2 shell
+ * integration) may emit terminal escape codes to stderr. These are harmless
+ * since we redirect stderr to a .err file on the remote side.
  */
 export function wrapInLoginShell(cmd: string, shellSetup?: string): string {
   const parts: string[] = []
@@ -376,7 +379,7 @@ export function wrapInLoginShell(cmd: string, shellSetup?: string): string {
   }
   parts.push(cmd)
   const inner = parts.join('; ')
-  return `$SHELL -lc ${shellQuote(inner)}`
+  return `$SHELL -ilc ${shellQuote(inner)}`
 }
 
 /**
