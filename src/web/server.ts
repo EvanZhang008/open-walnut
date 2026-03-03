@@ -861,6 +861,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
         // Check if triage wants the main agent notified — determines the "UI Only" badge
         const notifyMatch = result.match(/<main_agent_notify>([\s\S]*?)<\/main_agent_notify>/)
+        const triageUpdate = notifyMatch ? notifyMatch[1].trim() : ''
+
         const willNotifyMainAgent = !!(notifyMatch && taskId)
 
         // notification: true → "UI Only" badge (main agent can't see it)
@@ -884,8 +886,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         if (heartbeatHandle) {
           heartbeatHandle.requestNow('session-ended', `Session for task ${taskId} just completed and was triaged.`)
         }
-        if (notifyMatch && taskId) {
-          const triageUpdate = notifyMatch[1].trim()
+        if (willNotifyMainAgent) {
           log.web.info('triage wants to notify main agent', { taskId, triageUpdate: triageUpdate.slice(0, 200) })
 
           // Fire-and-forget: enqueue a main agent turn with task note + triage update

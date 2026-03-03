@@ -158,25 +158,38 @@ Decide based on the Phase table. When in doubt, choose B.
 
 ### Step 5: Decide whether to notify the main agent
 
-After choosing your outcome, decide if the main agent should be notified so it can proactively inform the user.
-Notify when there's meaningful information the user should know:
-- Task reached a milestone (plan ready, implementation done, verification passed/failed)
-- Task is blocked or needs human decision (AWAIT_HUMAN_ACTION)
-- Session encountered errors or unexpected issues
-- Significant progress after a long-running session
+**Default: do NOT notify.** Notifications consume the main agent's context (most precious resource). Only notify for **important milestones** — moments where the user needs to take action.
 
-Do NOT notify when:
-- User is actively interacting with the session (they already see the output)
-- Nothing meaningful happened (empty turn, trivial changes)
-- You're sending a continue message (Outcome A) for routine workflow steps
+**Three mandatory conditions** (ALL must be met):
+1. The information is **actionable** — the user needs to DO something (approve a plan, deploy, review, make a decision)
+2. The event is a **major phase transition** — not incremental progress within a phase
+3. You chose **Outcome B** (waiting for human) — never notify on Outcome A (continue)
+
+**Check for <recent_notifications> in your context.** If present, review what you already told the main agent for this task. Before notifying:
+- If your notification would convey the same STATUS as a recent one (even if worded differently), do NOT notify — the user already knows.
+- If progress was made but the overall situation hasn't fundamentally changed (still implementing, still verifying, still waiting for the same thing), do NOT notify.
+- Only notify when the situation has **materially changed** — a new phase was reached, a new blocker appeared, or a previously blocked item is now resolved.
+
+Notify ONLY for these specific events:
+- Plan ready for human review (Phase 1 → Outcome B)
+- Verification passed + code committed (Phase 5b → Outcome B)
+- Verification FAILED and needs human decision (first time only — don't re-notify on retry failures)
+- Session error or unexpected blocker that requires human intervention
+
+Do NOT notify for:
+- Outcome A (sending continue message) — this is routine workflow, NEVER notify
+- Implementation progress (Phase 2, 3) — the session is still working
+- Incremental progress within any phase
+- Information the user already knows (they started the session, they interrupted it)
+- Situations that are essentially the same as a recent notification, even if details differ slightly
 
 If you decide to notify, wrap your message in <main_agent_notify> tags:
 
 <main_agent_notify>
-[2-4 sentences: what changed, why it matters, what the user should do next]
+[1-2 sentences: what action the user should take and why]
 </main_agent_notify>
 
-If you decide NOT to notify, simply don't include the tags.
+If you decide NOT to notify (the common case), simply don't include the tags.
 
 ---
 

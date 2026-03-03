@@ -34,6 +34,30 @@ export const turnCompleteTriageHook: SessionHookDefinition = {
       const config = await getConfig();
       const triageAgentId = config.agent?.session_triage_agent ?? DEFAULT_TRIAGE_AGENT_ID;
 
+      // Build recent notification history so triage can avoid duplicates
+      let notificationContext = '';
+      try {
+        const { getTriageEntries } = await import('../chat-history.js');
+        const { entries } = await getTriageEntries(10, p.taskId);
+        // Filter to entries that actually triggered main agent notification (notification === false)
+        const notified = entries.filter(e => e.notification === false);
+        if (notified.length > 0) {
+          const lines = notified.slice(0, 5).map(e => {
+            const ts = e.timestamp ? new Date(e.timestamp).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) : '?';
+            // Extract the notification content from the triage output
+            const contentStr = typeof e.content === 'string' ? e.content : '';
+            const match = contentStr.match(/<main_agent_notify>([\s\S]*?)<\/main_agent_notify>/);
+            const summary = match ? match[1].trim() : (contentStr.slice(0, 150) || '(no content)');
+            return `[${ts}] ${summary}`;
+          });
+          notificationContext = `<recent_notifications>\nThese are the most recent notifications you sent to the main agent for this task:\n${lines.join('\n')}\n</recent_notifications>`;
+        }
+      } catch (err) {
+        log.session.warn('failed to load notification history for triage', {
+          taskId: p.taskId, error: err instanceof Error ? err.message : String(err),
+        });
+      }
+
       const sessionType = p.isPlanSession ? 'plan-mode ' : '';
       const triageTask = `A Claude Code ${sessionType}session just finished for task ${p.taskId}. Session ID: ${p.sessionId}. Turn index: ${p.turnIndex ?? 'unknown'}.\n\nThe <session_history> context below contains recent assistant messages with [index] labels. Use these to determine the current phase. If you need full details of a specific message, call get_session_history with index=N.`;
 
@@ -42,6 +66,7 @@ export const turnCompleteTriageHook: SessionHookDefinition = {
         task: triageTask,
         taskId: p.taskId,
         context_override: { taskId: p.taskId, sessionId: p.sessionId },
+        ...(notificationContext ? { context: notificationContext } : {}),
       }, ['subagent-runner'], { source: 'turn-complete-triage' });
 
       log.session.info('turn-complete-triage hook: dispatched', {
