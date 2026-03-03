@@ -827,9 +827,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
     // Persist subagent:result to chat history and run triage
     if (event.name === 'subagent:result') {
-      const { runId, agentId, agentName, taskId, result, usage } = eventData<'subagent:result'>(event)
+      const { runId, agentId, agentName, taskId, result, usage, notification } = eventData<'subagent:result'>(event)
 
-      log.web.info('subagent result received', { runId, agentId, taskId, resultLength: result?.length ?? 0 })
+      log.web.info('subagent result received', { runId, agentId, taskId, resultLength: result?.length ?? 0, hasNotification: !!notification })
       const subagentTaskRef = taskId ? await resolveTaskRef(taskId) : null
 
       // Check if this is a triage agent result — compact notification only
@@ -845,14 +845,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // Strip internal tags — not user-facing
         const cleanedResult = result
           .replace(/<memory_update>[\s\S]*?<\/memory_update>/g, '')
-          .replace(/<main_agent_notify>[\s\S]*?<\/main_agent_notify>/g, '')
+          .replace(/<main_agent_notify>[\s\S]*?<\/main_agent_notify>/g, '')  // defensive: custom agents may still use old tag format
           .trim() || 'triage completed'
 
-        // Check if triage wants the main agent notified — determines the "UI Only" badge
-        const notifyMatch = result.match(/<main_agent_notify>([\s\S]*?)<\/main_agent_notify>/)
-        const triageUpdate = notifyMatch ? notifyMatch[1].trim() : ''
-
-        const willNotifyMainAgent = !!(notifyMatch && taskId)
+        // Notification decision comes from the structured notify_main_agent tool call,
+        // not from parsing text tags. Tool calls are binary — called or not called.
+        const triageUpdate = notification?.trim() ?? ''
+        const willNotifyMainAgent = !!(triageUpdate && taskId)
 
         // notification: true → "UI Only" badge (main agent can't see it)
         // notification: false → no badge (main agent will be notified and respond)

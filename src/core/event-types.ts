@@ -185,6 +185,8 @@ export interface SubagentResultEvent {
   taskId?: string;
   result: string;
   usage?: { input_tokens: number; output_tokens: number };
+  /** Structured notification from notify_main_agent tool (triage agents) */
+  notification?: string;
   /** Set by main-ai handler for sanitized forwarding to web-ui */
   isTriageResult?: boolean;
 }

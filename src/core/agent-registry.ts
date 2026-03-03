@@ -161,7 +161,9 @@ Decide based on the Phase table. When in doubt, choose B.
 
 **Default: do NOT notify.** Notifications consume the main agent's context (most precious resource). Only notify for **important milestones** — moments where the user needs to take action.
 
-**Three mandatory conditions** (ALL must be met):
+**Mechanism: the \`notify_main_agent\` tool.** If you decide to notify, call the tool. If you decide not to notify (the common case), simply don't call it. This is a binary decision — there is no other way to trigger a notification.
+
+**Three mandatory conditions** (ALL must be met to call notify_main_agent):
 1. The information is **actionable** — the user needs to DO something (approve a plan, deploy, review, make a decision)
 2. The event is a **major phase transition** — not incremental progress within a phase
 3. You chose **Outcome B** (waiting for human) — never notify on Outcome A (continue)
@@ -171,26 +173,18 @@ Decide based on the Phase table. When in doubt, choose B.
 - If progress was made but the overall situation hasn't fundamentally changed (still implementing, still verifying, still waiting for the same thing), do NOT notify.
 - Only notify when the situation has **materially changed** — a new phase was reached, a new blocker appeared, or a previously blocked item is now resolved.
 
-Notify ONLY for these specific events:
+Call \`notify_main_agent\` ONLY for these specific events:
 - Plan ready for human review (Phase 1 → Outcome B)
 - Verification passed + code committed (Phase 5b → Outcome B)
 - Verification FAILED and needs human decision (first time only — don't re-notify on retry failures)
 - Session error or unexpected blocker that requires human intervention
 
-Do NOT notify for:
+Do NOT call notify_main_agent for:
 - Outcome A (sending continue message) — this is routine workflow, NEVER notify
 - Implementation progress (Phase 2, 3) — the session is still working
 - Incremental progress within any phase
 - Information the user already knows (they started the session, they interrupted it)
 - Situations that are essentially the same as a recent notification, even if details differ slightly
-
-If you decide to notify, wrap your message in <main_agent_notify> tags:
-
-<main_agent_notify>
-[1-2 sentences: what action the user should take and why]
-</main_agent_notify>
-
-If you decide NOT to notify (the common case), simply don't include the tags.
 
 ---
 
@@ -205,11 +199,11 @@ If you decide NOT to notify (the common case), simply don't include the tags.
 ## Tool Call Discipline (CRITICAL — failures here leave sessions stuck)
 - **Outcome A requires calling send_to_session.** Do NOT describe what to send in text — actually call the tool. If you write "send message to continue" without calling send_to_session, the session receives NOTHING and gets stuck.
 - **Execute ALL tool calls BEFORE writing conclusions.** Interleave tool calls as you go (get_task → update_task → add_note → send_to_session). Only write summary text after all tools are done.
-- **NEVER include <main_agent_notify> tags when choosing Outcome A.** Outcome A = routine continuation. If you wrote notify tags and then reconsidered, the tags are ALREADY in your output and WILL trigger a notification. Think first, then write.
+- **Outcome A = NEVER call notify_main_agent.** Outcome A is routine continuation — notifications are only for Outcome B milestones.
 - If you run out of tool rounds before calling send_to_session, the session will be stuck. Prioritize: get_task (round 1), update_task (round 2), send_to_session (round 3). Skip add_note if rounds are tight — a missing note update is far less harmful than a stuck session.`,
   allowed_tools: ['get_task', 'update_task', 'add_note',
                   'send_to_session', 'query_tasks', 'memory', 'search',
-                  'get_session_history'],
+                  'get_session_history', 'notify_main_agent'],
   context_sources: [
     { id: 'project_task_list', enabled: true },
     { id: 'session_history', enabled: true },

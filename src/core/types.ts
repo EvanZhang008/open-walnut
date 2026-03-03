@@ -343,7 +343,7 @@ export interface ChatEntry {
   notification?: boolean;
   taskId?: string;
   sessionId?: string;          // Linked session ID (e.g. embedded triage run ID)
-  notifyContent?: string;      // Extracted <main_agent_notify> content (triage entries only)
+  notifyContent?: string;      // Content from notify_main_agent tool call (triage entries only)
   // Compaction marker
   compacted?: boolean;         // true = excluded from model context, kept for scroll-back
   // Per-field content hashes for task context dedup (keys like "note:{taskId}", "pm:life/tax")

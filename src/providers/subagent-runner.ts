@@ -320,6 +320,35 @@ export class SubagentRunner {
       let systemPrompt = buildSubagentSystemPrompt(agentDef, data.task, combinedContext || undefined);
       const toolSet = await buildSubagentToolSet(agentDef, data.deniedTools);
 
+      // Inject per-run notify_main_agent tool (closure-based, concurrency-safe).
+      // Only agents with 'notify_main_agent' in allowed_tools get this tool.
+      let capturedNotification: string | undefined;
+      if (agentDef.allowed_tools?.includes('notify_main_agent')) {
+        toolSet.push({
+          name: 'notify_main_agent',
+          description: 'Send a notification to the main agent about an important milestone that requires user action. Only call this when the user needs to DO something (approve a plan, review, make a decision). If no notification is needed, simply do not call this tool.',
+          input_schema: {
+            type: 'object' as const,
+            properties: {
+              message: {
+                type: 'string',
+                description: '1-2 sentences: what happened and what action the user should take',
+              },
+            },
+            required: ['message'],
+          },
+          execute: async (params: Record<string, unknown>) => {
+            const msg = String(params.message ?? '').trim() || undefined;
+            if (capturedNotification) {
+              log.subagent.warn('notify_main_agent called again, overwriting previous', { runId: run.runId });
+            }
+            capturedNotification = msg;
+            log.subagent.info('notify_main_agent called', { runId: run.runId, messageLength: msg?.length ?? 0 });
+            return 'Notification queued for main agent.';
+          },
+        });
+      }
+
       // Resolve {auto} token in stateful memory_project path
       const resolvedStateful = agentDef.stateful ? { ...agentDef.stateful } : undefined;
       if (resolvedStateful?.memory_project?.includes('{auto}') && data.taskId) {
@@ -467,7 +496,7 @@ export class SubagentRunner {
         responseLength: result.response.length,
       });
 
-      log.subagent.info('subagent result emitted', { runId: run.runId, sessionId: run.runId, taskId: data.taskId });
+      log.subagent.info('subagent result emitted', { runId: run.runId, sessionId: run.runId, taskId: data.taskId, hasNotification: !!capturedNotification });
       bus.emit(EventNames.SUBAGENT_RESULT, {
         runId: run.runId,
         agentId: run.agentId,
@@ -475,6 +504,7 @@ export class SubagentRunner {
         task: data.task,
         taskId: data.taskId,
         result: result.response,
+        notification: capturedNotification,
         usage: totalUsage,
       }, ['main-ai'], { source: 'subagent-runner' });
     } catch (err) {
