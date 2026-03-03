@@ -71,6 +71,8 @@ interface TodoPanelProps {
   onPinTask?: (taskId: string) => void;
   onUnpinTask?: (taskId: string) => void;
   pinnedTaskIds?: Set<string>;
+  /** Set of session IDs currently displayed in session columns. */
+  openSessionIds?: Set<string>;
   operationError?: string | null;
   onClearOperationError?: () => void;
   onOperationError?: (msg: string) => void;
@@ -257,6 +259,7 @@ interface SortableTaskItemProps {
   onCyclePriority?: (id: string) => void;
   onUpdateTitle?: (id: string, title: string) => void;
   onOpenSession?: (sessionId: string) => void;
+  openSessionIds?: Set<string>;
   onPinTask?: (taskId: string) => void;
   onUnpinTask?: (taskId: string) => void;
   isPinned?: boolean;
@@ -267,7 +270,7 @@ interface SortableTaskItemProps {
   searchSemanticScore?: number; // Normalized semantic contribution [0,1]
 }
 
-function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount, onClick, onSetPhase, onStar, onCyclePriority, onUpdateTitle, onOpenSession, onPinTask, onUnpinTask, isPinned, searchContext, searchMatchField, searchScore, searchKeywordScore, searchSemanticScore }: SortableTaskItemProps) {
+function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount, onClick, onSetPhase, onStar, onCyclePriority, onUpdateTitle, onOpenSession, openSessionIds, onPinTask, onUnpinTask, isPinned, searchContext, searchMatchField, searchScore, searchKeywordScore, searchSemanticScore }: SortableTaskItemProps) {
   const integrations = useIntegrations();
   const {
     attributes,
@@ -503,6 +506,11 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount
             execStatus={task.exec_session_status}
             sessionIds={task.session_ids}
             mode={task.session_status?.mode ?? task.exec_session_status?.mode ?? task.plan_session_status?.mode}
+            isActive={openSessionIds ? !!(
+              (task.session_id && openSessionIds.has(task.session_id)) ||
+              (task.exec_session_id && openSessionIds.has(task.exec_session_id)) ||
+              (task.plan_session_id && openSessionIds.has(task.plan_session_id))
+            ) : false}
             onClick={onOpenSession ? () => {
               const sid = task.session_id || task.exec_session_id || task.plan_session_id;
               if (sid) onOpenSession(sid);
@@ -882,7 +890,7 @@ function reverseConversationLogEntries(log: string): string {
 
 // ── TaskDetailPane ──
 
-function TaskDetailPane({ task, onClose, onOpenSession, onOpenTriageForTask, style }: { task: Task; onClose?: () => void; onOpenSession?: (sessionId: string) => void; onOpenTriageForTask?: (taskId: string) => void; style?: CSSProperties }) {
+function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenTriageForTask, onFocusChild, style }: { task: Task; allTasks?: Task[]; onClose?: () => void; onOpenSession?: (sessionId: string) => void; onOpenTriageForTask?: (taskId: string) => void; onFocusChild?: (task: Task) => void; style?: CSSProperties }) {
   const navigate = useNavigate();
   const integrations = useIntegrations();
   const hasDescription = !!task.description;
@@ -891,6 +899,12 @@ function TaskDetailPane({ task, onClose, onOpenSession, onOpenTriageForTask, sty
   const hasConversationLog = !!task.conversation_log;
   const hasSubtasks = task.subtasks && task.subtasks.length > 0;
   const dueDateInfo = task.due_date ? formatDueDate(task.due_date) : null;
+
+  // Child tasks — tasks whose parent_task_id matches this task (handles prefix parent IDs)
+  const childTasks = useMemo(() => {
+    if (!allTasks) return [];
+    return allTasks.filter((t) => t.parent_task_id && task.id.startsWith(t.parent_task_id));
+  }, [allTasks, task.id]);
 
   // Build a comprehensive set of all session IDs from both session_ids array and slot fields.
   // This prevents the Sessions section from disappearing when session_ids is stale but slots are set.
@@ -1150,6 +1164,43 @@ function TaskDetailPane({ task, onClose, onOpenSession, onOpenTriageForTask, sty
         </div>
       )}
 
+      {childTasks.length > 0 && (
+        <div className="todo-detail-section">
+          <div className="todo-detail-section-label">Child Tasks ({childTasks.length})</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            {childTasks.map((child) => (
+              <div
+                key={child.id}
+                className="todo-detail-child-item"
+                role="button"
+                tabIndex={0}
+                onClick={() => onFocusChild ? onFocusChild(child) : navigate(`/tasks/${child.id}`)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onFocusChild ? onFocusChild(child) : navigate(`/tasks/${child.id}`); } }}
+              >
+                <span
+                  className="todo-detail-child-dot"
+                  style={{
+                    background: child.status === 'done' ? '#34c759'
+                      : child.phase === 'IN_PROGRESS' ? '#007aff'
+                      : child.phase === 'AWAIT_HUMAN_ACTION' ? '#ff9f0a'
+                      : 'var(--fg-muted)',
+                    opacity: child.status === 'done' ? 0.5 : 1,
+                  }}
+                />
+                <span style={{
+                  flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  textDecoration: child.status === 'done' ? 'line-through' : 'none',
+                  opacity: child.status === 'done' ? 0.5 : 1,
+                }}>
+                  {child.title}
+                </span>
+                <span className="text-xs text-muted">{PHASE_LABEL[child.phase] ?? child.phase}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {hasSummary && (
         <div className="todo-detail-section">
           <div className="todo-detail-section-label">Summary <span className="text-xs text-muted">(AI)</span></div>
@@ -1212,7 +1263,7 @@ function TaskDetailPane({ task, onClose, onOpenSession, onOpenTriageForTask, sty
 
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onCyclePriority, onFocusTask, onClearFocus, focusedTaskId, favorites, ordering, onReorder, onMoveTask, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, pinnedTaskIds, operationError, onClearOperationError, onOperationError }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onCyclePriority, onFocusTask, onClearFocus, focusedTaskId, favorites, ordering, onReorder, onMoveTask, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, pinnedTaskIds, openSessionIds, operationError, onClearOperationError, onOperationError }: TodoPanelProps) {
   // Hide .metadata* tasks (project/category configuration tasks, not user-visible)
   const tasks = useMemo(() => rawTasks.filter((t) => !t.title.startsWith('.metadata')), [rawTasks]);
   const navigate = useNavigate();
@@ -2362,6 +2413,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   onCyclePriority={onCyclePriority}
                   onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
                   onOpenSession={onOpenSession}
+                  openSessionIds={openSessionIds}
                   onPinTask={onPinTask}
                   onUnpinTask={onUnpinTask}
                   isPinned={pinnedTaskIds?.has(task.id)}
@@ -2392,6 +2444,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                 onCyclePriority={onCyclePriority}
                 onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
                 onOpenSession={onOpenSession}
+                openSessionIds={openSessionIds}
                 onPinTask={onPinTask}
                 onUnpinTask={onUnpinTask}
                 isPinned={pinnedTaskIds?.has(task.id)}
@@ -2457,6 +2510,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                 onCyclePriority={onCyclePriority}
                                 onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
                                 onOpenSession={onOpenSession}
+                                openSessionIds={openSessionIds}
                                 onPinTask={onPinTask}
                                 onUnpinTask={onUnpinTask}
                                 isPinned={pinnedTaskIds?.has(task.id)}
@@ -2511,6 +2565,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                               onCyclePriority={onCyclePriority}
                                               onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
                                               onOpenSession={onOpenSession}
+                                              openSessionIds={openSessionIds}
                                               onPinTask={onPinTask}
                                               onUnpinTask={onUnpinTask}
                                               isPinned={pinnedTaskIds?.has(task.id)}
@@ -2556,7 +2611,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       {/* Detail pane: task, project, or category */}
       {(focusedTask || detailTarget) && <div className="todo-detail-splitter" onMouseDown={splitterMouseDown} />}
       {focusedTask ? (
-        <TaskDetailPane task={focusedTask} onClose={onClearFocus} onOpenSession={onOpenSession} onOpenTriageForTask={onOpenTriageForTask} style={{ flex: `${detailRatio} 1 0%` }} />
+        <TaskDetailPane task={focusedTask} allTasks={tasks} onClose={onClearFocus} onOpenSession={onOpenSession} onOpenTriageForTask={onOpenTriageForTask} onFocusChild={onFocusTask} style={{ flex: `${detailRatio} 1 0%` }} />
       ) : detailTarget?.type === 'project' ? (
         <ProjectDetailPane
           category={detailTarget.category}

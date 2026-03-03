@@ -4480,14 +4480,14 @@ img[data-lightbox-src],
   pointer-events: none;
 }
 
-/* When chat is hidden, let session panel grow to fill space */
-.main-page-chat.collapsed ~ .main-page-session:not(.collapsed) {
+/* When chat is hidden, let sessions area grow to fill space */
+.main-page-chat.collapsed ~ .main-page-sessions-area:not(.collapsed) {
   flex: 1;
   min-width: 0;
 }
 
-/* When chat is hidden AND no session open, let todo fill space */
-.main-page-chat.collapsed ~ .main-page-session.collapsed ~ .main-page-todo {
+/* When chat is hidden AND no sessions open, let todo fill space */
+.main-page-chat.collapsed ~ .main-page-sessions-area.collapsed ~ .main-page-todo {
   flex: 1;
   min-width: 0;
 }
@@ -4546,28 +4546,37 @@ img[data-lightbox-src],
   transition: none;
 }
 
-/* ===== Session Panel (between chat and todo) ===== */
+/* ===== Sessions Area (between chat and todo) — multi-column layout ===== */
 
-.main-page-session {
+.main-page-sessions-area {
   flex-shrink: 0;
   border-left: 1px solid var(--border);
   background: var(--bg-secondary);
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   height: 100%;
   overflow: hidden;
   transition: width 0.25s ease, opacity 0.2s ease;
 }
 
-.main-page-session.collapsed {
+.main-page-sessions-area.collapsed {
   width: 0 !important;
   opacity: 0;
   border-left: none;
   overflow: hidden;
 }
 
-.main-page-session.resizing {
+.main-page-sessions-area.resizing {
   transition: none;
+}
+
+.main-page-session-column {
+  flex: 1 1 0%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
 }
 
 .session-resize-handle {
@@ -5443,6 +5452,28 @@ img[data-lightbox-src],
 
 .todo-detail-subtask-check {
   font-size: 11px;
+  flex-shrink: 0;
+}
+
+/* Child task items in detail pane */
+.todo-detail-child-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  font-size: 12px;
+  cursor: pointer;
+  background: var(--bg);
+  transition: background 0.15s;
+}
+.todo-detail-child-item:hover {
+  background: var(--bg-hover);
+}
+.todo-detail-child-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
   flex-shrink: 0;
 }
 
@@ -8193,7 +8224,7 @@ img[data-lightbox-src],
     display: none;
   }
 
-  .main-page-session {
+  .main-page-sessions-area {
     display: none;
   }
 
@@ -9147,6 +9178,15 @@ img[data-lightbox-src],
 }
 .task-session-pill-clickable:hover {
   filter: brightness(0.85);
+}
+
+/* Active indicator — session is currently open in a column
+   White inner ring + accent outer ring + soft glow */
+.task-session-pill-active {
+  box-shadow:
+    0 0 0 1.5px rgba(255, 255, 255, 0.85),
+    0 0 0 3px var(--accent),
+    0 0 10px color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 .task-session-dot {
