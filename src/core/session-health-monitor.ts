@@ -9,8 +9,8 @@
  *      → Check output file for result line → agent_complete or error
  *      → Clear task session slot only on error (agent_complete keeps slot for resume)
  *      → Emit session:status-changed
- *   4. Check idle timeout (Layer 3): kill idle sessions past the configured threshold.
- *      Uses persistent last_status_change timestamp — survives server restarts.
+ *   4. Check idle timeout: kill sessions whose outputFile mtime exceeds the threshold.
+ *      Uses file mtime — persistent on disk, survives server restarts, no state machine dependency.
  */
 
 import fs from 'node:fs'
@@ -57,7 +57,7 @@ export class SessionHealthMonitor {
     // Detect stale await_human_action sessions (stuck sub-agents)
     await this.checkStaleAwaitingSessions(sessions, updateSessionRecord)
 
-    // Layer 3: idle timeout — kill idle sessions past the configured threshold
+    // Idle timeout — kill sessions with stale outputFile mtime past the configured threshold
     await this.checkIdleTimeout(sessions, updateSessionRecord)
 
     for (const session of sessions) {
@@ -135,15 +135,21 @@ export class SessionHealthMonitor {
   }
 
   /**
-   * Layer 3: Idle timeout via persistent timestamps.
-   * Scans process_status === 'idle' sessions, checks (now - last_status_change) against
-   * the configured idle_timeout_minutes. Kills sessions that have been idle too long.
+   * Idle timeout based on JSONL output file mtime.
+   *
+   * Checks ALL non-terminal sessions with a live PID. If the outputFile hasn't
+   * been written to in more than idle_timeout_minutes (default 30), kill the process.
+   *
+   * Why file mtime instead of process_status + last_status_change:
+   *   - mtime is persistent — survives server restarts (it's on the filesystem)
+   *   - mtime doesn't depend on the process_status state machine being correct
+   *   - Works for both local and SSH sessions (local outputFile is always present)
+   *   - No edge cases: if the file isn't being written, the session is idle
    *
    * Skips await_human_action sessions — they're waiting for user input, not truly idle.
-   * SSH sessions are also skipped (SIGINT over SSH is unreliable).
    */
   private async checkIdleTimeout(
-    sessions: Array<{ claudeSessionId: string; taskId?: string; pid?: number; process_status?: string; work_status?: string; host?: string; last_status_change?: string; provider?: string }>,
+    sessions: Array<{ claudeSessionId: string; taskId?: string; pid?: number; process_status?: string; work_status?: string; host?: string; outputFile?: string; provider?: string }>,
     updateSessionRecord: (id: string, update: Record<string, unknown>) => Promise<unknown>,
   ): Promise<void> {
     // Read config to get idle_timeout_minutes
@@ -165,24 +171,33 @@ export class SessionHealthMonitor {
     const now = Date.now()
 
     for (const session of sessions) {
-      if (session.process_status !== 'idle') continue
       if (session.work_status === 'await_human_action') continue  // waiting for user, not idle
-      if (session.host) continue  // SSH sessions — skip (SIGINT unreliable)
       if (session.provider === 'sdk' || session.provider === 'embedded') continue
       if (session.pid == null) continue
+      if (!session.outputFile) continue
 
-      // Check timestamp
-      const statusChangeTime = session.last_status_change
-        ? new Date(session.last_status_change).getTime()
-        : 0
-      const idleDurationMs = now - statusChangeTime
+      // Check if PID is actually alive before spending time on mtime check
+      const processName = session.host ? 'ssh' : 'claude'
+      if (!isProcessAlive(session.pid, processName)) continue
+
+      // Check file mtime — the ground truth for "when was this session last active"
+      let mtimeMs: number
+      try {
+        const stat = fs.statSync(session.outputFile)
+        mtimeMs = stat.mtimeMs
+      } catch {
+        continue  // Can't stat file — skip (file may be on remote host only)
+      }
+
+      const idleDurationMs = now - mtimeMs
       if (idleDurationMs < idleTimeoutMs) continue
 
       const idleMinutes = Math.round(idleDurationMs / 60_000)
-      log.session.info('health monitor: idle timeout — killing session', {
+      log.session.info('health monitor: idle timeout (file mtime) — killing session', {
         sessionId: session.claudeSessionId,
         taskId: session.taskId,
         pid: session.pid,
+        host: session.host,
         idleMinutes,
         thresholdMinutes: Math.round(idleTimeoutMs / 60_000),
       })
@@ -195,7 +210,6 @@ export class SessionHealthMonitor {
 
       // Deferred SIGTERM fallback — fire-and-forget, doesn't block health check loop
       setTimeout(() => {
-        const processName = 'claude'
         if (isProcessAlive(pid, processName)) {
           try { process.kill(pid, 'SIGTERM') } catch { /* already dead */ }
         }
