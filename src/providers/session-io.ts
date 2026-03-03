@@ -589,7 +589,11 @@ export class RemoteIO implements SessionIO {
 
     let fullCmd: string
     if (cwd) {
-      fullCmd = `${setupCmds.join(' && ')} && cd ${shellQuote(cwd)} && ${claudeCmd}`
+      // CRITICAL: Use `|| exit 1` after cd to abort the ENTIRE command on failure.
+      // Without it, `cd /bad && setupSection; execSection` silently continues past
+      // the `;` — the cd failure only stops the `&&` chain before the `;`, but the
+      // exec section (which includes claude) runs anyway in the wrong directory.
+      fullCmd = `${setupCmds.join(' && ')} && { cd ${shellQuote(cwd)} || { echo "walnut: CWD not found: ${shellQuote(cwd)}" >&2; exit 1; }; } && ${claudeCmd}`
     } else {
       fullCmd = `${setupCmds.join(' && ')} && ${claudeCmd}`
     }
