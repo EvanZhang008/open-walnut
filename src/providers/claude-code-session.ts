@@ -33,7 +33,7 @@ import { isProcessAlive } from '../utils/process.js'
 import { SESSION_STREAMS_DIR } from '../constants.js'
 import { log } from '../logging/index.js'
 import { markProcessing, removeProcessed, revertToPending, loadQueue, getAllSessionsWithPending, enqueueMessage } from '../core/session-message-queue.js'
-import { createSessionIO, LocalIO, RemoteIO, transferImagesForRemoteSession, rewriteRemoteImagePaths, verifySshConnectivity } from './session-io.js'
+import { createSessionIO, LocalIO, RemoteIO, transferImagesForRemoteSession, rewriteRemoteImagePaths, verifySshSession } from './session-io.js'
 import type { SessionIO, SshTarget } from './session-io.js'
 import { recoverStateFromJsonl } from '../core/session-history.js'
 import type { SessionRecord, SessionMode, ProcessStatus, WorkStatus } from '../core/types.js'
@@ -2010,10 +2010,9 @@ export class SessionRunner {
       }
       sshTarget = { hostname, user: hostDef.user, port: hostDef.port, shell_setup: hostDef.shell_setup }
 
-      // Verify SSH connectivity + CWD existence before creating the session.
-      // This catches auth failures, unreachable hosts, and non-existent CWDs
-      // immediately instead of creating a session that will just sit in error state.
-      await verifySshConnectivity(sshTarget, data.host, cwd)
+      // Single SSH round trip: verify connectivity + CWD existence.
+      // Fail fast with a clear error before creating any session record.
+      await verifySshSession(sshTarget, data.host, cwd)
     }
 
     // Transfer local images to remote host before spawning session
