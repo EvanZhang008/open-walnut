@@ -36,3 +36,6 @@ todo-snapshot.md
 
 # Playwright report artifacts
 playwright-report/
+
+# Local-only Claude instructions (personal, never committed)
+CLAUDE.local.md
