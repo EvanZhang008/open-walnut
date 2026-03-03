@@ -44,6 +44,9 @@ export function TaskDetailPage() {
     location.key === 'default' ? navigate('/') : navigate(-1);
   }, [location.key, navigate]);
 
+  // Resolved full task ID — use for ALL event matching (URL param `id` may be a prefix)
+  const taskId = task?.id ?? id;
+
   const loadTask = useCallback(() => {
     if (!id) return;
     setLoading(true);
@@ -54,6 +57,22 @@ export function TaskDetailPage() {
   }, [id]);
 
   useEffect(() => { loadTask(); }, [loadTask]);
+
+  // Single session refetch — used by initial load + all WebSocket event handlers.
+  // Uses resolved taskId (full ID) so the backend query always matches.
+  const refetchSessions = useCallback(() => {
+    if (!taskId) return;
+    fetchSessionsForTask(taskId).then((sessions) => {
+      const map = new Map<string, SessionRecord>();
+      for (const s of sessions) map.set(s.claudeSessionId, s);
+      setSessionRecords(map);
+    }).catch(() => {});
+  }, [taskId]);
+
+  // Event match helper — checks if an event's taskId matches our task
+  const isMyTask = useCallback((eventTaskId?: string) => {
+    return !!eventTaskId && eventTaskId === taskId;
+  }, [taskId]);
 
   const searchDepsDebounce = useRef<ReturnType<typeof setTimeout>>(null);
   const handleDepSearch = useCallback((query: string) => {
@@ -99,81 +118,60 @@ export function TaskDetailPage() {
     }
   }, [id]);
 
-  // Load session records when task is available.
-  // Always fetch — API may return embedded sessions not in task.session_ids.
+  // Load session records when task is available or session slots change.
   useEffect(() => {
-    if (!id || !task) return;
-    let cancelled = false;
-    fetchSessionsForTask(id).then((sessions) => {
-      if (cancelled) return;
-      const map = new Map<string, SessionRecord>();
-      for (const s of sessions) map.set(s.claudeSessionId, s);
-      setSessionRecords(map);
-    }).catch(() => { /* session fetch non-critical */ });
-    return () => { cancelled = true; };
-  }, [id, task?.session_ids?.length, task?.exec_session_id, task?.plan_session_id]);
+    if (!task) return;
+    refetchSessions();
+  }, [task?.session_ids?.length, task?.exec_session_id, task?.plan_session_id, refetchSessions]);
 
-  // Live updates for this task
+  // ── Live updates via WebSocket ──
+  // All handlers use resolved `taskId` (full ID) for matching — never raw URL param.
+
+  // Task events — also reload when a child task changes (to refresh children list)
   useEvent('task:updated', (data) => {
     const { task: updated } = data as { task?: Task };
     if (!updated) { loadTask(); return; }
-    if (updated.id === id) setTask(updated);
+    if (updated.id === taskId) setTask(updated);
+    else if (updated.parent_task_id === taskId) loadTask();
   });
   useEvent('task:completed', (data) => {
     const { task: updated } = data as { task?: Task };
     if (!updated) { loadTask(); return; }
-    if (updated.id === id) setTask(updated);
+    if (updated.id === taskId) setTask(updated);
+    else if (updated.parent_task_id === taskId) loadTask();
   });
   useEvent('task:starred', (data) => {
     const { task: updated } = data as { task?: Task };
     if (!updated) { loadTask(); return; }
-    if (updated.id === id) setTask(updated);
+    if (updated.id === taskId) setTask(updated);
+  });
+  useEvent('task:created', (data) => {
+    const { task: created } = data as { task?: Task };
+    if (created?.parent_task_id === taskId) loadTask();
   });
   useEvent('task:deleted', (data) => {
     const { id: deletedId } = data as { id: string };
-    if (deletedId === id) navigate('/');
+    if (deletedId === taskId) navigate('/');
   });
 
-  // Refresh session records when sessions start/end for this task
+  // Session events — all funnel through refetchSessions (no duplicated fetch logic)
   useEvent('session:started', (data) => {
-    if ((data as { taskId?: string }).taskId === id) {
+    if (isMyTask((data as { taskId?: string }).taskId)) {
       loadTask();
-      if (id) fetchSessionsForTask(id).then((sessions) => {
-        const map = new Map<string, SessionRecord>();
-        for (const s of sessions) map.set(s.claudeSessionId, s);
-        setSessionRecords(map);
-      }).catch(() => {});
+      refetchSessions();
     }
   });
   useEvent('session:ended', (data) => {
-    if ((data as { taskId?: string }).taskId === id) {
+    if (isMyTask((data as { taskId?: string }).taskId)) {
       loadTask();
-      if (id) fetchSessionsForTask(id).then((sessions) => {
-        const map = new Map<string, SessionRecord>();
-        for (const s of sessions) map.set(s.claudeSessionId, s);
-        setSessionRecords(map);
-      }).catch(() => {});
+      refetchSessions();
     }
   });
   useEvent('session:status-changed', (data) => {
-    const { sessionId, taskId, mode, work_status, process_status, planCompleted, archived } = data as {
-      sessionId?: string; taskId?: string; mode?: string;
-      work_status?: string; process_status?: string; planCompleted?: boolean; archived?: boolean;
-    };
-    if (taskId !== id || !sessionId) return;
-    setSessionRecords((prev) => {
-      const record = prev.get(sessionId);
-      if (!record) return prev;
-      const updated = new Map(prev);
-      const patched = { ...record };
-      if (mode !== undefined) patched.mode = mode as SessionRecord['mode'];
-      if (work_status !== undefined) patched.work_status = work_status as SessionRecord['work_status'];
-      if (process_status !== undefined) patched.process_status = process_status as SessionRecord['process_status'];
-      if (planCompleted !== undefined) patched.planCompleted = planCompleted;
-      if (archived !== undefined) patched.archived = archived;
-      updated.set(sessionId, patched);
-      return updated;
-    });
+    const d = data as { sessionId?: string; taskId?: string };
+    if (isMyTask(d.taskId)) {
+      refetchSessions();
+    }
   });
 
   // Auto-select the most recent active session
@@ -435,6 +433,53 @@ export function TaskDetailPage() {
           </button>
         </div>
       </div>
+
+      {/* Child Tasks */}
+      {((task as Record<string, unknown>).children as Array<{ id: string; title: string; phase: string; status: string; priority: string }> | undefined)?.length ? (
+        <div className="card mb-4">
+          <h2 className="mb-2" style={{ fontSize: '16px', fontWeight: 600 }}>
+            Child Tasks
+            <span style={{ marginLeft: 8, fontSize: '0.75rem', fontWeight: 400, opacity: 0.5 }}>
+              {((task as Record<string, unknown>).children as Array<unknown>).length}
+            </span>
+          </h2>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            {((task as Record<string, unknown>).children as Array<{ id: string; title: string; phase: string; status: string; priority: string }>).map((child) => (
+              <div
+                key={child.id}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '8px',
+                  padding: '6px 10px', borderRadius: '6px',
+                  background: 'var(--bg-secondary)', cursor: 'pointer',
+                }}
+                onClick={() => navigate(`/tasks/${child.id}`)}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-secondary)'; }}
+              >
+                <span style={{
+                  width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+                  background: child.status === 'done' ? '#34c759'
+                    : child.phase === 'IN_PROGRESS' ? '#007aff'
+                    : child.phase === 'AWAIT_HUMAN_ACTION' ? '#ff9f0a'
+                    : 'var(--text-secondary)',
+                  opacity: child.status === 'done' ? 0.6 : 1,
+                }} />
+                <span style={{
+                  flex: 1, fontSize: '0.85rem',
+                  textDecoration: child.status === 'done' ? 'line-through' : 'none',
+                  opacity: child.status === 'done' ? 0.5 : 1,
+                }}>
+                  {child.title}
+                </span>
+                <span style={{ fontSize: '0.7rem', opacity: 0.4 }}>{child.phase}</span>
+                {child.priority !== 'none' && (
+                  <PriorityBadge priority={child.priority as 'immediate' | 'important' | 'backlog' | 'none'} />
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {/* Active Sessions — inline chat (always first) */}
       {activeSessionIds.length > 0 && (

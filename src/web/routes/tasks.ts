@@ -38,6 +38,7 @@ interface SessionInfo {
   mode: SessionMode
   provider?: import('../../core/types.js').SessionProvider
   planCompleted?: boolean
+  archived?: boolean
 }
 
 /** Map SessionInfo to the enriched status shape attached to tasks. */
@@ -81,6 +82,7 @@ async function enrichTasksWithSessionStatus(tasks: Task[]): Promise<Task[]> {
         mode: rec.mode,
         provider: rec.provider,
         planCompleted: rec.planCompleted,
+        archived: rec.archived,
       })
     }
   }
@@ -141,6 +143,11 @@ async function enrichTasksWithSessionStatus(tasks: Task[]): Promise<Task[]> {
         if (info) statuses.add(info.work_status)
       }
       if (statuses.size > 0) enriched.session_work_statuses = [...statuses]
+    }
+
+    // Filter archived sessions from session_ids so frontend counts/pills are correct
+    if (enriched.session_ids) {
+      enriched.session_ids = enriched.session_ids.filter(sid => !sessionMap.get(sid)?.archived)
     }
     return enriched
   })
@@ -238,6 +245,13 @@ tasksRouter.get('/:id', async (req: Request, res: Response, next: NextFunction) 
     const dependents = allTasks.filter((t) => t.depends_on?.includes(enriched.id))
     if (dependents.length > 0) {
       taskWithDeps.dependents = dependents.map((t) => ({ id: t.id, title: t.title, phase: t.phase }))
+    }
+    // Child tasks — handle both full-ID and prefix parent_task_id (legacy data)
+    const children = allTasks.filter((t) => t.parent_task_id && enriched.id.startsWith(t.parent_task_id))
+    if (children.length > 0) {
+      taskWithDeps.children = children.map((t) => ({
+        id: t.id, title: t.title, phase: t.phase, status: t.status, priority: t.priority,
+      }))
     }
     res.json({ task: taskWithDeps })
   } catch (err) {
