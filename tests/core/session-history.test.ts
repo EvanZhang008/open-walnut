@@ -153,6 +153,40 @@ describe('readSessionHistory', () => {
     expect(messages[0].text).toBe('Here is my answer.');
   });
 
+  it('refreshes planContent from disk when plan file was updated after JSONL capture', async () => {
+    // Simulate: Write tool wrote plan v1 to a file, ExitPlanMode captured it.
+    // Then the agent continued editing → disk now has v2.
+    const planPath = path.join(tmpBase, 'plans', 'test-plan.md');
+    await fsp.mkdir(path.dirname(planPath), { recursive: true });
+
+    await writeJsonl('s-plan-refresh', '/test', [
+      msg('u1', 'user', 'Make a plan'),
+      { type: 'assistant', timestamp: '2025-01-01T00:00:01Z', message: { id: 'a1', role: 'assistant', content: [
+        { type: 'tool_use', name: 'Write', input: {
+          file_path: planPath,  // path inside tmpBase which acts as ~/.claude/
+          content: '# Plan v1\nOriginal plan content',
+        } },
+      ] } },
+      { type: 'assistant', timestamp: '2025-01-01T00:00:02Z', message: { id: 'a2', role: 'assistant', content: [
+        { type: 'tool_use', name: 'ExitPlanMode', input: { plan: '(see plan below)' } },
+      ] } },
+    ]);
+
+    // Simulate agent editing the plan file after ExitPlanMode
+    await fsp.writeFile(planPath, '# Plan v2\nUpdated plan content');
+
+    const messages = await readSessionHistory('s-plan-refresh', '/test');
+
+    // Find the ExitPlanMode tool
+    const exitMsg = messages.find(m => m.tools?.some(t => t.name === 'ExitPlanMode'));
+    expect(exitMsg).toBeDefined();
+    const exitTool = exitMsg!.tools!.find(t => t.name === 'ExitPlanMode');
+    expect(exitTool).toBeDefined();
+
+    // planContent should be the DISK version (v2), not the JSONL version (v1)
+    expect(exitTool!.planContent).toBe('# Plan v2\nUpdated plan content');
+  });
+
   it('returns empty array for missing file', async () => {
     const messages = await readSessionHistory('nonexistent', '/test');
     expect(messages).toEqual([]);
