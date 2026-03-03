@@ -135,6 +135,16 @@ export class LocalIO implements SessionIO {
     const outputFd = fs.openSync(this._outputFile, append ? 'a' : 'w')
     const stderrFd = fs.openSync(this._outputFile + '.err', append ? 'a' : 'w')
 
+    // Touch the output file so health monitor sees a fresh mtime on resume.
+    // Opening in append mode doesn't update mtime — the health monitor would
+    // see the old mtime from the previous turn and kill the just-spawned process.
+    if (append) {
+      const now = new Date()
+      try { fs.utimesSync(this._outputFile, now, now) } catch (e) {
+        log.session.warn('failed to touch output file mtime on resume', { file: this._outputFile, error: String(e) })
+      }
+    }
+
     log.session.debug('LocalIO: files created', {
       pipePath: pipeTmpPath,
       outputFile: this._outputFile,
@@ -625,6 +635,14 @@ export class RemoteIO implements SessionIO {
     // but the local file accumulates all turns' output for history viewing.
     const localOutputFd = fs.openSync(this._localOutputFile, append ? 'a' : 'w')
     const localStderrFd = fs.openSync(this._localOutputFile + '.err', append ? 'a' : 'w')
+
+    // Touch local output file so health monitor sees fresh mtime on resume
+    if (append) {
+      const now = new Date()
+      try { fs.utimesSync(this._localOutputFile, now, now) } catch (e) {
+        log.session.warn('failed to touch output file mtime on resume', { file: this._localOutputFile, error: String(e) })
+      }
+    }
 
     this._hasPipe = true
 
