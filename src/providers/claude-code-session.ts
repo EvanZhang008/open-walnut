@@ -33,7 +33,7 @@ import { isProcessAlive } from '../utils/process.js'
 import { SESSION_STREAMS_DIR } from '../constants.js'
 import { log } from '../logging/index.js'
 import { markProcessing, removeProcessed, revertToPending, loadQueue, getAllSessionsWithPending, enqueueMessage } from '../core/session-message-queue.js'
-import { createSessionIO, LocalIO, RemoteIO, transferImagesForRemoteSession, rewriteRemoteImagePaths } from './session-io.js'
+import { createSessionIO, LocalIO, RemoteIO, transferImagesForRemoteSession, rewriteRemoteImagePaths, verifySshConnectivity } from './session-io.js'
 import type { SessionIO, SshTarget } from './session-io.js'
 import { recoverStateFromJsonl } from '../core/session-history.js'
 import type { SessionRecord, SessionMode, ProcessStatus, WorkStatus } from '../core/types.js'
@@ -146,6 +146,50 @@ function mapPermissionMode(cliMode: string): SessionMode | null {
     case 'default': return 'default'
     default: return null
   }
+}
+
+// ── Helpers for PID-death handler ──
+
+/**
+ * Check if a JSONL output file contains a 'result' event line.
+ * Used as ground truth when the JSONL tailer missed the result (race condition).
+ */
+function outputFileHasResult(filePath: string): boolean {
+  try {
+    const content = fs.readFileSync(filePath, 'utf-8')
+    for (const line of content.split('\n')) {
+      if (!line.trim()) continue
+      try {
+        const event = JSON.parse(line)
+        if (event.type === 'result') return true
+      } catch { continue }
+    }
+  } catch {
+    // File doesn't exist or can't be read
+  }
+  return false
+}
+
+/**
+ * Determine if SSH stderr content is benign (not a real error).
+ * SSH sessions always produce stderr from the EXIT trap (`cat JSONL.err >&2`)
+ * which copies Claude CLI's diagnostic output. We don't want to treat normal
+ * SSH disconnect messages or Claude CLI startup noise as session errors.
+ */
+function isBenignSshStderr(stderr: string): boolean {
+  const lines = stderr.split('\n').map(l => l.trim()).filter(Boolean)
+  // If every line matches a benign pattern, the stderr is benign
+  return lines.length > 0 && lines.every(line => {
+    // SSH connection close messages
+    if (/^Connection to .+ closed\.?$/i.test(line)) return true
+    // Killed by signal (normal process termination)
+    if (/^Killed\b/i.test(line) || /killed by signal/i.test(line)) return true
+    // SSH mux messages
+    if (/^(Shared connection to .+ closed|ControlSocket .+)$/i.test(line)) return true
+    // Empty or whitespace only
+    if (!line) return true
+    return false
+  })
 }
 
 // Re-export types and helpers from session-io for backwards compatibility
@@ -845,43 +889,84 @@ export class ClaudeCodeSession {
         // this turn (race: tailer saw process as alive → FIFO path → resultEmitted=false,
         // then process exited → PID-death handler fires with resultEmitted=false).
         if (!this.resultEmitted && !this._turnResultEmitted) {
-          // Try to read stderr file for error details
-          let stderr = ''
-          if (this._outputFile) {
-            try {
-              stderr = fs.readFileSync(this._outputFile + '.err', 'utf-8').slice(0, 10240).trim()
-            } catch {
-              // No stderr file
-            }
-          }
+          // Before using stderr to determine outcome, check if the JSONL
+          // output file contains a result block.  For SSH sessions, stderr
+          // is ALWAYS populated (the remote EXIT trap copies Claude's
+          // diagnostic output to stderr), so stderr alone is unreliable.
+          // Reading the output file directly is the ground truth.
+          const hasResultInFile = this._outputFile
+            ? outputFileHasResult(this._outputFile)
+            : false
 
           this.resultEmitted = true
 
-          if (stderr) {
-            // Has stderr → something went wrong → SESSION_ERROR
-            this._workStatus = 'error'
-            this._activity = undefined
-            this.emitStatusChanged('error', 'in_progress')
-            bus.emit(EventNames.SESSION_ERROR, {
-              sessionId: this.claudeSessionId,
-              taskId: this.taskId,
-              error: stderr,
-            }, ['main-ai', 'session-runner'], { source: 'session-runner' })
-          } else {
-            // No stderr → clean exit without result event (unusual but benign)
+          if (hasResultInFile) {
+            // Output file has a result block — the session completed normally.
+            // The tailer missed the result (race: PID died before tailer polled).
+            // Treat as successful completion — the result text is already in fullText.
             this._workStatus = 'agent_complete'
             this._activity = undefined
             this.emitStatusChanged('agent_complete', 'in_progress')
             if (this.claudeSessionId) {
               this.persistSessionRecord(this.claudeSessionId, this._cwd ?? undefined).catch(() => {})
             }
-            log.session.warn('session PID died but no result event', { taskId: this.taskId })
+            log.session.info('session PID died — result found in output file (tailer race)', {
+              taskId: this.taskId,
+              sessionId: this.claudeSessionId,
+              host: this._host,
+            })
             bus.emit(EventNames.SESSION_RESULT, {
               sessionId: this.claudeSessionId,
               taskId: this.taskId,
               result: this.fullText,
               isError: false,
             }, ['main-ai', 'session-runner'], { source: 'session-runner' })
+          } else {
+            // No result in output file — check stderr for diagnostics
+            let stderr = ''
+            if (this._outputFile) {
+              try {
+                stderr = fs.readFileSync(this._outputFile + '.err', 'utf-8').slice(0, 10240).trim()
+              } catch {
+                // No stderr file
+              }
+            }
+
+            // For SSH sessions, filter out benign stderr that isn't a real error.
+            // The remote EXIT trap copies Claude's stderr to SSH stderr, so messages
+            // like "Connection to X closed" or empty diagnostics are expected.
+            const isRealError = stderr && !isBenignSshStderr(stderr)
+
+            if (isRealError) {
+              // Has meaningful stderr → something went wrong → SESSION_ERROR
+              this._workStatus = 'error'
+              this._activity = undefined
+              this.emitStatusChanged('error', 'in_progress')
+              bus.emit(EventNames.SESSION_ERROR, {
+                sessionId: this.claudeSessionId,
+                taskId: this.taskId,
+                error: stderr,
+              }, ['main-ai', 'session-runner'], { source: 'session-runner' })
+            } else {
+              // No stderr or only benign SSH messages → clean exit without result event
+              this._workStatus = 'agent_complete'
+              this._activity = undefined
+              this.emitStatusChanged('agent_complete', 'in_progress')
+              if (this.claudeSessionId) {
+                this.persistSessionRecord(this.claudeSessionId, this._cwd ?? undefined).catch(() => {})
+              }
+              log.session.warn('session PID died but no result event', {
+                taskId: this.taskId,
+                host: this._host,
+                stderr: stderr ? stderr.slice(0, 200) : undefined,
+              })
+              bus.emit(EventNames.SESSION_RESULT, {
+                sessionId: this.claudeSessionId,
+                taskId: this.taskId,
+                result: this.fullText,
+                isError: false,
+              }, ['main-ai', 'session-runner'], { source: 'session-runner' })
+            }
           }
         }
       }
@@ -1924,6 +2009,11 @@ export class SessionRunner {
         throw new Error(`Host "${data.host}" is missing 'hostname' field in config.yaml`)
       }
       sshTarget = { hostname, user: hostDef.user, port: hostDef.port, shell_setup: hostDef.shell_setup }
+
+      // Verify SSH connectivity + CWD existence before creating the session.
+      // This catches auth failures, unreachable hosts, and non-existent CWDs
+      // immediately instead of creating a session that will just sit in error state.
+      await verifySshConnectivity(sshTarget, data.host, cwd)
     }
 
     // Transfer local images to remote host before spawning session

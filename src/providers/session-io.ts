@@ -991,6 +991,57 @@ export function findLocalImagePaths(text: string): string[] {
 }
 
 /**
+ * Verify SSH connectivity and (optionally) that the remote CWD exists.
+ * Runs `ssh host test -d /path` with a short timeout. Throws a descriptive error
+ * if the connection fails or the directory doesn't exist.
+ */
+export async function verifySshConnectivity(sshTarget: SshTarget, hostKey: string, remoteCwd?: string): Promise<void> {
+  const hostString = sshTarget.user
+    ? `${sshTarget.user}@${sshTarget.hostname}`
+    : sshTarget.hostname
+
+  const baseSshArgs = [
+    '-o', 'BatchMode=yes',
+    '-o', 'StrictHostKeyChecking=no',
+    '-o', 'ConnectTimeout=10',
+  ]
+  if (sshTarget.port) baseSshArgs.push('-p', String(sshTarget.port))
+
+  // Step 1: verify connectivity
+  try {
+    execFileSync('ssh', [...baseSshArgs, hostString, 'true'], { timeout: 15_000, stdio: 'pipe' })
+    log.session.info('SSH connectivity verified', { host: hostKey, hostname: sshTarget.hostname })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    let stderr = ''
+    if (err && typeof err === 'object' && 'stderr' in err) {
+      const rawStderr = (err as { stderr: Buffer | string }).stderr
+      stderr = (typeof rawStderr === 'string' ? rawStderr : rawStderr?.toString('utf-8') ?? '').trim()
+    }
+    const detail = stderr || msg
+    log.session.error('SSH connectivity check failed', { host: hostKey, hostname: sshTarget.hostname, error: detail })
+    throw new Error(
+      `Cannot connect to host "${hostKey}" (${sshTarget.hostname}): ${detail}. ` +
+      `Check that the host is reachable, SSH key auth is configured, and the host is defined correctly in config.yaml.`
+    )
+  }
+
+  // Step 2: verify remote CWD exists (if provided)
+  if (remoteCwd) {
+    try {
+      execFileSync('ssh', [...baseSshArgs, hostString, `test -d ${shellQuote(remoteCwd)}`], { timeout: 10_000, stdio: 'pipe' })
+      log.session.info('Remote CWD verified', { host: hostKey, cwd: remoteCwd })
+    } catch {
+      log.session.error('Remote CWD does not exist', { host: hostKey, hostname: sshTarget.hostname, cwd: remoteCwd })
+      throw new Error(
+        `Working directory does not exist on host "${hostKey}": ${remoteCwd}. ` +
+        `Create the directory first, or use a different working_directory.`
+      )
+    }
+  }
+}
+
+/**
  * Transfer local image files to a remote host via SCP, then rewrite paths in the text.
  * Returns the text with local paths replaced by their remote counterparts.
  *
