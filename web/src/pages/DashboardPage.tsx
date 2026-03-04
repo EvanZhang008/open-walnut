@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback } from 'react';
-import { useTasks } from '@/hooks/useTasks';
+import { useTasksContext } from '@/contexts/TasksContext';
 import { useOrdering } from '@/hooks/useOrdering';
 import { TaskStats } from '@/components/tasks/TaskStats';
 import { TaskList } from '@/components/tasks/TaskList';
@@ -9,7 +9,7 @@ import { TaskForm, type TaskFormData } from '@/components/tasks/TaskForm';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 
 export function DashboardPage() {
-  const { tasks, loading, error, toggleComplete, star, create } = useTasks();
+  const { tasks, loading, error, toggleComplete, star, create } = useTasksContext();
   const { categoryOrder } = useOrdering();
   const [statusFilter, setStatusFilter] = useState('todo');
   const [priorityFilter, setPriorityFilter] = useState('');

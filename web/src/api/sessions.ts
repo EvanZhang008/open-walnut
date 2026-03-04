@@ -21,8 +21,9 @@ export async function fetchSessionSummaries(limit?: number): Promise<SessionSumm
 // Re-export from canonical types
 export type { SessionHistoryMessage } from '@/types/session';
 
-export async function fetchSessionHistory(sessionId: string): Promise<SessionHistoryMessage[]> {
-  const res = await apiGet<{ messages: SessionHistoryMessage[] }>(`/api/sessions/${sessionId}/history`);
+export async function fetchSessionHistory(sessionId: string, opts?: { source?: 'streams' }): Promise<SessionHistoryMessage[]> {
+  const params = opts?.source ? { source: opts.source } : undefined;
+  const res = await apiGet<{ messages: SessionHistoryMessage[] }>(`/api/sessions/${sessionId}/history`, params);
   return res.messages;
 }
 

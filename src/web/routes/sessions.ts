@@ -325,14 +325,25 @@ sessionsRouter.patch('/:sessionId', async (req: Request, res: Response, next: Ne
 })
 
 // GET /api/sessions/:sessionId/history
+// ?source=streams — fast path: read local streams file only (skip SSH), ~1ms
 sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const sessionId = req.params.sessionId as string
+    const source = req.query.source as string | undefined
 
     // Look up session record to get cwd
     const record = await getSessionByClaudeId(sessionId)
     const cwd = record?.cwd
 
+    if (source === 'streams') {
+      // Fast path: host=undefined forces local-only reads (canonical local + streams fallback).
+      // Skips SSH entirely — ideal for instant first paint of FocusDock cards.
+      const messages = await readSessionHistory(sessionId, cwd, undefined, record?.outputFile)
+      res.json({ messages })
+      return
+    }
+
+    // Full path: reads from source of truth (SSH for remote sessions)
     let messages = await readSessionHistory(sessionId, cwd, record?.host, record?.outputFile)
     if (messages.length === 0 && !record) {
       res.status(404).json({ error: 'Session not found' })

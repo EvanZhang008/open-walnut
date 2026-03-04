@@ -3,7 +3,7 @@ import type { NavigateFunction } from 'react-router-dom';
 import type { Task } from '@walnut/core';
 import { useChat, type TaskContext, type ImageAttachment } from '@/hooks/useChat';
 import { useWebSocket, useEvent } from '@/hooks/useWebSocket';
-import { useTasks } from '@/hooks/useTasks';
+import { useTasksContext } from '@/contexts/TasksContext';
 import { useFavorites } from '@/hooks/useFavorites';
 import { useFocusBar } from '@/hooks/useFocusBar';
 import { useOrdering } from '@/hooks/useOrdering';
@@ -82,7 +82,7 @@ interface MainPageProps {
 export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const chat = useChat();
   const { connectionState } = useWebSocket();
-  const { tasks, loading, toggleComplete, setPhase, star, create, update, reorder, moveTask, operationError, clearOperationError, showOperationError } = useTasks();
+  const { tasks, loading, toggleComplete, setPhase, star, create, update, reorder, moveTask, operationError, clearOperationError, showOperationError } = useTasksContext();
   const favorites = useFavorites();
   const focusBar = useFocusBar(tasks);
   const pinnedTaskIdSet = useMemo(() => new Set(focusBar.pinnedIds), [focusBar.pinnedIds]);

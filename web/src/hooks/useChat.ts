@@ -380,7 +380,7 @@ export function useChat(): UseChatReturn {
     fetchChatStats().then(setStats).catch(() => {});
   }, []);
 
-  // Load chat history from server on mount
+  // Load chat history from server on mount — stats deferred until history loads
   useEffect(() => {
     let cancelled = false;
     fetchChatHistory(1, PAGE_SIZE)
@@ -394,9 +394,11 @@ export function useChat(): UseChatReturn {
         // Failed to load history — start with empty
       })
       .finally(() => {
-        if (!cancelled) setIsLoading(false);
+        if (!cancelled) {
+          setIsLoading(false);
+          refreshStats(); // Deferred: avoid blocking initial render (~114ms)
+        }
       });
-    refreshStats();
     return () => { cancelled = true; };
   }, [refreshStats]);
 

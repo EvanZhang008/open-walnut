@@ -5,7 +5,7 @@ import { CronToast } from '../common/CronToast';
 import { DataSafetyBanner } from '../common/DataSafetyBanner';
 import { FocusDock } from '../dock/FocusDock';
 import { useFocusBar } from '@/hooks/useFocusBar';
-import { useTasks } from '@/hooks/useTasks';
+import { TasksProvider, useTasksContext } from '@/contexts/TasksContext';
 
 interface AppShellProps {
   children: ReactNode;
@@ -21,11 +21,19 @@ function readCollapsed(): boolean {
 }
 
 export function AppShell({ children }: AppShellProps) {
+  return (
+    <TasksProvider>
+      <AppShellInner>{children}</AppShellInner>
+    </TasksProvider>
+  );
+}
+
+function AppShellInner({ children }: AppShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(readCollapsed);
   const location = useLocation();
   const isMainPage = location.pathname === '/';
-  const { tasks } = useTasks();
+  const { tasks } = useTasksContext();
   const focusBar = useFocusBar(tasks);
 
   const toggleSidebar = useCallback(() => {

@@ -4,6 +4,7 @@ import type { Task } from '@walnut/core';
 import type { SessionRecord } from '@walnut/core';
 import { renderNoteMarkdown, renderMarkdownWithRefs } from '@/utils/markdown';
 import { fetchSessionsForTask } from '@/api/sessions';
+import { fetchTask } from '@/api/tasks';
 import { fetchTriageHistory } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
 import { timeAgo } from '@/utils/time';
@@ -896,8 +897,23 @@ function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenTriageFo
   const integrations = useIntegrations();
   const hasDescription = !!task.description;
   const hasSummary = !!task.summary;
-  const hasNote = !!task.note;
-  const hasConversationLog = !!task.conversation_log;
+  // Support slim mode: has_note/has_conversation_log are set when content was stripped
+  const hasNote = !!task.note || !!(task as Record<string, unknown>).has_note;
+  const hasConversationLog = !!task.conversation_log || !!(task as Record<string, unknown>).has_conversation_log;
+
+  // Lazy-load full task when note/conversation_log content is needed but stripped (slim mode)
+  const [fullTask, setFullTask] = useState<Task | null>(null);
+  useEffect(() => { setFullTask(null); }, [task.id]); // Reset on task change
+  const needsFullLoad = (hasNote && !task.note) || (hasConversationLog && !task.conversation_log);
+  useEffect(() => {
+    if (!needsFullLoad || fullTask) return;
+    let cancelled = false;
+    fetchTask(task.id).then((t) => { if (!cancelled) setFullTask(t); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [needsFullLoad, fullTask, task.id]);
+  // Use full task data when available for note/conversation_log rendering
+  const noteContent = task.note ?? fullTask?.note;
+  const conversationLogContent = task.conversation_log ?? fullTask?.conversation_log;
   const hasSubtasks = task.subtasks && task.subtasks.length > 0;
   const dueDateInfo = task.due_date ? formatDueDate(task.due_date) : null;
 
@@ -1247,7 +1263,10 @@ function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenTriageFo
       {hasConversationLog && (
         <div className="todo-detail-section">
           <div className="todo-detail-section-label">Conversation Log</div>
-          <div className="todo-detail-note markdown-body conversation-log" dangerouslySetInnerHTML={{ __html: renderNoteMarkdown(reverseConversationLogEntries(task.conversation_log!)) }} />
+          {conversationLogContent
+            ? <div className="todo-detail-note markdown-body conversation-log" dangerouslySetInnerHTML={{ __html: renderNoteMarkdown(reverseConversationLogEntries(conversationLogContent)) }} />
+            : <div className="text-sm text-muted">Loading...</div>
+          }
         </div>
       )}
 
@@ -1286,7 +1305,10 @@ function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenTriageFo
       {hasNote && (
         <div className="todo-detail-section">
           <div className="todo-detail-section-label">Note</div>
-          <div className="todo-detail-note markdown-body" dangerouslySetInnerHTML={{ __html: renderNoteMarkdown(task.note) }} />
+          {noteContent
+            ? <div className="todo-detail-note markdown-body" dangerouslySetInnerHTML={{ __html: renderNoteMarkdown(noteContent) }} />
+            : <div className="text-sm text-muted">Loading...</div>
+          }
         </div>
       )}
 
@@ -1538,40 +1560,49 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [tasks, showCompleted, priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, activeCategory, favorites, isChildOfStarredParent]);
 
   // --- Search filtering: intersect filtered tasks with search results ---
+  // Search always includes completed tasks regardless of "Hide ✓" toggle —
+  // users searching by name expect to find tasks regardless of completion status.
+  // Explicit phase/priority/source filters still apply.
   const searchFiltered = useMemo(() => {
     if (!isSearchMode) return filtered;
 
-    // While API results haven't arrived yet, show client-side matches as a placeholder
+    // Helper: apply explicit filters (phase, priority, source) but NOT showCompleted.
+    const applySearchFilters = (t: Task): boolean => {
+      if (priorityFilter && effectivePriority(t.priority) !== priorityFilter) return false;
+      if (phaseFilter && t.phase !== phaseFilter) return false;
+      if (sourceFilter !== 'all') {
+        const taskSource = t.source || 'ms-todo';
+        if (taskSource !== sourceFilter) return false;
+      }
+      return true;
+    };
+
+    // While API results haven't arrived yet, show client-side matches as a placeholder.
+    // Search within ALL tasks (not `filtered`) so completed tasks are included.
     if (!searchResults) {
       const lowerQuery = searchQuery.toLowerCase();
-      return filtered.filter((t) =>
-        t.title.toLowerCase().includes(lowerQuery) ||
-        (t.description && t.description.toLowerCase().includes(lowerQuery)) ||
-        (t.summary && t.summary.toLowerCase().includes(lowerQuery)) ||
-        t.category.toLowerCase().includes(lowerQuery) ||
-        t.project.toLowerCase().includes(lowerQuery) ||
-        (t.tags && t.tags.some(tag => tag.toLowerCase().includes(lowerQuery)))
+      return tasks.filter((t) =>
+        applySearchFilters(t) && (
+          t.title.toLowerCase().includes(lowerQuery) ||
+          (t.description && t.description.toLowerCase().includes(lowerQuery)) ||
+          (t.summary && t.summary.toLowerCase().includes(lowerQuery)) ||
+          t.category.toLowerCase().includes(lowerQuery) ||
+          t.project.toLowerCase().includes(lowerQuery) ||
+          (t.tags && t.tags.some(tag => tag.toLowerCase().includes(lowerQuery)))
+        )
       );
     }
 
     // Server-side results: search across ALL tasks (cross-category).
-    // Respect all user filters including showCompleted.
     const taskMap = new Map(tasks.map((t) => [t.id, t]));
 
     return searchResults
       .map((r) => taskMap.get(r.taskId))
       .filter((t): t is NonNullable<typeof t> => {
         if (!t) return false;
-        if (!showCompleted && t.status === 'done' && phaseFilter !== 'COMPLETE') return false;
-        if (priorityFilter && effectivePriority(t.priority) !== priorityFilter) return false;
-        if (phaseFilter && t.phase !== phaseFilter) return false;
-        if (sourceFilter !== 'all') {
-          const taskSource = t.source || 'ms-todo';
-          if (taskSource !== sourceFilter) return false;
-        }
-        return true;
+        return applySearchFilters(t);
       });
-  }, [tasks, filtered, isSearchMode, searchQuery, searchResults, showCompleted, priorityFilter, phaseFilter, sourceFilter]);
+  }, [tasks, filtered, isSearchMode, searchQuery, searchResults, priorityFilter, phaseFilter, sourceFilter]);
 
   // Count of search results (for display)
   const searchResultCount = isSearchMode ? searchFiltered.length : null;

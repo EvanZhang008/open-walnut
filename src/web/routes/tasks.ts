@@ -216,9 +216,10 @@ const VALID_STATUSES = ['todo', 'in_progress', 'done']
 const VALID_PHASES_ARRAY = [...VALID_PHASES]
 
 // GET /api/tasks — list with optional filters
+// ?slim=1 — omit note and conversation_log fields (~400KB savings)
 tasksRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { status, category, project, source, tags } = req.query as Record<string, string | undefined>
+    const { status, category, project, source, tags, slim } = req.query as Record<string, string | undefined>
     const tasks = (await listTasks({ status, category })).filter((t) => !t.title.startsWith('.metadata'))
     // Client-side project filtering (listTasks only supports status+category)
     let filtered = project
@@ -237,11 +238,23 @@ tasksRouter.get('/', async (req: Request, res: Response, next: NextFunction) => 
     }
     const enriched = await enrichTasksWithSessionStatus(filtered)
     // Add is_blocked flag based on dependency resolution
-    const allTasksForDeps = filtered // Use the already-loaded filtered list
     const tasksWithBlocked = enriched.map((t) => ({
       ...t,
       ...(t.depends_on?.length ? { is_blocked: isTaskBlocked(t, enriched) } : {}),
     }))
+    // Slim mode: strip heavy text fields to reduce payload (~400KB savings)
+    if (slim === '1') {
+      const slimmed = tasksWithBlocked.map((t) => {
+        const { note, conversation_log, ...rest } = t
+        return {
+          ...rest,
+          has_note: !!note,
+          has_conversation_log: !!conversation_log,
+        }
+      })
+      res.json({ tasks: slimmed })
+      return
+    }
     res.json({ tasks: tasksWithBlocked })
   } catch (err) {
     next(err)
