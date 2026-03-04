@@ -582,8 +582,9 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     }
   }, [messages, clear, onBatchCompleted]);
 
-  // Scroll to bottom on initial load
-  const hasScrolledRef = useRef(false);
+  // Track which sessionId we last scrolled to bottom for — prevents stale-data scroll
+  // when sessionId changes without key (e.g., TaskDetailPage), and gates delayed retries.
+  const scrolledForSessionRef = useRef<string | null>(null);
 
   // ── Smart auto-scroll refs (declared early so session-switch reset can clear them) ──
   const userScrollLockUntil = useRef(0); // timestamp when lock expires
@@ -597,7 +598,7 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     pendingBatchTotal.current = 0;
     prevMsgLen.current = 0;
     setEditingId(null);
-    hasScrolledRef.current = false;
+    scrolledForSessionRef.current = null;
     blockIndexMap.current.clear();
     userScrollLockUntil.current = 0;
     lastScrollTop.current = 0;
@@ -615,20 +616,31 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     lastScrollTop.current = el.scrollTop;
   };
 
-  // Scroll to bottom on initial load — fires multiple times to catch async layout shifts (images, code blocks)
+  // Scroll to bottom on initial load — useLayoutEffect fires BEFORE paint so the user
+  // never sees a flash of the chat scrolled to top.
+  // Guard: only scroll when the messages belong to the CURRENT sessionId (prevents stale-data scroll
+  // when the component updates in-place without key={sessionId}).
+  useLayoutEffect(() => {
+    if (!loading && messages.length > 0 && containerRef.current
+      && scrolledForSessionRef.current !== sessionId) {
+      scrolledForSessionRef.current = sessionId;
+      scrollToBottom(containerRef.current);
+    }
+  }, [loading, messages, sessionId]);
+
+  // Delayed retries after initial scroll — catch async layout shifts from images, code blocks.
+  // Only depends on [loading, sessionId] (not messages) to avoid re-arming timers on every
+  // streaming update. The initial scroll above handles the messages gate.
   useEffect(() => {
-    if (!loading && messages.length > 0 && !hasScrolledRef.current && containerRef.current) {
-      hasScrolledRef.current = true;
+    if (scrolledForSessionRef.current === sessionId) {
       const scrollToEnd = () => {
         if (containerRef.current) scrollToBottom(containerRef.current);
       };
-      // Immediate + delayed catches to handle async content rendering
-      requestAnimationFrame(scrollToEnd);
       const t1 = setTimeout(scrollToEnd, 150);
       const t2 = setTimeout(scrollToEnd, 400);
       return () => { clearTimeout(t1); clearTimeout(t2); };
     }
-  }, [loading, messages]);
+  }, [loading, sessionId]);
 
   // ── Smart auto-scroll: scroll to bottom on new content, but pause when user scrolls up ──
   // When the user manually scrolls up, we lock auto-scroll for USER_SCROLL_LOCK_MS.
