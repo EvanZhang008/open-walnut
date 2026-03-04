@@ -1064,33 +1064,44 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
             ? (isErrorNotification ? 'Error' : 'Session')
             : role === 'user' ? 'You' : 'Walnut';
 
-  // Auto-collapse notification messages (session results, triage, subagent)
-  const shouldAutoCollapse = isNotification && !isErrorNotification;
+  // Auto-collapse notification messages (session results, subagent) AND all triage messages.
+  // Triage always collapses regardless of notification flag — the full analysis is noisy.
+  const shouldAutoCollapse = (isNotification && !isErrorNotification) || isTriage;
   const [isCollapsed, setIsCollapsed] = useState(shouldAutoCollapse);
 
-  // CSS class: cron, heartbeat, and notification messages get their own style
+  // CSS class: cron, heartbeat, notification, and triage messages get their own style
   const messageClass = isHeartbeat
     ? 'chat-message chat-message-heartbeat'
     : isCron
       ? 'chat-message chat-message-cron'
-      : isNotification
+      : (isNotification || isTriage)
         ? `chat-message chat-message-notification${isErrorNotification ? ' chat-message-notification-error' : ''}`
         : `chat-message chat-message-${role}`;
 
-  // Extract collapsed summary: first line of content, stripped of bold markers
+  // Extract collapsed summary for auto-collapsed messages
   const collapsedSummary = useMemo(() => {
     if (!shouldAutoCollapse) return '';
+    if (isTriage) {
+      // Triage: extract task ref + phase/outcome for a meaningful summary
+      const taskRefMatch = content.match(/\*\*Triage\*\*\s*\(([^)]+)\)/);
+      const taskRef = taskRefMatch ? taskRefMatch[1].trim() : '';
+      // Look for "Phase: ..." line in the summary section
+      const phaseMatch = content.match(/Phase:\s*(.+)/);
+      const phase = phaseMatch ? phaseMatch[1].trim() : '';
+      if (taskRef && phase) return `${taskRef} — ${phase}`.slice(0, 200);
+      if (taskRef) return taskRef.slice(0, 150);
+    }
+    // Default: first line, stripped of bold markers
     const firstLine = content.split('\n').find(l => l.trim()) ?? '';
-    // Strip markdown bold markers and truncate
     return firstLine.replace(/\*\*/g, '').slice(0, 120);
-  }, [content, shouldAutoCollapse]);
+  }, [content, shouldAutoCollapse, isTriage]);
 
-  // Notification header with UI Only badge + collapse toggle + collapsed summary
-  const notificationHeader = isNotification ? (
+  // Notification header with optional UI Only badge + collapse toggle + collapsed summary
+  const notificationHeader = (isNotification || isTriage) ? (
     <div className="chat-message-header chat-notification-header" onClick={shouldAutoCollapse ? () => setIsCollapsed(c => !c) : undefined} style={shouldAutoCollapse ? { cursor: 'pointer' } : undefined}>
       <div className="chat-message-role">
         {roleLabel}
-        <span className="chat-ui-only-badge">UI Only</span>
+        {notification && <span className="chat-ui-only-badge">UI Only</span>}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden', flex: 1 }}>
         {isCollapsed && collapsedSummary && (
