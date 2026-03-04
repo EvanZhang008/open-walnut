@@ -33,7 +33,7 @@ import { isProcessAlive } from '../utils/process.js'
 import { SESSION_STREAMS_DIR } from '../constants.js'
 import { log } from '../logging/index.js'
 import { markProcessing, removeProcessed, revertToPending, loadQueue, getAllSessionsWithPending, enqueueMessage } from '../core/session-message-queue.js'
-import { createSessionIO, LocalIO, RemoteIO, transferImagesForRemoteSession, rewriteRemoteImagePaths, verifySshSession } from './session-io.js'
+import { createSessionIO, LocalIO, RemoteIO, transferImagesForRemoteSession, rewriteRemoteImagePaths } from './session-io.js'
 import type { SessionIO, SshTarget } from './session-io.js'
 import { recoverStateFromJsonl } from '../core/session-history.js'
 import type { SessionRecord, SessionMode, ProcessStatus, WorkStatus } from '../core/types.js'
@@ -2009,10 +2009,6 @@ export class SessionRunner {
         throw new Error(`Host "${data.host}" is missing 'hostname' field in config.yaml`)
       }
       sshTarget = { hostname, user: hostDef.user, port: hostDef.port, shell_setup: hostDef.shell_setup }
-
-      // Single SSH round trip: verify connectivity + CWD existence.
-      // Fail fast with a clear error before creating any session record.
-      await verifySshSession(sshTarget, data.host, cwd)
     }
 
     // Transfer local images to remote host before spawning session

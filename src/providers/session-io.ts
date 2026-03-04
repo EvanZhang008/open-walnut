@@ -1013,64 +1013,6 @@ export function findLocalImagePaths(text: string): string[] {
 }
 
 /**
- * Verify SSH connectivity and that the remote CWD exists — single round trip.
- * Runs `ssh host test -d /path` which validates both connectivity and directory.
- * If no CWD, runs `ssh host true` for connectivity only.
- * Throws a descriptive error on failure.
- */
-export async function verifySshSession(sshTarget: SshTarget, hostKey: string, remoteCwd?: string): Promise<void> {
-  const hostString = sshTarget.user
-    ? `${sshTarget.user}@${sshTarget.hostname}`
-    : sshTarget.hostname
-
-  const sshArgs = [
-    '-o', 'BatchMode=yes',
-    '-o', 'StrictHostKeyChecking=no',
-    '-o', 'ConnectTimeout=10',
-  ]
-  if (sshTarget.port) sshArgs.push('-p', String(sshTarget.port))
-
-  // Single command: test -d validates both connectivity and directory existence
-  const remoteCmd = remoteCwd ? `test -d ${shellQuote(remoteCwd)}` : 'true'
-  sshArgs.push(hostString, remoteCmd)
-
-  try {
-    execFileSync('ssh', sshArgs, { timeout: 15_000, stdio: 'pipe' })
-    log.session.info('SSH pre-flight passed', { host: hostKey, cwd: remoteCwd ?? '(none)' })
-  } catch (err) {
-    let stderr = ''
-    if (err && typeof err === 'object' && 'stderr' in err) {
-      const rawStderr = (err as { stderr: Buffer | string }).stderr
-      stderr = (typeof rawStderr === 'string' ? rawStderr : rawStderr?.toString('utf-8') ?? '').trim()
-    }
-
-    // Distinguish connectivity failure from CWD-not-found
-    if (stderr && (stderr.includes('Connection refused') || stderr.includes('Could not resolve')
-      || stderr.includes('Permission denied') || stderr.includes('Connection timed out')
-      || stderr.includes('No route to host'))) {
-      log.session.error('SSH connectivity failed', { host: hostKey, hostname: sshTarget.hostname, error: stderr })
-      throw new Error(
-        `Cannot connect to host "${hostKey}" (${sshTarget.hostname}): ${stderr}. ` +
-        `Check that the host is reachable and SSH key auth is configured.`
-      )
-    }
-
-    if (remoteCwd) {
-      log.session.error('Remote CWD does not exist', { host: hostKey, cwd: remoteCwd })
-      throw new Error(
-        `Working directory does not exist on host "${hostKey}": ${remoteCwd}. ` +
-        `Create the directory first, or use a different working_directory.`
-      )
-    }
-
-    // Generic failure
-    const detail = stderr || (err instanceof Error ? err.message : String(err))
-    log.session.error('SSH pre-flight failed', { host: hostKey, hostname: sshTarget.hostname, error: detail })
-    throw new Error(`SSH pre-flight failed for host "${hostKey}": ${detail}`)
-  }
-}
-
-/**
  * Transfer local image files to a remote host via SCP, then rewrite paths in the text.
  * Returns the text with local paths replaced by their remote counterparts.
  *
