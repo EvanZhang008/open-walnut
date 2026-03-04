@@ -66,7 +66,7 @@ export const turnCompleteTriageHook: SessionHookDefinition = {
         agentId: triageAgentId,
         task: triageTask,
         taskId: p.taskId,
-        context_override: { taskId: p.taskId, sessionId: p.sessionId },
+        context_override: { taskId: p.taskId, sessionId: p.sessionId, cwd: p.session?.cwd, host: p.session?.host },
         ...(notificationContext ? { context: notificationContext } : {}),
       }, ['subagent-runner'], { source: 'turn-complete-triage' });
 
@@ -116,7 +116,7 @@ export const messageSendTriageHook: SessionHookDefinition = {
         agentId,
         task: triageTask,
         taskId: p.taskId,
-        context_override: { taskId: p.taskId, sessionId: p.sessionId },
+        context_override: { taskId: p.taskId, sessionId: p.sessionId, cwd: p.session?.cwd, host: p.session?.host },
       }, ['subagent-runner'], { source: 'message-send-triage' });
 
       log.session.info('message-send-triage hook: dispatched', {

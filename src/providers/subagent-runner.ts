@@ -297,7 +297,7 @@ export class SubagentRunner {
   private async runEmbedded(
     run: AgentRun & { _history?: MessageParam[] },
     agentDef: AgentDefinition,
-    data: { task: string; taskId?: string; deniedTools?: string[]; context?: string; context_override?: { taskId?: string; sessionId?: string } },
+    data: { task: string; taskId?: string; deniedTools?: string[]; context?: string; context_override?: { taskId?: string; sessionId?: string; cwd?: string; host?: string } },
     opts: { model?: string; region?: string; maxTokens?: number; maxToolRounds: number; resume?: boolean },
   ): Promise<void> {
     const isResume = opts.resume === true;
@@ -382,8 +382,8 @@ export class SubagentRunner {
       }
 
       if (resolvedStateful) {
-        const memory = getProjectMemory(resolvedStateful.memory_project);
-        systemPrompt += '\n\n' + buildStatefulMemorySection(memory, resolvedStateful);
+        const memResult = getProjectMemory(resolvedStateful.memory_project);
+        systemPrompt += '\n\n' + buildStatefulMemorySection(memResult?.content ?? null, resolvedStateful);
       }
 
       const { runAgentLoop } = await import('../agent/loop.js');

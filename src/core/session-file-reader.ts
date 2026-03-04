@@ -220,18 +220,36 @@ export async function readSessionJsonlContent(
 ): Promise<{ content: string; source: 'local' | 'stream' | 'outputFile' | 'remote' } | null> {
   const { SESSION_STREAMS_DIR } = await import('../constants.js');
 
-  // 1. Local canonical path (~/.claude/projects/...)
-  const localPath = findLocalJsonlPath(sessionId, cwd);
-  if (localPath) {
+  // 1. Canonical JSONL — source of truth.
+  //    Dispatch on host (like readSubagentContents): remote SSH first, else local fs.
+  //    Remote sessions have no local canonical file, so we must SSH first.
+  if (host) {
+    const reader = new RemoteFileReader(host);
+    const remotePath = remoteJsonlPath(sessionId, cwd);
     try {
-      const content = fs.readFileSync(localPath, 'utf-8');
-      if (content) return { content, source: 'local' };
-    } catch {
-      // Fall through
+      const content = await reader.readFile(remotePath);
+      if (content) return { content, source: 'remote' };
+    } catch (err) {
+      log.session.debug('remote JSONL read failed', {
+        host, sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      // Fall through to stream/outputFile fallbacks
+    }
+  } else {
+    const localPath = findLocalJsonlPath(sessionId, cwd);
+    if (localPath) {
+      try {
+        const content = fs.readFileSync(localPath, 'utf-8');
+        if (content) return { content, source: 'local' };
+      } catch {
+        // Fall through
+      }
     }
   }
 
-  // 2. Local streaming capture (SESSION_STREAMS_DIR)
+  // 2. Local streaming capture (SESSION_STREAMS_DIR) — fallback
+  //    Useful when canonical is unavailable (remote SSH down, local file missing)
   try {
     const files = fs.readdirSync(SESSION_STREAMS_DIR);
     for (const file of files) {
@@ -258,21 +276,6 @@ export async function readSessionJsonlContent(
         if (content) return { content, source: 'outputFile' };
       }
     } catch { /* Fall through */ }
-  }
-
-  // 4. Remote via SSH
-  if (host) {
-    const reader = new RemoteFileReader(host);
-    const remotePath = remoteJsonlPath(sessionId, cwd);
-    try {
-      const content = await reader.readFile(remotePath);
-      if (content) return { content, source: 'remote' };
-    } catch (err) {
-      log.session.debug('remote JSONL read failed', {
-        host, sessionId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
   }
 
   return null;

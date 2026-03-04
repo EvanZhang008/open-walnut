@@ -72,9 +72,9 @@ async function loadTaskDetails(task: Task, budget: number): Promise<string> {
 async function loadProjectMemory(task: Task, budget: number): Promise<string> {
   const { getProjectMemory } = await import('../core/project-memory.js');
   const projectPath = `${task.category.toLowerCase()}/${task.project.toLowerCase()}`;
-  const memory = getProjectMemory(projectPath);
-  if (!memory) return '(no project memory yet)';
-  return truncateToTokenBudget(memory, budget);
+  const result = getProjectMemory(projectPath);
+  if (!result) return '(no project memory yet)';
+  return truncateToTokenBudget(result.content, budget);
 }
 
 async function loadProjectTaskList(task: Task, budget: number): Promise<string> {
@@ -94,9 +94,9 @@ async function loadProjectTaskList(task: Task, budget: number): Promise<string> 
 
 async function loadGlobalMemory(budget: number): Promise<string> {
   const { getMemoryFile } = await import('../core/memory-file.js');
-  const memory = getMemoryFile();
-  if (!memory) return '(no global memory yet)';
-  return truncateToTokenBudget(memory, budget);
+  const result = getMemoryFile();
+  if (!result) return '(no global memory yet)';
+  return truncateToTokenBudget(result.content, budget);
 }
 
 async function loadDailyLog(budget: number): Promise<string> {
@@ -106,9 +106,9 @@ async function loadDailyLog(budget: number): Promise<string> {
   return logs; // getDailyLogsWithinBudget already handles budget
 }
 
-async function loadSessionHistory(sessionId: string, budget: number): Promise<string> {
+async function loadSessionHistory(sessionId: string, budget: number, cwd?: string, host?: string): Promise<string> {
   const { readSessionHistory } = await import('../core/session-history.js');
-  const messages = await readSessionHistory(sessionId);
+  const messages = await readSessionHistory(sessionId, cwd, host);
   if (messages.length === 0) return '(no session history)';
 
   // Assistant-only + [index] prefix + per-message truncation + tail truncation
@@ -159,6 +159,10 @@ const SOURCE_XML_TAGS: Record<ContextSourceId, string> = {
 export interface ContextSourcesInput {
   taskId?: string;
   sessionId?: string;
+  /** Session working directory — needed for session_history source. */
+  cwd?: string;
+  /** Remote host — needed for session_history source on remote sessions. */
+  host?: string;
 }
 
 /**
@@ -173,7 +177,7 @@ export async function loadContextSources(
   agentDef: AgentDefinition,
   input: ContextSourcesInput,
 ): Promise<string> {
-  const { taskId, sessionId } = input;
+  const { taskId, sessionId, cwd, host } = input;
 
   // No taskId → no context sources to load
   if (!taskId) return '';
@@ -234,7 +238,7 @@ export async function loadContextSources(
         if (!sessionId) {
           promise = Promise.resolve('(no session ID provided)');
         } else {
-          promise = loadSessionHistory(sessionId, budget);
+          promise = loadSessionHistory(sessionId, budget, cwd, host);
         }
         break;
       case 'conversation_log':
