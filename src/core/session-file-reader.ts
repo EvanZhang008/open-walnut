@@ -115,9 +115,12 @@ export class RemoteFileReader implements SessionFileReader {
 
   private execSsh(remoteCmd: string, timeout = 15000): string | null {
     try {
+      // Escape $ and " so they survive the local shell's double-quote expansion
+      // and are interpreted by the REMOTE shell instead.
+      const escaped = remoteCmd.replace(/\$/g, '\\$').replace(/"/g, '\\"');
       return execSync(
-        `ssh ${this.sshArgs.join(' ')} ${this.sshTarget} "${remoteCmd}"`,
-        { encoding: 'utf-8', timeout, stdio: ['pipe', 'pipe', 'pipe'] },
+        `ssh ${this.sshArgs.join(' ')} ${this.sshTarget} "${escaped}"`,
+        { encoding: 'utf-8', timeout, maxBuffer: 10 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'] },
       );
     } catch {
       return null;
@@ -225,9 +228,18 @@ export async function readSessionJsonlContent(
   //    Remote sessions have no local canonical file, so we must SSH first.
   if (host) {
     const reader = new RemoteFileReader(host);
-    const remotePath = remoteJsonlPath(sessionId, cwd);
+    // Try exact encoded path first, then glob fallback.
+    // Claude Code's path encoding may differ from ours (e.g. underscores → hyphens),
+    // so the exact path can miss even when the file exists.
+    const exactPath = cwd ? remoteJsonlPath(sessionId, cwd) : null;
+    const globPath = remoteJsonlPath(sessionId); // ~/.claude/projects/*/${sessionId}.jsonl
     try {
-      const content = await reader.readFile(remotePath);
+      if (exactPath) {
+        const content = await reader.readFile(exactPath);
+        if (content) return { content, source: 'remote' };
+      }
+      // Exact path missed or no cwd — try glob
+      const content = await reader.readFile(globPath);
       if (content) return { content, source: 'remote' };
     } catch (err) {
       log.session.debug('remote JSONL read failed', {
