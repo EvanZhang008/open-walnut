@@ -34,7 +34,7 @@ const SS_SESSION_KEY_LEGACY = 'walnut-home-session-panel';
 // ── Session column queue helpers (max 3, or max 2 if triage open) ──
 
 const MAX_COLUMNS = 3;
-const SESSION_WIDTH_BY_COUNT = [0, 35, 45, 55]; // 1 col=35%, 2=45%, 3=55%
+const SESSION_WIDTH_BY_COUNT = [0, 40, 65, 65]; // 1=40%, 2&3=65% (max width)
 
 function addSessionColumn(cols: string[], id: string, triageOpen: boolean): string[] {
   const max = triageOpen ? MAX_COLUMNS - 1 : MAX_COLUMNS;
