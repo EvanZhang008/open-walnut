@@ -420,7 +420,7 @@ export function buildRemoteCommand(claudeArgs: string[], cwd?: string, shellSetu
   const preamble = `${buildRemotePreamble(shellSetup)} && CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`
   const claudeCmd = `${preamble} claude ${quotedArgs.join(' ')}`
   if (cwd) {
-    return `cd ${shellQuote(cwd)} && ${claudeCmd}`
+    return `{ cd ${shellQuote(cwd)} || exit 1; } && ${claudeCmd}`
   }
   return claudeCmd
 }

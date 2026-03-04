@@ -152,17 +152,28 @@ function mapPermissionMode(cliMode: string): SessionMode | null {
 
 /**
  * Check if a JSONL output file contains a 'result' event line.
+ * Only reads the last ~8KB of the file since 'result' is always the final event.
  * Used as ground truth when the JSONL tailer missed the result (race condition).
  */
 function outputFileHasResult(filePath: string): boolean {
   try {
-    const content = fs.readFileSync(filePath, 'utf-8')
-    for (const line of content.split('\n')) {
-      if (!line.trim()) continue
-      try {
-        const event = JSON.parse(line)
-        if (event.type === 'result') return true
-      } catch { continue }
+    const fd = fs.openSync(filePath, 'r')
+    try {
+      const stat = fs.fstatSync(fd)
+      const TAIL_BYTES = 8192
+      const start = Math.max(0, stat.size - TAIL_BYTES)
+      const buf = Buffer.alloc(Math.min(TAIL_BYTES, stat.size))
+      fs.readSync(fd, buf, 0, buf.length, start)
+      const tail = buf.toString('utf-8')
+      for (const line of tail.split('\n')) {
+        if (!line.trim()) continue
+        try {
+          const event = JSON.parse(line)
+          if (event.type === 'result') return true
+        } catch { continue }
+      }
+    } finally {
+      fs.closeSync(fd)
     }
   } catch {
     // File doesn't exist or can't be read
@@ -178,16 +189,13 @@ function outputFileHasResult(filePath: string): boolean {
  */
 function isBenignSshStderr(stderr: string): boolean {
   const lines = stderr.split('\n').map(l => l.trim()).filter(Boolean)
-  // If every line matches a benign pattern, the stderr is benign
   return lines.length > 0 && lines.every(line => {
     // SSH connection close messages
     if (/^Connection to .+ closed\.?$/i.test(line)) return true
-    // Killed by signal (normal process termination)
-    if (/^Killed\b/i.test(line) || /killed by signal/i.test(line)) return true
+    // Normal process termination (SIGTERM=15, SIGHUP=1) — but NOT SIGKILL=9 (OOM)
+    if (/^Killed:\s*\d+$/i.test(line) || /killed by signal (1|15)\b/i.test(line)) return true
     // SSH mux messages
     if (/^(Shared connection to .+ closed|ControlSocket .+)$/i.test(line)) return true
-    // Empty or whitespace only
-    if (!line) return true
     return false
   })
 }

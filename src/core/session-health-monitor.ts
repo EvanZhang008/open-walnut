@@ -325,17 +325,26 @@ export class SessionHealthMonitor {
   }
 
   private outputFileHasResult(filePath: string): boolean {
+    // Only read last ~8KB — result event is always the final JSONL line.
+    // Avoids reading 100MB+ files for long sessions.
     try {
-      const content = fs.readFileSync(filePath, 'utf-8')
-      // Check for a result event line in the JSONL
-      for (const line of content.split('\n')) {
-        if (!line.trim()) continue
-        try {
-          const event = JSON.parse(line)
-          if (event.type === 'result') return true
-        } catch {
-          continue
+      const fd = fs.openSync(filePath, 'r')
+      try {
+        const stat = fs.fstatSync(fd)
+        const TAIL_BYTES = 8192
+        const start = Math.max(0, stat.size - TAIL_BYTES)
+        const buf = Buffer.alloc(Math.min(TAIL_BYTES, stat.size))
+        fs.readSync(fd, buf, 0, buf.length, start)
+        const tail = buf.toString('utf-8')
+        for (const line of tail.split('\n')) {
+          if (!line.trim()) continue
+          try {
+            const event = JSON.parse(line)
+            if (event.type === 'result') return true
+          } catch { continue }
         }
+      } finally {
+        fs.closeSync(fd)
       }
     } catch {
       // File doesn't exist or can't be read
