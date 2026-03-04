@@ -26,6 +26,7 @@ interface ChatMessageProps {
   source?: 'cron' | 'triage' | 'triage-notify' | 'session' | 'session-error' | 'agent-error' | 'subagent' | 'compaction' | 'compacting' | 'heartbeat';
   cronJobName?: string;
   notification?: boolean;
+  notifyContent?: string;
   queued?: boolean;
   onCancel?: () => void;
   taskLookup?: Map<string, Task>;
@@ -920,7 +921,7 @@ function MemoizedTextBlock({ content, onClick }: { content: string; onClick: (e:
   );
 }
 
-function ChatMessageInner({ role, content, blocks, images, taskContext, routeInfo, timestamp, source, cronJobName, notification, queued, onCancel, taskLookup, onTaskClick, onSessionClick }: ChatMessageProps) {
+function ChatMessageInner({ role, content, blocks, images, taskContext, routeInfo, timestamp, source, cronJobName, notification, notifyContent, queued, onCancel, taskLookup, onTaskClick, onSessionClick }: ChatMessageProps) {
   const navigate = useNavigate();
   const { lightboxSrc, openLightbox, closeLightbox } = useLightbox();
 
@@ -1082,10 +1083,11 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
   const collapsedSummary = useMemo(() => {
     if (!shouldAutoCollapse) return '';
     if (isTriage) {
-      // Triage: extract task ref + phase/outcome for a meaningful summary
+      // If triage notified the main agent, show the notification content as summary
+      if (notifyContent?.trim()) return notifyContent.trim().slice(0, 250);
+      // Fallback: extract task ref + phase/outcome for a meaningful summary
       const taskRefMatch = content.match(/\*\*Triage\*\*\s*\(([^)]+)\)/);
       const taskRef = taskRefMatch ? taskRefMatch[1].trim() : '';
-      // Look for "Phase: ..." line in the summary section
       const phaseMatch = content.match(/Phase:\s*(.+)/);
       const phase = phaseMatch ? phaseMatch[1].trim() : '';
       if (taskRef && phase) return `${taskRef} — ${phase}`.slice(0, 200);
@@ -1094,7 +1096,7 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
     // Default: first line, stripped of bold markers
     const firstLine = content.split('\n').find(l => l.trim()) ?? '';
     return firstLine.replace(/\*\*/g, '').slice(0, 120);
-  }, [content, shouldAutoCollapse, isTriage]);
+  }, [content, shouldAutoCollapse, isTriage, notifyContent]);
 
   // Notification header with optional UI Only badge + collapse toggle + collapsed summary
   const notificationHeader = (isNotification || isTriage) ? (
@@ -1272,6 +1274,7 @@ function arePropsEqual(prev: ChatMessageProps, next: ChatMessageProps): boolean 
     prev.source === next.source &&
     prev.cronJobName === next.cronJobName &&
     prev.notification === next.notification &&
+    prev.notifyContent === next.notifyContent &&
     prev.queued === next.queued &&
     prev.onCancel === next.onCancel &&
     prev.taskLookup === next.taskLookup &&

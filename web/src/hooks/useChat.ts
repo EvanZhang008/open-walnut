@@ -31,6 +31,7 @@ export interface ChatMessage {
   source?: 'cron' | 'triage' | 'triage-notify' | 'session' | 'session-error' | 'agent-error' | 'subagent' | 'compaction' | 'compacting' | 'heartbeat';
   cronJobName?: string;
   notification?: boolean;
+  notifyContent?: string;
   queued?: boolean;
   queueId?: number;
 }
@@ -153,6 +154,7 @@ function chatEntriesToMessages(entries: ChatEntry[]): ChatMessage[] {
         source: entry.source,
         cronJobName: entry.cronJobName,
         notification: entry.notification,
+        notifyContent: entry.notifyContent,
       });
       i++;
       continue;
@@ -621,7 +623,7 @@ export function useChat(): UseChatReturn {
   // Handle chat:history-updated — server pushes compact notifications (triage, subagent)
   useEvent('chat:history-updated', (data) => {
     const { entry } = data as {
-      entry?: { role: 'user' | 'assistant'; content: string; source?: string; notification?: boolean; taskId?: string; timestamp?: string };
+      entry?: { role: 'user' | 'assistant'; content: string; source?: string; notification?: boolean; notifyContent?: string; taskId?: string; timestamp?: string };
     };
     if (!entry || !entry.content) return;
     setMessages((prev) => [...prev, {
@@ -631,6 +633,7 @@ export function useChat(): UseChatReturn {
       timestamp: entry.timestamp,
       source: entry.source as ChatMessage['source'],
       notification: entry.notification,
+      notifyContent: entry.notifyContent,
     }]);
   });
 

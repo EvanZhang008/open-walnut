@@ -69,6 +69,7 @@ export function ChatPage() {
                 source={msg.source}
                 cronJobName={msg.cronJobName}
                 notification={msg.notification}
+                notifyContent={msg.notifyContent}
                 queued={msg.queued}
                 onCancel={msg.queued && msg.queueId != null ? () => cancelQueuedMessage(msg.queueId!) : undefined}
               />
