@@ -155,17 +155,21 @@ function mapPermissionMode(cliMode: string): SessionMode | null {
  * Only reads the last ~8KB of the file since 'result' is always the final event.
  * Used as ground truth when the JSONL tailer missed the result (race condition).
  */
-function outputFileHasResult(filePath: string): boolean {
+function outputFileHasResult(filePath: string, fromOffset = 0): boolean {
   try {
     const fd = fs.openSync(filePath, 'r')
     try {
       const stat = fs.fstatSync(fd)
-      const TAIL_BYTES = 8192
-      const start = Math.max(0, stat.size - TAIL_BYTES)
-      const buf = Buffer.alloc(Math.min(TAIL_BYTES, stat.size))
-      fs.readSync(fd, buf, 0, buf.length, start)
-      const tail = buf.toString('utf-8')
-      for (const line of tail.split('\n')) {
+      // Only scan data written after fromOffset (current turn).
+      // On resume, the file contains previous turns' events — including old
+      // result events that would cause a false positive if we scanned them.
+      const scanStart = Math.max(fromOffset, 0)
+      if (stat.size <= scanStart) return false  // No new data written this turn
+      const bytesToRead = stat.size - scanStart
+      const buf = Buffer.alloc(bytesToRead)
+      fs.readSync(fd, buf, 0, bytesToRead, scanStart)
+      const data = buf.toString('utf-8')
+      for (const line of data.split('\n')) {
         if (!line.trim()) continue
         try {
           const event = JSON.parse(line)
@@ -227,6 +231,8 @@ export class ClaudeCodeSession {
    *  after the JSONL tailer already emitted one for the same turn.
    *  Set to true after every emit; reset to false when a new turn starts (writeMessage). */
   private _turnResultEmitted = false
+  /** Byte offset in the output file where the current turn started (for resume). */
+  private _turnStartOffset = 0
   private io: SessionIO | null = null
   private livenessTimer: ReturnType<typeof setInterval> | null = null
   private _outputFile: string | null = null
@@ -438,6 +444,7 @@ export class ClaudeCodeSession {
     // Capture file size BEFORE spawning — on resume, the tailer starts from here
     // to avoid replaying old turns' events that are already in the session history.
     const tailFromOffset = isResume ? this.io.fileSize : 0
+    this._turnStartOffset = tailFromOffset
 
     if (sshTarget) {
       // ── Remote SSH spawn via RemoteIO ──
@@ -729,6 +736,7 @@ export class ClaudeCodeSession {
     this._activity = undefined
     this.resultEmitted = false
     this._turnResultEmitted = false  // New turn starting — allow result emission
+    this._turnStartOffset = this.io.fileSize  // Track where this turn's data begins
     this._askUserIntercepted = false
     this.emitStatusChanged('in_progress', prevWorkStatus)
     log.session.info('message sent to session via FIFO', { taskId: this.taskId, sessionId: this.claudeSessionId, messageLength: message.length })
@@ -903,7 +911,7 @@ export class ClaudeCodeSession {
           // diagnostic output to stderr), so stderr alone is unreliable.
           // Reading the output file directly is the ground truth.
           const hasResultInFile = this._outputFile
-            ? outputFileHasResult(this._outputFile)
+            ? outputFileHasResult(this._outputFile, this._turnStartOffset)
             : false
 
           this.resultEmitted = true
