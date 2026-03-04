@@ -266,10 +266,18 @@ function parseSessionMessages(content: string): SessionHistoryMessage[] {
         if (typeof nested === 'string') {
           resultText = nested;
         } else if (Array.isArray(nested)) {
-          resultText = (nested as Array<{ type: string; text?: string }>)
-            .filter(c => c.type === 'text' && c.text)
-            .map(c => c.text!)
-            .join('\n');
+          const arr = nested as Array<{ type: string; text?: string }>;
+          const hasImages = arr.some(c => c.type === 'image');
+          if (hasImages) {
+            // Preserve image content blocks as JSON so the frontend can render them.
+            // extractContentBlockImages() on the UI side parses this format.
+            resultText = JSON.stringify(arr);
+          } else {
+            resultText = arr
+              .filter(c => c.type === 'text' && c.text)
+              .map(c => c.text!)
+              .join('\n');
+          }
         }
         if (resultText) {
           toolResultMap.set(block.tool_use_id, resultText);
@@ -329,11 +337,20 @@ function parseSessionMessages(content: string): SessionHistoryMessage[] {
             ...(planContent ? { planContent } : {}),
           });
         } else {
+          // Don't truncate tool results that contain Anthropic content-block images
+          // (base64 image data is 100K+ chars and must pass through intact for frontend rendering).
+          const isImageResult = toolResult
+            && (toolResult.trimStart()[0] === '[' || toolResult.trimStart()[0] === '{')
+            && toolResult.includes('"base64"');
+          const resultText = toolResult
+            ? (isImageResult ? toolResult : toolResult.slice(0, 5000))
+            : undefined;
+
           tools.push({
             name: block.name,
             input: block.input ?? {},
             toolUseId,
-            ...(toolResult ? { result: toolResult.slice(0, 5000) } : {}),
+            ...(resultText ? { result: resultText } : {}),
             ...(agentId ? { agentId } : {}),
           });
         }

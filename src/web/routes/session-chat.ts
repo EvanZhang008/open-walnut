@@ -6,12 +6,15 @@
  * SessionRunner (subscribed to the bus) handles the actual session management.
  */
 
+import crypto from 'node:crypto'
 import { registerMethod } from '../ws/handler.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { getSessionByClaudeId, updateSessionRecord } from '../../core/session-tracker.js'
 import { enqueueMessage, editMessage, deleteMessage, getQueue } from '../../core/session-message-queue.js'
 import { sessionStreamBuffer } from '../session-stream-buffer.js'
 import { saveImageToDisk } from './images.js'
+import { transferImagesForRemoteSession } from '../../providers/session-io.js'
+import type { SshTarget } from '../../providers/session-io.js'
 import { log } from '../../logging/index.js'
 
 const ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
@@ -87,6 +90,28 @@ export function registerSessionChatRpc(): void {
 
     // Check if this is an embedded session — route to SubagentRunner instead of CLI queue
     const record = await getSessionByClaudeId(data.sessionId)
+
+    // For remote sessions: transfer locally-saved images to the remote host via SCP
+    // and rewrite paths so the remote Claude can Read them.
+    if (record?.host && augmentedMessage !== data.message) {
+      try {
+        const { getConfig } = await import('../../core/config-manager.js')
+        const config = await getConfig()
+        const hostDef = config.hosts?.[record.host]
+        const hostname = hostDef?.hostname ?? (hostDef as Record<string, unknown> | undefined)?.ssh as string | undefined
+        if (hostname) {
+          const sshTarget: SshTarget = { hostname, user: hostDef?.user, port: hostDef?.port }
+          const remoteDir = `/tmp/walnut-images/${crypto.randomBytes(8).toString('hex')}`
+          augmentedMessage = await transferImagesForRemoteSession(augmentedMessage, sshTarget, remoteDir)
+        }
+      } catch (err) {
+        log.web.warn('session:send image transfer to remote failed — sending with local paths', {
+          sessionId: data.sessionId, host: record.host,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+
     if (record?.provider === 'embedded') {
       const messageId = `emb-${Date.now()}`
 

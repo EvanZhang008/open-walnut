@@ -1338,12 +1338,16 @@ export class ClaudeCodeSession {
               : (block.content != null ? JSON.stringify(block.content) : '')
             // Rewrite remote image paths in tool results (no-op for local sessions)
             const resultContent = this.rewriteRemoteImages(rawResult)
+            // Don't truncate results containing base64 image content blocks —
+            // the frontend needs the full JSON to render images.
+            const isImageResult = resultContent.includes('"base64"')
+              && (resultContent.trimStart()[0] === '[' || resultContent.trimStart()[0] === '{')
             log.session.debug('JSONL event: tool-result', { sessionId: this.claudeSessionId, taskId: this.taskId, toolUseId: block.tool_use_id })
             bus.emit(EventNames.SESSION_TOOL_RESULT, {
               sessionId: this.claudeSessionId,
               taskId: this.taskId,
               toolUseId: block.tool_use_id,
-              result: resultContent.slice(0, 2000),
+              result: isImageResult ? resultContent : resultContent.slice(0, 2000),
               ...(userParentToolUseId ? { parentToolUseId: userParentToolUseId } : {}),
             }, ['main-ai'], { source: 'session-runner' })
           }
