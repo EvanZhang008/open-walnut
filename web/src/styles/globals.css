@@ -2919,6 +2919,31 @@ input:focus, textarea:focus, select:focus {
   white-space: nowrap;
 }
 
+/* Triage notification callout — shows what was sent to the AI */
+.chat-triage-notify-callout {
+  margin: 6px 0 10px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  border-radius: 0 6px 6px 0;
+  font-size: 0.85em;
+}
+
+.chat-triage-notify-label {
+  font-size: 0.75em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  margin-bottom: 3px;
+}
+
+.chat-triage-notify-text {
+  color: var(--text-primary);
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
 /* Collapsed summary text — wraps up to 2 lines, then clamps with ellipsis */
 .chat-collapsed-summary {
   font-size: 0.8em;

@@ -1083,9 +1083,7 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
   const collapsedSummary = useMemo(() => {
     if (!shouldAutoCollapse) return '';
     if (isTriage) {
-      // If triage notified the main agent, show the notification content as summary
-      if (notifyContent?.trim()) return notifyContent.trim().slice(0, 250);
-      // Fallback: extract task ref + phase/outcome for a meaningful summary
+      // Triage: extract task ref + phase/outcome for a meaningful summary
       const taskRefMatch = content.match(/\*\*Triage\*\*\s*\(([^)]+)\)/);
       const taskRef = taskRefMatch ? taskRefMatch[1].trim() : '';
       const phaseMatch = content.match(/Phase:\s*(.+)/);
@@ -1096,7 +1094,7 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
     // Default: first line, stripped of bold markers
     const firstLine = content.split('\n').find(l => l.trim()) ?? '';
     return firstLine.replace(/\*\*/g, '').slice(0, 120);
-  }, [content, shouldAutoCollapse, isTriage, notifyContent]);
+  }, [content, shouldAutoCollapse, isTriage]);
 
   // Notification header with optional UI Only badge + collapse toggle + collapsed summary
   const notificationHeader = (isNotification || isTriage) ? (
@@ -1247,6 +1245,12 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
           (!isCollapsed || !shouldAutoCollapse) && (
             <div className="chat-message-content">
               {routeInfo && <RouteInfoSection info={routeInfo} taskLookup={taskLookup} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />}
+              {isTriage && notifyContent?.trim() && (
+                <div className="chat-triage-notify-callout">
+                  <div className="chat-triage-notify-label">Notified AI</div>
+                  <div className="chat-triage-notify-text">{notifyContent.trim()}</div>
+                </div>
+              )}
               <div
                 className="markdown-body"
                 onClick={handleContentClick}
