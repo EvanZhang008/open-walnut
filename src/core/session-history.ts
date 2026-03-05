@@ -11,7 +11,9 @@
  */
 
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import { log } from '../logging/index.js';
+import { IMAGES_DIR } from '../constants.js';
 import {
   encodeProjectPath,
   findLocalJsonlPath,
@@ -20,6 +22,59 @@ import {
 } from './session-file-reader.js';
 import { rewriteRemoteImagePaths } from '../providers/session-io.js';
 import type { SshTarget } from '../providers/session-io.js';
+
+// ── Base64 image → disk save utility ──
+
+const MEDIA_TYPE_EXT: Record<string, string> = {
+  'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp',
+};
+
+/**
+ * Save a base64 image from a content block to disk and return the file path.
+ * Uses a content-hash filename for deduplication (same image → same file, skips re-write).
+ * Sync — safe to call from the JSONL parser and streaming handler.
+ */
+export function saveBase64ImageToFile(base64Data: string, mediaType?: string): string {
+  fs.mkdirSync(IMAGES_DIR, { recursive: true });
+  const ext = MEDIA_TYPE_EXT[mediaType ?? ''] ?? 'png';
+  // Fast hash: length + first 4K of data is enough for dedup without hashing the full 130K+ string
+  const hash = createHash('sha256').update(`${base64Data.length}:${base64Data.slice(0, 4096)}`).digest('hex').slice(0, 16);
+  const filePath = `${IMAGES_DIR}/tool-${hash}.${ext}`;
+  if (!fs.existsSync(filePath)) {
+    fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
+  }
+  return filePath;
+}
+
+/** Content block shape from Anthropic tool_result content arrays */
+interface ContentBlock {
+  type: string;
+  text?: string;
+  source?: { type?: string; media_type?: string; data?: string };
+}
+
+/**
+ * Extract images from Anthropic content-block arrays, save to disk,
+ * and return a result string with file paths + any text content.
+ * Returns null if no image blocks found.
+ */
+export function extractImageBlocksToFiles(blocks: ContentBlock[]): string | null {
+  if (!blocks.some(b => b.type === 'image')) return null;
+
+  const parts: string[] = [];
+  for (const block of blocks) {
+    if (block.type === 'image' && block.source?.type === 'base64' && typeof block.source.data === 'string') {
+      try {
+        parts.push(saveBase64ImageToFile(block.source.data, block.source.media_type));
+      } catch {
+        // Disk save failed — skip this image silently
+      }
+    } else if (block.type === 'text' && block.text) {
+      parts.push(block.text);
+    }
+  }
+  return parts.length > 0 ? parts.join('\n') : null;
+}
 
 // Re-export for backward compatibility
 export { encodeProjectPath };
@@ -266,14 +321,13 @@ function parseSessionMessages(content: string): SessionHistoryMessage[] {
         if (typeof nested === 'string') {
           resultText = nested;
         } else if (Array.isArray(nested)) {
-          const arr = nested as Array<{ type: string; text?: string }>;
-          const hasImages = arr.some(c => c.type === 'image');
-          if (hasImages) {
-            // Preserve image content blocks as JSON so the frontend can render them.
-            // extractContentBlockImages() on the UI side parses this format.
-            resultText = JSON.stringify(arr);
+          // Save image content blocks to disk — result becomes file paths (short text).
+          // The frontend's findImagePaths() detects these and renders via /api/local-image.
+          const extracted = extractImageBlocksToFiles(nested as ContentBlock[]);
+          if (extracted) {
+            resultText = extracted;
           } else {
-            resultText = arr
+            resultText = (nested as Array<{ type: string; text?: string }>)
               .filter(c => c.type === 'text' && c.text)
               .map(c => c.text!)
               .join('\n');
@@ -337,20 +391,11 @@ function parseSessionMessages(content: string): SessionHistoryMessage[] {
             ...(planContent ? { planContent } : {}),
           });
         } else {
-          // Don't truncate tool results that contain Anthropic content-block images
-          // (base64 image data is 100K+ chars and must pass through intact for frontend rendering).
-          const isImageResult = toolResult
-            && (toolResult.trimStart()[0] === '[' || toolResult.trimStart()[0] === '{')
-            && toolResult.includes('"base64"');
-          const resultText = toolResult
-            ? (isImageResult ? toolResult : toolResult.slice(0, 5000))
-            : undefined;
-
           tools.push({
             name: block.name,
             input: block.input ?? {},
             toolUseId,
-            ...(resultText ? { result: resultText } : {}),
+            ...(toolResult ? { result: toolResult.slice(0, 5000) } : {}),
             ...(agentId ? { agentId } : {}),
           });
         }

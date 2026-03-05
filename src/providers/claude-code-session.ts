@@ -35,7 +35,7 @@ import { log } from '../logging/index.js'
 import { markProcessing, removeProcessed, revertToPending, loadQueue, getAllSessionsWithPending, enqueueMessage } from '../core/session-message-queue.js'
 import { createSessionIO, LocalIO, RemoteIO, transferImagesForRemoteSession, rewriteRemoteImagePaths } from './session-io.js'
 import type { SessionIO, SshTarget } from './session-io.js'
-import { recoverStateFromJsonl } from '../core/session-history.js'
+import { recoverStateFromJsonl, extractImageBlocksToFiles } from '../core/session-history.js'
 import type { SessionRecord, SessionMode, ProcessStatus, WorkStatus } from '../core/types.js'
 import type { SessionServerClient } from './session-server-client.js'
 
@@ -1333,21 +1333,25 @@ export class ClaudeCodeSession {
         const userParentToolUseId = msg.parent_tool_use_id ?? undefined
         for (const block of msg.message.content) {
           if (block.type === 'tool_result') {
-            const rawResult = typeof block.content === 'string'
-              ? block.content
-              : (block.content != null ? JSON.stringify(block.content) : '')
+            let resultContent: string
+            // Save image content blocks to disk — result becomes short file paths.
+            // The frontend's findImagePaths() detects these and renders via /api/local-image.
+            if (Array.isArray(block.content) && block.content.some((c: Record<string, unknown>) => c.type === 'image')) {
+              resultContent = extractImageBlocksToFiles(block.content as Array<{ type: string; text?: string; source?: { type?: string; media_type?: string; data?: string } }>) ?? ''
+            } else {
+              const rawResult = typeof block.content === 'string'
+                ? block.content
+                : (block.content != null ? JSON.stringify(block.content) : '')
+              resultContent = rawResult
+            }
             // Rewrite remote image paths in tool results (no-op for local sessions)
-            const resultContent = this.rewriteRemoteImages(rawResult)
-            // Don't truncate results containing base64 image content blocks —
-            // the frontend needs the full JSON to render images.
-            const isImageResult = resultContent.includes('"base64"')
-              && (resultContent.trimStart()[0] === '[' || resultContent.trimStart()[0] === '{')
+            resultContent = this.rewriteRemoteImages(resultContent)
             log.session.debug('JSONL event: tool-result', { sessionId: this.claudeSessionId, taskId: this.taskId, toolUseId: block.tool_use_id })
             bus.emit(EventNames.SESSION_TOOL_RESULT, {
               sessionId: this.claudeSessionId,
               taskId: this.taskId,
               toolUseId: block.tool_use_id,
-              result: isImageResult ? resultContent : resultContent.slice(0, 2000),
+              result: resultContent.slice(0, 2000),
               ...(userParentToolUseId ? { parentToolUseId: userParentToolUseId } : {}),
             }, ['main-ai'], { source: 'session-runner' })
           }
