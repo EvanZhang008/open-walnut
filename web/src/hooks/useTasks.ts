@@ -3,6 +3,7 @@ import type { Task } from '@walnut/core';
 import { useEvent } from './useWebSocket';
 import { wsClient, type ConnectionState } from '@/api/ws';
 import * as tasksApi from '@/api/tasks';
+import { perf } from '@/utils/perf-logger';
 
 /**
  * Optimistic default status for a newly-linked session (before the first
@@ -20,15 +21,23 @@ const OPTIMISTIC_STARTING_STATUS = { work_status: 'in_progress' as const, proces
  * so the badge never shows "? / ?".
  */
 function mergeTask(existing: Task, incoming: Task): Task {
+  // Preserve enriched session_id: REST API backfills it from session records,
+  // but WS events send the raw task where session_id may be unset.
+  // Don't preserve when the task is completed — applyPhase('COMPLETE') explicitly
+  // clears all session slots and we must honor that.
+  const completed = incoming.phase === 'COMPLETE' || incoming.status === 'completed';
+  const mergedSessionId = incoming.session_id ?? (completed ? undefined : existing.session_id);
+
   return {
     ...incoming,
+    session_id: mergedSessionId,
     // Preserve enriched session status only if the slot ID is unchanged.
     // For a newly-linked session (different ID), use an optimistic default
     // so the badge doesn't flash "? / ?" while waiting for session:status-changed.
     session_status: incoming.session_status
-      ?? (incoming.session_id && incoming.session_id === existing.session_id
+      ?? (mergedSessionId && mergedSessionId === existing.session_id
         ? existing.session_status
-        : incoming.session_id
+        : mergedSessionId
           ? OPTIMISTIC_STARTING_STATUS
           : undefined),
     plan_session_status: incoming.plan_session_status
@@ -123,9 +132,10 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
   const refetch = useCallback(() => {
     setLoading(true);
     setError(null);
+    const endPerf = perf.start('tasks:fetch');
     tasksApi.fetchTasks(filter)
-      .then(setTasks)
-      .catch((e: Error) => setError(e.message))
+      .then((tasks) => { endPerf(`${tasks.length} tasks`); setTasks(tasks); })
+      .catch((e: Error) => { endPerf('error'); setError(e.message); })
       .finally(() => setLoading(false));
   }, [filter]);
 

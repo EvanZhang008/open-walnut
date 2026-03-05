@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { fetchSessionHistory } from '@/api/sessions';
+import { perf } from '@/utils/perf-logger';
 import type { SessionHistoryMessage } from '@/types/session';
 
 interface UseSessionHistoryReturn {
@@ -29,26 +30,30 @@ export function useSessionHistory(sessionId: string | null, version = 0): UseSes
     let cancelled = false;
     setLoading(true);
     setError(null);
+    const sid = sessionId.substring(0, 8);
 
     // Phase 1: Fast local read (streams file, ~1ms)
+    const endP1 = perf.start(`session:streams:${sid}`);
     fetchSessionHistory(sessionId, { source: 'streams' })
       .then((msgs) => {
         if (cancelled) return;
+        endP1(`${msgs.length} msgs`);
         if (msgs.length > 0) setMessages(msgs);
         setLoading(false); // Always clear loading — even if empty, don't block on Phase 2
       })
       .catch(() => {
-        // Phase 1 failure is non-critical — Phase 2 will still run
+        endP1('error');
       })
       .finally(() => {
         if (cancelled) return;
         // Phase 2: Full fetch (source of truth, may SSH for remote sessions)
+        const endP2 = perf.start(`session:full:${sid}`);
         fetchSessionHistory(sessionId)
           .then((msgs) => {
-            if (!cancelled) setMessages(msgs);
+            if (!cancelled) { endP2(`${msgs.length} msgs`); setMessages(msgs); }
           })
           .catch((e: Error) => {
-            if (!cancelled) setError(e.message);
+            if (!cancelled) { endP2('error'); setError(e.message); }
           })
           .finally(() => {
             if (!cancelled) setLoading(false);

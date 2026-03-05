@@ -1,4 +1,4 @@
-import { useState, useCallback, type ReactNode } from 'react';
+import { useState, useCallback, useEffect, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { CronToast } from '../common/CronToast';
@@ -6,6 +6,7 @@ import { DataSafetyBanner } from '../common/DataSafetyBanner';
 import { FocusDock } from '../dock/FocusDock';
 import { useFocusBar } from '@/hooks/useFocusBar';
 import { TasksProvider, useTasksContext } from '@/contexts/TasksContext';
+import { perf } from '@/utils/perf-logger';
 
 interface AppShellProps {
   children: ReactNode;
@@ -35,6 +36,12 @@ function AppShellInner({ children }: AppShellProps) {
   const isMainPage = location.pathname === '/';
   const { tasks } = useTasksContext();
   const focusBar = useFocusBar(tasks);
+
+  // Print perf waterfall 3s after mount (all initial fetches should be settled)
+  useEffect(() => {
+    const timer = setTimeout(() => perf.summary(), 3000);
+    return () => clearTimeout(timer);
+  }, []);
 
   const toggleSidebar = useCallback(() => {
     setSidebarOpen((prev) => !prev);

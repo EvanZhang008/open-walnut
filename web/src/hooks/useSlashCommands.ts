@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { fetchSlashCommands, type SlashCommandItem } from '@/api/slash-commands';
+import { perf } from '@/utils/perf-logger';
 
 // Module-level global cache: shared across all hook instances (e.g. multiple DockTaskCards).
 // Each cwd key is fetched at most once — avoids 3x duplicate requests (22KB each).
@@ -28,8 +29,10 @@ export function useSlashCommands(cwd?: string) {
     // Dedup inflight requests: if another instance is already fetching, reuse the promise
     let promise = inflightRequests.get(key);
     if (!promise) {
+      const endPerf = perf.start('slash-commands:fetch');
       promise = fetchSlashCommands(cwd);
       inflightRequests.set(key, promise);
+      promise.then((r) => endPerf(`${r.length} cmds`)).catch(() => endPerf('error'));
       promise.finally(() => inflightRequests.delete(key));
     }
 

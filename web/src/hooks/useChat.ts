@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect, type MutableRefObject } from 'react';
 import { useEvent } from './useWebSocket';
 import { wsClient } from '@/api/ws';
+import { perf } from '@/utils/perf-logger';
 import {
   fetchChatHistory, clearChatHistory, fetchChatStats,
   isToolResultError,
@@ -383,24 +384,27 @@ export function useChat(): UseChatReturn {
   // Load chat history from server on mount — stats deferred until history loads
   useEffect(() => {
     let cancelled = false;
+    const endHistory = perf.start('chat:history');
     fetchChatHistory(1, PAGE_SIZE)
       .then((resp) => {
         if (cancelled) return;
+        endHistory(`${resp.messages.length} entries`);
         setMessages(chatEntriesToMessages(resp.messages));
         setHasMore(resp.pagination.hasMore);
         nextPageRef.current = 2;
       })
       .catch(() => {
-        // Failed to load history — start with empty
+        endHistory('error');
       })
       .finally(() => {
         if (!cancelled) {
           setIsLoading(false);
-          refreshStats(); // Deferred: avoid blocking initial render (~114ms)
+          const endStats = perf.start('chat:stats');
+          fetchChatStats().then((s) => { endStats(); setStats(s); }).catch(() => endStats('error'));
         }
       });
     return () => { cancelled = true; };
-  }, [refreshStats]);
+  }, []);
 
   // Handle thinking blocks
   useEvent('agent:thinking', (data) => {
