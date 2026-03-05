@@ -19,6 +19,7 @@ import { WorkStatusPicker } from './WorkStatusPicker';
 import { SessionCopyButtons } from './SessionCopyButtons';
 import { ModelPicker } from './ModelPicker';
 import { useSessionUsage, formatModelName, getContextWindowSize } from '@/hooks/useSessionUsage';
+import { useSessionPlan } from '@/hooks/useSessionPlan';
 import { wsClient } from '@/api/ws';
 import type { SessionRecord } from '@/types/session';
 
@@ -120,6 +121,12 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
 
   // Fetch messages for the UserMessagesSummary
   const { messages: historyMessages, loading: historyLoading } = useSessionHistory(sessionId);
+
+  // Plan content for PlanPreviewSection
+  const hasPlan = !!session?.planCompleted;
+  const isFromPlan = !!session?.fromPlanSessionId;
+  const shouldFetchPlan = hasPlan || isFromPlan;
+  const { plan, loading: planLoading, refresh: planRefresh } = useSessionPlan(sessionId || undefined, shouldFetchPlan);
 
   // Real-time model + context window usage
   const liveUsage = useSessionUsage(sessionId);
@@ -452,7 +459,7 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
             Execution started.
           </p>
         )}
-        {session && <PlanPreviewSection session={session} />}
+        {session && <PlanPreviewSection session={session} plan={plan} loading={planLoading} refresh={planRefresh} />}
         <UserMessagesSummary
           messages={historyMessages}
           loading={historyLoading}
