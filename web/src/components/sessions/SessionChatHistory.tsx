@@ -590,6 +590,9 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
   const userScrollLockUntil = useRef(0); // timestamp when lock expires
   const lastScrollTop = useRef(0);
   const programmaticScrollUntil = useRef(0); // timestamp-based guard for programmatic scrolls
+  // Deadline for initial auto-scroll window — after initial scroll, we keep correcting
+  // for up to 2s to handle CSS transitions, Phase 2 data, initialPrompt, image loads.
+  const initialScrollDeadline = useRef(0);
 
   // Reset on session switch (consolidated — includes scroll flag + blockIndexMap + scroll lock)
   useEffect(() => {
@@ -603,6 +606,7 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     userScrollLockUntil.current = 0;
     lastScrollTop.current = 0;
     programmaticScrollUntil.current = 0;
+    initialScrollDeadline.current = 0;
     if (batchTimeoutRef.current) { clearTimeout(batchTimeoutRef.current); batchTimeoutRef.current = null; }
   }, [sessionId]);
 
@@ -624,23 +628,88 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     if (!loading && messages.length > 0 && containerRef.current
       && scrolledForSessionRef.current !== sessionId) {
       scrolledForSessionRef.current = sessionId;
+      initialScrollDeadline.current = Date.now() + 2000; // 2s auto-scroll correction window
       scrollToBottom(containerRef.current);
     }
   }, [loading, messages, sessionId]);
 
-  // Delayed retries after initial scroll — catch async layout shifts from images, code blocks.
-  // Only depends on [loading, sessionId] (not messages) to avoid re-arming timers on every
-  // streaming update. The initial scroll above handles the messages gate.
+  // ── Resilient scroll correction via ResizeObserver + MutationObserver ──
+  // After the initial scroll, content can shift due to:
+  //   - CSS width transition on sessions area (250ms from collapsed → visible)
+  //   - Phase 2 history data replacing Phase 1 (async, different message set)
+  //   - initialPrompt prop arriving (adds content at the top of the container)
+  //   - Images / code blocks loading (async height changes)
+  // Instead of fragile fixed-delay timers (150ms/400ms), observe actual DOM changes
+  // and re-scroll reactively during a 2s window after the initial scroll.
   useEffect(() => {
-    if (scrolledForSessionRef.current === sessionId) {
-      const scrollToEnd = () => {
-        if (containerRef.current) scrollToBottom(containerRef.current);
-      };
-      const t1 = setTimeout(scrollToEnd, 150);
-      const t2 = setTimeout(scrollToEnd, 400);
-      return () => { clearTimeout(t1); clearTimeout(t2); };
+    const el = containerRef.current;
+    if (!el || scrolledForSessionRef.current !== sessionId) return;
+    if (!initialScrollDeadline.current) return;
+
+    // Past the deadline: do one final scroll correction and stop
+    if (Date.now() > initialScrollDeadline.current) {
+      if (userScrollLockUntil.current < Date.now()) {
+        scrollToBottom(el);
+      }
+      return;
     }
-  }, [loading, sessionId]);
+
+    // Within the 2s window: observe DOM changes and re-scroll reactively.
+    // Only scroll if still at top (scrollTop=0, never scrolled visually) or near bottom.
+    // This respects user scroll-up: if user scrolled to the middle, don't override.
+    const tryScroll = () => {
+      const target = containerRef.current;
+      if (!target || target.scrollHeight <= target.clientHeight) return;
+      const nearBottom = target.scrollTop + target.clientHeight >= target.scrollHeight - SCROLL_THRESHOLD;
+      const stillAtTop = target.scrollTop === 0;
+      if (!nearBottom && !stillAtTop) return; // user scrolled to middle — respect it
+      scrollToBottom(target);
+    };
+
+    // Immediate correction on this render
+    tryScroll();
+
+    // ResizeObserver: fires when container dimensions change (CSS transition, flex reflow)
+    const ro = new ResizeObserver(tryScroll);
+    ro.observe(el);
+
+    // MutationObserver: fires when child elements change (new messages, initialPrompt, images)
+    const mo = new MutationObserver(tryScroll);
+    mo.observe(el, { childList: true, subtree: true });
+
+    // Auto-disconnect when deadline expires
+    const remaining = Math.max(100, initialScrollDeadline.current - Date.now() + 100);
+    const timer = setTimeout(() => {
+      ro.disconnect();
+      mo.disconnect();
+      // Final scroll after observers disconnect
+      tryScroll();
+    }, remaining);
+
+    return () => {
+      ro.disconnect();
+      mo.disconnect();
+      clearTimeout(timer);
+    };
+  }, [loading, messages, sessionId]);
+
+  // ── Render-based scroll correction ──
+  // Catches layout shifts from siblings (e.g., UserMessagesSummary growing above the scroll
+  // container, squeezing its height) that observers on the container itself might miss due to
+  // effect cleanup timing. Runs on every render but only does work during the 2s initial window.
+  useEffect(() => {
+    if (scrolledForSessionRef.current !== sessionId) return;
+    if (!initialScrollDeadline.current || Date.now() > initialScrollDeadline.current) return;
+    const raf = requestAnimationFrame(() => {
+      const el = containerRef.current;
+      if (!el || el.scrollHeight <= el.clientHeight) return;
+      if (userScrollLockUntil.current > Date.now()) return;
+      const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - SCROLL_THRESHOLD;
+      const stillAtTop = el.scrollTop === 0;
+      if (nearBottom || stillAtTop) scrollToBottom(el);
+    });
+    return () => cancelAnimationFrame(raf);
+  }); // intentionally no deps — runs every render during the 2s window
 
   // ── Smart auto-scroll: scroll to bottom on new content, but pause when user scrolls up ──
   // When the user manually scrolls up, we lock auto-scroll for USER_SCROLL_LOCK_MS.
