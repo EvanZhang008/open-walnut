@@ -9,7 +9,7 @@ import { fetchTriageHistory } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
 import { timeAgo } from '@/utils/time';
 import type { ProcessStatus, WorkStatus } from '@walnut/core';
-import { WORK_LABELS, WORK_COLORS, PROCESS_COLORS, resolveTaskSessionId } from '@/utils/session-status';
+import { WORK_LABELS, WORK_COLORS, PROCESS_COLORS, PROCESS_LABELS, compositeColor, resolveTaskSessionId } from '@/utils/session-status';
 import type { UseFavoritesReturn } from '@/hooks/useFavorites';
 import type { UseOrderingReturn } from '@/hooks/useOrdering';
 import { PriorityBadge } from '../common/PriorityBadge';
@@ -211,6 +211,7 @@ function formatDueDate(iso: string): { label: string; overdue: boolean } {
 const LS_TAB_KEY = 'walnut-todo-active-tab';
 const LS_COLLAPSED_CATS_KEY = 'walnut-todo-collapsed-cats';
 const LS_COLLAPSED_PROJS_KEY = 'walnut-todo-collapsed-projs';
+const LS_EXPANDED_PARENTS_KEY = 'walnut-todo-expanded-parents';
 const LS_FILTERS_COLLAPSED_KEY = 'walnut-todo-filters-collapsed';
 const LS_SORT_KEY = 'walnut-todo-sortBy';
 const LS_GROUP_KEY = 'walnut-todo-groupBy';
@@ -254,6 +255,8 @@ interface SortableTaskItemProps {
   isRecentlyDone?: boolean;
   isChild?: boolean;
   childCount?: number;
+  isExpanded?: boolean;           // Whether children are visible (only for parents)
+  onToggleExpand?: () => void;    // Toggle children visibility
   onClick: () => void;
   onSetPhase: (id: string, phase: string) => void;
   onStar?: (id: string) => void;
@@ -271,7 +274,7 @@ interface SortableTaskItemProps {
   searchSemanticScore?: number; // Normalized semantic contribution [0,1]
 }
 
-function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount, onClick, onSetPhase, onStar, onCyclePriority, onUpdateTitle, onOpenSession, openSessionIds, onPinTask, onUnpinTask, isPinned, searchContext, searchMatchField, searchScore, searchKeywordScore, searchSemanticScore }: SortableTaskItemProps) {
+function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount, isExpanded, onToggleExpand, onClick, onSetPhase, onStar, onCyclePriority, onUpdateTitle, onOpenSession, openSessionIds, onPinTask, onUnpinTask, isPinned, searchContext, searchMatchField, searchScore, searchKeywordScore, searchSemanticScore }: SortableTaskItemProps) {
   const integrations = useIntegrations();
   const {
     attributes,
@@ -433,6 +436,15 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount
       onKeyDown={(e) => { if (e.key === 'Enter' && !isEditing) onClick(); }}
     >
       <span className="drag-handle" {...attributes} {...listeners}>&#x2807;</span>
+      {!!childCount && childCount > 0 && (
+        <button
+          className={`task-parent-expand${isExpanded ? ' expanded' : ''}`}
+          title={isExpanded ? 'Collapse child tasks' : `Expand ${childCount} child task(s)`}
+          onClick={(e) => { e.stopPropagation(); onToggleExpand?.(); }}
+        >
+          {isExpanded ? '\u25BC' : '\u25B6'}
+        </button>
+      )}
       <div className="phase-picker-wrapper" ref={phaseWrapperRef}>
         <button
           className={`task-status-btn task-status-${task.status} task-phase-${task.phase?.toLowerCase()}`}
@@ -530,9 +542,7 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount
             </span>
           )}
           {!!childCount && childCount > 0 && (
-            <span className="task-children-badge" title={`${childCount} child task(s)`}>
-              {childCount} sub
-            </span>
+            <span className="task-children-badge">{childCount} sub</span>
           )}
           {task.source && (() => {
             const meta = getIntegrationMeta(integrations, task.source);
@@ -1341,6 +1351,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const [newTitle, setNewTitle] = useState('');
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(() => readSetFromStorage(LS_COLLAPSED_CATS_KEY));
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(() => readSetFromStorage(LS_COLLAPSED_PROJS_KEY));
+  // Tracks which parent tasks the user has EXPANDED (default = all collapsed)
+  const [expandedParents, setExpandedParents] = useState<Set<string>>(() => readSetFromStorage(LS_EXPANDED_PARENTS_KEY));
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const [activeDragType, setActiveDragType] = useState<string | null>(null);
   const [detailTarget, setDetailTarget] = useState<DetailTarget>(null);
@@ -1408,6 +1420,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       }
     }
 
+    // Expand collapsed parent if focused task is a child
+    if (task.parent_task_id) {
+      const parentTask = tasks.find((t) => t.id.startsWith(task.parent_task_id!));
+      if (parentTask && !expandedParents.has(parentTask.id)) {
+        setExpandedParents((prev) => {
+          const next = new Set(prev);
+          next.add(parentTask.id);
+          persistSet(LS_EXPANDED_PARENTS_KEY, next);
+          return next;
+        });
+      }
+    }
+
     // Auto-reveal: adjust filters if the focused task is hidden by current filters
     const isDone = task.status === 'done';
     if (isDone && !showCompleted && phaseFilter !== 'COMPLETE') {
@@ -1435,6 +1460,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (!focusedTaskId) return null;
     return tasks.find((t) => t.id === focusedTaskId) ?? null;
   }, [tasks, focusedTaskId]);
+
+  // Resolve pinned task IDs to Task objects for the pinned section
+  const pinnedTasks = useMemo(() => {
+    if (!pinnedTaskIds || pinnedTaskIds.size === 0) return [];
+    const taskMap = new Map(tasks.map((t) => [t.id, t]));
+    return [...pinnedTaskIds].map((id) => taskMap.get(id)).filter(Boolean) as Task[];
+  }, [tasks, pinnedTaskIds]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -1559,26 +1591,45 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tasks, showCompleted, priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, activeCategory, favorites, isChildOfStarredParent]);
 
-  // --- Search filtering: intersect filtered tasks with search results ---
-  // Search always includes completed tasks regardless of "Hide ✓" toggle —
-  // users searching by name expect to find tasks regardless of completion status.
-  // Explicit phase/priority/source filters still apply.
+  // --- Search filtering: intersect search results with active filters ---
+  // Search respects ALL current filters (show/hide completed, category tab,
+  // priority, phase, source, tag, session) so results stay consistent with
+  // the visible task list context.
   const searchFiltered = useMemo(() => {
     if (!isSearchMode) return filtered;
 
-    // Helper: apply explicit filters (phase, priority, source) but NOT showCompleted.
+    // Same filter logic as `filtered` — search results are a subset of what's visible.
     const applySearchFilters = (t: Task): boolean => {
+      // Show/hide completed
+      if (!showCompleted && t.status === 'done' && phaseFilter !== 'COMPLETE') return false;
+      // Priority
       if (priorityFilter && effectivePriority(t.priority) !== priorityFilter) return false;
+      // Phase
       if (phaseFilter && t.phase !== phaseFilter) return false;
+      // Session work status
+      if (sessionFilter) {
+        if (!t.session_work_statuses || !t.session_work_statuses.includes(sessionFilter as typeof t.session_work_statuses[number])) return false;
+      }
+      // Source/provider
       if (sourceFilter !== 'all') {
         const taskSource = t.source || 'ms-todo';
         if (taskSource !== sourceFilter) return false;
+      }
+      // Tag
+      if (tagFilter && (!t.tags || !t.tags.includes(tagFilter))) return false;
+      // Category tab
+      if (activeCategory === STARRED_TAB) {
+        const isStarred = !!t.starred;
+        const isCatFavorite = favorites?.isCategoryFavorite(t.category) ?? false;
+        const isProjFavorite = favorites?.isProjectFavorite(t.project) ?? false;
+        if (!(isStarred || isCatFavorite || isProjFavorite || isChildOfStarredParent(t))) return false;
+      } else if (activeCategory && t.category !== activeCategory) {
+        return false;
       }
       return true;
     };
 
     // While API results haven't arrived yet, show client-side matches as a placeholder.
-    // Search within ALL tasks (not `filtered`) so completed tasks are included.
     if (!searchResults) {
       const lowerQuery = searchQuery.toLowerCase();
       return tasks.filter((t) =>
@@ -1593,7 +1644,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       );
     }
 
-    // Server-side results: search across ALL tasks (cross-category).
+    // Server-side results: filter to respect active view context.
     const taskMap = new Map(tasks.map((t) => [t.id, t]));
 
     return searchResults
@@ -1602,7 +1653,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         if (!t) return false;
         return applySearchFilters(t);
       });
-  }, [tasks, filtered, isSearchMode, searchQuery, searchResults, priorityFilter, phaseFilter, sourceFilter]);
+  }, [tasks, filtered, isSearchMode, searchQuery, searchResults, showCompleted, priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, activeCategory, favorites, isChildOfStarredParent]);
 
   // Count of search results (for display)
   const searchResultCount = isSearchMode ? searchFiltered.length : null;
@@ -1834,12 +1885,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     });
   }, [sorted, groupBy, ordering?.categoryOrder, ordering?.projectOrder]);
 
-  // Child task maps: parentId → count, and set of child task IDs
+  // Child task maps: parentId → count, set of child task IDs, and child→parent mapping
   // Only tasks whose parent is VISIBLE in the current list are treated as children.
   // Orphans (parent hidden/completed/filtered out) render as normal top-level tasks.
-  const { childCountMap, childTaskIds } = useMemo(() => {
+  const { childCountMap, childTaskIds, childParentMap } = useMemo(() => {
     const countMap = new Map<string, number>();
     const childIds = new Set<string>();
+    const parentMap = new Map<string, string>(); // childId → parentFullId
     for (const task of sorted) {
       if (task.parent_task_id) {
         // Find parent — match by prefix (parent_task_id may be a short prefix)
@@ -1847,13 +1899,21 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         const parent = sorted.find((t) => t.id.startsWith(parentId));
         if (parent) {
           childIds.add(task.id);
+          parentMap.set(task.id, parent.id);
           countMap.set(parent.id, (countMap.get(parent.id) ?? 0) + 1);
         }
         // If parent not visible → orphan: no childIds entry, renders as top-level
       }
     }
-    return { childCountMap: countMap, childTaskIds: childIds };
+    return { childCountMap: countMap, childTaskIds: childIds, childParentMap: parentMap };
   }, [sorted]);
+
+  // Determine if a child task should be hidden (its parent is collapsed)
+  const isChildHidden = useCallback((taskId: string) => {
+    const parentId = childParentMap.get(taskId);
+    if (!parentId) return false; // not a child or orphan
+    return !expandedParents.has(parentId);
+  }, [childParentMap, expandedParents]);
 
   // Full (unfiltered) group map — needed so task reorder sends ALL IDs to the backend
   const fullGrouped = useMemo(() => {
@@ -1937,6 +1997,21 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     });
   };
 
+  // Toggle child task visibility for a parent task (default: collapsed)
+  const toggleParentExpand = useCallback((parentId: string) => {
+    setExpandedParents((prev) => {
+      const next = new Set(prev);
+      if (next.has(parentId)) next.delete(parentId);
+      else next.add(parentId);
+      persistSet(LS_EXPANDED_PARENTS_KEY, next);
+      return next;
+    });
+  }, []);
+
+  const isParentExpanded = useCallback((parentId: string) => {
+    return expandedParents.has(parentId);
+  }, [expandedParents]);
+
   // Collapse all / expand all
   const allGroupKeys = useMemo(() => {
     const catNames = grouped.map((g) => g.category);
@@ -1960,13 +2035,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       persistSet(LS_COLLAPSED_CATS_KEY, new Set());
       persistSet(LS_COLLAPSED_PROJS_KEY, new Set());
     } else {
-      // Collapse all
+      // Collapse all — also collapse child tasks
       const nextCats = new Set(allGroupKeys.catNames);
       const nextProjs = new Set(allGroupKeys.projKeys);
       setCollapsedCategories(nextCats);
       setCollapsedProjects(nextProjs);
+      setExpandedParents(new Set());
       persistSet(LS_COLLAPSED_CATS_KEY, nextCats);
       persistSet(LS_COLLAPSED_PROJS_KEY, nextProjs);
+      persistSet(LS_EXPANDED_PARENTS_KEY, new Set());
     }
   }, [allCollapsed, allGroupKeys]);
 
@@ -2428,6 +2505,54 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         </div>
       )}
 
+      {/* Pinned tasks section — shows between filters and task list */}
+      {pinnedTasks.length > 0 && (
+        <div className="todo-pinned-section">
+          <div className="todo-pinned-header">
+            <span className="todo-pinned-icon">{'\uD83D\uDCCC'}</span>
+            <span className="todo-pinned-label">Pinned</span>
+            <span className="todo-pinned-count">{pinnedTasks.length}</span>
+          </div>
+          <div className="todo-pinned-list">
+            {pinnedTasks.map((task) => {
+              const ps = task.session_status?.process_status ?? 'stopped';
+              const ws = task.session_status?.work_status ?? null;
+              const statusColor = task.session_status
+                ? compositeColor(ps as Parameters<typeof compositeColor>[0], (ws ?? 'completed') as Parameters<typeof compositeColor>[1])
+                : 'var(--fg-muted)';
+              const statusLabel = ps === 'running' ? 'Running'
+                : ps === 'idle' ? 'Idle'
+                : ws ? (WORK_LABELS as Record<string, string>)[ws] ?? ws
+                : null;
+              return (
+                <div
+                  key={task.id}
+                  className={`todo-pinned-card${focusedTaskId === task.id ? ' todo-pinned-card-active' : ''}`}
+                  onClick={() => onFocusTask?.(task)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onFocusTask?.(task); } }}
+                >
+                  <span className="todo-pinned-dot" style={{ background: statusColor }} />
+                  <span className="todo-pinned-title" title={task.title}>{task.title}</span>
+                  {statusLabel && (
+                    <span className="todo-pinned-status" style={{ color: statusColor }}>{statusLabel}</span>
+                  )}
+                  <button
+                    className="todo-pinned-unpin"
+                    onClick={(e) => { e.stopPropagation(); onUnpinTask?.(task.id); }}
+                    title="Unpin"
+                    aria-label="Unpin task"
+                  >
+                    &times;
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div className="todo-panel-list" style={(focusedTask || detailTarget) ? { flex: `${1 - detailRatio} 1 0%` } : undefined}>
         {loading && (
           <div className="empty-state" style={{ padding: '24px 8px' }}>
@@ -2452,12 +2577,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
               // Compute child maps from searchFiltered (cross-category)
               const searchChildIds = new Set<string>();
               const searchChildCount = new Map<string, number>();
+              const searchChildParent = new Map<string, string>();
               const searchIds = new Set(searchFiltered.map(t => t.id));
               for (const task of searchFiltered) {
                 if (task.parent_task_id) {
                   const parent = searchFiltered.find(t => t.id.startsWith(task.parent_task_id!));
                   if (parent) {
                     searchChildIds.add(task.id);
+                    searchChildParent.set(task.id, parent.id);
                     searchChildCount.set(parent.id, (searchChildCount.get(parent.id) ?? 0) + 1);
                   }
                 }
@@ -2482,14 +2609,56 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
               for (const task of searchFiltered) {
                 if (!emitted.has(task.id)) ordered.push(task);
               }
-              return ordered.map((task) => (
+              return ordered.map((task) => {
+                // Hide children of collapsed parents
+                const searchParentId = searchChildParent.get(task.id);
+                if (searchParentId && !expandedParents.has(searchParentId)) return null;
+                return (
+                  <SortableTaskItem
+                    key={task.id}
+                    task={task}
+                    isFocused={focusedTaskId === task.id}
+                    isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
+                    isChild={searchChildIds.has(task.id)}
+                    childCount={searchChildCount.get(task.id)}
+                    isExpanded={expandedParents.has(task.id)}
+                    onToggleExpand={() => toggleParentExpand(task.id)}
+                    onClick={() => handleTaskClick(task)}
+                    onSetPhase={onSetPhase ?? ((id) => onComplete(id))}
+                    onStar={onStar}
+                    onCyclePriority={onCyclePriority}
+                    onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
+                    onOpenSession={onOpenSession}
+                    openSessionIds={openSessionIds}
+                    onPinTask={onPinTask}
+                    onUnpinTask={onUnpinTask}
+                    isPinned={pinnedTaskIds?.has(task.id)}
+                    searchContext={`${task.category}${task.project && task.project !== task.category ? ` / ${task.project}` : ''}`}
+                    searchMatchField={searchMeta.get(task.id)?.matchField}
+                    searchScore={searchMeta.get(task.id)?.score}
+                    searchKeywordScore={searchMeta.get(task.id)?.keywordScore}
+                    searchSemanticScore={searchMeta.get(task.id)?.semanticScore}
+                  />
+                );
+              });
+            })()}
+          </div>
+        )}
+        {/* Flat mode: ungrouped list sorted by selected sort option */}
+        {!loading && !isSearchMode && groupBy === 'none' && sorted.length > 0 && (
+          <div className="todo-flat-results">
+            {sorted.map((task) => {
+              if (isChildHidden(task.id)) return null;
+              return (
                 <SortableTaskItem
                   key={task.id}
                   task={task}
                   isFocused={focusedTaskId === task.id}
                   isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
-                  isChild={searchChildIds.has(task.id)}
-                  childCount={searchChildCount.get(task.id)}
+                  isChild={childTaskIds.has(task.id)}
+                  childCount={childCountMap.get(task.id)}
+                  isExpanded={expandedParents.has(task.id)}
+                  onToggleExpand={() => toggleParentExpand(task.id)}
                   onClick={() => handleTaskClick(task)}
                   onSetPhase={onSetPhase ?? ((id) => onComplete(id))}
                   onStar={onStar}
@@ -2501,39 +2670,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   onUnpinTask={onUnpinTask}
                   isPinned={pinnedTaskIds?.has(task.id)}
                   searchContext={`${task.category}${task.project && task.project !== task.category ? ` / ${task.project}` : ''}`}
-                  searchMatchField={searchMeta.get(task.id)?.matchField}
-                  searchScore={searchMeta.get(task.id)?.score}
-                  searchKeywordScore={searchMeta.get(task.id)?.keywordScore}
-                  searchSemanticScore={searchMeta.get(task.id)?.semanticScore}
                 />
-              ));
-            })()}
-          </div>
-        )}
-        {/* Flat mode: ungrouped list sorted by selected sort option */}
-        {!loading && !isSearchMode && groupBy === 'none' && sorted.length > 0 && (
-          <div className="todo-flat-results">
-            {sorted.map((task) => (
-              <SortableTaskItem
-                key={task.id}
-                task={task}
-                isFocused={focusedTaskId === task.id}
-                isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
-                isChild={childTaskIds.has(task.id)}
-                childCount={childCountMap.get(task.id)}
-                onClick={() => handleTaskClick(task)}
-                onSetPhase={onSetPhase ?? ((id) => onComplete(id))}
-                onStar={onStar}
-                onCyclePriority={onCyclePriority}
-                onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
-                onOpenSession={onOpenSession}
-                openSessionIds={openSessionIds}
-                onPinTask={onPinTask}
-                onUnpinTask={onUnpinTask}
-                isPinned={pinnedTaskIds?.has(task.id)}
-                searchContext={`${task.category}${task.project && task.project !== task.category ? ` / ${task.project}` : ''}`}
-              />
-            ))}
+              );
+            })}
           </div>
         )}
         {/* Normal mode: grouped hierarchy */}
@@ -2578,27 +2717,32 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                       </DroppableHeader>
                       {!isCategoryCollapsed(category) && (
                         <>
-                          <SortableContext items={directTasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
-                            {directTasks.map((task) => (
-                              <SortableTaskItem
-                                key={task.id}
-                                task={task}
-                                isFocused={focusedTaskId === task.id}
-                                isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
-                                isChild={childTaskIds.has(task.id)}
-                                childCount={childCountMap.get(task.id)}
-                                onClick={() => handleTaskClick(task)}
-                                onSetPhase={onSetPhase ?? ((id) => onComplete(id))}
-                                onStar={onStar}
-                                onCyclePriority={onCyclePriority}
-                                onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
-                                onOpenSession={onOpenSession}
-                                openSessionIds={openSessionIds}
-                                onPinTask={onPinTask}
-                                onUnpinTask={onUnpinTask}
-                                isPinned={pinnedTaskIds?.has(task.id)}
-                              />
-                            ))}
+                          <SortableContext items={directTasks.filter((t) => !isChildHidden(t.id)).map((t) => t.id)} strategy={verticalListSortingStrategy}>
+                            {directTasks.map((task) => {
+                              if (isChildHidden(task.id)) return null;
+                              return (
+                                <SortableTaskItem
+                                  key={task.id}
+                                  task={task}
+                                  isFocused={focusedTaskId === task.id}
+                                  isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
+                                  isChild={childTaskIds.has(task.id)}
+                                  childCount={childCountMap.get(task.id)}
+                                  isExpanded={expandedParents.has(task.id)}
+                                  onToggleExpand={() => toggleParentExpand(task.id)}
+                                  onClick={() => handleTaskClick(task)}
+                                  onSetPhase={onSetPhase ?? ((id) => onComplete(id))}
+                                  onStar={onStar}
+                                  onCyclePriority={onCyclePriority}
+                                  onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
+                                  onOpenSession={onOpenSession}
+                                  openSessionIds={openSessionIds}
+                                  onPinTask={onPinTask}
+                                  onUnpinTask={onUnpinTask}
+                                  isPinned={pinnedTaskIds?.has(task.id)}
+                                />
+                              );
+                            })}
                           </SortableContext>
                           <SortableContext items={projects.map((p) => `proj:${category}/${p.project}`)} strategy={verticalListSortingStrategy}>
                             {projects.map(({ project, tasks: projTasks }) => {
@@ -2633,27 +2777,32 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                         )}
                                       </DroppableHeader>
                                       {!isProjectCollapsed(projKey) && (
-                                        <SortableContext items={projTasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
-                                          {projTasks.map((task) => (
-                                            <SortableTaskItem
-                                              key={task.id}
-                                              task={task}
-                                              isFocused={focusedTaskId === task.id}
-                                              isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
-                                              isChild={childTaskIds.has(task.id)}
-                                              childCount={childCountMap.get(task.id)}
-                                              onClick={() => handleTaskClick(task)}
-                                              onSetPhase={onSetPhase ?? ((id) => onComplete(id))}
-                                              onStar={onStar}
-                                              onCyclePriority={onCyclePriority}
-                                              onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
-                                              onOpenSession={onOpenSession}
-                                              openSessionIds={openSessionIds}
-                                              onPinTask={onPinTask}
-                                              onUnpinTask={onUnpinTask}
-                                              isPinned={pinnedTaskIds?.has(task.id)}
-                                            />
-                                          ))}
+                                        <SortableContext items={projTasks.filter((t) => !isChildHidden(t.id)).map((t) => t.id)} strategy={verticalListSortingStrategy}>
+                                          {projTasks.map((task) => {
+                                            if (isChildHidden(task.id)) return null;
+                                            return (
+                                              <SortableTaskItem
+                                                key={task.id}
+                                                task={task}
+                                                isFocused={focusedTaskId === task.id}
+                                                isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
+                                                isChild={childTaskIds.has(task.id)}
+                                                childCount={childCountMap.get(task.id)}
+                                                isExpanded={expandedParents.has(task.id)}
+                                                onToggleExpand={() => toggleParentExpand(task.id)}
+                                                onClick={() => handleTaskClick(task)}
+                                                onSetPhase={onSetPhase ?? ((id) => onComplete(id))}
+                                                onStar={onStar}
+                                                onCyclePriority={onCyclePriority}
+                                                onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
+                                                onOpenSession={onOpenSession}
+                                                openSessionIds={openSessionIds}
+                                                onPinTask={onPinTask}
+                                                onUnpinTask={onUnpinTask}
+                                                isPinned={pinnedTaskIds?.has(task.id)}
+                                              />
+                                            );
+                                          })}
                                         </SortableContext>
                                       )}
                                     </div>
