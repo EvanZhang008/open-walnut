@@ -32,6 +32,11 @@ export interface ModelConfig {
 export const DEFAULT_MODEL = 'global.anthropic.claude-opus-4-6-v1';
 const DEFAULT_MAX_TOKENS = 32768;
 
+/** Strip [1m] suffix used as context-window marker — Bedrock model ID doesn't include it. */
+function resolveBedrockModelId(model: string): string {
+  return model.replace(/\[1m\]$/, '');
+}
+
 // Aggressive retry config for 429/529 errors
 const MAX_RETRIES = 10;
 const BASE_DELAY_MS = 1000;  // 1s initial delay
@@ -131,7 +136,7 @@ export async function sendMessage(opts: {
   config?: ModelConfig;
   signal?: AbortSignal;
 }): Promise<ModelResult> {
-  const model = opts.config?.model ?? DEFAULT_MODEL;
+  const model = resolveBedrockModelId(opts.config?.model ?? DEFAULT_MODEL);
   const maxTokens = opts.config?.maxTokens ?? DEFAULT_MAX_TOKENS;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -199,7 +204,7 @@ export async function sendMessageStream(opts: {
   signal?: AbortSignal;
   onTextDelta?: (delta: string) => void;
 }): Promise<ModelResult> {
-  const model = opts.config?.model ?? DEFAULT_MODEL;
+  const model = resolveBedrockModelId(opts.config?.model ?? DEFAULT_MODEL);
   const maxTokens = opts.config?.maxTokens ?? DEFAULT_MAX_TOKENS;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {

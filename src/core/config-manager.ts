@@ -5,7 +5,9 @@ import { VALID_PRIORITIES, type Config, type TaskPriority } from './types.js';
 
 export const DEFAULT_AVAILABLE_MODELS = [
   'global.anthropic.claude-opus-4-6-v1',
+  'global.anthropic.claude-opus-4-6-v1[1m]',
   'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+  'us.anthropic.claude-sonnet-4-5-20250929-v1:0[1m]',
   'us.anthropic.claude-haiku-4-5-20251001-v1:0',
 ];
 
@@ -35,14 +37,42 @@ export async function getConfig(): Promise<Config> {
     if (!config.agent?.available_models) {
       config.agent = { ...config.agent, available_models: DEFAULT_AVAILABLE_MODELS };
     }
-    // Seed main_model default: first entry in available_models (Opus 4.6)
-    if (!config.agent?.main_model) {
+    // Migrate: ensure 1M variants exist for non-Haiku models
+    {
+      const models = config.agent!.available_models!;
+      const added: string[] = [];
+      for (const m of models) {
+        if (!m.endsWith('[1m]') && !m.toLowerCase().includes('haiku')) {
+          const oneM = m + '[1m]';
+          if (!models.includes(oneM)) added.push(oneM);
+        }
+      }
+      if (added.length > 0) {
+        // Interleave: insert each 1M variant right after its base model
+        const merged: string[] = [];
+        for (const m of models) {
+          merged.push(m);
+          const oneM = m + '[1m]';
+          if (added.includes(oneM)) merged.push(oneM);
+        }
+        config.agent = { ...config.agent, available_models: merged };
+      }
+    }
+    // Seed/migrate main_model: prefer 1M Opus variant for large context needs
+    {
       const models = config.agent?.available_models ?? DEFAULT_AVAILABLE_MODELS;
-      config.agent = { ...config.agent, main_model: models[0] };
+      const oneM = models.find(m => m.includes('opus') && m.includes('[1m]'));
+      if (!config.agent?.main_model) {
+        config.agent = { ...config.agent, main_model: oneM ?? models[0] };
+      } else if (oneM && config.agent.main_model === oneM.replace('[1m]', '')) {
+        // Migrate: upgrade from 200K Opus default to 1M Opus default
+        config.agent = { ...config.agent, main_model: oneM };
+      }
     }
     return config;
   } catch {
-    return { ...DEFAULT_CONFIG, agent: { available_models: DEFAULT_AVAILABLE_MODELS, main_model: DEFAULT_AVAILABLE_MODELS[0] } };
+    const defaultOneM = DEFAULT_AVAILABLE_MODELS.find(m => m.includes('opus') && m.includes('[1m]')) ?? DEFAULT_AVAILABLE_MODELS[0];
+    return { ...DEFAULT_CONFIG, agent: { available_models: DEFAULT_AVAILABLE_MODELS, main_model: defaultOneM } };
   }
 }
 

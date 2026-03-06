@@ -11,19 +11,26 @@ const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
   { value: 'dark', label: 'Dark' },
 ];
 
-/** Extract a human-readable label from a Bedrock model ID. */
+/** Extract a human-readable label from a Bedrock model ID (with optional [1m] suffix). */
 function modelDisplayName(modelId: string): string {
+  const is1M = modelId.endsWith('[1m]');
+  const ctx = is1M ? '1M' : '200K';
   const lower = modelId.toLowerCase();
-  if (lower.includes('opus') && lower.includes('4-6')) return 'Opus 4.6';
-  if (lower.includes('opus') && lower.includes('4-')) return 'Opus 4';
-  if (lower.includes('sonnet') && lower.includes('4-6')) return 'Sonnet 4.6';
-  if (lower.includes('sonnet') && lower.includes('4-5')) return 'Sonnet 4.5';
-  if (lower.includes('sonnet')) return 'Sonnet';
-  if (lower.includes('haiku') && lower.includes('4-5')) return 'Haiku 4.5';
-  if (lower.includes('haiku')) return 'Haiku';
-  if (lower.includes('opus')) return 'Opus';
-  // Fallback: show the raw ID truncated
-  return modelId.length > 40 ? modelId.slice(0, 37) + '...' : modelId;
+
+  let name: string;
+  if (lower.includes('opus') && lower.includes('4-6')) name = 'Opus 4.6';
+  else if (lower.includes('opus') && lower.includes('4-')) name = 'Opus 4';
+  else if (lower.includes('sonnet') && lower.includes('4-6')) name = 'Sonnet 4.6';
+  else if (lower.includes('sonnet') && lower.includes('4-5')) name = 'Sonnet 4.5';
+  else if (lower.includes('sonnet')) name = 'Sonnet';
+  else if (lower.includes('haiku') && lower.includes('4-5')) name = 'Haiku 4.5';
+  else if (lower.includes('haiku')) name = 'Haiku';
+  else if (lower.includes('opus')) name = 'Opus';
+  else return modelId.length > 40 ? modelId.slice(0, 37) + '...' : modelId;
+
+  // Haiku doesn't have a 1M variant — skip context suffix
+  if (lower.includes('haiku')) return name;
+  return `${name} (${ctx})`;
 }
 
 export function SettingsPage() {
