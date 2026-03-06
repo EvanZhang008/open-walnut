@@ -23,8 +23,12 @@ export function useFocusBar(tasks: Task[]): UseFocusBarReturn {
 
   useEffect(() => { fetchPinned(); }, [fetchPinned]);
 
-  // Re-sync when config changes (from other tabs/agents)
-  useEvent('config:changed', () => { fetchPinned(); });
+  // Re-sync only when focus_bar config changes (not every config change —
+  // avoids ghost pins from concurrent saveConfig callers overwriting focus_bar)
+  useEvent('config:changed', (data: unknown) => {
+    const { key } = (data ?? {}) as { key?: string };
+    if (key === 'focus_bar') fetchPinned();
+  });
 
   // Auto-unpin completed tasks
   useEvent('task:completed', (data: unknown) => {
@@ -36,14 +40,26 @@ export function useFocusBar(tasks: Task[]): UseFocusBarReturn {
   });
 
   const pin = useCallback(async (taskId: string) => {
-    const data = await focusApi.pinTask(taskId);
-    if (data?.pinned_tasks) setPinnedIds(data.pinned_tasks);
-    else setPinnedIds((prev) => prev.includes(taskId) ? prev : [...prev, taskId]);
+    // Optimistic: show in UI immediately
+    setPinnedIds((prev) => prev.includes(taskId) ? prev : [...prev, taskId]);
+    try {
+      const data = await focusApi.pinTask(taskId);
+      if (data?.pinned_tasks) setPinnedIds(data.pinned_tasks);
+    } catch {
+      // Revert on failure
+      setPinnedIds((prev) => prev.filter((id) => id !== taskId));
+    }
   }, []);
 
   const unpin = useCallback(async (taskId: string) => {
-    await focusApi.unpinTask(taskId);
+    // Optimistic: remove from UI immediately
     setPinnedIds((prev) => prev.filter((id) => id !== taskId));
+    try {
+      await focusApi.unpinTask(taskId);
+    } catch {
+      // Revert on failure
+      setPinnedIds((prev) => prev.includes(taskId) ? prev : [...prev, taskId]);
+    }
   }, []);
 
   const isPinned = useCallback(

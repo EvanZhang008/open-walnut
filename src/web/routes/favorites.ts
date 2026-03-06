@@ -3,7 +3,7 @@
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { getConfig, saveConfig } from '../../core/config-manager.js'
+import { getConfig, updateConfig } from '../../core/config-manager.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 
 export const favoritesRouter = Router()
@@ -31,7 +31,7 @@ favoritesRouter.post('/categories/:name', async (req: Request, res: Response, ne
     if (!config.favorites.categories.includes(name)) {
       config.favorites.categories.push(name)
     }
-    await saveConfig(config)
+    await updateConfig({ favorites: config.favorites })
     bus.emit(EventNames.CONFIG_CHANGED, { key: 'favorites' }, ['web-ui'])
     res.json({ categories: config.favorites.categories })
   } catch (err) {
@@ -46,7 +46,7 @@ favoritesRouter.delete('/categories/:name', async (req: Request, res: Response, 
     const config = await getConfig()
     if (!config.favorites) config.favorites = {}
     config.favorites.categories = (config.favorites.categories ?? []).filter((c) => c !== name)
-    await saveConfig(config)
+    await updateConfig({ favorites: config.favorites })
     bus.emit(EventNames.CONFIG_CHANGED, { key: 'favorites' }, ['web-ui'])
     res.json({ categories: config.favorites.categories })
   } catch (err) {
@@ -64,7 +64,7 @@ favoritesRouter.post('/projects/:name', async (req: Request, res: Response, next
     if (!config.favorites.projects.includes(name)) {
       config.favorites.projects.push(name)
     }
-    await saveConfig(config)
+    await updateConfig({ favorites: config.favorites })
     bus.emit(EventNames.CONFIG_CHANGED, { key: 'favorites' }, ['web-ui'])
     res.json({ projects: config.favorites.projects })
   } catch (err) {
@@ -79,7 +79,7 @@ favoritesRouter.delete('/projects/:name', async (req: Request, res: Response, ne
     const config = await getConfig()
     if (!config.favorites) config.favorites = {}
     config.favorites.projects = (config.favorites.projects ?? []).filter((p) => p !== name)
-    await saveConfig(config)
+    await updateConfig({ favorites: config.favorites })
     bus.emit(EventNames.CONFIG_CHANGED, { key: 'favorites' }, ['web-ui'])
     res.json({ projects: config.favorites.projects })
   } catch (err) {

@@ -4,8 +4,8 @@ import { Sidebar } from './Sidebar';
 import { CronToast } from '../common/CronToast';
 import { DataSafetyBanner } from '../common/DataSafetyBanner';
 import { FocusDock } from '../dock/FocusDock';
-import { useFocusBar } from '@/hooks/useFocusBar';
-import { TasksProvider, useTasksContext } from '@/contexts/TasksContext';
+import { TasksProvider } from '@/contexts/TasksContext';
+import { FocusBarProvider, useFocusBarContext } from '@/contexts/FocusBarContext';
 import { perf } from '@/utils/perf-logger';
 
 interface AppShellProps {
@@ -24,7 +24,9 @@ function readCollapsed(): boolean {
 export function AppShell({ children }: AppShellProps) {
   return (
     <TasksProvider>
-      <AppShellInner>{children}</AppShellInner>
+      <FocusBarProvider>
+        <AppShellInner>{children}</AppShellInner>
+      </FocusBarProvider>
     </TasksProvider>
   );
 }
@@ -34,8 +36,7 @@ function AppShellInner({ children }: AppShellProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(readCollapsed);
   const location = useLocation();
   const isMainPage = location.pathname === '/';
-  const { tasks } = useTasksContext();
-  const focusBar = useFocusBar(tasks);
+  const focusBar = useFocusBarContext();
 
   // Print perf waterfall 3s after mount (all initial fetches should be settled)
   useEffect(() => {

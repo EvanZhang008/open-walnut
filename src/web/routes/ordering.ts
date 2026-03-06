@@ -3,7 +3,7 @@
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { getConfig, saveConfig } from '../../core/config-manager.js'
+import { getConfig, updateConfig } from '../../core/config-manager.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 
 export const orderingRouter = Router()
@@ -32,7 +32,7 @@ orderingRouter.put('/categories', async (req: Request, res: Response, next: Next
     const config = await getConfig()
     if (!config.ordering) config.ordering = {}
     config.ordering.categories = order
-    await saveConfig(config)
+    await updateConfig({ ordering: config.ordering })
     bus.emit(EventNames.CONFIG_CHANGED, { key: 'ordering' }, ['web-ui'])
     res.json({ categories: config.ordering.categories })
   } catch (err) {
@@ -53,7 +53,7 @@ orderingRouter.put('/projects/:category', async (req: Request, res: Response, ne
     if (!config.ordering) config.ordering = {}
     if (!config.ordering.projects) config.ordering.projects = {}
     config.ordering.projects[category] = order
-    await saveConfig(config)
+    await updateConfig({ ordering: config.ordering })
     bus.emit(EventNames.CONFIG_CHANGED, { key: 'ordering' }, ['web-ui'])
     res.json({ projects: config.ordering.projects })
   } catch (err) {

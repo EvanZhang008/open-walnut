@@ -5,7 +5,7 @@ import { useChat, type TaskContext, type ImageAttachment } from '@/hooks/useChat
 import { useWebSocket, useEvent } from '@/hooks/useWebSocket';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { useFavorites } from '@/hooks/useFavorites';
-import { useFocusBar } from '@/hooks/useFocusBar';
+import { useFocusBarContext } from '@/contexts/FocusBarContext';
 import { useOrdering } from '@/hooks/useOrdering';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { ChatPanel } from '@/components/chat/ChatPanel';
@@ -84,7 +84,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const { connectionState } = useWebSocket();
   const { tasks, loading, toggleComplete, setPhase, star, create, update, reorder, moveTask, operationError, clearOperationError, showOperationError } = useTasksContext();
   const favorites = useFavorites();
-  const focusBar = useFocusBar(tasks);
+  const focusBar = useFocusBarContext();
   const pinnedTaskIdSet = useMemo(() => new Set(focusBar.pinnedIds), [focusBar.pinnedIds]);
   const ordering = useOrdering();
   const [focusedTask, setFocusedTask] = useState<Task | null>(null);
