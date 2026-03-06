@@ -110,13 +110,16 @@ export async function reconcileTaskEmbeddings(
   return { embedded, skipped, deleted };
 }
 
+export type EmbedSingleResult = 'embedded' | 'unchanged' | 'failed';
+
 /**
  * Embed a single task (for incremental updates on task:created / task:updated).
+ * Returns 'embedded' on success, 'unchanged' if hash matches, 'failed' if Ollama unavailable.
  */
 export async function embedSingleTask(
   task: Task,
   options?: OllamaEmbedOptions,
-): Promise<boolean> {
+): Promise<EmbedSingleResult> {
   ensureEmbeddingTables();
 
   const model = options?.model ?? 'bge-m3';
@@ -124,13 +127,17 @@ export async function embedSingleTask(
   const hash = compositeHash(text);
   const existingHash = getTaskEmbeddingHash(task.id);
 
-  if (existingHash === hash) return false; // unchanged
+  if (existingHash === hash) return 'unchanged';
 
   const vectors = await batchEmbed([text], options);
-  if (!vectors) return false; // Ollama unavailable
+  if (!vectors) {
+    log.agent.warn(`embedSingleTask failed for task ${task.id} ("${task.title.slice(0, 60)}") — Ollama unavailable`);
+    return 'failed';
+  }
 
   upsertTaskEmbedding(task.id, hash, vectors[0], model);
-  return true;
+  log.agent.debug(`Embedded task ${task.id} ("${task.title.slice(0, 40)}")`);
+  return 'embedded';
 }
 
 /**
@@ -171,14 +178,26 @@ export async function reconcileChunkEmbeddings(
   return { embedded, cleaned };
 }
 
+export interface ReconcileResult {
+  tasks: { embedded: number; skipped: number; deleted: number };
+  chunks: { embedded: number; cleaned: number };
+  totalTasks: number;
+  indexedTasks: number;
+  ollamaAvailable: boolean;
+}
+
 /**
  * Full reconciliation: tasks + chunks. Called on server startup.
  * Unloads model from GPU after completion to free memory.
+ * Returns status for system health reporting.
  */
 export async function reconcileAllEmbeddings(
   options?: OllamaEmbedOptions,
-): Promise<void> {
+): Promise<ReconcileResult> {
   const startTime = Date.now();
+
+  const tasks = await listTasks();
+  const totalTasks = tasks.length;
 
   const taskResult = await reconcileTaskEmbeddings(options);
   log.agent.info(`Task embeddings: ${taskResult.embedded} new, ${taskResult.skipped} unchanged, ${taskResult.deleted} removed`);
@@ -189,6 +208,14 @@ export async function reconcileAllEmbeddings(
   const elapsed = Date.now() - startTime;
   const totalEmbedded = taskResult.embedded + chunkResult.embedded;
 
+  // Count how many tasks actually have embeddings now
+  const { getAllTaskEmbeddings } = await import('./store.js');
+  const indexedTasks = getAllTaskEmbeddings().length;
+
+  // Ollama was available if we embedded everything we needed to, or nothing needed embedding
+  const neededEmbedding = totalTasks - taskResult.skipped;
+  const ollamaAvailable = neededEmbedding === 0 || taskResult.embedded === neededEmbedding;
+
   if (totalEmbedded > 0) {
     log.agent.info(`Embedding reconciliation complete in ${elapsed}ms (${totalEmbedded} vectors)`);
     // Unload model from GPU after bulk indexing
@@ -196,4 +223,16 @@ export async function reconcileAllEmbeddings(
   } else {
     log.agent.debug(`Embedding reconciliation: nothing to update (${elapsed}ms)`);
   }
+
+  if (indexedTasks < totalTasks) {
+    log.agent.warn(`Embedding gap: ${totalTasks - indexedTasks}/${totalTasks} tasks missing embeddings`);
+  }
+
+  return {
+    tasks: taskResult,
+    chunks: chunkResult,
+    totalTasks,
+    indexedTasks,
+    ollamaAvailable,
+  };
 }

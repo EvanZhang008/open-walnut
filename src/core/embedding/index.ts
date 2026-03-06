@@ -23,4 +23,5 @@ export {
   reconcileAllEmbeddings,
   embedSingleTask,
 } from './pipeline.js';
+export type { EmbedSingleResult } from './pipeline.js';
 export type { EmbeddingConfig, SearchMode, TaskEmbeddingRecord, ChunkEmbeddingRecord } from './types.js';

@@ -52,6 +52,7 @@ import { registry } from '../core/integration-registry.js'
 import { loadPlugins, migrateConfigToPlugins, runPluginMigrations } from '../core/integration-loader.js'
 import type { SyncPollContext } from '../core/integration-types.js'
 import { integrationsRouter } from './routes/integrations.js'
+import { systemRouter } from './routes/system.js'
 import { enqueueMainAgentTurn, getQueueStatus } from './agent-turn-queue.js'
 import { triggerBackgroundCompaction } from './background-compaction.js'
 import {
@@ -119,6 +120,27 @@ export function getPendingCronNotifications(): PendingCronNotification[] {
 
 export function drainPendingCronNotifications(): PendingCronNotification[] {
   return pendingCronNotifications.splice(0, pendingCronNotifications.length)
+}
+
+// ── System health state (embedding, etc.) ──
+
+export interface SystemHealthState {
+  embedding: {
+    total: number;
+    indexed: number;
+    unindexed: number;
+    ollamaAvailable: boolean;
+    lastReconcileAt?: string;
+    lastError?: string;
+  };
+}
+
+const systemHealth: SystemHealthState = {
+  embedding: { total: 0, indexed: 0, unindexed: 0, ollamaAvailable: true },
+}
+
+export function getSystemHealth(): SystemHealthState {
+  return systemHealth
 }
 
 /**
@@ -276,8 +298,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
       // If stateful: inject memory
       if (agentDef.stateful) {
-        const memory = getProjectMemory(agentDef.stateful.memory_project)
-        systemPrompt += '\n\n' + buildStatefulMemorySection(memory, agentDef.stateful)
+        const memResult = getProjectMemory(agentDef.stateful.memory_project)
+        systemPrompt += '\n\n' + buildStatefulMemorySection(memResult?.content ?? null, agentDef.stateful)
       }
 
       const tools = await buildSubagentToolSet(agentDef)
@@ -347,6 +369,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/heartbeat', (await import('./routes/heartbeat.js')).heartbeatRouter)
   app.use('/api/timeline', timelineRouter)
   app.use('/api/integrations', integrationsRouter)
+  app.use('/api/system', systemRouter)
   app.get('/api/git-sync/status', (_req, res) => {
     const health = gitAutoCommitHandle?.health ?? { protected: false, error: 'not started', consecutiveFailures: 0 }
     res.json(health)
@@ -555,6 +578,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // -- Incremental embedding: re-embed tasks on create/update --
   let embeddingDebounce: ReturnType<typeof setTimeout> | null = null
   const pendingEmbedTaskIds = new Set<string>()
+  const failedEmbedTaskIds = new Set<string>() // retry queue for failed embeddings
+  let embeddingRetryTimer: ReturnType<typeof setTimeout> | null = null
 
   bus.subscribe('embedding-sync', async (event) => {
     if (event.name !== EventNames.TASK_CREATED && event.name !== EventNames.TASK_UPDATED) return
@@ -567,20 +592,96 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const ids = [...pendingEmbedTaskIds]
       pendingEmbedTaskIds.clear()
 
+      let failedCount = 0
+      let embeddedCount = 0
       try {
         const { embedSingleTask } = await import('../core/embedding/pipeline.js')
         const { getTask: getTaskById } = await import('../core/task-manager.js')
         for (const id of ids) {
           try {
             const t = await getTaskById(id)
-            await embedSingleTask(t)
-          } catch { /* task may have been deleted */ }
+            const result = await embedSingleTask(t)
+            if (result === 'failed') {
+              failedCount++
+              failedEmbedTaskIds.add(id)
+            } else if (result === 'embedded') {
+              embeddedCount++
+              failedEmbedTaskIds.delete(id) // clear from retry queue on success
+            }
+          } catch (err) {
+            // Task may have been deleted between event and embedding
+            const msg = err instanceof Error ? err.message : String(err)
+            log.memory.debug(`embedSingleTask skipped task ${id}: ${msg}`)
+          }
         }
-      } catch {
-        // Embedding unavailable — silent degradation
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        log.memory.warn(`Embedding pipeline error: ${msg}`)
+        failedCount = ids.length
+        for (const id of ids) failedEmbedTaskIds.add(id)
+      }
+
+      if (embeddedCount > 0) {
+        log.memory.debug(`Incremental embedding: ${embeddedCount} task(s) embedded`)
+      }
+
+      // Update health if incremental embedding failed
+      if (failedCount > 0) {
+        log.memory.warn(`Incremental embedding: ${failedCount} task(s) failed — queued for retry`)
+        systemHealth.embedding.unindexed += failedCount
+        systemHealth.embedding.ollamaAvailable = false
+        broadcastEvent('system:health', systemHealth)
+        scheduleEmbeddingRetry()
       }
     }, 500) // 500ms debounce
   })
+
+  // Retry failed embeddings after 60s — gives Ollama time to come back up
+  function scheduleEmbeddingRetry(): void {
+    if (embeddingRetryTimer) return // already scheduled
+    embeddingRetryTimer = setTimeout(async () => {
+      embeddingRetryTimer = null
+      if (failedEmbedTaskIds.size === 0) return
+
+      const ids = [...failedEmbedTaskIds]
+      log.memory.info(`Retrying embedding for ${ids.length} task(s)...`)
+
+      try {
+        const { embedSingleTask } = await import('../core/embedding/pipeline.js')
+        const { getTask: getTaskById } = await import('../core/task-manager.js')
+        let retrySuccess = 0
+        let retryFail = 0
+
+        for (const id of ids) {
+          try {
+            const t = await getTaskById(id)
+            const result = await embedSingleTask(t)
+            if (result === 'failed') {
+              retryFail++
+            } else {
+              failedEmbedTaskIds.delete(id)
+              if (result === 'embedded') retrySuccess++
+            }
+          } catch {
+            failedEmbedTaskIds.delete(id) // task deleted, remove from retry
+          }
+        }
+
+        if (retrySuccess > 0) {
+          log.memory.info(`Embedding retry: ${retrySuccess} task(s) recovered`)
+          // Update health — run full reconcile count
+          reconcileEmbeddingsBackground()
+        }
+        if (retryFail > 0) {
+          log.memory.warn(`Embedding retry: ${retryFail} task(s) still failing — will retry on next reconciliation`)
+          // Don't schedule infinite retries — reconcileEmbeddingsBackground will catch them
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        log.memory.warn(`Embedding retry failed: ${msg}`)
+      }
+    }, 60_000)
+  }
 
   // -- Heartbeat config reload: restart runner when heartbeat config changes --
   bus.subscribe('heartbeat-config', async (event) => {
@@ -1249,11 +1350,29 @@ function reconcileEmbeddingsBackground(): void {
   ;(async () => {
     try {
       const { reconcileAllEmbeddings } = await import('../core/embedding/pipeline.js')
-      await reconcileAllEmbeddings()
+      const result = await reconcileAllEmbeddings()
+
+      // Update system health state
+      systemHealth.embedding = {
+        total: result.totalTasks,
+        indexed: result.indexedTasks,
+        unindexed: result.totalTasks - result.indexedTasks,
+        ollamaAvailable: result.ollamaAvailable,
+        lastReconcileAt: new Date().toISOString(),
+      }
+
+      // Broadcast to frontend if there are issues
+      if (result.indexedTasks < result.totalTasks || !result.ollamaAvailable) {
+        broadcastEvent('system:health', systemHealth)
+      }
     } catch (err) {
-      log.memory.warn('embedding reconciliation failed', {
-        error: err instanceof Error ? err.message : String(err),
-      })
+      const errMsg = err instanceof Error ? err.message : String(err)
+      log.memory.warn('embedding reconciliation failed', { error: errMsg })
+
+      systemHealth.embedding.ollamaAvailable = false
+      systemHealth.embedding.lastError = errMsg
+      systemHealth.embedding.lastReconcileAt = new Date().toISOString()
+      broadcastEvent('system:health', systemHealth)
     }
   })()
 }
