@@ -176,6 +176,8 @@ export interface AgentConfig {
   available_models?: string[];
   /** Default model passed as --model to claude CLI sessions. Defaults to 'opus'. */
   session_model?: string;
+  /** Bedrock model ID for the main AI agent. Defaults to DEFAULT_MODEL (Opus 4.6). */
+  main_model?: string;
 }
 
 export interface Config {

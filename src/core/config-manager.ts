@@ -35,9 +35,14 @@ export async function getConfig(): Promise<Config> {
     if (!config.agent?.available_models) {
       config.agent = { ...config.agent, available_models: DEFAULT_AVAILABLE_MODELS };
     }
+    // Seed main_model default: first entry in available_models (Opus 4.6)
+    if (!config.agent?.main_model) {
+      const models = config.agent?.available_models ?? DEFAULT_AVAILABLE_MODELS;
+      config.agent = { ...config.agent, main_model: models[0] };
+    }
     return config;
   } catch {
-    return { ...DEFAULT_CONFIG, agent: { available_models: DEFAULT_AVAILABLE_MODELS } };
+    return { ...DEFAULT_CONFIG, agent: { available_models: DEFAULT_AVAILABLE_MODELS, main_model: DEFAULT_AVAILABLE_MODELS[0] } };
   }
 }
 

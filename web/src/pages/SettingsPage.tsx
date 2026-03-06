@@ -11,6 +11,21 @@ const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
   { value: 'dark', label: 'Dark' },
 ];
 
+/** Extract a human-readable label from a Bedrock model ID. */
+function modelDisplayName(modelId: string): string {
+  const lower = modelId.toLowerCase();
+  if (lower.includes('opus') && lower.includes('4-6')) return 'Opus 4.6';
+  if (lower.includes('opus') && lower.includes('4-')) return 'Opus 4';
+  if (lower.includes('sonnet') && lower.includes('4-6')) return 'Sonnet 4.6';
+  if (lower.includes('sonnet') && lower.includes('4-5')) return 'Sonnet 4.5';
+  if (lower.includes('sonnet')) return 'Sonnet';
+  if (lower.includes('haiku') && lower.includes('4-5')) return 'Haiku 4.5';
+  if (lower.includes('haiku')) return 'Haiku';
+  if (lower.includes('opus')) return 'Opus';
+  // Fallback: show the raw ID truncated
+  return modelId.length > 40 ? modelId.slice(0, 37) + '...' : modelId;
+}
+
 export function SettingsPage() {
   const { theme, setTheme } = useTheme();
   const [config, setConfig] = useState<Config | null>(null);
@@ -23,6 +38,7 @@ export function SettingsPage() {
   const [userName, setUserName] = useState('');
   const [defaultPriority, setDefaultPriority] = useState<TaskPriority>('none');
   const [defaultCategory, setDefaultCategory] = useState('');
+  const [mainModel, setMainModel] = useState('');
   useEffect(() => {
     fetchConfig()
       .then((c) => {
@@ -30,6 +46,7 @@ export function SettingsPage() {
         setUserName(c.user?.name ?? '');
         setDefaultPriority(c.defaults?.priority ?? 'none');
         setDefaultCategory(c.defaults?.category ?? '');
+        setMainModel(c.agent?.main_model ?? '');
       })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false));
@@ -46,7 +63,7 @@ export function SettingsPage() {
         ...config,
         user: { ...config.user, name: userName },
         defaults: { priority: defaultPriority, category: defaultCategory },
-        agent: config.agent,
+        agent: { ...config.agent, main_model: mainModel || undefined },
       };
       await updateConfig(newConfig);
       setConfig(newConfig as Config);
@@ -154,6 +171,24 @@ export function SettingsPage() {
             />
           </div>
         </div>
+
+        {config?.agent?.available_models && config.agent.available_models.length > 0 && (
+          <div className="form-group">
+            <label htmlFor="settings-main-model">Main AI Model</label>
+            <select
+              id="settings-main-model"
+              value={mainModel}
+              onChange={(e) => setMainModel(e.target.value)}
+            >
+              {config.agent.available_models.map((id) => (
+                <option key={id} value={id}>{modelDisplayName(id)}</option>
+              ))}
+            </select>
+            <p className="text-sm text-muted" style={{ marginTop: 4 }}>
+              Model used by the main AI agent for chat and task processing.
+            </p>
+          </div>
+        )}
 
         {config?.provider && (
           <div className="form-group">
