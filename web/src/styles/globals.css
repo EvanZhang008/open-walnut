@@ -367,6 +367,205 @@ input:focus, textarea:focus, select:focus {
   display: none;
 }
 
+/* ── Notification bell + panel ── */
+
+.sidebar-notification-area {
+  padding: 4px 8px;
+  border-top: 1px solid var(--border);
+}
+
+.sidebar-notification-btn {
+  position: relative;
+}
+
+.notification-badge-dot {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff3b30;
+  border: 2px solid var(--bg-sidebar, var(--bg));
+}
+
+.sidebar.collapsed .notification-badge-dot {
+  top: 6px;
+  right: 12px;
+}
+
+.notification-panel-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 998;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.notification-panel {
+  position: fixed;
+  top: 0;
+  left: 200px;
+  bottom: 0;
+  width: 320px;
+  z-index: 999;
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+  animation: notif-slide-in 0.2s ease-out;
+}
+
+.notification-panel.sidebar-collapsed {
+  left: 56px;
+}
+
+@keyframes notif-slide-in {
+  from { transform: translateX(-16px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+.notification-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.notification-panel-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.notification-panel-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--fg-muted);
+  padding: 4px;
+  border-radius: var(--radius-sm);
+}
+
+.notification-panel-close:hover {
+  color: var(--fg);
+  background: var(--accent-subtle);
+}
+
+.notification-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.notification-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  margin-bottom: 8px;
+}
+
+.notification-card.warn {
+  border-color: #ff9500;
+  background: rgba(255, 149, 0, 0.05);
+}
+
+.notification-card.ok {
+  border-color: var(--border);
+}
+
+.notification-card-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.notification-card-icon {
+  font-size: 16px;
+}
+
+.notification-card-icon.warn {
+  color: #ff9500;
+}
+
+.notification-card-icon.ok {
+  color: #34c759;
+}
+
+.notification-card-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.notification-card-details {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.notification-detail-row {
+  display: flex;
+  justify-content: space-between;
+  color: var(--fg-muted);
+  padding: 2px 0;
+}
+
+.notification-detail-row.warn {
+  color: #ff9500;
+}
+
+.notification-detail-row.error {
+  color: #ff3b30;
+}
+
+.notification-detail-row.muted {
+  opacity: 0.7;
+}
+
+.notification-detail-value {
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.notification-detail-value.ok {
+  color: #34c759;
+}
+
+.notification-detail-value.warn {
+  color: #ff9500;
+}
+
+.notification-error-text {
+  font-size: 11px;
+  word-break: break-word;
+}
+
+.notification-retry-btn {
+  margin-top: 10px;
+  width: 100%;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.notification-retry-btn:hover {
+  opacity: 0.9;
+}
+
+.notification-retry-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .main-content {
   flex: 1;
   display: flex;
@@ -5172,6 +5371,120 @@ img[data-lightbox-src],
   border-bottom: 1px solid var(--border);
 }
 
+/* ── Pinned tasks section (between filters and task list) ── */
+
+.todo-pinned-section {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 6px 12px 4px;
+}
+
+.todo-pinned-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 4px;
+}
+
+.todo-pinned-icon {
+  font-size: 11px;
+  line-height: 1;
+}
+
+.todo-pinned-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.todo-pinned-count {
+  font-size: 10px;
+  color: var(--fg-muted);
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  padding: 0 5px;
+  min-width: 16px;
+  text-align: center;
+  line-height: 16px;
+}
+
+.todo-pinned-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.todo-pinned-card {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s;
+  min-height: 28px;
+}
+
+.todo-pinned-card:hover {
+  background: var(--bg-hover);
+}
+
+.todo-pinned-card-active {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.todo-pinned-card-active:hover {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+.todo-pinned-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.todo-pinned-title {
+  flex: 1;
+  font-size: 12px;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.3;
+}
+
+.todo-pinned-status {
+  font-size: 10px;
+  font-weight: 500;
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+
+.todo-pinned-unpin {
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 2px;
+  opacity: 0;
+  transition: opacity 0.12s, color 0.12s;
+  flex-shrink: 0;
+}
+
+.todo-pinned-card:hover .todo-pinned-unpin {
+  opacity: 0.6;
+}
+
+.todo-pinned-unpin:hover {
+  opacity: 1 !important;
+  color: var(--error);
+}
+
 .todo-panel-list {
   flex: 1;
   overflow-y: auto;
@@ -5228,6 +5541,31 @@ img[data-lightbox-src],
   white-space: nowrap;
 }
 
+/* Parent task expand/collapse chevron (front of row, like category/project arrows) */
+.task-parent-expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  border-radius: 3px;
+  padding: 0;
+  cursor: pointer;
+  font-size: 8px;
+  color: var(--fg-muted);
+  transition: color 0.15s, background 0.15s;
+  margin-right: -2px;
+}
+.task-parent-expand:hover {
+  color: var(--accent);
+  background: rgba(0, 122, 255, 0.08);
+}
+.task-parent-expand.expanded {
+  color: var(--accent);
+}
 .task-children-badge {
   font-size: 10px;
   color: var(--accent);
