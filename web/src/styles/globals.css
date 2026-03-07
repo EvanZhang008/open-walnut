@@ -5655,22 +5655,25 @@ img[data-lightbox-src],
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 14px;
-  height: 16px;
-  background: none;
-  border: none;
+  width: 22px;
+  height: 22px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 5px;
   padding: 0;
-  margin: 1px 2px 0 0;
+  margin: 0 4px 0 0;
   cursor: pointer;
-  font-size: 10px;
-  color: var(--fg-tertiary);
-  transition: color 0.15s;
+  color: var(--fg-secondary);
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
 }
 .task-parent-expand:hover {
   color: var(--accent);
+  background: rgba(0, 122, 255, 0.1);
+  border-color: var(--accent);
 }
 .task-parent-expand.expanded {
-  color: var(--fg-muted);
+  color: var(--accent);
+  background: rgba(0, 122, 255, 0.06);
 }
 .task-children-badge {
   font-size: 10px;

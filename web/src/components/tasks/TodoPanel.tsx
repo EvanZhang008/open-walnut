@@ -478,7 +478,9 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount
               title={isExpanded ? 'Collapse child tasks' : `Expand ${childCount} child task(s)`}
               onClick={(e) => { e.stopPropagation(); onToggleExpand?.(); }}
             >
-              {isExpanded ? '\u25BE' : '\u25B8'}
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+                <path d={isExpanded ? 'M1 3 L5 7 L9 3' : 'M3 1 L7 5 L3 9'} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+              </svg>
             </button>
           )}
           <span
