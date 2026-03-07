@@ -33,7 +33,7 @@ export function ListEditor({ items, onChange, placeholder, vertical }: ListEdito
     <div className="list-editor">
       <div className={`list-editor-items${vertical ? ' list-editor-vertical' : ''}`}>
         {items.map((item, i) => (
-          <span key={i} className="list-editor-chip">
+          <span key={item} className="list-editor-chip">
             <span className="list-editor-chip-text">{item}</span>
             <button
               type="button"

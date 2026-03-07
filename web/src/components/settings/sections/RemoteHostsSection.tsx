@@ -4,6 +4,7 @@ import { SectionCard } from '../inputs/SectionCard';
 import { NumberInput } from '../inputs/NumberInput';
 
 interface HostEntry {
+  _key: number; // stable React key
   alias: string;
   hostname: string;
   user: string;
@@ -12,8 +13,10 @@ interface HostEntry {
   shell_setup: string;
 }
 
+let nextHostKey = 0;
+
 function emptyHost(): HostEntry {
-  return { alias: '', hostname: '', user: '', port: undefined, label: '', shell_setup: '' };
+  return { _key: nextHostKey++, alias: '', hostname: '', user: '', port: undefined, label: '', shell_setup: '' };
 }
 
 interface Props {
@@ -27,6 +30,7 @@ export function RemoteHostsSection({ config, onSave }: Props) {
 
   useEffect(() => {
     const entries = Object.entries(config.hosts ?? {}).map(([alias, h]) => ({
+      _key: nextHostKey++,
       alias,
       hostname: h.hostname,
       user: h.user ?? '',
@@ -55,7 +59,7 @@ export function RemoteHostsSection({ config, onSave }: Props) {
     const hostsConfig: Config['hosts'] = {};
     for (const h of hosts) {
       if (!h.alias || !h.hostname) continue;
-      hostsConfig![h.alias] = {
+      hostsConfig[h.alias] = {
         hostname: h.hostname,
         user: h.user || undefined,
         port: h.port,
@@ -70,7 +74,7 @@ export function RemoteHostsSection({ config, onSave }: Props) {
     <SectionCard id="remote-hosts" title="Remote Hosts" description="SSH hosts for running remote Claude Code sessions." onSave={handleSave}>
       {hosts.map((host, idx) => (
         <details
-          key={idx}
+          key={host._key}
           className="settings-collapsible"
           open={expanded === idx}
           onToggle={(e) => {

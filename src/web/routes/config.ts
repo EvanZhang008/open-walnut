@@ -35,14 +35,16 @@ configRouter.post('/test-connection', async (req: Request, res: Response, next: 
 
     // Dynamic import to avoid pulling heavy dependency at module load
     const { default: AnthropicBedrock } = await import('@anthropic-ai/bedrock-sdk')
+    // Must match the auth pattern in adapter-bedrock.ts: skipAuth + authToken for bearer tokens
     const client = new AnthropicBedrock({
       awsRegion: region,
-      ...(token ? { awsSessionToken: token } : {}),
-    })
+      skipAuth: true,
+      authToken: token,
+    } as unknown as ConstructorParameters<typeof AnthropicBedrock>[0])
 
     const start = Date.now()
     await client.messages.create({
-      model: 'anthropic.claude-haiku-4-5-20251001-v1:0',
+      model: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
       max_tokens: 1,
       messages: [{ role: 'user', content: 'hi' }],
     })

@@ -5,7 +5,7 @@ import { ListEditor } from '../inputs/ListEditor';
 import { NumberInput } from '../inputs/NumberInput';
 
 /** Extract a human-readable label from a model ID. */
-export function modelDisplayName(modelId: string): string {
+function modelDisplayName(modelId: string): string {
   const is1M = modelId.endsWith('[1m]');
   const ctx = is1M ? '1M' : '200K';
   const lower = modelId.toLowerCase();

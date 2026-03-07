@@ -26,7 +26,7 @@ export function SecretInput({ id, value, onChange, placeholder }: SecretInputPro
         className="secret-toggle"
         onClick={() => setVisible(!visible)}
         aria-label={visible ? 'Hide' : 'Show'}
-        tabIndex={-1}
+        tabIndex={0}
       >
         {visible ? '◉' : '○'}
       </button>

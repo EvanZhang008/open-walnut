@@ -1,4 +1,4 @@
-import { useState, type ReactNode, type FormEvent } from 'react';
+import { useState, useRef, useEffect, type ReactNode, type FormEvent } from 'react';
 
 interface SectionCardProps {
   id: string;
@@ -27,6 +27,10 @@ export function SectionCard({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const successTimerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  // Clear success timer on unmount to avoid setState on unmounted component
+  useEffect(() => () => clearTimeout(successTimerRef.current), []);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -34,10 +38,11 @@ export function SectionCard({
     setSaving(true);
     setError(null);
     setSuccess(false);
+    clearTimeout(successTimerRef.current);
     try {
       await onSave();
       setSuccess(true);
-      setTimeout(() => setSuccess(false), 3000);
+      successTimerRef.current = setTimeout(() => setSuccess(false), 3000);
     } catch (err) {
       setError((err as Error).message);
     } finally {

@@ -10661,7 +10661,7 @@ img[data-lightbox-src],
 }
 
 .settings-nav-active {
-  background: rgba(0, 122, 255, 0.1);
+  background: var(--accent-subtle);
   color: var(--accent);
   font-weight: 600;
 }
@@ -10997,7 +10997,7 @@ img[data-lightbox-src],
   border-radius: 6px;
   border: 1px solid var(--border);
   background: var(--bg-secondary);
-  color: var(--text, var(--fg));
+  color: var(--fg);
 }
 
 /* Raw config viewer */
@@ -11050,28 +11050,6 @@ img[data-lightbox-src],
 
 .btn-danger:hover {
   background: rgba(255, 59, 48, 0.08);
-}
-
-/* Small button variant */
-.btn-sm {
-  padding: 4px 10px;
-  font-size: 12px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
-  color: var(--fg-secondary);
-  cursor: pointer;
-  font-family: inherit;
-  transition: background 0.15s;
-}
-
-.btn-sm:hover:not(:disabled) {
-  background: var(--bg-tertiary);
-}
-
-.btn-sm:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 /* Mobile: nav becomes horizontal tabs */

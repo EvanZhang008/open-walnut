@@ -41,7 +41,7 @@ export function SettingsPage() {
     };
     container.addEventListener('scroll', handleScroll, { passive: true });
     return () => container.removeEventListener('scroll', handleScroll);
-  }, [config]);
+  }, []);
 
   // Navigate to section
   const handleNavigate = useCallback((id: string) => {
@@ -59,7 +59,7 @@ export function SettingsPage() {
     if (hash && SECTION_IDS.includes(hash)) {
       setTimeout(() => handleNavigate(hash), 100);
     }
-  }, [handleNavigate, config]);
+  }, [handleNavigate]);
 
   // Cmd+S to save the focused section
   useEffect(() => {
