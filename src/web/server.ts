@@ -940,11 +940,31 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       bus.emit(EventNames.SESSION_ENDED, { sessionId, taskId }, ['web-ui'], { source: 'session-error' })
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // ARCHITECTURE: Single Source of Truth for Chat Content
+    //
+    // PRINCIPLE: What AI sees = what human sees.
+    //   - ONE content entry per event. Never build separate content for UI vs AI.
+    //   - tag:'ai' entries are visible to BOTH the main agent AND the console.
+    //   - NO displayText overrides to hide content. Console formats, never filters.
+    //   - If content should be collapsible/highlighted, that's a frontend concern.
+    //
+    // ANTI-PATTERN (do NOT do this):
+    //   const uiContent = "short summary"        // ← diverges
+    //   const aiPrompt = "full analysis + context" // ← diverges
+    //   addAIMessages(msgs, { displayText: uiContent }) // ← hides AI content
+    //
+    // CORRECT PATTERN:
+    //   const content = "full content with all sections"
+    //   Store as tag:'ai' → both AI and console see it
+    //   Console renders sections (collapse, highlight) via CSS/React
+    // ═══════════════════════════════════════════════════════════════════════
+
     // ── Subagent events ──
 
     // Forward subagent lifecycle events to web-ui for real-time display
-    // NOTE: subagent:result is forwarded AFTER compact processing below (not here)
-    // to prevent the full result text from reaching the browser before triage summary extraction.
+    // NOTE: subagent:result is forwarded AFTER processing below (not here)
+    // so triage content is assembled before reaching the browser.
     if (event.name === 'subagent:started' || event.name === 'subagent:error') {
       bus.emit(event.name, event.data, ['web-ui'], { source: 'subagent' })
     }
@@ -995,19 +1015,20 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         }
 
         if (willNotifyMainAgent) {
-          // ── Unified path: AI and human see the same entry ──
-          // No tag:"ui" entry — the tag:"ai" entry IS the display.
-          // Push the triage prompt to browser immediately (before agent runs),
-          // so the user sees "TRIAGE (collapsed)" while the AI is thinking.
-          // User sees ONLY the notification summary — no internal triage reasoning
-          const triageContent = `**Triage** (${displayTaskRef}):\n\n**Main AI Notification:**\n\n${triageUpdate}`
+          // ── Single Source of Truth: AI and human see the SAME content ──
+          // ONE entry with notification + full triage analysis.
+          // Console collapses/expands sections; server never hides content.
+          const triageContent = `**Triage** (${displayTaskRef}):\n\n**Main AI Notification:**\n\n${triageUpdate}\n\n---\n\n**Triage Analysis:**\n\n${cleanedResult}`
           log.web.info('triage will notify main agent (unified path)', { taskId, triageUpdate: triageUpdate.slice(0, 200) })
 
+          // Push to browser immediately so user sees collapsed triage while AI thinks
           bus.emit(EventNames.CHAT_HISTORY_UPDATED, {
             entry: { role: 'user', content: triageContent, source: 'triage', taskId, timestamp: triageTimestamp },
           }, ['web-ui'])
 
-          // Fire-and-forget: enqueue a main agent turn with full triage analysis
+          // Fire-and-forget: enqueue a main agent turn
+          // The prompt includes the full triage analysis so the AI can reason about it.
+          // The browser already has the nice formatted content via the bus event above.
           void enqueueMainAgentTurn('triage', async () => {
             try {
               const task = await getTask(taskId)
@@ -1015,7 +1036,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
               const taskTitle = task ? `${task.project ?? task.category} / ${task.title}` : taskId
               const taskRef = task ? `[${task.id}]` : `[${taskId}]`
 
-              // AI gets full triage context for reasoning; user sees only the → AI summary
+              // AI needs the full triage analysis to summarize for the user
               const prompt = `[Triage Update] Task "${taskTitle}" ${taskRef}\n\n${cleanedResult}\n\n<task_note>\n${taskNote}\n</task_note>\n\nInform the user concisely (2-4 sentences) about this task's status.\nFocus on what the triage analysis says — that's the new information.\nThe task note provides full context if needed.\nDo not use tools.`
 
               const { runAgentLoop } = await import('../agent/loop.js')
@@ -1043,9 +1064,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
                 broadcastEvent('agent:response', { text: agentResult.response, source: 'triage' })
               }
               const newApiMsgs = agentResult.messages.slice(history.length)
-              // displayText: user sees only the notification summary, not internal triage reasoning
-              const displayText = `**Triage** (${displayTaskRef}):\n\n**Main AI Notification:**\n\n${triageUpdate}`
-              await chatHistory.addAIMessages(newApiMsgs, { source: 'triage', displayText, taskId })
+              await chatHistory.addAIMessages(newApiMsgs, { source: 'triage', taskId })
               log.web.info('triage main agent done', { taskId, newMessages: newApiMsgs.length })
               triggerBackgroundCompaction('triage')
             } catch (err) {
@@ -1060,14 +1079,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
             }
           })
         } else {
-          // ── UI-only path: no notify, just display the triage result ──
-          // notification: true → "UI Only" badge
-          // Extract phase/outcome from triage output for brief summary; hide internal reasoning
-          const phaseMatch = cleanedResult.match(/Phase\s*\d+[:\s]+(\w+)/i)
-          const outcomeMatch = cleanedResult.match(/Outcome\s*([AB])/i)
-          const briefParts = [phaseMatch?.[1], outcomeMatch ? `Outcome ${outcomeMatch[1]}` : null].filter(Boolean)
-          const briefSummary = briefParts.length ? briefParts.join(' — ') : 'completed'
-          const triageContent = `**Triage** (${displayTaskRef}): ${briefSummary}`
+          // ── UI-only path: no notify, store full triage analysis ──
+          // notification: true → "UI Only" badge. Full content visible when expanded.
+          const triageContent = `**Triage** (${displayTaskRef}):\n\n**Triage Analysis:**\n\n${cleanedResult}`
           await chatHistory.addNotification({
             role: 'assistant', content: triageContent,
             source: 'triage', notification: true, taskId,

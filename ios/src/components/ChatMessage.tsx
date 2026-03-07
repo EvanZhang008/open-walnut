@@ -52,6 +52,13 @@ function extractCollapsedSummary(text: string): string {
     // Legacy compat: old → AI: format
     const notifyMatch = afterHeader.match(/>\s*\*\*→ AI:\*\*\s*(.+)/)
     if (notifyMatch) return `${taskName} — ${notifyMatch[1].trim()}`.slice(0, 150)
+    // UI-only triage: extract first line of analysis as summary
+    const analysisIdx = afterHeader.indexOf('**Triage Analysis:**')
+    if (analysisIdx !== -1) {
+      const afterAnalysis = afterHeader.slice(analysisIdx + '**Triage Analysis:**'.length)
+      const snippet = afterAnalysis.split(/\n\n+/).find(p => p.trim())?.trim().split('\n')[0] ?? ''
+      if (snippet) return `${taskName} — ${snippet}`.slice(0, 150)
+    }
     // Look for classification
     const classMatch = afterHeader.match(/(?:CONTINUE|REDIRECT|BLOCK|MILESTONE|ERROR)/i)
     if (classMatch) return `${taskName} — ${classMatch[0]}`.slice(0, 150)
@@ -74,25 +81,6 @@ function extractCollapsedSummary(text: string): string {
   return firstLine.replace(/\*\*/g, '').replace(/\*/g, '').slice(0, 120)
 }
 
-/** For triage messages, strip internal reasoning — only show up to the notification summary */
-function stripTriageReasoning(text: string, source?: string): string {
-  if (source !== 'triage') return text
-  // New format: **Main AI Notification:**
-  const newNotifyIdx = text.indexOf('**Main AI Notification:**')
-  if (newNotifyIdx !== -1) {
-    const afterLabel = text.slice(newNotifyIdx + '**Main AI Notification:**'.length)
-    const paragraphs = afterLabel.split(/\n\n+/)
-    const notifyText = paragraphs.find(p => p.trim())?.trim() ?? ''
-    return text.slice(0, newNotifyIdx) + '**Main AI Notification:**\n\n' + notifyText
-  }
-  // Legacy compat: old → AI: format
-  const notifyIdx = text.indexOf('> **→ AI:**')
-  if (notifyIdx === -1) return text
-  const afterNotify = text.indexOf('\n', notifyIdx)
-  if (afterNotify === -1) return text
-  return text.slice(0, afterNotify).trimEnd()
-}
-
 function ChatMessageInner({ message }: Props) {
   const isUser = message.role === 'user'
   const badge = !isUser ? sourceLabel(message.source) : null
@@ -102,12 +90,6 @@ function ChatMessageInner({ message }: Props) {
   const summary = useMemo(
     () => collapsible ? extractCollapsedSummary(message.text) : '',
     [collapsible, message.text]
-  )
-
-  // Strip internal triage reasoning for display
-  const displayText = useMemo(
-    () => stripTriageReasoning(message.text, message.source),
-    [message.text, message.source]
   )
 
   // Collapsed notification row
@@ -158,7 +140,7 @@ function ChatMessageInner({ message }: Props) {
         </TouchableOpacity>
         <View style={styles.expandedBody}>
           <Markdown style={markdownStyles} mergeStyle>
-            {displayText}
+            {message.text}
           </Markdown>
         </View>
       </View>

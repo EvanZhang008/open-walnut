@@ -981,29 +981,10 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
     if (!blocks || blocks.length === 0) {
       // User messages: preserve ALL newlines exactly as typed (no markdown collapsing)
       // AI messages + triage user entries: full markdown rendering
-      let displayContent = content;
-      // Triage messages: strip internal reasoning — only show up to the notification summary
-      if (source === 'triage') {
-        const notifyIdx = displayContent.indexOf('**Main AI Notification:**');
-        if (notifyIdx !== -1) {
-          // Keep header + notification label + the notification text, strip everything after
-          const afterLabel = notifyIdx + '**Main AI Notification:**'.length;
-          const rest = displayContent.slice(afterLabel);
-          // Find the notification text (first non-empty paragraph after label)
-          const paragraphs = rest.split(/\n\n+/);
-          const notifyText = paragraphs.find(p => p.trim())?.trim() ?? '';
-          displayContent = displayContent.slice(0, notifyIdx) + '**Main AI Notification:**\n\n' + notifyText;
-        }
-        // Legacy compat: old format with → AI:
-        const legacyIdx = displayContent.indexOf('> **→ AI:**');
-        if (legacyIdx !== -1) {
-          const afterNotify = displayContent.indexOf('\n', legacyIdx);
-          if (afterNotify !== -1) {
-            displayContent = displayContent.slice(0, afterNotify).trimEnd();
-          }
-        }
-      }
-      return (role === 'user' && source !== 'triage') ? renderUserMessage(displayContent) : renderMarkdown(displayContent);
+      // Single Source of Truth: render full content as-is. Console never strips content.
+      // Triage messages now contain all sections (notification + analysis); collapsing
+      // is handled by the collapsed summary above, not by filtering content here.
+      return (role === 'user' && source !== 'triage') ? renderUserMessage(content) : renderMarkdown(content);
     }
     return null;
   }, [content, blocks, source, notification, role]);
@@ -1121,6 +1102,14 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
       if (notifyMatch) {
         const msg = notifyMatch[1].trim();
         return taskLabel ? `${taskLabel} — ${msg}`.slice(0, 200) : msg.slice(0, 200);
+      }
+
+      // UI-only triage: extract first line of analysis as summary
+      const analysisIdx = content.indexOf('**Triage Analysis:**');
+      if (analysisIdx !== -1) {
+        const afterAnalysis = content.slice(analysisIdx + '**Triage Analysis:**'.length);
+        const snippet = afterAnalysis.split(/\n\n+/).find(p => p.trim())?.trim().split('\n')[0] ?? '';
+        if (snippet) return taskLabel ? `${taskLabel} — ${snippet}`.slice(0, 200) : snippet.slice(0, 200);
       }
 
       // Fallback: phase/outcome or just task label

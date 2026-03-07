@@ -510,6 +510,10 @@ export async function getLastContextHashes(): Promise<Record<string, string>> {
 /**
  * Push AI entries (conversation turns) into the store.
  * Content is the raw Anthropic format (string or ContentBlock[]).
+ *
+ * PRINCIPLE: What AI sees = what human sees. Avoid displayText overrides
+ * for content divergence. Use displayText only for formatting hints, never
+ * to hide content from the user that the AI can see.
  */
 export async function addAIMessages(
   msgs: MessageParam[],
