@@ -11,6 +11,7 @@ import {
   getMemoryFile,
   updateMemoryFile,
   ensureMemoryFile,
+  editMemoryFile,
 } from '../../src/core/memory-file.js';
 import { WALNUT_HOME, MEMORY_FILE } from '../../src/constants.js';
 
@@ -42,30 +43,66 @@ describe('ensureMemoryFile', () => {
 });
 
 describe('getMemoryFile', () => {
-  it('reads content of existing file', () => {
+  it('reads content and hash of existing file', () => {
     fs.writeFileSync(MEMORY_FILE, 'Test memory content', 'utf-8');
-    const content = getMemoryFile();
-    expect(content).toBe('Test memory content');
+    const result = getMemoryFile();
+    expect(result).not.toBeNull();
+    expect(result!.content).toBe('Test memory content');
+    expect(result!.contentHash).toHaveLength(12);
   });
 
   it('returns null when file does not exist', () => {
-    const content = getMemoryFile();
-    expect(content).toBeNull();
+    const result = getMemoryFile();
+    expect(result).toBeNull();
   });
 });
 
 describe('updateMemoryFile', () => {
-  it('replaces content of existing file', () => {
+  it('replaces content of existing file', async () => {
     fs.writeFileSync(MEMORY_FILE, 'Old content', 'utf-8');
-    updateMemoryFile('New content');
+    const result = await updateMemoryFile('New content');
     const content = fs.readFileSync(MEMORY_FILE, 'utf-8');
     expect(content).toBe('New content');
+    expect(result.contentHash).toHaveLength(12);
   });
 
-  it('creates file if it does not exist', () => {
-    updateMemoryFile('Brand new content');
+  it('creates file if it does not exist', async () => {
+    const result = await updateMemoryFile('Brand new content');
     expect(fs.existsSync(MEMORY_FILE)).toBe(true);
     const content = fs.readFileSync(MEMORY_FILE, 'utf-8');
     expect(content).toBe('Brand new content');
+    expect(result.contentHash).toHaveLength(12);
+  });
+
+  it('validates hash when provided', async () => {
+    fs.writeFileSync(MEMORY_FILE, 'Old content', 'utf-8');
+    const { contentHash } = getMemoryFile()!;
+
+    await expect(
+      updateMemoryFile('New content', 'wrong_hash_00'),
+    ).rejects.toThrow('Stale content_hash');
+
+    // Valid hash should work
+    const result = await updateMemoryFile('New content', contentHash);
+    expect(result.contentHash).toHaveLength(12);
+  });
+});
+
+describe('editMemoryFile', () => {
+  it('edits content by exact match', async () => {
+    fs.writeFileSync(MEMORY_FILE, 'hello world', 'utf-8');
+    const { contentHash } = getMemoryFile()!;
+
+    const result = await editMemoryFile('world', 'earth', contentHash);
+    expect(result.replacements).toBe(1);
+    expect(fs.readFileSync(MEMORY_FILE, 'utf-8')).toBe('hello earth');
+  });
+
+  it('rejects stale hash', async () => {
+    fs.writeFileSync(MEMORY_FILE, 'hello world', 'utf-8');
+
+    await expect(
+      editMemoryFile('world', 'earth', 'wrong_hash_00'),
+    ).rejects.toThrow('Stale content_hash');
   });
 });

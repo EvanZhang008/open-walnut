@@ -3,6 +3,12 @@ import path from 'node:path';
 import yaml from 'js-yaml';
 import { PROJECTS_MEMORY_DIR } from '../constants.js';
 import { formatDateKey } from './daily-log.js';
+import {
+  computeContentHash,
+  editFileContent,
+  writeFileChecked,
+} from '../utils/file-ops.js';
+import { withFileLock } from '../utils/file-lock.js';
 
 export interface ProjectMemoryHeader {
   name: string;
@@ -33,6 +39,11 @@ export interface AppendResult {
   summary: ProjectMemoryHeader;
   tail: string[];
   parentSummaries: ProjectSummary[];
+}
+
+export interface ProjectMemoryResult {
+  content: string;
+  contentHash: string;
 }
 
 const DEFAULT_TEMPLATE = `---
@@ -154,27 +165,44 @@ export function appendProjectMemory(
 
 /**
  * Rewrite the YAML frontmatter of a project MEMORY.md, preserving all log entries.
+ * Uses file locking and optional hash-based stale check.
  */
-export function updateProjectSummary(
+export async function updateProjectSummary(
   projectPath: string,
   name: string,
   description: string,
-): { parentSummaries: ProjectSummary[] } {
+  expectedHash?: string,
+): Promise<{ parentSummaries: ProjectSummary[]; contentHash: string }> {
   ensureProjectDir(projectPath);
 
   const dirPath = path.join(PROJECTS_MEMORY_DIR, projectPath);
   const memFile = path.join(dirPath, 'MEMORY.md');
 
-  const existing = fs.readFileSync(memFile, 'utf-8');
+  return withFileLock(memFile, async () => {
+    const existing = fs.readFileSync(memFile, 'utf-8');
 
-  // Remove existing frontmatter
-  const fmMatch = existing.match(/^---\n[\s\S]*?\n---\n?/);
-  const body = fmMatch ? existing.slice(fmMatch[0].length) : existing;
+    // Hash check
+    if (expectedHash != null) {
+      const currentHash = computeContentHash(existing);
+      if (currentHash !== expectedHash) {
+        const { StaleHashError } = await import('../utils/file-ops.js');
+        throw new StaleHashError(currentHash);
+      }
+    }
 
-  const newFrontmatter = `---\n${yaml.dump({ name, description }, { lineWidth: -1 })}---\n`;
-  fs.writeFileSync(memFile, newFrontmatter + body, 'utf-8');
+    // Remove existing frontmatter
+    const fmMatch = existing.match(/^---\n[\s\S]*?\n---\n?/);
+    const body = fmMatch ? existing.slice(fmMatch[0].length) : existing;
 
-  return { parentSummaries: getParentSummaries(projectPath) };
+    const newFrontmatter = `---\n${yaml.dump({ name, description }, { lineWidth: -1 })}---\n`;
+    const newContent = newFrontmatter + body;
+    fs.writeFileSync(memFile, newContent, 'utf-8');
+
+    return {
+      parentSummaries: getParentSummaries(projectPath),
+      contentHash: computeContentHash(newContent),
+    };
+  });
 }
 
 /**
@@ -254,43 +282,41 @@ export function getAllProjectSummaries(): ProjectSummary[] {
 
 /**
  * Edit project memory by content matching (find old_content, replace with new_content).
- * old_content must match exactly once. Omit/empty new_content = delete.
+ * Uses file-ops for atomic edit with optional hash-based stale check.
  */
-export function editProjectMemory(
+export async function editProjectMemory(
   projectPath: string,
   oldContent: string,
-  newContent?: string,
-): { oldContent: string; newContent: string } {
+  newContent: string,
+  expectedHash?: string,
+  replaceAll?: boolean,
+): Promise<{ replacements: number; contentHash: string }> {
   const memFile = path.join(PROJECTS_MEMORY_DIR, projectPath, 'MEMORY.md');
-  let content: string;
-  try {
-    content = fs.readFileSync(memFile, 'utf-8');
-  } catch {
-    throw new Error(`No memory file found for project "${projectPath}".`);
-  }
 
   if (!oldContent) throw new Error('old_content cannot be empty.');
-  const replacement = newContent ?? '';
 
-  const count = content.split(oldContent).length - 1;
-  if (count === 0) throw new Error('old_content not found in project memory.');
-  if (count > 1) throw new Error(`old_content matches ${count} locations — provide more surrounding context to make it unique.`);
-
-  let updated = content.replace(oldContent, replacement);
-  // Clean up triple+ blank lines left by deletions
-  updated = updated.replace(/\n{3,}/g, '\n\n');
-  fs.writeFileSync(memFile, updated, 'utf-8');
-  return { oldContent, newContent: replacement };
+  return editFileContent(memFile, oldContent, newContent, {
+    expectedHash,
+    replaceAll,
+  });
 }
 
 /**
- * Get the full content of a project's MEMORY.md.
+ * Get the full content of a project's MEMORY.md with content hash.
  */
-export function getProjectMemory(projectPath: string): string | null {
+export function getProjectMemory(projectPath: string): ProjectMemoryResult | null {
   const memFile = path.join(PROJECTS_MEMORY_DIR, projectPath, 'MEMORY.md');
   try {
-    return fs.readFileSync(memFile, 'utf-8');
+    const content = fs.readFileSync(memFile, 'utf-8');
+    return { content, contentHash: computeContentHash(content) };
   } catch {
     return null;
   }
+}
+
+/**
+ * Resolve a project_path to the absolute file path of its MEMORY.md.
+ */
+export function resolveProjectMemoryPath(projectPath: string): string {
+  return path.join(PROJECTS_MEMORY_DIR, projectPath, 'MEMORY.md');
 }

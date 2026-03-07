@@ -355,7 +355,51 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       messages = await rewriteHistoryRemoteImages(messages, record.host, sessionId)
     }
 
-    res.json({ messages })
+    // Fork-aware: prepend source session history when this session was forked.
+    // Follows the fork chain (A forked from B forked from C) with cycle detection.
+    let forkedFromSessionId: string | undefined
+    if (record?.forkedFromSessionId) {
+      forkedFromSessionId = record.forkedFromSessionId
+      try {
+        const forkChainMessages: typeof messages[] = []
+        const visited = new Set<string>([sessionId])
+        let currentForkId: string | undefined = record.forkedFromSessionId
+
+        while (currentForkId && !visited.has(currentForkId)) {
+          visited.add(currentForkId)
+          const sourceRecord = await getSessionByClaudeId(currentForkId)
+          if (!sourceRecord) break
+
+          let sourceMessages = await readSessionHistory(
+            currentForkId, sourceRecord.cwd, sourceRecord.host, sourceRecord.outputFile,
+          )
+          if (sourceRecord.host) {
+            sourceMessages = await rewriteHistoryRemoteImages(sourceMessages, sourceRecord.host, currentForkId)
+          }
+          if (sourceMessages.length > 0) {
+            forkChainMessages.unshift(sourceMessages)
+          }
+          currentForkId = sourceRecord.forkedFromSessionId
+        }
+
+        if (forkChainMessages.length > 0) {
+          const allSourceMessages = forkChainMessages.flat()
+          const separator: typeof messages[0] = {
+            role: 'assistant',
+            text: `--- Forked from session ${record.forkedFromSessionId.slice(0, 16)}... ---`,
+            timestamp: record.startedAt ?? new Date().toISOString(),
+          }
+          messages = [...allSourceMessages, separator, ...messages]
+        }
+      } catch (err) {
+        log.web.warn('failed to load fork source history', {
+          sessionId, forkedFrom: record.forkedFromSessionId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+
+    res.json({ messages, ...(forkedFromSessionId ? { forkedFromSessionId } : {}) })
   } catch (err) {
     next(err)
   }
@@ -549,6 +593,113 @@ sessionsRouter.post('/:sessionId/execute', async (req: Request, res: Response, n
     const newSessionId = await newSessionPromise
 
     res.json({ status: 'started', planSessionId, taskId, mode: execMode, ...(newSessionId ? { sessionId: newSessionId } : {}), ...(execHost ? { host: execHost } : {}) })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/sessions/:sessionId/fork — fork a session to a different task
+sessionsRouter.post('/:sessionId/fork', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const sourceSessionId = req.params.sessionId as string
+    const { task_id, message, title, model } = req.body as {
+      task_id: string
+      message?: string
+      title?: string
+      model?: string
+    }
+
+    if (!task_id) {
+      res.status(400).json({ error: 'task_id is required — fork creates a new session on a different task' })
+      return
+    }
+
+    // Look up source session
+    const sourceRecord = await getSessionByClaudeId(sourceSessionId)
+    if (!sourceRecord) {
+      res.status(404).json({ error: 'Source session not found' })
+      return
+    }
+
+    // Look up target task
+    const task = await getTask(task_id)
+    if (!task) {
+      res.status(404).json({ error: `Task "${task_id}" not found` })
+      return
+    }
+
+    // Check 1-session-per-task
+    const existingSessions = await getSessionsForTask(task.id)
+    const activeSessions = existingSessions.filter(s => !s.archived)
+    if (activeSessions.length > 0) {
+      res.status(409).json({
+        error: 'Target task already has a session',
+        existing_session_id: activeSessions[0].claudeSessionId,
+      })
+      return
+    }
+
+    // Validate source session has a working directory
+    if (!sourceRecord.cwd) {
+      res.status(400).json({ error: 'Source session has no working directory — cannot fork' })
+      return
+    }
+
+    // Build fork context from source session history
+    const { formatForkHistory } = await import('../../core/session-history.js')
+    const sourceMessages = await readSessionHistory(
+      sourceSessionId, sourceRecord.cwd, sourceRecord.host, sourceRecord.outputFile,
+    )
+    let appendSystemPrompt: string | undefined
+    if (sourceMessages.length > 0) {
+      const historyText = formatForkHistory(sourceMessages)
+      appendSystemPrompt = `<forked_session_context>\nThis session was forked from session ${sourceSessionId}.\nBelow is the conversation history from the source session:\n\n${historyText}\n</forked_session_context>`
+    }
+
+    const forkMessage = message ?? `Continue working. This session was forked from a previous session to focus on task: ${task.title}`
+
+    // Wait for the new session to start (up to 30s)
+    const WAIT_TIMEOUT_MS = 30_000
+    const subName = `fork-wait-${sourceSessionId}`
+    const newSessionPromise = new Promise<string | undefined>((resolve) => {
+      const timer = setTimeout(() => {
+        bus.unsubscribe(subName)
+        resolve(undefined)
+      }, WAIT_TIMEOUT_MS)
+
+      bus.subscribe(subName, (event) => {
+        if (event.name !== EventNames.SESSION_STATUS_CHANGED) return
+        const d = eventData<'session:status-changed'>(event)
+        if (d.forkedFromSessionId === sourceSessionId && d.sessionId) {
+          clearTimeout(timer)
+          bus.unsubscribe(subName)
+          resolve(d.sessionId)
+        }
+      }, { global: true })
+    })
+
+    bus.emit(EventNames.SESSION_START, {
+      taskId: task.id,
+      message: forkMessage,
+      cwd: sourceRecord.cwd,
+      project: task.project ?? '',
+      mode: sourceRecord.mode !== 'default' ? sourceRecord.mode : undefined,
+      model,
+      title: title ?? `Fork of ${sourceRecord.title ?? sourceSessionId.slice(0, 16)}`,
+      host: sourceRecord.host,
+      appendSystemPrompt,
+      forkedFromSessionId: sourceSessionId,
+    }, ['session-runner'], { source: 'web-api' })
+
+    const newSessionId = await newSessionPromise
+
+    res.json({
+      status: 'started',
+      sourceSessionId,
+      taskId: task.id,
+      ...(newSessionId ? { sessionId: newSessionId } : {}),
+      ...(sourceRecord.host ? { host: sourceRecord.host } : {}),
+    })
   } catch (err) {
     next(err)
   }

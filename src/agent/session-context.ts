@@ -175,22 +175,22 @@ export async function buildSessionContext(taskId: string): Promise<SessionContex
     try {
       const { getProjectMemory } = await import('../core/project-memory.js')
       const projectPath = `${task.category.toLowerCase()}/${task.project.toLowerCase()}`
-      const memory = getProjectMemory(projectPath)
+      const memResult = getProjectMemory(projectPath)
 
-      if (memory) {
+      if (memResult) {
         sections.push(
           truncateToTokenBudget(
-            `<project_memory>\n${memory}\n</project_memory>`,
+            `<project_memory>\n${memResult.content}\n</project_memory>`,
             PROJECT_MEMORY_BUDGET,
           ),
         )
       } else if (task.project !== task.category) {
         // Try category-level memory if project-specific doesn't exist
-        const categoryMemory = getProjectMemory(task.category.toLowerCase())
-        if (categoryMemory) {
+        const catResult = getProjectMemory(task.category.toLowerCase())
+        if (catResult) {
           sections.push(
             truncateToTokenBudget(
-              `<project_memory>\n${categoryMemory}\n</project_memory>`,
+              `<project_memory>\n${catResult.content}\n</project_memory>`,
               PROJECT_MEMORY_BUDGET,
             ),
           )

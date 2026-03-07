@@ -3,11 +3,14 @@
  * Returns line-numbered text for text files. For vision-supported image files
  * (PNG, JPEG, GIF, WebP), returns the image inline as a base64 content block
  * so the model can directly perceive it.
+ *
+ * Text reading uses shared file-ops infrastructure (readFileWithMeta).
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { ToolDefinition } from '../tools.js';
 import { compressForApi, MAX_BASE64_BYTES } from '../../utils/image-compress.js';
+import { readFileWithMeta } from '../../utils/file-ops.js';
 
 const IMAGE_EXTENSIONS = new Set([
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp',
@@ -78,7 +81,6 @@ export const readTool: ToolDefinition = {
         const base64 = buffer.toString('base64');
 
         if (base64.length > MAX_BASE64_BYTES) {
-          // Log so server ops can see which files are hitting the limit
           console.warn(`[read_file] image too large after compression: ${filePath} (${(buffer.length / 1_048_576).toFixed(1)} MB)`);
           return `[Image file: ${filePath}] (${stat.size} bytes, ${mime}) — too large for inline vision even after compression`;
         }
@@ -93,23 +95,15 @@ export const readTool: ToolDefinition = {
         ];
       }
 
-      // Text files: read and return with line numbers
-      const raw = await fs.readFile(filePath, 'utf-8');
-      const allLines = raw.split('\n');
-
-      const offset = Math.max(1, (params.offset as number) || 1);
+      // Text files: use shared readFileWithMeta
+      const offset = (params.offset as number) || undefined;
       const limit = params.limit as number | undefined;
 
-      const start = offset - 1; // convert to 0-based
-      const sliced = limit != null ? allLines.slice(start, start + limit) : allLines.slice(start);
+      const meta = await readFileWithMeta(filePath, { offset, limit });
 
-      const numbered = sliced.map(
-        (line, i) => `${String(start + i + 1).padStart(6)}\t${line}`,
-      );
-
-      let result = numbered.join('\n');
-      if (start > 0 || (limit != null && start + limit < allLines.length)) {
-        result += `\n\n(Showing lines ${start + 1}–${start + sliced.length} of ${allLines.length} total)`;
+      let result = meta.content;
+      if (meta.showing !== `1-${meta.totalLines} of ${meta.totalLines}`) {
+        result += `\n\n(Showing lines ${meta.showing} total)`;
       }
       return result;
     } catch (err: unknown) {

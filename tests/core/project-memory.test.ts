@@ -114,10 +114,10 @@ describe('appendProjectMemory', () => {
     expect(result.tail[0]).toBe('Built the REST endpoints');
   });
 
-  it('returns summary + tail + parent summaries', () => {
+  it('returns summary + tail + parent summaries', async () => {
     // Create parent first
     ensureProjectDir('work');
-    updateProjectSummary('work', 'Work', 'Work-related projects');
+    await updateProjectSummary('work', 'Work', 'Work-related projects');
 
     const result = appendProjectMemory('work/api', 'Entry 1', 'test');
     expect(result.summary).toBeDefined();
@@ -132,47 +132,46 @@ describe('appendProjectMemory', () => {
     }
     const result = appendProjectMemory('work/api', 'Entry 7', 'test');
     expect(result.tail).toHaveLength(5);
-    // Should be the last 5 entries
     expect(result.tail[0]).toContain('Entry');
   });
 });
 
 describe('updateProjectSummary', () => {
-  it('rewrites header and preserves logs', () => {
+  it('rewrites header and preserves logs', async () => {
     ensureProjectDir('work/api');
     appendProjectMemory('work/api', 'Some work done', 'session');
 
-    updateProjectSummary('work/api', 'API Service', 'RESTful API for the platform');
+    await updateProjectSummary('work/api', 'API Service', 'RESTful API for the platform');
 
-    const content = getProjectMemory('work/api')!;
-    expect(content).toContain('name: API Service');
-    expect(content).toContain('description: RESTful API for the platform');
-    expect(content).toContain('Some work done');
+    const result = getProjectMemory('work/api')!;
+    expect(result.content).toContain('name: API Service');
+    expect(result.content).toContain('description: RESTful API for the platform');
+    expect(result.content).toContain('Some work done');
   });
 
-  it('returns parent summaries', () => {
+  it('returns parent summaries and content hash', async () => {
     ensureProjectDir('work');
-    updateProjectSummary('work', 'Work', 'Work projects');
+    await updateProjectSummary('work', 'Work', 'Work projects');
 
     ensureProjectDir('work/api');
-    const result = updateProjectSummary('work/api', 'API', 'API service');
+    const result = await updateProjectSummary('work/api', 'API', 'API service');
     expect(result.parentSummaries).toHaveLength(1);
     expect(result.parentSummaries[0].name).toBe('Work');
+    expect(result.contentHash).toHaveLength(12);
   });
 
-  it('handles multiline description without corrupting YAML', () => {
+  it('handles multiline description without corrupting YAML', async () => {
     ensureProjectDir('life/tax');
-    updateProjectSummary('life/tax', 'Tax', 'Line one\nLine two\nLine three');
+    await updateProjectSummary('life/tax', 'Tax', 'Line one\nLine two\nLine three');
 
-    // append after update_summary must see the correct name
     const result = appendProjectMemory('life/tax', 'Filed taxes', 'agent');
     expect(result.summary.name).toBe('Tax');
     expect(result.summary.description).toContain('Line one');
   });
 
-  it('handles description with YAML-special characters', () => {
+  it('handles description with YAML-special characters', async () => {
     ensureProjectDir('work/svc');
-    updateProjectSummary('work/svc', 'Service', 'has: colons and "quotes"');
+    await updateProjectSummary('work/svc', 'Service', 'has: colons and "quotes"');
 
     const summary = getProjectSummary('work/svc');
     expect(summary!.name).toBe('Service');
@@ -181,15 +180,15 @@ describe('updateProjectSummary', () => {
 });
 
 describe('getAllProjectSummaries', () => {
-  it('finds nested MEMORY.md files', () => {
+  it('finds nested MEMORY.md files', async () => {
     ensureProjectDir('work');
-    updateProjectSummary('work', 'Work', 'Work stuff');
+    await updateProjectSummary('work', 'Work', 'Work stuff');
 
     ensureProjectDir('work/api');
-    updateProjectSummary('work/api', 'API', 'API service');
+    await updateProjectSummary('work/api', 'API', 'API service');
 
     ensureProjectDir('personal');
-    updateProjectSummary('personal', 'Personal', 'Personal projects');
+    await updateProjectSummary('personal', 'Personal', 'Personal projects');
 
     const summaries = getAllProjectSummaries();
     expect(summaries.length).toBe(3);
@@ -208,25 +207,26 @@ describe('getAllProjectSummaries', () => {
 });
 
 describe('getProjectMemory', () => {
-  it('returns full content of project MEMORY.md', () => {
+  it('returns content and hash of project MEMORY.md', () => {
     ensureProjectDir('work');
     appendProjectMemory('work', 'Test content', 'test');
 
-    const content = getProjectMemory('work');
-    expect(content).not.toBeNull();
-    expect(content).toContain('Test content');
+    const result = getProjectMemory('work');
+    expect(result).not.toBeNull();
+    expect(result!.content).toContain('Test content');
+    expect(result!.contentHash).toHaveLength(12);
   });
 
   it('returns null for non-existent project', () => {
-    const content = getProjectMemory('nonexistent');
-    expect(content).toBeNull();
+    const result = getProjectMemory('nonexistent');
+    expect(result).toBeNull();
   });
 });
 
 describe('getProjectSummary', () => {
-  it('reads project header', () => {
+  it('reads project header', async () => {
     ensureProjectDir('work');
-    updateProjectSummary('work', 'Work Hub', 'All work projects');
+    await updateProjectSummary('work', 'Work Hub', 'All work projects');
 
     const summary = getProjectSummary('work');
     expect(summary).not.toBeNull();
@@ -240,72 +240,70 @@ describe('getProjectSummary', () => {
 });
 
 describe('editProjectMemory', () => {
-  it('replaces matched text with new content', () => {
+  it('replaces matched text with new content', async () => {
     appendProjectMemory('work/api', 'Old fact about the API', 'agent');
-    const result = editProjectMemory('work/api', 'Old fact about the API', 'Corrected fact about the API');
-    expect(result.oldContent).toBe('Old fact about the API');
-    expect(result.newContent).toBe('Corrected fact about the API');
+    const result = await editProjectMemory('work/api', 'Old fact about the API', 'Corrected fact about the API');
+    expect(result.replacements).toBe(1);
+    expect(result.contentHash).toHaveLength(12);
 
     const content = getProjectMemory('work/api')!;
-    expect(content).toContain('Corrected fact about the API');
-    expect(content).not.toContain('Old fact about the API');
+    expect(content.content).toContain('Corrected fact about the API');
+    expect(content.content).not.toContain('Old fact about the API');
   });
 
-  it('deletes matched text when new_content is empty', () => {
+  it('deletes matched text when new_content is empty', async () => {
     appendProjectMemory('work/api', 'Keep this entry', 'agent');
     appendProjectMemory('work/api', 'Delete this entry', 'agent');
-    editProjectMemory('work/api', 'Delete this entry');
+    await editProjectMemory('work/api', 'Delete this entry', '');
 
     const content = getProjectMemory('work/api')!;
-    expect(content).toContain('Keep this entry');
-    expect(content).not.toContain('Delete this entry');
+    expect(content.content).toContain('Keep this entry');
+    expect(content.content).not.toContain('Delete this entry');
   });
 
-  it('cleans up triple+ blank lines after deletion', () => {
+  it('cleans up triple+ blank lines after deletion', async () => {
     appendProjectMemory('work/api', 'First entry', 'agent');
     appendProjectMemory('work/api', 'Middle entry', 'agent');
     appendProjectMemory('work/api', 'Last entry', 'agent');
 
-    // Delete the middle entry content — the ## header + content block
     const content = getProjectMemory('work/api')!;
-    const middleMatch = content.match(/## .+? — agent \[work\/api\]\nMiddle entry\n\n/);
+    const middleMatch = content.content.match(/## .+? — agent \[work\/api\]\nMiddle entry\n\n/);
     expect(middleMatch).not.toBeNull();
-    editProjectMemory('work/api', middleMatch![0]);
+    await editProjectMemory('work/api', middleMatch![0], '');
 
     const updated = getProjectMemory('work/api')!;
-    expect(updated).not.toContain('Middle entry');
-    // No triple blank lines
-    expect(updated).not.toMatch(/\n{3,}/);
+    expect(updated.content).not.toContain('Middle entry');
+    expect(updated.content).not.toMatch(/\n{3,}/);
   });
 
-  it('throws when old_content not found', () => {
+  it('rejects when old_content not found', async () => {
     appendProjectMemory('work/api', 'Some content', 'agent');
-    expect(() => editProjectMemory('work/api', 'nonexistent text', 'new')).toThrow('not found');
+    await expect(editProjectMemory('work/api', 'nonexistent text', 'new')).rejects.toThrow('not found');
   });
 
-  it('throws when old_content matches multiple locations', () => {
+  it('rejects when old_content matches multiple locations', async () => {
     appendProjectMemory('work/api', 'duplicate text here', 'agent');
     appendProjectMemory('work/api', 'duplicate text here', 'agent');
-    expect(() => editProjectMemory('work/api', 'duplicate text here', 'fixed')).toThrow('2 locations');
+    await expect(editProjectMemory('work/api', 'duplicate text here', 'fixed')).rejects.toThrow('matches');
   });
 
-  it('throws for non-existent project', () => {
-    expect(() => editProjectMemory('nonexistent', 'old', 'new')).toThrow('No memory file found');
+  it('rejects for non-existent project', async () => {
+    await expect(editProjectMemory('nonexistent', 'old', 'new')).rejects.toThrow();
   });
 
-  it('throws when old_content is empty string', () => {
+  it('rejects when old_content is empty string', async () => {
     appendProjectMemory('work/api', 'Some content', 'agent');
-    expect(() => editProjectMemory('work/api', '', 'new')).toThrow('cannot be empty');
+    await expect(editProjectMemory('work/api', '', 'new')).rejects.toThrow('cannot be empty');
   });
 
-  it('preserves YAML frontmatter when editing log content', () => {
+  it('preserves YAML frontmatter when editing log content', async () => {
     appendProjectMemory('work/api', 'Some content', 'agent');
-    updateProjectSummary('work/api', 'API Service', 'Our API');
-    editProjectMemory('work/api', 'Some content', 'Updated content');
+    await updateProjectSummary('work/api', 'API Service', 'Our API');
+    await editProjectMemory('work/api', 'Some content', 'Updated content');
 
     const content = getProjectMemory('work/api')!;
-    expect(content).toContain('name: API Service');
-    expect(content).toContain('Updated content');
+    expect(content.content).toContain('name: API Service');
+    expect(content.content).toContain('Updated content');
   });
 });
 
@@ -316,9 +314,9 @@ describe('getParentSummaries', () => {
     expect(parents).toEqual([]);
   });
 
-  it('returns parent summaries for nested project', () => {
+  it('returns parent summaries for nested project', async () => {
     ensureProjectDir('work');
-    updateProjectSummary('work', 'Work', 'Work category');
+    await updateProjectSummary('work', 'Work', 'Work category');
 
     ensureProjectDir('work/api');
     const parents = getParentSummaries('work/api');

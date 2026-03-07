@@ -83,12 +83,13 @@ describe('estimateTokens', () => {
 });
 
 describe('appendDailyLog', () => {
-  it('creates file with header on first call', () => {
+  it('creates file with YAML frontmatter on first call', () => {
     appendDailyLog('Test entry', 'test');
 
     const dateKey = formatDateKey();
     const content = fs.readFileSync(path.join(DAILY_DIR, `${dateKey}.md`), 'utf-8');
-    expect(content).toContain(`# Daily Log: ${dateKey}`);
+    expect(content).toContain(`name: '${dateKey}'`);
+    expect(content).toContain('---');
     expect(content).toContain('Test entry');
     expect(content).toContain('test');
   });
@@ -97,42 +98,43 @@ describe('appendDailyLog', () => {
     appendDailyLog('First entry', 'test1');
     appendDailyLog('Second entry', 'test2');
 
-    const content = getDailyLog()!;
-    expect(content).toContain('First entry');
-    expect(content).toContain('Second entry');
-    expect(content).toContain('test1');
-    expect(content).toContain('test2');
+    const result = getDailyLog()!;
+    expect(result.content).toContain('First entry');
+    expect(result.content).toContain('Second entry');
+    expect(result.content).toContain('test1');
+    expect(result.content).toContain('test2');
   });
 
   it('includes projectPath tag when provided', () => {
     appendDailyLog('Project entry', 'session', 'work/my-project');
 
-    const content = getDailyLog()!;
-    expect(content).toContain('[work/my-project]');
-    expect(content).toContain('Project entry');
+    const result = getDailyLog()!;
+    expect(result.content).toContain('[work/my-project]');
+    expect(result.content).toContain('Project entry');
   });
 
   it('does not include projectPath tag when not provided', () => {
     appendDailyLog('No project entry', 'test');
 
-    const content = getDailyLog()!;
+    const result = getDailyLog()!;
     // Should have "— test\n" without brackets
-    expect(content).toMatch(/— test\n/);
-    expect(content).not.toContain('[');
+    expect(result.content).toMatch(/— test\n/);
+    expect(result.content).not.toContain('[');
   });
 });
 
 describe('getDailyLog', () => {
-  it('returns content for today', () => {
+  it('returns content + hash for today', () => {
     appendDailyLog('Today entry', 'test');
-    const content = getDailyLog();
-    expect(content).not.toBeNull();
-    expect(content).toContain('Today entry');
+    const result = getDailyLog();
+    expect(result).not.toBeNull();
+    expect(result!.content).toContain('Today entry');
+    expect(result!.contentHash).toHaveLength(12);
   });
 
   it('returns null for missing date', () => {
-    const content = getDailyLog('2020-01-01');
-    expect(content).toBeNull();
+    const result = getDailyLog('2020-01-01');
+    expect(result).toBeNull();
   });
 
   it('returns content for a specific date', () => {
@@ -145,9 +147,9 @@ describe('getDailyLog', () => {
       'utf-8',
     );
 
-    const content = getDailyLog(dateKey);
-    expect(content).not.toBeNull();
-    expect(content).toContain('Specific date content');
+    const result = getDailyLog(dateKey);
+    expect(result).not.toBeNull();
+    expect(result!.content).toContain('Specific date content');
   });
 });
 

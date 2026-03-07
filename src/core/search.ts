@@ -2,6 +2,7 @@ import path from 'node:path';
 import { listTasks } from './task-manager.js';
 import { listMemories, type MemoryEntry } from './memory.js';
 import type { SearchMode } from './embedding/types.js';
+import type { Task } from './types.js';
 
 export interface SearchResult {
   type: 'task' | 'memory';
@@ -206,89 +207,206 @@ function resultKey(r: SearchResult): string {
 
 // ── Vector search helpers ──
 
-async function vectorSearchTasks(
+/**
+ * Embed the query once via Ollama. Returns null if unavailable.
+ * Uses 30m keep_alive to reduce cold-start frequency.
+ */
+async function embedQuery(query: string): Promise<Float32Array | null> {
+  try {
+    const { embed } = await import('./embedding/client.js');
+    return await embed(query, { keepAlive: '30m' });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Run vector search for both tasks and memory using a pre-computed query vector.
+ * Single function avoids redundant dynamic imports and embed calls.
+ */
+async function vectorSearchAll(
+  queryVec: Float32Array,
   query: string,
+  tasks: Task[],
+  searchTypes: ('task' | 'memory')[],
   limit: number,
   minCosine: number = 0.5,
 ): Promise<SearchResult[]> {
   try {
-    const { embed } = await import('./embedding/client.js');
-    const { getAllTaskEmbeddings } = await import('./embedding/store.js');
-    const { topK } = await import('./embedding/cosine.js');
+    const [{ getAllTaskEmbeddings, getAllChunkEmbeddings }, { topK, cosineSimilarity }] =
+      await Promise.all([
+        import('./embedding/store.js'),
+        import('./embedding/cosine.js'),
+      ]);
 
-    const queryVec = await embed(query);
-    if (!queryVec) return [];
+    const results: SearchResult[] = [];
 
-    const allEmbeddings = getAllTaskEmbeddings();
-    if (allEmbeddings.length === 0) return [];
+    if (searchTypes.includes('task')) {
+      const allEmbeddings = getAllTaskEmbeddings();
+      if (allEmbeddings.length > 0) {
+        const candidates = allEmbeddings.map((e) => ({
+          id: e.task_id,
+          embedding: e.embedding,
+        }));
+        const topResults = topK(queryVec, candidates, limit);
+        const taskMap = new Map(tasks.map((t) => [t.id, t]));
 
-    const candidates = allEmbeddings.map((e) => ({
-      id: e.task_id,
-      embedding: e.embedding,
-    }));
+        for (const r of topResults) {
+          if (r.score <= minCosine) continue;
+          const task = taskMap.get(r.id);
+          results.push({
+            type: 'task',
+            title: task?.title ?? r.id,
+            snippet: task ? extractSnippet(task.title + '. ' + (task.description || task.summary || ''), query) : '',
+            taskId: r.id,
+            parentTaskId: task?.parent_task_id,
+            score: r.score,
+            matchField: 'semantic',
+          });
+        }
+      }
+    }
 
-    const topResults = topK(queryVec, candidates, limit);
+    if (searchTypes.includes('memory')) {
+      const allChunks = getAllChunkEmbeddings();
+      if (allChunks.length > 0) {
+        const scored = allChunks.map((e) => ({
+          ...e,
+          score: cosineSimilarity(queryVec, e.embedding),
+        }));
+        scored.sort((a, b) => b.score - a.score);
 
-    // We need task details for the results
-    const tasks = await listTasks();
-    const taskMap = new Map(tasks.map((t) => [t.id, t]));
+        for (const r of scored.slice(0, limit)) {
+          if (r.score <= minCosine) continue;
+          results.push({
+            type: 'memory',
+            title: path.basename(r.path, '.md'),
+            snippet: extractSnippet(r.text, query),
+            path: r.path,
+            score: r.score,
+            matchField: 'semantic',
+          });
+        }
+      }
+    }
 
-    return topResults
-      .filter((r) => r.score > minCosine)
-      .map((r) => {
-        const task = taskMap.get(r.id);
-        return {
-          type: 'task' as const,
-          title: task?.title ?? r.id,
-          snippet: task ? extractSnippet(task.title + '. ' + (task.description || task.summary || ''), query) : '',
-          taskId: r.id,
-          parentTaskId: task?.parent_task_id,
-          score: r.score,
-          matchField: 'semantic',
-        };
-      });
+    return results;
   } catch {
     return [];
   }
 }
 
-async function vectorSearchMemory(
+// ── BM25 keyword scoring ──
+
+function bm25ScoreTasks(tasks: Task[], query: string): SearchResult[] {
+  const results: SearchResult[] = [];
+  for (const task of tasks) {
+    let bestScore = 0;
+    let matchField = '';
+
+    const titleScore = scoreMatch(task.title, query, 3);
+    if (titleScore > bestScore) { bestScore = titleScore; matchField = 'title'; }
+
+    if (task.description) {
+      const descScore = scoreMatch(task.description, query, 2.5);
+      if (descScore > bestScore) { bestScore = descScore; matchField = 'description'; }
+    }
+
+    if (task.summary) {
+      const sumScore = scoreMatch(task.summary, query, 2);
+      if (sumScore > bestScore) { bestScore = sumScore; matchField = 'summary'; }
+    }
+
+    if (task.note) {
+      const noteScore = scoreMatch(task.note, query, 1.5);
+      if (noteScore > bestScore) { bestScore = noteScore; matchField = 'note'; }
+    }
+
+    const catScore = scoreMatch(task.category, query, 1);
+    if (catScore > bestScore) { bestScore = catScore; matchField = 'category'; }
+
+    const projScore = scoreMatch(task.project, query, 1);
+    if (projScore > bestScore) { bestScore = projScore; matchField = 'project'; }
+
+    if (task.tags?.length) {
+      const tagsText = task.tags.join(' ');
+      const tagScore = scoreMatch(tagsText, query, 2);
+      if (tagScore > bestScore) { bestScore = tagScore; matchField = 'tags'; }
+    }
+
+    if (bestScore > 0) {
+      const snippetSource =
+        matchField === 'description' ? task.description
+        : matchField === 'summary' ? task.summary
+        : matchField === 'note' ? task.note
+        : matchField === 'tags' ? (task.tags ?? []).join(', ')
+        : task.title;
+      results.push({
+        type: 'task',
+        title: task.title,
+        snippet: extractSnippet(snippetSource, query),
+        taskId: task.id,
+        parentTaskId: task.parent_task_id,
+        score: bestScore,
+        matchField,
+      });
+    }
+  }
+  return results;
+}
+
+async function bm25ScoreMemory(
   query: string,
   limit: number,
-  minCosine: number = 0.5,
+  category?: string,
 ): Promise<SearchResult[]> {
+  const results: SearchResult[] = [];
+
+  // Try FTS5 first
   try {
-    const { embed } = await import('./embedding/client.js');
-    const { getAllChunkEmbeddings } = await import('./embedding/store.js');
-    const { cosineSimilarity } = await import('./embedding/cosine.js');
+    const { searchIndex } = await import('./memory-index.js');
+    const ftsResults = searchIndex(query, limit);
+    if (ftsResults.length > 0) {
+      const maxFts = ftsResults[0].score;
+      for (const r of ftsResults) {
+        results.push({
+          type: 'memory',
+          title: path.basename(r.path, '.md'),
+          snippet: extractSnippet(r.text, query),
+          path: r.path,
+          score: (r.score / maxFts) * 5,
+          matchField: 'content',
+        });
+      }
+      return results;
+    }
+  } catch { /* FTS unavailable */ }
 
-    const queryVec = await embed(query);
-    if (!queryVec) return [];
+  // Fallback: in-memory scan
+  const memories: MemoryEntry[] = category ? listMemories(category) : listMemories();
+  for (const mem of memories) {
+    let bestScore = 0;
+    let matchField = '';
 
-    const allEmbeddings = getAllChunkEmbeddings();
-    if (allEmbeddings.length === 0) return [];
+    const titleScore = scoreMatch(mem.title, query, 3);
+    if (titleScore > bestScore) { bestScore = titleScore; matchField = 'title'; }
 
-    // Score all chunks
-    const scored = allEmbeddings.map((e) => ({
-      ...e,
-      score: cosineSimilarity(queryVec, e.embedding),
-    }));
-    scored.sort((a, b) => b.score - a.score);
+    const contentScore = scoreMatch(mem.content, query, 1);
+    if (contentScore > bestScore) { bestScore = contentScore; matchField = 'content'; }
 
-    return scored
-      .slice(0, limit)
-      .filter((r) => r.score > minCosine)
-      .map((r) => ({
-        type: 'memory' as const,
-        title: path.basename(r.path, '.md'),
-        snippet: extractSnippet(r.text, query),
-        path: r.path,
-        score: r.score,
-        matchField: 'semantic',
-      }));
-  } catch {
-    return [];
+    if (bestScore > 0) {
+      bestScore += recencyBonus(mem.updatedAt);
+      results.push({
+        type: 'memory',
+        title: mem.title,
+        snippet: extractSnippet(mem.content, query),
+        path: mem.path,
+        score: bestScore,
+        matchField,
+      });
+    }
   }
+  return results;
 }
 
 // ── Main search function ──
@@ -304,212 +422,72 @@ export async function search(
   const normalizedQuery = query.trim();
   if (normalizedQuery.length === 0) return [];
 
-  // ── Keyword (BM25) path ──
-  const bm25Results: SearchResult[] = [];
+  // Load tasks once — shared by BM25, vector search, and child expansion
+  const tasks = types.includes('task') ? await listTasks() : [];
 
-  if (mode !== 'semantic') {
-    if (types.includes('task')) {
-      const tasks = await listTasks();
-      for (const task of tasks) {
-        let bestScore = 0;
-        let matchField = '';
-
-        const titleScore = scoreMatch(task.title, normalizedQuery, 3);
-        if (titleScore > bestScore) {
-          bestScore = titleScore;
-          matchField = 'title';
-        }
-
-        if (task.description) {
-          const descScore = scoreMatch(task.description, normalizedQuery, 2.5);
-          if (descScore > bestScore) {
-            bestScore = descScore;
-            matchField = 'description';
-          }
-        }
-
-        if (task.summary) {
-          const sumScore = scoreMatch(task.summary, normalizedQuery, 2);
-          if (sumScore > bestScore) {
-            bestScore = sumScore;
-            matchField = 'summary';
-          }
-        }
-
-        if (task.note) {
-          const noteScore = scoreMatch(task.note, normalizedQuery, 1.5);
-          if (noteScore > bestScore) {
-            bestScore = noteScore;
-            matchField = 'note';
-          }
-        }
-
-        const catScore = scoreMatch(task.category, normalizedQuery, 1);
-        if (catScore > bestScore) {
-          bestScore = catScore;
-          matchField = 'category';
-        }
-
-        const projScore = scoreMatch(task.project, normalizedQuery, 1);
-        if (projScore > bestScore) {
-          bestScore = projScore;
-          matchField = 'project';
-        }
-
-        if (task.tags?.length) {
-          const tagsText = task.tags.join(' ');
-          const tagScore = scoreMatch(tagsText, normalizedQuery, 2);
-          if (tagScore > bestScore) {
-            bestScore = tagScore;
-            matchField = 'tags';
-          }
-        }
-
-        if (bestScore > 0) {
-          const snippetSource =
-            matchField === 'description' ? task.description
-            : matchField === 'summary' ? task.summary
-            : matchField === 'note' ? task.note
-            : matchField === 'tags' ? (task.tags ?? []).join(', ')
-            : task.title;
-          bm25Results.push({
-            type: 'task',
-            title: task.title,
-            snippet: extractSnippet(snippetSource, normalizedQuery),
-            taskId: task.id,
-            parentTaskId: task.parent_task_id,
-            score: bestScore,
-            matchField,
-          });
-        }
-      }
-    }
-
-    if (types.includes('memory')) {
-      let usedFts = false;
-
-      // Try FTS5 first
-      try {
-        const { searchIndex } = await import('./memory-index.js');
-        const ftsResults = searchIndex(normalizedQuery, limit);
-        if (ftsResults.length > 0) {
-          usedFts = true;
-          const maxFts = ftsResults[0].score;
-          for (const r of ftsResults) {
-            bm25Results.push({
-              type: 'memory',
-              title: path.basename(r.path, '.md'),
-              snippet: extractSnippet(r.text, normalizedQuery),
-              path: r.path,
-              score: (r.score / maxFts) * 5,
-              matchField: 'content',
-            });
-          }
-        }
-      } catch {
-        // FTS unavailable
-      }
-
-      if (!usedFts) {
-        let memories: MemoryEntry[];
-        if (options.category) {
-          memories = listMemories(options.category);
-        } else {
-          memories = listMemories();
-        }
-
-        for (const mem of memories) {
-          let bestScore = 0;
-          let matchField = '';
-
-          const titleScore = scoreMatch(mem.title, normalizedQuery, 3);
-          if (titleScore > bestScore) {
-            bestScore = titleScore;
-            matchField = 'title';
-          }
-
-          const contentScore = scoreMatch(mem.content, normalizedQuery, 1);
-          if (contentScore > bestScore) {
-            bestScore = contentScore;
-            matchField = 'content';
-          }
-
-          if (bestScore > 0) {
-            bestScore += recencyBonus(mem.updatedAt);
-            const snippetSource = matchField === 'title' ? mem.content : mem.content;
-            bm25Results.push({
-              type: 'memory',
-              title: mem.title,
-              snippet: extractSnippet(snippetSource, normalizedQuery),
-              path: mem.path,
-              score: bestScore,
-              matchField,
-            });
-          }
-        }
-      }
-    }
-  }
-
-  // ── keyword-only mode: return BM25 results directly ──
+  // ── keyword-only mode ──
   if (mode === 'keyword') {
+    const bm25Results: SearchResult[] = [];
+    if (types.includes('task')) bm25Results.push(...bm25ScoreTasks(tasks, normalizedQuery));
+    if (types.includes('memory')) bm25Results.push(...await bm25ScoreMemory(normalizedQuery, limit, options.category));
     bm25Results.sort((a, b) => b.score - a.score);
-    return expandChildTasks(bm25Results.slice(0, limit));
+    return expandChildTasks(bm25Results.slice(0, limit), tasks);
   }
 
-  // ── Vector path ──
-  // In hybrid mode: lower cosine threshold and larger candidate pool so that
-  // cross-language matches (e.g. "test" ↔ "测试") survive into the fusion.
-  const isHybrid = mode === 'hybrid';
-  const vecMinCosine = isHybrid ? 0.3 : 0.5;
-  const vecTopK = isHybrid ? Math.max(limit * 3, 200) : limit;
-
-  const vectorResults: SearchResult[] = [];
-
-  if (types.includes('task')) {
-    const taskVecResults = await vectorSearchTasks(normalizedQuery, vecTopK, vecMinCosine);
-    vectorResults.push(...taskVecResults);
-  }
-
-  if (types.includes('memory')) {
-    const memVecResults = await vectorSearchMemory(normalizedQuery, vecTopK, vecMinCosine);
-    vectorResults.push(...memVecResults);
-  }
-
-  // ── semantic-only mode: return vector results directly ──
+  // ── semantic-only mode ──
   if (mode === 'semantic') {
-    vectorResults.sort((a, b) => b.score - a.score);
-    return expandChildTasks(vectorResults.slice(0, limit));
+    const queryVec = await embedQuery(normalizedQuery);
+    if (!queryVec) return [];
+    const vecResults = await vectorSearchAll(queryVec, normalizedQuery, tasks, types, limit, 0.5);
+    vecResults.sort((a, b) => b.score - a.score);
+    return expandChildTasks(vecResults.slice(0, limit), tasks);
   }
 
-  // ── hybrid mode: RRF fusion ──
-  // CRITICAL: sort BM25 results by score before RRF — rank is position-based
-  bm25Results.sort((a, b) => b.score - a.score);
+  // ── hybrid mode: run BM25 and vector in parallel ──
+  const vecMinCosine = 0.3;
+  const vecTopK = Math.max(limit * 3, 200);
+
+  // Start BM25 and embedding concurrently
+  const bm25Promise = (async () => {
+    const results: SearchResult[] = [];
+    if (types.includes('task')) results.push(...bm25ScoreTasks(tasks, normalizedQuery));
+    if (types.includes('memory')) results.push(...await bm25ScoreMemory(normalizedQuery, limit, options.category));
+    return results;
+  })();
+
+  const vectorPromise = (async () => {
+    const queryVec = await embedQuery(normalizedQuery);
+    if (!queryVec) return [];
+    return vectorSearchAll(queryVec, normalizedQuery, tasks, types, vecTopK, vecMinCosine);
+  })();
+
+  const [bm25Results, vectorResults] = await Promise.all([bm25Promise, vectorPromise]);
 
   if (vectorResults.length === 0) {
     // No vector results (Ollama unavailable or empty index) — fall back to BM25
-    return expandChildTasks(bm25Results.slice(0, limit));
+    bm25Results.sort((a, b) => b.score - a.score);
+    return expandChildTasks(bm25Results.slice(0, limit), tasks);
   }
 
+  // RRF fusion
+  bm25Results.sort((a, b) => b.score - a.score);
   const fused = normalizedFuse(bm25Results, vectorResults, 0.4);
-  return expandChildTasks(fused.slice(0, limit));
+  return expandChildTasks(fused.slice(0, limit), tasks);
 }
 
 /**
  * Auto-expand child tasks for matched parents.
  * For each parent task in results, inserts its children right after it
  * (if not already present). Children are marked with isAutoExpanded=true.
+ * Accepts pre-loaded tasks to avoid redundant disk reads.
  */
-async function expandChildTasks(results: SearchResult[]): Promise<SearchResult[]> {
+function expandChildTasks(results: SearchResult[], allTasks: Task[]): SearchResult[] {
   // Collect parent task IDs (tasks that are NOT children themselves)
   const taskResults = results.filter((r) => r.type === 'task' && !r.parentTaskId);
   if (taskResults.length === 0) return results;
 
   const parentFullIds = taskResults.map((r) => r.taskId!);
   const existingIds = new Set(results.filter((r) => r.taskId).map((r) => r.taskId!));
-
-  // Load all tasks to find children
-  const allTasks = await listTasks();
 
   // parent_task_id may be a prefix — resolve to full parent ID via prefix match
   const childrenByParent = new Map<string, typeof allTasks>();

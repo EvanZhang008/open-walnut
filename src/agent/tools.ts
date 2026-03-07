@@ -58,6 +58,9 @@ import { createProcessTool } from './tools/process-tool.js';
 import { agentCrudTools } from './tools/agent-crud-tools.js';
 import { commandCrudTools } from './tools/command-tools.js';
 import { heartbeatTools } from './tools/heartbeat-tools.js';
+import { memoryReadTool } from './tools/memory-read.js';
+import { memoryEditTool } from './tools/memory-edit.js';
+import { memoryWriteTool } from './tools/memory-write.js';
 
 
 /** Escape double-quotes in a string for use inside an XML attribute value. */
@@ -823,124 +826,10 @@ For projects (type='project'): set default_host and default_cwd for remote sessi
     },
   },
 
-  {
-    name: 'memory',
-    description: 'Manage long-term memory. Actions: "append" (add to daily log and/or project memory — use target param to choose), "update_summary" (update project YAML summary), "update_project" (replace entire body below YAML frontmatter — for full rewrites), "update_global" (update global MEMORY.md), "read" (read project or global memory), "edit" (⚠️ DESTRUCTIVE — replace or remove text in project memory by content matching, like the Edit tool. Omit new_content to delete. Data cannot be recovered. Only use when user explicitly requests. Prefer append to correct information over editing.).',
-    input_schema: {
-      type: 'object',
-      properties: {
-        action: { type: 'string', enum: ['append', 'update_summary', 'update_project', 'update_global', 'read', 'edit'], description: 'The memory operation to perform' },
-        project_path: { type: 'string', description: 'Project path (e.g. "work/event-service"). Required for update_summary, update_project, and edit, optional for append and read.' },
-        content: { type: 'string', description: 'Content to write. Required for append, update_project, and update_global.' },
-        name: { type: 'string', description: 'Project name. Required for update_summary.' },
-        description: { type: 'string', description: 'Project description. Required for update_summary.' },
-        target: { type: 'string', enum: ['daily', 'project', 'both'], description: 'Write target for append. "daily" = daily log only, "project" = project memory only (requires project_path), "both" = both (default).' },
-        old_content: { type: 'string', description: 'Text to find in project memory (exact match). Required for edit. Use "read" first to see current content.' },
-        new_content: { type: 'string', description: 'Replacement text for edit. Omit or empty string to delete the matched text.' },
-      },
-      required: ['action'],
-    },
-    async execute(params) {
-      const action = params.action as string;
-
-      if (action === 'append') {
-        const content = params.content as string;
-        if (!content) return 'Error: content is required for append action.';
-        const projectPath = params.project_path as string | undefined;
-        const target = (params.target as string) || 'both';
-
-        if (target === 'project' && !projectPath) {
-          return 'Error: project_path is required when target is "project".';
-        }
-
-        const writtenTo: string[] = [];
-
-        // Write to daily log
-        if (target === 'daily' || target === 'both') {
-          const { appendDailyLog } = await import('../core/daily-log.js');
-          appendDailyLog(content, 'agent', projectPath);
-          writtenTo.push('daily');
-        }
-
-        // Write to project memory
-        if ((target === 'project' || target === 'both') && projectPath) {
-          const { appendProjectMemory } = await import('../core/project-memory.js');
-          const result = appendProjectMemory(projectPath, content, 'agent');
-          writtenTo.push('project');
-          return json({
-            status: 'saved',
-            written_to: writtenTo,
-            project: result.summary,
-            recent_entries: result.tail,
-            parent_summaries: result.parentSummaries,
-          });
-        }
-
-        return `Saved to daily log.`;
-      }
-
-      if (action === 'update_summary') {
-        const projectPath = params.project_path as string;
-        const name = params.name as string;
-        const description = params.description as string;
-        if (!projectPath || !name || !description) return 'Error: project_path, name, and description are required.';
-        const { updateProjectSummary } = await import('../core/project-memory.js');
-        const result = updateProjectSummary(projectPath, name, description);
-        return json({ status: 'updated', parent_summaries: result.parentSummaries });
-      }
-
-      if (action === 'update_project') {
-        const projectPath = params.project_path as string;
-        const content = params.content as string;
-        if (!projectPath) return 'Error: project_path is required for update_project.';
-        if (!content) return 'Error: content is required for update_project.';
-        const { updateProjectBody } = await import('../core/project-memory.js');
-        const result = updateProjectBody(projectPath, content);
-        return json({ status: 'updated', summary: result.summary });
-      }
-
-      if (action === 'update_global') {
-        const content = params.content as string;
-        if (!content) return 'Error: content is required.';
-        const { updateMemoryFile } = await import('../core/memory-file.js');
-        updateMemoryFile(content);
-        return 'Global memory updated.';
-      }
-
-      if (action === 'read') {
-        const projectPath = params.project_path as string | undefined;
-        if (projectPath) {
-          const { getProjectMemory } = await import('../core/project-memory.js');
-          const content = getProjectMemory(projectPath);
-          return content ?? 'No memory found for this project.';
-        }
-        const { getMemoryFile } = await import('../core/memory-file.js');
-        const content = getMemoryFile();
-        return content ?? 'No global memory file found.';
-      }
-
-      if (action === 'edit') {
-        const projectPath = params.project_path as string;
-        const oldContent = params.old_content as string;
-        if (!projectPath) return 'Error: project_path is required for edit action.';
-        if (!oldContent) return 'Error: old_content is required for edit action.';
-        const newContent = (params.new_content as string) ?? '';
-        try {
-          const { editProjectMemory } = await import('../core/project-memory.js');
-          const result = editProjectMemory(projectPath, oldContent, newContent);
-          return json({
-            status: newContent ? 'updated' : 'deleted',
-            old_content: result.oldContent,
-            new_content: result.newContent,
-          });
-        } catch (err) {
-          return `Error: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      }
-
-      return `Error: Unknown action "${action}". Use append, update_summary, update_project, update_global, read, or edit.`;
-    },
-  },
+  // ── Memory Tools ──
+  memoryReadTool,
+  memoryEditTool,
+  memoryWriteTool,
 
   // ── Session Tools ──
   {
@@ -1084,7 +973,7 @@ Only pass host/working_directory explicitly when:
 
 Override priority: explicit params > project defaults > category defaults > local.
 
-Two ways to use:
+Three ways to use:
 
 1. Normal session:
    start_session({ task_id, title, prompt, working_directory })
@@ -1095,6 +984,12 @@ Two ways to use:
    → Read-only session. Claude explores the codebase, designs an approach,
      writes a plan file, and calls ExitPlanMode when done. Cannot edit files.
    → When plan completes, use the UI execute buttons to run the plan.
+
+3. Fork session:
+   start_session({ task_id, title, prompt, fork_session_id: "existing-session-id" })
+   → Creates a new session with the source session's full conversation context.
+   → Inherits working_directory, host, and mode from the source session.
+   → Use when a session scope-creeps and you want to branch to a new task.
 
 PREFER send_to_session over start_session for follow-up work. send_to_session
 preserves the full conversation history and codebase context, has no slot limits,
@@ -1108,6 +1003,7 @@ and is always allowed.`,
         working_directory: { type: 'string', description: 'Absolute path to working directory (required for CLI sessions). For remote sessions, this is the path on the remote machine. If not specified, uses project defaults (see update_task type=\'project\').' },
         host: { type: 'string', description: 'SSH host alias for remote execution (matches keys in config.hosts). If not specified, uses the project default_host from project settings. Omit for local execution.' },
         mode: { type: 'string', enum: ['plan', 'bypass'], description: "Session permission mode (CLI only). 'plan' = read-only, 'bypass' = no prompts." },
+        fork_session_id: { type: 'string', description: 'Fork from an existing session: copies its conversation context into a new session on a different task. When set, working_directory/host/mode are inherited from the source session and must NOT be provided.' },
         runner: { type: 'string', enum: ['embedded', 'cli'], description: "Runner type. 'cli' = Claude Code process (default if no agent_id). 'embedded' = in-process subagent (default if agent_id is set)." },
         agent_id: { type: 'string', description: 'Agent definition ID (e.g. "general", "researcher"). For embedded runs. Defaults to "general".' },
         model: { type: 'string', description: 'Model override for this run.' },
@@ -1175,6 +1071,75 @@ and is always allowed.`,
         }
 
         const prompt = (params.prompt as string) ?? (task ? `Working on task: ${task.title}` : 'Please help.');
+
+        // ── Fork session flow ──
+        const forkSessionId = params.fork_session_id as string | undefined;
+        if (forkSessionId) {
+          // Validate mutual exclusivity: fork inherits everything from source
+          const conflicting = ['working_directory', 'host', 'mode'].filter(k => params[k]);
+          if (conflicting.length > 0) {
+            return `Error: fork_session_id is mutually exclusive with ${conflicting.join(', ')}. These are inherited from the source session.`;
+          }
+          if (runner === 'embedded') {
+            return `Error: fork_session_id only works with CLI sessions (not embedded runners).`;
+          }
+
+          // Look up source session
+          const { getSessionByClaudeId } = await import('../core/session-tracker.js');
+          const sourceSession = await getSessionByClaudeId(forkSessionId);
+          if (!sourceSession) {
+            return `Error: Source session "${forkSessionId}" not found.`;
+          }
+
+          // Read and format source session history for context injection
+          const { readSessionHistory, formatForkHistory } = await import('../core/session-history.js');
+          const sourceMessages = await readSessionHistory(
+            forkSessionId, sourceSession.cwd, sourceSession.host, sourceSession.outputFile,
+          );
+          let forkContext = '';
+          if (sourceMessages.length > 0) {
+            const historyText = formatForkHistory(sourceMessages);
+            forkContext = `<forked_session_context>\nThis session was forked from session ${forkSessionId}.\nBelow is the conversation history from the source session:\n\n${historyText}\n</forked_session_context>`;
+          }
+
+          // Inherit host, cwd, mode from source session
+          const forkHost = sourceSession.host;
+          const forkCwd = sourceSession.cwd;
+          const forkMode = sourceSession.mode !== 'default' ? sourceSession.mode : undefined;
+
+          if (!forkCwd) {
+            return `Error: Source session "${forkSessionId}" has no working directory — cannot fork.`;
+          }
+
+          // Per-host concurrency check
+          {
+            const config = await getConfig();
+            const limitResult = await checkSessionLimit(forkHost, config.session_limits, config.session);
+            if (!limitResult.allowed) return buildSessionLimitBlocked(forkHost, limitResult);
+          }
+
+          const { sessionRunner } = await import('../providers/claude-code-session.js');
+          const sessionResult = await sessionRunner.startSession({
+            taskId: task?.id ?? '',
+            message: prompt,
+            cwd: forkCwd,
+            project: task?.project ?? '',
+            mode: forkMode,
+            model: (params.model as string | undefined) ?? sourceSession.model,
+            title: params.title as string | undefined,
+            host: forkHost,
+            appendSystemPrompt: forkContext || undefined,
+            forkedFromSessionId: forkSessionId,
+          });
+
+          const sRef = sessionRef(sessionResult.claudeSessionId, sessionResult.title);
+          const hostNote = forkHost ? ` on ${forkHost}` : '';
+          const forkNote = ` (forked from ${forkSessionId.slice(0, 16)}...)`;
+          if (task) {
+            return `CLI session ${sRef} started${hostNote}${forkNote} for task ${taskRef(task.id, task.title)}. Running in background.`;
+          }
+          return `CLI session ${sRef} started${hostNote}${forkNote}. Running in background.`;
+        }
 
         if (runner === 'embedded') {
           // Dispatch to SubagentRunner

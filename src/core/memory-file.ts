@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { MEMORY_FILE } from '../constants.js';
+import { computeContentHash, editFileContent, writeFileChecked } from '../utils/file-ops.js';
 
 const DEFAULT_TEMPLATE = `---
 name: Global Memory
@@ -9,12 +10,19 @@ description: >
 ---
 `;
 
+export interface MemoryFileResult {
+  content: string;
+  contentHash: string;
+}
+
 /**
  * Read the global MEMORY.md file.
+ * Returns content + contentHash for stale-check support.
  */
-export function getMemoryFile(): string | null {
+export function getMemoryFile(): MemoryFileResult | null {
   try {
-    return fs.readFileSync(MEMORY_FILE, 'utf-8');
+    const content = fs.readFileSync(MEMORY_FILE, 'utf-8');
+    return { content, contentHash: computeContentHash(content) };
   } catch {
     return null;
   }
@@ -22,10 +30,33 @@ export function getMemoryFile(): string | null {
 
 /**
  * Full replacement write of the global MEMORY.md file.
+ * @param expectedHash — if provided, validates against current content hash before writing.
  */
-export function updateMemoryFile(content: string): void {
+export async function updateMemoryFile(
+  content: string,
+  expectedHash?: string,
+): Promise<{ contentHash: string }> {
   fs.mkdirSync(path.dirname(MEMORY_FILE), { recursive: true });
-  fs.writeFileSync(MEMORY_FILE, content, 'utf-8');
+  const result = await writeFileChecked(MEMORY_FILE, content, {
+    expectedHash,
+  });
+  return { contentHash: result.contentHash };
+}
+
+/**
+ * Edit the global MEMORY.md by exact string replacement.
+ * @param expectedHash — validates against current content hash before editing.
+ */
+export async function editMemoryFile(
+  oldContent: string,
+  newContent: string,
+  expectedHash: string,
+  replaceAll?: boolean,
+): Promise<{ replacements: number; contentHash: string }> {
+  return editFileContent(MEMORY_FILE, oldContent, newContent, {
+    expectedHash,
+    replaceAll,
+  });
 }
 
 /**

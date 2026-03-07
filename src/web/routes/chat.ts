@@ -220,14 +220,16 @@ function loadHierarchicalMemory(category: string, project: string): {
   const selfPath = `${catLower}/${projLower}`;
 
   // Self = project-level memory
-  const selfContent = getProjectMemory(selfPath);
+  const selfResult = getProjectMemory(selfPath);
+  const selfContent = selfResult?.content ?? null;
 
   // Parent = category-level memory (only if project !== category, i.e. 2 levels)
   let parentPath: string | null = null;
   let parentContent: string | null = null;
   if (projLower !== catLower) {
     parentPath = catLower;
-    parentContent = getProjectMemory(catLower);
+    const parentResult = getProjectMemory(catLower);
+    parentContent = parentResult?.content ?? null;
   }
 
   return { parentPath, parentContent, selfPath, selfContent };

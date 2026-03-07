@@ -65,7 +65,7 @@ export function buildMemoryContext(budget: number = 20000): string {
   const dailyLogs = getDailyLogsWithinBudget(Math.floor(budget / 2));
 
   // Phase 2: summaries (remaining budget)
-  const globalMemory = getMemoryFile();
+  const globalMemoryResult = getMemoryFile();
   const projectSummaries = getAllProjectSummaries();
 
   const projectLines = projectSummaries.length > 0
@@ -76,7 +76,7 @@ export function buildMemoryContext(budget: number = 20000): string {
 ${taskCategories}
 
 ## Your long-term memory
-${globalMemory ?? '(No global memory yet.)'}
+${globalMemoryResult?.content ?? '(No global memory yet.)'}
 
 ## Your projects
 ${projectLines}

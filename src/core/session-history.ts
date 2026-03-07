@@ -11,9 +11,7 @@
  */
 
 import fs from 'node:fs';
-import { createHash } from 'node:crypto';
 import { log } from '../logging/index.js';
-import { IMAGES_DIR } from '../constants.js';
 import {
   encodeProjectPath,
   findLocalJsonlPath,
@@ -23,57 +21,26 @@ import {
 import { rewriteRemoteImagePaths } from '../providers/session-io.js';
 import type { SshTarget } from '../providers/session-io.js';
 
-// ── Base64 image → disk save utility ──
+// ── Image file detection ──
 
-const MEDIA_TYPE_EXT: Record<string, string> = {
-  'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp',
-};
+const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|svg)$/i;
 
-/**
- * Save a base64 image from a content block to disk and return the file path.
- * Uses a content-hash filename for deduplication (same image → same file, skips re-write).
- * Sync — safe to call from the JSONL parser and streaming handler.
- */
-export function saveBase64ImageToFile(base64Data: string, mediaType?: string): string {
-  fs.mkdirSync(IMAGES_DIR, { recursive: true });
-  const ext = MEDIA_TYPE_EXT[mediaType ?? ''] ?? 'png';
-  // Fast hash: length + first 4K of data is enough for dedup without hashing the full 130K+ string
-  const hash = createHash('sha256').update(`${base64Data.length}:${base64Data.slice(0, 4096)}`).digest('hex').slice(0, 16);
-  const filePath = `${IMAGES_DIR}/tool-${hash}.${ext}`;
-  if (!fs.existsSync(filePath)) {
-    fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
-  }
-  return filePath;
-}
-
-/** Content block shape from Anthropic tool_result content arrays */
-interface ContentBlock {
-  type: string;
-  text?: string;
-  source?: { type?: string; media_type?: string; data?: string };
+/** Check if a file path looks like an image */
+export function isImagePath(p: string): boolean {
+  return IMAGE_EXT_RE.test(p);
 }
 
 /**
- * Extract images from Anthropic content-block arrays, save to disk,
- * and return a result string with file paths + any text content.
- * Returns null if no image blocks found.
+ * Extract the file path from a tool_use input block if it points to an image.
+ * Checks common field names: file_path (most specific), then path, then filename.
+ * Only matches Read/Write/Edit-style tools that have an explicit file path input.
  */
-export function extractImageBlocksToFiles(blocks: ContentBlock[]): string | null {
-  if (!blocks.some(b => b.type === 'image')) return null;
-
-  const parts: string[] = [];
-  for (const block of blocks) {
-    if (block.type === 'image' && block.source?.type === 'base64' && typeof block.source.data === 'string') {
-      try {
-        parts.push(saveBase64ImageToFile(block.source.data, block.source.media_type));
-      } catch {
-        // Disk save failed — skip this image silently
-      }
-    } else if (block.type === 'text' && block.text) {
-      parts.push(block.text);
-    }
+export function extractImageFilePathFromInput(input: Record<string, unknown>): string | undefined {
+  for (const key of ['file_path', 'path', 'filename']) {
+    const val = input[key];
+    if (typeof val === 'string' && val && isImagePath(val)) return val;
   }
-  return parts.length > 0 ? parts.join('\n') : null;
+  return undefined;
 }
 
 // Re-export for backward compatibility
@@ -311,6 +278,8 @@ function parseSessionMessages(content: string): SessionHistoryMessage[] {
   // Scan all user messages for tool_result blocks and extract their text content.
   // This lets us associate tool results with their corresponding tool_use blocks.
   const toolResultMap = new Map<string, string>();
+  // Track which tool_result IDs contained image content blocks (base64 skipped)
+  const imageResultIds = new Set<string>();
   for (const [, msg] of messageMap) {
     if (msg.role !== 'user') continue;
     for (const block of msg.contentBlocks) {
@@ -321,16 +290,18 @@ function parseSessionMessages(content: string): SessionHistoryMessage[] {
         if (typeof nested === 'string') {
           resultText = nested;
         } else if (Array.isArray(nested)) {
-          // Save image content blocks to disk — result becomes file paths (short text).
-          // The frontend's findImagePaths() detects these and renders via /api/local-image.
-          const extracted = extractImageBlocksToFiles(nested as ContentBlock[]);
-          if (extracted) {
-            resultText = extracted;
-          } else {
-            resultText = (nested as Array<{ type: string; text?: string }>)
-              .filter(c => c.type === 'text' && c.text)
-              .map(c => c.text!)
-              .join('\n');
+          // Always extract text blocks (they may accompany image blocks in mixed results).
+          // Image blocks are skipped — we use the tool input's file_path instead,
+          // avoiding 130K+ base64 strings in the history pipeline.
+          resultText = (nested as Array<{ type: string; text?: string }>)
+            .filter(c => c.type === 'text' && c.text)
+            .map(c => c.text!)
+            .join('\n');
+          // Track tool_result IDs that contained image blocks — the file path
+          // from the tool input will be appended in the second pass.
+          const hasImage = (nested as Array<{ type: string }>).some(c => c.type === 'image');
+          if (hasImage && block.tool_use_id) {
+            imageResultIds.add(block.tool_use_id);
           }
         }
         if (resultText) {
@@ -359,7 +330,17 @@ function parseSessionMessages(content: string): SessionHistoryMessage[] {
       } else if (block.type === 'tool_use' && block.name) {
         const toolUseId = block.id;
         // Look up the result for this tool_use
-        const toolResult = toolUseId ? toolResultMap.get(toolUseId) : undefined;
+        let toolResult = toolUseId ? toolResultMap.get(toolUseId) : undefined;
+
+        // If the tool_result had image content blocks, append the file path from the
+        // tool input so the frontend's findImagePaths() can detect and render it.
+        // For remote sessions, rewriteHistoryRemoteImages() will SCP the file.
+        if (toolUseId && imageResultIds.has(toolUseId) && block.input) {
+          const imgPath = extractImageFilePathFromInput(block.input as Record<string, unknown>);
+          if (imgPath) {
+            toolResult = toolResult ? `${toolResult}\n${imgPath}` : imgPath;
+          }
+        }
 
         // Extract agentId from Task tool results.
         // The canonical pattern is the LAST "agentId: XXX (for resuming...)" line.
@@ -537,6 +518,43 @@ export async function readSessionHistory(sessionId: string, cwd?: string, host?:
   }
 
   return messages;
+}
+
+/**
+ * Format a source session's conversation history for injection into a forked session.
+ * Returns a text summary suitable for `append-system-prompt`, truncated to tokenBudget.
+ *
+ * Each message is formatted as:
+ *   [turn N] User: <text>
+ *   [turn N] Assistant [tool1, tool2]: <text>
+ */
+export function formatForkHistory(messages: SessionHistoryMessage[], tokenBudget = 50_000): string {
+  const CHARS_PER_TOKEN = 3.5;
+  const charBudget = Math.floor(tokenBudget * CHARS_PER_TOKEN);
+  const MAX_PER_MSG = 2000;
+
+  const lines: string[] = [];
+  let turn = 0;
+  for (const msg of messages) {
+    if (msg.role === 'user') turn++;
+    const toolInfo = msg.tools?.length ? ` [${msg.tools.map(t => t.name).join(', ')}]` : '';
+    const role = msg.role === 'user' ? 'User' : `Assistant${toolInfo}`;
+    const text = msg.text.length > MAX_PER_MSG
+      ? msg.text.slice(0, MAX_PER_MSG) + `... [${msg.text.length} chars total]`
+      : msg.text;
+    if (text.trim()) {
+      lines.push(`[turn ${turn}] ${role}: ${text}`);
+    }
+  }
+
+  const full = lines.join('\n\n');
+  if (full.length <= charBudget) return full;
+
+  // Tail-truncate: keep the most recent turns
+  const truncated = full.slice(-charBudget);
+  const firstNewline = truncated.indexOf('\n');
+  const clean = firstNewline > 0 ? truncated.slice(firstNewline + 1) : truncated;
+  return '[...earlier conversation omitted]\n\n' + clean;
 }
 
 /**

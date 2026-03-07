@@ -345,7 +345,6 @@ export interface ChatEntry {
   notification?: boolean;
   taskId?: string;
   sessionId?: string;          // Linked session ID (e.g. embedded triage run ID)
-  notifyContent?: string;      // Content from notify_main_agent tool call (triage entries only)
   // Compaction marker
   compacted?: boolean;         // true = excluded from model context, kept for scroll-back
   // Per-field content hashes for task context dedup (keys like "note:{taskId}", "pm:life/tax")
@@ -393,6 +392,8 @@ export interface SessionRecord {
   planFile?: string;
   planCompleted?: boolean;
   fromPlanSessionId?: string;
+  /** Source session ID when this session was forked from another session. */
+  forkedFromSessionId?: string;
   human_note?: string;
   pendingModel?: string;
   pendingMode?: string;

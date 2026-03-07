@@ -30,8 +30,8 @@ memoryRouter.get('/browse', (_req: Request, res: Response, next: NextFunction) =
     // Global MEMORY.md
     let global: BrowseItem | null = null
     try {
-      const content = getMemoryFile()
-      if (content) {
+      const result = getMemoryFile()
+      if (result) {
         const stat = fs.statSync(MEMORY_FILE)
         global = { path: 'MEMORY.md', title: 'Global Memory', updatedAt: stat.mtime.toISOString() }
       }
@@ -74,8 +74,8 @@ memoryRouter.get('/browse', (_req: Request, res: Response, next: NextFunction) =
 
 memoryRouter.get('/global', (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const content = getMemoryFile()
-    if (!content) {
+    const result = getMemoryFile()
+    if (!result) {
       res.status(404).json({ error: 'Global MEMORY.md not found' })
       return
     }
@@ -85,7 +85,7 @@ memoryRouter.get('/global', (_req: Request, res: Response, next: NextFunction) =
         path: 'MEMORY.md',
         title: 'Global Memory',
         category: 'global',
-        content,
+        content: result.content,
         createdAt: stat.birthtime.toISOString(),
         updatedAt: stat.mtime.toISOString(),
       },
@@ -131,13 +131,13 @@ memoryRouter.post('/daily-log/compact', async (req: Request, res: Response, next
     const dateKey = (req.body?.date as string) || formatDateKey()
 
     // Check if the file exists and report current size
-    const content = getDailyLog(dateKey)
-    if (!content) {
+    const dailyResult = getDailyLog(dateKey)
+    if (!dailyResult) {
       res.status(404).json({ error: `No daily log found for ${dateKey}` })
       return
     }
 
-    const tokens = estimateTokens(content)
+    const tokens = estimateTokens(dailyResult.content)
     const threshold = (req.body?.threshold as number) || 8000
 
     if (tokens < threshold) {

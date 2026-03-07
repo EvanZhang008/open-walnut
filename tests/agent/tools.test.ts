@@ -41,7 +41,9 @@ describe('tool definitions', () => {
     expect(names).toContain('update_task');
     expect(names).toContain('delete_task');
     expect(names).toContain('search');
-    expect(names).toContain('memory');
+    expect(names).toContain('memory_read');
+    expect(names).toContain('memory_edit');
+    expect(names).toContain('memory_write');
     expect(names).toContain('list_sessions');
     expect(names).toContain('get_session_summary');
     expect(names).toContain('update_session');
@@ -285,141 +287,40 @@ describe('search tool', () => {
   });
 });
 
-describe('memory tool', () => {
-  it('append saves to daily log', async () => {
-    const result = await executeTool('memory', {
-      action: 'append',
-      content: 'Some knowledge to remember',
-    });
-    expect(result).toBe('Saved to daily log.');
+describe('memory tools (smoke tests — see memory-tool-integration.test.ts for full coverage)', () => {
+  it('memory_read returns content and hash for global', async () => {
+    const { MEMORY_FILE } = await import('../../src/constants.js');
+    const nodefs = await import('node:fs');
+    const nodepath = await import('node:path');
+    nodefs.mkdirSync(nodepath.dirname(MEMORY_FILE), { recursive: true });
+    nodefs.writeFileSync(MEMORY_FILE, '# Test memory\n', 'utf-8');
+
+    const result = await executeTool('memory_read', { target: 'global' });
+    const parsed = JSON.parse(result as string);
+    expect(parsed.content_hash).toHaveLength(12);
+    expect(parsed.content).toContain('Test memory');
   });
 
-  it('append with project_path saves to project memory and daily log', async () => {
-    const result = await executeTool('memory', {
-      action: 'append',
-      content: 'Project-specific knowledge',
-      project_path: 'work/api',
-    });
-    const parsed = JSON.parse(result);
-    expect(parsed.status).toBe('saved');
-    expect(parsed.project).toBeDefined();
-    expect(parsed.recent_entries).toBeDefined();
-  });
-
-  it('read returns global memory when no project_path', async () => {
-    // Write something first
-    await executeTool('memory', {
-      action: 'update_global',
-      content: '# Global Memory\n\nSome global knowledge.',
-    });
-    const result = await executeTool('memory', { action: 'read' });
-    expect(result).toContain('Global Memory');
-  });
-
-  it('read returns project memory with project_path', async () => {
-    await executeTool('memory', {
-      action: 'append',
-      content: 'API endpoint added',
-      project_path: 'work/api',
-    });
-    const result = await executeTool('memory', {
-      action: 'read',
-      project_path: 'work/api',
-    });
-    expect(result).toContain('API endpoint added');
-  });
-
-  it('read returns not found for missing project', async () => {
-    const result = await executeTool('memory', {
-      action: 'read',
-      project_path: 'nonexistent/project',
-    });
-    expect(result).toBe('No memory found for this project.');
-  });
-
-  it('update_global replaces global memory content', async () => {
-    const result = await executeTool('memory', {
-      action: 'update_global',
-      content: 'New global content',
-    });
-    expect(result).toBe('Global memory updated.');
-  });
-
-  it('update_summary updates project summary', async () => {
-    // Create project first
-    await executeTool('memory', {
-      action: 'append',
-      content: 'Initial work',
-      project_path: 'work/api',
-    });
-    const result = await executeTool('memory', {
-      action: 'update_summary',
-      project_path: 'work/api',
-      name: 'API Service',
-      description: 'REST API for the platform',
-    });
-    const parsed = JSON.parse(result);
-    expect(parsed.status).toBe('updated');
-  });
-
-  it('returns error for missing required params', async () => {
-    const result = await executeTool('memory', {
-      action: 'append',
-    });
-    expect(result).toContain('Error:');
-  });
-
-  it('returns error for unknown action', async () => {
-    const result = await executeTool('memory', {
-      action: 'invalid',
-    });
-    expect(result).toContain('Error: Unknown action');
-  });
-
-  it('append with target="daily" writes only daily log', async () => {
-    const result = await executeTool('memory', {
-      action: 'append',
-      content: 'Daily-only entry',
-      project_path: 'work/api',
-      target: 'daily',
-    });
-    expect(result).toBe('Saved to daily log.');
-  });
-
-  it('append with target="project" writes only project memory', async () => {
-    const result = await executeTool('memory', {
-      action: 'append',
-      content: 'Project-only entry',
-      project_path: 'work/api',
+  it('memory_write append creates project memory', async () => {
+    const result = await executeTool('memory_write', {
       target: 'project',
-    });
-    const parsed = JSON.parse(result);
-    expect(parsed.status).toBe('saved');
-    expect(parsed.written_to).toEqual(['project']);
-    expect(parsed.project).toBeDefined();
-    expect(parsed.recent_entries).toBeDefined();
-  });
-
-  it('append with target="project" without project_path returns error', async () => {
-    const result = await executeTool('memory', {
-      action: 'append',
-      content: 'Will fail',
-      target: 'project',
-    });
-    expect(result).toContain('Error:');
-    expect(result).toContain('project_path is required');
-  });
-
-  it('append with target="both" writes to both', async () => {
-    const result = await executeTool('memory', {
-      action: 'append',
-      content: 'Both targets entry',
+      mode: 'append',
       project_path: 'work/api',
-      target: 'both',
+      content: 'New knowledge',
     });
-    const parsed = JSON.parse(result);
+    const parsed = JSON.parse(result as string);
     expect(parsed.status).toBe('saved');
-    expect(parsed.written_to).toEqual(['daily', 'project']);
+    expect(parsed.written_to).toContain('project');
+  });
+
+  it('memory_edit requires content_hash', async () => {
+    const result = await executeTool('memory_edit', {
+      target: 'global',
+      old_content: 'anything',
+      new_content: 'replacement',
+    });
+    expect(result).toContain('Error');
+    expect(result).toContain('content_hash');
   });
 });
 

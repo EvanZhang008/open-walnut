@@ -39,16 +39,15 @@ export const turnCompleteTriageHook: SessionHookDefinition = {
       try {
         const { getTriageEntries } = await import('../chat-history.js');
         const { entries } = await getTriageEntries(10, p.taskId);
-        // Filter to entries that actually triggered main agent notification (notification === false)
-        const notified = entries.filter(e => e.notification === false);
+        // Filter to entries that actually triggered main agent notification:
+        // New entries: tag:'ai' source:'triage' (stored via addAIMessages)
+        // Legacy entries: notification === false (stored via addNotification)
+        const notified = entries.filter(e => e.tag === 'ai' || e.notification === false);
         if (notified.length > 0) {
           const lines = notified.slice(0, 5).map(e => {
             const ts = e.timestamp ? new Date(e.timestamp).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) : '?';
-            // Use the dedicated notifyContent field (stored at triage save time).
-            // Fallback: first 150 chars of content for legacy entries without the field.
             const contentStr = typeof e.content === 'string' ? e.content : '';
-            const summary = e.notifyContent
-              || contentStr.slice(0, 150) || '(no content)';
+            const summary = contentStr.slice(0, 150) || '(no content)';
             return `[${ts}] ${summary}`;
           });
           notificationContext = `<recent_notifications>\nThese are the most recent notifications you sent to the main agent for this task:\n${lines.join('\n')}\n</recent_notifications>`;

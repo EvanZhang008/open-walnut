@@ -407,7 +407,7 @@ export async function createSessionRecord(
   taskId: string,
   project: string,
   cwd?: string,
-  extra?: { pid?: number; outputFile?: string; title?: string; description?: string; mode?: SessionMode; planFile?: string; planCompleted?: boolean; host?: string; provider?: import('./types.js').SessionProvider; fromPlanSessionId?: string },
+  extra?: { pid?: number; outputFile?: string; title?: string; description?: string; mode?: SessionMode; planFile?: string; planCompleted?: boolean; host?: string; provider?: import('./types.js').SessionProvider; fromPlanSessionId?: string; forkedFromSessionId?: string },
 ): Promise<SessionRecord> {
   return withWriteLock(async () => {
     const store = await readStore();
@@ -436,6 +436,7 @@ export async function createSessionRecord(
       if (extra?.planCompleted != null) existing.planCompleted = extra.planCompleted;
       if (extra?.host) existing.host = extra.host;
       if (extra?.fromPlanSessionId) existing.fromPlanSessionId = extra.fromPlanSessionId;
+      if (extra?.forkedFromSessionId) existing.forkedFromSessionId = extra.forkedFromSessionId;
       await writeStore(store);
       return existing;
     }
@@ -461,6 +462,7 @@ export async function createSessionRecord(
       ...(extra?.host ? { host: extra.host } : {}),
       ...(extra?.provider ? { provider: extra.provider } : {}),
       ...(extra?.fromPlanSessionId ? { fromPlanSessionId: extra.fromPlanSessionId } : {}),
+      ...(extra?.forkedFromSessionId ? { forkedFromSessionId: extra.forkedFromSessionId } : {}),
     };
 
     store.sessions.push(record);

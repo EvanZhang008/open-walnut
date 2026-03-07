@@ -35,6 +35,7 @@ export interface SessionStartEvent {
   title?: string;
   appendSystemPrompt?: string;
   fromPlanSessionId?: string;
+  forkedFromSessionId?: string;
 }
 
 export interface SessionSendEvent {
@@ -116,6 +117,7 @@ export interface SessionStatusChangedEvent {
   mode?: SessionMode;
   planCompleted?: boolean;
   fromPlanSessionId?: string;
+  forkedFromSessionId?: string;
   archived?: boolean;
 }
 
@@ -230,6 +232,19 @@ export interface ChatCompactedEvent { divider?: string }
 
 export interface ConfigChangedEvent { key?: string; config?: Record<string, unknown> }
 
+// ── System health events ──
+
+export interface SystemHealthEvent {
+  embedding: {
+    total: number;
+    indexed: number;
+    unindexed: number;
+    ollamaAvailable: boolean;
+    lastReconcileAt?: string;
+    lastError?: string;
+  };
+}
+
 // ── Cron events (emitted via broadcastEvent, consumed by git-versioning) ──
 
 export interface CronJobEvent {
@@ -289,6 +304,8 @@ export interface EventPayloadMap {
   'chat:compacted': ChatCompactedEvent;
 
   'config:changed': ConfigChangedEvent;
+
+  'system:health': SystemHealthEvent;
 
   'cron:job-added': CronJobEvent;
   'cron:job-updated': CronJobEvent;

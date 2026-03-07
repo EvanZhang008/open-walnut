@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { DAILY_DIR } from '../constants.js';
 import { getTokenizer } from '@anthropic-ai/tokenizer';
+import { computeContentHash } from '../utils/file-ops.js';
 import sizeOf from 'image-size';
 
 // ─── Singleton tokenizer ────────────────────────────────────────────
@@ -148,7 +149,7 @@ export function estimateFullPayload(opts: {
 
 /**
  * Append an entry to today's daily log file.
- * Creates the file with a header if it doesn't exist yet.
+ * Creates the file with YAML frontmatter if it doesn't exist yet.
  */
 export function appendDailyLog(content: string, source?: string, projectPath?: string): void {
   fs.mkdirSync(DAILY_DIR, { recursive: true });
@@ -157,7 +158,7 @@ export function appendDailyLog(content: string, source?: string, projectPath?: s
   const filePath = path.join(DAILY_DIR, `${dateKey}.md`);
 
   if (!fs.existsSync(filePath)) {
-    fs.writeFileSync(filePath, `# Daily Log: ${dateKey}\n\n`, 'utf-8');
+    fs.writeFileSync(filePath, `---\nname: '${dateKey}'\ndescription: ''\n---\n\n`, 'utf-8');
   }
 
   const now = new Date();
@@ -172,17 +173,32 @@ export function appendDailyLog(content: string, source?: string, projectPath?: s
   fs.appendFileSync(filePath, entry, 'utf-8');
 }
 
+export interface DailyLogResult {
+  content: string;
+  contentHash: string;
+}
+
 /**
  * Read the daily log for a given date (default: today).
+ * Returns content + contentHash for stale-check support.
  */
-export function getDailyLog(date?: string): string | null {
+export function getDailyLog(date?: string): DailyLogResult | null {
   const dateKey = date ?? formatDateKey();
   const filePath = path.join(DAILY_DIR, `${dateKey}.md`);
   try {
-    return fs.readFileSync(filePath, 'utf-8');
+    const content = fs.readFileSync(filePath, 'utf-8');
+    return { content, contentHash: computeContentHash(content) };
   } catch {
     return null;
   }
+}
+
+/**
+ * Resolve a date to the absolute file path of its daily log.
+ */
+export function resolveDailyLogPath(date?: string): string {
+  const dateKey = date ?? formatDateKey();
+  return path.join(DAILY_DIR, `${dateKey}.md`);
 }
 
 /**
@@ -196,9 +212,9 @@ export function getRecentDailyLogs(days: number): Array<{ date: string; content:
     const d = new Date(now);
     d.setDate(d.getDate() - i);
     const dateKey = formatDateKey(d);
-    const content = getDailyLog(dateKey);
-    if (content) {
-      results.push({ date: dateKey, content });
+    const result = getDailyLog(dateKey);
+    if (result) {
+      results.push({ date: dateKey, content: result.content });
     }
   }
 
@@ -291,21 +307,21 @@ export function getDailyLogsWithinBudget(tokenBudget: number): string {
     const d = new Date(now);
     d.setDate(d.getDate() - i);
     const dateKey = formatDateKey(d);
-    const content = getDailyLog(dateKey);
-    if (!content) continue;
+    const result = getDailyLog(dateKey);
+    if (!result) continue;
 
-    const tokens = estimateTokens(content);
+    const tokens = estimateTokens(result.content);
 
     // Fits within remaining budget — include fully
     if (tokensUsed + tokens <= tokenBudget) {
-      parts.push(content);
+      parts.push(result.content);
       tokensUsed += tokens;
       continue;
     }
 
     // Exceeds budget but we have no logs yet — truncate by entry, include partial
     if (parts.length === 0) {
-      const truncated = truncateDailyLogToFit(content, tokenBudget);
+      const truncated = truncateDailyLogToFit(result.content, tokenBudget);
       if (truncated) parts.push(truncated);
       break; // stop after truncated inclusion
     }

@@ -276,7 +276,7 @@ describe('enrichTaskContext', () => {
   it('loads full task content (not truncated)', async () => {
     const longNote = 'Important note content. '.repeat(100); // ~2400 chars
     vi.spyOn(taskManager, 'getTask').mockResolvedValue(makeTestTask({ note: longNote }) as any);
-    vi.spyOn(projectMemory, 'getProjectMemory').mockReturnValue(null);
+    vi.spyOn(projectMemory, 'getProjectMemory').mockReturnValue(null as any);
     vi.spyOn(chatHistory, 'getLastContextHashes').mockResolvedValue({});
 
     const result = await enrichTaskContext({ id: 'task-001', title: 'Fix Tax Filing' });
@@ -292,8 +292,8 @@ describe('enrichTaskContext', () => {
   it('includes project memory when available', async () => {
     vi.spyOn(taskManager, 'getTask').mockResolvedValue(makeTestTask() as any);
     vi.spyOn(projectMemory, 'getProjectMemory').mockImplementation((path: string) => {
-      if (path === 'life/tax') return '---\nname: Tax Project\n---\n## Memory entry\nTax-specific memory content';
-      if (path === 'life') return '---\nname: Life\n---\n## Memory entry\nLife category memory content';
+      if (path === 'life/tax') return { content: '---\nname: Tax Project\n---\n## Memory entry\nTax-specific memory content', contentHash: 'hash_tax_001' };
+      if (path === 'life') return { content: '---\nname: Life\n---\n## Memory entry\nLife category memory content', contentHash: 'hash_life_01' };
       return null;
     });
     vi.spyOn(chatHistory, 'getLastContextHashes').mockResolvedValue({});
@@ -309,8 +309,8 @@ describe('enrichTaskContext', () => {
   it('returns hashes keyed by content source path', async () => {
     vi.spyOn(taskManager, 'getTask').mockResolvedValue(makeTestTask() as any);
     vi.spyOn(projectMemory, 'getProjectMemory').mockImplementation((path: string) => {
-      if (path === 'life/tax') return 'project memory content';
-      if (path === 'life') return 'category memory content';
+      if (path === 'life/tax') return { content: 'project memory content', contentHash: 'hash_pm_tax' };
+      if (path === 'life') return { content: 'category memory content', contentHash: 'hash_pm_lif' };
       return null;
     });
     vi.spyOn(chatHistory, 'getLastContextHashes').mockResolvedValue({});
@@ -330,7 +330,7 @@ describe('enrichTaskContext', () => {
   it('marks unchanged fields when hashes match', async () => {
     const task = makeTestTask();
     vi.spyOn(taskManager, 'getTask').mockResolvedValue(task as any);
-    vi.spyOn(projectMemory, 'getProjectMemory').mockReturnValue(null);
+    vi.spyOn(projectMemory, 'getProjectMemory').mockReturnValue(null as any);
 
     // First call — get the hashes
     vi.spyOn(chatHistory, 'getLastContextHashes').mockResolvedValue({});
@@ -346,7 +346,7 @@ describe('enrichTaskContext', () => {
   });
 
   it('injects changed fields when hash differs', async () => {
-    vi.spyOn(projectMemory, 'getProjectMemory').mockReturnValue(null);
+    vi.spyOn(projectMemory, 'getProjectMemory').mockReturnValue(null as any);
 
     // First call
     vi.spyOn(taskManager, 'getTask').mockResolvedValue(makeTestTask({ note: 'old note' }) as any);
@@ -367,9 +367,9 @@ describe('enrichTaskContext', () => {
 
   it('shares parent memory hash across tasks in same category', async () => {
     vi.spyOn(projectMemory, 'getProjectMemory').mockImplementation((path: string) => {
-      if (path === 'life') return 'shared life memory';
-      if (path === 'life/tax') return 'tax memory';
-      if (path === 'life/sport') return 'sport memory';
+      if (path === 'life') return { content: 'shared life memory', contentHash: 'hash_life_sh' };
+      if (path === 'life/tax') return { content: 'tax memory', contentHash: 'hash_tax_mem' };
+      if (path === 'life/sport') return { content: 'sport memory', contentHash: 'hash_sport_m' };
       return null;
     });
 
@@ -399,7 +399,7 @@ describe('enrichTaskContext', () => {
     vi.spyOn(taskManager, 'getTask').mockResolvedValue(makeTestTask({
       category: 'Inbox', project: 'Inbox',
     }) as any);
-    vi.spyOn(projectMemory, 'getProjectMemory').mockReturnValue(null);
+    vi.spyOn(projectMemory, 'getProjectMemory').mockReturnValue(null as any);
     vi.spyOn(chatHistory, 'getLastContextHashes').mockResolvedValue({});
 
     const result = await enrichTaskContext({ id: 'task-001', title: 'Test' });

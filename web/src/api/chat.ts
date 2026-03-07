@@ -70,7 +70,6 @@ export interface ChatEntry {
   source?: 'cron' | 'triage' | 'session' | 'session-error' | 'agent-error' | 'subagent' | 'compaction' | 'compacting' | 'heartbeat';
   cronJobName?: string;
   notification?: boolean;
-  notifyContent?: string;  // Message sent to main agent via notify_main_agent tool (triage only)
   taskId?: string;
   sessionId?: string;  // Linked session ID (e.g. embedded triage run ID)
   compacted?: boolean;

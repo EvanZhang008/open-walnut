@@ -29,10 +29,9 @@ export interface ChatMessage {
   images?: ImageAttachment[];
   taskContext?: TaskContext;
   timestamp?: string;
-  source?: 'cron' | 'triage' | 'triage-notify' | 'session' | 'session-error' | 'agent-error' | 'subagent' | 'compaction' | 'compacting' | 'heartbeat';
+  source?: 'cron' | 'triage' | 'session' | 'session-error' | 'agent-error' | 'subagent' | 'compaction' | 'compacting' | 'heartbeat';
   cronJobName?: string;
   notification?: boolean;
-  notifyContent?: string;
   queued?: boolean;
   queueId?: number;
 }
@@ -155,7 +154,6 @@ function chatEntriesToMessages(entries: ChatEntry[]): ChatMessage[] {
         source: entry.source,
         cronJobName: entry.cronJobName,
         notification: entry.notification,
-        notifyContent: entry.notifyContent,
       });
       i++;
       continue;
@@ -170,10 +168,10 @@ function chatEntriesToMessages(entries: ChatEntry[]): ChatMessage[] {
         i++;
         continue;
       }
-      // Skip system-initiated user prompts (cron/heartbeat/triage/subagent) —
+      // Skip system-initiated user prompts (cron/heartbeat/subagent) —
       // these are the agent prompt entries that duplicate the UI notification.
-      // The corresponding tag:'ui' entry already displays in the chat.
-      if (entry.source && entry.source !== 'compaction' && entry.source !== 'compacting') {
+      // Exception: source:'triage' user entries are the unified display (no separate tag:'ui').
+      if (entry.source && entry.source !== 'compaction' && entry.source !== 'compacting' && entry.source !== 'triage') {
         i++;
         continue;
       }
@@ -629,7 +627,7 @@ export function useChat(): UseChatReturn {
   // Handle chat:history-updated — server pushes compact notifications (triage, subagent)
   useEvent('chat:history-updated', (data) => {
     const { entry } = data as {
-      entry?: { role: 'user' | 'assistant'; content: string; source?: string; notification?: boolean; notifyContent?: string; taskId?: string; timestamp?: string };
+      entry?: { role: 'user' | 'assistant'; content: string; source?: string; notification?: boolean; taskId?: string; timestamp?: string };
     };
     if (!entry || !entry.content) return;
     setMessages((prev) => [...prev, {
@@ -639,7 +637,6 @@ export function useChat(): UseChatReturn {
       timestamp: entry.timestamp,
       source: entry.source as ChatMessage['source'],
       notification: entry.notification,
-      notifyContent: entry.notifyContent,
     }]);
   });
 

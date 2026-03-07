@@ -1,8 +1,13 @@
 /**
  * edit_file tool — performs string replacement in a file.
  * Ensures unique match unless replace_all is set.
+ * Uses shared file-ops infrastructure (no hash check for generic files).
  */
-import fs from 'node:fs/promises';
+import {
+  editFileContent,
+  ContentNotFoundError,
+  AmbiguousMatchError,
+} from '../../utils/file-ops.js';
 import type { ToolDefinition } from '../tools.js';
 
 export const editTool: ToolDefinition = {
@@ -42,39 +47,19 @@ export const editTool: ToolDefinition = {
     if (newString == null) return 'Error: new_string is required.';
 
     try {
-      const content = await fs.readFile(filePath, 'utf-8');
+      // No expectedHash for generic file editing (hash check is memory-tool-only)
+      const result = await editFileContent(filePath, oldString, newString, {
+        replaceAll,
+      });
 
-      // Count occurrences
-      let count = 0;
-      let searchPos = 0;
-      while (true) {
-        const idx = content.indexOf(oldString, searchPos);
-        if (idx === -1) break;
-        count++;
-        searchPos = idx + oldString.length;
-      }
-
-      if (count === 0) {
+      return `File edited: ${filePath} (${result.replacements} replacement${result.replacements > 1 ? 's' : ''})`;
+    } catch (err: unknown) {
+      if (err instanceof ContentNotFoundError) {
         return `Error: old_string not found in ${filePath}. Make sure the string matches exactly (including whitespace and indentation).`;
       }
-
-      if (count > 1 && !replaceAll) {
-        return `Error: old_string appears ${count} times in ${filePath}. Provide more surrounding context to make the match unique, or set replace_all to true.`;
+      if (err instanceof AmbiguousMatchError) {
+        return `Error: old_string appears ${err.matchCount} times in ${filePath}. Provide more surrounding context to make the match unique, or set replace_all to true.`;
       }
-
-      let updated: string;
-      if (replaceAll) {
-        updated = content.split(oldString).join(newString);
-      } else {
-        // Replace first (and only) occurrence
-        const idx = content.indexOf(oldString);
-        updated = content.slice(0, idx) + newString + content.slice(idx + oldString.length);
-      }
-
-      await fs.writeFile(filePath, updated, 'utf-8');
-      const replacements = replaceAll ? count : 1;
-      return `File edited: ${filePath} (${replacements} replacement${replacements > 1 ? 's' : ''})`;
-    } catch (err: unknown) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === 'ENOENT') return `Error: File not found: ${filePath}`;
       if (code === 'EACCES') return `Error: Permission denied: ${filePath}`;

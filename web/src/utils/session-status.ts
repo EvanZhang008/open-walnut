@@ -5,7 +5,20 @@
  * Every component that shows session status must import from here.
  * Do NOT define local label/color maps in individual components.
  */
+import type { Task } from '@walnut/core';
 import type { ProcessStatus, WorkStatus } from '@/types/session';
+
+// ── Session ID resolution ──
+
+/** Resolve the best session ID for a task, falling back through all available slots.
+ *  Used by FocusDock and TodoPanel to find a displayable session. */
+export function resolveTaskSessionId(task: Task): string | null {
+  return task.session_id
+    || task.exec_session_id
+    || task.plan_session_id
+    || (task.session_ids?.length ? task.session_ids[task.session_ids.length - 1] : null)
+    || null;
+}
 
 // ── Labels ──
 

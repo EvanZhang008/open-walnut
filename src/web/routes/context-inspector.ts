@@ -5,6 +5,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { getConfig } from '../../core/config-manager.js'
+import { DEFAULT_MODEL } from '../../agent/model.js'
 import { buildRoleSection, buildSystemPrompt, buildTaskCategoriesSection } from '../../agent/context.js'
 import { buildSkillsPrompt } from '../../core/skill-loader.js'
 import { getCompactionSummary, getModelContext } from '../../core/chat-history.js'
@@ -25,7 +26,7 @@ contextInspectorRouter.get('/', async (_req: Request, res: Response, next: NextF
     const roleContent = buildRoleSection(name)
     const skillsContent = await buildSkillsPrompt() ?? ''
     const compactionContent = await getCompactionSummary().catch(() => null) ?? ''
-    const globalMemory = getMemoryFile() ?? ''
+    const globalMemory = getMemoryFile()?.content ?? ''
     const projectSummaries = getAllProjectSummaries()
     const dailyLogs = getDailyLogsWithinBudget(Math.floor(20000 / 2))
     const toolSchemas = getToolSchemas()
@@ -54,12 +55,11 @@ contextInspectorRouter.get('/', async (_req: Request, res: Response, next: NextF
     // (by pixel dimensions, not base64 size which can inflate by 500x)
     const messagesTokens = estimateMessagesTokens(apiMessages)
 
-    // Model config
-    const provider = config.provider as Record<string, unknown> | undefined
+    // Model config — mirror what the agent loop actually uses (loop.ts lines 146-150)
     const modelConfig = {
-      model: (provider?.model as string) ?? 'claude-opus-4-6',
-      max_tokens: 16384,
-      region: (provider?.region as string) ?? 'us-east-1',
+      model: config.agent?.main_model ?? config.agent?.model ?? DEFAULT_MODEL,
+      max_tokens: config.agent?.maxTokens ?? 32768,
+      region: config.agent?.region ?? config.provider?.bedrock_region ?? 'us-west-2',
     }
     const modelConfigText = JSON.stringify(modelConfig)
     const modelConfigTokens = estimateTokens(modelConfigText)

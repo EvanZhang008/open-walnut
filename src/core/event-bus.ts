@@ -81,6 +81,9 @@ export const EventNames = {
 
   // Config events
   CONFIG_CHANGED: 'config:changed',
+
+  // System health events
+  SYSTEM_HEALTH: 'system:health',
 } as const;
 
 export type EventName = (typeof EventNames)[keyof typeof EventNames];

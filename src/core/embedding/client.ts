@@ -7,7 +7,7 @@ import { log } from '../../logging/index.js';
 
 const DEFAULT_OLLAMA_URL = 'http://localhost:11434';
 const DEFAULT_MODEL = 'bge-m3';
-const DEFAULT_KEEP_ALIVE = '5m';
+const DEFAULT_KEEP_ALIVE = '30m';
 
 export interface OllamaEmbedOptions {
   ollamaUrl?: string;

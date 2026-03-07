@@ -23,10 +23,9 @@ interface ChatMessageProps {
   taskContext?: TaskContext;
   routeInfo?: RouteInfo;
   timestamp?: string;
-  source?: 'cron' | 'triage' | 'triage-notify' | 'session' | 'session-error' | 'agent-error' | 'subagent' | 'compaction' | 'compacting' | 'heartbeat';
+  source?: 'cron' | 'triage' | 'session' | 'session-error' | 'agent-error' | 'subagent' | 'compaction' | 'compacting' | 'heartbeat';
   cronJobName?: string;
   notification?: boolean;
-  notifyContent?: string;
   queued?: boolean;
   onCancel?: () => void;
   taskLookup?: Map<string, Task>;
@@ -921,7 +920,7 @@ function MemoizedTextBlock({ content, onClick }: { content: string; onClick: (e:
   );
 }
 
-function ChatMessageInner({ role, content, blocks, images, taskContext, routeInfo, timestamp, source, cronJobName, notification, notifyContent, queued, onCancel, taskLookup, onTaskClick, onSessionClick }: ChatMessageProps) {
+function ChatMessageInner({ role, content, blocks, images, taskContext, routeInfo, timestamp, source, cronJobName, notification, queued, onCancel, taskLookup, onTaskClick, onSessionClick }: ChatMessageProps) {
   const navigate = useNavigate();
   const { lightboxSrc, openLightbox, closeLightbox } = useLightbox();
 
@@ -981,8 +980,8 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
     // If no blocks, render content directly (legacy/history messages)
     if (!blocks || blocks.length === 0) {
       // User messages: preserve ALL newlines exactly as typed (no markdown collapsing)
-      // AI messages: full markdown rendering
-      return role === 'user' ? renderUserMessage(content) : renderMarkdown(content);
+      // AI messages + triage user entries: full markdown rendering
+      return (role === 'user' && source !== 'triage') ? renderUserMessage(content) : renderMarkdown(content);
     }
     return null;
   }, [content, blocks, source, notification, role]);
@@ -1083,13 +1082,23 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
   const collapsedSummary = useMemo(() => {
     if (!shouldAutoCollapse) return '';
     if (isTriage) {
-      // Triage: extract task ref + phase/outcome for a meaningful summary
-      const taskRefMatch = content.match(/\*\*Triage\*\*\s*\(([^)]+)\)/);
-      const taskRef = taskRefMatch ? taskRefMatch[1].trim() : '';
+      // Extract task label from <task-ref label="..."/> or legacy [id|label] format
+      const xmlRefMatch = content.match(/<task-ref[^>]*label="([^"]*)"/);
+      const legacyRefMatch = !xmlRefMatch ? content.match(/\[([^|\]]+)\|([^\]]+)\]/) : null;
+      const taskLabel = xmlRefMatch?.[1] ?? legacyRefMatch?.[2] ?? '';
+
+      // Extract → AI notification message (unified-path triage with notify)
+      const notifyMatch = content.match(/>\s*\*\*→ AI:\*\*\s*(.+)/);
+      if (notifyMatch) {
+        const msg = notifyMatch[1].trim();
+        return taskLabel ? `${taskLabel} — ${msg}`.slice(0, 200) : msg.slice(0, 200);
+      }
+
+      // Fallback: phase/outcome or just task label
       const phaseMatch = content.match(/Phase:\s*(.+)/);
       const phase = phaseMatch ? phaseMatch[1].trim() : '';
-      if (taskRef && phase) return `${taskRef} — ${phase}`.slice(0, 200);
-      if (taskRef) return taskRef.slice(0, 150);
+      if (taskLabel && phase) return `${taskLabel} — ${phase}`.slice(0, 200);
+      if (taskLabel) return taskLabel.slice(0, 150);
     }
     // Default: first line, stripped of bold markers
     const firstLine = content.split('\n').find(l => l.trim()) ?? '';
@@ -1191,7 +1200,7 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
           </div>
         )}
         {role === 'user' ? (
-          <div className="chat-message-content">
+          (!isCollapsed || !shouldAutoCollapse) && <div className="chat-message-content">
             {taskContext && <TaskContextSection ctx={taskContext} onSessionClick={onSessionClick} />}
             {routeInfo && <RouteInfoSection info={routeInfo} taskLookup={taskLookup} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />}
             {images && images.length > 0 && (
@@ -1245,12 +1254,6 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
           (!isCollapsed || !shouldAutoCollapse) && (
             <div className="chat-message-content">
               {routeInfo && <RouteInfoSection info={routeInfo} taskLookup={taskLookup} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />}
-              {isTriage && notifyContent?.trim() && (
-                <div className="chat-triage-notify-callout">
-                  <div className="chat-triage-notify-label">Notified AI</div>
-                  <div className="chat-triage-notify-text">{notifyContent.trim()}</div>
-                </div>
-              )}
               <div
                 className="markdown-body"
                 onClick={handleContentClick}
@@ -1278,7 +1281,6 @@ function arePropsEqual(prev: ChatMessageProps, next: ChatMessageProps): boolean 
     prev.source === next.source &&
     prev.cronJobName === next.cronJobName &&
     prev.notification === next.notification &&
-    prev.notifyContent === next.notifyContent &&
     prev.queued === next.queued &&
     prev.onCancel === next.onCancel &&
     prev.taskLookup === next.taskLookup &&

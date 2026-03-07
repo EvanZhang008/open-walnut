@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef, memo } from 'react';
 import type { Task } from '@walnut/core';
-import { compositeColor } from '@/utils/session-status';
+import { compositeColor, resolveTaskSessionId } from '@/utils/session-status';
 import { SessionChatHistory } from '@/components/sessions/SessionChatHistory';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { useSessionSend } from '@/hooks/useSessionSend';
@@ -61,7 +61,7 @@ interface DockTaskCardProps {
 }
 
 const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, onUnpin }: DockTaskCardProps) {
-  const sessionId = task.session_id ?? null;
+  const sessionId = resolveTaskSessionId(task);
   const isStreaming = task.session_status?.process_status === 'running';
 
   const ps = task.session_status?.process_status ?? 'stopped';
