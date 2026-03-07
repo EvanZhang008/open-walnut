@@ -664,20 +664,27 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
 
     const ro = new ResizeObserver(() => {
       const target = containerRef.current;
-      if (!target || target.scrollHeight <= target.clientHeight) return;
+      // Guard: only scroll if still on the same session (prevents stale observer
+      // firing on the wrong container during rapid session switches)
+      if (!target || scrolledForSessionRef.current !== sessionId) return;
+      if (target.scrollHeight <= target.clientHeight) return;
       if (userScrollLockUntil.current > Date.now()) return;
       scrollToBottom(target);
     });
 
     // Observe the scroll container (catches clientHeight changes from sibling squeeze)
     ro.observe(el);
-    // Observe the inner content wrapper if it exists (catches scrollHeight changes)
+    // Observe direct children (catches scrollHeight changes from content/images loading).
+    // ResizeObserver batches all entries into one callback per frame — no N*callback issue.
     for (const child of el.children) {
       ro.observe(child);
     }
 
     return () => ro.disconnect();
-  }, [sessionId, messages, blocks, scrollToBottom]);
+    // Deps: sessionId + scrollToBottom only. NOT messages/blocks — the ResizeObserver
+    // detects content changes via element resize, not via React re-render.
+    // Including messages/blocks would recreate the observer on every streaming update.
+  }, [sessionId, scrollToBottom]);
 
   // ── Deduplicate optimistic messages against persisted history ──
   // Non-committed messages: only dedup against NEWLY APPEARED messages ([prevMsgLen..length)).
