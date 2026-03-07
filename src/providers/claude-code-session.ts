@@ -1933,14 +1933,13 @@ export class SessionRunner {
       })
     }
 
-    // Session init timeout:
-    // - Resume/fork sessions load full conversation history → 30-65s measured.
-    //   Fork injects history as appendSystemPrompt → large first API call.
-    // - Remote adds SSH/wssh overhead (~2-5s) + devdesk latency.
-    // - New local sessions are fast (~8-10s) but still need margin.
-    // Measured tonight: remote resume = 58.6s, local resume = 65s.
+    // Session init timeout. Local new sessions take 1-2s from the console.
+    // Remote adds SSH/wssh/shell overhead (~5-10s). 90s for remote gives margin
+    // while timing logs (first JSONL line, timeToInitMs) collect data to find
+    // the real bottleneck — remote new sessions shouldn't take >10s but sometimes
+    // exceed 30s for unknown reasons (wssh relay? devdesk load?).
     const isRemote = !!data.host
-    const initTimeoutMs = isRemote ? 180_000 : 120_000
+    const initTimeoutMs = isRemote ? 90_000 : 30_000
 
     let timer: ReturnType<typeof setTimeout>
     const claudeSessionId = await Promise.race([
