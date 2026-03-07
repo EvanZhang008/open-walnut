@@ -67,6 +67,16 @@ function extractCollapsedSummary(text: string): string {
   return firstLine.replace(/\*\*/g, '').replace(/\*/g, '').slice(0, 120)
 }
 
+/** For triage messages, strip internal reasoning — only show up to the → AI: summary line */
+function stripTriageReasoning(text: string, source?: string): string {
+  if (source !== 'triage') return text
+  const notifyIdx = text.indexOf('> **→ AI:**')
+  if (notifyIdx === -1) return text
+  const afterNotify = text.indexOf('\n', notifyIdx)
+  if (afterNotify === -1) return text
+  return text.slice(0, afterNotify).trimEnd()
+}
+
 function ChatMessageInner({ message }: Props) {
   const isUser = message.role === 'user'
   const badge = !isUser ? sourceLabel(message.source) : null
@@ -76,6 +86,12 @@ function ChatMessageInner({ message }: Props) {
   const summary = useMemo(
     () => collapsible ? extractCollapsedSummary(message.text) : '',
     [collapsible, message.text]
+  )
+
+  // Strip internal triage reasoning for display
+  const displayText = useMemo(
+    () => stripTriageReasoning(message.text, message.source),
+    [message.text, message.source]
   )
 
   // Collapsed notification row
@@ -126,7 +142,7 @@ function ChatMessageInner({ message }: Props) {
         </TouchableOpacity>
         <View style={styles.expandedBody}>
           <Markdown style={markdownStyles} mergeStyle>
-            {message.text}
+            {displayText}
           </Markdown>
         </View>
       </View>

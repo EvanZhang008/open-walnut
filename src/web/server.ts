@@ -999,8 +999,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           // No tag:"ui" entry — the tag:"ai" entry IS the display.
           // Push the triage prompt to browser immediately (before agent runs),
           // so the user sees "TRIAGE (collapsed)" while the AI is thinking.
-          // triageContent includes the notify message prominently as a blockquote
-          const triageContent = `**Triage** (${displayTaskRef}):\n\n> **→ AI:** ${triageUpdate}\n\n${cleanedResult}`
+          // User sees ONLY the → AI summary line — no internal triage reasoning
+          const triageContent = `**Triage** (${displayTaskRef}):\n\n> **→ AI:** ${triageUpdate}`
           log.web.info('triage will notify main agent (unified path)', { taskId, triageUpdate: triageUpdate.slice(0, 200) })
 
           bus.emit(EventNames.CHAT_HISTORY_UPDATED, {
@@ -1015,7 +1015,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
               const taskTitle = task ? `${task.project ?? task.category} / ${task.title}` : taskId
               const taskRef = task ? `[${task.id}]` : `[${taskId}]`
 
-              // AI gets full triage content + task context; displayText shows the triage analysis
+              // AI gets full triage context for reasoning; user sees only the → AI summary
               const prompt = `[Triage Update] Task "${taskTitle}" ${taskRef}\n\n${cleanedResult}\n\n<task_note>\n${taskNote}\n</task_note>\n\nInform the user concisely (2-4 sentences) about this task's status.\nFocus on what the triage analysis says — that's the new information.\nThe task note provides full context if needed.\nDo not use tools.`
 
               const { runAgentLoop } = await import('../agent/loop.js')
@@ -1043,8 +1043,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
                 broadcastEvent('agent:response', { text: agentResult.response, source: 'triage' })
               }
               const newApiMsgs = agentResult.messages.slice(history.length)
-              // displayText: browser shows triage analysis with notify message; AI sees full prompt with task context
-              const displayText = `**Triage** (${displayTaskRef}):\n\n> **→ AI:** ${triageUpdate}\n\n${cleanedResult}`
+              // displayText: user sees only the → AI summary, not internal triage reasoning
+              const displayText = `**Triage** (${displayTaskRef}):\n\n> **→ AI:** ${triageUpdate}`
               await chatHistory.addAIMessages(newApiMsgs, { source: 'triage', displayText, taskId })
               log.web.info('triage main agent done', { taskId, newMessages: newApiMsgs.length })
               triggerBackgroundCompaction('triage')
@@ -1062,7 +1062,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         } else {
           // ── UI-only path: no notify, just display the triage result ──
           // notification: true → "UI Only" badge
-          const triageContent = `**Triage** (${displayTaskRef}):\n\n${cleanedResult}`
+          // Extract phase/outcome from triage output for brief summary; hide internal reasoning
+          const phaseMatch = cleanedResult.match(/Phase\s*\d+[:\s]+(\w+)/i)
+          const outcomeMatch = cleanedResult.match(/Outcome\s*([AB])/i)
+          const briefParts = [phaseMatch?.[1], outcomeMatch ? `Outcome ${outcomeMatch[1]}` : null].filter(Boolean)
+          const briefSummary = briefParts.length ? briefParts.join(' — ') : 'completed'
+          const triageContent = `**Triage** (${displayTaskRef}): ${briefSummary}`
           await chatHistory.addNotification({
             role: 'assistant', content: triageContent,
             source: 'triage', notification: true, taskId,

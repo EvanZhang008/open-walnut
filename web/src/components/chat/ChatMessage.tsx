@@ -981,7 +981,19 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
     if (!blocks || blocks.length === 0) {
       // User messages: preserve ALL newlines exactly as typed (no markdown collapsing)
       // AI messages + triage user entries: full markdown rendering
-      return (role === 'user' && source !== 'triage') ? renderUserMessage(content) : renderMarkdown(content);
+      let displayContent = content;
+      // Triage messages: strip internal reasoning — only show up to the → AI: summary line
+      if (source === 'triage') {
+        const notifyIdx = displayContent.indexOf('> **→ AI:**');
+        if (notifyIdx !== -1) {
+          // Keep header + → AI: line, strip everything after (internal reasoning)
+          const afterNotify = displayContent.indexOf('\n', notifyIdx);
+          if (afterNotify !== -1) {
+            displayContent = displayContent.slice(0, afterNotify).trimEnd();
+          }
+        }
+      }
+      return (role === 'user' && source !== 'triage') ? renderUserMessage(displayContent) : renderMarkdown(displayContent);
     }
     return null;
   }, [content, blocks, source, notification, role]);
