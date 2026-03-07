@@ -5167,7 +5167,7 @@ img[data-lightbox-src],
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 16px 4px;
+  padding: 8px 0 4px;
 }
 .search-relevance-divider::before,
 .search-relevance-divider::after {
