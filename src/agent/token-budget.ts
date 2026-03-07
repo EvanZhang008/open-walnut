@@ -7,28 +7,18 @@
  */
 
 import type { MessageParam } from './model.js';
-import { getContextWindowSize } from './model.js';
+import { getContextThreshold } from './model.js';
 import { estimateFullPayload, estimateMessagesTokens } from '../core/daily-log.js';
 
 export type ToolSchema = { name: string; description: string; input_schema: unknown };
 import { log } from '../logging/index.js';
 
-/**
- * Default context window budget for 200K models.
- * We leave 32K headroom for the response and token-counting inaccuracies.
- * For 1M models, computed dynamically via getContextBudget().
- */
-const DEFAULT_BUDGET = 168_000;
-
-/** Response headroom: ~16% of context window reserved for output + estimation slack. */
+/** ~16% headroom for output + estimation slack. 200K→168K, 1M→840K. */
 const BUDGET_PERCENT = 0.84;
 
-/**
- * Compute token budget for a model: 84% of context window (16% headroom for response).
- * For 200K models: 168K. For 1M models: 840K.
- */
+/** Compute token budget for a model: 84% of context window. */
 export function getContextBudget(model?: string): number {
-  return Math.round(getContextWindowSize(model) * BUDGET_PERCENT);
+  return getContextThreshold(model, BUDGET_PERCENT);
 }
 
 /** Minimum messages to keep even in emergency trim */

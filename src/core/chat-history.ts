@@ -743,8 +743,8 @@ export async function needsCompaction(): Promise<boolean> {
     const model = config.agent?.main_model;
     threshold = getContextThreshold(model, COMPACTION_PERCENT);
   } catch {
-    // Fallback: assume 200K window → 160K threshold (original default)
-    threshold = 160_000;
+    // Fallback: assume 200K default window
+    threshold = getContextThreshold(undefined, COMPACTION_PERCENT);
   }
 
   let fullTotal: number;

@@ -17,6 +17,7 @@ import { log } from '../logging/index.js';
 import { estimateMessagesTokens, estimateFullPayload } from '../core/daily-log.js';
 import { hydrateImagePaths } from '../core/chat-history.js';
 import { guardBudget, emergencyTrim, type ToolSchema } from './token-budget.js';
+import { getContextWindowSize } from './model.js';
 
 export interface ToolActivity {
   toolName: string;
@@ -254,14 +255,15 @@ export async function runAgentLoop(
     } catch (err) {
       const actualTokens = is400PromptTooLong(err);
       if (actualTokens !== null) {
-        // 190K = hard API limit (200K) - 10K output headroom.
-        // Intentionally higher than the preventive guard (168K): this path only fires after
-        // the API confirmed actual > 200K, so a tighter reactive trim target is appropriate.
+        // Reactive trim target: context window minus ~5% output headroom.
+        // Intentionally higher than the preventive guard (84%): this path only fires after
+        // the API confirmed the payload exceeds the hard limit.
+        const hardBudget = Math.round(getContextWindowSize(modelConfig.model) * 0.95);
         log.agent.warn(`${logTag} 400 prompt too long (${actualTokens} tokens), emergency trim and retry`, {
           actualTokens,
-          messageBudget: `~${Math.round((190_000 - fixedOverhead) / 1000)}K`,
+          messageBudget: `~${Math.round((hardBudget - fixedOverhead) / 1000)}K`,
         });
-        messages = emergencyTrim(messages, 190_000 - fixedOverhead);
+        messages = emergencyTrim(messages, hardBudget - fixedOverhead);
         lastExactTokens = null;
         lastExactMessageCount = 0;
         result = await callModel();
