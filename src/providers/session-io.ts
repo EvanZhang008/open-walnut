@@ -42,6 +42,7 @@ fi
 PIPE="$REMOTE_DIR/$SESSION_ID.pipe"
 JSONL="$REMOTE_DIR/$SESSION_ID.jsonl"
 PGID="$REMOTE_DIR/$SESSION_ID.pgid"
+WPID="$REMOTE_DIR/$SESSION_ID.writer"
 LOG="$REMOTE_DIR/$SESSION_ID.log"
 ERR="$REMOTE_DIR/$SESSION_ID.err"
 
@@ -67,7 +68,10 @@ do_stop() {
   if kill -0 "$pid" 2>/dev/null; then
     log "stop: SIGINT timeout, sending SIGTERM"; kill -TERM "$pid" 2>/dev/null; sleep 1
   fi
-  rm -f "$PGID" "$PIPE"; log "stop: done"
+  # Also kill the persistent FIFO writer if its PID file exists
+  local wpid; wpid=\$(cat "$WPID" 2>/dev/null)
+  [ -n "$wpid" ] && kill "$wpid" 2>/dev/null
+  rm -f "$PGID" "$WPID" "$PIPE"; log "stop: done"
 }
 
 do_start() {
@@ -90,8 +94,12 @@ do_start() {
   mkfifo "$PIPE" || { log "ERROR: mkfifo failed"; exit 1; }
   log "FIFO created: $PIPE"
 
+  # Pre-create JSONL so tail -f can start immediately (avoids race on slow hosts)
+  touch "$JSONL"
+
   sleep infinity > "$PIPE" &
   WRITER_PID=$!
+  echo $WRITER_PID > "$WPID"
   log "writer started PID=$WRITER_PID"
 
   claude $CLAUDE_ARGS < "$PIPE" > "$JSONL" 2>"$ERR" &
@@ -111,7 +119,7 @@ do_start() {
       log "cleanup: SIGINT timeout, sending SIGTERM"; kill -TERM $CLAUDE_PID 2>/dev/null; sleep 1
     fi
     kill $WRITER_PID 2>/dev/null
-    rm -f "$PGID" "$PIPE"
+    rm -f "$PGID" "$WPID" "$PIPE"
     log "=== session end (signal=$sig, exit=$EXIT_CODE) ==="
   }
   trap 'cleanup HUP' HUP
@@ -122,7 +130,7 @@ do_start() {
   EXIT_CODE=$?
   log "claude exited code=$EXIT_CODE"
   kill $WRITER_PID 2>/dev/null
-  rm -f "$PGID" "$PIPE"
+  rm -f "$PGID" "$WPID" "$PIPE"
   log "=== session end (normal, exit=$EXIT_CODE) ==="
 }
 
@@ -404,6 +412,9 @@ export class LocalIO implements SessionIO {
 // ── RemoteIO ──
 
 /** SSH connection target resolved from config.hosts */
+/** Remote directory for session files (FIFO, JSONL, PGID, logs). */
+const REMOTE_STREAMS_DIR = '/tmp/walnut-streams'
+
 export interface SshTarget {
   hostname: string
   user?: string
@@ -651,7 +662,7 @@ export class RemoteIO implements SessionIO {
       })
     }
 
-    const remoteDir = '/tmp/walnut-streams'
+    const remoteDir = REMOTE_STREAMS_DIR
     const tmpId = path.basename(this._localOutputFile, '.jsonl')
     this.remotePipePath = `${remoteDir}/${tmpId}.pipe`
     this.remoteOutputPath = `${remoteDir}/${tmpId}.jsonl`
@@ -738,10 +749,13 @@ export class RemoteIO implements SessionIO {
         })
         log.session.debug('RemoteIO: initial message written', { host: this.host, messageLength: initialMessage.length })
       } catch (e) {
-        log.session.warn('RemoteIO: failed to write initial message (session may not start)', {
+        // Initial message failure is critical — without it, claude starts with no context
+        // and sits idle forever. Throw so the caller can retry the whole send().
+        log.session.error('RemoteIO: failed to write initial message', {
           host: this.host,
           error: e instanceof Error ? e.message : String(e),
         })
+        throw new Error(`Failed to write initial message to remote session on ${hostString}: ${e instanceof Error ? e.message : String(e)}`)
       }
     }
 
@@ -880,7 +894,7 @@ export class RemoteIO implements SessionIO {
     const baseSshArgs = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=10']
     if (this.sshTarget.port) baseSshArgs.push('-p', String(this.sshTarget.port))
 
-    const scriptPath = `/tmp/walnut-streams/walnut-remote.sh`
+    const scriptPath = `${REMOTE_STREAMS_DIR}/walnut-remote.sh`
     const sessionId = path.basename(this.remotePgidPath, '.pgid')
     // Use the remote script's `status` command, with a direct PGID+kill-0 fallback
     // in case the script is missing (e.g., /tmp was cleaned).
@@ -1036,7 +1050,7 @@ export class RemoteIO implements SessionIO {
     // to rename because claude already has it open by fd; future write()
     // calls will use the updated remotePipePath.
     if (this.remotePipePath) {
-      const remoteDir = '/tmp/walnut-streams'
+      const remoteDir = REMOTE_STREAMS_DIR
       const newRemotePipe = `${remoteDir}/${sessionId}.pipe`
 
       if (this.remotePipePath !== newRemotePipe) {
@@ -1097,7 +1111,7 @@ export class RemoteIO implements SessionIO {
   recoverPipe(sessionId: string): void {
     // For remote sessions, set the expected remote paths optimistically —
     // actual liveness is verified on the first write() attempt.
-    const remoteDir = '/tmp/walnut-streams'
+    const remoteDir = REMOTE_STREAMS_DIR
     this.remotePipePath = `${remoteDir}/${sessionId}.pipe`
     this.remoteOutputPath = `${remoteDir}/${sessionId}.jsonl`
     this.remotePgidPath = `${remoteDir}/${sessionId}.pgid`
@@ -1212,7 +1226,7 @@ export class RemoteIO implements SessionIO {
    * Fire-and-forget.
    */
   static killRemoteBySessionId(sshTarget: SshTarget, sessionId: string): void {
-    const pgidPath = `/tmp/walnut-streams/${sessionId}.pgid`
+    const pgidPath = `${REMOTE_STREAMS_DIR}/${sessionId}.pgid`
     const hostString = sshTarget.user
       ? `${sshTarget.user}@${sshTarget.hostname}`
       : sshTarget.hostname
@@ -1242,7 +1256,7 @@ export class RemoteIO implements SessionIO {
     const baseSshArgs = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=10']
     if (sshTarget.port) baseSshArgs.push('-p', String(sshTarget.port))
 
-    const remoteDir = '/tmp/walnut-streams'
+    const remoteDir = REMOTE_STREAMS_DIR
 
     // List all PGID files on the remote host (async to avoid blocking event loop)
     let listing: string
