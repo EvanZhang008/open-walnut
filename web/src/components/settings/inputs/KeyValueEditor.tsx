@@ -18,7 +18,7 @@ export function KeyValueEditor({
   const [newKey, setNewKey] = useState('');
   const [newValue, setNewValue] = useState('');
 
-  const pairs = Object.entries(entries);
+  const pairs = Object.entries(entries ?? {});
 
   const addEntry = () => {
     const k = newKey.trim();
