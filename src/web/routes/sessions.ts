@@ -352,7 +352,7 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
 
     // Rewrite remote image paths to local paths for remote sessions
     if (record?.host) {
-      messages = await rewriteHistoryRemoteImages(messages, record.host, sessionId)
+      messages = await rewriteHistoryRemoteImages(messages, record.host, sessionId, record.cwd)
     }
 
     // Fork-aware: prepend source session history when this session was forked.
@@ -374,7 +374,7 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
             currentForkId, sourceRecord.cwd, sourceRecord.host, sourceRecord.outputFile,
           )
           if (sourceRecord.host) {
-            sourceMessages = await rewriteHistoryRemoteImages(sourceMessages, sourceRecord.host, currentForkId)
+            sourceMessages = await rewriteHistoryRemoteImages(sourceMessages, sourceRecord.host, currentForkId, sourceRecord.cwd)
           }
           if (sourceMessages.length > 0) {
             forkChainMessages.unshift(sourceMessages)

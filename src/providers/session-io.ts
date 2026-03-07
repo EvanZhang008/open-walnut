@@ -21,6 +21,119 @@ import { JsonlTailer } from '../core/jsonl-tailer.js'
 import { SESSION_STREAMS_DIR, REMOTE_IMAGES_DIR } from '../constants.js'
 import { log } from '../logging/index.js'
 
+// ── Embedded remote script ──
+// walnut-remote.sh is embedded as a string to avoid file path issues with bundlers.
+// This script runs independently on the remote machine (nohup) — SSH is only the transport.
+const WALNUT_REMOTE_SCRIPT = `#!/bin/bash
+# walnut-remote.sh — Independent remote session runner for Walnut.
+# Runs as a detached process on the remote machine (nohup).
+# SSH only starts it and tails the output — if SSH dies, the session continues.
+set -u
+
+REMOTE_DIR="\${WALNUT_REMOTE_DIR:-/tmp/walnut-streams}"
+ACTION="\${1:-}"
+SESSION_ID="\${2:-}"
+
+if [ -z "$ACTION" ] || [ -z "$SESSION_ID" ]; then
+  echo "Usage: walnut-remote.sh {start|status|stop} <session-id> [cwd] [claude-args...]" >&2
+  exit 1
+fi
+
+PIPE="$REMOTE_DIR/$SESSION_ID.pipe"
+JSONL="$REMOTE_DIR/$SESSION_ID.jsonl"
+PGID="$REMOTE_DIR/$SESSION_ID.pgid"
+LOG="$REMOTE_DIR/$SESSION_ID.log"
+ERR="$REMOTE_DIR/$SESSION_ID.err"
+
+log() { echo "[\$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG"; }
+
+do_status() {
+  if [ ! -f "$PGID" ]; then echo "no-pgid"; exit 0; fi
+  local pid; pid=\$(cat "$PGID" 2>/dev/null)
+  if [ -z "$pid" ]; then echo "empty-pgid"; exit 0; fi
+  if kill -0 "$pid" 2>/dev/null; then echo "running:$pid"; else echo "dead:$pid"; fi
+}
+
+do_stop() {
+  if [ ! -f "$PGID" ]; then log "stop: no PGID file"; exit 0; fi
+  local pid; pid=\$(cat "$PGID" 2>/dev/null)
+  if [ -z "$pid" ] || [ "$pid" -le 1 ] 2>/dev/null; then
+    log "stop: invalid PID: $pid"; rm -f "$PGID"; exit 0
+  fi
+  log "stop: sending SIGINT to claude PID=$pid"
+  kill -INT "$pid" 2>/dev/null
+  local i=0
+  while [ $i -lt 25 ] && kill -0 "$pid" 2>/dev/null; do sleep 0.2; i=$((i + 1)); done
+  if kill -0 "$pid" 2>/dev/null; then
+    log "stop: SIGINT timeout, sending SIGTERM"; kill -TERM "$pid" 2>/dev/null; sleep 1
+  fi
+  rm -f "$PGID" "$PIPE"; log "stop: done"
+}
+
+do_start() {
+  local CWD="\${3:-\$HOME}"
+  shift 3 2>/dev/null || shift $# 2>/dev/null
+  local CLAUDE_ARGS="$*"
+
+  mkdir -p "$REMOTE_DIR"
+  log "=== session start ==="
+  log "PID=$$, session=$SESSION_ID, cwd=$CWD"
+  log "claude args: $CLAUDE_ARGS"
+
+  if [ ! -d "$CWD" ]; then
+    log "ERROR: CWD not found: $CWD"; echo "walnut: CWD not found: $CWD" >&2; exit 1
+  fi
+  cd "$CWD" || { log "ERROR: cd failed: $CWD"; exit 1; }
+  log "working directory: \$(pwd)"
+
+  rm -f "$PIPE"
+  mkfifo "$PIPE" || { log "ERROR: mkfifo failed"; exit 1; }
+  log "FIFO created: $PIPE"
+
+  sleep infinity > "$PIPE" &
+  WRITER_PID=$!
+  log "writer started PID=$WRITER_PID"
+
+  claude $CLAUDE_ARGS < "$PIPE" > "$JSONL" 2>"$ERR" &
+  CLAUDE_PID=$!
+  log "claude started PID=$CLAUDE_PID"
+  echo $CLAUDE_PID > "$PGID"
+  log "PGID file written: $PGID"
+
+  EXIT_CODE=0
+  cleanup() {
+    local sig="\${1:-EXIT}"
+    log "cleanup triggered (signal=$sig)"
+    kill -INT $CLAUDE_PID 2>/dev/null
+    local i=0
+    while [ $i -lt 10 ] && kill -0 $CLAUDE_PID 2>/dev/null; do sleep 0.5; i=$((i + 1)); done
+    if kill -0 $CLAUDE_PID 2>/dev/null; then
+      log "cleanup: SIGINT timeout, sending SIGTERM"; kill -TERM $CLAUDE_PID 2>/dev/null; sleep 1
+    fi
+    kill $WRITER_PID 2>/dev/null
+    rm -f "$PGID" "$PIPE"
+    log "=== session end (signal=$sig, exit=$EXIT_CODE) ==="
+  }
+  trap 'cleanup HUP' HUP
+  trap 'cleanup TERM' TERM
+  trap 'cleanup INT' INT
+
+  wait $CLAUDE_PID 2>/dev/null
+  EXIT_CODE=$?
+  log "claude exited code=$EXIT_CODE"
+  kill $WRITER_PID 2>/dev/null
+  rm -f "$PGID" "$PIPE"
+  log "=== session end (normal, exit=$EXIT_CODE) ==="
+}
+
+case "$ACTION" in
+  start)  do_start "$@" ;;
+  status) do_status ;;
+  stop)   do_stop ;;
+  *)      echo "Unknown action: $ACTION" >&2; exit 1 ;;
+esac
+`
+
 // ── SessionIO interface ──
 
 export interface SessionIO {
@@ -441,6 +554,8 @@ export class RemoteIO implements SessionIO {
   private remoteOutputPath: string | null = null
   /** Remote PID file path — stores the claude process PID for remote kill/cleanup. */
   private remotePgidPath: string | null = null
+  /** Remote log file path — structured debug log written by walnut-remote.sh. */
+  private remoteLogPath: string | null = null
   private _localOutputFile: string
   private tailProc: ChildProcess | null = null
   private tailer: JsonlTailer | null = null
@@ -448,6 +563,10 @@ export class RemoteIO implements SessionIO {
   private _tailOffset = 0
   private sshTarget: SshTarget
   private _hasPipe = false
+  /** SSH PID monitoring the tail -f connection. Tracked for reconnect. */
+  private _tailSshPid: number | null = null
+  /** Whether a reconnect attempt is already in progress (prevents races). */
+  private _reconnecting = false
 
   /** Remote directory where transferred images are stored (for cleanup). */
   remoteImagesDir?: string
@@ -455,6 +574,11 @@ export class RemoteIO implements SessionIO {
   /** Expose SSH target for downstream consumers (e.g. remote image download). */
   get target(): SshTarget {
     return this.sshTarget
+  }
+
+  /** PID of the SSH process tailing remote JSONL (for liveness monitoring). */
+  get tailSshPid(): number | null {
+    return this._tailSshPid
   }
 
   readonly processName = 'ssh'
@@ -488,22 +612,19 @@ export class RemoteIO implements SessionIO {
   }
 
   /**
-   * Set up remote FIFO + JSONL files and spawn claude on the remote machine.
-   * Returns the SSH spawn args and env needed for the caller to spawn the process.
+   * Set up remote session using an independent script.
    *
-   * Remote setup:
-   *   1. mkdir -p /tmp/walnut-streams/
-   *   2. mkfifo /tmp/walnut-streams/{id}.pipe
-   *   3. claude --input-format stream-json < fifo > jsonl &
-   *   (all done via a single SSH command)
+   * Architecture (decoupled from SSH lifecycle):
+   *   Step 1: Deploy walnut-remote.sh to remote (~50 lines, <0.1s)
+   *   Step 2: Start script via SSH (nohup — detached, survives SSH drop)
+   *   Step 3: Write initial message to remote FIFO (if any)
+   *   Step 4: Return SSH tail args for caller to spawn the viewer process
    *
-   * FIFO initial message is written via the same SSH session that spawns claude,
-   * using a background subshell pattern:
-   *   ( echo 'message' > fifo ) & claude --input-format stream-json < fifo > jsonl
+   * The SSH process spawned by the caller is ONLY a viewer (tail -f).
+   * If it dies (SSH drop, network hiccup), the remote session continues.
+   * Walnut can reconnect via reconnectTail() without --resume.
    *
    * @param append — when true, open the LOCAL output file in append mode.
-   *   The remote JSONL still truncates (each turn is a fresh Claude process),
-   *   but the local file preserves all turns' data received via SSH stdout.
    */
   setupRemote(claudeArgs: string[], cwd?: string, initialMessage?: string, append?: boolean): {
     sshArgs: string[]
@@ -520,7 +641,6 @@ export class RemoteIO implements SessionIO {
       const certCheck = execFileSync('ssh-add', ['-L'], { encoding: 'utf-8', timeout: 5000 })
       const certLines = certCheck.split('\n').filter(l => l.includes('cert-v01'))
       if (certLines.length > 1) {
-        // Multiple certs loaded — likely stale ones. Flush and re-add.
         log.session.info('RemoteIO: flushing stale SSH agent certs', { certCount: certLines.length })
         execFileSync('ssh-add', ['-D'], { timeout: 5000, stdio: 'pipe' })
         execFileSync('ssh-add', [path.join(os.homedir(), '.ssh', 'id_ecdsa')], { timeout: 5000, stdio: 'pipe' })
@@ -536,139 +656,112 @@ export class RemoteIO implements SessionIO {
     this.remotePipePath = `${remoteDir}/${tmpId}.pipe`
     this.remoteOutputPath = `${remoteDir}/${tmpId}.jsonl`
     this.remotePgidPath = `${remoteDir}/${tmpId}.pgid`
+    this.remoteLogPath = `${remoteDir}/${tmpId}.log`
 
-    // Build the remote command that:
-    // 1. Creates the streams directory
-    // 2. Creates the FIFO
-    // 3. Writes the initial message to the FIFO in background
-    // 4. Starts claude reading from the FIFO, writing to JSONL
-    // 5. Tails the JSONL to stdout (so SSH connection streams it back)
-    const quotedArgs = claudeArgs.map((a) => shellQuote(a))
-    // shell_setup is handled by wrapInLoginShell() below — preamble only needs base PATH
-    const preamble = `${REMOTE_BASE_PATH} && CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`
-
-    const setupCmds = [
-      `mkdir -p ${shellQuote(remoteDir)}`,
-      `rm -f ${shellQuote(this.remotePipePath)}`,
-      `mkfifo ${shellQuote(this.remotePipePath)}`,
+    const hostString = this.sshTarget.user
+      ? `${this.sshTarget.user}@${this.sshTarget.hostname}`
+      : this.sshTarget.hostname
+    const baseSshArgs = [
+      '-o', 'BatchMode=yes',
+      '-o', 'StrictHostKeyChecking=no',
+      '-o', 'ConnectTimeout=15',
     ]
+    if (this.sshTarget.port) baseSshArgs.push('-p', String(this.sshTarget.port))
 
-    // Write initial message to FIFO in background, THEN start claude
-    // The FIFO write must happen in a subshell that runs concurrently with claude's read
-    //
-    // IMPORTANT: Use ';' (not '&&') to separate background-job lines from subsequent
-    // commands. The pattern `cmd & && next` is a zsh syntax error because '&&' cannot
-    // follow '&' (a background job terminator). 'cmd &; next' is valid in both bash and zsh.
-    let claudeCmd: string
+    // ── Step 1: Deploy walnut-remote.sh to remote ──
+    // Deploy via "ssh cat > file" — faster than scp and doesn't need scp binary.
+    // Script is embedded as a string constant (WALNUT_REMOTE_SCRIPT) to avoid
+    // file path issues with bundlers (tsup puts everything in dist/).
+    const scriptPath = `${remoteDir}/walnut-remote.sh`
+    const scriptContent = WALNUT_REMOTE_SCRIPT
+    try {
+      execFileSync('ssh', [
+        ...baseSshArgs, hostString,
+        `mkdir -p ${shellQuote(remoteDir)} && cat > ${shellQuote(scriptPath)} && chmod +x ${shellQuote(scriptPath)}`,
+      ], {
+        input: scriptContent,
+        timeout: 15_000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      })
+      log.session.debug('RemoteIO: deployed walnut-remote.sh', { host: this.host })
+    } catch (e) {
+      log.session.error('RemoteIO: failed to deploy walnut-remote.sh', {
+        host: this.host,
+        error: e instanceof Error ? e.message : String(e),
+      })
+      throw new Error(`Failed to deploy remote script to ${hostString}: ${e instanceof Error ? e.message : String(e)}`)
+    }
+
+    const deployMs = Date.now() - t0
+
+    // ── Step 2: Start script on remote (nohup — survives SSH drop) ──
+    // The script creates FIFO, starts claude, writes PGID, handles signals.
+    const quotedArgs = claudeArgs.map((a) => shellQuote(a)).join(' ')
+    const quotedCwd = shellQuote(cwd ?? '$HOME')
+    // The remote script needs PATH setup to find `claude` binary.
+    // buildRemotePreamble handles base PATH; wrapInLoginShell handles shell_setup.
+    // Only pass shell_setup to one of them to avoid running it twice.
+    const preamble = buildRemotePreamble()
+    const startCmd = `${preamble} && CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 nohup bash ${shellQuote(scriptPath)} start ${shellQuote(tmpId)} ${quotedCwd} ${quotedArgs} </dev/null >/dev/null 2>&1 &`
+    const wrappedStartCmd = wrapInLoginShell(startCmd, this.sshTarget.shell_setup)
+
+    try {
+      execFileSync('ssh', [...baseSshArgs, hostString, wrappedStartCmd], {
+        timeout: 15_000,
+        stdio: 'pipe',
+      })
+      log.session.debug('RemoteIO: remote script started', { host: this.host, sessionId: tmpId })
+    } catch (e) {
+      log.session.error('RemoteIO: failed to start remote script', {
+        host: this.host, sessionId: tmpId,
+        error: e instanceof Error ? e.message : String(e),
+      })
+      throw new Error(`Failed to start remote session on ${hostString}: ${e instanceof Error ? e.message : String(e)}`)
+    }
+
+    const startMs = Date.now() - t0
+
+    // ── Step 3: Wait for FIFO to be ready, then write initial message ──
+    // The script creates the FIFO synchronously before starting claude,
+    // but nohup may not have executed yet. Brief poll for the FIFO.
     if (initialMessage) {
       const payload = JSON.stringify({
         type: 'user',
         message: { role: 'user', content: initialMessage },
       })
-      // Setup section: uses '&&' (no background jobs → safe for both bash and zsh)
-      const setupSection = [
-        `${preamble}`,
-        `(printf '%s\\n' ${shellQuote(payload)} > ${shellQuote(this.remotePipePath)} &)`,
-      ].join(' && ')
-      // Execution section: uses ';' to avoid '& &&' zsh parse error.
-      //
-      // Persistent FIFO writer: `sleep infinity > FIFO &` keeps at least one
-      // writer fd open on the named pipe. Without it, Claude's stdin sees EOF
-      // the moment the initial `printf` closes its writer — causing Claude to
-      // exit after the first turn. With the persistent writer, Claude blocks
-      // on `read()` between turns (writer count ≥ 1 → no EOF), and subsequent
-      // messages injected via `RemoteIO.write()` are delivered reliably.
-      //
-      // EXIT trap: ensures all background processes are killed when the SSH
-      // connection drops (server kills SSH process → remote shell exits →
-      // trap fires → cleanup). Without the trap, Claude/tail/sleep would be
-      // orphaned on the remote machine.
-      // Remote stderr goes to a .err file instead of /dev/null.
-      // After claude exits, cat the stderr to SSH stderr (fd 2) so the local
-      // .err file captures it for the "process died before session init" diagnostic.
-      const remoteStderrFile = `${shellQuote(this.remoteOutputPath)}.err`
-      const execSection = [
-        `sleep infinity > ${shellQuote(this.remotePipePath)} &`,
-        `WRITER_PID=$!`,
-        `claude ${quotedArgs.join(' ')} < ${shellQuote(this.remotePipePath)} > ${shellQuote(this.remoteOutputPath)} 2>${remoteStderrFile} &`,
-        `CLAUDE_PID=$!`,
-        `echo $CLAUDE_PID > ${shellQuote(this.remotePgidPath!)}`,
-        // Register traps early — minimizes the window where signals go unhandled.
-        // TAIL_PID may be unset when trap fires, but kill with empty arg is harmless with 2>/dev/null.
-        `trap 'exit' HUP TERM INT`,
-        `trap 'kill -INT $CLAUDE_PID 2>/dev/null; kill $TAIL_PID $WRITER_PID 2>/dev/null; rm -f ${shellQuote(this.remotePgidPath!)}; cat ${remoteStderrFile} >&2 2>/dev/null' EXIT`,
-        `sleep 0.5`,
-        `tail -f -c +1 ${shellQuote(this.remoteOutputPath)} &`,
-        `TAIL_PID=$!`,
-        `wait $CLAUDE_PID 2>/dev/null`,
-        `sleep 2`,
-        `kill $TAIL_PID 2>/dev/null`,
-        `kill $WRITER_PID 2>/dev/null`,
-      ].join('; ')
-      claudeCmd = `${setupSection}; ${execSection}`
-    } else {
-      // Resume case: no initial message, just start claude with FIFO
-      const remoteStderrFile = `${shellQuote(this.remoteOutputPath)}.err`
-      const execSection = [
-        `sleep infinity > ${shellQuote(this.remotePipePath)} &`,
-        `WRITER_PID=$!`,
-        `claude ${quotedArgs.join(' ')} < ${shellQuote(this.remotePipePath)} > ${shellQuote(this.remoteOutputPath)} 2>${remoteStderrFile} &`,
-        `CLAUDE_PID=$!`,
-        `echo $CLAUDE_PID > ${shellQuote(this.remotePgidPath!)}`,
-        `trap 'exit' HUP TERM INT`,
-        `trap 'kill -INT $CLAUDE_PID 2>/dev/null; kill $TAIL_PID $WRITER_PID 2>/dev/null; rm -f ${shellQuote(this.remotePgidPath!)}; cat ${remoteStderrFile} >&2 2>/dev/null' EXIT`,
-        `sleep 0.5`,
-        `tail -f -c +1 ${shellQuote(this.remoteOutputPath)} &`,
-        `TAIL_PID=$!`,
-        `wait $CLAUDE_PID 2>/dev/null`,
-        `sleep 2`,
-        `kill $TAIL_PID 2>/dev/null`,
-        `kill $WRITER_PID 2>/dev/null`,
-      ].join('; ')
-      claudeCmd = `${preamble}; ${execSection}`
+      // Wait up to 3s for the FIFO to appear (script creates it immediately)
+      const waitCmd = `for i in 1 2 3 4 5 6; do [ -p ${shellQuote(this.remotePipePath)} ] && break; sleep 0.5; done; [ -p ${shellQuote(this.remotePipePath)} ] && printf '%s\\n' ${shellQuote(payload)} > ${shellQuote(this.remotePipePath)}`
+      try {
+        execFileSync('ssh', [...baseSshArgs, hostString, waitCmd], {
+          timeout: 15_000,
+          stdio: 'pipe',
+        })
+        log.session.debug('RemoteIO: initial message written', { host: this.host, messageLength: initialMessage.length })
+      } catch (e) {
+        log.session.warn('RemoteIO: failed to write initial message (session may not start)', {
+          host: this.host,
+          error: e instanceof Error ? e.message : String(e),
+        })
+      }
     }
 
-    let fullCmd: string
-    if (cwd) {
-      // CRITICAL: Use `|| exit 1` after cd to abort the ENTIRE command on failure.
-      // Without it, `cd /bad && setupSection; execSection` silently continues past
-      // the `;` — the cd failure only stops the `&&` chain before the `;`, but the
-      // exec section (which includes claude) runs anyway in the wrong directory.
-      fullCmd = `${setupCmds.join(' && ')} && { cd ${shellQuote(cwd)} || { echo "walnut: CWD not found: ${shellQuote(cwd)}" >&2; exit 1; }; } && ${claudeCmd}`
-    } else {
-      fullCmd = `${setupCmds.join(' && ')} && ${claudeCmd}`
-    }
+    const msgMs = Date.now() - t0
 
-    // Wrap in a login shell so profile files (.bashrc, .zshrc, .profile) are
-    // sourced — same as tmux. This ensures node version managers (nvm, fnm,
-    // volta) are loaded automatically. $SHELL is set by sshd.
-    const wrappedCmd = wrapInLoginShell(fullCmd, this.sshTarget.shell_setup)
-
-    // Build SSH args
-    const hostString = this.sshTarget.user
-      ? `${this.sshTarget.user}@${this.sshTarget.hostname}`
-      : this.sshTarget.hostname
+    // ── Step 4: Build tail SSH args (viewer — the process caller spawns) ──
+    // Wait for JSONL file to appear (script creates it when claude starts)
+    const tailCmd = `for i in 1 2 3 4 5 6 7 8 9 10; do [ -f ${shellQuote(this.remoteOutputPath)} ] && break; sleep 0.5; done; tail -f -c +1 ${shellQuote(this.remoteOutputPath)}`
 
     const sshArgs = [
-      '-o', 'BatchMode=yes',
-      '-o', 'StrictHostKeyChecking=no',
-      '-o', 'ConnectTimeout=15',
+      ...baseSshArgs,
       '-o', 'ServerAliveInterval=30',
       '-o', 'ServerAliveCountMax=3',
+      hostString, tailCmd,
     ]
-    if (this.sshTarget.port) {
-      sshArgs.push('-p', String(this.sshTarget.port))
-    }
-    sshArgs.push(hostString, wrappedCmd)
 
-    // Local output file — SSH stdout (which is remote tail -f) goes here.
-    // On resume (append=true), append to preserve previous turns' data.
-    // The remote JSONL still truncates (fresh Claude process each turn),
-    // but the local file accumulates all turns' output for history viewing.
+    // Local output file — SSH stdout (remote tail -f) goes here
     const localOutputFd = fs.openSync(this._localOutputFile, append ? 'a' : 'w')
     const localStderrFd = fs.openSync(this._localOutputFile + '.err', append ? 'a' : 'w')
 
-    // Touch local output file so health monitor sees fresh mtime on resume
     if (append) {
       const now = new Date()
       try { fs.utimesSync(this._localOutputFile, now, now) } catch (e) {
@@ -678,21 +771,136 @@ export class RemoteIO implements SessionIO {
 
     this._hasPipe = true
 
-    log.session.info('RemoteIO: SSH session setup', {
+    log.session.info('RemoteIO: SSH session setup (script-based)', {
       host: this.host,
       hostString,
       cwd: cwd ?? '(default)',
       remotePipe: this.remotePipePath,
       remoteJsonl: this.remoteOutputPath,
+      remoteLog: this.remoteLogPath,
       localOutputFile: this._localOutputFile,
       append: append ?? false,
       hasInitialMessage: !!initialMessage,
       initialMessageLength: initialMessage?.length ?? 0,
-      setupMs: Date.now() - t0,
+      deployMs,
+      startMs,
+      msgMs,
+      totalMs: Date.now() - t0,
     })
-    log.session.debug('RemoteIO: full SSH command', { cmd: fullCmd })
 
     return { sshArgs, localOutputFd, localStderrFd }
+  }
+
+  /**
+   * Reconnect the tail -f SSH process after a disconnect.
+   *
+   * The remote session continues running independently (started via nohup).
+   * This just spawns a new SSH process to resume tailing the JSONL output.
+   *
+   * @param fromOffset — byte offset in the LOCAL output file. The remote JSONL
+   *   is tailed from the equivalent position using `tail -f -c +{offset}`.
+   * @returns The spawned SSH process, or null if reconnect failed.
+   */
+  reconnectTail(fromOffset?: number): ChildProcess | null {
+    if (this._reconnecting) {
+      log.session.debug('RemoteIO: reconnect already in progress, skipping', { host: this.host })
+      return null
+    }
+    if (!this.remoteOutputPath) {
+      log.session.warn('RemoteIO: cannot reconnect — no remote output path', { host: this.host })
+      return null
+    }
+
+    this._reconnecting = true
+
+    const hostString = this.sshTarget.user
+      ? `${this.sshTarget.user}@${this.sshTarget.hostname}`
+      : this.sshTarget.hostname
+    const baseSshArgs = [
+      '-o', 'BatchMode=yes',
+      '-o', 'StrictHostKeyChecking=no',
+      '-o', 'ConnectTimeout=15',
+      '-o', 'ServerAliveInterval=30',
+      '-o', 'ServerAliveCountMax=3',
+    ]
+    if (this.sshTarget.port) baseSshArgs.push('-p', String(this.sshTarget.port))
+
+    // Use byte offset to avoid re-reading already-received data.
+    // +1 because tail -c +N is 1-based (byte N from start, not 0-based).
+    const offset = (fromOffset ?? 0) + 1
+    const tailCmd = `tail -f -c +${offset} ${shellQuote(this.remoteOutputPath)}`
+
+    // Append to existing local output file (don't truncate!)
+    const localOutputFd = fs.openSync(this._localOutputFile, 'a')
+    const localStderrFd = fs.openSync(this._localOutputFile + '.err', 'a')
+
+    try {
+      const proc = spawn('ssh', [...baseSshArgs, hostString, tailCmd], {
+        detached: true,
+        stdio: ['pipe', localOutputFd, localStderrFd],
+      })
+      proc.stdin?.end()
+      fs.closeSync(localOutputFd)
+      fs.closeSync(localStderrFd)
+      proc.unref()
+
+      this._tailSshPid = proc.pid ?? null
+
+      log.session.info('RemoteIO: tail reconnected', {
+        host: this.host,
+        pid: proc.pid,
+        fromOffset: offset,
+        localFile: this._localOutputFile,
+      })
+
+      this._reconnecting = false
+      return proc
+    } catch (e) {
+      fs.closeSync(localOutputFd)
+      fs.closeSync(localStderrFd)
+      log.session.error('RemoteIO: tail reconnect failed', {
+        host: this.host,
+        error: e instanceof Error ? e.message : String(e),
+      })
+      this._reconnecting = false
+      return null
+    }
+  }
+
+  /**
+   * Check if the remote session process is still alive (via PGID file).
+   * Returns: 'running', 'dead', 'no-pgid', 'error'
+   */
+  async checkRemoteAlive(): Promise<'running' | 'dead' | 'no-pgid' | 'error'> {
+    if (!this.remotePgidPath) return 'no-pgid'
+
+    const hostString = this.sshTarget.user
+      ? `${this.sshTarget.user}@${this.sshTarget.hostname}`
+      : this.sshTarget.hostname
+    const baseSshArgs = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=10']
+    if (this.sshTarget.port) baseSshArgs.push('-p', String(this.sshTarget.port))
+
+    const scriptPath = `/tmp/walnut-streams/walnut-remote.sh`
+    const sessionId = path.basename(this.remotePgidPath, '.pgid')
+    // Use the remote script's `status` command, with a direct PGID+kill-0 fallback
+    // in case the script is missing (e.g., /tmp was cleaned).
+    const cmd = `bash ${shellQuote(scriptPath)} status ${shellQuote(sessionId)} 2>/dev/null || { pid=$(cat ${shellQuote(this.remotePgidPath)} 2>/dev/null); [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && echo "running:$pid" || echo "dead:$pid"; }`
+
+    try {
+      const result = await new Promise<string>((resolve, reject) => {
+        execFile('ssh', [...baseSshArgs, hostString, cmd], {
+          timeout: 10_000,
+          encoding: 'utf-8',
+        }, (err, stdout) => err ? reject(err) : resolve(stdout.trim()))
+      })
+
+      if (result.startsWith('running:')) return 'running'
+      if (result.startsWith('dead:')) return 'dead'
+      if (result === 'no-pgid' || result === 'empty-pgid') return 'no-pgid'
+      return 'error'
+    } catch {
+      return 'error'
+    }
   }
 
   write(message: string): boolean {
@@ -833,13 +1041,20 @@ export class RemoteIO implements SessionIO {
 
       if (this.remotePipePath !== newRemotePipe) {
         const oldRemotePipe = this.remotePipePath
-        // Rename FIFO + PGID file in a single SSH command
+        // Rename FIFO + PGID + LOG files in a single SSH command
         const renameParts = [`mv ${shellQuote(oldRemotePipe)} ${shellQuote(newRemotePipe)} 2>/dev/null`]
         if (this.remotePgidPath) {
           const newRemotePgid = `${remoteDir}/${sessionId}.pgid`
           if (this.remotePgidPath !== newRemotePgid) {
             renameParts.push(`mv ${shellQuote(this.remotePgidPath)} ${shellQuote(newRemotePgid)} 2>/dev/null`)
             this.remotePgidPath = newRemotePgid
+          }
+        }
+        if (this.remoteLogPath) {
+          const newRemoteLog = `${remoteDir}/${sessionId}.log`
+          if (this.remoteLogPath !== newRemoteLog) {
+            renameParts.push(`mv ${shellQuote(this.remoteLogPath)} ${shellQuote(newRemoteLog)} 2>/dev/null`)
+            this.remoteLogPath = newRemoteLog
           }
         }
         const renameCmd = renameParts.join('; ')
@@ -886,11 +1101,13 @@ export class RemoteIO implements SessionIO {
     this.remotePipePath = `${remoteDir}/${sessionId}.pipe`
     this.remoteOutputPath = `${remoteDir}/${sessionId}.jsonl`
     this.remotePgidPath = `${remoteDir}/${sessionId}.pgid`
+    this.remoteLogPath = `${remoteDir}/${sessionId}.log`
     this._hasPipe = true  // Optimistic — write() will detect if it's gone
     log.session.debug('RemoteIO: recovered pipe paths (optimistic)', {
       host: this.host,
       remotePipe: this.remotePipePath,
       remoteJsonl: this.remoteOutputPath,
+      remoteLog: this.remoteLogPath,
       sessionId,
     })
   }
@@ -1092,13 +1309,16 @@ export class RemoteIO implements SessionIO {
 
     if (this.remoteOutputPath) {
       const jsonlToDelete = this.remoteOutputPath
-      // Delete JSONL + PGID file in a single SSH command
+      // Delete JSONL + PGID + LOG + ERR files in a single SSH command
       const rmTargets = [shellQuote(jsonlToDelete)]
       if (this.remotePgidPath) rmTargets.push(shellQuote(this.remotePgidPath))
+      if (this.remoteLogPath) rmTargets.push(shellQuote(this.remoteLogPath))
+      rmTargets.push(shellQuote(jsonlToDelete + '.err'))
       log.session.debug('RemoteIO: deleting remote files (fire-and-forget)', {
         host: this.host,
         remoteJsonl: jsonlToDelete,
         remotePgid: this.remotePgidPath,
+        remoteLog: this.remoteLogPath,
       })
       const sshArgs = [...baseSshArgs, hostString, `rm -f ${rmTargets.join(' ')}`]
       try {
@@ -1175,6 +1395,18 @@ const QUOTED_IMAGE_RE = new RegExp(
 )
 
 /**
+ * Relative image filename regex — matches bare filenames like `screenshot.png`
+ * or relative paths like `subdir/img.png` (NOT starting with /).
+ * Boundaries include backtick (Claude Code wraps filenames in backticks).
+ */
+const RELATIVE_IMAGE_RE = new RegExp(
+  `(?:^|[\\s"'\`=:(])` +                           // boundary before
+  `((?:[\\w][\\w.-]*/)*[\\w][\\w.-]*\\.(?:${IMG_EXT}))` + // capture: filename
+  `(?=[\\s"'\`),;\\]}]|$)`,                         // boundary after (lookahead)
+  'gi',
+)
+
+/**
  * Find absolute image paths in text, handling both spaced and non-spaced paths.
  *
  * Two-pass detection:
@@ -1199,6 +1431,21 @@ export function findImagePaths(text: string): string[] {
     found.add(m[1])
   }
 
+  return [...found]
+}
+
+/**
+ * Find relative image filenames in text (e.g. `screenshot.png`, `subdir/img.jpg`).
+ * Only returns names that do NOT start with `/` (absolute paths handled separately).
+ */
+export function findRelativeImageNames(text: string): string[] {
+  const found = new Set<string>()
+  let m: RegExpExecArray | null
+  RELATIVE_IMAGE_RE.lastIndex = 0
+  while ((m = RELATIVE_IMAGE_RE.exec(text)) !== null) {
+    const p = m[1]
+    if (!p.startsWith('/')) found.add(p)
+  }
   return [...found]
 }
 
@@ -1340,35 +1587,59 @@ export function downloadRemoteImage(
  * The actual download happens asynchronously — by the time a human looks at the
  * image in the UI, the SCP (~100-500ms on LAN) is complete.
  *
+ * When `cwd` is provided, also detects relative image filenames (e.g. `screenshot.png`)
+ * and resolves them against the remote CWD before downloading.
+ *
  * @param cache — per-session Map<remotePath, localPath> to avoid re-downloading
+ * @param cwd — session working directory on the remote host (for relative filename resolution)
  */
 export function rewriteRemoteImagePaths(
   text: string,
   sshTarget: SshTarget,
   sessionId: string,
   cache: Map<string, string>,
+  cwd?: string,
 ): string {
-  const remotePaths = findRemoteImagePaths(text)
-  if (remotePaths.length === 0) return text
-
   let rewritten = text
+
+  // Pass 1: absolute remote paths (existing behavior)
+  const remotePaths = findRemoteImagePaths(text)
   for (const remotePath of remotePaths) {
-    // Check cache first
     let localPath = cache.get(remotePath)
     if (!localPath) {
-      // Compute local target: ~/.walnut/images/remote/{sessionId}/{filename}
       localPath = path.join(REMOTE_IMAGES_DIR, sessionId, path.basename(remotePath))
       cache.set(remotePath, localPath)
 
-      // If not already downloaded, fire-and-forget SCP
       if (!fs.existsSync(localPath)) {
-        downloadRemoteImage(sshTarget, remotePath, localPath).catch(() => {
-          // Already logged inside downloadRemoteImage
-        })
+        downloadRemoteImage(sshTarget, remotePath, localPath).catch(() => {})
       }
     }
-
     rewritten = rewritten.split(remotePath).join(localPath)
+  }
+
+  // Pass 2: relative image filenames resolved against remote CWD
+  if (cwd) {
+    const relNames = findRelativeImageNames(rewritten)
+    for (const relName of relNames) {
+      const absoluteRemote = `${cwd.replace(/\/$/, '')}/${relName}`
+      // Skip if this absolute path was already handled in pass 1
+      if (cache.has(absoluteRemote)) continue
+
+      let localPath = cache.get(`rel:${relName}`)
+      if (!localPath) {
+        localPath = path.join(REMOTE_IMAGES_DIR, sessionId, path.basename(relName))
+        cache.set(`rel:${relName}`, localPath)
+
+        if (!fs.existsSync(localPath)) {
+          downloadRemoteImage(sshTarget, absoluteRemote, localPath).catch(() => {})
+        }
+      }
+      // Rewrite relative name → local absolute path in the text
+      // Use regex to avoid partial matches (e.g. don't match inside a longer path)
+      const escaped = relName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const nameRe = new RegExp(`(?<=^|[\\s"'\`=:(])${escaped}(?=[\\s"'\`),;\\]}]|$)`, 'g')
+      rewritten = rewritten.replace(nameRe, localPath)
+    }
   }
 
   return rewritten

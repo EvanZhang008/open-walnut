@@ -137,8 +137,9 @@ const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp)$/i;
 /** Match absolute image file paths in text (allows spaces/hyphens in path segments) */
 const IMAGE_PATH_IN_TEXT_RE = /(\/(?:[\w. -]+\/)+[\w. -]+\.(?:png|jpe?g|gif|webp))/gi;
 
-/** Match relative image file paths like "screenshot.png" or "subdir/file.png" */
-const RELATIVE_IMAGE_PATH_RE = /(?:^|[\s"'=:(])(([\w][\w.-]*\/)*[\w][\w.-]*\.(?:png|jpe?g|gif|webp))(?=[\s"'),;\]}]|$)/gi;
+/** Match relative image file paths like "screenshot.png" or "subdir/file.png".
+ *  Boundaries include backtick — Claude Code commonly wraps filenames in backticks. */
+const RELATIVE_IMAGE_PATH_RE = /(?:^|[\s"'`=:(])(([\w][\w.-]*\/)*[\w][\w.-]*\.(?:png|jpe?g|gif|webp))(?=[\s"'`),;\]}]|$)/gi;
 
 /**
  * Extract base64 images from Anthropic content-block JSON format.

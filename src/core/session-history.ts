@@ -841,6 +841,7 @@ export async function rewriteHistoryRemoteImages(
   messages: SessionHistoryMessage[],
   host: string,
   sessionId: string,
+  cwd?: string,
 ): Promise<SessionHistoryMessage[]> {
   // Resolve sshTarget from config.hosts
   let sshTarget: SshTarget | undefined
@@ -865,13 +866,13 @@ export async function rewriteHistoryRemoteImages(
   for (const msg of messages) {
     // Rewrite text content
     if (msg.text) {
-      msg.text = rewriteRemoteImagePaths(msg.text, sshTarget, sessionId, cache)
+      msg.text = rewriteRemoteImagePaths(msg.text, sshTarget, sessionId, cache, cwd)
     }
     // Rewrite tool results
     if (msg.tools) {
       for (const tool of msg.tools) {
         if (tool.result) {
-          tool.result = rewriteRemoteImagePaths(tool.result, sshTarget, sessionId, cache)
+          tool.result = rewriteRemoteImagePaths(tool.result, sshTarget, sessionId, cache, cwd)
         }
       }
     }

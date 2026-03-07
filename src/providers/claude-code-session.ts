@@ -270,6 +270,8 @@ export class ClaudeCodeSession {
   private _lastPlanWriteContent: string | null = null
   /** True when we've already auto-replied to AskUserQuestion this turn. Reset on new turn. */
   private _askUserIntercepted = false
+  /** Guards against concurrent handleRemoteTailDeath() calls from the liveness interval. */
+  private _handlingRemoteDeath = false
   /** Timestamp when spawn() was called — used to measure time-to-init for diagnostics. */
   private _spawnTs = 0
   /** Per-session cache for remote→local image path rewriting (avoids re-downloading). */
@@ -756,6 +758,18 @@ export class ClaudeCodeSession {
     this._askUserIntercepted = false
     this._toolInputFilePaths.clear()  // Fresh turn — clear stale cached tool input paths
     this.emitStatusChanged('in_progress', prevWorkStatus)
+    // Persist running state to session tracker so API consumers (frontend tree, etc.)
+    // see the updated status immediately — not just WebSocket subscribers.
+    if (this.claudeSessionId) {
+      import('../core/session-tracker.js').then(({ updateSessionRecord }) => {
+        updateSessionRecord(this.claudeSessionId!, {
+          process_status: 'running',
+          work_status: 'in_progress',
+          activity: undefined,
+          last_status_change: new Date().toISOString(),
+        }).catch(() => {})
+      }).catch(() => {})
+    }
     log.session.info('message sent to session via FIFO', { taskId: this.taskId, sessionId: this.claudeSessionId, messageLength: message.length })
     return true
   }
@@ -883,140 +897,220 @@ export class ClaudeCodeSession {
 
       const processName = this.io?.processName ?? 'claude'
       if (!isProcessAlive(this.pid, processName)) {
+        // ── Remote sessions: SSH tail died ≠ session died ──
+        // The SSH process is only a viewer (tail -f). The remote session runs
+        // independently via walnut-remote.sh. Try to reconnect instead of
+        // declaring the session dead.
+        if (this._host && this.io instanceof RemoteIO) {
+          this.handleRemoteTailDeath()
+          return
+        }
+
+        // ── Local sessions: process died — original logic ──
         log.session.info('session process exited (PID check)', {
           sessionId: this.claudeSessionId,
           taskId: this.taskId,
           pid: this.pid,
         })
 
-        // Process is dead — clean up named FIFO
-        this.io?.deletePipe()
-
-        // Process is dead — flush any remaining data from the file
-        this.io?.flushTail()
-        this.io?.stopTail()
-
-        this._active = false
-        this._processStatus = 'stopped'
-        this.stopLivenessMonitor()
-
-        // Reject sessionReady with detailed diagnostics.
-        // The generic "process died before session init" is useless for debugging.
-        // Include: exit code, stderr, whether it's SSH or local, and the PID.
-        let initStderr = ''
-        if (this._outputFile) {
-          try {
-            initStderr = fs.readFileSync(this._outputFile + '.err', 'utf-8').slice(0, 2048).trim()
-          } catch { /* no stderr file */ }
-        }
-        const parts = ['process died before session init']
-        if (this._host) parts.push(`[SSH → ${this._host}]`)
-        if (this._exitCode !== null) parts.push(`[exit code: ${this._exitCode}]`)
-        if (this.pid) parts.push(`[pid: ${this.pid}]`)
-        if (initStderr) parts.push(`stderr: ${initStderr}`)
-        else parts.push('(no stderr captured)')
-        const errMsg = parts.join(' ')
-        log.session.error('session init failed — SSH process died before init event', {
-          taskId: this.taskId,
-          pid: this.pid,
-          exitCode: this._exitCode,
-          host: this._host,
-          stderr: initStderr || undefined,
-          outputFile: this._outputFile,
-          timeSinceSpawnMs: this._spawnTs ? Date.now() - this._spawnTs : undefined,
-        })
-        this._rejectSessionReady(new Error(errMsg))
-
-        // If no result was emitted by the tailer, determine fallback behavior.
-        // After server restart + reconnection, resultEmitted is pre-set to true
-        // when the session already had a terminal work_status, preventing duplicate
-        // synthetic results that would re-trigger triage.
-        // Also skip if _turnResultEmitted — the tailer already emitted a result for
-        // this turn (race: tailer saw process as alive → FIFO path → resultEmitted=false,
-        // then process exited → PID-death handler fires with resultEmitted=false).
-        if (!this.resultEmitted && !this._turnResultEmitted) {
-          // Before using stderr to determine outcome, check if the JSONL
-          // output file contains a result block.  For SSH sessions, stderr
-          // is ALWAYS populated (the remote EXIT trap copies Claude's
-          // diagnostic output to stderr), so stderr alone is unreliable.
-          // Reading the output file directly is the ground truth.
-          const hasResultInFile = this._outputFile
-            ? outputFileHasResult(this._outputFile, this._turnStartOffset)
-            : false
-
-          this.resultEmitted = true
-
-          if (hasResultInFile) {
-            // Output file has a result block — the session completed normally.
-            // The tailer missed the result (race: PID died before tailer polled).
-            // Treat as successful completion — the result text is already in fullText.
-            this._workStatus = 'agent_complete'
-            this._activity = undefined
-            this.emitStatusChanged('agent_complete', 'in_progress')
-            if (this.claudeSessionId) {
-              this.persistSessionRecord(this.claudeSessionId, this._cwd ?? undefined).catch(() => {})
-            }
-            log.session.info('session PID died — result found in output file (tailer race)', {
-              taskId: this.taskId,
-              sessionId: this.claudeSessionId,
-              host: this._host,
-            })
-            bus.emit(EventNames.SESSION_RESULT, {
-              sessionId: this.claudeSessionId,
-              taskId: this.taskId,
-              result: this.fullText,
-              isError: false,
-            }, ['main-ai', 'session-runner'], { source: 'session-runner' })
-          } else {
-            // No result in output file — check stderr for diagnostics
-            let stderr = ''
-            if (this._outputFile) {
-              try {
-                stderr = fs.readFileSync(this._outputFile + '.err', 'utf-8').slice(0, 10240).trim()
-              } catch {
-                // No stderr file
-              }
-            }
-
-            // For SSH sessions, filter out benign stderr that isn't a real error.
-            // The remote EXIT trap copies Claude's stderr to SSH stderr, so messages
-            // like "Connection to X closed" or empty diagnostics are expected.
-            const isRealError = stderr && !isBenignSshStderr(stderr)
-
-            if (isRealError) {
-              // Has meaningful stderr → something went wrong → SESSION_ERROR
-              this._workStatus = 'error'
-              this._activity = undefined
-              this.emitStatusChanged('error', 'in_progress')
-              bus.emit(EventNames.SESSION_ERROR, {
-                sessionId: this.claudeSessionId,
-                taskId: this.taskId,
-                error: stderr,
-              }, ['main-ai', 'session-runner'], { source: 'session-runner' })
-            } else {
-              // No stderr or only benign SSH messages → clean exit without result event
-              this._workStatus = 'agent_complete'
-              this._activity = undefined
-              this.emitStatusChanged('agent_complete', 'in_progress')
-              if (this.claudeSessionId) {
-                this.persistSessionRecord(this.claudeSessionId, this._cwd ?? undefined).catch(() => {})
-              }
-              log.session.warn('session PID died but no result event', {
-                taskId: this.taskId,
-                host: this._host,
-                stderr: stderr ? stderr.slice(0, 200) : undefined,
-              })
-              bus.emit(EventNames.SESSION_RESULT, {
-                sessionId: this.claudeSessionId,
-                taskId: this.taskId,
-                result: this.fullText,
-                isError: false,
-              }, ['main-ai', 'session-runner'], { source: 'session-runner' })
-            }
-          }
-        }
+        this.handleProcessDeath()
       }
     }, LIVENESS_INTERVAL_MS)
+  }
+
+  /**
+   * Handle the death of the SSH tail -f process for a remote session.
+   *
+   * Architecture: The SSH process is only a viewer (tail -f {jsonl}).
+   * The actual claude process runs independently on the remote machine.
+   * When SSH dies (network hiccup, ServerAlive timeout, etc.):
+   *   1. Check if the remote claude process is still alive (via PGID file)
+   *   2. If alive → reconnect tail → keep monitoring
+   *   3. If dead → fall through to normal process death handling
+   */
+  private handleRemoteTailDeath(): void {
+    // Guard: prevent concurrent invocations from the setInterval.
+    // The async checkRemoteAlive() can take up to 10s (SSH timeout),
+    // during which the interval fires again seeing the same dead PID.
+    if (this._handlingRemoteDeath) return
+    this._handlingRemoteDeath = true
+
+    const remoteIO = this.io as RemoteIO
+    const oldPid = this.pid
+
+    log.session.info('remote SSH tail died — checking remote session health', {
+      sessionId: this.claudeSessionId,
+      taskId: this.taskId,
+      pid: oldPid,
+      host: this._host,
+    })
+
+    // Async check: is the remote process still alive?
+    remoteIO.checkRemoteAlive().then((status) => {
+      if (status === 'running') {
+        // Remote session is still alive — reconnect the tail viewer
+        log.session.info('remote session still alive — reconnecting tail', {
+          sessionId: this.claudeSessionId,
+          taskId: this.taskId,
+          host: this._host,
+          remoteStatus: status,
+        })
+
+        // Get current local file offset so we don't re-read old data
+        const offset = remoteIO.fileSize
+        const newProc = remoteIO.reconnectTail(offset)
+
+        if (newProc && newProc.pid) {
+          // Update monitored PID to the new SSH tail process
+          this.pid = newProc.pid
+          log.session.info('remote tail reconnected successfully', {
+            sessionId: this.claudeSessionId,
+            taskId: this.taskId,
+            oldPid,
+            newPid: this.pid,
+            host: this._host,
+          })
+          // Continue monitoring — don't stop the liveness timer
+          this._handlingRemoteDeath = false
+          return
+        } else {
+          log.session.warn('remote tail reconnect failed — treating as dead', {
+            sessionId: this.claudeSessionId,
+            taskId: this.taskId,
+            host: this._host,
+          })
+        }
+      } else {
+        log.session.info('remote session is dead — handling process death', {
+          sessionId: this.claudeSessionId,
+          taskId: this.taskId,
+          host: this._host,
+          remoteStatus: status,
+        })
+      }
+
+      // Remote process is dead or reconnect failed — fall through to death handling
+      this._handlingRemoteDeath = false
+      this.handleProcessDeath()
+    }).catch((err) => {
+      log.session.warn('remote health check failed — treating as dead', {
+        sessionId: this.claudeSessionId,
+        taskId: this.taskId,
+        host: this._host,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      this._handlingRemoteDeath = false
+      this.handleProcessDeath()
+    })
+  }
+
+  /**
+   * Handle process death (local process exit or confirmed remote process death).
+   * Extracted from the original liveness monitor for reuse by handleRemoteTailDeath().
+   */
+  private handleProcessDeath(): void {
+    // Process is dead — clean up named FIFO
+    this.io?.deletePipe()
+
+    // Process is dead — flush any remaining data from the file
+    this.io?.flushTail()
+    this.io?.stopTail()
+
+    this._active = false
+    this._processStatus = 'stopped'
+    this.stopLivenessMonitor()
+
+    // Reject sessionReady with detailed diagnostics.
+    let initStderr = ''
+    if (this._outputFile) {
+      try {
+        initStderr = fs.readFileSync(this._outputFile + '.err', 'utf-8').slice(0, 2048).trim()
+      } catch { /* no stderr file */ }
+    }
+    const parts = ['process died before session init']
+    if (this._host) parts.push(`[SSH → ${this._host}]`)
+    if (this._exitCode !== null) parts.push(`[exit code: ${this._exitCode}]`)
+    if (this.pid) parts.push(`[pid: ${this.pid}]`)
+    if (initStderr) parts.push(`stderr: ${initStderr}`)
+    else parts.push('(no stderr captured)')
+    const errMsg = parts.join(' ')
+    log.session.error('session init failed — process died before init event', {
+      taskId: this.taskId,
+      pid: this.pid,
+      exitCode: this._exitCode,
+      host: this._host,
+      stderr: initStderr || undefined,
+      outputFile: this._outputFile,
+      timeSinceSpawnMs: this._spawnTs ? Date.now() - this._spawnTs : undefined,
+    })
+    this._rejectSessionReady(new Error(errMsg))
+
+    // If no result was emitted by the tailer, determine fallback behavior.
+    if (!this.resultEmitted && !this._turnResultEmitted) {
+      const hasResultInFile = this._outputFile
+        ? outputFileHasResult(this._outputFile, this._turnStartOffset)
+        : false
+
+      this.resultEmitted = true
+
+      if (hasResultInFile) {
+        this._workStatus = 'agent_complete'
+        this._activity = undefined
+        this.emitStatusChanged('agent_complete', 'in_progress')
+        if (this.claudeSessionId) {
+          this.persistSessionRecord(this.claudeSessionId, this._cwd ?? undefined).catch(() => {})
+        }
+        log.session.info('session PID died — result found in output file (tailer race)', {
+          taskId: this.taskId,
+          sessionId: this.claudeSessionId,
+          host: this._host,
+        })
+        bus.emit(EventNames.SESSION_RESULT, {
+          sessionId: this.claudeSessionId,
+          taskId: this.taskId,
+          result: this.fullText,
+          isError: false,
+        }, ['main-ai', 'session-runner'], { source: 'session-runner' })
+      } else {
+        let stderr = ''
+        if (this._outputFile) {
+          try {
+            stderr = fs.readFileSync(this._outputFile + '.err', 'utf-8').slice(0, 10240).trim()
+          } catch { /* No stderr file */ }
+        }
+
+        const isRealError = stderr && !isBenignSshStderr(stderr)
+
+        if (isRealError) {
+          this._workStatus = 'error'
+          this._activity = undefined
+          this.emitStatusChanged('error', 'in_progress')
+          bus.emit(EventNames.SESSION_ERROR, {
+            sessionId: this.claudeSessionId,
+            taskId: this.taskId,
+            error: stderr,
+          }, ['main-ai', 'session-runner'], { source: 'session-runner' })
+        } else {
+          this._workStatus = 'agent_complete'
+          this._activity = undefined
+          this.emitStatusChanged('agent_complete', 'in_progress')
+          if (this.claudeSessionId) {
+            this.persistSessionRecord(this.claudeSessionId, this._cwd ?? undefined).catch(() => {})
+          }
+          log.session.warn('session PID died but no result event', {
+            taskId: this.taskId,
+            host: this._host,
+            stderr: stderr ? stderr.slice(0, 200) : undefined,
+          })
+          bus.emit(EventNames.SESSION_RESULT, {
+            sessionId: this.claudeSessionId,
+            taskId: this.taskId,
+            result: this.fullText,
+            isError: false,
+          }, ['main-ai', 'session-runner'], { source: 'session-runner' })
+        }
+      }
+    }
   }
 
   private stopLivenessMonitor(): void {
@@ -1039,7 +1133,7 @@ export class ClaudeCodeSession {
     if (!this._host || !this.io || !(this.io instanceof RemoteIO)) return text
     const sshTarget = (this.io as RemoteIO).target
     const sessionId = this.claudeSessionId ?? 'unknown'
-    return rewriteRemoteImagePaths(text, sshTarget, sessionId, this._remoteImageCache)
+    return rewriteRemoteImagePaths(text, sshTarget, sessionId, this._remoteImageCache, this._cwd ?? undefined)
   }
 
   /**
