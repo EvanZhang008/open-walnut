@@ -593,6 +593,10 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
   // Deadline for initial auto-scroll window — after initial scroll, we keep correcting
   // for up to 2s to handle CSS transitions, Phase 2 data, initialPrompt, image loads.
   const initialScrollDeadline = useRef(0);
+  // Track previous message count to detect Phase 2 replacing Phase 1 data.
+  // For remote sessions, Phase 1 returns a small set (e.g. 9 msgs from local streams file)
+  // and Phase 2 returns the full set (e.g. 87 msgs via SSH) seconds later.
+  const prevScrollMsgCount = useRef(0);
 
   // Reset on session switch (consolidated — includes scroll flag + blockIndexMap + scroll lock)
   useEffect(() => {
@@ -607,6 +611,7 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     lastScrollTop.current = 0;
     programmaticScrollUntil.current = 0;
     initialScrollDeadline.current = 0;
+    prevScrollMsgCount.current = 0;
     if (batchTimeoutRef.current) { clearTimeout(batchTimeoutRef.current); batchTimeoutRef.current = null; }
   }, [sessionId]);
 
@@ -620,16 +625,24 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     lastScrollTop.current = el.scrollTop;
   };
 
-  // Scroll to bottom on initial load — useLayoutEffect fires BEFORE paint so the user
-  // never sees a flash of the chat scrolled to top.
-  // Guard: only scroll when the messages belong to the CURRENT sessionId (prevents stale-data scroll
-  // when the component updates in-place without key={sessionId}).
+  // Scroll to bottom on initial load AND when message count changes (Phase 2 data).
+  // useLayoutEffect fires BEFORE paint — prevents flash of wrong scroll position.
   useLayoutEffect(() => {
-    if (!loading && messages.length > 0 && containerRef.current
-      && scrolledForSessionRef.current !== sessionId) {
-      scrolledForSessionRef.current = sessionId;
-      initialScrollDeadline.current = Date.now() + 2000; // 2s auto-scroll correction window
-      scrollToBottom(containerRef.current);
+    if (!loading && messages.length > 0 && containerRef.current) {
+      const el = containerRef.current;
+      const msgCountChanged = messages.length !== prevScrollMsgCount.current;
+      prevScrollMsgCount.current = messages.length;
+
+      if (scrolledForSessionRef.current !== sessionId) {
+        // First scroll for this session
+        scrolledForSessionRef.current = sessionId;
+        initialScrollDeadline.current = Date.now() + 2000;
+        scrollToBottom(el);
+      } else if (msgCountChanged && userScrollLockUntil.current < Date.now()) {
+        // Phase 2 replaced Phase 1 data (or batch-completed added messages).
+        // Re-scroll before paint so user never sees the wrong position.
+        scrollToBottom(el);
+      }
     }
   }, [loading, messages, sessionId]);
 
