@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import type { NavigateFunction } from 'react-router-dom';
 import type { Task } from '@walnut/core';
 import { useChat, type TaskContext, type ImageAttachment } from '@/hooks/useChat';
+import type { ChatStats } from '@/api/chat';
 import { useWebSocket, useEvent } from '@/hooks/useWebSocket';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { useFavorites } from '@/hooks/useFavorites';
@@ -22,6 +23,73 @@ import { useShowUiOnlyTriage } from '@/hooks/useDeveloperSettings';
 import { FocusDock } from '@/components/dock/FocusDock';
 import type { SlashCommand } from '@/commands/types';
 import type { CommandContext } from '@/commands/types';
+
+// ── Compact chat header with dropdown menu ──
+
+const CONTEXT_WINDOW = 200_000; // main agent context window
+
+function ChatHeaderRow({ title, stats, connectionState, inspectorOpen, onToggleInspector, hasMessages, onClear }: {
+  title: string;
+  stats: ChatStats | null;
+  connectionState: string;
+  inspectorOpen: boolean;
+  onToggleInspector: () => void;
+  hasMessages: boolean;
+  onClear: () => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Close menu on outside click
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [menuOpen]);
+
+  const pct = stats ? Math.round((stats.estimatedTotalTokens ?? stats.estimatedTokens) / CONTEXT_WINDOW * 100) : null;
+  const pctColor = pct != null && pct > 80 ? 'var(--error)' : pct != null && pct > 50 ? 'var(--warning)' : 'var(--fg-muted)';
+
+  return (
+    <div className="chat-header-row">
+      <div className="chat-header-meta">
+        <span className="chat-header-title">{title}</span>
+        {pct != null && (
+          <span className="chat-header-pct" style={{ color: pctColor }} title={`${stats!.apiMessageCount} msgs · ~${Math.round((stats!.estimatedTotalTokens ?? stats!.estimatedTokens) / 1000)}K tokens${stats!.compacted ? ' · compacted' : ''}`}>
+            {pct}%
+          </span>
+        )}
+        {connectionState !== 'connected' && (
+          <span className="text-xs" style={{ color: 'var(--warning)' }}>({connectionState})</span>
+        )}
+      </div>
+      <div className="chat-header-menu-wrap" ref={menuRef}>
+        <button
+          className="chat-header-menu-btn"
+          onClick={() => setMenuOpen(v => !v)}
+          aria-label="Chat options"
+        >
+          &#x22EF;{/* ⋯ horizontal ellipsis */}
+        </button>
+        {menuOpen && (
+          <div className="chat-header-dropdown">
+            <button className="chat-header-dropdown-item" onClick={() => { onToggleInspector(); setMenuOpen(false); }}>
+              {inspectorOpen ? 'Hide context' : 'Show context'}
+            </button>
+            {hasMessages && (
+              <button className="chat-header-dropdown-item chat-header-dropdown-danger" onClick={() => { onClear(); setMenuOpen(false); }}>
+                Clear chat
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 const PRIORITY_CYCLE: Record<string, 'immediate' | 'important' | 'backlog' | 'none'> = { none: 'backlog', backlog: 'important', important: 'immediate', immediate: 'none', high: 'none', low: 'important', medium: 'important' };
 
@@ -417,34 +485,15 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       {/* Chat Panel (left, flex) — collapsible via Focus Dock toggle */}
       <div className={`main-page-chat${chatVisible ? '' : ' collapsed'}`}>
         <div className="chat-page">
-          <div className="chat-header-row">
-            <div className="chat-header-meta">
-              <span className="chat-header-title">{chatTitle}</span>
-              {chat.stats && (
-                <span className="chat-stats-badge">
-                  {chat.stats.apiMessageCount} msgs · ~{Math.round((chat.stats.estimatedTotalTokens ?? chat.stats.estimatedTokens) / 1000)}K tokens
-                  {chat.stats.compacted && ' · compacted'}
-                </span>
-              )}
-              {connectionState !== 'connected' && (
-                <span className="text-xs" style={{ color: 'var(--warning)', marginLeft: 8 }}>
-                  ({connectionState})
-                </span>
-              )}
-            </div>
-            <div className="flex gap-2">
-              <button
-                className={`btn btn-sm${inspector.isOpen ? ' btn-primary' : ''}`}
-                onClick={inspector.toggle}
-                aria-label="Toggle context inspector"
-              >
-                Context
-              </button>
-              {chat.messages.length > 0 && (
-                <button className="btn btn-sm" onClick={chat.clearMessages}>Clear</button>
-              )}
-            </div>
-          </div>
+          <ChatHeaderRow
+            title={chatTitle}
+            stats={chat.stats}
+            connectionState={connectionState}
+            inspectorOpen={inspector.isOpen}
+            onToggleInspector={inspector.toggle}
+            hasMessages={chat.messages.length > 0}
+            onClear={chat.clearMessages}
+          />
 
           {inspector.isOpen && (
             <ContextInspectorPanel

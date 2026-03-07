@@ -2952,6 +2952,76 @@ input:focus, textarea:focus, select:focus {
   text-overflow: ellipsis;
 }
 
+.chat-header-pct {
+  font-size: 12px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+/* ── Chat header dropdown menu ── */
+
+.chat-header-menu-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.chat-header-menu-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  color: var(--fg-muted);
+  transition: background 0.15s, color 0.15s;
+  cursor: pointer;
+}
+
+.chat-header-menu-btn:hover {
+  background: var(--bg-secondary);
+  color: var(--fg);
+}
+
+.chat-header-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--card-shadow-hover);
+  min-width: 140px;
+  z-index: 50;
+  padding: 4px;
+  animation: contextBarSlideIn 0.12s ease-out;
+}
+
+.chat-header-dropdown-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--fg);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.chat-header-dropdown-item:hover {
+  background: var(--bg-secondary);
+}
+
+.chat-header-dropdown-danger {
+  color: var(--error);
+}
+
+.chat-header-dropdown-danger:hover {
+  background: color-mix(in srgb, var(--error) 10%, transparent);
+}
+
 .chat-panel {
   flex: 1;
   overflow-y: auto;
