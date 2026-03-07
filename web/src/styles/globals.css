@@ -2925,6 +2925,33 @@ input:focus, textarea:focus, select:focus {
   height: calc(100vh - 48px);
 }
 
+/* Compact single-line chat header (replaces bulky page-header on main page) */
+.chat-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+  margin-bottom: 4px;
+  flex-shrink: 0;
+}
+
+.chat-header-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.chat-header-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .chat-panel {
   flex: 1;
   overflow-y: auto;
@@ -4663,6 +4690,23 @@ img[data-lightbox-src],
   display: flex;
   flex: 1;
   min-height: 0;
+  overflow: hidden;
+}
+
+/* Left column: chat + sessions + focus dock (everything except todo sidebar) */
+.main-page-left {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Inner row: chat + sessions side by side */
+.main-page-content-row {
+  flex: 1;
+  min-height: 0;
+  display: flex;
   overflow: hidden;
 }
 
@@ -7141,10 +7185,9 @@ img[data-lightbox-src],
 .task-context-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 12px;
-  margin-top: 8px;
+  gap: 8px;
+  padding: 4px 12px;
+  margin-top: 4px;
   background: var(--accent-subtle);
   border: 1px solid var(--accent);
   border-radius: var(--radius-sm);
@@ -7163,15 +7206,6 @@ img[data-lightbox-src],
   }
 }
 
-.task-context-bar-main {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  flex: 1;
-  flex-wrap: wrap;
-}
-
 .task-context-bar-title {
   font-size: 13px;
   font-weight: 600;
@@ -7179,21 +7213,16 @@ img[data-lightbox-src],
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 200px;
-}
-
-.task-context-bar-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
+  flex: 1;
+  min-width: 0;
 }
 
 .task-context-bar-action {
   font-size: 14px;
   color: var(--fg-muted);
-  padding: 4px 6px;
+  padding: 2px 4px;
   border-radius: 4px;
+  flex-shrink: 0;
   transition: color 0.15s, background 0.15s;
 }
 
@@ -7202,13 +7231,8 @@ img[data-lightbox-src],
   background: var(--bg-secondary);
 }
 
-.task-context-bar-link {
-  font-size: 12px;
-  font-weight: 500;
-}
-
 .task-context-bar-close {
-  font-size: 18px;
+  font-size: 16px;
   line-height: 1;
 }
 
@@ -8605,6 +8629,15 @@ img[data-lightbox-src],
   }
 
   .main-page {
+    flex-direction: column;
+  }
+
+  .main-page-left {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .main-page-content-row {
     flex-direction: column;
   }
 

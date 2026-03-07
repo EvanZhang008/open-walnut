@@ -81,7 +81,7 @@ function AppShellInner({ children }: AppShellProps) {
         >
           {children}
         </div>
-        <FocusDock focusBar={focusBar} />
+        {!isMainPage && <FocusDock focusBar={focusBar} />}
       </main>
       <CronToast />
     </div>

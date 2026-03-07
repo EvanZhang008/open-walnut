@@ -19,6 +19,7 @@ import { fetchSession } from '@/api/sessions';
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
 import { useContextInspector } from '@/hooks/useContextInspector';
 import { useShowUiOnlyTriage } from '@/hooks/useDeveloperSettings';
+import { FocusDock } from '@/components/dock/FocusDock';
 import type { SlashCommand } from '@/commands/types';
 import type { CommandContext } from '@/commands/types';
 
@@ -409,26 +410,27 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   return (
     <div className="main-page" style={{ position: 'relative' }}>
 
+      {/* Left column: Chat + Sessions + FocusDock (sidebar excluded) */}
+      <div className="main-page-left">
+      <div className="main-page-content-row">
+
       {/* Chat Panel (left, flex) — collapsible via Focus Dock toggle */}
       <div className={`main-page-chat${chatVisible ? '' : ' collapsed'}`}>
         <div className="chat-page">
-          <div className="page-header flex justify-between items-center">
-            <div>
-              <h1 className="page-title">{chatTitle}</h1>
-              <p className="page-subtitle">
-                {chatSubtitle}
-                {chat.stats && (
-                  <span className="chat-stats-badge" style={{ marginLeft: 8 }}>
-                    {chat.stats.apiMessageCount} msgs · ~{Math.round((chat.stats.estimatedTotalTokens ?? chat.stats.estimatedTokens) / 1000)}K tokens
-                    {chat.stats.compacted && ' · compacted'}
-                  </span>
-                )}
-                {connectionState !== 'connected' && (
-                  <span className="text-xs" style={{ color: 'var(--warning)', marginLeft: 8 }}>
-                    ({connectionState})
-                  </span>
-                )}
-              </p>
+          <div className="chat-header-row">
+            <div className="chat-header-meta">
+              <span className="chat-header-title">{chatTitle}</span>
+              {chat.stats && (
+                <span className="chat-stats-badge">
+                  {chat.stats.apiMessageCount} msgs · ~{Math.round((chat.stats.estimatedTotalTokens ?? chat.stats.estimatedTokens) / 1000)}K tokens
+                  {chat.stats.compacted && ' · compacted'}
+                </span>
+              )}
+              {connectionState !== 'connected' && (
+                <span className="text-xs" style={{ color: 'var(--warning)', marginLeft: 8 }}>
+                  ({connectionState})
+                </span>
+              )}
             </div>
             <div className="flex gap-2">
               <button
@@ -564,6 +566,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           );
         })}
       </div>
+
+      </div>{/* end .main-page-content-row */}
+
+      {/* FocusDock — inside left column, below chat+sessions */}
+      <FocusDock focusBar={focusBar} />
+
+      </div>{/* end .main-page-left */}
 
       {/* Todo Resize Handle */}
       <div className="todo-resize-handle" onMouseDown={todoPanel.handleResizeStart} />
