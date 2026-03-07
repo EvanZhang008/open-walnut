@@ -17,18 +17,26 @@ import fs from 'node:fs'
 import { log } from '../logging/index.js'
 import { isProcessAlive } from '../utils/process.js'
 import { bus, EventNames } from './event-bus.js'
+import type { SshTarget } from '../providers/session-io.js'
 
 const HEALTH_CHECK_INTERVAL_MS = 30_000
 /** Default idle timeout: 30 minutes */
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000
+/** Run remote orphan sweep every 60 health checks (60 * 30s = 30 minutes) */
+const SWEEP_EVERY_N_CHECKS = 60
 
 export class SessionHealthMonitor {
   private timer: ReturnType<typeof setInterval> | null = null
+  private sweepCounter = 0
+  private sweeping = false
 
   start(): void {
     if (this.timer) return
     this.timer = setInterval(() => this.check().catch(() => {}), HEALTH_CHECK_INTERVAL_MS)
     log.session.info('session health monitor started', { intervalMs: HEALTH_CHECK_INTERVAL_MS })
+
+    // Delay initial sweep to let the server fully initialize (sessions loaded from disk)
+    setTimeout(() => this.sweepRemoteOrphans().catch(() => {}), 10_000)
   }
 
   stop(): void {
@@ -44,6 +52,12 @@ export class SessionHealthMonitor {
 
     // Kill orphaned processes from terminal/stopped sessions (leaked processes)
     await this.killOrphanedProcesses()
+
+    // Periodic remote orphan sweep (every ~30 minutes)
+    if (++this.sweepCounter >= SWEEP_EVERY_N_CHECKS) {
+      this.sweepCounter = 0
+      this.sweepRemoteOrphans().catch(() => {})
+    }
 
     let sessions
     try {
@@ -215,6 +229,16 @@ export class SessionHealthMonitor {
         }
       }, 5_000)
 
+      // For remote sessions, also kill the remote claude process via SSH.
+      // The local SIGINT/SIGTERM only kills the SSH tunnel — remote processes survive.
+      if (session.host) {
+        const sshTarget = await this.resolveHostTarget(session.host)
+        if (sshTarget) {
+          const { RemoteIO } = await import('../providers/session-io.js')
+          RemoteIO.killRemoteBySessionId(sshTarget, session.claudeSessionId)
+        }
+      }
+
       const updateNow = new Date().toISOString()
       await updateSessionRecord(session.claudeSessionId, {
         process_status: 'stopped',
@@ -313,6 +337,16 @@ export class SessionHealthMonitor {
         })
 
         try { process.kill(s.pid, 'SIGTERM') } catch { /* already dead */ }
+
+        // For remote sessions, also kill the remote claude process via SSH
+        if (s.host) {
+          const sshTarget = await this.resolveHostTarget(s.host)
+          if (sshTarget) {
+            const { RemoteIO } = await import('../providers/session-io.js')
+            RemoteIO.killRemoteBySessionId(sshTarget, s.claudeSessionId)
+          }
+        }
+
         killed++
       }
 
@@ -321,6 +355,74 @@ export class SessionHealthMonitor {
       }
     } catch {
       // Non-critical — will retry on next health check
+    }
+  }
+
+  /**
+   * Resolve a host alias (from session record) to an SshTarget via config.hosts.
+   */
+  private async resolveHostTarget(hostAlias: string): Promise<SshTarget | null> {
+    try {
+      const { getConfig } = await import('./config-manager.js')
+      const config = await getConfig()
+      const hostDef = config.hosts?.[hostAlias]
+      if (!hostDef) return null
+      const hostname = hostDef.hostname ?? (hostDef as Record<string, unknown>).ssh as string | undefined
+      if (!hostname) return null
+      return { hostname, user: hostDef.user, port: hostDef.port }
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Sweep all configured remote hosts for orphaned PGID files.
+   * An orphan is a PGID file whose session ID is not in the session registry.
+   * Called at startup + every ~30 minutes.
+   */
+  private async sweepRemoteOrphans(): Promise<void> {
+    if (this.sweeping) return  // Prevent concurrent sweeps
+    this.sweeping = true
+    try {
+      const { getConfig } = await import('./config-manager.js')
+      const { listSessions, TERMINAL_WORK_STATUSES } = await import('./session-tracker.js')
+      const { RemoteIO } = await import('../providers/session-io.js')
+
+      const config = await getConfig()
+      const hosts = config.hosts
+      if (!hosts || Object.keys(hosts).length === 0) return
+
+      // Build set of non-terminal session IDs — a PGID file for a terminal session
+      // is an orphan by definition (the process should have exited and cleaned up).
+      const sessions = await listSessions()
+      const knownIds = new Set(
+        sessions
+          .filter(s => !TERMINAL_WORK_STATUSES.has(s.work_status) || s.process_status !== 'stopped')
+          .map(s => s.claudeSessionId)
+      )
+
+      for (const [alias, hostDef] of Object.entries(hosts)) {
+        const sshTarget = await this.resolveHostTarget(alias)
+        if (!sshTarget) continue
+
+        try {
+          const cleaned = await RemoteIO.sweepRemoteOrphans(sshTarget, knownIds)
+          if (cleaned > 0) {
+            log.session.info('health monitor: swept remote orphans', { host: alias, cleaned })
+          }
+        } catch (err) {
+          log.session.debug('health monitor: remote sweep failed for host', {
+            host: alias,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
+      }
+    } catch (err) {
+      log.session.debug('health monitor: remote orphan sweep failed', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    } finally {
+      this.sweeping = false
     }
   }
 

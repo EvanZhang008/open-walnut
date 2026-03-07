@@ -439,6 +439,8 @@ export function buildRemoteCommand(claudeArgs: string[], cwd?: string, shellSetu
 export class RemoteIO implements SessionIO {
   private remotePipePath: string | null = null
   private remoteOutputPath: string | null = null
+  /** Remote PID file path — stores the claude process PID for remote kill/cleanup. */
+  private remotePgidPath: string | null = null
   private _localOutputFile: string
   private tailProc: ChildProcess | null = null
   private tailer: JsonlTailer | null = null
@@ -533,6 +535,7 @@ export class RemoteIO implements SessionIO {
     const tmpId = path.basename(this._localOutputFile, '.jsonl')
     this.remotePipePath = `${remoteDir}/${tmpId}.pipe`
     this.remoteOutputPath = `${remoteDir}/${tmpId}.jsonl`
+    this.remotePgidPath = `${remoteDir}/${tmpId}.pgid`
 
     // Build the remote command that:
     // 1. Creates the streams directory
@@ -589,10 +592,14 @@ export class RemoteIO implements SessionIO {
         `WRITER_PID=$!`,
         `claude ${quotedArgs.join(' ')} < ${shellQuote(this.remotePipePath)} > ${shellQuote(this.remoteOutputPath)} 2>${remoteStderrFile} &`,
         `CLAUDE_PID=$!`,
+        `echo $CLAUDE_PID > ${shellQuote(this.remotePgidPath!)}`,
+        // Register traps early — minimizes the window where signals go unhandled.
+        // TAIL_PID may be unset when trap fires, but kill with empty arg is harmless with 2>/dev/null.
+        `trap 'exit' HUP TERM INT`,
+        `trap 'kill -INT $CLAUDE_PID 2>/dev/null; kill $TAIL_PID $WRITER_PID 2>/dev/null; rm -f ${shellQuote(this.remotePgidPath!)}; cat ${remoteStderrFile} >&2 2>/dev/null' EXIT`,
         `sleep 0.5`,
         `tail -f -c +1 ${shellQuote(this.remoteOutputPath)} &`,
         `TAIL_PID=$!`,
-        `trap 'kill $CLAUDE_PID $TAIL_PID $WRITER_PID 2>/dev/null; cat ${remoteStderrFile} >&2 2>/dev/null' EXIT`,
         `wait $CLAUDE_PID 2>/dev/null`,
         `sleep 2`,
         `kill $TAIL_PID 2>/dev/null`,
@@ -607,10 +614,12 @@ export class RemoteIO implements SessionIO {
         `WRITER_PID=$!`,
         `claude ${quotedArgs.join(' ')} < ${shellQuote(this.remotePipePath)} > ${shellQuote(this.remoteOutputPath)} 2>${remoteStderrFile} &`,
         `CLAUDE_PID=$!`,
+        `echo $CLAUDE_PID > ${shellQuote(this.remotePgidPath!)}`,
+        `trap 'exit' HUP TERM INT`,
+        `trap 'kill -INT $CLAUDE_PID 2>/dev/null; kill $TAIL_PID $WRITER_PID 2>/dev/null; rm -f ${shellQuote(this.remotePgidPath!)}; cat ${remoteStderrFile} >&2 2>/dev/null' EXIT`,
         `sleep 0.5`,
         `tail -f -c +1 ${shellQuote(this.remoteOutputPath)} &`,
         `TAIL_PID=$!`,
-        `trap 'kill $CLAUDE_PID $TAIL_PID $WRITER_PID 2>/dev/null; cat ${remoteStderrFile} >&2 2>/dev/null' EXIT`,
         `wait $CLAUDE_PID 2>/dev/null`,
         `sleep 2`,
         `kill $TAIL_PID 2>/dev/null`,
@@ -824,7 +833,16 @@ export class RemoteIO implements SessionIO {
 
       if (this.remotePipePath !== newRemotePipe) {
         const oldRemotePipe = this.remotePipePath
-        const renameCmd = `mv ${shellQuote(oldRemotePipe)} ${shellQuote(newRemotePipe)} 2>/dev/null`
+        // Rename FIFO + PGID file in a single SSH command
+        const renameParts = [`mv ${shellQuote(oldRemotePipe)} ${shellQuote(newRemotePipe)} 2>/dev/null`]
+        if (this.remotePgidPath) {
+          const newRemotePgid = `${remoteDir}/${sessionId}.pgid`
+          if (this.remotePgidPath !== newRemotePgid) {
+            renameParts.push(`mv ${shellQuote(this.remotePgidPath)} ${shellQuote(newRemotePgid)} 2>/dev/null`)
+            this.remotePgidPath = newRemotePgid
+          }
+        }
+        const renameCmd = renameParts.join('; ')
         this.remotePipePath = newRemotePipe
 
         const hostString = this.sshTarget.user
@@ -867,6 +885,7 @@ export class RemoteIO implements SessionIO {
     const remoteDir = '/tmp/walnut-streams'
     this.remotePipePath = `${remoteDir}/${sessionId}.pipe`
     this.remoteOutputPath = `${remoteDir}/${sessionId}.jsonl`
+    this.remotePgidPath = `${remoteDir}/${sessionId}.pgid`
     this._hasPipe = true  // Optimistic — write() will detect if it's gone
     log.session.debug('RemoteIO: recovered pipe paths (optimistic)', {
       host: this.host,
@@ -906,6 +925,154 @@ export class RemoteIO implements SessionIO {
     }
   }
 
+  /**
+   * Gracefully stop all remote processes — mirrors local gracefulStop() logic.
+   * Phase 1: SIGINT to remote claude PID (saves session state).
+   * Phase 2 (deferred 5s): SIGTERM fallback + PGID file cleanup.
+   * Fire-and-forget — does NOT block. Local gracefulStop() handles polling.
+   */
+  gracefulStopRemote(): void {
+    if (!this.remotePgidPath) return
+
+    const pgidPath = this.remotePgidPath
+    const hostString = this.sshTarget.user
+      ? `${this.sshTarget.user}@${this.sshTarget.hostname}`
+      : this.sshTarget.hostname
+    const baseSshArgs = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=10']
+    if (this.sshTarget.port) baseSshArgs.push('-p', String(this.sshTarget.port))
+
+    log.session.info('RemoteIO: gracefulStopRemote — sending SIGINT to remote claude', {
+      host: this.host, pgidPath,
+    })
+
+    // Phase 1: SIGINT to claude (graceful — saves session state)
+    const sigintCmd = `pid=$(cat ${shellQuote(pgidPath)} 2>/dev/null) && [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null && kill -INT $pid 2>/dev/null`
+    try {
+      const proc = spawn('ssh', [...baseSshArgs, hostString, sigintCmd], { detached: true, stdio: 'ignore' })
+      proc.unref()
+    } catch {
+      log.session.debug('RemoteIO: gracefulStopRemote SIGINT spawn failed', { host: this.host })
+    }
+
+    // Phase 2: deferred SIGTERM + cleanup (5s later, fire-and-forget)
+    const sigtermCmd = `pid=$(cat ${shellQuote(pgidPath)} 2>/dev/null) && [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null && kill -TERM $pid 2>/dev/null; rm -f ${shellQuote(pgidPath)}`
+    setTimeout(() => {
+      try {
+        const proc = spawn('ssh', [...baseSshArgs, hostString, sigtermCmd], { detached: true, stdio: 'ignore' })
+        proc.unref()
+      } catch { /* non-fatal */ }
+    }, 5_000)
+  }
+
+  /**
+   * Force-kill remote claude process — sends SIGTERM and cleans up PGID file.
+   * Fire-and-forget.
+   */
+  killRemote(): void {
+    if (!this.remotePgidPath) return
+
+    const pgidPath = this.remotePgidPath
+    const hostString = this.sshTarget.user
+      ? `${this.sshTarget.user}@${this.sshTarget.hostname}`
+      : this.sshTarget.hostname
+    const baseSshArgs = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=10']
+    if (this.sshTarget.port) baseSshArgs.push('-p', String(this.sshTarget.port))
+
+    log.session.info('RemoteIO: killRemote — sending SIGTERM to remote claude', {
+      host: this.host, pgidPath,
+    })
+
+    const cmd = `pid=$(cat ${shellQuote(pgidPath)} 2>/dev/null) && [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null && kill -TERM $pid 2>/dev/null; rm -f ${shellQuote(pgidPath)}`
+    try {
+      const proc = spawn('ssh', [...baseSshArgs, hostString, cmd], { detached: true, stdio: 'ignore' })
+      proc.unref()
+    } catch { /* non-fatal */ }
+  }
+
+  /**
+   * Kill a remote session by its session ID — reads the PGID file and sends SIGTERM.
+   * Used by the health monitor when it doesn't have a live RemoteIO instance.
+   * Fire-and-forget.
+   */
+  static killRemoteBySessionId(sshTarget: SshTarget, sessionId: string): void {
+    const pgidPath = `/tmp/walnut-streams/${sessionId}.pgid`
+    const hostString = sshTarget.user
+      ? `${sshTarget.user}@${sshTarget.hostname}`
+      : sshTarget.hostname
+    const sshArgs = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=10']
+    if (sshTarget.port) sshArgs.push('-p', String(sshTarget.port))
+
+    const cmd = `pid=$(cat ${shellQuote(pgidPath)} 2>/dev/null) && [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null && kill -TERM $pid 2>/dev/null; rm -f ${shellQuote(pgidPath)}`
+    sshArgs.push(hostString, cmd)
+
+    log.session.info('RemoteIO: killRemoteBySessionId', { host: hostString, sessionId, pgidPath })
+
+    try {
+      const proc = spawn('ssh', sshArgs, { detached: true, stdio: 'ignore' })
+      proc.unref()
+    } catch { /* non-fatal */ }
+  }
+
+  /**
+   * Sweep a remote host for orphaned PGID files and kill their processes.
+   * Compares PGID filenames against known session IDs in the registry.
+   * Returns the number of orphans cleaned up.
+   */
+  static async sweepRemoteOrphans(sshTarget: SshTarget, knownSessionIds: Set<string>): Promise<number> {
+    const hostString = sshTarget.user
+      ? `${sshTarget.user}@${sshTarget.hostname}`
+      : sshTarget.hostname
+    const baseSshArgs = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=10']
+    if (sshTarget.port) baseSshArgs.push('-p', String(sshTarget.port))
+
+    const remoteDir = '/tmp/walnut-streams'
+
+    // List all PGID files on the remote host (async to avoid blocking event loop)
+    let listing: string
+    try {
+      listing = await new Promise<string>((resolve, reject) => {
+        execFile('ssh', [...baseSshArgs, hostString, `ls ${remoteDir}/*.pgid 2>/dev/null || true`], {
+          timeout: 15_000,
+          encoding: 'utf-8',
+        }, (err, stdout) => err ? reject(err) : resolve(stdout))
+      })
+    } catch {
+      return 0  // SSH failed — will retry next sweep
+    }
+
+    const pgidFiles = listing.trim().split('\n').filter(Boolean)
+    if (pgidFiles.length === 0) return 0
+
+    // Batch all orphan kill+cleanup into a single SSH command per host
+    const orphanFiles: string[] = []
+    for (const pgidFile of pgidFiles) {
+      const basename = path.basename(pgidFile, '.pgid')
+      if (knownSessionIds.has(basename)) continue
+      orphanFiles.push(pgidFile)
+      log.session.info('RemoteIO: sweepRemoteOrphans — cleaning orphan', {
+        host: hostString, pgidFile, sessionId: basename,
+      })
+    }
+
+    if (orphanFiles.length === 0) return 0
+
+    // Single SSH command kills all orphans — avoids N+1 SSH calls.
+    // PID validation: check numeric and > 1 to avoid killing init.
+    const killCmds = orphanFiles.map(f =>
+      `pid=$(cat ${shellQuote(f)} 2>/dev/null); [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null && kill -TERM $pid 2>/dev/null; rm -f ${shellQuote(f)}`
+    ).join('; ')
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        execFile('ssh', [...baseSshArgs, hostString, killCmds], {
+          timeout: 15_000,
+        }, (err) => err ? reject(err) : resolve())
+      })
+    } catch { /* non-fatal */ }
+
+    return orphanFiles.length
+  }
+
   async cleanup(): Promise<void> {
     log.session.debug('RemoteIO: cleanup start', {
       host: this.host,
@@ -925,11 +1092,15 @@ export class RemoteIO implements SessionIO {
 
     if (this.remoteOutputPath) {
       const jsonlToDelete = this.remoteOutputPath
-      log.session.debug('RemoteIO: deleting remote JSONL (fire-and-forget)', {
+      // Delete JSONL + PGID file in a single SSH command
+      const rmTargets = [shellQuote(jsonlToDelete)]
+      if (this.remotePgidPath) rmTargets.push(shellQuote(this.remotePgidPath))
+      log.session.debug('RemoteIO: deleting remote files (fire-and-forget)', {
         host: this.host,
         remoteJsonl: jsonlToDelete,
+        remotePgid: this.remotePgidPath,
       })
-      const sshArgs = [...baseSshArgs, hostString, `rm -f ${shellQuote(jsonlToDelete)}`]
+      const sshArgs = [...baseSshArgs, hostString, `rm -f ${rmTargets.join(' ')}`]
       try {
         const proc = spawn('ssh', sshArgs, { detached: true, stdio: 'ignore' })
         proc.unref()

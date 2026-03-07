@@ -724,6 +724,13 @@ export class ClaudeCodeSession {
         // Process already dead
       }
     }
+
+    // Also kill remote processes (fire-and-forget) — local SIGTERM only kills
+    // the SSH tunnel; remote claude/tail/sleep survive without this.
+    if (this.io instanceof RemoteIO) {
+      this.io.killRemote()
+    }
+
     this._active = false
   }
 
@@ -773,6 +780,13 @@ export class ClaudeCodeSession {
 
     log.session.info('gracefulStop: sending SIGINT to save session state', { taskId: this.taskId, pid })
 
+    // For remote sessions, also SIGINT the remote claude process directly.
+    // The local SIGINT only kills the SSH tunnel — without this, remote
+    // claude/tail/sleep survive and become orphans.
+    if (this.io instanceof RemoteIO) {
+      this.io.gracefulStopRemote()
+    }
+
     // Phase 1: SIGINT — Claude Code saves session state on Ctrl+C
     try { process.kill(pid, 'SIGINT') } catch { return }
 
@@ -821,6 +835,11 @@ export class ClaudeCodeSession {
     if (this.pid !== null) {
       const pid = this.pid
       const processName = this.io?.processName ?? 'claude'
+
+      // For remote sessions, also SIGINT the remote claude process directly.
+      if (this.io instanceof RemoteIO) {
+        this.io.gracefulStopRemote()
+      }
 
       // Phase 1: SIGINT — Claude Code saves session state on Ctrl+C
       try { process.kill(pid, 'SIGINT') } catch { /* already dead */ }
