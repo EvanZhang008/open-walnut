@@ -148,7 +148,9 @@ The main agent chat persists via `~/.walnut/chat-history.json`. Unified `entries
 
 Key API: `addAIMessages()`, `addNotification()`, `getModelContext()`, `getDisplayEntries()`. Auto-migrates from v1 on first read. Also runs one-time migration to mark orphan `tool_result` entries as compacted.
 
-### Compaction process (when >160K tokens)
+### Compaction process (when full payload exceeds 80% of context window)
+
+Threshold is dynamic: 80% of the model's context window (160K for 200K models, 800K for `[1m]` 1M models). Reads `agent.main_model` from config. See `getContextWindowSize()` in `src/agent/model.ts`.
 
 1. **Memory flush** (`MEMORY_FLUSH_MESSAGE`): Real agent turn via `runAgentLoop()` with full default tool set. Agent uses `memory` tool to persist knowledge. Only runs when `aiEntries.length >= 8`. Uses default tools to preserve Bedrock prompt cache prefix alignment.
 2. **Summarize** (`buildCompactionInstruction()`): LLM call with full message history as `MessageParam[]` produces structured checkpoint summary (10-section format).
