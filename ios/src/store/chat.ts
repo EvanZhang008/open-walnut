@@ -41,6 +41,34 @@ function nextMsgId(prefix: string): string {
 // Track initialization to prevent duplicate WebSocket subscriptions
 let initialized = false
 
+/**
+ * Transform entity refs (<task-ref>, <session-ref>) to readable markdown.
+ * The server stores these as XML tags with labels; iOS renders them as bold text.
+ */
+function transformEntityRefs(text: string): string {
+  // <task-ref id="abc" label="Project / Title" /> → **Project / Title**
+  // Also handles self-closing without space: <task-ref ... />
+  text = text.replace(
+    /<task-ref\s+id="[^"]*"\s+label="([^"]*)"\s*\/>/g,
+    '**$1**'
+  )
+  // Handle task-ref without label (just show shortened ID)
+  text = text.replace(
+    /<task-ref\s+id="([^"]*)"\s*\/>/g,
+    '`$1`'
+  )
+  // <session-ref id="abc" label="Session Name" /> → *Session Name*
+  text = text.replace(
+    /<session-ref\s+id="[^"]*"\s+label="([^"]*)"\s*\/>/g,
+    '*$1*'
+  )
+  text = text.replace(
+    /<session-ref\s+id="([^"]*)"\s*\/>/g,
+    '`$1`'
+  )
+  return text
+}
+
 function entryToMessage(entry: ChatEntry): ChatMessage {
   let blocks: MessageBlock[] | undefined
   let text = ''
@@ -57,7 +85,11 @@ function entryToMessage(entry: ChatEntry): ChatMessage {
     text = String(entry.content ?? '')
   }
 
+  // Prefer displayText if available and text is empty
   if (!text && entry.displayText) text = entry.displayText
+
+  // Transform entity refs to readable markdown
+  text = transformEntityRefs(text)
 
   return {
     id: nextMsgId('entry'),
@@ -129,8 +161,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       if (streamingMessageId) {
         const updated = messages.map((m) => {
           if (m.id === streamingMessageId) {
-            const fullText = finalText || (m.text + streamBuffer)
-            return { ...m, text: fullText, isStreaming: false }
+            const raw = finalText || (m.text + streamBuffer)
+            return { ...m, text: transformEntityRefs(raw), isStreaming: false }
           }
           return m
         })
@@ -142,7 +174,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             messages: [...s.messages, {
               id: nextMsgId('resp'),
               role: 'assistant' as const,
-              text: finalText,
+              text: transformEntityRefs(finalText),
               timestamp: new Date().toISOString(),
             }],
             isStreaming: false,
