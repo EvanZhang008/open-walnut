@@ -214,7 +214,7 @@ function resultKey(r: SearchResult): string {
 async function embedQuery(query: string): Promise<Float32Array | null> {
   try {
     const { embed } = await import('./embedding/client.js');
-    return await embed(query, { keepAlive: '30m' });
+    return await embed(query);
   } catch {
     return null;
   }
