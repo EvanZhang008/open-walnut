@@ -435,7 +435,20 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount
       tabIndex={0}
       onKeyDown={(e) => { if (e.key === 'Enter' && !isEditing) onClick(); }}
     >
-      <span className="drag-handle" {...attributes} {...listeners}>&#x2807;</span>
+      {!!childCount && childCount > 0 ? (
+        <button
+          className={`task-parent-expand${isExpanded ? ' expanded' : ''}`}
+          title={isExpanded ? 'Collapse child tasks' : `Expand ${childCount} child task(s)`}
+          onClick={(e) => { e.stopPropagation(); onToggleExpand?.(); }}
+          {...attributes} {...listeners}
+        >
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+            <path d={isExpanded ? 'M1 3 L5 7 L9 3' : 'M3 1 L7 5 L3 9'} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+          </svg>
+        </button>
+      ) : (
+        <span className="drag-handle" {...attributes} {...listeners}>&#x2807;</span>
+      )}
       <div className="phase-picker-wrapper" ref={phaseWrapperRef}>
         <button
           className={`task-status-btn task-status-${task.status} task-phase-${task.phase?.toLowerCase()}`}
@@ -472,17 +485,6 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount
       </div>
       <div className="todo-item-content">
         <div className="todo-item-title-row">
-          {!!childCount && childCount > 0 && (
-            <button
-              className={`task-parent-expand${isExpanded ? ' expanded' : ''}`}
-              title={isExpanded ? 'Collapse child tasks' : `Expand ${childCount} child task(s)`}
-              onClick={(e) => { e.stopPropagation(); onToggleExpand?.(); }}
-            >
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
-                <path d={isExpanded ? 'M1 3 L5 7 L9 3' : 'M3 1 L7 5 L3 9'} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-              </svg>
-            </button>
-          )}
           <span
             ref={titleRef}
             className={`todo-item-title${isEditing ? ' editing' : ''}`}
