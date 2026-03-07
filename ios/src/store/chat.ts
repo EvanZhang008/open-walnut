@@ -32,6 +32,15 @@ interface ChatStore {
 let flushTimer: ReturnType<typeof setTimeout> | null = null
 let streamingMessageId: string | null = null
 
+// Monotonic counter — guarantees unique IDs across all message sources
+let msgIdSeq = 0
+function nextMsgId(prefix: string): string {
+  return `${prefix}-${++msgIdSeq}`
+}
+
+// Track initialization to prevent duplicate WebSocket subscriptions
+let initialized = false
+
 function entryToMessage(entry: ChatEntry): ChatMessage {
   let blocks: MessageBlock[] | undefined
   let text = ''
@@ -51,7 +60,7 @@ function entryToMessage(entry: ChatEntry): ChatMessage {
   if (!text && entry.displayText) text = entry.displayText
 
   return {
-    id: `${entry.timestamp}-${entry.role}-${Math.random().toString(36).slice(2, 6)}`,
+    id: nextMsgId('entry'),
     role: entry.role,
     text,
     timestamp: entry.timestamp,
@@ -71,6 +80,14 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   streamBuffer: '',
 
   initialize: () => {
+    // Prevent duplicate WebSocket subscriptions on re-mount
+    if (initialized) {
+      // Already subscribed — just refresh history
+      get().loadHistory()
+      return
+    }
+    initialized = true
+
     // Load initial history
     get().loadHistory()
 
@@ -123,7 +140,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         if (finalText) {
           set((s) => ({
             messages: [...s.messages, {
-              id: `resp-${Date.now()}`,
+              id: nextMsgId('resp'),
               role: 'assistant' as const,
               text: finalText,
               timestamp: new Date().toISOString(),
@@ -160,17 +177,22 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     wsClient.onEvent('chat:history-updated', (data) => {
       const d = data as { entry?: ChatEntry }
       if (d.entry && !get().isStreaming) {
-        const msg = entryToMessage(d.entry)
-        set((s) => ({ messages: [...s.messages, msg] }))
+        // Dedup: skip if we already have a message with this timestamp and role
+        const existing = get().messages
+        const isDup = existing.some(
+          (m) => m.timestamp === d.entry!.timestamp && m.role === d.entry!.role
+        )
+        if (!isDup) {
+          const msg = entryToMessage(d.entry)
+          set((s) => ({ messages: [...s.messages, msg] }))
+        }
       }
     })
   },
 
   cleanup: () => {
-    wsClient.offEvent('agent:text-delta', () => {})
-    wsClient.offEvent('agent:response', () => {})
-    wsClient.offEvent('agent:error', () => {})
-    wsClient.offEvent('chat:history-updated', () => {})
+    // Note: we keep WebSocket subscriptions alive across tab switches
+    // since Zustand store persists. Only clear timers.
     if (flushTimer) {
       clearTimeout(flushTimer)
       flushTimer = null
@@ -182,14 +204,14 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
     // Add user message to local list
     const userMsg: ChatMessage = {
-      id: `user-${Date.now()}`,
+      id: nextMsgId('user'),
       role: 'user',
       text,
       timestamp: new Date().toISOString(),
     }
 
     // Create placeholder for assistant streaming
-    const assistantId = `stream-${Date.now()}`
+    const assistantId = nextMsgId('stream')
     streamingMessageId = assistantId
     const assistantMsg: ChatMessage = {
       id: assistantId,
