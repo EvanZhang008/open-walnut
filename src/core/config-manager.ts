@@ -37,9 +37,13 @@ export async function getConfig(): Promise<Config> {
     if (!config.agent?.available_models) {
       config.agent = { ...config.agent, available_models: DEFAULT_AVAILABLE_MODELS };
     }
-    // Migrate: ensure 1M variants exist for non-Haiku models
-    {
-      const models = config.agent!.available_models!;
+    // Legacy migration: only applies to string[] format (not ModelEntry[] from new multi-provider config)
+    const isLegacyModelList = Array.isArray(config.agent?.available_models)
+      && config.agent!.available_models!.length > 0
+      && typeof config.agent!.available_models![0] === 'string';
+    if (isLegacyModelList) {
+      // Migrate: ensure 1M variants exist for non-Haiku models
+      const models = config.agent!.available_models! as string[];
       const added: string[] = [];
       for (const m of models) {
         if (!m.endsWith('[1m]') && !m.toLowerCase().includes('haiku')) {
@@ -48,7 +52,6 @@ export async function getConfig(): Promise<Config> {
         }
       }
       if (added.length > 0) {
-        // Interleave: insert each 1M variant right after its base model
         const merged: string[] = [];
         for (const m of models) {
           merged.push(m);
@@ -57,17 +60,18 @@ export async function getConfig(): Promise<Config> {
         }
         config.agent = { ...config.agent, available_models: merged };
       }
-    }
-    // Seed/migrate main_model: prefer 1M Opus variant for large context needs
-    {
-      const models = config.agent?.available_models ?? DEFAULT_AVAILABLE_MODELS;
-      const oneM = models.find(m => m.includes('opus') && m.includes('[1m]'));
+      // Seed/migrate main_model: prefer 1M Opus variant for large context needs
+      const allModels = (config.agent?.available_models ?? DEFAULT_AVAILABLE_MODELS) as string[];
+      const oneM = allModels.find(m => m.includes('opus') && m.includes('[1m]'));
       if (!config.agent?.main_model) {
-        config.agent = { ...config.agent, main_model: oneM ?? models[0] };
+        config.agent = { ...config.agent, main_model: oneM ?? allModels[0] };
       } else if (oneM && config.agent.main_model === oneM.replace('[1m]', '')) {
-        // Migrate: upgrade from 200K Opus default to 1M Opus default
         config.agent = { ...config.agent, main_model: oneM };
       }
+    } else if (!config.agent?.main_model) {
+      // New format: seed main_model from first available model entry
+      const defaultOneM = DEFAULT_AVAILABLE_MODELS.find(m => m.includes('opus') && m.includes('[1m]')) ?? DEFAULT_AVAILABLE_MODELS[0];
+      config.agent = { ...config.agent, main_model: defaultOneM };
     }
     return config;
   } catch {
@@ -104,7 +108,7 @@ export async function saveConfig(config: Config): Promise<void> {
     // Add comment above available_models (js-yaml strips comments, so we inject after dump)
     content = content.replace(
       /^(\s+)available_models:/m,
-      '$1# Predefined Bedrock model IDs for the agent form dropdown.\n$1# Edit this list to add or remove models.\n$1available_models:',
+      '$1# Available models for the agent form dropdown.\n$1# Edit this list to add or remove models.\n$1available_models:',
     );
     await fs.writeFile(CONFIG_FILE, content, 'utf-8');
   });
@@ -138,7 +142,7 @@ export async function updateConfig(partial: Partial<Config>): Promise<void> {
     let content = yaml.dump(merged, { indent: 2, lineWidth: 120 });
     content = content.replace(
       /^(\s+)available_models:/m,
-      '$1# Predefined Bedrock model IDs for the agent form dropdown.\n$1# Edit this list to add or remove models.\n$1available_models:',
+      '$1# Available models for the agent form dropdown.\n$1# Edit this list to add or remove models.\n$1available_models:',
     );
     await fs.writeFile(CONFIG_FILE, content, 'utf-8');
   });

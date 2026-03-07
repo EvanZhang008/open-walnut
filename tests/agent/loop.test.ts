@@ -13,6 +13,9 @@ vi.mock('../../src/agent/model.js', () => ({
   sendMessageStream: vi.fn(),
   resetClient: vi.fn(),
   DEFAULT_MODEL: 'global.anthropic.claude-opus-4-6-v1',
+  getContextWindowSize: (model?: string) => model?.includes('[1m]') ? 1_000_000 : 200_000,
+  getContextThreshold: (model: string | undefined, percent: number) =>
+    Math.round((model?.includes('[1m]') ? 1_000_000 : 200_000) * percent),
 }));
 
 import { WALNUT_HOME } from '../../src/constants.js';

@@ -19,7 +19,8 @@ import { TriagePanel } from '@/components/triage/TriagePanel';
 import { fetchSession } from '@/api/sessions';
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
 import { useContextInspector } from '@/hooks/useContextInspector';
-import { useShowUiOnlyTriage } from '@/hooks/useDeveloperSettings';
+import { shouldHideUiOnlyMessage } from '@/hooks/useDeveloperSettings';
+import { useUiOnlySettings } from '@/hooks/useDeveloperSettings';
 import { FocusDock } from '@/components/dock/FocusDock';
 import type { SlashCommand } from '@/commands/types';
 import type { CommandContext } from '@/commands/types';
@@ -159,7 +160,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const ordering = useOrdering();
   const [focusedTask, setFocusedTask] = useState<Task | null>(null);
   const inspector = useContextInspector();
-  const showUiOnlyTriage = useShowUiOnlyTriage();
+  // Force re-render when UI Only settings change (hook subscribes to localStorage)
+  useUiOnlySettings();
 
   // Chat panel visibility — toggle via Focus Dock "Chat" button
   const [chatVisible, setChatVisible] = useState<boolean>(
@@ -525,7 +527,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               </div>
             )}
             {chat.messages
-              .filter((msg) => showUiOnlyTriage || !(msg.source === 'triage' && msg.notification))
+              .filter((msg) => !shouldHideUiOnlyMessage(msg.source, msg.notification))
               .map((msg) => (
               <ChatMessage
                 key={msg.key}

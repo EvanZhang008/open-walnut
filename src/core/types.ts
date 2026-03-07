@@ -115,6 +115,8 @@ export interface AgentDefinition {
   description?: string;
   runner: 'embedded' | 'cli';
   model?: string;
+  /** Provider name — maps to config.providers[name]. Falls back to subagent default. */
+  provider?: string;
   region?: string;
   max_tokens?: number;
   max_tool_rounds?: number;
@@ -135,6 +137,8 @@ export interface AgentDefinition {
 
 export interface SubagentGlobalConfig {
   model?: string;
+  /** Provider name for subagents. Maps to config.providers[name]. */
+  provider?: string;
   region?: string;
   max_tokens?: number;
   max_concurrent?: number;
@@ -172,12 +176,15 @@ export interface AgentConfig {
   session_triage_agent?: string;
   /** Agent ID to use for message-send triage. Default: 'message-send-triage' (builtin). */
   message_send_triage_agent?: string;
-  /** Predefined Bedrock model IDs shown in the agent form dropdown. */
-  available_models?: string[];
+  /** Predefined model IDs shown in the agent form dropdown. Supports both string[] (legacy Bedrock IDs)
+   *  and ModelEntry[] (new multi-provider format). */
+  available_models?: string[] | import('../agent/providers/types.js').ModelEntry[];
   /** Default model passed as --model to claude CLI sessions. Defaults to 'opus'. */
   session_model?: string;
-  /** Bedrock model ID for the main AI agent. Defaults to DEFAULT_MODEL (Opus 4.6). */
+  /** Model ID for the main AI agent. Defaults to DEFAULT_MODEL (Opus 4.6). */
   main_model?: string;
+  /** Default provider name for the main agent. Maps to config.providers[name]. */
+  main_provider?: string;
 }
 
 export interface Config {
@@ -190,6 +197,9 @@ export interface Config {
     bedrock_region?: string;
     bedrock_bearer_token?: string;
   };
+  /** Multi-provider configuration. Each key is a provider name, value is protocol + auth config.
+   *  When absent, auto-synthesized from legacy `provider.*` fields + env var auto-detection. */
+  providers?: Record<string, import('../agent/providers/types.js').ProviderConfig>;
   agent?: AgentConfig;
   local?: {
     /** Category names reserved for local-only tasks (never synced to any external service). */
@@ -276,6 +286,16 @@ export interface Config {
   developer?: {
     /** Show "UI ONLY" triage messages in chat. Default: false (hidden for less noise). */
     show_ui_only_triage?: boolean;
+    /** Show "UI ONLY" session result messages. Default: false. */
+    show_ui_only_session?: boolean;
+    /** Show "UI ONLY" session error messages. Default: false. */
+    show_ui_only_session_error?: boolean;
+    /** Show "UI ONLY" subagent result messages. Default: false. */
+    show_ui_only_subagent?: boolean;
+    /** Show "UI ONLY" heartbeat messages. Default: false. */
+    show_ui_only_heartbeat?: boolean;
+    /** Show "UI ONLY" agent error messages. Default: false. */
+    show_ui_only_agent_error?: boolean;
   };
   /** API keys for remote client authentication (iOS app, etc.) */
   api_keys?: ApiKeyEntry[];

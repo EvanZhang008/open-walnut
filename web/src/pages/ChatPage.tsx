@@ -6,13 +6,14 @@ import { ChatPanel } from '@/components/chat/ChatPanel';
 import { ChatMessage } from '@/components/chat/ChatMessage';
 import { ChatInput } from '@/components/chat/ChatInput';
 import type { SlashCommand, CommandContext } from '@/commands/types';
-import { useShowUiOnlyTriage } from '@/hooks/useDeveloperSettings';
+import { shouldHideUiOnlyMessage, useUiOnlySettings } from '@/hooks/useDeveloperSettings';
 
 export function ChatPage() {
   const navigate = useNavigate();
   const { messages, isStreaming, toolActivity, error, isLoading, queueCount, hasMore, isLoadingOlder, prependedRef, sendMessage, clearMessages, addLocalMessage, stopGeneration, cancelQueuedMessage, clearQueue, loadOlderMessages } = useChat();
   const { connectionState } = useWebSocket();
-  const showUiOnlyTriage = useShowUiOnlyTriage();
+  // Force re-render when UI Only settings change
+  useUiOnlySettings();
 
   const handleCommand = useCallback((cmd: SlashCommand, args?: string) => {
     const ctx: CommandContext = {
@@ -62,7 +63,7 @@ export function ChatPage() {
           </div>
         )}
         {messages
-          .filter((msg) => showUiOnlyTriage || !(msg.source === 'triage' && msg.notification))
+          .filter((msg) => !shouldHideUiOnlyMessage(msg.source, msg.notification))
           .map((msg) => (
           <ChatMessage
                 key={msg.key}

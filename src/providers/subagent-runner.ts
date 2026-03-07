@@ -208,6 +208,7 @@ export class SubagentRunner {
     const subagentConfig = config.agent?.subagent;
 
     const model = data.model ?? agentDef.model ?? subagentConfig?.model ?? config.agent?.model;
+    const provider = agentDef.provider ?? subagentConfig?.provider ?? config.agent?.main_provider;
     const region = data.region ?? agentDef.region ?? subagentConfig?.region ?? config.agent?.region;
     const maxTokens = agentDef.max_tokens ?? subagentConfig?.max_tokens ?? config.agent?.maxTokens;
     const maxToolRounds = agentDef.max_tool_rounds ?? subagentConfig?.max_tool_rounds ?? 10;
@@ -289,7 +290,7 @@ export class SubagentRunner {
     run.status = 'running';
     log.subagent.info('run starting', { runId, agentId, semaphoreActive: this.semaphore.active, semaphoreMax: this.semaphore.max });
 
-    this.runEmbedded(run, agentDef, data, { model, region, maxTokens, maxToolRounds }).catch((err) => {
+    this.runEmbedded(run, agentDef, data, { model, provider, region, maxTokens, maxToolRounds }).catch((err) => {
       log.subagent.error('embedded run failed', { runId, error: err instanceof Error ? err.message : String(err) });
     });
   }
@@ -298,7 +299,7 @@ export class SubagentRunner {
     run: AgentRun & { _history?: MessageParam[] },
     agentDef: AgentDefinition,
     data: { task: string; taskId?: string; deniedTools?: string[]; context?: string; context_override?: { taskId?: string; sessionId?: string; cwd?: string; host?: string } },
-    opts: { model?: string; region?: string; maxTokens?: number; maxToolRounds: number; resume?: boolean },
+    opts: { model?: string; provider?: string; region?: string; maxTokens?: number; maxToolRounds: number; resume?: boolean },
   ): Promise<void> {
     const isResume = opts.resume === true;
 
@@ -430,6 +431,7 @@ export class SubagentRunner {
         tools: toolSet,
         modelConfig: {
           model: opts.model,
+          provider: opts.provider,
           region: opts.region,
           maxTokens: opts.maxTokens,
         },
@@ -575,6 +577,7 @@ export class SubagentRunner {
     const subagentConfig = config.agent?.subagent;
 
     const model = agentDef.model ?? subagentConfig?.model ?? config.agent?.model;
+    const provider = agentDef.provider ?? subagentConfig?.provider ?? config.agent?.main_provider;
     const region = agentDef.region ?? subagentConfig?.region ?? config.agent?.region;
     const maxTokens = agentDef.max_tokens ?? subagentConfig?.max_tokens ?? config.agent?.maxTokens;
     const maxToolRounds = agentDef.max_tool_rounds ?? subagentConfig?.max_tool_rounds ?? 10;
@@ -610,7 +613,7 @@ export class SubagentRunner {
     this.runEmbedded(run, agentDef, {
       task: data.message,
       taskId: run.taskId,
-    }, { model, region, maxTokens, maxToolRounds, resume: true }).catch((err) => {
+    }, { model, provider, region, maxTokens, maxToolRounds, resume: true }).catch((err) => {
       log.subagent.error('resume run failed', { runId: data.runId, error: err instanceof Error ? err.message : String(err) });
     });
   }

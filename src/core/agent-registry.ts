@@ -346,8 +346,19 @@ async function validateModel(model: string | undefined): Promise<void> {
   if (!model) return;
   const config = await getConfig();
   const allowed = config.agent?.available_models ?? DEFAULT_AVAILABLE_MODELS;
-  if (!allowed.includes(model)) {
-    throw new Error(`Model "${model}" is not in the available models list. Allowed: ${allowed.join(', ')}`);
+  if (!Array.isArray(allowed) || allowed.length === 0) return; // Empty list = allow all
+  // Handle both legacy string[] and new ModelEntry[] formats
+  const isLegacy = typeof allowed[0] === 'string';
+  const isAllowed = isLegacy
+    ? (allowed as string[]).includes(model)
+    : (allowed as Array<{ id?: string; model_id?: string }>).some(
+        (e) => typeof e === 'object' && (e.id === model || e.model_id === model),
+      );
+  if (!isAllowed) {
+    const names = isLegacy
+      ? (allowed as string[]).join(', ')
+      : (allowed as Array<{ id?: string }>).map(e => typeof e === 'object' ? e.id : String(e)).join(', ');
+    throw new Error(`Model "${model}" is not in the available models list. Allowed: ${names}`);
   }
 }
 

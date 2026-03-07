@@ -6,6 +6,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { getConfig, updateConfig } from '../../core/config-manager.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { VALID_PRIORITIES } from '../../core/types.js'
+import { log } from '../../logging/index.js'
 
 export const configRouter = Router()
 
@@ -16,6 +17,41 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
     res.json({ config })
   } catch (err) {
     next(err)
+  }
+})
+
+// POST /api/config/test-connection — test Bedrock connection
+configRouter.post('/test-connection', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { bedrock_region, bedrock_bearer_token } = req.body
+    const config = await getConfig()
+    const region = bedrock_region || config.provider?.bedrock_region || 'us-west-2'
+    const token = bedrock_bearer_token || config.provider?.bedrock_bearer_token
+
+    if (!token) {
+      res.json({ ok: false, error: 'No bearer token provided' })
+      return
+    }
+
+    // Dynamic import to avoid pulling heavy dependency at module load
+    const { default: AnthropicBedrock } = await import('@anthropic-ai/bedrock-sdk')
+    const client = new AnthropicBedrock({
+      awsRegion: region,
+      ...(token ? { awsSessionToken: token } : {}),
+    })
+
+    const start = Date.now()
+    await client.messages.create({
+      model: 'anthropic.claude-haiku-4-5-20251001-v1:0',
+      max_tokens: 1,
+      messages: [{ role: 'user', content: 'hi' }],
+    })
+    const latencyMs = Date.now() - start
+
+    res.json({ ok: true, latencyMs })
+  } catch (err) {
+    log.warn('test-connection failed', { error: (err as Error).message })
+    res.json({ ok: false, error: (err as Error).message })
   }
 })
 

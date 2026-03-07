@@ -36,6 +36,9 @@ vi.mock('../../src/agent/model.js', () => ({
   sendMessageStream: mockSendMessageStream,
   resetClient: vi.fn(),
   DEFAULT_MODEL: 'test-model',
+  getContextWindowSize: (model?: string) => model?.includes('[1m]') ? 1_000_000 : 200_000,
+  getContextThreshold: (model: string | undefined, percent: number) =>
+    Math.round((model?.includes('[1m]') ? 1_000_000 : 200_000) * percent),
 }));
 
 import { WALNUT_HOME } from '../../src/constants.js';

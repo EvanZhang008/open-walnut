@@ -146,6 +146,7 @@ export async function runAgentLoop(
 
   const modelConfig: ModelConfig = options?.modelConfig ?? {
     model: config.agent?.main_model ?? config.agent?.model,
+    provider: config.agent?.main_provider,
     region: config.agent?.region,
     maxTokens: config.agent?.maxTokens,
   };
