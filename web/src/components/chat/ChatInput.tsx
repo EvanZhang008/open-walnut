@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, type KeyboardEvent, type DragEvent, type ClipboardEvent } from 'react';
+import { useState, useRef, useCallback, type KeyboardEvent, type DragEvent, type ClipboardEvent, useLayoutEffect } from 'react';
 import { searchCommands, getCommand } from '@/commands/index';
 import type { SlashCommand } from '@/commands/types';
 import type { ImageAttachment } from '@/api/chat';
@@ -44,6 +44,13 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteResults, setPaletteResults] = useState<PaletteItem[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
+
+  // Ref mirror for palette state — guarantees handleKeyDown always reads latest values
+  // even if React hasn't flushed the re-render from onChange before the next keydown fires
+  const paletteRef = useRef({ open: false, results: [] as PaletteItem[], selectedIndex: 0 });
+  useLayoutEffect(() => {
+    paletteRef.current = { open: paletteOpen, results: paletteResults, selectedIndex };
+  }, [paletteOpen, paletteResults, selectedIndex]);
 
   const processFiles = useCallback((files: FileList | File[]) => {
     const fileArray = Array.from(files);
@@ -160,20 +167,23 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   }, [isSessionMode, onCommand, onControlCommand, closePalette]);
 
   const handleKeyDown = (e: KeyboardEvent) => {
-    if (paletteOpen && paletteResults.length > 0) {
+    // Read palette state from ref to avoid stale closure issues —
+    // React may not have flushed re-render from onChange before keydown fires
+    const ps = paletteRef.current;
+    if (ps.open && ps.results.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setSelectedIndex((i) => (i + 1) % paletteResults.length);
+        setSelectedIndex((i) => (i + 1) % ps.results.length);
         return;
       }
       if (e.key === 'ArrowUp') {
         e.preventDefault();
-        setSelectedIndex((i) => (i - 1 + paletteResults.length) % paletteResults.length);
+        setSelectedIndex((i) => (i - 1 + ps.results.length) % ps.results.length);
         return;
       }
       if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && !e.altKey)) {
         e.preventDefault();
-        handleSelectCommand(paletteResults[selectedIndex]);
+        handleSelectCommand(ps.results[ps.selectedIndex]);
         return;
       }
       if (e.key === 'Escape') {
@@ -218,11 +228,15 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       } else {
         results = searchCommands(query);
       }
+      const open = results.length > 0;
       setPaletteResults(results);
-      setPaletteOpen(results.length > 0);
+      setPaletteOpen(open);
       setSelectedIndex(0);
+      // Sync ref immediately so handleKeyDown reads correct state even before re-render
+      paletteRef.current = { open, results, selectedIndex: 0 };
     } else {
       closePalette();
+      paletteRef.current = { open: false, results: [], selectedIndex: 0 };
     }
   };
 
