@@ -18,6 +18,7 @@ import { TriagePanel } from '@/components/triage/TriagePanel';
 import { fetchSession } from '@/api/sessions';
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
 import { useContextInspector } from '@/hooks/useContextInspector';
+import { useShowUiOnlyTriage } from '@/hooks/useDeveloperSettings';
 import type { SlashCommand } from '@/commands/types';
 import type { CommandContext } from '@/commands/types';
 
@@ -89,6 +90,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const ordering = useOrdering();
   const [focusedTask, setFocusedTask] = useState<Task | null>(null);
   const inspector = useContextInspector();
+  const showUiOnlyTriage = useShowUiOnlyTriage();
 
   // Chat panel visibility — toggle via Focus Dock "Chat" button
   const [chatVisible, setChatVisible] = useState<boolean>(
@@ -471,7 +473,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                 }</p>
               </div>
             )}
-            {chat.messages.map((msg) => (
+            {chat.messages
+              .filter((msg) => showUiOnlyTriage || !(msg.source === 'triage' && msg.notification))
+              .map((msg) => (
               <ChatMessage
                 key={msg.key}
                 role={msg.role}

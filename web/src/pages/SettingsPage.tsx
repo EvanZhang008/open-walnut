@@ -4,6 +4,7 @@ import { fetchConfig, updateConfig } from '@/api/config';
 import { apiGet, apiPut } from '@/api/client';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { useTheme, type ThemePreference } from '@/hooks/useTheme';
+import { useShowUiOnlyTriage, setShowUiOnlyTriage as setShowUiOnlyTriageLocal } from '@/hooks/useDeveloperSettings';
 
 const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
   { value: 'system', label: 'System' },
@@ -46,6 +47,7 @@ export function SettingsPage() {
   const [defaultPriority, setDefaultPriority] = useState<TaskPriority>('none');
   const [defaultCategory, setDefaultCategory] = useState('');
   const [mainModel, setMainModel] = useState('');
+  const showUiOnlyTriage = useShowUiOnlyTriage();
   useEffect(() => {
     fetchConfig()
       .then((c) => {
@@ -54,6 +56,8 @@ export function SettingsPage() {
         setDefaultPriority(c.defaults?.priority ?? 'none');
         setDefaultCategory(c.defaults?.category ?? '');
         setMainModel(c.agent?.main_model ?? '');
+        // Sync server config value to localStorage for reactive hooks
+        setShowUiOnlyTriageLocal(c.developer?.show_ui_only_triage ?? false);
       })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false));
@@ -109,6 +113,15 @@ export function SettingsPage() {
       setHbError((err as Error).message);
     } finally {
       setHbSaving(false);
+    }
+  };
+
+  const handleToggleUiOnlyTriage = async (checked: boolean) => {
+    setShowUiOnlyTriageLocal(checked);
+    try {
+      await updateConfig({ developer: { show_ui_only_triage: checked } } as Partial<Config>);
+    } catch {
+      setShowUiOnlyTriageLocal(!checked);
     }
   };
 
@@ -271,6 +284,26 @@ export function SettingsPage() {
             </div>
           </>
         )}
+      </div>
+
+      {/* ── Developer ── */}
+      <div className="card" style={{ maxWidth: 520, marginTop: 24 }}>
+        <h3 style={{ margin: '0 0 4px' }}>Developer</h3>
+        <p className="text-sm text-muted" style={{ margin: '0 0 12px' }}>
+          Debugging options for advanced users.
+        </p>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={showUiOnlyTriage}
+            onChange={(e) => handleToggleUiOnlyTriage(e.target.checked)}
+            style={{ width: 16, height: 16, accentColor: 'var(--accent)' }}
+          />
+          <span>Show &ldquo;UI Only&rdquo; triage messages</span>
+        </label>
+        <p className="text-sm text-muted" style={{ margin: '6px 0 0 24px' }}>
+          Display internal triage notifications in chat. Useful for debugging the triage agent. Hidden by default to reduce noise.
+        </p>
       </div>
     </div>
   );

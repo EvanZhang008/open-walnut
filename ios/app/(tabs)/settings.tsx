@@ -16,6 +16,7 @@ import {
 import { useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useConnectionStore } from '../../src/store/connection'
+import { useSettingsStore } from '../../src/store/settings'
 import { clearAll } from '../../src/utils/secure-store'
 import { ConnectionBadge } from '../../src/components/ConnectionBadge'
 
@@ -26,6 +27,11 @@ export default function SettingsScreen() {
   const connect = useConnectionStore((s) => s.connect)
   const disconnect = useConnectionStore((s) => s.disconnect)
   const [pushEnabled, setPushEnabled] = useState(true)
+  const showUiOnlyTriage = useSettingsStore((s) => s.showUiOnlyTriage)
+  const setShowUiOnlyTriage = useSettingsStore((s) => s.setShowUiOnlyTriage)
+  const loadSettings = useSettingsStore((s) => s.load)
+
+  useEffect(() => { loadSettings() }, [])
 
   const handleReconnect = () => {
     disconnect()
@@ -85,6 +91,26 @@ export default function SettingsScreen() {
         </View>
         <Text style={styles.hint}>
           Receive push notifications when sessions complete, tasks need attention, or scheduled jobs run.
+        </Text>
+      </View>
+
+      {/* Developer */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Developer</Text>
+        <View style={styles.card}>
+          <View style={styles.row}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.label}>Show UI Only triage</Text>
+            </View>
+            <Switch
+              value={showUiOnlyTriage}
+              onValueChange={setShowUiOnlyTriage}
+              trackColor={{ false: '#E5E5EA', true: '#34C759' }}
+            />
+          </View>
+        </View>
+        <Text style={styles.hint}>
+          Show internal triage notifications in chat. Useful for debugging.
         </Text>
       </View>
 

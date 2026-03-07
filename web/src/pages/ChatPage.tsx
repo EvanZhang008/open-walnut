@@ -6,11 +6,13 @@ import { ChatPanel } from '@/components/chat/ChatPanel';
 import { ChatMessage } from '@/components/chat/ChatMessage';
 import { ChatInput } from '@/components/chat/ChatInput';
 import type { SlashCommand, CommandContext } from '@/commands/types';
+import { useShowUiOnlyTriage } from '@/hooks/useDeveloperSettings';
 
 export function ChatPage() {
   const navigate = useNavigate();
   const { messages, isStreaming, toolActivity, error, isLoading, queueCount, hasMore, isLoadingOlder, prependedRef, sendMessage, clearMessages, addLocalMessage, stopGeneration, cancelQueuedMessage, clearQueue, loadOlderMessages } = useChat();
   const { connectionState } = useWebSocket();
+  const showUiOnlyTriage = useShowUiOnlyTriage();
 
   const handleCommand = useCallback((cmd: SlashCommand, args?: string) => {
     const ctx: CommandContext = {
@@ -59,7 +61,9 @@ export function ChatPage() {
             <p>Start a conversation with Walnut. Ask about your tasks, get help with planning, or just chat.</p>
           </div>
         )}
-        {messages.map((msg) => (
+        {messages
+          .filter((msg) => showUiOnlyTriage || !(msg.source === 'triage' && msg.notification))
+          .map((msg) => (
           <ChatMessage
                 key={msg.key}
                 role={msg.role}

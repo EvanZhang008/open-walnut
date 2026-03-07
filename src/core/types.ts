@@ -273,6 +273,10 @@ export interface Config {
     push_on_session_end?: boolean;  // default: true
   };
   session_hooks?: import('./session-hooks/types.js').SessionHooksConfig;
+  developer?: {
+    /** Show "UI ONLY" triage messages in chat. Default: false (hidden for less noise). */
+    show_ui_only_triage?: boolean;
+  };
   /** API keys for remote client authentication (iOS app, etc.) */
   api_keys?: ApiKeyEntry[];
   /** Registered push notification tokens for mobile clients */

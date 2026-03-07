@@ -88,5 +88,6 @@ export interface ChatMessage {
   timestamp: string
   isStreaming?: boolean
   source?: string
+  notification?: boolean
   blocks?: MessageBlock[]
 }

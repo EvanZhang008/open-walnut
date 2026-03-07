@@ -97,6 +97,7 @@ function entryToMessage(entry: ChatEntry): ChatMessage {
     text,
     timestamp: entry.timestamp,
     source: entry.source,
+    notification: entry.notification,
     blocks,
   }
 }

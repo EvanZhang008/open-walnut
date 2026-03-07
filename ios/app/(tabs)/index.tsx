@@ -3,7 +3,7 @@
  * Streaming messages, markdown rendering, send/stop.
  */
 
-import React, { useEffect, useRef, useCallback } from 'react'
+import React, { useEffect, useRef, useCallback, useMemo } from 'react'
 import {
   View,
   FlatList,
@@ -19,13 +19,14 @@ import { ChatMessageView } from '../../src/components/ChatMessage'
 import { ChatInput } from '../../src/components/ChatInput'
 import { ConnectionBadge } from '../../src/components/ConnectionBadge'
 import { useChatStore } from '../../src/store/chat'
+import { useSettingsStore } from '../../src/store/settings'
 import type { ChatMessage } from '../../src/api/types'
 
 export default function ChatScreen() {
   const insets = useSafeAreaInsets()
   const navigation = useNavigation()
   const flatListRef = useRef<FlatList>(null)
-  const messages = useChatStore((s) => s.messages)
+  const allMessages = useChatStore((s) => s.messages)
   const isStreaming = useChatStore((s) => s.isStreaming)
   const isLoading = useChatStore((s) => s.isLoading)
   const error = useChatStore((s) => s.error)
@@ -33,6 +34,14 @@ export default function ChatScreen() {
   const taskContext = useChatStore((s) => s.taskContext)
   const initialize = useChatStore((s) => s.initialize)
   const loadOlderMessages = useChatStore((s) => s.loadOlderMessages)
+  const showUiOnlyTriage = useSettingsStore((s) => s.showUiOnlyTriage)
+  const loadSettings = useSettingsStore((s) => s.load)
+
+  // Filter out UI-only triage messages unless developer setting is enabled
+  const messages = useMemo(
+    () => showUiOnlyTriage ? allMessages : allMessages.filter((m) => !(m.source === 'triage' && m.notification)),
+    [allMessages, showUiOnlyTriage]
+  )
 
   // Set header with connection badge
   useEffect(() => {
@@ -46,9 +55,10 @@ export default function ChatScreen() {
     })
   }, [navigation])
 
-  // Initialize chat on mount
+  // Initialize chat and load settings on mount
   useEffect(() => {
     initialize()
+    loadSettings()
   }, [])
 
   // Auto-scroll to bottom when new messages arrive
