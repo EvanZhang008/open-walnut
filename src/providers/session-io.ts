@@ -14,6 +14,7 @@
 
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import { spawn, execFile, execFileSync, type ChildProcess } from 'node:child_process'
 import { JsonlTailer } from '../core/jsonl-tailer.js'
@@ -507,6 +508,27 @@ export class RemoteIO implements SessionIO {
     localOutputFd: number
     localStderrFd: number
   } {
+    const t0 = Date.now()
+
+    // Pre-flight: ensure SSH agent has a valid (non-expired) cert.
+    // mwinit writes fresh certs to disk but doesn't flush old ones from the agent.
+    // A long-running ssh-agent accumulates expired certs that cause intermittent
+    // "Permission denied (publickey)" when the server tries an expired cert first.
+    try {
+      const certCheck = execFileSync('ssh-add', ['-L'], { encoding: 'utf-8', timeout: 5000 })
+      const certLines = certCheck.split('\n').filter(l => l.includes('cert-v01'))
+      if (certLines.length > 1) {
+        // Multiple certs loaded — likely stale ones. Flush and re-add.
+        log.session.info('RemoteIO: flushing stale SSH agent certs', { certCount: certLines.length })
+        execFileSync('ssh-add', ['-D'], { timeout: 5000, stdio: 'pipe' })
+        execFileSync('ssh-add', [path.join(os.homedir(), '.ssh', 'id_ecdsa')], { timeout: 5000, stdio: 'pipe' })
+      }
+    } catch (e) {
+      log.session.debug('RemoteIO: SSH agent pre-flight check failed (non-fatal)', {
+        error: e instanceof Error ? e.message : String(e),
+      })
+    }
+
     const remoteDir = '/tmp/walnut-streams'
     const tmpId = path.basename(this._localOutputFile, '.jsonl')
     this.remotePipePath = `${remoteDir}/${tmpId}.pipe`
@@ -621,6 +643,7 @@ export class RemoteIO implements SessionIO {
     const sshArgs = [
       '-o', 'BatchMode=yes',
       '-o', 'StrictHostKeyChecking=no',
+      '-o', 'ConnectTimeout=15',
       '-o', 'ServerAliveInterval=30',
       '-o', 'ServerAliveCountMax=3',
     ]
@@ -656,6 +679,7 @@ export class RemoteIO implements SessionIO {
       append: append ?? false,
       hasInitialMessage: !!initialMessage,
       initialMessageLength: initialMessage?.length ?? 0,
+      setupMs: Date.now() - t0,
     })
     log.session.debug('RemoteIO: full SSH command', { cmd: fullCmd })
 
@@ -729,6 +753,11 @@ export class RemoteIO implements SessionIO {
     // Tail the local output file (SSH stdout → local file)
     this.tailer = new JsonlTailer(this._localOutputFile, onLine)
     this.tailer.start(fromOffset)
+    log.session.info('RemoteIO: tailer started', {
+      host: this.host,
+      file: this._localOutputFile,
+      fromOffset: fromOffset ?? 0,
+    })
   }
 
   stopTail(): void {

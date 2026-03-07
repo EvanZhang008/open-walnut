@@ -35,7 +35,7 @@ import { log } from '../logging/index.js'
 import { markProcessing, removeProcessed, revertToPending, loadQueue, getAllSessionsWithPending, enqueueMessage } from '../core/session-message-queue.js'
 import { createSessionIO, LocalIO, RemoteIO, transferImagesForRemoteSession, rewriteRemoteImagePaths } from './session-io.js'
 import type { SessionIO, SshTarget } from './session-io.js'
-import { recoverStateFromJsonl, extractImageBlocksToFiles } from '../core/session-history.js'
+import { recoverStateFromJsonl, extractImageFilePathFromInput } from '../core/session-history.js'
 import type { SessionRecord, SessionMode, ProcessStatus, WorkStatus } from '../core/types.js'
 import type { SessionServerClient } from './session-server-client.js'
 
@@ -259,6 +259,8 @@ export class ClaudeCodeSession {
   pendingDescription?: string
   /** Source plan session ID (set when this session was created from a plan) */
   fromPlanSessionId?: string
+  /** Source session ID when this session was forked from another session */
+  forkedFromSessionId?: string
 
   /** Plan file path captured from Write tool_use targeting ~/.claude/plans/ */
   planFile: string | null = null
@@ -268,9 +270,12 @@ export class ClaudeCodeSession {
   private _lastPlanWriteContent: string | null = null
   /** True when we've already auto-replied to AskUserQuestion this turn. Reset on new turn. */
   private _askUserIntercepted = false
+  /** Timestamp when spawn() was called — used to measure time-to-init for diagnostics. */
+  private _spawnTs = 0
   /** Per-session cache for remote→local image path rewriting (avoids re-downloading). */
   private _remoteImageCache = new Map<string, string>()
-
+  /** Cache tool_use input file paths for image tools — used to resolve tool_result image content blocks to file paths. */
+  private _toolInputFilePaths = new Map<string, string>()
 
   /** Resolves with the Claude session ID once the system init event arrives. */
   readonly sessionReady: Promise<string>
@@ -448,8 +453,10 @@ export class ClaudeCodeSession {
 
     if (sshTarget) {
       // ── Remote SSH spawn via RemoteIO ──
+      this._spawnTs = Date.now()
       const remoteIO = this.io as RemoteIO
       const { sshArgs, localOutputFd, localStderrFd } = remoteIO.setupRemote(args, cwd, message, isResume)
+      const setupElapsed = Date.now() - this._spawnTs
 
       proc = spawn('ssh', sshArgs, {
         detached: true,
@@ -471,6 +478,8 @@ export class ClaudeCodeSession {
         pid: proc.pid,
         outputFile: this.io.outputFile,
         resume: !!resumeSessionId,
+        setupMs: setupElapsed,
+        spawnMs: Date.now() - this._spawnTs,
       })
     } else {
       // ── Local spawn via LocalIO ──
@@ -738,6 +747,7 @@ export class ClaudeCodeSession {
     this._turnResultEmitted = false  // New turn starting — allow result emission
     this._turnStartOffset = this.io.fileSize  // Track where this turn's data begins
     this._askUserIntercepted = false
+    this._toolInputFilePaths.clear()  // Fresh turn — clear stale cached tool input paths
     this.emitStatusChanged('in_progress', prevWorkStatus)
     log.session.info('message sent to session via FIFO', { taskId: this.taskId, sessionId: this.claudeSessionId, messageLength: message.length })
     return true
@@ -887,13 +897,14 @@ export class ClaudeCodeSession {
         if (initStderr) parts.push(`stderr: ${initStderr}`)
         else parts.push('(no stderr captured)')
         const errMsg = parts.join(' ')
-        log.session.error('session init failed', {
+        log.session.error('session init failed — SSH process died before init event', {
           taskId: this.taskId,
           pid: this.pid,
           exitCode: this._exitCode,
           host: this._host,
           stderr: initStderr || undefined,
           outputFile: this._outputFile,
+          timeSinceSpawnMs: this._spawnTs ? Date.now() - this._spawnTs : undefined,
         })
         this._rejectSessionReady(new Error(errMsg))
 
@@ -1016,7 +1027,21 @@ export class ClaudeCodeSession {
    * Handle a single JSONL line from the stream-json output.
    * Parses the JSON, extracts the event type, and emits bus events.
    */
+  /** Track whether we've received any JSONL line yet (for first-line timing). */
+  private _firstLineSeen = false
+
   private handleStreamLine(line: string): void {
+    if (!this._firstLineSeen) {
+      this._firstLineSeen = true
+      log.session.info('first JSONL line received from output', {
+        taskId: this.taskId,
+        isRemote: !!this._host,
+        host: this._host,
+        timeSinceSpawnMs: this._spawnTs ? Date.now() - this._spawnTs : undefined,
+        linePreview: line.slice(0, 120),
+      })
+    }
+
     let event: StreamEvent
     try {
       event = JSON.parse(line) as StreamEvent
@@ -1037,7 +1062,14 @@ export class ClaudeCodeSession {
           const expectedId = this._expectedSessionId
           this.claudeSessionId = newId
           this._expectedSessionId = null
-          log.session.info('session ID from init', { sessionId: newId, taskId: this.taskId })
+          const initElapsedMs = this._spawnTs ? Date.now() - this._spawnTs : undefined
+          log.session.info('session ID from init', {
+            sessionId: newId,
+            taskId: this.taskId,
+            timeToInitMs: initElapsedMs,
+            isRemote: !!this._host,
+            host: this._host,
+          })
 
           // Rename output file + FIFO to use the real session ID via SessionIO
           if (this.io) {
@@ -1179,6 +1211,14 @@ export class ClaudeCodeSession {
             }, ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
           } else if (block.type === 'tool_use') {
             this._activity = `Using ${block.name}`
+
+            // Cache image file paths from tool inputs (e.g. Read tool's file_path).
+            // When the tool_result comes back with base64 image content blocks,
+            // we use the cached path instead of the base64 data.
+            if (block.id && block.input) {
+              const imgPath = extractImageFilePathFromInput(block.input as Record<string, unknown>)
+              if (imgPath) this._toolInputFilePaths.set(block.id, imgPath)
+            }
 
             // Capture plan file path and content (Claude writes plan to ~/.claude/plans/{slug}.md)
             if (block.name === 'Write' && typeof block.input?.file_path === 'string') {
@@ -1334,10 +1374,20 @@ export class ClaudeCodeSession {
         for (const block of msg.message.content) {
           if (block.type === 'tool_result') {
             let resultContent: string
-            // Save image content blocks to disk — result becomes short file paths.
-            // The frontend's findImagePaths() detects these and renders via /api/local-image.
-            if (Array.isArray(block.content) && block.content.some((c: Record<string, unknown>) => c.type === 'image')) {
-              resultContent = extractImageBlocksToFiles(block.content as Array<{ type: string; text?: string; source?: { type?: string; media_type?: string; data?: string } }>) ?? ''
+            // If the tool_result has image content blocks, use the cached file path
+            // from the tool_use input instead of the base64 data. This keeps the
+            // streaming pipeline lightweight — paths are short and the frontend's
+            // findImagePaths() detects them and renders via /api/local-image.
+            const hasImageBlocks = Array.isArray(block.content) && block.content.some((c: Record<string, unknown>) => c.type === 'image')
+            const cachedPath = block.tool_use_id ? this._toolInputFilePaths.get(block.tool_use_id) : undefined
+            if (hasImageBlocks && cachedPath) {
+              // Use the file path from the tool input — avoids piping 130K+ base64 through the bus
+              resultContent = cachedPath
+              this._toolInputFilePaths.delete(block.tool_use_id as string)
+            } else if (hasImageBlocks) {
+              // Image blocks but no cached path (e.g. screenshot tool without file_path input).
+              // Don't serialize the base64 blob — just note it's an image.
+              resultContent = '[image]'
             } else {
               const rawResult = typeof block.content === 'string'
                 ? block.content
@@ -1454,6 +1504,7 @@ export class ClaudeCodeSession {
       activity: this._activity,
       ...(this.planCompleted ? { planCompleted: true } : {}),
       ...(this.fromPlanSessionId ? { fromPlanSessionId: this.fromPlanSessionId } : {}),
+      ...(this.forkedFromSessionId ? { forkedFromSessionId: this.forkedFromSessionId } : {}),
     }, ['*'], { source: 'session-runner', urgency: 'urgent' })
   }
 
@@ -1470,6 +1521,7 @@ export class ClaudeCodeSession {
         planCompleted: this.planCompleted ? true : undefined,
         host: this._host ?? undefined,
         fromPlanSessionId: this.fromPlanSessionId,
+        forkedFromSessionId: this.forkedFromSessionId,
       })
     } catch (err) {
       log.session.warn('failed to persist session record', { sessionId: claudeSessionId, error: err instanceof Error ? err.message : String(err) })
@@ -1863,19 +1915,56 @@ export class SessionRunner {
     appendSystemPrompt?: string
     host?: string
     fromPlanSessionId?: string
+    forkedFromSessionId?: string
   }): Promise<{ claudeSessionId: string; title: string }> {
     // Route to SDK session server when available and connected
     if (this.sdkClient?.connected) {
       return this.handleStartSdk(data)
     }
 
+    const startTs = Date.now()
     const { sessionReady, title } = await this.handleStart(data)
+    const handleStartMs = Date.now() - startTs
+    if (handleStartMs > 2000) {
+      log.session.warn('handleStart took unexpectedly long', {
+        taskId: data.taskId,
+        host: data.host,
+        handleStartMs,
+      })
+    }
+
+    // Session init timeout:
+    // - Resume/fork sessions load full conversation history → 30-65s measured.
+    //   Fork injects history as appendSystemPrompt → large first API call.
+    // - Remote adds SSH/wssh overhead (~2-5s) + devdesk latency.
+    // - New local sessions are fast (~8-10s) but still need margin.
+    // Measured tonight: remote resume = 58.6s, local resume = 65s.
+    const isRemote = !!data.host
+    const initTimeoutMs = isRemote ? 180_000 : 120_000
+
+    let timer: ReturnType<typeof setTimeout>
     const claudeSessionId = await Promise.race([
       sessionReady,
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('session init timed out after 30s')), 30_000),
-      ),
-    ])
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          log.session.error(`session init timeout — ${initTimeoutMs / 1000}s exceeded`, {
+            taskId: data.taskId,
+            host: data.host,
+            isRemote,
+            totalElapsedMs: Date.now() - startTs,
+            handleStartMs,
+          })
+          reject(new Error(`session init timed out after ${initTimeoutMs / 1000}s`))
+        }, initTimeoutMs)
+      }),
+    ]).finally(() => clearTimeout(timer!))
+
+    log.session.info('session ready', {
+      claudeSessionId,
+      host: data.host,
+      totalStartMs: Date.now() - startTs,
+      handleStartMs,
+    })
     return { claudeSessionId, title }
   }
 
@@ -1890,6 +1979,7 @@ export class SessionRunner {
     appendSystemPrompt?: string
     host?: string
     fromPlanSessionId?: string
+    forkedFromSessionId?: string
   }): Promise<{ sessionReady: Promise<string>; title: string }> {
     const { taskId, project, mode, model } = data
     let cwd = data.cwd
@@ -1955,6 +2045,7 @@ export class SessionRunner {
     }
     const session = new ClaudeCodeSession(taskId, project ?? '', this.cliCommand)
     if (data.fromPlanSessionId) session.fromPlanSessionId = data.fromPlanSessionId
+    if (data.forkedFromSessionId) session.forkedFromSessionId = data.forkedFromSessionId
     this.sessions.set(mapKey, session)
 
     // Auto-generate title + description
@@ -2037,16 +2128,22 @@ export class SessionRunner {
 
     // Transfer local images to remote host before spawning session
     if (sshTarget) {
+      const imageTransferStart = Date.now()
       const remoteImagesDir = `/tmp/walnut-images/${crypto.randomBytes(8).toString('hex')}`
       try {
         message = await transferImagesForRemoteSession(message, sshTarget, remoteImagesDir)
         if (appendSystemPrompt) {
           appendSystemPrompt = await transferImagesForRemoteSession(appendSystemPrompt, sshTarget, remoteImagesDir)
         }
+        const imageTransferMs = Date.now() - imageTransferStart
+        if (imageTransferMs > 1000) {
+          log.session.info('remote image transfer completed', { host: data.host, imageTransferMs })
+        }
       } catch (err) {
         log.session.warn('image transfer to remote failed — proceeding without images', {
           host: data.host,
           error: err instanceof Error ? err.message : String(err),
+          imageTransferMs: Date.now() - imageTransferStart,
         })
       }
     }
