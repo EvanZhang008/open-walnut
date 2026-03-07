@@ -582,25 +582,26 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     }
   }, [messages, clear, onBatchCompleted]);
 
-  // Track which sessionId we last scrolled to bottom for — prevents stale-data scroll
-  // when sessionId changes without key (e.g., TaskDetailPage), and gates delayed retries.
+  // ═══════════════════════════════════════════════════════════════════════════
+  // AUTO-SCROLL SYSTEM — Simple & Robust
+  //
+  // Rule: keep scroll at bottom UNLESS the user explicitly scrolled up.
+  //
+  // Three pieces:
+  //  1. scrollToBottom() — the only scroll function, marks scroll as programmatic
+  //  2. Scroll event listener — detects user scroll-up, sets 15s lock
+  //  3. ResizeObserver — fires on ANY size change (content, sibling squeeze,
+  //     streaming, Phase 2 data, images loading) → scrolls to bottom if not locked
+  //
+  // That's it. No MutationObserver, no timers, no deadlines, no message counting.
+  // ═══════════════════════════════════════════════════════════════════════════
+
   const scrolledForSessionRef = useRef<string | null>(null);
-
-  // ── Smart auto-scroll refs (declared early so session-switch reset can clear them) ──
-  const userScrollLockUntil = useRef(0); // timestamp when lock expires
+  const userScrollLockUntil = useRef(0);
   const lastScrollTop = useRef(0);
-  const programmaticScrollUntil = useRef(0); // timestamp-based guard for programmatic scrolls
-  // Deadline for initial auto-scroll window — after initial scroll, we keep correcting
-  // for up to 2s to handle CSS transitions, Phase 2 data, initialPrompt, image loads.
-  const initialScrollDeadline = useRef(0);
-  // Track previous message count to detect Phase 2 replacing Phase 1 data.
-  // For remote sessions, Phase 1 returns a small set (e.g. 9 msgs from local streams file)
-  // and Phase 2 returns the full set (e.g. 87 msgs via SSH) seconds later.
-  const prevScrollMsgCount = useRef(0);
-  // Track previous clientHeight to detect container squeeze from sibling growth
-  const prevClientHeight = useRef(0);
+  const programmaticScrollUntil = useRef(0);
 
-  // Reset on session switch (consolidated — includes scroll flag + blockIndexMap + scroll lock)
+  // Reset on session switch
   useEffect(() => {
     setHistoryVersion(0);
     awaitingRefresh.current = false;
@@ -612,143 +613,38 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     userScrollLockUntil.current = 0;
     lastScrollTop.current = 0;
     programmaticScrollUntil.current = 0;
-    initialScrollDeadline.current = 0;
-    prevScrollMsgCount.current = 0;
-    prevClientHeight.current = 0;
     if (batchTimeoutRef.current) { clearTimeout(batchTimeoutRef.current); batchTimeoutRef.current = null; }
   }, [sessionId]);
 
   // Cleanup timeout on unmount
   useEffect(() => () => { if (batchTimeoutRef.current) clearTimeout(batchTimeoutRef.current); }, []);
 
-  // Helper: scroll to bottom and mark as programmatic (suppresses user-scroll detection for 100ms)
-  const scrollToBottom = (el: HTMLElement) => {
-    programmaticScrollUntil.current = Date.now() + 100;
+  // Helper: scroll to bottom, mark as programmatic for 150ms
+  const scrollToBottom = useCallback((el: HTMLElement) => {
+    programmaticScrollUntil.current = Date.now() + 150;
     el.scrollTop = el.scrollHeight;
     lastScrollTop.current = el.scrollTop;
-  };
+  }, []);
 
-  // Scroll to bottom on initial load AND when message count changes (Phase 2 data).
-  // useLayoutEffect fires BEFORE paint — prevents flash of wrong scroll position.
+  // ── 1. Initial scroll (before paint) ──
   useLayoutEffect(() => {
-    if (!loading && messages.length > 0 && containerRef.current) {
-      const el = containerRef.current;
-      const msgCountChanged = messages.length !== prevScrollMsgCount.current;
-      prevScrollMsgCount.current = messages.length;
-
-      if (scrolledForSessionRef.current !== sessionId) {
-        // First scroll for this session
-        scrolledForSessionRef.current = sessionId;
-        initialScrollDeadline.current = Date.now() + 2000;
-        scrollToBottom(el);
-      } else if (msgCountChanged && userScrollLockUntil.current < Date.now()) {
-        // Phase 2 replaced Phase 1 data (or batch-completed added messages).
-        // Re-scroll before paint so user never sees the wrong position.
-        scrollToBottom(el);
-      }
+    if (!loading && messages.length > 0 && containerRef.current
+      && scrolledForSessionRef.current !== sessionId) {
+      scrolledForSessionRef.current = sessionId;
+      scrollToBottom(containerRef.current);
     }
-  }, [loading, messages, sessionId]);
+  }, [loading, messages, sessionId, scrollToBottom]);
 
-  // ── Persistent ResizeObserver: maintain scroll-to-bottom when container resizes ──
-  // Sibling sections (UserMessagesSummary, SessionNotes, PlanPreviewSection) load
-  // asynchronously and grow, squeezing this container's clientHeight. When the container
-  // SHRINKS (siblings grew), re-scroll regardless of distance from bottom — the gap was
-  // caused by layout squeeze, not user scroll-up.
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el || scrolledForSessionRef.current !== sessionId) return;
-    prevClientHeight.current = el.clientHeight;
-
-    const ro = new ResizeObserver(() => {
-      const target = containerRef.current;
-      if (!target || target.scrollHeight <= target.clientHeight) return;
-      if (userScrollLockUntil.current > Date.now()) return;
-
-      const currentHeight = target.clientHeight;
-      const heightShrank = currentHeight < prevClientHeight.current;
-      prevClientHeight.current = currentHeight;
-
-      if (heightShrank) {
-        // Container squeezed by sibling growth — always re-scroll.
-        // The gap between scrollTop and the new bottom was caused by
-        // clientHeight shrinking, NOT by user scrolling up.
-        scrollToBottom(target);
-        return;
-      }
-
-      const nearBottom = target.scrollTop + target.clientHeight >= target.scrollHeight - SCROLL_THRESHOLD;
-      const stillAtTop = target.scrollTop === 0;
-      if (nearBottom || stillAtTop) scrollToBottom(target);
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [sessionId, messages]); // re-attach when session or content changes
-
-  // ── Initial-load MutationObserver ──
-  // During the 2s window after initial scroll, watch for DOM changes (new messages,
-  // images loading, initialPrompt appearing) and re-scroll reactively.
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el || scrolledForSessionRef.current !== sessionId) return;
-    if (!initialScrollDeadline.current) return;
-
-    // Past the deadline: do one final scroll correction and stop
-    if (Date.now() > initialScrollDeadline.current) {
-      if (userScrollLockUntil.current < Date.now()) {
-        scrollToBottom(el);
-      }
-      return;
-    }
-
-    const tryScroll = () => {
-      const target = containerRef.current;
-      if (!target || target.scrollHeight <= target.clientHeight) return;
-      if (userScrollLockUntil.current > Date.now()) return;
-      const nearBottom = target.scrollTop + target.clientHeight >= target.scrollHeight - SCROLL_THRESHOLD;
-      const stillAtTop = target.scrollTop === 0;
-      if (!nearBottom && !stillAtTop) return;
-      scrollToBottom(target);
-    };
-
-    // Immediate correction on this render
-    tryScroll();
-
-    // MutationObserver: fires when child elements change (new messages, initialPrompt, images)
-    const mo = new MutationObserver(tryScroll);
-    mo.observe(el, { childList: true, subtree: true });
-
-    // Auto-disconnect when deadline expires
-    const remaining = Math.max(100, initialScrollDeadline.current - Date.now() + 100);
-    const timer = setTimeout(() => {
-      mo.disconnect();
-      tryScroll();
-    }, remaining);
-
-    return () => {
-      mo.disconnect();
-      clearTimeout(timer);
-    };
-  }, [loading, messages, sessionId]);
-
-  // ── Smart auto-scroll: scroll to bottom on new content, but pause when user scrolls up ──
-  // When the user manually scrolls up, we lock auto-scroll for USER_SCROLL_LOCK_MS.
-  // After the lock expires, the next new content triggers auto-scroll to bottom.
-  // User scrolling back to bottom clears the lock immediately.
-
-  // Detect user scroll-up: set a 15s lock.
-  // Re-attaches when loading finishes (containerRef becomes available).
+  // ── 2. User scroll-up detection ──
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     const onScroll = () => {
-      // Ignore programmatic scrolls (timestamp-based guard, robust against multi-fire)
       if (Date.now() < programmaticScrollUntil.current) return;
       const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - SCROLL_THRESHOLD;
-      // User scrolled up away from bottom → lock auto-scroll
       if (!nearBottom && el.scrollTop < lastScrollTop.current) {
         userScrollLockUntil.current = Date.now() + USER_SCROLL_LOCK_MS;
       }
-      // User scrolled back to bottom manually → clear lock
       if (nearBottom) {
         userScrollLockUntil.current = 0;
       }
@@ -756,33 +652,32 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
-  }, [loading]); // re-run when loading finishes so containerRef.current is available
+  }, [loading]);
 
-  // Auto-scroll on new streaming content, respecting the user-scroll lock
-  const streamScrollRaf = useRef<number | null>(null);
+  // ── 3. ResizeObserver — the ONE mechanism that handles everything ──
+  // Fires when: messages render, Phase 2 replaces Phase 1, siblings load and
+  // squeeze the container, images load, streaming blocks arrive, CSS transitions.
+  // Always scrolls to bottom unless user scroll-lock is active.
   useEffect(() => {
-    if ((isStreaming || (optimisticMessages && optimisticMessages.length > 0)) && containerRef.current) {
-      if (streamScrollRaf.current !== null) cancelAnimationFrame(streamScrollRaf.current);
-      streamScrollRaf.current = requestAnimationFrame(() => {
-        streamScrollRaf.current = null;
-        const el = containerRef.current;
-        if (!el) return;
-        // If user-scroll lock is active, don't auto-scroll
-        if (userScrollLockUntil.current > Date.now()) return;
-        // Lock expired or never set → scroll to bottom
-        scrollToBottom(el);
-      });
+    const el = containerRef.current;
+    if (!el || scrolledForSessionRef.current !== sessionId) return;
+
+    const ro = new ResizeObserver(() => {
+      const target = containerRef.current;
+      if (!target || target.scrollHeight <= target.clientHeight) return;
+      if (userScrollLockUntil.current > Date.now()) return;
+      scrollToBottom(target);
+    });
+
+    // Observe the scroll container (catches clientHeight changes from sibling squeeze)
+    ro.observe(el);
+    // Observe the inner content wrapper if it exists (catches scrollHeight changes)
+    for (const child of el.children) {
+      ro.observe(child);
     }
-  }, [blocks, isStreaming, optimisticMessages]);
 
-  useEffect(() => {
-    return () => {
-      if (streamScrollRaf.current !== null) {
-        cancelAnimationFrame(streamScrollRaf.current);
-        streamScrollRaf.current = null;
-      }
-    };
-  }, []);
+    return () => ro.disconnect();
+  }, [sessionId, messages, blocks, scrollToBottom]);
 
   // ── Deduplicate optimistic messages against persisted history ──
   // Non-committed messages: only dedup against NEWLY APPEARED messages ([prevMsgLen..length)).
