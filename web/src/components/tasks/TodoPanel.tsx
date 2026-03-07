@@ -1420,14 +1420,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       }
     }
 
-    // Expand collapsed parent if focused task is a child
+    // Expand collapsed parent if focused task is a child (temporary — not persisted,
+    // so parents collapse back on page reload unless user manually expanded them)
     if (task.parent_task_id) {
       const parentTask = tasks.find((t) => t.id.startsWith(task.parent_task_id!));
       if (parentTask && !expandedParents.has(parentTask.id)) {
         setExpandedParents((prev) => {
           const next = new Set(prev);
           next.add(parentTask.id);
-          persistSet(LS_EXPANDED_PARENTS_KEY, next);
+          // Don't persist — only manual chevron clicks save to localStorage
           return next;
         });
       }
