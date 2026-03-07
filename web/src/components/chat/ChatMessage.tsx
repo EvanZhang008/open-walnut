@@ -982,12 +982,22 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
       // User messages: preserve ALL newlines exactly as typed (no markdown collapsing)
       // AI messages + triage user entries: full markdown rendering
       let displayContent = content;
-      // Triage messages: strip internal reasoning — only show up to the → AI: summary line
+      // Triage messages: strip internal reasoning — only show up to the notification summary
       if (source === 'triage') {
-        const notifyIdx = displayContent.indexOf('> **→ AI:**');
+        const notifyIdx = displayContent.indexOf('**Main AI Notification:**');
         if (notifyIdx !== -1) {
-          // Keep header + → AI: line, strip everything after (internal reasoning)
-          const afterNotify = displayContent.indexOf('\n', notifyIdx);
+          // Keep header + notification label + the notification text, strip everything after
+          const afterLabel = notifyIdx + '**Main AI Notification:**'.length;
+          const rest = displayContent.slice(afterLabel);
+          // Find the notification text (first non-empty paragraph after label)
+          const paragraphs = rest.split(/\n\n+/);
+          const notifyText = paragraphs.find(p => p.trim())?.trim() ?? '';
+          displayContent = displayContent.slice(0, notifyIdx) + '**Main AI Notification:**\n\n' + notifyText;
+        }
+        // Legacy compat: old format with → AI:
+        const legacyIdx = displayContent.indexOf('> **→ AI:**');
+        if (legacyIdx !== -1) {
+          const afterNotify = displayContent.indexOf('\n', legacyIdx);
           if (afterNotify !== -1) {
             displayContent = displayContent.slice(0, afterNotify).trimEnd();
           }
@@ -1099,7 +1109,14 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
       const legacyRefMatch = !xmlRefMatch ? content.match(/\[([^|\]]+)\|([^\]]+)\]/) : null;
       const taskLabel = xmlRefMatch?.[1] ?? legacyRefMatch?.[2] ?? '';
 
-      // Extract → AI notification message (unified-path triage with notify)
+      // Extract notification message (unified-path triage with notify)
+      const notifyLabelIdx = content.indexOf('**Main AI Notification:**');
+      if (notifyLabelIdx !== -1) {
+        const afterLabel = content.slice(notifyLabelIdx + '**Main AI Notification:**'.length);
+        const msg = afterLabel.split(/\n\n+/).find(p => p.trim())?.trim() ?? '';
+        if (msg) return taskLabel ? `${taskLabel} — ${msg}`.slice(0, 200) : msg.slice(0, 200);
+      }
+      // Legacy compat: old → AI: format
       const notifyMatch = content.match(/>\s*\*\*→ AI:\*\*\s*(.+)/);
       if (notifyMatch) {
         const msg = notifyMatch[1].trim();

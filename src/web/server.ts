@@ -999,8 +999,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           // No tag:"ui" entry — the tag:"ai" entry IS the display.
           // Push the triage prompt to browser immediately (before agent runs),
           // so the user sees "TRIAGE (collapsed)" while the AI is thinking.
-          // User sees ONLY the → AI summary line — no internal triage reasoning
-          const triageContent = `**Triage** (${displayTaskRef}):\n\n> **→ AI:** ${triageUpdate}`
+          // User sees ONLY the notification summary — no internal triage reasoning
+          const triageContent = `**Triage** (${displayTaskRef}):\n\n**Main AI Notification:**\n\n${triageUpdate}`
           log.web.info('triage will notify main agent (unified path)', { taskId, triageUpdate: triageUpdate.slice(0, 200) })
 
           bus.emit(EventNames.CHAT_HISTORY_UPDATED, {
@@ -1043,8 +1043,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
                 broadcastEvent('agent:response', { text: agentResult.response, source: 'triage' })
               }
               const newApiMsgs = agentResult.messages.slice(history.length)
-              // displayText: user sees only the → AI summary, not internal triage reasoning
-              const displayText = `**Triage** (${displayTaskRef}):\n\n> **→ AI:** ${triageUpdate}`
+              // displayText: user sees only the notification summary, not internal triage reasoning
+              const displayText = `**Triage** (${displayTaskRef}):\n\n**Main AI Notification:**\n\n${triageUpdate}`
               await chatHistory.addAIMessages(newApiMsgs, { source: 'triage', displayText, taskId })
               log.web.info('triage main agent done', { taskId, newMessages: newApiMsgs.length })
               triggerBackgroundCompaction('triage')

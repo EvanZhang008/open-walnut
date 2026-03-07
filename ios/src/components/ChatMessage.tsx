@@ -42,7 +42,14 @@ function extractCollapsedSummary(text: string): string {
     const taskName = triageTaskMatch[1]
     // Try to find a brief summary after the task name
     const afterHeader = text.slice(triageTaskMatch.index! + triageTaskMatch[0].length)
-    // Look for "→ AI:" notify message
+    // Look for "Main AI Notification:" notify message
+    const notifyLabelIdx = afterHeader.indexOf('**Main AI Notification:**')
+    if (notifyLabelIdx !== -1) {
+      const rest = afterHeader.slice(notifyLabelIdx + '**Main AI Notification:**'.length)
+      const msg = rest.split(/\n\n+/).find(p => p.trim())?.trim() ?? ''
+      if (msg) return `${taskName} — ${msg}`.slice(0, 150)
+    }
+    // Legacy compat: old → AI: format
     const notifyMatch = afterHeader.match(/>\s*\*\*→ AI:\*\*\s*(.+)/)
     if (notifyMatch) return `${taskName} — ${notifyMatch[1].trim()}`.slice(0, 150)
     // Look for classification
@@ -67,9 +74,18 @@ function extractCollapsedSummary(text: string): string {
   return firstLine.replace(/\*\*/g, '').replace(/\*/g, '').slice(0, 120)
 }
 
-/** For triage messages, strip internal reasoning — only show up to the → AI: summary line */
+/** For triage messages, strip internal reasoning — only show up to the notification summary */
 function stripTriageReasoning(text: string, source?: string): string {
   if (source !== 'triage') return text
+  // New format: **Main AI Notification:**
+  const newNotifyIdx = text.indexOf('**Main AI Notification:**')
+  if (newNotifyIdx !== -1) {
+    const afterLabel = text.slice(newNotifyIdx + '**Main AI Notification:**'.length)
+    const paragraphs = afterLabel.split(/\n\n+/)
+    const notifyText = paragraphs.find(p => p.trim())?.trim() ?? ''
+    return text.slice(0, newNotifyIdx) + '**Main AI Notification:**\n\n' + notifyText
+  }
+  // Legacy compat: old → AI: format
   const notifyIdx = text.indexOf('> **→ AI:**')
   if (notifyIdx === -1) return text
   const afterNotify = text.indexOf('\n', notifyIdx)
