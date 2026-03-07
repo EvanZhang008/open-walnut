@@ -5,8 +5,9 @@ For architecture overview and tool table, see project `CLAUDE.md`.
 ## Agent Loop Internals
 
 - **Entry**: `runAgentLoop()` at `src/agent/loop.ts`
-- **Model**: Bedrock `global.anthropic.claude-opus-4-6-v1` via `src/agent/model.ts`
-- **Auth**: Bearer token from `config.yaml` (`provider.bedrock_bearer_token`), falls back to `AWS_BEARER_TOKEN_BEDROCK` env var, then standard AWS credential chain. Auto-recreates client on 403 (expired credentials) with one retry.
+- **Model**: Default `global.anthropic.claude-opus-4-6-v1` via `src/agent/model.ts` (thin dispatcher through provider registry)
+- **Providers**: Multi-provider system at `src/agent/providers/`. Providers are config (YAML), protocols are code (adapters). Registry resolves `config.providers[name]` → protocol adapter. Two adapters: `bedrock` (AWS Bedrock SDK), `anthropic-messages` (direct Anthropic API). Falls back to Bedrock from legacy config when no `providers` section exists. Shared retry logic in `retry.ts`.
+- **Auth**: Per-provider. Bedrock: bearer token from `config.yaml` → `AWS_BEARER_TOKEN_BEDROCK` env → AWS credential chain, auto-recreates on 403. Anthropic: API key from config → `ANTHROPIC_API_KEY` env. Secret resolution supports `${env:VAR}` syntax and auto-detection.
 - **Retry**: Aggressive retry on 429 (rate limit), 529 (overloaded), 503 (service unavailable) — up to 10 retries with exponential backoff (1s→60s cap, ±30% jitter), respects `retry-after` header, abort-signal aware. Both `sendMessage()` and `sendMessageStream()` retry transparently.
 - **Streaming**: Always uses `sendMessageStream()` — non-streaming calls can timeout on long responses. Supports `onTextDelta` callback for real-time token delivery.
 - **Abort**: Accepts an `AbortSignal` via `options.signal`. Checked before each model call and before each tool execution. Aborted tools return `[Aborted by user]`.
