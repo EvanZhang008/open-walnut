@@ -580,6 +580,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   const pendingEmbedTaskIds = new Set<string>()
   const failedEmbedTaskIds = new Set<string>() // retry queue for failed embeddings
   let embeddingRetryTimer: ReturnType<typeof setTimeout> | null = null
+  let embeddingRetryDelay = 60_000 // starts at 60s, doubles each failure, caps at 5min
 
   bus.subscribe('embedding-sync', async (event) => {
     if (event.name !== EventNames.TASK_CREATED && event.name !== EventNames.TASK_UPDATED) return
@@ -594,6 +595,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
       let failedCount = 0
       let embeddedCount = 0
+      const succeededIds = new Set<string>()
       try {
         const { embedSingleTask } = await import('../core/embedding/pipeline.js')
         const { getTask: getTaskById } = await import('../core/task-manager.js')
@@ -606,6 +608,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
               failedEmbedTaskIds.add(id)
             } else if (result === 'embedded') {
               embeddedCount++
+              succeededIds.add(id)
               failedEmbedTaskIds.delete(id) // clear from retry queue on success
             }
           } catch (err) {
@@ -617,8 +620,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         log.memory.warn(`Embedding pipeline error: ${msg}`)
-        failedCount = ids.length
-        for (const id of ids) failedEmbedTaskIds.add(id)
+        failedCount = ids.length - embeddedCount
+        for (const id of ids) {
+          if (!succeededIds.has(id)) failedEmbedTaskIds.add(id)
+        }
       }
 
       if (embeddedCount > 0) {
@@ -628,7 +633,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // Update health if incremental embedding failed
       if (failedCount > 0) {
         log.memory.warn(`Incremental embedding: ${failedCount} task(s) failed — queued for retry`)
-        systemHealth.embedding.unindexed += failedCount
+        systemHealth.embedding.unindexed = failedEmbedTaskIds.size
         systemHealth.embedding.ollamaAvailable = false
         broadcastEvent('system:health', systemHealth)
         scheduleEmbeddingRetry()
@@ -636,7 +641,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     }, 500) // 500ms debounce
   })
 
-  // Retry failed embeddings after 60s — gives Ollama time to come back up
+  // Retry failed embeddings with exponential backoff (60s -> 120s -> 240s -> 300s cap)
   function scheduleEmbeddingRetry(): void {
     if (embeddingRetryTimer) return // already scheduled
     embeddingRetryTimer = setTimeout(async () => {
@@ -644,7 +649,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       if (failedEmbedTaskIds.size === 0) return
 
       const ids = [...failedEmbedTaskIds]
-      log.memory.info(`Retrying embedding for ${ids.length} task(s)...`)
+      log.memory.info(`Retrying embedding for ${ids.length} task(s) (delay was ${embeddingRetryDelay / 1000}s)...`)
 
       try {
         const { embedSingleTask } = await import('../core/embedding/pipeline.js')
@@ -671,16 +676,21 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           log.memory.info(`Embedding retry: ${retrySuccess} task(s) recovered`)
           // Update health — run full reconcile count
           reconcileEmbeddingsBackground()
+          embeddingRetryDelay = 60_000 // reset backoff on success
         }
         if (retryFail > 0) {
-          log.memory.warn(`Embedding retry: ${retryFail} task(s) still failing — will retry on next reconciliation`)
-          // Don't schedule infinite retries — reconcileEmbeddingsBackground will catch them
+          log.memory.warn(`Embedding retry: ${retryFail} task(s) still failing — scheduling another retry`)
+          embeddingRetryDelay = Math.min(embeddingRetryDelay * 2, 300_000) // double delay, cap at 5min
+          scheduleEmbeddingRetry()
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         log.memory.warn(`Embedding retry failed: ${msg}`)
+        // Outer failure (e.g. dynamic import failed) — also retry with backoff
+        embeddingRetryDelay = Math.min(embeddingRetryDelay * 2, 300_000)
+        scheduleEmbeddingRetry()
       }
-    }, 60_000)
+    }, embeddingRetryDelay)
   }
 
   // -- Heartbeat config reload: restart runner when heartbeat config changes --
@@ -954,81 +964,103 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         const triageUpdate = notification?.trim() ?? ''
         const willNotifyMainAgent = !!(triageUpdate && taskId)
 
-        // notification: true → "UI Only" badge (main agent can't see it)
-        // notification: false → no badge (main agent will be notified and respond)
-        const triageContent = `**Triage** (${subagentTaskRef ?? `[${taskId}]`}):\n\n${cleanedResult}`
+        // Build display-safe task ref (uses <task-ref> XML tag for clickable link rendering)
+        let displayTaskRef: string
+        try {
+          const refTask = await getTask(taskId)
+          const refLabel = refTask.project && refTask.project !== refTask.category
+            ? `${refTask.project} / ${refTask.title}` : refTask.title
+          displayTaskRef = `<task-ref id="${taskId}" label="${refLabel}"/>`
+        } catch {
+          displayTaskRef = taskId
+        }
         const triageTimestamp = new Date().toISOString()
-        const notifyContent = triageUpdate || undefined
-        await chatHistory.addNotification({
-          role: 'assistant', content: triageContent,
-          source: 'triage', notification: !willNotifyMainAgent, taskId,
-          sessionId: runId,
-          timestamp: triageTimestamp,
-          notifyContent,
-        })
-        log.web.info('triage notification saved to chat', { taskId, sessionId: runId, willNotifyMainAgent })
-
-        // Push compact notification directly to browser (no extra HTTP round-trip)
-        bus.emit(EventNames.CHAT_HISTORY_UPDATED, {
-          entry: { role: 'assistant', content: triageContent, source: 'triage', notification: !willNotifyMainAgent, taskId, sessionId: runId, timestamp: triageTimestamp, notifyContent },
-        }, ['web-ui'])
 
         // Wake heartbeat after session triage
         if (heartbeatHandle) {
           heartbeatHandle.requestNow('session-ended', `Session for task ${taskId} just completed and was triaged.`)
         }
-        if (willNotifyMainAgent) {
-          log.web.info('triage wants to notify main agent', { taskId, triageUpdate: triageUpdate.slice(0, 200) })
 
-          // Fire-and-forget: enqueue a main agent turn with task note + triage update
-          void enqueueMainAgentTurn('triage:notify', async () => {
+        if (willNotifyMainAgent) {
+          // ── Unified path: AI and human see the same entry ──
+          // No tag:"ui" entry — the tag:"ai" entry IS the display.
+          // Push the triage prompt to browser immediately (before agent runs),
+          // so the user sees "TRIAGE (collapsed)" while the AI is thinking.
+          // triageContent includes the notify message prominently as a blockquote
+          const triageContent = `**Triage** (${displayTaskRef}):\n\n> **→ AI:** ${triageUpdate}\n\n${cleanedResult}`
+          log.web.info('triage will notify main agent (unified path)', { taskId, triageUpdate: triageUpdate.slice(0, 200) })
+
+          bus.emit(EventNames.CHAT_HISTORY_UPDATED, {
+            entry: { role: 'user', content: triageContent, source: 'triage', taskId, timestamp: triageTimestamp },
+          }, ['web-ui'])
+
+          // Fire-and-forget: enqueue a main agent turn with full triage analysis
+          void enqueueMainAgentTurn('triage', async () => {
             try {
               const task = await getTask(taskId)
               const taskNote = task?.note ?? '(no note yet)'
               const taskTitle = task ? `${task.project ?? task.category} / ${task.title}` : taskId
               const taskRef = task ? `[${task.id}]` : `[${taskId}]`
 
-              const prompt = `[Triage Notification] Task "${taskTitle}" ${taskRef}\n\n<task_note>\n${taskNote}\n</task_note>\n\n<triage_update>\n${triageUpdate}\n</triage_update>\n\nInform the user concisely (2-4 sentences) about this task's status.\nFocus on what the triage update says — that's the new information.\nThe task note provides full context if needed.\nDo not use tools.`
+              // AI gets full triage content + task context; displayText shows the triage analysis
+              const prompt = `[Triage Update] Task "${taskTitle}" ${taskRef}\n\n${cleanedResult}\n\n<task_note>\n${taskNote}\n</task_note>\n\nInform the user concisely (2-4 sentences) about this task's status.\nFocus on what the triage analysis says — that's the new information.\nThe task note provides full context if needed.\nDo not use tools.`
 
               const { runAgentLoop } = await import('../agent/loop.js')
               const { estimateMessagesTokens } = await import('../core/daily-log.js')
               const history = await chatHistory.getApiMessages()
               const historyTokens = estimateMessagesTokens(history)
-              log.web.info('triage:notify main agent turn starting', {
+              log.web.info('triage main agent turn starting', {
                 taskId,
                 historyMessages: history.length,
                 historyTokens: `~${Math.round(historyTokens / 1000)}K`,
               })
 
               const agentResult = await runAgentLoop(prompt, history, {
-                onTextDelta: (delta) => broadcastEvent('agent:text-delta', { delta, source: 'triage-notify' }),
+                onTextDelta: (delta) => broadcastEvent('agent:text-delta', { delta, source: 'triage' }),
                 onThinking: (text) => broadcastEvent('agent:thinking', { text }),
                 onToolCall: (toolName, input) => broadcastEvent('agent:tool-call', { toolName, input }),
                 onToolResult: (toolName, result) => broadcastEvent('agent:tool-result', { toolName, result }),
                 onToolActivity: (activity) => broadcastEvent('agent:tool-activity', activity),
                 onUsage: (u) => {
-                  try { usageTracker.record({ source: 'triage-notify', model: u.model ?? 'unknown', input_tokens: u.input_tokens, output_tokens: u.output_tokens, cache_creation_input_tokens: u.cache_creation_input_tokens, cache_read_input_tokens: u.cache_read_input_tokens }) } catch {}
+                  try { usageTracker.record({ source: 'triage', model: u.model ?? 'unknown', input_tokens: u.input_tokens, output_tokens: u.output_tokens, cache_creation_input_tokens: u.cache_creation_input_tokens, cache_read_input_tokens: u.cache_read_input_tokens }) } catch {}
                 },
-              }, { source: 'triage-notify' })
+              }, { source: 'triage' })
 
               if (agentResult.response) {
-                broadcastEvent('agent:response', { text: agentResult.response, source: 'triage-notify' })
+                broadcastEvent('agent:response', { text: agentResult.response, source: 'triage' })
               }
               const newApiMsgs = agentResult.messages.slice(history.length)
-              await chatHistory.addAIMessages(newApiMsgs, { source: 'triage-notify' })
-              log.web.info('triage:notify main agent done', { taskId, newMessages: newApiMsgs.length })
-              triggerBackgroundCompaction('triage:notify')
+              // displayText: browser shows triage analysis with notify message; AI sees full prompt with task context
+              const displayText = `**Triage** (${displayTaskRef}):\n\n> **→ AI:** ${triageUpdate}\n\n${cleanedResult}`
+              await chatHistory.addAIMessages(newApiMsgs, { source: 'triage', displayText, taskId })
+              log.web.info('triage main agent done', { taskId, newMessages: newApiMsgs.length })
+              triggerBackgroundCompaction('triage')
             } catch (err) {
               const errMsg = err instanceof Error ? err.message : String(err)
-              log.web.error('triage:notify main agent failed', { taskId, error: errMsg })
+              log.web.error('triage main agent failed', { taskId, error: errMsg })
               broadcastEvent('agent:error', { error: `Triage notify failed for task ${taskId}: ${errMsg}` })
               await chatHistory.addNotification({
                 role: 'assistant',
-                content: `**Triage Notify Error** (${taskId}): ${errMsg}`,
+                content: `**Triage Error** (${taskId}): ${errMsg}`,
                 source: 'agent-error', notification: true,
               })
             }
           })
+        } else {
+          // ── UI-only path: no notify, just display the triage result ──
+          // notification: true → "UI Only" badge
+          const triageContent = `**Triage** (${displayTaskRef}):\n\n${cleanedResult}`
+          await chatHistory.addNotification({
+            role: 'assistant', content: triageContent,
+            source: 'triage', notification: true, taskId,
+            sessionId: runId,
+            timestamp: triageTimestamp,
+          })
+          log.web.info('triage notification saved to chat (UI only)', { taskId, sessionId: runId })
+
+          bus.emit(EventNames.CHAT_HISTORY_UPDATED, {
+            entry: { role: 'assistant', content: triageContent, source: 'triage', notification: true, taskId, sessionId: runId, timestamp: triageTimestamp },
+          }, ['web-ui'])
         }
 
         // Safety net: if triage completed but task is still at AGENT_COMPLETE,

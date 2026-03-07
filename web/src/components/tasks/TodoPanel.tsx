@@ -2578,7 +2578,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
               const searchChildIds = new Set<string>();
               const searchChildCount = new Map<string, number>();
               const searchChildParent = new Map<string, string>();
-              const searchIds = new Set(searchFiltered.map(t => t.id));
               for (const task of searchFiltered) {
                 if (task.parent_task_id) {
                   const parent = searchFiltered.find(t => t.id.startsWith(task.parent_task_id!));
@@ -2617,7 +2616,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                 // Relevance divider: show once when score drops below 0.4
                 const score = searchMeta.get(task.id)?.score;
                 let divider: ReactNode = null;
-                if (!relevanceDividerShown && score != null && score < 0.4) {
+                if (!relevanceDividerShown && score != null && score < 0.4 && !searchChildIds.has(task.id)) {
                   relevanceDividerShown = true;
                   divider = (
                     <div key="__relevance-divider" className="search-relevance-divider">
