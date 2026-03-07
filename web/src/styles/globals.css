@@ -5164,23 +5164,22 @@ img[data-lightbox-src],
 
 /* Relevance divider — separates high-relevance from low-relevance search results */
 .search-relevance-divider {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px 2px;
+  position: relative;
+  margin: 8px 0 4px;
+  border-top: 1px solid var(--border);
+}
+.search-relevance-divider span {
+  position: absolute;
+  top: -1px;
+  left: 12px;
+  transform: translateY(-50%);
+  padding: 0 6px;
+  background: var(--bg-primary);
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
   color: var(--fg-muted);
-  font-size: 11px;
-  letter-spacing: 0.03em;
-}
-.search-relevance-divider::before,
-.search-relevance-divider::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: var(--border);
-}
-.search-relevance-divider::before {
-  flex: 0 0 8px;
 }
 
 /* Flat mode (ungrouped) list container */
