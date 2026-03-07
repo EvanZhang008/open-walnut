@@ -31,10 +31,10 @@ const SS_CHAT_VISIBLE_KEY = 'walnut-home-chat-visible';
 // Legacy key for migration
 const SS_SESSION_KEY_LEGACY = 'walnut-home-session-panel';
 
-// ── Session column queue helpers (max 3, or max 2 if triage open) ──
+// ── Session column queue helpers (max 2, or max 1 if triage open) ──
 
-const MAX_COLUMNS = 3;
-const SESSION_WIDTH_BY_COUNT = [0, 40, 65, 65]; // 1=40%, 2&3=65% (max width)
+const MAX_COLUMNS = 2;
+const SESSION_WIDTH_BY_COUNT = [0, 40, 65]; // 1=40%, 2=65% (max width)
 
 function addSessionColumn(cols: string[], id: string, triageOpen: boolean): string[] {
   const max = triageOpen ? MAX_COLUMNS - 1 : MAX_COLUMNS;
@@ -95,7 +95,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     () => sessionStorage.getItem(SS_CHAT_VISIBLE_KEY) !== 'false'
   );
 
-  // Session columns state — up to 3 sessions displayed side by side
+  // Session columns state — up to 2 sessions displayed side by side
   const [sessionColumns, setSessionColumns] = useState<string[]>(loadSessionColumns);
 
   // Triage panel state — shares the first column slot with sessions
@@ -124,7 +124,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     const count = sessionColumns.length + (triagePanelOpen ? 1 : 0);
     if (count === prevColCountRef.current) return;
     prevColCountRef.current = count;
-    if (count > 0) sessionPanel.setPct(SESSION_WIDTH_BY_COUNT[Math.min(count, 3)]);
+    if (count > 0) sessionPanel.setPct(SESSION_WIDTH_BY_COUNT[Math.min(count, 2)]);
   }, [sessionColumns.length, triagePanelOpen, sessionPanel.setPct]);
 
   // Keep focusedTask in sync with latest data from tasks array (handles WS updates from other sources)
@@ -529,7 +529,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         <div className="session-resize-handle" onMouseDown={sessionPanel.handleResizeStart} />
       )}
 
-      {/* Sessions Area — triage (first slot) + up to 3 session columns */}
+      {/* Sessions Area — triage (first slot) + up to 2 session columns */}
       <div
         ref={sessionPanel.panelRef}
         className={`main-page-sessions-area${sessionColumns.length === 0 && !triagePanelOpen ? ' collapsed' : ''}`}
