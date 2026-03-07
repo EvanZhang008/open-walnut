@@ -5166,12 +5166,11 @@ img[data-lightbox-src],
 .search-relevance-divider {
   display: flex;
   justify-content: center;
-  padding: 6px 0;
+  padding: 3px 0;
+  border-radius: 6px;
+  background: var(--border);
 }
 .search-relevance-divider span {
-  padding: 2px 12px;
-  border-radius: 10px;
-  background: var(--border);
   font-size: 10px;
   font-weight: 500;
   text-transform: uppercase;
