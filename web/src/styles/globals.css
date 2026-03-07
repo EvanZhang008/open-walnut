@@ -3118,31 +3118,6 @@ input:focus, textarea:focus, select:focus {
   white-space: nowrap;
 }
 
-/* Triage notification callout — shows what was sent to the AI */
-.chat-triage-notify-callout {
-  margin: 6px 0 10px;
-  padding: 8px 12px;
-  border-left: 3px solid var(--accent);
-  background: color-mix(in srgb, var(--accent) 6%, transparent);
-  border-radius: 0 6px 6px 0;
-  font-size: 0.85em;
-}
-
-.chat-triage-notify-label {
-  font-size: 0.75em;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--accent);
-  margin-bottom: 3px;
-}
-
-.chat-triage-notify-text {
-  color: var(--text-primary);
-  line-height: 1.45;
-  white-space: pre-wrap;
-}
-
 /* Collapsed summary text — wraps up to 2 lines, then clamps with ellipsis */
 .chat-collapsed-summary {
   font-size: 0.8em;
@@ -5187,6 +5162,27 @@ img[data-lightbox-src],
   padding: 4px 0;
 }
 
+/* Relevance divider — separates high-relevance from low-relevance search results */
+.search-relevance-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 2px;
+  color: var(--fg-muted);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+}
+.search-relevance-divider::before,
+.search-relevance-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+.search-relevance-divider::before {
+  flex: 0 0 8px;
+}
+
 /* Flat mode (ungrouped) list container */
 .todo-flat-results {
   padding: 4px 0;
@@ -5496,7 +5492,7 @@ img[data-lightbox-src],
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  padding: 10px 8px;
+  padding: 6px 8px;
   border-bottom: 1px solid var(--border);
   cursor: pointer;
   transition: background 0.15s;
@@ -5541,30 +5537,28 @@ img[data-lightbox-src],
   white-space: nowrap;
 }
 
-/* Parent task expand/collapse chevron (front of row, like category/project arrows) */
+/* Parent task expand/collapse chevron — inline before the title text */
 .task-parent-expand {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
   flex-shrink: 0;
+  width: 14px;
+  height: 16px;
   background: none;
   border: none;
-  border-radius: 3px;
   padding: 0;
+  margin: 1px 2px 0 0;
   cursor: pointer;
-  font-size: 8px;
-  color: var(--fg-muted);
-  transition: color 0.15s, background 0.15s;
-  margin-right: -2px;
+  font-size: 10px;
+  color: var(--fg-tertiary);
+  transition: color 0.15s;
 }
 .task-parent-expand:hover {
   color: var(--accent);
-  background: rgba(0, 122, 255, 0.08);
 }
 .task-parent-expand.expanded {
-  color: var(--accent);
+  color: var(--fg-muted);
 }
 .task-children-badge {
   font-size: 10px;
@@ -5606,7 +5600,7 @@ img[data-lightbox-src],
 
 .todo-item-title-row {
   display: flex;
-  align-items: baseline;
+  align-items: first baseline;
 }
 
 .task-attention-dot {

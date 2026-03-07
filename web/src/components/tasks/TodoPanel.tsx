@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect, useRef, memo, type FormEvent, type CSSProperties, type ReactNode } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef, memo, Fragment, type FormEvent, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Task } from '@walnut/core';
 import type { SessionRecord } from '@walnut/core';
@@ -436,15 +436,6 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount
       onKeyDown={(e) => { if (e.key === 'Enter' && !isEditing) onClick(); }}
     >
       <span className="drag-handle" {...attributes} {...listeners}>&#x2807;</span>
-      {!!childCount && childCount > 0 && (
-        <button
-          className={`task-parent-expand${isExpanded ? ' expanded' : ''}`}
-          title={isExpanded ? 'Collapse child tasks' : `Expand ${childCount} child task(s)`}
-          onClick={(e) => { e.stopPropagation(); onToggleExpand?.(); }}
-        >
-          {isExpanded ? '\u25BC' : '\u25B6'}
-        </button>
-      )}
       <div className="phase-picker-wrapper" ref={phaseWrapperRef}>
         <button
           className={`task-status-btn task-status-${task.status} task-phase-${task.phase?.toLowerCase()}`}
@@ -481,6 +472,15 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount
       </div>
       <div className="todo-item-content">
         <div className="todo-item-title-row">
+          {!!childCount && childCount > 0 && (
+            <button
+              className={`task-parent-expand${isExpanded ? ' expanded' : ''}`}
+              title={isExpanded ? 'Collapse child tasks' : `Expand ${childCount} child task(s)`}
+              onClick={(e) => { e.stopPropagation(); onToggleExpand?.(); }}
+            >
+              {isExpanded ? '\u25BE' : '\u25B8'}
+            </button>
+          )}
           <span
             ref={titleRef}
             className={`todo-item-title${isEditing ? ' editing' : ''}`}
@@ -2609,11 +2609,25 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
               for (const task of searchFiltered) {
                 if (!emitted.has(task.id)) ordered.push(task);
               }
+              let relevanceDividerShown = false;
               return ordered.map((task) => {
                 // Hide children of collapsed parents
                 const searchParentId = searchChildParent.get(task.id);
                 if (searchParentId && !expandedParents.has(searchParentId)) return null;
+                // Relevance divider: show once when score drops below 0.4
+                const score = searchMeta.get(task.id)?.score;
+                let divider: ReactNode = null;
+                if (!relevanceDividerShown && score != null && score < 0.4) {
+                  relevanceDividerShown = true;
+                  divider = (
+                    <div key="__relevance-divider" className="search-relevance-divider">
+                      <span>Less relevant</span>
+                    </div>
+                  );
+                }
                 return (
+                  <Fragment key={task.id}>
+                  {divider}
                   <SortableTaskItem
                     key={task.id}
                     task={task}
@@ -2639,6 +2653,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     searchKeywordScore={searchMeta.get(task.id)?.keywordScore}
                     searchSemanticScore={searchMeta.get(task.id)?.semanticScore}
                   />
+                  </Fragment>
                 );
               });
             })()}
