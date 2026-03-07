@@ -597,6 +597,8 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
   // For remote sessions, Phase 1 returns a small set (e.g. 9 msgs from local streams file)
   // and Phase 2 returns the full set (e.g. 87 msgs via SSH) seconds later.
   const prevScrollMsgCount = useRef(0);
+  // Track previous clientHeight to detect container squeeze from sibling growth
+  const prevClientHeight = useRef(0);
 
   // Reset on session switch (consolidated — includes scroll flag + blockIndexMap + scroll lock)
   useEffect(() => {
@@ -612,6 +614,7 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     programmaticScrollUntil.current = 0;
     initialScrollDeadline.current = 0;
     prevScrollMsgCount.current = 0;
+    prevClientHeight.current = 0;
     if (batchTimeoutRef.current) { clearTimeout(batchTimeoutRef.current); batchTimeoutRef.current = null; }
   }, [sessionId]);
 
@@ -648,17 +651,31 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
 
   // ── Persistent ResizeObserver: maintain scroll-to-bottom when container resizes ──
   // Sibling sections (UserMessagesSummary, SessionNotes, PlanPreviewSection) load
-  // asynchronously and grow, squeezing this container's clientHeight. A time-limited
-  // observer window (2s) misses late-loading siblings. This persistent observer keeps
-  // scroll at bottom whenever the container resizes, unless the user scrolled up.
+  // asynchronously and grow, squeezing this container's clientHeight. When the container
+  // SHRINKS (siblings grew), re-scroll regardless of distance from bottom — the gap was
+  // caused by layout squeeze, not user scroll-up.
   useEffect(() => {
     const el = containerRef.current;
     if (!el || scrolledForSessionRef.current !== sessionId) return;
+    prevClientHeight.current = el.clientHeight;
 
     const ro = new ResizeObserver(() => {
       const target = containerRef.current;
       if (!target || target.scrollHeight <= target.clientHeight) return;
       if (userScrollLockUntil.current > Date.now()) return;
+
+      const currentHeight = target.clientHeight;
+      const heightShrank = currentHeight < prevClientHeight.current;
+      prevClientHeight.current = currentHeight;
+
+      if (heightShrank) {
+        // Container squeezed by sibling growth — always re-scroll.
+        // The gap between scrollTop and the new bottom was caused by
+        // clientHeight shrinking, NOT by user scrolling up.
+        scrollToBottom(target);
+        return;
+      }
+
       const nearBottom = target.scrollTop + target.clientHeight >= target.scrollHeight - SCROLL_THRESHOLD;
       const stillAtTop = target.scrollTop === 0;
       if (nearBottom || stillAtTop) scrollToBottom(target);
