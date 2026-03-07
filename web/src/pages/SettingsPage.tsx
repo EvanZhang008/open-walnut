@@ -1,309 +1,104 @@
-import { useState, useEffect, type FormEvent } from 'react';
-import type { Config, TaskPriority } from '@walnut/core';
-import { fetchConfig, updateConfig } from '@/api/config';
-import { apiGet, apiPut } from '@/api/client';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
-import { useTheme, type ThemePreference } from '@/hooks/useTheme';
-import { useShowUiOnlyTriage, setShowUiOnlyTriage as setShowUiOnlyTriageLocal } from '@/hooks/useDeveloperSettings';
+import { SettingsNav } from '@/components/settings/SettingsNav';
+import { useSettingsConfig } from '@/hooks/useSettingsConfig';
 
-const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
-  { value: 'system', label: 'System' },
-  { value: 'light', label: 'Light' },
-  { value: 'dark', label: 'Dark' },
+// Sections
+import { GettingStartedSection } from '@/components/settings/sections/GettingStartedSection';
+import { ModelsSection } from '@/components/settings/sections/ModelsSection';
+import { GeneralSection } from '@/components/settings/sections/GeneralSection';
+import { SessionsSection } from '@/components/settings/sections/SessionsSection';
+import { IntegrationsSection } from '@/components/settings/sections/IntegrationsSection';
+import { SearchSection } from '@/components/settings/sections/SearchSection';
+import { HeartbeatSection } from '@/components/settings/sections/HeartbeatSection';
+import { RemoteHostsSection } from '@/components/settings/sections/RemoteHostsSection';
+import { AdvancedSection } from '@/components/settings/sections/AdvancedSection';
+
+const SECTION_IDS = [
+  'getting-started', 'models', 'general', 'sessions',
+  'integrations', 'search', 'heartbeat', 'remote-hosts', 'advanced',
 ];
 
-/** Extract a human-readable label from a Bedrock model ID (with optional [1m] suffix). */
-function modelDisplayName(modelId: string): string {
-  const is1M = modelId.endsWith('[1m]');
-  const ctx = is1M ? '1M' : '200K';
-  const lower = modelId.toLowerCase();
-
-  let name: string;
-  if (lower.includes('opus') && lower.includes('4-6')) name = 'Opus 4.6';
-  else if (lower.includes('opus') && lower.includes('4-')) name = 'Opus 4';
-  else if (lower.includes('sonnet') && lower.includes('4-6')) name = 'Sonnet 4.6';
-  else if (lower.includes('sonnet') && lower.includes('4-5')) name = 'Sonnet 4.5';
-  else if (lower.includes('sonnet')) name = 'Sonnet';
-  else if (lower.includes('haiku') && lower.includes('4-5')) name = 'Haiku 4.5';
-  else if (lower.includes('haiku')) name = 'Haiku';
-  else if (lower.includes('opus')) name = 'Opus';
-  else return modelId.length > 40 ? modelId.slice(0, 37) + '...' : modelId;
-
-  // Haiku doesn't have a 1M variant — skip context suffix
-  if (lower.includes('haiku')) return name;
-  return `${name} (${ctx})`;
-}
-
 export function SettingsPage() {
-  const { theme, setTheme } = useTheme();
-  const [config, setConfig] = useState<Config | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
+  const { config, loading, error, saveSection } = useSettingsConfig();
+  const [activeSection, setActiveSection] = useState('getting-started');
+  const contentRef = useRef<HTMLDivElement>(null);
 
-  // Editable fields
-  const [userName, setUserName] = useState('');
-  const [defaultPriority, setDefaultPriority] = useState<TaskPriority>('none');
-  const [defaultCategory, setDefaultCategory] = useState('');
-  const [mainModel, setMainModel] = useState('');
-  const showUiOnlyTriage = useShowUiOnlyTriage();
+  // Track active section via scroll position
   useEffect(() => {
-    fetchConfig()
-      .then((c) => {
-        setConfig(c);
-        setUserName(c.user?.name ?? '');
-        setDefaultPriority(c.defaults?.priority ?? 'none');
-        setDefaultCategory(c.defaults?.category ?? '');
-        setMainModel(c.agent?.main_model ?? '');
-        // Sync server config value to localStorage for reactive hooks
-        setShowUiOnlyTriageLocal(c.developer?.show_ui_only_triage ?? false);
-      })
-      .catch((e: Error) => setError(e.message))
-      .finally(() => setLoading(false));
+    const container = contentRef.current;
+    if (!container) return;
+    const handleScroll = () => {
+      const scrollTop = container.scrollTop + 40;
+      for (let i = SECTION_IDS.length - 1; i >= 0; i--) {
+        const el = document.getElementById(SECTION_IDS[i]);
+        if (el && el.offsetTop <= scrollTop) {
+          setActiveSection(SECTION_IDS[i]);
+          return;
+        }
+      }
+      setActiveSection(SECTION_IDS[0]);
+    };
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, [config]);
+
+  // Navigate to section
+  const handleNavigate = useCallback((id: string) => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setActiveSection(id);
+      window.history.replaceState(null, '', `#${id}`);
+    }
   }, []);
 
-  const handleSave = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!config) return;
-    setSaving(true);
-    setError(null);
-    setSuccess(false);
-    try {
-      const newConfig = {
-        ...config,
-        user: { ...config.user, name: userName },
-        defaults: { priority: defaultPriority, category: defaultCategory },
-        agent: { ...config.agent, main_model: mainModel || undefined },
-      };
-      await updateConfig(newConfig);
-      setConfig(newConfig as Config);
-      setSuccess(true);
-      setTimeout(() => setSuccess(false), 3000);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  // ── Heartbeat checklist editor ──
-  const [hbContent, setHbContent] = useState('');
-  const [hbLoading, setHbLoading] = useState(true);
-  const [hbSaving, setHbSaving] = useState(false);
-  const [hbError, setHbError] = useState<string | null>(null);
-  const [hbSuccess, setHbSuccess] = useState(false);
-
+  // On mount, scroll to hash
   useEffect(() => {
-    apiGet<{ content: string }>('/api/heartbeat/checklist')
-      .then((r) => setHbContent(r.content))
-      .catch((e: Error) => setHbError(e.message))
-      .finally(() => setHbLoading(false));
-  }, []);
-
-  const handleHbSave = async () => {
-    setHbSaving(true);
-    setHbError(null);
-    setHbSuccess(false);
-    try {
-      await apiPut('/api/heartbeat/checklist', { content: hbContent });
-      setHbSuccess(true);
-      setTimeout(() => setHbSuccess(false), 3000);
-    } catch (err) {
-      setHbError((err as Error).message);
-    } finally {
-      setHbSaving(false);
+    const hash = window.location.hash.slice(1);
+    if (hash && SECTION_IDS.includes(hash)) {
+      setTimeout(() => handleNavigate(hash), 100);
     }
-  };
+  }, [handleNavigate, config]);
 
-  const handleToggleUiOnlyTriage = async (checked: boolean) => {
-    setShowUiOnlyTriageLocal(checked);
-    try {
-      await updateConfig({ developer: { show_ui_only_triage: checked } } as Partial<Config>);
-    } catch {
-      setShowUiOnlyTriageLocal(!checked);
-    }
-  };
+  // Cmd+S to save the focused section
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        e.preventDefault();
+        const form = document.getElementById(activeSection) as HTMLFormElement | null;
+        if (form?.requestSubmit) form.requestSubmit();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [activeSection]);
 
   if (loading) return <LoadingSpinner />;
-  if (!config && error) return <div className="empty-state"><p>Error: {error}</p></div>;
+  if (!config && error) {
+    return <div className="empty-state"><p>Error: {error}</p></div>;
+  }
+  if (!config) return null;
 
   return (
-    <div>
-      <div className="page-header">
-        <h1 className="page-title">Settings</h1>
-        <p className="page-subtitle">Configuration and preferences</p>
-      </div>
-
-      <div className="card" style={{ maxWidth: 520 }}>
-        <div className="form-group">
-          <label>Theme</label>
-          <div className="theme-picker">
-            {THEME_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                className={`theme-picker-btn${theme === opt.value ? ' active' : ''}`}
-                onClick={() => setTheme(opt.value)}
-              >
-                {opt.label}
-              </button>
-            ))}
+    <div className="settings-layout">
+      <SettingsNav activeSection={activeSection} onNavigate={handleNavigate} />
+      <div className="settings-content" ref={contentRef}>
+        <div className="settings-content-inner">
+          <div className="page-header">
+            <h1 className="page-title">Settings</h1>
+            <p className="page-subtitle">Configure everything from one place</p>
           </div>
+          <GettingStartedSection config={config} onSave={saveSection} />
+          <ModelsSection config={config} onSave={saveSection} />
+          <GeneralSection config={config} onSave={saveSection} />
+          <SessionsSection config={config} onSave={saveSection} />
+          <IntegrationsSection config={config} onSave={saveSection} />
+          <SearchSection config={config} onSave={saveSection} />
+          <HeartbeatSection config={config} onSave={saveSection} />
+          <RemoteHostsSection config={config} onSave={saveSection} />
+          <AdvancedSection config={config} onSave={saveSection} />
         </div>
-      </div>
-
-      <form className="card" onSubmit={handleSave} style={{ maxWidth: 520 }}>
-        <div className="form-group">
-          <label htmlFor="settings-name">User Name</label>
-          <input
-            id="settings-name"
-            type="text"
-            value={userName}
-            onChange={(e) => setUserName(e.target.value)}
-            placeholder="Your name"
-          />
-        </div>
-
-        <div className="form-row">
-          <div className="form-group">
-            <label htmlFor="settings-priority">Default Priority</label>
-            <select
-              id="settings-priority"
-              value={defaultPriority}
-              onChange={(e) => setDefaultPriority(e.target.value as TaskPriority)}
-            >
-              <option value="none">None (untriaged)</option>
-              <option value="backlog">Backlog</option>
-              <option value="important">Important</option>
-              <option value="immediate">Immediate</option>
-            </select>
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="settings-category">Default Category</label>
-            <input
-              id="settings-category"
-              type="text"
-              value={defaultCategory}
-              onChange={(e) => setDefaultCategory(e.target.value)}
-              placeholder="e.g., Work"
-            />
-          </div>
-        </div>
-
-        {config?.agent?.available_models && config.agent.available_models.length > 0 && (
-          <div className="form-group">
-            <label htmlFor="settings-main-model">Main AI Model</label>
-            <select
-              id="settings-main-model"
-              value={mainModel}
-              onChange={(e) => setMainModel(e.target.value)}
-            >
-              {config.agent.available_models.map((id) => (
-                <option key={id} value={id}>{modelDisplayName(id)}</option>
-              ))}
-            </select>
-            <p className="text-sm text-muted" style={{ marginTop: 4 }}>
-              Model used by the main AI agent for chat and task processing.
-            </p>
-          </div>
-        )}
-
-        {config?.provider && (
-          <div className="form-group">
-            <label>Provider</label>
-            <div className="text-sm text-muted" style={{ padding: '6px 0' }}>
-              {config.provider.type}
-              {config.provider.model && ` / ${config.provider.model}`}
-            </div>
-          </div>
-        )}
-
-        {config?.ms_todo?.client_id && (
-          <div className="form-group">
-            <label>MS To-Do Client ID</label>
-            <div className="font-mono text-sm text-muted" style={{ padding: '6px 0' }}>
-              {config.ms_todo.client_id}
-            </div>
-          </div>
-        )}
-
-        {error && <div className="text-sm" style={{ color: 'var(--error)', marginBottom: 8 }}>Error: {error}</div>}
-        {success && <div className="text-sm" style={{ color: 'var(--success)', marginBottom: 8 }}>Settings saved.</div>}
-
-        <div className="form-actions">
-          <button type="submit" className="btn btn-primary" disabled={saving}>
-            {saving ? 'Saving...' : 'Save Settings'}
-          </button>
-        </div>
-      </form>
-
-      {/* ── Heartbeat Checklist Editor ── */}
-      <div className="card" style={{ maxWidth: 520, marginTop: 24 }}>
-        <label id="heartbeat-label" htmlFor="heartbeat-editor">
-          <h3 style={{ margin: '0 0 4px' }}>Heartbeat Checklist</h3>
-        </label>
-        <p className="text-sm text-muted" style={{ margin: '0 0 12px' }}>
-          HEARTBEAT.md — the AI reads this periodically and acts on unchecked items.
-        </p>
-        {hbLoading ? (
-          <LoadingSpinner />
-        ) : (
-          <>
-            <textarea
-              id="heartbeat-editor"
-              aria-labelledby="heartbeat-label"
-              value={hbContent}
-              onChange={(e) => setHbContent(e.target.value)}
-              rows={12}
-              style={{
-                width: '100%',
-                fontFamily: 'var(--font-mono, monospace)',
-                fontSize: 13,
-                resize: 'vertical',
-                padding: 8,
-                borderRadius: 6,
-                border: '1px solid var(--border)',
-                background: 'var(--bg-secondary)',
-                color: 'var(--text)',
-              }}
-              placeholder="# Heartbeat Checklist&#10;- [ ] Check pipeline status&#10;- [ ] Review open PRs"
-            />
-            {hbError && <div className="text-sm" style={{ color: 'var(--error)', marginTop: 8 }}>Error: {hbError}</div>}
-            {hbSuccess && <div className="text-sm" style={{ color: 'var(--success)', marginTop: 8 }}>Checklist saved.</div>}
-            <div className="form-actions" style={{ marginTop: 8 }}>
-              <button
-                type="button"
-                className="btn btn-primary"
-                disabled={hbSaving}
-                onClick={handleHbSave}
-              >
-                {hbSaving ? 'Saving...' : 'Save Checklist'}
-              </button>
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* ── Developer ── */}
-      <div className="card" style={{ maxWidth: 520, marginTop: 24 }}>
-        <h3 style={{ margin: '0 0 4px' }}>Developer</h3>
-        <p className="text-sm text-muted" style={{ margin: '0 0 12px' }}>
-          Debugging options for advanced users.
-        </p>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-          <input
-            type="checkbox"
-            checked={showUiOnlyTriage}
-            onChange={(e) => handleToggleUiOnlyTriage(e.target.checked)}
-            style={{ width: 16, height: 16, accentColor: 'var(--accent)' }}
-          />
-          <span>Show &ldquo;UI Only&rdquo; triage messages</span>
-        </label>
-        <p className="text-sm text-muted" style={{ margin: '6px 0 0 24px' }}>
-          Display internal triage notifications in chat. Useful for debugging the triage agent. Hidden by default to reduce noise.
-        </p>
       </div>
     </div>
   );
