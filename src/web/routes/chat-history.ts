@@ -10,6 +10,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import * as chatHistory from '../../core/chat-history.js'
 import { estimateMessagesTokens, estimateFullPayload } from '../../core/daily-log.js'
+import { getContextWindowSize } from '../../agent/model.js'
 import { log } from '../../logging/index.js'
 import { isCompactionInProgress, triggerBackgroundCompaction } from '../background-compaction.js'
 
@@ -49,6 +50,16 @@ chatHistoryRouter.get('/stats', async (_req: Request, res: Response, next: NextF
       log.web.warn('chat stats: full payload estimation failed', { error: String(err) })
     }
 
+    // Read model from config for context window detection
+    let contextWindow: number
+    try {
+      const { getConfig } = await import('../../core/config-manager.js')
+      const config = await getConfig()
+      contextWindow = getContextWindowSize(config.agent?.main_model)
+    } catch {
+      contextWindow = getContextWindowSize(undefined)
+    }
+
     res.json({
       apiMessageCount: modelContext.length,
       estimatedTokens: messageTokens,
@@ -56,6 +67,7 @@ chatHistoryRouter.get('/stats', async (_req: Request, res: Response, next: NextF
       toolsTokens,
       estimatedTotalTokens: systemTokens + toolsTokens + messageTokens,
       compacted: !!summary,
+      contextWindow,
     })
   } catch (err) {
     next(err)

@@ -141,6 +141,8 @@ export interface ChatStats {
   toolsTokens?: number;
   estimatedTotalTokens?: number;
   compacted: boolean;
+  /** Model's context window size (e.g. 200K or 1M). */
+  contextWindow?: number;
 }
 
 export async function fetchChatStats(): Promise<ChatStats> {

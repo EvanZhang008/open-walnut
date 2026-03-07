@@ -27,7 +27,7 @@ import type { CommandContext } from '@/commands/types';
 
 // ── Compact chat header with dropdown menu ──
 
-const CONTEXT_WINDOW = 200_000; // main agent context window
+const CONTEXT_WINDOW_DEFAULT = 200_000; // fallback when backend doesn't provide contextWindow
 
 function ChatHeaderRow({ title, stats, connectionState, inspectorOpen, onToggleInspector, hasMessages, onClear }: {
   title: string;
@@ -51,7 +51,8 @@ function ChatHeaderRow({ title, stats, connectionState, inspectorOpen, onToggleI
     return () => document.removeEventListener('mousedown', handler);
   }, [menuOpen]);
 
-  const pct = stats ? Math.round((stats.estimatedTotalTokens ?? stats.estimatedTokens) / CONTEXT_WINDOW * 100) : null;
+  const contextWindow = stats?.contextWindow ?? CONTEXT_WINDOW_DEFAULT;
+  const pct = stats ? Math.round((stats.estimatedTotalTokens ?? stats.estimatedTokens) / contextWindow * 100) : null;
   const pctColor = pct != null && pct > 80 ? 'var(--error)' : pct != null && pct > 50 ? 'var(--warning)' : 'var(--fg-muted)';
 
   return (
