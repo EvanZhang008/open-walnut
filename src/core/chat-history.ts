@@ -10,6 +10,7 @@
  */
 
 import type { MessageParam } from '../agent/model.js';
+import { getContextThreshold } from '../agent/model.js';
 import type { ChatHistoryStore, ChatEntry, DisplayMessage } from './types.js';
 import { CHAT_HISTORY_FILE } from '../constants.js';
 import { readJsonFile, writeJsonFile } from '../utils/fs.js';
@@ -18,7 +19,8 @@ import { log } from '../logging/index.js';
 import fsp from 'node:fs/promises';
 import { compressForApi, MAX_BASE64_BYTES } from '../utils/image-compress.js';
 
-const COMPACTION_TOKEN_THRESHOLD = 160_000;
+/** Compaction triggers at 80% of the model's context window. */
+const COMPACTION_PERCENT = 0.80;
 const RECENT_TURNS_TO_KEEP = 10;
 
 /** Token threshold for daily log compaction — ~8K tokens (~32KB of text) */
@@ -555,7 +557,6 @@ export async function addNotification(msg: {
   notification?: boolean;
   taskId?: string;
   sessionId?: string;
-  notifyContent?: string;
 }): Promise<void> {
   return withWriteLock(async () => {
     const store = await readStore();
@@ -570,7 +571,6 @@ export async function addNotification(msg: {
       taskId: msg.taskId,
     };
     if (msg.sessionId) entry.sessionId = msg.sessionId;
-    if (msg.notifyContent) entry.notifyContent = msg.notifyContent;
     store.entries!.push(entry);
     await writeStore(store);
     log.agent.debug('chat notification added', { source: msg.source, role: msg.role });
@@ -729,12 +729,23 @@ export async function clear(): Promise<void> {
  * Check whether the full API payload (system + tools + messages) exceeds the
  * token threshold and needs compaction.
  *
- * Previously only counted message tokens (~155K could pass), while the actual
- * API payload includes system prompt + tool schemas (~120K overhead), causing
- * 275K+ payloads to slip through the 160K threshold.
+ * Threshold is 80% of the model's context window (200K default, 1M for `[1m]` models).
+ * Reads `agent.main_model` from config to detect the window size.
  */
 export async function needsCompaction(): Promise<boolean> {
   const modelMsgs = await getModelContext();
+
+  // Read model from config to compute context-aware threshold
+  let threshold: number;
+  try {
+    const { getConfig } = await import('./config-manager.js');
+    const config = await getConfig();
+    const model = config.agent?.main_model;
+    threshold = getContextThreshold(model, COMPACTION_PERCENT);
+  } catch {
+    // Fallback: assume 200K window → 160K threshold (original default)
+    threshold = 160_000;
+  }
 
   let fullTotal: number;
   let breakdown: { system: number; tools: number; messages: number; total: number };
@@ -762,14 +773,14 @@ export async function needsCompaction(): Promise<boolean> {
     breakdown = { system: FALLBACK_OVERHEAD, tools: 0, messages: msgTokens, total: fullTotal };
   }
 
-  const needed = fullTotal > COMPACTION_TOKEN_THRESHOLD;
+  const needed = fullTotal > threshold;
   log.agent.info('needsCompaction check', {
     messageCount: modelMsgs.length,
     systemTokens: `~${Math.round(breakdown.system / 1000)}K`,
     toolsTokens: `~${Math.round(breakdown.tools / 1000)}K`,
     messageTokens: `~${Math.round(breakdown.messages / 1000)}K`,
     fullTotal: `~${Math.round(fullTotal / 1000)}K`,
-    threshold: `${COMPACTION_TOKEN_THRESHOLD / 1000}K`,
+    threshold: `${Math.round(threshold / 1000)}K`,
     needed,
   });
   return needed;

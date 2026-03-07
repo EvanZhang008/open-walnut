@@ -7,17 +7,29 @@
  */
 
 import type { MessageParam } from './model.js';
+import { getContextWindowSize } from './model.js';
 import { estimateFullPayload, estimateMessagesTokens } from '../core/daily-log.js';
 
 export type ToolSchema = { name: string; description: string; input_schema: unknown };
 import { log } from '../logging/index.js';
 
 /**
- * Default context window budget.
- * The model's hard limit is 200K. We leave 32K headroom for the response
- * and any token-counting inaccuracies.
+ * Default context window budget for 200K models.
+ * We leave 32K headroom for the response and token-counting inaccuracies.
+ * For 1M models, computed dynamically via getContextBudget().
  */
 const DEFAULT_BUDGET = 168_000;
+
+/** Response headroom: ~16% of context window reserved for output + estimation slack. */
+const BUDGET_PERCENT = 0.84;
+
+/**
+ * Compute token budget for a model: 84% of context window (16% headroom for response).
+ * For 200K models: 168K. For 1M models: 840K.
+ */
+export function getContextBudget(model?: string): number {
+  return Math.round(getContextWindowSize(model) * BUDGET_PERCENT);
+}
 
 /** Minimum messages to keep even in emergency trim */
 const MIN_MESSAGES_TO_KEEP = 4;
@@ -26,8 +38,10 @@ export interface BudgetGuardOptions {
   system: string;
   tools: ToolSchema[];
   messages: MessageParam[];
-  /** Token budget. Default: 168K */
+  /** Token budget. Default: computed from model context window (168K for 200K, 840K for 1M). */
   budget?: number;
+  /** Model string — used to compute default budget when `budget` is not provided. */
+  model?: string;
   /** Caller label for logging */
   source?: string;
   /**
@@ -54,7 +68,7 @@ export interface BudgetGuardResult {
  * When trimming is needed, a new array is returned; the original is not mutated.
  */
 export async function guardBudget(opts: BudgetGuardOptions): Promise<BudgetGuardResult> {
-  const budget = opts.budget ?? DEFAULT_BUDGET;
+  const budget = opts.budget ?? getContextBudget(opts.model);
   const source = opts.source ?? 'agent';
 
   // Fast path: caller provided a reliable estimate (exact baseline + delta) that's within budget.

@@ -32,6 +32,27 @@ export interface ModelConfig {
 export const DEFAULT_MODEL = 'global.anthropic.claude-opus-4-6-v1';
 const DEFAULT_MAX_TOKENS = 32768;
 
+/** Context window sizes */
+const CONTEXT_WINDOW_1M = 1_000_000;
+const CONTEXT_WINDOW_DEFAULT = 200_000;
+
+/**
+ * Get the context window size for a model string.
+ * Models with `[1m]` suffix have a 1M token context window; all others default to 200K.
+ */
+export function getContextWindowSize(model?: string): number {
+  return model?.includes('[1m]') ? CONTEXT_WINDOW_1M : CONTEXT_WINDOW_DEFAULT;
+}
+
+/**
+ * Compute a token threshold as a percentage of the model's context window.
+ * @param model - Model string (may include `[1m]` suffix)
+ * @param percent - Fraction of the context window (e.g., 0.80 for 80%)
+ */
+export function getContextThreshold(model: string | undefined, percent: number): number {
+  return Math.round(getContextWindowSize(model) * percent);
+}
+
 /** Strip [1m] suffix used as context-window marker — Bedrock model ID doesn't include it. */
 function resolveBedrockModelId(model: string): string {
   return model.replace(/\[1m\]$/, '');

@@ -237,6 +237,7 @@ export async function runAgentLoop(
         messages,
         source: logTag,
         tokenEstimate,
+        model: modelConfig.model,
       });
       if (budgetResult.trimmed) {
         messages = budgetResult.messages;
