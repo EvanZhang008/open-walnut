@@ -273,6 +273,27 @@ export interface Config {
     push_on_session_end?: boolean;  // default: true
   };
   session_hooks?: import('./session-hooks/types.js').SessionHooksConfig;
+  /** API keys for remote client authentication (iOS app, etc.) */
+  api_keys?: ApiKeyEntry[];
+  /** Registered push notification tokens for mobile clients */
+  push_tokens?: PushTokenEntry[];
+}
+
+export interface ApiKeyEntry {
+  name: string;
+  key: string;
+  created_at: string;
+}
+
+export interface PushTokenEntry {
+  /** Expo push token (e.g. ExponentPushToken[...]) */
+  token: string;
+  /** Platform: ios or android */
+  platform: 'ios' | 'android';
+  /** Name of the API key this token is bound to */
+  key_name: string;
+  /** Registration timestamp */
+  registered_at: string;
 }
 
 export interface AgentMessage {

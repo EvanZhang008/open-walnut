@@ -53,6 +53,11 @@ import { loadPlugins, migrateConfigToPlugins, runPluginMigrations } from '../cor
 import type { SyncPollContext } from '../core/integration-types.js'
 import { integrationsRouter } from './routes/integrations.js'
 import { systemRouter } from './routes/system.js'
+import { authMiddleware } from './middleware/auth.js'
+import { pushRouter } from './routes/push.js'
+import { authRouter } from './routes/auth.js'
+import { registerAuthRpc } from './routes/auth-rpc.js'
+import { initPushNotifications } from '../core/push-notification.js'
 import { enqueueMainAgentTurn, getQueueStatus } from './agent-turn-queue.js'
 import { triggerBackgroundCompaction } from './background-compaction.js'
 import {
@@ -161,6 +166,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // -- Middleware --
   app.use(cors())
   app.use(express.json())
+  // Auth middleware: localhost passthrough, remote requires Bearer token
+  app.use('/api', authMiddleware)
 
   // -- Cron service --
   const cronService = new CronService({
@@ -370,6 +377,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/timeline', timelineRouter)
   app.use('/api/integrations', integrationsRouter)
   app.use('/api/system', systemRouter)
+  app.use('/api/push', pushRouter)
+  app.use('/api/auth', authRouter)
   app.get('/api/git-sync/status', (_req, res) => {
     const health = gitAutoCommitHandle?.health ?? { protected: false, error: 'not started', consecutiveFailures: 0 }
     res.json(health)
@@ -412,6 +421,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // -- Register RPC methods on the WebSocket handler --
   registerChatRpc()
   registerSessionChatRpc()
+  registerAuthRpc()
+
+  // -- Push notification service --
+  initPushNotifications()
 
   // -- Pull latest data from git (remote hooks may have pushed new data) --
   await gitPullWalnut()
