@@ -6,6 +6,8 @@ import type { SessionHistoryMessage } from '@/types/session';
 interface UseSessionHistoryReturn {
   messages: SessionHistoryMessage[];
   loading: boolean;
+  /** Phase 2 (SSH/full fetch) still in progress — true between Phase 1 completion and Phase 2 completion */
+  phase2Pending: boolean;
   error: string | null;
 }
 
@@ -17,18 +19,21 @@ interface UseSessionHistoryReturn {
 export function useSessionHistory(sessionId: string | null, version = 0): UseSessionHistoryReturn {
   const [messages, setMessages] = useState<SessionHistoryMessage[]>([]);
   const [loading, setLoading] = useState(false);
+  const [phase2Pending, setPhase2Pending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!sessionId) {
       setMessages([]);
       setLoading(false);
+      setPhase2Pending(false);
       setError(null);
       return;
     }
 
     let cancelled = false;
     setLoading(true);
+    setPhase2Pending(true);
     setError(null);
     const sid = sessionId.substring(0, 8);
 
@@ -56,12 +61,12 @@ export function useSessionHistory(sessionId: string | null, version = 0): UseSes
             if (!cancelled) { endP2('error'); setError(e.message); }
           })
           .finally(() => {
-            if (!cancelled) setLoading(false);
+            if (!cancelled) { setLoading(false); setPhase2Pending(false); }
           });
       });
 
     return () => { cancelled = true; };
   }, [sessionId, version]);
 
-  return { messages, loading, error };
+  return { messages, loading, phase2Pending, error };
 }

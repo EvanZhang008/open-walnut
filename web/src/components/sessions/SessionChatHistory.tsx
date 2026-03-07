@@ -502,7 +502,7 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     }
   }, [openLightbox]);
 
-  const { messages, loading, error } = useSessionHistory(sessionId, historyVersion);
+  const { messages, loading, phase2Pending, error } = useSessionHistory(sessionId, historyVersion);
   const { blocks, isStreaming, clear } = useSessionStream(sessionId);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -830,31 +830,33 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     && deduped.some(m => m.status !== 'committed');
   const timeline = buildTimeline(blocks, deduped, blockIndexMap.current, isStreaming, isResuming);
 
-  // Loading spinner only on initial load
-  if (loading && messages.length === 0 && blocks.length === 0) return <LoadingSpinner />;
-
-  if (error) {
-    return (
-      <div className="session-history-empty">
-        <p className="text-muted">Failed to load history: {error}</p>
-      </div>
-    );
-  }
-
   const hasContent = messages.length > 0 || timeline.length > 0 || isStreaming
     || deduped.length > 0;
 
-  if (!hasContent) {
-    return (
-      <div className="session-history-empty">
-        <p className="text-muted">No conversation history found</p>
-      </div>
-    );
-  }
-
+  // Always mount the scroll container so containerRef is available for scroll effects.
+  // Remote sessions have a gap between Phase 1 (empty, local streams) and Phase 2 (SSH fetch)
+  // where containerRef was previously null, breaking auto-scroll.
   return (
     <>
       <div className="session-history" ref={containerRef} onClick={handleContainerClick}>
+        {/* Loading / empty / error states rendered INSIDE the scroll container */}
+        {loading && messages.length === 0 && blocks.length === 0 && <LoadingSpinner />}
+        {error && (
+          <div className="session-history-empty">
+            <p className="text-muted">Failed to load history: {error}</p>
+          </div>
+        )}
+        {!error && !hasContent && !loading && !phase2Pending && (
+          <div className="session-history-empty">
+            <p className="text-muted">No conversation history found</p>
+          </div>
+        )}
+        {/* Show a subtle loading indicator when Phase 2 (SSH) is still fetching */}
+        {!hasContent && !loading && phase2Pending && (
+          <div className="session-history-empty">
+            <p className="text-muted">Loading remote session...</p>
+          </div>
+        )}
         {/* Initial prompt — the first user message that started this session */}
         {initialPrompt && (
           <div className="session-msg session-msg-user session-initial-prompt">
