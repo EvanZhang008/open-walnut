@@ -87,6 +87,8 @@ web/src/
 │   ├── tasks/           # TodoPanel, TaskList, TaskCard, TaskContextBar, TaskForm, SubtaskList
 │   ├── context/         # ContextInspectorPanel, ContextSection, ToolCard, ApiMessageBlock
 │   ├── sessions/        # SessionTreePanel, SessionDetailPanel, SessionPanel, SessionChatHistory, SessionRow
+│   ├── settings/        # SettingsNav, inputs/ (SectionCard, SecretInput, ToggleSwitch, NumberInput,
+│   │                    #   ListEditor, KeyValueEditor, StatusIndicator), sections/ (9 section components)
 │   ├── memory/          # MemoryTreePanel, MemoryContentPanel
 │   ├── usage/           # UsageSummaryCards, UsageDailyChart, UsageBreakdownTable, UsageRecentTable
 │   ├── cron/            # Cron job management components
@@ -94,7 +96,8 @@ web/src/
 │   ├── search/          # SearchBar, SearchResults (child task display with indentation)
 │   └── common/          # EmptyState, LoadingSpinner, StatusBadge, PriorityBadge
 ├── hooks/               # useTasks, useChat, useWebSocket, useSessionStream, useResizablePanel,
-│                        # useSessionHistory, useContextInspector, useCronJobs, useFavorites, useOrdering, useUsage
+│                        # useSessionHistory, useContextInspector, useCronJobs, useFavorites, useOrdering,
+│                        # useUsage, useSettingsConfig
 ├── api/                 # REST client: tasks, sessions, search, config, ws
 ├── utils/               # Shared utilities (markdown rendering, session-status, time)
 └── styles/globals.css   # Theme

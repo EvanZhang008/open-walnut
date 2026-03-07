@@ -262,7 +262,7 @@ React SPA communicates with the Express server via REST and WebSocket. The serve
 | `/sessions` | SessionsPage | Task-tree browser (left) + session detail/chat (right) |
 | `/usage` | UsagePage | Token usage & cost dashboard |
 | `/commands` | CommandsPage | Slash command management |
-| `/settings` | SettingsPage | Config editor |
+| `/settings` | SettingsPage | Full config editor — 9 sections with sidebar nav, per-section save |
 
 See `web/src/AGENTS.md` for detailed UX implementation (message isolation, task references, image rendering, session streaming, slash commands).
 
