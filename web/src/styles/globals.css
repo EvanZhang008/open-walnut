@@ -5165,28 +5165,22 @@ img[data-lightbox-src],
 /* Relevance divider — separates high-relevance from low-relevance search results */
 .search-relevance-divider {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 0 4px;
-}
-.search-relevance-divider::before,
-.search-relevance-divider::after {
-  content: '';
-  flex: 1;
-  height: 3px;
-  border-radius: 1.5px;
-  background: var(--border);
-  opacity: 0.5;
+  justify-content: center;
+  padding: 6px 0;
 }
 .search-relevance-divider span {
-  flex-shrink: 0;
+  padding: 2px 12px;
+  border-radius: 10px;
+  background: var(--border);
   font-size: 10px;
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--fg-muted);
-  opacity: 0.7;
 }
+/* Remove border between divider and adjacent tasks */
+.todo-panel-item:has(+ .search-relevance-divider) { border-bottom: none; }
+.search-relevance-divider + .todo-panel-item { border-bottom: none; }
 
 /* Flat mode (ungrouped) list container */
 .todo-flat-results {
