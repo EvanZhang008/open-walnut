@@ -6,6 +6,8 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue.svg)](https://www.typescriptlang.org/)
 [![GitHub stars](https://img.shields.io/github/stars/EvanZhang008/walnut?style=social)](https://github.com/EvanZhang008/walnut)
 
+![Walnut — AI butler with chat, Claude Code sessions, and task management](docs/social-preview.png)
+
 **An AI agent that manages your projects, notes, and coding sessions — with the missing web UI for Claude Code built in.**
 
 Walnut is not just a dashboard — it's an AI-native app. A built-in AI agent with 30+ tools manages your tasks, accumulates knowledge, spawns and monitors Claude Code sessions, and acts on your behalf. It also gives Claude Code a proper web interface: real-time session streaming, multi-session monitoring, visual task boards, and persistent memory. Think of it as an AI butler that happens to have a beautiful UI.
