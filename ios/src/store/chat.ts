@@ -32,10 +32,13 @@ interface ChatStore {
 let flushTimer: ReturnType<typeof setTimeout> | null = null
 let streamingMessageId: string | null = null
 
-// Monotonic counter — guarantees unique IDs across all message sources
+// Monotonic counter + random nonce — survives Expo Fast Refresh without collisions.
+// Fast Refresh re-evaluates module-level code (resetting msgIdSeq to 0) but preserves
+// Zustand store state. The nonce ensures new IDs never collide with pre-reload messages.
 let msgIdSeq = 0
+const idNonce = Math.random().toString(36).slice(2, 8)
 function nextMsgId(prefix: string): string {
-  return `${prefix}-${++msgIdSeq}`
+  return `${prefix}-${idNonce}-${++msgIdSeq}`
 }
 
 // Track initialization to prevent duplicate WebSocket subscriptions
@@ -129,6 +132,24 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const d = data as { text?: string; delta?: string }
       const delta = d.text ?? d.delta ?? ''
       if (!delta) return
+
+      // Auto-create streaming placeholder if we receive deltas without an active session
+      // (happens when another client — web browser — initiated the chat)
+      if (!streamingMessageId) {
+        const id = nextMsgId('ext-stream')
+        streamingMessageId = id
+        set((s) => ({
+          messages: [...s.messages, {
+            id,
+            role: 'assistant' as const,
+            text: '',
+            timestamp: new Date().toISOString(),
+            isStreaming: true,
+          }],
+          isStreaming: true,
+          error: null,
+        }))
+      }
 
       set((s) => ({ streamBuffer: s.streamBuffer + delta }))
 

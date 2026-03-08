@@ -12,7 +12,7 @@ import type { MessageParam } from '../../agent/model.js'
 import type { DisplayMessageBlock } from '../../core/types.js'
 import type { CompactionResult } from '../../core/chat-history.js'
 import { MEMORY_FLUSH_MESSAGE } from '../../core/chat-history.js'
-import { registerMethod, sendToClient } from '../ws/handler.js'
+import { registerMethod, broadcastEvent } from '../ws/handler.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { usageTracker } from '../../core/usage/index.js'
 import * as chatHistory from '../../core/chat-history.js'
@@ -703,20 +703,20 @@ export function registerChatRpc(): void {
       try {
         const result = await runAgentLoop(userContent, history, {
           onTextDelta: (delta) => {
-            sendToClient(client, EventNames.AGENT_TEXT_DELTA, { delta })
+            broadcastEvent(EventNames.AGENT_TEXT_DELTA, { delta })
           },
           onToolActivity: (activity) => {
-            sendToClient(client, EventNames.AGENT_TOOL_ACTIVITY, activity)
+            broadcastEvent(EventNames.AGENT_TOOL_ACTIVITY, activity)
           },
           onThinking: (text) => {
-            sendToClient(client, EventNames.AGENT_THINKING, { text })
+            broadcastEvent(EventNames.AGENT_THINKING, { text })
           },
           onToolCall: (toolName, input, toolUseId) => {
             toolsUsedInTurn.add(toolName)
-            sendToClient(client, EventNames.AGENT_TOOL_CALL, { toolName, input, toolUseId })
+            broadcastEvent(EventNames.AGENT_TOOL_CALL, { toolName, input, toolUseId })
           },
           onToolResult: (toolName, result, toolUseId) => {
-            sendToClient(client, EventNames.AGENT_TOOL_RESULT, { toolName, result, toolUseId })
+            broadcastEvent(EventNames.AGENT_TOOL_RESULT, { toolName, result, toolUseId })
           },
           onUsage: (usage) => {
             bus.emit('agent:usage', { usage }, ['web-ui'], { source: 'agent' })
@@ -759,7 +759,7 @@ export function registerChatRpc(): void {
               log.web.warn('autoAppendConversationLog failed (aborted)', { taskId: taskContext.id, error: err instanceof Error ? err.message : String(err) })
             })
           }
-          sendToClient(client, EventNames.AGENT_RESPONSE, { text: result.response, aborted: true })
+          broadcastEvent(EventNames.AGENT_RESPONSE, { text: result.response, aborted: true })
           return
         }
 
@@ -783,7 +783,7 @@ export function registerChatRpc(): void {
 
         // Signal turn complete to the client (resets isStreaming).
         // This resolves the RPC immediately — compaction runs separately below.
-        sendToClient(client, EventNames.AGENT_RESPONSE, { text: resolvedText })
+        broadcastEvent(EventNames.AGENT_RESPONSE, { text: resolvedText })
         log.web.info('chat turn completed', { taskId: taskContext?.id, durationMs: Date.now() - turnStartMs })
 
         // Auto-append to conversation_log if a task was focused
@@ -825,7 +825,7 @@ export function registerChatRpc(): void {
           autoAppendConversationLog(taskContext.id, message, `[Error: ${errMsg}]`, [...toolsUsedInTurn]).catch(() => { /* non-critical */ })
         }
 
-        sendToClient(client, EventNames.AGENT_ERROR, { error: errMsg })
+        broadcastEvent(EventNames.AGENT_ERROR, { error: errMsg })
       }
     })
   })
