@@ -5661,7 +5661,7 @@ img[data-lightbox-src],
   flex-shrink: 0;
   width: 20px;
   height: 20px;
-  font-size: 16px;
+  font-size: 12px;
   color: var(--fg-muted);
   background: none;
   border: none;
@@ -5669,6 +5669,7 @@ img[data-lightbox-src],
   cursor: pointer;
   transition: color 0.15s, background 0.15s, transform 0.2s;
   padding: 0;
+  line-height: 1;
 }
 .collapse-chevron:hover {
   color: var(--fg);
@@ -5676,6 +5677,11 @@ img[data-lightbox-src],
 }
 .collapse-chevron.expanded {
   transform: rotate(90deg);
+}
+/* Task-level chevron: inline within title row, slight right margin for spacing */
+.todo-item-title-row > .collapse-chevron {
+  margin-right: 2px;
+  margin-top: 1px;
 }
 .task-children-badge {
   font-size: 10px;
