@@ -1,7 +1,30 @@
 {
   "name": "walnut",
   "version": "0.1.0",
-  "description": "Personal intelligent butler - CLI task manager",
+  "description": "Personal AI butler powered by Claude — task management, Claude Code sessions, memory system, and web UI",
+  "license": "MIT",
+  "homepage": "https://github.com/EvanZhang008/walnut",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/EvanZhang008/walnut.git"
+  },
+  "keywords": [
+    "ai",
+    "task-manager",
+    "claude",
+    "claude-code",
+    "personal-assistant",
+    "productivity",
+    "self-hosted",
+    "local-first",
+    "ai-agent",
+    "web-ui",
+    "knowledge-management",
+    "typescript",
+    "cli",
+    "ai-butler",
+    "automation"
+  ],
   "type": "module",
   "bin": {
     "walnut": "./bin/walnut.js"

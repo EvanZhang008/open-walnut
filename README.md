@@ -1,10 +1,34 @@
-# Walnut — AI-Native Personal Productivity System with Claude Code Web UI
+# Walnut — Personal AI Butler & Task Manager with Claude Code Web UI
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/EvanZhang008/walnut/actions/workflows/ci.yml/badge.svg)](https://github.com/EvanZhang008/walnut/actions)
+[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22-green.svg)](https://nodejs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue.svg)](https://www.typescriptlang.org/)
+[![GitHub stars](https://img.shields.io/github/stars/EvanZhang008/walnut?style=social)](https://github.com/EvanZhang008/walnut)
 
 **An AI agent that manages your projects, notes, and coding sessions — with the missing web UI for Claude Code built in.**
 
 Walnut is not just a dashboard — it's an AI-native app. A built-in AI agent with 30+ tools manages your tasks, accumulates knowledge, spawns and monitors Claude Code sessions, and acts on your behalf. It also gives Claude Code a proper web interface: real-time session streaming, multi-session monitoring, visual task boards, and persistent memory. Think of it as an AI butler that happens to have a beautiful UI.
 
 > **Philosophy**: Walnut is human-first. It amplifies *your* productivity — not by building a swarm of agents talking to each other, but by giving *you* superpowers. You stay in control. The AI handles the grunt work, surfaces what matters, and gets out of your way. The goal is simple: make your day smooth, focused, and productive.
+
+## Table of Contents
+
+- [Why Walnut?](#why-walnut)
+- [Screenshots](#screenshots)
+- [Key Features](#key-features)
+- [Multi-Agent — But Human-Centered](#multi-agent--but-human-centered)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [Web Dashboard Pages](#web-dashboard-pages)
+- [CLI](#cli)
+- [Project Structure](#project-structure)
+- [Development](#development)
+- [Tech Stack](#tech-stack)
+- [Alternatives](#alternatives)
+- [Contributing](#contributing)
+- [Star History](#star-history)
+- [License](#license)
 
 ## Why Walnut?
 
@@ -32,7 +56,7 @@ Walnut replaces all of that with one system:
 
 ### Talk to the agent, get things done
 
-![Create a task through chat](docs/demo-create-task.png)
+![Walnut AI task manager — create a task through natural language chat](docs/demo-create-task.png)
 
 > "I need to file my tax before this week. Make it high priority and star."
 >
@@ -40,7 +64,7 @@ Walnut replaces all of that with one system:
 
 ### AI sessions that work for you
 
-![Start a coding session](docs/demo-start-session.png)
+![Walnut Claude Code session — AI starts a coding session attached to a task](docs/demo-start-session.png)
 
 > The agent spawns a Claude Code session attached to the task. It runs in plan mode, reports progress, and you can check on it anytime from the session panel.
 
@@ -229,6 +253,24 @@ npm test              # All tests (parallel)
 - **Testing**: Vitest, Playwright
 - **Integrations**: Microsoft Graph API, plugin system
 
+## Alternatives
+
+- [Claude Code](https://github.com/anthropics/claude-code) — The CLI tool Walnut orchestrates
+- [Aider](https://github.com/paul-gauthier/aider) — AI pair programming (terminal only)
+- [Continue](https://github.com/continuedev/continue) — AI coding assistant (IDE extension)
+
+Walnut is different: it combines task management, memory, and session orchestration in one self-hosted system.
+
+## Contributing
+
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## Star History
+
+If you find Walnut useful, consider giving it a star — it helps others discover the project.
+
+[![Star History Chart](https://api.star-history.com/svg?repos=EvanZhang008/walnut&type=Date)](https://star-history.com/#EvanZhang008/walnut&Date)
+
 ## License
 
-MIT
+[MIT](LICENSE)
