@@ -199,11 +199,12 @@ export function isImageFilePath(p: string): boolean {
   return IMAGE_EXT_RE.test(p);
 }
 
-/** Resolve an image path: absolute paths pass through, relative paths get cwd prepended */
-export function resolveImagePath(path: string, cwd?: string): string {
+/** Resolve an image path: absolute paths pass through, relative paths get cwd prepended.
+ *  Returns null if a relative path can't be resolved (no cwd available). */
+export function resolveImagePath(path: string, cwd?: string): string | null {
   if (path.startsWith('/')) return path;
   if (cwd) return `${cwd.replace(/\/$/, '')}/${path}`;
-  return path;
+  return null;
 }
 
 /**

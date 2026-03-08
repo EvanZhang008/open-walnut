@@ -142,15 +142,15 @@ export function GenericToolCall({ tool, status = 'done', result: resultProp, ses
       return { resultImages: images, resultTextHtml: text };
     }
 
-    // 2. Check for image file paths in result text
+    // 2. Check for image file paths in result text (skip unresolvable relative paths)
     const paths = findImagePaths(result);
-    const images = paths.length > 0
-      ? paths.map((p, i) => ({
-          src: `/api/local-image?path=${encodeURIComponent(resolveImagePath(p, sessionCwd))}`,
-          key: `path-${i}`,
-          caption: p,
-        }))
-      : null;
+    const resolved = paths
+      .map((p, i) => {
+        const abs = resolveImagePath(p, sessionCwd);
+        return abs ? { src: `/api/local-image?path=${encodeURIComponent(abs)}`, key: `path-${i}`, caption: p } : null;
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null);
+    const images = resolved.length > 0 ? resolved : null;
 
     // 3. Render remaining text as markdown (with truncation)
     const text = renderMarkdownWithRefs(result.length > 3000 ? result.slice(0, 3000) : result);
@@ -164,7 +164,8 @@ export function GenericToolCall({ tool, status = 'done', result: resultProp, ses
     if (typeof fp !== 'string' || !isImageFilePath(fp)) return null;
     // Skip if result already has images (avoids showing same image twice for Read tool)
     if (resultImages && resultImages.length > 0) return null;
-    return `/api/local-image?path=${encodeURIComponent(resolveImagePath(fp, sessionCwd))}`;
+    const resolved = resolveImagePath(fp, sessionCwd);
+    return resolved ? `/api/local-image?path=${encodeURIComponent(resolved)}` : null;
   }, [safeInput, open, resultImages, sessionCwd]);
 
   // Click handler for pill links inside <pre> (event delegation)
@@ -381,19 +382,25 @@ export const SessionMessage = memo(function SessionMessage({ message, sessionCwd
             dangerouslySetInnerHTML={{ __html: renderMarkdownWithRefs(text) }}
           />
         )}
-        {textImagePaths.length > 0 && (
-          <div className="tool-result-images">
-            {textImagePaths.map((p, i) => {
-              const src = `/api/local-image?path=${encodeURIComponent(resolveImagePath(p, sessionCwd))}`;
-              return (
-                <div key={i} className="tool-result-image-item">
-                  <img src={src} className="inline-image" data-lightbox-src={src} loading="lazy" />
-                  <span className="inline-image-path">{p}</span>
-                </div>
-              );
-            })}
-          </div>
-        )}
+        {textImagePaths.length > 0 && (() => {
+          const resolved = textImagePaths
+            .map((p) => ({ p, abs: resolveImagePath(p, sessionCwd) }))
+            .filter((x): x is { p: string; abs: string } => x.abs !== null);
+          if (resolved.length === 0) return null;
+          return (
+            <div className="tool-result-images">
+              {resolved.map(({ p, abs }, i) => {
+                const src = `/api/local-image?path=${encodeURIComponent(abs)}`;
+                return (
+                  <div key={i} className="tool-result-image-item">
+                    <img src={src} className="inline-image" data-lightbox-src={src} loading="lazy" />
+                    <span className="inline-image-path">{p}</span>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
       </div>
       {!isUser && usage && (
         <div className="session-msg-meta">

@@ -208,19 +208,25 @@ function StreamingTextBlock({ content, sessionCwd, onTaskClick, onSessionClick }
         onClick={handleClick}
         dangerouslySetInnerHTML={{ __html: html }}
       />
-      {imagePaths.length > 0 && (
-        <div className="tool-result-images">
-          {imagePaths.map((p, i) => {
-            const src = `/api/local-image?path=${encodeURIComponent(resolveImagePath(p, sessionCwd))}`;
-            return (
-              <div key={i} className="tool-result-image-item">
-                <img src={src} className="inline-image" data-lightbox-src={src} loading="lazy" />
-                <span className="inline-image-path">{p}</span>
-              </div>
-            );
-          })}
-        </div>
-      )}
+      {imagePaths.length > 0 && (() => {
+        const resolved = imagePaths
+          .map((p) => ({ p, abs: resolveImagePath(p, sessionCwd) }))
+          .filter((x): x is { p: string; abs: string } => x.abs !== null);
+        if (resolved.length === 0) return null;
+        return (
+          <div className="tool-result-images">
+            {resolved.map(({ p, abs }, i) => {
+              const src = `/api/local-image?path=${encodeURIComponent(abs)}`;
+              return (
+                <div key={i} className="tool-result-image-item">
+                  <img src={src} className="inline-image" data-lightbox-src={src} loading="lazy" />
+                  <span className="inline-image-path">{p}</span>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
     </>
   );
 }
