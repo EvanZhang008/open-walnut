@@ -206,6 +206,47 @@ export class SessionHealthMonitor {
       const idleDurationMs = now - mtimeMs
       if (idleDurationMs < idleTimeoutMs) continue
 
+      // ── Extra validation for remote sessions ──
+      // Local file mtime can be stale if SSH was disconnected (tail wasn't flowing data).
+      // Before killing, check the REMOTE JSONL file mtime to confirm the session is
+      // truly idle on the remote side too — not just locally stale from an SSH outage.
+      if (session.host) {
+        const sshTarget = await this.resolveHostTarget(session.host)
+        if (sshTarget) {
+          try {
+            const remoteJsonl = `/tmp/walnut-streams/${session.claudeSessionId}.jsonl`
+            const { execFile: execFileCb } = await import('node:child_process')
+            const hostString = sshTarget.user ? `${sshTarget.user}@${sshTarget.hostname}` : sshTarget.hostname
+            const sshArgs = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=10']
+            if (sshTarget.port) sshArgs.push('-p', String(sshTarget.port))
+            // stat -c %Y = mtime as epoch seconds (Linux)
+            const remoteMtime = await new Promise<number | null>((resolve) => {
+              execFileCb('ssh', [...sshArgs, hostString, `stat -c %Y '${remoteJsonl}' 2>/dev/null`], {
+                timeout: 10_000, encoding: 'utf-8',
+              }, (err, stdout) => {
+                if (err) { resolve(null); return }
+                const epoch = parseInt(stdout.trim(), 10)
+                resolve(isNaN(epoch) ? null : epoch * 1000)
+              })
+            })
+            if (remoteMtime != null) {
+              const remoteIdleMs = now - remoteMtime
+              if (remoteIdleMs < idleTimeoutMs) {
+                log.session.info('health monitor: local mtime stale but remote is active — skipping kill', {
+                  sessionId: session.claudeSessionId,
+                  localIdleMin: Math.round(idleDurationMs / 60_000),
+                  remoteIdleMin: Math.round(remoteIdleMs / 60_000),
+                  thresholdMin: Math.round(idleTimeoutMs / 60_000),
+                })
+                continue  // Remote is still active — don't kill
+              }
+            }
+          } catch {
+            // SSH check failed — fall through to kill based on local mtime
+          }
+        }
+      }
+
       const idleMinutes = Math.round(idleDurationMs / 60_000)
       log.session.info('health monitor: idle timeout (file mtime) — killing session', {
         sessionId: session.claudeSessionId,
