@@ -127,6 +127,15 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // Load initial history
     get().loadHistory()
 
+    // Clear stale errors on reconnect (e.g. after credentials change)
+    wsClient.onConnectionChange((state) => {
+      if (state === 'connected' && get().error) {
+        set({ error: null })
+        // Refresh history with new credentials
+        get().loadHistory()
+      }
+    })
+
     // Subscribe to streaming events
     wsClient.onEvent('agent:text-delta', (data) => {
       const d = data as { text?: string; delta?: string }
@@ -308,6 +317,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         isLoading: false,
         hasMore: resp.pagination?.hasMore ?? false,
         currentPage: 1,
+        error: null,
       })
     } catch (err) {
       set({ isLoading: false, error: err instanceof Error ? err.message : 'Failed to load history' })
