@@ -255,11 +255,36 @@ npm test              # All tests (parallel)
 
 ## Alternatives
 
-- [Claude Code](https://github.com/anthropics/claude-code) — The CLI tool Walnut orchestrates
-- [Aider](https://github.com/paul-gauthier/aider) — AI pair programming (terminal only)
-- [Continue](https://github.com/continuedev/continue) — AI coding assistant (IDE extension)
+### AI Coding Agents
 
-Walnut is different: it combines task management, memory, and session orchestration in one self-hosted system.
+| Project | Stars | What It Does | How Walnut Differs |
+|---------|-------|--------------|-------------------|
+| [Claude Code](https://github.com/anthropics/claude-code) | - | Anthropic's CLI coding agent | Walnut orchestrates Claude Code sessions with task context and memory |
+| [Aider](https://github.com/paul-gauthier/aider) | 30k+ | Terminal-based AI pair programmer, Git-aware | No task management, no persistent memory, no web UI |
+| [OpenHands](https://github.com/OpenHands/OpenHands) | 68k+ | Autonomous AI software engineer | Focused on single-task autonomy; no task hierarchy or session orchestration |
+| [Cline](https://github.com/cline/cline) | 30k+ | VS Code AI coding agent | IDE-bound; no standalone task/project management |
+| [Roo Code](https://github.com/RooCodeInc/Roo-Code) | 22k+ | VS Code multi-agent coding assistant | IDE extension, no self-hosted web UI or task system |
+| [Continue](https://github.com/continuedev/continue) | 25k+ | Open-source AI code assistant (IDE) | IDE extension, no task orchestration or memory |
+| [Plandex](https://github.com/plandex-ai/plandex) | 11k+ | Terminal AI agent for large tasks | Plan/execute only; no task hierarchy, web UI, or session management |
+| [OpenCode](https://github.com/opencode-ai/opencode) | 5k+ | Terminal AI coding agent (Go) | TUI only, no web dashboard or task management |
+
+### Agent Orchestration & Task Management
+
+| Project | Stars | What It Does | How Walnut Differs |
+|---------|-------|--------------|-------------------|
+| [Gastown](https://github.com/steveyegge/gastown) | - | Multi-agent orchestration with git-backed persistence | Agent coordination focused; Walnut adds task hierarchy, memory, and web UI |
+| [Vibe Kanban](https://github.com/BloopAI/vibe-kanban) | 22k+ | Kanban board for AI coding agents | Kanban-only; no built-in memory, chat agent, or session history |
+| [Claude Task Master](https://github.com/eyaltoledano/claude-task-master) | 14k+ | AI task management for Cursor/Windsurf/Roo | Drop-in for IDEs; no standalone server, web UI, or memory system |
+| [Claude Code UI](https://github.com/siteboon/claudecodeui) | - | Web UI wrapper for Claude Code CLI | Session viewer only; no task management, agent, or memory |
+
+### What Makes Walnut Different
+
+Walnut is not just a coding agent or a Kanban board — it's a **complete self-hosted system** that combines:
+- **Task hierarchy** (Category > Project > Task > Subtask) with lifecycle management
+- **AI agent with 30+ tools** that understands your tasks and acts on your behalf
+- **Claude Code session orchestration** — spawn, monitor, and manage sessions from a web UI
+- **Persistent memory** — per-project memory, daily logs, semantic search
+- **Self-hosted, local-first** — all data in `~/.walnut/` as JSON, Markdown, and SQLite
 
 ## Contributing
 
