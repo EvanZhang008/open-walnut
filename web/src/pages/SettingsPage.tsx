@@ -1,7 +1,29 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, Component, type ReactNode, type ErrorInfo } from 'react';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { SettingsNav } from '@/components/settings/SettingsNav';
 import { useSettingsConfig } from '@/hooks/useSettingsConfig';
+
+// Error boundary to prevent a single section crash from taking down the whole page
+class SectionErrorBoundary extends Component<{ name: string; children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.warn(`[Settings] ${this.props.name} crashed:`, error, info.componentStack);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="card settings-section" style={{ borderColor: 'var(--error)' }}>
+          <h3 className="settings-section-title">{this.props.name}</h3>
+          <p className="text-sm" style={{ color: 'var(--error)' }}>
+            This section encountered an error: {this.state.error.message}
+          </p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // Sections
 import { GettingStartedSection } from '@/components/settings/sections/GettingStartedSection';
@@ -89,15 +111,15 @@ export function SettingsPage() {
             <h1 className="page-title">Settings</h1>
             <p className="page-subtitle">Configure everything from one place</p>
           </div>
-          <GettingStartedSection config={config} onSave={saveSection} />
-          <ModelsSection config={config} onSave={saveSection} />
-          <GeneralSection config={config} onSave={saveSection} />
-          <SessionsSection config={config} onSave={saveSection} />
-          <IntegrationsSection config={config} onSave={saveSection} />
-          <SearchSection config={config} onSave={saveSection} />
-          <HeartbeatSection config={config} onSave={saveSection} />
-          <RemoteHostsSection config={config} onSave={saveSection} />
-          <AdvancedSection config={config} onSave={saveSection} />
+          <SectionErrorBoundary name="Getting Started"><GettingStartedSection config={config} onSave={saveSection} /></SectionErrorBoundary>
+          <SectionErrorBoundary name="Models"><ModelsSection config={config} onSave={saveSection} /></SectionErrorBoundary>
+          <SectionErrorBoundary name="General"><GeneralSection config={config} onSave={saveSection} /></SectionErrorBoundary>
+          <SectionErrorBoundary name="Sessions"><SessionsSection config={config} onSave={saveSection} /></SectionErrorBoundary>
+          <SectionErrorBoundary name="Integrations"><IntegrationsSection config={config} onSave={saveSection} /></SectionErrorBoundary>
+          <SectionErrorBoundary name="Search"><SearchSection config={config} onSave={saveSection} /></SectionErrorBoundary>
+          <SectionErrorBoundary name="Heartbeat"><HeartbeatSection config={config} onSave={saveSection} /></SectionErrorBoundary>
+          <SectionErrorBoundary name="Remote Hosts"><RemoteHostsSection config={config} onSave={saveSection} /></SectionErrorBoundary>
+          <SectionErrorBoundary name="Advanced"><AdvancedSection config={config} onSave={saveSection} /></SectionErrorBoundary>
         </div>
       </div>
     </div>
