@@ -115,10 +115,40 @@ export function SessionsPage() {
   useEvent('session:result', () => { loadTree(); });
   useEvent('session:status-changed', (data: unknown) => {
     // Auto-switch to new exec session when "Clear Context & Execute" creates one
-    const d = data as { sessionId?: string; fromPlanSessionId?: string };
+    const d = data as { sessionId?: string; fromPlanSessionId?: string; process_status?: string; work_status?: string; activity?: string };
     if (d.fromPlanSessionId && d.sessionId && d.fromPlanSessionId === selectedId) {
       setSelectedId(d.sessionId);
     }
+
+    // Optimistically apply status fields to in-memory tree data so the UI updates
+    // immediately — without waiting for the loadTree() API round-trip.
+    // This fixes the stale-status bug where FIFO sessions show Idle/Agent Complete
+    // even though they transitioned to Running/In Progress.
+    if (d.sessionId && treeData && (d.process_status || d.work_status)) {
+      setTreeData((prev) => {
+        if (!prev) return prev;
+        const patch = (sessions: SessionRecord[]) => {
+          for (const s of sessions) {
+            if (s.claudeSessionId === d.sessionId) {
+              if (d.process_status) s.process_status = d.process_status as SessionRecord['process_status'];
+              if (d.work_status) s.work_status = d.work_status as SessionRecord['work_status'];
+              if ('activity' in d) s.activity = d.activity;
+              return true;
+            }
+          }
+          return false;
+        };
+        for (const cat of prev.tree) {
+          for (const t of cat.directTasks) { if (patch(t.sessions)) return { ...prev }; }
+          for (const proj of cat.projects) {
+            for (const t of proj.tasks) { if (patch(t.sessions)) return { ...prev }; }
+          }
+        }
+        if (patch(prev.orphanSessions)) return { ...prev };
+        return prev;
+      });
+    }
+
     loadTree();
   });
 
