@@ -5652,31 +5652,25 @@ img[data-lightbox-src],
   white-space: nowrap;
 }
 
-/* Parent task expand/collapse chevron — inline before the title text */
+/* Parent task expand/collapse chevron — matches category/project arrow style */
 .task-parent-expand {
-  display: inline-flex;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
-  width: 22px;
-  height: 22px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 0;
-  margin: 0 4px 0 0;
-  cursor: pointer;
-  color: var(--fg-secondary);
-  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  font-size: 10px;
+  color: var(--fg-muted);
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
 }
 .task-parent-expand:hover {
-  color: var(--accent);
-  background: rgba(0, 122, 255, 0.1);
-  border-color: var(--accent);
+  color: var(--fg);
+  background: var(--bg-hover);
 }
 .task-parent-expand.expanded {
-  color: var(--accent);
-  background: rgba(0, 122, 255, 0.06);
+  color: var(--fg-muted);
 }
 .task-children-badge {
   font-size: 10px;
