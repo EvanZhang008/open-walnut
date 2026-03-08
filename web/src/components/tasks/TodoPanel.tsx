@@ -133,6 +133,8 @@ const PRIORITY_LABEL: Record<string, string> = {
   none: 'None',
 };
 
+const CHEVRON_ICON = '\u25B6'; // ▶ — used by all collapse-chevron buttons (CSS rotation handles expanded state)
+
 /** Normalize legacy priority values to current 4-tier system. */
 function effectivePriority(p: string): string {
   if (p === 'high') return 'immediate';
@@ -435,15 +437,6 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount
       {...attributes}
       {...listeners}
     >
-      {!!childCount && childCount > 0 && (
-        <button
-          className={`collapse-chevron${isExpanded ? ' expanded' : ''}`}
-          title={isExpanded ? 'Collapse child tasks' : `Expand ${childCount} child task(s)`}
-          onClick={(e) => { e.stopPropagation(); onToggleExpand?.(); }}
-        >
-          {'\u25B8'}
-        </button>
-      )}
       <div className="phase-picker-wrapper" ref={phaseWrapperRef}>
         <button
           className={`task-status-btn task-status-${task.status} task-phase-${task.phase?.toLowerCase()}`}
@@ -480,6 +473,15 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount
       </div>
       <div className="todo-item-content">
         <div className="todo-item-title-row">
+          {childCount > 0 && (
+            <button
+              className={`collapse-chevron${isExpanded ? ' expanded' : ''}`}
+              title={isExpanded ? 'Collapse child tasks' : `Expand ${childCount} child task(s)`}
+              onClick={(e) => { e.stopPropagation(); onToggleExpand?.(); }}
+            >
+              {CHEVRON_ICON}
+            </button>
+          )}
           <span
             ref={titleRef}
             className={`todo-item-title${isEditing ? ' editing' : ''}`}
@@ -2706,7 +2708,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                           <div ref={setHeaderRef} className={`todo-group-category-header${isHeaderOver ? ' header-drop-active' : ''}`} {...dragHandleProps}>
                             <div className="todo-group-header-controls">
                               <button className={`collapse-chevron${!isCategoryCollapsed(category) ? ' expanded' : ''}`} onClick={(e) => { e.stopPropagation(); toggleCategory(category); }} title="Collapse/Expand">
-                                {'\u25B8'}
+                                {CHEVRON_ICON}
                               </button>
                               <button className="todo-group-name-btn" onClick={() => showCategoryDetail(category)} title="View category details">
                                 <span className="todo-group-category-name">{category}</span>
@@ -2768,7 +2770,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                           <div ref={setProjHeaderRef} className={`todo-group-project-header${isProjHeaderOver ? ' header-drop-active' : ''}`} {...projDragProps}>
                                             <div className="todo-group-header-controls">
                                               <button className={`collapse-chevron${!isProjectCollapsed(projKey) ? ' expanded' : ''}`} onClick={(e) => { e.stopPropagation(); toggleProject(projKey); }} title="Collapse/Expand">
-                                                {'\u25B8'}
+                                                {CHEVRON_ICON}
                                               </button>
                                               <button className="todo-group-name-btn" onClick={() => showProjectDetail(category, project)} title="View project details">
                                                 <span className="todo-group-project-name">{project}</span>
