@@ -26,10 +26,13 @@ configRouter.post('/test-connection', async (req: Request, res: Response, next: 
     const { bedrock_region, bedrock_bearer_token } = req.body
     const config = await getConfig()
     const region = bedrock_region || config.provider?.bedrock_region || 'us-west-2'
-    const token = bedrock_bearer_token || config.provider?.bedrock_bearer_token
+    const token = bedrock_bearer_token
+      || config.provider?.bedrock_bearer_token
+      || config.providers?.bedrock?.bearer_token
+      || process.env.AWS_BEARER_TOKEN_BEDROCK
 
     if (!token) {
-      res.json({ ok: false, error: 'No bearer token provided' })
+      res.json({ ok: false, error: 'No bearer token configured (set in config or AWS_BEARER_TOKEN_BEDROCK env var)' })
       return
     }
 

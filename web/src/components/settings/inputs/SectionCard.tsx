@@ -55,7 +55,7 @@ export function SectionCard({
   return (
     <form
       id={id}
-      className={`settings-section card${attention ? ' settings-attention' : ''}`}
+      className="settings-section"
       onSubmit={handleSubmit}
     >
       {banner && (

@@ -431,21 +431,18 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount
         if ((e.target as HTMLElement).closest('.todo-item-title')) return;
         onClick();
       }}
-      role="button"
-      tabIndex={0}
       onKeyDown={(e) => { if (e.key === 'Enter' && !isEditing) onClick(); }}
+      {...attributes}
+      {...listeners}
     >
-      {!!childCount && childCount > 0 ? (
+      {!!childCount && childCount > 0 && (
         <button
-          className={`task-parent-expand${isExpanded ? ' expanded' : ''}`}
+          className={`collapse-chevron${isExpanded ? ' expanded' : ''}`}
           title={isExpanded ? 'Collapse child tasks' : `Expand ${childCount} child task(s)`}
           onClick={(e) => { e.stopPropagation(); onToggleExpand?.(); }}
-          {...attributes} {...listeners}
         >
-          {isExpanded ? '\u25BC' : '\u25B6'}
+          {'\u25B8'}
         </button>
-      ) : (
-        <span className="drag-handle" {...attributes} {...listeners}>&#x2807;</span>
       )}
       <div className="phase-picker-wrapper" ref={phaseWrapperRef}>
         <button
@@ -664,7 +661,6 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount
 function TaskItemOverlay({ task }: { task: Task }) {
   return (
     <div className="todo-panel-item drag-overlay-item">
-      <span className="drag-handle">&#x2807;</span>
       <span className={`task-status-btn task-status-${task.status} task-phase-${task.phase?.toLowerCase()}`}>
         {PHASE_ICON[task.phase] ?? '\u25CB'}
       </span>
@@ -2707,11 +2703,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     <div className="todo-group-category">
                       <DroppableHeader id={`hdr-cat:${category}`} category={category} project={category} disabled={activeDragType !== 'task'}>
                         {({ isOver: isHeaderOver, setNodeRef: setHeaderRef }) => (
-                          <div ref={setHeaderRef} className={`todo-group-category-header${isHeaderOver ? ' header-drop-active' : ''}`}>
-                            <span className="group-drag-handle" {...dragHandleProps}>&#x2807;</span>
+                          <div ref={setHeaderRef} className={`todo-group-category-header${isHeaderOver ? ' header-drop-active' : ''}`} {...dragHandleProps}>
                             <div className="todo-group-header-controls">
-                              <button className="todo-group-arrow-btn" onClick={() => toggleCategory(category)} title="Collapse/Expand">
-                                {isCategoryCollapsed(category) ? '\u25B6' : '\u25BC'}
+                              <button className={`collapse-chevron${!isCategoryCollapsed(category) ? ' expanded' : ''}`} onClick={(e) => { e.stopPropagation(); toggleCategory(category); }} title="Collapse/Expand">
+                                {'\u25B8'}
                               </button>
                               <button className="todo-group-name-btn" onClick={() => showCategoryDetail(category)} title="View category details">
                                 <span className="todo-group-category-name">{category}</span>
@@ -2770,11 +2765,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                     <div className="todo-group-project">
                                       <DroppableHeader id={`hdr-proj:${category}/${project}`} category={category} project={project} disabled={activeDragType !== 'task'}>
                                         {({ isOver: isProjHeaderOver, setNodeRef: setProjHeaderRef }) => (
-                                          <div ref={setProjHeaderRef} className={`todo-group-project-header${isProjHeaderOver ? ' header-drop-active' : ''}`}>
-                                            <span className="group-drag-handle" {...projDragProps}>&#x2807;</span>
+                                          <div ref={setProjHeaderRef} className={`todo-group-project-header${isProjHeaderOver ? ' header-drop-active' : ''}`} {...projDragProps}>
                                             <div className="todo-group-header-controls">
-                                              <button className="todo-group-arrow-btn" onClick={() => toggleProject(projKey)} title="Collapse/Expand">
-                                                {isProjectCollapsed(projKey) ? '\u25B6' : '\u25BC'}
+                                              <button className={`collapse-chevron${!isProjectCollapsed(projKey) ? ' expanded' : ''}`} onClick={(e) => { e.stopPropagation(); toggleProject(projKey); }} title="Collapse/Expand">
+                                                {'\u25B8'}
                                               </button>
                                               <button className="todo-group-name-btn" onClick={() => showProjectDetail(category, project)} title="View project details">
                                                 <span className="todo-group-project-name">{project}</span>
@@ -2841,12 +2835,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             >
               {activeDragType === 'category-group' && activeDragId ? (
                 <div className="drag-overlay-group">
-                  <span className="drag-overlay-group-icon">&#x2807;</span>
                   {activeDragId.replace('cat:', '')}
                 </div>
               ) : activeDragType === 'project-group' && activeDragId ? (
                 <div className="drag-overlay-group drag-overlay-group-project">
-                  <span className="drag-overlay-group-icon">&#x2807;</span>
                   {activeDragId.replace(/^proj:[^/]+\//, '')}
                 </div>
               ) : draggedTask ? (

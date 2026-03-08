@@ -51,10 +51,12 @@ export function SettingsPage() {
     const container = contentRef.current;
     if (!container) return;
     const handleScroll = () => {
-      const scrollTop = container.scrollTop + 40;
+      const containerRect = container.getBoundingClientRect();
+      // Find the last section whose top is above the midpoint of the container
+      const threshold = containerRect.top + 80;
       for (let i = SECTION_IDS.length - 1; i >= 0; i--) {
         const el = document.getElementById(SECTION_IDS[i]);
-        if (el && el.offsetTop <= scrollTop) {
+        if (el && el.getBoundingClientRect().top <= threshold) {
           setActiveSection(SECTION_IDS[i]);
           return;
         }
