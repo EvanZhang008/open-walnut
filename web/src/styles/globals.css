@@ -32,6 +32,7 @@
   --radius-lg: 16px;
   --heartbeat: #FF6B6B;
   --overlay-bg: rgba(0, 0, 0, 0.3);
+  --bg-hover: rgba(0, 0, 0, 0.04);
 
   /* Entity ref colors — task=blue (accent), session=purple */
   --session-ref: #5856D6;
@@ -61,6 +62,7 @@
   --card-shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.3);
   --heartbeat: #FF8787;
   --overlay-bg: rgba(0, 0, 0, 0.5);
+  --bg-hover: rgba(255, 255, 255, 0.06);
   --session-ref: #5E5CE6;
   --session-ref-subtle: rgba(94, 92, 230, 0.12);
   --session-ref-subtle-hover: rgba(94, 92, 230, 0.24);
@@ -84,6 +86,7 @@
     --card-shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.3);
     --heartbeat: #FF8787;
     --overlay-bg: rgba(0, 0, 0, 0.5);
+    --bg-hover: rgba(255, 255, 255, 0.06);
   }
 }
 
@@ -5836,6 +5839,17 @@ img[data-lightbox-src],
   min-height: 0;
 }
 
+/* Detail pane is a content panel, not a list item — no hover highlight */
+.todo-detail-pane .todo-detail-section,
+.todo-detail-pane .todo-detail-meta,
+.todo-detail-pane .todo-detail-note {
+  transition: none;
+}
+.todo-detail-pane .todo-detail-section:hover,
+.todo-detail-pane .todo-detail-meta:hover {
+  background: transparent;
+}
+
 .todo-detail-header {
   display: flex;
   align-items: center;
@@ -6197,7 +6211,7 @@ img[data-lightbox-src],
 }
 
 .todo-detail-session-item:hover {
-  background: var(--bg-hover, rgba(128, 128, 128, 0.08));
+  background: var(--bg-hover);
 }
 
 .todo-detail-session-row1 {

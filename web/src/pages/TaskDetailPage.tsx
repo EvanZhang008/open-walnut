@@ -323,7 +323,7 @@ export function TaskDetailPage() {
                       key={t.id}
                       onClick={() => handleAddDep(t.id)}
                       style={{ padding: '4px 8px', cursor: 'pointer', fontSize: '0.8rem', borderBottom: '1px solid var(--border)' }}
-                      onMouseEnter={(e) => { (e.target as HTMLElement).style.background = 'var(--bg-hover)'; }}
+                      onMouseEnter={(e) => { (e.target as HTMLElement).style.background = 'var(--bg-tertiary)'; }}
                       onMouseLeave={(e) => { (e.target as HTMLElement).style.background = 'transparent'; }}
                     >
                       <span style={{ opacity: 0.5, marginRight: '6px' }}>{t.id.slice(0, 8)}</span>
@@ -478,7 +478,7 @@ export function TaskDetailPage() {
                   background: 'var(--bg-secondary)', cursor: 'pointer',
                 }}
                 onClick={() => navigate(`/tasks/${child.id}`)}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)'; }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-tertiary)'; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-secondary)'; }}
               >
                 <span style={{
