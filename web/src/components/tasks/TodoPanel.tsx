@@ -1464,6 +1464,22 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusedTaskId, tasks, activeCategory, collapsedCategories, collapsedProjects, favorites]);
 
+  // Auto-expand parent when a child task is created (via WS event)
+  useEvent('task:created', (data) => {
+    const { task } = data as { task: { parent_task_id?: string } };
+    if (!task?.parent_task_id) return;
+    // Resolve full parent ID (parent_task_id may be a prefix)
+    const parentTask = tasks.find((t) => t.id.startsWith(task.parent_task_id!));
+    if (parentTask) {
+      setExpandedParents((prev) => {
+        if (prev.has(parentTask.id)) return prev;
+        const next = new Set(prev);
+        next.add(parentTask.id);
+        return next;
+      });
+    }
+  });
+
   const focusedTask = useMemo(() => {
     if (!focusedTaskId) return null;
     return tasks.find((t) => t.id === focusedTaskId) ?? null;
