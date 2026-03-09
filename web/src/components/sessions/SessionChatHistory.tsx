@@ -593,19 +593,25 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
   //
   // Rule: keep scroll at bottom UNLESS the user explicitly scrolled up.
   //
-  // Three pieces:
+  // Four pieces:
   //  1. scrollToBottom() — the only scroll function, marks scroll as programmatic
   //  2. Scroll event listener — detects user scroll-up, sets 15s lock
-  //  3. ResizeObserver — fires on ANY size change (content, sibling squeeze,
-  //     streaming, Phase 2 data, images loading) → scrolls to bottom if not locked
+  //  3. ResizeObserver — fires on size changes in existing children (images,
+  //     sibling squeeze, CSS transitions) → scrolls to bottom if not locked
+  //  4. Content-growth useLayoutEffect — catches scrollHeight increases from
+  //     new/recreated DOM nodes (e.g. streaming panel destroyed between turns)
+  //     that ResizeObserver can't observe
   //
-  // That's it. No MutationObserver, no timers, no deadlines, no message counting.
+  // Pieces 3 & 4 are complementary: RO handles layout changes in existing
+  // elements, the effect handles new elements appearing. Both respect the
+  // same user scroll lock.
   // ═══════════════════════════════════════════════════════════════════════════
 
   const scrolledForSessionRef = useRef<string | null>(null);
   const userScrollLockUntil = useRef(0);
   const lastScrollTop = useRef(0);
   const programmaticScrollUntil = useRef(0);
+  const prevScrollHeight = useRef(0);
 
   // Reset on session switch
   useEffect(() => {
@@ -619,6 +625,7 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     userScrollLockUntil.current = 0;
     lastScrollTop.current = 0;
     programmaticScrollUntil.current = 0;
+    prevScrollHeight.current = 0;
     if (batchTimeoutRef.current) { clearTimeout(batchTimeoutRef.current); batchTimeoutRef.current = null; }
   }, [sessionId]);
 
@@ -691,6 +698,22 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     // detects content changes via element resize, not via React re-render.
     // Including messages/blocks would recreate the observer on every streaming update.
   }, [sessionId, scrollToBottom]);
+
+  // ── 4. Content-growth auto-scroll ──
+  // ResizeObserver only observes children present at setup time. Between turns,
+  // session-streaming-panel is destroyed and recreated — new DOM nodes aren't
+  // observed. This effect catches ALL content growth by comparing scrollHeight
+  // after each render (before paint), so scroll stays pinned even across turns.
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el || scrolledForSessionRef.current !== sessionId) return;
+    const sh = el.scrollHeight;
+    if (sh <= prevScrollHeight.current) { prevScrollHeight.current = sh; return; }
+    prevScrollHeight.current = sh;
+    if (sh <= el.clientHeight) return;  // all content visible, no scroll needed
+    if (userScrollLockUntil.current > Date.now()) return;
+    scrollToBottom(el);
+  });
 
   // ── Deduplicate optimistic messages against persisted history ──
   // Non-committed messages: only dedup against NEWLY APPEARED messages ([prevMsgLen..length)).

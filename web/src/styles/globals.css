@@ -2235,6 +2235,7 @@ input:focus, textarea:focus, select:focus {
 .session-history {
   flex: 1;
   overflow-y: auto;
+  overflow-anchor: none;  /* Prevent browser scroll anchoring from fighting JS auto-scroll */
   padding: 16px;
   display: flex;
   flex-direction: column;
