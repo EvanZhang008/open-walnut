@@ -5,10 +5,9 @@ interface SecretInputProps {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
-  readOnly?: boolean;
 }
 
-export function SecretInput({ id, value, onChange, placeholder, readOnly }: SecretInputProps) {
+export function SecretInput({ id, value, onChange, placeholder }: SecretInputProps) {
   const [visible, setVisible] = useState(false);
 
   return (
@@ -17,12 +16,10 @@ export function SecretInput({ id, value, onChange, placeholder, readOnly }: Secr
         id={id}
         type={visible ? 'text' : 'password'}
         value={value}
-        onChange={(e) => { if (!readOnly) onChange(e.target.value); }}
-        onFocus={readOnly ? (e) => { e.target.blur(); onChange(''); } : undefined}
+        onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         className="secret-input"
         autoComplete="off"
-        readOnly={readOnly}
       />
       <button
         type="button"

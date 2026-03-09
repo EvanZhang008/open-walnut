@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import type { Config } from '@walnut/core';
 import { SectionCard } from '../inputs/SectionCard';
 import { SecretInput } from '../inputs/SecretInput';
@@ -17,38 +17,16 @@ interface Props {
 }
 
 export function GettingStartedSection({ config, onSave }: Props) {
+  const envHint = (config as Config & { _envTokenHint?: string })._envTokenHint ?? '';
   const [region, setRegion] = useState(config.provider?.bedrock_region ?? 'us-west-2');
   const [token, setToken] = useState(config.provider?.bedrock_bearer_token ?? '');
-  const [envToken, setEnvToken] = useState('');
-  const [status, setStatus] = useState<'connected' | 'error' | 'unknown' | 'testing'>('testing');
-  const [statusText, setStatusText] = useState<string | undefined>('Checking connection...');
-  const autoTestedRef = useRef(false);
+  const [status, setStatus] = useState<'connected' | 'error' | 'unknown' | 'testing'>('unknown');
+  const [statusText, setStatusText] = useState<string | undefined>();
 
   useEffect(() => {
     setRegion(config.provider?.bedrock_region ?? 'us-west-2');
     setToken(config.provider?.bedrock_bearer_token ?? '');
   }, [config]);
-
-  // Auto-test connection on mount — also fetches env token hint
-  useEffect(() => {
-    if (autoTestedRef.current) return;
-    autoTestedRef.current = true;
-    testConnection({ bedrock_region: region })
-      .then((result) => {
-        if (result.ok) {
-          setStatus('connected');
-          const viaEnv = !token;
-          setStatusText(`Connected${viaEnv ? ' via environment' : ''}${result.latencyMs ? ` (${result.latencyMs}ms)` : ''}`);
-          // If token not in config but connection works, the env var has it
-          if (viaEnv && result.envTokenHint) setEnvToken(result.envTokenHint);
-        } else {
-          setStatus('unknown');
-          setStatusText(undefined);
-        }
-      })
-      .catch(() => { setStatus('unknown'); setStatusText(undefined); });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const handleTest = async () => {
     setStatus('testing');
@@ -57,8 +35,8 @@ export function GettingStartedSection({ config, onSave }: Props) {
       const result = await testConnection({ bedrock_region: region, bedrock_bearer_token: token || undefined });
       if (result.ok) {
         setStatus('connected');
-        const source = !token ? ' (via environment)' : '';
-        setStatusText(`Connected${source}${result.latencyMs ? ` — ${result.latencyMs}ms` : ''}`);
+        const source = !token && envHint ? ' via environment' : '';
+        setStatusText(`Connected${source}${result.latencyMs ? ` (${result.latencyMs}ms)` : ''}`);
       } else {
         setStatus('error');
         setStatusText(result.error ?? 'Connection failed');
@@ -80,6 +58,9 @@ export function GettingStartedSection({ config, onSave }: Props) {
     });
   };
 
+  // Display value: user-entered token > config token > env hint
+  const displayValue = token || envHint;
+
   return (
     <SectionCard
       id="getting-started"
@@ -98,12 +79,11 @@ export function GettingStartedSection({ config, onSave }: Props) {
         <label htmlFor="bedrock-token">Bearer Token</label>
         <SecretInput
           id="bedrock-token"
-          value={token || envToken}
+          value={displayValue}
           onChange={setToken}
           placeholder="Paste your bearer token"
-          readOnly={!token && !!envToken}
         />
-        {!token && envToken && (
+        {!token && envHint && (
           <p className="text-sm text-muted" style={{ marginTop: 4 }}>
             From environment variable. Paste a new token above to override.
           </p>

@@ -1,8 +1,10 @@
 import { apiGet, apiPut, apiPost } from './client';
 import type { Config } from '@walnut/core';
 
-export async function fetchConfig(): Promise<Config> {
-  const res = await apiGet<{ config: Config }>('/api/config');
+export async function fetchConfig(): Promise<Config & { _envTokenHint?: string }> {
+  const res = await apiGet<{ config: Config; envTokenHint?: string }>('/api/config');
+  // Attach env hint as a transient field
+  if (res.envTokenHint) (res.config as Config & { _envTokenHint?: string })._envTokenHint = res.envTokenHint;
   return res.config;
 }
 
