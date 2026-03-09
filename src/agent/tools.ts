@@ -457,10 +457,6 @@ export const tools: ToolDefinition[] = [
         const allTasks = await listTasks();
         const children = allTasks.filter((t) => t.parent_task_id === task.id);
         const result: Record<string, unknown> = { ...task };
-        // Truncate conversation_log to avoid consuming excessive tokens
-        if (result.conversation_log && typeof result.conversation_log === 'string' && (result.conversation_log as string).length > 1500) {
-          result.conversation_log = (result.conversation_log as string).slice(-1500) + '\n[older entries truncated]';
-        }
         if (children.length > 0) {
           result.children = children.map((c) => ({
             id: c.id, title: c.title, status: c.status, phase: c.phase,
@@ -603,7 +599,7 @@ export const tools: ToolDefinition[] = [
         const syncStatus = syncResult?.success === false
           ? `, ⚠️ sync failed: ${syncResult.error}`
           : ', synced';
-        return `Task created: [${task.id}] ${task.title} (${task.priority}, ${task.category} → ${task.source}${syncStatus})`;
+        return `Task created: ${taskRef(task.id, task.title)} (${task.priority}, ${task.category} → ${task.source}${syncStatus})`;
       } catch (err) {
         if (err instanceof CategorySourceConflictError) {
           return `Error: ${err.message} (category "${err.category}" uses ${err.existingSource} — cannot add ${err.intendedSource} task)`;
@@ -767,7 +763,7 @@ For projects (type='project'): set default_host and default_cwd for remote sessi
 
         // Get final task state for the response
         const task = await getTask(id);
-        return `Task updated: [${task.id}] ${task.title} — ${results.join(', ')}`;
+        return `Task updated: ${taskRef(task.id, task.title)} — ${results.join(', ')}`;
       } catch (err) {
         return `Error: ${err instanceof Error ? err.message : String(err)}`;
       }
@@ -789,7 +785,7 @@ For projects (type='project'): set default_host and default_cwd for remote sessi
       try {
         const { task } = await deleteTask(params.id as string);
         bus.emit(EventNames.TASK_DELETED, { id: task.id, task }, ['web-ui'], { source: 'agent' });
-        return `Task deleted: [${task.id}] ${task.title}`;
+        return `Task deleted: ${taskRef(task.id, task.title)}`;
       } catch (err) {
         if (err instanceof ActiveSessionError) {
           return `Cannot delete: task has ${err.activeSessionIds.length} active session(s): ${err.activeSessionIds.join(', ')}. Stop or complete those sessions first.`;

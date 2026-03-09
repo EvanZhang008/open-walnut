@@ -374,25 +374,20 @@ export async function enrichTaskContext(ctx: TaskContext): Promise<EnrichedResul
 
 /**
  * Fire-and-forget helper: append a conversation log entry to a task after a chat turn.
- * Truncates user/AI messages to keep entries brief. appendConversationLog auto-prepends the timestamp.
+ * Preserves full user/AI messages — never truncate user input or AI responses.
+ * appendConversationLog auto-prepends the timestamp.
  */
 async function autoAppendConversationLog(taskId: string, userMessage: string, aiResponse: string, toolNames?: string[]): Promise<void> {
-  const userSummary = userMessage.length > 150
-    ? userMessage.slice(0, 150).trim() + '\u2026'
-    : userMessage
-
-  let aiSummary: string
+  let aiContent: string
   if (aiResponse) {
-    aiSummary = aiResponse.length > 200
-      ? aiResponse.slice(0, 200).trim() + '\u2026'
-      : aiResponse
+    aiContent = aiResponse
   } else if (toolNames && toolNames.length > 0) {
-    aiSummary = `[Used tools: ${toolNames.join(', ')}]`
+    aiContent = `[Used tools: ${toolNames.join(', ')}]`
   } else {
-    aiSummary = '[No response]'
+    aiContent = '[No response]'
   }
 
-  const entry = `**User:** ${userSummary}\n**AI:** ${aiSummary}`
+  const entry = `**User:** ${userMessage}\n**AI:** ${aiContent}`
   await appendConversationLog(taskId, entry)
 }
 
