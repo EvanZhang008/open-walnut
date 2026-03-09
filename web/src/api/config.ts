@@ -14,10 +14,36 @@ export interface TestConnectionResult {
   ok: boolean;
   error?: string;
   latencyMs?: number;
+  envTokenHint?: string;
 }
 
 export async function testConnection(
   params: { bedrock_region?: string; bedrock_bearer_token?: string },
 ): Promise<TestConnectionResult> {
   return apiPost<TestConnectionResult>('/api/config/test-connection', params);
+}
+
+// ── Multi-provider API ──
+
+export interface ProviderStatus {
+  api: string;
+  base_url?: string;
+  status: 'ready' | 'no_key' | 'not_implemented';
+  key_hint?: string;
+  auto_detected: boolean;
+}
+
+export async function fetchProviders(): Promise<Record<string, ProviderStatus>> {
+  const res = await apiGet<{ providers: Record<string, ProviderStatus> }>('/api/config/providers');
+  return res.providers;
+}
+
+export async function testProvider(
+  providerName: string,
+  providerConfig?: { api: string; api_key?: string; base_url?: string; region?: string; bearer_token?: string },
+): Promise<TestConnectionResult> {
+  return apiPost<TestConnectionResult>('/api/config/test-provider', {
+    provider_name: providerName,
+    provider_config: providerConfig,
+  });
 }

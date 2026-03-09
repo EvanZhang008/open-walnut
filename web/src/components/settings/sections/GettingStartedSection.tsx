@@ -19,9 +19,9 @@ interface Props {
 export function GettingStartedSection({ config, onSave }: Props) {
   const [region, setRegion] = useState(config.provider?.bedrock_region ?? 'us-west-2');
   const [token, setToken] = useState(config.provider?.bedrock_bearer_token ?? '');
+  const [envToken, setEnvToken] = useState('');
   const [status, setStatus] = useState<'connected' | 'error' | 'unknown' | 'testing'>('testing');
   const [statusText, setStatusText] = useState<string | undefined>('Checking connection...');
-  const [envDetected, setEnvDetected] = useState(false);
   const autoTestedRef = useRef(false);
 
   useEffect(() => {
@@ -29,7 +29,7 @@ export function GettingStartedSection({ config, onSave }: Props) {
     setToken(config.provider?.bedrock_bearer_token ?? '');
   }, [config]);
 
-  // Auto-test connection on first mount (catches env var auth)
+  // Auto-test connection on mount — also fetches env token hint
   useEffect(() => {
     if (autoTestedRef.current) return;
     autoTestedRef.current = true;
@@ -38,8 +38,9 @@ export function GettingStartedSection({ config, onSave }: Props) {
         if (result.ok) {
           setStatus('connected');
           const viaEnv = !token;
-          if (viaEnv) setEnvDetected(true);
           setStatusText(`Connected${viaEnv ? ' via environment' : ''}${result.latencyMs ? ` (${result.latencyMs}ms)` : ''}`);
+          // If token not in config but connection works, the env var has it
+          if (viaEnv && result.envTokenHint) setEnvToken(result.envTokenHint);
         } else {
           setStatus('unknown');
           setStatusText(undefined);
@@ -95,23 +96,17 @@ export function GettingStartedSection({ config, onSave }: Props) {
 
       <div className="form-group">
         <label htmlFor="bedrock-token">Bearer Token</label>
-        {envDetected && !token ? (
-          <>
-            <div style={{
-              padding: '8px 12px', borderRadius: 6, fontSize: 13,
-              background: 'rgba(52, 199, 89, 0.08)', border: '1px solid rgba(52, 199, 89, 0.3)',
-              color: 'var(--success)', display: 'flex', alignItems: 'center', gap: 8,
-            }}>
-              <span style={{ fontSize: 16 }}>&#x2713;</span>
-              <span>Configured via <code style={{ fontSize: 12 }}>AWS_BEARER_TOKEN_BEDROCK</code> environment variable</span>
-            </div>
-            <p className="text-sm text-muted" style={{ marginTop: 4, cursor: 'pointer' }}
-              onClick={() => setEnvDetected(false)}>
-              Want to override? Click here to enter a token manually.
-            </p>
-          </>
-        ) : (
-          <SecretInput id="bedrock-token" value={token} onChange={setToken} placeholder="Paste your bearer token" />
+        <SecretInput
+          id="bedrock-token"
+          value={token || envToken}
+          onChange={setToken}
+          placeholder="Paste your bearer token"
+          readOnly={!token && !!envToken}
+        />
+        {!token && envToken && (
+          <p className="text-sm text-muted" style={{ marginTop: 4 }}>
+            From environment variable. Paste a new token above to override.
+          </p>
         )}
       </div>
 
