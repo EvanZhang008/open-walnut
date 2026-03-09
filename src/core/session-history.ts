@@ -18,8 +18,13 @@ import {
   readSessionJsonlContent,
   readSubagentContents,
 } from './session-file-reader.js';
-import { rewriteRemoteImagePaths } from '../providers/session-io.js';
+import os from 'node:os';
+import path from 'node:path';
+import { rewriteRemoteImagePaths, findImagePaths } from '../providers/session-io.js';
 import type { SshTarget } from '../providers/session-io.js';
+
+/** Cached homedir — avoids repeated syscall on each history request */
+const LOCAL_HOME = os.homedir();
 
 // ── Image file detection ──
 
@@ -863,16 +868,42 @@ export async function rewriteHistoryRemoteImages(
 
   const cache = new Map<string, string>()
 
+  // Pre-scan: build filename → absolute path hints from tool inputs/results.
+  // Tool inputs (e.g. Bash `cp` commands, file paths) contain full absolute paths
+  // that are more accurate than CWD-based resolution for relative filenames.
+  const filePathHints = new Map<string, string>()
+  const isUsefulHint = (p: string) =>
+    !p.startsWith(LOCAL_HOME) &&        // skip local filesystem paths
+    p.lastIndexOf('/') > 0              // require ≥2 path components (reject "/file.png" from `./file.png` regex capture)
+  for (const msg of messages) {
+    if (!msg.tools) continue
+    for (const tool of msg.tools) {
+      // Scan tool input (may be object or string)
+      const inputStr = typeof tool.input === 'string'
+        ? tool.input
+        : (tool.input ? JSON.stringify(tool.input) : '')
+      for (const p of findImagePaths(inputStr)) {
+        if (isUsefulHint(p)) filePathHints.set(path.basename(p), p)
+      }
+      // Scan tool result
+      if (tool.result) {
+        for (const p of findImagePaths(tool.result)) {
+          if (isUsefulHint(p)) filePathHints.set(path.basename(p), p)
+        }
+      }
+    }
+  }
+
   for (const msg of messages) {
     // Rewrite text content
     if (msg.text) {
-      msg.text = rewriteRemoteImagePaths(msg.text, sshTarget, sessionId, cache, cwd)
+      msg.text = rewriteRemoteImagePaths(msg.text, sshTarget, sessionId, cache, cwd, filePathHints)
     }
     // Rewrite tool results
     if (msg.tools) {
       for (const tool of msg.tools) {
         if (tool.result) {
-          tool.result = rewriteRemoteImagePaths(tool.result, sshTarget, sessionId, cache, cwd)
+          tool.result = rewriteRemoteImagePaths(tool.result, sshTarget, sessionId, cache, cwd, filePathHints)
         }
       }
     }

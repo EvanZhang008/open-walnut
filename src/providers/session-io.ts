@@ -1393,6 +1393,9 @@ export function createSessionIO(
 
 // ── Image transfer for remote sessions ──
 
+/** Local home directory — used to skip local paths during remote image rewriting. */
+const LOCAL_HOME = os.homedir()
+
 /** Image extensions we recognize. */
 const IMG_EXT = 'png|jpg|jpeg|gif|webp|bmp|tiff'
 
@@ -1618,12 +1621,17 @@ export function rewriteRemoteImagePaths(
   sessionId: string,
   cache: Map<string, string>,
   cwd?: string,
+  /** Optional map of basename → full remote path, built from tool inputs/results */
+  filePathHints?: Map<string, string>,
 ): string {
   let rewritten = text
 
   // Pass 1: absolute remote paths (existing behavior)
   const remotePaths = findRemoteImagePaths(text)
   for (const remotePath of remotePaths) {
+    // Skip local paths — they exist on this machine, not on the remote host
+    if (remotePath.startsWith(LOCAL_HOME) || remotePath.startsWith(REMOTE_IMAGES_DIR)) continue
+
     let localPath = cache.get(remotePath)
     if (!localPath) {
       localPath = path.join(REMOTE_IMAGES_DIR, sessionId, path.basename(remotePath))
@@ -1640,7 +1648,9 @@ export function rewriteRemoteImagePaths(
   if (cwd) {
     const relNames = findRelativeImageNames(rewritten)
     for (const relName of relNames) {
-      const absoluteRemote = `${cwd.replace(/\/$/, '')}/${relName}`
+      // Use filePathHints (from tool inputs) when available — more accurate than CWD
+      const hintPath = filePathHints?.get(path.basename(relName))
+      const absoluteRemote = hintPath || `${cwd.replace(/\/$/, '')}/${relName}`
       // Skip if this absolute path was already handled in pass 1
       if (cache.has(absoluteRemote)) continue
 
@@ -1657,7 +1667,7 @@ export function rewriteRemoteImagePaths(
       // Use regex to avoid partial matches (e.g. don't match inside a longer path)
       const escaped = relName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       const nameRe = new RegExp(`(?<=^|[\\s"'\`=:(])${escaped}(?=[\\s"'\`),;\\]}]|$)`, 'g')
-      rewritten = rewritten.replace(nameRe, localPath)
+      rewritten = rewritten.replace(nameRe, () => localPath)
     }
   }
 

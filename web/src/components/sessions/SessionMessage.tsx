@@ -7,6 +7,14 @@ import {
 } from '@/utils/markdown';
 import { useLivePlanContent } from '@/contexts/PlanContentContext';
 
+/** Hide the image's parent container on load error (broken remote images, etc.).
+ *  Hides .tool-result-image-item if present (caption + img), else hides parent element. */
+const hideOnImgError = (e: React.SyntheticEvent<HTMLImageElement>) => {
+  const img = e.target as HTMLImageElement;
+  const container = img.closest('.tool-result-image-item') ?? img.parentElement;
+  if (container instanceof HTMLElement) container.style.display = 'none';
+};
+
 interface SessionMessageProps {
   message: SessionHistoryMessage;
   sessionCwd?: string;
@@ -215,7 +223,7 @@ export function GenericToolCall({ tool, status = 'done', result: resultProp, ses
             ))}
             {inputImageSrc && (
               <div className="tool-result-images">
-                <img src={inputImageSrc} className="inline-image" data-lightbox-src={inputImageSrc} loading="lazy" />
+                <img src={inputImageSrc} className="inline-image" data-lightbox-src={inputImageSrc} loading="lazy" onError={hideOnImgError} />
               </div>
             )}
           </div>
@@ -226,7 +234,7 @@ export function GenericToolCall({ tool, status = 'done', result: resultProp, ses
                 <div className="tool-result-images">
                   {resultImages.map(img => (
                     <div key={img.key} className="tool-result-image-item">
-                      <img src={img.src} className="inline-image" data-lightbox-src={img.src} loading="lazy" />
+                      <img src={img.src} className="inline-image" data-lightbox-src={img.src} loading="lazy" onError={hideOnImgError} />
                       {img.caption && <span className="inline-image-path">{img.caption}</span>}
                     </div>
                   ))}
@@ -393,7 +401,7 @@ export const SessionMessage = memo(function SessionMessage({ message, sessionCwd
                 const src = `/api/local-image?path=${encodeURIComponent(abs)}`;
                 return (
                   <div key={i} className="tool-result-image-item">
-                    <img src={src} className="inline-image" data-lightbox-src={src} loading="lazy" />
+                    <img src={src} className="inline-image" data-lightbox-src={src} loading="lazy" onError={hideOnImgError} />
                     <span className="inline-image-path">{p}</span>
                   </div>
                 );
