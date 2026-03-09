@@ -1971,61 +1971,6 @@ input:focus, textarea:focus, select:focus {
   background: var(--success, #34c759);
 }
 
-/* Fork popover */
-.session-fork-wrapper {
-  position: relative;
-  display: inline-flex;
-}
-
-.session-fork-popover {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  z-index: 100;
-  background: var(--card-bg, #fff);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
-  padding: 10px 12px;
-  min-width: 260px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.session-fork-popover-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--fg);
-}
-
-.session-fork-popover-input {
-  width: 100%;
-  padding: 5px 8px;
-  font-size: 12px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--fg);
-  outline: none;
-  box-sizing: border-box;
-}
-
-.session-fork-popover-input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.15);
-}
-
-.session-fork-popover-error {
-  font-size: 11px;
-  color: var(--error, #ff3b30);
-}
-
-.session-fork-popover-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-}
 
 .session-detail-link {
   color: var(--accent);
@@ -11161,6 +11106,12 @@ img[data-lightbox-src],
 .provider-badge.configured {
   background: rgba(52, 199, 89, 0.1);
   color: var(--success);
+}
+
+.provider-badge.active {
+  background: rgba(0, 122, 255, 0.15);
+  color: var(--accent);
+  font-weight: 600;
 }
 
 .provider-card-body {
