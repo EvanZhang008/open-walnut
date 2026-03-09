@@ -9,7 +9,7 @@ export const UI_ONLY_CATEGORIES = [
   { key: 'session', label: 'Session results', description: 'Completed session output summaries', defaultOn: false },
   { key: 'session-error', label: 'Session errors', description: 'Session error notifications', defaultOn: true },
   { key: 'subagent', label: 'Subagent results', description: 'Embedded subagent result notifications', defaultOn: false },
-  { key: 'heartbeat', label: 'Heartbeat', description: 'Periodic health check results', defaultOn: true },
+  { key: 'heartbeat', label: 'Heartbeat "all clear"', description: 'Routine check-ins when nothing needs attention (issues always shown)', defaultOn: false },
   { key: 'agent-error', label: 'Agent errors', description: 'Agent and cron error notifications', defaultOn: true },
 ] as const;
 
