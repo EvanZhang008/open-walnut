@@ -1940,6 +1940,33 @@ input:focus, textarea:focus, select:focus {
   color: var(--accent);
 }
 
+/* "Fork in Walnut" action button — accent fill to distinguish from copy chips */
+.session-fork-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  font-family: inherit;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, opacity 0.15s;
+  line-height: 1.6;
+}
+
+.session-fork-btn:hover {
+  opacity: 0.85;
+}
+
+.session-fork-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .session-detail-link {
   color: var(--accent);
   text-decoration: none;
@@ -5636,22 +5663,6 @@ img[data-lightbox-src],
   opacity: 0.6;
   background: rgba(52, 199, 89, 0.06);
   transition: opacity 0.3s ease;
-}
-
-/* Child task indentation */
-.todo-panel-item-child {
-  margin-left: 16px;
-  border-left: 2px solid var(--border-strong);
-  padding-left: 8px;
-}
-
-.task-child-badge {
-  font-size: 10px;
-  color: var(--fg-muted);
-  background: var(--bg-secondary);
-  padding: 1px 5px;
-  border-radius: 4px;
-  white-space: nowrap;
 }
 
 /* Unified collapse/expand chevron — used at category, project, and parent-task levels */

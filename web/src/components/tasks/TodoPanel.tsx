@@ -255,7 +255,7 @@ interface SortableTaskItemProps {
   task: Task;
   isFocused: boolean;
   isRecentlyDone?: boolean;
-  isChild?: boolean;
+  depth?: number;               // Nesting depth (0 = top-level, 1 = child, 2 = grandchild, etc.)
   childCount?: number;
   isExpanded?: boolean;           // Whether children are visible (only for parents)
   onToggleExpand?: () => void;    // Toggle children visibility
@@ -276,7 +276,7 @@ interface SortableTaskItemProps {
   searchSemanticScore?: number; // Normalized semantic contribution [0,1]
 }
 
-function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount, isExpanded, onToggleExpand, onClick, onSetPhase, onStar, onCyclePriority, onUpdateTitle, onOpenSession, openSessionIds, onPinTask, onUnpinTask, isPinned, searchContext, searchMatchField, searchScore, searchKeywordScore, searchSemanticScore }: SortableTaskItemProps) {
+function SortableTaskItem({ task, isFocused, isRecentlyDone, depth = 0, childCount, isExpanded, onToggleExpand, onClick, onSetPhase, onStar, onCyclePriority, onUpdateTitle, onOpenSession, openSessionIds, onPinTask, onUnpinTask, isPinned, searchContext, searchMatchField, searchScore, searchKeywordScore, searchSemanticScore }: SortableTaskItemProps) {
   const integrations = useIntegrations();
   const {
     attributes,
@@ -317,6 +317,7 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0 : undefined,
+    ...(depth > 0 ? { paddingLeft: `${depth * 20}px` } : {}),
   };
 
   const isDone = task.phase === 'COMPLETE';
@@ -341,7 +342,6 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount
     isDone ? 'todo-panel-item-done' : '',
     isRecentlyDone ? 'todo-panel-item-recently-done' : '',
     isFocused ? 'task-focused' : '',
-    isChild ? 'todo-panel-item-child' : '',
   ].filter(Boolean).join(' ');
 
   const dueDateInfo = task.due_date ? formatDueDate(task.due_date) : null;
@@ -437,6 +437,17 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount
       {...attributes}
       {...listeners}
     >
+      {childCount > 0 ? (
+        <button
+          className={`collapse-chevron task-collapse-chevron${isExpanded ? ' expanded' : ''}`}
+          title={isExpanded ? 'Collapse child tasks' : `Expand ${childCount} child task(s)`}
+          onClick={(e) => { e.stopPropagation(); onToggleExpand?.(); }}
+        >
+          {CHEVRON_ICON}
+        </button>
+      ) : (
+        <span className="collapse-chevron-spacer" />
+      )}
       <div className="phase-picker-wrapper" ref={phaseWrapperRef}>
         <button
           className={`task-status-btn task-status-${task.status} task-phase-${task.phase?.toLowerCase()}`}
@@ -473,15 +484,6 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount
       </div>
       <div className="todo-item-content">
         <div className="todo-item-title-row">
-          {childCount > 0 && (
-            <button
-              className={`collapse-chevron${isExpanded ? ' expanded' : ''}`}
-              title={isExpanded ? 'Collapse child tasks' : `Expand ${childCount} child task(s)`}
-              onClick={(e) => { e.stopPropagation(); onToggleExpand?.(); }}
-            >
-              {CHEVRON_ICON}
-            </button>
-          )}
           <span
             ref={titleRef}
             className={`todo-item-title${isEditing ? ' editing' : ''}`}
@@ -537,12 +539,7 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, isChild, childCount
               blocked
             </span>
           )}
-          {isChild && (
-            <span className="task-child-badge" title={`Child of ${task.parent_task_id?.slice(0, 8)}`}>
-              &#x2514; child
-            </span>
-          )}
-          {!!childCount && childCount > 0 && (
+          {!!childCount && (
             <span className="task-children-badge">{childCount} sub</span>
           )}
           {task.source && (() => {
@@ -1889,7 +1886,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Child task maps: parentId → count, set of child task IDs, and child→parent mapping
   // Only tasks whose parent is VISIBLE in the current list are treated as children.
   // Orphans (parent hidden/completed/filtered out) render as normal top-level tasks.
-  const { childCountMap, childTaskIds, childParentMap } = useMemo(() => {
+  const { childCountMap, childTaskIds, childParentMap, depthMap } = useMemo(() => {
     const countMap = new Map<string, number>();
     const childIds = new Set<string>();
     const parentMap = new Map<string, string>(); // childId → parentFullId
@@ -1906,14 +1903,30 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         // If parent not visible → orphan: no childIds entry, renders as top-level
       }
     }
-    return { childCountMap: countMap, childTaskIds: childIds, childParentMap: parentMap };
+    // Compute depth for each task by walking the parent chain (supports unlimited nesting)
+    const depths = new Map<string, number>();
+    const MAX_DEPTH = 10; // Safety cap against unexpected cycles
+    const getDepth = (id: string): number => {
+      if (depths.has(id)) return depths.get(id)!;
+      const pid = parentMap.get(id);
+      const d = pid ? Math.min(getDepth(pid) + 1, MAX_DEPTH) : 0;
+      depths.set(id, d);
+      return d;
+    };
+    for (const task of sorted) getDepth(task.id);
+    return { childCountMap: countMap, childTaskIds: childIds, childParentMap: parentMap, depthMap: depths };
   }, [sorted]);
 
-  // Determine if a child task should be hidden (its parent is collapsed)
+  // Determine if a child task should be hidden (any ancestor is collapsed — walks full chain)
   const isChildHidden = useCallback((taskId: string) => {
-    const parentId = childParentMap.get(taskId);
-    if (!parentId) return false; // not a child or orphan
-    return !expandedParents.has(parentId);
+    let currentId: string | undefined = taskId;
+    while (currentId) {
+      const parentId = childParentMap.get(currentId);
+      if (!parentId) return false; // reached a root task
+      if (!expandedParents.has(parentId)) return true; // ancestor collapsed
+      currentId = parentId;
+    }
+    return false;
   }, [childParentMap, expandedParents]);
 
   // Full (unfiltered) group map — needed so task reorder sends ALL IDs to the backend
@@ -2633,7 +2646,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     task={task}
                     isFocused={focusedTaskId === task.id}
                     isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
-                    isChild={searchChildIds.has(task.id)}
+                    depth={depthMap.get(task.id) ?? 0}
                     childCount={searchChildCount.get(task.id)}
                     isExpanded={expandedParents.has(task.id)}
                     onToggleExpand={() => toggleParentExpand(task.id)}
@@ -2670,7 +2683,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   task={task}
                   isFocused={focusedTaskId === task.id}
                   isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
-                  isChild={childTaskIds.has(task.id)}
+                  depth={depthMap.get(task.id) ?? 0}
                   childCount={childCountMap.get(task.id)}
                   isExpanded={expandedParents.has(task.id)}
                   onToggleExpand={() => toggleParentExpand(task.id)}
@@ -2740,7 +2753,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                   task={task}
                                   isFocused={focusedTaskId === task.id}
                                   isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
-                                  isChild={childTaskIds.has(task.id)}
+                                  depth={depthMap.get(task.id) ?? 0}
                                   childCount={childCountMap.get(task.id)}
                                   isExpanded={expandedParents.has(task.id)}
                                   onToggleExpand={() => toggleParentExpand(task.id)}
@@ -2799,7 +2812,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                                 task={task}
                                                 isFocused={focusedTaskId === task.id}
                                                 isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
-                                                isChild={childTaskIds.has(task.id)}
+                                                depth={depthMap.get(task.id) ?? 0}
                                                 childCount={childCountMap.get(task.id)}
                                                 isExpanded={expandedParents.has(task.id)}
                                                 onToggleExpand={() => toggleParentExpand(task.id)}

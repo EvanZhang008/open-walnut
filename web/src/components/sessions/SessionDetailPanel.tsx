@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, type KeyboardEvent } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { SessionChatHistory } from './SessionChatHistory';
 import { SessionNotes } from './SessionNotes';
 import { UserMessagesSummary } from './UserMessagesSummary';
@@ -119,6 +120,7 @@ function EditableTitle({ sessionId, title, onSaved }: { sessionId: string; title
 }
 
 export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged, onSessionReplaced, optimisticMessages, onMessagesDelivered, onBatchCompleted, onEditQueued, onDeleteQueued, onAgentQueued, onClearCommitted }: SessionDetailPanelProps) {
+  const navigate = useNavigate();
   const [executing, setExecuting] = useState(false);
   const [executeError, setExecuteError] = useState<string | null>(null);
   const [executeStarted, setExecuteStarted] = useState(false);
@@ -318,7 +320,7 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
             {session.lastActiveAt && (
               <span title={new Date(session.lastActiveAt).toLocaleString()}>{timeAgo(session.lastActiveAt)}</span>
             )}
-            {sessionId && <SessionCopyButtons sessionId={sessionId} cwd={session.cwd} />}
+            {sessionId && <SessionCopyButtons sessionId={sessionId} cwd={session.cwd} taskId={session.taskId} taskTitle={taskTitle} onForkComplete={(newTaskId) => navigate(`/tasks/${newTaskId}`)} />}
             {ps === 'stopped' && !session.archived && (
               <button
                 className="btn btn-sm"

@@ -78,3 +78,13 @@ export async function executePlanSession(
 export async function executePlanContinue(sessionId: string): Promise<{ status: string; sessionId: string }> {
   return apiPost(`/api/sessions/${sessionId}/execute-continue`, {});
 }
+
+export async function forkSessionInWalnut(
+  sessionId: string,
+  opts?: { child_title?: string; message?: string; model?: string },
+): Promise<{ status: string; sourceSessionId: string; taskId: string; childTaskCreated?: boolean; sessionId?: string }> {
+  return apiPost(`/api/sessions/${sessionId}/fork`, {
+    create_child_task: true,
+    ...opts,
+  });
+}

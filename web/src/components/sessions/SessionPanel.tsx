@@ -391,7 +391,7 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
             >
               {sessionId} &#x2197;
             </span>
-            <SessionCopyButtons sessionId={sessionId} cwd={session?.cwd} />
+            <SessionCopyButtons sessionId={sessionId} cwd={session?.cwd} taskId={session?.taskId} taskTitle={taskTitle ?? undefined} onForkComplete={(newTaskId) => navigate(`/tasks/${newTaskId}`)} />
             {session?.host && (
               <span
                 className="session-panel-host"

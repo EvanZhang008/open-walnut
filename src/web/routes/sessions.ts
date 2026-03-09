@@ -6,7 +6,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { log } from '../../logging/index.js'
 import { listSessions, getRecentSessions, getSessionSummaries, getSessionsForTask, getSessionByClaudeId, updateSessionRecord, isTriageSession } from '../../core/session-tracker.js'
 import { readSessionHistory, extractPlanContent, rewriteHistoryRemoteImages } from '../../core/session-history.js'
-import { listTasks, getTask } from '../../core/task-manager.js'
+import { listTasks, getTask, addTask } from '../../core/task-manager.js'
 import { getConfig } from '../../core/config-manager.js'
 import { bus, EventNames, eventData } from '../../core/event-bus.js'
 import { isProcessAlive } from '../../utils/process.js'
@@ -602,15 +602,21 @@ sessionsRouter.post('/:sessionId/execute', async (req: Request, res: Response, n
 sessionsRouter.post('/:sessionId/fork', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const sourceSessionId = req.params.sessionId as string
-    const { task_id, message, title, model } = req.body as {
-      task_id: string
+    const { task_id, create_child_task, child_title, message, title, model } = req.body as {
+      task_id?: string
+      create_child_task?: boolean
+      child_title?: string
       message?: string
       title?: string
       model?: string
     }
 
-    if (!task_id) {
-      res.status(400).json({ error: 'task_id is required — fork creates a new session on a different task' })
+    if (!task_id && !create_child_task) {
+      res.status(400).json({ error: 'Either task_id or create_child_task is required' })
+      return
+    }
+    if (task_id && create_child_task) {
+      res.status(400).json({ error: 'task_id and create_child_task are mutually exclusive' })
       return
     }
 
@@ -621,11 +627,46 @@ sessionsRouter.post('/:sessionId/fork', async (req: Request, res: Response, next
       return
     }
 
-    // Look up target task
-    const task = await getTask(task_id)
-    if (!task) {
-      res.status(404).json({ error: `Task "${task_id}" not found` })
+    // Validate source session has a working directory BEFORE creating any child tasks
+    if (!sourceRecord.cwd) {
+      res.status(400).json({ error: 'Source session has no working directory — cannot fork' })
       return
+    }
+
+    let task: Task | undefined
+    let childTaskCreated = false
+
+    if (create_child_task) {
+      // Auto-create a child task under the source session's task
+      if (!sourceRecord.taskId) {
+        res.status(400).json({ error: 'Source session has no task — cannot create child task' })
+        return
+      }
+      let parentTask: Task
+      try {
+        parentTask = await getTask(sourceRecord.taskId)
+      } catch {
+        res.status(404).json({ error: `Parent task "${sourceRecord.taskId}" not found` })
+        return
+      }
+      const newTitle = child_title ?? `Fork of ${parentTask.title}`
+      const { task: newChild } = await addTask({
+        title: newTitle,
+        category: parentTask.category,
+        project: parentTask.project,
+        parent_task_id: parentTask.id,
+        source: parentTask.source,
+      })
+      bus.emit(EventNames.TASK_CREATED, { task: newChild }, ['web-ui', 'main-agent'], { source: 'fork' })
+      task = newChild
+      childTaskCreated = true
+    } else {
+      // Look up target task by provided task_id
+      task = await getTask(task_id!)
+      if (!task) {
+        res.status(404).json({ error: `Task "${task_id}" not found` })
+        return
+      }
     }
 
     // Check 1-session-per-task
@@ -636,12 +677,6 @@ sessionsRouter.post('/:sessionId/fork', async (req: Request, res: Response, next
         error: 'Target task already has a session',
         existing_session_id: activeSessions[0].claudeSessionId,
       })
-      return
-    }
-
-    // Validate source session has a working directory
-    if (!sourceRecord.cwd) {
-      res.status(400).json({ error: 'Source session has no working directory — cannot fork' })
       return
     }
 
@@ -697,6 +732,7 @@ sessionsRouter.post('/:sessionId/fork', async (req: Request, res: Response, next
       status: 'started',
       sourceSessionId,
       taskId: task.id,
+      ...(childTaskCreated ? { childTaskCreated: true } : {}),
       ...(newSessionId ? { sessionId: newSessionId } : {}),
       ...(sourceRecord.host ? { host: sourceRecord.host } : {}),
     })
