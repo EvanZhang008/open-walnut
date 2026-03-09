@@ -5,12 +5,12 @@ import { useSyncExternalStore } from 'react';
  * Each maps to a localStorage key: `walnut:show_ui_only_{category}`.
  */
 export const UI_ONLY_CATEGORIES = [
-  { key: 'triage', label: 'Triage results', description: 'Session triage analysis notifications' },
-  { key: 'session', label: 'Session results', description: 'Completed session output summaries' },
-  { key: 'session-error', label: 'Session errors', description: 'Session error notifications' },
-  { key: 'subagent', label: 'Subagent results', description: 'Embedded subagent result notifications' },
-  { key: 'heartbeat', label: 'Heartbeat', description: 'Periodic health check results' },
-  { key: 'agent-error', label: 'Agent errors', description: 'Agent and cron error notifications' },
+  { key: 'triage', label: 'Triage results', description: 'Session triage analysis notifications', defaultOn: false },
+  { key: 'session', label: 'Session results', description: 'Completed session output summaries', defaultOn: false },
+  { key: 'session-error', label: 'Session errors', description: 'Session error notifications', defaultOn: true },
+  { key: 'subagent', label: 'Subagent results', description: 'Embedded subagent result notifications', defaultOn: false },
+  { key: 'heartbeat', label: 'Heartbeat', description: 'Periodic health check results', defaultOn: true },
+  { key: 'agent-error', label: 'Agent errors', description: 'Agent and cron error notifications', defaultOn: true },
 ] as const;
 
 export type UiOnlyCategory = typeof UI_ONLY_CATEGORIES[number]['key'];
@@ -30,15 +30,21 @@ function subscribe(cb: () => void): () => void {
 }
 
 function getSnapshotForCategory(category: UiOnlyCategory): boolean {
+  const catDef = UI_ONLY_CATEGORIES.find(c => c.key === category);
+  const defaultVal = catDef?.defaultOn ?? false;
   try {
     // For triage, also check legacy key
     if (category === 'triage') {
       const modern = localStorage.getItem(`${KEY_PREFIX}${category}`);
       if (modern !== null) return modern === 'true';
-      return localStorage.getItem(LEGACY_KEY) === 'true';
+      const legacy = localStorage.getItem(LEGACY_KEY);
+      if (legacy !== null) return legacy === 'true';
+      return defaultVal;
     }
-    return localStorage.getItem(`${KEY_PREFIX}${category}`) === 'true';
-  } catch { return false; }
+    const stored = localStorage.getItem(`${KEY_PREFIX}${category}`);
+    if (stored !== null) return stored === 'true';
+    return defaultVal;
+  } catch { return defaultVal; }
 }
 
 /** Read the developer setting for a specific UI Only category. Reactive to changes. */

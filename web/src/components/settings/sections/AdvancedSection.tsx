@@ -66,8 +66,13 @@ export function AdvancedSection({ config, onSave }: Props) {
 
   // Read dev settings from localStorage directly (no hook)
   const getDevChecked = (key: string) => {
-    try { return localStorage.getItem(`walnut:show_ui_only_${key}`) === 'true'; }
-    catch { return false; }
+    const catDef = UI_ONLY_CATEGORIES.find(c => c.key === key);
+    const defaultVal = catDef?.defaultOn ?? false;
+    try {
+      const stored = localStorage.getItem(`walnut:show_ui_only_${key}`);
+      if (stored !== null) return stored === 'true';
+      return defaultVal;
+    } catch { return defaultVal; }
   };
 
   return (
@@ -142,12 +147,12 @@ export function AdvancedSection({ config, onSave }: Props) {
           </div>
         </details>
 
-        {/* Developer */}
+        {/* Chat Notifications */}
         <details className="settings-collapsible">
-          <summary className="settings-collapsible-title">Developer</summary>
+          <summary className="settings-collapsible-title">Chat Notifications</summary>
           <div className="settings-collapsible-body">
             <p className="text-sm text-muted" style={{ margin: '0 0 12px 0' }}>
-              Show &ldquo;UI Only&rdquo; messages in chat by category.
+              Choose which background notifications appear in chat. Checked = visible.
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {UI_ONLY_CATEGORIES.map((cat) => (
