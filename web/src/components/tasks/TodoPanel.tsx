@@ -437,9 +437,12 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, depth = 0, childCou
       {...attributes}
       {...listeners}
     >
+      {/* ── Layout: [chevron 20px] [phase-icon] [content ...flex-1...] [badges] ── */}
+
+      {/* — chevron column: collapse button or spacer for alignment — */}
       {childCount > 0 ? (
         <button
-          className={`collapse-chevron task-collapse-chevron${isExpanded ? ' expanded' : ''}`}
+          className={`collapse-chevron${isExpanded ? ' expanded' : ''}`}
           title={isExpanded ? 'Collapse child tasks' : `Expand ${childCount} child task(s)`}
           onClick={(e) => { e.stopPropagation(); onToggleExpand?.(); }}
         >
@@ -448,6 +451,8 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, depth = 0, childCou
       ) : (
         <span className="collapse-chevron-spacer" />
       )}
+
+      {/* — status column: phase icon + picker dropdown — */}
       <div className="phase-picker-wrapper" ref={phaseWrapperRef}>
         <button
           className={`task-status-btn task-status-${task.status} task-phase-${task.phase?.toLowerCase()}`}
@@ -482,6 +487,8 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, depth = 0, childCou
           </div>
         )}
       </div>
+
+      {/* — content area: title + metadata rows (flex:1) — */}
       <div className="todo-item-content">
         <div className="todo-item-title-row">
           <span
@@ -618,6 +625,8 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, depth = 0, childCou
           )}
         </div>
       </div>
+
+      {/* — action badges: priority, star, pin — */}
       <div className="todo-item-actions">
         <PriorityBadge
           priority={task.priority}
@@ -660,6 +669,7 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, depth = 0, childCou
 function TaskItemOverlay({ task }: { task: Task }) {
   return (
     <div className="todo-panel-item drag-overlay-item">
+      <span className="collapse-chevron-spacer" />
       <span className={`task-status-btn task-status-${task.status} task-phase-${task.phase?.toLowerCase()}`}>
         {PHASE_ICON[task.phase] ?? '\u25CB'}
       </span>
