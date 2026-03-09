@@ -455,6 +455,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         subtasks: focusedTask.subtasks?.map(s => ({ id: s.id, title: s.title, done: s.done })),
       };
       chat.sendMessage(text, taskContext, images);
+      // Clear task quote after sending — quote is bound to the message, not persistent
+      setFocusedTask(null);
     } else {
       chat.sendMessage(text, undefined, images);
     }
