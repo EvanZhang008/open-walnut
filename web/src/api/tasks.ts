@@ -25,6 +25,7 @@ export interface UpdateTaskInput {
   project?: string;
   due_date?: string | null;
   needs_attention?: boolean;
+  parent_task_id?: string;  // Set parent (task ID) or '' to remove parent
   add_tags?: string[];
   remove_tags?: string[];
   set_tags?: string[];

@@ -67,6 +67,7 @@ interface TodoPanelProps {
   ordering?: UseOrderingReturn;
   onReorder?: (category: string, project: string, taskIds: string[]) => void;
   onMoveTask?: (taskId: string, category: string, project: string, insertNearTaskId?: string) => void;
+  onReparentTask?: (taskId: string, newParentId: string | null) => void;
   onOpenSession?: (sessionId: string) => void;
   onOpenTriageForTask?: (taskId: string) => void;
   onPinTask?: (taskId: string) => void;
@@ -1338,7 +1339,7 @@ function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenTriageFo
 
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onCyclePriority, onFocusTask, onClearFocus, focusedTaskId, favorites, ordering, onReorder, onMoveTask, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, pinnedTaskIds, openSessionIds, operationError, onClearOperationError, onOperationError }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onCyclePriority, onFocusTask, onClearFocus, focusedTaskId, favorites, ordering, onReorder, onMoveTask, onReparentTask, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, pinnedTaskIds, openSessionIds, operationError, onClearOperationError, onOperationError }: TodoPanelProps) {
   // Hide .metadata* tasks (project/category configuration tasks, not user-visible)
   const tasks = useMemo(() => rawTasks.filter((t) => !t.title.startsWith('.metadata')), [rawTasks]);
   const navigate = useNavigate();
@@ -2194,6 +2195,51 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       return;
     }
 
+    // ── Reparent detection ──
+    // When dragging a task, check if the drop target implies a parent change.
+    // Rules:
+    //   - Drop on a child task → adopt same parent (become sibling)
+    //   - Drop on a parent task (has children) → become child of that task
+    //   - Drop on a header → unparent (become top-level)
+    //   - Drop on a regular task (no children, no parent) → unparent
+    const activeTask = sorted.find((t) => t.id === activeId);
+    if (activeTask && onReparentTask) {
+      let newParentId: string | null = null;
+      if (insertNearTaskId) {
+        const targetTask = sorted.find((t) => t.id === insertNearTaskId);
+        if (targetTask) {
+          if (childParentMap.has(targetTask.id)) {
+            // Target is a child → adopt same parent (become sibling)
+            newParentId = childParentMap.get(targetTask.id)!;
+          } else if ((childCountMap.get(targetTask.id) ?? 0) > 0) {
+            // Target is a parent (has visible children) → become child of target
+            newParentId = targetTask.id;
+          }
+          // else: target is a plain top-level task → newParentId stays null (unparent)
+        }
+      }
+      // Dropped on header: newParentId stays null (unparent)
+
+      // Resolve current parent of the dragged task
+      const currentParentId = activeTask.parent_task_id
+        ? (sorted.find((t) => t.id.startsWith(activeTask.parent_task_id!))?.id ?? null)
+        : null;
+
+      if (newParentId !== currentParentId) {
+        // Auto-expand new parent so the moved task is visible
+        if (newParentId) {
+          setExpandedParents((prev) => {
+            if (prev.has(newParentId!)) return prev;
+            const next = new Set(prev);
+            next.add(newParentId!);
+            return next;
+          });
+        }
+        onReparentTask(activeId, newParentId);
+        return;
+      }
+    }
+
     const sameGroup = activeInfo.category === targetCategory && activeInfo.project === targetProject;
 
     if (sameGroup) {
@@ -2248,7 +2294,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       if (!onMoveTask) return;
       onMoveTask(activeId, targetCategory, targetProject, insertNearTaskId);
     }
-  }, [onReorder, onMoveTask, ordering, taskGroupMap, grouped, fullGrouped]);
+  }, [onReorder, onMoveTask, onReparentTask, ordering, taskGroupMap, grouped, fullGrouped, sorted, childParentMap, childCountMap]);
 
   const draggedTask = activeDragId ? sorted.find((t) => t.id === activeDragId) : null;
 

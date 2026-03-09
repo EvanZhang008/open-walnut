@@ -154,7 +154,7 @@ interface MainPageProps {
 export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const chat = useChat();
   const { connectionState } = useWebSocket();
-  const { tasks, loading, toggleComplete, setPhase, star, create, update, reorder, moveTask, operationError, clearOperationError, showOperationError } = useTasksContext();
+  const { tasks, loading, toggleComplete, setPhase, star, create, update, reorder, moveTask, reparentTask, operationError, clearOperationError, showOperationError } = useTasksContext();
   const favorites = useFavorites();
   const focusBar = useFocusBarContext();
   const pinnedTaskIdSet = useMemo(() => new Set(focusBar.pinnedIds), [focusBar.pinnedIds]);
@@ -653,6 +653,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           ordering={ordering}
           onReorder={reorder}
           onMoveTask={moveTask}
+          onReparentTask={reparentTask}
           onOpenSession={handleToggleSession}
           openSessionIds={openSessionIdSet}
           onOpenTriageForTask={handleOpenTriageForTask}

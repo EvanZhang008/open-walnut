@@ -95,6 +95,7 @@ interface UseTasksReturn {
   star: (id: string) => Promise<Task>;
   reorder: (category: string, project: string, taskIds: string[]) => void;
   moveTask: (taskId: string, category: string, project: string, insertNearTaskId?: string) => void;
+  reparentTask: (taskId: string, newParentId: string | null) => void;
 }
 
 export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
@@ -292,5 +293,19 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
       .catch((err: Error) => { showOperationError(err.message); refetch(); });
   }, [refetch, guardEcho, showOperationError]);
 
-  return { tasks, loading, error, operationError, clearOperationError, showOperationError, refetch, create, update, toggleComplete, setPhase, star, reorder, moveTask };
+  const reparentTask = useCallback((taskId: string, newParentId: string | null) => {
+    guardEcho(`move:${taskId}`);
+    // Optimistic: update parent_task_id locally
+    setTasks((prev) => prev.map((t) =>
+      t.id === taskId
+        ? { ...t, parent_task_id: newParentId || undefined }
+        : t
+    ));
+    // Backend handles category/project inheritance from new parent
+    tasksApi.updateTask(taskId, { parent_task_id: newParentId ?? '' })
+      .then(() => refetch())  // refetch to get updated category/project
+      .catch((err: Error) => { showOperationError(err.message); refetch(); });
+  }, [refetch, guardEcho, showOperationError]);
+
+  return { tasks, loading, error, operationError, clearOperationError, showOperationError, refetch, create, update, toggleComplete, setPhase, star, reorder, moveTask, reparentTask };
 }
