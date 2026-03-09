@@ -700,13 +700,15 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
   }, [sessionId, scrollToBottom]);
 
   // ── 4. Content-growth auto-scroll ──
-  // ResizeObserver only observes children present at setup time. Between turns,
-  // session-streaming-panel is destroyed and recreated — new DOM nodes aren't
-  // observed. This effect catches ALL content growth by comparing scrollHeight
-  // after each render (before paint), so scroll stays pinned even across turns.
+  // Primary scroll-to-bottom mechanism. Runs on every render (before paint),
+  // compares scrollHeight to detect content growth, and scrolls if needed.
+  // Works independently of piece 1 — no scrolledForSessionRef guard needed
+  // because key={sessionId} forces remount (prevScrollHeight starts at 0).
+  // Covers: initial data arrival, Phase 2 message replacement, new streaming
+  // blocks between turns, and any other scrollHeight increase.
   useLayoutEffect(() => {
     const el = containerRef.current;
-    if (!el || scrolledForSessionRef.current !== sessionId) return;
+    if (!el) return;
     const sh = el.scrollHeight;
     if (sh <= prevScrollHeight.current) { prevScrollHeight.current = sh; return; }
     prevScrollHeight.current = sh;
