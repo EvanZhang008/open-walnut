@@ -1967,6 +1967,66 @@ input:focus, textarea:focus, select:focus {
   cursor: not-allowed;
 }
 
+.session-fork-btn-success {
+  background: var(--success, #34c759);
+}
+
+/* Fork popover */
+.session-fork-wrapper {
+  position: relative;
+  display: inline-flex;
+}
+
+.session-fork-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 100;
+  background: var(--card-bg, #fff);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  padding: 10px 12px;
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.session-fork-popover-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.session-fork-popover-input {
+  width: 100%;
+  padding: 5px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  outline: none;
+  box-sizing: border-box;
+}
+
+.session-fork-popover-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.15);
+}
+
+.session-fork-popover-error {
+  font-size: 11px;
+  color: var(--error, #ff3b30);
+}
+
+.session-fork-popover-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .session-detail-link {
   color: var(--accent);
   text-decoration: none;
@@ -5667,12 +5727,13 @@ img[data-lightbox-src],
 
 /* Unified collapse/expand chevron — used at category, project, and parent-task levels */
 .collapse-chevron {
+  --chevron-size: 20px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 20px;
-  height: 20px;
+  width: var(--chevron-size);
+  height: var(--chevron-size);
   font-size: 12px;
   color: var(--fg-muted);
   background: none;
@@ -5690,10 +5751,10 @@ img[data-lightbox-src],
 .collapse-chevron.expanded {
   transform: rotate(90deg);
 }
-/* Task-level chevron: inline within title row, slight right margin for spacing */
-.todo-item-title-row > .collapse-chevron {
-  margin-right: 2px;
-  margin-top: 1px;
+.collapse-chevron-spacer {
+  display: inline-block;
+  width: var(--chevron-size, 20px);
+  flex-shrink: 0;
 }
 .task-children-badge {
   font-size: 10px;
@@ -6533,8 +6594,6 @@ img[data-lightbox-src],
   min-width: 0;
 }
 
-/* .todo-group-arrow-btn removed — replaced by .collapse-chevron */
-
 .todo-group-name-btn {
   display: flex;
   align-items: center;
@@ -6781,11 +6840,6 @@ img[data-lightbox-src],
   font-size: 12px;
   font-weight: 500;
   padding: 6px 12px;
-}
-
-/* .drag-overlay-group-icon removed — drag handle icons no longer used */
-.drag-overlay-group-icon {
-  display: none;
 }
 
 /* ===== Source/Provider Filter Bar ===== */
@@ -11033,4 +11087,109 @@ img[data-lightbox-src],
   .settings-content {
     padding: 0 12px 48px;
   }
+}
+
+/* ===== AI Providers Section ===== */
+
+.provider-catalog {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.provider-card {
+  background: var(--card-bg);
+}
+
+.provider-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  cursor: pointer;
+  gap: 12px;
+  user-select: none;
+}
+
+.provider-card-header:hover {
+  background: var(--bg-hover);
+}
+
+.provider-card-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.provider-card-arrow {
+  font-size: 11px;
+  color: var(--fg-muted);
+  width: 12px;
+  flex-shrink: 0;
+}
+
+.provider-card-label {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.provider-card-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.provider-badge {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.provider-badge.auto {
+  background: rgba(0, 122, 255, 0.1);
+  color: var(--accent);
+}
+
+.provider-badge.configured {
+  background: rgba(52, 199, 89, 0.1);
+  color: var(--success);
+}
+
+.provider-card-body {
+  padding: 0 14px 14px 34px;
+}
+
+.provider-card-meta {
+  font-size: 12px;
+  color: var(--fg-muted);
+  display: flex;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+
+.provider-card-key-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.provider-card-key-row .form-group {
+  margin-bottom: 0;
+}
+
+.btn-danger {
+  color: var(--error);
+  border-color: var(--error);
+}
+
+.btn-danger:hover {
+  background: rgba(255, 59, 48, 0.08);
 }

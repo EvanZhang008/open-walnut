@@ -391,7 +391,17 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
             >
               {sessionId} &#x2197;
             </span>
-            <SessionCopyButtons sessionId={sessionId} cwd={session?.cwd} taskId={session?.taskId} taskTitle={taskTitle ?? undefined} onForkComplete={(newTaskId) => navigate(`/tasks/${newTaskId}`)} />
+            <SessionCopyButtons
+              sessionId={sessionId}
+              cwd={session?.cwd}
+              taskId={session?.taskId}
+              taskTitle={taskTitle ?? undefined}
+              onForkComplete={(newTaskId, newSessionId) => {
+                // Select the new child task, then open its session
+                onTaskClick?.(newTaskId);
+                if (newSessionId) onSessionClick?.(newSessionId);
+              }}
+            />
             {session?.host && (
               <span
                 className="session-panel-host"
