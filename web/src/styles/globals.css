@@ -11135,12 +11135,3 @@ img[data-lightbox-src],
 .provider-card-key-row .form-group {
   margin-bottom: 0;
 }
-
-.btn-danger {
-  color: var(--error);
-  border-color: var(--error);
-}
-
-.btn-danger:hover {
-  background: rgba(255, 59, 48, 0.08);
-}

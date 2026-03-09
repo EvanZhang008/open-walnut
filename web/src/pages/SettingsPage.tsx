@@ -27,6 +27,7 @@ class SectionErrorBoundary extends Component<{ name: string; children: ReactNode
 
 // Sections
 import { GettingStartedSection } from '@/components/settings/sections/GettingStartedSection';
+import { ProvidersSection } from '@/components/settings/sections/ProvidersSection';
 import { ModelsSection } from '@/components/settings/sections/ModelsSection';
 import { GeneralSection } from '@/components/settings/sections/GeneralSection';
 import { SessionsSection } from '@/components/settings/sections/SessionsSection';
@@ -37,7 +38,7 @@ import { RemoteHostsSection } from '@/components/settings/sections/RemoteHostsSe
 import { AdvancedSection } from '@/components/settings/sections/AdvancedSection';
 
 const SECTION_IDS = [
-  'getting-started', 'models', 'general', 'sessions',
+  'getting-started', 'providers', 'models', 'general', 'sessions',
   'integrations', 'search', 'heartbeat', 'remote-hosts', 'advanced',
 ];
 
@@ -114,6 +115,7 @@ export function SettingsPage() {
             <p className="page-subtitle">Configure everything from one place</p>
           </div>
           <SectionErrorBoundary name="Getting Started"><GettingStartedSection config={config} onSave={saveSection} /></SectionErrorBoundary>
+          <SectionErrorBoundary name="AI Providers"><ProvidersSection config={config} onSave={saveSection} /></SectionErrorBoundary>
           <SectionErrorBoundary name="Models"><ModelsSection config={config} onSave={saveSection} /></SectionErrorBoundary>
           <SectionErrorBoundary name="General"><GeneralSection config={config} onSave={saveSection} /></SectionErrorBoundary>
           <SectionErrorBoundary name="Sessions"><SessionsSection config={config} onSave={saveSection} /></SectionErrorBoundary>

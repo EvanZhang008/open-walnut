@@ -9,7 +9,6 @@ import { VALID_PRIORITIES } from '../../core/types.js'
 import { log } from '../../logging/index.js'
 import { buildProviderMap, resolveProvider, type ProviderConfig } from '../../agent/providers/index.js'
 import { autoDetectApiKey } from '../../agent/providers/secret.js'
-import { KNOWN_PROVIDERS } from '../../agent/providers/defaults.js'
 
 export const configRouter = Router()
 
