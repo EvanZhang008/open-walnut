@@ -19,8 +19,9 @@ interface Props {
 export function GettingStartedSection({ config, onSave }: Props) {
   const [region, setRegion] = useState(config.provider?.bedrock_region ?? 'us-west-2');
   const [token, setToken] = useState(config.provider?.bedrock_bearer_token ?? '');
-  const [status, setStatus] = useState<'connected' | 'error' | 'unknown' | 'testing'>('unknown');
-  const [statusText, setStatusText] = useState<string | undefined>();
+  const [status, setStatus] = useState<'connected' | 'error' | 'unknown' | 'testing'>('testing');
+  const [statusText, setStatusText] = useState<string | undefined>('Checking connection...');
+  const [envDetected, setEnvDetected] = useState(false);
   const autoTestedRef = useRef(false);
 
   useEffect(() => {
@@ -32,17 +33,19 @@ export function GettingStartedSection({ config, onSave }: Props) {
   useEffect(() => {
     if (autoTestedRef.current) return;
     autoTestedRef.current = true;
-    // Fire-and-forget test — backend checks config + env vars
     testConnection({ bedrock_region: region })
       .then((result) => {
         if (result.ok) {
           setStatus('connected');
-          const source = token ? '' : ' (via environment)';
-          setStatusText(`Connected${source}${result.latencyMs ? ` — ${result.latencyMs}ms` : ''}`);
+          const viaEnv = !token;
+          if (viaEnv) setEnvDetected(true);
+          setStatusText(`Connected${viaEnv ? ' via environment' : ''}${result.latencyMs ? ` (${result.latencyMs}ms)` : ''}`);
+        } else {
+          setStatus('unknown');
+          setStatusText(undefined);
         }
-        // Don't show error on auto-test — user hasn't interacted yet
       })
-      .catch(() => { /* silent */ });
+      .catch(() => { setStatus('unknown'); setStatusText(undefined); });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -92,11 +95,23 @@ export function GettingStartedSection({ config, onSave }: Props) {
 
       <div className="form-group">
         <label htmlFor="bedrock-token">Bearer Token</label>
-        <SecretInput id="bedrock-token" value={token} onChange={setToken} placeholder={status === 'connected' && !token ? 'Configured via environment variable' : 'Paste your bearer token'} />
-        {!token && status === 'connected' && (
-          <p className="text-sm text-muted" style={{ marginTop: 4 }}>
-            Using AWS_BEARER_TOKEN_BEDROCK from environment. Override by pasting a token above.
-          </p>
+        {envDetected && !token ? (
+          <>
+            <div style={{
+              padding: '8px 12px', borderRadius: 6, fontSize: 13,
+              background: 'rgba(52, 199, 89, 0.08)', border: '1px solid rgba(52, 199, 89, 0.3)',
+              color: 'var(--success)', display: 'flex', alignItems: 'center', gap: 8,
+            }}>
+              <span style={{ fontSize: 16 }}>&#x2713;</span>
+              <span>Configured via <code style={{ fontSize: 12 }}>AWS_BEARER_TOKEN_BEDROCK</code> environment variable</span>
+            </div>
+            <p className="text-sm text-muted" style={{ marginTop: 4, cursor: 'pointer' }}
+              onClick={() => setEnvDetected(false)}>
+              Want to override? Click here to enter a token manually.
+            </p>
+          </>
+        ) : (
+          <SecretInput id="bedrock-token" value={token} onChange={setToken} placeholder="Paste your bearer token" />
         )}
       </div>
 
