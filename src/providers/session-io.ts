@@ -77,12 +77,13 @@ do_stop() {
 do_start() {
   local CWD="\${3:-\$HOME}"
   shift 3 2>/dev/null || shift $# 2>/dev/null
-  local CLAUDE_ARGS="$*"
+  # Log args for debugging ($* is fine for display, just don't use it to invoke)
+  local CLAUDE_ARGS_LOG="$*"
 
   mkdir -p "$REMOTE_DIR"
   log "=== session start ==="
   log "PID=$$, session=$SESSION_ID, cwd=$CWD"
-  log "claude args: $CLAUDE_ARGS"
+  log "claude args: $CLAUDE_ARGS_LOG"
 
   if [ ! -d "$CWD" ]; then
     log "ERROR: CWD not found: $CWD"; echo "walnut: CWD not found: $CWD" >&2; exit 1
@@ -102,7 +103,11 @@ do_start() {
   echo $WRITER_PID > "$WPID"
   log "writer started PID=$WRITER_PID"
 
-  claude $CLAUDE_ARGS < "$PIPE" > "$JSONL" 2>"$ERR" &
+  # CRITICAL: Use "$@" to preserve argument boundaries. "$*" or unquoted
+  # $CLAUDE_ARGS flattens args into one string then re-splits by whitespace,
+  # breaking multi-word values like --append-system-prompt (which contains
+  # YAML frontmatter '---' that becomes a standalone option → crash).
+  claude "$@" < "$PIPE" > "$JSONL" 2>"$ERR" &
   CLAUDE_PID=$!
   log "claude started PID=$CLAUDE_PID"
   echo $CLAUDE_PID > "$PGID"
