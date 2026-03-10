@@ -55,7 +55,10 @@ export function useSessionHistory(sessionId: string | null, version = 0): UseSes
         const endP2 = perf.start(`session:full:${sid}`);
         fetchSessionHistory(sessionId)
           .then((msgs) => {
-            if (!cancelled) { endP2(`${msgs.length} msgs`); setMessages(msgs); }
+            if (!cancelled) {
+              endP2(`${msgs.length} msgs`);
+              setMessages(msgs);
+            }
           })
           .catch((e: Error) => {
             if (!cancelled) { endP2('error'); setError(e.message); }
