@@ -10,6 +10,7 @@ import { Lightbox } from '../common/Lightbox';
 import type { SessionHistoryMessage } from '@/types/session';
 import type { ImageAttachment } from '@/api/chat';
 import { renderMarkdownWithRefs, findImagePaths, resolveImagePath } from '@/utils/markdown';
+import { scrollLog } from '@/utils/scroll-debug';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
@@ -484,6 +485,9 @@ const SCROLL_THRESHOLD = 300;  // px from bottom to consider "near bottom"
 const USER_SCROLL_LOCK_MS = 15_000;  // pause auto-scroll for 15s when user scrolls up
 
 export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessionCwd, optimisticMessages, onMessagesDelivered, onBatchCompleted, onEditQueued, onDeleteQueued, onAgentQueued, onClearCommitted, onTaskClick, onSessionClick }: SessionChatHistoryProps) {
+  const renderCount = useRef(0);
+  renderCount.current++;
+
   const [historyVersion, setHistoryVersion] = useState(0);
   const awaitingRefresh = useRef(false);
   const pendingBatchTotal = useRef(0);
@@ -511,6 +515,13 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
   const { messages, loading, phase2Pending, error } = useSessionHistory(sessionId, historyVersion);
   const { blocks, isStreaming, clear } = useSessionStream(sessionId);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // ── Scroll debug: log every render ──
+  scrollLog('render', {
+    sid: sessionId?.substring(0, 8), render: renderCount.current,
+    msgCount: messages?.length, loading, phase2Pending,
+    hasContainer: !!containerRef.current,
+  });
 
   // ── Message delivery lifecycle ──
   // 1. User sends → optimistic msg added (status: 'pending', grey)
@@ -615,6 +626,8 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
 
   // Reset on session switch
   useEffect(() => {
+    scrollLog.mark(sessionId);
+    scrollLog('reset-effect', { sid: sessionId?.substring(0, 8) });
     setHistoryVersion(0);
     awaitingRefresh.current = false;
     pendingBatchTotal.current = 0;
@@ -632,19 +645,45 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
   // Cleanup timeout on unmount
   useEffect(() => () => { if (batchTimeoutRef.current) clearTimeout(batchTimeoutRef.current); }, []);
 
-  // Helper: scroll to bottom, mark as programmatic for 150ms
-  const scrollToBottom = useCallback((el: HTMLElement) => {
+  // Helper: scroll to bottom, mark as programmatic for 150ms.
+  // Uses rAF verification: after setting scrollTop, schedule a rAF check
+  // to re-apply if layout shifts moved us away from the bottom.
+  const scrollToBottom = useCallback((el: HTMLElement, source?: string) => {
+    const before = { scrollTop: Math.round(el.scrollTop), scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
     programmaticScrollUntil.current = Date.now() + 150;
     el.scrollTop = el.scrollHeight;
     lastScrollTop.current = el.scrollTop;
+    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 5;
+    scrollLog(`scrollToBottom(${source || '?'})`, {
+      before, after: Math.round(el.scrollTop), atBottom,
+    });
+    // rAF verification: re-check after browser completes layout
+    requestAnimationFrame(() => {
+      if (userScrollLockUntil.current > Date.now()) return;
+      const stillAtBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 5;
+      if (!stillAtBottom && el.scrollHeight > el.clientHeight) {
+        programmaticScrollUntil.current = Date.now() + 150;
+        el.scrollTop = el.scrollHeight;
+        lastScrollTop.current = el.scrollTop;
+        scrollLog(`scrollToBottom-rAF-fix(${source || '?'})`, {
+          scrollTop: Math.round(el.scrollTop), scrollHeight: el.scrollHeight,
+        });
+      }
+    });
   }, []);
 
   // ── 1. Initial scroll (before paint) ──
   useLayoutEffect(() => {
-    if (!loading && messages.length > 0 && containerRef.current
-      && scrolledForSessionRef.current !== sessionId) {
+    const willFire = !loading && messages.length > 0 && !!containerRef.current
+      && scrolledForSessionRef.current !== sessionId;
+    scrollLog('effect#1-initial', {
+      willFire, loading, msgCount: messages.length, hasEl: !!containerRef.current,
+      scrolledFor: scrolledForSessionRef.current?.substring(0, 8) ?? null,
+      sid: sessionId?.substring(0, 8),
+    });
+    if (willFire) {
       scrolledForSessionRef.current = sessionId;
-      scrollToBottom(containerRef.current);
+      scrollToBottom(containerRef.current!, 'initial');
     }
   }, [loading, messages, sessionId, scrollToBottom]);
 
@@ -652,14 +691,21 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+    let scrollEventCount = 0;
     const onScroll = () => {
       if (Date.now() < programmaticScrollUntil.current) return;
+      scrollEventCount++;
       const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - SCROLL_THRESHOLD;
       if (!nearBottom && el.scrollTop < lastScrollTop.current) {
         userScrollLockUntil.current = Date.now() + USER_SCROLL_LOCK_MS;
+        scrollLog('user-scroll-LOCK', {
+          scrollTop: Math.round(el.scrollTop), scrollHeight: el.scrollHeight,
+          clientHeight: el.clientHeight, gap: el.scrollHeight - el.scrollTop - el.clientHeight,
+        });
       }
-      if (nearBottom) {
+      if (nearBottom && userScrollLockUntil.current > 0) {
         userScrollLockUntil.current = 0;
+        scrollLog('user-scroll-UNLOCK', { scrollEventCount });
       }
       lastScrollTop.current = el.scrollTop;
     };
@@ -673,25 +719,41 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
   // Always scrolls to bottom unless user scroll-lock is active.
   useEffect(() => {
     const el = containerRef.current;
-    if (!el || scrolledForSessionRef.current !== sessionId) return;
+    scrollLog('effect#3-RO-setup', {
+      hasEl: !!el,
+      scrolledFor: scrolledForSessionRef.current?.substring(0, 8) ?? null,
+      sid: sessionId?.substring(0, 8),
+    });
+    if (!el) return;
 
+    let roFireCount = 0;
     const ro = new ResizeObserver(() => {
+      roFireCount++;
       const target = containerRef.current;
       // Guard: only scroll if still on the same session (prevents stale observer
       // firing on the wrong container during rapid session switches)
       if (!target || scrolledForSessionRef.current !== sessionId) return;
       if (target.scrollHeight <= target.clientHeight) return;
-      if (userScrollLockUntil.current > Date.now()) return;
-      scrollToBottom(target);
+      if (userScrollLockUntil.current > Date.now()) {
+        scrollLog('effect#3-RO-LOCKED', { roFireCount });
+        return;
+      }
+      scrollLog('effect#3-RO-fire', {
+        roFireCount, scrollHeight: target.scrollHeight, clientHeight: target.clientHeight,
+        scrollTop: Math.round(target.scrollTop),
+      });
+      scrollToBottom(target, 'resize-observer');
     });
 
     // Observe the scroll container (catches clientHeight changes from sibling squeeze)
     ro.observe(el);
     // Observe direct children (catches scrollHeight changes from content/images loading).
     // ResizeObserver batches all entries into one callback per frame — no N*callback issue.
+    const childCount = el.children.length;
     for (const child of el.children) {
       ro.observe(child);
     }
+    scrollLog('effect#3-RO-CREATED', { childrenObserved: childCount });
 
     return () => ro.disconnect();
     // Deps: sessionId + scrollToBottom only. NOT messages/blocks — the ResizeObserver
@@ -710,11 +772,32 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     const el = containerRef.current;
     if (!el) return;
     const sh = el.scrollHeight;
-    if (sh <= prevScrollHeight.current) { prevScrollHeight.current = sh; return; }
+    const ch = el.clientHeight;
+    const prevSh = prevScrollHeight.current;
+    if (sh <= prevSh) {
+      // Also detect clientHeight squeeze: scrollHeight unchanged but container got smaller
+      // (e.g., sibling grew in flex layout)
+      const atBottom = el.scrollTop + ch >= sh - 5;
+      if (!atBottom && sh > ch && prevSh > 0) {
+        scrollLog('effect#4-SQUEEZE-DETECTED', {
+          scrollHeight: sh, prevScrollHeight: prevSh, clientHeight: ch,
+          scrollTop: Math.round(el.scrollTop), gap: sh - el.scrollTop - ch,
+        });
+        if (userScrollLockUntil.current <= Date.now()) {
+          scrollToBottom(el, 'content-growth-squeeze');
+        }
+      }
+      prevScrollHeight.current = sh;
+      return;
+    }
+    scrollLog('effect#4-growth', {
+      scrollHeight: sh, prevScrollHeight: prevSh, clientHeight: ch,
+      delta: sh - prevSh,
+    });
     prevScrollHeight.current = sh;
-    if (sh <= el.clientHeight) return;  // all content visible, no scroll needed
+    if (sh <= ch) return;  // all content visible, no scroll needed
     if (userScrollLockUntil.current > Date.now()) return;
-    scrollToBottom(el);
+    scrollToBottom(el, 'content-growth');
   });
 
   // ── Deduplicate optimistic messages against persisted history ──
