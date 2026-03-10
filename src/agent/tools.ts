@@ -58,6 +58,7 @@ import { createProcessTool } from './tools/process-tool.js';
 import { agentCrudTools } from './tools/agent-crud-tools.js';
 import { commandCrudTools } from './tools/command-tools.js';
 import { heartbeatTools } from './tools/heartbeat-tools.js';
+import { askQuestionTool } from './tools/ask-question-tool.js';
 import { memoryReadTool } from './tools/memory-read.js';
 import { memoryEditTool } from './tools/memory-edit.js';
 import { memoryWriteTool } from './tools/memory-write.js';
@@ -1958,6 +1959,9 @@ defaults (same resolution chain as start_session).`,
 
   // ── Heartbeat Tools ──
   ...heartbeatTools,
+
+  // ── User Interaction ──
+  askQuestionTool,
 
 ];
 

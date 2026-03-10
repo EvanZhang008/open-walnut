@@ -7,6 +7,7 @@ import type { MessageBlock, ThinkingBlock, ToolCallBlock, ImageBlock, TaskContex
 import { useLightbox } from '@/hooks/useLightbox';
 import { Lightbox } from '@/components/common/Lightbox';
 import { entityRefsToHtml, renderToolResultWithRefs, extractMarkdownFields } from '@/utils/markdown';
+import { QuestionCard, parseAskQuestionInput } from './QuestionCard';
 export interface RouteInfo {
   direction: 'sent' | 'received';
   event: string;
@@ -1174,8 +1175,16 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
                   switch (block.type) {
                     case 'thinking':
                       return <ThinkingSection key={i} block={block} />;
-                    case 'tool_call':
+                    case 'tool_call': {
+                      // Render ask_question as interactive QuestionCard
+                      if (block.name === 'ask_question') {
+                        const questions = parseAskQuestionInput(block.input)
+                        if (questions) {
+                          return <QuestionCard key={i} questions={questions} pending={block.status === 'calling'} result={block.result} />
+                        }
+                      }
                       return <ToolCallSection key={i} block={block} taskLookup={taskLookup} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />;
+                    }
                     case 'text':
                       return <MemoizedTextBlock key={i} content={block.content} onClick={handleContentClick} />;
                     case 'image': {

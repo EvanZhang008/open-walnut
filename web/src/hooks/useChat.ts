@@ -478,6 +478,16 @@ export function useChat(): UseChatReturn {
         content,
       }), src),
     );
+
+    // Desktop notification when agent asks a question
+    if (toolName === 'ask_question' && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      const questions = input?.questions as Array<{ question?: string }> | undefined
+      const firstQ = questions?.[0]?.question ?? 'The agent has a question for you'
+      new Notification('Agent has a question', {
+        body: firstQ.slice(0, 120),
+        tag: `walnut-question-${toolUseId ?? Date.now()}`,
+      })
+    }
   });
 
   // Handle tool result — match by unique toolUseId for deterministic pairing.

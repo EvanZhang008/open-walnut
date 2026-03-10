@@ -26,6 +26,12 @@ import { truncateToTokenBudget } from '../../utils/token-truncate.js'
 import { log } from '../../logging/index.js'
 import { enqueueMainAgentTurn } from '../agent-turn-queue.js'
 import { triggerBackgroundCompaction } from '../background-compaction.js'
+import {
+  hasPendingQuestion,
+  submitTextAnswer,
+  submitAnswers,
+  cancelQuestion,
+} from '../../core/agent-question.js'
 
 /**
  * Track usage for compaction-related LLM calls (both summarizer and memory flusher).
@@ -605,11 +611,44 @@ export function registerChatRpc(): void {
   // Register stop method — aborts the calling client's active agent turn
   registerMethod('chat:stop', async (_payload: unknown, client: WebSocket) => {
     activeAbortControllers.get(client)?.abort()
+    cancelQuestion() // Also cancel any pending ask_question tool
+  })
+
+  // Answer structured questions from the QuestionCard UI
+  registerMethod('chat:answer-question', async (payload: unknown) => {
+    const { answers } = payload as { answers: Record<string, string> }
+    if (!hasPendingQuestion()) {
+      log.web.warn('chat:answer-question received but no pending question')
+      return
+    }
+    log.web.info('chat:answer-question received', { answerCount: Object.keys(answers).length })
+    // Persist user's answers as a UI-only chat entry
+    const answerLines = Object.entries(answers).map(([k, v]) => `${k}: ${v}`).join('\n')
+    await chatHistory.addNotification({ role: 'user', content: answerLines })
+    broadcastEvent(EventNames.CHAT_HISTORY_UPDATED, {
+      entry: { role: 'user', content: answerLines, source: 'question-answer' },
+    })
+    submitAnswers(answers)
   })
 
   registerMethod('chat', async (payload: unknown, client: WebSocket) => {
     const { message, taskContext, images } = payload as ChatPayload
     log.web.info('chat message received', { taskId: taskContext?.id, messageLength: message.length, imageCount: images?.length ?? 0, source: 'chat' })
+
+    // ── Intercept: if the agent is waiting for a question answer, route here ──
+    // The agent loop is blocked on ask_question tool. We must NOT enqueue a new
+    // turn (that would deadlock — current turn holds the single slot).
+    // Instead, resolve the pending question directly.
+    if (hasPendingQuestion()) {
+      log.web.info('routing chat message to pending ask_question', { messageLength: message.length })
+      // Persist the user's answer as a UI-only entry so it appears in chat history
+      await chatHistory.addNotification({ role: 'user', content: message })
+      broadcastEvent(EventNames.CHAT_HISTORY_UPDATED, {
+        entry: { role: 'user', content: message, source: 'question-answer' },
+      })
+      submitTextAnswer(message)
+      return
+    }
 
     // Pre-process images outside the queue (save to disk, prepare base64 blocks).
     // This avoids holding the queue while doing disk I/O for image uploads.
