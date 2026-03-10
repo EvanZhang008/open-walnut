@@ -375,7 +375,7 @@ src/
 
 ## Git Auto-Commit (`src/web/server.ts` → `src/integrations/git-sync.ts`)
 
-`startGitAutoCommit()` runs at server startup: ensures `~/.walnut/` is a git repo (`ensureRepo()`), commits any leftover dirty state, pulls remote, then polls every 30s (`commitIfDirty()`). Health state (`GitAutoCommitHealth`) tracks `protected`, `consecutiveFailures`, `error`. Status exposed via `GET /api/git-sync/status` and pushed to frontend via `git-sync:status` WebSocket event. `DataSafetyBanner` (red, non-dismissible) appears when git is unavailable or commits fail 3+ times. `task-manager.ts` has a backup-on-empty safety net: saves `tasks.backup.json` before writing an empty store when disk has existing tasks.
+`startGitAutoCommit()` runs at server startup: ensures `~/.walnut/` is a git repo (`ensureRepo()`), commits any leftover dirty state, pulls remote, then polls every 30s (`commitIfDirty()`). Health state (`GitAutoCommitHealth`) tracks `protected`, `consecutiveFailures`, `error`. Status exposed via `GET /api/git-sync/status` and pushed to frontend via `git-sync:status` WebSocket event. When git is unavailable or commits fail 3+ times: (1) NotificationPanel shows a "Data Backup" card with failure details (via `useSystemHealth` hook), (2) bell icon red dot activates, (3) one-time chat notification sent via `addNotification()`. `commitIfDirty()` includes `clearStaleLock()` which auto-removes stale `.git/index.lock` files (PID liveness check + 60s age threshold). `task-manager.ts` has a backup-on-empty safety net: saves `tasks.backup.json` before writing an empty store when disk has existing tasks.
 
 ## E2E-First Development Workflow
 
