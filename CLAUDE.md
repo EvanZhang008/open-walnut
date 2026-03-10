@@ -265,6 +265,8 @@ React SPA communicates with the Express server via REST and WebSocket. The serve
 | `/commands` | CommandsPage | Slash command management |
 | `/settings` | SettingsPage | Full config editor — 10 sections with sidebar nav, per-section save |
 
+**Quick Start Sessions** (`/session` slash command): Inline popover above chat input for picking a working directory from session history. Paths ranked by frequency + recency with fuzzy search and host filter tabs. Selecting a path shows a context pill; sending creates a starred task under `"Quick Start"` project in the inferred category, starts a session, and notifies the main agent to reorganize. Backend: `GET /api/sessions/working-dirs` + `POST /api/sessions/quick-start` in `src/web/routes/sessions.ts`. Frontend: `SessionPathSelector` popover (`web/src/components/sessions/SessionPathSelector.tsx`), integrated into `MainPage.tsx` with send interception.
+
 See `web/src/AGENTS.md` for detailed UX implementation (message isolation, task references, image rendering, session streaming, slash commands).
 
 ## Integration Plugin System
