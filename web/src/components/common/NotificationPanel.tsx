@@ -11,12 +11,13 @@ interface NotificationPanelProps {
 }
 
 export function NotificationPanel({ open, onClose, sidebarCollapsed }: NotificationPanelProps) {
-  const { health, loading, reindexing, triggerReindex } = useSystemHealth();
+  const { health, gitSync, loading, reindexing, triggerReindex } = useSystemHealth();
 
   if (!open) return null;
 
   const emb = health.embedding;
   const embeddingOk = emb.unindexed === 0 && emb.ollamaAvailable;
+  const gitOk = gitSync.protected && gitSync.consecutiveFailures < 3;
 
   return (
     <>
@@ -101,6 +102,57 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
                     {reindexing ? 'Reindexing...' : 'Retry'}
                   </button>
                 )}
+              </div>
+
+              {/* Git backup status */}
+              <div className={`notification-card ${gitOk ? 'ok' : 'warn'}`}>
+                <div className="notification-card-row">
+                  <span className={`notification-card-icon ${gitOk ? 'ok' : 'warn'}`}>
+                    {gitOk ? '\u2713' : '\u26A0'}
+                  </span>
+                  <span className="notification-card-label">Data Backup</span>
+                </div>
+
+                <div className="notification-card-details">
+                  {!gitSync.protected ? (
+                    <div className="notification-detail-row warn">
+                      <span>Not protected</span>
+                      <span className="notification-detail-value">
+                        {gitSync.error ?? 'git unavailable'}
+                      </span>
+                    </div>
+                  ) : gitSync.consecutiveFailures >= 3 ? (
+                    <>
+                      <div className="notification-detail-row warn">
+                        <span>Status</span>
+                        <span className="notification-detail-value">Failing</span>
+                      </div>
+                      <div className="notification-detail-row">
+                        <span>Consecutive failures</span>
+                        <span className="notification-detail-value">{gitSync.consecutiveFailures}</span>
+                      </div>
+                      {gitSync.error && (
+                        <div className="notification-detail-row error">
+                          <span className="notification-error-text">{gitSync.error}</span>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="notification-detail-row">
+                      <span>Status</span>
+                      <span className="notification-detail-value ok">Protected</span>
+                    </div>
+                  )}
+
+                  {gitSync.lastCommitAt && (
+                    <div className="notification-detail-row muted">
+                      <span>Last backup</span>
+                      <span className="notification-detail-value">
+                        {formatRelative(gitSync.lastCommitAt)}
+                      </span>
+                    </div>
+                  )}
+                </div>
               </div>
             </>
           )}

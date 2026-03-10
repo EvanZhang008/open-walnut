@@ -2,7 +2,6 @@ import { useState, useCallback, useEffect, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { CronToast } from '../common/CronToast';
-import { DataSafetyBanner } from '../common/DataSafetyBanner';
 import { FocusDock } from '../dock/FocusDock';
 import { TasksProvider } from '@/contexts/TasksContext';
 import { FocusBarProvider, useFocusBarContext } from '@/contexts/FocusBarContext';
@@ -64,7 +63,6 @@ function AppShellInner({ children }: AppShellProps) {
 
   return (
     <div className="app-shell">
-      <DataSafetyBanner />
       <button className="sidebar-toggle" onClick={toggleSidebar} aria-label="Toggle sidebar">
         &#9776;
       </button>

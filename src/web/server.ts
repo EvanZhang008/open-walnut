@@ -418,6 +418,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   httpServer = createServer(app)
   attachWss(httpServer)
 
+  // -- Bind port early (before heavy init) so no other process can grab it --
+  await new Promise<void>((resolve, reject) => {
+    httpServer!.listen(port, () => resolve())
+    httpServer!.once('error', reject)
+  })
+  const label = dev ? 'dev' : 'production'
+  log.web.info(`server listening on http://localhost:${port}`, { mode: label, port })
+  console.log(`Walnut web server (${label}) listening on http://localhost:${port}`)
+
   // -- Register RPC methods on the WebSocket handler --
   registerChatRpc()
   registerSessionChatRpc()
@@ -1040,13 +1049,57 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
               const prompt = `[Triage Update] Task "${taskTitle}" ${taskRef}\n\n${cleanedResult}\n\n<task_note>\n${taskNote}\n</task_note>\n\nInform the user concisely (2-4 sentences) about this task's status.\nFocus on what the triage analysis says — that's the new information.\nThe task note provides full context if needed.\nDo not use tools.`
 
               const { runAgentLoop } = await import('../agent/loop.js')
-              const { estimateMessagesTokens } = await import('../core/daily-log.js')
+              const { estimateMessagesTokens, estimateFullPayload } = await import('../core/daily-log.js')
+              const { getContextWindowSize } = await import('../agent/model.js')
+              const { getConfig } = await import('../core/config-manager.js')
+              const { buildSystemPrompt } = await import('../agent/context.js')
+              const { getToolSchemas } = await import('../agent/tools.js')
               const history = await chatHistory.getApiMessages()
               const historyTokens = estimateMessagesTokens(history)
+
+              // Pre-check: estimate full payload and bail to notification-only if near the limit.
+              // This prevents burning API tokens on a 400 that the agent loop would have to recover from.
+              const agentConfig = await getConfig()
+              const mainModel = agentConfig.agent?.main_model
+              const contextLimit = getContextWindowSize(mainModel)
+              const TRIAGE_BAIL_PERCENT = 0.92 // bail if estimated > 92% of context window
+              let estimatedTotal = historyTokens
+              try {
+                const system = await buildSystemPrompt()
+                const tools = getToolSchemas()
+                const full = estimateFullPayload({ system, tools, messages: history })
+                estimatedTotal = full.total
+              } catch (preCheckErr) {
+                // If full estimation fails, be conservative — assume over limit to avoid 400
+                log.web.warn('triage pre-check: full estimation failed, using conservative fallback', {
+                  taskId, error: preCheckErr instanceof Error ? preCheckErr.message : String(preCheckErr),
+                })
+                estimatedTotal = contextLimit // force bail
+              }
+
+              if (estimatedTotal > contextLimit * TRIAGE_BAIL_PERCENT) {
+                log.web.warn('triage main agent skipped: history near context limit', {
+                  taskId,
+                  estimatedTotal: `~${Math.round(estimatedTotal / 1000)}K`,
+                  contextLimit: `${Math.round(contextLimit / 1000)}K`,
+                  bailThreshold: `${Math.round(contextLimit * TRIAGE_BAIL_PERCENT / 1000)}K`,
+                })
+                // Fall back to notification-only (same as triageToChat: false path)
+                const bailContent = `**Triage** (${displayTaskRef}):\n\n${cleanedResult}`
+                await chatHistory.addNotification({
+                  role: 'assistant', content: bailContent,
+                  source: 'triage', notification: true, taskId,
+                })
+                broadcastEvent('agent:response', { text: bailContent, source: 'triage' })
+                triggerBackgroundCompaction('triage-bail')
+                return
+              }
+
               log.web.info('triage main agent turn starting', {
                 taskId,
                 historyMessages: history.length,
                 historyTokens: `~${Math.round(historyTokens / 1000)}K`,
+                estimatedTotal: `~${Math.round(estimatedTotal / 1000)}K`,
               })
 
               const agentResult = await runAgentLoop(prompt, history, {
@@ -1195,24 +1248,17 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     try { require('node:fs').appendFileSync('/tmp/walnut-exit.log', msg + '\n') } catch { /* ignore */ }
   })
 
-  // -- Start listening --
-  return new Promise((resolve) => {
-    httpServer!.listen(port, () => {
-      const label = dev ? 'dev' : 'production'
-      log.web.info(`server listening on http://localhost:${port}`, { mode: label, port })
-      console.log(`Walnut web server (${label}) listening on http://localhost:${port}`)
-      cronService.start().catch((err) => {
-        log.cron.error('failed to start cron service', { error: err instanceof Error ? err.message : String(err) })
-      })
-
-      // -- Start heartbeat runner (if enabled in config) --
-      startHeartbeatIfConfigured().catch((err) => {
-        log.heartbeat.error('failed to start heartbeat', { error: err instanceof Error ? err.message : String(err) })
-      })
-
-      resolve(httpServer!)
-    })
+  // -- Start post-listen services (port already bound above) --
+  cronService.start().catch((err) => {
+    log.cron.error('failed to start cron service', { error: err instanceof Error ? err.message : String(err) })
   })
+
+  // -- Start heartbeat runner (if enabled in config) --
+  startHeartbeatIfConfigured().catch((err) => {
+    log.heartbeat.error('failed to start heartbeat', { error: err instanceof Error ? err.message : String(err) })
+  })
+
+  return httpServer!
 }
 
 // ── Git auto-commit polling ──
@@ -1221,6 +1267,7 @@ const GIT_POLL_INTERVAL_MS = 30_000
 
 function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth } {
   const health: GitAutoCommitHealth = { protected: false, consecutiveFailures: 0 }
+  let notifiedForEpisode = false // only send chat notification once per failure episode
 
   const emitStatus = () => {
     broadcastEvent('git-sync:status', health)
@@ -1260,7 +1307,9 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
         health.lastCommitAt = new Date().toISOString()
         health.consecutiveFailures = 0
         health.error = undefined
+        notifiedForEpisode = false
         log.git.debug('auto-committed')
+        emitStatus()
       }
     } catch (err) {
       health.consecutiveFailures++
@@ -1270,6 +1319,23 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
         consecutiveFailures: health.consecutiveFailures,
       })
       emitStatus()
+      // Send a one-time chat notification when failures first reach the threshold
+      if (health.consecutiveFailures >= 3 && !notifiedForEpisode) {
+        const notifContent = `Data backup failing \u2014 git auto-commit has failed ${health.consecutiveFailures}+ times consecutively. Check logs: \`walnut logs -s git\``
+        notifiedForEpisode = true
+        chatHistory.addNotification({
+          role: 'assistant',
+          content: notifContent,
+          source: 'agent-error',
+          notification: true,
+        }).then(() => {
+          bus.emit(EventNames.CHAT_HISTORY_UPDATED, {
+            entry: { role: 'assistant', content: notifContent, source: 'agent-error', notification: true, timestamp: new Date().toISOString() },
+          }, ['web-ui'])
+        }).catch(() => {
+          notifiedForEpisode = false // reset so next cycle retries
+        })
+      }
     }
   }, GIT_POLL_INTERVAL_MS)
 

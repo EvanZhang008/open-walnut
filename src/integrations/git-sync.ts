@@ -192,6 +192,42 @@ export async function gitPullWalnut(): Promise<void> {
 }
 
 /**
+ * Remove a stale .git/index.lock if it exists, is older than 60 seconds,
+ * and the process that created it is no longer alive.
+ * Git writes the PID into the lock file; we check liveness before deleting.
+ */
+function clearStaleLock(): boolean {
+  const lockPath = path.join(WALNUT_HOME, '.git', 'index.lock');
+  try {
+    const stat = fs.statSync(lockPath);
+    const ageMs = Date.now() - stat.mtimeMs;
+    if (ageMs <= 60_000) return false;
+
+    // Git writes PID as first line of index.lock — check if that process is alive
+    try {
+      const content = fs.readFileSync(lockPath, 'utf-8');
+      const pid = parseInt(content.trim().split('\n')[0], 10);
+      if (pid > 0) {
+        try {
+          process.kill(pid, 0); // signal 0 = liveness check, doesn't kill
+          return false; // process still alive — don't delete
+        } catch {
+          // process is dead — safe to delete
+        }
+      }
+    } catch {
+      // can't read lock file content — fall through to age-based removal
+    }
+
+    fs.unlinkSync(lockPath);
+    return true;
+  } catch {
+    // File doesn't exist or can't stat — nothing to do
+  }
+  return false;
+}
+
+/**
  * Commit all dirty changes with an auto-save message.
  * Returns true if a commit was made, false if working tree was clean.
  */
@@ -201,6 +237,7 @@ export function commitIfDirty(): boolean {
 
   const lines = status.split('\n').filter((l) => l.trim());
   const timestamp = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  clearStaleLock();
   git('add -A');
   gitSafe(`commit -m "auto-save ${timestamp} (${lines.length} files)"`);
   return true;
