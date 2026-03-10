@@ -1913,8 +1913,20 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Child task maps: parentId → count, set of child task IDs, and child→parent mapping
   // Only tasks whose parent is VISIBLE in the current list are treated as children.
   // Orphans (parent hidden/completed/filtered out) render as normal top-level tasks.
-  const { childCountMap, childTaskIds, childParentMap, depthMap } = useMemo(() => {
+  // True child count from the FULL task list (unfiltered) — used for chevron + "N sub" badge
+  // so the user always sees that children exist, even when they're filtered out.
+  const trueChildCountMap = useMemo(() => {
     const countMap = new Map<string, number>();
+    for (const task of tasks) {
+      if (task.parent_task_id) {
+        const parent = tasks.find((t) => t.id.startsWith(task.parent_task_id!));
+        if (parent) countMap.set(parent.id, (countMap.get(parent.id) ?? 0) + 1);
+      }
+    }
+    return countMap;
+  }, [tasks]);
+
+  const { childTaskIds, childParentMap, depthMap } = useMemo(() => {
     const childIds = new Set<string>();
     const parentMap = new Map<string, string>(); // childId → parentFullId
     for (const task of sorted) {
@@ -1925,7 +1937,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         if (parent) {
           childIds.add(task.id);
           parentMap.set(task.id, parent.id);
-          countMap.set(parent.id, (countMap.get(parent.id) ?? 0) + 1);
         }
         // If parent not visible → orphan: no childIds entry, renders as top-level
       }
@@ -1941,7 +1952,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       return d;
     };
     for (const task of sorted) getDepth(task.id);
-    return { childCountMap: countMap, childTaskIds: childIds, childParentMap: parentMap, depthMap: depths };
+    return { childTaskIds: childIds, childParentMap: parentMap, depthMap: depths };
   }, [sorted]);
 
   // Determine if a child task should be hidden (any ancestor is collapsed — walks full chain)
@@ -2211,7 +2222,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           if (childParentMap.has(targetTask.id)) {
             // Target is a child → adopt same parent (become sibling)
             newParentId = childParentMap.get(targetTask.id)!;
-          } else if ((childCountMap.get(targetTask.id) ?? 0) > 0) {
+          } else if ((trueChildCountMap.get(targetTask.id) ?? 0) > 0) {
             // Target is a parent (has visible children) → become child of target
             newParentId = targetTask.id;
           }
@@ -2294,7 +2305,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       if (!onMoveTask) return;
       onMoveTask(activeId, targetCategory, targetProject, insertNearTaskId);
     }
-  }, [onReorder, onMoveTask, onReparentTask, ordering, taskGroupMap, grouped, fullGrouped, sorted, childParentMap, childCountMap]);
+  }, [onReorder, onMoveTask, onReparentTask, ordering, taskGroupMap, grouped, fullGrouped, sorted, childParentMap, trueChildCountMap]);
 
   const draggedTask = activeDragId ? sorted.find((t) => t.id === activeDragId) : null;
 
@@ -2756,7 +2767,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   isFocused={focusedTaskId === task.id}
                   isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
                   depth={depthMap.get(task.id) ?? 0}
-                  childCount={childCountMap.get(task.id)}
+                  childCount={trueChildCountMap.get(task.id)}
                   isExpanded={expandedParents.has(task.id)}
                   onToggleExpand={() => toggleParentExpand(task.id)}
                   onClick={() => handleTaskClick(task)}
@@ -2826,7 +2837,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                   isFocused={focusedTaskId === task.id}
                                   isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
                                   depth={depthMap.get(task.id) ?? 0}
-                                  childCount={childCountMap.get(task.id)}
+                                  childCount={trueChildCountMap.get(task.id)}
                                   isExpanded={expandedParents.has(task.id)}
                                   onToggleExpand={() => toggleParentExpand(task.id)}
                                   onClick={() => handleTaskClick(task)}
@@ -2885,7 +2896,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                                 isFocused={focusedTaskId === task.id}
                                                 isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
                                                 depth={depthMap.get(task.id) ?? 0}
-                                                childCount={childCountMap.get(task.id)}
+                                                childCount={trueChildCountMap.get(task.id)}
                                                 isExpanded={expandedParents.has(task.id)}
                                                 onToggleExpand={() => toggleParentExpand(task.id)}
                                                 onClick={() => handleTaskClick(task)}
