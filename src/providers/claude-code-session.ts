@@ -1582,7 +1582,7 @@ export class ClaudeCodeSession {
             import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
               updateSessionRecord(sid, { pid: undefined }),
             ).catch((err) => {
-              log.session.debug('failed to clear PID on exit', { sessionId: sid, error: String(err) })
+              log.session.warn('failed to clear PID on process exit', { sessionId: sid, error: String(err) })
             })
           }
         }

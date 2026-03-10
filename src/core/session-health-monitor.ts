@@ -381,8 +381,9 @@ export class SessionHealthMonitor {
 
         // PID reuse protection: skip if this PID is used by an active session
         if (activePids.has(s.pid)) {
-          log.session.debug('health monitor: skipping orphan kill — PID in use by active session', {
-            sessionId: s.claudeSessionId, pid: s.pid,
+          log.session.warn('health monitor: skipping orphan kill — PID reuse collision detected', {
+            staleSessionId: s.claudeSessionId, pid: s.pid,
+            staleWorkStatus: s.work_status, staleProcessStatus: s.process_status,
           })
           continue
         }

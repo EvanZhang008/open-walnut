@@ -546,7 +546,10 @@ export async function updateSessionRecord(
 
     // When session reaches terminal state, clear PID to prevent stale PID orphan kills.
     // OS can recycle PIDs — a stale PID on a completed session can collide with a new session's PID.
-    if (updates.work_status && TERMINAL_WORK_STATUSES.has(updates.work_status)) {
+    if (updates.work_status && TERMINAL_WORK_STATUSES.has(updates.work_status) && session.pid != null) {
+      log.session.info('clearing stale PID on terminal transition', {
+        sessionId: claudeSessionId, pid: session.pid, work_status: updates.work_status,
+      });
       session.pid = undefined;
     }
     session.lastActiveAt = new Date().toISOString();
@@ -620,7 +623,10 @@ export async function completeTaskSessions(sessionIds: string[]): Promise<number
       }
       session.work_status = 'completed';
       session.process_status = 'stopped';
-      session.pid = undefined;  // Clear PID to prevent stale PID orphan kills
+      if (session.pid != null) {
+        log.session.info('clearing stale PID on task completion', { sessionId: sid, pid: session.pid });
+      }
+      session.pid = undefined;
       session.last_status_change = now;
       session.lastActiveAt = now;
       updated++;
