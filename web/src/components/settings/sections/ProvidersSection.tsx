@@ -215,9 +215,14 @@ export function ProvidersSection({ config, onSave }: Props) {
     await onSave({ agent: { ...config.agent, main_provider: name } });
   };
 
-  // Providers that are ready (have keys or don't need them) — used for active dropdown
+  // Providers that are ready (have keys or don't need them) — used for active dropdown.
+  // Exclude not_implemented providers (e.g. ollama) that can't actually serve requests.
   const readyProviders = ALL_PROVIDERS.filter(
-    (def) => providers[def.name]?.status === 'ready' || !def.needsKey,
+    (def) => {
+      const info = providers[def.name];
+      if (info?.status === 'not_implemented') return false;
+      return info?.status === 'ready' || !def.needsKey;
+    },
   );
 
   return (

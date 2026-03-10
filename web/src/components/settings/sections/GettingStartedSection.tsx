@@ -28,6 +28,12 @@ export function GettingStartedSection({ config, onSave }: Props) {
     setToken(config.provider?.bedrock_bearer_token ?? '');
   }, [config]);
 
+  // Reset connection status when user changes token or region
+  useEffect(() => {
+    setStatus('unknown');
+    setStatusText(undefined);
+  }, [token, region]);
+
   const handleTest = async () => {
     setStatus('testing');
     setStatusText(undefined);

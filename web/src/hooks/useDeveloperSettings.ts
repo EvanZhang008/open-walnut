@@ -17,9 +17,6 @@ export type UiOnlyCategory = typeof UI_ONLY_CATEGORIES[number]['key'];
 
 const KEY_PREFIX = 'walnut:show_ui_only_';
 
-// Legacy key for backwards compatibility
-const LEGACY_KEY = 'walnut:show_ui_only_triage';
-
 function subscribe(cb: () => void): () => void {
   window.addEventListener('storage', cb);
   window.addEventListener('walnut-dev-settings', cb);
@@ -33,14 +30,6 @@ function getSnapshotForCategory(category: UiOnlyCategory): boolean {
   const catDef = UI_ONLY_CATEGORIES.find(c => c.key === category);
   const defaultVal = catDef?.defaultOn ?? false;
   try {
-    // For triage, also check legacy key
-    if (category === 'triage') {
-      const modern = localStorage.getItem(`${KEY_PREFIX}${category}`);
-      if (modern !== null) return modern === 'true';
-      const legacy = localStorage.getItem(LEGACY_KEY);
-      if (legacy !== null) return legacy === 'true';
-      return defaultVal;
-    }
     const stored = localStorage.getItem(`${KEY_PREFIX}${category}`);
     if (stored !== null) return stored === 'true';
     return defaultVal;
@@ -78,10 +67,6 @@ export function useUiOnlySettings(): Record<UiOnlyCategory, boolean> {
 export function setShowUiOnlyCategory(category: UiOnlyCategory, value: boolean): void {
   try {
     localStorage.setItem(`${KEY_PREFIX}${category}`, String(value));
-    // Keep legacy key in sync for triage
-    if (category === 'triage') {
-      localStorage.setItem(LEGACY_KEY, String(value));
-    }
   } catch { /* private browsing */ }
   window.dispatchEvent(new Event('walnut-dev-settings'));
 }

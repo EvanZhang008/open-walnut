@@ -18,7 +18,9 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
     const config = await getConfig()
     // Include env var bearer token hint so the UI can show it without a test call
     const envBearerToken = process.env.AWS_BEARER_TOKEN_BEDROCK
-    const envTokenHint = !config.provider?.bedrock_bearer_token && envBearerToken
+    // Only show env hint if no token is configured in either legacy or new-style config
+    const hasConfigToken = !!(config.provider?.bedrock_bearer_token || config.providers?.bedrock?.bearer_token)
+    const envTokenHint = !hasConfigToken && envBearerToken
       ? envBearerToken.slice(0, 8) + '••••••••' + envBearerToken.slice(-4)
       : undefined
     res.json({ config, envTokenHint })

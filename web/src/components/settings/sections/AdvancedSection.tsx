@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback } from 'react';
+import { useCallback } from 'react';
 import type { Config } from '@walnut/core';
 import { SectionCard } from '../inputs/SectionCard';
 import { UI_ONLY_CATEGORIES, setShowUiOnlyCategory, type UiOnlyCategory } from '@/hooks/useDeveloperSettings';
@@ -7,8 +7,6 @@ import { updateConfig } from '@/api/config';
 interface Props { config: Config; onSave: (partial: Partial<Config>) => Promise<void>; }
 
 export function AdvancedSection({ config, onSave }: Props) {
-  // Use refs for all form values — avoids useState entirely (React 19 crash workaround)
-  const formRef = useRef<HTMLFormElement>(null);
 
   // Read helpers
   const git = config.git_versioning ?? {};
@@ -16,7 +14,9 @@ export function AdvancedSection({ config, onSave }: Props) {
   const sub = config.agent?.subagent ?? {};
 
   const handleSave = useCallback(async () => {
-    const f = formRef.current;
+    // SectionCard renders a <form id="advanced"> — look it up directly.
+    // (A ref on the inner <div> won't work with FormData.)
+    const f = document.getElementById('advanced') as HTMLFormElement | null;
     if (!f) return;
     const fd = new FormData(f);
     const val = (name: string) => (fd.get(name) as string) ?? '';
@@ -50,21 +50,8 @@ export function AdvancedSection({ config, onSave }: Props) {
     });
   }, [config, onSave]);
 
-  const handleToggleUiOnly = async (category: UiOnlyCategory, checked: boolean) => {
-    setShowUiOnlyCategory(category, checked);
-    try {
-      const ds: Record<string, boolean> = {};
-      for (const cat of UI_ONLY_CATEGORIES) {
-        const key = `show_ui_only_${cat.key.replace(/-/g, '_')}`;
-        ds[key] = cat.key === category ? checked : localStorage.getItem(`walnut:show_ui_only_${cat.key}`) === 'true';
-      }
-      await updateConfig({ developer: ds } as Partial<Config>);
-    } catch {
-      setShowUiOnlyCategory(category, !checked);
-    }
-  };
-
-  // Read dev settings from localStorage directly (no hook)
+  // Read dev settings from localStorage directly (no hook).
+  // Respects defaultOn — raw localStorage.getItem would treat never-set keys as false.
   const getDevChecked = (key: string) => {
     const catDef = UI_ONLY_CATEGORIES.find(c => c.key === key);
     const defaultVal = catDef?.defaultOn ?? false;
@@ -75,9 +62,25 @@ export function AdvancedSection({ config, onSave }: Props) {
     } catch { return defaultVal; }
   };
 
+  const handleToggleUiOnly = async (category: UiOnlyCategory, checked: boolean) => {
+    setShowUiOnlyCategory(category, checked);
+    try {
+      const ds: Record<string, boolean> = {};
+      for (const cat of UI_ONLY_CATEGORIES) {
+        const key = `show_ui_only_${cat.key.replace(/-/g, '_')}`;
+        // Use getDevChecked (respects defaultOn) instead of raw localStorage
+        // to avoid zeroing out defaultOn categories that were never explicitly set
+        ds[key] = cat.key === category ? checked : getDevChecked(cat.key);
+      }
+      await updateConfig({ developer: ds } as Partial<Config>);
+    } catch {
+      setShowUiOnlyCategory(category, !checked);
+    }
+  };
+
   return (
     <SectionCard id="advanced" title="Advanced" description="Git versioning, exec security, subagent defaults, developer options." onSave={handleSave}>
-      <div ref={formRef as React.RefObject<HTMLFormElement>} style={{ display: 'contents' }}>
+      <div style={{ display: 'contents' }}>
         {/* Git Versioning */}
         <details className="settings-collapsible" open>
           <summary className="settings-collapsible-title">Git Versioning</summary>
