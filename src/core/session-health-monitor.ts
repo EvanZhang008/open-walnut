@@ -356,6 +356,19 @@ export class SessionHealthMonitor {
       const { listSessions, TERMINAL_WORK_STATUSES } = await import('./session-tracker.js')
       const sessions = await listSessions()
 
+      // Build set of PIDs actively used by non-terminal, non-stopped sessions.
+      // This prevents PID-reuse collisions: OS can recycle a PID from a completed
+      // session and assign it to a new active session.
+      const activePids = new Set<number>()
+      for (const s of sessions) {
+        if (s.pid == null) continue
+        const isTerminal = TERMINAL_WORK_STATUSES.has(s.work_status)
+        const isStopped = s.process_status === 'stopped'
+        if (!isTerminal && !isStopped) {
+          activePids.add(s.pid)
+        }
+      }
+
       let killed = 0
       for (const s of sessions) {
         if (s.pid == null) continue
@@ -365,6 +378,14 @@ export class SessionHealthMonitor {
         const isTerminal = TERMINAL_WORK_STATUSES.has(s.work_status)
         const isStopped = s.process_status === 'stopped'
         if (!isTerminal && !isStopped) continue
+
+        // PID reuse protection: skip if this PID is used by an active session
+        if (activePids.has(s.pid)) {
+          log.session.debug('health monitor: skipping orphan kill — PID in use by active session', {
+            sessionId: s.claudeSessionId, pid: s.pid,
+          })
+          continue
+        }
 
         const processName = s.host ? 'ssh' : 'claude'
         if (!isProcessAlive(s.pid, processName)) continue

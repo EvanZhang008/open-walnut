@@ -542,6 +542,12 @@ export async function updateSessionRecord(
       throw new Error(`Session not found: ${claudeSessionId}`);
     }
 
+    // When session reaches terminal state, clear PID to prevent stale PID orphan kills.
+    // OS can recycle PIDs — a stale PID on a completed session can collide with a new session's PID.
+    if (updates.work_status && TERMINAL_WORK_STATUSES.has(updates.work_status)) {
+      updates.pid = undefined;
+    }
+
     Object.assign(session, updates);
     session.lastActiveAt = new Date().toISOString();
     await writeStore(store);
@@ -614,6 +620,7 @@ export async function completeTaskSessions(sessionIds: string[]): Promise<number
       }
       session.work_status = 'completed';
       session.process_status = 'stopped';
+      session.pid = undefined;  // Clear PID to prevent stale PID orphan kills
       session.last_status_change = now;
       session.lastActiveAt = now;
       updated++;

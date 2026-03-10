@@ -1575,6 +1575,13 @@ export class ClaudeCodeSession {
           this._workStatus = result.is_error ? 'error' : 'agent_complete'
           this._activity = undefined
           this.stopMonitoring()
+
+          // Clear PID from record to prevent stale PID orphan kills on future PID reuse
+          if (this.claudeSessionId) {
+            import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+              updateSessionRecord(this.claudeSessionId!, { pid: undefined }),
+            ).catch(() => {})
+          }
         }
 
         this.emitStatusChanged(result.is_error ? 'error' : 'agent_complete', 'in_progress')
