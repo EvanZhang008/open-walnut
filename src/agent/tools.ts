@@ -1272,8 +1272,13 @@ defaults (same resolution chain as start_session).`,
           if (resolvedCwd) paths.push(canonicalJsonlPath(sessionId, resolvedCwd));
           if (resolvedHost && resolvedCwd) paths.push(`${resolvedHost}:${remoteJsonlPath(sessionId, resolvedCwd)}`);
           else if (resolvedHost) paths.push(`${resolvedHost}:${remoteJsonlPath(sessionId)}`);
-          return `Error: JSONL file not found for session ${sessionId}. Looked in:\n${paths.map(p => `  - ${p}`).join('\n')}\nCheck that the session_id, host, and working_directory are correct.`;
+          paths.push('(also searched via glob and find fallback)');
+          return `Error: JSONL file not found for session ${sessionId}. Searched:\n${paths.map(p => `  - ${p}`).join('\n')}\nTry: ssh ${resolvedHost || 'HOST'} "find ~/.claude/projects -name '${sessionId}.jsonl'"`;
         }
+
+        // ⑤b Auto-correct CWD: prefer the CWD embedded in the JSONL over the guessed one
+        const effectiveCwd = jsonlResult.foundCwd || resolvedCwd;
+        const cwdCorrected = jsonlResult.foundCwd && resolvedCwd && jsonlResult.foundCwd !== resolvedCwd;
 
         // ⑥ Extract metadata from JSONL
         const lines = jsonlResult.content.split('\n').filter(Boolean);
@@ -1316,7 +1321,7 @@ defaults (same resolution chain as start_session).`,
           claudeSessionId: sessionId,
           taskId: task.id,
           project: task.project,
-          cwd: resolvedCwd,
+          cwd: effectiveCwd,
           host: resolvedHost,
           title,
           work_status: workStatus,
@@ -1335,8 +1340,9 @@ defaults (same resolution chain as start_session).`,
         // ⑩ Return success
         const sRef = sessionRef(record.claudeSessionId, record.title ?? title);
         const hostNote = resolvedHost ? ` (${resolvedHost})` : '';
-        const cwdNote = resolvedCwd ? ` cwd=${resolvedCwd}` : '';
-        return `Imported session ${sRef}${hostNote}${cwdNote} → task ${taskRef(task.id, task.title)}. Messages: ${messageCount}, source: ${jsonlResult.source}.`;
+        const cwdNote = effectiveCwd ? ` cwd=${effectiveCwd}` : '';
+        const correctionNote = cwdCorrected ? ` (auto-corrected from ${resolvedCwd})` : '';
+        return `Imported session ${sRef}${hostNote}${cwdNote}${correctionNote} → task ${taskRef(task.id, task.title)}. Messages: ${messageCount}, source: ${jsonlResult.source}.`;
       } catch (err) {
         return `Error: ${err instanceof Error ? err.message : String(err)}`;
       }

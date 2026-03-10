@@ -56,6 +56,25 @@ export function remoteSubagentDirPath(sessionId: string, cwd?: string): string {
   return `~/.claude/projects/*/${sessionId}/subagents`;
 }
 
+// ── JSONL content helpers ──
+
+/**
+ * Extract the working directory from JSONL content.
+ * Claude Code writes `cwd` on the first `type: "user"` entry.
+ */
+export function extractCwdFromJsonlContent(content: string): string | undefined {
+  for (const line of content.split('\n')) {
+    if (!line) continue;
+    try {
+      const entry = JSON.parse(line);
+      if ((entry.type === 'user' || entry.type === 'human') && entry.cwd) {
+        return entry.cwd;
+      }
+    } catch { /* skip malformed lines */ }
+  }
+  return undefined;
+}
+
 // ── Interface ──
 
 export interface SessionFileReader {
@@ -145,6 +164,17 @@ export class RemoteFileReader implements SessionFileReader {
   }
 
   /**
+   * Search for a session JSONL using `find` — more robust than shell glob.
+   * Returns the file content if found, null otherwise.
+   */
+  async findSession(sessionId: string): Promise<string | null> {
+    await this.resolve();
+    // Single SSH call: find the file and cat it
+    const cmd = `f=$(find ~/.claude/projects -maxdepth 2 -name '${sessionId}.jsonl' -print -quit 2>/dev/null) && [ -n "$f" ] && cat "$f"`;
+    return this.execSsh(cmd, 20000);
+  }
+
+  /**
    * Batch-read all subagent JSONL files from a remote directory.
    * Returns a Map<filename, content> to avoid N separate SSH calls.
    */
@@ -208,39 +238,56 @@ export function findLocalJsonlPath(sessionId: string, cwd?: string): string | nu
   return null;
 }
 
+/** Result from readSessionJsonlContent with optional CWD auto-discovery. */
+export type ReadSessionResult = {
+  content: string;
+  source: 'local' | 'stream' | 'outputFile' | 'remote';
+  /** CWD extracted from JSONL content — may differ from the cwd parameter when found via fallback search. */
+  foundCwd?: string;
+};
+
 /**
  * Read session JSONL content using the appropriate reader.
  * Tries local paths first, then falls back to remote if host is provided.
  *
- * Returns { content, source } where source indicates where data was read from,
- * or null if not found.
+ * Returns { content, source, foundCwd } where source indicates where data was read from.
+ * foundCwd is extracted from the JSONL content (first user message's cwd field) —
+ * useful when the provided cwd was wrong but the session was found via fallback search.
  */
 export async function readSessionJsonlContent(
   sessionId: string,
   cwd?: string,
   host?: string,
   outputFile?: string,
-): Promise<{ content: string; source: 'local' | 'stream' | 'outputFile' | 'remote' } | null> {
+): Promise<ReadSessionResult | null> {
   const { SESSION_STREAMS_DIR } = await import('../constants.js');
+
+  // Helper: attach foundCwd from JSONL content
+  const withFoundCwd = (content: string, source: ReadSessionResult['source']): ReadSessionResult => {
+    const foundCwd = extractCwdFromJsonlContent(content);
+    return { content, source, ...(foundCwd ? { foundCwd } : {}) };
+  };
 
   // 1. Canonical JSONL — source of truth.
   //    Dispatch on host (like readSubagentContents): remote SSH first, else local fs.
   //    Remote sessions have no local canonical file, so we must SSH first.
   if (host) {
     const reader = new RemoteFileReader(host);
-    // Try exact encoded path first, then glob fallback.
-    // Claude Code's path encoding may differ from ours (e.g. underscores → hyphens),
-    // so the exact path can miss even when the file exists.
+    // Try exact encoded path first, then glob fallback, then find fallback.
     const exactPath = cwd ? remoteJsonlPath(sessionId, cwd) : null;
     const globPath = remoteJsonlPath(sessionId); // ~/.claude/projects/*/${sessionId}.jsonl
     try {
       if (exactPath) {
         const content = await reader.readFile(exactPath);
-        if (content) return { content, source: 'remote' };
+        if (content) return withFoundCwd(content, 'remote');
       }
       // Exact path missed or no cwd — try glob
       const content = await reader.readFile(globPath);
-      if (content) return { content, source: 'remote' };
+      if (content) return withFoundCwd(content, 'remote');
+
+      // Glob also missed — try `find` (more robust than shell glob)
+      const findContent = await reader.findSession(sessionId);
+      if (findContent) return withFoundCwd(findContent, 'remote');
     } catch (err) {
       log.session.debug('remote JSONL read failed', {
         host, sessionId,
@@ -253,7 +300,7 @@ export async function readSessionJsonlContent(
     if (localPath) {
       try {
         const content = fs.readFileSync(localPath, 'utf-8');
-        if (content) return { content, source: 'local' };
+        if (content) return withFoundCwd(content, 'local');
       } catch {
         // Fall through
       }
@@ -273,7 +320,7 @@ export async function readSessionJsonlContent(
           const parsed = JSON.parse(firstLine);
           if (parsed.sessionId === sessionId || parsed.session_id === sessionId) {
             const content = fs.readFileSync(filePath, 'utf-8');
-            if (content) return { content, source: 'stream' };
+            if (content) return withFoundCwd(content, 'stream');
           }
         }
       } catch { /* Skip */ }
@@ -285,7 +332,7 @@ export async function readSessionJsonlContent(
     try {
       if (fs.existsSync(outputFile)) {
         const content = fs.readFileSync(outputFile, 'utf-8');
-        if (content) return { content, source: 'outputFile' };
+        if (content) return withFoundCwd(content, 'outputFile');
       }
     } catch { /* Fall through */ }
   }
