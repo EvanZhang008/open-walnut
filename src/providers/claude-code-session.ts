@@ -1578,9 +1578,12 @@ export class ClaudeCodeSession {
 
           // Clear PID from record to prevent stale PID orphan kills on future PID reuse
           if (this.claudeSessionId) {
+            const sid = this.claudeSessionId
             import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
-              updateSessionRecord(this.claudeSessionId!, { pid: undefined }),
-            ).catch(() => {})
+              updateSessionRecord(sid, { pid: undefined }),
+            ).catch((err) => {
+              log.session.debug('failed to clear PID on exit', { sessionId: sid, error: String(err) })
+            })
           }
         }
 
