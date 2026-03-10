@@ -15,6 +15,7 @@ import { ChatInput } from '@/components/chat/ChatInput';
 import { TodoPanel } from '@/components/tasks/TodoPanel';
 import { TaskContextBar } from '@/components/tasks/TaskContextBar';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
+import { SessionLauncherDrawer } from '@/components/sessions/SessionLauncherDrawer';
 import { TriagePanel } from '@/components/triage/TriagePanel';
 import { fetchSession } from '@/api/sessions';
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
@@ -179,6 +180,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Task ID for filtered triage panel (null = show all)
   const [triageTaskId, setTriageTaskId] = useState<string | null>(null);
 
+  // Session launcher drawer state (opened via /session command)
+  const [sessionLauncherOpen, setSessionLauncherOpen] = useState(false);
+
   // Set of session IDs currently open in columns — for active pill indicators
   const openSessionIdSet = useMemo(() => new Set(sessionColumns), [sessionColumns]);
 
@@ -192,13 +196,16 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const todoPanel = useResizablePanel('walnut-todo-width', 25);
   const sessionPanel = useResizablePanel('walnut-session-panel-width-v2', 35);
 
-  // Graduated session area width — set directly when column count changes
+  // Graduated session area width — only auto-set when column count increases
+  // (don't override user's manual drag on decrease or same count)
   const prevColCountRef = useRef(0);
   useEffect(() => {
     const count = sessionColumns.length + (triagePanelOpen ? 1 : 0);
     if (count === prevColCountRef.current) return;
+    const prev = prevColCountRef.current;
     prevColCountRef.current = count;
-    if (count > 0) sessionPanel.setPct(SESSION_WIDTH_BY_COUNT[Math.min(count, 2)]);
+    // Only auto-set width when opening panels (0→1, 1→2), not when closing
+    if (count > prev && count > 0) sessionPanel.setPct(SESSION_WIDTH_BY_COUNT[Math.min(count, 2)]);
   }, [sessionColumns.length, triagePanelOpen, sessionPanel.setPct]);
 
   // Keep focusedTask in sync with latest data from tasks array (handles WS updates from other sources)
@@ -276,11 +283,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // Toggle main chat panel visibility
       setChatVisible(prev => !prev);
     };
+    const handleSessionLauncher = () => setSessionLauncherOpen(true);
     window.addEventListener('dock:activate-task', handleDockTask);
     window.addEventListener('dock:activate-chat', handleDockChat);
+    window.addEventListener('session-launcher:open', handleSessionLauncher);
     return () => {
       window.removeEventListener('dock:activate-task', handleDockTask);
       window.removeEventListener('dock:activate-chat', handleDockChat);
+      window.removeEventListener('session-launcher:open', handleSessionLauncher);
     };
   }, []);
 
@@ -346,6 +356,22 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     setTriagePanelOpen(false);
     setTriageTaskId(null);
   }, []);
+
+  // Session launcher: track pending quick-start taskId, auto-open session when it starts
+  const pendingQuickStartRef = useRef<string | null>(null);
+  const handleSessionLauncherStarted = useCallback((taskId: string) => {
+    pendingQuickStartRef.current = taskId;
+  }, []);
+
+  // Auto-open session panel when a quick-start session fires
+  useEvent('session:started', (data) => {
+    const d = data as { sessionId?: string; taskId?: string; claudeSessionId?: string };
+    const sessionId = d.claudeSessionId ?? d.sessionId;
+    if (pendingQuickStartRef.current && d.taskId === pendingQuickStartRef.current && sessionId) {
+      pendingQuickStartRef.current = null;
+      setSessionColumns(prev => addSessionColumn(prev, sessionId, triageOpenRef.current));
+    }
+  });
 
   // Handle session click from chat: focus the associated task + open session column
   const handleSessionClick = useCallback(async (sessionId: string) => {
@@ -665,6 +691,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onOperationError={showOperationError}
         />
       </div>
+
+      {/* Session Launcher Drawer (opened via /session command) */}
+      <SessionLauncherDrawer
+        open={sessionLauncherOpen}
+        onClose={() => setSessionLauncherOpen(false)}
+        onSessionStarted={handleSessionLauncherStarted}
+      />
     </div>
   );
 }
