@@ -3,6 +3,7 @@ import { compactCommand } from './compact.js';
 import { helpCommand } from './help.js';
 import { checkTasksCommand } from './check-tasks.js';
 import { planCommand } from './plan.js';
+import { sessionCommand } from './session.js';
 import { sessionsCommand } from './sessions.js';
 import { tasksCommand } from './tasks.js';
 import { loadMarkdownCommands } from './markdown-bridge.js';
@@ -12,6 +13,7 @@ register({ ...compactCommand, source: 'hardcoded' });
 register({ ...helpCommand, source: 'hardcoded' });
 register({ ...checkTasksCommand, source: 'hardcoded' });
 register({ ...planCommand, source: 'hardcoded' });
+register({ ...sessionCommand, source: 'hardcoded' });
 register({ ...sessionsCommand, source: 'hardcoded' });
 register({ ...tasksCommand, source: 'hardcoded' });
 

@@ -6,9 +6,10 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { log } from '../../logging/index.js'
 import { listSessions, getRecentSessions, getSessionSummaries, getSessionsForTask, getSessionByClaudeId, updateSessionRecord, isTriageSession } from '../../core/session-tracker.js'
 import { readSessionHistory, extractPlanContent, rewriteHistoryRemoteImages } from '../../core/session-history.js'
-import { listTasks, getTask, addTask } from '../../core/task-manager.js'
+import { listTasks, getTask, addTask, updateTask } from '../../core/task-manager.js'
 import { getConfig } from '../../core/config-manager.js'
 import { bus, EventNames, eventData } from '../../core/event-bus.js'
+import path from 'path'
 import { isProcessAlive } from '../../utils/process.js'
 import { readPlanFromSession, buildPlanExecutionMessage } from '../../utils/plan-message.js'
 import type { SessionRecord, Task, WorkStatus } from '../../core/types.js'
@@ -62,6 +63,204 @@ async function enrichWithHostnames(sessions: SessionRecord[]): Promise<SessionRe
 }
 
 export const sessionsRouter = Router()
+
+// GET /api/sessions/working-dirs — deduplicated working directories from session history
+sessionsRouter.get('/working-dirs', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const sessions = await listSessions()
+    const tasks = await listTasks()
+    const config = await getConfig()
+
+    // Build taskId → category map
+    const taskCategoryMap = new Map<string, string>()
+    for (const t of tasks) {
+      taskCategoryMap.set(t.id, t.category)
+    }
+
+    // Aggregate (cwd, host) pairs with frequency + recency + category votes
+    interface DirAgg {
+      cwd: string
+      host: string | null
+      count: number
+      lastUsed: string
+      categoryVotes: Map<string, number>
+    }
+
+    const dirMap = new Map<string, DirAgg>()
+
+    for (const s of sessions) {
+      if (!s.cwd) continue
+      if (isTriageSession(s)) continue
+      if (s.archived) continue
+
+      const key = `${s.cwd}::${s.host ?? '__local__'}`
+      const existing = dirMap.get(key)
+      const category = s.taskId ? taskCategoryMap.get(s.taskId) : undefined
+
+      if (existing) {
+        existing.count++
+        if (s.startedAt > existing.lastUsed) existing.lastUsed = s.startedAt
+        if (category) existing.categoryVotes.set(category, (existing.categoryVotes.get(category) ?? 0) + 1)
+      } else {
+        const votes = new Map<string, number>()
+        if (category) votes.set(category, 1)
+        dirMap.set(key, {
+          cwd: s.cwd,
+          host: s.host ?? null,
+          count: 1,
+          lastUsed: s.startedAt,
+          categoryVotes: votes,
+        })
+      }
+    }
+
+    // Resolve majority-vote category and host labels
+    const hosts = config.hosts ?? {}
+    const now = Date.now()
+    const entries: Array<{
+      cwd: string
+      host: string | null
+      hostLabel?: string
+      category: string
+      count: number
+      lastUsed: string
+      score: number
+    }> = []
+
+    // Find max age and max count for normalization
+    let maxAgeMs = 1
+    let maxCount = 1
+    for (const agg of dirMap.values()) {
+      const age = now - new Date(agg.lastUsed).getTime()
+      if (age > maxAgeMs) maxAgeMs = age
+      if (agg.count > maxCount) maxCount = agg.count
+    }
+
+    for (const agg of dirMap.values()) {
+      // Majority vote for category
+      let bestCat = config.defaults?.category ?? 'Inbox'
+      let bestCount = 0
+      for (const [cat, cnt] of agg.categoryVotes) {
+        if (cnt > bestCount) { bestCat = cat; bestCount = cnt }
+      }
+
+      // Host label from config
+      const hostLabel = agg.host ? hosts[agg.host]?.label ?? agg.host : undefined
+
+      // Score: normalized frequency * 0.3 + recency * 0.7 (both in [0,1])
+      const ageMs = now - new Date(agg.lastUsed).getTime()
+      const recencyScore = 1 - (ageMs / maxAgeMs)
+      const freqScore = agg.count / maxCount
+      const score = freqScore * 0.3 + recencyScore * 0.7
+
+      entries.push({
+        cwd: agg.cwd,
+        host: agg.host,
+        hostLabel,
+        category: bestCat,
+        count: agg.count,
+        lastUsed: agg.lastUsed,
+        score,
+      })
+    }
+
+    // Sort by score descending
+    entries.sort((a, b) => b.score - a.score)
+
+    // Strip score from response
+    const dirs = entries.map(({ score: _s, ...rest }) => rest)
+    res.json({ dirs })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/sessions/quick-start — create task + start session in one step
+sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { cwd, host, message, category, model, mode } = req.body as {
+      cwd: string
+      host?: string
+      message: string
+      category?: string
+      model?: string
+      mode?: string
+    }
+
+    if (!cwd || typeof cwd !== 'string') {
+      res.status(400).json({ error: 'cwd is required' })
+      return
+    }
+    if (!message || typeof message !== 'string') {
+      res.status(400).json({ error: 'message is required' })
+      return
+    }
+
+    if (mode) {
+      const validModes = ['bypass', 'accept', 'default', 'plan']
+      if (!validModes.includes(mode)) {
+        res.status(400).json({ error: `Invalid mode: ${mode}. Must be one of: ${validModes.join(', ')}` })
+        return
+      }
+    }
+
+    // Length limits
+    if (cwd.length > 4096) {
+      res.status(400).json({ error: 'cwd too long (max 4096 chars)' })
+      return
+    }
+    if (message.length > 50000) {
+      res.status(400).json({ error: 'message too long (max 50000 chars)' })
+      return
+    }
+
+    const config = await getConfig()
+    const taskCategory = category || config.defaults?.category || 'Inbox'
+    const title = `Session: ${path.basename(cwd.replace(/\/+$/, '') || '/')}`
+
+    // Create task in "Quick Start" project under the determined category
+    const { task } = await addTask({
+      title,
+      category: taskCategory,
+      project: 'Quick Start',
+    })
+
+    // Star the task and set cwd
+    await updateTask(task.id, { starred: true, cwd })
+
+    // Re-read to get updated fields
+    const updatedTask = await getTask(task.id)
+
+    bus.emit(EventNames.TASK_CREATED, { task: updatedTask }, ['web-ui', 'main-agent'], { source: 'quick-start' })
+
+    // Build system prompt hint for session AI
+    const appendSystemPrompt = [
+      '<quick_start_task>',
+      'This task was created via Quick Start. When your work is complete:',
+      '1. Update the task title to be descriptive (replace the generic "Session: ..." title) using update_task',
+      `2. If "${taskCategory} / Quick Start" is not the right project, move the task to the correct project within the same category "${taskCategory}" using update_task with the project field`,
+      '</quick_start_task>',
+    ].join('\n')
+
+    // Emit SESSION_START event
+    bus.emit(EventNames.SESSION_START, {
+      taskId: task.id,
+      message,
+      cwd,
+      project: 'Quick Start',
+      mode,
+      model,
+      host,
+      appendSystemPrompt,
+    }, ['session-runner'], { source: 'quick-start' })
+
+    log.web.info('quick-start: created task + started session', { taskId: task.id, cwd, host, category: taskCategory })
+
+    res.json({ taskId: task.id, task: updatedTask })
+  } catch (err) {
+    next(err)
+  }
+})
 
 // GET /api/sessions/tree — sessions grouped by task hierarchy
 sessionsRouter.get('/tree', async (req: Request, res: Response, next: NextFunction) => {

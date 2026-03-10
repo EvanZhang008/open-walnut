@@ -15,9 +15,9 @@ import { ChatInput } from '@/components/chat/ChatInput';
 import { TodoPanel } from '@/components/tasks/TodoPanel';
 import { TaskContextBar } from '@/components/tasks/TaskContextBar';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
-import { SessionLauncherDrawer } from '@/components/sessions/SessionLauncherDrawer';
+import { SessionPathSelector, type QuickStartPath } from '@/components/sessions/SessionPathSelector';
 import { TriagePanel } from '@/components/triage/TriagePanel';
-import { fetchSession } from '@/api/sessions';
+import { fetchSession, quickStartSession } from '@/api/sessions';
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
 import { useContextInspector } from '@/hooks/useContextInspector';
 import { shouldHideUiOnlyMessage } from '@/hooks/useDeveloperSettings';
@@ -180,8 +180,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Task ID for filtered triage panel (null = show all)
   const [triageTaskId, setTriageTaskId] = useState<string | null>(null);
 
-  // Session launcher drawer state (opened via /session command)
-  const [sessionLauncherOpen, setSessionLauncherOpen] = useState(false);
+  // Session quick-start state (opened via /session command)
+  const [pathSelectorOpen, setPathSelectorOpen] = useState(false);
+  const [quickStartPath, setQuickStartPath] = useState<QuickStartPath | null>(null);
 
   // Set of session IDs currently open in columns — for active pill indicators
   const openSessionIdSet = useMemo(() => new Set(sessionColumns), [sessionColumns]);
@@ -283,7 +284,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // Toggle main chat panel visibility
       setChatVisible(prev => !prev);
     };
-    const handleSessionLauncher = () => setSessionLauncherOpen(true);
+    const handleSessionLauncher = () => setPathSelectorOpen(true);
     window.addEventListener('dock:activate-task', handleDockTask);
     window.addEventListener('dock:activate-chat', handleDockChat);
     window.addEventListener('session-launcher:open', handleSessionLauncher);
@@ -357,10 +358,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     setTriageTaskId(null);
   }, []);
 
-  // Session launcher: track pending quick-start taskId, auto-open session when it starts
+  // Quick-start: track pending taskId, auto-open session panel when it starts
   const pendingQuickStartRef = useRef<string | null>(null);
-  const handleSessionLauncherStarted = useCallback((taskId: string) => {
-    pendingQuickStartRef.current = taskId;
+
+  // Path selector → select handler
+  const handlePathSelect = useCallback((path: QuickStartPath) => {
+    setQuickStartPath(path);
+    setPathSelectorOpen(false);
   }, []);
 
   // Auto-open session panel when a quick-start session fires
@@ -449,7 +453,45 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     if (focusedTask?.id === id) setFocusedTask(updated);
   }, [update, focusedTask]);
 
+  // Ref to hold quickStartPath for the async callback (avoids stale closure)
+  const quickStartPathRef = useRef(quickStartPath);
+  quickStartPathRef.current = quickStartPath;
+
   const handleSendMessage = useCallback((text: string, images?: ImageAttachment[]) => {
+    const qsp = quickStartPathRef.current;
+
+    // Quick-start interception: when a path is selected, create task + start session
+    if (qsp) {
+      setQuickStartPath(null);
+      // Show the user's message as a local chat entry immediately
+      chat.addLocalMessage(`Quick Start on \`${qsp.cwd}\`${qsp.host ? ` (${qsp.hostLabel ?? qsp.host})` : ''}:\n> ${text}`);
+
+      quickStartSession({
+        cwd: qsp.cwd,
+        host: qsp.host ?? undefined,
+        message: text,
+        category: qsp.category,
+      }).then((result) => {
+        pendingQuickStartRef.current = result.taskId;
+        // Notify main agent to reorganize the task
+        const agentMsg = [
+          `[Quick Start] Session created and running.`,
+          `- Task ID: ${result.taskId}`,
+          `- Path: ${qsp.cwd}`,
+          `- Category: ${qsp.category} / Quick Start`,
+          ``,
+          `Please update the task:`,
+          `1. Set a descriptive title (replace "Session: ...")`,
+          `2. Move from "Quick Start" to the correct project if needed`,
+        ].join('\n');
+        chat.sendMessage(agentMsg);
+      }).catch((err) => {
+        setQuickStartPath(qsp); // Restore so user can retry
+        chat.addLocalMessage(`Quick Start failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+      return;
+    }
+
     if (focusedTask) {
       // Truncate large text fields before sending over WebSocket to avoid
       // serializing multi-KB payloads — backend truncates too, but this saves wire bytes.
@@ -588,6 +630,16 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             )}
           </ChatPanel>
 
+          {/* Quick Start Bar — context pill when path is selected */}
+          {quickStartPath && (
+            <div className="quick-start-bar">
+              <span className="qsb-label">Quick Start</span>
+              <span className="qsb-path" title={quickStartPath.cwd}>{quickStartPath.cwd}</span>
+              {quickStartPath.host && <span className="qsb-host">{quickStartPath.hostLabel ?? quickStartPath.host}</span>}
+              <button className="qsb-close" onClick={() => setQuickStartPath(null)} aria-label="Cancel quick start">&times;</button>
+            </div>
+          )}
+
           {focusedTask && (
             <TaskContextBar
               task={focusedTask}
@@ -597,16 +649,25 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             />
           )}
 
-          <ChatInput
-            onSend={handleSendMessage}
-            onCommand={handleCommand}
-            onStop={chat.stopGeneration}
-            onClearQueue={chat.clearQueue}
-            disabled={connectionState !== 'connected'}
-            isStreaming={chat.isStreaming}
-            focusedTaskTitle={focusedTask?.title}
-            queueCount={chat.queueCount}
-          />
+          <div style={{ position: 'relative' }}>
+            {/* Session path selector popover (above the input) */}
+            <SessionPathSelector
+              open={pathSelectorOpen}
+              onClose={() => setPathSelectorOpen(false)}
+              onSelect={handlePathSelect}
+            />
+
+            <ChatInput
+              onSend={handleSendMessage}
+              onCommand={handleCommand}
+              onStop={chat.stopGeneration}
+              onClearQueue={chat.clearQueue}
+              disabled={connectionState !== 'connected'}
+              isStreaming={chat.isStreaming}
+              focusedTaskTitle={quickStartPath ? `Session on ${quickStartPath.cwd.split('/').pop()}` : focusedTask?.title}
+              queueCount={chat.queueCount}
+            />
+          </div>
         </div>
       </div>
 
@@ -692,12 +753,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         />
       </div>
 
-      {/* Session Launcher Drawer (opened via /session command) */}
-      <SessionLauncherDrawer
-        open={sessionLauncherOpen}
-        onClose={() => setSessionLauncherOpen(false)}
-        onSessionStarted={handleSessionLauncherStarted}
-      />
     </div>
   );
 }

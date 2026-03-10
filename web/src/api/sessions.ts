@@ -79,6 +79,33 @@ export async function executePlanContinue(sessionId: string): Promise<{ status: 
   return apiPost(`/api/sessions/${sessionId}/execute-continue`, {});
 }
 
+// ── Quick Start Session ──
+
+export interface WorkingDirEntry {
+  cwd: string;
+  host: string | null;
+  hostLabel?: string;
+  category: string;
+  count: number;
+  lastUsed: string;
+}
+
+export async function fetchWorkingDirs(): Promise<WorkingDirEntry[]> {
+  const res = await apiGet<{ dirs: WorkingDirEntry[] }>('/api/sessions/working-dirs');
+  return res.dirs;
+}
+
+export async function quickStartSession(opts: {
+  cwd: string;
+  host?: string;
+  message: string;
+  category?: string;
+  model?: string;
+  mode?: string;
+}): Promise<{ taskId: string; task: unknown }> {
+  return apiPost('/api/sessions/quick-start', opts);
+}
+
 export async function forkSessionInWalnut(
   sessionId: string,
   opts?: { child_title?: string; message?: string; model?: string },
