@@ -1582,7 +1582,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [starredIdsArr]);
 
   const filtered = useMemo(() => {
-    return tasks.filter((t) => {
+    // First pass: apply all filters to get directly-matching tasks
+    const directList = tasks.filter((t) => {
       if (!showCompleted && t.status === 'done' && phaseFilter !== 'COMPLETE') {
         return false;
       }
@@ -1613,7 +1614,34 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       if (activeCategory && t.category !== activeCategory) return false;
       return true;
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Build included-ID set from first pass results
+    const directlyMatched = new Set<string>(directList.map(t => t.id));
+
+    // Second pass (iterative): include child tasks at any depth whose ancestor passed
+    // the first-pass filter. Category and other filters are relaxed for children —
+    // only the completed-hiding rule is enforced. Repeat until no new tasks are added
+    // so that grandchildren (and deeper) are also included.
+    const result = [...directList];
+    let added = true;
+    while (added) {
+      added = false;
+      for (const t of tasks) {
+        if (directlyMatched.has(t.id)) continue; // already included
+        if (!t.parent_task_id) continue; // not a child task
+        // Respect completed filter even for children
+        if (!showCompleted && t.status === 'done' && phaseFilter !== 'COMPLETE') continue;
+        // parent_task_id uses a prefix convention: check if any visible task's id
+        // starts with this task's parent_task_id (handles composite/prefixed IDs)
+        const parentVisible = result.some(p => p.id.startsWith(t.parent_task_id!));
+        if (parentVisible) {
+          result.push(t);
+          directlyMatched.add(t.id);
+          added = true;
+        }
+      }
+    }
+    return result;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- isChildOfStarredParent is stable (useCallback)
   }, [tasks, showCompleted, priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, activeCategory, favorites, isChildOfStarredParent]);
 
   // --- Search filtering: intersect search results with active filters ---
