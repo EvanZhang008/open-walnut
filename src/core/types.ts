@@ -61,6 +61,8 @@ export interface Task {
   completed_at?: string;
   due_date?: string;
   starred?: boolean;
+  pinned?: boolean;
+  pin_order?: number;  // lower = higher in list, undefined = not pinned
   needs_attention?: boolean;
   /** Last sync error message — set on push failure, cleared on success. */
   sync_error?: string;

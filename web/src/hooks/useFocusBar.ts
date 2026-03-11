@@ -8,6 +8,7 @@ export interface UseFocusBarReturn {
   pinnedTasks: Task[];
   pin: (taskId: string) => Promise<void>;
   unpin: (taskId: string) => Promise<void>;
+  reorder: (newIds: string[]) => Promise<void>;
   isPinned: (taskId: string) => boolean;
 }
 
@@ -61,6 +62,18 @@ export function useFocusBar(tasks: Task[]): UseFocusBarReturn {
     }
   }, []);
 
+  const reorder = useCallback(async (newIds: string[]) => {
+    // Optimistic: update local order immediately
+    setPinnedIds(newIds);
+    try {
+      const data = await focusApi.reorderPinnedTasks(newIds);
+      if (data?.pinned_tasks) setPinnedIds(data.pinned_tasks);
+    } catch {
+      // Revert on failure — re-fetch from server
+      fetchPinned();
+    }
+  }, [fetchPinned]);
+
   const isPinned = useCallback(
     (taskId: string) => pinnedIds.includes(taskId),
     [pinnedIds],
@@ -72,5 +85,5 @@ export function useFocusBar(tasks: Task[]): UseFocusBarReturn {
     return pinnedIds.map((id) => taskMap.get(id)).filter(Boolean) as Task[];
   }, [pinnedIds, tasks]);
 
-  return { pinnedIds, pinnedTasks, pin, unpin, isPinned };
+  return { pinnedIds, pinnedTasks, pin, unpin, reorder, isPinned };
 }

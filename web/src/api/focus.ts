@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiDelete } from './client';
+import { apiGet, apiPost, apiPut, apiDelete } from './client';
 
 export interface FocusBarData {
   pinned_tasks: string[];
@@ -14,4 +14,8 @@ export async function pinTask(taskId: string): Promise<FocusBarData> {
 
 export async function unpinTask(taskId: string): Promise<FocusBarData> {
   return apiDelete(`/api/focus/tasks/${encodeURIComponent(taskId)}`) as unknown as FocusBarData;
+}
+
+export async function reorderPinnedTasks(taskIds: string[]): Promise<FocusBarData> {
+  return apiPut<FocusBarData>('/api/focus/reorder', { task_ids: taskIds });
 }

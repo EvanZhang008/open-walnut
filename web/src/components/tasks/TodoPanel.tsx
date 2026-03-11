@@ -74,6 +74,7 @@ interface TodoPanelProps {
   onOpenTriageForTask?: (taskId: string) => void;
   onPinTask?: (taskId: string) => void;
   onUnpinTask?: (taskId: string) => void;
+  onReorderPinned?: (newIds: string[]) => void;
   pinnedTaskIds?: Set<string>;
   /** Set of session IDs currently displayed in session columns. */
   openSessionIds?: Set<string>;
@@ -1361,9 +1362,74 @@ function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenTriageFo
   );
 }
 
+// ── SortablePinnedCard — draggable pinned task card ──
+
+interface SortablePinnedCardProps {
+  task: Task;
+  isFocused: boolean;
+  onFocusTask?: (task: Task) => void;
+  onUnpinTask?: (taskId: string) => void;
+}
+
+function SortablePinnedCard({ task, isFocused, onFocusTask, onUnpinTask }: SortablePinnedCardProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: task.id });
+
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : undefined,
+  };
+
+  const ps = task.session_status?.process_status ?? 'stopped';
+  const ws = task.session_status?.work_status ?? null;
+  const statusColor = task.session_status
+    ? compositeColor(ps as Parameters<typeof compositeColor>[0], (ws ?? 'completed') as Parameters<typeof compositeColor>[1])
+    : 'var(--fg-muted)';
+  const statusLabel = ps === 'running' ? 'Running'
+    : ps === 'idle' ? 'Idle'
+    : ws ? (WORK_LABELS as Record<string, string>)[ws] ?? ws
+    : null;
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`todo-pinned-card${isFocused ? ' todo-pinned-card-active' : ''}`}
+      onClick={() => onFocusTask?.(task)}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onFocusTask?.(task); } }}
+    >
+      <span className="todo-pinned-drag-handle" {...attributes} {...listeners} title="Drag to reorder">
+        &#x2630;
+      </span>
+      <span className="todo-pinned-dot" style={{ background: statusColor }} />
+      <span className="todo-pinned-title" title={task.title}>{task.title}</span>
+      {statusLabel && (
+        <span className="todo-pinned-status" style={{ color: statusColor }}>{statusLabel}</span>
+      )}
+      <button
+        className="todo-pinned-unpin"
+        onClick={(e) => { e.stopPropagation(); onUnpinTask?.(task.id); }}
+        title="Unpin"
+        aria-label="Unpin task"
+      >
+        &times;
+      </button>
+    </div>
+  );
+}
+
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onCyclePriority, onFocusTask, onClearFocus, focusedTaskId, favorites, ordering, onReorder, onMoveTask, onReparentTask, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, pinnedTaskIds, openSessionIds, operationError, onClearOperationError, onOperationError }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onCyclePriority, onFocusTask, onClearFocus, focusedTaskId, favorites, ordering, onReorder, onMoveTask, onReparentTask, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, pinnedTaskIds, openSessionIds, operationError, onClearOperationError, onOperationError }: TodoPanelProps) {
   // Hide .metadata* tasks (project/category configuration tasks, not user-visible)
   const tasks = useMemo(() => rawTasks.filter((t) => !t.title.startsWith('.metadata')), [rawTasks]);
   const navigate = useNavigate();
@@ -1528,6 +1594,27 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const tabSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
   );
+
+  // Sensors for pinned section DnD (separate from main task DnD)
+  const pinnedSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  const pinnedTaskIds_arr = useMemo(() => pinnedTasks.map((t) => t.id), [pinnedTasks]);
+
+  const handlePinnedDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = pinnedTaskIds_arr.indexOf(active.id as string);
+    const newIndex = pinnedTaskIds_arr.indexOf(over.id as string);
+    if (oldIndex === -1 || newIndex === -1) return;
+    const newOrder = [...pinnedTaskIds_arr];
+    newOrder.splice(oldIndex, 1);
+    newOrder.splice(newIndex, 0, active.id as string);
+    onReorderPinned?.(newOrder);
+  }, [pinnedTaskIds_arr, onReorderPinned]);
+
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
 
   // Recently completed: tracks tasks completed in the last 10s for visual styling
@@ -2657,7 +2744,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         </div>
       )}
 
-      {/* Pinned tasks section — shows between filters and task list */}
+      {/* Pinned tasks section — drag-to-reorder, shows between filters and task list */}
       {pinnedTasks.length > 0 && (
         <div className="todo-pinned-section">
           <div className="todo-pinned-header">
@@ -2665,43 +2752,21 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             <span className="todo-pinned-label">Pinned</span>
             <span className="todo-pinned-count">{pinnedTasks.length}</span>
           </div>
-          <div className="todo-pinned-list">
-            {pinnedTasks.map((task) => {
-              const ps = task.session_status?.process_status ?? 'stopped';
-              const ws = task.session_status?.work_status ?? null;
-              const statusColor = task.session_status
-                ? compositeColor(ps as Parameters<typeof compositeColor>[0], (ws ?? 'completed') as Parameters<typeof compositeColor>[1])
-                : 'var(--fg-muted)';
-              const statusLabel = ps === 'running' ? 'Running'
-                : ps === 'idle' ? 'Idle'
-                : ws ? (WORK_LABELS as Record<string, string>)[ws] ?? ws
-                : null;
-              return (
-                <div
-                  key={task.id}
-                  className={`todo-pinned-card${focusedTaskId === task.id ? ' todo-pinned-card-active' : ''}`}
-                  onClick={() => onFocusTask?.(task)}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onFocusTask?.(task); } }}
-                >
-                  <span className="todo-pinned-dot" style={{ background: statusColor }} />
-                  <span className="todo-pinned-title" title={task.title}>{task.title}</span>
-                  {statusLabel && (
-                    <span className="todo-pinned-status" style={{ color: statusColor }}>{statusLabel}</span>
-                  )}
-                  <button
-                    className="todo-pinned-unpin"
-                    onClick={(e) => { e.stopPropagation(); onUnpinTask?.(task.id); }}
-                    title="Unpin"
-                    aria-label="Unpin task"
-                  >
-                    &times;
-                  </button>
-                </div>
-              );
-            })}
-          </div>
+          <DndContext sensors={pinnedSensors} collisionDetection={closestCenter} onDragEnd={handlePinnedDragEnd}>
+            <SortableContext items={pinnedTaskIds_arr} strategy={verticalListSortingStrategy}>
+              <div className="todo-pinned-list">
+                {pinnedTasks.map((task) => (
+                  <SortablePinnedCard
+                    key={task.id}
+                    task={task}
+                    isFocused={focusedTaskId === task.id}
+                    onFocusTask={onFocusTask}
+                    onUnpinTask={onUnpinTask}
+                  />
+                ))}
+              </div>
+            </SortableContext>
+          </DndContext>
         </div>
       )}
 

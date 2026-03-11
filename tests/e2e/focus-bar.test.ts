@@ -1,5 +1,6 @@
 /**
- * Focus Bar E2E tests — pin/unpin tasks, unlimited pins, persistence.
+ * Focus Bar E2E tests — pin/unpin tasks, unlimited pins, reorder, persistence.
+ * Pin state stored on task-level fields (pinned + pin_order).
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -14,8 +15,10 @@ let port: number;
 
 function apiUrl(path: string) { return `http://localhost:${port}${path}`; }
 
-async function api(method: string, path: string) {
-  const r = await fetch(apiUrl(path), { method });
+async function api(method: string, path: string, body?: unknown) {
+  const opts: RequestInit = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const r = await fetch(apiUrl(path), opts);
   return { status: r.status, data: await r.json() };
 }
 
@@ -97,5 +100,30 @@ describe('Focus Bar API', () => {
   it('deleting nonexistent task from focus is a no-op', async () => {
     const r = await api('DELETE', '/api/focus/tasks/nonexistent-id');
     expect(r.status).toBe(200);
+  });
+
+  it('PUT /api/focus/reorder changes pin order', async () => {
+    // Currently pinned: [taskIds[1], taskIds[2], taskIds[3]]
+    const reversed = [taskIds[3], taskIds[2], taskIds[1]];
+    const r = await api('PUT', '/api/focus/reorder', { task_ids: reversed });
+    expect(r.status).toBe(200);
+    expect(r.data.pinned_tasks).toEqual(reversed);
+
+    // Verify persistence
+    const r2 = await api('GET', '/api/focus/tasks');
+    expect(r2.data.pinned_tasks).toEqual(reversed);
+  });
+
+  it('reorder with invalid body returns 400', async () => {
+    const r = await api('PUT', '/api/focus/reorder', { task_ids: 'not-an-array' });
+    expect(r.status).toBe(400);
+  });
+
+  it('pin state stored on task objects', async () => {
+    // Fetch a pinned task and verify the pinned field
+    const r = await fetch(apiUrl(`/api/tasks/${taskIds[3]}`));
+    const data = await r.json();
+    expect(data.task.pinned).toBe(true);
+    expect(typeof data.task.pin_order).toBe('number');
   });
 });
