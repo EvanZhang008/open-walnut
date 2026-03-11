@@ -201,6 +201,16 @@ export interface SubagentErrorEvent {
   error: string;
 }
 
+// ── Inline subagent streaming events ──
+
+export interface AgentSubagentStreamEvent {
+  toolUseId: string;
+  block: {
+    type: 'text' | 'tool_call' | 'system';
+    [key: string]: unknown;
+  };
+}
+
 // ── Agent events (chat streaming, sent via WebSocket RPC) ──
 
 export interface AgentTextDeltaEvent { delta: string; source?: string }
@@ -291,6 +301,7 @@ export interface EventPayloadMap {
   'subagent:result': SubagentResultEvent;
   'subagent:error': SubagentErrorEvent;
 
+  'agent:subagent-stream': AgentSubagentStreamEvent;
   'agent:text-delta': AgentTextDeltaEvent;
   'agent:tool-activity': AgentToolActivityEvent;
   'agent:tool-call': AgentToolCallEvent;

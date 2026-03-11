@@ -982,6 +982,8 @@ function slimContent(content: unknown, stripImageData = false): unknown {
   if (!Array.isArray(content)) return content;
 
   return content.map((block: Record<string, unknown>) => {
+    // Strip thinking blocks — compacted entries are never re-sent to the API
+    if (block.type === 'thinking') return null;
     if (block.type === 'tool_use' && block.input && typeof block.input === 'object') {
       const slimmed: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(block.input as Record<string, unknown>)) {
@@ -1025,7 +1027,7 @@ function slimContent(content: unknown, stripImageData = false): unknown {
       };
     }
     return block;
-  });
+  }).filter(Boolean);
 }
 
 /**

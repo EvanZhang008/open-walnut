@@ -62,6 +62,7 @@ import { askQuestionTool } from './tools/ask-question-tool.js';
 import { memoryReadTool } from './tools/memory-read.js';
 import { memoryEditTool } from './tools/memory-edit.js';
 import { memoryWriteTool } from './tools/memory-write.js';
+import { createSubagentTool } from './tools/create-subagent.js';
 
 
 /** Escape double-quotes in a string for use inside an XML attribute value. */
@@ -89,11 +90,16 @@ export type ToolContentBlock = ToolTextBlock | ToolImageBlock;
 /** Content returned by a tool: plain string or structured content blocks (text + image). */
 export type ToolResultContent = string | ToolContentBlock[];
 
+/** Metadata passed to tool execute functions (e.g. toolUseId for correlation). */
+export interface ToolExecuteMeta {
+  toolUseId?: string;
+}
+
 export interface ToolDefinition {
   name: string;
   description: string;
   input_schema: Record<string, unknown>;
-  execute: (params: Record<string, unknown>) => Promise<ToolResultContent>;
+  execute: (params: Record<string, unknown>, meta?: ToolExecuteMeta) => Promise<ToolResultContent>;
 }
 
 function json(data: unknown): string {
@@ -1975,6 +1981,9 @@ defaults (same resolution chain as start_session).`,
   // ── User Interaction ──
   askQuestionTool,
 
+  // ── Inline Subagent ──
+  createSubagentTool,
+
 ];
 
 /**
@@ -1991,14 +2000,14 @@ export function getToolSchemas(): Array<{ name: string; description: string; inp
 /**
  * Execute a tool by name with given parameters.
  */
-export async function executeTool(name: string, params: Record<string, unknown>): Promise<ToolResultContent> {
+export async function executeTool(name: string, params: Record<string, unknown>, meta?: ToolExecuteMeta): Promise<ToolResultContent> {
   const tool = tools.find((t) => t.name === name);
   if (!tool) {
     log.agent.warn(`unknown tool requested: ${name}`);
     return `Error: Unknown tool "${name}"`;
   }
   try {
-    const result = await tool.execute(params);
+    const result = await tool.execute(params, meta);
     log.agent.debug(`tool ${name} completed`, {
       resultLength: typeof result === 'string' ? result.length : `${result.length} blocks`,
     });

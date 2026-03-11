@@ -35,3 +35,11 @@ export const DEFAULT_MAX_TOKENS = 32768;
 /** Context window sizes. */
 export const CONTEXT_WINDOW_1M = 1_000_000;
 export const CONTEXT_WINDOW_DEFAULT = 200_000;
+
+/** Beta header for 1M context window. */
+export const BETA_CONTEXT_1M = 'context-1m-2025-08-07';
+
+/** Strip [1m] suffix used as context-window marker — API model IDs don't include it. */
+export function stripModelSuffix(model: string): string {
+  return model.replace(/\[1m\]$/, '');
+}

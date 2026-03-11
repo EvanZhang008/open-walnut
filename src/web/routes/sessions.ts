@@ -64,114 +64,150 @@ async function enrichWithHostnames(sessions: SessionRecord[]): Promise<SessionRe
 
 export const sessionsRouter = Router()
 
-// GET /api/sessions/working-dirs — deduplicated working directories from session history
+// GET /api/sessions/working-dirs — deduplicated working directories from persistent store
 sessionsRouter.get('/working-dirs', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const sessions = await listSessions()
-    const tasks = await listTasks()
+    const { getFrequentDirs } = await import('../../core/frequent-dirs.js')
+    const dirs = await getFrequentDirs()
     const config = await getConfig()
-
-    // Build taskId → category map
-    const taskCategoryMap = new Map<string, string>()
-    for (const t of tasks) {
-      taskCategoryMap.set(t.id, t.category)
-    }
-
-    // Aggregate (cwd, host) pairs with frequency + recency + category votes
-    interface DirAgg {
-      cwd: string
-      host: string | null
-      count: number
-      lastUsed: string
-      categoryVotes: Map<string, number>
-    }
-
-    const dirMap = new Map<string, DirAgg>()
-
-    for (const s of sessions) {
-      if (!s.cwd) continue
-      if (isTriageSession(s)) continue
-      if (s.archived) continue
-
-      const key = `${s.cwd}::${s.host ?? '__local__'}`
-      const existing = dirMap.get(key)
-      const category = s.taskId ? taskCategoryMap.get(s.taskId) : undefined
-
-      if (existing) {
-        existing.count++
-        if (s.startedAt > existing.lastUsed) existing.lastUsed = s.startedAt
-        if (category) existing.categoryVotes.set(category, (existing.categoryVotes.get(category) ?? 0) + 1)
-      } else {
-        const votes = new Map<string, number>()
-        if (category) votes.set(category, 1)
-        dirMap.set(key, {
-          cwd: s.cwd,
-          host: s.host ?? null,
-          count: 1,
-          lastUsed: s.startedAt,
-          categoryVotes: votes,
-        })
-      }
-    }
-
-    // Resolve majority-vote category and host labels
     const hosts = config.hosts ?? {}
+    const defaultCat = config.defaults?.category ?? 'Inbox'
     const now = Date.now()
-    const entries: Array<{
-      cwd: string
-      host: string | null
-      hostLabel?: string
-      category: string
-      count: number
-      lastUsed: string
-      score: number
-    }> = []
 
     // Find max age and max count for normalization
     let maxAgeMs = 1
     let maxCount = 1
-    for (const agg of dirMap.values()) {
-      const age = now - new Date(agg.lastUsed).getTime()
+    for (const d of dirs) {
+      const age = now - new Date(d.lastUsed).getTime()
       if (age > maxAgeMs) maxAgeMs = age
-      if (agg.count > maxCount) maxCount = agg.count
+      if (d.count > maxCount) maxCount = d.count
     }
 
-    for (const agg of dirMap.values()) {
+    // Compute score, hostLabel, resolved category at read time
+    const entries = dirs.map(d => {
       // Majority vote for category
-      let bestCat = config.defaults?.category ?? 'Inbox'
+      let bestCat = defaultCat
       let bestCount = 0
-      for (const [cat, cnt] of agg.categoryVotes) {
+      for (const [cat, cnt] of Object.entries(d.categoryVotes)) {
         if (cnt > bestCount) { bestCat = cat; bestCount = cnt }
       }
 
-      // Host label from config
-      const hostLabel = agg.host ? hosts[agg.host]?.label ?? agg.host : undefined
-
-      // Score: normalized frequency * 0.3 + recency * 0.7 (both in [0,1])
-      const ageMs = now - new Date(agg.lastUsed).getTime()
+      const hostLabel = d.host ? hosts[d.host]?.label ?? d.host : undefined
+      const ageMs = now - new Date(d.lastUsed).getTime()
       const recencyScore = 1 - (ageMs / maxAgeMs)
-      const freqScore = agg.count / maxCount
+      const freqScore = d.count / maxCount
       const score = freqScore * 0.3 + recencyScore * 0.7
 
-      entries.push({
-        cwd: agg.cwd,
-        host: agg.host,
+      return {
+        cwd: d.cwd,
+        host: d.host,
         hostLabel,
         category: bestCat,
-        count: agg.count,
-        lastUsed: agg.lastUsed,
+        count: d.count,
+        lastUsed: d.lastUsed,
         score,
-      })
-    }
+      }
+    })
 
-    // Sort by score descending
     entries.sort((a, b) => b.score - a.score)
-
-    // Strip score from response
-    const dirs = entries.map(({ score: _s, ...rest }) => rest)
-    res.json({ dirs })
+    const result = entries.map(({ score: _s, ...rest }) => rest)
+    res.json({ dirs: result })
   } catch (err) {
     next(err)
+  }
+})
+
+// POST /api/sessions/working-dirs/recompile — rebuild frequent-directories.json from sessions
+sessionsRouter.post('/working-dirs/recompile', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { compileFromSessions } = await import('../../core/frequent-dirs.js')
+    await compileFromSessions()
+    const { getFrequentDirs } = await import('../../core/frequent-dirs.js')
+    const dirs = await getFrequentDirs()
+    res.json({ status: 'ok', count: dirs.length })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/sessions/list-dirs — list subdirectories on a host (local or SSH) for path auto-complete
+sessionsRouter.get('/list-dirs', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const prefix = String(req.query.prefix ?? '/')
+    const host = req.query.host as string | undefined
+
+    if (prefix.length > 4096) {
+      res.status(400).json({ error: 'prefix too long' })
+      return
+    }
+
+    // Sanitize: no shell metacharacters allowed in prefix
+    if (/[;&|`$(){}!<>]/.test(prefix)) {
+      res.status(400).json({ error: 'invalid characters in prefix' })
+      return
+    }
+
+    // Find the parent directory to list
+    const dir = prefix.endsWith('/') ? prefix : path.dirname(prefix)
+    const partial = prefix.endsWith('/') ? '' : path.basename(prefix)
+
+    if (host) {
+      // SSH: resolve host from config
+      const config = await getConfig()
+      const hostDef = config.hosts?.[host]
+      if (!hostDef) {
+        res.status(400).json({ error: `Unknown host: ${host}` })
+        return
+      }
+      const hostname = hostDef.hostname ?? (hostDef as Record<string, unknown>).ssh as string | undefined
+      if (!hostname) {
+        res.status(400).json({ error: `Host "${host}" has no hostname` })
+        return
+      }
+      const hostString = hostDef.user ? `${hostDef.user}@${hostname}` : hostname
+      const sshArgs = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=5']
+      if (hostDef.port) sshArgs.push('-p', String(hostDef.port))
+
+      // Shell-quote the dir for safe SSH
+      const quotedDir = dir.replace(/'/g, "'\\''")
+      const cmd = `ls -1 -p '${quotedDir}' 2>/dev/null | grep '/$' | head -100`
+
+      const { execFile } = await import('node:child_process')
+      const output = await new Promise<string>((resolve, reject) => {
+        execFile('ssh', [...sshArgs, hostString, cmd], {
+          timeout: 8_000,
+          encoding: 'utf-8',
+        }, (err, stdout) => err ? reject(err) : resolve(stdout))
+      })
+
+      const entries = output.split('\n').filter(Boolean).map(name => {
+        const clean = name.replace(/\/$/, '')
+        return dir.endsWith('/') ? `${dir}${clean}` : `${dir}/${clean}`
+      }).filter(p => !partial || path.basename(p).toLowerCase().startsWith(partial.toLowerCase()))
+
+      res.json({ dirs: entries, parent: dir })
+    } else {
+      // Local filesystem
+      const fs = await import('node:fs')
+      let entries: string[] = []
+      try {
+        const names = fs.readdirSync(dir)
+        for (const name of names) {
+          if (partial && !name.toLowerCase().startsWith(partial.toLowerCase())) continue
+          const full = path.join(dir, name)
+          try {
+            if (fs.statSync(full).isDirectory()) entries.push(full)
+          } catch { /* skip unreadable */ }
+          if (entries.length >= 100) break
+        }
+      } catch { /* dir doesn't exist */ }
+
+      res.json({ dirs: entries, parent: dir })
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    // SSH failures return 400, not 500
+    res.status(400).json({ error: msg })
   }
 })
 

@@ -9,6 +9,7 @@ import {
   type ThinkingBlock, type ToolCallBlock, type TextBlock, type ImageBlock, type MessageBlock,
   type ImageAttachment,
 } from '@/api/chat';
+import type { StreamingBlock } from './useSessionStream';
 
 const PAGE_SIZE = 100;
 
@@ -522,6 +523,52 @@ export function useChat(): UseChatReturn {
     const activity = data as ToolActivity & { sessionId?: string };
     if (activity.sessionId) return;
     setToolActivity(activity.status === 'done' ? null : activity);
+  });
+
+  // Handle inline subagent streaming — append blocks to the matching create_subagent tool call
+  useEvent('agent:subagent-stream', (data) => {
+    const { toolUseId, block } = data as { toolUseId: string; block: StreamingBlock };
+    setMessages((prev) => {
+      // Search backwards for the tool_call with matching toolUseId
+      for (let msgIdx = prev.length - 1; msgIdx >= 0; msgIdx--) {
+        const msg = prev[msgIdx];
+        if (msg.role !== 'assistant' || !msg.blocks) continue;
+        for (let i = msg.blocks.length - 1; i >= 0; i--) {
+          const b = msg.blocks[i];
+          if (b.type !== 'tool_call' || b.toolUseId !== toolUseId) continue;
+          // Found matching tool call — append stream block
+          const tcBlock = b as ToolCallBlock;
+          const existingBlocks = tcBlock.streamBlocks ?? [];
+          // Merge tool results with existing tool_calls by toolUseId
+          let newStreamBlocks: StreamingBlock[];
+          if (block.type === 'tool_call' && block.result !== undefined && !block.name) {
+            // This is a tool result — merge with existing tool_call
+            const targetIdx = existingBlocks.findIndex(
+              (sb) => sb.type === 'tool_call' && sb.toolUseId === block.toolUseId,
+            );
+            if (targetIdx >= 0) {
+              newStreamBlocks = [...existingBlocks];
+              const existing = newStreamBlocks[targetIdx] as StreamingBlock & { type: 'tool_call' };
+              newStreamBlocks[targetIdx] = {
+                ...existing,
+                result: block.result,
+                status: block.result?.startsWith('Error:') ? 'error' : 'done',
+              };
+            } else {
+              newStreamBlocks = [...existingBlocks, block];
+            }
+          } else {
+            newStreamBlocks = [...existingBlocks, block];
+          }
+          const newBlocks = [...msg.blocks];
+          newBlocks[i] = { ...tcBlock, streamBlocks: newStreamBlocks };
+          const updated = [...prev];
+          updated[msgIdx] = { ...msg, blocks: newBlocks };
+          return updated;
+        }
+      }
+      return prev; // no matching tool call found
+    });
   });
 
   // Handle final complete response

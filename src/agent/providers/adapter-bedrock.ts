@@ -12,12 +12,8 @@ import {
   MAX_RETRIES, isAuthError, isRetryableError, getRetryDelay, sleep,
   abortedResult, extractUsage,
 } from './retry.js';
+import { stripModelSuffix } from './defaults.js';
 import { log } from '../../logging/index.js';
-
-/** Strip [1m] suffix used as context-window marker — Bedrock model ID doesn't include it. */
-function resolveBedrockModelId(model: string): string {
-  return model.replace(/\[1m\]$/, '');
-}
 
 export class BedrockAdapter implements ProtocolAdapter {
   readonly protocol: ApiProtocol = 'bedrock';
@@ -51,22 +47,28 @@ export class BedrockAdapter implements ProtocolAdapter {
   }
 
   async sendMessage(opts: AdapterCallOptions): Promise<ModelResult> {
-    const model = resolveBedrockModelId(opts.model);
+    const model = stripModelSuffix(opts.model);
     const { providerConfig } = opts;
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       const bedrock = this.getClient(providerConfig.region, providerConfig.bearer_token);
       try {
-        const response = await bedrock.messages.create(
-          {
-            model,
-            max_tokens: opts.maxTokens,
-            system: opts.system,
-            messages: opts.messages,
-            tools: opts.tools,
-          },
-          opts.signal ? { signal: opts.signal } : undefined,
-        );
+        const params = {
+          model,
+          max_tokens: opts.maxTokens,
+          system: opts.system,
+          messages: opts.messages,
+          tools: opts.tools,
+        };
+        const requestOpts = opts.signal ? { signal: opts.signal } : undefined;
+        // Use beta endpoint when betas are specified (e.g., 1M context window).
+        // BetaMessage and Message are structurally identical — safe to treat as same shape.
+        const response: { content: any; stop_reason: any; usage?: any } = opts.betas?.length
+          ? await (bedrock.beta.messages.create as any)(
+              { ...params, betas: opts.betas },
+              requestOpts,
+            )
+          : await bedrock.messages.create(params, requestOpts);
 
         return { content: response.content, stopReason: response.stop_reason, usage: extractUsage(response.usage) };
       } catch (err) {
@@ -92,7 +94,7 @@ export class BedrockAdapter implements ProtocolAdapter {
   async sendMessageStream(
     opts: AdapterCallOptions & { onTextDelta?: (delta: string) => void },
   ): Promise<ModelResult> {
-    const model = resolveBedrockModelId(opts.model);
+    const model = stripModelSuffix(opts.model);
     const { providerConfig } = opts;
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -100,13 +102,20 @@ export class BedrockAdapter implements ProtocolAdapter {
 
       try {
         const bedrock = this.getClient(providerConfig.region, providerConfig.bearer_token);
-        const stream: MessageStream = bedrock.messages.stream({
+        const streamParams = {
           model,
           max_tokens: opts.maxTokens,
           system: opts.system,
           messages: opts.messages,
           tools: opts.tools,
-        });
+        };
+        // Use beta endpoint when betas are specified (e.g., 1M context window).
+        // BetaMessageStream and MessageStream are structurally compatible (same on/abort/finalMessage).
+        const stream: MessageStream = opts.betas?.length
+          ? (bedrock.beta.messages.stream as any)(
+              { ...streamParams, betas: opts.betas },
+            )
+          : bedrock.messages.stream(streamParams);
 
         if (opts.signal) {
           if (opts.signal.aborted) {

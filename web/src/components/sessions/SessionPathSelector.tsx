@@ -30,6 +30,21 @@ function fuzzyMatch(query: string, cwd: string): boolean {
   return query.toLowerCase().split(/\s+/).filter(Boolean).every(t => lower.includes(t));
 }
 
+/** Path-aware fuzzy match for edit mode — splits on / to match individual segments.
+ *  Returns a score: 2 = startsWith, 1 = segment match, 0 = no match. */
+function pathFuzzyScore(editingPath: string, cwd: string): number {
+  if (!editingPath) return 2;
+  const cwdLower = cwd.toLowerCase();
+  const editLower = editingPath.toLowerCase();
+  // Best: startsWith
+  if (cwdLower.startsWith(editLower)) return 2;
+  // Good: ANY non-trivial path segment matches (min 2 chars to avoid noise)
+  const segments = editLower.split('/').filter(s => s.length >= 2);
+  if (segments.length === 0) return 2;
+  const matchCount = segments.filter(seg => cwdLower.includes(seg)).length;
+  return matchCount > 0 ? 1 : 0;
+}
+
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -85,14 +100,20 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
 
   // Filtered list
   const filtered = useMemo(() => {
-    return dirs.filter(d => {
+    const hostFiltered = dirs.filter(d => {
       if (hostFilter === '__local__' && d.host) return false;
       if (hostFilter !== 'all' && hostFilter !== '__local__' && d.host !== hostFilter) return false;
-      if (editMode) {
-        return d.cwd.toLowerCase().startsWith(editingPath.toLowerCase());
-      }
-      return fuzzyMatch(query, d.cwd);
+      return true;
     });
+    if (editMode) {
+      // In edit mode: score paths by segment overlap, startsWith first, then segment matches
+      const scored = hostFiltered
+        .map(d => ({ d, score: pathFuzzyScore(editingPath, d.cwd) }))
+        .filter(x => x.score > 0);
+      scored.sort((a, b) => b.score - a.score);
+      return scored.map(x => x.d);
+    }
+    return hostFiltered.filter(d => fuzzyMatch(query, d.cwd));
   }, [dirs, query, hostFilter, editMode, editingPath]);
 
   useEffect(() => { setSelectedIdx(0); }, [query, hostFilter, editMode, editingPath]);

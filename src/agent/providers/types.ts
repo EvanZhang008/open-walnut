@@ -97,6 +97,8 @@ export interface AdapterCallOptions {
   tools?: Tool[];
   signal?: AbortSignal;
   compat?: ModelCompat;             // Per-model quirks
+  /** Beta feature flags (e.g., 'context-1m-2025-08-07' for 1M context window). */
+  betas?: string[];
 }
 
 /** The adapter interface — one implementation per protocol. */

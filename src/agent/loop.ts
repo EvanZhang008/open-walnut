@@ -18,6 +18,7 @@ import { estimateMessagesTokens, estimateFullPayload } from '../core/daily-log.j
 import { hydrateImagePaths } from '../core/chat-history.js';
 import { guardBudget, emergencyTrim, type ToolSchema } from './token-budget.js';
 import { getContextWindowSize } from './model.js';
+import { CONTEXT_WINDOW_DEFAULT } from './providers/defaults.js';
 
 export interface ToolActivity {
   toolName: string;
@@ -66,6 +67,18 @@ function is400PromptTooLong(err: unknown): number | null {
   if (status !== undefined && status !== 400) return null;
   // e.g. "400 prompt is too long: 225938 tokens > 200000 maximum"
   const match = /prompt is too long[:\s]+(\d+)\s*tokens/i.exec(err.message);
+  return match ? parseInt(match[1], 10) : null;
+}
+
+/**
+ * Parse the API's maximum token limit from the error message.
+ * e.g. "225938 tokens > 200000 maximum" → 200000
+ * Used as a safety net when getContextWindowSize() returns 1M but the API
+ * actually enforces a lower limit (e.g. beta header not applied).
+ */
+function parseMaxFromError(err: unknown): number | null {
+  if (!(err instanceof Error)) return null;
+  const match = />\s*(\d+)\s*maximum/i.exec(err.message);
   return match ? parseInt(match[1], 10) : null;
 }
 
@@ -175,17 +188,18 @@ export async function runAgentLoop(
   let lastExactMessageCount = 0;
 
   /** Execute a tool by name — uses custom tool set if provided. */
-  async function executeToolLocal(name: string, params: Record<string, unknown>): Promise<ToolResultContent> {
+  async function executeToolLocal(name: string, params: Record<string, unknown>, toolUseId?: string): Promise<ToolResultContent> {
+    const meta = toolUseId ? { toolUseId } : undefined;
     if (customTools) {
       const tool = customTools.find((t) => t.name === name);
       if (!tool) return `Error: Unknown tool "${name}"`;
       try {
-        return await tool.execute(params);
+        return await tool.execute(params, meta);
       } catch (err) {
         return `Error executing ${name}: ${err instanceof Error ? err.message : String(err)}`;
       }
     }
-    return executeTool(name, params);
+    return executeTool(name, params, meta);
   }
 
   /** Send current messages through cache preparation and API call. */
@@ -256,15 +270,38 @@ export async function runAgentLoop(
     } catch (err) {
       const actualTokens = is400PromptTooLong(err);
       if (actualTokens !== null) {
-        // Reactive trim target: context window minus ~5% output headroom.
-        // Intentionally higher than the preventive guard (84%): this path only fires after
-        // the API confirmed the payload exceeds the hard limit.
-        const hardBudget = Math.round(getContextWindowSize(modelConfig.model) * 0.95);
-        log.agent.warn(`${logTag} 400 prompt too long (${actualTokens} tokens), emergency trim and retry`, {
+        // Use the API's reported maximum as the trim target when available.
+        // This handles the case where getContextWindowSize() returns 1M but the API
+        // actually enforces a lower limit (e.g. beta header not applied).
+        // When we can't parse the max, fall back to 200K (safe default) instead of
+        // the model's context window which could be 1M and useless as a trim target.
+        const rawMax = parseMaxFromError(err);
+        const parsedMax = rawMax && rawMax > 0 ? rawMax : null;
+        const fallbackMax = parsedMax ?? CONTEXT_WINDOW_DEFAULT;
+        const hardBudget = Math.round(fallbackMax * 0.90);
+
+        // Calibrate trim using the API's exact token count vs our estimate.
+        // Our estimator can undercount by 15-25%; using the ratio ensures we
+        // trim enough so the retry actually fits under the API's hard limit.
+        const currentEstimate = estimateFullPayload({
+          system, tools: toolSchemas as ToolSchema[], messages,
+        }).total;
+        const correctionRatio = currentEstimate > 0
+          ? Math.max(1.0, Math.min(actualTokens / currentEstimate, 2.0))
+          : 1.3; // fallback: assume 30% underestimate
+
+        // Convert hard budget from "real tokens" to "estimated tokens" space,
+        // then subtract the (estimated) fixed overhead to get message budget.
+        const adjustedMessageBudget = Math.round(hardBudget / correctionRatio) - fixedOverhead;
+
+        log.agent.warn(`${logTag} 400 prompt too long (${actualTokens} tokens), calibrated trim and retry`, {
           actualTokens,
-          messageBudget: `~${Math.round((hardBudget - fixedOverhead) / 1000)}K`,
+          apiMaximum: parsedMax ?? 'unknown (using context window)',
+          currentEstimate: `~${Math.round(currentEstimate / 1000)}K`,
+          correctionRatio: correctionRatio.toFixed(2),
+          adjustedMessageBudget: `~${Math.round(adjustedMessageBudget / 1000)}K`,
         });
-        messages = emergencyTrim(messages, hardBudget - fixedOverhead);
+        messages = emergencyTrim(messages, Math.max(adjustedMessageBudget, 0));
         lastExactTokens = null;
         lastExactMessageCount = 0;
         result = await callModel();
@@ -393,7 +430,7 @@ export async function runAgentLoop(
       callbacks?.onToolActivity?.({ toolName: toolUse.name, status: 'calling' });
       callbacks?.onToolCall?.(toolUse.name, toolUse.input, toolUse.id);
 
-      const toolResult = await executeToolLocal(toolUse.name, toolUse.input);
+      const toolResult = await executeToolLocal(toolUse.name, toolUse.input, toolUse.id);
 
       callbacks?.onToolActivity?.({ toolName: toolUse.name, status: 'done' });
       // For the callback (WS broadcast to frontend), send a display-safe string.

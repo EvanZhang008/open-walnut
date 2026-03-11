@@ -49,7 +49,7 @@
     "web:dev": "concurrently \"tsup --watch\" \"cd web && npx vite\"",
     "web:build": "tsup && cd web && npx vite build",
     "dev:ephemeral": "npm run web:build && node dist/cli.js web --ephemeral",
-    "dev:prod": "npm run web:build && lsof -ti:3456 | xargs kill -15 2>/dev/null; sleep 2; node dist/cli.js web --port 3456"
+    "dev:prod": "npm run web:build && lsof -ti:3456 -sTCP:LISTEN | xargs kill -15 2>/dev/null; sleep 2; node dist/cli.js web --port 3456"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.26.3",
@@ -58,6 +58,7 @@
     "@azure/msal-node": "^5.0.3",
     "@mozilla/readability": "^0.6.0",
     "@slack/web-api": "^7.14.0",
+    "@tiptap/extension-image": "^3.20.1",
     "better-sqlite3": "^12.6.2",
     "chalk": "^5.4.1",
     "commander": "^14.0.0",

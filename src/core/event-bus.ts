@@ -24,6 +24,9 @@ export const EventNames = {
   TASK_REORDERED: 'task:reordered',
   TASK_UNBLOCKED: 'task:unblocked',
 
+  // Inline subagent streaming
+  AGENT_SUBAGENT_STREAM: 'agent:subagent-stream',
+
   // Agent events (chat streaming)
   AGENT_TEXT_DELTA: 'agent:text-delta',
   AGENT_TOOL_ACTIVITY: 'agent:tool-activity',

@@ -12,7 +12,7 @@ import {
   MAX_RETRIES, isRetryableError, getRetryDelay, sleep,
   abortedResult, extractUsage,
 } from './retry.js';
-import { DEFAULT_BASE_URLS } from './defaults.js';
+import { DEFAULT_BASE_URLS, stripModelSuffix } from './defaults.js';
 import { log } from '../../logging/index.js';
 
 export class AnthropicAdapter implements ProtocolAdapter {
@@ -46,6 +46,7 @@ export class AnthropicAdapter implements ProtocolAdapter {
   }
 
   async sendMessage(opts: AdapterCallOptions): Promise<ModelResult> {
+    const model = stripModelSuffix(opts.model);
     const { providerConfig } = opts;
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -55,16 +56,22 @@ export class AnthropicAdapter implements ProtocolAdapter {
         providerConfig.auth_header,
       );
       try {
-        const response = await client.messages.create(
-          {
-            model: opts.model,
-            max_tokens: opts.maxTokens,
-            system: opts.system,
-            messages: opts.messages,
-            tools: opts.tools,
-          },
-          opts.signal ? { signal: opts.signal } : undefined,
-        );
+        const params = {
+          model,
+          max_tokens: opts.maxTokens,
+          system: opts.system,
+          messages: opts.messages,
+          tools: opts.tools,
+        };
+        const requestOpts = opts.signal ? { signal: opts.signal } : undefined;
+        // Use beta endpoint when betas are specified (e.g., 1M context window).
+        // BetaMessage and Message are structurally identical — safe to treat as same shape.
+        const response: { content: any; stop_reason: any; usage?: any } = opts.betas?.length
+          ? await (client.beta.messages.create as any)(
+              { ...params, betas: opts.betas },
+              requestOpts,
+            )
+          : await client.messages.create(params, requestOpts);
 
         return { content: response.content, stopReason: response.stop_reason, usage: extractUsage(response.usage) };
       } catch (err) {
@@ -85,6 +92,7 @@ export class AnthropicAdapter implements ProtocolAdapter {
   async sendMessageStream(
     opts: AdapterCallOptions & { onTextDelta?: (delta: string) => void },
   ): Promise<ModelResult> {
+    const model = stripModelSuffix(opts.model);
     const { providerConfig } = opts;
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -96,13 +104,20 @@ export class AnthropicAdapter implements ProtocolAdapter {
           providerConfig.base_url,
           providerConfig.auth_header,
         );
-        const stream: MessageStream = client.messages.stream({
-          model: opts.model,
+        const streamParams = {
+          model,
           max_tokens: opts.maxTokens,
           system: opts.system,
           messages: opts.messages,
           tools: opts.tools,
-        });
+        };
+        // Use beta endpoint when betas are specified (e.g., 1M context window).
+        // BetaMessageStream and MessageStream are structurally compatible (same on/abort/finalMessage).
+        const stream: MessageStream = opts.betas?.length
+          ? (client.beta.messages.stream as any)(
+              { ...streamParams, betas: opts.betas },
+            )
+          : client.messages.stream(streamParams);
 
         if (opts.signal) {
           if (opts.signal.aborted) {

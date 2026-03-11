@@ -13,6 +13,8 @@ export interface ToolCallBlock {
   input?: Record<string, unknown>;
   result?: string;
   status: 'calling' | 'done' | 'error';
+  /** Streaming blocks from inline subagent (only for create_subagent tool calls) */
+  streamBlocks?: import('@/hooks/useSessionStream').StreamingBlock[];
 }
 
 /** Detect if a tool call result indicates an error */

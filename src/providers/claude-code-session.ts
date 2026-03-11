@@ -2172,12 +2172,14 @@ export class SessionRunner {
 
     // Auto-generate title + description
     let taskTitle: string | undefined
+    let taskCategory: string | undefined
     if (taskId) {
       try {
         const { updateTask, getTask } = await import('../core/task-manager.js')
         await updateTask(taskId, { phase: 'IN_PROGRESS' })
         const task = await getTask(taskId)
         taskTitle = task?.title
+        taskCategory = task?.category
       } catch (err) {
         log.session.warn('failed to update task phase on session start', { taskId, error: err instanceof Error ? err.message : String(err) })
       }
@@ -2273,6 +2275,13 @@ export class SessionRunner {
     const sessionTitle = session.pendingTitle ?? message.slice(0, 120)
     session.send(message, cwd, undefined, mode, resolvedModel, appendSystemPrompt, data.host, sshTarget)
 
+    // Record directory usage for the frequent-dirs persistent store (fire-and-forget)
+    if (cwd) {
+      import('../core/frequent-dirs.js').then(({ recordDirectory }) => {
+        recordDirectory(cwd!, data.host ?? null, taskCategory).catch(() => {})
+      }).catch(() => {})
+    }
+
     bus.emit(EventNames.SESSION_STARTED, {
       taskId,
       project: project ?? '',
@@ -2356,12 +2365,14 @@ export class SessionRunner {
 
     // Auto-generate title (same logic as CLI path)
     let taskTitle: string | undefined
+    let sdkTaskCategory: string | undefined
     if (taskId) {
       try {
         const { updateTask, getTask } = await import('../core/task-manager.js')
         await updateTask(taskId, { phase: 'IN_PROGRESS' })
         const task = await getTask(taskId)
         taskTitle = task?.title
+        sdkTaskCategory = task?.category
       } catch (err) {
         log.session.warn('failed to update task phase on SDK session start', {
           taskId, error: err instanceof Error ? err.message : String(err),
@@ -2450,6 +2461,13 @@ export class SessionRunner {
           taskId, error: err instanceof Error ? err.message : String(err),
         })
       }
+    }
+
+    // Record directory usage for frequent-dirs store (fire-and-forget)
+    if (cwd) {
+      import('../core/frequent-dirs.js').then(({ recordDirectory }) => {
+        recordDirectory(cwd!, data.host ?? null, sdkTaskCategory).catch(() => {})
+      }).catch(() => {})
     }
 
     bus.emit(EventNames.SESSION_STARTED, {
