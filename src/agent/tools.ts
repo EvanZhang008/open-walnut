@@ -954,7 +954,17 @@ For projects (type='project'): set default_host and default_cwd for remote sessi
   // ── Session Management Tools ──
   {
     name: 'start_session',
-    description: `Start a NEW session — either a CLI Claude Code session or an embedded subagent run. A task_id, title, and prompt are required.
+    description: `Start a NEW persistent Claude Code session that runs in the BACKGROUND. Results appear in the session panel, NOT in this conversation. A task_id, title, and prompt are required.
+
+USE FOR: Code implementation, debugging, multi-round coding, anything needing task tracking
+or persistent conversation history — work that lives in the session panel.
+
+DO NOT USE FOR: Quick research, one-shot file analysis, or codebase investigation where you
+need the answer back in THIS conversation — use create_subagent instead.
+
+Key difference:
+  start_session    → runs in BACKGROUND, results in the session panel (async, needs a task)
+  create_subagent  → result comes back INLINE to this conversation (sync, no task needed)
 
 Each task allows exactly ONE session — ever. If the task already has a session (active, stopped,
 or completed), this tool returns a BLOCKED response. Use send_to_session to continue in the

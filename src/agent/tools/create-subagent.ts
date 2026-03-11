@@ -13,15 +13,19 @@ const VALID_MODELS = new Set(['opus', 'sonnet', 'haiku']);
 
 export const createSubagentTool: ToolDefinition = {
   name: 'create_subagent',
-  description: `Spawn a lightweight Claude Code subprocess for quick AI-assisted tasks.
-Shows as a collapsible agent box in chat with streaming output.
+  description: `Spawn a lightweight Claude Code subprocess whose result returns INLINE to THIS conversation.
+No task required. No persistent session created. Shows as a collapsible agent box in chat with streaming output.
 The subagent has access to ALL Claude Code tools (file read/write, bash, grep, glob, etc.).
 
-Use for: validating paths, searching codebases, reading/analyzing files, quick investigations,
-running commands with AI interpretation, any task that benefits from an independent AI context.
+USE FOR: Quick research, file analysis, codebase investigation, one-shot questions, validating paths,
+running commands with AI interpretation — any task where you need the answer back HERE in this chat.
 
-Unlike start_session: no task required, no persistent session, result returns directly to you.
-Unlike exec: the subagent has full AI reasoning ability, not just shell commands.
+DO NOT USE FOR: Multi-round coding, work that needs task tracking, implementation requiring conversation
+history — use start_session instead, which creates a persistent background session.
+
+Key difference:
+  create_subagent → result comes back to YOU (inline in this conversation)
+  start_session   → result goes to a SEPARATE session panel (background, async, needs a task)
 
 Default model is opus. Use sonnet for simple tasks, haiku for trivial lookups.
 Default timeout is 120 seconds (max 600). Background mode spawns and returns immediately.`,
