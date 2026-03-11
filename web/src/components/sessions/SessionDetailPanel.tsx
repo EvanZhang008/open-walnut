@@ -58,6 +58,40 @@ function CopyableId({ value, truncate }: { value: string; truncate?: number }) {
   );
 }
 
+function CopyPathButton({ path }: { path: string }) {
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => { clearTimeout(timerRef.current); }, []);
+
+  const handleCopy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(path).then(() => {
+      setCopied(true);
+      clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => setCopied(false), 1500);
+    }).catch(() => {});
+  };
+
+  return (
+    <button
+      className="copy-path-btn"
+      onClick={handleCopy}
+      title={copied ? 'Copied!' : `Copy path: ${path}`}
+    >
+      {copied ? (
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="3.5 8.5 6.5 11.5 12.5 4.5" />
+        </svg>
+      ) : (
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+          <path d="M10.5 5.5V3.5A1.5 1.5 0 0 0 9 2H3.5A1.5 1.5 0 0 0 2 3.5V9a1.5 1.5 0 0 0 1.5 1.5h2" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
 function EditableTitle({ sessionId, title, onSaved }: { sessionId: string; title: string; onSaved?: () => void }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(title);
@@ -379,7 +413,10 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
                     {session.cwd && (
                       <div className="session-detail-info-row">
                         <span className="session-detail-info-label">Working Dir</span>
-                        <span className="session-detail-info-value"><code className="session-detail-code">{session.cwd}</code></span>
+                        <span className="session-detail-info-value" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <code className="session-detail-code">{session.cwd}</code>
+                          <CopyPathButton path={session.cwd} />
+                        </span>
                       </div>
                     )}
                     {session.host && (
