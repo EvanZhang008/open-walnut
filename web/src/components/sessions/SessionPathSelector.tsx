@@ -43,6 +43,8 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
   const [query, setQuery] = useState('');
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [hostFilter, setHostFilter] = useState<string>('all');
+  const [editMode, setEditMode] = useState(false);
+  const [editingPath, setEditingPath] = useState('');
 
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -56,6 +58,8 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
     setQuery('');
     setSelectedIdx(0);
     setHostFilter('all');
+    setEditMode(false);
+    setEditingPath('');
     fetchWorkingDirs()
       .then(d => { setDirs(d); setLoading(false); })
       .catch(e => { setError(e.message); setLoading(false); });
@@ -84,11 +88,14 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
     return dirs.filter(d => {
       if (hostFilter === '__local__' && d.host) return false;
       if (hostFilter !== 'all' && hostFilter !== '__local__' && d.host !== hostFilter) return false;
+      if (editMode) {
+        return d.cwd.toLowerCase().startsWith(editingPath.toLowerCase());
+      }
       return fuzzyMatch(query, d.cwd);
     });
-  }, [dirs, query, hostFilter]);
+  }, [dirs, query, hostFilter, editMode, editingPath]);
 
-  useEffect(() => { setSelectedIdx(0); }, [query, hostFilter]);
+  useEffect(() => { setSelectedIdx(0); }, [query, hostFilter, editMode, editingPath]);
 
   // Scroll selected into view
   useEffect(() => {
@@ -102,21 +109,59 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
     onSelect({ cwd: d.cwd, host: d.host, hostLabel: d.hostLabel, category: d.category });
   }, [onSelect]);
 
+  // Enter edit mode with a given path
+  const enterEditMode = useCallback((d: WorkingDirEntry) => {
+    setEditMode(true);
+    setEditingPath(d.cwd);
+    setSelectedIdx(0);
+  }, []);
+
   // Keyboard navigation (scoped to search input, not global)
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      setSelectedIdx(prev => Math.min(prev + 1, Math.max(filtered.length - 1, 0)));
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setSelectedIdx(prev => Math.max(prev - 1, 0));
-    } else if (e.key === 'Enter') {
-      e.preventDefault();
-      if (filtered[selectedIdx]) handleSelect(filtered[selectedIdx]);
-    } else if (e.key === 'Escape') {
-      onClose();
+    if (editMode) {
+      // --- EDIT MODE ---
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const match = dirs.find(d => d.cwd === editingPath);
+        onSelect({
+          cwd: editingPath,
+          host: match?.host ?? null,
+          hostLabel: match?.hostLabel,
+          category: match?.category ?? 'Inbox',
+        });
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        setEditMode(false);
+        setEditingPath('');
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSelectedIdx(prev => Math.min(prev + 1, Math.max(filtered.length - 1, 0)));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSelectedIdx(prev => Math.max(prev - 1, 0));
+      } else if (e.key === 'Tab') {
+        // Tab-complete from selected item
+        e.preventDefault();
+        if (filtered[selectedIdx]) {
+          setEditingPath(filtered[selectedIdx].cwd);
+        }
+      }
+    } else {
+      // --- BROWSE MODE ---
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSelectedIdx(prev => Math.min(prev + 1, Math.max(filtered.length - 1, 0)));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSelectedIdx(prev => Math.max(prev - 1, 0));
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (filtered[selectedIdx]) enterEditMode(filtered[selectedIdx]);
+      } else if (e.key === 'Escape') {
+        onClose();
+      }
     }
-  }, [filtered, selectedIdx, handleSelect, onClose]);
+  }, [editMode, editingPath, filtered, selectedIdx, dirs, onSelect, onClose, enterEditMode]);
 
   // Close on outside click
   useEffect(() => {
@@ -139,11 +184,11 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
       <div className="sps-search">
         <input
           ref={searchRef}
-          className="sps-search-input"
+          className={`sps-search-input${editMode ? ' editing' : ''}`}
           type="text"
-          placeholder="Search paths... (↑↓ navigate, Enter select, Esc close)"
-          value={query}
-          onChange={e => setQuery(e.target.value)}
+          placeholder={editMode ? 'Edit path... (Enter confirm, Esc cancel, Tab complete)' : 'Search paths... (↑↓ navigate, Enter select, Esc close)'}
+          value={editMode ? editingPath : query}
+          onChange={e => editMode ? setEditingPath(e.target.value) : setQuery(e.target.value)}
           onKeyDown={handleKeyDown}
           autoFocus
         />
@@ -179,11 +224,11 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
           <div
             key={`${d.cwd}::${d.host ?? ''}`}
             className={`sps-path-item${idx === selectedIdx ? ' active' : ''}`}
-            onClick={() => handleSelect(d)}
+            onClick={() => editMode ? setEditingPath(d.cwd) : enterEditMode(d)}
             onMouseEnter={() => setSelectedIdx(idx)}
           >
             <div className="sps-path-main">
-              <span className="sps-path-cwd" title={d.cwd}>{d.cwd}</span>
+              <span className="sps-path-cwd">{d.cwd}</span>
               <span className="sps-path-host-tag">{d.host ? (d.hostLabel ?? d.host) : 'local'}</span>
             </div>
             <div className="sps-path-meta">
