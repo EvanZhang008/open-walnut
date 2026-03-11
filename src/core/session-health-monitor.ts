@@ -15,7 +15,7 @@
 
 import fs from 'node:fs'
 import { log } from '../logging/index.js'
-import { isProcessAlive, isProcessAliveAsync } from '../utils/process.js'
+import { isProcessAliveAsync } from '../utils/process.js'
 import { bus, EventNames } from './event-bus.js'
 import type { SshTarget } from '../providers/session-io.js'
 
@@ -265,9 +265,11 @@ export class SessionHealthMonitor {
 
       // Deferred SIGTERM fallback — fire-and-forget, doesn't block health check loop
       setTimeout(() => {
-        if (isProcessAlive(pid, processName)) {
-          try { process.kill(pid, 'SIGTERM') } catch { /* already dead */ }
-        }
+        isProcessAliveAsync(pid, processName).then((alive) => {
+          if (alive) {
+            try { process.kill(pid, 'SIGTERM') } catch { /* already dead */ }
+          }
+        }).catch(() => {})
       }, 5_000)
 
       // For remote sessions, also kill the remote claude process via SSH.

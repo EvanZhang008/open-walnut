@@ -31,11 +31,13 @@ async function enrichWithLiveStatus(sessions: SessionRecord[]): Promise<SessionR
   }
 
   if (checks.length > 0) {
-    const results = await Promise.all(
+    const results = await Promise.allSettled(
       checks.map(c => isProcessAliveAsync(c.pid, c.processName))
     )
     for (let i = 0; i < checks.length; i++) {
-      if (!results[i]) {
+      const r = results[i]
+      const alive = r.status === 'fulfilled' && r.value === true
+      if (!alive) {
         sessions[checks[i].index].process_status = 'stopped'
       }
     }
