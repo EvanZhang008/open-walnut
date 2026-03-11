@@ -1,5 +1,5 @@
 /**
- * Focus Bar E2E tests — pin/unpin tasks, max 3 guard, persistence.
+ * Focus Bar E2E tests — pin/unpin tasks, unlimited pins, persistence.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -68,17 +68,12 @@ describe('Focus Bar API', () => {
     expect(r.data.pinned_tasks).toHaveLength(1);
   });
 
-  it('can pin up to 3 tasks', async () => {
+  it('can pin unlimited tasks', async () => {
     await api('POST', `/api/focus/tasks/${taskIds[1]}`);
-    const r = await api('POST', `/api/focus/tasks/${taskIds[2]}`);
-    expect(r.status).toBe(200);
-    expect(r.data.pinned_tasks).toHaveLength(3);
-  });
-
-  it('4th pin is rejected with 400', async () => {
+    await api('POST', `/api/focus/tasks/${taskIds[2]}`);
     const r = await api('POST', `/api/focus/tasks/${taskIds[3]}`);
-    expect(r.status).toBe(400);
-    expect(r.data.error).toMatch(/Maximum 3/);
+    expect(r.status).toBe(200);
+    expect(r.data.pinned_tasks).toHaveLength(4);
   });
 
   it('DELETE /api/focus/tasks/:id unpins a task', async () => {
@@ -87,13 +82,7 @@ describe('Focus Bar API', () => {
 
     const r2 = await api('GET', '/api/focus/tasks');
     expect(r2.data.pinned_tasks).not.toContain(taskIds[0]);
-    expect(r2.data.pinned_tasks).toHaveLength(2);
-  });
-
-  it('after unpin, 4th task can now be pinned', async () => {
-    const r = await api('POST', `/api/focus/tasks/${taskIds[3]}`);
-    expect(r.status).toBe(200);
-    expect(r.data.pinned_tasks).toHaveLength(3);
+    expect(r2.data.pinned_tasks).toHaveLength(3);
   });
 
   it('pinned tasks persist across GET calls', async () => {

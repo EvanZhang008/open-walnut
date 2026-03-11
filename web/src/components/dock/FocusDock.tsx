@@ -177,8 +177,13 @@ interface FocusDockProps {
   focusBar: UseFocusBarReturn;
 }
 
+const FOCUS_DOCK_MAX_VISIBLE = 3;
+
 export function FocusDock({ focusBar }: FocusDockProps) {
-  const { pinnedTasks, unpin } = focusBar;
+  const { pinnedTasks: allPinnedTasks, unpin } = focusBar;
+  // Focus Dock shows only the first N pinned tasks (UI space limited);
+  // the Todo Sidebar pinned section shows all.
+  const pinnedTasks = allPinnedTasks.slice(0, FOCUS_DOCK_MAX_VISIBLE);
 
   // Self-manage active state by listening to custom events
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);

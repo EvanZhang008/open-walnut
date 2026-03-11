@@ -1,5 +1,8 @@
 /**
- * Focus Bar routes — manage pinned tasks via config (max 3).
+ * Focus Bar routes — manage pinned tasks via config.
+ *
+ * Users can pin any number of tasks. The Focus Dock UI shows only the first 3;
+ * the Todo Sidebar pinned section shows all.
  *
  * Uses updateConfig() (partial merge) instead of saveConfig() (full replacement)
  * so that concurrent config writes from other routes never drop focus_bar data.
@@ -8,8 +11,6 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { getConfig, updateConfig } from '../../core/config-manager.js'
 import { bus, EventNames } from '../../core/event-bus.js'
-
-const MAX_PINNED = 3
 
 /** Read current pinned IDs, falling back to legacy plugins.focus-bar location. */
 async function readPinnedIds(): Promise<string[]> {
@@ -43,7 +44,7 @@ focusRouter.get('/tasks', async (_req: Request, res: Response, next: NextFunctio
   }
 })
 
-// POST /api/focus/tasks/:id — pin a task (max 3)
+// POST /api/focus/tasks/:id — pin a task (no limit)
 focusRouter.post('/tasks/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const taskId = req.params.id as string
@@ -52,12 +53,6 @@ focusRouter.post('/tasks/:id', async (req: Request, res: Response, next: NextFun
     // Already pinned — no-op
     if (current.includes(taskId)) {
       res.json({ pinned_tasks: current })
-      return
-    }
-
-    // Max 3 guard
-    if (current.length >= MAX_PINNED) {
-      res.status(400).json({ error: `Maximum ${MAX_PINNED} pinned tasks allowed. Unpin one first.` })
       return
     }
 

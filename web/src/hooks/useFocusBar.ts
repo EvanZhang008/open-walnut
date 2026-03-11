@@ -9,7 +9,6 @@ export interface UseFocusBarReturn {
   pin: (taskId: string) => Promise<void>;
   unpin: (taskId: string) => Promise<void>;
   isPinned: (taskId: string) => boolean;
-  isFull: boolean;
 }
 
 export function useFocusBar(tasks: Task[]): UseFocusBarReturn {
@@ -73,7 +72,5 @@ export function useFocusBar(tasks: Task[]): UseFocusBarReturn {
     return pinnedIds.map((id) => taskMap.get(id)).filter(Boolean) as Task[];
   }, [pinnedIds, tasks]);
 
-  const isFull = pinnedIds.length >= 3;
-
-  return { pinnedIds, pinnedTasks, pin, unpin, isPinned, isFull };
+  return { pinnedIds, pinnedTasks, pin, unpin, isPinned };
 }
