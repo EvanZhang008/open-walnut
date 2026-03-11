@@ -508,7 +508,7 @@ export const tools: ToolDefinition[] = [
         name: { type: 'string', description: 'Category name. Required for type=category.' },
         source: { type: 'string', enum: ['local', 'ms-todo'], description: 'Sync target for the category. Required for type=category. "local" = never synced.' },
         // Task fields
-        title: { type: 'string', description: 'Task title. Required for type=task.' },
+        title: { type: 'string', description: 'Task title. Required for type=task. Format: "<≤3-word prefix> — <short description>". Prefix = scope/component/area (max 3 words). Description = concise what/why. Use em-dash (—). Good: "EventController BAH — Availability drop investigation". Bad: verbose metric names or long prefixes.' },
         priority: { type: 'string', enum: ['immediate', 'important', 'backlog', 'none'], description: 'Priority: immediate (urgent), important (can wait), backlog (future), none' },
         category: { type: 'string', description: 'Category — top-level group (e.g. Work, Life, Later). Required for type=project.' },
         project: { type: 'string', description: 'Project — list within category (e.g. HomeLab, Costco). Required for type=project. Defaults to category if omitted for type=task.' },
@@ -631,7 +631,7 @@ For projects (type='project'): set default_host and default_cwd for remote sessi
         type: { type: 'string', enum: ['task', 'project'], description: 'Entity type. Default: "task".' },
         // Task fields
         id: { type: 'string', description: 'Task ID or prefix. Required for type=task.' },
-        title: { type: 'string', description: 'New title.' },
+        title: { type: 'string', description: 'New title. Format: "<≤3-word prefix> — <short description>". Prefix = scope/component/area (max 3 words). Description = concise what/why. Use em-dash (—). Good: "EventController BAH — Availability drop investigation". Bad: verbose metric names or long prefixes.' },
         priority: { type: 'string', enum: ['immediate', 'important', 'backlog', 'none'], description: 'New priority: immediate (urgent), important (can wait), backlog (future), none.' },
         phase: { type: 'string', enum: [...VALID_PHASES].filter(p => p !== 'COMPLETE'), description: 'Task lifecycle phase. Status is auto-derived. Only humans can set COMPLETE.' },
         category: { type: 'string', description: 'New category (also used for project identification when type=project).' },
