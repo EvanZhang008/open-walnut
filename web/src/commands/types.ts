@@ -4,8 +4,8 @@ export interface SlashCommand {
   name: string;
   description: string;
   type: CommandType;
-  /** Where this command comes from: hardcoded (frontend), builtin (.md shipped), user (.md user-created) */
-  source?: 'hardcoded' | 'builtin' | 'user';
+  /** Where this command comes from: hardcoded (frontend), builtin (.md shipped), user (.md user-created), control (UI-only command) */
+  source?: 'hardcoded' | 'builtin' | 'user' | 'control';
   execute: (ctx: CommandContext) => void | Promise<void>;
 }
 

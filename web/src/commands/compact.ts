@@ -5,6 +5,7 @@ export const compactCommand: SlashCommand = {
   name: 'compact',
   description: 'Compact conversation — summarize old messages into memory',
   type: 'frontend',
+  source: 'control',
   execute: async (ctx) => {
     try {
       await compactChatHistory();

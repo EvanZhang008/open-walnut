@@ -9,11 +9,36 @@ import { readSessionHistory, extractPlanContent, rewriteHistoryRemoteImages } fr
 import { listTasks, getTask, addTask, updateTask } from '../../core/task-manager.js'
 import { getConfig } from '../../core/config-manager.js'
 import { bus, EventNames, eventData } from '../../core/event-bus.js'
+import fs from 'node:fs'
+import { execFile } from 'node:child_process'
 import path from 'path'
 import { isProcessAliveAsync } from '../../utils/process.js'
 import { readPlanFromSession, buildPlanExecutionMessage } from '../../utils/plan-message.js'
 import { getFrequentDirs, compileFromSessions } from '../../core/frequent-dirs.js'
 import type { SessionRecord, Task, WorkStatus } from '../../core/types.js'
+import type { SessionHistoryMessage } from '../../core/session-history.js'
+
+/** Diagnose message ordering — logs whether user text messages are interleaved or bunched at end. */
+function logMessageOrdering(phase: string, sessionId: string, messages: SessionHistoryMessage[], host?: string): void {
+  const userIndices: number[] = []
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i].role === 'user' && messages[i].text?.trim()) userIndices.push(i)
+  }
+  if (userIndices.length <= 1) return // no diagnostic needed for 0-1 user messages
+  const lastAsst = messages.reduce((max, m, i) => m.role === 'assistant' ? i : max, -1)
+  const usersAfterLastAsst = userIndices.filter(i => i > lastAsst).length
+  const bunched = usersAfterLastAsst > userIndices.length / 2
+  log.web.info('session history ordering', {
+    phase,
+    sessionId: sessionId.substring(0, 8),
+    host: host ?? 'local',
+    total: messages.length,
+    userText: userIndices.length,
+    lastAsstIdx: lastAsst,
+    usersAfterLastAsst,
+    bunched,
+  })
+}
 
 /** Recompute process_status live via PID check (for GET responses).
  *  Runs all PID checks in parallel to avoid blocking the event loop. */
@@ -189,8 +214,7 @@ sessionsRouter.get('/list-dirs', async (req: Request, res: Response, next: NextF
 
       // SSH ControlMaster: reuse persistent connection
       const controlDir = '/tmp/walnut-ssh-mux'
-      const nodeFs = await import('node:fs')
-      nodeFs.mkdirSync(controlDir, { recursive: true, mode: 0o700 })
+      fs.mkdirSync(controlDir, { recursive: true, mode: 0o700 })
       const controlPath = `${controlDir}/%r@%h-%p`
 
       const sshArgs = [
@@ -206,7 +230,6 @@ sessionsRouter.get('/list-dirs', async (req: Request, res: Response, next: NextF
       const quotedDir = dir.replace(/'/g, "'\\''")
       const cmd = `find '${quotedDir}' -maxdepth ${depth} -type d 2>/dev/null | head -500`
 
-      const { execFile } = await import('node:child_process')
       const output = await new Promise<string>((resolve, reject) => {
         execFile('ssh', [...sshArgs, hostString, cmd], {
           timeout: 10_000,
@@ -226,7 +249,6 @@ sessionsRouter.get('/list-dirs', async (req: Request, res: Response, next: NextF
       res.json({ dirs: entries, parent: dir })
     } else {
       // Local filesystem — also preload multiple levels
-      const fs = await import('node:fs')
       const entries: string[] = []
       const walkLocal = (d: string, currentDepth: number) => {
         if (currentDepth > depth || entries.length >= 500) return
@@ -620,12 +642,14 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       // Fast path: host=undefined forces local-only reads (canonical local + streams fallback).
       // Skips SSH entirely — ideal for instant first paint of FocusDock cards.
       const messages = await readSessionHistory(sessionId, cwd, undefined, record?.outputFile)
+      logMessageOrdering('P1:streams', sessionId, messages, record?.host)
       res.json({ messages })
       return
     }
 
     // Full path: reads from source of truth (SSH for remote sessions)
     let messages = await readSessionHistory(sessionId, cwd, record?.host, record?.outputFile)
+    logMessageOrdering('P2:full', sessionId, messages, record?.host)
     if (messages.length === 0 && !record) {
       res.status(404).json({ error: 'Session not found' })
       return

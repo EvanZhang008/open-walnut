@@ -1,7 +1,7 @@
 /**
  * SessionPathSelector — popover above chat input for picking a working directory.
- * Replaces the old SessionLauncherDrawer with an inline popover that positions
- * itself like CommandPalette (absolute, bottom: 100%).
+ * Features: history paths, live SSH/local directory listing, Tab completion,
+ * Shift+Tab host cycling, SSH pre-warm on open.
  */
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { fetchWorkingDirs, listDirs, type WorkingDirEntry } from '@/api/sessions';
@@ -30,8 +30,6 @@ function fuzzyMatch(query: string, cwd: string): boolean {
   return query.toLowerCase().split(/\s+/).filter(Boolean).every(t => lower.includes(t));
 }
 
-/** Path-aware fuzzy match for edit mode — splits on / to match individual segments.
- *  Returns a score: 2 = startsWith, 1 = segment match, 0 = no match. */
 function pathFuzzyScore(editingPath: string, cwd: string): number {
   if (!editingPath) return 2;
   const cwdLower = cwd.toLowerCase();
@@ -43,7 +41,6 @@ function pathFuzzyScore(editingPath: string, cwd: string): number {
   return matchCount > 0 ? 1 : 0;
 }
 
-/** Merged item: either from session history or live filesystem listing */
 interface ListItem {
   cwd: string;
   host: string | null;
@@ -51,7 +48,7 @@ interface ListItem {
   category: string;
   count: number;
   lastUsed: string;
-  live?: boolean; // true = from live fs listing, not session history
+  live?: boolean;
 }
 
 interface Props {
@@ -71,13 +68,15 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
   const [editingPath, setEditingPath] = useState('');
   const [liveDirs, setLiveDirs] = useState<string[]>([]);
   const [liveLoading, setLiveLoading] = useState(false);
+  // For "All" mode: live dirs tagged with their source host
+  const [liveTaggedDirs, setLiveTaggedDirs] = useState<Array<{ cwd: string; host: string | null; hostLabel?: string }>>([]);
 
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const liveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Fetch on open
+  // Fetch history + pre-warm SSH connections on open
   useEffect(() => {
     if (!open) return;
     setLoading(true);
@@ -88,6 +87,8 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
     setEditMode(false);
     setEditingPath('');
     setLiveDirs([]);
+    setLiveTaggedDirs([]);
+    // fetchWorkingDirs returns from cache if already prefetched on page load
     fetchWorkingDirs()
       .then(d => { setDirs(d); setLoading(false); })
       .catch(e => { setError(e.message); setLoading(false); });
@@ -100,23 +101,28 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
     }
   }, [open, loading]);
 
-  // Live directory listing with multi-level preload cache.
-  // Triggers in edit mode OR when browse query starts with / (path-like input).
-  const liveCacheRef = useRef<{ prefix: string; host: string | undefined; dirs: string[] } | null>(null);
+  // Keep cursor at end of input when editingPath changes (e.g. after click or Tab)
+  useEffect(() => {
+    if (editMode && searchRef.current) {
+      const len = editingPath.length;
+      searchRef.current.setSelectionRange(len, len);
+    }
+  }, [editMode, editingPath]);
 
-  // The active path for live listing — either editingPath (edit mode) or query (browse, if path-like)
+  // Live directory listing with multi-level preload cache
+  const liveCacheRef = useRef<{ prefix: string; host: string | undefined; dirs: string[] } | null>(null);
   const activePath = editMode ? editingPath : (query.startsWith('/') ? query : '');
+
+  // Resolve effective host for live listing
+  const effectiveHost = hostFilter !== 'all' && hostFilter !== '__local__' ? hostFilter : undefined;
 
   useEffect(() => {
     if (!activePath || activePath.length < 2) {
       setLiveDirs([]);
+      setLiveTaggedDirs([]);
       return;
     }
 
-    const host = hostFilter !== 'all' && hostFilter !== '__local__' ? hostFilter : undefined;
-    const cache = liveCacheRef.current;
-
-    // Helper: filter cached dirs to direct children of a directory
     const filterChildren = (allDirs: string[], parentDir: string, partialName: string) =>
       allDirs.filter(p => {
         if (!p.startsWith(parentDir)) return false;
@@ -129,17 +135,54 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
     const dir = activePath.endsWith('/') ? activePath : activePath.slice(0, activePath.lastIndexOf('/') + 1);
     const partial = activePath.endsWith('/') ? '' : activePath.slice(activePath.lastIndexOf('/') + 1);
 
-    // Check if current path is within the cached tree
+    if (hostFilter === 'all') {
+      // "All" mode: query local + all SSH hosts in parallel, tag results
+      if (liveTimerRef.current) clearTimeout(liveTimerRef.current);
+      liveTimerRef.current = setTimeout(() => {
+        const sshHosts = new Set<string>();
+        for (const d of dirs) { if (d.host) sshHosts.add(d.host); }
+        const hostLabels = new Map<string, string>();
+        for (const d of dirs) { if (d.host && d.hostLabel) hostLabels.set(d.host, d.hostLabel); }
+
+        // Fire all in parallel: local + each SSH host
+        const promises: Array<Promise<Array<{ cwd: string; host: string | null; hostLabel?: string }>>> = [];
+        // Local
+        promises.push(
+          listDirs(activePath, null)
+            .then(paths => filterChildren(paths, dir, partial).map(p => ({ cwd: p, host: null })))
+            .catch(() => [])
+        );
+        // Each SSH host
+        for (const host of sshHosts) {
+          promises.push(
+            listDirs(activePath, host)
+              .then(paths => filterChildren(paths, dir, partial).map(p => ({ cwd: p, host, hostLabel: hostLabels.get(host) })))
+              .catch(() => [])
+          );
+        }
+        setLiveLoading(true);
+        Promise.all(promises).then(results => {
+          setLiveTaggedDirs(results.flat());
+          setLiveDirs([]); // clear single-host dirs
+          setLiveLoading(false);
+        });
+      }, 150);
+      return () => { if (liveTimerRef.current) clearTimeout(liveTimerRef.current); };
+    }
+
+    // Specific host or local mode
+    const host = effectiveHost;
+    const cache = liveCacheRef.current;
+
     if (cache && cache.host === host && activePath.startsWith(cache.prefix)) {
       const filtered = filterChildren(cache.dirs, dir, partial);
-      // Cache hit: use results. If empty and we're deeper than cache root, re-fetch.
       if (filtered.length > 0 || dir === cache.prefix) {
         setLiveDirs(filtered);
+        setLiveTaggedDirs([]);
         return;
       }
     }
 
-    // Not in cache or cache miss at depth — fetch from API
     if (liveTimerRef.current) clearTimeout(liveTimerRef.current);
     liveTimerRef.current = setTimeout(() => {
       setLiveLoading(true);
@@ -147,12 +190,13 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
         .then(d => {
           liveCacheRef.current = { prefix: dir, host, dirs: d };
           setLiveDirs(filterChildren(d, dir, partial));
+          setLiveTaggedDirs([]);
           setLiveLoading(false);
         })
-        .catch(() => { setLiveDirs([]); setLiveLoading(false); });
+        .catch(() => { setLiveDirs([]); setLiveTaggedDirs([]); setLiveLoading(false); });
     }, 150);
     return () => { if (liveTimerRef.current) clearTimeout(liveTimerRef.current); };
-  }, [activePath, hostFilter]);
+  }, [activePath, hostFilter, effectiveHost, dirs]);
 
   // Host tabs
   const hostTabs = useMemo(() => {
@@ -165,25 +209,35 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
     return Array.from(labels.entries()).map(([key, label]) => ({ key, label }));
   }, [dirs]);
 
-  // Resolve current host for live items
   const currentHost = hostFilter !== 'all' && hostFilter !== '__local__' ? hostFilter : null;
   const currentHostLabel = hostTabs.find(t => t.key === hostFilter)?.label;
 
-  // Filtered list — merges history + live dirs in edit mode
+  // Filtered list — merges history + live dirs
   const filtered: ListItem[] = useMemo(() => {
     const hostFiltered = dirs.filter(d => {
       if (hostFilter === '__local__' && d.host) return false;
       if (hostFilter !== 'all' && hostFilter !== '__local__' && d.host !== hostFilter) return false;
       return true;
     });
-    // Build live filesystem items (deduped against history)
-    const buildLiveItems = (historySet: Set<string>): ListItem[] =>
-      liveDirs
+
+    // Build live items from either tagged (All mode) or single-host list
+    const buildLiveItems = (historySet: Set<string>): ListItem[] => {
+      if (liveTaggedDirs.length > 0) {
+        // All mode: each item already has host/hostLabel
+        return liveTaggedDirs
+          .filter(p => !historySet.has(p.cwd))
+          .map(p => ({
+            cwd: p.cwd, host: p.host, hostLabel: p.hostLabel ?? (p.host ? undefined : 'local'),
+            category: 'Inbox', count: 0, lastUsed: '', live: true,
+          }));
+      }
+      return liveDirs
         .filter(p => !historySet.has(p))
         .map(p => ({
           cwd: p, host: currentHost, hostLabel: currentHostLabel,
           category: 'Inbox', count: 0, lastUsed: '', live: true,
         }));
+    };
 
     if (editMode) {
       const scored = hostFiltered
@@ -197,15 +251,14 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
 
     // Browse mode
     const historyItems = hostFiltered.filter(d => fuzzyMatch(query, d.cwd)).map(d => ({ ...d, live: false }));
-    // If query looks like a path, also show live dirs
-    if (query.startsWith('/') && liveDirs.length > 0) {
+    if (query.startsWith('/') && (liveDirs.length > 0 || liveTaggedDirs.length > 0)) {
       const liveItems = buildLiveItems(new Set(historyItems.map(h => h.cwd)));
       return [...liveItems, ...historyItems];
     }
     return historyItems;
-  }, [dirs, query, hostFilter, editMode, editingPath, liveDirs, currentHost, currentHostLabel]);
+  }, [dirs, query, hostFilter, editMode, editingPath, liveDirs, liveTaggedDirs, currentHost, currentHostLabel]);
 
-  useEffect(() => { setSelectedIdx(0); }, [query, hostFilter, editMode, editingPath, liveDirs]);
+  useEffect(() => { setSelectedIdx(0); }, [query, hostFilter, editMode, editingPath, liveDirs, liveTaggedDirs]);
 
   // Scroll selected into view
   useEffect(() => {
@@ -214,35 +267,34 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
     items[selectedIdx]?.scrollIntoView({ block: 'nearest' });
   }, [selectedIdx]);
 
-  // Select handler
   const handleSelect = useCallback((d: ListItem) => {
     onSelect({ cwd: d.cwd, host: d.host, hostLabel: d.hostLabel, category: d.category });
   }, [onSelect]);
 
-  // Enter edit mode with a given path
   const enterEditMode = useCallback((d: ListItem) => {
     setEditMode(true);
     setEditingPath(d.cwd);
     setSelectedIdx(0);
   }, []);
 
-  // Keyboard navigation (scoped to search input, not global)
+  // Keyboard navigation
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    // Shift+Tab: cycle host tabs (works in both modes)
+    if (e.key === 'Tab' && e.shiftKey) {
+      e.preventDefault();
+      const idx = hostTabs.findIndex(t => t.key === hostFilter);
+      const nextIdx = (idx + 1) % hostTabs.length;
+      setHostFilter(hostTabs[nextIdx].key);
+      return;
+    }
+
     if (editMode) {
       // --- EDIT MODE ---
       if (e.key === 'Enter') {
         e.preventDefault();
-        if (filtered[selectedIdx]) {
-          // If a live dir is selected, use it (Tab-complete into it with trailing /)
-          const sel = filtered[selectedIdx];
-          if (sel.live) {
-            setEditingPath(sel.cwd + '/');
-            return;
-          }
-        }
         const match = dirs.find(d => d.cwd === editingPath);
         onSelect({
-          cwd: editingPath,
+          cwd: editingPath.replace(/\/+$/, '') || '/',
           host: match?.host ?? currentHost,
           hostLabel: match?.hostLabel ?? currentHostLabel,
           category: match?.category ?? 'Inbox',
@@ -252,6 +304,7 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
         setEditMode(false);
         setEditingPath('');
         setLiveDirs([]);
+        setLiveTaggedDirs([]);
       } else if (e.key === 'ArrowDown') {
         e.preventDefault();
         setSelectedIdx(prev => Math.min(prev + 1, Math.max(filtered.length - 1, 0)));
@@ -259,7 +312,6 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
         e.preventDefault();
         setSelectedIdx(prev => Math.max(prev - 1, 0));
       } else if (e.key === 'Tab') {
-        // Tab-complete from selected item — append / to drill into dirs
         e.preventDefault();
         if (filtered[selectedIdx]) {
           const sel = filtered[selectedIdx];
@@ -279,9 +331,10 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
         if (filtered[selectedIdx]) {
           const sel = filtered[selectedIdx];
           if (sel.live) {
-            // Live dir: enter edit mode with trailing / to drill in
             setEditMode(true);
             setEditingPath(sel.cwd + '/');
+            // If this live dir has a specific host, switch to that host tab
+            if (sel.host && hostFilter === 'all') setHostFilter(sel.host);
             setSelectedIdx(0);
           } else {
             enterEditMode(sel);
@@ -291,7 +344,7 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
         onClose();
       }
     }
-  }, [editMode, editingPath, filtered, selectedIdx, dirs, onSelect, onClose, enterEditMode, currentHost, currentHostLabel]);
+  }, [editMode, editingPath, filtered, selectedIdx, dirs, onSelect, onClose, enterEditMode, currentHost, currentHostLabel, hostFilter, hostTabs]);
 
   // Close on outside click
   useEffect(() => {
@@ -301,7 +354,6 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
         onClose();
       }
     };
-    // Delay to avoid closing on the click that opened us
     const timer = setTimeout(() => document.addEventListener('mousedown', handler), 100);
     return () => { clearTimeout(timer); document.removeEventListener('mousedown', handler); };
   }, [open, onClose]);
@@ -310,7 +362,6 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
 
   return (
     <div className="session-path-selector" ref={popoverRef}>
-      {/* Search */}
       <div className="sps-search">
         <input
           ref={searchRef}
@@ -325,7 +376,6 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
         {liveLoading && <span className="sps-live-indicator">listing...</span>}
       </div>
 
-      {/* Host filter */}
       {hostTabs.length > 2 && (
         <div className="sps-host-filter">
           {hostTabs.map(tab => (
@@ -337,10 +387,10 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
               {tab.label}
             </button>
           ))}
+          <span className="sps-host-hint">Shift+Tab</span>
         </div>
       )}
 
-      {/* Path list */}
       <div className="sps-path-list" ref={listRef}>
         {loading && <div className="sps-empty">Loading paths...</div>}
         {error && <div className="sps-error">{error}</div>}
@@ -361,11 +411,19 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
               if (editMode) {
                 if (d.live) {
                   setEditingPath(d.cwd + '/');
+                  if (d.host && hostFilter === 'all') setHostFilter(d.host);
                 } else {
                   setEditingPath(d.cwd);
                 }
               } else {
-                enterEditMode(d);
+                if (d.live) {
+                  setEditMode(true);
+                  setEditingPath(d.cwd + '/');
+                  if (d.host && hostFilter === 'all') setHostFilter(d.host);
+                  setSelectedIdx(0);
+                } else {
+                  enterEditMode(d);
+                }
               }
             }}
             onMouseEnter={() => setSelectedIdx(idx)}
@@ -373,7 +431,7 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
             <div className="sps-path-main">
               <span className="sps-path-cwd">{d.cwd}{d.live ? '/' : ''}</span>
               {d.live
-                ? <span className="sps-path-host-tag sps-tag-live">dir</span>
+                ? <span className="sps-path-host-tag sps-tag-live">{d.host ? (d.hostLabel ?? d.host) : 'local'}</span>
                 : <span className="sps-path-host-tag">{d.host ? (d.hostLabel ?? d.host) : 'local'}</span>
               }
             </div>

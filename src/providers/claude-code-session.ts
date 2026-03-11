@@ -2278,7 +2278,7 @@ export class SessionRunner {
     // Record directory usage for the frequent-dirs persistent store (fire-and-forget)
     if (cwd) {
       import('../core/frequent-dirs.js').then(({ recordDirectory }) => {
-        recordDirectory(cwd!, data.host ?? null, taskCategory).catch(() => {})
+        recordDirectory(cwd, data.host ?? null, taskCategory).catch(() => {})
       }).catch(() => {})
     }
 
@@ -2466,7 +2466,7 @@ export class SessionRunner {
     // Record directory usage for frequent-dirs store (fire-and-forget)
     if (cwd) {
       import('../core/frequent-dirs.js').then(({ recordDirectory }) => {
-        recordDirectory(cwd!, data.host ?? null, sdkTaskCategory).catch(() => {})
+        recordDirectory(cwd, data.host ?? null, sdkTaskCategory).catch(() => {})
       }).catch(() => {})
     }
 

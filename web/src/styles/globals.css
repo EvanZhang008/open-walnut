@@ -9480,16 +9480,27 @@ img[data-lightbox-src],
   }
 }
 
-/* Control command badge in palette */
+/* Control commands — distinct amber/orange color to differentiate from agent commands */
+.command-palette-control .command-palette-name {
+  color: #d97706;
+}
+.command-palette-control .command-palette-desc {
+  color: #92400e;
+}
+[data-theme="dark"] .command-palette-control .command-palette-name {
+  color: #fbbf24;
+}
+[data-theme="dark"] .command-palette-control .command-palette-desc {
+  color: #b59533;
+}
+
 .command-palette-source-control {
   color: #92400e;
   background: #fef3c7;
 }
-@media (prefers-color-scheme: dark) {
-  .command-palette-source-control {
-    color: #fbbf24;
-    background: rgba(251, 191, 36, 0.15);
-  }
+[data-theme="dark"] .command-palette-source-control {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.15);
 }
 
 /* ===== Session Path Selector (popover above chat input) ===== */
@@ -9515,6 +9526,7 @@ img[data-lightbox-src],
 .sps-search {
   padding: 8px 8px 4px;
   flex-shrink: 0;
+  position: relative;
 }
 
 .sps-search-input {
@@ -9562,12 +9574,6 @@ img[data-lightbox-src],
   background: var(--accent);
   color: #fff;
   border-color: var(--accent);
-}
-
-.sps-host-hint {
-  font-size: 10px;
-  color: var(--fg-muted);
-  margin-left: auto;
 }
 
 .sps-path-list {
@@ -9635,6 +9641,13 @@ img[data-lightbox-src],
 
 .sps-live .sps-path-cwd { opacity: 0.85; }
 
+.sps-host-hint {
+  font-size: 9px;
+  color: var(--fg-muted);
+  opacity: 0.5;
+  margin-left: auto;
+}
+
 .sps-live-indicator {
   position: absolute;
   right: 12px;
@@ -9643,8 +9656,6 @@ img[data-lightbox-src],
   font-size: 10px;
   color: var(--fg-muted);
 }
-.sps-search { position: relative; }
-
 .sps-empty, .sps-error {
   padding: 20px 12px;
   text-align: center;

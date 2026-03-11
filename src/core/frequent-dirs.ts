@@ -46,7 +46,10 @@ function readStore(): FrequentDirsStore | null {
   try {
     if (!fs.existsSync(FREQUENT_DIRS_FILE)) return null
     const raw = fs.readFileSync(FREQUENT_DIRS_FILE, 'utf-8')
-    return JSON.parse(raw) as FrequentDirsStore
+    const parsed = JSON.parse(raw)
+    // Schema validation: reject corrupted or incompatible data
+    if (parsed?.version !== 1 || !Array.isArray(parsed?.directories)) return null
+    return parsed as FrequentDirsStore
   } catch {
     return null
   }

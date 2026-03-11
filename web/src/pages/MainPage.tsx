@@ -383,14 +383,17 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, []);
 
   // Auto-open session panel when a quick-start session fires
-  useEvent('session:started', (data) => {
-    const d = data as { sessionId?: string; taskId?: string; claudeSessionId?: string };
-    const sessionId = d.claudeSessionId ?? d.sessionId;
-    if (pendingQuickStartRef.current && d.taskId === pendingQuickStartRef.current && sessionId) {
+  // Listen to both session:started and session:status-changed to catch the sessionId
+  const openQuickStartSession = useCallback((data: Record<string, unknown>) => {
+    const sessionId = (data.claudeSessionId ?? data.sessionId) as string | undefined;
+    const taskId = data.taskId as string | undefined;
+    if (pendingQuickStartRef.current && taskId === pendingQuickStartRef.current && sessionId) {
       pendingQuickStartRef.current = null;
       setSessionColumns(prev => addSessionColumn(prev, sessionId, triageOpenRef.current));
     }
-  });
+  }, []);
+  useEvent('session:started', openQuickStartSession);
+  useEvent('session:status-changed', openQuickStartSession);
 
   // Handle session click from chat: focus the associated task + open session column
   const handleSessionClick = useCallback(async (sessionId: string) => {
@@ -469,13 +472,21 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // Show the user's message as a local chat entry immediately
       chat.addLocalMessage(`Quick Start on \`${qsp.cwd}\`${qsp.host ? ` (${qsp.hostLabel ?? qsp.host})` : ''}:\n> ${text}`);
 
+      // Set pending ref BEFORE the async call so WS events that arrive
+      // during the HTTP round-trip can still match via taskId
+      const tempTaskId = `pending-${Date.now()}`;
+      pendingQuickStartRef.current = tempTaskId;
+
       quickStartSession({
         cwd: qsp.cwd,
         host: qsp.host ?? undefined,
         message: text,
         category: qsp.category,
       }).then((result) => {
-        pendingQuickStartRef.current = result.taskId;
+        // Update ref with real taskId (WS events use this to match)
+        if (pendingQuickStartRef.current === tempTaskId) {
+          pendingQuickStartRef.current = result.taskId;
+        }
         // Notify main agent to reorganize the task
         const agentMsg = [
           `[Quick Start] Session created and running.`,
@@ -756,6 +767,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onOpenTriageForTask={handleOpenTriageForTask}
           onPinTask={focusBar.pin}
           onUnpinTask={focusBar.unpin}
+          onReorderPinned={focusBar.reorder}
           pinnedTaskIds={pinnedTaskIdSet}
           operationError={operationError}
           onClearOperationError={clearOperationError}

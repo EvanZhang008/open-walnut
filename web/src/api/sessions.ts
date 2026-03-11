@@ -90,10 +90,21 @@ export interface WorkingDirEntry {
   lastUsed: string;
 }
 
+// Cache working dirs so /session popover opens instantly (prefetched on page load)
+let _workingDirsCache: WorkingDirEntry[] | null = null;
+let _workingDirsFetching: Promise<WorkingDirEntry[]> | null = null;
+
 export async function fetchWorkingDirs(): Promise<WorkingDirEntry[]> {
-  const res = await apiGet<{ dirs: WorkingDirEntry[] }>('/api/sessions/working-dirs');
-  return res.dirs;
+  if (_workingDirsCache) return _workingDirsCache;
+  if (_workingDirsFetching) return _workingDirsFetching;
+  _workingDirsFetching = apiGet<{ dirs: WorkingDirEntry[] }>('/api/sessions/working-dirs')
+    .then(res => { _workingDirsCache = res.dirs; _workingDirsFetching = null; return res.dirs; })
+    .catch(err => { _workingDirsFetching = null; throw err; });
+  return _workingDirsFetching;
 }
+
+/** Invalidate cache (e.g. after starting a new session) */
+export function invalidateWorkingDirsCache(): void { _workingDirsCache = null; _workingDirsFetching = null; }
 
 export async function listDirs(prefix: string, host?: string | null): Promise<string[]> {
   const params = new URLSearchParams({ prefix });
@@ -101,6 +112,16 @@ export async function listDirs(prefix: string, host?: string | null): Promise<st
   const res = await apiGet<{ dirs: string[] }>(`/api/sessions/list-dirs?${params}`);
   return res.dirs;
 }
+
+// Prefetch working dirs + pre-warm SSH on page load (fire-and-forget).
+// Uses the most-frequent path per host (instead of root /) for a useful cache hit.
+fetchWorkingDirs().then(dirs => {
+  const bestPerHost = new Map<string, string>();
+  for (const d of dirs) {
+    if (d.host && !bestPerHost.has(d.host)) bestPerHost.set(d.host, d.cwd);
+  }
+  for (const [host, cwd] of bestPerHost) { listDirs(cwd, host).catch(() => {}); }
+}).catch(() => {});
 
 export async function quickStartSession(opts: {
   cwd: string;
@@ -110,7 +131,9 @@ export async function quickStartSession(opts: {
   model?: string;
   mode?: string;
 }): Promise<{ taskId: string; task: unknown }> {
-  return apiPost('/api/sessions/quick-start', opts);
+  const result = await apiPost<{ taskId: string; task: unknown }>('/api/sessions/quick-start', opts);
+  invalidateWorkingDirsCache(); // new session → new path entry
+  return result;
 }
 
 export async function forkSessionInWalnut(

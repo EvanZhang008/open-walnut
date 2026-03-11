@@ -4,6 +4,7 @@ export const sessionCommand: SlashCommand = {
   name: 'session',
   description: 'Quick Start — pick a path and start a session',
   type: 'frontend',
+  source: 'control',
   execute: () => {
     window.dispatchEvent(new CustomEvent('session-launcher:open'));
   },

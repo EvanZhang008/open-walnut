@@ -9,11 +9,12 @@ import { tasksCommand } from './tasks.js';
 import { loadMarkdownCommands } from './markdown-bridge.js';
 
 // Register hardcoded commands (highest priority — never overridden)
-register({ ...compactCommand, source: 'hardcoded' });
+// Commands with their own source (e.g. 'control') keep it; others get 'hardcoded'
+register({ ...compactCommand });
 register({ ...helpCommand, source: 'hardcoded' });
 register({ ...checkTasksCommand, source: 'hardcoded' });
 register({ ...planCommand, source: 'hardcoded' });
-register({ ...sessionCommand, source: 'hardcoded' });
+register({ ...sessionCommand });
 register({ ...sessionsCommand, source: 'hardcoded' });
 register({ ...tasksCommand, source: 'hardcoded' });
 

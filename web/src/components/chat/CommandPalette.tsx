@@ -43,7 +43,7 @@ export function CommandPalette<T extends PaletteItem = SlashCommand>({ commands,
       {commands.map((cmd, i) => (
         <div
           key={cmd.name}
-          className={`command-palette-item${i === selectedIndex ? ' command-palette-item-active' : ''}`}
+          className={`command-palette-item${i === selectedIndex ? ' command-palette-item-active' : ''}${cmd.source === 'control' ? ' command-palette-control' : ''}`}
           onMouseDown={(e) => {
             e.preventDefault();
             onSelect(cmd);
@@ -51,7 +51,7 @@ export function CommandPalette<T extends PaletteItem = SlashCommand>({ commands,
         >
           <div className="command-palette-row">
             <span className="command-palette-name">/{cmd.name}</span>
-            {showSource && cmd.source && (
+            {(showSource || cmd.source === 'control') && cmd.source && (
               <span className={`command-palette-source${cmd.source ? ` command-palette-source-${cmd.source}` : ''}`}>{SOURCE_LABELS[cmd.source] ?? cmd.source}</span>
             )}
           </div>
