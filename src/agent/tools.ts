@@ -511,6 +511,7 @@ export const tools: ToolDefinition[] = [
         description: { type: 'string', description: 'What & why context for the task (pre-action). Synced to configured plugins on creation.' },
         tags: { type: 'array', items: { type: 'string' }, description: 'Initial tags. Convention: "key:value" for structured data (e.g. "team:backend", "blocked").' },
         depends_on: { type: 'array', items: { type: 'string' }, description: 'Full IDs of prerequisite tasks that must complete before this one can start.' },
+        cwd: { type: 'string', description: 'Task-level working directory override (type=task only). Takes precedence over project default_cwd when starting sessions.' },
       },
       required: [],
     },
@@ -595,6 +596,7 @@ export const tools: ToolDefinition[] = [
           description: params.description as string | undefined,
           tags: params.tags as string[] | undefined,
           depends_on: params.depends_on as string[] | undefined,
+          cwd: params.cwd as string | undefined,
         });
         bus.emit(EventNames.TASK_CREATED, { task }, ['web-ui'], { source: 'agent' });
         const syncStatus = syncResult?.success === false
