@@ -271,6 +271,19 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
     onSelect({ cwd: d.cwd, host: d.host, hostLabel: d.hostLabel, category: d.category });
   }, [onSelect]);
 
+  // Confirm the current editingPath (Shift+Enter or Go button)
+  const handleConfirm = useCallback(() => {
+    if (!editingPath) return;
+    const trimmed = editingPath.replace(/\/+$/, '') || '/';
+    const match = dirs.find(d => d.cwd === trimmed);
+    onSelect({
+      cwd: trimmed,
+      host: match?.host ?? currentHost,
+      hostLabel: match?.hostLabel ?? currentHostLabel,
+      category: match?.category ?? 'Inbox',
+    });
+  }, [editingPath, dirs, onSelect, currentHost, currentHostLabel]);
+
   const enterEditMode = useCallback((d: ListItem) => {
     setEditMode(true);
     setEditingPath(d.cwd);
@@ -290,15 +303,25 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
 
     if (editMode) {
       // --- EDIT MODE ---
-      if (e.key === 'Enter') {
+      if (e.key === 'Enter' && (e.shiftKey || e.metaKey)) {
+        // Shift+Enter or Cmd+Enter: confirm and start session
         e.preventDefault();
-        const match = dirs.find(d => d.cwd === editingPath);
-        onSelect({
-          cwd: editingPath.replace(/\/+$/, '') || '/',
-          host: match?.host ?? currentHost,
-          hostLabel: match?.hostLabel ?? currentHostLabel,
-          category: match?.category ?? 'Inbox',
-        });
+        handleConfirm();
+      } else if (e.key === 'Enter') {
+        // Enter: always select/autocomplete (never sends)
+        e.preventDefault();
+        if (filtered.length > 0) {
+          const sel = filtered[Math.min(selectedIdx, filtered.length - 1)];
+          if (sel.live) {
+            // Live directory — navigate deeper
+            setEditingPath(sel.cwd + '/');
+            if (sel.host && hostFilter === 'all') setHostFilter(sel.host);
+          } else {
+            // History item — fill the path into input
+            setEditingPath(sel.cwd);
+          }
+        }
+        // If no items, Enter does nothing (path is incomplete)
       } else if (e.key === 'Escape') {
         e.preventDefault();
         setEditMode(false);
@@ -326,14 +349,20 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
         setSelectedIdx(prev => Math.max(prev - 1, 0));
+      } else if (e.key === 'Enter' && (e.shiftKey || e.metaKey)) {
+        // Shift+Enter: send selected item directly (skip edit mode)
+        e.preventDefault();
+        if (filtered[selectedIdx] && !filtered[selectedIdx].live) {
+          handleSelect(filtered[selectedIdx]);
+        }
       } else if (e.key === 'Enter') {
+        // Enter: enter edit mode with selected item
         e.preventDefault();
         if (filtered[selectedIdx]) {
           const sel = filtered[selectedIdx];
           if (sel.live) {
             setEditMode(true);
             setEditingPath(sel.cwd + '/');
-            // If this live dir has a specific host, switch to that host tab
             if (sel.host && hostFilter === 'all') setHostFilter(sel.host);
             setSelectedIdx(0);
           } else {
@@ -344,7 +373,7 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
         onClose();
       }
     }
-  }, [editMode, editingPath, filtered, selectedIdx, dirs, onSelect, onClose, enterEditMode, currentHost, currentHostLabel, hostFilter, hostTabs]);
+  }, [editMode, filtered, selectedIdx, onClose, enterEditMode, handleConfirm, handleSelect, hostFilter, hostTabs]);
 
   // Close on outside click
   useEffect(() => {
@@ -367,13 +396,21 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
           ref={searchRef}
           className={`sps-search-input${editMode ? ' editing' : ''}`}
           type="text"
-          placeholder={editMode ? 'Type path... (Tab complete, Enter confirm, Esc cancel)' : 'Search paths... (↑↓ navigate, Enter select, Esc close)'}
+          placeholder={editMode ? 'Type path... (Enter select, ⇧Enter go, Esc back)' : 'Search paths... (↑↓ navigate, Enter select, Esc close)'}
           value={editMode ? editingPath : query}
           onChange={e => editMode ? setEditingPath(e.target.value) : setQuery(e.target.value)}
           onKeyDown={handleKeyDown}
           autoFocus
         />
-        {liveLoading && <span className="sps-live-indicator">listing...</span>}
+        {editMode && editingPath && (
+          <button
+            className="sps-go-btn"
+            onClick={handleConfirm}
+            title="Start session (⇧Enter)"
+          >
+            Go <kbd>⇧↵</kbd>
+          </button>
+        )}
       </div>
 
       {hostTabs.length > 2 && (
@@ -397,7 +434,7 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
         {!loading && !error && filtered.length === 0 && (
           <div className="sps-empty">
             {editMode
-              ? (liveLoading ? 'Listing directories...' : 'No directories found. Type a path and press Enter to use it.')
+              ? (liveLoading ? 'Listing directories...' : 'No matches. Press ⇧Enter or click Go to use this path.')
               : dirs.length === 0
                 ? 'No session history yet. Start a session on a task first.'
                 : 'No paths match your search.'}

@@ -182,9 +182,9 @@ sessionsRouter.get('/list-dirs', async (req: Request, res: Response, next: NextF
       return
     }
 
-    // Find the parent directory to list
+    // Find the parent directory to list.
+    // Partial matching is handled by the frontend's filterChildren — backend returns all entries.
     const dir = prefix.endsWith('/') ? prefix : path.dirname(prefix)
-    const partial = prefix.endsWith('/') ? '' : path.basename(prefix)
 
     if (host) {
       // SSH: resolve host from config
@@ -204,9 +204,7 @@ sessionsRouter.get('/list-dirs', async (req: Request, res: Response, next: NextF
       const cacheKey = `${host}::${dir}::${depth}`
       const cached = dirCache.get(cacheKey)
       if (cached && Date.now() - cached.ts < DIR_CACHE_TTL) {
-        const entries = cached.dirs
-          .filter(p => !partial || path.basename(p).toLowerCase().startsWith(partial.toLowerCase()))
-        res.json({ dirs: entries, parent: dir, cached: true })
+        res.json({ dirs: cached.dirs, parent: dir, cached: true })
         return
       }
 
@@ -228,7 +226,7 @@ sessionsRouter.get('/list-dirs', async (req: Request, res: Response, next: NextF
       if (hostDef.port) sshArgs.push('-p', String(hostDef.port))
 
       const quotedDir = dir.replace(/'/g, "'\\''")
-      const cmd = `find '${quotedDir}' -maxdepth ${depth} -type d 2>/dev/null | head -500`
+      const cmd = `find '${quotedDir}' -maxdepth ${depth} -type d -not -name '.*' 2>/dev/null | head -500`
 
       const output = await new Promise<string>((resolve, reject) => {
         execFile('ssh', [...sshArgs, hostString, cmd], {
@@ -243,10 +241,9 @@ sessionsRouter.get('/list-dirs', async (req: Request, res: Response, next: NextF
       // Cache the full unfiltered result
       dirCache.set(cacheKey, { dirs: allEntries, ts: Date.now() })
 
-      const entries = allEntries
-        .filter(p => !partial || path.basename(p).toLowerCase().startsWith(partial.toLowerCase()))
-
-      res.json({ dirs: entries, parent: dir })
+      // Return unfiltered — frontend's filterChildren handles partial matching.
+      // This prevents frontend cache pollution when partial changes.
+      res.json({ dirs: allEntries, parent: dir })
     } else {
       // Local filesystem — also preload multiple levels
       const entries: string[] = []
@@ -256,8 +253,8 @@ sessionsRouter.get('/list-dirs', async (req: Request, res: Response, next: NextF
           const names = fs.readdirSync(d)
           for (const name of names) {
             if (entries.length >= 500) break
-            // At the first level, filter by partial prefix
-            if (currentDepth === 1 && partial && !name.toLowerCase().startsWith(partial.toLowerCase())) continue
+            // Skip hidden directories
+            if (name.startsWith('.')) continue
             const full = path.join(d, name)
             try {
               if (fs.statSync(full).isDirectory()) {
