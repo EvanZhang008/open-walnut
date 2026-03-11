@@ -409,11 +409,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     } catch { /* non-critical */ }
   }, []);
 
-  const handleCreate = useCallback(async (input: { title: string; priority: string }) => {
-    await create({
+  const handleCreate = useCallback(async (input: { title: string; priority: string; category?: string; project?: string }) => {
+    const task = await create({
       title: input.title,
       priority: input.priority as 'high' | 'low' | 'none',
+      category: input.category,
+      project: input.project,
     });
+    return task;
   }, [create]);
 
   const handleFocusTask = useCallback((task: Task) => {

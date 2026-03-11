@@ -58,7 +58,7 @@ interface TodoPanelProps {
   loading: boolean;
   onComplete: (id: string) => void;
   onSetPhase?: (id: string, phase: string) => void;
-  onCreate: (input: { title: string; priority: string }) => Promise<unknown>;
+  onCreate: (input: { title: string; priority: string; category?: string; project?: string }) => Promise<Task | unknown>;
   onUpdate?: (id: string, updates: { title?: string }) => void;
   onStar?: (id: string) => void;
   onCyclePriority?: (id: string) => void;
@@ -1469,17 +1469,23 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   // Track previous focusedTaskId to detect new focus (not re-renders)
   const prevFocusedRef = useRef<string | undefined>(undefined);
+  // Track whether the focused task was already handled (prevents re-running on unrelated tasks changes)
+  const focusHandledRef = useRef(false);
 
   // Auto-switch tab, expand groups, and scroll to task when focusedTaskId changes
   useEffect(() => {
-    if (!focusedTaskId || focusedTaskId === prevFocusedRef.current) {
+    if (!focusedTaskId) {
       prevFocusedRef.current = focusedTaskId;
+      focusHandledRef.current = false;
       return;
     }
+    const isNewFocus = focusedTaskId !== prevFocusedRef.current;
+    if (!isNewFocus && focusHandledRef.current) return; // already handled
     prevFocusedRef.current = focusedTaskId;
 
     const task = tasks.find((t) => t.id === focusedTaskId);
-    if (!task) return;
+    if (!task) return; // task not yet in list (e.g. waiting for WebSocket) — will retry when tasks update
+    focusHandledRef.current = true;
 
     // Switch to the correct category tab (unless already showing All or Starred with this task visible)
     const cat = task.category || 'Uncategorized';
@@ -1491,7 +1497,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const isStarred = !!task.starred;
       const isCatFav = favorites?.isCategoryFavorite(cat) ?? false;
       const isProjFav = favorites?.isProjectFavorite(task.project) ?? false;
-      if (!isStarred && !isCatFav && !isProjFav && !isChildOfStarredParent(task)) {
+      if (!isStarred && !isCatFav && !isProjFav && !isDescendantVisibleInStarred(task)) {
         setActiveCategory(cat);
         persistTab(cat);
       }
@@ -1680,20 +1686,18 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return hasStarredTasks || hasFavorites;
   }, [tasks, favorites?.hasFavorites]);
 
-  // Precompute: IDs of starred tasks (used to auto-include their children in starred view)
-  const starredTaskIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const t of tasks) { if (t.starred) ids.add(t.id); }
-    return ids;
-  }, [tasks]);
-
-  // Stable array for iteration (avoids Array.from inside filter loops)
-  const starredIdsArr = useMemo(() => Array.from(starredTaskIds), [starredTaskIds]);
-
-  // Helper: check if a task is a child of a starred parent (handles prefix parent_task_id)
-  const isChildOfStarredParent = useCallback((t: Task) => {
-    return !!t.parent_task_id && starredIdsArr.some(sid => sid.startsWith(t.parent_task_id!));
-  }, [starredIdsArr]);
+  // Helper: check if a task is visible in starred view via its ancestor chain.
+  // Walks up parent_task_id links (max 10 depth) checking if any ancestor is starred
+  // or belongs to a favorited category/project.
+  const isDescendantVisibleInStarred = useCallback((t: Task): boolean => {
+    if (!t.parent_task_id) return false;
+    const parent = tasks.find(p => p.id.startsWith(t.parent_task_id!));
+    if (!parent) return false;
+    if (parent.starred) return true;
+    if (favorites?.isCategoryFavorite(parent.category)) return true;
+    if (favorites?.isProjectFavorite(parent.project)) return true;
+    return isDescendantVisibleInStarred(parent);
+  }, [tasks, favorites]);
 
   const filtered = useMemo(() => {
     // First pass: apply all filters to get directly-matching tasks
@@ -1722,7 +1726,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         const isStarred = !!t.starred;
         const isCatFavorite = favorites?.isCategoryFavorite(t.category) ?? false;
         const isProjFavorite = favorites?.isProjectFavorite(t.project) ?? false;
-        return isStarred || isCatFavorite || isProjFavorite || isChildOfStarredParent(t);
+        return isStarred || isCatFavorite || isProjFavorite || isDescendantVisibleInStarred(t);
       }
 
       if (activeCategory && t.category !== activeCategory) return false;
@@ -1755,8 +1759,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       }
     }
     return result;
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- isChildOfStarredParent is stable (useCallback)
-  }, [tasks, showCompleted, priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, activeCategory, favorites, isChildOfStarredParent]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- isDescendantVisibleInStarred is stable (useCallback)
+  }, [tasks, showCompleted, priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, activeCategory, favorites, isDescendantVisibleInStarred]);
 
   // --- Search filtering: intersect search results with active filters ---
   // Search respects ALL current filters (show/hide completed, category tab,
@@ -1789,7 +1793,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         const isStarred = !!t.starred;
         const isCatFavorite = favorites?.isCategoryFavorite(t.category) ?? false;
         const isProjFavorite = favorites?.isProjectFavorite(t.project) ?? false;
-        if (!(isStarred || isCatFavorite || isProjFavorite || isChildOfStarredParent(t))) return false;
+        if (!(isStarred || isCatFavorite || isProjFavorite || isDescendantVisibleInStarred(t))) return false;
       } else if (activeCategory && t.category !== activeCategory) {
         return false;
       }
@@ -1820,7 +1824,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         if (!t) return false;
         return applySearchFilters(t);
       });
-  }, [tasks, filtered, isSearchMode, searchQuery, searchResults, showCompleted, priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, activeCategory, favorites, isChildOfStarredParent]);
+  }, [tasks, filtered, isSearchMode, searchQuery, searchResults, showCompleted, priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, activeCategory, favorites, isDescendantVisibleInStarred]);
 
   // Count of search results (for display)
   const searchResultCount = isSearchMode ? searchFiltered.length : null;
@@ -1923,7 +1927,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // Shared predicates to avoid duplication across filter dimensions.
     const matchesCategory = (t: Task) => {
       if (activeCategory === STARRED_TAB) {
-        return !!t.starred || (favorites?.isCategoryFavorite(t.category) ?? false) || (favorites?.isProjectFavorite(t.project) ?? false) || isChildOfStarredParent(t);
+        return !!t.starred || (favorites?.isCategoryFavorite(t.category) ?? false) || (favorites?.isProjectFavorite(t.project) ?? false) || isDescendantVisibleInStarred(t);
       }
       return !activeCategory || t.category === activeCategory;
     };
@@ -2019,7 +2023,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
     return { priority, phase, session, source, tagCounts, totalForPriority: forPriority.length, totalForPhase, totalForSession: forSession.length, totalForTags: forTags.length };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tasks, showCompleted, priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, activeCategory, favorites, isChildOfStarredParent]);
+  }, [tasks, showCompleted, priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, activeCategory, favorites, isDescendantVisibleInStarred]);
 
   // Build category -> project -> tasks hierarchy (skipped in flat mode)
   const grouped = useMemo(() => {
@@ -2146,14 +2150,24 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const title = newTitle.trim();
     if (!title) return;
     try {
-      await onCreate({ title, priority: 'none' });
+      const result = await onCreate({ title, priority: 'none', category: 'Inbox', project: 'Quick Start' });
       setNewTitle('');
       if (onClearOperationError) onClearOperationError();
+      const newTask = result as Task | undefined;
+      if (newTask?.id) {
+        // Smart navigation: All view shows everything so stay; others jump to Inbox
+        if (activeCategory !== '') {
+          setActiveCategory('Inbox');
+          persistTab('Inbox');
+        }
+        // Auto-focus triggers scroll-into-view via SortableTaskItem
+        onFocusTask?.(newTask);
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to add task';
       if (onOperationError) onOperationError(msg);
     }
-  }, [newTitle, onCreate, onClearOperationError, onOperationError]);
+  }, [newTitle, onCreate, onClearOperationError, onOperationError, onFocusTask, activeCategory]);
 
   const handleTabDragEnd = useCallback((event: DragEndEvent) => {
     setActiveTabId(null);
