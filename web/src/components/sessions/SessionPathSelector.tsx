@@ -100,13 +100,15 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
     }
   }, [open, loading]);
 
-  // Live directory listing with 3-level preload cache.
-  // API returns 3 levels deep → we cache and filter client-side.
-  // Only re-fetch when user navigates beyond cached depth.
+  // Live directory listing with multi-level preload cache.
+  // Triggers in edit mode OR when browse query starts with / (path-like input).
   const liveCacheRef = useRef<{ prefix: string; host: string | undefined; dirs: string[] } | null>(null);
 
+  // The active path for live listing — either editingPath (edit mode) or query (browse, if path-like)
+  const activePath = editMode ? editingPath : (query.startsWith('/') ? query : '');
+
   useEffect(() => {
-    if (!editMode || !editingPath || editingPath.length < 2) {
+    if (!activePath || activePath.length < 2) {
       setLiveDirs([]);
       return;
     }
@@ -114,48 +116,43 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
     const host = hostFilter !== 'all' && hostFilter !== '__local__' ? hostFilter : undefined;
     const cache = liveCacheRef.current;
 
-    // Check if current path is within the cached tree
-    if (cache && cache.host === host && editingPath.startsWith(cache.prefix)) {
-      // Filter cached dirs client-side — instant
-      const dir = editingPath.endsWith('/') ? editingPath : editingPath.slice(0, editingPath.lastIndexOf('/') + 1);
-      const partial = editingPath.endsWith('/') ? '' : editingPath.slice(editingPath.lastIndexOf('/') + 1);
-      const filtered = cache.dirs.filter(p => {
-        // Must be a direct child of `dir`
-        if (!p.startsWith(dir)) return false;
-        const rest = p.slice(dir.length);
-        if (rest.includes('/')) return false; // deeper than one level
-        if (partial && !rest.toLowerCase().startsWith(partial.toLowerCase())) return false;
+    // Helper: filter cached dirs to direct children of a directory
+    const filterChildren = (allDirs: string[], parentDir: string, partialName: string) =>
+      allDirs.filter(p => {
+        if (!p.startsWith(parentDir)) return false;
+        const rest = p.slice(parentDir.length);
+        if (rest.includes('/')) return false;
+        if (partialName && !rest.toLowerCase().startsWith(partialName.toLowerCase())) return false;
         return true;
       });
-      setLiveDirs(filtered);
-      return;
+
+    const dir = activePath.endsWith('/') ? activePath : activePath.slice(0, activePath.lastIndexOf('/') + 1);
+    const partial = activePath.endsWith('/') ? '' : activePath.slice(activePath.lastIndexOf('/') + 1);
+
+    // Check if current path is within the cached tree
+    if (cache && cache.host === host && activePath.startsWith(cache.prefix)) {
+      const filtered = filterChildren(cache.dirs, dir, partial);
+      // Cache hit: use results. If empty and we're deeper than cache root, re-fetch.
+      if (filtered.length > 0 || dir === cache.prefix) {
+        setLiveDirs(filtered);
+        return;
+      }
     }
 
-    // Not in cache — fetch from API with preload
+    // Not in cache or cache miss at depth — fetch from API
     if (liveTimerRef.current) clearTimeout(liveTimerRef.current);
     liveTimerRef.current = setTimeout(() => {
       setLiveLoading(true);
-      listDirs(editingPath, host)
+      listDirs(activePath, host)
         .then(d => {
-          // Cache the full tree
-          const dir = editingPath.endsWith('/') ? editingPath : editingPath.slice(0, editingPath.lastIndexOf('/') + 1);
           liveCacheRef.current = { prefix: dir, host, dirs: d };
-          // Filter to direct children for display
-          const partial = editingPath.endsWith('/') ? '' : editingPath.slice(editingPath.lastIndexOf('/') + 1);
-          const filtered = d.filter(p => {
-            if (!p.startsWith(dir)) return false;
-            const rest = p.slice(dir.length);
-            if (rest.includes('/')) return false;
-            if (partial && !rest.toLowerCase().startsWith(partial.toLowerCase())) return false;
-            return true;
-          });
-          setLiveDirs(filtered);
+          setLiveDirs(filterChildren(d, dir, partial));
           setLiveLoading(false);
         })
         .catch(() => { setLiveDirs([]); setLiveLoading(false); });
-    }, 150); // shorter debounce since SSH is now fast with multiplexing
+    }, 150);
     return () => { if (liveTimerRef.current) clearTimeout(liveTimerRef.current); };
-  }, [editMode, editingPath, hostFilter]);
+  }, [activePath, hostFilter]);
 
   // Host tabs
   const hostTabs = useMemo(() => {
@@ -179,32 +176,33 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
       if (hostFilter !== 'all' && hostFilter !== '__local__' && d.host !== hostFilter) return false;
       return true;
     });
+    // Build live filesystem items (deduped against history)
+    const buildLiveItems = (historySet: Set<string>): ListItem[] =>
+      liveDirs
+        .filter(p => !historySet.has(p))
+        .map(p => ({
+          cwd: p, host: currentHost, hostLabel: currentHostLabel,
+          category: 'Inbox', count: 0, lastUsed: '', live: true,
+        }));
+
     if (editMode) {
-      // History matches
       const scored = hostFiltered
         .map(d => ({ d, score: pathFuzzyScore(editingPath, d.cwd) }))
         .filter(x => x.score > 0);
       scored.sort((a, b) => b.score - a.score);
       const historyItems: ListItem[] = scored.map(x => ({ ...x.d, live: false }));
-
-      // Live filesystem entries — deduplicate against history
-      const historySet = new Set(historyItems.map(h => h.cwd));
-      const liveItems: ListItem[] = liveDirs
-        .filter(p => !historySet.has(p))
-        .map(p => ({
-          cwd: p,
-          host: currentHost,
-          hostLabel: currentHostLabel,
-          category: 'Inbox',
-          count: 0,
-          lastUsed: '',
-          live: true,
-        }));
-
-      // Live items first (they're the actual fs completions), then history
+      const liveItems = buildLiveItems(new Set(historyItems.map(h => h.cwd)));
       return [...liveItems, ...historyItems];
     }
-    return hostFiltered.filter(d => fuzzyMatch(query, d.cwd)).map(d => ({ ...d, live: false }));
+
+    // Browse mode
+    const historyItems = hostFiltered.filter(d => fuzzyMatch(query, d.cwd)).map(d => ({ ...d, live: false }));
+    // If query looks like a path, also show live dirs
+    if (query.startsWith('/') && liveDirs.length > 0) {
+      const liveItems = buildLiveItems(new Set(historyItems.map(h => h.cwd)));
+      return [...liveItems, ...historyItems];
+    }
+    return historyItems;
   }, [dirs, query, hostFilter, editMode, editingPath, liveDirs, currentHost, currentHostLabel]);
 
   useEffect(() => { setSelectedIdx(0); }, [query, hostFilter, editMode, editingPath, liveDirs]);
@@ -278,7 +276,17 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
         setSelectedIdx(prev => Math.max(prev - 1, 0));
       } else if (e.key === 'Enter') {
         e.preventDefault();
-        if (filtered[selectedIdx]) enterEditMode(filtered[selectedIdx]);
+        if (filtered[selectedIdx]) {
+          const sel = filtered[selectedIdx];
+          if (sel.live) {
+            // Live dir: enter edit mode with trailing / to drill in
+            setEditMode(true);
+            setEditingPath(sel.cwd + '/');
+            setSelectedIdx(0);
+          } else {
+            enterEditMode(sel);
+          }
+        }
       } else if (e.key === 'Escape') {
         onClose();
       }
@@ -314,7 +322,7 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
           onKeyDown={handleKeyDown}
           autoFocus
         />
-        {editMode && liveLoading && <span className="sps-live-indicator">listing...</span>}
+        {liveLoading && <span className="sps-live-indicator">listing...</span>}
       </div>
 
       {/* Host filter */}

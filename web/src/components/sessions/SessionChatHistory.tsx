@@ -599,7 +599,6 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
 
   const isAtBottom = useRef(true);
   const scrollRafId = useRef<number | null>(null);
-  const initialScrollDone = useRef<string | null>(null);  // tracks which session got initial scroll
   const [showScrollArrow, setShowScrollArrow] = useState(false);
 
   // Reset on session switch
@@ -611,7 +610,6 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     setEditingId(null);
     blockIndexMap.current.clear();
     isAtBottom.current = true;
-    initialScrollDone.current = null;
     setShowScrollArrow(false);
     if (scrollRafId.current !== null) { cancelAnimationFrame(scrollRafId.current); scrollRafId.current = null; }
     if (batchTimeoutRef.current) { clearTimeout(batchTimeoutRef.current); batchTimeoutRef.current = null; }
@@ -641,22 +639,17 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     return () => el.removeEventListener('scroll', onScroll);
   }, []);
 
-  // Initial scroll to bottom — once per session, when first data arrives
+  // Scroll to bottom — fires before paint (useLayoutEffect) whenever content changes.
+  // No one-shot gate (initialScrollDone) — runs continuously while isAtBottom is true.
+  // This handles: initial load, Phase 2 replacing Phase 1, batch refreshes, and
+  // any timing edge case where the first scroll attempt saw incomplete geometry.
   useLayoutEffect(() => {
-    if (!loading && messages.length > 0 && containerRef.current
-        && initialScrollDone.current !== sessionId) {
-      initialScrollDone.current = sessionId;
-      containerRef.current.scrollTop = containerRef.current.scrollHeight;
-      isAtBottom.current = true;
-      setShowScrollArrow(false);
-    }
-  }, [loading, messages, sessionId]);
+    if (!isAtBottom.current || !containerRef.current || messages.length === 0) return;
+    containerRef.current.scrollTop = containerRef.current.scrollHeight;
+  }, [loading, messages]);
 
-  // Auto-scroll when content changes (new messages or streaming blocks).
-  // Trust isAtBottom ref — the scroll handler updates it synchronously on user scroll,
-  // so if the user scrolled up, isAtBottom is already false before this effect fires.
-  // No "actuallyNearBottom" guard needed — content replacement (Phase 2 replacing Phase 1)
-  // shifts scrollHeight without user action, but we should still scroll to bottom.
+  // Auto-scroll when streaming blocks change.
+  // Watches `messages` reference (not length) to catch Phase 2 same-count replacements.
   useEffect(() => {
     if (!isAtBottom.current) return;
     const el = containerRef.current;
@@ -666,7 +659,7 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
       scrollRafId.current = null;
       if (el) el.scrollTop = el.scrollHeight;
     });
-  }, [messages.length, blocks.length]);
+  }, [messages, blocks.length]);
 
   // Click handler for the scroll-to-bottom arrow
   const handleScrollToBottom = useCallback(() => {

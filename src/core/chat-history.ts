@@ -358,6 +358,12 @@ export async function getCompactionSummary(): Promise<string | null> {
   return store.compactionSummary;
 }
 
+/** Get the lastUpdated timestamp — cheap, for cache invalidation. */
+export async function getLastUpdated(): Promise<string> {
+  const store = await readStore();
+  return store.lastUpdated || '';
+}
+
 /**
  * Check whether an entry is a "logical message" for pagination counting.
  * A logical message is a user message (non-tool-result), an assistant message,

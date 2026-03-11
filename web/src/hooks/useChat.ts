@@ -573,9 +573,13 @@ export function useChat(): UseChatReturn {
 
   // Handle final complete response
   useEvent('agent:response', (data) => {
-    const { source } = (data ?? {}) as { source?: string };
+    const { source, stats: piggybacked } = (data ?? {}) as { source?: string; stats?: ChatStats };
     setToolActivity(null);
-    refreshStats();
+    if (piggybacked) {
+      setStats(piggybacked);
+    } else {
+      refreshStats();
+    }
 
     // Safety net: force-close any stale 'calling' tool blocks (turn is complete)
     setMessages((prev) => closeStaleToolCalls(prev, 'done'));

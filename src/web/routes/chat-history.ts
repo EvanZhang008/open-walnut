@@ -16,6 +16,16 @@ import { isCompactionInProgress, triggerBackgroundCompaction } from '../backgrou
 
 export const chatHistoryRouter = Router()
 
+// Module-level cache for stats endpoint — avoids re-reading 11MB + rebuilding system prompt
+let cachedStats: Record<string, unknown> | null = null
+let cacheTimestamp: string | null = null
+
+/** Invalidate the stats cache (called when piggybacked stats are broadcast). */
+export function invalidateStatsCache(): void {
+  cachedStats = null
+  cacheTimestamp = null
+}
+
 // GET /api/chat/history?page=1&pageSize=100
 chatHistoryRouter.get('/history', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -28,9 +38,17 @@ chatHistoryRouter.get('/history', async (req: Request, res: Response, next: Next
   }
 })
 
-// GET /api/chat/stats — real conversation size
+// GET /api/chat/stats — real conversation size (cached between turns)
 chatHistoryRouter.get('/stats', async (_req: Request, res: Response, next: NextFunction) => {
   try {
+    // Check if cached stats are still valid (chat history hasn't changed)
+    const lastUpdated = await chatHistory.getLastUpdated()
+    if (cachedStats && cacheTimestamp === lastUpdated) {
+      res.json(cachedStats)
+      return
+    }
+
+    // Full computation (first call or after new messages/compaction)
     const modelContext = await chatHistory.getModelContext()
     const messageTokens = estimateMessagesTokens(modelContext)
     const summary = await chatHistory.getCompactionSummary()
@@ -60,7 +78,7 @@ chatHistoryRouter.get('/stats', async (_req: Request, res: Response, next: NextF
       contextWindow = getContextWindowSize(undefined)
     }
 
-    res.json({
+    const result = {
       apiMessageCount: modelContext.length,
       estimatedTokens: messageTokens,
       systemTokens,
@@ -68,7 +86,13 @@ chatHistoryRouter.get('/stats', async (_req: Request, res: Response, next: NextF
       estimatedTotalTokens: systemTokens + toolsTokens + messageTokens,
       compacted: !!summary,
       contextWindow,
-    })
+    }
+
+    // Cache for subsequent calls
+    cachedStats = result
+    cacheTimestamp = lastUpdated
+
+    res.json(result)
   } catch (err) {
     next(err)
   }
