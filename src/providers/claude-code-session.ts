@@ -1058,7 +1058,9 @@ export class ClaudeCodeSession {
         this._activity = undefined
         this.emitStatusChanged('agent_complete', 'in_progress')
         if (this.claudeSessionId) {
-          this.persistSessionRecord(this.claudeSessionId, this._cwd ?? undefined).catch(() => {})
+          this.persistSessionRecord(this.claudeSessionId, this._cwd ?? undefined).catch((err) => {
+            log.session.warn('persistSessionRecord failed (PID died, result found)', { sessionId: this.claudeSessionId, error: err instanceof Error ? err.message : String(err) })
+          })
         }
         log.session.info('session PID died — result found in output file (tailer race)', {
           taskId: this.taskId,
@@ -1095,7 +1097,9 @@ export class ClaudeCodeSession {
           this._activity = undefined
           this.emitStatusChanged('agent_complete', 'in_progress')
           if (this.claudeSessionId) {
-            this.persistSessionRecord(this.claudeSessionId, this._cwd ?? undefined).catch(() => {})
+            this.persistSessionRecord(this.claudeSessionId, this._cwd ?? undefined).catch((err) => {
+              log.session.warn('persistSessionRecord failed (PID died, no result)', { sessionId: this.claudeSessionId, error: err instanceof Error ? err.message : String(err) })
+            })
           }
           log.session.warn('session PID died but no result event', {
             taskId: this.taskId,
@@ -1190,14 +1194,28 @@ export class ClaudeCodeSession {
             this._outputFile = this.io.outputFile
           }
 
-          if (expectedId && expectedId !== newId) {
-            // Resume failed — Claude created a new session. Rename the original record's ID
-            // to the new ID so history/UI stays connected, instead of creating a phantom record.
-            log.session.warn('resume produced different session ID, renaming record', {
-              expectedSessionId: expectedId, actualSessionId: newId, taskId: this.taskId,
-            });
-            (async () => {
-              try {
+          // Capture model from init event for in-memory state (used by emitStatusChanged below)
+          if (typeof sys.model === 'string' && sys.model) {
+            this._initModel = sys.model
+            // Extract short model ID for display (e.g. "claude-opus-4-6")
+            // Init model format: "global.anthropic.claude-opus-4-6-v1[1m]"
+            const shortModel = sys.model.replace(/^.*\./, '').replace(/[-_]v\d+.*$/, '') || sys.model
+            this._model = shortModel
+          }
+
+          // Persist session record BEFORE resolving sessionReady — callers must not
+          // receive the session ID until sessions.json is written.  Without this,
+          // concurrent starts could return an ID that has no matching record.
+          // handleStreamLine is sync, so we wrap in an async IIFE.
+          const initModel = typeof sys.model === 'string' && sys.model ? sys.model : undefined
+          ;(async () => {
+            try {
+              if (expectedId && expectedId !== newId) {
+                // Resume failed — Claude created a new session. Rename the original record's
+                // ID to the new ID so history/UI stays connected.
+                log.session.warn('resume produced different session ID, renaming record', {
+                  expectedSessionId: expectedId, actualSessionId: newId, taskId: this.taskId,
+                })
                 const { renameSessionId } = await import('../core/session-tracker.js')
                 const renamed = await renameSessionId(expectedId, newId, {
                   outputFile: this._outputFile ?? undefined,
@@ -1207,38 +1225,29 @@ export class ClaudeCodeSession {
                   // Original record not found — fall back to creating a fresh record
                   await this.persistSessionRecord(newId, this._cwd ?? undefined)
                 }
-              } catch (err) {
-                log.session.error('renameSessionId failed, persisting fresh record', {
-                  expectedId, newId, taskId: this.taskId,
-                  error: err instanceof Error ? err.message : String(err),
-                })
-                this.persistSessionRecord(newId, this._cwd ?? undefined).catch((err2) => {
-                  log.session.error('persistSessionRecord fallback also failed', {
-                    newId, error: err2 instanceof Error ? err2.message : String(err2),
-                  })
-                })
+              } else {
+                await this.persistSessionRecord(newId, this._cwd ?? undefined)
               }
-            })()
-          } else {
-            this.persistSessionRecord(newId, this._cwd ?? undefined).catch(() => {})
-          }
-
-          this._resolveSessionReady(newId)
+              // Write model after persist — record is guaranteed to exist now
+              if (initModel) {
+                const { updateSessionRecord } = await import('../core/session-tracker.js')
+                await updateSessionRecord(newId, { model: initModel })
+              }
+            } catch (err) {
+              // Persist failed — log loudly but still resolve so the session isn't stuck.
+              // The session process IS running, just not registered.
+              log.session.error('CRITICAL: session record persist failed — session will be unregistered', {
+                sessionId: newId, taskId: this.taskId,
+                error: err instanceof Error ? err.message : String(err),
+              })
+            } finally {
+              // Always resolve — the process is already alive regardless of persist outcome
+              this._resolveSessionReady(newId)
+            }
+          })()
 
           // Re-emit status now that claudeSessionId is set (first emit at spawn had null ID)
           this.emitStatusChanged(this._workStatus)
-
-          // Capture model from init event (full string with provider prefix + [1m] suffix)
-          if (typeof sys.model === 'string' && sys.model) {
-            this._initModel = sys.model
-            // Extract short model ID for display (e.g. "claude-opus-4-6")
-            // Init model format: "global.anthropic.claude-opus-4-6-v1[1m]"
-            const shortModel = sys.model.replace(/^.*\./, '').replace(/[-_]v\d+.*$/, '') || sys.model
-            this._model = shortModel
-            import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
-              updateSessionRecord(newId, { model: sys.model as string }).catch(() => {}),
-            )
-          }
         }
 
         // Parse permissionMode from ANY system event (init or status).
@@ -1556,7 +1565,9 @@ export class ClaudeCodeSession {
         })
 
         if (this.claudeSessionId) {
-          this.persistSessionRecord(this.claudeSessionId, this._cwd ?? undefined).catch(() => {})
+          this.persistSessionRecord(this.claudeSessionId, this._cwd ?? undefined).catch((err) => {
+            log.session.warn('persistSessionRecord failed (result handler)', { sessionId: this.claudeSessionId, error: err instanceof Error ? err.message : String(err) })
+          })
         }
 
         const processStillAlive = this.pid !== null && isProcessAlive(this.pid, this.io?.processName ?? 'claude')
@@ -1632,23 +1643,19 @@ export class ClaudeCodeSession {
   }
 
   private async persistSessionRecord(claudeSessionId: string, cwd?: string): Promise<void> {
-    try {
-      const { createSessionRecord } = await import('../core/session-tracker.js')
-      await createSessionRecord(claudeSessionId, this.taskId, this.project, cwd, {
-        pid: this.pid ?? undefined,
-        outputFile: this._outputFile ?? undefined,
-        title: this.pendingTitle,
-        description: this.pendingDescription,
-        mode: this._mode,
-        planFile: this.planFile ?? undefined,
-        planCompleted: this.planCompleted ? true : undefined,
-        host: this._host ?? undefined,
-        fromPlanSessionId: this.fromPlanSessionId,
-        forkedFromSessionId: this.forkedFromSessionId,
-      })
-    } catch (err) {
-      log.session.warn('failed to persist session record', { sessionId: claudeSessionId, error: err instanceof Error ? err.message : String(err) })
-    }
+    const { createSessionRecord } = await import('../core/session-tracker.js')
+    await createSessionRecord(claudeSessionId, this.taskId, this.project, cwd, {
+      pid: this.pid ?? undefined,
+      outputFile: this._outputFile ?? undefined,
+      title: this.pendingTitle,
+      description: this.pendingDescription,
+      mode: this._mode,
+      planFile: this.planFile ?? undefined,
+      planCompleted: this.planCompleted ? true : undefined,
+      host: this._host ?? undefined,
+      fromPlanSessionId: this.fromPlanSessionId,
+      forkedFromSessionId: this.forkedFromSessionId,
+    })
   }
 }
 
