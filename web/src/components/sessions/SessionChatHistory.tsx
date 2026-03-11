@@ -8,7 +8,7 @@ import { SessionMessage, PlanCard, CollapsedPlanWrite, GenericToolCall } from '.
 import { TeamCard } from './TeamCard';
 import { LoadingSpinner } from '../common/LoadingSpinner';
 import { Lightbox } from '../common/Lightbox';
-import type { SessionHistoryMessage, SessionHistoryTool } from '@/types/session';
+import type { SessionHistoryMessage } from '@/types/session';
 import type { ImageAttachment } from '@/api/chat';
 import { renderMarkdownWithRefs, findImagePaths, resolveImagePath } from '@/utils/markdown';
 
@@ -513,39 +513,31 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
   const containerRef = useRef<HTMLDivElement>(null);
 
   // ── Team detection from history messages ──
-  // Scan messages for TeamCreate + Agent tools with teamName to detect team sessions
-  const teamInfo = useMemo(() => {
-    let teamName: string | null = null;
-    const agentStatuses = new Map<string, 'calling' | 'done' | 'error'>();
-    const teamToolIndices = new Set<number>(); // message indices that are part of team orchestration
+  // Scan messages for TeamCreate + Agent tools to detect ALL teams in this session
+  const teams = useMemo(() => {
+    const result: Array<{ teamName: string; agentStatuses: Map<string, 'calling' | 'done' | 'error'> }> = [];
+    let currentTeam: { teamName: string; agentStatuses: Map<string, 'calling' | 'done' | 'error'> } | null = null;
 
-    for (let mi = 0; mi < messages.length; mi++) {
-      const m = messages[mi];
+    for (const m of messages) {
       if (!m.tools) continue;
       for (const tool of m.tools) {
-        // Detect TeamCreate
         if (tool.name === 'TeamCreate' && typeof tool.input?.team_name === 'string') {
-          teamName = tool.input.team_name;
-          teamToolIndices.add(mi);
+          currentTeam = { teamName: tool.input.team_name, agentStatuses: new Map() };
+          result.push(currentTeam);
         }
-        // Detect Agent with team_name
-        if (tool.name === 'Agent' && tool.teamName) {
-          if (!teamName) teamName = tool.teamName;
+        if (tool.name === 'Agent' && tool.teamName && currentTeam) {
           const agentName = tool.teamAgentName || (typeof tool.input?.name === 'string' ? tool.input.name : '');
           if (agentName) {
-            const status = tool.result ? 'done' : 'calling';
-            agentStatuses.set(agentName, status);
+            currentTeam.agentStatuses.set(agentName, tool.result ? 'done' : 'calling');
           }
-        }
-        // Detect SendMessage (team communication)
-        if (tool.name === 'SendMessage' && teamName) {
-          teamToolIndices.add(mi);
         }
       }
     }
-
-    return { teamName, agentStatuses, teamToolIndices };
+    return result;
   }, [messages]);
+
+  // Active team tab: null = "Main" (lead conversation), string = team name
+  const [activeTeamTab, setActiveTeamTab] = useState<string | null>(null);
 
 // ── Message delivery lifecycle ──
   // 1. User sends → optimistic msg added (status: 'pending', grey)
@@ -826,7 +818,42 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
   // where containerRef was previously null, breaking auto-scroll.
   return (
     <>
-      <div className="session-history" ref={containerRef} onClick={handleContainerClick}>
+      {/* Team tab bar — shown when session has team(s) */}
+      {teams.length > 0 && (
+        <div className="team-tab-bar">
+          <button
+            className={`team-tab-bar-item ${activeTeamTab === null ? 'team-tab-bar-item-active' : ''}`}
+            onClick={() => setActiveTeamTab(null)}
+          >
+            Lead
+          </button>
+          {teams.map(t => {
+            const doneCount = [...t.agentStatuses.values()].filter(s => s === 'done').length;
+            return (
+              <button
+                key={t.teamName}
+                className={`team-tab-bar-item ${activeTeamTab === t.teamName ? 'team-tab-bar-item-active' : ''}`}
+                onClick={() => setActiveTeamTab(t.teamName)}
+              >
+                {t.teamName}
+                <span className="team-tab-bar-count">{doneCount}/{t.agentStatuses.size}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Team view — shown when a team tab is active */}
+      {activeTeamTab && sessionId && (
+        <TeamCard
+          sessionId={sessionId}
+          teamName={activeTeamTab}
+          agentStatuses={teams.find(t => t.teamName === activeTeamTab)?.agentStatuses}
+        />
+      )}
+
+      {/* Main conversation — hidden when a team tab is active */}
+      <div className="session-history" ref={containerRef} onClick={handleContainerClick} style={activeTeamTab ? { display: 'none' } : undefined}>
         {/* Loading / empty / error states rendered INSIDE the scroll container */}
         {loading && messages.length === 0 && blocks.length === 0 && <LoadingSpinner />}
         {error && (
@@ -857,35 +884,12 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
             </div>
           </div>
         )}
-        {/* Persisted history messages + TeamCard */}
-        {(() => {
-          let teamCardRendered = false;
-          return messages.map((m, i) => {
-            // Render TeamCard at the first team tool index
-            if (teamInfo.teamName && !teamCardRendered && teamInfo.teamToolIndices.has(i)) {
-              teamCardRendered = true;
-              return (
-                <div key={`team-${i}`}>
-                  <div key={i} data-msg-index={i}>
-                    <SessionMessage message={m} sessionCwd={sessionCwd} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />
-                  </div>
-                  {sessionId && (
-                    <TeamCard
-                      sessionId={sessionId}
-                      teamName={teamInfo.teamName!}
-                      agentStatuses={teamInfo.agentStatuses}
-                    />
-                  )}
-                </div>
-              );
-            }
-            return (
-              <div key={i} data-msg-index={i}>
-                <SessionMessage message={m} sessionCwd={sessionCwd} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />
-              </div>
-            );
-          });
-        })()}
+        {/* Persisted history messages */}
+        {messages.map((m, i) => (
+          <div key={i} data-msg-index={i}>
+            <SessionMessage message={m} sessionCwd={sessionCwd} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />
+          </div>
+        ))}
 
         {/* Turn timeline — interleaved blocks + ALL optimistic messages by blockIndex.
             Both active (pending/received/delivered) and committed messages stay in the timeline

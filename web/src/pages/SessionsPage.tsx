@@ -17,10 +17,12 @@ import type { SessionTreeResponse, SessionRecord } from '@/types/session';
 const LS_HIDE_COMPLETED = 'walnut-session-tree-hide-completed';
 const LS_LIST_WIDTH_KEY = 'walnut-session-list-width-v2';
 const LIST_WIDTH_MIN = 260;
-const LIST_WIDTH_DEFAULT = 600;
+const LIST_WIDTH_MAX_PCT = 0.45;
+const LIST_WIDTH_DEFAULT = 380;
 
 function clampWidth(w: number): number {
-  return Math.max(LIST_WIDTH_MIN, w);
+  const maxPx = typeof window !== 'undefined' ? window.innerWidth * LIST_WIDTH_MAX_PCT : 800;
+  return Math.max(LIST_WIDTH_MIN, Math.min(w, maxPx));
 }
 
 function readListWidth(): number {
@@ -100,6 +102,13 @@ export function SessionsPage() {
   useEffect(() => {
     try { localStorage.setItem(LS_LIST_WIDTH_KEY, String(listWidth)); } catch { /* ignore */ }
   }, [listWidth]);
+
+  // Re-clamp list width when window resizes (e.g. zoom change, small screen)
+  useEffect(() => {
+    const onResize = () => setListWidth((w) => clampWidth(w));
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   const loadTree = useCallback(() => {
     fetchSessionTree(hideCompleted)

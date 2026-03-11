@@ -1409,6 +1409,7 @@ input:focus, textarea:focus, select:focus {
   overflow-y: auto;
   border-right: 1px solid var(--border);
   background: var(--bg);
+  max-width: 45%;
 }
 
 .sessions-list-pane.resizing {
@@ -2484,11 +2485,49 @@ input:focus, textarea:focus, select:focus {
 .session-system-detail { font-size: 11px; opacity: 0.7; }
 .session-system-line--error { color: var(--warning); }
 
+/* ── Team Tab Bar (top-level: Lead | Team1 | Team2) ── */
+.team-tab-bar {
+  display: flex;
+  gap: 0;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+.team-tab-bar-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg-muted);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s;
+}
+.team-tab-bar-item:hover { color: var(--fg); }
+.team-tab-bar-item-active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.team-tab-bar-count {
+  font-size: 11px;
+  color: var(--fg-muted);
+  background: var(--bg-tertiary);
+  padding: 1px 6px;
+  border-radius: 8px;
+}
+
 /* ── Team Card (Claude Code Teams) ── */
 .team-card {
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  margin: 12px 0;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
   background: var(--bg);
 }
@@ -2569,7 +2608,8 @@ input:focus, textarea:focus, select:focus {
 /* Agent panel */
 .team-agent-panel {
   padding: 12px 14px;
-  max-height: 400px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
