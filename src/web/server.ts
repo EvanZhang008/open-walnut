@@ -29,6 +29,7 @@ import { chatHistoryRouter } from './routes/chat-history.js'
 import { contextInspectorRouter } from './routes/context-inspector.js'
 import { registerChatRpc } from './routes/chat.js'
 import { registerSessionChatRpc } from './routes/session-chat.js'
+import { registerBrowserLogsRpc, browserLogsRouter } from './routes/browser-logs.js'
 import { usageRouter } from './routes/usage.js'
 import { imagesRouter } from './routes/images.js'
 import { localImageRouter } from './routes/local-image.js'
@@ -382,6 +383,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/system', systemRouter)
   app.use('/api/push', pushRouter)
   app.use('/api/auth', authRouter)
+  app.use('/api/browser-logs', browserLogsRouter)
   app.get('/api/git-sync/status', (_req, res) => {
     const health = gitAutoCommitHandle?.health ?? { protected: false, error: 'not started', consecutiveFailures: 0 }
     res.json(health)
@@ -434,6 +436,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   registerChatRpc()
   registerSessionChatRpc()
   registerAuthRpc()
+  registerBrowserLogsRpc()
 
   // -- Push notification service --
   initPushNotifications()
@@ -785,6 +788,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       if (sessionId) {
         sendStreamEvent(sessionId, event.name, event.data)
       }
+    } else if (event.name === 'session:team-info' || event.name === 'session:team-agent-delta' || event.name === 'session:team-agent-snapshot') {
+      // Team events: broadcast to all clients (frontend filters by sessionId)
+      broadcastEvent(event.name, event.data)
     }
 
     // ── Non-streaming events: broadcast to all clients (low-frequency, needed everywhere) ──
@@ -807,12 +813,16 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       }
       bus.emit(event.name, enrichedData, ['web-ui'], { source: event.source, urgency: event.urgency, reemit: true })
 
-      // Clear stream buffer after session ends (delayed to let subscribers process the result event)
+      // Clear stream buffer + team pollers after session ends
       if (event.name === 'session:result' || event.name === 'session:error') {
         const sid = eventData<'session:result'>(event).sessionId
         if (sid) {
           sessionStreamBuffer.markDone(sid)
           setTimeout(() => sessionStreamBuffer.clear(sid), 2000)
+          // Cleanup team poller for this session
+          import('./routes/session-chat.js').then(({ cleanupTeamPoller }) => {
+            cleanupTeamPoller(sid)
+          }).catch(() => {})
         }
       }
     }

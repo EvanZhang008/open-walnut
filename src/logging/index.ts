@@ -27,6 +27,7 @@ export const log = {
   usage: createSubsystemLogger('usage'),
   heartbeat: createSubsystemLogger('heartbeat'),
   git: createSubsystemLogger('git'),
+  browser: createSubsystemLogger('browser'),
 };
 
 // ── Initialization ──

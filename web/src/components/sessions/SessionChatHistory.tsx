@@ -5,9 +5,10 @@ import { useSessionStream, type StreamingBlock } from '@/hooks/useSessionStream'
 import { useEvent } from '@/hooks/useWebSocket';
 import { useLightbox } from '@/hooks/useLightbox';
 import { SessionMessage, PlanCard, CollapsedPlanWrite, GenericToolCall } from './SessionMessage';
+import { TeamCard } from './TeamCard';
 import { LoadingSpinner } from '../common/LoadingSpinner';
 import { Lightbox } from '../common/Lightbox';
-import type { SessionHistoryMessage } from '@/types/session';
+import type { SessionHistoryMessage, SessionHistoryTool } from '@/types/session';
 import type { ImageAttachment } from '@/api/chat';
 import { renderMarkdownWithRefs, findImagePaths, resolveImagePath } from '@/utils/markdown';
 
@@ -511,6 +512,41 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
   const { blocks, isStreaming, clear } = useSessionStream(sessionId);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // ── Team detection from history messages ──
+  // Scan messages for TeamCreate + Agent tools with teamName to detect team sessions
+  const teamInfo = useMemo(() => {
+    let teamName: string | null = null;
+    const agentStatuses = new Map<string, 'calling' | 'done' | 'error'>();
+    const teamToolIndices = new Set<number>(); // message indices that are part of team orchestration
+
+    for (let mi = 0; mi < messages.length; mi++) {
+      const m = messages[mi];
+      if (!m.tools) continue;
+      for (const tool of m.tools) {
+        // Detect TeamCreate
+        if (tool.name === 'TeamCreate' && typeof tool.input?.team_name === 'string') {
+          teamName = tool.input.team_name;
+          teamToolIndices.add(mi);
+        }
+        // Detect Agent with team_name
+        if (tool.name === 'Agent' && tool.teamName) {
+          if (!teamName) teamName = tool.teamName;
+          const agentName = tool.teamAgentName || (typeof tool.input?.name === 'string' ? tool.input.name : '');
+          if (agentName) {
+            const status = tool.result ? 'done' : 'calling';
+            agentStatuses.set(agentName, status);
+          }
+        }
+        // Detect SendMessage (team communication)
+        if (tool.name === 'SendMessage' && teamName) {
+          teamToolIndices.add(mi);
+        }
+      }
+    }
+
+    return { teamName, agentStatuses, teamToolIndices };
+  }, [messages]);
+
 // ── Message delivery lifecycle ──
   // 1. User sends → optimistic msg added (status: 'pending', grey)
   // 2. Server delivers to CLI (FIFO/resume) → 'session:messages-delivered' → status: 'delivered' (normal)
@@ -639,17 +675,26 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     return () => el.removeEventListener('scroll', onScroll);
   }, []);
 
-  // Scroll to bottom — fires before paint (useLayoutEffect) whenever content changes.
-  // No one-shot gate (initialScrollDone) — runs continuously while isAtBottom is true.
-  // This handles: initial load, Phase 2 replacing Phase 1, batch refreshes, and
-  // any timing edge case where the first scroll attempt saw incomplete geometry.
+  // ── Scroll-to-bottom: 3-layer approach ──
+  //
+  // Why 3 layers? Because "scroll to bottom" can be defeated by THREE independent events:
+  //   1. Content changes (messages arrive, streaming blocks appear)
+  //   2. Container resizes (sibling components load → flex shrinks our container)
+  //   3. Phase 2 replacing Phase 1 (same message count, different content/height)
+  //
+  // Previous attempts used only layer 1 (useLayoutEffect on messages). This failed because
+  // UserMessagesSummary, PlanPreviewSection, and SessionNotes are SIBLINGS that load
+  // asynchronously — when they grow, session-panel-body shrinks via flex, shifting our
+  // scroll position AFTER the initial scroll. No scroll event fires (it's a resize),
+  // so isAtBottom stays true but the user sees content at the top/middle.
+
+  // Layer 1: Content changes — scroll before paint (zero flash)
   useLayoutEffect(() => {
     if (!isAtBottom.current || !containerRef.current || messages.length === 0) return;
     containerRef.current.scrollTop = containerRef.current.scrollHeight;
   }, [loading, messages]);
 
-  // Auto-scroll when streaming blocks change.
-  // Watches `messages` reference (not length) to catch Phase 2 same-count replacements.
+  // Layer 2: Streaming blocks + Phase 2 replacement — scroll after paint via rAF
   useEffect(() => {
     if (!isAtBottom.current) return;
     const el = containerRef.current;
@@ -660,6 +705,28 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
       if (el) el.scrollTop = el.scrollHeight;
     });
   }, [messages, blocks.length]);
+
+  // Layer 3: Container resize — catches flex layout shifts from sibling components
+  // loading data (UserMessagesSummary, PlanPreviewSection, SessionNotes grow → we shrink).
+  // Also handles window resize, expanded modal toggling, etc.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      if (!isAtBottom.current) return;
+      // Use rAF to batch with other scroll operations in the same frame
+      if (scrollRafId.current !== null) cancelAnimationFrame(scrollRafId.current);
+      scrollRafId.current = requestAnimationFrame(() => {
+        scrollRafId.current = null;
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    });
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      if (scrollRafId.current !== null) cancelAnimationFrame(scrollRafId.current);
+    };
+  }, []);
 
   // Click handler for the scroll-to-bottom arrow
   const handleScrollToBottom = useCallback(() => {
@@ -774,12 +841,36 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
             </div>
           </div>
         )}
-        {/* Persisted history messages */}
-        {messages.map((m, i) => (
-          <div key={i} data-msg-index={i}>
-            <SessionMessage message={m} sessionCwd={sessionCwd} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />
-          </div>
-        ))}
+        {/* Persisted history messages + TeamCard */}
+        {(() => {
+          let teamCardRendered = false;
+          return messages.map((m, i) => {
+            // Render TeamCard at the first team tool index
+            if (teamInfo.teamName && !teamCardRendered && teamInfo.teamToolIndices.has(i)) {
+              teamCardRendered = true;
+              return (
+                <div key={`team-${i}`}>
+                  <div key={i} data-msg-index={i}>
+                    <SessionMessage message={m} sessionCwd={sessionCwd} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />
+                  </div>
+                  {sessionId && (
+                    <TeamCard
+                      sessionId={sessionId}
+                      teamName={teamInfo.teamName!}
+                      agentStatuses={teamInfo.agentStatuses}
+                      sessionCwd={sessionCwd}
+                    />
+                  )}
+                </div>
+              );
+            }
+            return (
+              <div key={i} data-msg-index={i}>
+                <SessionMessage message={m} sessionCwd={sessionCwd} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />
+              </div>
+            );
+          });
+        })()}
 
         {/* Turn timeline — interleaved blocks + ALL optimistic messages by blockIndex.
             Both active (pending/received/delivered) and committed messages stay in the timeline

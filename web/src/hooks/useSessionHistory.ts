@@ -11,6 +11,26 @@ interface UseSessionHistoryReturn {
   error: string | null;
 }
 
+/** Diagnostic: count user text messages and check if they're interleaved or bunched */
+function diagnoseOrdering(phase: string, sid: string, msgs: SessionHistoryMessage[]): void {
+  const userIndices: number[] = [];
+  for (let i = 0; i < msgs.length; i++) {
+    if (msgs[i].role === 'user' && msgs[i].text?.trim()) userIndices.push(i);
+  }
+  if (userIndices.length === 0) {
+    console.debug(`[session-history] ${phase} ${sid}: ${msgs.length} msgs, 0 user text msgs`);
+    return;
+  }
+  // Check: are user messages bunched at the end?
+  const lastAsst = msgs.reduce((max, m, i) => m.role === 'assistant' ? i : max, -1);
+  const usersAfterLastAsst = userIndices.filter(i => i > lastAsst).length;
+  const bunched = usersAfterLastAsst > userIndices.length / 2;
+  console.debug(
+    `[session-history] ${phase} ${sid}: ${msgs.length} msgs, ${userIndices.length} user text, ` +
+    `lastAsst@${lastAsst}, usersAfterLast=${usersAfterLastAsst}${bunched ? ' ⚠️ BUNCHED' : ' ✓ interleaved'}`
+  );
+}
+
 /**
  * Two-phase session history loading:
  * Phase 1: Read local streams file (~1ms) — instant display
@@ -43,6 +63,7 @@ export function useSessionHistory(sessionId: string | null, version = 0): UseSes
       .then((msgs) => {
         if (cancelled) return;
         endP1(`${msgs.length} msgs`);
+        diagnoseOrdering('P1:streams', sid, msgs);
         if (msgs.length > 0) setMessages(msgs);
         setLoading(false); // Always clear loading — even if empty, don't block on Phase 2
       })
@@ -57,6 +78,7 @@ export function useSessionHistory(sessionId: string | null, version = 0): UseSes
           .then((msgs) => {
             if (!cancelled) {
               endP2(`${msgs.length} msgs`);
+              diagnoseOrdering('P2:full', sid, msgs);
               setMessages(msgs);
             }
           })

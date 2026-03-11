@@ -58,8 +58,12 @@ export interface SessionHistoryTool {
   toolUseId?: string;
   result?: string;
   planContent?: string;
-  /** agentId extracted from Task tool_result — links to subagent JSONL */
+  /** agentId extracted from Task/Agent tool_result — links to subagent JSONL */
   agentId?: string;
+  /** Team name extracted from Agent tool input (for multi-agent teams) */
+  teamName?: string;
+  /** Team agent name extracted from Agent tool input */
+  teamAgentName?: string;
   /** Child messages from subagent JSONL (populated for Task tools) */
   childMessages?: SessionHistoryMessage[];
 }
@@ -347,13 +351,24 @@ function parseSessionMessages(content: string): SessionHistoryMessage[] {
           }
         }
 
-        // Extract agentId from Task tool results.
-        // The canonical pattern is the LAST "agentId: XXX (for resuming...)" line.
-        // Earlier occurrences may be from quoted JSON examples in the result text.
+        // Extract agentId from Task/Agent tool results.
+        // Task: "agentId: XXX (for resuming...)" — hex agent ID
+        // Agent (teams): "agent_id: name@team" — name@team format
         let agentId: string | undefined;
+        let teamName: string | undefined;
+        let teamAgentName: string | undefined;
         if (block.name === 'Task' && toolResult) {
           const matches = [...toolResult.matchAll(/agentId:\s*([a-f0-9]+)/g)];
           if (matches.length > 0) agentId = matches[matches.length - 1][1];
+        } else if (block.name === 'Agent' && toolResult) {
+          // Team Agent: result contains "agent_id: name@team"
+          const agentMatch = toolResult.match(/agent_id:\s*(\S+)/);
+          if (agentMatch) agentId = agentMatch[1];
+          // Also extract team_name from tool input
+          if (typeof block.input?.team_name === 'string') {
+            teamName = block.input.team_name;
+            teamAgentName = typeof block.input?.name === 'string' ? block.input.name : undefined;
+          }
         }
 
         // Capture plan content from Write tool targeting ~/.claude/plans/
@@ -383,6 +398,8 @@ function parseSessionMessages(content: string): SessionHistoryMessage[] {
             toolUseId,
             ...(toolResult ? { result: toolResult.slice(0, 5000) } : {}),
             ...(agentId ? { agentId } : {}),
+            ...(teamName ? { teamName } : {}),
+            ...(teamAgentName ? { teamAgentName } : {}),
           });
         }
       } else if (block.type === 'thinking' && block.thinking) {
@@ -471,6 +488,28 @@ export async function readSessionHistory(sessionId: string, cwd?: string, host?:
   if (result) {
     try {
       messages = parseSessionMessages(result.content);
+
+      // Diagnostic: detect user message ordering issues
+      const userTextIndices: number[] = [];
+      for (let i = 0; i < messages.length; i++) {
+        if (messages[i].role === 'user' && messages[i].text?.trim()) userTextIndices.push(i);
+      }
+      if (userTextIndices.length > 1) {
+        const lastAsst = messages.reduce((max, m, i) => m.role === 'assistant' ? i : max, -1);
+        const usersAfterLastAsst = userTextIndices.filter(i => i > lastAsst).length;
+        if (usersAfterLastAsst > userTextIndices.length / 2) {
+          log.session.warn('⚠️ user messages bunched at end of parsed history', {
+            sessionId: sessionId.substring(0, 8),
+            source: result.source,
+            host: host ?? 'local',
+            total: messages.length,
+            userText: userTextIndices.length,
+            lastAsstIdx: lastAsst,
+            usersAfterLastAsst,
+            userPositions: userTextIndices.slice(0, 20),
+          });
+        }
+      }
     } catch (err) {
       log.session.warn('failed to parse session history', {
         sessionId, source: result.source,

@@ -26,6 +26,7 @@ src/web/static
 
 # Task planning artifacts
 .tasks/
+.plan
 
 # Claude local data (keep skills only — commands are local/private)
 .claude/*
