@@ -232,21 +232,6 @@ export interface SessionTeamAgentDeltaEvent {
   }>;
 }
 
-export interface SessionTeamAgentSnapshotEvent {
-  sessionId: string;
-  agentName: string;
-  events: Array<{
-    type: 'text' | 'tool_use' | 'tool_result' | 'system';
-    text?: string;
-    toolName?: string;
-    toolUseId?: string;
-    input?: Record<string, unknown>;
-    result?: string;
-    subtype?: string;
-    model?: string;
-  }>;
-}
-
 // ── Inline subagent streaming events ──
 
 export interface AgentSubagentStreamEvent {
@@ -352,7 +337,6 @@ export interface EventPayloadMap {
 
   'session:team-info': SessionTeamInfoEvent;
   'session:team-agent-delta': SessionTeamAgentDeltaEvent;
-  'session:team-agent-snapshot': SessionTeamAgentSnapshotEvent;
 
   'subagent:start': SubagentStartEvent;
   'subagent:send': SubagentSendEvent;

@@ -16,6 +16,10 @@ import { saveImageToDisk } from './images.js'
 import { transferImagesForRemoteSession } from '../../providers/session-io.js'
 import type { SshTarget } from '../../providers/session-io.js'
 import { log } from '../../logging/index.js'
+import { sessionRunner } from '../../providers/claude-code-session.js'
+import { readTeamConfig, findTeammateJsonlPaths, writeToInbox } from '../../core/team-reader.js'
+import { ActiveTabPoller, readFullFile, parseJsonlLines } from '../../providers/subagent-poller.js'
+import { broadcastEvent } from '../ws/handler.js'
 
 const ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 const MAX_SESSION_IMAGES = 5
@@ -226,4 +230,154 @@ export function registerSessionChatRpc(): void {
 
     return sessionStreamBuffer.getSnapshot(data.sessionId)
   })
+
+  // ── Team RPCs ──
+
+  registerMethod('session:team-info', async (payload: unknown) => {
+    if (typeof payload !== 'object' || payload === null) {
+      throw new Error('session:team-info requires an object payload')
+    }
+    const data = payload as Record<string, unknown>
+    if (typeof data.sessionId !== 'string') {
+      throw new Error('session:team-info requires sessionId (string)')
+    }
+    const sessionId = data.sessionId
+    const teamName = typeof data.teamName === 'string' ? data.teamName : undefined
+
+    if (!teamName) {
+      return { teamName: null, members: [] }
+    }
+
+    const resolvedTeamName = teamName
+
+    const config = readTeamConfig(resolvedTeamName)
+    if (!config) {
+      return { teamName: resolvedTeamName, members: [] }
+    }
+
+    const members = config.members.map(m => ({
+      name: m.name,
+      agentType: m.agentType,
+      model: m.model,
+      isLead: m.agentId === config.leadAgentId,
+      backendType: m.backendType,
+    }))
+
+    return { teamName: resolvedTeamName, members }
+  })
+
+  registerMethod('session:team-agent-subscribe', async (payload: unknown) => {
+    if (typeof payload !== 'object' || payload === null) {
+      throw new Error('session:team-agent-subscribe requires an object payload')
+    }
+    const data = payload as Record<string, unknown>
+
+    if (typeof data.sessionId !== 'string' || typeof data.agentName !== 'string' || typeof data.teamName !== 'string') {
+      throw new Error('session:team-agent-subscribe requires sessionId, agentName, teamName (all strings)')
+    }
+    const sessionId = data.sessionId
+    const agentName = data.agentName
+    const teamName = data.teamName
+
+    const config = readTeamConfig(teamName)
+    if (!config) {
+      return { events: [], error: 'Team config not found' }
+    }
+
+    // Get session record for cwd
+    const record = await getSessionByClaudeId(sessionId)
+    const cwd = record?.cwd
+
+    // Find JSONL path for this specific teammate
+    const jsonlPaths = findTeammateJsonlPaths(config, sessionId, cwd ?? undefined)
+    const jsonlPath = jsonlPaths.get(agentName)
+
+    if (!jsonlPath) {
+      return { events: [], error: 'JSONL file not found for agent' }
+    }
+
+    // Read the full file for initial snapshot
+    const { lines } = readFullFile(jsonlPath)
+    const events = parseJsonlLines(lines)
+
+    // Start polling for this agent (stop any previous polling)
+    const session = sessionRunner.findByClaudeId(sessionId)
+    if (session) {
+      startTeamAgentPolling(sessionId, agentName, jsonlPath, !!record?.host)
+    }
+
+    return { events }
+  })
+
+  registerMethod('session:team-agent-unsubscribe', async (payload: unknown) => {
+    if (typeof payload !== 'object' || payload === null) {
+      throw new Error('session:team-agent-unsubscribe requires an object payload')
+    }
+    const data = payload as Record<string, unknown>
+
+    if (typeof data.sessionId !== 'string') {
+      throw new Error('session:team-agent-unsubscribe requires sessionId (string)')
+    }
+
+    stopTeamAgentPolling(data.sessionId)
+    return { ok: true }
+  })
+
+  registerMethod('session:team-send', async (payload: unknown) => {
+    if (typeof payload !== 'object' || payload === null) {
+      throw new Error('session:team-send requires an object payload')
+    }
+    const data = payload as Record<string, unknown>
+
+    if (typeof data.teamName !== 'string' || typeof data.agentName !== 'string' || typeof data.message !== 'string') {
+      throw new Error('session:team-send requires teamName, agentName, message (all strings)')
+    }
+    const teamName = data.teamName
+    const agentName = data.agentName
+    const message = data.message
+
+    await writeToInbox(teamName, agentName, message)
+
+    log.web.info('team message sent to inbox', { teamName, agentName, messageLength: message.length })
+    return { ok: true }
+  })
+}
+
+// ── Team Agent Polling Management ──
+// One poller per session — tracks which agent tab is active.
+
+const teamPollers = new Map<string, ActiveTabPoller>()
+
+function startTeamAgentPolling(sessionId: string, agentName: string, jsonlPath: string, remote: boolean): void {
+  let poller = teamPollers.get(sessionId)
+  if (!poller) {
+    poller = new ActiveTabPoller((agent, events) => {
+      // Broadcast events to frontend
+      broadcastEvent('session:team-agent-delta', {
+        sessionId,
+        agentName: agent,
+        events,
+      })
+    })
+    teamPollers.set(sessionId, poller)
+  }
+
+  // Subscribe to the new agent (stops previous if any)
+  poller.subscribe(agentName, jsonlPath, remote)
+}
+
+function stopTeamAgentPolling(sessionId: string): void {
+  const poller = teamPollers.get(sessionId)
+  if (poller) {
+    poller.stop()
+  }
+}
+
+/** Cleanup pollers when session ends. Called from server.ts session:result handler. */
+export function cleanupTeamPoller(sessionId: string): void {
+  const poller = teamPollers.get(sessionId)
+  if (poller) {
+    poller.destroy()
+    teamPollers.delete(sessionId)
+  }
 }

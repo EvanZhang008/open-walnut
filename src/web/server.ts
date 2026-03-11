@@ -788,7 +788,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       if (sessionId) {
         sendStreamEvent(sessionId, event.name, event.data)
       }
-    } else if (event.name === 'session:team-info' || event.name === 'session:team-agent-delta' || event.name === 'session:team-agent-snapshot') {
+    } else if (event.name === 'session:team-info' || event.name === 'session:team-agent-delta') {
       // Team events: broadcast to all clients (frontend filters by sessionId)
       broadcastEvent(event.name, event.data)
     }

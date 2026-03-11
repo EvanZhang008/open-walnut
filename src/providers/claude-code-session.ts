@@ -1970,6 +1970,16 @@ export class SessionRunner {
   }
 
   /**
+   * Find a live session by its Claude session ID (iterates all sessions).
+   */
+  findByClaudeId(claudeSessionId: string): ClaudeCodeSession | undefined {
+    for (const session of this.sessions.values()) {
+      if (session.sessionId === claudeSessionId) return session
+    }
+    return undefined
+  }
+
+  /**
    * Kill orphaned claude processes from stopped/terminal sessions.
    * Scans sessions.json for sessions with PIDs where process_status is 'stopped'
    * or work_status is terminal, but the OS process is still alive.

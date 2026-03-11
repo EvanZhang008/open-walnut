@@ -636,6 +636,13 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
   const isAtBottom = useRef(true);
   const scrollRafId = useRef<number | null>(null);
   const [showScrollArrow, setShowScrollArrow] = useState(false);
+  // Timestamp: ignore scroll events within 100ms of a ResizeObserver callback.
+  // Why? When sibling components grow (UserMessagesSummary, PlanPreviewSection, SessionNotes),
+  // the flex container shrinks our scroll area. This can trigger a scroll event (browser adjusts
+  // geometry), which falsely sets isAtBottom=false. The RO then sees isAtBottom=false and skips
+  // the corrective scroll → user stuck in the middle. By ignoring scroll events near a resize,
+  // we prevent resize-induced geometry shifts from corrupting isAtBottom.
+  const ignoreScrollUntil = useRef(0);
 
   // Reset on session switch
   useEffect(() => {
@@ -646,6 +653,7 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     setEditingId(null);
     blockIndexMap.current.clear();
     isAtBottom.current = true;
+    ignoreScrollUntil.current = 0;
     setShowScrollArrow(false);
     if (scrollRafId.current !== null) { cancelAnimationFrame(scrollRafId.current); scrollRafId.current = null; }
     if (batchTimeoutRef.current) { clearTimeout(batchTimeoutRef.current); batchTimeoutRef.current = null; }
@@ -657,12 +665,15 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     if (scrollRafId.current !== null) cancelAnimationFrame(scrollRafId.current);
   }, []);
 
-  // Scroll handler: track whether user is near bottom (registered once, stable DOM ref)
+  // Scroll handler: track whether user is near bottom.
+  // Ignores scroll events caused by container resizes (which corrupt isAtBottom).
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     let prevArrowState = false;
     const onScroll = () => {
+      // Skip scroll events triggered by ResizeObserver-induced geometry shifts
+      if (Date.now() < ignoreScrollUntil.current) return;
       const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - NEAR_BOTTOM_PX;
       isAtBottom.current = nearBottom;
       const nextArrow = !nearBottom && el.scrollHeight > el.clientHeight;
@@ -677,21 +688,20 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
 
   // ── Scroll-to-bottom: 3-layer approach ──
   //
-  // Why 3 layers? Because "scroll to bottom" can be defeated by THREE independent events:
+  // Three independent events can defeat scroll-to-bottom:
   //   1. Content changes (messages arrive, streaming blocks appear)
-  //   2. Container resizes (sibling components load → flex shrinks our container)
-  //   3. Phase 2 replacing Phase 1 (same message count, different content/height)
+  //   2. Container resizes (sibling components load → flex shrinks us)
+  //   3. Phase 2 replacing Phase 1 (different content/height)
   //
-  // Previous attempts used only layer 1 (useLayoutEffect on messages). This failed because
-  // UserMessagesSummary, PlanPreviewSection, and SessionNotes are SIBLINGS that load
-  // asynchronously — when they grow, session-panel-body shrinks via flex, shifting our
-  // scroll position AFTER the initial scroll. No scroll event fires (it's a resize),
-  // so isAtBottom stays true but the user sees content at the top/middle.
+  // The core invariant: isAtBottom tracks USER INTENT (did they scroll up?), not geometry.
+  // Resize-induced scroll events are suppressed (ignoreScrollUntil) so they can't corrupt it.
+  // Every programmatic scroll forces isAtBottom=true to keep the invariant consistent.
 
   // Layer 1: Content changes — scroll before paint (zero flash)
   useLayoutEffect(() => {
     if (!isAtBottom.current || !containerRef.current || messages.length === 0) return;
     containerRef.current.scrollTop = containerRef.current.scrollHeight;
+    isAtBottom.current = true;
   }, [loading, messages]);
 
   // Layer 2: Streaming blocks + Phase 2 replacement — scroll after paint via rAF
@@ -702,23 +712,29 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     if (scrollRafId.current !== null) cancelAnimationFrame(scrollRafId.current);
     scrollRafId.current = requestAnimationFrame(() => {
       scrollRafId.current = null;
-      if (el) el.scrollTop = el.scrollHeight;
+      if (!el) return;
+      el.scrollTop = el.scrollHeight;
+      isAtBottom.current = true;
     });
   }, [messages, blocks.length]);
 
-  // Layer 3: Container resize — catches flex layout shifts from sibling components
-  // loading data (UserMessagesSummary, PlanPreviewSection, SessionNotes grow → we shrink).
-  // Also handles window resize, expanded modal toggling, etc.
+  // Layer 3: Container resize — catches flex layout shifts from sibling components.
+  // Always schedules a rAF (no isAtBottom check here — the check is in the callback).
+  // This avoids the multi-resize race: RO fires → scroll event sets isAtBottom=false →
+  // next RO returns early → stuck in middle.
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => {
-      if (!isAtBottom.current) return;
-      // Use rAF to batch with other scroll operations in the same frame
+      // Suppress scroll events from this resize for 100ms
+      ignoreScrollUntil.current = Date.now() + 100;
+      // Always schedule rAF — check isAtBottom inside the callback (after scroll events settle)
       if (scrollRafId.current !== null) cancelAnimationFrame(scrollRafId.current);
       scrollRafId.current = requestAnimationFrame(() => {
         scrollRafId.current = null;
-        if (el) el.scrollTop = el.scrollHeight;
+        if (!el || !isAtBottom.current) return;
+        el.scrollTop = el.scrollHeight;
+        isAtBottom.current = true;
       });
     });
     ro.observe(el);
@@ -858,7 +874,6 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
                       sessionId={sessionId}
                       teamName={teamInfo.teamName!}
                       agentStatuses={teamInfo.agentStatuses}
-                      sessionCwd={sessionCwd}
                     />
                   )}
                 </div>

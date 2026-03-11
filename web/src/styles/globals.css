@@ -2484,6 +2484,204 @@ input:focus, textarea:focus, select:focus {
 .session-system-detail { font-size: 11px; opacity: 0.7; }
 .session-system-line--error { color: var(--warning); }
 
+/* ── Team Card (Claude Code Teams) ── */
+.team-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin: 12px 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+.team-card-loading {
+  padding: 16px;
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+.team-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.team-card-title {
+  font-weight: 600;
+  color: var(--fg);
+}
+.team-card-count {
+  font-size: 12px;
+  color: var(--fg-muted);
+  background: var(--bg-tertiary);
+  padding: 2px 8px;
+  border-radius: 8px;
+}
+.team-card-tabs {
+  display: flex;
+  gap: 0;
+  overflow-x: auto;
+  padding: 0 4px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+}
+.team-tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 12px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s;
+}
+.team-tab:hover {
+  color: var(--fg);
+}
+.team-tab-active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 500;
+}
+.team-tab-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.team-tab-dot {
+  font-size: 10px;
+  line-height: 1;
+}
+.team-tab-dot-running { color: var(--accent); animation: session-pulse 1.4s ease-in-out infinite; }
+.team-tab-dot-done { color: #34c759; }
+.team-tab-dot-error { color: var(--warning); }
+.team-tab-dot-pending { font-size: 9px; }
+.team-card-placeholder {
+  padding: 24px;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+/* Agent panel */
+.team-agent-panel {
+  padding: 12px 14px;
+  max-height: 400px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.team-agent-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+.team-agent-loading-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+.team-agent-empty {
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 13px;
+  padding: 24px;
+}
+.team-agent-events {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.team-agent-text {
+  font-size: 13px;
+  color: var(--fg);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.team-agent-tool {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 8px;
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.team-agent-tool-icon { font-size: 11px; }
+.team-agent-tool-name { font-weight: 600; color: var(--fg); }
+.team-agent-tool-input {
+  display: flex;
+  gap: 6px;
+  overflow: hidden;
+}
+.team-agent-tool-param {
+  color: var(--fg-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
+.team-agent-result {
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  border-left: 2px solid var(--border);
+  margin-left: 4px;
+  max-height: 100px;
+  overflow-y: auto;
+}
+.team-agent-result-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* Chat input */
+.team-chat-input {
+  display: flex;
+  gap: 6px;
+  padding-top: 8px;
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.team-chat-input-field {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12px;
+  outline: none;
+}
+.team-chat-input-field:focus {
+  border-color: var(--accent);
+}
+.team-chat-send-btn {
+  padding: 6px 12px;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.team-chat-send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* Session list panel (filter tabs + scrollable list) */
 .session-list-panel {
   display: flex;

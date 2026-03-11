@@ -77,6 +77,10 @@ export interface SessionHistoryTool {
   planContent?: string;
   /** agentId linking to subagent JSONL */
   agentId?: string;
+  /** Team name (for Claude Code Teams Agent tools) */
+  teamName?: string;
+  /** Team agent name (for Claude Code Teams Agent tools) */
+  teamAgentName?: string;
   /** Child messages from subagent JSONL (populated for Task tools) */
   childMessages?: SessionHistoryMessage[];
 }
