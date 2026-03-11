@@ -140,31 +140,21 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       resetInput();
       return;
     }
-    if (isSessionMode) {
-      // Session mode: insert the command text (user will press Enter to send)
-      const text = `/${cmd.name} `;
-      setValue(text);
-      closePalette();
-      // Resize textarea and move cursor to end
-      requestAnimationFrame(() => {
-        const el = textareaRef.current;
-        if (el) {
-          el.style.height = 'auto';
-          el.style.height = Math.min(el.scrollHeight, 200) + 'px';
-          el.focus();
-          el.setSelectionRange(text.length, text.length);
-        }
-      });
-    } else {
-      // Main chat mode: execute the command
-      setValue('');
-      closePalette();
-      if (textareaRef.current) {
-        textareaRef.current.style.height = 'auto';
+    // Both modes: insert command text into input (user presses Enter to execute)
+    const text = `/${cmd.name} `;
+    setValue(text);
+    closePalette();
+    // Resize textarea and move cursor to end
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) {
+        el.style.height = 'auto';
+        el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+        el.focus();
+        el.setSelectionRange(text.length, text.length);
       }
-      onCommand?.(cmd as SlashCommand);
-    }
-  }, [isSessionMode, onCommand, onControlCommand, closePalette]);
+    });
+  }, [onControlCommand, closePalette]);
 
   const handleKeyDown = (e: KeyboardEvent) => {
     // Read palette state from ref to avoid stale closure issues —
