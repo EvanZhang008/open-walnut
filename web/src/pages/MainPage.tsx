@@ -16,6 +16,7 @@ import { TodoPanel } from '@/components/tasks/TodoPanel';
 import { TaskContextBar } from '@/components/tasks/TaskContextBar';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { SessionPathSelector, type QuickStartPath } from '@/components/sessions/SessionPathSelector';
+import { QuestionPopover, parseAskQuestionInput } from '@/components/chat/QuestionPopover';
 import { TriagePanel } from '@/components/triage/TriagePanel';
 import { fetchSession, quickStartSession } from '@/api/sessions';
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
@@ -186,6 +187,20 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   // Set of session IDs currently open in columns — for active pill indicators
   const openSessionIdSet = useMemo(() => new Set(sessionColumns), [sessionColumns]);
+
+  // Detect pending ask_question tool call from chat messages
+  const pendingQuestion = useMemo(() => {
+    for (let i = chat.messages.length - 1; i >= 0; i--) {
+      const msg = chat.messages[i]
+      if (msg.role !== 'assistant' || !msg.blocks) continue
+      for (const block of msg.blocks) {
+        if (block.type === 'tool_call' && block.name === 'ask_question' && block.status === 'calling') {
+          return parseAskQuestionInput((block as { input?: Record<string, unknown> }).input)
+        }
+      }
+    }
+    return null
+  }, [chat.messages])
 
   // Task lookup map for resolving task IDs to names in tool call UI
   const taskMap = useMemo(() => new Map(tasks.map(t => [t.id, t])), [tasks]);
@@ -401,9 +416,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const handleFocusTask = useCallback((task: Task) => {
     const isUnfocusing = focusedTask?.id === task.id;
     setFocusedTask(isUnfocusing ? null : task);
-    // Clear attention flag on focus (not on unfocus)
+    // Clear attention flag on focus (not on unfocus) — fire-and-forget
     if (!isUnfocusing && task.needs_attention) {
-      update(task.id, { needs_attention: false }).catch(() => { /* best-effort */ });
+      update(task.id, { needs_attention: false });
     }
   }, [focusedTask, update]);
 
@@ -416,42 +431,30 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     setFocusedTask(null);
   }, []);
 
-  const handleComplete = useCallback(async (id: string) => {
-    try {
-      const updated = await toggleComplete(id);
-      if (updated.status === 'done' && focusedTask?.id === id) setFocusedTask(null);
-    } catch (err) {
-      showOperationError(err instanceof Error ? err.message : 'Failed to toggle completion');
-    }
-  }, [toggleComplete, focusedTask, showOperationError]);
+  const handleComplete = useCallback((id: string) => {
+    const task = taskMapRef.current.get(id);
+    if (task && task.status !== 'done' && focusedTask?.id === id) setFocusedTask(null);
+    toggleComplete(id);
+  }, [toggleComplete, focusedTask]);
 
-  const handleSetPhase = useCallback(async (id: string, phase: string) => {
-    try {
-      const updated = await setPhase(id, phase);
-      if (updated.status === 'done' && focusedTask?.id === id) setFocusedTask(null);
-      if (focusedTask?.id === id && updated.status !== 'done') setFocusedTask(updated);
-    } catch (err) {
-      showOperationError(err instanceof Error ? err.message : 'Failed to set phase');
-    }
-  }, [setPhase, focusedTask, showOperationError]);
+  const handleSetPhase = useCallback((id: string, phase: string) => {
+    if (phase === 'COMPLETE' && focusedTask?.id === id) setFocusedTask(null);
+    setPhase(id, phase);
+  }, [setPhase, focusedTask]);
 
-  const handleStar = useCallback(async (id: string) => {
-    const updated = await star(id);
-    if (focusedTask?.id === id) setFocusedTask(updated);
-  }, [star, focusedTask]);
+  const handleStar = useCallback((id: string) => {
+    star(id);
+  }, [star]);
 
-  const handleCyclePriority = useCallback(async (id: string) => {
-    const current = tasks.find((t) => t.id === id);
+  const handleCyclePriority = useCallback((id: string) => {
+    const current = taskMapRef.current.get(id);
     if (!current) return;
-    const next = PRIORITY_CYCLE[current.priority] ?? 'none';
-    const updated = await update(id, { priority: next });
-    if (focusedTask?.id === id) setFocusedTask(updated);
-  }, [tasks, update, focusedTask]);
+    update(id, { priority: (PRIORITY_CYCLE[current.priority] ?? 'none') });
+  }, [update]);
 
-  const handleUpdate = useCallback(async (id: string, updates: { title?: string }) => {
-    const updated = await update(id, updates);
-    if (focusedTask?.id === id) setFocusedTask(updated);
-  }, [update, focusedTask]);
+  const handleUpdate = useCallback((id: string, updates: { title?: string }) => {
+    update(id, updates);
+  }, [update]);
 
   // Ref to hold quickStartPath for the async callback (avoids stale closure)
   const quickStartPathRef = useRef(quickStartPath);
@@ -652,9 +655,16 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           <div style={{ position: 'relative' }}>
             {/* Session path selector popover (above the input) */}
             <SessionPathSelector
-              open={pathSelectorOpen}
+              open={pathSelectorOpen && !pendingQuestion}
               onClose={() => setPathSelectorOpen(false)}
               onSelect={handlePathSelect}
+            />
+
+            {/* Ask Question popover (above the input, mutually exclusive with path selector) */}
+            <QuestionPopover
+              open={!!pendingQuestion}
+              questions={pendingQuestion ?? []}
+              onClose={() => {/* closed automatically when tool result arrives */}}
             />
 
             <ChatInput

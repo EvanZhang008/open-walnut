@@ -13,10 +13,10 @@ export interface TasksContextValue {
   showOperationError: (msg: string) => void;
   refetch: () => void;
   create: (input: CreateTaskInput) => Promise<Task>;
-  update: (id: string, updates: UpdateTaskInput) => Promise<Task>;
-  toggleComplete: (id: string) => Promise<Task>;
-  setPhase: (id: string, phase: string) => Promise<Task>;
-  star: (id: string) => Promise<Task>;
+  update: (id: string, updates: UpdateTaskInput) => void;
+  toggleComplete: (id: string) => void;
+  setPhase: (id: string, phase: string) => void;
+  star: (id: string) => void;
   reorder: (category: string, project: string, taskIds: string[]) => void;
   moveTask: (taskId: string, category: string, project: string, insertNearTaskId?: string) => void;
   reparentTask: (taskId: string, newParentId: string | null) => void;

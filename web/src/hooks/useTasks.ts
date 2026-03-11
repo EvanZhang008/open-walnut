@@ -3,6 +3,7 @@ import type { Task } from '@walnut/core';
 import { useEvent } from './useWebSocket';
 import { wsClient, type ConnectionState } from '@/api/ws';
 import * as tasksApi from '@/api/tasks';
+import { ApiError } from '@/api/client';
 import { perf } from '@/utils/perf-logger';
 
 /**
@@ -77,6 +78,100 @@ function applyReorder(tasks: Task[], category: string, project: string, taskIds:
 }
 
 
+// ── Optimistic prediction functions ──
+
+function applyToggleStar(tasks: Task[], id: string): Task[] {
+  const now = new Date().toISOString();
+  return tasks.map(t => t.id === id
+    ? { ...t, starred: !t.starred, updated_at: now }
+    : t);
+}
+
+/** Clear session slots and needs_attention — mirrors server applyPhase('COMPLETE'). */
+function clearSessionSlots(t: Task): Task {
+  return {
+    ...t,
+    session_id: undefined,
+    plan_session_id: undefined,
+    exec_session_id: undefined,
+    session_status: undefined,
+    plan_session_status: undefined,
+    exec_session_status: undefined,
+    needs_attention: undefined,
+  };
+}
+
+function applyToggleComplete(tasks: Task[], id: string): Task[] {
+  const now = new Date().toISOString();
+  return tasks.map(t => {
+    if (t.id !== id) return t;
+    const completing = t.status !== 'done';
+    const base = completing ? clearSessionSlots(t) : t;
+    return {
+      ...base,
+      status: completing ? 'done' as const : 'todo' as const,
+      phase: completing ? 'COMPLETE' : 'TODO',
+      completed_at: completing ? now : undefined,
+      updated_at: now,
+    };
+  });
+}
+
+/** Map phases to their corresponding task status. */
+function phaseToStatus(phase: string): 'done' | 'todo' | 'in_progress' {
+  if (phase === 'COMPLETE') return 'done';
+  if (phase === 'TODO') return 'todo';
+  return 'in_progress';
+}
+
+function applyPhaseChange(tasks: Task[], id: string, phase: string): Task[] {
+  const now = new Date().toISOString();
+  const completing = phase === 'COMPLETE';
+  const status = phaseToStatus(phase);
+  return tasks.map((t): Task => {
+    if (t.id !== id) return t;
+    const base = completing ? clearSessionSlots(t) : t;
+    return { ...base, phase: phase as Task['phase'], status, completed_at: completing ? now : undefined, updated_at: now };
+  });
+}
+
+/** Only spread direct-value task fields for optimistic update (not instruction fields like add_tags). */
+const OPTIMISTIC_FIELDS = new Set([
+  'title', 'status', 'phase', 'priority', 'category', 'project',
+  'due_date', 'needs_attention', 'parent_task_id', 'starred',
+]);
+
+function applyFieldUpdate(tasks: Task[], id: string, updates: Record<string, unknown>): Task[] {
+  const now = new Date().toISOString();
+  const filtered: Record<string, unknown> = {};
+  for (const key of Object.keys(updates)) {
+    if (OPTIMISTIC_FIELDS.has(key)) filtered[key] = updates[key];
+  }
+  return tasks.map(t => t.id === id
+    ? { ...t, ...filtered, updated_at: now }
+    : t);
+}
+
+// ── Retry helper ──
+
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  retries = 2,
+  baseDelay = 300,
+): Promise<T> {
+  let lastErr: Error | undefined;
+  for (let i = 0; i <= retries; i++) {
+    try { return await fn(); }
+    catch (err) {
+      lastErr = err instanceof Error ? err : new Error(String(err));
+      // Don't retry client errors (4xx) — they won't succeed on retry
+      if (lastErr instanceof ApiError && lastErr.status >= 400 && lastErr.status < 500) throw lastErr;
+      if (i < retries) await new Promise(r => setTimeout(r, baseDelay * (i + 1)));
+    }
+  }
+  throw lastErr!;
+}
+
 /** How long (ms) an operation error banner stays visible before auto-dismissing. */
 const OPERATION_ERROR_TIMEOUT_MS = 6000;
 
@@ -89,10 +184,10 @@ interface UseTasksReturn {
   showOperationError: (msg: string) => void;
   refetch: () => void;
   create: (input: tasksApi.CreateTaskInput) => Promise<Task>;
-  update: (id: string, updates: tasksApi.UpdateTaskInput) => Promise<Task>;
-  toggleComplete: (id: string) => Promise<Task>;
-  setPhase: (id: string, phase: string) => Promise<Task>;
-  star: (id: string) => Promise<Task>;
+  update: (id: string, updates: tasksApi.UpdateTaskInput) => void;
+  toggleComplete: (id: string) => void;
+  setPhase: (id: string, phase: string) => void;
+  star: (id: string) => void;
   reorder: (category: string, project: string, taskIds: string[]) => void;
   moveTask: (taskId: string, category: string, project: string, insertNearTaskId?: string) => void;
   reparentTask: (taskId: string, newParentId: string | null) => void;
@@ -122,12 +217,27 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
   }, []);
 
   // Suppress WS echoes of our own optimistic operations.
-  // Keys: "reorder:<cat>/<proj>" for reorder echoes, "move:<taskId>" for update echoes.
-  // Auto-expire after 5s as safety net.
-  const echoGuard = useRef(new Set<string>());
+  // Counter-based: each guardEcho increments the count, each consumed echo decrements.
+  // This correctly handles rapid repeated operations (e.g. double-click star).
+  // Auto-expire after 5s as safety net (decrements so counter never stays stuck).
+  const echoGuard = useRef(new Map<string, number>());
   const guardEcho = useCallback((key: string) => {
-    echoGuard.current.add(key);
-    setTimeout(() => echoGuard.current.delete(key), 5000);
+    const map = echoGuard.current;
+    map.set(key, (map.get(key) ?? 0) + 1);
+    setTimeout(() => {
+      const count = map.get(key) ?? 0;
+      if (count <= 1) map.delete(key);
+      else map.set(key, count - 1);
+    }, 5000);
+  }, []);
+  /** Consume one echo guard for `key`. Returns true if an echo was suppressed. */
+  const consumeEcho = useCallback((key: string): boolean => {
+    const map = echoGuard.current;
+    const count = map.get(key) ?? 0;
+    if (count <= 0) return false;
+    if (count <= 1) map.delete(key);
+    else map.set(key, count - 1);
+    return true;
   }, []);
 
   const refetch = useCallback(() => {
@@ -175,19 +285,23 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
   useEvent('task:updated', (data) => {
     const { task } = data as { task?: Task };
     if (!task) { refetch(); return; }  // bulk change (e.g. category rename) — refetch all
-    if (echoGuard.current.delete(`move:${task.id}`)) return;
+    if (consumeEcho(`move:${task.id}`)) return;
+    if (consumeEcho(`update:${task.id}`)) return;
+    if (consumeEcho(`phase:${task.id}`)) return;
     setTasks((prev) => prev.map((t) => (t.id === task.id ? mergeTask(t, task) : t)));
   });
 
   useEvent('task:completed', (data) => {
     const { task } = data as { task?: Task };
     if (!task) { refetch(); return; }
+    if (consumeEcho(`complete:${task.id}`)) return;
     setTasks((prev) => prev.map((t) => (t.id === task.id ? mergeTask(t, task) : t)));
   });
 
   useEvent('task:starred', (data) => {
     const { task } = data as { task?: Task };
     if (!task) { refetch(); return; }
+    if (consumeEcho(`star:${task.id}`)) return;
     setTasks((prev) => prev.map((t) => (t.id === task.id ? mergeTask(t, task) : t)));
   });
 
@@ -198,7 +312,7 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
 
   useEvent('task:reordered', (data) => {
     const { category, project, taskIds } = data as { category: string; project: string; taskIds: string[] };
-    if (echoGuard.current.delete(`reorder:${category}/${project}`)) return;
+    if (consumeEcho(`reorder:${category}/${project}`)) return;
     setTasks((prev) => applyReorder(prev, category, project, taskIds));
   });
 
@@ -229,35 +343,46 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
     }));
   });
 
+  // Shared error handler for optimistic operations: show banner + refetch truth from server
+  const onOpError = useCallback((err: Error) => {
+    showOperationError(err.message);
+    refetch();
+  }, [showOperationError, refetch]);
+
   const create = useCallback(async (input: tasksApi.CreateTaskInput) => {
     const task = await tasksApi.createTask(input);
     return task;
   }, []);
 
-  const update = useCallback(async (id: string, updates: tasksApi.UpdateTaskInput) => {
-    const task = await tasksApi.updateTask(id, updates);
-    return task;
-  }, []);
+  const update = useCallback((id: string, updates: tasksApi.UpdateTaskInput) => {
+    guardEcho(`update:${id}`);
+    setTasks(prev => applyFieldUpdate(prev, id, updates as Record<string, unknown>));
+    withRetry(() => tasksApi.updateTask(id, updates)).catch(onOpError);
+  }, [guardEcho, onOpError]);
 
-  const toggleComplete = useCallback(async (id: string) => {
-    const task = await tasksApi.toggleCompleteTask(id);
-    return task;
-  }, []);
+  const toggleComplete = useCallback((id: string) => {
+    guardEcho(`complete:${id}`);
+    setTasks(prev => applyToggleComplete(prev, id));
+    withRetry(() => tasksApi.toggleCompleteTask(id)).catch(onOpError);
+  }, [guardEcho, onOpError]);
 
-  const setPhase = useCallback(async (id: string, phase: string) => {
-    const task = await tasksApi.updateTask(id, { phase });
-    return task;
-  }, []);
+  const setPhase = useCallback((id: string, phase: string) => {
+    guardEcho(`phase:${id}`);
+    setTasks(prev => applyPhaseChange(prev, id, phase));
+    withRetry(() => tasksApi.updateTask(id, { phase })).catch(onOpError);
+  }, [guardEcho, onOpError]);
 
-  const star = useCallback(async (id: string) => {
-    const task = await tasksApi.starTask(id);
-    return task;
-  }, []);
+  const star = useCallback((id: string) => {
+    guardEcho(`star:${id}`);
+    setTasks(prev => applyToggleStar(prev, id));
+    withRetry(() => tasksApi.starTask(id)).catch(onOpError);
+  }, [guardEcho, onOpError]);
 
   const reorder = useCallback((category: string, project: string, taskIds: string[]) => {
     guardEcho(`reorder:${category}/${project}`);
     setTasks((prev) => applyReorder(prev, category, project, taskIds));
-    tasksApi.reorderTasks(category, project, taskIds).catch(() => refetch());
+    withRetry(() => tasksApi.reorderTasks(category, project, taskIds))
+      .catch(() => refetch());
   }, [refetch, guardEcho]);
 
   const moveTask = useCallback((taskId: string, category: string, project: string, insertNearTaskId?: string) => {
@@ -288,10 +413,10 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
       return final;
     });
 
-    tasksApi.updateTask(taskId, { category, project })
-      .then(() => tasksApi.reorderTasks(category, project, newGroupOrder))
-      .catch((err: Error) => { showOperationError(err.message); refetch(); });
-  }, [refetch, guardEcho, showOperationError]);
+    withRetry(() => tasksApi.updateTask(taskId, { category, project }))
+      .then(() => withRetry(() => tasksApi.reorderTasks(category, project, newGroupOrder)))
+      .catch(onOpError);
+  }, [refetch, guardEcho, onOpError]);
 
   const reparentTask = useCallback((taskId: string, newParentId: string | null) => {
     guardEcho(`move:${taskId}`);
@@ -302,10 +427,10 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
         : t
     ));
     // Backend handles category/project inheritance from new parent
-    tasksApi.updateTask(taskId, { parent_task_id: newParentId ?? '' })
+    withRetry(() => tasksApi.updateTask(taskId, { parent_task_id: newParentId ?? '' }))
       .then(() => refetch())  // refetch to get updated category/project
-      .catch((err: Error) => { showOperationError(err.message); refetch(); });
-  }, [refetch, guardEcho, showOperationError]);
+      .catch(onOpError);
+  }, [refetch, guardEcho, onOpError]);
 
   return { tasks, loading, error, operationError, clearOperationError, showOperationError, refetch, create, update, toggleComplete, setPhase, star, reorder, moveTask, reparentTask };
 }

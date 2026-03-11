@@ -59,7 +59,7 @@ interface TodoPanelProps {
   onComplete: (id: string) => void;
   onSetPhase?: (id: string, phase: string) => void;
   onCreate: (input: { title: string; priority: string }) => Promise<unknown>;
-  onUpdate?: (id: string, updates: { title?: string }) => Promise<unknown>;
+  onUpdate?: (id: string, updates: { title?: string }) => void;
   onStar?: (id: string) => void;
   onCyclePriority?: (id: string) => void;
   onFocusTask?: (task: Task) => void;
