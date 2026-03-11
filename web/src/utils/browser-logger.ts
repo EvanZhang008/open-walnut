@@ -44,7 +44,7 @@ const MAX_ARGS_LEN = 1000
 // ── State ──
 
 const buffer: BrowserLogEntry[] = []
-let flushTimer: ReturnType<typeof setTimeout> | null = null
+let flushTimer: ReturnType<typeof setInterval> | null = null
 let initialized = false
 
 // Save originals before patching — used internally to avoid recursion
@@ -64,7 +64,10 @@ function safeStringify(val: unknown): string {
   if (typeof val === 'string') return val
   if (typeof val === 'number' || typeof val === 'boolean') return String(val)
   if (typeof val === 'function') return `[Function: ${val.name || 'anonymous'}]`
-  if (val instanceof Error) return `${val.name}: ${val.message}`
+  if (val instanceof Error) {
+    const stack = val.stack?.slice(0, 500) ?? ''
+    return stack || `${val.name}: ${val.message}`
+  }
 
   // DOM nodes
   if (typeof Node !== 'undefined' && val instanceof Node) {
@@ -135,17 +138,15 @@ function addEntry(level: BrowserLogEntry['level'], args: unknown[]): void {
 function flush(): void {
   if (buffer.length === 0) return
 
-  const entries = buffer.splice(0, buffer.length)
+  // Check WS BEFORE draining — keep entries in buffer if not connected
+  // so they survive until next flush when WS may be available.
+  if (wsClient.state !== 'connected') return
 
-  // Try WebSocket first
-  if (wsClient.state === 'connected') {
-    // Fire-and-forget — don't await
-    wsClient.sendRpc('browser:logs', { entries }).catch(() => {
-      // WS send failed — entries are lost (acceptable for debug logs)
-    })
-  }
-  // If WS is not connected, entries are simply dropped.
-  // The ring buffer prevents unbounded growth while disconnected.
+  const entries = buffer.splice(0, buffer.length)
+  // Fire-and-forget — don't await
+  wsClient.sendRpc('browser:logs', { entries }).catch(() => {
+    // WS send failed — entries are lost (acceptable for debug logs)
+  })
 }
 
 /** sendBeacon fallback for page unload — best-effort, no response expected */

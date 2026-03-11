@@ -20,6 +20,7 @@ import type { LogLevel } from '../../logging/levels.js'
 
 // ── Types ──
 
+// Keep in sync with web/src/utils/browser-logger.ts:BrowserLogEntry
 interface BrowserLogEntry {
   time: string
   level: 'log' | 'info' | 'warn' | 'error'
@@ -73,8 +74,7 @@ function truncate(s: string, max: number): string {
   return s.length <= max ? s : s.slice(0, max)
 }
 
-function writeEntries(entries: BrowserLogEntry[]): number {
-  let written = 0
+function writeEntries(entries: BrowserLogEntry[]): void {
   for (const entry of entries) {
     if (!isValidEntry(entry)) continue
 
@@ -91,9 +91,7 @@ function writeEntries(entries: BrowserLogEntry[]): number {
       browserLevel: entry.level, // preserve original level (e.g. 'log' vs 'info')
       ...meta,
     })
-    written++
   }
-  return written
 }
 
 // ── WebSocket RPC handler ──
