@@ -17,7 +17,7 @@ function readHeight(): number {
 }
 
 export function GlobalNotesSection(props: UseGlobalNotesReturn) {
-  const { content, updateContent, saving, saveError, collapsed, toggleCollapse, popupOpen, openPopup, closePopup } = props;
+  const { content, onEditorUpdate, saving, saveError, collapsed, toggleCollapse, popupOpen, openPopup, closePopup } = props;
   const [height, setHeight] = useState(readHeight);
   const dragging = useRef(false);
   const startY = useRef(0);
@@ -85,7 +85,7 @@ export function GlobalNotesSection(props: UseGlobalNotesReturn) {
           <div className="global-notes-body" style={{ height }}>
             <NotesEditor
               content={content}
-              onUpdate={updateContent}
+              onDirty={onEditorUpdate}
               className="global-notes-editor-inline"
             />
           </div>
@@ -94,7 +94,7 @@ export function GlobalNotesSection(props: UseGlobalNotesReturn) {
       {popupOpen && (
         <GlobalNotesPopup
           content={content}
-          updateContent={updateContent}
+          onDirty={onEditorUpdate}
           saving={saving}
           onClose={closePopup}
         />

@@ -1,15 +1,16 @@
 import { useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { NotesEditor } from './NotesEditor';
+import type { Editor } from '@tiptap/core';
 
 interface GlobalNotesPopupProps {
   content: string;
-  updateContent: (val: string) => void;
+  onDirty: (editor: Editor) => void;
   saving: boolean;
   onClose: () => void;
 }
 
-export function GlobalNotesPopup({ content, updateContent, saving, onClose }: GlobalNotesPopupProps) {
+export function GlobalNotesPopup({ content, onDirty, saving, onClose }: GlobalNotesPopupProps) {
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === 'Escape') onClose();
   }, [onClose]);
@@ -37,7 +38,7 @@ export function GlobalNotesPopup({ content, updateContent, saving, onClose }: Gl
         <div className="notes-popup-body">
           <NotesEditor
             content={content}
-            onUpdate={updateContent}
+            onDirty={onDirty}
             className="global-notes-editor-popup"
             autoFocus
           />

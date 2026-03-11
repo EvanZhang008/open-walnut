@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { fetchGlobalNotes, saveGlobalNotes } from '@/api/notes';
+import type { Editor } from '@tiptap/core';
 
 export interface UseGlobalNotesReturn {
   content: string;
-  updateContent: (val: string) => void;
+  onEditorUpdate: (editor: Editor) => void;
   saving: boolean;
   saveError: string | null;
   collapsed: boolean;
@@ -25,7 +26,7 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
   });
   const [popupOpen, setPopupOpen] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const latestContent = useRef(content);
+  const editorRef = useRef<Editor | null>(null);
   const dirty = useRef(false);
 
   // Load on mount with cancellation guard
@@ -37,21 +38,26 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
     return () => { mounted = false; };
   }, []);
 
-  // Keep ref in sync
-  useEffect(() => {
-    latestContent.current = content;
-  }, [content]);
-
-  // Debounced save
-  const updateContent = useCallback((val: string) => {
-    setContent(val);
+  // Lightweight dirty signal — no serialization, no React state update per keystroke
+  const onEditorUpdate = useCallback((editor: Editor) => {
+    editorRef.current = editor;
     dirty.current = true;
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    setSaving(true);
     setSaveError(null);
+
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+
+    // Show saving indicator (single state update)
+    setSaving(true);
+
     saveTimer.current = setTimeout(() => {
-      saveGlobalNotes(val)
-        .then(() => { dirty.current = false; })
+      // Serialize markdown ONCE when debounce fires
+      const md = editorRef.current?.storage.markdown.getMarkdown() ?? '';
+      saveGlobalNotes(md)
+        .then(() => {
+          dirty.current = false;
+          // Sync React state so popup/sidebar stay in sync
+          setContent(md);
+        })
         .catch((err) => { setSaveError(err instanceof Error ? err.message : 'Save failed'); })
         .finally(() => setSaving(false));
     }, 500);
@@ -62,8 +68,9 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
     return () => {
       if (saveTimer.current) {
         clearTimeout(saveTimer.current);
-        if (dirty.current) {
-          saveGlobalNotes(latestContent.current).catch(() => {});
+        if (dirty.current && editorRef.current) {
+          const md = editorRef.current.storage.markdown.getMarkdown();
+          saveGlobalNotes(md).catch(() => {});
         }
       }
     };
@@ -80,5 +87,5 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
   const openPopup = useCallback(() => setPopupOpen(true), []);
   const closePopup = useCallback(() => setPopupOpen(false), []);
 
-  return { content, updateContent, saving, saveError, collapsed, toggleCollapse, popupOpen, openPopup, closePopup };
+  return { content, onEditorUpdate, saving, saveError, collapsed, toggleCollapse, popupOpen, openPopup, closePopup };
 }

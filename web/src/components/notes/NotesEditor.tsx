@@ -6,6 +6,7 @@
 
 import { useEffect, useRef } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
+import type { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
@@ -14,14 +15,14 @@ import { Markdown } from 'tiptap-markdown';
 
 interface NotesEditorProps {
   content: string;
-  onUpdate: (markdown: string) => void;
+  onDirty: (editor: Editor) => void;
   placeholder?: string;
   className?: string;
   /** Auto-focus when mounted */
   autoFocus?: boolean;
 }
 
-export function NotesEditor({ content, onUpdate, placeholder, className, autoFocus }: NotesEditorProps) {
+export function NotesEditor({ content, onDirty, placeholder, className, autoFocus }: NotesEditorProps) {
   const isExternalUpdate = useRef(false);
 
   const editor = useEditor({
@@ -46,12 +47,12 @@ export function NotesEditor({ content, onUpdate, placeholder, className, autoFoc
     autofocus: autoFocus ? 'end' : false,
     onUpdate: ({ editor }) => {
       if (isExternalUpdate.current) return;
-      const md = editor.storage.markdown.getMarkdown();
-      onUpdate(md);
+      // Signal dirty — no serialization here
+      onDirty(editor);
     },
   });
 
-  // Sync external content changes (e.g. checkbox toggle from sidebar while popup is open)
+  // Sync external content changes (e.g. after save syncs content state)
   useEffect(() => {
     if (!editor) return;
     const currentMd = editor.storage.markdown.getMarkdown();
