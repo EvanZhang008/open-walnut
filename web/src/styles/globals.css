@@ -4383,11 +4383,15 @@ input:focus, textarea:focus, select:focus {
 /* ── Plan card (session chat — ExitPlanMode rendering) ── */
 
 .session-plan-card {
-  margin: 6px 0;
-  border-radius: var(--radius-sm);
-  border: 2px solid var(--accent);
+  margin: 8px 0;
+  border-radius: 12px;
+  border: none;
   background: var(--card-bg);
   overflow: hidden;
+  box-shadow:
+    0 0 0 0.5px rgba(0, 0, 0, 0.06),
+    0 1px 3px rgba(0, 0, 0, 0.04),
+    0 4px 12px rgba(0, 0, 0, 0.06);
 }
 
 .session-plan-card-header {
@@ -4395,38 +4399,63 @@ input:focus, textarea:focus, select:focus {
   align-items: center;
   gap: 6px;
   width: 100%;
-  padding: 8px 12px;
+  padding: 10px 16px 6px;
   text-align: left;
-  font-size: 13px;
-  font-weight: 600;
-  background: var(--accent-subtle);
-  color: var(--accent);
+  font-size: 12px;
+  font-weight: 500;
+  background: transparent;
+  color: var(--fg-muted);
   transition: background 0.15s;
 }
 
 .session-plan-card-header:hover {
-  background: var(--accent-subtle);
-  filter: brightness(0.95);
+  background: rgba(0, 0, 0, 0.02);
 }
 
 .session-plan-card-icon {
-  font-size: 10px;
+  font-size: 9px;
   flex-shrink: 0;
+  opacity: 0.5;
 }
 
 .session-plan-card-title {
-  font-weight: 700;
+  font-weight: 500;
+  letter-spacing: 0.01em;
 }
 
 .session-plan-card-body {
-  padding: 10px 12px;
+  padding: 4px 20px 16px;
   max-height: 500px;
   overflow-y: auto;
-  border-top: 1px solid var(--border);
+  border-top: none;
 }
 
 .session-plan-card-body .markdown-body {
-  font-size: 13px;
+  font-size: 13.5px;
+  line-height: 1.7;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .session-plan-card {
+    box-shadow:
+      0 0 0 0.5px rgba(255, 255, 255, 0.08),
+      0 1px 3px rgba(0, 0, 0, 0.12),
+      0 4px 12px rgba(0, 0, 0, 0.2);
+  }
+  :root:not([data-theme]) .session-plan-card-header:hover {
+    background: rgba(255, 255, 255, 0.03);
+  }
+}
+
+[data-theme="dark"] .session-plan-card {
+  box-shadow:
+    0 0 0 0.5px rgba(255, 255, 255, 0.08),
+    0 1px 3px rgba(0, 0, 0, 0.12),
+    0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+[data-theme="dark"] .session-plan-card-header:hover {
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .session-plan-write-muted {
@@ -5327,12 +5356,12 @@ img[data-lightbox-src],
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 2px 4px;
-  border-radius: 4px;
+  padding: 4px 6px;
+  border-radius: 6px;
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.15s, background 0.15s;
-  color: var(--accent);
+  color: var(--fg-muted);
   background: none;
   border: none;
   flex-shrink: 0;
@@ -5344,7 +5373,7 @@ img[data-lightbox-src],
 
 .session-plan-card-header:hover .plan-card-expand-btn:hover {
   opacity: 1;
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  background: rgba(0, 0, 0, 0.04);
 }
 
 /* Touch devices: always show expand button at low opacity */
