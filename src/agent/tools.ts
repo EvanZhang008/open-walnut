@@ -1278,9 +1278,14 @@ defaults (same resolution chain as start_session).`,
           return `Error: JSONL file not found for session ${sessionId}. Searched:\n${paths.map(p => `  - ${p}`).join('\n')}\nTry: ssh ${resolvedHost || 'HOST'} "find ~/.claude/projects -name '${sessionId}.jsonl'"`;
         }
 
-        // ⑤b Auto-correct CWD: prefer the CWD embedded in the JSONL over the guessed one
-        const effectiveCwd = jsonlResult.foundCwd || resolvedCwd;
-        const cwdCorrected = jsonlResult.foundCwd && resolvedCwd && jsonlResult.foundCwd !== resolvedCwd;
+        // ⑤b Strict CWD validation: if the JSONL was found but the embedded CWD
+        // doesn't match what was resolved, error out with the correct CWD so the
+        // caller can re-run with the right working_directory.
+        const actualCwd = jsonlResult.foundCwd;
+        if (actualCwd && resolvedCwd && actualCwd !== resolvedCwd) {
+          return `Error: CWD mismatch for session ${sessionId}.\n  Resolved CWD: ${resolvedCwd}\n  Actual CWD:   ${actualCwd}\nRe-run with working_directory="${actualCwd}"`;
+        }
+        const effectiveCwd = actualCwd || resolvedCwd;
 
         // ⑥ Extract metadata from JSONL
         const lines = jsonlResult.content.split('\n').filter(Boolean);
@@ -1343,8 +1348,7 @@ defaults (same resolution chain as start_session).`,
         const sRef = sessionRef(record.claudeSessionId, record.title ?? title);
         const hostNote = resolvedHost ? ` (${resolvedHost})` : '';
         const cwdNote = effectiveCwd ? ` cwd=${effectiveCwd}` : '';
-        const correctionNote = cwdCorrected ? ` (auto-corrected from ${resolvedCwd})` : '';
-        return `Imported session ${sRef}${hostNote}${cwdNote}${correctionNote} → task ${taskRef(task.id, task.title)}. Messages: ${messageCount}, source: ${jsonlResult.source}.`;
+        return `Imported session ${sRef}${hostNote}${cwdNote} → task ${taskRef(task.id, task.title)}. Messages: ${messageCount}, source: ${jsonlResult.source}.`;
       } catch (err) {
         return `Error: ${err instanceof Error ? err.message : String(err)}`;
       }
