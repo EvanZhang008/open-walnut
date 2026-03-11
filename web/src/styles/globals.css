@@ -6811,6 +6811,8 @@ img[data-lightbox-src],
 .global-notes-body {
   padding: 0 16px 8px;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 }
 
 /* ── Draggable resize handle between task list and notes ── */
@@ -6848,12 +6850,16 @@ img[data-lightbox-src],
 
 /* ── Tiptap editor base styles (shared inline + popup) ── */
 
+.notes-editor {
+  height: 100%;
+}
+
 .notes-editor .tiptap {
   outline: none;
   color: var(--fg);
   font-size: 13px;
   line-height: 1.5;
-  min-height: 32px;
+  min-height: 100%;
 }
 
 .notes-editor .tiptap > *:first-child { margin-top: 0; }
@@ -7000,6 +7006,8 @@ img[data-lightbox-src],
   position: fixed;
   inset: 0;
   background: var(--overlay-bg);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -7012,8 +7020,8 @@ img[data-lightbox-src],
   max-width: 800px;
   max-height: 80vh;
   background: var(--card-bg);
-  border-radius: var(--radius-lg);
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+  border-radius: 12px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -7064,6 +7072,8 @@ img[data-lightbox-src],
   flex: 1;
   overflow-y: auto;
   padding: 16px;
+  display: flex;
+  flex-direction: column;
 }
 
 @keyframes notes-popup-fade-in {
