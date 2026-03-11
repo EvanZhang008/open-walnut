@@ -5,8 +5,11 @@
  * Unlike start_session, no task is required and no persistent session is created.
  */
 
+import { randomBytes } from 'node:crypto';
 import type { ToolDefinition, ToolResultContent, ToolExecuteMeta } from '../tools.js';
 import { runInlineSubagent } from '../../providers/inline-subagent.js';
+
+const VALID_MODELS = new Set(['opus', 'sonnet', 'haiku']);
 
 export const createSubagentTool: ToolDefinition = {
   name: 'create_subagent',
@@ -20,8 +23,8 @@ running commands with AI interpretation, any task that benefits from an independ
 Unlike start_session: no task required, no persistent session, result returns directly to you.
 Unlike exec: the subagent has full AI reasoning ability, not just shell commands.
 
-Default model is sonnet (fast and cheap). Use opus only for complex reasoning tasks.
-Default timeout is 120 seconds. Background mode spawns and returns immediately.`,
+Default model is opus. Use sonnet for simple tasks, haiku for trivial lookups.
+Default timeout is 120 seconds (max 600). Background mode spawns and returns immediately.`,
   input_schema: {
     type: 'object',
     properties: {
@@ -36,11 +39,12 @@ Default timeout is 120 seconds. Background mode spawns and returns immediately.`
       model: {
         type: 'string',
         enum: ['opus', 'sonnet', 'haiku'],
-        description: 'Model to use. Default: sonnet (fast and cheap). Use opus for complex reasoning.',
+        description: 'Model to use. Default: opus. Use sonnet for simple tasks, haiku for trivial lookups.',
       },
       timeout_secs: {
         type: 'number',
         description: 'Timeout in seconds. Default: 120, max: 600.',
+        maximum: 600,
       },
       background: {
         type: 'boolean',
@@ -60,15 +64,21 @@ Default timeout is 120 seconds. Background mode spawns and returns immediately.`
       return 'Error: prompt is required and cannot be empty.';
     }
 
-    const timeoutSecs = Math.min(Math.max(Number(params.timeout_secs) || 120, 10), 600);
+    // Validate model against allowlist
+    const rawModel = typeof params.model === 'string' ? params.model : 'opus';
+    const model = VALID_MODELS.has(rawModel) ? rawModel : 'opus';
+
+    // Handle timeout_secs: 0 correctly (don't treat as falsy)
+    const rawTimeout = params.timeout_secs != null ? Number(params.timeout_secs) : 120;
+    const timeoutSecs = Math.min(Math.max(isNaN(rawTimeout) ? 120 : rawTimeout, 10), 600);
 
     const result = await runInlineSubagent({
       prompt,
       cwd: params.cwd as string | undefined,
-      model: (params.model as string) ?? 'sonnet',
+      model,
       timeoutMs: timeoutSecs * 1000,
       systemPrompt: params.system_prompt as string | undefined,
-      toolUseId: meta?.toolUseId ?? `subagent-${Date.now()}`,
+      toolUseId: meta?.toolUseId ?? `subagent-${randomBytes(6).toString('hex')}`,
       background: params.background === true,
     });
 

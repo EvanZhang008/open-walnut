@@ -9,16 +9,20 @@
 
 import { useState, useMemo, memo } from 'react';
 import type { ToolCallBlock } from '@/api/chat';
+import type { StreamingBlock } from '@/hooks/useSessionStream';
 import { ClaudeStreamView } from '../common/ClaudeStreamView';
 
 interface SubagentBlockProps {
   block: ToolCallBlock;
 }
 
+const EMPTY_BLOCKS: StreamingBlock[] = [];
+
 export const SubagentBlock = memo(function SubagentBlock({ block }: SubagentBlockProps) {
-  const [open, setOpen] = useState(false);
+  // Auto-open when actively streaming so the user sees output immediately
+  const [open, setOpen] = useState(() => block.status === 'calling');
   const isStreaming = block.status === 'calling';
-  const streamBlocks = block.streamBlocks ?? [];
+  const streamBlocks = block.streamBlocks ?? EMPTY_BLOCKS;
 
   // Extract prompt from input for header summary
   const promptSummary = useMemo(() => {
@@ -28,7 +32,7 @@ export const SubagentBlock = memo(function SubagentBlock({ block }: SubagentBloc
   }, [block.input?.prompt]);
 
   // Extract model and background from input
-  const model = (block.input?.model as string) ?? 'sonnet';
+  const model = (block.input?.model as string) ?? 'opus';
   const background = block.input?.background === true;
 
   // Extract cost/duration from result text (format: "\n[Cost: $X.XXXX | Duration: X.Xs]")
@@ -41,7 +45,7 @@ export const SubagentBlock = memo(function SubagentBlock({ block }: SubagentBloc
 
   const statusIcon = isStreaming ? (
     <span className="spinner" style={{ width: 12, height: 12, borderWidth: 2, display: 'inline-block', verticalAlign: 'middle' }} />
-  ) : block.status === 'error' ? '\u2717' : '\u2713';
+  ) : block.status === 'done' ? '\u2713' : '\u2717';
 
   return (
     <div className={`chat-tool-block subagent-block subagent-block--${block.status}`}>
@@ -69,22 +73,15 @@ export const SubagentBlock = memo(function SubagentBlock({ block }: SubagentBloc
               <pre className="chat-tool-block-pre">{block.input.prompt as string}</pre>
             </div>
           )}
-          {/* Stream content */}
-          {streamBlocks.length > 0 ? (
+          {/* Stream content or fallback to plain result */}
+          {streamBlocks.length > 0 || isStreaming ? (
             <div className="subagent-stream-content">
-              <ClaudeStreamView
-                blocks={streamBlocks}
-                isStreaming={isStreaming}
-              />
+              <ClaudeStreamView blocks={streamBlocks} isStreaming={isStreaming} />
             </div>
           ) : block.result ? (
             <div className="subagent-result">
               <div className="chat-tool-block-section-label">Result</div>
               <pre className="chat-tool-block-pre">{block.result}</pre>
-            </div>
-          ) : isStreaming ? (
-            <div className="subagent-stream-content">
-              <ClaudeStreamView blocks={[]} isStreaming={true} />
             </div>
           ) : null}
         </div>

@@ -5105,16 +5105,12 @@ img[data-lightbox-src],
 }
 
 .session-resize-handle {
-  width: 6px;
+  width: 8px;
   flex-shrink: 0;
   cursor: col-resize;
   position: relative;
   z-index: 5;
   transition: background 0.15s;
-}
-
-.session-resize-handle:hover {
-  background: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .session-resize-handle::after {
@@ -5123,16 +5119,21 @@ img[data-lightbox-src],
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  width: 3px;
-  height: 32px;
-  border-radius: 2px;
-  background: var(--accent);
-  opacity: 0;
-  transition: opacity 0.15s;
+  width: 4px;
+  height: 40px;
+  border-radius: 3px;
+  background: var(--border);
+  opacity: 0.5;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.session-resize-handle:hover {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
 .session-resize-handle:hover::after {
-  opacity: 0.6;
+  background: var(--accent);
+  opacity: 0.8;
 }
 
 .session-panel {
@@ -5994,6 +5995,30 @@ img[data-lightbox-src],
 .todo-pinned-unpin:hover {
   opacity: 1 !important;
   color: var(--error);
+}
+
+.todo-pinned-drag-handle {
+  cursor: grab;
+  color: var(--fg-muted);
+  opacity: 0;
+  font-size: 10px;
+  line-height: 1;
+  flex-shrink: 0;
+  padding: 2px 0;
+  user-select: none;
+  touch-action: none;
+}
+
+.todo-pinned-card:hover .todo-pinned-drag-handle {
+  opacity: 0.5;
+}
+
+.todo-pinned-drag-handle:hover {
+  opacity: 0.8 !important;
+}
+
+.todo-pinned-drag-handle:active {
+  cursor: grabbing;
 }
 
 .todo-panel-list {

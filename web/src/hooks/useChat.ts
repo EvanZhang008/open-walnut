@@ -552,7 +552,7 @@ export function useChat(): UseChatReturn {
               newStreamBlocks[targetIdx] = {
                 ...existing,
                 result: block.result,
-                status: block.result?.startsWith('Error:') ? 'error' : 'done',
+                status: isToolResultError(block.result) ? 'error' : 'done',
               };
             } else {
               newStreamBlocks = [...existingBlocks, block];

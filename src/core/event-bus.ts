@@ -55,6 +55,11 @@ export const EventNames = {
   SESSION_SYSTEM_EVENT: 'session:system-event',
   SESSION_USAGE_UPDATE: 'session:usage-update',
 
+  // Team events (Claude Code Teams — parallel agents)
+  SESSION_TEAM_INFO: 'session:team-info',
+  SESSION_TEAM_AGENT_DELTA: 'session:team-agent-delta',
+  SESSION_TEAM_AGENT_SNAPSHOT: 'session:team-agent-snapshot',
+
   // Chat history events
   CHAT_HISTORY_UPDATED: 'chat:history-updated',
   CHAT_COMPACTING: 'chat:compacting',

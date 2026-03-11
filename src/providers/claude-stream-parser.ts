@@ -2,8 +2,8 @@
  * Shared JSONL parser for Claude Code `--output-format stream-json` output.
  *
  * Converts individual JSONL lines into StreamingBlock objects that the frontend
- * can render. Used by both InlineSubagent (main agent tool) and potentially
- * JsonlTailer (session streaming) in the future.
+ * can render. Used by InlineSubagent (main agent tool).
+ * TODO: JsonlTailer could be refactored to use this parser.
  *
  * The JSONL format:
  *   {"type":"system","subtype":"init","model":"...","session_id":"..."}
@@ -12,7 +12,9 @@
  *   {"type":"result","subtype":"success","result":"...","cost_usd":0.003}
  */
 
-/** Streaming block types — mirrors the frontend StreamingBlock union */
+/** Streaming block types — mirrors the frontend StreamingBlock union in useSessionStream.ts.
+ *  Backend needs its own definitions since it can't import from the frontend package.
+ *  Keep these in sync with web/src/hooks/useSessionStream.ts. */
 export interface StreamingTextBlock {
   type: 'text';
   content: string;

@@ -11,6 +11,9 @@
  * - Concurrent limit via semaphore (max 3)
  * - Two-phase kill on timeout: SIGINT → 3s → SIGTERM
  * - Clean env (strips CLAUDECODE to avoid nested session detection)
+ *
+ * Permission mode is always bypassPermissions — subagents are trusted
+ * internal tools spawned by the main agent, not user-facing sessions.
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -30,7 +33,7 @@ import {
 export interface InlineSubagentOptions {
   prompt: string;
   cwd?: string;
-  model?: string;           // default: sonnet
+  model?: string;           // default: opus
   timeoutMs?: number;       // default: 120_000
   systemPrompt?: string;    // optional additional system prompt
   permissionMode?: string;  // default: bypassPermissions
@@ -45,6 +48,8 @@ export interface InlineSubagentResult {
   sessionId?: string;
   error?: string;
   durationMs: number;
+  /** Accumulated streaming blocks — available for introspection after completion.
+   *  During execution, blocks are also streamed live via AGENT_SUBAGENT_STREAM events. */
   blocks: StreamingBlock[];
 }
 
@@ -77,7 +82,8 @@ function releaseSemaphore(): void {
 
 const activeProcesses = new Set<ChildProcess>();
 
-process.on('exit', () => {
+// Use once() to avoid listener accumulation across hot-reloads / test runs
+process.once('exit', () => {
   for (const proc of activeProcesses) {
     try { proc.kill('SIGTERM'); } catch {}
   }
@@ -89,7 +95,7 @@ export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<In
   const {
     prompt,
     cwd,
-    model = 'sonnet',
+    model = 'opus',
     timeoutMs = 120_000,
     systemPrompt,
     permissionMode = 'bypassPermissions',
@@ -100,7 +106,7 @@ export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<In
   await acquireSemaphore();
   const startTime = Date.now();
 
-  // Build CLI args
+  // Build CLI args — claude CLI accepts short model names (opus, sonnet, haiku)
   const args = [
     '-p',
     '--output-format', 'stream-json',
@@ -112,7 +118,8 @@ export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<In
     args.push('--append-system-prompt', systemPrompt);
   }
 
-  // Clean env — remove CLAUDECODE to prevent nested session detection
+  // Clean env — remove CLAUDECODE to prevent nested session detection.
+  // API keys (ANTHROPIC_API_KEY etc.) are intentionally preserved so the subprocess can authenticate.
   const { CLAUDECODE: _drop, ...cleanEnv } = process.env;
 
   log.agent.info('inline subagent spawning', {
@@ -139,7 +146,7 @@ export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<In
   // State tracking
   let initData: ClaudeStreamInit | undefined;
   let resultData: ClaudeStreamResult | undefined;
-  const blocks: StreamingBlock[] = [];
+  let blocks: StreamingBlock[] = [];
 
   // Parse JSONL output line by line
   const rl = createInterface({ input: proc.stdout!, crlfDelay: Infinity });
@@ -156,9 +163,7 @@ export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<In
     const blockList = Array.isArray(parsed) ? parsed : [parsed];
     for (const block of blockList) {
       // Accumulate (merges tool results with tool calls)
-      const newBlocks = accumulateBlock(blocks, block);
-      blocks.length = 0;
-      blocks.push(...newBlocks);
+      blocks = accumulateBlock(blocks, block);
 
       // Emit streaming event to frontend
       bus.emit(EventNames.AGENT_SUBAGENT_STREAM, {
@@ -168,13 +173,16 @@ export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<In
     }
   });
 
-  // Collect stderr for error diagnostics
+  // Collect stderr for error diagnostics (capped to prevent unbounded growth)
   let stderr = '';
+  const STDERR_MAX = 10_000;
   proc.stderr?.on('data', (chunk: Buffer) => {
-    stderr += chunk.toString();
+    if (stderr.length < STDERR_MAX) stderr += chunk.toString();
   });
 
-  // If background mode, return immediately with a handle
+  // If background mode, return immediately with a handle.
+  // Note: semaphore slot is held until the background process completes,
+  // so background jobs count against the max 3 concurrent limit.
   if (background) {
     const bgPromise = waitForExit(proc, rl, timeoutMs, toolUseId);
     bgPromise.then((exitCode) => {
@@ -191,7 +199,7 @@ export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<In
         costUsd: resultData?.costUsd,
       });
 
-      // Notify main agent via event bus
+      // Notify frontend via event bus
       bus.emit(EventNames.AGENT_SUBAGENT_STREAM, {
         toolUseId,
         block: {
@@ -254,12 +262,11 @@ function waitForExit(
   return new Promise((resolve) => {
     let resolved = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let killTimer: ReturnType<typeof setTimeout> | null = null;
 
     const cleanup = () => {
-      if (timer) {
-        clearTimeout(timer);
-        timer = null;
-      }
+      if (timer) { clearTimeout(timer); timer = null; }
+      if (killTimer) { clearTimeout(killTimer); killTimer = null; }
       rl.close();
     };
 
@@ -286,7 +293,7 @@ function waitForExit(
       try { proc.kill('SIGINT'); } catch {}
 
       // Give 3s for graceful shutdown, then SIGTERM
-      setTimeout(() => {
+      killTimer = setTimeout(() => {
         if (resolved) return;
         log.agent.warn('inline subagent force kill — sending SIGTERM', { toolUseId });
         try { proc.kill('SIGTERM'); } catch {}

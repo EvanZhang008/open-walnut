@@ -1,4 +1,5 @@
 import { apiGet, apiPost } from './client';
+import type { StreamingBlock } from '@/hooks/useSessionStream';
 
 // Block types for rich chat messages — shared between API layer, hooks, and components
 export interface ThinkingBlock {
@@ -14,7 +15,7 @@ export interface ToolCallBlock {
   result?: string;
   status: 'calling' | 'done' | 'error';
   /** Streaming blocks from inline subagent (only for create_subagent tool calls) */
-  streamBlocks?: import('@/hooks/useSessionStream').StreamingBlock[];
+  streamBlocks?: StreamingBlock[];
 }
 
 /** Detect if a tool call result indicates an error */
