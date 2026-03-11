@@ -45,6 +45,8 @@ import { useVerticalSplitter } from '@/hooks/useVerticalSplitter';
 import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
 import { ProjectDetailPane } from './ProjectDetailPane';
 import { CategoryDetailPane } from './CategoryDetailPane';
+import { GlobalNotesSection } from '../notes/GlobalNotesSection';
+import { useGlobalNotes } from '@/hooks/useGlobalNotes';
 
 type DetailTarget =
   | { type: 'project'; category: string; project: string }
@@ -422,6 +424,23 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, depth = 0, childCou
     setIsEditing(true);
   }, [onUpdateTitle]);
 
+  // Safety net: click-outside exits editing even if blur doesn't fire
+  useEffect(() => {
+    if (!isEditing) return;
+    const handleOutsidePointerDown = (e: PointerEvent) => {
+      if (titleRef.current && !titleRef.current.contains(e.target as Node)) {
+        commitEdit();
+      }
+    };
+    document.addEventListener('pointerdown', handleOutsidePointerDown);
+    return () => document.removeEventListener('pointerdown', handleOutsidePointerDown);
+  }, [isEditing, commitEdit]);
+
+  // Disable DnD listeners & sortable attributes while editing to prevent
+  // drag from hijacking text selection and focus inside the contentEditable
+  const activeAttributes = isEditing ? {} : attributes;
+  const activeListeners = isEditing ? {} : listeners;
+
   return (
     <div
       ref={setNodeRef}
@@ -435,8 +454,8 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, depth = 0, childCou
         onClick();
       }}
       onKeyDown={(e) => { if (e.key === 'Enter' && !isEditing) onClick(); }}
-      {...attributes}
-      {...listeners}
+      {...activeAttributes}
+      {...activeListeners}
     >
       {/* ── Layout: [chevron 20px] [phase-icon] [content ...flex-1...] [badges] ── */}
 
@@ -1367,6 +1386,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   // Search state
   const { query: searchQuery, setQuery: setSearchQuery, results: searchResults, isSearching, clearSearch } = useTaskSearch();
+
+  // Global notes
+  const globalNotes = useGlobalNotes();
 
   // Vertical splitter for list/detail ratio
   const { ratio: detailRatio, containerRef: splitterContainerRef, handleMouseDown: splitterMouseDown, isResizing: splitterResizing } = useVerticalSplitter();
@@ -3015,6 +3037,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           Add
         </button>
       </form>
+      <GlobalNotesSection {...globalNotes} />
     </div>
   );
 });
