@@ -358,10 +358,14 @@ export async function getCompactionSummary(): Promise<string | null> {
   return store.compactionSummary;
 }
 
-/** Get the lastUpdated timestamp — cheap, for cache invalidation. */
+/** Get file mtime as cache key — single syscall, avoids parsing the full file. */
 export async function getLastUpdated(): Promise<string> {
-  const store = await readStore();
-  return store.lastUpdated || '';
+  try {
+    const stat = await fsp.stat(CHAT_HISTORY_FILE);
+    return stat.mtimeMs.toString();
+  } catch {
+    return '';
+  }
 }
 
 /**

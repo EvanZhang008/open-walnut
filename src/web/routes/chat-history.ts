@@ -16,15 +16,10 @@ import { isCompactionInProgress, triggerBackgroundCompaction } from '../backgrou
 
 export const chatHistoryRouter = Router()
 
-// Module-level cache for stats endpoint — avoids re-reading 11MB + rebuilding system prompt
-let cachedStats: Record<string, unknown> | null = null
-let cacheTimestamp: string | null = null
-
-/** Invalidate the stats cache (called when piggybacked stats are broadcast). */
-export function invalidateStatsCache(): void {
-  cachedStats = null
-  cacheTimestamp = null
-}
+// Module-level cache for stats endpoint — avoids rebuilding system prompt + tool schemas.
+// Invalidated automatically when file mtime changes (any chat history write).
+let cachedStats: { apiMessageCount: number; estimatedTokens: number; systemTokens: number; toolsTokens: number; estimatedTotalTokens: number; compacted: boolean; contextWindow: number } | null = null
+let cachedMtime: string | null = null
 
 // GET /api/chat/history?page=1&pageSize=100
 chatHistoryRouter.get('/history', async (req: Request, res: Response, next: NextFunction) => {
@@ -43,7 +38,7 @@ chatHistoryRouter.get('/stats', async (_req: Request, res: Response, next: NextF
   try {
     // Check if cached stats are still valid (chat history hasn't changed)
     const lastUpdated = await chatHistory.getLastUpdated()
-    if (cachedStats && cacheTimestamp === lastUpdated) {
+    if (cachedStats && cachedMtime === lastUpdated) {
       res.json(cachedStats)
       return
     }
@@ -90,7 +85,7 @@ chatHistoryRouter.get('/stats', async (_req: Request, res: Response, next: NextF
 
     // Cache for subsequent calls
     cachedStats = result
-    cacheTimestamp = lastUpdated
+    cachedMtime = lastUpdated
 
     res.json(result)
   } catch (err) {
