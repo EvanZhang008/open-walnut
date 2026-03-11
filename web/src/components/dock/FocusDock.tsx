@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef, memo } from 'react';
 import type { Task } from '@walnut/core';
 import { compositeColor, resolveTaskSessionId } from '@/utils/session-status';
 import { SessionChatHistory } from '@/components/sessions/SessionChatHistory';
+import { SessionExpandedModal } from '@/components/sessions/SessionExpandedModal';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { useSessionSend } from '@/hooks/useSessionSend';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
@@ -86,6 +87,9 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
   // Reuse the same send hook as SessionPanel — optimistic messages + delivery tracking
   const { optimisticMsgs, send, handleMessagesDelivered, handleBatchCompleted, clearCommitted } = useSessionSend(sessionId);
 
+  // Expanded modal state
+  const [showExpanded, setShowExpanded] = useState(false);
+
   // Slash command autocomplete (same as SessionPanel)
   const { items: slashCommands, search: searchSlashCommands } = useSlashCommands();
 
@@ -107,6 +111,21 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
           <span className="dock-task-status-dot" style={{ background: statusColor }} />
           {isStreaming && <span className="dock-task-streaming-dot" />}
           <span className="dock-task-title" title={task.title}>{task.title}</span>
+          {sessionId && (
+            <button
+              className="dock-task-expand"
+              onClick={(e) => { e.stopPropagation(); setShowExpanded(true); }}
+              title="Expand session"
+              aria-label="Expand session to full screen"
+            >
+              <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="10 2 14 2 14 6" />
+                <polyline points="6 14 2 14 2 10" />
+                <line x1="14" y1="2" x2="9" y2="7" />
+                <line x1="2" y1="14" x2="7" y2="9" />
+              </svg>
+            </button>
+          )}
           <button
             className="dock-task-unpin"
             onClick={handleUnpin}
@@ -144,6 +163,12 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
             searchSessionCommands={searchSlashCommands}
           />
         </div>
+      )}
+      {showExpanded && sessionId && (
+        <SessionExpandedModal
+          sessionId={sessionId}
+          onClose={() => setShowExpanded(false)}
+        />
       )}
     </div>
   );
