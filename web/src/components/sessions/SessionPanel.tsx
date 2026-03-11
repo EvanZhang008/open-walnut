@@ -381,7 +381,7 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
                   title={pinned ? 'Unpin from Focus Bar' : 'Pin to Focus Bar'}
                   aria-label={pinned ? 'Unpin from Focus Bar' : 'Pin to Focus Bar'}
                 >
-                  {pinned ? '\u{1F4CC}' : '\u{1F4CC}'}
+                  {pinned ? '\u{1F4CC}' : '\u{1F4CD}'}
                 </button>
               )}
               <button className="session-panel-close" onClick={onClose} title="Close session panel">&times;</button>

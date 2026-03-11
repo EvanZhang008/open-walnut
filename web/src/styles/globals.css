@@ -1809,7 +1809,7 @@ input:focus, textarea:focus, select:focus {
   border-radius: 4px;
   padding: 2px 4px;
   margin: -2px -4px;
-  background: var(--bg-primary, #fff);
+  background: var(--card-bg, #fff);
   color: var(--fg-primary, #000);
   outline: none;
   font-family: inherit;
@@ -5078,7 +5078,7 @@ img[data-lightbox-src],
   top: calc(100% + 4px);
   right: 0;
   z-index: 100;
-  background: var(--bg-primary);
+  background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
@@ -5204,7 +5204,7 @@ img[data-lightbox-src],
   border-radius: 12px;
   overflow: hidden;
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
-  background: var(--bg-primary);
+  background: var(--card-bg);
 }
 
 .session-panel--expanded {
@@ -5279,7 +5279,7 @@ img[data-lightbox-src],
   border-radius: 12px;
   overflow: hidden;
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
-  background: var(--bg-primary);
+  background: var(--card-bg);
   border: 2px solid var(--accent);
   display: flex;
   flex-direction: column;
@@ -6642,6 +6642,13 @@ img[data-lightbox-src],
   font-style: italic;
 }
 
+.global-notes-error {
+  font-size: 11px;
+  color: var(--red, #ff3b30);
+  font-style: italic;
+  cursor: help;
+}
+
 .global-notes-expand-btn {
   background: none;
   border: none;
@@ -6660,84 +6667,93 @@ img[data-lightbox-src],
 
 .global-notes-body {
   padding: 0 16px 8px;
-  max-height: 200px;
   overflow-y: auto;
 }
 
-.global-notes-textarea {
-  width: 100%;
-  min-height: 60px;
-  max-height: 200px;
-  padding: 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--fg);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  font-size: 13px;
-  line-height: 1.5;
-  resize: none;
+/* ── Draggable resize handle between task list and notes ── */
+
+.global-notes-resize-handle {
+  height: 6px;
+  cursor: row-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  user-select: none;
+  touch-action: none;
+}
+
+.global-notes-resize-handle:hover,
+.global-notes-resize-handle.dragging {
+  background: var(--accent-subtle);
+}
+
+.global-notes-resize-handle::after {
+  content: '';
+  width: 32px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border-strong);
+  opacity: 0.5;
+}
+
+.global-notes-resize-handle:hover::after,
+.global-notes-resize-handle.dragging::after {
+  opacity: 1;
+  background: var(--accent);
+}
+
+/* ── Tiptap editor base styles (shared inline + popup) ── */
+
+.notes-editor .tiptap {
   outline: none;
-}
-
-.global-notes-textarea:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-subtle);
-}
-
-.global-notes-preview {
-  cursor: text;
-  min-height: 32px;
-  padding: 4px 0;
+  color: var(--fg);
   font-size: 13px;
   line-height: 1.5;
+  min-height: 32px;
 }
 
-.global-notes-preview h1,
-.global-notes-preview h2,
-.global-notes-preview h3 {
-  margin: 4px 0 2px;
+.notes-editor .tiptap > *:first-child { margin-top: 0; }
+.notes-editor .tiptap > *:last-child { margin-bottom: 0; }
+
+.notes-editor .tiptap p { margin: 2px 0; }
+
+.notes-editor .tiptap h1,
+.notes-editor .tiptap h2,
+.notes-editor .tiptap h3 {
   line-height: 1.3;
+  margin: 6px 0 2px;
 }
 
-.global-notes-preview h1 { font-size: 16px; }
-.global-notes-preview h2 { font-size: 14px; }
-.global-notes-preview h3 { font-size: 13px; }
+.notes-editor .tiptap h1 { font-size: 18px; }
+.notes-editor .tiptap h2 { font-size: 15px; }
+.notes-editor .tiptap h3 { font-size: 13px; font-weight: 600; }
 
-.global-notes-preview p {
-  margin: 2px 0;
-}
-
-.global-notes-preview ul,
-.global-notes-preview ol {
+.notes-editor .tiptap ul,
+.notes-editor .tiptap ol {
   margin: 2px 0;
   padding-left: 20px;
 }
 
-.global-notes-preview li {
-  margin: 1px 0;
-}
+.notes-editor .tiptap li { margin: 1px 0; }
+.notes-editor .tiptap li p { margin: 0; }
 
-.global-notes-preview input[type="checkbox"] {
-  cursor: pointer;
-  margin-right: 4px;
-}
-
-.global-notes-preview blockquote {
+.notes-editor .tiptap blockquote {
   margin: 4px 0;
   padding-left: 10px;
   border-left: 3px solid var(--border-strong);
   color: var(--fg-secondary);
 }
 
-.global-notes-preview code {
+.notes-editor .tiptap code {
   background: var(--bg-secondary);
   padding: 1px 4px;
   border-radius: 3px;
   font-size: 12px;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
 }
 
-.global-notes-preview pre {
+.notes-editor .tiptap pre {
   background: var(--bg-secondary);
   padding: 8px;
   border-radius: var(--radius-sm);
@@ -6745,15 +6761,80 @@ img[data-lightbox-src],
   margin: 4px 0;
 }
 
-.global-notes-preview pre code {
+.notes-editor .tiptap pre code {
   background: none;
   padding: 0;
 }
 
-.notes-placeholder {
+.notes-editor .tiptap hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 8px 0;
+}
+
+.notes-editor .tiptap strong { font-weight: 600; }
+.notes-editor .tiptap em { font-style: italic; }
+
+/* Task list (checkbox items) */
+.notes-editor .tiptap ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 4px;
+}
+
+.notes-editor .tiptap ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.notes-editor .tiptap ul[data-type="taskList"] li > label {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.notes-editor .tiptap ul[data-type="taskList"] li > label input[type="checkbox"] {
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+.notes-editor .tiptap ul[data-type="taskList"] li > div {
+  flex: 1;
+}
+
+.notes-editor .tiptap ul[data-type="taskList"] li[data-checked="true"] > div > p {
+  text-decoration: line-through;
+  color: var(--fg-muted);
+}
+
+/* Placeholder */
+.notes-editor .tiptap p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
   color: var(--fg-muted);
   font-style: italic;
-  margin: 0;
+  pointer-events: none;
+  height: 0;
+}
+
+/* Inline variant (sidebar) */
+.global-notes-editor-inline .tiptap {
+  font-size: 13px;
+}
+
+/* Popup variant */
+.global-notes-editor-popup .tiptap {
+  font-size: 14px;
+  line-height: 1.6;
+  min-height: 300px;
+}
+
+.global-notes-editor-popup .tiptap h1 { font-size: 22px; }
+.global-notes-editor-popup .tiptap h2 { font-size: 18px; }
+.global-notes-editor-popup .tiptap h3 { font-size: 16px; }
+
+.global-notes-error {
+  font-size: 11px;
+  color: #ff3b30;
 }
 
 /* ===== Global Notes Popup ===== */
@@ -6808,20 +6889,6 @@ img[data-lightbox-src],
   font-style: italic;
 }
 
-.notes-popup-edit-btn {
-  padding: 4px 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--fg-secondary);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.notes-popup-edit-btn:hover {
-  background: var(--bg-secondary);
-}
-
 .notes-popup-close {
   background: none;
   border: none;
@@ -6840,73 +6907,6 @@ img[data-lightbox-src],
   flex: 1;
   overflow-y: auto;
   padding: 16px;
-}
-
-.notes-popup-textarea {
-  width: 100%;
-  height: 100%;
-  min-height: 300px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--fg);
-  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
-  font-size: 14px;
-  line-height: 1.6;
-  resize: none;
-  outline: none;
-}
-
-.notes-popup-preview {
-  font-size: 14px;
-  line-height: 1.6;
-  min-height: 300px;
-}
-
-.notes-popup-preview h1 { font-size: 22px; margin: 8px 0 4px; }
-.notes-popup-preview h2 { font-size: 18px; margin: 8px 0 4px; }
-.notes-popup-preview h3 { font-size: 16px; margin: 6px 0 3px; }
-
-.notes-popup-preview p { margin: 4px 0; }
-
-.notes-popup-preview ul,
-.notes-popup-preview ol {
-  margin: 4px 0;
-  padding-left: 24px;
-}
-
-.notes-popup-preview li { margin: 2px 0; }
-
-.notes-popup-preview input[type="checkbox"] {
-  cursor: pointer;
-  margin-right: 6px;
-}
-
-.notes-popup-preview blockquote {
-  margin: 8px 0;
-  padding-left: 14px;
-  border-left: 3px solid var(--border-strong);
-  color: var(--fg-secondary);
-}
-
-.notes-popup-preview code {
-  background: var(--bg-secondary);
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-size: 13px;
-}
-
-.notes-popup-preview pre {
-  background: var(--bg-secondary);
-  padding: 12px;
-  border-radius: var(--radius-sm);
-  overflow-x: auto;
-  margin: 8px 0;
-}
-
-.notes-popup-preview pre code {
-  background: none;
-  padding: 0;
 }
 
 @keyframes notes-popup-fade-in {
@@ -9591,7 +9591,7 @@ img[data-lightbox-src],
   padding: 10px 8px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--bg-primary);
+  background: var(--card-bg);
   transition: border-color 0.15s, background 0.15s;
 }
 
