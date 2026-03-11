@@ -815,9 +815,28 @@ export function registerChatRpc(): void {
         })
         log.agent.info('agent response persisted', { taskId: taskContext?.id, messageCount: newApiMsgs.length })
 
+        // Build lightweight stats from agent loop's token breakdown (avoids expensive re-computation)
+        let stats: Record<string, unknown> | undefined
+        if (result.tokenBreakdown) {
+          const { getContextWindowSize } = await import('../../agent/model.js')
+          const { getConfig } = await import('../../core/config-manager.js')
+          const config = await getConfig()
+          const contextWindow = getContextWindowSize(config.agent?.main_model)
+          const compacted = !!(await chatHistory.getCompactionSummary())
+          stats = {
+            apiMessageCount: result.messages.filter((m: { compacted?: boolean }) => !m.compacted).length,
+            estimatedTokens: result.tokenBreakdown.messages,
+            systemTokens: result.tokenBreakdown.system,
+            toolsTokens: result.tokenBreakdown.tools,
+            estimatedTotalTokens: result.tokenBreakdown.total,
+            compacted,
+            contextWindow,
+          }
+        }
+
         // Signal turn complete to the client (resets isStreaming).
         // This resolves the RPC immediately — compaction runs separately below.
-        broadcastEvent(EventNames.AGENT_RESPONSE, { text: resolvedText })
+        broadcastEvent(EventNames.AGENT_RESPONSE, { text: resolvedText, ...(stats ? { stats } : {}) })
         log.web.info('chat turn completed', { taskId: taskContext?.id, durationMs: Date.now() - turnStartMs })
 
         // Auto-append to conversation_log if a task was focused

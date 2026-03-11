@@ -42,35 +42,46 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
   const onEditorUpdate = useCallback((editor: Editor) => {
     editorRef.current = editor;
     dirty.current = true;
-    setSaveError(null);
+    if (saveError) setSaveError(null);
 
     if (saveTimer.current) clearTimeout(saveTimer.current);
 
-    // Show saving indicator (single state update)
     setSaving(true);
 
     saveTimer.current = setTimeout(() => {
-      // Serialize markdown ONCE when debounce fires
-      const md = editorRef.current?.storage.markdown.getMarkdown() ?? '';
-      saveGlobalNotes(md)
-        .then(() => {
-          dirty.current = false;
-          // Sync React state so popup/sidebar stay in sync
-          setContent(md);
-        })
-        .catch((err) => { setSaveError(err instanceof Error ? err.message : 'Save failed'); })
-        .finally(() => setSaving(false));
+      // Serialize from the editor ref — guard against destroyed editors
+      const ed = editorRef.current;
+      if (!ed || ed.isDestroyed) {
+        setSaving(false);
+        return;
+      }
+      try {
+        const md = ed.storage.markdown.getMarkdown();
+        saveGlobalNotes(md)
+          .then(() => {
+            dirty.current = false;
+            setContent(md);
+          })
+          .catch((err) => { setSaveError(err instanceof Error ? err.message : 'Save failed'); })
+          .finally(() => setSaving(false));
+      } catch {
+        // Editor was destroyed between scheduling and firing — skip save
+        setSaving(false);
+      }
     }, 500);
-  }, []);
+  }, [saveError]);
 
   // Cleanup timer on unmount — only flush if content was actually modified
   useEffect(() => {
     return () => {
       if (saveTimer.current) {
         clearTimeout(saveTimer.current);
-        if (dirty.current && editorRef.current) {
-          const md = editorRef.current.storage.markdown.getMarkdown();
-          saveGlobalNotes(md).catch(() => {});
+        const ed = editorRef.current;
+        if (dirty.current && ed && !ed.isDestroyed) {
+          try {
+            const md = ed.storage.markdown.getMarkdown();
+            saveGlobalNotes(md).catch(() => {});
+          } catch { /* editor already gone */ }
         }
       }
     };

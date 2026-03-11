@@ -218,7 +218,16 @@ export interface AgentToolActivityEvent { toolName: string; status: 'calling' | 
 export interface AgentToolCallEvent { toolName: string; input: Record<string, unknown> }
 export interface AgentToolResultEvent { toolName: string; result: string }
 export interface AgentThinkingEvent { text: string }
-export interface AgentResponseEvent { text: string; aborted?: boolean; source?: string }
+export interface ChatStats {
+  apiMessageCount: number;
+  estimatedTokens: number;
+  systemTokens: number;
+  toolsTokens: number;
+  estimatedTotalTokens: number;
+  compacted: boolean;
+  contextWindow: number;
+}
+export interface AgentResponseEvent { text: string; aborted?: boolean; source?: string; stats?: ChatStats }
 export interface AgentErrorEvent { error: string }
 
 // ── Chat events ──

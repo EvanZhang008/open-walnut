@@ -6995,11 +6995,6 @@ img[data-lightbox-src],
 .global-notes-editor-popup .tiptap h2 { font-size: 18px; }
 .global-notes-editor-popup .tiptap h3 { font-size: 16px; }
 
-.global-notes-error {
-  font-size: 11px;
-  color: #ff3b30;
-}
-
 /* ===== Global Notes Popup ===== */
 
 .notes-popup-overlay {
@@ -9628,6 +9623,27 @@ img[data-lightbox-src],
 }
 
 .sps-path-category { font-weight: 500; }
+
+.sps-tag-live {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+[data-theme="dark"] .sps-tag-live {
+  background: #1b3a1e;
+  color: #81c784;
+}
+
+.sps-live .sps-path-cwd { opacity: 0.85; }
+
+.sps-live-indicator {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+  color: var(--fg-muted);
+}
+.sps-search { position: relative; }
 
 .sps-empty, .sps-error {
   padding: 20px 12px;

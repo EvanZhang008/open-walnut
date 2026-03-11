@@ -10,35 +10,37 @@ import { listTasks, getTask, addTask, updateTask } from '../../core/task-manager
 import { getConfig } from '../../core/config-manager.js'
 import { bus, EventNames, eventData } from '../../core/event-bus.js'
 import path from 'path'
-import { isProcessAlive } from '../../utils/process.js'
+import { isProcessAliveAsync } from '../../utils/process.js'
 import { readPlanFromSession, buildPlanExecutionMessage } from '../../utils/plan-message.js'
+import { getFrequentDirs, compileFromSessions } from '../../core/frequent-dirs.js'
 import type { SessionRecord, Task, WorkStatus } from '../../core/types.js'
 
-/** Recompute process_status live via PID check (for GET responses). */
-function enrichWithLiveStatus(sessions: SessionRecord[]): SessionRecord[] {
-  for (const s of sessions) {
-    // Embedded/SDK sessions have no OS process — trust the stored status
+/** Recompute process_status live via PID check (for GET responses).
+ *  Runs all PID checks in parallel to avoid blocking the event loop. */
+async function enrichWithLiveStatus(sessions: SessionRecord[]): Promise<SessionRecord[]> {
+  // Collect sessions that need a PID liveness check
+  const checks: { index: number; pid: number; processName: string }[] = []
+  for (let i = 0; i < sessions.length; i++) {
+    const s = sessions[i]
     if (s.provider === 'embedded' || s.provider === 'sdk') continue
-
-    if (s.pid != null) {
-      if (s.process_status === 'running' || s.process_status === 'idle') {
-        // Verify PID liveness for sessions the DB thinks are alive (running or idle).
-        // This catches processes that died without triggering normal shutdown.
-        const processName = s.host ? 'ssh' : 'claude'
-        if (!isProcessAlive(s.pid, processName)) {
-          s.process_status = 'stopped'
-        }
-      }
-      // If DB says 'stopped', trust it — it was set explicitly by session-end,
-      // health-monitor, reconciler, or user action. Don't re-check PID because
-      // the process may be orphaned/zombie (still alive but session is done).
-      // When a session resumes, createSessionRecord() sets process_status='running'
-      // in the DB before any API response, so there's no "Stopped + Completed" regression.
-    } else if (s.work_status === 'completed' || s.work_status === 'error') {
-      // No PID to check and work is done — safe to force stopped
+    if (s.pid != null && (s.process_status === 'running' || s.process_status === 'idle')) {
+      checks.push({ index: i, pid: s.pid, processName: s.host ? 'ssh' : 'claude' })
+    } else if (s.pid == null && (s.work_status === 'completed' || s.work_status === 'error')) {
       s.process_status = 'stopped'
     }
   }
+
+  if (checks.length > 0) {
+    const results = await Promise.all(
+      checks.map(c => isProcessAliveAsync(c.pid, c.processName))
+    )
+    for (let i = 0; i < checks.length; i++) {
+      if (!results[i]) {
+        sessions[checks[i].index].process_status = 'stopped'
+      }
+    }
+  }
+
   return sessions
 }
 
@@ -67,7 +69,7 @@ export const sessionsRouter = Router()
 // GET /api/sessions/working-dirs — deduplicated working directories from persistent store
 sessionsRouter.get('/working-dirs', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const { getFrequentDirs } = await import('../../core/frequent-dirs.js')
+    // getFrequentDirs imported statically at top to avoid cold-start latency
     const dirs = await getFrequentDirs()
     const config = await getConfig()
     const hosts = config.hosts ?? {}
@@ -120,9 +122,9 @@ sessionsRouter.get('/working-dirs', async (_req: Request, res: Response, next: N
 // POST /api/sessions/working-dirs/recompile — rebuild frequent-directories.json from sessions
 sessionsRouter.post('/working-dirs/recompile', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const { compileFromSessions } = await import('../../core/frequent-dirs.js')
+    // compileFromSessions imported statically at top
     await compileFromSessions()
-    const { getFrequentDirs } = await import('../../core/frequent-dirs.js')
+    // getFrequentDirs imported statically at top to avoid cold-start latency
     const dirs = await getFrequentDirs()
     res.json({ status: 'ok', count: dirs.length })
   } catch (err) {
@@ -130,11 +132,17 @@ sessionsRouter.post('/working-dirs/recompile', async (_req: Request, res: Respon
   }
 })
 
+// In-memory cache for SSH directory listings (avoid re-SSHing for 60s)
+const dirCache = new Map<string, { dirs: string[]; ts: number }>()
+const DIR_CACHE_TTL = 60_000
+
 // GET /api/sessions/list-dirs — list subdirectories on a host (local or SSH) for path auto-complete
+// Uses SSH ControlMaster multiplexing for fast subsequent calls and multi-level preload.
 sessionsRouter.get('/list-dirs', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const prefix = String(req.query.prefix ?? '/')
     const host = req.query.host as string | undefined
+    const depth = Math.min(Number(req.query.depth) || 2, 4) // preload depth, default 2, max 4
 
     if (prefix.length > 4096) {
       res.status(400).json({ error: 'prefix too long' })
@@ -164,43 +172,79 @@ sessionsRouter.get('/list-dirs', async (req: Request, res: Response, next: NextF
         res.status(400).json({ error: `Host "${host}" has no hostname` })
         return
       }
+
+      // Check in-memory cache first (avoid re-SSHing)
+      const cacheKey = `${host}::${dir}::${depth}`
+      const cached = dirCache.get(cacheKey)
+      if (cached && Date.now() - cached.ts < DIR_CACHE_TTL) {
+        const entries = cached.dirs
+          .filter(p => !partial || path.basename(p).toLowerCase().startsWith(partial.toLowerCase()))
+        res.json({ dirs: entries, parent: dir, cached: true })
+        return
+      }
+
       const hostString = hostDef.user ? `${hostDef.user}@${hostname}` : hostname
-      const sshArgs = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=5']
+
+      // SSH ControlMaster: reuse persistent connection
+      const controlDir = '/tmp/walnut-ssh-mux'
+      const nodeFs = await import('node:fs')
+      nodeFs.mkdirSync(controlDir, { recursive: true, mode: 0o700 })
+      const controlPath = `${controlDir}/%r@%h-%p`
+
+      const sshArgs = [
+        '-o', 'BatchMode=yes',
+        '-o', 'StrictHostKeyChecking=no',
+        '-o', 'ConnectTimeout=5',
+        '-o', `ControlMaster=auto`,
+        '-o', `ControlPath=${controlPath}`,
+        '-o', `ControlPersist=300`,
+      ]
       if (hostDef.port) sshArgs.push('-p', String(hostDef.port))
 
-      // Shell-quote the dir for safe SSH
       const quotedDir = dir.replace(/'/g, "'\\''")
-      const cmd = `ls -1 -p '${quotedDir}' 2>/dev/null | grep '/$' | head -100`
+      const cmd = `find '${quotedDir}' -maxdepth ${depth} -type d 2>/dev/null | head -500`
 
       const { execFile } = await import('node:child_process')
       const output = await new Promise<string>((resolve, reject) => {
         execFile('ssh', [...sshArgs, hostString, cmd], {
-          timeout: 8_000,
+          timeout: 10_000,
           encoding: 'utf-8',
         }, (err, stdout) => err ? reject(err) : resolve(stdout))
       })
 
-      const entries = output.split('\n').filter(Boolean).map(name => {
-        const clean = name.replace(/\/$/, '')
-        return dir.endsWith('/') ? `${dir}${clean}` : `${dir}/${clean}`
-      }).filter(p => !partial || path.basename(p).toLowerCase().startsWith(partial.toLowerCase()))
+      const allEntries = output.split('\n')
+        .filter(p => p && p !== dir && p !== dir.replace(/\/$/, ''))
+
+      // Cache the full unfiltered result
+      dirCache.set(cacheKey, { dirs: allEntries, ts: Date.now() })
+
+      const entries = allEntries
+        .filter(p => !partial || path.basename(p).toLowerCase().startsWith(partial.toLowerCase()))
 
       res.json({ dirs: entries, parent: dir })
     } else {
-      // Local filesystem
+      // Local filesystem — also preload multiple levels
       const fs = await import('node:fs')
-      let entries: string[] = []
-      try {
-        const names = fs.readdirSync(dir)
-        for (const name of names) {
-          if (partial && !name.toLowerCase().startsWith(partial.toLowerCase())) continue
-          const full = path.join(dir, name)
-          try {
-            if (fs.statSync(full).isDirectory()) entries.push(full)
-          } catch { /* skip unreadable */ }
-          if (entries.length >= 100) break
-        }
-      } catch { /* dir doesn't exist */ }
+      const entries: string[] = []
+      const walkLocal = (d: string, currentDepth: number) => {
+        if (currentDepth > depth || entries.length >= 500) return
+        try {
+          const names = fs.readdirSync(d)
+          for (const name of names) {
+            if (entries.length >= 500) break
+            // At the first level, filter by partial prefix
+            if (currentDepth === 1 && partial && !name.toLowerCase().startsWith(partial.toLowerCase())) continue
+            const full = path.join(d, name)
+            try {
+              if (fs.statSync(full).isDirectory()) {
+                entries.push(full)
+                if (currentDepth < depth) walkLocal(full, currentDepth + 1)
+              }
+            } catch { /* skip unreadable */ }
+          }
+        } catch { /* dir doesn't exist */ }
+      }
+      walkLocal(dir, 1)
 
       res.json({ dirs: entries, parent: dir })
     }
@@ -302,7 +346,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
 sessionsRouter.get('/tree', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const hideCompleted = req.query.hideCompleted === 'true'
-    const sessions = await enrichWithHostnames(enrichWithLiveStatus(await listSessions()))
+    const sessions = await enrichWithHostnames(await enrichWithLiveStatus(await listSessions()))
     const tasks = await listTasks()
     const config = await getConfig()
     const favCats: string[] = config.favorites?.categories ?? []
@@ -391,7 +435,7 @@ sessionsRouter.get('/', async (_req: Request, res: Response, next: NextFunction)
   try {
     const all = await listSessions()
     const sessions = all.filter(s => !isTriageSession(s) && !s.archived)
-    res.json({ sessions: await enrichWithHostnames(enrichWithLiveStatus(sessions)) })
+    res.json({ sessions: await enrichWithHostnames(await enrichWithLiveStatus(sessions)) })
   } catch (err) {
     next(err)
   }
@@ -403,7 +447,7 @@ sessionsRouter.get('/recent', async (req: Request, res: Response, next: NextFunc
     const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 10
     const all = await getRecentSessions(limit)
     const sessions = all.filter(s => !isTriageSession(s) && !s.archived)
-    res.json({ sessions: await enrichWithHostnames(enrichWithLiveStatus(sessions)) })
+    res.json({ sessions: await enrichWithHostnames(await enrichWithLiveStatus(sessions)) })
   } catch (err) {
     next(err)
   }
@@ -432,7 +476,7 @@ sessionsRouter.get('/task/:taskId', async (req: Request, res: Response, next: Ne
     const all = await getSessionsForTask(taskId)
     // Exclude triage subagent runs (archived sessions kept — frontend needs them for collapsed section)
     const sessions = all.filter(s => !isTriageSession(s))
-    res.json({ sessions: await enrichWithHostnames(enrichWithLiveStatus(sessions)) })
+    res.json({ sessions: await enrichWithHostnames(await enrichWithLiveStatus(sessions)) })
   } catch (err) {
     next(err)
   }
@@ -446,7 +490,7 @@ sessionsRouter.get('/:sessionId', async (req: Request, res: Response, next: Next
       res.status(404).json({ error: 'session not found' })
       return
     }
-    const [enriched] = await enrichWithHostnames(enrichWithLiveStatus([session]))
+    const [enriched] = await enrichWithHostnames(await enrichWithLiveStatus([session]))
     res.json({ session: enriched })
   } catch (err) {
     next(err)

@@ -15,7 +15,7 @@
 
 import fs from 'node:fs'
 import { log } from '../logging/index.js'
-import { isProcessAlive } from '../utils/process.js'
+import { isProcessAlive, isProcessAliveAsync } from '../utils/process.js'
 import { bus, EventNames } from './event-bus.js'
 import type { SshTarget } from '../providers/session-io.js'
 
@@ -80,7 +80,7 @@ export class SessionHealthMonitor {
       if (session.provider === 'sdk' || session.provider === 'embedded') continue
 
       const processName = session.host ? 'ssh' : 'claude'
-      const alive = session.pid != null && isProcessAlive(session.pid, processName)
+      const alive = session.pid != null && await isProcessAliveAsync(session.pid, processName)
 
       // Determine expected process status from PID liveness
       // alive=true: could be 'running' or 'idle' (don't override idle→running)
@@ -192,7 +192,7 @@ export class SessionHealthMonitor {
 
       // Check if PID is actually alive before spending time on mtime check
       const processName = session.host ? 'ssh' : 'claude'
-      if (!isProcessAlive(session.pid, processName)) continue
+      if (!await isProcessAliveAsync(session.pid, processName)) continue
 
       // Check file mtime — the ground truth for "when was this session last active"
       let mtimeMs: number
@@ -389,7 +389,7 @@ export class SessionHealthMonitor {
         }
 
         const processName = s.host ? 'ssh' : 'claude'
-        if (!isProcessAlive(s.pid, processName)) continue
+        if (!await isProcessAliveAsync(s.pid, processName)) continue
 
         log.session.warn('health monitor: killing orphaned process', {
           sessionId: s.claudeSessionId,

@@ -37,17 +37,19 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
     reader.onload = async () => {
       try {
         const dataUrl = reader.result as string;
-        // dataUrl = "data:image/png;base64,iVBOR..."
+        if (!dataUrl?.includes(',')) return;
         const [header, base64] = dataUrl.split(',');
+        if (!base64) return;
         const mediaType = header.match(/data:(.*?);/)?.[1] || 'image/png';
         const url = await uploadNoteImage(base64, mediaType);
         editor.chain().focus().setImage({ src: url }).run();
       } catch {
-        // Fallback: insert as inline data URL (works but bloats markdown)
+        // Upload failed — insert as inline data URL as fallback
         const dataUrl = reader.result as string;
-        editor.chain().focus().setImage({ src: dataUrl }).run();
+        if (dataUrl) editor.chain().focus().setImage({ src: dataUrl }).run();
       }
     };
+    reader.onerror = () => { /* silently skip — user can retry paste */ };
     reader.readAsDataURL(file);
   }, []);
 

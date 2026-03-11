@@ -130,7 +130,7 @@ export async function runAgentLoop(
   history: MessageParam[],
   callbacks?: AgentCallbacks,
   options?: AgentLoopOptions,
-): Promise<{ messages: MessageParam[]; response: string; aborted?: boolean }> {
+): Promise<{ messages: MessageParam[]; response: string; aborted?: boolean; tokenBreakdown?: { system: number; tools: number; messages: number; total: number } }> {
   const config = await getConfig();
 
   // Use custom system/tools/model if provided (subagent mode), else defaults
@@ -187,6 +187,18 @@ export async function runAgentLoop(
   let lastExactTokens: number | null = null;
   let lastExactMessageCount = 0;
 
+  /** Build token breakdown from the most accurate data available. */
+  function buildTokenBreakdown() {
+    return {
+      system: initialBreakdown.system,
+      tools: initialBreakdown.tools,
+      messages: lastExactTokens !== null
+        ? lastExactTokens - fixedOverhead
+        : initialBreakdown.messages,
+      total: lastExactTokens ?? initialBreakdown.total,
+    };
+  }
+
   /** Execute a tool by name — uses custom tool set if provided. */
   async function executeToolLocal(name: string, params: Record<string, unknown>, toolUseId?: string): Promise<ToolResultContent> {
     const meta = toolUseId ? { toolUseId } : undefined;
@@ -225,7 +237,7 @@ export async function runAgentLoop(
     // Abort checkpoint 1: before calling model
     if (signal?.aborted) {
       log.agent.info(`${logTag} aborted before round ${round + 1}`);
-      return { messages, response: finalText, aborted: true };
+      return { messages, response: finalText, aborted: true, tokenBreakdown: buildTokenBreakdown() };
     }
 
     // Compute token estimate: use exact baseline from last API response + estimated delta for
@@ -319,7 +331,7 @@ export async function runAgentLoop(
           if (block.type === 'text') finalText += block.text;
         }
       }
-      return { messages, response: finalText, aborted: true };
+      return { messages, response: finalText, aborted: true, tokenBreakdown: buildTokenBreakdown() };
     }
 
     cacheTTLTracker.touch();
@@ -381,7 +393,7 @@ export async function runAgentLoop(
                 if (block.type === 'text') finalText += block.text;
               }
             }
-            return { messages, response: finalText, aborted: true };
+            return { messages, response: finalText, aborted: true, tokenBreakdown: buildTokenBreakdown() };
           }
 
           cacheTTLTracker.touch();
@@ -455,7 +467,7 @@ export async function runAgentLoop(
     // If aborted during tool execution, stop the loop
     if (signal?.aborted) {
       if (textParts.length > 0) finalText += textParts.join('\n');
-      return { messages, response: finalText, aborted: true };
+      return { messages, response: finalText, aborted: true, tokenBreakdown: buildTokenBreakdown() };
     }
 
     // If there was also text in the response with tools, accumulate it
@@ -514,5 +526,5 @@ export async function runAgentLoop(
     log.agent.info(`${logTag} final response after max rounds`, { textLength: finalText.length });
   }
 
-  return { messages, response: finalText };
+  return { messages, response: finalText, tokenBreakdown: buildTokenBreakdown() };
 }

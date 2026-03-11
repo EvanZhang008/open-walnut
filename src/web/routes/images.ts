@@ -92,8 +92,8 @@ imagesRouter.post('/upload', async (req: Request, res: Response, next: NextFunct
 imagesRouter.get('/:filename', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const filename = req.params.filename as string
-    // Sanitize: only allow alphanumeric, dash, dot (prevent path traversal)
-    if (!/^[\w.-]+$/.test(filename)) {
+    // Sanitize: only allow alphanumeric, dash, dot; reject path traversal
+    if (!/^[\w.-]+$/.test(filename) || filename.includes('..')) {
       res.status(400).json({ error: 'Invalid filename' })
       return
     }

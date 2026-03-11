@@ -95,6 +95,13 @@ export async function fetchWorkingDirs(): Promise<WorkingDirEntry[]> {
   return res.dirs;
 }
 
+export async function listDirs(prefix: string, host?: string | null): Promise<string[]> {
+  const params = new URLSearchParams({ prefix });
+  if (host) params.set('host', host);
+  const res = await apiGet<{ dirs: string[] }>(`/api/sessions/list-dirs?${params}`);
+  return res.dirs;
+}
+
 export async function quickStartSession(opts: {
   cwd: string;
   host?: string;

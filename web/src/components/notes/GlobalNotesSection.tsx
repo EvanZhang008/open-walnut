@@ -19,23 +19,26 @@ function readHeight(): number {
 export function GlobalNotesSection(props: UseGlobalNotesReturn) {
   const { content, onEditorUpdate, saving, saveError, collapsed, toggleCollapse, popupOpen, openPopup, closePopup } = props;
   const [height, setHeight] = useState(readHeight);
+  const heightRef = useRef(height);
   const dragging = useRef(false);
   const startY = useRef(0);
   const startH = useRef(0);
+
+  // Keep ref in sync for use in event handlers
+  heightRef.current = height;
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     dragging.current = true;
     startY.current = e.clientY;
-    startH.current = height;
+    startH.current = heightRef.current;
     document.body.style.cursor = 'row-resize';
     document.body.style.userSelect = 'none';
-  }, [height]);
+  }, []);
 
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
       if (!dragging.current) return;
-      // Dragging UP increases notes height (panel grows upward)
       const delta = startY.current - e.clientY;
       const newH = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, startH.current + delta));
       setHeight(newH);
@@ -45,8 +48,8 @@ export function GlobalNotesSection(props: UseGlobalNotesReturn) {
       dragging.current = false;
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
-      // Persist
-      try { localStorage.setItem(LS_NOTES_HEIGHT_KEY, String(height)); } catch {}
+      // Persist latest height from ref (not stale closure value)
+      try { localStorage.setItem(LS_NOTES_HEIGHT_KEY, String(heightRef.current)); } catch {}
     };
 
     document.addEventListener('mousemove', onMouseMove);
@@ -55,7 +58,7 @@ export function GlobalNotesSection(props: UseGlobalNotesReturn) {
       document.removeEventListener('mousemove', onMouseMove);
       document.removeEventListener('mouseup', onMouseUp);
     };
-  }, [height]);
+  }, []);
 
   return (
     <>
