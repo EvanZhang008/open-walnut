@@ -353,6 +353,7 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, depth = 0, childCou
   const [isEditing, setIsEditing] = useState(false);
   const titleRef = useRef<HTMLSpanElement>(null);
   const clickPosRef = useRef<{ x: number; y: number } | null>(null);
+  const isCommittingRef = useRef(false); // one-shot guard against double-fire (pointerdown + blur)
 
   // Sync DOM text when task.title changes externally (e.g. WS push) while not editing
   useEffect(() => {
@@ -401,14 +402,17 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, depth = 0, childCou
   }, [isEditing]);
 
   const commitEdit = useCallback(() => {
-    if (!isEditing) return;
+    if (!isEditing || isCommittingRef.current) return;
+    isCommittingRef.current = true;
     setIsEditing(false);
     const trimmed = (titleRef.current?.textContent ?? '').trim();
     if (trimmed && trimmed !== task.title && onUpdateTitle) {
       onUpdateTitle(task.id, trimmed);
     } else if (titleRef.current) {
+      // Revert to original if title is empty or unchanged
       titleRef.current.textContent = task.title;
     }
+    isCommittingRef.current = false;
   }, [isEditing, task.title, task.id, onUpdateTitle]);
 
   const cancelEdit = useCallback(() => {
@@ -424,7 +428,8 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, depth = 0, childCou
     setIsEditing(true);
   }, [onUpdateTitle]);
 
-  // Safety net: click-outside exits editing even if blur doesn't fire
+  // Click-outside handler: exits editing when clicking outside the title span.
+  // Also serves as a fallback when blur doesn't fire (e.g. click on non-focusable element).
   useEffect(() => {
     if (!isEditing) return;
     const handleOutsidePointerDown = (e: PointerEvent) => {

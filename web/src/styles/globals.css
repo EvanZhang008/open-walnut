@@ -5855,10 +5855,13 @@ img[data-lightbox-src],
   touch-action: none;
 }
 
-/* Suppress browser focus ring on sortable items (DnD adds tabIndex/role) */
-.todo-panel-item:focus,
+/* Replace browser focus ring with subtle bg on sortable items (DnD adds tabIndex/role) */
+.todo-panel-item:focus {
+  outline: none;
+}
 .todo-panel-item:focus-visible {
   outline: none;
+  background: var(--accent-subtle);
 }
 
 .todo-panel-item:last-child {
