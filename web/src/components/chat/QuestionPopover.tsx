@@ -1,37 +1,34 @@
 /**
- * QuestionCard — small inline drawer, one question per page.
+ * QuestionPopover — floating popover above chat input for ask_question tool.
  *
- * Like AskUserQuestion: a compact drawer where each question
- * is its own "page". User answers one, then slides to the next. After the
- * last question, all answers are submitted together.
- *
- * States: pending (interactive, paged) → answered (collapsed summary).
+ * Renders as a popover (like SessionPathSelector) with page-per-question
+ * navigation. Single-select auto-advances; multi-select has Next button.
+ * Last page shows Submit. Answered state closes popover; inline summary
+ * shows in the message bubble.
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { wsClient } from '@/api/ws'
 
-interface QuestionOption {
+export interface QuestionOption {
   label: string
   description?: string
 }
 
-interface QuestionItem {
+export interface QuestionItem {
   question: string
   header?: string
   options?: QuestionOption[]
   multiSelect?: boolean
 }
 
-interface QuestionCardProps {
+interface QuestionPopoverProps {
+  open: boolean
   questions: QuestionItem[]
-  /** Tool is still waiting (status === 'calling') */
-  pending: boolean
-  /** Tool result text (shown after answered) */
-  result?: string
+  onClose: () => void
 }
 
-export function QuestionCard({ questions, pending, result }: QuestionCardProps) {
+export function QuestionPopover({ open, questions, onClose }: QuestionPopoverProps) {
   const [page, setPage] = useState(0)
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const [selections, setSelections] = useState<Record<string, string[]>>({})
@@ -39,16 +36,26 @@ export function QuestionCard({ questions, pending, result }: QuestionCardProps) 
   const [submitted, setSubmitted] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const isAnswered = !pending || submitted
   const current = questions[page]
   const key = current?.header ?? String(page)
   const isLastPage = page >= questions.length - 1
   const selectedOpts = selections[key] ?? []
 
-  // Focus input when page changes
+  // Reset state when questions change (new question set)
   useEffect(() => {
-    if (pending && inputRef.current) inputRef.current.focus()
-  }, [page, pending])
+    setPage(0)
+    setAnswers({})
+    setSelections({})
+    setCustomText('')
+    setSubmitted(false)
+  }, [questions])
+
+  // Focus input when page changes or popover opens
+  useEffect(() => {
+    if (open && inputRef.current) {
+      setTimeout(() => inputRef.current?.focus(), 50)
+    }
+  }, [page, open])
 
   const toggleOption = useCallback((label: string) => {
     const multi = !!current?.multiSelect
@@ -64,12 +71,13 @@ export function QuestionCard({ questions, pending, result }: QuestionCardProps) 
   const submitAll = useCallback((finalAnswers: Record<string, string>) => {
     if (submitted) return
     setSubmitted(true)
-    wsClient.sendRpc('chat:answer-question', { answers: finalAnswers }).catch(() => {
+    wsClient.sendRpc('chat:answer-question', { answers: finalAnswers }).then(() => {
+      onClose()
+    }).catch(() => {
       setSubmitted(false)
     })
-  }, [submitted])
+  }, [submitted, onClose])
 
-  /** Confirm current page answer and advance (or submit if last). */
   const handleNext = useCallback(() => {
     const answer = customText.trim() || selectedOpts.join(', ') || '(no answer)'
     const updated = { ...answers, [key]: answer }
@@ -77,7 +85,6 @@ export function QuestionCard({ questions, pending, result }: QuestionCardProps) 
     setCustomText('')
 
     if (isLastPage) {
-      // Fill in any missing answers
       const final: Record<string, string> = {}
       for (let i = 0; i < questions.length; i++) {
         const k = questions[i].header ?? String(i)
@@ -89,7 +96,6 @@ export function QuestionCard({ questions, pending, result }: QuestionCardProps) 
     }
   }, [customText, selectedOpts, answers, key, isLastPage, questions, submitAll])
 
-  /** Single-select option click: auto-advance. */
   const handleOptionClick = useCallback((label: string) => {
     if (current?.multiSelect) {
       toggleOption(label)
@@ -119,74 +125,61 @@ export function QuestionCard({ questions, pending, result }: QuestionCardProps) 
     }
   }, [handleNext])
 
-  // ── Answered / collapsed state ──
-  if (isAnswered) {
-    const answerSummary = questions.map((q, i) => {
-      const k = q.header ?? String(i)
-      return `${k}: ${answers[k] ?? '—'}`
-    }).join(' · ')
+  if (!open || questions.length === 0) return null
 
-    return (
-      <div className="question-drawer question-drawer-answered">
-        <div className="question-drawer-bar">
-          <span className="question-drawer-icon">&#x2713;</span>
-          <span className="question-drawer-title">Answered</span>
-          <span className="question-drawer-summary">{answerSummary}</span>
-        </div>
-        {result && <div className="question-drawer-result">{result}</div>}
-      </div>
-    )
-  }
-
-  // ── Pending / interactive drawer ──
   return (
-    <div className="question-drawer question-drawer-pending">
-      {/* Progress bar */}
-      <div className="question-drawer-bar">
-        <span className="question-drawer-icon">&#x2753;</span>
-        <span className="question-drawer-title">
-          {questions.length === 1 ? 'Question' : `Question ${page + 1} / ${questions.length}`}
-        </span>
-        {current?.header && (
-          <span className="question-drawer-chip">{current.header}</span>
+    <div className="question-popover">
+      {/* Header */}
+      <div className="qp-header">
+        <span className="qp-header-icon">&#x2753;</span>
+        <span className="qp-header-title">Agent has a question</span>
+        {questions.length > 1 && (
+          <span className="qp-header-page">{page + 1} / {questions.length}</span>
         )}
       </div>
 
-      {/* Current question */}
-      <div className="question-drawer-page">
-        <div className="question-drawer-question">{current?.question}</div>
+      {/* Question body */}
+      <div className="qp-body">
+        {current?.header && (
+          <div className="qp-chip">{current.header}</div>
+        )}
+        <div className="qp-question">{current?.question}</div>
 
-        {/* Option buttons */}
+        {/* Option pills */}
         {current?.options && current.options.length > 0 && (
-          <div className="question-drawer-options">
+          <div className="qp-options">
             {current.options.map(opt => (
               <button
                 key={opt.label}
-                className={`question-drawer-opt ${selectedOpts.includes(opt.label) ? 'question-drawer-opt-sel' : ''}`}
+                className={`qp-option ${selectedOpts.includes(opt.label) ? 'qp-option-selected' : ''}`}
                 onClick={() => handleOptionClick(opt.label)}
                 title={opt.description}
+                disabled={submitted}
               >
                 {opt.label}
+                {opt.description && <span className="qp-option-desc">{opt.description}</span>}
               </button>
             ))}
           </div>
         )}
 
-        {/* Text input + next/submit button */}
-        <div className="question-drawer-input-row">
+        {/* Input row */}
+        <div className="qp-input-row">
           <input
             ref={inputRef}
-            className="question-drawer-input"
+            className="qp-input"
             placeholder={current?.options?.length ? 'Or type custom answer...' : 'Type your answer...'}
             value={customText}
             onChange={e => setCustomText(e.target.value)}
             onKeyDown={handleKeyDown}
+            disabled={submitted}
           />
           <button
-            className="question-drawer-next"
+            className="qp-submit"
             onClick={handleNext}
+            disabled={submitted}
           >
-            {isLastPage ? 'Submit' : 'Next \u203A'}
+            {submitted ? 'Sending...' : isLastPage ? 'Submit' : 'Next \u203A'}
           </button>
         </div>
       </div>

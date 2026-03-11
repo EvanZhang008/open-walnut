@@ -7,7 +7,8 @@ import type { MessageBlock, ThinkingBlock, ToolCallBlock, ImageBlock, TaskContex
 import { useLightbox } from '@/hooks/useLightbox';
 import { Lightbox } from '@/components/common/Lightbox';
 import { entityRefsToHtml, renderToolResultWithRefs, extractMarkdownFields } from '@/utils/markdown';
-import { QuestionCard, parseAskQuestionInput } from './QuestionCard';
+import { parseAskQuestionInput } from './QuestionPopover';
+import { SubagentBlock } from './SubagentBlock';
 export interface RouteInfo {
   direction: 'sent' | 'received';
   event: string;
@@ -884,6 +885,7 @@ function SystemMessageGroup({ blocks, sourceLabel, taskLookup, onTaskClick, onSe
                 case 'thinking':
                   return <ThinkingSection key={i} block={block} />;
                 case 'tool_call':
+                  if (block.name === 'create_subagent') return <SubagentBlock key={i} block={block} />;
                   return <ToolCallSection key={i} block={block} taskLookup={taskLookup} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />;
                 case 'text':
                   return <MemoizedTextBlock key={i} content={block.content} onClick={onContentClick} />;
@@ -1176,11 +1178,34 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
                     case 'thinking':
                       return <ThinkingSection key={i} block={block} />;
                     case 'tool_call': {
-                      // Render ask_question as interactive QuestionCard
+                      // Render create_subagent as SubagentBlock
+                      if (block.name === 'create_subagent') return <SubagentBlock key={i} block={block} />;
+                      // Render ask_question as inline status (popover handled by MainPage)
                       if (block.name === 'ask_question') {
                         const questions = parseAskQuestionInput(block.input)
                         if (questions) {
-                          return <QuestionCard key={i} questions={questions} pending={block.status === 'calling'} result={block.result} />
+                          if (block.status === 'calling') {
+                            return (
+                              <div key={i} className="question-inline-pending">
+                                <span className="question-inline-icon">&#x2753;</span>
+                                Agent is asking you a question...
+                              </div>
+                            )
+                          }
+                          // Answered — compact summary
+                          const summary = questions.map((q, qi) => {
+                            const k = q.header ?? String(qi)
+                            // Try to extract answer from result text
+                            const resultText = block.result ?? ''
+                            const match = resultText.match(new RegExp(`${k}:\\s*(.+?)(?:\\s*[·|]|$)`))
+                            return `${k}: ${match?.[1]?.trim() ?? '...'}`
+                          }).join(' · ')
+                          return (
+                            <div key={i} className="question-inline-answered">
+                              <span className="question-inline-icon">&#x2713;</span>
+                              Answered: {summary}
+                            </div>
+                          )
                         }
                       }
                       return <ToolCallSection key={i} block={block} taskLookup={taskLookup} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />;
