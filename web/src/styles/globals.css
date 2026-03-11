@@ -5205,6 +5205,8 @@ img[data-lightbox-src],
   overflow: hidden;
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
   background: var(--card-bg);
+  transform: translateZ(0);
+  -webkit-font-smoothing: antialiased;
 }
 
 .session-panel--expanded {
@@ -5273,43 +5275,45 @@ img[data-lightbox-src],
 }
 
 .plan-popup-container {
-  width: 60vw;
-  max-width: 900px;
+  width: 78vw;
+  max-width: 1170px;
   max-height: 85vh;
-  border-radius: 12px;
+  border-radius: 14px;
   overflow: hidden;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.04),
+    0 8px 24px rgba(0, 0, 0, 0.12),
+    0 24px 80px rgba(0, 0, 0, 0.16);
   background: var(--card-bg);
-  border: 2px solid var(--accent);
   display: flex;
   flex-direction: column;
+  transform: translateZ(0);
+  -webkit-font-smoothing: antialiased;
 }
 
 .plan-popup-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--accent-subtle);
+  padding: 14px 20px;
   flex-shrink: 0;
 }
 
 .plan-popup-title {
   font-size: 14px;
-  font-weight: 700;
-  color: var(--accent);
+  font-weight: 600;
+  color: var(--fg-secondary);
 }
 
 .plan-popup-close {
   background: none;
   border: none;
-  font-size: 22px;
+  font-size: 20px;
   line-height: 1;
   cursor: pointer;
   color: var(--fg-muted);
-  padding: 0 4px;
-  border-radius: 4px;
+  padding: 2px 6px;
+  border-radius: 6px;
   transition: color 0.15s, background 0.15s;
 }
 
@@ -5319,7 +5323,7 @@ img[data-lightbox-src],
 }
 
 .plan-popup-body {
-  padding: 16px;
+  padding: 4px 20px 20px;
   overflow-y: auto;
   flex: 1;
   min-height: 0;
@@ -5332,6 +5336,15 @@ img[data-lightbox-src],
 @media (prefers-reduced-motion: reduce) {
   .session-expanded-overlay,
   .plan-popup-overlay { animation: none; }
+}
+
+@media (prefers-color-scheme: dark) {
+  .plan-popup-container {
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.06),
+      0 8px 24px rgba(0, 0, 0, 0.4),
+      0 24px 80px rgba(0, 0, 0, 0.5);
+  }
 }
 
 .session-panel-meta {
