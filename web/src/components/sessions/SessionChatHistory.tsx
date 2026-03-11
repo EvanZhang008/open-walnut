@@ -652,19 +652,15 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     }
   }, [loading, messages, sessionId]);
 
-  // Auto-scroll when content changes (new messages or streaming blocks)
+  // Auto-scroll when content changes (new messages or streaming blocks).
+  // Trust isAtBottom ref — the scroll handler updates it synchronously on user scroll,
+  // so if the user scrolled up, isAtBottom is already false before this effect fires.
+  // No "actuallyNearBottom" guard needed — content replacement (Phase 2 replacing Phase 1)
+  // shifts scrollHeight without user action, but we should still scroll to bottom.
   useEffect(() => {
     if (!isAtBottom.current) return;
     const el = containerRef.current;
     if (!el) return;
-    // Verify actual scroll position — content replacement (Phase 2 replacing Phase 1)
-    // can shift scroll without firing a scroll event, making isAtBottom stale.
-    const actuallyNearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - NEAR_BOTTOM_PX;
-    if (!actuallyNearBottom) {
-      isAtBottom.current = false;
-      setShowScrollArrow(true);
-      return;
-    }
     if (scrollRafId.current !== null) cancelAnimationFrame(scrollRafId.current);
     scrollRafId.current = requestAnimationFrame(() => {
       scrollRafId.current = null;

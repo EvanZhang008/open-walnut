@@ -6915,6 +6915,14 @@ img[data-lightbox-src],
   color: var(--fg);
 }
 
+.notes-editor .tiptap img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-sm);
+  margin: 4px 0;
+  cursor: default;
+}
+
 .notes-editor .tiptap hr {
   border: none;
   border-top: 1px solid var(--border);

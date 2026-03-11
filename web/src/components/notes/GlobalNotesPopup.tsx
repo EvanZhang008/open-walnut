@@ -39,6 +39,7 @@ export function GlobalNotesPopup({ content, onDirty, saving, onClose }: GlobalNo
           <NotesEditor
             content={content}
             onDirty={onDirty}
+            editing={saving}
             className="global-notes-editor-popup"
             autoFocus
           />

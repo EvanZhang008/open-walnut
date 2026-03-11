@@ -64,6 +64,30 @@ export async function readImageAsBase64(filePath: string): Promise<{ data: strin
   }
 }
 
+// POST /api/images/upload — upload a base64 image, return URL
+imagesRouter.post('/upload', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { data, mediaType } = req.body
+    if (typeof data !== 'string' || typeof mediaType !== 'string') {
+      res.status(400).json({ error: 'data (base64 string) and mediaType are required' })
+      return
+    }
+    if (!MIME_TO_EXT[mediaType]) {
+      res.status(400).json({ error: `Unsupported media type: ${mediaType}` })
+      return
+    }
+    // Limit to 10MB
+    if (data.length > 10_000_000) {
+      res.status(413).json({ error: 'Image too large (max 10MB base64)' })
+      return
+    }
+    const { filename } = await saveImageToDisk(data, mediaType)
+    res.json({ url: `/api/images/${filename}` })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // GET /api/images/:filename — serve a saved image
 imagesRouter.get('/:filename', async (req: Request, res: Response, next: NextFunction) => {
   try {

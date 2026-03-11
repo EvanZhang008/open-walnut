@@ -31,8 +31,8 @@ export function TodoSearchBar({
         inputRef.current?.focus();
         return;
       }
-      // / key when no input is focused
-      if (e.key === '/' && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
+      // / key when no editable element is focused
+      if (e.key === '/' && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA' && !(document.activeElement as HTMLElement)?.isContentEditable) {
         e.preventDefault();
         inputRef.current?.focus();
       }

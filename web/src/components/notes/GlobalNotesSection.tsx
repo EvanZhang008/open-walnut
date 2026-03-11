@@ -86,6 +86,7 @@ export function GlobalNotesSection(props: UseGlobalNotesReturn) {
             <NotesEditor
               content={content}
               onDirty={onEditorUpdate}
+              editing={saving}
               className="global-notes-editor-inline"
             />
           </div>
