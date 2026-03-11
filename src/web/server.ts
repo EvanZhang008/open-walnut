@@ -47,12 +47,13 @@ import { getTask, listTasks } from '../core/task-manager.js'
 import { log } from '../logging/index.js'
 import { usageTracker } from '../core/usage/index.js'
 import * as chatHistory from '../core/chat-history.js'
-import { gitPullWalnut, ensureRepo, commitIfDirty, isGitAvailable } from '../integrations/git-sync.js'
+import { gitPullWalnut, ensureRepo, commitIfDirty, isGitAvailable, isLockContention } from '../integrations/git-sync.js'
 import { registry } from '../core/integration-registry.js'
 import { loadPlugins, migrateConfigToPlugins, runPluginMigrations } from '../core/integration-loader.js'
 import type { SyncPollContext } from '../core/integration-types.js'
 import { integrationsRouter } from './routes/integrations.js'
 import { systemRouter } from './routes/system.js'
+import { notesRouter } from './routes/notes.js'
 import { authMiddleware } from './middleware/auth.js'
 import { pushRouter } from './routes/push.js'
 import { authRouter } from './routes/auth.js'
@@ -160,6 +161,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
   const port = options.port ?? DEFAULT_PORT
   const dev = options.dev ?? false
+  const isEphemeral = !!process.env.WALNUT_EPHEMERAL
 
   const app = express()
 
@@ -375,6 +377,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/slash-commands', createSlashCommandsRouter())
   app.use('/api/heartbeat', (await import('./routes/heartbeat.js')).heartbeatRouter)
   app.use('/api/timeline', timelineRouter)
+  app.use('/api/notes', notesRouter)
   app.use('/api/integrations', integrationsRouter)
   app.use('/api/system', systemRouter)
   app.use('/api/push', pushRouter)
@@ -436,7 +439,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   initPushNotifications()
 
   // -- Pull latest data from git (remote hooks may have pushed new data) --
-  await gitPullWalnut()
+  if (!isEphemeral) {
+    await gitPullWalnut()
+  }
 
   // -- Prewarm task store: force load + migration before accepting requests --
   // Without this, early HTTP requests can hit an uninitialized store and return [].
@@ -508,7 +513,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   reconcileEmbeddingsBackground()
 
   // -- Git auto-commit polling (30s interval) --
-  gitAutoCommitHandle = startGitAutoCommit()
+  // Skip for ephemeral servers — they use a temp copy of data, no need to backup
+  if (!isEphemeral) {
+    gitAutoCommitHandle = startGitAutoCommit()
+  }
 
   // -- Init SubagentRunner + SessionRunner --
   subagentRunner.init()
@@ -821,11 +829,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       if (event.source === 'subagent-runner') return
 
       // Git pull: fetch data pushed by remote hooks (best-effort)
-      try {
-        await gitPullWalnut()
-        log.web.info('git pull completed for session result')
-      } catch (err) {
-        log.web.warn('git pull failed after session result', { error: String(err) })
+      if (!isEphemeral) {
+        try {
+          await gitPullWalnut()
+          log.web.info('git pull completed for session result')
+        } catch (err) {
+          log.web.warn('git pull failed after session result', { error: String(err) })
+        }
       }
 
       const { sessionId, taskId, result, isError, totalCost, duration } = eventData<'session:result'>(event)
@@ -920,11 +930,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // Persist session:error to chat history
     if (event.name === 'session:error') {
       // Git pull: fetch data pushed by remote hooks (best-effort)
-      try {
-        await gitPullWalnut()
-        log.web.info('git pull completed for session error')
-      } catch (err) {
-        log.web.warn('git pull failed after session error', { error: String(err) })
+      if (!isEphemeral) {
+        try {
+          await gitPullWalnut()
+          log.web.info('git pull completed for session error')
+        } catch (err) {
+          log.web.warn('git pull failed after session error', { error: String(err) })
+        }
       }
 
       const { error, taskId, sessionId } = eventData<'session:error'>(event)
@@ -1268,6 +1280,7 @@ const GIT_POLL_INTERVAL_MS = 30_000
 function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth } {
   const health: GitAutoCommitHealth = { protected: false, consecutiveFailures: 0 }
   let notifiedForEpisode = false // only send chat notification once per failure episode
+  let lockContentionCount = 0
 
   const emitStatus = () => {
     broadcastEvent('git-sync:status', health)
@@ -1308,33 +1321,48 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
         health.consecutiveFailures = 0
         health.error = undefined
         notifiedForEpisode = false
+        lockContentionCount = 0
         log.git.debug('auto-committed')
         emitStatus()
       }
     } catch (err) {
-      health.consecutiveFailures++
-      health.error = err instanceof Error ? err.message : String(err)
-      log.git.warn('auto-commit failed', {
-        error: health.error,
-        consecutiveFailures: health.consecutiveFailures,
-      })
-      emitStatus()
-      // Send a one-time chat notification when failures first reach the threshold
-      if (health.consecutiveFailures >= 3 && !notifiedForEpisode) {
-        const notifContent = `Data backup failing \u2014 git auto-commit has failed ${health.consecutiveFailures}+ times consecutively. Check logs: \`walnut logs -s git\``
-        notifiedForEpisode = true
-        chatHistory.addNotification({
-          role: 'assistant',
-          content: notifContent,
-          source: 'agent-error',
-          notification: true,
-        }).then(() => {
-          bus.emit(EventNames.CHAT_HISTORY_UPDATED, {
-            entry: { role: 'assistant', content: notifContent, source: 'agent-error', notification: true, timestamp: new Date().toISOString() },
-          }, ['web-ui'])
-        }).catch(() => {
-          notifiedForEpisode = false // reset so next cycle retries
+      if (isLockContention(err)) {
+        // Lock contention is transient (e.g. orphaned server processes or concurrent git pull).
+        // Don't count toward consecutive failures — the retry in commitIfDirty already tried once.
+        lockContentionCount++
+        log.git.debug('auto-commit skipped (lock contention)', { lockContentionCount })
+        // If lock contention persists for 10+ cycles (~5 min), surface it in health state
+        if (lockContentionCount >= 10 && lockContentionCount % 10 === 0) {
+          health.error = 'persistent lock contention — check for orphaned server processes'
+          log.git.warn(health.error, { lockContentionCount })
+          emitStatus()
+        }
+      } else {
+        lockContentionCount = 0
+        health.consecutiveFailures++
+        health.error = err instanceof Error ? err.message : String(err)
+        log.git.warn('auto-commit failed', {
+          error: health.error,
+          consecutiveFailures: health.consecutiveFailures,
         })
+        emitStatus()
+        // Send a one-time chat notification when failures first reach the threshold
+        if (health.consecutiveFailures >= 3 && !notifiedForEpisode) {
+          const notifContent = `Data backup failing \u2014 git auto-commit has failed ${health.consecutiveFailures}+ times consecutively. Check logs: \`walnut logs -s git\``
+          notifiedForEpisode = true
+          chatHistory.addNotification({
+            role: 'assistant',
+            content: notifContent,
+            source: 'agent-error',
+            notification: true,
+          }).then(() => {
+            bus.emit(EventNames.CHAT_HISTORY_UPDATED, {
+              entry: { role: 'assistant', content: notifContent, source: 'agent-error', notification: true, timestamp: new Date().toISOString() },
+            }, ['web-ui'])
+          }).catch(() => {
+            notifiedForEpisode = false // reset so next cycle retries
+          })
+        }
       }
     }
   }, GIT_POLL_INTERVAL_MS)

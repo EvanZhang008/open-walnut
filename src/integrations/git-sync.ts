@@ -181,6 +181,7 @@ export function autoSync(): void {
 export async function gitPullWalnut(): Promise<void> {
   try {
     if (!isGitAvailable() || !isRepo() || !hasRemote()) return;
+    clearStaleLock();
     execSync('git pull --ff-only', {
       cwd: WALNUT_HOME,
       timeout: 15000,
@@ -192,32 +193,16 @@ export async function gitPullWalnut(): Promise<void> {
 }
 
 /**
- * Remove a stale .git/index.lock if it exists, is older than 60 seconds,
- * and the process that created it is no longer alive.
- * Git writes the PID into the lock file; we check liveness before deleting.
+ * Remove a stale .git/index.lock if it exists and is older than the threshold.
+ * The lock file format varies by git version (binary index copy, sometimes with PID).
+ * We use pure age-based removal since any normal git op finishes in < 5s.
  */
-function clearStaleLock(): boolean {
+function clearStaleLock(maxAgeMs = 10_000): boolean {
   const lockPath = path.join(WALNUT_HOME, '.git', 'index.lock');
   try {
     const stat = fs.statSync(lockPath);
     const ageMs = Date.now() - stat.mtimeMs;
-    if (ageMs <= 60_000) return false;
-
-    // Git writes PID as first line of index.lock — check if that process is alive
-    try {
-      const content = fs.readFileSync(lockPath, 'utf-8');
-      const pid = parseInt(content.trim().split('\n')[0], 10);
-      if (pid > 0) {
-        try {
-          process.kill(pid, 0); // signal 0 = liveness check, doesn't kill
-          return false; // process still alive — don't delete
-        } catch {
-          // process is dead — safe to delete
-        }
-      }
-    } catch {
-      // can't read lock file content — fall through to age-based removal
-    }
+    if (ageMs <= maxAgeMs) return false;
 
     fs.unlinkSync(lockPath);
     return true;
@@ -228,17 +213,38 @@ function clearStaleLock(): boolean {
 }
 
 /**
+ * Check whether an error is a git index.lock contention error.
+ * Matches git's specific error: "Unable to create '...index.lock': File exists."
+ */
+export function isLockContention(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes('index.lock') && msg.includes('File exists');
+}
+
+/**
  * Commit all dirty changes with an auto-save message.
  * Returns true if a commit was made, false if working tree was clean.
+ * Retries once on index.lock contention (common when multiple processes
+ * run git ops against the same repo, e.g. orphaned server processes).
  */
 export function commitIfDirty(): boolean {
+  clearStaleLock();
   const status = gitSafe('status --porcelain');
   if (!status || status.trim().length === 0) return false;
 
   const lines = status.split('\n').filter((l) => l.trim());
   const timestamp = new Date().toISOString().slice(0, 19).replace('T', ' ');
-  clearStaleLock();
-  git('add -A');
+
+  try {
+    git('add -A');
+  } catch (err) {
+    if (!isLockContention(err)) throw err;
+    // Lock held by another process — wait briefly and retry once
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
+    clearStaleLock(5_000);
+    git('add -A');
+  }
+
   gitSafe(`commit -m "auto-save ${timestamp} (${lines.length} files)"`);
   return true;
 }
