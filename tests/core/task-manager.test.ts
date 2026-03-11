@@ -241,24 +241,42 @@ describe('reorderTasks', () => {
     expect(all[2].id).toBe(w1.id);
   });
 
-  it('throws when orderedIds length does not match group', async () => {
-    const { task: t1 } = await addTask({ title: 'Only one', category: 'work', project: 'work' });
-    await addTask({ title: 'Two', category: 'work', project: 'work' });
+  it('self-heals when orderedIds is missing a group member (appends missing at end)', async () => {
+    const { task: t1 } = await addTask({ title: 'First', category: 'work', project: 'work' });
+    const { task: t2 } = await addTask({ title: 'Second', category: 'work', project: 'work' });
+    const { task: t3 } = await addTask({ title: 'Third', category: 'work', project: 'work' });
 
-    await expect(reorderTasks('work', 'work', [t1.id])).rejects.toThrow(/does not match group size/);
+    // Only provide t3, t1 — t2 is missing, should be appended at the end
+    await reorderTasks('work', 'work', [t3.id, t1.id]);
+
+    const tasks = await listTasks({ category: 'work' });
+    expect(tasks[0].id).toBe(t3.id);
+    expect(tasks[1].id).toBe(t1.id);
+    expect(tasks[2].id).toBe(t2.id); // auto-appended
   });
 
-  it('throws when orderedIds contains unknown ID', async () => {
-    await addTask({ title: 'One', category: 'work', project: 'work' });
-
-    await expect(reorderTasks('work', 'work', ['fake-id'])).rejects.toThrow(/does not belong to group/);
-  });
-
-  it('throws when orderedIds is missing a group ID', async () => {
+  it('self-heals when orderedIds contains unknown IDs (drops them)', async () => {
     const { task: t1 } = await addTask({ title: 'One', category: 'work', project: 'work' });
-    await addTask({ title: 'Two', category: 'work', project: 'work' });
+    const { task: t2 } = await addTask({ title: 'Two', category: 'work', project: 'work' });
 
-    await expect(reorderTasks('work', 'work', [t1.id, t1.id])).rejects.toThrow(/Duplicate task IDs/);
+    // Include a fake ID — should be silently dropped
+    await reorderTasks('work', 'work', ['fake-id', t2.id, t1.id]);
+
+    const tasks = await listTasks({ category: 'work' });
+    expect(tasks[0].id).toBe(t2.id);
+    expect(tasks[1].id).toBe(t1.id);
+  });
+
+  it('self-heals when orderedIds has duplicates (deduplicates)', async () => {
+    const { task: t1 } = await addTask({ title: 'One', category: 'work', project: 'work' });
+    const { task: t2 } = await addTask({ title: 'Two', category: 'work', project: 'work' });
+
+    // Duplicate t1 — should be deduplicated, t2 appended as missing
+    await reorderTasks('work', 'work', [t1.id, t1.id]);
+
+    const tasks = await listTasks({ category: 'work' });
+    expect(tasks[0].id).toBe(t1.id);
+    expect(tasks[1].id).toBe(t2.id); // auto-appended
   });
 });
 

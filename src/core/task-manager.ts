@@ -2358,31 +2358,54 @@ export async function reorderTasks(
   return withWriteLock(async () => {
   const store = await readStore();
 
-  // Find tasks belonging to this group, preserving their store indices
+  // Find tasks belonging to this group, preserving their store indices.
+  // Exclude .metadata tasks — they are internal bookkeeping and should not
+  // participate in user-facing reorder operations. The frontend never sees
+  // them (filtered out by GET /api/tasks), so orderedIds will never contain them.
   const groupEntries: { index: number; task: Task }[] = [];
   for (let i = 0; i < store.tasks.length; i++) {
     const t = store.tasks[i];
-    if (t.category === category && t.project === project) {
+    if (t.category === category && t.project === project && !t.title.startsWith('.metadata')) {
       groupEntries.push({ index: i, task: t });
     }
   }
 
   const groupIds = new Set(groupEntries.map((e) => e.task.id));
-  const orderedSet = new Set(orderedIds);
 
-  // Validate: orderedIds must match group IDs exactly
-  if (orderedSet.size !== orderedIds.length) {
-    throw new Error('Duplicate task IDs in orderedIds');
-  }
-  if (orderedIds.length !== groupEntries.length) {
-    throw new Error(
-      `orderedIds length (${orderedIds.length}) does not match group size (${groupEntries.length})`,
-    );
-  }
+  // Deduplicate orderedIds (keep first occurrence)
+  const seen = new Set<string>();
+  const deduped: string[] = [];
   for (const id of orderedIds) {
-    if (!groupIds.has(id)) {
-      throw new Error(`Task ID "${id}" does not belong to group ${category}/${project}`);
+    if (!seen.has(id)) {
+      seen.add(id);
+      deduped.push(id);
     }
+  }
+
+  // Self-healing: reconcile orderedIds with actual group instead of throwing.
+  // This handles transient inconsistencies from concurrent operations, race
+  // conditions between frontend optimistic updates and backend state, etc.
+  // - Drop IDs from orderedIds that aren't in the group (stale/removed tasks)
+  // - Append group IDs missing from orderedIds at the end (newly added tasks)
+  const reconciledIds: string[] = [];
+  for (const id of deduped) {
+    if (groupIds.has(id)) {
+      reconciledIds.push(id);
+    }
+  }
+  const reconciledSet = new Set(reconciledIds);
+  for (const entry of groupEntries) {
+    if (!reconciledSet.has(entry.task.id)) {
+      reconciledIds.push(entry.task.id);
+    }
+  }
+
+  if (reconciledIds.length !== groupEntries.length) {
+    // Should never happen after reconciliation, but guard just in case
+    log.task.warn('reorderTasks: reconciliation mismatch, skipping reorder', {
+      category, project, reconciledCount: reconciledIds.length, groupCount: groupEntries.length,
+    });
+    return;
   }
 
   // Build a map from id → task for quick lookup
@@ -2390,8 +2413,8 @@ export async function reorderTasks(
 
   // Place reordered tasks back into their original index slots
   const indices = groupEntries.map((e) => e.index);
-  for (let i = 0; i < orderedIds.length; i++) {
-    store.tasks[indices[i]] = taskById.get(orderedIds[i])!;
+  for (let i = 0; i < reconciledIds.length; i++) {
+    store.tasks[indices[i]] = taskById.get(reconciledIds[i])!;
   }
 
   await writeStore(store);
