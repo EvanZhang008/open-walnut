@@ -4309,8 +4309,6 @@ input:focus, textarea:focus, select:focus {
   font-weight: 600;
   background: var(--accent-subtle);
   color: var(--accent);
-  cursor: pointer;
-  border: none;
   transition: background 0.15s;
 }
 
@@ -5193,7 +5191,7 @@ img[data-lightbox-src],
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--overlay-bg);
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
   animation: lightbox-fade-in 0.15s ease-out;
@@ -5214,6 +5212,19 @@ img[data-lightbox-src],
   height: 100%;
   border: none;
   border-radius: 0;
+}
+
+/* --- Plan Card Header (restructured: toggle button + expand button as siblings) --- */
+.session-plan-card-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  padding: 0;
 }
 
 /* --- Plan Card Expand Button --- */
@@ -5237,20 +5248,25 @@ img[data-lightbox-src],
   opacity: 0.5;
 }
 
-.plan-card-expand-btn:hover {
-  opacity: 1 !important;
+.session-plan-card-header:hover .plan-card-expand-btn:hover {
+  opacity: 1;
   background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+/* Touch devices: always show expand button at low opacity */
+@media (hover: none) {
+  .plan-card-expand-btn { opacity: 0.4; }
 }
 
 /* --- Plan Popup --- */
 .plan-popup-overlay {
   position: fixed;
   inset: 0;
-  z-index: 9000;
+  z-index: 9100;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--overlay-bg);
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
   animation: lightbox-fade-in 0.15s ease-out;

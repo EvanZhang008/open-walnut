@@ -195,9 +195,9 @@ export async function gitPullWalnut(): Promise<void> {
 /**
  * Remove a stale .git/index.lock if it exists and is older than the threshold.
  * The lock file format varies by git version (binary index copy, sometimes with PID).
- * We use pure age-based removal since any normal git op finishes in < 5s.
+ * We use pure age-based removal (default 60s) since any normal git op finishes quickly.
  */
-function clearStaleLock(maxAgeMs = 10_000): boolean {
+function clearStaleLock(maxAgeMs = 60_000): boolean {
   const lockPath = path.join(WALNUT_HOME, '.git', 'index.lock');
   try {
     const stat = fs.statSync(lockPath);

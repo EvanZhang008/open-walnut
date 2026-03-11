@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, memo } from 'react';
+import { useState, useCallback, useMemo, memo, type MouseEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { SessionHistoryMessage, SessionHistoryTool } from '@/types/session';
 import {
@@ -6,6 +6,7 @@ import {
   extractContentBlockImages, findImagePaths, isImageFilePath, resolveImagePath,
 } from '@/utils/markdown';
 import { useLivePlanContent } from '@/contexts/PlanContentContext';
+import { PlanPopup } from './PlanPopup';
 
 /** Hide the image's parent container on load error (broken remote images, etc.).
  *  Hides .tool-result-image-item if present (caption + img), else hides parent element. */
@@ -66,13 +67,34 @@ export function PlanCard({ content }: { content: string }) {
   const livePlan = useLivePlanContent();
   const displayContent = livePlan ?? content;
   const [open, setOpen] = useState(true);
+  const [showPopup, setShowPopup] = useState(false);
   const html = useMemo(() => renderMarkdownWithRefs(displayContent), [displayContent]);
+
+  const handleExpandClick = useCallback(() => {
+    setShowPopup(true);
+  }, []);
+
   return (
     <div className="session-plan-card">
-      <button className="session-plan-card-header" onClick={() => setOpen((p) => !p)}>
-        <span className="session-plan-card-icon">{open ? '\u25BC' : '\u25B6'}</span>
-        <span className="session-plan-card-title">Plan</span>
-      </button>
+      <div className="session-plan-card-header">
+        <button className="session-plan-card-toggle" onClick={() => setOpen((p) => !p)}>
+          <span className="session-plan-card-icon">{open ? '\u25BC' : '\u25B6'}</span>
+          <span className="session-plan-card-title">Plan</span>
+        </button>
+        <button
+          className="plan-card-expand-btn"
+          onClick={handleExpandClick}
+          title="Expand plan"
+          aria-label="Expand plan to popup"
+        >
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="10 2 14 2 14 6" />
+            <polyline points="6 14 2 14 2 10" />
+            <line x1="14" y1="2" x2="9" y2="7" />
+            <line x1="2" y1="14" x2="7" y2="9" />
+          </svg>
+        </button>
+      </div>
       {open && (
         <div className="session-plan-card-body">
           <div
@@ -81,6 +103,7 @@ export function PlanCard({ content }: { content: string }) {
           />
         </div>
       )}
+      {showPopup && <PlanPopup content={displayContent} onClose={() => setShowPopup(false)} />}
     </div>
   );
 }

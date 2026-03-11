@@ -18,6 +18,7 @@ import { timeAgo } from '@/utils/time';
 import { WorkStatusPicker } from './WorkStatusPicker';
 import { SessionCopyButtons } from './SessionCopyButtons';
 import { ModelPicker } from './ModelPicker';
+import { SessionExpandedModal } from './SessionExpandedModal';
 import { useSessionUsage, formatModelName, getContextWindowSize } from '@/hooks/useSessionUsage';
 import { useSessionPlan } from '@/hooks/useSessionPlan';
 import { wsClient } from '@/api/ws';
@@ -81,9 +82,11 @@ interface SessionPanelProps {
   onSessionClick?: (sessionId: string) => void;
   /** Called when "Clear Context & Execute" creates a new session — parent should switch to it. */
   onSessionReplaced?: (newSessionId: string) => void;
+  /** When true, panel is rendered inside the expanded modal — hides expand button, stretches to fill container. */
+  expanded?: boolean;
 }
 
-export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, onSessionReplaced }: SessionPanelProps) {
+export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, onSessionReplaced, expanded }: SessionPanelProps) {
   const navigate = useNavigate();
   const [session, setSession] = useState<SessionRecord | null>(null);
   const [loading, setLoading] = useState(true);
@@ -99,6 +102,8 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
 
   // Model picker state
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  // Expanded modal state (only used when not already expanded)
+  const [showExpanded, setShowExpanded] = useState(false);
 
   const handleControlCommand = useCallback((command: string) => {
     if (command === 'model') {
@@ -252,11 +257,12 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
   const [executeError, setExecuteError] = useState<string | null>(null);
   const [executeStarted, setExecuteStarted] = useState(false);
 
-  // Reset execute state when session changes
+  // Reset execute + expanded state when session changes
   useEffect(() => {
     setExecuting(false);
     setExecuteError(null);
     setExecuteStarted(false);
+    setShowExpanded(false);
   }, [sessionId]);
 
   const showExecuteButtons =
@@ -320,7 +326,7 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
 
   return (
     <SessionPanelErrorBoundary sessionId={sessionId} onClose={onClose}>
-      <div className="session-panel">
+      <div className={`session-panel${expanded ? ' session-panel--expanded' : ''}`} {...(showExpanded ? { inert: '' } as any : {})}>
         <div className="session-panel-header">
           <div className="session-panel-header-top">
             <div className="session-panel-title-area">
@@ -352,6 +358,21 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
               {loading && <span className="session-panel-badge" style={{ color: 'var(--fg-muted)' }}>Loading...</span>}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
+              {!expanded && (
+                <button
+                  className="session-panel-expand"
+                  onClick={() => setShowExpanded(true)}
+                  title="Expand to full screen"
+                  aria-label="Expand session to full screen"
+                >
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="10 2 14 2 14 6" />
+                    <polyline points="6 14 2 14 2 10" />
+                    <line x1="14" y1="2" x2="9" y2="7" />
+                    <line x1="2" y1="14" x2="7" y2="9" />
+                  </svg>
+                </button>
+              )}
               {session?.taskId && (
                 <button
                   className={`session-panel-pin${pinned ? ' pinned' : ''}`}
@@ -523,6 +544,15 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
           )}
         </div>
       </div>
+      {showExpanded && (
+        <SessionExpandedModal
+          sessionId={sessionId}
+          onClose={() => setShowExpanded(false)}
+          onTaskClick={onTaskClick}
+          onSessionClick={onSessionClick}
+          onSessionReplaced={onSessionReplaced}
+        />
+      )}
     </SessionPanelErrorBoundary>
   );
 }
