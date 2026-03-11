@@ -267,6 +267,8 @@ React SPA communicates with the Express server via REST and WebSocket. The serve
 
 **Quick Start Sessions** (`/session` slash command): Inline popover above chat input for picking a working directory from session history. Paths ranked by frequency + recency with fuzzy search and host filter tabs. Selecting a path shows a context pill; sending creates a starred task under `"Quick Start"` project in the inferred category, starts a session, and notifies the main agent to reorganize. Backend: `GET /api/sessions/working-dirs` + `POST /api/sessions/quick-start` in `src/web/routes/sessions.ts`. Frontend: `SessionPathSelector` popover (`web/src/components/sessions/SessionPathSelector.tsx`), integrated into `MainPage.tsx` with send interception.
 
+**Global Notes**: Collapsible, resizable notes panel at the bottom of TodoPanel sidebar — a persistent scratchpad using Tiptap for WYSIWYG markdown (headings, lists, checkboxes, bold/italic, code, blockquotes). Stored as `~/.walnut/global-notes.md` (local-only, not synced). Expand button opens a 60vw centered popup via React portal. Backend: `GET/PUT /api/notes/global` in `src/web/routes/notes.ts`. Frontend: `GlobalNotesSection` + `NotesEditor` (Tiptap) + `GlobalNotesPopup` in `web/src/components/notes/`, state via `useGlobalNotes` hook with 500ms debounced auto-save.
+
 See `web/src/AGENTS.md` for detailed UX implementation (message isolation, task references, image rendering, session streaming, slash commands).
 
 ## Integration Plugin System
@@ -373,6 +375,7 @@ src/
 │   ├── sessions/        # [slug].md session summaries
 │   ├── knowledge/       # *.md knowledge articles
 │   └── memory-index.sqlite  # FTS5 search index
+├── global-notes.md      # User's personal scratchpad (local-only, not synced)
 └── hook-errors.log      # Silent hook error log
 ```
 

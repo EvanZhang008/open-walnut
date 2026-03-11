@@ -124,6 +124,7 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
       <div className="dock-task-body">
         {sessionId ? (
           <SessionChatHistory
+            key={sessionId}
             sessionId={sessionId}
             optimisticMessages={optimisticMsgs}
             onMessagesDelivered={handleMessagesDelivered}
