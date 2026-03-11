@@ -871,10 +871,16 @@ export async function rewriteHistoryRemoteImages(
   // Pre-scan: build filename → absolute path hints from tool inputs/results.
   // Tool inputs (e.g. Bash `cp` commands, file paths) contain full absolute paths
   // that are more accurate than CWD-based resolution for relative filenames.
-  const filePathHints = new Map<string, string>()
+  const filePathHints = new Map<string, string[]>()
   const isUsefulHint = (p: string) =>
     !p.startsWith(LOCAL_HOME) &&        // skip local filesystem paths
     p.lastIndexOf('/') > 0              // require ≥2 path components (reject "/file.png" from `./file.png` regex capture)
+  const addHint = (p: string) => {
+    const bn = path.basename(p)
+    const arr = filePathHints.get(bn)
+    if (arr) { if (!arr.includes(p)) arr.push(p) }
+    else filePathHints.set(bn, [p])
+  }
   for (const msg of messages) {
     if (!msg.tools) continue
     for (const tool of msg.tools) {
@@ -883,12 +889,12 @@ export async function rewriteHistoryRemoteImages(
         ? tool.input
         : (tool.input ? JSON.stringify(tool.input) : '')
       for (const p of findImagePaths(inputStr)) {
-        if (isUsefulHint(p)) filePathHints.set(path.basename(p), p)
+        if (isUsefulHint(p)) addHint(p)
       }
       // Scan tool result
       if (tool.result) {
         for (const p of findImagePaths(tool.result)) {
-          if (isUsefulHint(p)) filePathHints.set(path.basename(p), p)
+          if (isUsefulHint(p)) addHint(p)
         }
       }
     }

@@ -1621,8 +1621,8 @@ export function rewriteRemoteImagePaths(
   sessionId: string,
   cache: Map<string, string>,
   cwd?: string,
-  /** Optional map of basename → full remote path, built from tool inputs/results */
-  filePathHints?: Map<string, string>,
+  /** Optional map of basename → all known remote paths, built from tool inputs/results */
+  filePathHints?: Map<string, string[]>,
 ): string {
   let rewritten = text
 
@@ -1648,26 +1648,39 @@ export function rewriteRemoteImagePaths(
   if (cwd) {
     const relNames = findRelativeImageNames(rewritten)
     for (const relName of relNames) {
-      // Use filePathHints (from tool inputs) when available — more accurate than CWD
-      const hintPath = filePathHints?.get(path.basename(relName))
-      const absoluteRemote = hintPath || `${cwd.replace(/\/$/, '')}/${relName}`
-      // Skip if this absolute path was already handled in pass 1
-      if (cache.has(absoluteRemote)) continue
+      const basename = path.basename(relName)
+      // Build candidate paths: hints first, then CWD, then /tmp/ fallback
+      // (CloudWatch MCP and many tools save temp files to /tmp/)
+      const hintPaths = filePathHints?.get(basename) ?? []
+      const cwdPath = `${cwd.replace(/\/$/, '')}/${relName}`
+      const tmpPath = `/tmp/${basename}`
+      const candidates = [...hintPaths]
+      if (!candidates.includes(cwdPath)) candidates.push(cwdPath)
+      if (!candidates.includes(tmpPath)) candidates.push(tmpPath)
+
+      // Skip if any candidate was already handled in pass 1
+      if (candidates.some(c => cache.has(c))) continue
 
       let localPath = cache.get(`rel:${relName}`)
       if (!localPath) {
-        localPath = path.join(REMOTE_IMAGES_DIR, sessionId, path.basename(relName))
+        localPath = path.join(REMOTE_IMAGES_DIR, sessionId, basename)
         cache.set(`rel:${relName}`, localPath)
 
         if (!fs.existsSync(localPath)) {
-          downloadRemoteImage(sshTarget, absoluteRemote, localPath).catch(() => {})
+          // Try all candidate paths sequentially until one succeeds
+          const lp = localPath
+          ;(async () => {
+            for (const candidate of candidates) {
+              const ok = await downloadRemoteImage(sshTarget, candidate, lp)
+              if (ok) return
+            }
+          })().catch(() => {})
         }
       }
       // Rewrite relative name → local absolute path in the text
-      // Use regex to avoid partial matches (e.g. don't match inside a longer path)
       const escaped = relName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       const nameRe = new RegExp(`(?<=^|[\\s"'\`=:(])${escaped}(?=[\\s"'\`),;\\]}]|$)`, 'g')
-      rewritten = rewritten.replace(nameRe, () => localPath)
+      rewritten = rewritten.replace(nameRe, () => localPath!)
     }
   }
 
