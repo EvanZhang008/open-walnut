@@ -291,31 +291,10 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, depth = 0, childCou
     isDragging,
   } = useSortable({ id: task.id, data: { type: 'task' }, animateLayoutChanges: noAnimateAfterDrag });
 
-  // Combined ref: sortable + scroll-into-view on focus
-  const itemRef = useRef<HTMLDivElement | null>(null);
-  const wasFocusedRef = useRef(false);
+  // Combined ref for sortable
   const setNodeRef = useCallback((node: HTMLDivElement | null) => {
     setSortableRef(node);
-    itemRef.current = node;
   }, [setSortableRef]);
-
-  // Scroll this item into view when it becomes focused (scoped to .todo-panel-list only)
-  useEffect(() => {
-    if (isFocused && !wasFocusedRef.current && itemRef.current) {
-      const el = itemRef.current;
-      const listContainer = el.closest('.todo-panel-list');
-      if (listContainer) {
-        const elRect = el.getBoundingClientRect();
-        const containerRect = listContainer.getBoundingClientRect();
-        if (elRect.top < containerRect.top || elRect.bottom > containerRect.bottom) {
-          // Calculate absolute position within scroll container, center it
-          const elTopInContainer = elRect.top - containerRect.top + listContainer.scrollTop;
-          listContainer.scrollTop = elTopInContainer - containerRect.height / 3;
-        }
-      }
-    }
-    wasFocusedRef.current = isFocused;
-  }, [isFocused]);
 
   const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
@@ -1369,9 +1348,10 @@ interface SortablePinnedCardProps {
   isFocused: boolean;
   onFocusTask?: (task: Task) => void;
   onUnpinTask?: (taskId: string) => void;
+  onOpenSession?: (sessionId: string) => void;
 }
 
-function SortablePinnedCard({ task, isFocused, onFocusTask, onUnpinTask }: SortablePinnedCardProps) {
+function SortablePinnedCard({ task, isFocused, onFocusTask, onUnpinTask, onOpenSession }: SortablePinnedCardProps) {
   const {
     attributes,
     listeners,
@@ -1415,6 +1395,21 @@ function SortablePinnedCard({ task, isFocused, onFocusTask, onUnpinTask }: Sorta
       {statusLabel && (
         <span className="todo-pinned-status" style={{ color: statusColor }}>{statusLabel}</span>
       )}
+      {(() => {
+        const sid = resolveTaskSessionId(task);
+        if (!sid) return null;
+        return (
+          <button
+            className="todo-pinned-session-chip"
+            style={{ borderColor: statusColor, color: statusColor }}
+            onClick={(e) => { e.stopPropagation(); onOpenSession?.(sid); }}
+            title="Open session"
+            aria-label="Open session"
+          >
+            S
+          </button>
+        );
+      })()}
       <button
         className="todo-pinned-unpin"
         onClick={(e) => { e.stopPropagation(); onUnpinTask?.(task.id); }}
@@ -1471,6 +1466,44 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const prevFocusedRef = useRef<string | undefined>(undefined);
   // Track whether the focused task was already handled (prevents re-running on unrelated tasks changes)
   const focusHandledRef = useRef(false);
+  // RAF handle for cancellation on unmount / new focus
+  const scrollRafRef = useRef<number>(0);
+
+  // Scroll to a task by ID inside .todo-panel-list. Uses double-RAF to wait for
+  // React commit + browser paint after state changes (expand/filter-clear).
+  // Retries up to 5 frames if the element hasn't mounted yet.
+  const scrollToTask = useCallback((taskId: string) => {
+    cancelAnimationFrame(scrollRafRef.current);
+    let attempts = 0;
+    const maxAttempts = 5;
+    const tryScroll = () => {
+      const listContainer = document.querySelector('.todo-panel-list');
+      if (!listContainer) return;
+      const el = listContainer.querySelector(`[data-task-id="${window.CSS.escape(taskId)}"]`);
+      if (!el) {
+        // Element not yet in DOM (expand/filter state still propagating) — retry
+        if (++attempts < maxAttempts) {
+          scrollRafRef.current = requestAnimationFrame(tryScroll);
+        }
+        return;
+      }
+      const elRect = el.getBoundingClientRect();
+      const containerRect = listContainer.getBoundingClientRect();
+      if (elRect.top < containerRect.top || elRect.bottom > containerRect.bottom) {
+        const elTopInContainer = elRect.top - containerRect.top + listContainer.scrollTop;
+        listContainer.scrollTop = elTopInContainer - containerRect.height / 3;
+      }
+    };
+    // Double-RAF: first RAF fires after React commit, second after browser paint
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = requestAnimationFrame(tryScroll);
+    });
+  }, []);
+
+  // Cleanup RAF on unmount
+  useEffect(() => {
+    return () => cancelAnimationFrame(scrollRafRef.current);
+  }, []);
 
   // Auto-switch tab, expand groups, and scroll to task when focusedTaskId changes
   useEffect(() => {
@@ -1559,8 +1592,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       setSourceFilter('all');
     }
 
-    // Note: actual scroll-into-view is handled by SortableTaskItem itself
-    // when isFocused transitions to true (scoped to .todo-panel-list only).
+    // Scroll to the focused task after state changes (expand/filter) have flushed to DOM.
+    // scrollToTask uses double-RAF + retry to wait for React commit + browser paint.
+    scrollToTask(focusedTaskId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusedTaskId, tasks, activeCategory, collapsedCategories, collapsedProjects, favorites]);
 
@@ -2776,6 +2810,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     isFocused={focusedTaskId === task.id}
                     onFocusTask={onFocusTask}
                     onUnpinTask={onUnpinTask}
+                    onOpenSession={onOpenSession}
                   />
                 ))}
               </div>

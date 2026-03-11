@@ -6295,6 +6295,29 @@ img[data-lightbox-src],
   cursor: grabbing;
 }
 
+/* Mini session chip in pinned cards — compact "S" button */
+.todo-pinned-session-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: 4px;
+  border: 1.5px solid currentColor;
+  background: none;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  opacity: 0.7;
+  transition: opacity 0.15s, background 0.15s;
+}
+.todo-pinned-session-chip:hover {
+  opacity: 1;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
 .todo-panel-list {
   flex: 1;
   overflow-y: auto;
