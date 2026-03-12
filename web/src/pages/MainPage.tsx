@@ -165,6 +165,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const pinnedTaskIdSet = useMemo(() => new Set(focusBar.pinnedIds), [focusBar.pinnedIds]);
   const ordering = useOrdering();
   const [focusedTask, setFocusedTask] = useState<Task | null>(null);
+  // Nonce that increments on every focus action — forces re-scroll even for same task
+  const [focusNonce, setFocusNonce] = useState(0);
   const inspector = useContextInspector();
   // Force re-render when UI Only settings change (hook subscribes to localStorage)
   useUiOnlySettings();
@@ -226,6 +228,40 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Resizable panels
   const todoPanel = useResizablePanel('walnut-todo-width', 25);
   const sessionPanel = useResizablePanel('walnut-session-panel-width-v2', 35);
+
+  // Column split ratio: left column gets splitPct%, right gets (100-splitPct)%
+  const [colSplitPct, setColSplitPct] = useState(() => {
+    try { const v = parseFloat(localStorage.getItem('walnut-col-split') ?? ''); return isNaN(v) ? 50 : Math.min(80, Math.max(20, v)); } catch { return 50; }
+  });
+  const colSplitRef = useRef(colSplitPct);
+  colSplitRef.current = colSplitPct;
+  useEffect(() => { try { localStorage.setItem('walnut-col-split', String(colSplitPct)); } catch {} }, [colSplitPct]);
+
+  const handleColSplitStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const sessionsEl = sessionPanel.panelRef.current;
+    if (!sessionsEl) return;
+    const startX = e.clientX;
+    const startPct = colSplitRef.current;
+    const areaRect = sessionsEl.getBoundingClientRect();
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    sessionsEl.classList.add('resizing');
+    const onMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - startX;
+      const deltaPct = (dx / areaRect.width) * 100;
+      setColSplitPct(Math.min(80, Math.max(20, startPct + deltaPct)));
+    };
+    const onUp = () => {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      sessionsEl.classList.remove('resizing');
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }, [sessionPanel.panelRef]);
 
   // Graduated session area width — only auto-set when column count increases
   // (don't override user's manual drag on decrease or same count)
@@ -413,6 +449,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Metadata for the pending session panel (cwd, host, etc.)
   const pendingQuickStartMetaRef = useRef<{ id: string; cwd: string; host?: string; hostLabel?: string } | null>(null);
 
+  // Fork: pending panel metadata (same pattern as quick-start)
+  const pendingForkMetaRef = useRef<{ id: string; cwd: string; host?: string } | null>(null);
+
   // Path selector → select handler
   const handlePathSelect = useCallback((path: QuickStartPath) => {
     setQuickStartPath(path);
@@ -472,6 +511,32 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     }, 2000);
   }, [sessionColumns]);
 
+  // ── Fork pending handlers ──
+  const handleForkPending = useCallback((cwd: string, host?: string) => {
+    const pendingColId = `pending:fork-${Date.now()}`;
+    pendingForkMetaRef.current = { id: pendingColId, cwd, host };
+    setSessionColumns(prev => addSessionColumn(prev, pendingColId, triageOpenRef.current));
+  }, []);
+
+  const handleForkResolved = useCallback((_taskId: string, sessionId?: string) => {
+    const meta = pendingForkMetaRef.current;
+    pendingForkMetaRef.current = null;
+    if (meta && sessionId) {
+      setSessionColumns(prev => replaceSessionColumn(prev, meta.id, sessionId));
+    } else if (meta) {
+      // No sessionId returned — remove pending panel
+      setSessionColumns(prev => removeSessionColumn(prev, meta.id));
+    }
+  }, []);
+
+  const handleForkFailed = useCallback(() => {
+    const meta = pendingForkMetaRef.current;
+    pendingForkMetaRef.current = null;
+    if (meta) {
+      setSessionColumns(prev => removeSessionColumn(prev, meta.id));
+    }
+  }, []);
+
   // Handle session click from chat: focus the associated task + open session column
   const handleSessionClick = useCallback(async (sessionId: string) => {
     // Add session column
@@ -497,10 +562,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, [create]);
 
   const handleFocusTask = useCallback((task: Task) => {
-    const isUnfocusing = focusedTask?.id === task.id;
-    setFocusedTask(isUnfocusing ? null : task);
-    // Clear attention flag on focus (not on unfocus) — fire-and-forget
-    if (!isUnfocusing && task.needs_attention) {
+    const isRefocus = focusedTask?.id === task.id;
+    // Always focus (never toggle off) — unfocusing is done via detail panel close / Esc.
+    // Increment nonce so TodoPanel re-scrolls even when the same task is re-clicked.
+    setFocusedTask(task);
+    setFocusNonce(n => n + 1);
+    // Clear attention flag on new focus (not re-focus)
+    if (!isRefocus && task.needs_attention) {
       update(task.id, { needs_attention: false });
     }
   }, [focusedTask, update]);
@@ -808,7 +876,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         {sessionColumns.map((sid, idx) => {
           const needsDivider = idx > 0 || triagePanelOpen;
           const isPending = sid.startsWith('pending:');
-          const pendingMeta = isPending ? pendingQuickStartMetaRef.current : null;
+          const qsMeta = isPending ? pendingQuickStartMetaRef.current : null;
+          const forkMeta = isPending ? pendingForkMetaRef.current : null;
+          const pendingMeta = (qsMeta?.id === sid ? qsMeta : null) ?? (forkMeta?.id === sid ? forkMeta : null);
+          const isForkPending = forkMeta?.id === sid;
           return (
             <div className="main-page-session-column" key={sid} style={needsDivider ? { borderLeft: '1px solid var(--border)' } : undefined}>
               {isPending && pendingMeta ? (
@@ -816,7 +887,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                   taskId={sid}
                   cwd={pendingMeta.cwd}
                   host={pendingMeta.host}
-                  hostLabel={pendingMeta.hostLabel}
+                  hostLabel={'hostLabel' in pendingMeta ? pendingMeta.hostLabel : undefined}
+                  label={isForkPending ? 'Forking session...' : undefined}
                   onClose={() => handleCloseSession(sid)}
                 />
               ) : (
@@ -826,6 +898,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                   onTaskClick={handleFocusTaskById}
                   onSessionClick={handleSessionClick}
                   onSessionReplaced={(newId) => handleSessionReplaced(sid, newId)}
+                  onForkPending={handleForkPending}
+                  onForkResolved={handleForkResolved}
+                  onForkFailed={handleForkFailed}
                 />
               )}
             </div>
@@ -861,6 +936,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onFocusTask={handleFocusTask}
           onClearFocus={handleClearFocus}
           focusedTaskId={focusedTask?.id}
+          focusNonce={focusNonce}
           favorites={favorites}
           ordering={ordering}
           onReorder={reorder}

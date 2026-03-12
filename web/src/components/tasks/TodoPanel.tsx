@@ -4,7 +4,7 @@ import type { Task } from '@walnut/core';
 import type { SessionRecord } from '@walnut/core';
 import { renderNoteMarkdown, renderMarkdownWithRefs } from '@/utils/markdown';
 import { fetchSessionsForTask } from '@/api/sessions';
-import { fetchTask } from '@/api/tasks';
+import { fetchTask, updateTask as apiUpdateTask, fetchAvailableSprints, type SprintOption } from '@/api/tasks';
 import { fetchTriageHistory } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
 import { timeAgo } from '@/utils/time';
@@ -66,6 +66,8 @@ interface TodoPanelProps {
   onFocusTask?: (task: Task) => void;
   onClearFocus?: () => void;
   focusedTaskId?: string;
+  /** Increments on every focus action — forces re-scroll even for same task */
+  focusNonce?: number;
   favorites?: UseFavoritesReturn;
   ordering?: UseOrderingReturn;
   onReorder?: (category: string, project: string, taskIds: string[]) => void;
@@ -949,6 +951,38 @@ function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenTriageFo
   const hasSubtasks = task.subtasks && task.subtasks.length > 0;
   const dueDateInfo = task.due_date ? formatDueDate(task.due_date) : null;
 
+  // Sprint picker state
+  const [sprintPickerOpen, setSprintPickerOpen] = useState(false);
+  const [availableSprints, setAvailableSprints] = useState<SprintOption[]>([]);
+  const [currentSprintName, setCurrentSprintName] = useState<string | null>(null);
+  const sprintRef = useRef<HTMLDivElement>(null);
+
+  const handleSprintPickerOpen = async () => {
+    if (!sprintPickerOpen) {
+      const { sprints, current } = await fetchAvailableSprints();
+      setAvailableSprints(sprints);
+      setCurrentSprintName(current);
+    }
+    setSprintPickerOpen(!sprintPickerOpen);
+  };
+
+  const handleSprintChange = async (sprintName: string | null) => {
+    await apiUpdateTask(task.id, { sprint: sprintName ?? '' });
+    setSprintPickerOpen(false);
+  };
+
+  // Close sprint picker on click outside
+  useEffect(() => {
+    if (!sprintPickerOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (sprintRef.current && !sprintRef.current.contains(e.target as Node)) {
+        setSprintPickerOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [sprintPickerOpen]);
+
   // Child tasks — tasks whose parent_task_id matches this task (handles prefix parent IDs)
   const childTasks = useMemo(() => {
     if (!allTasks) return [];
@@ -1096,9 +1130,43 @@ function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenTriageFo
               {PRIORITY_ICON[task.priority]} {PRIORITY_LABEL[task.priority]}
             </span>
           )}
-          {task.sprint && (
-            <span className="todo-detail-sprint-pill">{task.sprint}</span>
-          )}
+          <div ref={sprintRef} style={{ position: 'relative', display: 'inline-block' }}>
+            <button
+              className={`sprint-picker-pill${task.sprint ? '' : ' sprint-picker-empty-pill'}`}
+              onClick={handleSprintPickerOpen}
+              title={task.sprint ? `Sprint: ${task.sprint}` : 'Set sprint'}
+            >
+              {task.sprint || '+ Sprint'}
+            </button>
+            {sprintPickerOpen && (
+              <div className="sprint-picker-dropdown">
+                {availableSprints.length === 0 ? (
+                  <div className="sprint-picker-empty">No sprints available</div>
+                ) : (
+                  <>
+                    {task.sprint && (
+                      <button
+                        className="sprint-picker-option sprint-picker-clear"
+                        onClick={() => handleSprintChange(null)}
+                      >
+                        Clear sprint
+                      </button>
+                    )}
+                    {availableSprints.map((s) => (
+                      <button
+                        key={s.id}
+                        className={`sprint-picker-option${task.sprint === s.name ? ' sprint-picker-active' : ''}${s.name === currentSprintName ? ' sprint-picker-current' : ''}`}
+                        onClick={() => handleSprintChange(s.name)}
+                      >
+                        <span>{s.name}</span>
+                        {s.name === currentSprintName && <span className="sprint-picker-current-badge">current</span>}
+                      </button>
+                    ))}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         </div>
         <div className="todo-detail-dates text-xs text-muted">
           {task.created_at && <span>Created {timeAgo(task.created_at)}</span>}
@@ -1434,7 +1502,7 @@ function SortablePinnedCard({ task, isFocused, onFocusTask, onUnpinTask, onOpenS
 
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onCyclePriority, onFocusTask, onClearFocus, focusedTaskId, favorites, ordering, onReorder, onMoveTask, onReparentTask, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, pinnedTaskIds, openSessionIds, operationError, onClearOperationError, onOperationError, externalCategory, onCategoryChange }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onCyclePriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, favorites, ordering, onReorder, onMoveTask, onReparentTask, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, pinnedTaskIds, openSessionIds, operationError, onClearOperationError, onOperationError, externalCategory, onCategoryChange }: TodoPanelProps) {
   // Hide .metadata* tasks (project/category configuration tasks, not user-visible)
   const tasks = useMemo(() => rawTasks.filter((t) => !t.title.startsWith('.metadata')), [rawTasks]);
   const navigate = useNavigate();
@@ -1487,6 +1555,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const prevFocusedRef = useRef<string | undefined>(undefined);
   // Track whether the focused task was already handled (prevents re-running on unrelated tasks changes)
   const focusHandledRef = useRef(false);
+  // Track previous focusNonce to detect re-focus on same task
+  const prevNonceRef = useRef(focusNonce ?? 0);
   // RAF handle for cancellation on unmount / new focus
   const scrollRafRef = useRef<number>(0);
 
@@ -1549,10 +1619,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       return;
     }
     const isNewFocus = focusedTaskId !== prevFocusedRef.current;
-    if (!isNewFocus && focusHandledRef.current) {
-      scrollLog('focus-effect-SKIP', { taskId: focusedTaskId.substring(0, 12), reason: 'already-handled' });
-      return; // already handled
-    }
+    const nonceChanged = (focusNonce ?? 0) !== prevNonceRef.current;
+    prevNonceRef.current = focusNonce ?? 0;
+    if (!isNewFocus && !nonceChanged && focusHandledRef.current) return; // already handled
     prevFocusedRef.current = focusedTaskId;
 
     const task = tasks.find((t) => t.id === focusedTaskId);
@@ -1641,7 +1710,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // scrollToTask uses double-RAF + retry to wait for React commit + browser paint.
     scrollToTask(focusedTaskId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusedTaskId, tasks, activeCategory, collapsedCategories, collapsedProjects, favorites]);
+  }, [focusedTaskId, focusNonce, tasks, activeCategory, collapsedCategories, collapsedProjects, favorites]);
 
   // Auto-expand parent when a child task is created (via WS event)
   useEvent('task:created', (data) => {
