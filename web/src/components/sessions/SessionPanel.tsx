@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, Component, type ReactNode, type ErrorInfo } from 'react';
+import { useState, useEffect, useCallback, useRef, Component, type ReactNode, type ErrorInfo, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { SessionChatHistory } from './SessionChatHistory';
 import { SessionNotes } from './SessionNotes';
@@ -18,7 +18,7 @@ import { timeAgo } from '@/utils/time';
 import { WorkStatusPicker } from './WorkStatusPicker';
 import { SessionCopyButtons } from './SessionCopyButtons';
 import { ModelPicker } from './ModelPicker';
-import { SessionExpandedModal } from './SessionExpandedModal';
+import { useFullscreen } from '@/hooks/useFullscreen';
 import { useSessionUsage, formatModelName, getContextWindowSize } from '@/hooks/useSessionUsage';
 import { useSessionPlan } from '@/hooks/useSessionPlan';
 import { wsClient } from '@/api/ws';
@@ -26,7 +26,7 @@ import type { SessionRecord } from '@/types/session';
 
 interface SessionPanelErrorBoundaryProps {
   sessionId: string;
-  onClose: () => void;
+  onClose: (sessionId: string) => void;
   children: ReactNode;
 }
 
@@ -63,7 +63,7 @@ class SessionPanelErrorBoundary extends Component<SessionPanelErrorBoundaryProps
             className="btn btn-sm btn-primary"
             onClick={() => {
               sessionStorage.removeItem('walnut-home-session-columns');
-              this.props.onClose();
+              this.props.onClose(this.props.sessionId);
             }}
           >
             Close panel
@@ -77,20 +77,21 @@ class SessionPanelErrorBoundary extends Component<SessionPanelErrorBoundaryProps
 
 interface SessionPanelProps {
   sessionId: string;
-  onClose: () => void;
+  /** Stable close handler — receives the sessionId so parent can identify which panel to close. */
+  onClose: (sessionId: string) => void;
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
-  /** Called when "Clear Context & Execute" creates a new session — parent should switch to it. */
-  onSessionReplaced?: (newSessionId: string) => void;
+  /** Called when "Clear Context & Execute" creates a new session — receives (oldId, newId). */
+  onSessionReplaced?: (oldSessionId: string, newSessionId: string) => void;
   /** Called immediately when Fork is clicked — parent can show a pending panel. */
   onForkPending?: (cwd: string, host?: string) => void;
   /** Called when fork API returns — parent can replace the pending panel with the real session. */
   onForkResolved?: (taskId: string, sessionId?: string) => void;
-  /** When true, panel is rendered inside the expanded modal — hides expand button, stretches to fill container. */
-  expanded?: boolean;
+  /** Called when fork API fails — parent should remove the pending panel. */
+  onForkFailed?: () => void;
 }
 
-export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, onSessionReplaced, onForkPending, onForkResolved, expanded }: SessionPanelProps) {
+export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, onSessionReplaced, onForkPending, onForkResolved, onForkFailed }: SessionPanelProps) {
   const navigate = useNavigate();
   const [session, setSession] = useState<SessionRecord | null>(null);
   const [loading, setLoading] = useState(true);
@@ -106,8 +107,8 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
 
   // Model picker state
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
-  // Expanded modal state (only used when not already expanded)
-  const [showExpanded, setShowExpanded] = useState(false);
+  // CSS-promotion fullscreen (same instance, no remount)
+  const { isFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop } = useFullscreen();
 
   const handleControlCommand = useCallback((command: string) => {
     if (command === 'model') {
@@ -261,13 +262,13 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
   const [executeError, setExecuteError] = useState<string | null>(null);
   const [executeStarted, setExecuteStarted] = useState(false);
 
-  // Reset execute + expanded state when session changes
+  // Reset execute + fullscreen state when session changes
   useEffect(() => {
     setExecuting(false);
     setExecuteError(null);
     setExecuteStarted(false);
-    setShowExpanded(false);
-  }, [sessionId]);
+    exitFullscreen();
+  }, [sessionId, exitFullscreen]);
 
   const showExecuteButtons =
     session?.planCompleted === true
@@ -296,7 +297,7 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
       setExecuteStarted(true);
       // Only navigate if user is still viewing the same session
       if (result.sessionId && sessionIdRef.current === clickedSessionId) {
-        onSessionReplaced?.(result.sessionId);
+        onSessionReplaced?.(sessionId, result.sessionId);
       }
     } catch (err) {
       setExecuteError(err instanceof Error ? err.message : String(err));
@@ -330,7 +331,8 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
 
   return (
     <SessionPanelErrorBoundary sessionId={sessionId} onClose={onClose}>
-      <div className={`session-panel${expanded ? ' session-panel--expanded' : ''}`} {...(showExpanded ? { inert: '' } as any : {})}>
+      {FullscreenBackdrop}
+      <div className={`session-panel${fullscreenClass}`}>
         <div className="session-panel-header">
           <div className="session-panel-header-top">
             <div className="session-panel-title-area">
@@ -362,21 +364,28 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
               {loading && <span className="session-panel-badge" style={{ color: 'var(--fg-muted)' }}>Loading...</span>}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
-              {!expanded && (
-                <button
-                  className="session-panel-expand"
-                  onClick={() => setShowExpanded(true)}
-                  title="Expand to full screen"
-                  aria-label="Expand session to full screen"
-                >
+              <button
+                className="session-panel-expand"
+                onClick={isFullscreen ? exitFullscreen : enterFullscreen}
+                title={isFullscreen ? 'Collapse back' : 'Expand to full screen'}
+                aria-label={isFullscreen ? 'Collapse session' : 'Expand session to full screen'}
+              >
+                {isFullscreen ? (
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="4 14 4 10 0 10" />
+                    <polyline points="12 2 12 6 16 6" />
+                    <line x1="0" y1="10" x2="5" y2="5" />
+                    <line x1="16" y1="6" x2="11" y2="11" />
+                  </svg>
+                ) : (
                   <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                     <polyline points="10 2 14 2 14 6" />
                     <polyline points="6 14 2 14 2 10" />
                     <line x1="14" y1="2" x2="9" y2="7" />
                     <line x1="2" y1="14" x2="7" y2="9" />
                   </svg>
-                </button>
-              )}
+                )}
+              </button>
               {session?.taskId && (
                 <button
                   className={`session-panel-pin${pinned ? ' pinned' : ''}`}
@@ -388,7 +397,7 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
                   {pinned ? '\u{1F4CC}' : '\u{1F4CD}'}
                 </button>
               )}
-              <button className="session-panel-close" onClick={onClose} title="Close session panel">&times;</button>
+              <button className="session-panel-close" onClick={() => onClose(sessionId)} title="Close session panel">&times;</button>
             </div>
           </div>
           {session?.taskId && (
@@ -431,6 +440,7 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
                 onTaskClick?.(newTaskId);
                 if (newSessionId) onSessionClick?.(newSessionId);
               }}
+              onForkFailed={onForkFailed}
             />
             {session?.host && (
               <span
@@ -552,15 +562,6 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
           )}
         </div>
       </div>
-      {showExpanded && (
-        <SessionExpandedModal
-          sessionId={sessionId}
-          onClose={() => setShowExpanded(false)}
-          onTaskClick={onTaskClick}
-          onSessionClick={onSessionClick}
-          onSessionReplaced={onSessionReplaced}
-        />
-      )}
     </SessionPanelErrorBoundary>
   );
-}
+});

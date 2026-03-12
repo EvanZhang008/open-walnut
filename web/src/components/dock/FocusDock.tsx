@@ -2,10 +2,10 @@ import { useState, useCallback, useEffect, useRef, memo } from 'react';
 import type { Task } from '@walnut/core';
 import { compositeColor, resolveTaskSessionId } from '@/utils/session-status';
 import { SessionChatHistory } from '@/components/sessions/SessionChatHistory';
-import { SessionExpandedModal } from '@/components/sessions/SessionExpandedModal';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { useSessionSend } from '@/hooks/useSessionSend';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
+import { useFullscreen } from '@/hooks/useFullscreen';
 import type { ImageAttachment } from '@/api/chat';
 import type { UseFocusBarReturn } from '@/hooks/useFocusBar';
 
@@ -87,8 +87,8 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
   // Reuse the same send hook as SessionPanel — optimistic messages + delivery tracking
   const { optimisticMsgs, send, handleMessagesDelivered, handleBatchCompleted, clearCommitted } = useSessionSend(sessionId);
 
-  // Expanded modal state
-  const [showExpanded, setShowExpanded] = useState(false);
+  // CSS-promotion fullscreen (same instance, no remount)
+  const { isFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop } = useFullscreen();
 
   // Slash command autocomplete (same as SessionPanel)
   const { items: slashCommands, search: searchSlashCommands } = useSlashCommands();
@@ -98,10 +98,11 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
     send(sessionId, text.trim(), images);
   }, [sessionId, send]);
 
-  return (
+  return (<>
+    {FullscreenBackdrop}
     <div
-      className={`dock-task-card${isActive ? ' dock-task-active' : ''}`}
-      onClick={(e) => { if (e.target === e.currentTarget || (e.target as HTMLElement).closest('.dock-task-header')) handleClick(); }}
+      className={`dock-task-card${isActive ? ' dock-task-active' : ''}${fullscreenClass}`}
+      onClick={(e) => { if (!isFullscreen && (e.target === e.currentTarget || (e.target as HTMLElement).closest('.dock-task-header'))) handleClick(); }}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); handleClick(); } }}
@@ -114,16 +115,25 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
           {sessionId && (
             <button
               className="dock-task-expand"
-              onClick={(e) => { e.stopPropagation(); setShowExpanded(true); }}
-              title="Expand session"
-              aria-label="Expand session to full screen"
+              onClick={(e) => { e.stopPropagation(); isFullscreen ? exitFullscreen() : enterFullscreen(); }}
+              title={isFullscreen ? 'Collapse back' : 'Expand session'}
+              aria-label={isFullscreen ? 'Collapse session' : 'Expand session to full screen'}
             >
-              <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="10 2 14 2 14 6" />
-                <polyline points="6 14 2 14 2 10" />
-                <line x1="14" y1="2" x2="9" y2="7" />
-                <line x1="2" y1="14" x2="7" y2="9" />
-              </svg>
+              {isFullscreen ? (
+                <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="4 14 4 10 0 10" />
+                  <polyline points="12 2 12 6 16 6" />
+                  <line x1="0" y1="10" x2="5" y2="5" />
+                  <line x1="16" y1="6" x2="11" y2="11" />
+                </svg>
+              ) : (
+                <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="10 2 14 2 14 6" />
+                  <polyline points="6 14 2 14 2 10" />
+                  <line x1="14" y1="2" x2="9" y2="7" />
+                  <line x1="2" y1="14" x2="7" y2="9" />
+                </svg>
+              )}
             </button>
           )}
           <button
@@ -164,14 +174,8 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
           />
         </div>
       )}
-      {showExpanded && sessionId && (
-        <SessionExpandedModal
-          sessionId={sessionId}
-          onClose={() => setShowExpanded(false)}
-        />
-      )}
     </div>
-  );
+  </>);
 });
 
 // ── ChatDockItem ──

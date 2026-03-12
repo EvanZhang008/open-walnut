@@ -483,7 +483,7 @@ function buildTimeline(
 // ── Auto-scroll constant ──
 const NEAR_BOTTOM_PX = 80;  // px from bottom to consider "at bottom"
 
-export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessionCwd, optimisticMessages, onMessagesDelivered, onBatchCompleted, onEditQueued, onDeleteQueued, onAgentQueued, onClearCommitted, onTaskClick, onSessionClick }: SessionChatHistoryProps) {
+export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessionCwd, optimisticMessages, onMessagesDelivered, onBatchCompleted, onEditQueued, onDeleteQueued, onAgentQueued, onClearCommitted, onTaskClick, onSessionClick }: SessionChatHistoryProps) {
   const [historyVersion, setHistoryVersion] = useState(0);
   const awaitingRefresh = useRef(false);
   const pendingBatchTotal = useRef(0);
@@ -1132,4 +1132,4 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
       {lightboxSrc && <Lightbox src={lightboxSrc} onClose={closeLightbox} />}
     </>
   );
-}
+});

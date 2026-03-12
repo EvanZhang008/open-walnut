@@ -716,9 +716,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const chatTitle = focusedTask
     ? `Chat — ${focusedTask.title}`
     : 'Chat';
-  const chatSubtitle = focusedTask
-    ? `Chatting about task in ${focusedTask.category}${focusedTask.project && focusedTask.project !== focusedTask.category ? ` / ${focusedTask.project}` : ''}`
-    : 'Chat with Walnut';
 
   return (
     <div className="main-page" style={{ position: 'relative' }}>
@@ -901,10 +898,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               ) : (
                 <SessionPanel
                   sessionId={sid}
-                  onClose={() => handleCloseSession(sid)}
+                  onClose={handleCloseSession}
                   onTaskClick={handleFocusTaskById}
                   onSessionClick={handleSessionClick}
-                  onSessionReplaced={(newId) => handleSessionReplaced(sid, newId)}
+                  onSessionReplaced={handleSessionReplaced}
                   onForkPending={handleForkPending}
                   onForkResolved={handleForkResolved}
                   onForkFailed={handleForkFailed}
