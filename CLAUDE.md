@@ -276,6 +276,8 @@ React SPA communicates with the Express server via REST and WebSocket. The serve
 
 **Global Notes**: Collapsible, resizable notes panel at the bottom of TodoPanel sidebar — a persistent scratchpad using Tiptap for WYSIWYG markdown (headings, lists, checkboxes, bold/italic, code, blockquotes, images). Supports **image paste/drop** — images uploaded to `~/.walnut/images/` via `POST /api/images/upload`, falling back to inline data URLs if upload fails. Stored as `~/.walnut/global-notes.md` (local-only, not synced). Expand button opens a 60vw centered popup (backdrop blur) via React portal. Backend: `GET/PUT /api/notes/global` in `src/web/routes/notes.ts`. Frontend: `GlobalNotesSection` + `NotesEditor` (Tiptap + Image extension) + `GlobalNotesPopup` in `web/src/components/notes/`, state via `useGlobalNotes` hook with optimized save (markdown serialization deferred to 500ms debounce — no per-keystroke serialization or React re-renders).
 
+**URL State Sync**: Key UI state (open session panels, focused task, active category tab) is encoded into URL query params via `useUrlSync` hook (`web/src/hooks/useUrlSync.ts`). Format: `/?s1=<sessionId>&s2=<sessionId2>&task=<taskId>&cat=<category>`. Enables deep linking for debug, refresh persistence, and shareable UI layouts. Uses debounced `replaceState` (not `pushState`). Starred tab maps to `cat=starred` in URL. Falls back to `sessionStorage` when no URL params present.
+
 See `web/src/AGENTS.md` for detailed UX implementation (message isolation, task references, image rendering, session streaming, slash commands).
 
 ## Integration Plugin System

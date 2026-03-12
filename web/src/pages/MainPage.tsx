@@ -23,6 +23,7 @@ import { fetchSession, fetchSessionsForTask, quickStartSession } from '@/api/ses
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
 import { QuickAccessBar } from '@/components/chat/QuickAccessBar';
 import { useContextInspector } from '@/hooks/useContextInspector';
+import { useUrlSync } from '@/hooks/useUrlSync';
 import { shouldHideUiOnlyMessage } from '@/hooks/useDeveloperSettings';
 import { useUiOnlySettings } from '@/hooks/useDeveloperSettings';
 import { FocusDock } from '@/components/dock/FocusDock';
@@ -176,6 +177,18 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Session columns state — up to 2 sessions displayed side by side
   const [sessionColumns, setSessionColumns] = useState<string[]>(loadSessionColumns);
 
+  // Active category tab — mirrors TodoPanel's tab for URL sync.
+  // Initialize from the same localStorage key so the URL reflects the initial tab.
+  const [activeCategory, setActiveCategory] = useState<string | undefined>(() => {
+    try { return localStorage.getItem('walnut-todo-active-tab') ?? undefined; } catch { return undefined; }
+  });
+  const urlSync = useUrlSync({
+    focusedTaskId: focusedTask?.id,
+    sessionColumns,
+    activeCategory,
+    visible,
+  });
+
   // Triage panel state — shares the first column slot with sessions
   const [triagePanelOpen, setTriagePanelOpen] = useState(false);
   const triageOpenRef = useRef(triagePanelOpen);
@@ -236,9 +249,27 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     }
   }, [tasks, focusedTask]);
 
-  // Restore focusedTask from sessionStorage once tasks have loaded
+  // Restore state once tasks have loaded — URL params take priority over sessionStorage.
+  // Also handles popstate events (browser back/forward) that arrive after initial load.
   const restoredTaskRef = useRef(false);
   useEffect(() => {
+    // Apply URL pending state (initial load or popstate)
+    if (urlSync.pending) {
+      // On initial load, wait for tasks to arrive before applying
+      if (!restoredTaskRef.current && loading) return;
+      restoredTaskRef.current = true;
+      const p = urlSync.pending;
+      if (p.taskId) {
+        const task = tasks.find(t => t.id === p.taskId);
+        if (task) setFocusedTask(task);
+      }
+      if (p.sessionIds.length > 0) setSessionColumns(p.sessionIds);
+      if (p.category !== null) setActiveCategory(p.category);
+      urlSync.clearPending();
+      return;
+    }
+
+    // No URL params — fallback to sessionStorage restore (once)
     if (loading || restoredTaskRef.current) return;
     restoredTaskRef.current = true;
     const savedTaskId = sessionStorage.getItem(SS_TASK_KEY);
@@ -246,7 +277,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       const task = tasks.find((t) => t.id === savedTaskId);
       if (task) setFocusedTask(task);
     }
-  }, [loading, tasks, focusedTask]);
+  }, [loading, tasks, focusedTask, urlSync.pending, urlSync.clearPending]);
 
   // Restore state from sessionStorage when returning from another page.
   // This is a defensive safety net: if React state was somehow lost while hidden,
@@ -845,6 +876,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           operationError={operationError}
           onClearOperationError={clearOperationError}
           onOperationError={showOperationError}
+          externalCategory={activeCategory}
+          onCategoryChange={setActiveCategory}
         />
       </div>
 

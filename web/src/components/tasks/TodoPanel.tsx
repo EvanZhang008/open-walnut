@@ -81,6 +81,10 @@ interface TodoPanelProps {
   operationError?: string | null;
   onClearOperationError?: () => void;
   onOperationError?: (msg: string) => void;
+  /** Externally-set category (e.g. from URL deep link). When it changes from undefined to a value, the tab switches. */
+  externalCategory?: string;
+  /** Fires whenever the active category tab changes (for URL sync). */
+  onCategoryChange?: (cat: string) => void;
 }
 
 const STARRED_TAB = '\u2605';
@@ -1424,7 +1428,7 @@ function SortablePinnedCard({ task, isFocused, onFocusTask, onUnpinTask, onOpenS
 
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onCyclePriority, onFocusTask, onClearFocus, focusedTaskId, favorites, ordering, onReorder, onMoveTask, onReparentTask, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, pinnedTaskIds, openSessionIds, operationError, onClearOperationError, onOperationError }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onCyclePriority, onFocusTask, onClearFocus, focusedTaskId, favorites, ordering, onReorder, onMoveTask, onReparentTask, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, pinnedTaskIds, openSessionIds, operationError, onClearOperationError, onOperationError, externalCategory, onCategoryChange }: TodoPanelProps) {
   // Hide .metadata* tasks (project/category configuration tasks, not user-visible)
   const tasks = useMemo(() => rawTasks.filter((t) => !t.title.startsWith('.metadata')), [rawTasks]);
   const navigate = useNavigate();
@@ -1440,6 +1444,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     try { return localStorage.getItem(LS_FILTERS_COLLAPSED_KEY) !== '0'; } catch { return true; }
   });
   const [activeCategory, setActiveCategory] = useState(readTab);
+
+  // Apply externally-set category (e.g. from URL deep link)
+  const prevExternalCatRef = useRef(externalCategory);
+  useEffect(() => {
+    if (externalCategory !== undefined && externalCategory !== prevExternalCatRef.current) {
+      setActiveCategory(externalCategory);
+      persistTab(externalCategory);
+    }
+    prevExternalCatRef.current = externalCategory;
+  }, [externalCategory]);
+
   const integrations = useIntegrations();
   const [newTitle, setNewTitle] = useState('');
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(() => readSetFromStorage(LS_COLLAPSED_CATS_KEY));
@@ -1525,6 +1540,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (activeCategory !== '' && activeCategory !== cat && activeCategory !== STARRED_TAB) {
       setActiveCategory(cat);
       persistTab(cat);
+      onCategoryChange?.(cat);
     } else if (activeCategory === STARRED_TAB) {
       // If task isn't visible under starred tab, switch to its category
       const isStarred = !!task.starred;
@@ -1533,6 +1549,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       if (!isStarred && !isCatFav && !isProjFav && !isDescendantVisibleInStarred(task)) {
         setActiveCategory(cat);
         persistTab(cat);
+        onCategoryChange?.(cat);
       }
     }
 
@@ -2193,6 +2210,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         if (activeCategory !== '') {
           setActiveCategory('Inbox');
           persistTab('Inbox');
+          onCategoryChange?.('Inbox');
         }
         // Auto-focus triggers scroll-into-view via SortableTaskItem
         onFocusTask?.(newTask);
@@ -2535,14 +2553,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           {hasStarredContent && (
             <button
               className={`todo-panel-tab todo-panel-tab-starred${activeCategory === STARRED_TAB ? ' todo-panel-tab-active' : ''}`}
-              onClick={() => { const next = activeCategory === STARRED_TAB ? '' : STARRED_TAB; setActiveCategory(next); persistTab(next); }}
+              onClick={() => { const next = activeCategory === STARRED_TAB ? '' : STARRED_TAB; setActiveCategory(next); persistTab(next); onCategoryChange?.(next); }}
             >
               {STARRED_TAB}
             </button>
           )}
           <button
             className={`todo-panel-tab${activeCategory === '' ? ' todo-panel-tab-active' : ''}`}
-            onClick={() => { setActiveCategory(''); persistTab(''); }}
+            onClick={() => { setActiveCategory(''); persistTab(''); onCategoryChange?.(''); }}
           >
             All
           </button>
@@ -2558,7 +2576,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   key={cat}
                   id={cat}
                   active={activeCategory === cat}
-                  onClick={() => { setActiveCategory(cat); persistTab(cat); }}
+                  onClick={() => { setActiveCategory(cat); persistTab(cat); onCategoryChange?.(cat); }}
                   isLocal={localCategories.has(cat)}
                 >
                   {cat}
@@ -3156,7 +3174,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           Add
         </button>
       </form>
-      <GlobalNotesSection {...globalNotes} />
+      <GlobalNotesSection
+        {...globalNotes}
+        tasks={tasks}
+        focusedTaskId={focusedTaskId ?? undefined}
+        onTaskClick={(taskId) => {
+          const task = tasks.find(t => t.id === taskId);
+          if (task) onFocusTask?.(task);
+        }}
+      />
     </div>
   );
 });
