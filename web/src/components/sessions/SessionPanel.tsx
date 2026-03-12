@@ -24,7 +24,7 @@ import { useSessionPlan } from '@/hooks/useSessionPlan';
 import { wsClient } from '@/api/ws';
 import type { SessionRecord } from '@/types/session';
 
-function CopyPathButton({ path }: { path: string }) {
+function CopyablePath({ label, path }: { label: string; path: string }) {
   const [copied, setCopied] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => { clearTimeout(timerRef.current); }, []);
@@ -39,22 +39,13 @@ function CopyPathButton({ path }: { path: string }) {
   };
 
   return (
-    <button
-      className="copy-path-btn"
+    <span
+      className={`session-panel-project copyable-path${copied ? ' copied' : ''}`}
+      title={copied ? 'Copied!' : path}
       onClick={handleCopy}
-      title={copied ? 'Copied!' : `Copy path: ${path}`}
     >
-      {copied ? (
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <polyline points="3.5 8.5 6.5 11.5 12.5 4.5" />
-        </svg>
-      ) : (
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
-          <path d="M10.5 5.5V3.5A1.5 1.5 0 0 0 9 2H3.5A1.5 1.5 0 0 0 2 3.5V9a1.5 1.5 0 0 0 1.5 1.5h2" />
-        </svg>
-      )}
-    </button>
+      {copied ? 'Copied!' : label}
+    </span>
   );
 }
 
@@ -473,12 +464,7 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
                 SSH: {session.host}
               </span>
             )}
-            {session?.project && (
-              <span className="session-panel-project-row">
-                <span className="session-panel-project" title={session.cwd || session.project}>{session.project}</span>
-                {session.cwd && <CopyPathButton path={session.cwd} />}
-              </span>
-            )}
+            {session?.project && <CopyablePath label={session.project} path={session.cwd || session.project} />}
             {displayModel && (
               <span className="session-detail-model-pill" title={rawModel || ''}>
                 {displayModel}

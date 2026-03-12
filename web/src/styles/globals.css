@@ -5749,46 +5749,23 @@ img[data-lightbox-src],
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
-.session-panel-project-row {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  overflow: hidden;
-  min-width: 0;
-}
-
 .session-panel-project {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.copy-path-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  border: none;
-  border-radius: 3px;
-  background: transparent;
-  color: var(--fg-muted);
+.copyable-path {
   cursor: pointer;
-  opacity: 0.5;
-  transition: opacity 0.15s, background 0.15s, color 0.15s;
+  transition: color 0.15s, background 0.15s;
 }
 
-.copy-path-btn:hover {
-  opacity: 1;
-  background: var(--bg-tertiary);
-  color: var(--fg-secondary);
+.copyable-path:hover {
+  color: var(--accent);
 }
 
-.copy-path-btn:active {
-  opacity: 1;
-  background: var(--bg-quaternary, var(--bg-tertiary));
+.copyable-path.copied {
+  color: var(--success, #34c759);
 }
 
 .session-panel-time {
