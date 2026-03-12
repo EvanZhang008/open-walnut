@@ -21,10 +21,15 @@ export async function fetchSessionSummaries(limit?: number): Promise<SessionSumm
 // Re-export from canonical types
 export type { SessionHistoryMessage } from '@/types/session';
 
-export async function fetchSessionHistory(sessionId: string, opts?: { source?: 'streams' }): Promise<SessionHistoryMessage[]> {
+export interface SessionHistoryResult {
+  messages: SessionHistoryMessage[];
+  forkBoundaryIndex?: number;
+}
+
+export async function fetchSessionHistory(sessionId: string, opts?: { source?: 'streams' }): Promise<SessionHistoryResult> {
   const params = opts?.source ? { source: opts.source } : undefined;
-  const res = await apiGet<{ messages: SessionHistoryMessage[] }>(`/api/sessions/${sessionId}/history`, params);
-  return res.messages;
+  const res = await apiGet<{ messages: SessionHistoryMessage[]; forkBoundaryIndex?: number }>(`/api/sessions/${sessionId}/history`, params);
+  return { messages: res.messages, forkBoundaryIndex: res.forkBoundaryIndex };
 }
 
 export async function updateSession(sessionId: string, updates: { title?: string; human_note?: string; work_status?: string; archived?: boolean; archive_reason?: string }): Promise<SessionRecord> {

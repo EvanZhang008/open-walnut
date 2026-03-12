@@ -1972,6 +1972,123 @@ input:focus, textarea:focus, select:focus {
   background: var(--success, #34c759);
 }
 
+.session-fork-wrapper {
+  position: relative;
+  display: inline-flex;
+}
+
+.session-fork-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 320px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.session-fork-input {
+  width: 100%;
+  min-height: 48px;
+  max-height: 120px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.15s;
+  box-sizing: border-box;
+}
+
+.session-fork-input:focus {
+  border-color: var(--accent);
+}
+
+.session-fork-input::placeholder {
+  color: var(--text-quaternary);
+}
+
+.session-fork-popover-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.session-fork-hint {
+  font-size: 10px;
+  color: var(--text-quaternary);
+  margin-right: auto;
+}
+
+.session-fork-cancel,
+.session-fork-submit {
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  border-radius: 6px;
+  cursor: pointer;
+  border: none;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.session-fork-cancel {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.session-fork-cancel:hover {
+  background: var(--border);
+}
+
+.session-fork-submit {
+  background: var(--accent);
+  color: #fff;
+}
+
+.session-fork-submit:hover {
+  opacity: 0.85;
+}
+
+.session-fork-submit:disabled,
+.session-fork-cancel:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Fork divider in session chat history */
+.session-fork-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  margin: 4px 0;
+}
+
+.session-fork-divider::before,
+.session-fork-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.session-fork-divider-label {
+  font-size: 11px;
+  color: var(--text-quaternary);
+  white-space: nowrap;
+  font-weight: 500;
+}
 
 .session-detail-link {
   color: var(--accent);
@@ -12585,4 +12702,118 @@ img[data-lightbox-src],
 @keyframes questionPulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.7; }
+}
+
+/* ===== Pending Session Panel ===== */
+
+.pending-session-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.pending-session-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 32px 24px;
+}
+
+.pending-session-spinner-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pending-session-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+
+.pending-session-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg-secondary);
+}
+
+.pending-session-path {
+  font-size: 11px;
+  font-family: 'SF Mono', Menlo, monospace;
+  color: var(--fg-muted);
+  word-break: break-all;
+  max-width: 300px;
+}
+
+/* ===== Quick Start System Banner (in chat) ===== */
+
+.chat-quick-start-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  margin: 4px 0;
+  justify-content: center;
+}
+
+.chat-quick-start-icon {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.chat-quick-start-text {
+  font-size: 12px;
+  color: var(--fg-muted);
+  line-height: 1.4;
+}
+
+.chat-quick-start-time {
+  font-size: 10px;
+  color: var(--fg-muted);
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+/* ===== Quick Access Bar (above chat input) ===== */
+
+.quick-access-bar-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 12px;
+}
+
+.quick-access-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  font-size: 12px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1.4;
+}
+
+.quick-access-pill:hover {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.quick-access-pill-icon {
+  font-size: 11px;
+}
+
+.quick-access-pill-label {
+  font-family: 'SF Mono', Menlo, monospace;
+  font-size: 11px;
 }

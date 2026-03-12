@@ -78,8 +78,8 @@ function TriageSessionSection({
     setLoadingHistory(true);
     setHistoryError(null);
     fetchSessionHistory(entry.sessionId!)
-      .then((msgs) => {
-        setMessages(filterTriageMessages(msgs));
+      .then((result) => {
+        setMessages(filterTriageMessages(result.messages));
         setLoaded(true);
       })
       .catch((e) => setHistoryError(e.message ?? 'Failed to load'))

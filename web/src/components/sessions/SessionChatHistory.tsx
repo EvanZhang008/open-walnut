@@ -508,7 +508,7 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     }
   }, [openLightbox]);
 
-  const { messages, loading, phase2Pending, error } = useSessionHistory(sessionId, historyVersion);
+  const { messages, loading, phase2Pending, error, forkBoundaryIndex } = useSessionHistory(sessionId, historyVersion);
   const { blocks, isStreaming, clear } = useSessionStream(sessionId);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -982,9 +982,14 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
             </div>
           </div>
         )}
-        {/* Persisted history messages */}
+        {/* Persisted history messages (with optional fork divider) */}
         {messages.map((m, i) => (
           <div key={i} data-msg-index={i}>
+            {forkBoundaryIndex != null && i === forkBoundaryIndex && (
+              <div className="session-fork-divider">
+                <span className="session-fork-divider-label">Forked session starts here</span>
+              </div>
+            )}
             <SessionMessage message={m} sessionCwd={sessionCwd} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />
           </div>
         ))}

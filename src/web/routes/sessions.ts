@@ -660,6 +660,7 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
     // Fork-aware: prepend source session history when this session was forked.
     // Follows the fork chain (A forked from B forked from C) with cycle detection.
     let forkedFromSessionId: string | undefined
+    let forkBoundaryIndex: number | undefined
     if (record?.forkedFromSessionId) {
       forkedFromSessionId = record.forkedFromSessionId
       try {
@@ -686,12 +687,8 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
 
         if (forkChainMessages.length > 0) {
           const allSourceMessages = forkChainMessages.flat()
-          const separator: typeof messages[0] = {
-            role: 'assistant',
-            text: `--- Forked from session ${record.forkedFromSessionId.slice(0, 16)}... ---`,
-            timestamp: record.startedAt ?? new Date().toISOString(),
-          }
-          messages = [...allSourceMessages, separator, ...messages]
+          messages = [...allSourceMessages, ...messages]
+          forkBoundaryIndex = allSourceMessages.length
         }
       } catch (err) {
         log.web.warn('failed to load fork source history', {
@@ -701,7 +698,11 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       }
     }
 
-    res.json({ messages, ...(forkedFromSessionId ? { forkedFromSessionId } : {}) })
+    res.json({
+      messages,
+      ...(forkedFromSessionId ? { forkedFromSessionId } : {}),
+      ...(forkBoundaryIndex != null ? { forkBoundaryIndex } : {}),
+    })
   } catch (err) {
     next(err)
   }
@@ -993,7 +994,7 @@ sessionsRouter.post('/:sessionId/fork', async (req: Request, res: Response, next
       appendSystemPrompt = `<forked_session_context>\nThis session was forked from session ${sourceSessionId}.\nBelow is the conversation history from the source session:\n\n${historyText}\n</forked_session_context>`
     }
 
-    const forkMessage = message ?? `Continue working. This session was forked from a previous session to focus on task: ${task.title}`
+    const forkMessage = message || `Continue working on: ${task.title}`
 
     // Wait for the new session to start (up to 30s)
     const WAIT_TIMEOUT_MS = 30_000
