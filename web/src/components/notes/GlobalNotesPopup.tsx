@@ -2,15 +2,19 @@ import { useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { NotesEditor } from './NotesEditor';
 import type { Editor } from '@tiptap/core';
+import type { Task } from '@walnut/core';
 
 interface GlobalNotesPopupProps {
   content: string;
   onDirty: (editor: Editor) => void;
   saving: boolean;
   onClose: () => void;
+  tasks?: Task[];
+  focusedTaskId?: string;
+  onTaskClick?: (taskId: string) => void;
 }
 
-export function GlobalNotesPopup({ content, onDirty, saving, onClose }: GlobalNotesPopupProps) {
+export function GlobalNotesPopup({ content, onDirty, saving, onClose, tasks, focusedTaskId, onTaskClick }: GlobalNotesPopupProps) {
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === 'Escape') onClose();
   }, [onClose]);
@@ -42,6 +46,9 @@ export function GlobalNotesPopup({ content, onDirty, saving, onClose }: GlobalNo
             editing={saving}
             className="global-notes-editor-popup"
             autoFocus
+            tasks={tasks}
+            focusedTaskId={focusedTaskId}
+            onTaskClick={onTaskClick}
           />
         </div>
       </div>

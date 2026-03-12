@@ -644,6 +644,8 @@ input:focus, textarea:focus, select:focus {
 .badge-phase-in_progress { background: rgba(0, 122, 255, 0.12); color: var(--accent); }
 .badge-phase-agent_complete { background: rgba(255, 59, 48, 0.12); color: var(--error); }
 .badge-phase-await_human_action { background: rgba(255, 59, 48, 0.12); color: var(--error); }
+.badge-phase-human_verified { background: rgba(52, 199, 89, 0.12); color: #34C759; }
+.badge-phase-post_work_completed { background: rgba(48, 176, 199, 0.12); color: #30B0C7; }
 .badge-phase-human_verification { background: rgba(255, 107, 0, 0.12); color: #FF6B00; }
 .badge-phase-peer_code_review { background: rgba(175, 82, 222, 0.12); color: #AF52DE; }
 .badge-phase-release_in_pipeline { background: rgba(48, 176, 199, 0.12); color: #30B0C7; }
@@ -655,6 +657,8 @@ input:focus, textarea:focus, select:focus {
 .task-phase-in_progress { color: var(--accent); }
 .task-phase-agent_complete { color: var(--error); }
 .task-phase-await_human_action { color: var(--error); }
+.task-phase-human_verified { color: #34C759; }
+.task-phase-post_work_completed { color: #30B0C7; }
 .task-phase-human_verification { color: #FF6B00; }
 .task-phase-peer_code_review { color: #AF52DE; }
 .task-phase-release_in_pipeline { color: #30B0C7; }
@@ -1725,6 +1729,7 @@ input:focus, textarea:focus, select:focus {
 .session-tree-session-time {
   flex-shrink: 0;
   margin-left: auto;
+  white-space: nowrap;
 }
 
 /* Shared tree utilities */
@@ -7402,6 +7407,196 @@ img[data-lightbox-src],
 .global-notes-editor-popup .tiptap h1 { font-size: 22px; }
 .global-notes-editor-popup .tiptap h2 { font-size: 18px; }
 .global-notes-editor-popup .tiptap h3 { font-size: 16px; }
+
+/* ===== Task link pill in notes editor ===== */
+
+.notes-editor .tiptap a.task-link {
+  color: var(--accent);
+  text-decoration: none;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  padding: 1px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: background 0.15s;
+}
+
+.notes-editor .tiptap a.task-link:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  text-decoration: none;
+}
+
+/* ===== Slash Command Panel ===== */
+
+.notes-slash-portal {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.notes-slash-panel {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  min-width: 220px;
+  max-width: 360px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.notes-slash-empty {
+  padding: 12px 16px;
+  color: var(--fg-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.notes-slash-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.notes-slash-item:hover,
+.notes-slash-item-active {
+  background: var(--bg-hover);
+}
+
+.notes-slash-item-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+  width: 22px;
+  text-align: center;
+}
+
+.notes-slash-item-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.notes-slash-item-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.notes-slash-item-desc {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+/* ===== Task Search Sub-Panel ===== */
+
+.notes-task-search {
+  min-width: 300px;
+  max-width: 400px;
+  padding: 0;
+}
+
+.notes-task-search-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 6px 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.notes-task-search-back {
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.notes-task-search-back:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.notes-task-search-input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--fg);
+  font-size: 13px;
+  padding: 6px 8px;
+}
+
+.notes-task-search-input::placeholder {
+  color: var(--fg-muted);
+}
+
+.notes-task-search-list {
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.notes-task-search-item {
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.notes-task-search-item:hover,
+.notes-task-search-item.notes-slash-item-active {
+  background: var(--bg-hover);
+}
+
+.notes-task-search-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.notes-task-search-pin {
+  color: var(--accent);
+  margin-right: 4px;
+  font-size: 11px;
+}
+
+.notes-task-search-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.notes-task-search-project {
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.notes-task-search-phase {
+  font-size: 10px;
+  color: var(--fg-muted);
+  background: var(--bg-tertiary);
+  padding: 0 5px;
+  border-radius: 3px;
+  text-transform: capitalize;
+}
+
+.notes-task-search-phase.done {
+  color: var(--fg-muted);
+  text-decoration: line-through;
+}
 
 /* ===== Global Notes Popup ===== */
 

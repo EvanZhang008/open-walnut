@@ -8,6 +8,7 @@ import { fetchTask } from '@/api/tasks';
 import { fetchTriageHistory } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
 import { timeAgo } from '@/utils/time';
+import { scrollLog } from '@/utils/scroll-debug';
 import type { ProcessStatus, WorkStatus } from '@walnut/core';
 import { WORK_LABELS, WORK_COLORS, PROCESS_COLORS, PROCESS_LABELS, compositeColor, resolveTaskSessionId } from '@/utils/session-status';
 import type { UseFavoritesReturn } from '@/hooks/useFavorites';
@@ -94,6 +95,8 @@ const PHASE_ICON: Record<string, ReactNode> = {
   IN_PROGRESS: '\u25D0',            // ◐ half-filled
   AGENT_COMPLETE: '\u2713',          // ✓ single check
   AWAIT_HUMAN_ACTION: <PersonIcon />,
+  HUMAN_VERIFIED: '\u2705',          // ✅ green checkmark
+  POST_WORK_COMPLETED: '\uD83D\uDCE6', // 📦 package
   PEER_CODE_REVIEW: '\u22C8',       // ⋈ bowtie
   RELEASE_IN_PIPELINE: '\u25B7',    // ▷ open triangle
   COMPLETE: '\u2713\u2713',          // ✓✓ double check
@@ -104,6 +107,8 @@ const PHASE_LABEL: Record<string, string> = {
   IN_PROGRESS: 'In Progress',
   AGENT_COMPLETE: 'Agent Complete',
   AWAIT_HUMAN_ACTION: 'Await Human Action',
+  HUMAN_VERIFIED: 'Human Verified',
+  POST_WORK_COMPLETED: 'Post-Work Done',
   PEER_CODE_REVIEW: 'Peer Code Review',
   RELEASE_IN_PIPELINE: 'Release in Pipeline',
   COMPLETE: 'Complete',
@@ -111,6 +116,7 @@ const PHASE_LABEL: Record<string, string> = {
 
 const PHASE_ORDER: string[] = [
   'TODO', 'IN_PROGRESS', 'AGENT_COMPLETE', 'AWAIT_HUMAN_ACTION',
+  'HUMAN_VERIFIED', 'POST_WORK_COMPLETED',
   'PEER_CODE_REVIEW', 'RELEASE_IN_PIPELINE', 'COMPLETE',
 ];
 
@@ -1484,40 +1490,55 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // RAF handle for cancellation on unmount / new focus
   const scrollRafRef = useRef<number>(0);
 
-  // Scroll to a task by ID inside .todo-panel-list. Uses double-RAF to wait for
-  // React commit + browser paint after state changes (expand/filter-clear).
-  // Retries up to 5 frames if the element hasn't mounted yet.
+  // Scroll to a task by ID inside .todo-panel-list.
+  // Uses double-RAF + retry to wait for React commit + browser paint + layout settle
+  // after state changes (expand/filter-clear, detail panel open).
+  const scrollTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const scrollToTask = useCallback((taskId: string) => {
     cancelAnimationFrame(scrollRafRef.current);
-    let attempts = 0;
-    const maxAttempts = 5;
-    const tryScroll = () => {
+    clearTimeout(scrollTimerRef.current);
+    scrollLog('focus-scroll-start', { taskId: taskId.substring(0, 12) });
+
+    const doScroll = () => {
       const listContainer = document.querySelector('.todo-panel-list');
-      if (!listContainer) return;
+      if (!listContainer) {
+        scrollLog('focus-scroll-MISS', { reason: 'no-list-container' });
+        return;
+      }
       const el = listContainer.querySelector(`[data-task-id="${window.CSS.escape(taskId)}"]`);
       if (!el) {
-        // Element not yet in DOM (expand/filter state still propagating) — retry
-        if (++attempts < maxAttempts) {
-          scrollRafRef.current = requestAnimationFrame(tryScroll);
-        }
+        scrollLog('focus-scroll-MISS', { reason: 'element-not-found', taskId: taskId.substring(0, 12) });
         return;
       }
       const elRect = el.getBoundingClientRect();
       const containerRect = listContainer.getBoundingClientRect();
-      if (elRect.top < containerRect.top || elRect.bottom > containerRect.bottom) {
+      const outOfView = elRect.top < containerRect.top || elRect.bottom > containerRect.bottom;
+      if (outOfView) {
         const elTopInContainer = elRect.top - containerRect.top + listContainer.scrollTop;
         listContainer.scrollTop = elTopInContainer - containerRect.height / 3;
+        scrollLog('focus-scroll-done', { taskId: taskId.substring(0, 12), scrollTo: Math.round(listContainer.scrollTop) });
+      } else {
+        scrollLog('focus-scroll-skip', { reason: 'already-visible', taskId: taskId.substring(0, 12) });
       }
     };
-    // Double-RAF: first RAF fires after React commit, second after browser paint
+
+    // Phase 1: double-RAF (React commit + paint) — handles expand/filter DOM changes
     scrollRafRef.current = requestAnimationFrame(() => {
-      scrollRafRef.current = requestAnimationFrame(tryScroll);
+      scrollRafRef.current = requestAnimationFrame(() => {
+        doScroll();
+        // Phase 2: delayed re-scroll after 150ms to handle layout shifts
+        // (e.g., detail panel opening changes flex ratio of .todo-panel-list)
+        scrollTimerRef.current = setTimeout(() => {
+          scrollLog('focus-scroll-phase2', { taskId: taskId.substring(0, 12) });
+          doScroll();
+        }, 150);
+      });
     });
   }, []);
 
-  // Cleanup RAF on unmount
+  // Cleanup RAF + timer on unmount
   useEffect(() => {
-    return () => cancelAnimationFrame(scrollRafRef.current);
+    return () => { cancelAnimationFrame(scrollRafRef.current); clearTimeout(scrollTimerRef.current); };
   }, []);
 
   // Auto-switch tab, expand groups, and scroll to task when focusedTaskId changes
@@ -1528,12 +1549,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       return;
     }
     const isNewFocus = focusedTaskId !== prevFocusedRef.current;
-    if (!isNewFocus && focusHandledRef.current) return; // already handled
+    if (!isNewFocus && focusHandledRef.current) {
+      scrollLog('focus-effect-SKIP', { taskId: focusedTaskId.substring(0, 12), reason: 'already-handled' });
+      return; // already handled
+    }
     prevFocusedRef.current = focusedTaskId;
 
     const task = tasks.find((t) => t.id === focusedTaskId);
-    if (!task) return; // task not yet in list (e.g. waiting for WebSocket) — will retry when tasks update
+    if (!task) {
+      scrollLog('focus-effect-SKIP', { taskId: focusedTaskId.substring(0, 12), reason: 'task-not-in-list' });
+      return; // task not yet in list (e.g. waiting for WebSocket) — will retry when tasks update
+    }
     focusHandledRef.current = true;
+    scrollLog('focus-effect-run', { taskId: focusedTaskId.substring(0, 12), isNewFocus, cat: task.category, proj: task.project, activeTab: activeCategory });
 
     // Switch to the correct category tab (unless already showing All or Starred with this task visible)
     const cat = task.category || 'Uncategorized';
@@ -2719,6 +2747,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
               ))}
               <MoreDropdown
                 items={[
+                  { value: 'HUMAN_VERIFIED', icon: PHASE_ICON.HUMAN_VERIFIED, label: PHASE_LABEL.HUMAN_VERIFIED, count: filterCounts.phase.HUMAN_VERIFIED },
+                  { value: 'POST_WORK_COMPLETED', icon: PHASE_ICON.POST_WORK_COMPLETED, label: PHASE_LABEL.POST_WORK_COMPLETED, count: filterCounts.phase.POST_WORK_COMPLETED },
                   { value: 'PEER_CODE_REVIEW', icon: PHASE_ICON.PEER_CODE_REVIEW, label: PHASE_LABEL.PEER_CODE_REVIEW, count: filterCounts.phase.PEER_CODE_REVIEW },
                   { value: 'RELEASE_IN_PIPELINE', icon: PHASE_ICON.RELEASE_IN_PIPELINE, label: PHASE_LABEL.RELEASE_IN_PIPELINE, count: filterCounts.phase.RELEASE_IN_PIPELINE },
                   { value: 'COMPLETE', icon: PHASE_ICON.COMPLETE, label: PHASE_LABEL.COMPLETE, count: filterCounts.phase.COMPLETE },

@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { GlobalNotesPopup } from './GlobalNotesPopup';
 import { NotesEditor } from './NotesEditor';
 import type { UseGlobalNotesReturn } from '@/hooks/useGlobalNotes';
+import type { Task } from '@walnut/core';
 
 const LS_NOTES_HEIGHT_KEY = 'walnut-global-notes-height';
 const DEFAULT_HEIGHT = 180;
@@ -16,8 +17,14 @@ function readHeight(): number {
   return DEFAULT_HEIGHT;
 }
 
-export function GlobalNotesSection(props: UseGlobalNotesReturn) {
-  const { content, onEditorUpdate, saving, saveError, collapsed, toggleCollapse, popupOpen, openPopup, closePopup } = props;
+interface GlobalNotesSectionProps extends UseGlobalNotesReturn {
+  tasks?: Task[];
+  focusedTaskId?: string;
+  onTaskClick?: (taskId: string) => void;
+}
+
+export function GlobalNotesSection(props: GlobalNotesSectionProps) {
+  const { content, onEditorUpdate, saving, saveError, collapsed, toggleCollapse, popupOpen, openPopup, closePopup, tasks, focusedTaskId, onTaskClick } = props;
   const [height, setHeight] = useState(readHeight);
   const heightRef = useRef(height);
   const dragging = useRef(false);
@@ -91,6 +98,9 @@ export function GlobalNotesSection(props: UseGlobalNotesReturn) {
               onDirty={onEditorUpdate}
               editing={saving}
               className="global-notes-editor-inline"
+              tasks={tasks}
+              focusedTaskId={focusedTaskId}
+              onTaskClick={onTaskClick}
             />
           </div>
         )}
@@ -101,6 +111,9 @@ export function GlobalNotesSection(props: UseGlobalNotesReturn) {
           onDirty={onEditorUpdate}
           saving={saving}
           onClose={closePopup}
+          tasks={tasks}
+          focusedTaskId={focusedTaskId}
+          onTaskClick={onTaskClick}
         />
       )}
     </>

@@ -5,7 +5,7 @@
  * Supports pasting images from clipboard (uploaded to server).
  */
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import type { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
@@ -13,8 +13,13 @@ import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
 import Placeholder from '@tiptap/extension-placeholder';
 import Image from '@tiptap/extension-image';
+import Link from '@tiptap/extension-link';
 import { Markdown } from 'tiptap-markdown';
 import { uploadNoteImage } from '@/api/notes';
+import { SlashCommandExtension } from './slash-commands/SlashCommandExtension';
+import { SlashCommandPortal } from './slash-commands/SlashCommandPortal';
+import type { SlashCommandState } from './slash-commands/types';
+import type { Task } from '@walnut/core';
 
 interface NotesEditorProps {
   content: string;
@@ -25,11 +30,34 @@ interface NotesEditorProps {
   autoFocus?: boolean;
   /** When true, skip external content sync (editor is being actively edited) */
   editing?: boolean;
+  /** Tasks for slash command /task search */
+  tasks?: Task[];
+  /** Currently focused task ID — pinned at top of search results */
+  focusedTaskId?: string;
+  /** Called when user clicks a task reference link in the editor */
+  onTaskClick?: (taskId: string) => void;
 }
 
-export function NotesEditor({ content, onDirty, placeholder, className, autoFocus, editing }: NotesEditorProps) {
+/** Link extension: adds class="task-link" to /tasks/ hrefs, strips target for internal links */
+const TaskAwareLink = Link.extend({
+  renderHTML({ HTMLAttributes }) {
+    const href = HTMLAttributes.href || '';
+    if (!href.startsWith('/tasks/')) return ['a', HTMLAttributes, 0];
+    // Strip target/rel for internal task links — we handle navigation ourselves
+    const attrs = { ...HTMLAttributes, class: 'task-link' };
+    delete attrs.target;
+    delete attrs.rel;
+    return ['a', attrs, 0];
+  },
+});
+
+export function NotesEditor({ content, onDirty, placeholder, className, autoFocus, editing, tasks, focusedTaskId, onTaskClick }: NotesEditorProps) {
   const isExternalUpdate = useRef(false);
   const editorRef = useRef<Editor | null>(null);
+  const [slashState, setSlashState] = useState<SlashCommandState>({ phase: 'closed' });
+  // Ref so ProseMirror's handleClick closure always sees the latest callback
+  const onTaskClickRef = useRef(onTaskClick);
+  onTaskClickRef.current = onTaskClick;
 
   /** Upload a File (image blob) to server, insert into editor */
   const handleImageUpload = useCallback(async (file: File, editor: Editor) => {
@@ -56,7 +84,8 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
-        // Keep defaults for heading, bold, italic, code, blockquote, lists, etc.
+        // Disable built-in link — we use TaskAwareLink with custom renderHTML
+        link: false,
       }),
       TaskList,
       TaskItem.configure({
@@ -74,6 +103,14 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
         transformPastedText: true,
         transformCopiedText: true,
       }),
+      TaskAwareLink.configure({
+        openOnClick: false, // we handle clicks ourselves
+        autolink: false,
+        linkOnPaste: false,
+      }),
+      SlashCommandExtension.configure({
+        onStateChange: setSlashState,
+      }),
     ],
     content,
     autofocus: autoFocus ? 'end' : false,
@@ -83,6 +120,19 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
       onDirty(editor);
     },
     editorProps: {
+      // Intercept clicks on task-link anchors at the ProseMirror level
+      handleClick: (view, pos, event) => {
+        const target = event.target as HTMLElement;
+        const anchor = target.closest('a');
+        const href = anchor?.getAttribute('href');
+        if (href?.startsWith('/tasks/') && onTaskClickRef.current) {
+          event.preventDefault();
+          const taskId = href.slice('/tasks/'.length);
+          if (taskId) onTaskClickRef.current(taskId);
+          return true; // tell ProseMirror we handled it
+        }
+        return false;
+      },
       handlePaste: (view, event) => {
         const items = event.clipboardData?.items;
         if (!items) return false;
@@ -139,10 +189,25 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
     };
   }, [editor]);
 
+  const handleSlashClose = useCallback(() => {
+    setSlashState({ phase: 'closed' });
+  }, []);
+
   return (
-    <EditorContent
-      editor={editor}
-      className={`notes-editor ${className ?? ''}`}
-    />
+    <>
+      <EditorContent
+        editor={editor}
+        className={`notes-editor ${className ?? ''}`}
+      />
+      {editor && slashState.phase !== 'closed' && tasks && (
+        <SlashCommandPortal
+          editor={editor}
+          state={slashState}
+          tasks={tasks}
+          focusedTaskId={focusedTaskId}
+          onClose={handleSlashClose}
+        />
+      )}
+    </>
   );
 }
