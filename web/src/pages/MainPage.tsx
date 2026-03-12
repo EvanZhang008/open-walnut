@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef, Fragment } from 'react';
 import type { NavigateFunction } from 'react-router-dom';
 import type { Task } from '@walnut/core';
 import { useChat, type TaskContext, type ImageAttachment } from '@/hooks/useChat';
@@ -886,9 +886,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           const colStyle: React.CSSProperties = totalCols >= 2
             ? { flex: `0 0 ${colIdx === 0 ? colSplitPct : (100 - colSplitPct)}%` }
             : {};
-          return (<>
+          return (<Fragment key={sid}>
             {needsDivider && <div className="session-col-resize-handle" onMouseDown={handleColSplitStart} />}
-            <div className="main-page-session-column" key={sid} style={colStyle}>
+            <div className="main-page-session-column" style={colStyle}>
               {isPending && pendingMeta ? (
                 <PendingSessionPanel
                   taskId={sid}
@@ -911,7 +911,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                 />
               )}
             </div>
-          </>);
+          </Fragment>);
         })}
       </div>
 
