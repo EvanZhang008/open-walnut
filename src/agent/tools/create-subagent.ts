@@ -93,9 +93,15 @@ Default timeout is 120 seconds (max 600).`,
 
     if (result.success) {
       const parts = [result.result];
+      const meta_parts: string[] = [];
       if (result.costUsd !== undefined) {
-        parts.push(`\n[Cost: $${result.costUsd.toFixed(4)} | Duration: ${(result.durationMs / 1000).toFixed(1)}s]`);
+        meta_parts.push(`Cost: $${result.costUsd.toFixed(4)}`);
       }
+      meta_parts.push(`Duration: ${(result.durationMs / 1000).toFixed(1)}s`);
+      if (result.sessionId) {
+        meta_parts.push(`Session: ${result.sessionId}`);
+      }
+      parts.push(`\n[${meta_parts.join(' | ')}]`);
       return parts.join('');
     }
 
