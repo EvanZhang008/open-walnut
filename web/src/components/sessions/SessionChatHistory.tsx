@@ -513,31 +513,49 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
   const containerRef = useRef<HTMLDivElement>(null);
 
   // ── Team detection from history messages ──
-  // Scan messages for TeamCreate + Agent tools to detect ALL teams in this session
+  // Scan messages for TeamCreate + Agent tools to detect ALL teams in this session.
+  // IMPORTANT: The Agent tool's teamName is the source of truth — TeamCreate's input.team_name
+  // may differ because Claude Code can internally rename/regenerate the team name.
   const teams = useMemo(() => {
-    const result: Array<{ teamName: string; agentStatuses: Map<string, 'calling' | 'done' | 'error'> }> = [];
-    let currentTeam: { teamName: string; agentStatuses: Map<string, 'calling' | 'done' | 'error'> } | null = null;
-
+    const teamsByName = new Map<string, { teamName: string; agentStatuses: Map<string, 'calling' | 'done' | 'error'> }>();
     for (const m of messages) {
       if (!m.tools) continue;
       for (const tool of m.tools) {
-        if (tool.name === 'TeamCreate' && typeof tool.input?.team_name === 'string') {
-          currentTeam = { teamName: tool.input.team_name, agentStatuses: new Map() };
-          result.push(currentTeam);
-        }
-        if (tool.name === 'Agent' && tool.teamName && currentTeam) {
+        if (tool.name === 'Agent' && tool.teamName) {
+          const realTeamName = tool.teamName;
+          if (!teamsByName.has(realTeamName)) {
+            teamsByName.set(realTeamName, { teamName: realTeamName, agentStatuses: new Map() });
+          }
+          const team = teamsByName.get(realTeamName)!;
           const agentName = tool.teamAgentName || (typeof tool.input?.name === 'string' ? tool.input.name : '');
           if (agentName) {
-            currentTeam.agentStatuses.set(agentName, tool.result ? 'done' : 'calling');
+            team.agentStatuses.set(agentName, tool.result ? 'done' : 'calling');
           }
         }
       }
     }
-    return result;
+    return [...teamsByName.values()];
   }, [messages]);
 
   // Active team tab: null = "Main" (lead conversation), string = team name
   const [activeTeamTab, setActiveTeamTab] = useState<string | null>(null);
+
+  // When switching from a team tab back to Lead, the main conversation container
+  // transitions from display:none → visible. ResizeObserver does NOT fire for this
+  // transition (per spec), so scroll position is stale. Force a scroll to bottom.
+  const prevTeamTab = useRef<string | null>(null);
+  useEffect(() => {
+    if (prevTeamTab.current !== null && activeTeamTab === null && isAtBottom.current) {
+      // Switched from team → lead: container just became visible, scrollTop may be 0
+      requestAnimationFrame(() => {
+        const el = containerRef.current;
+        if (el && isAtBottom.current) {
+          el.scrollTop = el.scrollHeight;
+        }
+      });
+    }
+    prevTeamTab.current = activeTeamTab;
+  }, [activeTeamTab]);
 
 // ── Message delivery lifecycle ──
   // 1. User sends → optimistic msg added (status: 'pending', grey)
@@ -627,14 +645,30 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
 
   const isAtBottom = useRef(true);
   const scrollRafId = useRef<number | null>(null);
+  const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const firstScrollDone = useRef(false);
+  const initialLoadDone = useRef(false);  // true after Phase 2 completes for the first time
   const [showScrollArrow, setShowScrollArrow] = useState(false);
-  // Timestamp: ignore scroll events within 100ms of a ResizeObserver callback.
+  // Timestamp: ignore scroll events within the debounce window (350ms) of a resize.
   // Why? When sibling components grow (UserMessagesSummary, PlanPreviewSection, SessionNotes),
   // the flex container shrinks our scroll area. This can trigger a scroll event (browser adjusts
-  // geometry), which falsely sets isAtBottom=false. The RO then sees isAtBottom=false and skips
-  // the corrective scroll → user stuck in the middle. By ignoring scroll events near a resize,
-  // we prevent resize-induced geometry shifts from corrupting isAtBottom.
+  // geometry), which falsely sets isAtBottom=false. By ignoring scroll events during the
+  // debounce window, we prevent resize-induced geometry shifts from corrupting isAtBottom.
   const ignoreScrollUntil = useRef(0);
+
+  // ── Scroll debug logging (persisted via browser-logger → walnut logs -s browser) ──
+  const sid8 = sessionId.substring(0, 8);
+  const scrollLog = useCallback((layer: string, action: string, el?: HTMLElement | null) => {
+    if (el) {
+      const top = Math.round(el.scrollTop);
+      const ch = Math.round(el.clientHeight);
+      const sh = Math.round(el.scrollHeight);
+      const gap = sh - top - ch;
+      console.log(`[scroll:${sid8}] ${layer} ${action} top=${top} ch=${ch} sh=${sh} gap=${gap} atBot=${isAtBottom.current}`);
+    } else {
+      console.log(`[scroll:${sid8}] ${layer} ${action} atBot=${isAtBottom.current}`);
+    }
+  }, [sid8]);
 
   // Reset on session switch
   useEffect(() => {
@@ -645,16 +679,20 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     setEditingId(null);
     blockIndexMap.current.clear();
     isAtBottom.current = true;
+    firstScrollDone.current = false;
+    initialLoadDone.current = false;
     ignoreScrollUntil.current = 0;
     setShowScrollArrow(false);
     if (scrollRafId.current !== null) { cancelAnimationFrame(scrollRafId.current); scrollRafId.current = null; }
     if (batchTimeoutRef.current) { clearTimeout(batchTimeoutRef.current); batchTimeoutRef.current = null; }
+    if (resizeTimerRef.current) { clearTimeout(resizeTimerRef.current); resizeTimerRef.current = null; }
   }, [sessionId]);
 
   // Cleanup on unmount
   useEffect(() => () => {
     if (batchTimeoutRef.current) clearTimeout(batchTimeoutRef.current);
     if (scrollRafId.current !== null) cancelAnimationFrame(scrollRafId.current);
+    if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current);
   }, []);
 
   // Scroll handler: track whether user is near bottom.
@@ -663,11 +701,21 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     const el = containerRef.current;
     if (!el) return;
     let prevArrowState = false;
+    let lastLoggedAtBot: boolean | null = null;
     const onScroll = () => {
       // Skip scroll events triggered by ResizeObserver-induced geometry shifts
       if (Date.now() < ignoreScrollUntil.current) return;
       const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - NEAR_BOTTOM_PX;
+      const prev = isAtBottom.current;
       isAtBottom.current = nearBottom;
+      // Log only on transitions (not every scroll tick)
+      if (nearBottom !== lastLoggedAtBot) {
+        lastLoggedAtBot = nearBottom;
+        const top = Math.round(el.scrollTop);
+        const ch = Math.round(el.clientHeight);
+        const sh = Math.round(el.scrollHeight);
+        console.log(`[scroll:${sid8}] handler ${prev}→${nearBottom} top=${top} ch=${ch} sh=${sh}`);
+      }
       const nextArrow = !nearBottom && el.scrollHeight > el.clientHeight;
       if (nextArrow !== prevArrowState) {
         prevArrowState = nextArrow;
@@ -676,65 +724,115 @@ export function SessionChatHistory({ sessionId, workStatus, initialPrompt, sessi
     };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
-  }, []);
+  }, [sid8]);
 
-  // ── Scroll-to-bottom: 3-layer approach ──
+  // Mark initial load done once Phase 2 completes for the first time.
+  // This prevents force-scroll from firing on batch-refresh re-fetches
+  // (which also set phase2Pending=true in useSessionHistory).
+  // Note: don't require firstScrollDone — Phase 2 might return 0 messages
+  // (new session, empty history). Without this, initialLoadDone stays false
+  // forever, and every batch refresh force-scrolls the user to bottom.
+  useEffect(() => {
+    if (!phase2Pending && !initialLoadDone.current) {
+      initialLoadDone.current = true;
+    }
+  }, [phase2Pending]);
+
+  // ── Scroll-to-bottom: 2 paths ──
   //
-  // Three independent events can defeat scroll-to-bottom:
-  //   1. Content changes (messages arrive, streaming blocks appear)
-  //   2. Container resizes (sibling components load → flex shrinks us)
-  //   3. Phase 2 replacing Phase 1 (different content/height)
+  // Path A — IMMEDIATE: The very first scroll when messages arrive (before paint, zero flash).
+  //          Also used for live streaming blocks (blocks.length changes need instant follow).
+  //
+  // Path B — DEBOUNCED: Everything else (Phase 2 data, sibling resizes, batch refreshes).
+  //          All rapid changes batch into ONE scroll after 250ms of quiet.
+  //          This eliminates the 6+ visible jumps from siblings loading independently.
   //
   // The core invariant: isAtBottom tracks USER INTENT (did they scroll up?), not geometry.
   // Resize-induced scroll events are suppressed (ignoreScrollUntil) so they can't corrupt it.
-  // Every programmatic scroll forces isAtBottom=true to keep the invariant consistent.
 
-  // Layer 1: Content changes — scroll before paint (zero flash)
+  // Shared debounced scroll — used by Phase 2, resizes, and batch refreshes
+  // Update ref in useEffect (not render top-level) to be safe in concurrent mode —
+  // abandoned render passes can mutate refs with uncommitted values.
+  const phase2PendingRef = useRef(phase2Pending);
+  useEffect(() => { phase2PendingRef.current = phase2Pending; }, [phase2Pending]);
+  const debouncedScroll = useCallback((reason: string) => {
+    const forceScroll = phase2PendingRef.current && !initialLoadDone.current;
+    if (!forceScroll && !isAtBottom.current) return;
+    // Suppress resize-induced scroll events during debounce window
+    ignoreScrollUntil.current = Date.now() + 350;
+    if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current);
+    resizeTimerRef.current = setTimeout(() => {
+      resizeTimerRef.current = null;
+      const el = containerRef.current;
+      const force = phase2PendingRef.current && !initialLoadDone.current;
+      if (!el || (!force && !isAtBottom.current)) {
+        if (!isAtBottom.current && !force) scrollLog('debounced', `SKIP(${reason})`, el);
+        return;
+      }
+      el.scrollTop = el.scrollHeight;
+      isAtBottom.current = true;
+      scrollLog('debounced', `SCROLL(${reason}${force ? ',forced' : ''})`, el);
+    }, 250);
+  }, [scrollLog]);
+
+  // Path A-1: Content changes — immediate scroll, before paint (useLayoutEffect)
+  // Fires on every messages/loading change. This is NOT the source of jumps — jumps come
+  // from sibling resizes (handled by debounced Path B-2). Content changes are infrequent
+  // (Phase 1, Phase 2, batch refresh) and each one correctly scrolls to the new bottom.
+  //
+  // CRITICAL: While phase2Pending, ALWAYS scroll regardless of isAtBottom. Phase 2 is a data
+  // correction (streams→full history). A tiny accidental trackpad touch between Phase 1 and
+  // Phase 2 can set isAtBottom=false, then Phase 2 arrives with 10x more content and we're
+  // stuck at the top. During initial loading, user hasn't meaningfully scrolled up.
   useLayoutEffect(() => {
-    if (!isAtBottom.current || !containerRef.current || messages.length === 0) return;
+    if (!containerRef.current || messages.length === 0) return;
+    const forceScroll = phase2Pending && !initialLoadDone.current; // initial load only
+    if (!forceScroll && !isAtBottom.current) return;
     containerRef.current.scrollTop = containerRef.current.scrollHeight;
     isAtBottom.current = true;
-  }, [loading, messages]);
+    firstScrollDone.current = true;
+    scrollLog('content', `SCROLL(msgs=${messages.length}${forceScroll ? ',forced' : ''})`, containerRef.current);
+  }, [loading, messages, phase2Pending, scrollLog]);
 
-  // Layer 2: Streaming blocks + Phase 2 replacement — scroll after paint via rAF
+  // Path A-2: Streaming — immediate scroll for new blocks (live output needs instant follow)
   useEffect(() => {
-    if (!isAtBottom.current) return;
+    if (!isAtBottom.current || blocks.length === 0) return;
     const el = containerRef.current;
     if (!el) return;
     if (scrollRafId.current !== null) cancelAnimationFrame(scrollRafId.current);
     scrollRafId.current = requestAnimationFrame(() => {
       scrollRafId.current = null;
-      if (!el) return;
+      if (!el || !isAtBottom.current) return;
       el.scrollTop = el.scrollHeight;
       isAtBottom.current = true;
     });
-  }, [messages, blocks.length]);
+  }, [blocks.length]);
 
-  // Layer 3: Container resize — catches flex layout shifts from sibling components.
-  // Always schedules a rAF (no isAtBottom check here — the check is in the callback).
-  // This avoids the multi-resize race: RO fires → scroll event sets isAtBottom=false →
-  // next RO returns early → stuck in middle.
+  // Path B-1: Content replacement (Phase 2, batch refresh) — debounced
+  // The isAtBottom check is sufficient — Path A-1 already handles the immediate scroll.
+  // This is a redundant safety net that fires 250ms later.
+  useEffect(() => {
+    if (!isAtBottom.current) return;
+    debouncedScroll(`msgs=${messages.length}`);
+  }, [messages, debouncedScroll]);
+
+  // Path B-2: Container resize (sibling components loading) — debounced
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+    let prevHeight = el.clientHeight;
     const ro = new ResizeObserver(() => {
-      // Suppress scroll events from this resize for 100ms
-      ignoreScrollUntil.current = Date.now() + 100;
-      // Always schedule rAF — check isAtBottom inside the callback (after scroll events settle)
-      if (scrollRafId.current !== null) cancelAnimationFrame(scrollRafId.current);
-      scrollRafId.current = requestAnimationFrame(() => {
-        scrollRafId.current = null;
-        if (!el || !isAtBottom.current) return;
-        el.scrollTop = el.scrollHeight;
-        isAtBottom.current = true;
-      });
+      const newHeight = el.clientHeight;
+      const delta = newHeight - prevHeight;
+      if (delta !== 0) {
+        scrollLog('resize', `delta=${delta > 0 ? '+' : ''}${Math.round(delta)}`, el);
+        prevHeight = newHeight;
+      }
+      debouncedScroll('resize');
     });
     ro.observe(el);
-    return () => {
-      ro.disconnect();
-      if (scrollRafId.current !== null) cancelAnimationFrame(scrollRafId.current);
-    };
-  }, []);
+    return () => ro.disconnect();
+  }, [debouncedScroll, scrollLog]);
 
   // Click handler for the scroll-to-bottom arrow
   const handleScrollToBottom = useCallback(() => {

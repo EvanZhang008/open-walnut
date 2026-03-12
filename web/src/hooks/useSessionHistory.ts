@@ -9,6 +9,8 @@ interface UseSessionHistoryReturn {
   /** Phase 2 (SSH/full fetch) still in progress — true between Phase 1 completion and Phase 2 completion */
   phase2Pending: boolean;
   error: string | null;
+  /** Index in messages[] where the fork boundary is (source messages end, forked messages start) */
+  forkBoundaryIndex?: number;
 }
 
 /** Diagnostic: count user text messages and check if they're interleaved or bunched */
@@ -41,6 +43,7 @@ export function useSessionHistory(sessionId: string | null, version = 0): UseSes
   const [loading, setLoading] = useState(false);
   const [phase2Pending, setPhase2Pending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [forkBoundaryIndex, setForkBoundaryIndex] = useState<number | undefined>(undefined);
 
   useEffect(() => {
     if (!sessionId) {
@@ -48,6 +51,7 @@ export function useSessionHistory(sessionId: string | null, version = 0): UseSes
       setLoading(false);
       setPhase2Pending(false);
       setError(null);
+      setForkBoundaryIndex(undefined);
       return;
     }
 
@@ -55,16 +59,18 @@ export function useSessionHistory(sessionId: string | null, version = 0): UseSes
     setLoading(true);
     setPhase2Pending(true);
     setError(null);
+    setForkBoundaryIndex(undefined);
     const sid = sessionId.substring(0, 8);
 
     // Phase 1: Fast local read (streams file, ~1ms)
     const endP1 = perf.start(`session:streams:${sid}`);
     fetchSessionHistory(sessionId, { source: 'streams' })
-      .then((msgs) => {
+      .then((result) => {
         if (cancelled) return;
-        endP1(`${msgs.length} msgs`);
-        diagnoseOrdering('P1:streams', sid, msgs);
-        if (msgs.length > 0) setMessages(msgs);
+        endP1(`${result.messages.length} msgs`);
+        diagnoseOrdering('P1:streams', sid, result.messages);
+        if (result.messages.length > 0) setMessages(result.messages);
+        if (result.forkBoundaryIndex != null) setForkBoundaryIndex(result.forkBoundaryIndex);
         setLoading(false); // Always clear loading — even if empty, don't block on Phase 2
       })
       .catch(() => {
@@ -75,11 +81,12 @@ export function useSessionHistory(sessionId: string | null, version = 0): UseSes
         // Phase 2: Full fetch (source of truth, may SSH for remote sessions)
         const endP2 = perf.start(`session:full:${sid}`);
         fetchSessionHistory(sessionId)
-          .then((msgs) => {
+          .then((result) => {
             if (!cancelled) {
-              endP2(`${msgs.length} msgs`);
-              diagnoseOrdering('P2:full', sid, msgs);
-              setMessages(msgs);
+              endP2(`${result.messages.length} msgs`);
+              diagnoseOrdering('P2:full', sid, result.messages);
+              setMessages(result.messages);
+              setForkBoundaryIndex(result.forkBoundaryIndex);
             }
           })
           .catch((e: Error) => {
@@ -93,5 +100,5 @@ export function useSessionHistory(sessionId: string | null, version = 0): UseSes
     return () => { cancelled = true; };
   }, [sessionId, version]);
 
-  return { messages, loading, phase2Pending, error };
+  return { messages, loading, phase2Pending, error, forkBoundaryIndex };
 }
