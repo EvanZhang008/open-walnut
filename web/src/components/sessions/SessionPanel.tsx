@@ -82,11 +82,15 @@ interface SessionPanelProps {
   onSessionClick?: (sessionId: string) => void;
   /** Called when "Clear Context & Execute" creates a new session — parent should switch to it. */
   onSessionReplaced?: (newSessionId: string) => void;
+  /** Called immediately when Fork is clicked — parent can show a pending panel. */
+  onForkPending?: (cwd: string, host?: string) => void;
+  /** Called when fork API returns — parent can replace the pending panel with the real session. */
+  onForkResolved?: (taskId: string, sessionId?: string) => void;
   /** When true, panel is rendered inside the expanded modal — hides expand button, stretches to fill container. */
   expanded?: boolean;
 }
 
-export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, onSessionReplaced, expanded }: SessionPanelProps) {
+export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, onSessionReplaced, onForkPending, onForkResolved, expanded }: SessionPanelProps) {
   const navigate = useNavigate();
   const [session, setSession] = useState<SessionRecord | null>(null);
   const [loading, setLoading] = useState(true);
@@ -415,9 +419,14 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
             <SessionCopyButtons
               sessionId={sessionId}
               cwd={session?.cwd}
+              project={session?.project}
               taskId={session?.taskId}
               taskTitle={taskTitle ?? undefined}
+              onForkStarted={(cwd, host) => {
+                onForkPending?.(cwd, host);
+              }}
               onForkComplete={(newTaskId, newSessionId) => {
+                onForkResolved?.(newTaskId, newSessionId);
                 // Select the new child task, then open its session
                 onTaskClick?.(newTaskId);
                 if (newSessionId) onSessionClick?.(newSessionId);
@@ -439,7 +448,6 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
                 SSH: {session.host}
               </span>
             )}
-            {session?.project && <span className="session-panel-project" title={session.cwd || session.project}>{session.project}</span>}
             {displayModel && (
               <span className="session-detail-model-pill" title={rawModel || ''}>
                 {displayModel}

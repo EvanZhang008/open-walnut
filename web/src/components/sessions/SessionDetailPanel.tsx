@@ -322,6 +322,7 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
               <SessionCopyButtons
                 sessionId={sessionId}
                 cwd={session.cwd}
+                project={session.project}
                 taskId={session.taskId}
                 taskTitle={taskTitle}
                 onForkComplete={(_newTaskId, newSessionId) => {

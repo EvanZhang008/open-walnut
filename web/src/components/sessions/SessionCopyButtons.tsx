@@ -4,8 +4,10 @@ import { forkSessionInWalnut } from '@/api/sessions';
 interface SessionCopyButtonsProps {
   sessionId: string;
   cwd?: string;
+  project?: string;
   taskId?: string;
   taskTitle?: string;
+  onForkStarted?: (cwd: string, host?: string) => void;
   onForkComplete?: (taskId: string, sessionId?: string) => void;
 }
 
@@ -34,7 +36,7 @@ function CopyChip({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function SessionCopyButtons({ sessionId, cwd, taskId, taskTitle, onForkComplete }: SessionCopyButtonsProps) {
+export function SessionCopyButtons({ sessionId, cwd, project, taskId, taskTitle, onForkStarted, onForkComplete }: SessionCopyButtonsProps) {
   const [showForkInput, setShowForkInput] = useState(false);
   const [forkMessage, setForkMessage] = useState('');
   const [forking, setForking] = useState(false);
@@ -69,12 +71,14 @@ export function SessionCopyButtons({ sessionId, cwd, taskId, taskTitle, onForkCo
     setForking(true);
     setForkResult(null);
     setForkError(null);
+    setShowForkInput(false);
+    // Notify parent immediately so it can show a pending panel
+    if (cwd) onForkStarted?.(cwd);
     try {
       const result = await forkSessionInWalnut(sessionId, {
         ...(message ? { message } : {}),
       });
       setForkResult('success');
-      setShowForkInput(false);
       setForkMessage('');
       clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => setForkResult(null), 2000);
@@ -89,7 +93,7 @@ export function SessionCopyButtons({ sessionId, cwd, taskId, taskTitle, onForkCo
     } finally {
       setForking(false);
     }
-  }, [forking, sessionId, onForkComplete]);
+  }, [forking, sessionId, cwd, onForkStarted, onForkComplete]);
 
   const handleForkClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -118,7 +122,7 @@ export function SessionCopyButtons({ sessionId, cwd, taskId, taskTitle, onForkCo
 
   return (
     <span className="session-copy-buttons">
-      {cwd && <CopyChip label="CWD" value={cwd} />}
+      {cwd && <CopyChip label={project || 'CWD'} value={cwd} />}
       <CopyChip label="ID" value={sessionId} />
       <CopyChip label="Resume" value={`${cdPrefix}claude -r ${sessionId}`} />
       <CopyChip label="CLI Fork" value={`${cdPrefix}claude --fork-session -r ${sessionId}`} />
