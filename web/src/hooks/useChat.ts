@@ -30,7 +30,7 @@ export interface ChatMessage {
   images?: ImageAttachment[];
   taskContext?: TaskContext;
   timestamp?: string;
-  source?: 'cron' | 'triage' | 'session' | 'session-error' | 'agent-error' | 'subagent' | 'compaction' | 'compacting' | 'heartbeat';
+  source?: 'cron' | 'triage' | 'session' | 'session-error' | 'agent-error' | 'subagent' | 'compaction' | 'compacting' | 'heartbeat' | 'quick-start';
   cronJobName?: string;
   notification?: boolean;
   queued?: boolean;
@@ -171,8 +171,8 @@ function chatEntriesToMessages(entries: ChatEntry[]): ChatMessage[] {
       }
       // Skip system-initiated user prompts (cron/heartbeat/subagent) —
       // these are the agent prompt entries that duplicate the UI notification.
-      // Exception: source:'triage' user entries are the unified display (no separate tag:'ui').
-      if (entry.source && entry.source !== 'compaction' && entry.source !== 'compacting' && entry.source !== 'triage') {
+      // Exception: source:'triage' and 'quick-start' user entries are the unified display.
+      if (entry.source && entry.source !== 'compaction' && entry.source !== 'compacting' && entry.source !== 'triage' && entry.source !== 'quick-start') {
         i++;
         continue;
       }
@@ -290,7 +290,7 @@ interface UseChatReturn {
   /** Ref set to true right before older messages are prepended.
    *  Pass to ChatPanel so it can distinguish prepend from append for scroll preservation. */
   prependedRef: MutableRefObject<boolean>;
-  sendMessage: (text: string, taskContext?: TaskContext, images?: ImageAttachment[]) => void;
+  sendMessage: (text: string, taskContext?: TaskContext, images?: ImageAttachment[], source?: string) => void;
   clearMessages: () => void;
   addLocalMessage: (content: string) => void;
   stopGeneration: () => void;
@@ -370,7 +370,7 @@ export function useChat(): UseChatReturn {
   // Track the current agent turn's source so streaming handlers can separate heartbeat/cron/chat
   const currentSourceRef = useRef<ChatMessage['source'] | undefined>(undefined);
   // Forward ref for sendRpc to break circular dependency with drainOrStop
-  const sendRpcRef = useRef<(text: string, taskContext?: TaskContext, images?: ImageAttachment[]) => void>(undefined);
+  const sendRpcRef = useRef<(text: string, taskContext?: TaskContext, images?: ImageAttachment[], source?: string) => void>(undefined);
 
   // Keep refs in sync with state
   isStreamingRef.current = isStreaming;
@@ -806,7 +806,7 @@ export function useChat(): UseChatReturn {
   }, []);
 
   /** Send a message via RPC (not queued) */
-  const sendRpc = useCallback((text: string, taskContext?: TaskContext, images?: ImageAttachment[]) => {
+  const sendRpc = useCallback((text: string, taskContext?: TaskContext, images?: ImageAttachment[], source?: string) => {
     setIsStreaming(true);
     setError(null);
     rpcInFlightRef.current = true;
@@ -819,6 +819,9 @@ export function useChat(): UseChatReturn {
     }
     if (images?.length) {
       payload.images = images.map(img => ({ data: img.data, mediaType: img.mediaType }));
+    }
+    if (source) {
+      payload.source = source;
     }
 
     wsClient.sendRpc('chat', payload)
@@ -839,7 +842,7 @@ export function useChat(): UseChatReturn {
   }, [drainOrStop]);
   sendRpcRef.current = sendRpc;
 
-  const sendMessage = useCallback((text: string, taskContext?: TaskContext, images?: ImageAttachment[]) => {
+  const sendMessage = useCallback((text: string, taskContext?: TaskContext, images?: ImageAttachment[], source?: string) => {
     if (isStreamingRef.current) {
       if (queueRef.current.length >= MAX_QUEUE_SIZE) return;
       const queueId = ++queueIdCounter.current;
@@ -847,6 +850,7 @@ export function useChat(): UseChatReturn {
         key: nextMessageKey(),
         role: 'user', content: text, taskContext, images,
         timestamp: new Date().toISOString(), queued: true, queueId,
+        ...(source ? { source: source as ChatMessage['source'] } : {}),
       };
       setMessages((prev) => [...prev, userMsg]);
       queueRef.current.push({ id: queueId, text, taskContext, images });
@@ -855,9 +859,13 @@ export function useChat(): UseChatReturn {
     }
 
     // Immediate send
-    const userMsg: ChatMessage = { key: nextMessageKey(), role: 'user', content: text, taskContext, images, timestamp: new Date().toISOString() };
+    const userMsg: ChatMessage = {
+      key: nextMessageKey(), role: 'user', content: text, taskContext, images,
+      timestamp: new Date().toISOString(),
+      ...(source ? { source: source as ChatMessage['source'] } : {}),
+    };
     setMessages((prev) => [...prev, userMsg]);
-    sendRpc(text, taskContext, images);
+    sendRpc(text, taskContext, images, source);
   }, [sendRpc]);
 
   const clearMessages = useCallback(() => {

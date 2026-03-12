@@ -1982,7 +1982,7 @@ input:focus, textarea:focus, select:focus {
   top: calc(100% + 6px);
   right: 0;
   width: 320px;
-  background: var(--bg-primary);
+  background: #fff;
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px;
@@ -1993,6 +1993,11 @@ input:focus, textarea:focus, select:focus {
   gap: 8px;
 }
 
+@media (prefers-color-scheme: dark) {
+  .session-fork-popover { background: #1c1c1e; }
+  .session-fork-input { background: #2c2c2e; }
+}
+
 .session-fork-input {
   width: 100%;
   min-height: 48px;
@@ -2001,7 +2006,7 @@ input:focus, textarea:focus, select:focus {
   font-size: 13px;
   font-family: inherit;
   color: var(--text-primary);
-  background: var(--bg-secondary);
+  background: #f5f5f7;
   border: 1px solid var(--border);
   border-radius: 8px;
   resize: vertical;

@@ -368,7 +368,7 @@ export interface DisplayMessage {
   content: string;
   blocks?: DisplayMessageBlock[];
   timestamp: string;
-  source?: 'cron' | 'triage' | 'session' | 'session-error' | 'agent-error' | 'subagent' | 'compaction' | 'heartbeat';
+  source?: 'cron' | 'triage' | 'session' | 'session-error' | 'agent-error' | 'subagent' | 'compaction' | 'heartbeat' | 'quick-start';
   cronJobName?: string;
   notification?: boolean;
   taskId?: string;
@@ -387,7 +387,7 @@ export interface ChatEntry {
   // For AI user messages where displayed text differs from model content (e.g. context prefix stripped)
   displayText?: string;
   // UI metadata (present on both tags, optional)
-  source?: 'cron' | 'triage' | 'session' | 'session-error' | 'agent-error' | 'subagent' | 'compaction' | 'heartbeat';
+  source?: 'cron' | 'triage' | 'session' | 'session-error' | 'agent-error' | 'subagent' | 'compaction' | 'heartbeat' | 'quick-start';
   cronJobName?: string;
   notification?: boolean;
   taskId?: string;

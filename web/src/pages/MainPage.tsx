@@ -15,11 +15,13 @@ import { ChatInput } from '@/components/chat/ChatInput';
 import { TodoPanel } from '@/components/tasks/TodoPanel';
 import { TaskContextBar } from '@/components/tasks/TaskContextBar';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
+import { PendingSessionPanel } from '@/components/sessions/PendingSessionPanel';
 import { SessionPathSelector, type QuickStartPath } from '@/components/sessions/SessionPathSelector';
 import { QuestionPopover, parseAskQuestionInput } from '@/components/chat/QuestionPopover';
 import { TriagePanel } from '@/components/triage/TriagePanel';
-import { fetchSession, quickStartSession } from '@/api/sessions';
+import { fetchSession, fetchSessionsForTask, quickStartSession } from '@/api/sessions';
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
+import { QuickAccessBar } from '@/components/chat/QuickAccessBar';
 import { useContextInspector } from '@/hooks/useContextInspector';
 import { shouldHideUiOnlyMessage } from '@/hooks/useDeveloperSettings';
 import { useUiOnlySettings } from '@/hooks/useDeveloperSettings';
@@ -277,7 +279,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, [focusedTask?.id]);
 
   useEffect(() => {
-    if (sessionColumns.length > 0) sessionStorage.setItem(SS_SESSION_COLUMNS_KEY, JSON.stringify(sessionColumns));
+    // Only persist real session IDs (not pending: placeholders) to sessionStorage
+    const persistable = sessionColumns.filter(s => !s.startsWith('pending:'));
+    if (persistable.length > 0) sessionStorage.setItem(SS_SESSION_COLUMNS_KEY, JSON.stringify(persistable));
     else sessionStorage.removeItem(SS_SESSION_COLUMNS_KEY);
   }, [sessionColumns]);
 
@@ -375,6 +379,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   // Quick-start: track pending taskId, auto-open session panel when it starts
   const pendingQuickStartRef = useRef<string | null>(null);
+  // Metadata for the pending session panel (cwd, host, etc.)
+  const pendingQuickStartMetaRef = useRef<{ id: string; cwd: string; host?: string; hostLabel?: string } | null>(null);
 
   // Path selector → select handler
   const handlePathSelect = useCallback((path: QuickStartPath) => {
@@ -382,18 +388,58 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     setPathSelectorOpen(false);
   }, []);
 
-  // Auto-open session panel when a quick-start session fires
-  // Listen to both session:started and session:status-changed to catch the sessionId
-  const openQuickStartSession = useCallback((data: Record<string, unknown>) => {
-    const sessionId = (data.claudeSessionId ?? data.sessionId) as string | undefined;
-    const taskId = data.taskId as string | undefined;
-    if (pendingQuickStartRef.current && taskId === pendingQuickStartRef.current && sessionId) {
-      pendingQuickStartRef.current = null;
+  // Auto-open session panel when a quick-start session resolves.
+  // Strategy: listen to task:updated events (fires after linkSession persists the
+  // session record). Also poll as fallback in case the WS event is missed.
+  const openQuickStartSession = useCallback((data: unknown) => {
+    if (!pendingQuickStartRef.current) return;
+    const d = data as Record<string, unknown>;
+    const task = d.task as { id?: string; exec_session_id?: string; plan_session_id?: string } | undefined;
+    if (!task?.id || task.id !== pendingQuickStartRef.current) return;
+    const sessionId = task.exec_session_id ?? task.plan_session_id;
+    if (!sessionId) return;
+    const pendingMeta = pendingQuickStartMetaRef.current;
+    pendingQuickStartRef.current = null;
+    pendingQuickStartMetaRef.current = null;
+    if (pendingPollRef.current) { clearInterval(pendingPollRef.current); pendingPollRef.current = null; }
+    if (pendingMeta) {
+      setSessionColumns(prev => replaceSessionColumn(prev, pendingMeta.id, sessionId));
+    } else {
       setSessionColumns(prev => addSessionColumn(prev, sessionId, triageOpenRef.current));
     }
   }, []);
-  useEvent('session:started', openQuickStartSession);
-  useEvent('session:status-changed', openQuickStartSession);
+  useEvent('task:updated', openQuickStartSession);
+
+  // Fallback poll: if WS events are missed, poll for the session ID every 2s
+  const pendingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    return () => { if (pendingPollRef.current) clearInterval(pendingPollRef.current); };
+  }, []);
+  // Start polling when a pending column exists
+  useEffect(() => {
+    const hasPending = sessionColumns.some(s => s.startsWith('pending:'));
+    if (!hasPending || pendingPollRef.current) return;
+    pendingPollRef.current = setInterval(async () => {
+      const taskId = pendingQuickStartRef.current;
+      if (!taskId || taskId.startsWith('pending-')) { /* ref not yet updated to real taskId */ return; }
+      try {
+        const sessions = await fetchSessionsForTask(taskId);
+        const active = sessions.find(s => s.claudeSessionId);
+        if (active) {
+          const pendingMeta = pendingQuickStartMetaRef.current;
+          pendingQuickStartRef.current = null;
+          pendingQuickStartMetaRef.current = null;
+          clearInterval(pendingPollRef.current!);
+          pendingPollRef.current = null;
+          if (pendingMeta) {
+            setSessionColumns(prev => replaceSessionColumn(prev, pendingMeta.id, active.claudeSessionId));
+          } else {
+            setSessionColumns(prev => addSessionColumn(prev, active.claudeSessionId, triageOpenRef.current));
+          }
+        }
+      } catch { /* retry on next tick */ }
+    }, 2000);
+  }, [sessionColumns]);
 
   // Handle session click from chat: focus the associated task + open session column
   const handleSessionClick = useCallback(async (sessionId: string) => {
@@ -480,6 +526,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       const tempTaskId = `pending-${Date.now()}`;
       pendingQuickStartRef.current = tempTaskId;
 
+      // Immediately open a pending session column for instant visual feedback
+      const pendingColId = `pending:${tempTaskId}`;
+      setSessionColumns(prev => addSessionColumn(prev, pendingColId, triageOpenRef.current));
+      // Store pending metadata for rendering
+      pendingQuickStartMetaRef.current = { id: pendingColId, cwd: qsp.cwd, host: qsp.host ?? undefined, hostLabel: qsp.hostLabel ?? undefined };
+
       quickStartSession({
         cwd: qsp.cwd,
         host: qsp.host ?? undefined,
@@ -490,20 +542,24 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         if (pendingQuickStartRef.current === tempTaskId) {
           pendingQuickStartRef.current = result.taskId;
         }
-        // Notify main agent to reorganize the task
+        // Notify main agent to reorganize the task (include user's prompt)
         const agentMsg = [
           `[Quick Start] Session created and running.`,
           `- Task ID: ${result.taskId}`,
           `- Path: ${qsp.cwd}`,
           `- Category: ${qsp.category} / Quick Start`,
+          `- User prompt: "${text}"`,
           ``,
           `Please update the task:`,
           `1. Set a descriptive title (replace "Session: ...")`,
           `2. Move from "Quick Start" to the correct project if needed`,
         ].join('\n');
-        chat.sendMessage(agentMsg);
+        chat.sendMessage(agentMsg, undefined, undefined, 'quick-start');
       }).catch((err) => {
         setQuickStartPath(qsp); // Restore so user can retry
+        // Remove the pending column on failure
+        setSessionColumns(prev => removeSessionColumn(prev, pendingColId));
+        pendingQuickStartMetaRef.current = null;
         chat.addLocalMessage(`Quick Start failed: ${err instanceof Error ? err.message : String(err)}`);
       });
       return;
@@ -681,6 +737,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               onClose={() => {/* closed automatically when tool result arrives */}}
             />
 
+            <QuickAccessBar onSessionClick={() => setPathSelectorOpen(true)} />
+
             <ChatInput
               onSend={handleSendMessage}
               onCommand={handleCommand}
@@ -718,15 +776,27 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         )}
         {sessionColumns.map((sid, idx) => {
           const needsDivider = idx > 0 || triagePanelOpen;
+          const isPending = sid.startsWith('pending:');
+          const pendingMeta = isPending ? pendingQuickStartMetaRef.current : null;
           return (
             <div className="main-page-session-column" key={sid} style={needsDivider ? { borderLeft: '1px solid var(--border)' } : undefined}>
-              <SessionPanel
-                sessionId={sid}
-                onClose={() => handleCloseSession(sid)}
-                onTaskClick={handleFocusTaskById}
-                onSessionClick={handleSessionClick}
-                onSessionReplaced={(newId) => handleSessionReplaced(sid, newId)}
-              />
+              {isPending && pendingMeta ? (
+                <PendingSessionPanel
+                  taskId={sid}
+                  cwd={pendingMeta.cwd}
+                  host={pendingMeta.host}
+                  hostLabel={pendingMeta.hostLabel}
+                  onClose={() => handleCloseSession(sid)}
+                />
+              ) : (
+                <SessionPanel
+                  sessionId={sid}
+                  onClose={() => handleCloseSession(sid)}
+                  onTaskClick={handleFocusTaskById}
+                  onSessionClick={handleSessionClick}
+                  onSessionReplaced={(newId) => handleSessionReplaced(sid, newId)}
+                />
+              )}
             </div>
           );
         })}

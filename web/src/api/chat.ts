@@ -70,7 +70,7 @@ export interface ChatEntry {
   content: unknown;  // ContentBlock[] for 'ai', string for 'ui'
   timestamp: string;
   displayText?: string;
-  source?: 'cron' | 'triage' | 'session' | 'session-error' | 'agent-error' | 'subagent' | 'compaction' | 'compacting' | 'heartbeat';
+  source?: 'cron' | 'triage' | 'session' | 'session-error' | 'agent-error' | 'subagent' | 'compaction' | 'compacting' | 'heartbeat' | 'quick-start';
   cronJobName?: string;
   notification?: boolean;
   taskId?: string;

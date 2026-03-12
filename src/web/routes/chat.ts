@@ -128,6 +128,7 @@ interface ChatPayload {
   message: string
   taskContext?: TaskContext
   images?: ImagePayload[]
+  source?: string
 }
 
 /**
@@ -632,8 +633,9 @@ export function registerChatRpc(): void {
   })
 
   registerMethod('chat', async (payload: unknown, client: WebSocket) => {
-    const { message, taskContext, images } = payload as ChatPayload
-    log.web.info('chat message received', { taskId: taskContext?.id, messageLength: message.length, imageCount: images?.length ?? 0, source: 'chat' })
+    const { message, taskContext, images, source: payloadSource } = payload as ChatPayload
+    const chatSource = payloadSource === 'quick-start' ? 'quick-start' as const : undefined
+    log.web.info('chat message received', { taskId: taskContext?.id, messageLength: message.length, imageCount: images?.length ?? 0, source: payloadSource ?? 'chat' })
 
     // ── Intercept: if the agent is waiting for a question answer, route here ──
     // The agent loop is blocked on ask_question tool. We must NOT enqueue a new
@@ -785,7 +787,7 @@ export function registerChatRpc(): void {
           }
           if (newApiMsgs.length > 0) {
             const persistMsgs = replaceImagesWithPaths(newApiMsgs, savedImages)
-            await chatHistory.addAIMessages(persistMsgs, { displayText: message })
+            await chatHistory.addAIMessages(persistMsgs, { displayText: message, ...(chatSource && { source: chatSource }) })
           }
           // Auto-append to conversation_log for aborted turns
           if (taskContext?.id) {
@@ -812,6 +814,7 @@ export function registerChatRpc(): void {
           displayText: message,
           ...(contextHashes && { contextHashes }),
           ...(taskContext?.id && { taskId: taskContext.id }),
+          ...(chatSource && { source: chatSource }),
         })
         log.agent.info('agent response persisted', { taskId: taskContext?.id, messageCount: newApiMsgs.length })
 
