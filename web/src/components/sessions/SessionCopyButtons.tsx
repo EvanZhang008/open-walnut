@@ -9,6 +9,7 @@ interface SessionCopyButtonsProps {
   taskTitle?: string;
   onForkStarted?: (cwd: string, host?: string) => void;
   onForkComplete?: (taskId: string, sessionId?: string) => void;
+  onForkFailed?: () => void;
 }
 
 function CopyChip({ label, value }: { label: string; value: string }) {
@@ -36,16 +37,18 @@ function CopyChip({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function SessionCopyButtons({ sessionId, cwd, project, taskId, taskTitle, onForkStarted, onForkComplete }: SessionCopyButtonsProps) {
+export function SessionCopyButtons({ sessionId, cwd, project, taskId, taskTitle, onForkStarted, onForkComplete, onForkFailed }: SessionCopyButtonsProps) {
   const [showForkInput, setShowForkInput] = useState(false);
   const [forkMessage, setForkMessage] = useState('');
   const [forking, setForking] = useState(false);
   const [forkResult, setForkResult] = useState<'success' | 'error' | null>(null);
   const [forkError, setForkError] = useState<string | null>(null);
+  const [cliCopied, setCliCopied] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const cliCopyTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
-  useEffect(() => () => { clearTimeout(timerRef.current); }, []);
+  useEffect(() => () => { clearTimeout(timerRef.current); clearTimeout(cliCopyTimerRef.current); }, []);
 
   // Focus textarea when popover opens
   useEffect(() => {
@@ -88,12 +91,13 @@ export function SessionCopyButtons({ sessionId, cwd, project, taskId, taskTitle,
     } catch (err) {
       setForkResult('error');
       setForkError(err instanceof Error ? err.message : 'Fork failed');
+      onForkFailed?.();
       clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => { setForkResult(null); setForkError(null); }, 3000);
     } finally {
       setForking(false);
     }
-  }, [forking, sessionId, cwd, onForkStarted, onForkComplete]);
+  }, [forking, sessionId, cwd, onForkStarted, onForkComplete, onForkFailed]);
 
   const handleForkClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -125,7 +129,6 @@ export function SessionCopyButtons({ sessionId, cwd, project, taskId, taskTitle,
       {cwd && <CopyChip label={project || 'CWD'} value={cwd} />}
       <CopyChip label="ID" value={sessionId} />
       <CopyChip label="Resume" value={`${cdPrefix}claude -r ${sessionId}`} />
-      <CopyChip label="CLI Fork" value={`${cdPrefix}claude --fork-session -r ${sessionId}`} />
       {taskId && (
         <span className="session-fork-wrapper">
           <button
@@ -165,6 +168,22 @@ export function SessionCopyButtons({ sessionId, cwd, project, taskId, taskTitle,
                   {forking ? 'Forking...' : 'Fork'}
                 </button>
               </div>
+              <hr className="session-fork-divider-line" />
+              <button
+                className="session-fork-cli-copy"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const cmd = `${cdPrefix}claude --fork-session -r ${sessionId}`;
+                  navigator.clipboard.writeText(cmd).then(() => {
+                    setCliCopied(true);
+                    clearTimeout(cliCopyTimerRef.current);
+                    cliCopyTimerRef.current = setTimeout(() => setCliCopied(false), 1500);
+                  }).catch(() => {});
+                }}
+                title={`Copy: ${cdPrefix}claude --fork-session -r ${sessionId}`}
+              >
+                {cliCopied ? 'Copied!' : 'Copy CLI command'}
+              </button>
             </div>
           )}
         </span>
