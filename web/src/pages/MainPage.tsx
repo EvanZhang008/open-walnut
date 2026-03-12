@@ -880,8 +880,15 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           const forkMeta = isPending ? pendingForkMetaRef.current : null;
           const pendingMeta = (qsMeta?.id === sid ? qsMeta : null) ?? (forkMeta?.id === sid ? forkMeta : null);
           const isForkPending = forkMeta?.id === sid;
-          return (
-            <div className="main-page-session-column" key={sid} style={needsDivider ? { borderLeft: '1px solid var(--border)' } : undefined}>
+          // Column split: when 2+ columns, first gets splitPct%, rest share remainder
+          const totalCols = sessionColumns.length + (triagePanelOpen ? 1 : 0);
+          const colIdx = idx + (triagePanelOpen ? 1 : 0);
+          const colStyle: React.CSSProperties = totalCols >= 2
+            ? { flex: `0 0 ${colIdx === 0 ? colSplitPct : (100 - colSplitPct)}%` }
+            : {};
+          return (<>
+            {needsDivider && <div className="session-col-resize-handle" onMouseDown={handleColSplitStart} />}
+            <div className="main-page-session-column" key={sid} style={colStyle}>
               {isPending && pendingMeta ? (
                 <PendingSessionPanel
                   taskId={sid}
@@ -904,7 +911,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                 />
               )}
             </div>
-          );
+          </>);
         })}
       </div>
 

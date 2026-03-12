@@ -5501,6 +5501,40 @@ img[data-lightbox-src],
   opacity: 0.8;
 }
 
+/* Draggable handle between session columns (inside sessions area) */
+.session-col-resize-handle {
+  width: 8px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  position: relative;
+  z-index: 5;
+  border-left: 1px solid var(--border);
+  transition: background 0.15s;
+}
+
+.session-col-resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 4px;
+  height: 40px;
+  border-radius: 3px;
+  background: var(--border);
+  opacity: 0.5;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.session-col-resize-handle:hover {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.session-col-resize-handle:hover::after {
+  background: var(--accent);
+  opacity: 0.8;
+}
+
 .session-panel {
   display: flex;
   flex-direction: column;
@@ -6743,6 +6777,93 @@ img[data-lightbox-src],
   line-height: 1.4;
   background: rgba(0, 122, 255, 0.08);
   color: var(--accent);
+}
+
+/* Sprint picker — interactive pill + dropdown */
+.sprint-picker-pill {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 500;
+  line-height: 1.4;
+  background: rgba(0, 122, 255, 0.08);
+  color: var(--accent);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.sprint-picker-pill:hover {
+  border-color: var(--accent);
+  background: rgba(0, 122, 255, 0.14);
+}
+.sprint-picker-empty-pill {
+  background: transparent;
+  color: var(--fg-muted);
+  border: 1px dashed var(--border);
+  font-weight: 400;
+}
+.sprint-picker-empty-pill:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.sprint-picker-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 100;
+  min-width: 200px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  padding: 4px;
+}
+.sprint-picker-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 6px 10px;
+  font-size: 12px;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  border-radius: 4px;
+  text-align: left;
+  gap: 8px;
+}
+.sprint-picker-option:hover {
+  background: var(--bg-hover);
+}
+.sprint-picker-active {
+  font-weight: 600;
+  color: var(--accent);
+  background: rgba(0, 122, 255, 0.08);
+}
+.sprint-picker-clear {
+  color: var(--error);
+  font-size: 11px;
+  border-bottom: 1px solid var(--border);
+  border-radius: 4px 4px 0 0;
+  margin-bottom: 2px;
+}
+.sprint-picker-current-badge {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(52, 199, 89, 0.12);
+  color: #34C759;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+.sprint-picker-empty {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  text-align: center;
 }
 
 .todo-detail-dates {
