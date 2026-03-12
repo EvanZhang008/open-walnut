@@ -58,34 +58,6 @@ function CopyableId({ value, truncate }: { value: string; truncate?: number }) {
   );
 }
 
-function CopyableCode({ label, value }: { label: string; value: string }) {
-  const [copied, setCopied] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => () => { clearTimeout(timerRef.current); }, []);
-  const copy = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    navigator.clipboard.writeText(value).then(() => {
-      setCopied(true);
-      clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => setCopied(false), 1500);
-    }).catch(() => {});
-  };
-  return (
-    <div className="session-detail-info-row">
-      <span className="session-detail-info-label">{label}</span>
-      <span className="session-detail-info-value">
-        <code
-          className={`session-detail-code copyable-path${copied ? ' copied' : ''}`}
-          onClick={copy}
-          title={copied ? 'Copied!' : `Click to copy: ${value}`}
-        >
-          {copied ? 'Copied!' : value}
-        </code>
-      </span>
-    </div>
-  );
-}
-
 function EditableTitle({ sessionId, title, onSaved }: { sessionId: string; title: string; onSaved?: () => void }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(title);
@@ -405,7 +377,10 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
                       </div>
                     )}
                     {session.cwd && (
-                      <CopyableCode label="Working Dir" value={session.cwd} />
+                      <div className="session-detail-info-row">
+                        <span className="session-detail-info-label">Working Dir</span>
+                        <span className="session-detail-info-value"><code className="session-detail-code">{session.cwd}</code></span>
+                      </div>
                     )}
                     {session.host && (
                       <div className="session-detail-info-row">

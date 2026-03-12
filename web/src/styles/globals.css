@@ -5877,19 +5877,6 @@ img[data-lightbox-src],
   white-space: nowrap;
 }
 
-.copyable-path {
-  cursor: pointer;
-  transition: color 0.15s, background 0.15s;
-}
-
-.copyable-path:hover {
-  color: var(--accent);
-}
-
-.copyable-path.copied {
-  color: var(--success, #34c759);
-}
-
 .session-panel-time {
   flex-shrink: 0;
 }

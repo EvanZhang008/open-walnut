@@ -24,31 +24,6 @@ import { useSessionPlan } from '@/hooks/useSessionPlan';
 import { wsClient } from '@/api/ws';
 import type { SessionRecord } from '@/types/session';
 
-function CopyablePath({ label, path }: { label: string; path: string }) {
-  const [copied, setCopied] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => () => { clearTimeout(timerRef.current); }, []);
-
-  const handleCopy = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    navigator.clipboard.writeText(path).then(() => {
-      setCopied(true);
-      clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => setCopied(false), 1500);
-    }).catch(() => {});
-  };
-
-  return (
-    <span
-      className={`session-panel-project copyable-path${copied ? ' copied' : ''}`}
-      title={copied ? 'Copied!' : path}
-      onClick={handleCopy}
-    >
-      {copied ? 'Copied!' : label}
-    </span>
-  );
-}
-
 interface SessionPanelErrorBoundaryProps {
   sessionId: string;
   onClose: () => void;
@@ -464,7 +439,7 @@ export function SessionPanel({ sessionId, onClose, onTaskClick, onSessionClick, 
                 SSH: {session.host}
               </span>
             )}
-            {session?.project && <CopyablePath label={session.project} path={session.cwd || session.project} />}
+            {session?.project && <span className="session-panel-project" title={session.cwd || session.project}>{session.project}</span>}
             {displayModel && (
               <span className="session-detail-model-pill" title={rawModel || ''}>
                 {displayModel}

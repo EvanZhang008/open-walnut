@@ -118,6 +118,7 @@ export function SessionCopyButtons({ sessionId, cwd, taskId, taskTitle, onForkCo
 
   return (
     <span className="session-copy-buttons">
+      {cwd && <CopyChip label="CWD" value={cwd} />}
       <CopyChip label="ID" value={sessionId} />
       <CopyChip label="Resume" value={`${cdPrefix}claude -r ${sessionId}`} />
       <CopyChip label="CLI Fork" value={`${cdPrefix}claude --fork-session -r ${sessionId}`} />
