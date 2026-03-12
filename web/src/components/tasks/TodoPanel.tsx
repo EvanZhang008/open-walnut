@@ -2439,6 +2439,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       }
       // Dropped on header: newParentId stays null (unparent)
 
+      // Prevent cycles: don't allow reparenting to self or to a descendant
+      if (newParentId === activeId) return;
+      let walkId: string | undefined = newParentId ?? undefined;
+      while (walkId) {
+        const nextParent = childParentMap.get(walkId);
+        if (nextParent === activeId) return; // would create a cycle
+        walkId = nextParent;
+      }
+
       // Resolve current parent of the dragged task
       const currentParentId = activeTask.parent_task_id
         ? (sorted.find((t) => t.id.startsWith(activeTask.parent_task_id!))?.id ?? null)
