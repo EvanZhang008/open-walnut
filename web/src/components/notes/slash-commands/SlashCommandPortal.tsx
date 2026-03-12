@@ -41,7 +41,9 @@ export function SlashCommandPortal({ editor, state, tasks, focusedTaskId, onClos
     }
   }, [state.phase]);
 
-  // Calculate cursor position for panel placement
+  // Calculate cursor position for panel placement.
+  // Default: panel appears ABOVE the "/" (like editor autocomplete).
+  // Falls back to below if not enough space above.
   useEffect(() => {
     if (state.phase === 'closed') return;
     const range = 'range' in state ? state.range : rangeRef.current;
@@ -49,14 +51,16 @@ export function SlashCommandPortal({ editor, state, tasks, focusedTaskId, onClos
 
     try {
       const c = editor.view.coordsAtPos(range.from);
-      const viewportH = window.innerHeight;
-      const panelH = 280; // approximate max panel height
 
-      // Flip upward if near bottom of viewport
-      const top = c.bottom + panelH > viewportH
-        ? c.top - panelH - 4
-        : c.bottom + 4;
+      // Measure actual panel height after render (fallback to estimate)
+      const panelH = panelRef.current?.getBoundingClientRect().height || 120;
 
+      // Prefer above: anchor bottom of panel to top of "/" line
+      const aboveTop = c.top - panelH - 4;
+      // Fallback below: anchor top of panel to bottom of "/" line
+      const belowTop = c.bottom + 4;
+
+      const top = aboveTop >= 0 ? aboveTop : belowTop;
       setCoords({ left: c.left, top });
     } catch {
       // coordsAtPos can fail for invalid positions — panel stays hidden
