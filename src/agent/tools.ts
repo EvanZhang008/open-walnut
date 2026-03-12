@@ -216,6 +216,7 @@ export const tools: ToolDefinition[] = [
             parent_task_id: { type: 'string', description: 'Filter to children of a parent task (by ID prefix).' },
             tags: { type: 'array', items: { type: 'string' }, description: 'Filter to tasks with any of these tags (OR match).' },
             blocked: { type: 'boolean', description: 'Filter to tasks that are blocked/unblocked by dependencies.' },
+            sprint: { type: 'string', description: 'Filter by sprint name (exact match).' },
           },
         },
         match: {
@@ -368,6 +369,11 @@ export const tools: ToolDefinition[] = [
       if (where.blocked !== undefined) {
         const wantBlocked = where.blocked === true || where.blocked === 'true';
         tasks = tasks.filter((t) => wantBlocked ? isTaskBlocked(t, allTasks) : !isTaskBlocked(t, allTasks));
+      }
+
+      // Apply sprint filter (exact match)
+      if (where.sprint) {
+        tasks = tasks.filter((t) => t.sprint === where.sprint);
       }
 
       if (tasks.length === 0) {

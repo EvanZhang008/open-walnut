@@ -2768,6 +2768,20 @@ input:focus, textarea:focus, select:focus {
   flex-direction: column;
   gap: 4px;
 }
+.team-agent-user-sent {
+  font-size: 13px;
+  background: var(--accent, #007AFF);
+  color: #fff;
+  padding: 6px 12px;
+  border-radius: 12px 12px 4px 12px;
+  align-self: flex-end;
+  max-width: 80%;
+  margin: 4px 0;
+}
+.team-agent-user-sent-label {
+  font-weight: 600;
+  margin-right: 6px;
+}
 .team-agent-text {
   font-size: 13px;
   color: var(--fg);

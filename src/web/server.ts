@@ -9,7 +9,7 @@ import { createServer, type Server as HttpServer } from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import express from 'express'
+import express, { Router } from 'express'
 import cors from 'cors'
 import { bus, EventNames, eventData } from '../core/event-bus.js'
 import { attachWss, broadcastEvent, sendStreamEvent, closeWss } from './ws/handler.js'
@@ -380,6 +380,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/timeline', timelineRouter)
   app.use('/api/notes', notesRouter)
   app.use('/api/integrations', integrationsRouter)
+
+  // Plugin routes — mounted as a single router that gets populated after plugin loading.
+  // This router sits before notFoundHandler, so plugin routes registered later still work.
+  const pluginRouter = Router()
+  app.use('/api/plugins', pluginRouter)
+
   app.use('/api/system', systemRouter)
   app.use('/api/push', pushRouter)
   app.use('/api/auth', authRouter)
@@ -1239,6 +1245,17 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     log.web.info('integration plugins loaded', { plugins: registry.getAll().map(p => p.id) })
   } catch (err) {
     log.web.error('failed to load integration plugins', { error: err instanceof Error ? err.message : String(err) })
+  }
+
+  // Mount plugin-registered HTTP routes AFTER plugins are loaded.
+  // Routes are added to pluginRouter (already mounted at /api/plugins before notFoundHandler).
+  for (const plugin of registry.getAll()) {
+    if (plugin.httpRoutes?.length) {
+      for (const route of plugin.httpRoutes) {
+        pluginRouter.use(`/${plugin.id}${route.path}`, route.handler)
+        log.web.info('mounted plugin route', { plugin: plugin.id, path: `/api/plugins/${plugin.id}${route.path}` })
+      }
+    }
   }
 
   // -- Run plugin data migrations (move legacy task fields to ext) --

@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import type { Task } from '@walnut/core';
 import { renderNoteMarkdown } from '@/utils/markdown';
-import { fetchTask, toggleCompleteTask, starTask, addNote, updateNote, updateDescription, deleteTask, addTag, removeTag, addDependency, removeDependency } from '@/api/tasks';
+import { fetchTask, toggleCompleteTask, starTask, addNote, updateNote, updateDescription, deleteTask, addTag, removeTag, addDependency, removeDependency, updateTask } from '@/api/tasks';
+import { SprintPicker } from '@/components/tasks/SprintPicker';
 import { fetchSessionsForTask, updateSession } from '@/api/sessions';
 import type { SessionRecord } from '@walnut/core';
 import { PriorityBadge } from '@/components/common/PriorityBadge';
@@ -199,6 +200,12 @@ export function TaskDetailPage() {
     setTask(updated);
   };
 
+  const handleSprintChange = async (sprintName: string | null) => {
+    if (!id) return;
+    const updated = await updateTask(id, { sprint: sprintName ?? '' });
+    setTask(updated);
+  };
+
   const handleDelete = async () => {
     if (!id) return;
     const confirmed = window.confirm(`Delete task "${task?.title}"? This cannot be undone.`);
@@ -290,7 +297,7 @@ export function TaskDetailPage() {
           <PriorityBadge priority={task.priority} />
           <span className="text-sm text-muted">{task.category}{task.project && task.project !== task.category ? ` / ${task.project}` : ''}</span>
           {task.due_date && <span className="text-sm text-muted">Due: {task.due_date}</span>}
-          {task.sprint && <span className="text-sm text-muted">Sprint: {task.sprint}</span>}
+          <SprintPicker sprint={task.sprint} onSprintChange={handleSprintChange} />
         </div>
         {/* Dependencies */}
         <div style={{ marginBottom: '1rem' }}>

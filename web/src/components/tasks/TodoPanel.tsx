@@ -4,7 +4,8 @@ import type { Task } from '@walnut/core';
 import type { SessionRecord } from '@walnut/core';
 import { renderNoteMarkdown, renderMarkdownWithRefs } from '@/utils/markdown';
 import { fetchSessionsForTask } from '@/api/sessions';
-import { fetchTask, updateTask as apiUpdateTask, fetchAvailableSprints, type SprintOption } from '@/api/tasks';
+import { fetchTask, updateTask as apiUpdateTask } from '@/api/tasks';
+import { SprintPicker } from '@/components/tasks/SprintPicker';
 import { fetchTriageHistory } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
 import { timeAgo } from '@/utils/time';
@@ -951,37 +952,9 @@ function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenTriageFo
   const hasSubtasks = task.subtasks && task.subtasks.length > 0;
   const dueDateInfo = task.due_date ? formatDueDate(task.due_date) : null;
 
-  // Sprint picker state
-  const [sprintPickerOpen, setSprintPickerOpen] = useState(false);
-  const [availableSprints, setAvailableSprints] = useState<SprintOption[]>([]);
-  const [currentSprintName, setCurrentSprintName] = useState<string | null>(null);
-  const sprintRef = useRef<HTMLDivElement>(null);
-
-  const handleSprintPickerOpen = async () => {
-    if (!sprintPickerOpen) {
-      const { sprints, current } = await fetchAvailableSprints();
-      setAvailableSprints(sprints);
-      setCurrentSprintName(current);
-    }
-    setSprintPickerOpen(!sprintPickerOpen);
-  };
-
   const handleSprintChange = async (sprintName: string | null) => {
     await apiUpdateTask(task.id, { sprint: sprintName ?? '' });
-    setSprintPickerOpen(false);
   };
-
-  // Close sprint picker on click outside
-  useEffect(() => {
-    if (!sprintPickerOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (sprintRef.current && !sprintRef.current.contains(e.target as Node)) {
-        setSprintPickerOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [sprintPickerOpen]);
 
   // Child tasks — tasks whose parent_task_id matches this task (handles prefix parent IDs)
   const childTasks = useMemo(() => {
@@ -1130,43 +1103,7 @@ function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenTriageFo
               {PRIORITY_ICON[task.priority]} {PRIORITY_LABEL[task.priority]}
             </span>
           )}
-          <div ref={sprintRef} style={{ position: 'relative', display: 'inline-block' }}>
-            <button
-              className={`sprint-picker-pill${task.sprint ? '' : ' sprint-picker-empty-pill'}`}
-              onClick={handleSprintPickerOpen}
-              title={task.sprint ? `Sprint: ${task.sprint}` : 'Set sprint'}
-            >
-              {task.sprint || '+ Sprint'}
-            </button>
-            {sprintPickerOpen && (
-              <div className="sprint-picker-dropdown">
-                {availableSprints.length === 0 ? (
-                  <div className="sprint-picker-empty">No sprints available</div>
-                ) : (
-                  <>
-                    {task.sprint && (
-                      <button
-                        className="sprint-picker-option sprint-picker-clear"
-                        onClick={() => handleSprintChange(null)}
-                      >
-                        Clear sprint
-                      </button>
-                    )}
-                    {availableSprints.map((s) => (
-                      <button
-                        key={s.id}
-                        className={`sprint-picker-option${task.sprint === s.name ? ' sprint-picker-active' : ''}${s.name === currentSprintName ? ' sprint-picker-current' : ''}`}
-                        onClick={() => handleSprintChange(s.name)}
-                      >
-                        <span>{s.name}</span>
-                        {s.name === currentSprintName && <span className="sprint-picker-current-badge">current</span>}
-                      </button>
-                    ))}
-                  </>
-                )}
-              </div>
-            )}
-          </div>
+          <SprintPicker sprint={task.sprint} onSprintChange={handleSprintChange} />
         </div>
         <div className="todo-detail-dates text-xs text-muted">
           {task.created_at && <span>Created {timeAgo(task.created_at)}</span>}

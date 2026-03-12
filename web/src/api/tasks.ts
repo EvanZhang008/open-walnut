@@ -14,6 +14,7 @@ export interface CreateTaskInput {
   category?: string;
   project?: string;
   due_date?: string;
+  sprint?: string;
 }
 
 export interface UpdateTaskInput {
@@ -26,6 +27,7 @@ export interface UpdateTaskInput {
   due_date?: string | null;
   needs_attention?: boolean;
   parent_task_id?: string;  // Set parent (task ID) or '' to remove parent
+  sprint?: string;  // Set sprint name or '' to clear
   add_tags?: string[];
   remove_tags?: string[];
   set_tags?: string[];
@@ -128,6 +130,31 @@ export async function reorderTasks(category: string, project: string, taskIds: s
 
 export async function fetchDashboard(): Promise<DashboardData> {
   return apiGet<DashboardData>('/api/dashboard');
+}
+
+// ── Sprint helpers ──
+
+export interface SprintOption {
+  id: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+}
+
+/** Fetch available sprints from plugin cache (for sprint picker dropdown) */
+export async function fetchAvailableSprints(): Promise<{ sprints: SprintOption[]; current: string | null }> {
+  try {
+    return await apiGet<{ sprints: SprintOption[]; current: string | null }>('/api/plugins/taskei/sprints');
+  } catch {
+    // Plugin not loaded or no sprints cached — return empty
+    return { sprints: [], current: null };
+  }
+}
+
+/** Fetch sprint metadata (unique sprint names with task counts) */
+export async function fetchSprintMeta(): Promise<{ name: string; count: number }[]> {
+  const res = await apiGet<{ sprints: { name: string; count: number }[] }>('/api/tasks/meta/sprints');
+  return res.sprints;
 }
 
 // ── Tag helpers ──

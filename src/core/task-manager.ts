@@ -436,6 +436,7 @@ export interface AddTaskInput {
   tags?: string[];
   depends_on?: string[];
   cwd?: string;
+  sprint?: string;
   /** Explicit source override. Only needed for the first task in a new category (e.g. source='local'). */
   source?: TaskSource;
 }
@@ -877,6 +878,7 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       ...(parentTask ? { parent_task_id: parentTask.id } : {}),
       ...(input.tags?.length ? { tags: [...new Set(input.tags)] } : {}),
       ...(input.cwd ? { cwd: input.cwd } : {}),
+      ...(input.sprint ? { sprint: input.sprint } : {}),
     };
 
     // Validate and attach depends_on before pushing to store

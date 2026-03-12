@@ -219,7 +219,7 @@ const VALID_PHASES_ARRAY = [...VALID_PHASES]
 // ?slim=1 — omit note and conversation_log fields (~400KB savings)
 tasksRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { status, category, project, source, tags, slim } = req.query as Record<string, string | undefined>
+    const { status, category, project, source, tags, sprint, slim } = req.query as Record<string, string | undefined>
     const tasks = (await listTasks({ status, category })).filter((t) => !t.title.startsWith('.metadata'))
     // Client-side project filtering (listTasks only supports status+category)
     let filtered = project
@@ -235,6 +235,10 @@ tasksRouter.get('/', async (req: Request, res: Response, next: NextFunction) => 
       if (tagSet.size > 0) {
         filtered = filtered.filter((t) => t.tags?.some(tag => tagSet.has(tag)))
       }
+    }
+    // Sprint filtering (exact match)
+    if (sprint) {
+      filtered = filtered.filter((t) => t.sprint === sprint)
     }
     const enriched = await enrichTasksWithSessionStatus(filtered)
     // Add is_blocked flag based on dependency resolution
@@ -266,6 +270,25 @@ tasksRouter.get('/meta/tags', async (_req: Request, res: Response, next: NextFun
   try {
     const tags = await getAllTags()
     res.json({ tags })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/tasks/meta/sprints — all unique sprint names with task counts
+tasksRouter.get('/meta/sprints', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const tasks = (await listTasks({})).filter((t) => !t.title.startsWith('.metadata'))
+    const sprintCounts = new Map<string, number>()
+    for (const t of tasks) {
+      if (t.sprint) {
+        sprintCounts.set(t.sprint, (sprintCounts.get(t.sprint) ?? 0) + 1)
+      }
+    }
+    const sprints = [...sprintCounts.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count)
+    res.json({ sprints })
   } catch (err) {
     next(err)
   }
@@ -429,6 +452,11 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
         }
       }
     }
+    // Sprint validation
+    if (req.body.sprint !== undefined && typeof req.body.sprint !== 'string') {
+      res.status(400).json({ error: 'sprint must be a string (sprint name or empty string to clear)' })
+      return
+    }
     // Dependency validation
     for (const field of ['add_depends_on', 'remove_depends_on', 'set_depends_on'] as const) {
       if (req.body[field] !== undefined) {
@@ -441,6 +469,23 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
     const result = await updateTask(id, req.body)
     log.web.info('task updated via REST', { taskId: id, fields: Object.keys(req.body) })
     bus.emit(EventNames.TASK_UPDATED, { task: result.task }, ['web-ui', 'main-agent'], { source: 'api' })
+
+    // HUMAN_VERIFIED: auto-push session to run code review + commit
+    if (req.body.phase === 'HUMAN_VERIFIED' && result.task.session_id) {
+      const { getSessionByClaudeId } = await import('../../core/session-tracker.js')
+      const session = await getSessionByClaudeId(result.task.session_id)
+      if (session && session.process_status !== 'stopped') {
+        bus.emit(EventNames.SESSION_SEND, {
+          sessionId: result.task.session_id,
+          taskId: result.task.id,
+          message: 'User has verified this work and approved it. Please proceed:\n1. Run /code-review to review all changes\n2. After review, run /close-session-with-commit to commit and close',
+        }, ['session-runner'], { source: 'api' })
+        log.web.info('HUMAN_VERIFIED: auto-pushing session', {
+          taskId: result.task.id, sessionId: result.task.session_id,
+        })
+      }
+    }
+
     res.json(result)
   } catch (err) {
     if (err instanceof CategorySourceConflictError) {
