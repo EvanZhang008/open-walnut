@@ -18,7 +18,8 @@ No task required. No persistent session created. Shows as a collapsible agent bo
 The subagent has access to ALL Claude Code tools (file read/write, bash, grep, glob, etc.).
 
 USE FOR: Quick research, file analysis, codebase investigation, one-shot questions, validating paths,
-running commands with AI interpretation — any task where you need the answer back HERE in this chat.
+running commands with AI interpretation, gathering context before starting a session (e.g., explore
+a codebase to find the right paths/files/patterns before kicking off a start_session for implementation).
 
 DO NOT USE FOR: Multi-round coding, work that needs task tracking, implementation requiring conversation
 history — use start_session instead, which creates a persistent background session.
@@ -27,8 +28,12 @@ Key difference:
   create_subagent → result comes back to YOU (inline in this conversation)
   start_session   → result goes to a SEPARATE session panel (background, async, needs a task)
 
+Two modes:
+  Foreground (default): Blocks until the subagent finishes. Result returned directly.
+  Background (background=true): Spawns and returns immediately. Use when you don't need to wait.
+
 Default model is opus. Use sonnet for simple tasks, haiku for trivial lookups.
-Default timeout is 120 seconds (max 600). Background mode spawns and returns immediately.`,
+Default timeout is 120 seconds (max 600).`,
   input_schema: {
     type: 'object',
     properties: {
