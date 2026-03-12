@@ -37,6 +37,14 @@ function StatusDot({ status }: { status?: 'calling' | 'done' | 'error' }) {
 
 /** Render a single JSONL event for the agent conversation */
 const AgentEventView = memo(function AgentEventView({ event }: { event: TeamAgentEvent }) {
+  if (event.type === 'user-sent') {
+    return (
+      <div className="team-agent-user-sent">
+        <span className="team-agent-user-sent-label">You:</span>
+        {event.text}
+      </div>
+    );
+  }
   if (event.type === 'text' && event.text) {
     return <div className="team-agent-text">{event.text}</div>;
   }
@@ -70,22 +78,25 @@ const AgentEventView = memo(function AgentEventView({ event }: { event: TeamAgen
 });
 
 /** Chat input for sending messages to a teammate */
-function TeamChatInput({ teamName, agentName }: { teamName: string; agentName: string }) {
+function TeamChatInput({ teamName, agentName, onSent }: { teamName: string; agentName: string; onSent?: (text: string) => void }) {
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
 
   const handleSend = useCallback(async () => {
     if (!message.trim()) return;
+    const text = message.trim();
     setSending(true);
     try {
-      await wsClient.sendRpc('session:team-send', { teamName, agentName, message: message.trim() });
+      await wsClient.sendRpc('session:team-send', { teamName, agentName, message: text });
       setMessage('');
+      // Show the sent message in the UI immediately
+      onSent?.(text);
     } catch (err) {
       console.error('Failed to send team message:', err);
     } finally {
       setSending(false);
     }
-  }, [teamName, agentName, message]);
+  }, [teamName, agentName, message, onSent]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -118,11 +129,13 @@ function AgentPanel({
   events,
   loading,
   teamName,
+  onSent,
 }: {
   agentName: string;
   events: TeamAgentEvent[];
   loading: boolean;
   teamName: string;
+  onSent?: (text: string) => void;
 }) {
   // Coalesce consecutive text events into single blocks (memoized to avoid re-computing on every render)
   const coalesced = useMemo(() => {
@@ -164,7 +177,7 @@ function AgentPanel({
           <AgentEventView key={i} event={event} />
         ))}
       </div>
-      <TeamChatInput teamName={teamName} agentName={agentName} />
+      <TeamChatInput teamName={teamName} agentName={agentName} onSent={onSent} />
     </div>
   );
 }
@@ -184,6 +197,7 @@ export const TeamCard = memo(function TeamCard({
     agentLoading,
     selectAgent,
     loaded,
+    addSentMessage,
   } = useTeamStream(sessionId, teamName);
 
   if (!loaded || members.length === 0) {
@@ -220,6 +234,7 @@ export const TeamCard = memo(function TeamCard({
           events={agentEvents}
           loading={agentLoading}
           teamName={teamName}
+          onSent={addSentMessage}
         />
       )}
       {!activeAgent && (

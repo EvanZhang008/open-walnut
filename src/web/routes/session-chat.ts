@@ -17,7 +17,7 @@ import { transferImagesForRemoteSession } from '../../providers/session-io.js'
 import type { SshTarget } from '../../providers/session-io.js'
 import { log } from '../../logging/index.js'
 import { sessionRunner } from '../../providers/claude-code-session.js'
-import { readTeamConfig, findTeammateJsonlPaths, writeToInbox } from '../../core/team-reader.js'
+import { readTeamConfig, findTeammateJsonlPaths, writeToInbox, extractTeamsFromLeadJsonl, findSubagentJsonlByPrompt, getLeadSessionJsonlPath, findAllSubagentJsonlsForAgent } from '../../core/team-reader.js'
 import { ActiveTabPoller, readFullFile, parseJsonlLines } from '../../providers/subagent-poller.js'
 import { broadcastEvent } from '../ws/handler.js'
 
@@ -248,22 +248,43 @@ export function registerSessionChatRpc(): void {
       return { teamName: null, members: [] }
     }
 
-    const resolvedTeamName = teamName
-
-    const config = readTeamConfig(resolvedTeamName)
-    if (!config) {
-      return { teamName: resolvedTeamName, members: [] }
+    // Try reading team config from disk first
+    const config = readTeamConfig(teamName)
+    if (config) {
+      const members = config.members.map(m => ({
+        name: m.name,
+        agentType: m.agentType,
+        model: m.model,
+        isLead: m.agentId === config.leadAgentId,
+        backendType: m.backendType,
+      }))
+      return { teamName, members }
     }
 
-    const members = config.members.map(m => ({
-      name: m.name,
-      agentType: m.agentType,
-      model: m.model,
-      isLead: m.agentId === config.leadAgentId,
-      backendType: m.backendType,
+    // Fallback: config deleted by TeamDelete — extract from lead session JSONL
+    const record = await getSessionByClaudeId(sessionId)
+    if (!record?.cwd) {
+      return { teamName, members: [] }
+    }
+
+    const leadJsonlPath = getLeadSessionJsonlPath(sessionId, record.cwd)
+    const teams = extractTeamsFromLeadJsonl(leadJsonlPath)
+    const agents = teams.get(teamName)
+
+    if (!agents || agents.length === 0) {
+      return { teamName, members: [] }
+    }
+
+    const members = agents.map(a => ({
+      name: a.name,
+      agentType: a.agentType,
+      model: a.model,
+      isLead: false,
+      backendType: undefined,
     }))
 
-    return { teamName: resolvedTeamName, members }
+    log.web.info('team-info fallback: extracted from lead JSONL', { teamName, memberCount: members.length })
+    return { teamName, members }
   })
 
   registerMethod('session:team-agent-subscribe', async (payload: unknown) => {
@@ -279,34 +300,63 @@ export function registerSessionChatRpc(): void {
     const agentName = data.agentName
     const teamName = data.teamName
 
-    const config = readTeamConfig(teamName)
-    if (!config) {
-      return { events: [], error: 'Team config not found' }
-    }
-
     // Get session record for cwd
     const record = await getSessionByClaudeId(sessionId)
     const cwd = record?.cwd
 
-    // Find JSONL path for this specific teammate
-    const jsonlPaths = findTeammateJsonlPaths(config, sessionId, cwd ?? undefined)
-    const jsonlPath = jsonlPaths.get(agentName)
+    let jsonlPath: string | null = null
+
+    // Try 1: Read team config from disk and find JSONL via config-based matching
+    const config = readTeamConfig(teamName)
+    if (config && cwd) {
+      const jsonlPaths = findTeammateJsonlPaths(config, sessionId, cwd)
+      jsonlPath = jsonlPaths.get(agentName) ?? null
+    }
+
+    // Try 2: Config deleted by TeamDelete — extract prompts from lead JSONL and match
+    if (!jsonlPath && cwd) {
+      const leadJsonlPath = getLeadSessionJsonlPath(sessionId, cwd)
+      const teams = extractTeamsFromLeadJsonl(leadJsonlPath)
+      const agents = teams.get(teamName)
+      const agent = agents?.find(a => a.name === agentName)
+
+      if (agent?.fullPrompt) {
+        jsonlPath = findSubagentJsonlByPrompt(sessionId, cwd, agent.fullPrompt)
+        if (jsonlPath) {
+          log.web.info('team-agent-subscribe fallback: found JSONL via prompt matching', {
+            teamName, agentName, path: jsonlPath.slice(-60),
+          })
+        }
+      }
+    }
 
     if (!jsonlPath) {
       return { events: [], error: 'JSONL file not found for agent' }
     }
 
-    // Read the full file for initial snapshot
-    const { lines } = readFullFile(jsonlPath)
-    const events = parseJsonlLines(lines)
+    // Find ALL JSONL files for this agent (main conversation + inbox responses + shutdown).
+    // cwd is guaranteed non-null here (both Try 1 and Try 2 require it to set jsonlPath).
+    const allJsonlPaths = findAllSubagentJsonlsForAgent(sessionId, cwd!, agentName, jsonlPath)
 
-    // Start polling for this agent (stop any previous polling)
+    // Read and merge events from all files chronologically (file-level ordering)
+    const allEvents: ReturnType<typeof parseJsonlLines> = [];
+    for (const p of allJsonlPaths) {
+      const { lines } = readFullFile(p);
+      const parsed = parseJsonlLines(lines);
+      allEvents.push(...parsed);
+    }
+
+    log.web.debug('team-agent-subscribe: loaded JSONL files', {
+      agentName, fileCount: allJsonlPaths.length, eventCount: allEvents.length,
+    })
+
+    // Start polling for this agent's main JSONL (stop any previous polling)
     const session = sessionRunner.findByClaudeId(sessionId)
     if (session) {
       startTeamAgentPolling(sessionId, agentName, jsonlPath, !!record?.host)
     }
 
-    return { events }
+    return { events: allEvents }
   })
 
   registerMethod('session:team-agent-unsubscribe', async (payload: unknown) => {

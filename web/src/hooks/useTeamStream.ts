@@ -20,7 +20,7 @@ export interface TeamMember {
 }
 
 export interface TeamAgentEvent {
-  type: 'text' | 'tool_use' | 'tool_result' | 'system';
+  type: 'text' | 'tool_use' | 'tool_result' | 'system' | 'user-sent';
   text?: string;
   toolName?: string;
   toolUseId?: string;
@@ -28,6 +28,8 @@ export interface TeamAgentEvent {
   result?: string;
   subtype?: string;
   model?: string;
+  /** Timestamp for sent messages */
+  timestamp?: string;
 }
 
 interface UseTeamStreamReturn {
@@ -45,6 +47,8 @@ interface UseTeamStreamReturn {
   selectAgent: (agentName: string) => void;
   /** Whether team info has been loaded */
   loaded: boolean;
+  /** Add a sent message to the active agent's events (optimistic UI) */
+  addSentMessage: (text: string) => void;
 }
 
 /**
@@ -105,6 +109,15 @@ export function useTeamStream(sessionId: string | null, teamName: string | null)
     setAgentEvents(prev => [...prev, ...payload.events]);
   });
 
+  // Add a user-sent message optimistically
+  const addSentMessage = useCallback((text: string) => {
+    setAgentEvents(prev => [...prev, {
+      type: 'user-sent' as const,
+      text,
+      timestamp: new Date().toISOString(),
+    }]);
+  }, []);
+
   // Select an agent tab and start streaming its JSONL
   const selectAgent = useCallback((agentName: string) => {
     if (!sessionId || !teamName) return;
@@ -141,5 +154,6 @@ export function useTeamStream(sessionId: string | null, teamName: string | null)
     agentLoading,
     selectAgent,
     loaded,
+    addSentMessage,
   };
 }

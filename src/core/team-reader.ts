@@ -227,15 +227,13 @@ function matchSubagentToMember(content: string, member: TeamMember): boolean {
   const teammateTag = `from="${member.name}"`;
   if (content.includes(teammateTag)) return true;
 
-  // Check for the agent name in the early content
+  // Check for the agent name in the early content (both literal and JSON-escaped quotes)
   const namePattern = `"${member.name}"`;
-  if (content.includes(namePattern)) return true;
+  const escapedPattern = `\\"${member.name}\\"`;
+  if (content.includes(namePattern) || content.includes(escapedPattern)) return true;
 
-  // Check for prompt fragment (first 100 chars)
-  if (member.prompt) {
-    const snippet = member.prompt.slice(0, 100);
-    if (content.includes(snippet)) return true;
-  }
+  // Check for @agentName in shutdown requestIds (e.g., "@reader-alpha")
+  if (content.includes(`@${member.name}`)) return true;
 
   return false;
 }
@@ -283,6 +281,286 @@ export async function writeToInbox(
   // Ensure inbox directory exists before writing
   await fsp.mkdir(path.dirname(filePath), { recursive: true });
   await fsp.writeFile(filePath, JSON.stringify(inbox, null, 2));
+}
+
+// ── Fallback: Extract Team Info from Lead Session JSONL ──
+// When TeamDelete removes the config from disk, we can still reconstruct
+// team member info and find JSONL files by parsing the lead session's JSONL.
+
+export interface ExtractedTeamAgent {
+  name: string;
+  teamName: string;
+  agentType: string;
+  model: string;
+  /** First ~80 chars of the prompt sent to this agent (for JSONL matching) */
+  promptSnippet: string;
+  /** Full prompt for precise matching */
+  fullPrompt: string;
+  /** Status from tool result ('done' if result exists) */
+  status: 'calling' | 'done';
+}
+
+/**
+ * Extract team info directly from the lead session JSONL.
+ * This is the FALLBACK when TeamDelete has removed the config from disk.
+ *
+ * Parses Agent tool calls to find: team names, agent names, prompts, models.
+ * Returns a map: teamName → list of agents.
+ */
+export function extractTeamsFromLeadJsonl(
+  sessionJsonlPath: string,
+): Map<string, ExtractedTeamAgent[]> {
+  const teams = new Map<string, ExtractedTeamAgent[]>();
+
+  try {
+    const content = fs.readFileSync(sessionJsonlPath, 'utf-8');
+    const lines = content.split('\n').filter(Boolean);
+
+    // First pass: collect Agent tool_use calls
+    const agentCalls = new Map<string, { name: string; teamName: string; prompt: string; model: string; agentType: string }>();
+
+    for (const line of lines) {
+      try {
+        const obj = JSON.parse(line);
+        if (obj.type === 'assistant') {
+          const blocks = obj.message?.content;
+          if (!Array.isArray(blocks)) continue;
+          for (const block of blocks) {
+            if (block.type === 'tool_use' && block.name === 'Agent') {
+              const input = block.input || {};
+              const teamName = input.team_name;
+              const agentName = input.name;
+              if (teamName && agentName) {
+                agentCalls.set(block.id, {
+                  name: agentName,
+                  teamName,
+                  prompt: typeof input.prompt === 'string' ? input.prompt : '',
+                  model: typeof input.model === 'string' ? input.model : 'sonnet',
+                  agentType: typeof input.subagent_type === 'string' ? input.subagent_type : 'general-purpose',
+                });
+              }
+            }
+          }
+        }
+      } catch { /* skip malformed lines */ }
+    }
+
+    // Second pass: check tool_results to determine status
+    const completedToolUseIds = new Set<string>();
+    for (const line of lines) {
+      try {
+        const obj = JSON.parse(line);
+        if (obj.type === 'user') {
+          const blocks = obj.message?.content;
+          if (!Array.isArray(blocks)) continue;
+          for (const block of blocks) {
+            if (block.type === 'tool_result' && agentCalls.has(block.tool_use_id)) {
+              completedToolUseIds.add(block.tool_use_id);
+            }
+          }
+        }
+      } catch { /* skip */ }
+    }
+
+    // Build team map
+    for (const [toolId, call] of agentCalls) {
+      if (!teams.has(call.teamName)) {
+        teams.set(call.teamName, []);
+      }
+      teams.get(call.teamName)!.push({
+        name: call.name,
+        teamName: call.teamName,
+        agentType: call.agentType,
+        model: call.model,
+        promptSnippet: call.prompt.slice(0, 80),
+        fullPrompt: call.prompt,
+        status: completedToolUseIds.has(toolId) ? 'done' : 'calling',
+      });
+    }
+
+    log.session.debug('extracted teams from lead JSONL', {
+      path: sessionJsonlPath.slice(-60),
+      teams: [...teams.keys()],
+      agentCount: [...teams.values()].reduce((n, a) => n + a.length, 0),
+    });
+  } catch (err) {
+    log.session.warn('failed to extract teams from lead JSONL', {
+      path: sessionJsonlPath.slice(-60),
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  return teams;
+}
+
+/**
+ * Extract text content from the first user message in a subagent JSONL file.
+ * The teammate-message prompt appears here (Claude Code wraps Agent tool prompts
+ * in <teammate-message> tags). Returns null if no user message found.
+ */
+function extractFirstUserMessage(filePath: string): string | null {
+  const head = readFileHead(filePath, 8192);
+  if (!head) return null;
+
+  const lines = head.split('\n').filter(Boolean);
+  for (const line of lines) {
+    try {
+      const obj = JSON.parse(line);
+      if (obj.type !== 'user') continue;
+      const content = obj.message?.content;
+      if (typeof content === 'string') return content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block.type === 'text' && typeof block.text === 'string') return block.text;
+        }
+      }
+    } catch { /* skip malformed */ }
+  }
+  return null;
+}
+
+/**
+ * Scan the subagent directory once and return a mapping of each file's
+ * first user message text → file path. Larger files (actual conversations)
+ * are preferred over small files (shutdown messages, user chats).
+ */
+function buildSubagentIndex(
+  leadSessionId: string,
+  leadCwd: string,
+): Array<{ filePath: string; firstMessage: string; size: number }> {
+  const encoded = encodeProjectPath(leadCwd);
+  const subagentDir = path.join(CLAUDE_HOME, 'projects', encoded, leadSessionId, 'subagents');
+
+  const result: Array<{ filePath: string; firstMessage: string; size: number }> = [];
+
+  try {
+    if (!fs.existsSync(subagentDir)) return result;
+    const files = fs.readdirSync(subagentDir)
+      .filter(f => f.startsWith('agent-') && f.endsWith('.jsonl'));
+
+    for (const file of files) {
+      const filePath = path.join(subagentDir, file);
+      const size = fs.statSync(filePath).size;
+      const firstMsg = extractFirstUserMessage(filePath);
+      if (firstMsg) {
+        result.push({ filePath, firstMessage: firstMsg, size });
+      }
+    }
+  } catch (err) {
+    log.session.debug('buildSubagentIndex failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Find a subagent JSONL file by matching the full prompt from the Agent tool call.
+ * Parses JSONL properly to avoid JSON escaping mismatches.
+ *
+ * When multiple files match (e.g., conversation file + shutdown file both contain
+ * the prompt), prefers the larger file (actual conversation).
+ */
+export function findSubagentJsonlByPrompt(
+  leadSessionId: string,
+  leadCwd: string,
+  fullPrompt: string,
+): string | null {
+  const index = buildSubagentIndex(leadSessionId, leadCwd);
+
+  // Find all files whose first user message contains the full prompt
+  const matches = index
+    .filter(entry => entry.firstMessage.includes(fullPrompt))
+    .sort((a, b) => b.size - a.size); // largest first (prefer actual conversations)
+
+  if (matches.length > 0) {
+    return matches[0].filePath;
+  }
+
+  // Fallback: try matching with just the first 200 chars of prompt
+  // (in case wrapping slightly modified the prompt)
+  const promptHead = fullPrompt.slice(0, 200);
+  if (promptHead.length > 50) {
+    const fallbackMatches = index
+      .filter(entry => entry.firstMessage.includes(promptHead))
+      .sort((a, b) => b.size - a.size);
+    if (fallbackMatches.length > 0) {
+      return fallbackMatches[0].filePath;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Find ALL subagent JSONL files belonging to a specific agent.
+ * This includes:
+ * - The main conversation file (matched by prompt)
+ * - Inbox response files (created when inbox messages are delivered)
+ * - Shutdown acknowledgment files
+ *
+ * Returns paths sorted by file mtime (oldest first) for chronological ordering.
+ */
+export function findAllSubagentJsonlsForAgent(
+  leadSessionId: string,
+  leadCwd: string,
+  agentName: string,
+  mainJsonlPath?: string | null,
+): string[] {
+  const encoded = encodeProjectPath(leadCwd);
+  const subagentDir = path.join(CLAUDE_HOME, 'projects', encoded, leadSessionId, 'subagents');
+
+  const result: Array<{ filePath: string; mtime: number }> = [];
+
+  try {
+    if (!fs.existsSync(subagentDir)) return [];
+    const files = fs.readdirSync(subagentDir)
+      .filter(f => f.startsWith('agent-') && f.endsWith('.jsonl'));
+
+    for (const file of files) {
+      const filePath = path.join(subagentDir, file);
+
+      // Always include the main conversation file
+      if (mainJsonlPath && filePath === mainJsonlPath) {
+        result.push({ filePath, mtime: fs.statSync(filePath).mtimeMs });
+        continue;
+      }
+
+      // For other files: check if they reference this agent's name
+      const head = readFileHead(filePath, 8192);
+      if (!head) continue;
+
+      // Look for agent name in inbox-style messages:
+      // - Shutdown requests: "@{agentName}" in requestId
+      // - Inbox delivery: the file is a follow-up conversation for this agent
+      //   (Claude Code creates new subagent per inbox message)
+      const hasAgentRef = head.includes(`@${agentName}`)
+        || head.includes(`"${agentName}"`)
+        || head.includes(`\\"${agentName}\\"`);
+
+      if (hasAgentRef) {
+        result.push({ filePath, mtime: fs.statSync(filePath).mtimeMs });
+      }
+    }
+  } catch (err) {
+    log.session.debug('findAllSubagentJsonlsForAgent failed', {
+      agentName, error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // Sort by mtime for chronological order
+  result.sort((a, b) => a.mtime - b.mtime);
+  return result.map(r => r.filePath);
+}
+
+/**
+ * Get the path to the lead session JSONL file.
+ * Claude Code stores session JSONL at ~/.claude/projects/{encodedCwd}/{sessionId}.jsonl
+ */
+export function getLeadSessionJsonlPath(sessionId: string, cwd: string): string {
+  const encoded = encodeProjectPath(cwd);
+  return path.join(CLAUDE_HOME, 'projects', encoded, `${sessionId}.jsonl`);
 }
 
 // ── Helpers ──
