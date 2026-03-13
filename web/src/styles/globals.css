@@ -12145,7 +12145,7 @@ img[data-lightbox-src],
 }
 
 .dock-task-attention {
-  border-left: 3px solid #e53935;
+  border: 2px solid #e53935;
 }
 
 .dock-task-attention .dock-task-phase-label {

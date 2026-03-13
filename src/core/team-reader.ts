@@ -494,11 +494,45 @@ export function findSubagentJsonlByPrompt(
 }
 
 /**
+ * Parse the first JSONL line to extract parentUuid (for chain traversal).
+ */
+function extractParentUuid(filePath: string): string | null {
+  const head = readFileHead(filePath, 1024);
+  if (!head) return null;
+  const firstLine = head.split('\n')[0];
+  if (!firstLine) return null;
+  try {
+    const obj = JSON.parse(firstLine);
+    return obj.parentUuid ?? null;
+  } catch { return null; }
+}
+
+/**
+ * Collect all UUIDs from a JSONL file (for parentUuid chain matching).
+ */
+function collectUuids(filePath: string): Set<string> {
+  const uuids = new Set<string>();
+  try {
+    const content = fs.readFileSync(filePath, 'utf-8');
+    for (const line of content.split('\n')) {
+      if (!line) continue;
+      try {
+        const obj = JSON.parse(line);
+        if (obj.uuid) uuids.add(obj.uuid);
+      } catch { /* skip */ }
+    }
+  } catch { /* skip */ }
+  return uuids;
+}
+
+/**
  * Find ALL subagent JSONL files belonging to a specific agent.
  * This includes:
  * - The main conversation file (matched by prompt)
- * - Inbox response files (created when inbox messages are delivered)
- * - Shutdown acknowledgment files
+ * - Inbox response files (linked via parentUuid chain — when a user sends a
+ *   message via team chat, Claude Code creates a new subagent file whose
+ *   parentUuid points to the last UUID in the parent agent's JSONL)
+ * - Shutdown acknowledgment files (matched by @agentName pattern)
  *
  * Returns paths sorted by file mtime (oldest first) for chronological ordering.
  */
@@ -512,36 +546,75 @@ export function findAllSubagentJsonlsForAgent(
   const subagentDir = path.join(CLAUDE_HOME, 'projects', encoded, leadSessionId, 'subagents');
 
   const result: Array<{ filePath: string; mtime: number }> = [];
+  const includedPaths = new Set<string>();
 
   try {
     if (!fs.existsSync(subagentDir)) return [];
-    const files = fs.readdirSync(subagentDir)
-      .filter(f => f.startsWith('agent-') && f.endsWith('.jsonl'));
+    const allFiles = fs.readdirSync(subagentDir)
+      .filter(f => f.startsWith('agent-') && f.endsWith('.jsonl'))
+      .map(f => path.join(subagentDir, f));
 
-    for (const file of files) {
-      const filePath = path.join(subagentDir, file);
-
-      // Always include the main conversation file
+    // Phase 1: Include main JSONL + name-matched files
+    for (const filePath of allFiles) {
       if (mainJsonlPath && filePath === mainJsonlPath) {
         result.push({ filePath, mtime: fs.statSync(filePath).mtimeMs });
+        includedPaths.add(filePath);
         continue;
       }
 
-      // For other files: check if they reference this agent's name
       const head = readFileHead(filePath, 8192);
       if (!head) continue;
 
-      // Look for agent name in inbox-style messages:
-      // - Shutdown requests: "@{agentName}" in requestId
-      // - Inbox delivery: the file is a follow-up conversation for this agent
-      //   (Claude Code creates new subagent per inbox message)
+      // Match by agent name patterns (shutdown requests, teammate-message tags)
       const hasAgentRef = head.includes(`@${agentName}`)
         || head.includes(`"${agentName}"`)
         || head.includes(`\\"${agentName}\\"`);
 
       if (hasAgentRef) {
         result.push({ filePath, mtime: fs.statSync(filePath).mtimeMs });
+        includedPaths.add(filePath);
       }
+    }
+
+    // Phase 2: Trace parentUuid chains from matched files.
+    // Inbox response files have NO agent name — only a parentUuid pointing to
+    // the last UUID in the parent file's conversation. We collect all UUIDs from
+    // matched files and find children whose parentUuid is in our set.
+    const knownUuids = new Set<string>();
+    for (const entry of result) {
+      for (const uuid of collectUuids(entry.filePath)) {
+        knownUuids.add(uuid);
+      }
+    }
+
+    // Iterative chain traversal (handles grandchildren, etc.)
+    let foundNew = true;
+    while (foundNew) {
+      foundNew = false;
+      for (const filePath of allFiles) {
+        if (includedPaths.has(filePath)) continue;
+        const parentUuid = extractParentUuid(filePath);
+        if (parentUuid && knownUuids.has(parentUuid)) {
+          result.push({ filePath, mtime: fs.statSync(filePath).mtimeMs });
+          includedPaths.add(filePath);
+          // Add this file's UUIDs so we can find grandchildren
+          for (const uuid of collectUuids(filePath)) {
+            knownUuids.add(uuid);
+          }
+          foundNew = true;
+        }
+      }
+    }
+
+    if (result.length > 1) {
+      log.session.debug('findAllSubagentJsonlsForAgent: multi-file', {
+        agentName, fileCount: result.length,
+        nameMatched: [...includedPaths].filter(p => {
+          const h = readFileHead(p, 512);
+          return h && (h.includes(`@${agentName}`) || h.includes(`"${agentName}"`));
+        }).length,
+        chainMatched: result.length - (mainJsonlPath ? 1 : 0),
+      });
     }
   } catch (err) {
     log.session.debug('findAllSubagentJsonlsForAgent failed', {
