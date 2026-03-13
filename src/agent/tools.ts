@@ -1293,40 +1293,37 @@ defaults (same resolution chain as start_session).`,
         //    from compacted entries, and the mismatch error helpfully suggested the wrong
         //    CWD as a fix — leading to a broken import. Strict = canonical path only.
         const { canonicalJsonlPath, remoteJsonlPath, encodeProjectPath, RemoteFileReader } = await import('../core/session-file-reader.js');
-        const { default: fs } = await import('node:fs');
+
+        if (!resolvedCwd) {
+          return `Error: No working directory resolved for session ${sessionId}. Provide working_directory explicitly.`;
+        }
 
         let jsonlContent: string | null = null;
-        const effectiveCwd = resolvedCwd;
 
         if (resolvedHost) {
           // Remote: SSH check canonical path only (no glob/find fallback)
           const reader = new RemoteFileReader(resolvedHost);
-          if (resolvedCwd) {
-            const exactPath = remoteJsonlPath(sessionId, resolvedCwd);
-            jsonlContent = await reader.readFile(exactPath);
-          }
+          const exactPath = remoteJsonlPath(sessionId, resolvedCwd);
+          jsonlContent = await reader.readFile(exactPath);
           if (!jsonlContent) {
-            const expectedPath = resolvedCwd
-              ? `${resolvedHost}:${remoteJsonlPath(sessionId, resolvedCwd)}`
-              : `${resolvedHost}:~/.claude/projects/{encoded-cwd}/${sessionId}.jsonl`;
             return `Error: JSONL not found at canonical path for session ${sessionId}.\n` +
-              `  Expected: ${expectedPath}\n` +
-              `  CWD used: ${resolvedCwd || '(none resolved)'}\n` +
+              `  Expected: ${resolvedHost}:${exactPath}\n` +
+              `  CWD used: ${resolvedCwd}\n` +
               `Check ~/.claude/projects/ on ${resolvedHost} for the correct directory name, then re-run with the correct working_directory.`;
           }
         } else {
           // Local: check canonical path only (no fallback search)
-          if (resolvedCwd) {
-            const expectedPath = canonicalJsonlPath(sessionId, resolvedCwd);
-            if (fs.existsSync(expectedPath)) {
-              jsonlContent = fs.readFileSync(expectedPath, 'utf-8');
-            }
+          const expectedPath = canonicalJsonlPath(sessionId, resolvedCwd);
+          try {
+            jsonlContent = await fsp.readFile(expectedPath, 'utf-8');
+          } catch {
+            // File not found
           }
           if (!jsonlContent) {
-            const encoded = resolvedCwd ? encodeProjectPath(resolvedCwd) : '{encoded-cwd}';
+            const encoded = encodeProjectPath(resolvedCwd);
             return `Error: JSONL not found at canonical path for session ${sessionId}.\n` +
               `  Expected: ~/.claude/projects/${encoded}/${sessionId}.jsonl\n` +
-              `  CWD used: ${resolvedCwd || '(none resolved)'}\n` +
+              `  CWD used: ${resolvedCwd}\n` +
               `Check ~/.claude/projects/ for the correct directory name, then re-run with the correct working_directory.`;
           }
         }
@@ -1372,7 +1369,7 @@ defaults (same resolution chain as start_session).`,
           claudeSessionId: sessionId,
           taskId: task.id,
           project: task.project,
-          cwd: effectiveCwd,
+          cwd: resolvedCwd,
           host: resolvedHost,
           title,
           work_status: workStatus,
@@ -1391,7 +1388,7 @@ defaults (same resolution chain as start_session).`,
         // ⑩ Return success
         const sRef = sessionRef(record.claudeSessionId, record.title ?? title);
         const hostNote = resolvedHost ? ` (${resolvedHost})` : '';
-        const cwdNote = effectiveCwd ? ` cwd=${effectiveCwd}` : '';
+        const cwdNote = resolvedCwd ? ` cwd=${resolvedCwd}` : '';
         return `Imported session ${sRef}${hostNote}${cwdNote} → task ${taskRef(task.id, task.title)}. Messages: ${messageCount}.`;
       } catch (err) {
         return `Error: ${err instanceof Error ? err.message : String(err)}`;
@@ -1765,15 +1762,20 @@ defaults (same resolution chain as start_session).`,
         if (newTaskId !== undefined) {
           const session = await getSessionByClaudeId(sessionId);
           if (!session) return `Error: Session not found: ${sessionId}`;
+          if (session.process_status !== 'stopped') {
+            return `Error: Stop session before changing task association. Session ${sessionId} is still ${session.process_status}.`;
+          }
 
           const { clearSession, clearSessionSlot, linkSession } = await import('../core/task-manager.js');
 
           // Clear old task association
-          if (session.taskId) {
+          const oldTaskId = session.taskId;
+          if (oldTaskId) {
             try {
-              await clearSession(session.taskId, sessionId);
-              await clearSessionSlot(session.taskId, sessionId);
+              await clearSession(oldTaskId, sessionId);
+              await clearSessionSlot(oldTaskId, sessionId);
             } catch { /* old task may not exist */ }
+            bus.emit(EventNames.TASK_UPDATED, { taskId: oldTaskId }, [], { source: 'agent' });
           }
 
           if (newTaskId === '') {
@@ -1839,6 +1841,7 @@ defaults (same resolution chain as start_session).`,
           if (title) parts.push(`title="${title}"`);
           parts.push(`work_status=${workStatus}`);
           if (activity) parts.push(`activity="${activity}"`);
+          if (newCwd) parts.push(`cwd="${newCwd}"`);
           return `Session ${sRef} updated: ${parts.join(', ')}`;
         }
 
@@ -1848,8 +1851,9 @@ defaults (same resolution chain as start_session).`,
 
         // Look up session for the ref tag label (no prior fetch in this branch)
         const session = await getSessionByClaudeId(sessionId);
+        if (!session) return `Error: Session not found: ${sessionId}`;
         await updateSessionRecord(sessionId, updates as Partial<SessionRecord>);
-        const sRef = sessionRef(sessionId, title ?? session?.title ?? sessionId.slice(0, 16));
+        const sRef = sessionRef(sessionId, title ?? session.title ?? sessionId.slice(0, 16));
         const parts = [];
         if (title) parts.push(`title="${title}"`);
         if (activity) parts.push(`activity="${activity}"`);
