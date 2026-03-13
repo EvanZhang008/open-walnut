@@ -3,7 +3,7 @@ import { apiGet } from './client';
 export interface SlashCommandItem {
   name: string;
   description: string;
-  source: 'skill' | 'walnut' | 'claude-root' | 'project';
+  source: 'skill' | 'walnut' | 'claude-root' | 'project' | 'built-in';
 }
 
 export async function fetchSlashCommands(cwd?: string): Promise<SlashCommandItem[]> {

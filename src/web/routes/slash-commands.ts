@@ -19,8 +19,20 @@ import { CLAUDE_HOME } from '../../constants.js'
 export interface SlashCommandItem {
   name: string
   description: string
-  source: 'skill' | 'walnut' | 'claude-root' | 'project'
+  source: 'skill' | 'walnut' | 'claude-root' | 'project' | 'built-in'
 }
+
+/**
+ * Claude Code built-in commands that support non-interactive (-p) mode.
+ * Verified against Claude Code v2.1.x (supportsNonInteractive: true).
+ * Update this list when Claude Code adds/removes built-in commands.
+ */
+const BUILTIN_COMMANDS: SlashCommandItem[] = [
+  { name: 'compact', description: 'Compact conversation context with optional focus instructions', source: 'built-in' },
+  { name: 'context', description: 'Show current context window usage', source: 'built-in' },
+  { name: 'cost', description: 'Show token usage and cost for this session', source: 'built-in' },
+  { name: 'files', description: 'List files in current context', source: 'built-in' },
+]
 
 /** Scan a directory for *.md command files and return items. */
 async function scanCommandDir(
@@ -120,10 +132,11 @@ export function createSlashCommandsRouter(): Router {
           : Promise.resolve([]),
       ])
 
-      // Merge: project > root > walnut > skill (higher priority first for dedup)
+      // Merge: project > root > walnut > skill > built-in
+      // Higher priority first — user commands shadow built-ins (intentional).
       const seen = new Set<string>()
       const items: SlashCommandItem[] = []
-      for (const list of [projectCmds, rootCmds, walnutCmds, skills]) {
+      for (const list of [projectCmds, rootCmds, walnutCmds, skills, BUILTIN_COMMANDS]) {
         for (const item of list) {
           if (seen.has(item.name)) continue
           seen.add(item.name)

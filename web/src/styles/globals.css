@@ -10294,6 +10294,15 @@ img[data-lightbox-src],
   background: rgba(251, 191, 36, 0.15);
 }
 
+.command-palette-source-built-in {
+  color: #0e7490;
+  background: #cffafe;
+}
+[data-theme="dark"] .command-palette-source-built-in {
+  color: #22d3ee;
+  background: rgba(34, 211, 238, 0.12);
+}
+
 /* ===== Session Path Selector (popover above chat input) ===== */
 
 .session-path-selector {

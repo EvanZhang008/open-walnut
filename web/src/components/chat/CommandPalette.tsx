@@ -15,13 +15,15 @@ interface CommandPaletteProps<T extends PaletteItem = SlashCommand> {
   showSource?: boolean;
 }
 
+// Covers multiple type vocabularies: SlashCommandItem (API) + SlashCommand (local registry).
 const SOURCE_LABELS: Record<string, string> = {
   skill: 'Skill',
   walnut: 'Walnut',
   'claude-root': 'Claude',
   project: 'Project',
-  hardcoded: 'Built-in',
-  builtin: 'Built-in',
+  'built-in': 'Built-in',  // API: Claude Code native commands
+  hardcoded: 'Built-in',   // Local registry: hardcoded commands
+  builtin: 'Built-in',     // Local registry: built-in commands
   user: 'User',
   control: 'Control',
 };
