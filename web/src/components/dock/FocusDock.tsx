@@ -1,6 +1,6 @@
-import { useState, useCallback, useEffect, useRef, memo } from 'react';
+import { useState, useCallback, useEffect, useRef, memo, useMemo } from 'react';
 import type { Task } from '@walnut/core';
-import { compositeColor, resolveTaskSessionId } from '@/utils/session-status';
+import { resolveTaskSessionId } from '@/utils/session-status';
 import { SessionChatHistory } from '@/components/sessions/SessionChatHistory';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { useSessionSend } from '@/hooks/useSessionSend';
@@ -34,10 +34,6 @@ const WORK_LABELS: Record<string, string> = {
   await_human_action: 'Await Human', completed: 'Completed', error: 'Error',
 };
 
-const PROCESS_LABELS: Record<string, string> = {
-  running: 'Running', idle: 'Idle', stopped: 'Stopped',
-};
-
 // ── Dock height constants ──
 
 const DOCK_HEIGHT_KEY = 'walnut-dock-height';
@@ -68,12 +64,7 @@ interface DockTaskCardProps {
 const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, onUnpin }: DockTaskCardProps) {
   const sessionId = resolveTaskSessionId(task);
   const isStreaming = task.session_status?.process_status === 'running';
-
-  const ps = task.session_status?.process_status ?? 'stopped';
   const ws = task.session_status?.work_status ?? null;
-  const statusColor = task.session_status
-    ? compositeColor(ps, ws ?? 'completed')
-    : 'var(--fg-muted)';
 
   // Red highlight for phases that need human attention
   const needsAttention = task.phase === 'AGENT_COMPLETE' || task.phase === 'AWAIT_HUMAN_ACTION';
@@ -116,8 +107,8 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
     >
       <div className="dock-task-header">
         <div className="dock-task-header-top">
-          <span className={`dock-task-process-label${isStreaming ? ' dock-task-process-running' : ''}`} style={{ color: statusColor }}>
-            {PROCESS_LABELS[ps] ?? ps}
+          <span className={`dock-task-phase-badge${needsAttention ? ' dock-task-phase-attention' : ''}${isStreaming ? ' dock-task-phase-streaming' : ''}`}>
+            {PHASE_LABELS[task.phase ?? ''] ?? task.phase ?? 'To Do'}
           </span>
           <span className="dock-task-title" title={task.title}>{task.title}</span>
           {sessionId && (
@@ -153,10 +144,11 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
             &times;
           </button>
         </div>
-        <div className="dock-task-status-labels">
-          <span className="dock-task-phase-label">{PHASE_LABELS[task.phase ?? ''] ?? task.phase ?? 'To Do'}</span>
-          {ws && <span className="dock-task-session-label">{WORK_LABELS[ws] ?? ws}</span>}
-        </div>
+        {ws && (
+          <div className="dock-task-status-labels">
+            <span className="dock-task-session-label">{WORK_LABELS[ws] ?? ws}</span>
+          </div>
+        )}
       </div>
       <div className="dock-task-body">
         {sessionId ? (
@@ -219,9 +211,16 @@ const FOCUS_DOCK_MAX_VISIBLE = 3;
 
 export function FocusDock({ focusBar }: FocusDockProps) {
   const { pinnedTasks: allPinnedTasks, unpin } = focusBar;
-  // Focus Dock shows only the first N pinned tasks (UI space limited);
-  // the Todo Sidebar pinned section shows all.
-  const pinnedTasks = allPinnedTasks.slice(0, FOCUS_DOCK_MAX_VISIBLE);
+  // Sort: attention-needed tasks (AGENT_COMPLETE, AWAIT_HUMAN_ACTION) first,
+  // then take the first N visible (UI space limited).
+  const pinnedTasks = useMemo(() => {
+    const sorted = [...allPinnedTasks].sort((a, b) => {
+      const aAttn = a.phase === 'AGENT_COMPLETE' || a.phase === 'AWAIT_HUMAN_ACTION' ? 0 : 1;
+      const bAttn = b.phase === 'AGENT_COMPLETE' || b.phase === 'AWAIT_HUMAN_ACTION' ? 0 : 1;
+      return aAttn - bAttn;
+    });
+    return sorted.slice(0, FOCUS_DOCK_MAX_VISIBLE);
+  }, [allPinnedTasks]);
 
   // Self-manage active state by listening to custom events
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);

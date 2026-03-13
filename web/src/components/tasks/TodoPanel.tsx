@@ -1383,10 +1383,6 @@ function SortablePinnedCard({ task, isFocused, onFocusTask, onUnpinTask, onOpenS
   };
 
   const needsAttention = task.phase === 'AGENT_COMPLETE' || task.phase === 'AWAIT_HUMAN_ACTION';
-  const dotColor = task.status === 'done' ? '#34c759'
-    : task.phase === 'IN_PROGRESS' ? '#007aff'
-    : needsAttention ? 'var(--error)'
-    : 'var(--fg-muted)';
   const phaseLabel = PHASE_LABEL[task.phase] ?? task.phase;
 
   const ps = task.session_status?.process_status ?? 'stopped';
@@ -1408,9 +1404,8 @@ function SortablePinnedCard({ task, isFocused, onFocusTask, onUnpinTask, onOpenS
       <span className="todo-pinned-drag-handle" {...attributes} {...listeners} title="Drag to reorder">
         &#x2630;
       </span>
-      <span className="todo-pinned-dot" style={{ background: dotColor }} />
+      <span className={`todo-pinned-phase${needsAttention ? ' todo-pinned-phase-attention' : ''}`}>{phaseLabel}</span>
       <span className="todo-pinned-title" title={task.title}>{task.title}</span>
-      <span className="todo-pinned-phase" style={{ color: needsAttention ? 'var(--error)' : 'var(--fg-muted)' }}>{phaseLabel}</span>
       {(() => {
         const sid = resolveTaskSessionId(task);
         if (!sid) return null;

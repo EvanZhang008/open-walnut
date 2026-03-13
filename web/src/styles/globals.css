@@ -6470,13 +6470,6 @@ img[data-lightbox-src],
   background: color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
-.todo-pinned-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
 .todo-pinned-title {
   flex: 1;
   font-size: 12px;
@@ -6488,9 +6481,16 @@ img[data-lightbox-src],
 }
 
 .todo-pinned-phase {
-  font-size: 10px;
-  font-weight: 500;
+  font-size: 9px;
+  font-weight: 600;
   flex-shrink: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--fg-muted);
+}
+
+.todo-pinned-phase-attention {
+  color: var(--error);
 }
 
 .todo-pinned-card-attention {
@@ -12179,11 +12179,6 @@ img[data-lightbox-src],
   border: 2px solid var(--error);
 }
 
-.dock-task-attention .dock-task-phase-label {
-  color: var(--error);
-  font-weight: 600;
-}
-
 /* ── Card header ── */
 
 .dock-task-header {
@@ -12205,29 +12200,26 @@ img[data-lightbox-src],
   gap: 6px;
 }
 
-.dock-task-phase-label {
-  font-size: 9px;
-  font-weight: 500;
-  color: var(--fg-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-}
-
 .dock-task-session-label {
   font-size: 9px;
   font-weight: 500;
   color: var(--accent);
 }
 
-.dock-task-process-label {
+.dock-task-phase-badge {
   font-size: 9px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.3px;
   flex-shrink: 0;
+  color: var(--fg-muted);
 }
 
-.dock-task-process-running {
+.dock-task-phase-attention {
+  color: var(--error);
+}
+
+.dock-task-phase-streaming {
   animation: dock-pulse 1.5s ease-in-out infinite;
 }
 
