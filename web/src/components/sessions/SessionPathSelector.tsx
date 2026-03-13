@@ -111,7 +111,7 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
 
   // Live directory listing with multi-level preload cache
   const liveCacheRef = useRef<{ prefix: string; host: string | undefined; dirs: string[] } | null>(null);
-  const activePath = editMode ? editingPath : (query.startsWith('/') ? query : '');
+  const activePath = editMode ? editingPath : ((query.startsWith('/') || query.startsWith('~')) ? query : '');
 
   // Resolve effective host for live listing
   const effectiveHost = hostFilter !== 'all' && hostFilter !== '__local__' ? hostFilter : undefined;
@@ -255,7 +255,7 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
 
     // Browse mode
     const historyItems = hostFiltered.filter(d => fuzzyMatch(query, d.cwd)).map(d => ({ ...d, live: false }));
-    if (query.startsWith('/') && (liveDirs.length > 0 || liveTaggedDirs.length > 0)) {
+    if ((query.startsWith('/') || query.startsWith('~')) && (liveDirs.length > 0 || liveTaggedDirs.length > 0)) {
       const liveItems = buildLiveItems(new Set(historyItems.map(h => h.cwd)));
       return [...liveItems, ...historyItems];
     }
