@@ -76,6 +76,9 @@ export interface SessionHistoryMessage {
   thinking?: string;
   model?: string;
   usage?: { input_tokens: number; output_tokens: number };
+  /** Walnut-generated message ID for deterministic dedup of optimistic user messages.
+   *  Present on synthetic user events written by writeSyntheticUserEvent(). */
+  walnutMessageId?: string;
 }
 
 export interface PaginationMeta {
@@ -89,9 +92,12 @@ export interface PaginationMeta {
 
 interface RawJsonlLine {
   type: string;
+  subtype?: string;
   uuid?: string;
   timestamp?: string;
   parent_tool_use_id?: string | null;
+  /** Walnut-generated message ID on synthetic user events (subtype='walnut-injected'). */
+  walnutMessageId?: string;
   // queue-operation fields (FIFO-injected user messages)
   operation?: string;
   content?: string;
@@ -194,6 +200,7 @@ function parseSessionMessages(content: string): SessionHistoryMessage[] {
     model?: string;
     usage?: { input_tokens: number; output_tokens: number };
     parentToolUseId?: string;
+    walnutMessageId?: string;
     contentBlocks: Array<{
       type: string;
       text?: string;
@@ -274,12 +281,44 @@ function parseSessionMessages(content: string): SessionHistoryMessage[] {
         model: raw.message.model,
         usage: raw.message.usage,
         parentToolUseId: raw.parent_tool_use_id ?? undefined,
+        walnutMessageId: raw.walnutMessageId ?? undefined,
         contentBlocks: raw.message.content
           ? (typeof raw.message.content === 'string'
             ? [{ type: 'text' as const, text: raw.message.content }]
             : [...raw.message.content])
           : [],
       });
+    }
+  }
+
+  // ── Dedup synthetic vs canonical user messages ──
+  // When a FIFO-delivered message succeeds (Pattern A), the JSONL may contain BOTH:
+  //   1. A synthetic walnut-injected event (with walnutMessageId, written by Walnut)
+  //   2. A canonical user event (written by Claude CLI after processing the FIFO input)
+  // Keep the synthetic one (has walnutMessageId for frontend dedup) and remove the canonical.
+  const syntheticTexts = new Set<string>();
+  for (const [, msg] of messageMap) {
+    if (msg.role === 'user' && msg.walnutMessageId) {
+      const text = msg.contentBlocks
+        .filter(b => b.type === 'text' && b.text)
+        .map(b => b.text!)
+        .join('\n')
+        .trim();
+      if (text) syntheticTexts.add(text);
+    }
+  }
+  if (syntheticTexts.size > 0) {
+    for (const [key, msg] of messageMap) {
+      if (msg.role === 'user' && !msg.walnutMessageId) {
+        const text = msg.contentBlocks
+          .filter(b => b.type === 'text' && b.text)
+          .map(b => b.text!)
+          .join('\n')
+          .trim();
+        if (text && syntheticTexts.has(text)) {
+          messageMap.delete(key);
+        }
+      }
     }
   }
 
@@ -421,6 +460,7 @@ function parseSessionMessages(content: string): SessionHistoryMessage[] {
       ...(thinking ? { thinking } : {}),
       ...(msg.model ? { model: msg.model } : {}),
       ...(msg.usage ? { usage: msg.usage } : {}),
+      ...(msg.walnutMessageId ? { walnutMessageId: msg.walnutMessageId } : {}),
     });
     resultParentIds.push(msg.parentToolUseId);
   }
@@ -757,9 +797,10 @@ export async function recoverStateFromJsonl(sessionId: string, cwd?: string, hos
         if (mapped) state.mode = mapped;
       }
 
-      if (type === 'user') {
+      if (type === 'user' && parsed.subtype !== 'walnut-injected') {
         // A user message after a result means the session was resumed —
         // clear workStatus so we don't incorrectly report agent_complete.
+        // Skip synthetic walnut-injected events (written by Walnut for dedup, not real turns).
         if (state.workStatus) {
           state.workStatus = undefined;
           state.activity = undefined;

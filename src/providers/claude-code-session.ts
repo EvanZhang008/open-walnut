@@ -775,6 +775,36 @@ export class ClaudeCodeSession {
   }
 
   /**
+   * Append a synthetic user-text event to the local output file.
+   * Claude Code's stdout stream does NOT echo user text messages — only tool_results
+   * and assistant responses appear in the JSONL. This means Phase 1 (local streams read)
+   * never sees user messages, and the frontend relies entirely on optimistic copies
+   * that can fail to dedup.
+   *
+   * By writing a synthetic event at delivery time, the local JSONL becomes a complete
+   * record. Phase 1 reads include user messages at the correct chronological position.
+   * The walnutMessageId enables deterministic dedup against optimistic copies.
+   */
+  writeSyntheticUserEvent(message: string, walnutMessageId: string): void {
+    const outputFile = this._outputFile
+    if (!outputFile) return
+    const event = JSON.stringify({
+      type: 'user',
+      subtype: 'walnut-injected',
+      message: { role: 'user', content: message },
+      walnutMessageId,
+      timestamp: new Date().toISOString(),
+    })
+    // Async write — don't block event loop for disk I/O
+    fsp.appendFile(outputFile, event + '\n').catch((err) => {
+      log.session.debug('writeSyntheticUserEvent failed (non-fatal)', {
+        sessionId: this.claudeSessionId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    })
+  }
+
+  /**
    * Gracefully stop the running process before respawning.
    * Uses SIGINT (Claude Code saves session state on Ctrl+C) + wait, with SIGTERM fallback.
    * This ensures session data is flushed to disk so --resume can find it.
@@ -2750,10 +2780,22 @@ export class SessionRunner {
         await targetSession.gracefulStop()
       }
 
+      // Build walnutMessageIds from the batch — one synthetic event per queued message.
+      // Each optimistic copy in the frontend has a unique queueId; we need a matching
+      // walnutMessageId in the JSONL for each one so Layer 1 dedup can remove them all.
+      const walnutMessageIds = msgs.map(m => m.id).filter(Boolean)
+
       // Try stdin write first (stream-json mode — reuses running process)
       if (targetSession && !hasPendingSwitch) {
         if (targetSession.writeMessage(combined)) {
           log.session.info('processNext: message sent via stdin (no new process)', { sessionId })
+
+          // Write synthetic user events to local JSONL so Phase 1 has user messages.
+          // One event per queued message so each optimistic copy can dedup by ID.
+          for (const wmId of walnutMessageIds) {
+            const msgText = msgs.find(m => m.id === wmId)!.message
+            targetSession.writeSyntheticUserEvent(msgText, wmId)
+          }
 
           // ── Eagerly remove from disk queue ──
           // Once the message is written to the FIFO, Claude has it. Remove from the
@@ -2833,6 +2875,12 @@ export class SessionRunner {
           log.session.info('resuming session via CLI', { sessionId, taskId: record.taskId, messageLength: combined.length, model: resolvedModel })
           session.send(combined, record.cwd ?? undefined, sessionId, resolvedMode ?? mode, resolvedModel, undefined, record.host ?? undefined, sshTarget)
 
+          // Write synthetic user events — send() is sync, _outputFile is set immediately
+          for (const wmId of walnutMessageIds) {
+            const msgText = msgs.find(m => m.id === wmId)!.message
+            session.writeSyntheticUserEvent(msgText, wmId)
+          }
+
           // Eagerly remove from disk queue — message is now baked into --resume args
           removeProcessed(sessionId).catch((err) => {
             log.session.warn('eager removeProcessed failed after --resume spawn', { sessionId, error: err instanceof Error ? err.message : String(err) })
@@ -2893,6 +2941,12 @@ export class SessionRunner {
       // Resume the session with the combined message (with optional mode/model override)
       log.session.info('resuming session via CLI (existing target)', { sessionId, taskId: targetSession.taskId, messageLength: combined.length, host: resumeHost, model: resolvedModel })
       targetSession.send(combined, targetSession.cwd ?? undefined, sessionId, resolvedMode ?? mode, resolvedModel, undefined, resumeHost ?? undefined, resumeSshTarget)
+
+      // Write synthetic user events — send() is sync, _outputFile is set immediately
+      for (const wmId of walnutMessageIds) {
+        const msgText = msgs.find(m => m.id === wmId)!.message
+        targetSession.writeSyntheticUserEvent(msgText, wmId)
+      }
 
       // Eagerly remove from disk queue — message is now baked into --resume args
       removeProcessed(sessionId).catch((err) => {

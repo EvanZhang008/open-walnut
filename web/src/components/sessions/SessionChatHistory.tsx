@@ -869,15 +869,22 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   }, []);
 
   // ── Deduplicate optimistic messages against persisted history ──
-  // Non-committed messages: only dedup against NEWLY APPEARED messages ([prevMsgLen..length)).
-  // This prevents old persisted messages (e.g., a previous "hi" from an earlier turn)
-  // from incorrectly absorbing a new mid-stream "hi" optimistic message.
-  // Committed messages: dedup against ALL persisted messages. Committed means the CLI
-  // has consumed the message, so its persisted counterpart exists somewhere in history.
-  // This handles multi-batch scenarios where prevMsgLen has advanced past the committed
-  // message's corresponding persisted entry.
-  // Uses count-based (multiset) matching so duplicate texts dedup correctly.
+  //
+  // Two-layer dedup:
+  // 1. walnutMessageId match (deterministic): persisted msg has walnutMessageId matching
+  //    optimistic queueId → exact match, works for ANY status (pending/received/delivered/committed).
+  //    This is the primary dedup path — written by writeSyntheticUserEvent() on delivery.
+  // 2. Text-based fallback (legacy): for messages without walnutMessageId (canonical JSONL,
+  //    queue-operation entries). Uses count-based multiset matching with prevMsgLen windowing.
   const allOptimistic = optimisticMessages ?? [];
+
+  // Layer 1: Build set of walnutMessageIds present in persisted history
+  const persistedWalnutIds = new Set<string>();
+  for (const m of messages) {
+    if (m.walnutMessageId) persistedWalnutIds.add(m.walnutMessageId);
+  }
+
+  // Layer 2: Text-based counts (legacy fallback)
   const newUserTextCounts = new Map<string, number>();
   for (let i = prevMsgLen.current; i < messages.length; i++) {
     if (messages[i].role === 'user') {
@@ -885,7 +892,6 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       newUserTextCounts.set(t, (newUserTextCounts.get(t) ?? 0) + 1);
     }
   }
-  // Full persisted text counts — used only for committed message dedup
   const allUserTextCounts = new Map<string, number>();
   for (const m of messages) {
     if (m.role === 'user') {
@@ -894,8 +900,13 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   }
 
   const deduped = allOptimistic.filter(m => {
+    // Layer 1: deterministic ID match — works for ANY optimistic status
+    if (persistedWalnutIds.has(m.queueId)) {
+      return false; // exact match, remove optimistic copy
+    }
+
+    // Layer 2: text-based fallback
     if (m.status === 'committed') {
-      // Committed: dedup against ALL persisted messages (safe — CLI consumed it)
       const c = allUserTextCounts.get(m.text);
       if (c && c > 0) {
         allUserTextCounts.set(m.text, c - 1);
@@ -903,13 +914,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       }
       return true;
     }
-    // Non-committed: only dedup against new messages (avoids false positives)
     const c = newUserTextCounts.get(m.text);
     if (c && c > 0) {
       newUserTextCounts.set(m.text, c - 1);
-      return false; // absorbed by a newly persisted message
+      return false;
     }
-    return true; // not in new persisted messages — keep in timeline
+    return true;
   });
 
   // ── Assign blockIndex for ALL non-deduped optimistic messages (set once, never updated) ──

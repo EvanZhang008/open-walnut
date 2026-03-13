@@ -28,7 +28,8 @@ function logMessageOrdering(phase: string, sessionId: string, messages: SessionH
   const lastAsst = messages.reduce((max, m, i) => m.role === 'assistant' ? i : max, -1)
   const usersAfterLastAsst = userIndices.filter(i => i > lastAsst).length
   const bunched = usersAfterLastAsst > userIndices.length / 2
-  log.web.info('session history ordering', {
+  if (!bunched) return // only log anomalies — skip normal cases to reduce production noise
+  log.web.warn('session history: user messages bunched at end', {
     phase,
     sessionId: sessionId.substring(0, 8),
     host: host ?? 'local',
@@ -36,7 +37,6 @@ function logMessageOrdering(phase: string, sessionId: string, messages: SessionH
     userText: userIndices.length,
     lastAsstIdx: lastAsst,
     usersAfterLastAsst,
-    bunched,
   })
 }
 
@@ -182,9 +182,23 @@ sessionsRouter.get('/list-dirs', async (req: Request, res: Response, next: NextF
       return
     }
 
+    // Expand ~ to home directory
+    let expandedPrefix = prefix
+    if (expandedPrefix === '~' || expandedPrefix.startsWith('~/')) {
+      if (host) {
+        // SSH: replace ~ with $HOME for shell expansion (used inside double quotes)
+        expandedPrefix = '$HOME' + expandedPrefix.slice(1)
+      } else {
+        const os = await import('node:os')
+        const home = os.homedir()
+        // Preserve trailing slash: ~/ → /Users/me/, ~/foo → /Users/me/foo
+        expandedPrefix = home + expandedPrefix.slice(1)
+      }
+    }
+
     // Find the parent directory to list.
     // Partial matching is handled by the frontend's filterChildren — backend returns all entries.
-    const dir = prefix.endsWith('/') ? prefix : path.dirname(prefix)
+    const dir = expandedPrefix.endsWith('/') ? expandedPrefix : path.dirname(expandedPrefix)
 
     if (host) {
       // SSH: resolve host from config
@@ -225,8 +239,12 @@ sessionsRouter.get('/list-dirs', async (req: Request, res: Response, next: NextF
       ]
       if (hostDef.port) sshArgs.push('-p', String(hostDef.port))
 
-      const quotedDir = dir.replace(/'/g, "'\\''")
-      const cmd = `find '${quotedDir}' -maxdepth ${depth} -type d -not -name '.*' 2>/dev/null | head -500`
+      // Use double quotes for $HOME paths (shell expansion needed), single quotes otherwise
+      const needsExpansion = dir.includes('$HOME')
+      const quotedDir = needsExpansion
+        ? `"${dir.replace(/"/g, '\\"')}"`
+        : `'${dir.replace(/'/g, "'\\''")}'`
+      const cmd = `find ${quotedDir} -maxdepth ${depth} -type d -not -path '*/.*' 2>/dev/null | head -500`
 
       const output = await new Promise<string>((resolve, reject) => {
         execFile('ssh', [...sshArgs, hostString, cmd], {
@@ -235,15 +253,27 @@ sessionsRouter.get('/list-dirs', async (req: Request, res: Response, next: NextF
         }, (err, stdout) => err ? reject(err) : resolve(stdout))
       })
 
-      const allEntries = output.split('\n')
-        .filter(p => p && p !== dir && p !== dir.replace(/\/$/, ''))
+      const rawLines = output.split('\n').filter(Boolean)
 
-      // Cache the full unfiltered result
+      // find outputs the root dir first — use it to resolve $HOME expansion
+      let resolvedDir = dir
+      if (dir.includes('$HOME') && rawLines.length > 0) {
+        // First line from find is the resolved directory itself
+        const first = rawLines[0].endsWith('/') ? rawLines[0] : rawLines[0] + '/'
+        resolvedDir = first
+      }
+
+      const allEntries = rawLines
+        .filter(p => p !== resolvedDir.replace(/\/$/, '') && p !== resolvedDir)
+
+      // Cache using resolved dir for consistent lookup
+      const resolvedCacheKey = `${host}::${resolvedDir}::${depth}`
       dirCache.set(cacheKey, { dirs: allEntries, ts: Date.now() })
+      if (resolvedCacheKey !== cacheKey) {
+        dirCache.set(resolvedCacheKey, { dirs: allEntries, ts: Date.now() })
+      }
 
-      // Return unfiltered — frontend's filterChildren handles partial matching.
-      // This prevents frontend cache pollution when partial changes.
-      res.json({ dirs: allEntries, parent: dir })
+      res.json({ dirs: allEntries, parent: resolvedDir })
     } else {
       // Local filesystem — also preload multiple levels
       const entries: string[] = []
