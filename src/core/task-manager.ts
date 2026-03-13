@@ -1146,6 +1146,74 @@ export interface UpdateTaskInput {
   cwd?: string;                   // Task-level cwd override. Empty string clears.
 }
 
+// ── Cross-source migration ──
+
+interface MigratedTask {
+  task: Task;
+  oldSource: TaskSource;
+  oldExt: Record<string, unknown> | undefined;
+  oldTitle: string;
+}
+
+/**
+ * Migrate a task (and same-source children) to a new source.
+ * Called inside withWriteLock — mutates store in place (no writeStore call).
+ * Returns the list of migrated tasks with their old state snapshots.
+ */
+function migrateTaskSource(
+  store: TaskStore,
+  task: Task,
+  newCategory: string,
+  newProject: string,
+  newSource: TaskSource,
+): MigratedTask[] {
+  const now = new Date().toISOString();
+  const oldSource = task.source;
+  const results: MigratedTask[] = [];
+
+  // Migrate the parent task
+  const oldExt = task.ext ? structuredClone(task.ext) : undefined;
+  const oldTitle = task.title;
+  task.source = newSource;
+  task.category = newCategory;
+  task.project = newProject;
+  task.ext = undefined;
+  task.external_url = undefined;
+  task.sync_error = undefined;
+  task.updated_at = now;
+  results.push({ task, oldSource, oldExt, oldTitle });
+
+  // Migrate same-source children (they inherit parent's source)
+  const children = store.tasks.filter(
+    t => t.parent_task_id === task.id && t.source === oldSource,
+  );
+  for (const child of children) {
+    const childOldExt = child.ext ? structuredClone(child.ext) : undefined;
+    const childOldTitle = child.title;
+    child.source = newSource;
+    // Children keep their own category/project — only change source + ext
+    child.ext = undefined;
+    child.external_url = undefined;
+    child.sync_error = undefined;
+    child.updated_at = now;
+    results.push({ task: child, oldSource, oldExt: childOldExt, oldTitle: childOldTitle });
+  }
+
+  // Update store.categories for the target category
+  if (store.categories) {
+    const catKey = Object.keys(store.categories).find(
+      k => k.toLowerCase() === newCategory.toLowerCase(),
+    );
+    if (catKey) {
+      store.categories[catKey] = { source: newSource };
+    } else {
+      store.categories[newCategory] = { source: newSource };
+    }
+  }
+
+  return results;
+}
+
 /**
  * Update fields on a task by partial ID match.
  */
@@ -1164,6 +1232,8 @@ export async function updateTask(idPrefix: string, updates: UpdateTaskInput): Pr
   }
 
   const task = matches[0];
+  let migrationResult: MigratedTask[] | undefined;
+
   if (updates.title !== undefined) task.title = updates.title;
   if (updates.priority !== undefined) task.priority = sanitizePriority(updates.priority);
   if (updates.category !== undefined) {
@@ -1171,26 +1241,41 @@ export async function updateTask(idPrefix: string, updates: UpdateTaskInput): Pr
     const hasSlash = updates.category.includes(' / ') && updates.project === undefined;
     const parsed = hasSlash ? parseGroupFromCategory(updates.category) : undefined;
     const newCategoryName = parsed ? parsed.group : updates.category;
+    const newProject = parsed ? parsed.listName : (updates.project ?? newCategoryName);
+    let skipCategoryAssignment = false;
 
     // Validate category-source consistency when category is actually changing
     if (newCategoryName.toLowerCase() !== task.category.toLowerCase()) {
       const config = await getConfig();
       const validation = validateCategorySource(store.tasks, newCategoryName, task.source, config, store.categories);
       if (!validation.ok) {
-        throw new CategorySourceConflictError(
-          `Cannot move task to category "${newCategoryName}" — it contains ${validation.existingSource} tasks but this task syncs to ${task.source}. Tasks cannot change sync backends. Delete and recreate the task in the target category instead.`,
-          newCategoryName,
-          task.source,
-          validation.existingSource,
-        );
+        // Hard config reservations: still block
+        if (validation.reason === 'config_local' || validation.reason === 'config_plugin') {
+          throw new CategorySourceConflictError(
+            `Cannot move task to category "${newCategoryName}" — it contains ${validation.existingSource} tasks but this task syncs to ${task.source}. Tasks cannot change sync backends. Delete and recreate the task in the target category instead.`,
+            newCategoryName,
+            task.source,
+            validation.existingSource,
+          );
+        }
+        // Soft conflict (store_categories / existing_tasks): auto-migrate source
+        migrationResult = migrateTaskSource(store, task, newCategoryName, newProject, validation.existingSource);
+        skipCategoryAssignment = true; // migrateTaskSource already set category/project
+        log.task.info('cross-source migration triggered', {
+          taskId: task.id, oldSource: migrationResult[0].oldSource,
+          newSource: validation.existingSource, newCategory: newCategoryName,
+          childrenMigrated: migrationResult.length - 1,
+        });
       }
     }
 
-    if (parsed) {
-      task.category = parsed.group;
-      task.project = parsed.listName;
-    } else {
-      task.category = updates.category;
+    if (!skipCategoryAssignment) {
+      if (parsed) {
+        task.category = parsed.group;
+        task.project = parsed.listName;
+      } else {
+        task.category = updates.category;
+      }
     }
   }
   if (updates.phase !== undefined && VALID_PHASES.has(updates.phase)) {
@@ -1335,11 +1420,44 @@ export async function updateTask(idPrefix: string, updates: UpdateTaskInput): Pr
   await writeStore(store);
 
   // Fire-and-forget: push to plugin + parent change + mark linked sessions completed
-  autoPushIfConfigured(task).then(r => {
-    if (!r.success) log.task.warn('sync push failed (fire-and-forget)', { taskId: task.id, source: task.source, error: r.error });
-  }).catch(err => {
-    log.task.warn('sync push rejected (fire-and-forget)', { taskId: task.id, source: task.source, error: err instanceof Error ? err.message : String(err) });
-  });
+  if (migrationResult) {
+    // Cross-source migration: handle old backend cleanup + new backend push per migrated task
+    for (const m of migrationResult) {
+      // 1. Mark old remote as moved (rename + complete) — skip if old source was local
+      if (m.oldSource !== 'local' && m.oldExt) {
+        const oldPlugin = registry.get(m.oldSource);
+        if (oldPlugin) {
+          const movedTitle = `[Moved] ${m.oldTitle} [walnut:${m.task.id}]`;
+          // Build a snapshot with old source/ext so the plugin can find the remote task
+          const snapshot = { ...m.task, source: m.oldSource, ext: m.oldExt } as Task;
+          Promise.resolve()
+            .then(() => oldPlugin.sync.updateTitle(snapshot, movedTitle))
+            .then(() => oldPlugin.sync.updatePhase(snapshot, 'COMPLETE'))
+            .catch(err => log.task.warn('cross-source migration: old backend mark-moved failed (non-fatal)', {
+              taskId: m.task.id, oldSource: m.oldSource,
+              error: err instanceof Error ? err.message : String(err),
+            }));
+        }
+      }
+
+      // 2. Push to new backend (autoPush detects no ext → createTask)
+      autoPushIfConfigured(m.task).catch(err => log.task.warn(
+        'cross-source migration: new backend push failed', {
+          taskId: m.task.id, newSource: m.task.source,
+          error: err instanceof Error ? err.message : String(err),
+        }));
+
+      // 3. Notify UI for each migrated task
+      bus.emit(EventNames.TASK_UPDATED, { task: m.task }, ['web-ui'], { source: 'migration' });
+    }
+  } else {
+    // Normal (non-migration) sync push
+    autoPushIfConfigured(task).then(r => {
+      if (!r.success) log.task.warn('sync push failed (fire-and-forget)', { taskId: task.id, source: task.source, error: r.error });
+    }).catch(err => {
+      log.task.warn('sync push rejected (fire-and-forget)', { taskId: task.id, source: task.source, error: err instanceof Error ? err.message : String(err) });
+    });
+  }
   if (parentChangeAction) parentChangeAction();
   if (task.phase === 'COMPLETE') autoCompleteTaskSessions(task);
 
@@ -1561,29 +1679,25 @@ export class CategorySourceConflictError extends Error {
  * 1. If store.categories has an entry with a different source → conflict.
  * 2. If any existing task in the category has a different source → conflict.
  * 3. Config reservations (local.categories, plugins.*.category) checked for backward compat.
- * Returns { ok: true } or { ok: false, error: string, existingSource: TaskSource }.
+ * Returns { ok: true } or { ok: false, error, existingSource, reason }.
+ * `reason` distinguishes hard config reservations from soft store/existing conflicts:
+ *  - 'store_categories' / 'existing_tasks': migratable (task can switch source)
+ *  - 'config_local' / 'config_plugin': hard reservation (task cannot move here)
  */
+export type CategoryValidationReason = 'store_categories' | 'config_local' | 'config_plugin' | 'existing_tasks';
+
 export function validateCategorySource(
   tasks: Task[],
   category: string,
   intendedSource: TaskSource,
   config: unknown,
   storeCategories?: Record<string, { source: TaskSource }>,
-): { ok: true } | { ok: false; error: string; existingSource: TaskSource } {
+): { ok: true } | { ok: false; error: string; existingSource: TaskSource; reason: CategoryValidationReason } {
   const catLower = category.toLowerCase();
   const cfg = config as Record<string, unknown>;
 
-  // Check store.categories first (highest priority — source of truth for v3)
-  if (storeCategories) {
-    const storeCatKey = Object.keys(storeCategories).find(k => k.toLowerCase() === catLower);
-    if (storeCatKey && storeCategories[storeCatKey].source !== intendedSource) {
-      return {
-        ok: false,
-        error: `Category "${category}" is registered as ${storeCategories[storeCatKey].source}. Cannot add a ${intendedSource} task to it.`,
-        existingSource: storeCategories[storeCatKey].source,
-      };
-    }
-  }
+  // Config reservations checked FIRST — these are hard blocks (user-explicit constraints)
+  // that cannot be auto-migrated, and must take priority over store/existing-task conflicts.
 
   // Check config reservation: config.local.categories are reserved for local tasks only
   const localConfig = cfg.local as { categories?: string[] } | undefined;
@@ -1593,6 +1707,7 @@ export function validateCategorySource(
       ok: false,
       error: `Category "${category}" is reserved for local tasks (config.local.categories). Only local tasks can use this category. Use a different category name for ${intendedSource} tasks.`,
       existingSource: 'local',
+      reason: 'config_local',
     };
   }
 
@@ -1606,9 +1721,26 @@ export function validateCategorySource(
         ok: false,
         error: `Category "${category}" is reserved for ${pluginId} sync (plugins.${pluginId}.category). Only ${pluginId} tasks can use this category.`,
         existingSource: pluginId,
+        reason: 'config_plugin',
       };
     }
   }
+
+  // Soft conflicts below — these are migratable (updateTask auto-migrates source)
+
+  // Check store.categories (source of truth for v3)
+  if (storeCategories) {
+    const storeCatKey = Object.keys(storeCategories).find(k => k.toLowerCase() === catLower);
+    if (storeCatKey && storeCategories[storeCatKey].source !== intendedSource) {
+      return {
+        ok: false,
+        error: `Category "${category}" is registered as ${storeCategories[storeCatKey].source}. Cannot add a ${intendedSource} task to it.`,
+        existingSource: storeCategories[storeCatKey].source,
+        reason: 'store_categories',
+      };
+    }
+  }
+
   // Check existing tasks in the category
   const existing = tasks.find(
     (t) => t.category.toLowerCase() === catLower && t.source !== intendedSource,
@@ -1618,6 +1750,7 @@ export function validateCategorySource(
       ok: false,
       error: `Category "${category}" already contains ${existing.source} tasks. Cannot add a ${intendedSource} task to it. Use a different category name, or move existing tasks out first.`,
       existingSource: existing.source,
+      reason: 'existing_tasks',
     };
   }
 

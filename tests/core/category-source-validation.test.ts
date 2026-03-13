@@ -21,11 +21,11 @@ import type { Task } from '../../src/core/types.js';
 
 beforeEach(async () => {
   _resetForTesting();
-  await fs.rm(WALNUT_HOME, { recursive: true, force: true });
+  await fs.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
 });
 
 afterEach(async () => {
-  await fs.rm(WALNUT_HOME, { recursive: true, force: true });
+  await fs.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
 });
 
 // ── validateCategorySource (pure function) ──
@@ -513,7 +513,7 @@ describe('addTask — inherits source from existing tasks in category (no config
 });
 
 describe('updateTask — local task movement', () => {
-  it('blocks moving local task to a category with different source in store.categories', async () => {
+  it('auto-migrates local task to a category with different source in store.categories', async () => {
     // Use store.categories directly to set up different sources
     await createCategory('Local', 'local');
     await createCategory('Synced', 'ms-todo');
@@ -525,9 +525,14 @@ describe('updateTask — local task movement', () => {
     const { task: msTodoTask } = await addTask({ title: 'Synced task', category: 'Synced' });
     expect(msTodoTask.source).toBe('ms-todo');
 
-    // Try to move local task to 'Synced' (has ms-todo tasks) → should fail
-    const err = await updateTask(localTask.id, { category: 'Synced' }).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(CategorySourceConflictError);
+    // Moving local task to 'Synced' → auto-migrates source to ms-todo
+    const { task: moved } = await updateTask(localTask.id, { category: 'Synced' });
+    expect(moved.category).toBe('Synced');
+    expect(moved.source).toBe('ms-todo');
+    expect(moved.id).toBe(localTask.id); // ID doesn't change
+    expect(moved.ext).toBeUndefined(); // ext cleared for new source push
+    expect(moved.external_url).toBeUndefined();
+    expect(moved.sync_error).toBeUndefined();
   });
 
   it('blocks moving synced task to a local-reserved category', async () => {
@@ -866,5 +871,255 @@ describe('addTask — reads source from store.categories', () => {
 
     const storeCategories = await getStoreCategories();
     expect(storeCategories['BrandNew']).toEqual({ source: 'local' });
+  });
+});
+
+// ── Cross-source migration ──
+
+describe('updateTask — cross-source migration', () => {
+  it('migrates task source when moving to category with different source (store_categories)', async () => {
+    await createCategory('SourceA', 'ms-todo');
+    await createCategory('SourceB', 'plugin-a');
+
+    const { task } = await addTask({ title: 'Migrate me', category: 'SourceA' });
+    expect(task.source).toBe('ms-todo');
+
+    const { task: migrated } = await updateTask(task.id, { category: 'SourceB' });
+    expect(migrated.id).toBe(task.id); // ID unchanged
+    expect(migrated.source).toBe('plugin-a');
+    expect(migrated.category).toBe('SourceB');
+    expect(migrated.ext).toBeUndefined();
+    expect(migrated.external_url).toBeUndefined();
+    expect(migrated.sync_error).toBeUndefined();
+  });
+
+  it('migrates task source when moving to category with existing tasks of different source', async () => {
+    // No explicit category registration — source determined by existing tasks
+    const tasksDir = path.join(WALNUT_HOME, 'tasks');
+    await fs.mkdir(tasksDir, { recursive: true });
+    await fs.writeFile(
+      path.join(tasksDir, 'tasks.json'),
+      JSON.stringify({
+        version: 3,
+        categories: {},
+        tasks: [{
+          id: 'existing-1',
+          title: 'Existing plugin-b task',
+          status: 'todo',
+          phase: 'TODO',
+          priority: 'none',
+          category: 'TeamB',
+          project: 'TeamB',
+          source: 'plugin-b',
+          session_ids: [],
+          description: '',
+          summary: '',
+          note: '',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }],
+      }),
+    );
+
+    // Create a local task in a different category
+    const { task: localTask } = await addTask({ title: 'Local task', category: 'Personal' });
+    expect(localTask.source).toBe('local');
+
+    // Move local task to TeamB (has plugin-b tasks) → auto-migrate
+    const { task: migrated } = await updateTask(localTask.id, { category: 'TeamB' });
+    expect(migrated.source).toBe('plugin-b');
+    expect(migrated.category).toBe('TeamB');
+    expect(migrated.id).toBe(localTask.id);
+  });
+
+  it('preserves task ID across migration', async () => {
+    await createCategory('CatA', 'local');
+    await createCategory('CatB', 'ms-todo');
+
+    const { task } = await addTask({ title: 'Keep my ID', category: 'CatA' });
+    const originalId = task.id;
+
+    const { task: migrated } = await updateTask(task.id, { category: 'CatB' });
+    expect(migrated.id).toBe(originalId);
+  });
+
+  it('clears ext, external_url, and sync_error on migration', async () => {
+    await createCategory('OldCat', 'ms-todo');
+    await createCategory('NewCat', 'plugin-a');
+
+    const { task } = await addTask({ title: 'Has ext data', category: 'OldCat' });
+
+    // Manually patch the task file to add ext/external_url/sync_error
+    const tasksFile = path.join(WALNUT_HOME, 'tasks', 'tasks.json');
+    const raw = JSON.parse(await fs.readFile(tasksFile, 'utf-8'));
+    const t = raw.tasks.find((x: { id: string }) => x.id === task.id);
+    t.ext = { 'ms-todo': { id: 'remote-123', list_id: 'list-abc' } };
+    t.external_url = 'https://example.com/task/123';
+    t.sync_error = 'previous error';
+    await fs.writeFile(tasksFile, JSON.stringify(raw));
+    _resetForTesting(); // force re-read of store
+
+    const { task: migrated } = await updateTask(task.id, { category: 'NewCat' });
+    expect(migrated.source).toBe('plugin-a');
+    expect(migrated.ext).toBeUndefined();
+    expect(migrated.external_url).toBeUndefined();
+    expect(migrated.sync_error).toBeUndefined();
+  });
+
+  it('migrates same-source children along with parent', async () => {
+    await createCategory('CatA', 'local');
+    await createCategory('CatB', 'ms-todo');
+
+    const { task: parent } = await addTask({ title: 'Parent', category: 'CatA' });
+    const { task: child1 } = await addTask({ title: 'Child 1', category: 'CatA', parent_task_id: parent.id });
+    const { task: child2 } = await addTask({ title: 'Child 2', category: 'CatA', parent_task_id: parent.id });
+
+    expect(child1.source).toBe('local');
+    expect(child2.source).toBe('local');
+
+    // Migrate parent to CatB (ms-todo)
+    const { task: migrated } = await updateTask(parent.id, { category: 'CatB' });
+    expect(migrated.source).toBe('ms-todo');
+
+    // Verify children also migrated by reading the store file
+    const tasksFile = path.join(WALNUT_HOME, 'tasks', 'tasks.json');
+    const raw = JSON.parse(await fs.readFile(tasksFile, 'utf-8'));
+    const migratedChild1 = raw.tasks.find((t: { id: string }) => t.id === child1.id);
+    const migratedChild2 = raw.tasks.find((t: { id: string }) => t.id === child2.id);
+    expect(migratedChild1.source).toBe('ms-todo');
+    expect(migratedChild2.source).toBe('ms-todo');
+    // Children keep their own category (not changed to CatB)
+    expect(migratedChild1.category).toBe('CatA');
+    expect(migratedChild2.category).toBe('CatA');
+    // Children's IDs unchanged
+    expect(migratedChild1.id).toBe(child1.id);
+    expect(migratedChild2.id).toBe(child2.id);
+  });
+
+  it('does not migrate children with different source than parent', async () => {
+    await createCategory('CatA', 'local');
+    await createCategory('CatB', 'ms-todo');
+
+    const { task: parent } = await addTask({ title: 'Parent', category: 'CatA' });
+
+    // Create child, then manually change its source to something different
+    const { task: child } = await addTask({ title: 'Different source child', category: 'CatA', parent_task_id: parent.id });
+    const tasksFile = path.join(WALNUT_HOME, 'tasks', 'tasks.json');
+    const raw = JSON.parse(await fs.readFile(tasksFile, 'utf-8'));
+    const childInStore = raw.tasks.find((t: { id: string }) => t.id === child.id);
+    childInStore.source = 'plugin-b';
+    await fs.writeFile(tasksFile, JSON.stringify(raw));
+    _resetForTesting();
+
+    // Migrate parent to CatB
+    await updateTask(parent.id, { category: 'CatB' });
+
+    // Child with different source should NOT be migrated
+    const raw2 = JSON.parse(await fs.readFile(tasksFile, 'utf-8'));
+    const childAfter = raw2.tasks.find((t: { id: string }) => t.id === child.id);
+    expect(childAfter.source).toBe('plugin-b'); // unchanged
+  });
+
+  it('still throws for config_local reservation', async () => {
+    await fs.mkdir(path.dirname(CONFIG_FILE), { recursive: true });
+    await fs.writeFile(
+      CONFIG_FILE,
+      JSON.stringify({
+        version: 1,
+        user: { name: 'test' },
+        defaults: { priority: 'none', category: 'personal' },
+        provider: { type: 'bedrock' },
+        local: { categories: ['Reserved'] },
+      }),
+    );
+
+    await createCategory('Synced', 'ms-todo');
+    const { task } = await addTask({ title: 'Synced task', category: 'Synced' });
+
+    // Moving ms-todo task to config-reserved local category → hard block
+    await expect(updateTask(task.id, { category: 'Reserved' })).rejects.toThrow(CategorySourceConflictError);
+  });
+
+  it('still throws for config_plugin reservation', async () => {
+    await fs.mkdir(path.dirname(CONFIG_FILE), { recursive: true });
+    await fs.writeFile(
+      CONFIG_FILE,
+      JSON.stringify({
+        version: 1,
+        user: { name: 'test' },
+        defaults: { priority: 'none', category: 'personal' },
+        provider: { type: 'bedrock' },
+        plugins: { 'plugin-a': { room_id: 'room-1', category: 'Work' } },
+      }),
+    );
+
+    const { task: localTask } = await addTask({ title: 'Local task', category: 'Life' });
+
+    // Moving local task to plugin-a reserved category → hard block
+    await expect(updateTask(localTask.id, { category: 'Work' })).rejects.toThrow(CategorySourceConflictError);
+  });
+
+  it('updates store.categories source after migration', async () => {
+    await createCategory('OldSource', 'local');
+    await createCategory('NewSource', 'ms-todo');
+
+    const { task } = await addTask({ title: 'Migrate', category: 'OldSource' });
+
+    await updateTask(task.id, { category: 'NewSource' });
+
+    // Verify store.categories reflects the target source
+    const storeCategories = await getStoreCategories();
+    expect(storeCategories['NewSource']).toEqual({ source: 'ms-todo' });
+  });
+
+  it('handles slash-separated category format in migration', async () => {
+    await createCategory('CatA', 'local');
+    await createCategory('CatB', 'ms-todo');
+
+    const { task } = await addTask({ title: 'Slash test', category: 'CatA' });
+    expect(task.source).toBe('local');
+
+    // Move using slash-separated format "CatB / MyProject"
+    const { task: migrated } = await updateTask(task.id, { category: 'CatB / MyProject' });
+    expect(migrated.source).toBe('ms-todo');
+    expect(migrated.category).toBe('CatB');
+    expect(migrated.project).toBe('MyProject');
+  });
+
+  it('validateCategorySource returns reason field', () => {
+    // store_categories reason
+    const r1 = validateCategorySource(
+      [], 'Cat', 'local', {},
+      { 'Cat': { source: 'ms-todo' } },
+    );
+    expect(r1.ok).toBe(false);
+    if (!r1.ok) expect(r1.reason).toBe('store_categories');
+
+    // config_local reason
+    const r2 = validateCategorySource(
+      [], 'Local', 'ms-todo',
+      { local: { categories: ['Local'] } },
+    );
+    expect(r2.ok).toBe(false);
+    if (!r2.ok) expect(r2.reason).toBe('config_local');
+
+    // config_plugin reason
+    const r3 = validateCategorySource(
+      [], 'Work', 'local',
+      { plugins: { 'plugin-a': { category: 'Work' } } },
+    );
+    expect(r3.ok).toBe(false);
+    if (!r3.ok) expect(r3.reason).toBe('config_plugin');
+
+    // existing_tasks reason
+    const tasks = [{
+      id: 'x', title: 'X', status: 'todo' as const, phase: 'TODO' as const,
+      priority: 'none' as const, category: 'Mixed', project: 'Mixed',
+      source: 'plugin-b', session_ids: [], description: '', summary: '',
+      note: '', created_at: '', updated_at: '',
+    }];
+    const r4 = validateCategorySource(tasks, 'Mixed', 'local', {});
+    expect(r4.ok).toBe(false);
+    if (!r4.ok) expect(r4.reason).toBe('existing_tasks');
   });
 });
