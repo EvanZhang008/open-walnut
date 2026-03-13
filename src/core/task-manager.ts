@@ -13,6 +13,15 @@ import yaml from 'js-yaml';
 
 const EMPTY_STORE: TaskStore = { version: 1, tasks: [] };
 
+/** Ask the task's plugin to validate content before writing. Throws on rejection. */
+function runPluginContentValidation(task: { source: string }, field: string, value: string): void {
+  const plugin = registry.get(task.source);
+  if (plugin?.sync.validateContent) {
+    const error = plugin.sync.validateContent(task as Task, field, value);
+    if (error) throw new Error(error);
+  }
+}
+
 let initialized = false;
 let migrated = false;
 
@@ -889,6 +898,10 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       newTask.depends_on = deduped;
     }
 
+    // Plugin content validation (before writing to store)
+    runPluginContentValidation(newTask, 'title', newTask.title);
+    if (newTask.description) runPluginContentValidation(newTask, 'description', newTask.description);
+
     store.tasks.push(newTask);
 
     // Auto-ensure: if category is not in store.categories, add it
@@ -1234,7 +1247,10 @@ export async function updateTask(idPrefix: string, updates: UpdateTaskInput): Pr
   const task = matches[0];
   let migrationResult: MigratedTask[] | undefined;
 
-  if (updates.title !== undefined) task.title = updates.title;
+  if (updates.title !== undefined) {
+    runPluginContentValidation(task, 'title', updates.title);
+    task.title = updates.title;
+  }
   if (updates.priority !== undefined) task.priority = sanitizePriority(updates.priority);
   if (updates.category !== undefined) {
     // Parse slash-separated "category / project" format once, reuse result
@@ -1477,6 +1493,7 @@ export async function addNote(idPrefix: string, content: string): Promise<{ task
   }
 
   const task = matches[0];
+  runPluginContentValidation(task, 'note', content);
   task.note = task.note ? task.note + '\n\n' + content : content;
   task.updated_at = new Date().toISOString();
 
@@ -1512,6 +1529,7 @@ export async function appendConversationLog(idPrefix: string, entry: string): Pr
   }
 
   const task = matches[0];
+  runPluginContentValidation(task, 'conversation_log', entry);
   const now = new Date();
   const yyyy = now.getFullYear();
   const mm = String(now.getMonth() + 1).padStart(2, '0');
@@ -1556,6 +1574,7 @@ export async function updateNote(idPrefix: string, content: string): Promise<{ t
   }
 
   const task = matches[0];
+  runPluginContentValidation(task, 'note', content);
   task.note = content;
   task.updated_at = new Date().toISOString();
 
@@ -1587,6 +1606,7 @@ export async function updateDescription(idPrefix: string, content: string): Prom
   }
 
   const task = matches[0];
+  runPluginContentValidation(task, 'description', content);
   task.description = content;
   task.updated_at = new Date().toISOString();
 
@@ -1618,6 +1638,7 @@ export async function updateSummary(idPrefix: string, content: string): Promise<
   }
 
   const task = matches[0];
+  runPluginContentValidation(task, 'summary', content);
   task.summary = content;
   task.updated_at = new Date().toISOString();
 

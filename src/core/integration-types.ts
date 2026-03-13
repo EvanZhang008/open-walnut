@@ -51,6 +51,10 @@ export interface IntegrationSync {
   associateSubtask(parentTask: Task, childTask: Task): Promise<void>;
   disassociateSubtask(parentTask: Task, childTask: Task): Promise<void>;
 
+  // ── Content Validation (optional — reject content before store write) ──
+  /** Return error string to reject, null to accept. */
+  validateContent?(task: Task, field: string, value: string): string | null;
+
   // ── Pull (periodic sync from remote) ──
   syncPoll(ctx: SyncPollContext): Promise<void>;
 }
