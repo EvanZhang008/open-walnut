@@ -51,6 +51,73 @@ const TaskAwareLink = Link.extend({
   },
 });
 
+/** Check if a string is a safe HTTP(S) URL — rejects javascript:, data:, file:, etc. */
+function isUrl(text: string): boolean {
+  try {
+    const url = new URL(text);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Detach nested child list from the list item at cursor,
+ * making them siblings after the current item.
+ * Enables per-line Tab indentation: only the current item moves, not children.
+ */
+function detachListItemChildren(editor: Editor): boolean {
+  const { state } = editor;
+  const { $from } = state.selection;
+
+  let depth = $from.depth;
+  while (depth > 0) {
+    const name = $from.node(depth).type.name;
+    if (name === 'taskItem' || name === 'listItem') break;
+    depth--;
+  }
+  if (depth === 0) return false;
+
+  const item = $from.node(depth);
+  const itemPos = $from.before(depth);
+  const itemEnd = $from.after(depth);
+
+  // Find nested list (taskList, bulletList, orderedList) within this item
+  let nestedList: ReturnType<typeof item.child> | null = null;
+  let offsetInItem = 1; // +1 for item open tag
+
+  for (let i = 0; i < item.childCount; i++) {
+    const child = item.child(i);
+    const t = child.type.name;
+    if (t === 'taskList' || t === 'bulletList' || t === 'orderedList') {
+      nestedList = child;
+      break;
+    }
+    offsetInItem += child.nodeSize;
+  }
+
+  if (!nestedList || nestedList.childCount === 0) return false;
+
+  const children: ReturnType<typeof item.child>[] = [];
+  nestedList.forEach(child => children.push(child));
+
+  const nestedPos = itemPos + offsetInItem;
+  const { tr } = state;
+
+  // Remove nested list from inside the item
+  tr.delete(nestedPos, nestedPos + nestedList.nodeSize);
+
+  // Insert children as siblings after the (now shorter) item
+  let insertPos = tr.mapping.map(itemEnd);
+  for (const child of children) {
+    tr.insert(insertPos, child);
+    insertPos += child.nodeSize;
+  }
+
+  editor.view.dispatch(tr);
+  return true;
+}
+
 export function NotesEditor({ content, onDirty, placeholder, className, autoFocus, editing, tasks, focusedTaskId, onTaskClick }: NotesEditorProps) {
   const isExternalUpdate = useRef(false);
   const editorRef = useRef<Editor | null>(null);
@@ -134,19 +201,30 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
         return false;
       },
       handlePaste: (view, event) => {
+        // Image paste (takes priority over URL detection)
         const items = event.clipboardData?.items;
-        if (!items) return false;
-        for (const item of items) {
-          if (item.type.startsWith('image/')) {
-            event.preventDefault();
-            const file = item.getAsFile();
-            if (file && editorRef.current) {
-              handleImageUpload(file, editorRef.current);
+        if (items) {
+          for (const item of items) {
+            if (item.type.startsWith('image/')) {
+              event.preventDefault();
+              const file = item.getAsFile();
+              if (file && editorRef.current) {
+                handleImageUpload(file, editorRef.current);
+              }
+              return true;
             }
+          }
+        }
+        // Paste URL over selected text → wrap selection as hyperlink
+        if (!view.state.selection.empty) {
+          const clipText = event.clipboardData?.getData('text/plain')?.trim();
+          if (clipText && isUrl(clipText) && editorRef.current) {
+            event.preventDefault();
+            editorRef.current.chain().focus().setLink({ href: clipText }).run();
             return true;
           }
         }
-        return false; // let tiptap handle non-image pastes
+        return false;
       },
       handleDrop: (view, event) => {
         const files = event.dataTransfer?.files;
@@ -161,6 +239,34 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
           }
         }
         return false;
+      },
+      // Per-line Tab: only indent current item, detach children first
+      handleKeyDown: (_view, event) => {
+        if (event.key !== 'Tab') return false;
+        const { $from } = _view.state.selection;
+        let listItemType: string | null = null;
+        let listItemDepth = 0;
+        for (let d = $from.depth; d > 0; d--) {
+          const name = $from.node(d).type.name;
+          if (name === 'taskItem' || name === 'listItem') {
+            listItemType = name;
+            listItemDepth = d;
+            break;
+          }
+        }
+        if (!listItemType || !editorRef.current) return false;
+        event.preventDefault();
+        if (event.shiftKey) {
+          editorRef.current.commands.liftListItem(listItemType);
+        } else {
+          // Only detach children if sink is possible (has previous sibling in parent list)
+          const parentListDepth = listItemDepth - 1;
+          if (parentListDepth >= 0 && $from.index(parentListDepth) > 0) {
+            detachListItemChildren(editorRef.current);
+          }
+          editorRef.current.commands.sinkListItem(listItemType);
+        }
+        return true;
       },
     },
   });
