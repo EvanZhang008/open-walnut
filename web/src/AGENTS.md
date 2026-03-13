@@ -89,7 +89,7 @@ web/src/
 │                        # TaskDetailPage, ChatPage, CronPage, UsagePage
 ├── components/
 │   ├── chat/            # ChatPanel, ChatInput, ChatMessage
-│   ├── tasks/           # TodoPanel, TaskList, TaskCard, TaskContextBar, TaskForm, SubtaskList
+│   ├── tasks/           # TodoPanel, TaskList, TaskCard, TaskForm, SubtaskList
 │   ├── context/         # ContextInspectorPanel, ContextSection, ToolCard, ApiMessageBlock
 │   ├── sessions/        # SessionTreePanel, SessionDetailPanel, SessionPanel, PlanPopup, SessionChatHistory, SessionRow
 │   ├── settings/        # SettingsNav, inputs/ (SectionCard, SecretInput, ToggleSwitch, NumberInput,

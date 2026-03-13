@@ -137,10 +137,10 @@ test('click task navigates to detail page', async ({ page }) => {
   // Click the task title to focus it (not the checkbox)
   await taskItem.locator('.todo-panel-item-title').click()
 
-  // Should show task context bar or navigate to detail
+  // Should show task context pill or navigate to detail
   // The TodoPanel focuses the task in the chat context
-  await expect(page.locator('.task-context-bar')).toBeVisible({ timeout: 3000 }).catch(async () => {
-    // If no context bar, check if we navigated to task detail page
+  await expect(page.locator('.chat-input-task-pill')).toBeVisible({ timeout: 3000 }).catch(async () => {
+    // If no context pill, check if we navigated to task detail page
     await expect(page).toHaveURL(new RegExp(`/tasks/${task.id}`))
   })
 })

@@ -5,6 +5,8 @@ import type { ImageAttachment } from '@/api/chat';
 import type { SlashCommandItem } from '@/api/slash-commands';
 import { MAX_QUEUE_SIZE } from '@/hooks/useChat';
 import { CommandPalette, type PaletteItem } from './CommandPalette';
+import type { Task } from '@walnut/core';
+import { StatusBadge } from '../common/StatusBadge';
 
 const ALLOWED_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const MAX_IMAGES = 5;
@@ -18,6 +20,10 @@ interface ChatInputProps {
   disabled?: boolean;
   isStreaming?: boolean;
   focusedTaskTitle?: string;
+  /** Task object for inline context pill inside the input box */
+  focusedTask?: Task | null;
+  /** Callback to clear the focused task */
+  onClearFocus?: () => void;
   queueCount?: number;
   placeholder?: string;
   showCommands?: boolean;
@@ -29,7 +35,7 @@ interface ChatInputProps {
   onControlCommand?: (command: string) => void;
 }
 
-export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, queueCount, placeholder, showCommands = true, sessionCommands, searchSessionCommands, onControlCommand }: ChatInputProps) {
+export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, showCommands = true, sessionCommands, searchSessionCommands, onControlCommand }: ChatInputProps) {
   const [value, setValue] = useState('');
   const [images, setImages] = useState<ImageAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
@@ -313,6 +319,22 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
           {onClearQueue && (
             <button className="chat-queue-clear" onClick={onClearQueue} type="button">Clear all</button>
           )}
+        </div>
+      )}
+      {/* Inline task context pill — inside the input box so user can't miss it */}
+      {focusedTask && onClearFocus && (
+        <div className={`chat-input-task-pill${(focusedTask.phase === 'AGENT_COMPLETE' || focusedTask.phase === 'AWAIT_HUMAN_ACTION') ? ' pill-attention' : ''}`}>
+          <button
+            className="pill-close"
+            onClick={onClearFocus}
+            title="Clear task focus"
+            type="button"
+            aria-label="Clear task focus"
+          >
+            &times;
+          </button>
+          <StatusBadge status={focusedTask.status} phase={focusedTask.phase} />
+          <span className="pill-title">{focusedTask.title}</span>
         </div>
       )}
       {/* Image preview area */}

@@ -13,7 +13,6 @@ import { ChatPanel } from '@/components/chat/ChatPanel';
 import { ChatMessage, type RouteInfo } from '@/components/chat/ChatMessage';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { TodoPanel } from '@/components/tasks/TodoPanel';
-import { TaskContextBar } from '@/components/tasks/TaskContextBar';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { PendingSessionPanel } from '@/components/sessions/PendingSessionPanel';
 import { SessionPathSelector, type QuickStartPath } from '@/components/sessions/SessionPathSelector';
@@ -809,15 +808,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             </div>
           )}
 
-          {focusedTask && (
-            <TaskContextBar
-              task={focusedTask}
-              onComplete={handleComplete}
-              onStar={handleStar}
-              onClear={handleClearFocus}
-            />
-          )}
-
           <div style={{ position: 'relative' }}>
             {/* Session path selector popover (above the input) */}
             <SessionPathSelector
@@ -843,6 +833,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               disabled={connectionState !== 'connected'}
               isStreaming={chat.isStreaming}
               focusedTaskTitle={quickStartPath ? `Session on ${quickStartPath.cwd.split('/').pop()}` : focusedTask?.title}
+              focusedTask={quickStartPath ? null : focusedTask}
+              onClearFocus={handleClearFocus}
               queueCount={chat.queueCount}
             />
           </div>

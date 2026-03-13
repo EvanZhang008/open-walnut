@@ -97,8 +97,8 @@ test.describe('3. Click into task shows context', () => {
     }
     await page.screenshot({ path: 'playwright-report/plugin-03-task-context.png' })
 
-    // Either context bar appears or we navigate to task detail
-    const contextBar = page.locator('.task-context-bar')
+    // Either task context pill appears or we navigate to task detail
+    const contextBar = page.locator('.chat-input-task-pill')
     const isContextBar = await contextBar.isVisible().catch(() => false)
     if (!isContextBar) {
       await expect(page).toHaveURL(/\/tasks\/|\//, { timeout: 3000 })
