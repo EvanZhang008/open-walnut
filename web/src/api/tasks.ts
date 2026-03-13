@@ -150,7 +150,7 @@ export interface SprintOption {
 export async function fetchAvailableSprints(): Promise<{ sprints: SprintOption[]; current: string | null }> {
   // Layer 1: try plugin endpoint (has startDate/endDate + current sprint)
   try {
-    const result = await apiGet<{ sprints: SprintOption[]; current: string | null }>('/api/plugins/taskei/sprints');
+    const result = await apiGet<{ sprints: SprintOption[]; current: string | null }>('/api/plugins/sprint-sync/sprints');
     if (result.sprints.length > 0) return result;
   } catch {
     // Plugin not loaded — fall through to local data
