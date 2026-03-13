@@ -11,7 +11,7 @@ import { useEvent } from '@/hooks/useWebSocket';
 import { timeAgo } from '@/utils/time';
 import { scrollLog } from '@/utils/scroll-debug';
 import type { ProcessStatus, WorkStatus } from '@walnut/core';
-import { WORK_LABELS, WORK_COLORS, PROCESS_COLORS, PROCESS_LABELS, compositeColor, resolveTaskSessionId } from '@/utils/session-status';
+import { WORK_LABELS, WORK_COLORS, PROCESS_COLORS, PROCESS_LABELS, resolveTaskSessionId } from '@/utils/session-status';
 import type { UseFavoritesReturn } from '@/hooks/useFavorites';
 import type { UseOrderingReturn } from '@/hooks/useOrdering';
 import { PriorityBadge } from '../common/PriorityBadge';
@@ -1385,42 +1385,25 @@ function SortablePinnedCard({ task, isFocused, onFocusTask, onUnpinTask, onOpenS
   const needsAttention = task.phase === 'AGENT_COMPLETE' || task.phase === 'AWAIT_HUMAN_ACTION';
   const phaseLabel = PHASE_LABEL[task.phase] ?? task.phase;
 
-  const ps = task.session_status?.process_status ?? 'stopped';
-  const ws = task.session_status?.work_status ?? null;
-  const sessionColor = task.session_status
-    ? compositeColor(ps as Parameters<typeof compositeColor>[0], (ws ?? 'completed') as Parameters<typeof compositeColor>[1])
-    : null;
-
   return (
     <div
       ref={setNodeRef}
       style={style}
       className={`todo-pinned-card${isFocused ? ' todo-pinned-card-active' : ''}${needsAttention ? ' todo-pinned-card-attention' : ''}`}
-      onClick={() => onFocusTask?.(task)}
+      onClick={() => {
+        onFocusTask?.(task);
+        const sid = resolveTaskSessionId(task);
+        if (sid) onOpenSession?.(sid);
+      }}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onFocusTask?.(task); } }}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onFocusTask?.(task); const sid = resolveTaskSessionId(task); if (sid) onOpenSession?.(sid); } }}
     >
       <span className="todo-pinned-drag-handle" {...attributes} {...listeners} title="Drag to reorder">
         &#x2630;
       </span>
       <span className="todo-pinned-title" title={task.title}>{task.title}</span>
       <span className={`todo-pinned-phase${needsAttention ? ' todo-pinned-phase-attention' : ''}`}>{phaseLabel}</span>
-      {(() => {
-        const sid = resolveTaskSessionId(task);
-        if (!sid) return null;
-        return (
-          <button
-            className="todo-pinned-session-chip"
-            style={{ borderColor: sessionColor ?? 'var(--fg-muted)', color: sessionColor ?? 'var(--fg-muted)' }}
-            onClick={(e) => { e.stopPropagation(); onOpenSession?.(sid); }}
-            title="Open session"
-            aria-label="Open session"
-          >
-            S
-          </button>
-        );
-      })()}
       <button
         className="todo-pinned-unpin"
         onClick={(e) => { e.stopPropagation(); onUnpinTask?.(task.id); }}
