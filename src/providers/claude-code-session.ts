@@ -2350,7 +2350,17 @@ export class SessionRunner {
         } catch (err) {
           log.session.warn('failed to link session to task', { taskId, error: err instanceof Error ? err.message : String(err) })
         }
-      }).catch(() => {}) // spawn error already handled
+      }).catch((err) => {
+        // Session failed to initialize (SSH failure, timeout, etc.)
+        // Notify web-ui so the pending session panel can show an error.
+        const errorMsg = err instanceof Error ? err.message : String(err)
+        log.session.warn('session init failed — notifying web-ui', { taskId, error: errorMsg, host: data.host })
+        bus.emit(EventNames.SESSION_ERROR, {
+          sessionId: null,
+          taskId,
+          error: errorMsg,
+        }, ['web-ui'], { source: 'session-init-failure' })
+      })
     }
 
     return { sessionReady: session.sessionReady, title: sessionTitle }

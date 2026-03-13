@@ -446,7 +446,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Quick-start: track pending taskId, auto-open session panel when it starts
   const pendingQuickStartRef = useRef<string | null>(null);
   // Metadata for the pending session panel (cwd, host, etc.)
-  const pendingQuickStartMetaRef = useRef<{ id: string; cwd: string; host?: string; hostLabel?: string } | null>(null);
+  const pendingQuickStartMetaRef = useRef<{ id: string; cwd: string; host?: string; hostLabel?: string; realTaskId?: string } | null>(null);
 
   // Fork: pending panel metadata (same pattern as quick-start)
   const pendingForkMetaRef = useRef<{ id: string; cwd: string; host?: string } | null>(null);
@@ -658,6 +658,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         // Update ref with real taskId (WS events use this to match)
         if (pendingQuickStartRef.current === tempTaskId) {
           pendingQuickStartRef.current = result.taskId;
+        }
+        // Store real taskId so PendingSessionPanel can match error events
+        if (pendingQuickStartMetaRef.current?.id === pendingColId) {
+          pendingQuickStartMetaRef.current = { ...pendingQuickStartMetaRef.current, realTaskId: result.taskId };
         }
         // Notify main agent to reorganize the task (include user's prompt)
         const agentMsg = [
@@ -900,9 +904,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               {isPending && pendingMeta ? (
                 <PendingSessionPanel
                   taskId={sid}
+                  realTaskId={'realTaskId' in pendingMeta ? (pendingMeta as { realTaskId?: string }).realTaskId : undefined}
                   cwd={pendingMeta.cwd}
                   host={pendingMeta.host}
-                  hostLabel={'hostLabel' in pendingMeta ? pendingMeta.hostLabel : undefined}
+                  hostLabel={'hostLabel' in pendingMeta ? (pendingMeta as { hostLabel?: string }).hostLabel : undefined}
                   label={isForkPending ? 'Forking session...' : undefined}
                   onClose={() => handleCloseSession(sid)}
                 />

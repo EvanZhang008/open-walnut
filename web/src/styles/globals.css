@@ -13142,6 +13142,35 @@ img[data-lightbox-src],
   max-width: 300px;
 }
 
+.pending-session-error-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--color-error, #ff3b30);
+  color: #fff;
+  font-size: 20px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.pending-session-dismiss-btn {
+  margin-top: 8px;
+  padding: 6px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--fg-primary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.pending-session-dismiss-btn:hover {
+  background: var(--bg-tertiary);
+}
+
 /* ===== Quick Start System Banner (in chat) ===== */
 
 .chat-quick-start-banner {
