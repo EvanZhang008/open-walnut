@@ -2334,7 +2334,7 @@ input:focus, textarea:focus, select:focus {
   transition: color 0.15s;
 }
 
-.user-messages-summary-toggle:hover {
+.user-messages-summary-toggle:hover:not(:disabled) {
   color: var(--accent);
 }
 

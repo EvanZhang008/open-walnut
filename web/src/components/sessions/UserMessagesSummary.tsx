@@ -15,7 +15,8 @@ function formatTime(dateStr: string): string {
 }
 
 export function UserMessagesSummary({ messages, loading, onMessageClick }: UserMessagesSummaryProps) {
-  const [collapsed, setCollapsed] = useState(false);
+  // Default collapsed — expanding is user-initiated, never causes layout shift
+  const [collapsed, setCollapsed] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Extract user messages with their original index in the full messages array
@@ -23,36 +24,35 @@ export function UserMessagesSummary({ messages, loading, onMessageClick }: UserM
     .map((m, i) => ({ message: m, originalIndex: i }))
     .filter(({ message }) => message.role === 'user' && message.text.trim());
 
-  // Auto-scroll to bottom when new messages arrive
+  // Auto-scroll to bottom when new messages arrive (only when already expanded)
   const prevCount = useRef(userMessages.length);
   useEffect(() => {
-    if (userMessages.length > prevCount.current && scrollRef.current) {
+    if (!collapsed && userMessages.length > prevCount.current && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
     prevCount.current = userMessages.length;
-  }, [userMessages.length]);
+  }, [userMessages.length, collapsed]);
 
   const handleClick = useCallback((originalIndex: number) => {
     onMessageClick?.(originalIndex);
   }, [onMessageClick]);
 
   const hasMessages = !loading && userMessages.length > 0;
-  const canExpand = hasMessages;
 
   return (
-    <div className={`user-messages-summary${!canExpand ? ' user-messages-summary-muted' : ''}`}>
+    <div className={`user-messages-summary${!hasMessages ? ' user-messages-summary-muted' : ''}`}>
       <button
         className="user-messages-summary-toggle"
-        onClick={() => canExpand && setCollapsed(c => !c)}
-        disabled={!canExpand}
+        onClick={() => setCollapsed(c => !c)}
+        disabled={!hasMessages}
       >
-        <span className="user-messages-summary-arrow">{collapsed || !canExpand ? '\u25B8' : '\u25BE'}</span>
+        <span className="user-messages-summary-arrow">{collapsed || !hasMessages ? '\u25B8' : '\u25BE'}</span>
         <span className="user-messages-summary-label">My Messages</span>
         {hasMessages && (
           <span className="user-messages-summary-count">{userMessages.length}</span>
         )}
       </button>
-      {canExpand && !collapsed && (
+      {hasMessages && !collapsed && (
         <div className="user-messages-summary-list" ref={scrollRef}>
           {userMessages.map(({ message, originalIndex }) => (
             <div
