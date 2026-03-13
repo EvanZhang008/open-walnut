@@ -29,11 +29,6 @@ const PHASE_LABELS: Record<string, string> = {
   COMPLETE: 'Complete',
 };
 
-const WORK_LABELS: Record<string, string> = {
-  in_progress: 'Running', agent_complete: 'Agent Done',
-  await_human_action: 'Await Human', completed: 'Completed', error: 'Error',
-};
-
 // ── Dock height constants ──
 
 const DOCK_HEIGHT_KEY = 'walnut-dock-height';
@@ -64,7 +59,6 @@ interface DockTaskCardProps {
 const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, onUnpin }: DockTaskCardProps) {
   const sessionId = resolveTaskSessionId(task);
   const isStreaming = task.session_status?.process_status === 'running';
-  const ws = task.session_status?.work_status ?? null;
 
   // Red highlight for phases that need human attention
   const needsAttention = task.phase === 'AGENT_COMPLETE' || task.phase === 'AWAIT_HUMAN_ACTION';
@@ -107,10 +101,10 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
     >
       <div className="dock-task-header">
         <div className="dock-task-header-top">
+          <span className="dock-task-title" title={task.title}>{task.title}</span>
           <span className={`dock-task-phase-badge${needsAttention ? ' dock-task-phase-attention' : ''}${isStreaming ? ' dock-task-phase-streaming' : ''}`}>
             {PHASE_LABELS[task.phase ?? ''] ?? task.phase ?? 'To Do'}
           </span>
-          <span className="dock-task-title" title={task.title}>{task.title}</span>
           {sessionId && (
             <button
               className="dock-task-expand"
@@ -144,11 +138,6 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
             &times;
           </button>
         </div>
-        {ws && (
-          <div className="dock-task-status-labels">
-            <span className="dock-task-session-label">{WORK_LABELS[ws] ?? ws}</span>
-          </div>
-        )}
       </div>
       <div className="dock-task-body">
         {sessionId ? (
