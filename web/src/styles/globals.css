@@ -707,10 +707,10 @@ input:focus, textarea:focus, select:focus {
   top: 100%;
   right: 0;
   z-index: 30;
-  background: var(--bg-primary);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  background: var(--card-bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--card-shadow-hover);
   min-width: 160px;
   padding: 4px;
 }
