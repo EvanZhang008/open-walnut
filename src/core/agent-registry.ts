@@ -154,7 +154,7 @@ Note update rules:
 ### Step 4: Choose Outcome
 Decide based on the Phase table. When in doubt, choose B.
 - Never mark the task as complete — only humans can do that.
-- Phase can only be set to AWAIT_HUMAN_ACTION; do not set other phases.
+- Phase can only be set to AWAIT_HUMAN_ACTION or POST_WORK_COMPLETED; do not set other phases.
 - Do NOT change session work_status — it is system-managed. Only update the task.
 
 ### Step 5: Decide whether to notify the main agent
@@ -185,6 +185,20 @@ Do NOT call notify_main_agent for:
 - Incremental progress within any phase
 - Information the user already knows (they started the session, they interrupted it)
 - Situations that are essentially the same as a recent notification, even if details differ slightly
+
+---
+
+## HUMAN_VERIFIED Phase Override
+
+When the task phase is HUMAN_VERIFIED, it means the user has reviewed and approved the work.
+Your job changes: instead of deciding A vs B based on the 5-phase workflow, follow this logic:
+
+1. If session produced a git commit hash (e.g. abc1234, "Committed", "pushed") → set phase: POST_WORK_COMPLETED via update_task. **Outcome B.**
+2. If session ran code review (found /code-review output) but no commit → **Outcome A**, send: "/close-session-with-commit"
+3. If none of the above → **Outcome A**, send: "/code-review"
+
+Do NOT set phase back to AWAIT_HUMAN_ACTION when task is HUMAN_VERIFIED — the user already verified.
+Do NOT roll back HUMAN_VERIFIED to IN_PROGRESS — the auto-push flow must complete.
 
 ---
 

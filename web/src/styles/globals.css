@@ -645,7 +645,7 @@ input:focus, textarea:focus, select:focus {
 .badge-phase-agent_complete { background: rgba(255, 59, 48, 0.12); color: var(--error); }
 .badge-phase-await_human_action { background: rgba(255, 59, 48, 0.12); color: var(--error); }
 .badge-phase-human_verified { background: rgba(52, 199, 89, 0.12); color: #34C759; }
-.badge-phase-post_work_completed { background: rgba(48, 176, 199, 0.12); color: #30B0C7; }
+.badge-phase-post_work_completed { background: rgba(90, 200, 250, 0.12); color: #5AC8FA; }
 .badge-phase-human_verification { background: rgba(255, 107, 0, 0.12); color: #FF6B00; }
 .badge-phase-peer_code_review { background: rgba(175, 82, 222, 0.12); color: #AF52DE; }
 .badge-phase-release_in_pipeline { background: rgba(48, 176, 199, 0.12); color: #30B0C7; }
@@ -658,7 +658,7 @@ input:focus, textarea:focus, select:focus {
 .task-phase-agent_complete { color: var(--error); }
 .task-phase-await_human_action { color: var(--error); }
 .task-phase-human_verified { color: #34C759; }
-.task-phase-post_work_completed { color: #30B0C7; }
+.task-phase-post_work_completed { color: #5AC8FA; }
 .task-phase-human_verification { color: #FF6B00; }
 .task-phase-peer_code_review { color: #AF52DE; }
 .task-phase-release_in_pipeline { color: #30B0C7; }

@@ -4,9 +4,10 @@
  *
  * Task and Session use aligned status names. Session work_status is a subset of Task phase.
  *
- * Task Phases (7):
+ * Task Phases (9):
  *   TODO → IN_PROGRESS → AGENT_COMPLETE → AWAIT_HUMAN_ACTION
- *                                       → PEER_CODE_REVIEW → RELEASE_IN_PIPELINE → COMPLETE
+ *        → HUMAN_VERIFIED → POST_WORK_COMPLETED
+ *        → PEER_CODE_REVIEW → RELEASE_IN_PIPELINE → COMPLETE
  *
  * Session Work Status (5, subset of task phases):
  *   in_progress | agent_complete | await_human_action | completed | error
@@ -42,13 +43,15 @@
 
 import type { TaskPhase, TaskStatus, Task } from './types.js';
 
-// ── Phase → Status (7 → 3) ──
+// ── Phase → Status (9 → 3) ──
 
 export const PHASE_TO_STATUS: Record<TaskPhase, TaskStatus> = {
   TODO: 'todo',
   IN_PROGRESS: 'in_progress',
   AGENT_COMPLETE: 'in_progress',
   AWAIT_HUMAN_ACTION: 'in_progress',
+  HUMAN_VERIFIED: 'in_progress',
+  POST_WORK_COMPLETED: 'in_progress',
   PEER_CODE_REVIEW: 'in_progress',
   RELEASE_IN_PIPELINE: 'in_progress',
   COMPLETE: 'done',
@@ -69,6 +72,8 @@ export const PHASE_ORDER: TaskPhase[] = [
   'IN_PROGRESS',
   'AGENT_COMPLETE',
   'AWAIT_HUMAN_ACTION',
+  'HUMAN_VERIFIED',
+  'POST_WORK_COMPLETED',
   'PEER_CODE_REVIEW',
   'RELEASE_IN_PIPELINE',
   'COMPLETE',
@@ -78,7 +83,7 @@ export const VALID_PHASES = new Set<string>(PHASE_ORDER);
 
 // ── Core functions ──
 
-/** Derive the 3-state status from a 7-state phase. */
+/** Derive the 3-state status from a 9-state phase. */
 export function deriveStatusFromPhase(phase: TaskPhase): TaskStatus {
   return PHASE_TO_STATUS[phase] ?? 'todo';
 }
@@ -152,10 +157,13 @@ export function migratePhase(phase: string): TaskPhase {
 
 // ── Session-resume rollback ──
 
-/** Phases that should auto-rollback to IN_PROGRESS when a session resumes work. */
+/** Phases that should auto-rollback to IN_PROGRESS when a session resumes work.
+ *  HUMAN_VERIFIED is intentionally excluded — during auto-push the phase must stay
+ *  so triage knows the user already verified the work. */
 const ROLLBACK_PHASES = new Set<TaskPhase>([
   'AGENT_COMPLETE',
   'AWAIT_HUMAN_ACTION',
+  'POST_WORK_COMPLETED',
   'PEER_CODE_REVIEW',
   'RELEASE_IN_PIPELINE',
 ]);

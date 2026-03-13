@@ -12,6 +12,8 @@ const phaseSymbols: Record<string, ReactNode> = {
   IN_PROGRESS: '\u25D0',            // ◐ half-filled
   AGENT_COMPLETE: '\u2713',          // ✓ checkmark
   AWAIT_HUMAN_ACTION: <PersonIcon />,
+  HUMAN_VERIFIED: '\u2705',          // ✅ green checkmark
+  POST_WORK_COMPLETED: '\uD83D\uDCE6', // 📦 package
   PEER_CODE_REVIEW: '\u22C8',       // ⋈ bowtie
   RELEASE_IN_PIPELINE: '\u25B7',    // ▷ open triangle
   COMPLETE: '\u2713\u2713',          // ✓✓ double check
@@ -22,6 +24,8 @@ const phaseLabels: Record<string, string> = {
   IN_PROGRESS: 'In Progress',
   AGENT_COMPLETE: 'Agent Complete',
   AWAIT_HUMAN_ACTION: 'Await Human Action',
+  HUMAN_VERIFIED: 'Human Verified',
+  POST_WORK_COMPLETED: 'Post-Work Done',
   PEER_CODE_REVIEW: 'Peer Code Review',
   RELEASE_IN_PIPELINE: 'Release in Pipeline',
   COMPLETE: 'Complete',

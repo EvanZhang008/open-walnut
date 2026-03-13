@@ -19,8 +19,8 @@ import {
 } from '../../src/core/phase.js';
 
 describe('PHASE_ORDER', () => {
-  it('has exactly 7 phases', () => {
-    expect(PHASE_ORDER).toHaveLength(7);
+  it('has exactly 9 phases', () => {
+    expect(PHASE_ORDER).toHaveLength(9);
   });
 
   it('starts with TODO and ends with COMPLETE', () => {
@@ -53,11 +53,13 @@ describe('VALID_PHASES', () => {
 });
 
 describe('PHASE_TO_STATUS', () => {
-  it('maps all 7 phases to correct statuses', () => {
+  it('maps all 9 phases to correct statuses', () => {
     expect(PHASE_TO_STATUS.TODO).toBe('todo');
     expect(PHASE_TO_STATUS.IN_PROGRESS).toBe('in_progress');
     expect(PHASE_TO_STATUS.AGENT_COMPLETE).toBe('in_progress');
     expect(PHASE_TO_STATUS.AWAIT_HUMAN_ACTION).toBe('in_progress');
+    expect(PHASE_TO_STATUS.HUMAN_VERIFIED).toBe('in_progress');
+    expect(PHASE_TO_STATUS.POST_WORK_COMPLETED).toBe('in_progress');
     expect(PHASE_TO_STATUS.PEER_CODE_REVIEW).toBe('in_progress');
     expect(PHASE_TO_STATUS.RELEASE_IN_PIPELINE).toBe('in_progress');
     expect(PHASE_TO_STATUS.COMPLETE).toBe('done');
@@ -79,6 +81,14 @@ describe('computeSessionCompletionPhase', () => {
 
   it('AWAIT_HUMAN_ACTION → null (no regression)', () => {
     expect(computeSessionCompletionPhase('AWAIT_HUMAN_ACTION', false)).toBeNull();
+  });
+
+  it('HUMAN_VERIFIED → null (no regression)', () => {
+    expect(computeSessionCompletionPhase('HUMAN_VERIFIED', false)).toBeNull();
+  });
+
+  it('POST_WORK_COMPLETED → null (no regression)', () => {
+    expect(computeSessionCompletionPhase('POST_WORK_COMPLETED', false)).toBeNull();
   });
 
   it('PEER_CODE_REVIEW → null (no regression)', () => {
@@ -146,8 +156,16 @@ describe('shouldRollbackToInProgress', () => {
     expect(shouldRollbackToInProgress('PEER_CODE_REVIEW')).toBe(true);
   });
 
+  it('POST_WORK_COMPLETED → true', () => {
+    expect(shouldRollbackToInProgress('POST_WORK_COMPLETED')).toBe(true);
+  });
+
   it('RELEASE_IN_PIPELINE → true', () => {
     expect(shouldRollbackToInProgress('RELEASE_IN_PIPELINE')).toBe(true);
+  });
+
+  it('HUMAN_VERIFIED → false (excluded: auto-push must preserve phase)', () => {
+    expect(shouldRollbackToInProgress('HUMAN_VERIFIED')).toBe(false);
   });
 
   it('TODO → false', () => {
@@ -169,6 +187,8 @@ describe('deriveStatusFromPhase', () => {
     expect(deriveStatusFromPhase('IN_PROGRESS')).toBe('in_progress');
     expect(deriveStatusFromPhase('AGENT_COMPLETE')).toBe('in_progress');
     expect(deriveStatusFromPhase('AWAIT_HUMAN_ACTION')).toBe('in_progress');
+    expect(deriveStatusFromPhase('HUMAN_VERIFIED')).toBe('in_progress');
+    expect(deriveStatusFromPhase('POST_WORK_COMPLETED')).toBe('in_progress');
     expect(deriveStatusFromPhase('PEER_CODE_REVIEW')).toBe('in_progress');
     expect(deriveStatusFromPhase('RELEASE_IN_PIPELINE')).toBe('in_progress');
     expect(deriveStatusFromPhase('COMPLETE')).toBe('done');
