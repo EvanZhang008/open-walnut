@@ -1249,16 +1249,10 @@ export async function updateTask(idPrefix: string, updates: UpdateTaskInput): Pr
       const config = await getConfig();
       const validation = validateCategorySource(store.tasks, newCategoryName, task.source, config, store.categories);
       if (!validation.ok) {
-        // Hard config reservations: still block
-        if (validation.reason === 'config_local' || validation.reason === 'config_plugin') {
-          throw new CategorySourceConflictError(
-            `Cannot move task to category "${newCategoryName}" — it contains ${validation.existingSource} tasks but this task syncs to ${task.source}. Tasks cannot change sync backends. Delete and recreate the task in the target category instead.`,
-            newCategoryName,
-            task.source,
-            validation.existingSource,
-          );
-        }
-        // Soft conflict (store_categories / existing_tasks): auto-migrate source
+        // Auto-migrate source: the task adopts the target category's source.
+        // All conflict reasons (config_local, config_plugin, store_categories,
+        // existing_tasks) are migratable — the target category's source is the
+        // correct source for the task after the move.
         migrationResult = migrateTaskSource(store, task, newCategoryName, newProject, validation.existingSource);
         skipCategoryAssignment = true; // migrateTaskSource already set category/project
         log.task.info('cross-source migration triggered', {

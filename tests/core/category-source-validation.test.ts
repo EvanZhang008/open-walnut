@@ -150,7 +150,7 @@ describe('addTask category-source validation', () => {
 // ── updateTask with source conflict ──
 
 describe('updateTask category-source validation', () => {
-  it('throws CategorySourceConflictError on category change to different-source category', async () => {
+  it('auto-migrates local task to config-reserved plugin category', async () => {
     await fs.mkdir(path.dirname(CONFIG_FILE), { recursive: true });
     await fs.writeFile(
       CONFIG_FILE,
@@ -171,13 +171,12 @@ describe('updateTask category-source validation', () => {
     const { task: localTask } = await addTask({ title: 'Local task', category: 'Life' });
     expect(localTask.source).toBe('local');
 
-    // Try to move local task to the plugin-a category
-    const err = await updateTask(localTask.id, { category: 'Work' }).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(CategorySourceConflictError);
-    const e = err as CategorySourceConflictError;
-    expect(e.category).toBe('Work');
-    expect(e.intendedSource).toBe('local');
-    expect(e.existingSource).toBe('plugin-a');
+    // Move local task to the plugin-a category → auto-migrates to plugin-a source
+    const { task: moved } = await updateTask(localTask.id, { category: 'Work' });
+    expect(moved.category).toBe('Work');
+    expect(moved.source).toBe('plugin-a');
+    expect(moved.id).toBe(localTask.id);
+    expect(moved.ext).toBeUndefined();
   });
 
   it('allows category change to same-source category', async () => {
@@ -233,13 +232,15 @@ describe('updateTask category-source validation', () => {
     // Create a plugin-a task in 'Work'
     await addTask({ title: 'Plugin task', category: 'Work' });
 
-    // Create an ms-todo task in 'Life'
-    const { task: msTodoTask } = await addTask({ title: 'MS task', category: 'Life' });
+    // Create a local task in 'Life'
+    const { task: localTask } = await addTask({ title: 'Local task', category: 'Life' });
+    expect(localTask.source).toBe('local');
 
-    // Try to move using slash-separated format "Work / Project" — should detect "Work" conflict
-    await expect(
-      updateTask(msTodoTask.id, { category: 'Work / SomeProject' }),
-    ).rejects.toThrow(CategorySourceConflictError);
+    // Move using slash-separated format "Work / SomeProject" → auto-migrates to plugin-a
+    const { task: moved } = await updateTask(localTask.id, { category: 'Work / SomeProject' });
+    expect(moved.source).toBe('plugin-a');
+    expect(moved.category).toBe('Work');
+    expect(moved.project).toBe('SomeProject');
   });
 });
 
@@ -535,7 +536,7 @@ describe('updateTask — local task movement', () => {
     expect(moved.sync_error).toBeUndefined();
   });
 
-  it('blocks moving synced task to a local-reserved category', async () => {
+  it('auto-migrates synced task to a local-reserved category', async () => {
     await fs.mkdir(path.dirname(CONFIG_FILE), { recursive: true });
     await fs.writeFile(
       CONFIG_FILE,
@@ -553,11 +554,11 @@ describe('updateTask — local task movement', () => {
     const { task: msTodoTask } = await addTask({ title: 'Synced task', category: 'Life' });
     expect(msTodoTask.source).toBe('ms-todo');
 
-    // Try to move ms-todo task to 'Local' (config-reserved for local) → should fail
-    const err = await updateTask(msTodoTask.id, { category: 'Local' }).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(CategorySourceConflictError);
-    const e = err as CategorySourceConflictError;
-    expect(e.existingSource).toBe('local');
+    // Move ms-todo task to 'Local' (config-reserved for local) → auto-migrates to local
+    const { task: moved } = await updateTask(msTodoTask.id, { category: 'Local' });
+    expect(moved.category).toBe('Local');
+    expect(moved.source).toBe('local');
+    expect(moved.id).toBe(msTodoTask.id);
   });
 });
 
@@ -1020,7 +1021,7 @@ describe('updateTask — cross-source migration', () => {
     expect(childAfter.source).toBe('plugin-b'); // unchanged
   });
 
-  it('still throws for config_local reservation', async () => {
+  it('auto-migrates to config_local reserved category', async () => {
     await fs.mkdir(path.dirname(CONFIG_FILE), { recursive: true });
     await fs.writeFile(
       CONFIG_FILE,
@@ -1036,11 +1037,14 @@ describe('updateTask — cross-source migration', () => {
     await createCategory('Synced', 'ms-todo');
     const { task } = await addTask({ title: 'Synced task', category: 'Synced' });
 
-    // Moving ms-todo task to config-reserved local category → hard block
-    await expect(updateTask(task.id, { category: 'Reserved' })).rejects.toThrow(CategorySourceConflictError);
+    // Moving ms-todo task to config-reserved local category → auto-migrates to local
+    const { task: moved } = await updateTask(task.id, { category: 'Reserved' });
+    expect(moved.category).toBe('Reserved');
+    expect(moved.source).toBe('local');
+    expect(moved.id).toBe(task.id);
   });
 
-  it('still throws for config_plugin reservation', async () => {
+  it('auto-migrates to config_plugin reserved category', async () => {
     await fs.mkdir(path.dirname(CONFIG_FILE), { recursive: true });
     await fs.writeFile(
       CONFIG_FILE,
@@ -1055,8 +1059,11 @@ describe('updateTask — cross-source migration', () => {
 
     const { task: localTask } = await addTask({ title: 'Local task', category: 'Life' });
 
-    // Moving local task to plugin-a reserved category → hard block
-    await expect(updateTask(localTask.id, { category: 'Work' })).rejects.toThrow(CategorySourceConflictError);
+    // Moving local task to plugin-a reserved category → auto-migrates to plugin-a
+    const { task: moved } = await updateTask(localTask.id, { category: 'Work' });
+    expect(moved.category).toBe('Work');
+    expect(moved.source).toBe('plugin-a');
+    expect(moved.id).toBe(localTask.id);
   });
 
   it('updates store.categories source after migration', async () => {
