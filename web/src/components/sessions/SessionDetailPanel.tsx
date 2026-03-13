@@ -5,6 +5,7 @@ import { UserMessagesSummary } from './UserMessagesSummary';
 import { PlanPreviewSection } from './PlanPreviewSection';
 import { WorkStatusPicker } from './WorkStatusPicker';
 import { SessionCopyButtons } from './SessionCopyButtons';
+import { TaskQuickActions } from './TaskQuickActions';
 import { updateSession, executePlanSession, executePlanContinue } from '@/api/sessions';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
 import { useSessionPlan } from '@/hooks/useSessionPlan';
@@ -290,9 +291,12 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
           {/* Compact meta bar */}
           <div className="session-detail-meta-bar">
             {session.taskId && (
-              <a href={`/tasks/${session.taskId}`} className="session-detail-link" title={`Task: ${session.taskId}`}>
-                {taskLabel}
-              </a>
+              <>
+                <a href={`/tasks/${session.taskId}`} className="session-detail-link" title={`Task: ${session.taskId}`}>
+                  {taskLabel}
+                </a>
+                <TaskQuickActions taskId={session.taskId} />
+              </>
             )}
             {displayModel && (
               <span className="session-detail-model-pill" title={liveUsage.model || session?.model || ''}>

@@ -5656,6 +5656,9 @@ img[data-lightbox-src],
   padding: 12px 14px 10px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  overflow: visible;
+  position: relative;
+  z-index: 10;
 }
 
 .session-panel-header-top {
@@ -6076,6 +6079,126 @@ img[data-lightbox-src],
   flex-shrink: 0;
   font-size: 10px;
   opacity: 0.6;
+}
+
+/* ===== Task Quick Actions (session panel header) ===== */
+
+.session-panel-task-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.session-panel-task-row .session-panel-task-link {
+  margin-top: 0;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.task-quick-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.task-quick-phase {
+  position: relative;
+}
+
+.task-quick-phase-btn {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+.task-quick-phase-btn:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--accent);
+}
+
+.task-quick-phase-icon {
+  font-size: 12px;
+}
+
+.task-quick-phase-label {
+  font-weight: 500;
+  color: var(--fg-secondary);
+}
+
+.task-quick-phase-menu {
+  position: fixed;
+  z-index: 9999;
+}
+
+.task-quick-star {
+  font-size: 13px;
+  color: var(--fg-muted);
+  padding: 1px 2px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  opacity: 0.5;
+  transition: opacity 0.15s, color 0.15s;
+  line-height: 1;
+}
+
+.task-quick-star:hover {
+  opacity: 1;
+  color: var(--warning);
+}
+
+.task-quick-star.starred {
+  opacity: 1;
+  color: var(--warning);
+}
+
+.task-quick-attention {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+  opacity: 0.4;
+  transition: opacity 0.15s, border-color 0.15s;
+}
+
+.task-quick-attention:hover {
+  opacity: 1;
+  border-color: var(--border);
+}
+
+.task-quick-attention.active {
+  opacity: 1;
+}
+
+.task-quick-attention-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--fg-muted);
+}
+
+.task-quick-attention.active .task-quick-attention-dot {
+  background: var(--error, #ff3b30);
 }
 
 .session-panel-body {

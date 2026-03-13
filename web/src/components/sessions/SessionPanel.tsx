@@ -18,6 +18,7 @@ import { timeAgo } from '@/utils/time';
 import { WorkStatusPicker } from './WorkStatusPicker';
 import { SessionCopyButtons } from './SessionCopyButtons';
 import { ModelPicker } from './ModelPicker';
+import { TaskQuickActions } from './TaskQuickActions';
 import { useFullscreen } from '@/hooks/useFullscreen';
 import { useSessionUsage, formatModelName, getContextWindowSize } from '@/hooks/useSessionUsage';
 import { useSessionPlan } from '@/hooks/useSessionPlan';
@@ -169,6 +170,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, onT
 
   // Task title for the breadcrumb link
   const [taskTitle, setTaskTitle] = useState<string | null>(null);
+  // Full task object — passed to TaskQuickActions to avoid a duplicate fetch
+  const [sessionTask, setSessionTask] = useState<import('@walnut/core').Task | null>(null);
 
   // Pin state — self-contained (calls focus API directly)
   const [pinned, setPinned] = useState(false);
@@ -208,6 +211,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, onT
     setSession(null);
     setLoading(true);
     setTaskTitle(null);
+    setSessionTask(null);
     setPinned(false);
     fetchSession(sessionId).then((s) => {
       if (!cancelled) {
@@ -216,7 +220,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, onT
         // Fetch associated task title + pin state
         if (s?.taskId) {
           fetchTask(s.taskId).then((t) => {
-            if (!cancelled) setTaskTitle(t.title);
+            if (!cancelled) {
+              setTaskTitle(t.title);
+              setSessionTask(t);
+            }
           }).catch(() => {});
           refreshPinState(s.taskId);
         }
@@ -401,17 +408,20 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, onT
             </div>
           </div>
           {session?.taskId && (
-            <div
-              className="session-panel-task-link"
-              role="button"
-              tabIndex={0}
-              onClick={() => onTaskClick?.(session.taskId!)}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onTaskClick?.(session.taskId!); }}
-              title={taskTitle ? `Go to task: ${taskTitle}` : `Go to task ${session.taskId}`}
-            >
-              <span className="session-panel-task-icon">&#x1F4CB;</span>
-              <span className="session-panel-task-title">{taskTitle || session.taskId}</span>
-              <span className="session-panel-task-arrow">&#x2197;</span>
+            <div className="session-panel-task-row">
+              <div
+                className="session-panel-task-link"
+                role="button"
+                tabIndex={0}
+                onClick={() => onTaskClick?.(session.taskId!)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onTaskClick?.(session.taskId!); }}
+                title={taskTitle ? `Go to task: ${taskTitle}` : `Go to task ${session.taskId}`}
+              >
+                <span className="session-panel-task-icon">&#x1F4CB;</span>
+                <span className="session-panel-task-title">{taskTitle || session.taskId}</span>
+                <span className="session-panel-task-arrow">&#x2197;</span>
+              </div>
+              <TaskQuickActions taskId={session.taskId} task={sessionTask} />
             </div>
           )}
           <div className="session-panel-meta">
