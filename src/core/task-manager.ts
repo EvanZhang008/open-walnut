@@ -1433,24 +1433,26 @@ export async function updateTask(idPrefix: string, updates: UpdateTaskInput): Pr
   if (migrationResult) {
     // Cross-source migration: handle old backend cleanup + new backend push per migrated task
     for (const m of migrationResult) {
-      // 1. Mark old remote as moved (rename + complete) — skip if old source was local
+      // 1. Mark old remote as moved (rename + complete) — AWAITED to prevent sync
+      //    from re-importing the still-active remote task as a duplicate.
       if (m.oldSource !== 'local' && m.oldExt) {
         const oldPlugin = registry.get(m.oldSource);
         if (oldPlugin) {
           const movedTitle = `[Moved] ${m.oldTitle} [walnut:${m.task.id}]`;
-          // Build a snapshot with old source/ext so the plugin can find the remote task
           const snapshot = { ...m.task, source: m.oldSource, ext: m.oldExt } as Task;
-          Promise.resolve()
-            .then(() => oldPlugin.sync.updateTitle(snapshot, movedTitle))
-            .then(() => oldPlugin.sync.updatePhase(snapshot, 'COMPLETE'))
-            .catch(err => log.task.warn('cross-source migration: old backend mark-moved failed (non-fatal)', {
+          try {
+            await oldPlugin.sync.updateTitle(snapshot, movedTitle);
+            await oldPlugin.sync.updatePhase(snapshot, 'COMPLETE');
+          } catch (err) {
+            log.task.warn('cross-source migration: old backend mark-moved failed (non-fatal)', {
               taskId: m.task.id, oldSource: m.oldSource,
               error: err instanceof Error ? err.message : String(err),
-            }));
+            });
+          }
         }
       }
 
-      // 2. Push to new backend (autoPush detects no ext → createTask)
+      // 2. Push to new backend (fire-and-forget — sync will retry if this fails)
       autoPushIfConfigured(m.task).catch(err => log.task.warn(
         'cross-source migration: new backend push failed', {
           taskId: m.task.id, newSource: m.task.source,
