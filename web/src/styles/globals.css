@@ -2906,7 +2906,7 @@ input:focus, textarea:focus, select:focus {
   width: 100%;
   font-size: 11px;
   color: var(--fg-muted);
-  opacity: 0.7;
+  margin-bottom: 2px;
 }
 .team-chat-input-field {
   flex: 1;

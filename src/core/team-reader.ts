@@ -1,12 +1,41 @@
 /**
  * Team Reader — read Claude Code team config, find teammate JSONL files, inbox operations.
  *
- * Claude Code Teams have two backends:
- * - tmux: each teammate is a separate `claude` process with own session JSONL
- * - in-process: teammates are subagents, JSONL at {leadSession}/subagents/agent-{hex}.jsonl
+ * ## Two Backends
+ * - **tmux**: each teammate is a separate `claude` process with own session JSONL.
+ *   Messages delivered in real-time (separate OS processes).
+ * - **in-process**: teammates are subagents under the lead session.
+ *   JSONL at {leadSession}/subagents/agent-{hex}.jsonl
  *
  * Both use the same team config at ~/.claude/teams/{team}/config.json
  * and the same inbox protocol at ~/.claude/teams/{team}/inboxes/{agent}.json
+ *
+ * ## In-Process Inbox Delivery (key architecture)
+ *
+ * When a message is sent to a teammate's inbox (writeToInbox), Claude Code
+ * delivers it **between rounds only** — not mid-tool-call. The delivery creates
+ * a BRAND NEW JSONL file with a new agentId. The new file's first entry has
+ * `parentUuid` pointing to the last UUID of the agent's previous JSONL file,
+ * forming a linked chain:
+ *
+ *   [main conversation] ← parentUuid ← [inbox response 1] ← parentUuid ← [inbox response 2] ...
+ *
+ * This means an agent receiving N inbox messages has N+1 JSONL files total.
+ * Each file has a distinct agentId but shares the same conversation context
+ * (Claude Code carries forward the full history).
+ *
+ * Implications for Walnut:
+ * - findAllSubagentJsonlsForAgent() must trace parentUuid chains to discover all files
+ * - The poller must periodically re-discover new files (not just tail one file)
+ * - Messages sent to busy agents are queued — delivered only after current turn ends
+ * - The "response" comes from a continuation process, not the original running process
+ *
+ * ## TeamDelete Fallback
+ *
+ * TeamDelete removes ~/.claude/teams/{name}/ at session end. When config is gone,
+ * extractTeamsFromLeadJsonl() reconstructs member info from Agent tool calls in
+ * the lead session JSONL, and findSubagentJsonlByPrompt() matches JSONL files
+ * by comparing the full prompt text.
  */
 
 import fs from 'node:fs';
@@ -47,13 +76,6 @@ export interface InboxMessage {
   summary: string;
   timestamp: string;
   read: boolean;
-}
-
-export interface TeamInfo {
-  teamName: string;
-  config: TeamConfig;
-  /** Map from member name → resolved JSONL file path (or null if not found yet) */
-  memberJsonlPaths: Map<string, string | null>;
 }
 
 // ── Team Config ──
@@ -239,6 +261,13 @@ function matchSubagentToMember(content: string, member: TeamMember): boolean {
 }
 
 // ── Inbox Operations ──
+//
+// The inbox is a JSON file per agent at ~/.claude/teams/{team}/inboxes/{agent}.json.
+// Claude Code polls this file between rounds. When a new message is found:
+// - In-process mode: spawns a NEW subagent (new agentId, new JSONL file) with
+//   parentUuid linking to the previous file. The original running agent is NOT
+//   interrupted — delivery happens only after the current round completes.
+// - Tmux mode: sends to the running tmux pane directly (real-time delivery).
 
 /** Path to a teammate's inbox file */
 function inboxPath(teamName: string, agentName: string): string {
@@ -527,14 +556,24 @@ function collectUuids(filePath: string): Set<string> {
 
 /**
  * Find ALL subagent JSONL files belonging to a specific agent.
- * This includes:
- * - The main conversation file (matched by prompt)
- * - Inbox response files (linked via parentUuid chain — when a user sends a
- *   message via team chat, Claude Code creates a new subagent file whose
- *   parentUuid points to the last UUID in the parent agent's JSONL)
- * - Shutdown acknowledgment files (matched by @agentName pattern)
+ *
+ * In-process teammates accumulate multiple JSONL files over their lifetime:
+ *
+ *   agent-abc.jsonl  (initial spawn — main conversation, matched by prompt)
+ *       ↓ parentUuid chain
+ *   agent-def.jsonl  (inbox response #1 — new agentId, linked via parentUuid)
+ *       ↓ parentUuid chain
+ *   agent-ghi.jsonl  (inbox response #2 — e.g., shutdown acknowledgment)
+ *
+ * Discovery uses two phases:
+ * 1. Name matching: find files with @agentName or "agentName" in first 8KB
+ * 2. parentUuid chain: collect all UUIDs from matched files, iteratively find
+ *    children whose parentUuid is in the set (handles inbox responses that
+ *    have NO agent name — only a parentUuid link)
  *
  * Returns paths sorted by file mtime (oldest first) for chronological ordering.
+ * Called both at subscription time (initial load) and periodically by the poller
+ * to discover newly created inbox response files.
  */
 export function findAllSubagentJsonlsForAgent(
   leadSessionId: string,
@@ -587,21 +626,31 @@ export function findAllSubagentJsonlsForAgent(
       }
     }
 
-    // Iterative chain traversal (handles grandchildren, etc.)
-    let foundNew = true;
-    while (foundNew) {
-      foundNew = false;
-      for (const filePath of allFiles) {
+    // Build parentUuid → filePath lookup for O(N) chain traversal
+    const parentUuidIndex = new Map<string, string[]>();
+    for (const filePath of allFiles) {
+      if (includedPaths.has(filePath)) continue;
+      const parentUuid = extractParentUuid(filePath);
+      if (parentUuid) {
+        const list = parentUuidIndex.get(parentUuid) ?? [];
+        list.push(filePath);
+        parentUuidIndex.set(parentUuid, list);
+      }
+    }
+
+    // Walk the chain: for each known UUID, find children via the index
+    const queue = [...knownUuids];
+    while (queue.length > 0) {
+      const uuid = queue.pop()!;
+      const children = parentUuidIndex.get(uuid);
+      if (!children) continue;
+      for (const filePath of children) {
         if (includedPaths.has(filePath)) continue;
-        const parentUuid = extractParentUuid(filePath);
-        if (parentUuid && knownUuids.has(parentUuid)) {
-          result.push({ filePath, mtime: fs.statSync(filePath).mtimeMs });
-          includedPaths.add(filePath);
-          // Add this file's UUIDs so we can find grandchildren
-          for (const uuid of collectUuids(filePath)) {
-            knownUuids.add(uuid);
-          }
-          foundNew = true;
+        result.push({ filePath, mtime: fs.statSync(filePath).mtimeMs });
+        includedPaths.add(filePath);
+        for (const childUuid of collectUuids(filePath)) {
+          knownUuids.add(childUuid);
+          queue.push(childUuid);
         }
       }
     }
@@ -609,11 +658,6 @@ export function findAllSubagentJsonlsForAgent(
     if (result.length > 1) {
       log.session.debug('findAllSubagentJsonlsForAgent: multi-file', {
         agentName, fileCount: result.length,
-        nameMatched: [...includedPaths].filter(p => {
-          const h = readFileHead(p, 512);
-          return h && (h.includes(`@${agentName}`) || h.includes(`"${agentName}"`));
-        }).length,
-        chainMatched: result.length - (mainJsonlPath ? 1 : 0),
       });
     }
   } catch (err) {

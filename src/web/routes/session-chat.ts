@@ -350,10 +350,15 @@ export function registerSessionChatRpc(): void {
       agentName, fileCount: allJsonlPaths.length, eventCount: allEvents.length,
     })
 
-    // Start polling for this agent's main JSONL (stop any previous polling)
+    // Start multi-file polling for this agent
     const session = sessionRunner.findByClaudeId(sessionId)
     if (session) {
-      startTeamAgentPolling(sessionId, agentName, jsonlPath, !!record?.host)
+      startTeamAgentPolling(sessionId, agentName, {
+        allPaths: allJsonlPaths,
+        mainJsonlPath: jsonlPath,
+        cwd: cwd!,
+        remote: !!record?.host,
+      })
     }
 
     return { events: allEvents }
@@ -398,7 +403,12 @@ export function registerSessionChatRpc(): void {
 
 const teamPollers = new Map<string, ActiveTabPoller>()
 
-function startTeamAgentPolling(sessionId: string, agentName: string, jsonlPath: string, remote: boolean): void {
+function startTeamAgentPolling(sessionId: string, agentName: string, opts: {
+  allPaths: string[];
+  mainJsonlPath: string | null;
+  cwd: string;
+  remote: boolean;
+}): void {
   let poller = teamPollers.get(sessionId)
   if (!poller) {
     poller = new ActiveTabPoller((agent, events) => {
@@ -412,14 +422,24 @@ function startTeamAgentPolling(sessionId: string, agentName: string, jsonlPath: 
     teamPollers.set(sessionId, poller)
   }
 
-  // Subscribe to the new agent (stops previous if any)
-  poller.subscribe(agentName, jsonlPath, remote)
+  // Subscribe with multi-file tracking and discovery context
+  poller.subscribe(agentName, {
+    filePaths: opts.allPaths,
+    remote: opts.remote,
+    discovery: opts.remote ? undefined : {
+      sessionId,
+      cwd: opts.cwd,
+      agentName,
+      mainJsonlPath: opts.mainJsonlPath,
+    },
+  })
 }
 
 function stopTeamAgentPolling(sessionId: string): void {
   const poller = teamPollers.get(sessionId)
   if (poller) {
-    poller.stop()
+    poller.destroy()
+    teamPollers.delete(sessionId)
   }
 }
 

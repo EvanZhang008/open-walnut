@@ -78,7 +78,12 @@ const AgentEventView = memo(function AgentEventView({ event }: { event: TeamAgen
 });
 
 /** Chat input for sending messages to a teammate */
-function TeamChatInput({ teamName, agentName, onSent }: { teamName: string; agentName: string; onSent?: (text: string) => void }) {
+function TeamChatInput({ teamName, agentName, agentStatus, onSent }: {
+  teamName: string;
+  agentName: string;
+  agentStatus?: 'calling' | 'done' | 'error';
+  onSent?: (text: string) => void;
+}) {
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
 
@@ -105,14 +110,19 @@ function TeamChatInput({ teamName, agentName, onSent }: { teamName: string; agen
     }
   }, [handleSend]);
 
+  const isBusy = agentStatus === 'calling';
+
   return (
     <div className="team-chat-input">
+      {isBusy && (
+        <div className="team-chat-hint">Delivered after current turn ends</div>
+      )}
       <input
         type="text"
         value={message}
         onChange={e => setMessage(e.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder={`Message ${agentName}...`}
+        placeholder={isBusy ? `Message ${agentName} (queued)...` : `Message ${agentName}...`}
         disabled={sending}
         className="team-chat-input-field"
       />
@@ -129,12 +139,14 @@ function AgentPanel({
   events,
   loading,
   teamName,
+  agentStatus,
   onSent,
 }: {
   agentName: string;
   events: TeamAgentEvent[];
   loading: boolean;
   teamName: string;
+  agentStatus?: 'calling' | 'done' | 'error';
   onSent?: (text: string) => void;
 }) {
   // Coalesce consecutive text events into single blocks (memoized to avoid re-computing on every render)
@@ -177,7 +189,7 @@ function AgentPanel({
           <AgentEventView key={i} event={event} />
         ))}
       </div>
-      <TeamChatInput teamName={teamName} agentName={agentName} onSent={onSent} />
+      <TeamChatInput teamName={teamName} agentName={agentName} agentStatus={agentStatus} onSent={onSent} />
     </div>
   );
 }
@@ -234,6 +246,7 @@ export const TeamCard = memo(function TeamCard({
           events={agentEvents}
           loading={agentLoading}
           teamName={teamName}
+          agentStatus={agentStatuses?.get(activeAgent)}
           onSent={addSentMessage}
         />
       )}
