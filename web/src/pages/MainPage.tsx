@@ -675,7 +675,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           `1. Set a descriptive title (replace "Session: ...")`,
           `2. Move from "Quick Start" to the correct project if needed`,
         ].join('\n');
-        chat.sendMessage(agentMsg, undefined, images, 'quick-start');
+        // Images already sent to the session via quickStartSession() — don't duplicate
+        chat.sendMessage(agentMsg, undefined, undefined, 'quick-start');
       }).catch((err) => {
         setQuickStartPath(qsp); // Restore so user can retry
         // Remove the pending column on failure
