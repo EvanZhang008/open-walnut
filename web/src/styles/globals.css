@@ -6423,6 +6423,13 @@ img[data-lightbox-src],
   opacity: 0.8;
 }
 
+.todo-pinned-phase-attention {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--error);
+  flex-shrink: 0;
+}
+
 .todo-pinned-unpin {
   background: none;
   border: none;
@@ -8744,6 +8751,17 @@ img[data-lightbox-src],
 
 .task-context-bar-close:hover {
   color: var(--error);
+}
+
+.task-context-bar-attention {
+  border-color: var(--error);
+  background: rgba(255, 59, 48, 0.08);
+}
+
+.task-context-bar .badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  flex-shrink: 0;
 }
 
 /* ===== Task Star Button ===== */

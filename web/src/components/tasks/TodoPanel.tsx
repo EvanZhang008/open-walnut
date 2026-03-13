@@ -1410,6 +1410,9 @@ function SortablePinnedCard({ task, isFocused, onFocusTask, onUnpinTask, onOpenS
       {statusLabel && (
         <span className="todo-pinned-status" style={{ color: statusColor }}>{statusLabel}</span>
       )}
+      {(task.phase === 'AGENT_COMPLETE' || task.phase === 'AWAIT_HUMAN_ACTION') && (
+        <span className="todo-pinned-phase-attention">{PHASE_LABEL[task.phase] ?? task.phase}</span>
+      )}
       {(() => {
         const sid = resolveTaskSessionId(task);
         if (!sid) return null;
