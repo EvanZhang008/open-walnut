@@ -144,26 +144,25 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
         const hostLabels = new Map<string, string>();
         for (const d of dirs) { if (d.host && d.hostLabel) hostLabels.set(d.host, d.hostLabel); }
 
-        // Fire all in parallel: local + each SSH host
         const promises: Array<Promise<Array<{ cwd: string; host: string | null; hostLabel?: string }>>> = [];
         // Local
         promises.push(
           listDirs(activePath, null)
-            .then(paths => filterChildren(paths, dir, partial).map(p => ({ cwd: p, host: null })))
+            .then(res => filterChildren(res.dirs, res.parent, partial).map(p => ({ cwd: p, host: null })))
             .catch(() => [])
         );
         // Each SSH host
         for (const host of sshHosts) {
           promises.push(
             listDirs(activePath, host)
-              .then(paths => filterChildren(paths, dir, partial).map(p => ({ cwd: p, host, hostLabel: hostLabels.get(host) })))
+              .then(res => filterChildren(res.dirs, res.parent, partial).map(p => ({ cwd: p, host, hostLabel: hostLabels.get(host) })))
               .catch(() => [])
           );
         }
         setLiveLoading(true);
         Promise.all(promises).then(results => {
           setLiveTaggedDirs(results.flat());
-          setLiveDirs([]); // clear single-host dirs
+          setLiveDirs([]);
           setLiveLoading(false);
         });
       }, 150);
@@ -187,11 +186,16 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
     liveTimerRef.current = setTimeout(() => {
       setLiveLoading(true);
       listDirs(activePath, host)
-        .then(d => {
-          liveCacheRef.current = { prefix: dir, host, dirs: d };
-          setLiveDirs(filterChildren(d, dir, partial));
+        .then(res => {
+          // Use resolved parent from API (handles ~ expansion)
+          liveCacheRef.current = { prefix: res.parent, host, dirs: res.dirs };
+          setLiveDirs(filterChildren(res.dirs, res.parent, partial));
           setLiveTaggedDirs([]);
           setLiveLoading(false);
+          // If prefix was ~, rewrite editingPath to the resolved path
+          if (activePath.startsWith('~/') && res.parent && !res.parent.startsWith('~')) {
+            setEditingPath(res.parent);
+          }
         })
         .catch(() => { setLiveDirs([]); setLiveTaggedDirs([]); setLiveLoading(false); });
     }, 150);

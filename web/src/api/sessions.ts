@@ -111,11 +111,11 @@ export async function fetchWorkingDirs(): Promise<WorkingDirEntry[]> {
 /** Invalidate cache (e.g. after starting a new session) */
 export function invalidateWorkingDirsCache(): void { _workingDirsCache = null; _workingDirsFetching = null; }
 
-export async function listDirs(prefix: string, host?: string | null): Promise<string[]> {
+export async function listDirs(prefix: string, host?: string | null): Promise<{ dirs: string[]; parent: string }> {
   const params = new URLSearchParams({ prefix });
   if (host) params.set('host', host);
-  const res = await apiGet<{ dirs: string[] }>(`/api/sessions/list-dirs?${params}`);
-  return res.dirs;
+  const res = await apiGet<{ dirs: string[]; parent: string }>(`/api/sessions/list-dirs?${params}`);
+  return { dirs: res.dirs, parent: res.parent };
 }
 
 // Prefetch working dirs + pre-warm SSH on page load (fire-and-forget).
