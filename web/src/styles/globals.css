@@ -5033,22 +5033,19 @@ input:focus, textarea:focus, select:focus {
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* Inline task context pill — sits inside chat-input-container */
+/* Inline task context pill — sits inside .chat-input-box above the textarea */
 .chat-input-task-pill {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 3px 10px 3px 4px;
-  background: var(--accent-subtle);
-  border: 1px solid var(--accent);
-  border-radius: 999px;
+  padding: 6px 10px 2px 6px;
+  border-bottom: 1px solid var(--border);
   flex-shrink: 0;
   max-width: 100%;
   animation: contextBarSlideIn 0.15s ease;
 }
 .chat-input-task-pill.pill-attention {
-  border-color: var(--error);
-  background: rgba(255, 59, 48, 0.08);
+  background: rgba(255, 59, 48, 0.06);
 }
 .chat-input-task-pill .pill-close {
   display: flex;
@@ -5085,6 +5082,22 @@ input:focus, textarea:focus, select:focus {
   flex-shrink: 0;
 }
 
+/* Unified bordered box: pill + images + textarea all inside one border */
+.chat-input-box {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  transition: border-color 0.2s, box-shadow 0.2s;
+  min-width: 0;
+}
+.chat-input-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+
 .chat-input-textarea {
   flex: 1;
   resize: none;
@@ -5092,18 +5105,11 @@ input:focus, textarea:focus, select:focus {
   max-height: 200px;
   font: inherit;
   color: var(--fg);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
+  background: transparent;
+  border: none;
   padding: 8px 12px;
   outline: none;
   line-height: 1.5;
-  transition: border-color 0.2s, box-shadow 0.2s;
-}
-
-.chat-input-textarea:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-subtle);
 }
 
 .chat-send-btn {

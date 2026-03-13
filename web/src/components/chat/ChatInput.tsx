@@ -321,54 +321,57 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
           )}
         </div>
       )}
-      {/* Inline task context pill — inside the input box so user can't miss it */}
-      {focusedTask && onClearFocus && (
-        <div className={`chat-input-task-pill${(focusedTask.phase === 'AGENT_COMPLETE' || focusedTask.phase === 'AWAIT_HUMAN_ACTION') ? ' pill-attention' : ''}`}>
-          <button
-            className="pill-close"
-            onClick={onClearFocus}
-            title="Clear task focus"
-            type="button"
-            aria-label="Clear task focus"
-          >
-            &times;
-          </button>
-          <StatusBadge status={focusedTask.status} phase={focusedTask.phase} />
-          <span className="pill-title">{focusedTask.title}</span>
-        </div>
-      )}
-      {/* Image preview area */}
-      {images.length > 0 && (
-        <div className="chat-image-previews">
-          {images.map((img, i) => (
-            <div key={i} className="chat-image-preview">
-              <img
-                src={`data:${img.mediaType};base64,${img.data}`}
-                alt={img.name}
-              />
-              <button
-                className="chat-image-remove"
-                onClick={() => removeImage(i)}
-                type="button"
-                aria-label="Remove image"
-              >
-                &times;
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-      <textarea
-        ref={textareaRef}
-        className="chat-input-textarea"
-        value={value}
-        onChange={(e) => handleChange(e.target.value)}
-        onKeyDown={handleKeyDown}
-        onPaste={handlePaste}
-        placeholder={placeholder ?? (focusedTaskTitle ? `Ask about '${focusedTaskTitle}'...` : 'Type a message... (/ for commands)')}
-        disabled={disabled}
-        rows={1}
-      />
+      {/* Unified input box: pill + images + textarea share one border */}
+      <div className="chat-input-box">
+        {/* Inline task context pill */}
+        {focusedTask && onClearFocus && (
+          <div className={`chat-input-task-pill${(focusedTask.phase === 'AGENT_COMPLETE' || focusedTask.phase === 'AWAIT_HUMAN_ACTION') ? ' pill-attention' : ''}`}>
+            <button
+              className="pill-close"
+              onClick={onClearFocus}
+              title="Clear task focus"
+              type="button"
+              aria-label="Clear task focus"
+            >
+              &times;
+            </button>
+            <StatusBadge status={focusedTask.status} phase={focusedTask.phase} />
+            <span className="pill-title">{focusedTask.title}</span>
+          </div>
+        )}
+        {/* Image preview area */}
+        {images.length > 0 && (
+          <div className="chat-image-previews">
+            {images.map((img, i) => (
+              <div key={i} className="chat-image-preview">
+                <img
+                  src={`data:${img.mediaType};base64,${img.data}`}
+                  alt={img.name}
+                />
+                <button
+                  className="chat-image-remove"
+                  onClick={() => removeImage(i)}
+                  type="button"
+                  aria-label="Remove image"
+                >
+                  &times;
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <textarea
+          ref={textareaRef}
+          className="chat-input-textarea"
+          value={value}
+          onChange={(e) => handleChange(e.target.value)}
+          onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
+          placeholder={placeholder ?? (focusedTaskTitle ? `Ask about '${focusedTaskTitle}'...` : 'Type a message... (/ for commands)')}
+          disabled={disabled}
+          rows={1}
+        />
+      </div>
       <input
         ref={fileInputRef}
         type="file"
