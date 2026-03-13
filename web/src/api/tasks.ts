@@ -141,12 +141,32 @@ export interface SprintOption {
   endDate: string;
 }
 
-/** Fetch available sprints from plugin cache (for sprint picker dropdown) */
+/**
+ * Fetch available sprints for the sprint picker dropdown.
+ * Two-layer strategy:
+ *  1. Plugin cache (has dates + current sprint detection)
+ *  2. Fallback to local task meta (just names + counts, always works)
+ */
 export async function fetchAvailableSprints(): Promise<{ sprints: SprintOption[]; current: string | null }> {
+  // Layer 1: try plugin endpoint (has startDate/endDate + current sprint)
   try {
-    return await apiGet<{ sprints: SprintOption[]; current: string | null }>('/api/plugins/taskei/sprints');
+    const result = await apiGet<{ sprints: SprintOption[]; current: string | null }>('/api/plugins/taskei/sprints');
+    if (result.sprints.length > 0) return result;
   } catch {
-    // Plugin not loaded or no sprints cached — return empty
+    // Plugin not loaded — fall through to local data
+  }
+
+  // Layer 2: local task meta — always works, but only has names + counts
+  try {
+    const meta = await apiGet<{ sprints: { name: string; count: number }[] }>('/api/tasks/meta/sprints');
+    const sprints: SprintOption[] = meta.sprints.map((s, i) => ({
+      id: `local-${i}`,
+      name: s.name,
+      startDate: '',
+      endDate: '',
+    }));
+    return { sprints, current: null };
+  } catch {
     return { sprints: [], current: null };
   }
 }
