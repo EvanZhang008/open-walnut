@@ -12203,7 +12203,6 @@ img[data-lightbox-src],
 .dock-task-status-labels {
   display: flex;
   gap: 6px;
-  padding-left: 13px;
 }
 
 .dock-task-phase-label {
@@ -12220,19 +12219,15 @@ img[data-lightbox-src],
   color: var(--accent);
 }
 
-.dock-task-status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
+.dock-task-process-label {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
   flex-shrink: 0;
 }
 
-.dock-task-streaming-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--success);
-  flex-shrink: 0;
+.dock-task-process-running {
   animation: dock-pulse 1.5s ease-in-out infinite;
 }
 
