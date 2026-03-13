@@ -816,6 +816,31 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     debouncedScroll(`msgs=${messages.length}`);
   }, [messages, debouncedScroll]);
 
+  // Path C: Image load corrector — fixes scrollHeight growth from async image loading.
+  // Images in messages load asynchronously — each goes from 0px to natural height, growing
+  // scrollHeight by thousands of px while scrollTop stays fixed. No other layer detects this
+  // (messages ref didn't change, container didn't resize). Confirmed root cause of the
+  // "goes to middle then comes back" jump (DRIFT logs showed +18,937px gaps).
+  //
+  // Uses capture-phase 'load' listener — img load events don't bubble, but capture catches
+  // them. Fires only when an image actually finishes loading. Zero polling, zero overhead.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onLoad = (e: Event) => {
+      if (!isAtBottom.current) return;
+      const target = e.target as HTMLElement;
+      if (target.tagName !== 'IMG') return;
+      const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (gap > 2) {
+        el.scrollTop = el.scrollHeight;
+        console.log(`[scroll:${sid8}] IMG-FIX gap=${gap}→0 src=${(target as HTMLImageElement).src.slice(-40)}`);
+      }
+    };
+    el.addEventListener('load', onLoad, true); // capture phase — img load doesn't bubble
+    return () => el.removeEventListener('load', onLoad, true);
+  }, [sid8]);
+
   // Path B-2: Container resize (sibling components loading) — debounced
   useEffect(() => {
     const el = containerRef.current;
