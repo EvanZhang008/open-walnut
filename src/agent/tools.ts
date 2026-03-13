@@ -514,7 +514,7 @@ export const tools: ToolDefinition[] = [
         name: { type: 'string', description: 'Category name. Required for type=category.' },
         source: { type: 'string', enum: ['local', 'ms-todo'], description: 'Sync target for the category. Required for type=category. "local" = never synced.' },
         // Task fields
-        title: { type: 'string', description: 'Task title. Required for type=task. Format: "<≤3-word prefix> — <short description>". Prefix MUST be the most unique identifier of the task (max 3 words) — the thing that instantly tells you WHICH task this is. Use em-dash (—). Good: "Sprint自动选择 — 查询/选择当前sprint", "Task不跳转 — 点击task不定位到列表位置". Bad: generic prefixes like "Sprint功能增强", "Bug:", "Tool Description".' },
+        title: { type: 'string', description: 'Task title. Required for type=task. Format: "<≤3-word prefix> — <short description>". Prefix MUST be the most unique identifier of the task (max 3 words) — the thing that instantly tells you WHICH task this is. Use em-dash (—). Good: "Sprint选择器 — 查询/选择当前sprint", "Task不跳转 — 点击task不定位到列表位置". Bad: generic prefixes like "Sprint功能增强", "Bug:", "Tool Description".' },
         priority: { type: 'string', enum: ['immediate', 'important', 'backlog', 'none'], description: 'Priority: immediate (urgent), important (can wait), backlog (future), none' },
         category: { type: 'string', description: 'Category — top-level group (e.g. Work, Life, Later). Required for type=project.' },
         project: { type: 'string', description: 'Project — list within category (e.g. HomeLab, Costco). Required for type=project. Defaults to category if omitted for type=task.' },
@@ -637,7 +637,7 @@ For projects (type='project'): set default_host and default_cwd for remote sessi
         type: { type: 'string', enum: ['task', 'project'], description: 'Entity type. Default: "task".' },
         // Task fields
         id: { type: 'string', description: 'Task ID or prefix. Required for type=task.' },
-        title: { type: 'string', description: 'New title. Format: "<≤3-word prefix> — <short description>". Prefix MUST be the most unique identifier of the task (max 3 words) — the thing that instantly tells you WHICH task this is. Use em-dash (—). Good: "Sprint自动选择 — 查询/选择当前sprint", "Task不跳转 — 点击task不定位到列表位置". Bad: generic prefixes like "Sprint功能增强", "Bug:", "Tool Description".' },
+        title: { type: 'string', description: 'New title. Format: "<≤3-word prefix> — <short description>". Prefix MUST be the most unique identifier of the task (max 3 words) — the thing that instantly tells you WHICH task this is. Use em-dash (—). Good: "Sprint选择器 — 查询/选择当前sprint", "Task不跳转 — 点击task不定位到列表位置". Bad: generic prefixes like "Sprint功能增强", "Bug:", "Tool Description".' },
         priority: { type: 'string', enum: ['immediate', 'important', 'backlog', 'none'], description: 'New priority: immediate (urgent), important (can wait), backlog (future), none.' },
         phase: { type: 'string', enum: [...VALID_PHASES].filter(p => p !== 'COMPLETE'), description: 'Task lifecycle phase. Status is auto-derived. Only humans can set COMPLETE.' },
         category: { type: 'string', description: 'New category (also used for project identification when type=project).' },
@@ -1306,17 +1306,13 @@ defaults (same resolution chain as start_session).`,
             jsonlContent = await reader.readFile(exactPath);
           }
           if (!jsonlContent) {
-            const hostPrefix = resolvedHost ? `${resolvedHost}:` : '';
             const expectedPath = resolvedCwd
-              ? `${hostPrefix}${remoteJsonlPath(sessionId, resolvedCwd)}`
-              : `${hostPrefix}~/.claude/projects/{encoded-cwd}/${sessionId}.jsonl`;
+              ? `${resolvedHost}:${remoteJsonlPath(sessionId, resolvedCwd)}`
+              : `${resolvedHost}:~/.claude/projects/{encoded-cwd}/${sessionId}.jsonl`;
             return `Error: JSONL not found at canonical path for session ${sessionId}.\n` +
               `  Expected: ${expectedPath}\n` +
-              `  CWD used: ${resolvedCwd || '(none resolved)'}\n\n` +
-              `The JSONL must exist at the exact canonical path for the given CWD.\n` +
-              `To find the right project directory, run:\n` +
-              `  ssh ${resolvedHost} "ls ~/.claude/projects/ | xargs -I{} sh -c 'test -f ~/.claude/projects/{}/${sessionId}.jsonl && echo {}'"` +
-              `\nThen decode the directory name (replace - with /) to get the correct CWD, and re-run with working_directory="<correct CWD>".`;
+              `  CWD used: ${resolvedCwd || '(none resolved)'}\n` +
+              `Check ~/.claude/projects/ on ${resolvedHost} for the correct directory name, then re-run with the correct working_directory.`;
           }
         } else {
           // Local: check canonical path only (no fallback search)
@@ -1330,11 +1326,8 @@ defaults (same resolution chain as start_session).`,
             const encoded = resolvedCwd ? encodeProjectPath(resolvedCwd) : '{encoded-cwd}';
             return `Error: JSONL not found at canonical path for session ${sessionId}.\n` +
               `  Expected: ~/.claude/projects/${encoded}/${sessionId}.jsonl\n` +
-              `  CWD used: ${resolvedCwd || '(none resolved)'}\n\n` +
-              `The JSONL must exist at the exact canonical path for the given CWD.\n` +
-              `To find the right project directory, run:\n` +
-              `  ls ~/.claude/projects/ | xargs -I{} sh -c 'test -f ~/.claude/projects/{}/${sessionId}.jsonl && echo {}'` +
-              `\nThen decode the directory name (replace - with /) to get the correct CWD, and re-run with working_directory="<correct CWD>".`;
+              `  CWD used: ${resolvedCwd || '(none resolved)'}\n` +
+              `Check ~/.claude/projects/ for the correct directory name, then re-run with the correct working_directory.`;
           }
         }
 

@@ -144,16 +144,21 @@ export interface SprintOption {
 /**
  * Fetch available sprints for the sprint picker dropdown.
  * Two-layer strategy:
- *  1. Plugin cache (has dates + current sprint detection)
+ *  1. Discover plugins dynamically, try each for /sprints (has dates + current sprint)
  *  2. Fallback to local task meta (just names + counts, always works)
  */
 export async function fetchAvailableSprints(): Promise<{ sprints: SprintOption[]; current: string | null }> {
-  // Layer 1: try plugin endpoint (has startDate/endDate + current sprint)
+  // Layer 1: discover plugins and try each for enriched sprint data
   try {
-    const result = await apiGet<{ sprints: SprintOption[]; current: string | null }>('/api/plugins/sprint-sync/sprints');
-    if (result.sprints.length > 0) return result;
+    const plugins = await apiGet<Array<{ id: string }>>('/api/integrations');
+    for (const plugin of plugins) {
+      try {
+        const result = await apiGet<{ sprints: SprintOption[]; current: string | null }>(`/api/plugins/${plugin.id}/sprints`);
+        if (result.sprints.length > 0) return result;
+      } catch { /* this plugin doesn't serve sprints — try next */ }
+    }
   } catch {
-    // Plugin not loaded — fall through to local data
+    // Integrations endpoint unavailable — fall through to local data
   }
 
   // Layer 2: local task meta — always works, but only has names + counts
