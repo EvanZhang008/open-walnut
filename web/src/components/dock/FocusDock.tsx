@@ -34,6 +34,10 @@ const WORK_LABELS: Record<string, string> = {
   await_human_action: 'Await Human', completed: 'Completed', error: 'Error',
 };
 
+const PROCESS_LABELS: Record<string, string> = {
+  running: 'Running', idle: 'Idle', stopped: 'Stopped',
+};
+
 // ── Dock height constants ──
 
 const DOCK_HEIGHT_KEY = 'walnut-dock-height';
@@ -112,8 +116,9 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
     >
       <div className="dock-task-header">
         <div className="dock-task-header-top">
-          <span className="dock-task-status-dot" style={{ background: statusColor }} />
-          {isStreaming && <span className="dock-task-streaming-dot" />}
+          <span className={`dock-task-process-label${isStreaming ? ' dock-task-process-running' : ''}`} style={{ color: statusColor }}>
+            {PROCESS_LABELS[ps] ?? ps}
+          </span>
           <span className="dock-task-title" title={task.title}>{task.title}</span>
           {sessionId && (
             <button
