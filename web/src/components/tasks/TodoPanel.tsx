@@ -1382,21 +1382,24 @@ function SortablePinnedCard({ task, isFocused, onFocusTask, onUnpinTask, onOpenS
     opacity: isDragging ? 0.5 : undefined,
   };
 
+  const needsAttention = task.phase === 'AGENT_COMPLETE' || task.phase === 'AWAIT_HUMAN_ACTION';
+  const dotColor = task.status === 'done' ? '#34c759'
+    : task.phase === 'IN_PROGRESS' ? '#007aff'
+    : needsAttention ? 'var(--error)'
+    : 'var(--fg-muted)';
+  const phaseLabel = PHASE_LABEL[task.phase] ?? task.phase;
+
   const ps = task.session_status?.process_status ?? 'stopped';
   const ws = task.session_status?.work_status ?? null;
-  const statusColor = task.session_status
+  const sessionColor = task.session_status
     ? compositeColor(ps as Parameters<typeof compositeColor>[0], (ws ?? 'completed') as Parameters<typeof compositeColor>[1])
-    : 'var(--fg-muted)';
-  const statusLabel = ps === 'running' ? 'Running'
-    : ps === 'idle' ? 'Idle'
-    : ws ? (WORK_LABELS as Record<string, string>)[ws] ?? ws
     : null;
 
   return (
     <div
       ref={setNodeRef}
       style={style}
-      className={`todo-pinned-card${isFocused ? ' todo-pinned-card-active' : ''}`}
+      className={`todo-pinned-card${isFocused ? ' todo-pinned-card-active' : ''}${needsAttention ? ' todo-pinned-card-attention' : ''}`}
       onClick={() => onFocusTask?.(task)}
       role="button"
       tabIndex={0}
@@ -1405,21 +1408,16 @@ function SortablePinnedCard({ task, isFocused, onFocusTask, onUnpinTask, onOpenS
       <span className="todo-pinned-drag-handle" {...attributes} {...listeners} title="Drag to reorder">
         &#x2630;
       </span>
-      <span className="todo-pinned-dot" style={{ background: statusColor }} />
+      <span className="todo-pinned-dot" style={{ background: dotColor }} />
       <span className="todo-pinned-title" title={task.title}>{task.title}</span>
-      {statusLabel && (
-        <span className="todo-pinned-status" style={{ color: statusColor }}>{statusLabel}</span>
-      )}
-      {(task.phase === 'AGENT_COMPLETE' || task.phase === 'AWAIT_HUMAN_ACTION') && (
-        <span className="todo-pinned-phase-attention">{PHASE_LABEL[task.phase] ?? task.phase}</span>
-      )}
+      <span className="todo-pinned-phase" style={{ color: needsAttention ? 'var(--error)' : 'var(--fg-muted)' }}>{phaseLabel}</span>
       {(() => {
         const sid = resolveTaskSessionId(task);
         if (!sid) return null;
         return (
           <button
             className="todo-pinned-session-chip"
-            style={{ borderColor: statusColor, color: statusColor }}
+            style={{ borderColor: sessionColor ?? 'var(--fg-muted)', color: sessionColor ?? 'var(--fg-muted)' }}
             onClick={(e) => { e.stopPropagation(); onOpenSession?.(sid); }}
             title="Open session"
             aria-label="Open session"

@@ -6416,18 +6416,22 @@ img[data-lightbox-src],
   line-height: 1.3;
 }
 
-.todo-pinned-status {
+.todo-pinned-phase {
   font-size: 10px;
   font-weight: 500;
   flex-shrink: 0;
-  opacity: 0.8;
 }
 
-.todo-pinned-phase-attention {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--error);
-  flex-shrink: 0;
+.todo-pinned-card-attention {
+  background: rgba(255, 59, 48, 0.08);
+}
+
+.todo-pinned-card-attention:hover {
+  background: rgba(255, 59, 48, 0.14);
+}
+
+.todo-pinned-card-attention.todo-pinned-card-active {
+  background: rgba(255, 59, 48, 0.12);
 }
 
 .todo-pinned-unpin {
