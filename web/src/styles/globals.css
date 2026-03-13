@@ -12168,11 +12168,11 @@ img[data-lightbox-src],
 }
 
 .dock-task-attention {
-  border: 2px solid #e53935;
+  border: 2px solid var(--error);
 }
 
 .dock-task-attention .dock-task-phase-label {
-  color: #e53935;
+  color: var(--error);
   font-weight: 600;
 }
 
