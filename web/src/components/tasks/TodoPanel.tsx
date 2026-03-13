@@ -1404,8 +1404,8 @@ function SortablePinnedCard({ task, isFocused, onFocusTask, onUnpinTask, onOpenS
       <span className="todo-pinned-drag-handle" {...attributes} {...listeners} title="Drag to reorder">
         &#x2630;
       </span>
-      <span className={`todo-pinned-phase${needsAttention ? ' todo-pinned-phase-attention' : ''}`}>{phaseLabel}</span>
       <span className="todo-pinned-title" title={task.title}>{task.title}</span>
+      <span className={`todo-pinned-phase${needsAttention ? ' todo-pinned-phase-attention' : ''}`}>{phaseLabel}</span>
       {(() => {
         const sid = resolveTaskSessionId(task);
         if (!sid) return null;
