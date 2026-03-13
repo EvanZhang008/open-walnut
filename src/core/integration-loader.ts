@@ -18,8 +18,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import yaml from 'js-yaml';
 import { WALNUT_HOME, TASKS_FILE, CONFIG_FILE } from '../constants.js';
 import { createSubsystemLogger } from '../logging/index.js';
@@ -56,6 +55,8 @@ async function bundleExternalPlugin(
     const pluginName = path.basename(pluginDir);
     const outfile = path.join(os.tmpdir(), `walnut-plugin-${pluginName}-${Date.now()}.mjs`);
 
+    // BUILTIN_DIR is always {root}/dist/integrations or {root}/src/integrations
+    const projectRoot = path.dirname(path.dirname(BUILTIN_DIR));
     await build({
       entryPoints: [entryFile],
       outfile,
@@ -64,15 +65,24 @@ async function bundleExternalPlugin(
       platform: 'node',
       target: 'node22',
       external: ['better-sqlite3'],
-      logLevel: 'silent',
+      nodePaths: [path.join(projectRoot, 'node_modules')],
+      banner: { js: 'import { createRequire as __cr } from "node:module"; const require = __cr(import.meta.url);' },
+      logLevel: 'warning',
       plugins: [{
         name: 'rebase-walnut-imports',
         setup(b) {
           // Rebase parent-directory imports (../../core/, ../../utils/, etc.)
           // to the walnut src/ tree so they resolve correctly.
+          // Use src/ (not dist/) because tsup bundles everything — dist/ lacks individual module files.
+          // BUILTIN_DIR = {project}/dist/integrations → srcBase = {project}/src/integrations
+          const srcBase = path.join(path.dirname(path.dirname(BUILTIN_DIR)), 'src', 'integrations');
+          const rebaseDir = fs.existsSync(srcBase) ? srcBase : BUILTIN_DIR;
           b.onResolve({ filter: /^\.\.\// }, (args) => {
+            // Only rebase imports originating from the plugin directory itself.
+            // Once resolved into the walnut src/ tree, let esbuild handle natively.
+            if (!args.importer.startsWith(pluginDir + '/')) return undefined;
             const subPath = path.relative(pluginDir, args.importer);
-            const assumedImporter = path.join(BUILTIN_DIR, pluginName, subPath);
+            const assumedImporter = path.join(rebaseDir, pluginName, subPath);
             const resolved = path.resolve(path.dirname(assumedImporter), args.path);
             // Try .ts extension (esbuild resolves .js → .ts naturally in the src tree)
             for (const candidate of [
@@ -388,6 +398,9 @@ async function loadPlugin(
         bundledFile = await bundleExternalPlugin(pluginDir, entryPath);
         if (bundledFile) {
           const mod = await import(pathToFileURL(bundledFile).href);
+          // Clean up temp bundle — module is cached by Node after import()
+          fsp.unlink(bundledFile).catch(() => {});
+          bundledFile = null;
           if (typeof mod.default === 'function') {
             registerFn = mod.default;
             break;

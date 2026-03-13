@@ -24,5 +24,5 @@ export default defineConfig({
   splitting: false,
   sourcemap: true,
   dts: false,
-  external: ['better-sqlite3', '@anthropic-ai/claude-agent-sdk'],
+  external: ['better-sqlite3', '@anthropic-ai/claude-agent-sdk', 'esbuild'],
 });
