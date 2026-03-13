@@ -12144,6 +12144,15 @@ img[data-lightbox-src],
   border-bottom: 2px solid var(--accent);
 }
 
+.dock-task-attention {
+  border-left: 3px solid #e53935;
+}
+
+.dock-task-attention .dock-task-phase-label {
+  color: #e53935;
+  font-weight: 600;
+}
+
 /* ── Card header ── */
 
 .dock-task-header {

@@ -71,6 +71,9 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
     ? compositeColor(ps, ws ?? 'completed')
     : 'var(--fg-muted)';
 
+  // Red highlight for phases that need human attention
+  const needsAttention = task.phase === 'AGENT_COMPLETE' || task.phase === 'AWAIT_HUMAN_ACTION';
+
   const handleClick = useCallback(() => {
     if (isActive) {
       emitDockActivateChat();
@@ -101,7 +104,7 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
   return (<>
     {FullscreenBackdrop}
     <div
-      className={`dock-task-card${isActive ? ' dock-task-active' : ''}${fullscreenClass}`}
+      className={`dock-task-card${isActive ? ' dock-task-active' : ''}${needsAttention ? ' dock-task-attention' : ''}${fullscreenClass}`}
       onClick={(e) => { if (!isFullscreen && (e.target === e.currentTarget || (e.target as HTMLElement).closest('.dock-task-header'))) handleClick(); }}
       role="button"
       tabIndex={0}
