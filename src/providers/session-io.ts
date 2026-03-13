@@ -171,7 +171,7 @@ export interface SessionIO {
   /** Current byte offset in the JSONL file (for resumption). */
   readonly tailOffset: number
 
-  /** The JSONL output file path (for stall detection, file renaming, etc.) */
+  /** The JSONL output file path (for health monitoring, file renaming, etc.) */
   readonly outputFile: string
 
   /** Process name used for liveness checks ('claude' for local, 'ssh' for remote). */

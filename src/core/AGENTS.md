@@ -136,8 +136,6 @@ Messages reach Claude Code via two paths, which produce different JSONL patterns
 
 **2. --resume spawn (between-turn delivery):** When no running process exists (or FIFO write fails), `processNext()` spawns `claude --resume <id> -p "message"`. This produces a normal `human_turn_start` entry (Pattern C). Always reliable.
 
-**FIFO stall detection:** After FIFO write, a 30s timer checks if the JSONL file has grown. If not (Claude stopped reading stdin), the stalled process is killed and a --resume spawn takes over. The message is re-enqueued to prevent loss.
-
 **Frontend implications:** See `web/src/AGENTS.md` "Session Chat" section for how the frontend deduplicates optimistic messages against these JSONL patterns. Key issue: FIFO-delivered messages may or may not appear in JSONL depending on timing, so the frontend must handle both cases (message in persisted history vs. not).
 
 ## Chat History & Compaction Details

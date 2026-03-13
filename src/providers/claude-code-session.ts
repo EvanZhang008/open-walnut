@@ -32,7 +32,7 @@ import { bus, EventNames, eventData } from '../core/event-bus.js'
 import { isProcessAlive } from '../utils/process.js'
 import { SESSION_STREAMS_DIR } from '../constants.js'
 import { log } from '../logging/index.js'
-import { markProcessing, removeProcessed, revertToPending, loadQueue, getAllSessionsWithPending, enqueueMessage } from '../core/session-message-queue.js'
+import { markProcessing, removeProcessed, revertToPending, loadQueue, getAllSessionsWithPending } from '../core/session-message-queue.js'
 import { createSessionIO, LocalIO, RemoteIO, transferImagesForRemoteSession, rewriteRemoteImagePaths } from './session-io.js'
 import type { SessionIO, SshTarget } from './session-io.js'
 import { recoverStateFromJsonl, extractImageFilePathFromInput } from '../core/session-history.js'
@@ -2770,62 +2770,9 @@ export class SessionRunner {
             count: msgs.length,
           }, ['main-ai'], { source: 'session-runner' })
 
-          // ── FIFO stall detection ──
-          // Claude CLI may stop reading from stdin FIFO after completing a --resume turn.
-          // If no JSONL output appears within the timeout, the FIFO delivery silently failed.
-          // Kill the stalled process and fall back to --resume spawn.
-          //
-          // Timeout is 120s (not 30s) because large-context sessions (e.g. 789K tokens)
-          // have very long time-to-first-token on API calls. 30s was killing sessions
-          // that were legitimately processing a large context.
-          const STALL_TIMEOUT_MS = 120_000
-          const outputFile = targetSession.outputFile
-          if (outputFile) {
-            let sizeAtWrite = -1
-            try { sizeAtWrite = fs.statSync(outputFile).size } catch { /* ignore */ }
-
-            const stallTimer = setTimeout(async () => {
-              // Guard: session may have already produced output or finished
-              if (targetSession!.workStatus !== 'in_progress') return
-
-              let currentSize = -1
-              try { currentSize = fs.statSync(outputFile).size } catch { /* ignore */ }
-
-              if (currentSize <= sizeAtWrite) {
-                log.session.warn('FIFO stall detected — no JSONL output, killing stalled process', {
-                  sessionId,
-                  taskId: targetSession!.taskId,
-                  pid: targetSession!.processPid,
-                  stallDurationMs: STALL_TIMEOUT_MS,
-                  sizeAtWrite,
-                  currentSize,
-                })
-
-                // Re-enqueue the message so processNext can pick it up after respawn.
-                // (Messages were already removed from disk queue after FIFO write above,
-                // so we enqueue fresh instead of reverting.)
-                await enqueueMessage(sessionId, combined)
-                this.clearActiveProcessing(sessionId)
-
-                // Gracefully stop the stalled process and wait for session state flush
-                await targetSession!.interrupt()
-
-                // Re-process — without FIFO, falls through to --resume spawn
-                this.processNext(sessionId, mode).catch((err) => {
-                  log.session.error('processNext failed after FIFO stall recovery', {
-                    sessionId,
-                    error: err instanceof Error ? err.message : String(err),
-                  })
-                })
-              }
-            }, STALL_TIMEOUT_MS)
-
-            // If the session produces a result normally, cancel the stall timer.
-            // We listen for JSONL activity via a one-shot tailer size check isn't needed —
-            // the normal SESSION_RESULT handler in the bus subscriber will clear activeProcessing,
-            // and the workStatus guard above will prevent the timer from acting.
-            stallTimer.unref()  // Don't keep the Node process alive for this timer
-          }
+          // FIFO stall detection removed — the 120s timer was killing legitimate
+          // long-running operations (compaction on large contexts, slow API calls).
+          // The 30-min health monitor idle timeout is the proper safety net.
 
           return
         }

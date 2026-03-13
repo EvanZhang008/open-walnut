@@ -77,7 +77,7 @@ Both tiers use multiset (count-based) matching for correctness with duplicate te
 | `web/src/hooks/useSessionStream.ts` | Streaming blocks from WS. `clear()` resets blocks on turn boundary. |
 | `web/src/hooks/useSessionHistory.ts` | Fetches persisted history via REST. Re-fetches on `historyVersion` change. |
 | `src/core/session-history.ts` | Server-side JSONL parser. Pattern A/B/C handling. |
-| `src/providers/claude-code-session.ts` | FIFO write (`writeMessage`), `processNext` (FIFO→--resume fallback), stall detection. |
+| `src/providers/claude-code-session.ts` | FIFO write (`writeMessage`), `processNext` (FIFO→--resume fallback). |
 | `src/core/session-message-queue.ts` | Disk-backed message queue. Survives server restart. |
 
 ## Frontend File Structure
