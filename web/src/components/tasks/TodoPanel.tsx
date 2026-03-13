@@ -14,7 +14,8 @@ import type { ProcessStatus, WorkStatus } from '@walnut/core';
 import { WORK_LABELS, WORK_COLORS, PROCESS_COLORS, PROCESS_LABELS, resolveTaskSessionId } from '@/utils/session-status';
 import type { UseFavoritesReturn } from '@/hooks/useFavorites';
 import type { UseOrderingReturn } from '@/hooks/useOrdering';
-import { PriorityBadge } from '../common/PriorityBadge';
+import { PriorityPicker } from '../common/PriorityPicker';
+import type { TaskPriority } from '@walnut/core';
 import { TodoSearchBar } from './TodoSearchBar';
 import { useTaskSearch } from '@/hooks/useTaskSearch';
 import {
@@ -63,7 +64,7 @@ interface TodoPanelProps {
   onCreate: (input: { title: string; priority: string; category?: string; project?: string }) => Promise<Task | unknown>;
   onUpdate?: (id: string, updates: { title?: string }) => void;
   onStar?: (id: string) => void;
-  onCyclePriority?: (id: string) => void;
+  onSetPriority?: (id: string, priority: string) => void;
   onFocusTask?: (task: Task) => void;
   onClearFocus?: () => void;
   focusedTaskId?: string;
@@ -279,7 +280,7 @@ interface SortableTaskItemProps {
   onClick: () => void;
   onSetPhase: (id: string, phase: string) => void;
   onStar?: (id: string) => void;
-  onCyclePriority?: (id: string) => void;
+  onSetPriority?: (id: string, priority: string) => void;
   onUpdateTitle?: (id: string, title: string) => void;
   onOpenSession?: (sessionId: string) => void;
   openSessionIds?: Set<string>;
@@ -293,7 +294,7 @@ interface SortableTaskItemProps {
   searchSemanticScore?: number; // Normalized semantic contribution [0,1]
 }
 
-function SortableTaskItem({ task, isFocused, isRecentlyDone, depth = 0, childCount, isExpanded, onToggleExpand, onClick, onSetPhase, onStar, onCyclePriority, onUpdateTitle, onOpenSession, openSessionIds, onPinTask, onUnpinTask, isPinned, searchContext, searchMatchField, searchScore, searchKeywordScore, searchSemanticScore }: SortableTaskItemProps) {
+function SortableTaskItem({ task, isFocused, isRecentlyDone, depth = 0, childCount, isExpanded, onToggleExpand, onClick, onSetPhase, onStar, onSetPriority, onUpdateTitle, onOpenSession, openSessionIds, onPinTask, onUnpinTask, isPinned, searchContext, searchMatchField, searchScore, searchKeywordScore, searchSemanticScore }: SortableTaskItemProps) {
   const integrations = useIntegrations();
   const {
     attributes,
@@ -646,10 +647,14 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, depth = 0, childCou
 
       {/* — action badges: priority, star, pin — */}
       <div className="todo-item-actions">
-        <PriorityBadge
-          priority={task.priority}
-          onClick={onCyclePriority ? (e) => { e.stopPropagation(); onCyclePriority(task.id); } : undefined}
-        />
+        {onSetPriority ? (
+          <PriorityPicker
+            priority={task.priority}
+            onChange={(p) => onSetPriority(task.id, p)}
+          />
+        ) : (
+          <span className={`badge badge-${task.priority}`}>{task.priority === 'immediate' ? '!!' : task.priority === 'important' ? '!' : task.priority === 'backlog' ? '~' : '--'}</span>
+        )}
         {onStar && (
           <button
             className={`task-star-btn${task.starred ? ' starred' : ''}`}
@@ -694,7 +699,7 @@ function TaskItemOverlay({ task }: { task: Task }) {
       <div className="todo-item-content">
         <span className="todo-item-title">{task.title}</span>
       </div>
-      <PriorityBadge priority={task.priority} />
+      <span className={`badge badge-${task.priority}`}>{task.priority === 'immediate' ? '!!' : task.priority === 'important' ? '!' : task.priority === 'backlog' ? '~' : '--'}</span>
     </div>
   );
 }
@@ -1418,7 +1423,7 @@ function SortablePinnedCard({ task, isFocused, onFocusTask, onUnpinTask, onOpenS
 
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onCyclePriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, favorites, ordering, onReorder, onMoveTask, onReparentTask, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, pinnedTaskIds, openSessionIds, operationError, onClearOperationError, onOperationError, externalCategory, onCategoryChange }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, favorites, ordering, onReorder, onMoveTask, onReparentTask, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, pinnedTaskIds, openSessionIds, operationError, onClearOperationError, onOperationError, externalCategory, onCategoryChange }: TodoPanelProps) {
   // Hide .metadata* tasks (project/category configuration tasks, not user-visible)
   const tasks = useMemo(() => rawTasks.filter((t) => !t.title.startsWith('.metadata')), [rawTasks]);
   const navigate = useNavigate();
@@ -2951,7 +2956,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     onClick={() => handleTaskClick(task)}
                     onSetPhase={onSetPhase ?? ((id) => onComplete(id))}
                     onStar={onStar}
-                    onCyclePriority={onCyclePriority}
+                    onSetPriority={onSetPriority}
                     onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
                     onOpenSession={onOpenSession}
                     openSessionIds={openSessionIds}
@@ -2988,7 +2993,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   onClick={() => handleTaskClick(task)}
                   onSetPhase={onSetPhase ?? ((id) => onComplete(id))}
                   onStar={onStar}
-                  onCyclePriority={onCyclePriority}
+                  onSetPriority={onSetPriority}
                   onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
                   onOpenSession={onOpenSession}
                   openSessionIds={openSessionIds}
@@ -3058,7 +3063,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                   onClick={() => handleTaskClick(task)}
                                   onSetPhase={onSetPhase ?? ((id) => onComplete(id))}
                                   onStar={onStar}
-                                  onCyclePriority={onCyclePriority}
+                                  onSetPriority={onSetPriority}
                                   onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
                                   onOpenSession={onOpenSession}
                                   openSessionIds={openSessionIds}
@@ -3117,7 +3122,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                                 onClick={() => handleTaskClick(task)}
                                                 onSetPhase={onSetPhase ?? ((id) => onComplete(id))}
                                                 onStar={onStar}
-                                                onCyclePriority={onCyclePriority}
+                                                onSetPriority={onSetPriority}
                                                 onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
                                                 onOpenSession={onOpenSession}
                                                 openSessionIds={openSessionIds}

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
 import type { Task, TaskPhase, TaskPriority } from '@walnut/core';
 import { fetchTask, updateTask, starTask } from '@/api/tasks';
 import { useEvent } from '@/hooks/useWebSocket';
-import { PriorityBadge } from '@/components/common/PriorityBadge';
+import { PriorityPicker } from '@/components/common/PriorityPicker';
 
 /* ── Phase constants (shared with TodoPanel) ─────────────────────── */
 
@@ -35,11 +35,6 @@ const PHASE_ORDER: string[] = [
   'HUMAN_VERIFIED', 'POST_WORK_COMPLETED',
   'PEER_CODE_REVIEW', 'RELEASE_IN_PIPELINE', 'COMPLETE',
 ];
-
-const PRIORITY_CYCLE: Record<string, TaskPriority> = {
-  none: 'backlog', backlog: 'important', important: 'immediate', immediate: 'none',
-  high: 'none', low: 'important', medium: 'important',
-};
 
 /* ── Component ───────────────────────────────────────────────────── */
 
@@ -107,16 +102,10 @@ export function TaskQuickActions({ taskId, task: externalTask }: TaskQuickAction
     });
   }, [task, taskId]);
 
-  const handleCyclePriority = useCallback(() => {
+  const handleSetPriority = useCallback((priority: TaskPriority) => {
     if (!task) return;
-    let nextPriority: TaskPriority = 'none';
-    setTask(prev => {
-      if (!prev) return prev;
-      nextPriority = PRIORITY_CYCLE[prev.priority] ?? 'none';
-      return { ...prev, priority: nextPriority };
-    });
-    // nextPriority is set synchronously by the updater above before the async call
-    updateTask(taskId, { priority: nextPriority }).catch(() => {
+    setTask(prev => prev ? { ...prev, priority } : prev);
+    updateTask(taskId, { priority }).catch(() => {
       fetchTask(taskId).then(setTask).catch(() => {});
     });
   }, [task, taskId]);
@@ -192,9 +181,10 @@ export function TaskQuickActions({ taskId, task: externalTask }: TaskQuickAction
       </div>
 
       {/* Priority */}
-      <PriorityBadge
+      <PriorityPicker
         priority={task.priority}
-        onClick={(e) => { e.stopPropagation(); handleCyclePriority(); }}
+        onChange={handleSetPriority}
+        fixed
       />
 
       {/* Star */}

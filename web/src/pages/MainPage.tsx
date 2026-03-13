@@ -97,8 +97,6 @@ function ChatHeaderRow({ title, stats, connectionState, inspectorOpen, onToggleI
   );
 }
 
-const PRIORITY_CYCLE: Record<string, 'immediate' | 'important' | 'backlog' | 'none'> = { none: 'backlog', backlog: 'important', important: 'immediate', immediate: 'none', high: 'none', low: 'important', medium: 'important' };
-
 const SS_TASK_KEY = 'walnut-home-focused-task';
 const SS_SESSION_COLUMNS_KEY = 'walnut-home-session-columns';
 const SS_TODO_SCROLL_KEY = 'walnut-home-todo-scroll';
@@ -601,23 +599,17 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   const handleComplete = useCallback((id: string) => {
     const task = taskMapRef.current.get(id);
-    if (task && task.status !== 'done' && focusedTask?.id === id) setFocusedTask(null);
+    if (task && task.status !== 'done' && focusedTaskRef.current?.id === id) setFocusedTask(null);
     toggleComplete(id);
-  }, [toggleComplete, focusedTask]);
+  }, [toggleComplete]);
 
   const handleSetPhase = useCallback((id: string, phase: string) => {
-    if (phase === 'COMPLETE' && focusedTask?.id === id) setFocusedTask(null);
+    if (phase === 'COMPLETE' && focusedTaskRef.current?.id === id) setFocusedTask(null);
     setPhase(id, phase);
-  }, [setPhase, focusedTask]);
+  }, [setPhase]);
 
-  const handleStar = useCallback((id: string) => {
-    star(id);
-  }, [star]);
-
-  const handleCyclePriority = useCallback((id: string) => {
-    const current = taskMapRef.current.get(id);
-    if (!current) return;
-    update(id, { priority: (PRIORITY_CYCLE[current.priority] ?? 'none') });
+  const handleSetPriority = useCallback((id: string, priority: string) => {
+    update(id, { priority });
   }, [update]);
 
   const handleUpdate = useCallback((id: string, updates: { title?: string }) => {
@@ -952,8 +944,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onSetPhase={handleSetPhase}
           onCreate={handleCreate}
           onUpdate={handleUpdate}
-          onStar={handleStar}
-          onCyclePriority={handleCyclePriority}
+          onStar={star}
+          onSetPriority={handleSetPriority}
           onFocusTask={handleFocusTask}
           onClearFocus={handleClearFocus}
           focusedTaskId={focusedTask?.id}

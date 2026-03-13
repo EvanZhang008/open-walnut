@@ -700,6 +700,39 @@ input:focus, textarea:focus, select:focus {
 .phase-picker-icon { width: 18px; text-align: center; font-size: 14px; }
 .phase-picker-check { margin-left: auto; color: var(--accent); font-size: 12px; }
 
+/* Priority picker dropdown */
+.priority-picker-wrapper { position: relative; }
+.priority-picker-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 30;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  min-width: 160px;
+  padding: 4px;
+}
+.priority-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  background: none;
+  font-size: 13px;
+  color: var(--fg-primary);
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.priority-picker-item:hover { background: var(--accent-subtle); }
+.priority-picker-item.active { font-weight: 600; }
+.priority-picker-icon { width: 22px; text-align: center; font-size: 12px; font-weight: 700; }
+.priority-picker-check { margin-left: auto; color: var(--accent); font-size: 12px; }
+
 /* Sprint pill in todo panel meta row */
 .todo-item-sprint-pill {
   font-size: 10px;
@@ -2863,10 +2896,17 @@ input:focus, textarea:focus, select:focus {
 /* Chat input */
 .team-chat-input {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   padding-top: 8px;
   margin-top: 8px;
   border-top: 1px solid var(--border);
+}
+.team-chat-hint {
+  width: 100%;
+  font-size: 11px;
+  color: var(--fg-muted);
+  opacity: 0.7;
 }
 .team-chat-input-field {
   flex: 1;
