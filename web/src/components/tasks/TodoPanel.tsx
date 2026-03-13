@@ -1534,8 +1534,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     scrollRafRef.current = requestAnimationFrame(() => {
       scrollRafRef.current = requestAnimationFrame(() => {
         doScroll();
-        // Phase 2: delayed re-scroll after 150ms to handle layout shifts
-        // (e.g., detail panel opening changes flex ratio of .todo-panel-list)
+        // Phase 2: re-scroll after 150ms to handle layout shifts from the detail
+        // panel opening (flex ratio change on .todo-panel-list). No CSS transition
+        // is involved — the flex change is instant — but React may batch the
+        // focusedTask state update (which controls the flex style) separately from
+        // the focusedTaskId update that triggers this effect. 150ms is generous
+        // enough to cover any batched re-renders on slow machines.
         scrollTimerRef.current = setTimeout(() => {
           scrollLog('focus-scroll-phase2', { taskId: taskId.substring(0, 12) });
           doScroll();

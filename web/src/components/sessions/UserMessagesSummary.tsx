@@ -36,20 +36,23 @@ export function UserMessagesSummary({ messages, loading, onMessageClick }: UserM
     onMessageClick?.(originalIndex);
   }, [onMessageClick]);
 
-  // Don't render if no messages loaded yet or no user messages
-  if (loading || userMessages.length === 0) return null;
+  const hasMessages = !loading && userMessages.length > 0;
+  const canExpand = hasMessages;
 
   return (
-    <div className="user-messages-summary">
+    <div className={`user-messages-summary${!canExpand ? ' user-messages-summary-muted' : ''}`}>
       <button
         className="user-messages-summary-toggle"
-        onClick={() => setCollapsed(c => !c)}
+        onClick={() => canExpand && setCollapsed(c => !c)}
+        disabled={!canExpand}
       >
-        <span className="user-messages-summary-arrow">{collapsed ? '\u25B8' : '\u25BE'}</span>
+        <span className="user-messages-summary-arrow">{collapsed || !canExpand ? '\u25B8' : '\u25BE'}</span>
         <span className="user-messages-summary-label">My Messages</span>
-        <span className="user-messages-summary-count">{userMessages.length}</span>
+        {hasMessages && (
+          <span className="user-messages-summary-count">{userMessages.length}</span>
+        )}
       </button>
-      {!collapsed && (
+      {canExpand && !collapsed && (
         <div className="user-messages-summary-list" ref={scrollRef}>
           {userMessages.map(({ message, originalIndex }) => (
             <div

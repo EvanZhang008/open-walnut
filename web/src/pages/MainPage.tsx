@@ -560,8 +560,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     return task;
   }, [create]);
 
+  // Ref to avoid re-creating handleFocusTask on every focus change (which defeats React.memo on TodoPanel)
+  const focusedTaskRef = useRef(focusedTask);
+  focusedTaskRef.current = focusedTask;
+
   const handleFocusTask = useCallback((task: Task) => {
-    const isRefocus = focusedTask?.id === task.id;
+    const isRefocus = focusedTaskRef.current?.id === task.id;
     // Always focus (never toggle off) — unfocusing is done via detail panel close / Esc.
     // Increment nonce so TodoPanel re-scrolls even when the same task is re-clicked.
     setFocusedTask(task);
@@ -570,7 +574,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     if (!isRefocus && task.needs_attention) {
       update(task.id, { needs_attention: false });
     }
-  }, [focusedTask, update]);
+  }, [update]);
 
   const handleFocusTaskById = useCallback((taskId: string) => {
     const task = taskMapRef.current.get(taskId);
@@ -579,6 +583,20 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   const handleClearFocus = useCallback(() => {
     setFocusedTask(null);
+  }, []);
+
+  // Escape key unfocuses the current task (since clicking no longer toggles off)
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && focusedTaskRef.current && !e.defaultPrevented) {
+        // Don't unfocus if a modal/dialog/popover is open (they handle Escape themselves)
+        const active = document.activeElement;
+        if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || (active as HTMLElement).isContentEditable)) return;
+        setFocusedTask(null);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
   }, []);
 
   const handleComplete = useCallback((id: string) => {
@@ -635,6 +653,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         host: qsp.host ?? undefined,
         message: text,
         category: qsp.category,
+        images,
       }).then((result) => {
         // Update ref with real taskId (WS events use this to match)
         if (pendingQuickStartRef.current === tempTaskId) {
@@ -652,7 +671,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           `1. Set a descriptive title (replace "Session: ...")`,
           `2. Move from "Quick Start" to the correct project if needed`,
         ].join('\n');
-        chat.sendMessage(agentMsg, undefined, undefined, 'quick-start');
+        chat.sendMessage(agentMsg, undefined, images, 'quick-start');
       }).catch((err) => {
         setQuickStartPath(qsp); // Restore so user can retry
         // Remove the pending column on failure

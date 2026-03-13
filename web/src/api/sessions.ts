@@ -1,5 +1,6 @@
 import { apiGet, apiPatch, apiPost } from './client';
 import type { SessionSummary, SessionRecord } from '@walnut/core';
+import type { ImageAttachment } from './chat';
 
 export async function fetchSessions(): Promise<SessionSummary[]> {
   const res = await apiGet<{ sessions: SessionSummary[] }>('/api/sessions');
@@ -135,8 +136,16 @@ export async function quickStartSession(opts: {
   category?: string;
   model?: string;
   mode?: string;
+  images?: ImageAttachment[];
 }): Promise<{ taskId: string; task: unknown }> {
-  const result = await apiPost<{ taskId: string; task: unknown }>('/api/sessions/quick-start', opts);
+  // Convert ImageAttachment[] to the backend ImagePayload format (data + mediaType only)
+  const payload: Record<string, unknown> = { ...opts };
+  if (opts.images?.length) {
+    payload.images = opts.images.map(img => ({ data: img.data, mediaType: img.mediaType }));
+  } else {
+    delete payload.images;
+  }
+  const result = await apiPost<{ taskId: string; task: unknown }>('/api/sessions/quick-start', payload);
   invalidateWorkingDirsCache(); // new session → new path entry
   return result;
 }

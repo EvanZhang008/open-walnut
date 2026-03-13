@@ -2311,6 +2311,14 @@ input:focus, textarea:focus, select:focus {
   flex-shrink: 0;
 }
 
+.user-messages-summary-muted {
+  opacity: 0.5;
+}
+
+.user-messages-summary-muted .user-messages-summary-toggle {
+  cursor: default;
+}
+
 .user-messages-summary-toggle {
   display: flex;
   align-items: center;

@@ -20,8 +20,8 @@ import { drainPendingCronNotifications } from '../server.js'
 import { getTask, appendConversationLog } from '../../core/task-manager.js'
 import { getProjectMemory } from '../../core/project-memory.js'
 import { getSessionByClaudeId } from '../../core/session-tracker.js'
-import { saveImageToDisk } from './images.js'
-import { compressForApi } from '../../utils/image-compress.js'
+import { processAndSaveImages, buildImageAnnotation } from './images.js'
+import type { ImagePayload } from './images.js'
 import { truncateToTokenBudget } from '../../utils/token-truncate.js'
 import { log } from '../../logging/index.js'
 import { enqueueMainAgentTurn } from '../agent-turn-queue.js'
@@ -115,14 +115,6 @@ interface TaskContext {
   exec_session_id?: string
   exec_session_status?: { work_status: string; process_status: string; activity?: string }
 }
-
-interface ImagePayload {
-  data: string       // raw base64
-  mediaType: string  // 'image/png', 'image/jpeg', etc.
-}
-
-const ALLOWED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
-const MAX_IMAGES_PER_MESSAGE = 5
 
 interface ChatPayload {
   message: string
@@ -675,25 +667,10 @@ export function registerChatRpc(): void {
     let savedImages: Array<{ filePath: string; filename: string; mediaType: string }> = []
     let imageContentBlocks: unknown[] | null = null
     if (images && images.length > 0) {
-      const validImages = images
-        .filter(img => ALLOWED_IMAGE_TYPES.has(img.mediaType))
-        .filter(img => !!img.data)
-        .slice(0, MAX_IMAGES_PER_MESSAGE)
-      if (validImages.length > 0) {
-        const saved = await Promise.all(
-          validImages.map(async (img) => {
-            const rawBuffer = Buffer.from(img.data, 'base64')
-            const { buffer, mimeType } = await compressForApi(rawBuffer, img.mediaType)
-            const compressedBase64 = buffer.toString('base64')
-            const { filePath, filename } = await saveImageToDisk(compressedBase64, mimeType)
-            return { filePath, filename, mediaType: mimeType, data: compressedBase64 }
-          }),
-        )
-        savedImages = saved.map(s => ({ filePath: s.filePath, filename: s.filename, mediaType: s.mediaType }))
-        imageContentBlocks = saved.map(s => ({
-          type: 'image',
-          source: { type: 'base64', media_type: s.mediaType, data: s.data },
-        }))
+      const processed = await processAndSaveImages(images)
+      if (processed) {
+        savedImages = processed.savedImages
+        imageContentBlocks = processed.imageContentBlocks
       }
     }
 
@@ -728,8 +705,7 @@ export function registerChatRpc(): void {
       // Build user content with images if present
       let userContent: string | unknown[] = agentMessage
       if (imageContentBlocks) {
-        const imagePathLines = savedImages.map((s, i) => `Image ${i + 1}: ${s.filePath}`).join('\n')
-        const imageAnnotation = `<attached-images>\n${imagePathLines}\n</attached-images>\n\n`
+        const imageAnnotation = buildImageAnnotation(savedImages)
         imageContentBlocks.push({ type: 'text', text: imageAnnotation + agentMessage })
         userContent = imageContentBlocks
       }

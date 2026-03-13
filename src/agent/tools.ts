@@ -1287,30 +1287,59 @@ defaults (same resolution chain as start_session).`,
           }
         }
 
-        // ⑤ Validate JSONL exists (local/remote transparent)
-        const { readSessionJsonlContent, canonicalJsonlPath, remoteJsonlPath } = await import('../core/session-file-reader.js');
-        const jsonlResult = await readSessionJsonlContent(sessionId, resolvedCwd, resolvedHost);
+        // ⑤ Validate JSONL exists at CANONICAL path only (no fallback search).
+        //    Fallback search (glob/find) caused a real bug: it found the JSONL in a
+        //    different project dir, then extractCwdFromJsonlContent() read a wrong CWD
+        //    from compacted entries, and the mismatch error helpfully suggested the wrong
+        //    CWD as a fix — leading to a broken import. Strict = canonical path only.
+        const { canonicalJsonlPath, remoteJsonlPath, encodeProjectPath, RemoteFileReader } = await import('../core/session-file-reader.js');
+        const { default: fs } = await import('node:fs');
 
-        if (!jsonlResult) {
-          const paths: string[] = [];
-          if (resolvedCwd) paths.push(canonicalJsonlPath(sessionId, resolvedCwd));
-          if (resolvedHost && resolvedCwd) paths.push(`${resolvedHost}:${remoteJsonlPath(sessionId, resolvedCwd)}`);
-          else if (resolvedHost) paths.push(`${resolvedHost}:${remoteJsonlPath(sessionId)}`);
-          paths.push('(also searched via glob and find fallback)');
-          return `Error: JSONL file not found for session ${sessionId}. Searched:\n${paths.map(p => `  - ${p}`).join('\n')}\nTry: ssh ${resolvedHost || 'HOST'} "find ~/.claude/projects -name '${sessionId}.jsonl'"`;
-        }
+        let jsonlContent: string | null = null;
+        const effectiveCwd = resolvedCwd;
 
-        // ⑤b Strict CWD validation: if the JSONL was found but the embedded CWD
-        // doesn't match what was resolved, error out with the correct CWD so the
-        // caller can re-run with the right working_directory.
-        const actualCwd = jsonlResult.foundCwd;
-        if (actualCwd && resolvedCwd && actualCwd !== resolvedCwd) {
-          return `Error: CWD mismatch for session ${sessionId}.\n  Resolved CWD: ${resolvedCwd}\n  Actual CWD:   ${actualCwd}\nRe-run with working_directory="${actualCwd}"`;
+        if (resolvedHost) {
+          // Remote: SSH check canonical path only (no glob/find fallback)
+          const reader = new RemoteFileReader(resolvedHost);
+          if (resolvedCwd) {
+            const exactPath = remoteJsonlPath(sessionId, resolvedCwd);
+            jsonlContent = await reader.readFile(exactPath);
+          }
+          if (!jsonlContent) {
+            const hostPrefix = resolvedHost ? `${resolvedHost}:` : '';
+            const expectedPath = resolvedCwd
+              ? `${hostPrefix}${remoteJsonlPath(sessionId, resolvedCwd)}`
+              : `${hostPrefix}~/.claude/projects/{encoded-cwd}/${sessionId}.jsonl`;
+            return `Error: JSONL not found at canonical path for session ${sessionId}.\n` +
+              `  Expected: ${expectedPath}\n` +
+              `  CWD used: ${resolvedCwd || '(none resolved)'}\n\n` +
+              `The JSONL must exist at the exact canonical path for the given CWD.\n` +
+              `To find the right project directory, run:\n` +
+              `  ssh ${resolvedHost} "ls ~/.claude/projects/ | xargs -I{} sh -c 'test -f ~/.claude/projects/{}/${sessionId}.jsonl && echo {}'"` +
+              `\nThen decode the directory name (replace - with /) to get the correct CWD, and re-run with working_directory="<correct CWD>".`;
+          }
+        } else {
+          // Local: check canonical path only (no fallback search)
+          if (resolvedCwd) {
+            const expectedPath = canonicalJsonlPath(sessionId, resolvedCwd);
+            if (fs.existsSync(expectedPath)) {
+              jsonlContent = fs.readFileSync(expectedPath, 'utf-8');
+            }
+          }
+          if (!jsonlContent) {
+            const encoded = resolvedCwd ? encodeProjectPath(resolvedCwd) : '{encoded-cwd}';
+            return `Error: JSONL not found at canonical path for session ${sessionId}.\n` +
+              `  Expected: ~/.claude/projects/${encoded}/${sessionId}.jsonl\n` +
+              `  CWD used: ${resolvedCwd || '(none resolved)'}\n\n` +
+              `The JSONL must exist at the exact canonical path for the given CWD.\n` +
+              `To find the right project directory, run:\n` +
+              `  ls ~/.claude/projects/ | xargs -I{} sh -c 'test -f ~/.claude/projects/{}/${sessionId}.jsonl && echo {}'` +
+              `\nThen decode the directory name (replace - with /) to get the correct CWD, and re-run with working_directory="<correct CWD>".`;
+          }
         }
-        const effectiveCwd = actualCwd || resolvedCwd;
 
         // ⑥ Extract metadata from JSONL
-        const lines = jsonlResult.content.split('\n').filter(Boolean);
+        const lines = jsonlContent.split('\n').filter(Boolean);
         let firstTimestamp: string | undefined;
         let lastTimestamp: string | undefined;
         let messageCount = 0;
@@ -1370,7 +1399,7 @@ defaults (same resolution chain as start_session).`,
         const sRef = sessionRef(record.claudeSessionId, record.title ?? title);
         const hostNote = resolvedHost ? ` (${resolvedHost})` : '';
         const cwdNote = effectiveCwd ? ` cwd=${effectiveCwd}` : '';
-        return `Imported session ${sRef}${hostNote}${cwdNote} → task ${taskRef(task.id, task.title)}. Messages: ${messageCount}, source: ${jsonlResult.source}.`;
+        return `Imported session ${sRef}${hostNote}${cwdNote} → task ${taskRef(task.id, task.title)}. Messages: ${messageCount}.`;
       } catch (err) {
         return `Error: ${err instanceof Error ? err.message : String(err)}`;
       }
@@ -1677,6 +1706,8 @@ defaults (same resolution chain as start_session).`,
         title: { type: 'string', description: 'Short title / one-sentence summary for the session' },
         work_status: { type: 'string', enum: ['await_human_action', 'agent_complete'], description: 'New work status. await_human_action = critical decision needs human input. agent_complete = session turn finished, can be resumed. Only humans can set completed.' },
         activity: { type: 'string', description: 'Freetext activity description (e.g. "planning", "testing")' },
+        cwd: { type: 'string', description: 'Override session working directory. Use to fix wrong CWD after import.' },
+        task_id: { type: 'string', description: 'Move session to a different task (ID or prefix). Pass empty string "" to dissociate from current task entirely.' },
         archived: { type: 'boolean', description: '⚠️ NEVER set archived=true unless the user EXPLICITLY requests archiving. Do NOT archive sessions proactively — even if they appear idle, error, or completed. The user may still be actively working on the task. Archive (true) or unarchive (false) a session. Session must be stopped before archiving. Archived sessions free the task session slot.' },
         archive_reason: { type: 'string', description: 'Why this session is being archived (e.g. "wrong directory", "obsolete"). Optional.' },
       },
@@ -1688,6 +1719,8 @@ defaults (same resolution chain as start_session).`,
         const title = params.title as string | undefined;
         const workStatus = params.work_status as WorkStatus | undefined;
         const activity = params.activity as string | undefined;
+        const newCwd = params.cwd as string | undefined;
+        const newTaskId = params.task_id as string | undefined;
         const archived = params.archived as boolean | undefined;
         const archiveReason = params.archive_reason as string | undefined;
 
@@ -1735,9 +1768,47 @@ defaults (same resolution chain as start_session).`,
           }
         }
 
+        // Handle task_id change (dissociate or re-associate)
+        if (newTaskId !== undefined) {
+          const session = await getSessionByClaudeId(sessionId);
+          if (!session) return `Error: Session not found: ${sessionId}`;
+
+          const { clearSession, clearSessionSlot, linkSession } = await import('../core/task-manager.js');
+
+          // Clear old task association
+          if (session.taskId) {
+            try {
+              await clearSession(session.taskId, sessionId);
+              await clearSessionSlot(session.taskId, sessionId);
+            } catch { /* old task may not exist */ }
+          }
+
+          if (newTaskId === '') {
+            // Dissociate from task entirely
+            await updateSessionRecord(sessionId, { taskId: undefined });
+            bus.emit(EventNames.SESSION_STATUS_CHANGED, {
+              sessionId,
+              taskId: undefined,
+              process_status: session.process_status,
+              work_status: session.work_status,
+            }, ['*'], { source: 'agent' });
+            const sRef = sessionRef(sessionId, session.title ?? sessionId.slice(0, 16));
+            return `Session ${sRef} dissociated from task. Session is now unlinked.`;
+          } else {
+            // Re-associate to a different task
+            const newTask = await getTask(newTaskId);
+            await updateSessionRecord(sessionId, { taskId: newTask.id, project: newTask.project });
+            await linkSession(newTask.id, sessionId);
+            bus.emit(EventNames.TASK_UPDATED, { taskId: newTask.id }, [], { source: 'agent' });
+            const sRef = sessionRef(sessionId, session.title ?? sessionId.slice(0, 16));
+            return `Session ${sRef} moved to task ${taskRef(newTask.id, newTask.title)}.`;
+          }
+        }
+
         const updates: Record<string, unknown> = {};
         if (title !== undefined) updates.title = title;
         if (activity !== undefined) updates.activity = activity;
+        if (newCwd !== undefined) updates.cwd = newCwd;
 
         if (workStatus) {
           // Validate: agent can only set await_human_action or agent_complete.
@@ -1779,7 +1850,7 @@ defaults (same resolution chain as start_session).`,
         }
 
         if (Object.keys(updates).length === 0) {
-          return 'Error: No updates provided. Specify title, work_status, or activity.';
+          return 'Error: No updates provided. Specify title, work_status, activity, cwd, or task_id.';
         }
 
         // Look up session for the ref tag label (no prior fetch in this branch)
@@ -1789,6 +1860,7 @@ defaults (same resolution chain as start_session).`,
         const parts = [];
         if (title) parts.push(`title="${title}"`);
         if (activity) parts.push(`activity="${activity}"`);
+        if (newCwd) parts.push(`cwd="${newCwd}"`);
         return `Session ${sRef} updated: ${parts.join(', ')}`;
       } catch (err) {
         return `Error: ${err instanceof Error ? err.message : String(err)}`;

@@ -17,6 +17,8 @@ import { readPlanFromSession, buildPlanExecutionMessage } from '../../utils/plan
 import { getFrequentDirs, compileFromSessions } from '../../core/frequent-dirs.js'
 import type { SessionRecord, Task, WorkStatus } from '../../core/types.js'
 import type { SessionHistoryMessage } from '../../core/session-history.js'
+import { processAndSaveImages, buildImageAnnotation } from './images.js'
+import type { ImagePayload } from './images.js'
 
 /** Diagnose message ordering — logs whether user text messages are interleaved or bunched at end. */
 function logMessageOrdering(phase: string, sessionId: string, messages: SessionHistoryMessage[], host?: string): void {
@@ -309,13 +311,14 @@ sessionsRouter.get('/list-dirs', async (req: Request, res: Response, next: NextF
 // POST /api/sessions/quick-start — create task + start session in one step
 sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { cwd, host, message, category, model, mode } = req.body as {
+    const { cwd, host, message, category, model, mode, images } = req.body as {
       cwd: string
       host?: string
       message: string
       category?: string
       model?: string
       mode?: string
+      images?: ImagePayload[]
     }
 
     if (!cwd || typeof cwd !== 'string') {
@@ -343,6 +346,16 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     if (message.length > 50000) {
       res.status(400).json({ error: 'message too long (max 50000 chars)' })
       return
+    }
+
+    // Process attached images — save to disk and annotate the session message
+    let sessionMessage = message
+    if (images && images.length > 0) {
+      const processed = await processAndSaveImages(images)
+      if (processed) {
+        const annotation = buildImageAnnotation(processed.savedImages)
+        sessionMessage = annotation + message
+      }
     }
 
     const config = await getConfig()
@@ -373,10 +386,10 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       '</quick_start_task>',
     ].join('\n')
 
-    // Emit SESSION_START event
+    // Emit SESSION_START event (sessionMessage includes image path annotations if images were attached)
     bus.emit(EventNames.SESSION_START, {
       taskId: task.id,
-      message,
+      message: sessionMessage,
       cwd,
       project: 'Quick Start',
       mode,

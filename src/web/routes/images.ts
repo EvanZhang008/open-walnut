@@ -12,6 +12,20 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import fsp from 'node:fs/promises'
 import { IMAGES_DIR } from '../../constants.js'
+import { compressForApi } from '../../utils/image-compress.js'
+
+export interface ImagePayload {
+  data: string       // raw base64
+  mediaType: string  // 'image/png', 'image/jpeg', etc.
+}
+
+export interface ProcessedImages {
+  savedImages: Array<{ filePath: string; filename: string; mediaType: string }>
+  imageContentBlocks: Array<{ type: 'image'; source: { type: 'base64'; media_type: string; data: string } }>
+}
+
+const ALLOWED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
+const MAX_IMAGES_PER_MESSAGE = 5
 
 export const imagesRouter = Router()
 
@@ -62,6 +76,45 @@ export async function readImageAsBase64(filePath: string): Promise<{ data: strin
   } catch {
     return null
   }
+}
+
+/**
+ * Validate, compress, save images to disk, and build API content blocks.
+ * Shared by chat handler and quick-start session handler.
+ */
+export async function processAndSaveImages(images: ImagePayload[]): Promise<ProcessedImages | null> {
+  const validImages = images
+    .filter(img => ALLOWED_IMAGE_TYPES.has(img.mediaType))
+    .filter(img => !!img.data)
+    .slice(0, MAX_IMAGES_PER_MESSAGE)
+
+  if (validImages.length === 0) return null
+
+  const saved = await Promise.all(
+    validImages.map(async (img) => {
+      const rawBuffer = Buffer.from(img.data, 'base64')
+      const { buffer, mimeType } = await compressForApi(rawBuffer, img.mediaType)
+      const compressedBase64 = buffer.toString('base64')
+      const { filePath, filename } = await saveImageToDisk(compressedBase64, mimeType)
+      return { filePath, filename, mediaType: mimeType, data: compressedBase64 }
+    }),
+  )
+
+  return {
+    savedImages: saved.map(s => ({ filePath: s.filePath, filename: s.filename, mediaType: s.mediaType })),
+    imageContentBlocks: saved.map(s => ({
+      type: 'image' as const,
+      source: { type: 'base64' as const, media_type: s.mediaType, data: s.data },
+    })),
+  }
+}
+
+/**
+ * Build the <attached-images> text annotation for image paths.
+ */
+export function buildImageAnnotation(savedImages: Array<{ filePath: string }>): string {
+  const imagePathLines = savedImages.map((s, i) => `Image ${i + 1}: ${s.filePath}`).join('\n')
+  return `<attached-images>\n${imagePathLines}\n</attached-images>\n\n`
 }
 
 // POST /api/images/upload — upload a base64 image, return URL
