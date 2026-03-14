@@ -3,7 +3,7 @@
  *
  * ARCHITECTURE NOTE:
  * This is the ONLY provider that spawns Claude Code CLI processes.
- * The main agent (walnut's "brain") uses Bedrock SDK directly via agent/model.ts.
+ * The main agent (open-walnut's "brain") uses Bedrock SDK directly via agent/model.ts.
  * This file manages delegated coding sessions — long-running claude -p workers
  * that execute tasks in the background, returning results via the event bus.
  *
@@ -795,13 +795,25 @@ export class ClaudeCodeSession {
       walnutMessageId,
       timestamp: new Date().toISOString(),
     })
-    // Async write — don't block event loop for disk I/O
-    fsp.appendFile(outputFile, event + '\n').catch((err) => {
-      log.session.debug('writeSyntheticUserEvent failed (non-fatal)', {
+    const line = event + '\n'
+    // Write to streams capture file (always — this is _outputFile)
+    fsp.appendFile(outputFile, line).catch((err) => {
+      log.session.debug('writeSyntheticUserEvent failed on streams file (non-fatal)', {
         sessionId: this.claudeSessionId,
         error: err instanceof Error ? err.message : String(err),
       })
     })
+    // Also write to canonical JSONL (local sessions only).
+    // readSessionJsonlContent reads canonical first (higher priority than streams),
+    // so the synthetic event must be in BOTH files for Phase 1 to see it.
+    if (!this._host && this.claudeSessionId && this._cwd) {
+      import('../core/session-file-reader.js').then(({ canonicalJsonlPath }) => {
+        const canonPath = canonicalJsonlPath(this.claudeSessionId!, this._cwd!)
+        fsp.appendFile(canonPath, line).catch(() => {
+          // Canonical file may not exist yet (pre-rename) — non-fatal
+        })
+      }).catch(() => {})
+    }
   }
 
   /**
@@ -929,7 +941,7 @@ export class ClaudeCodeSession {
       if (!isProcessAlive(this.pid, processName)) {
         // ── Remote sessions: SSH tail died ≠ session died ──
         // The SSH process is only a viewer (tail -f). The remote session runs
-        // independently via walnut-remote.sh. Try to reconnect instead of
+        // independently via open-walnut-remote.sh. Try to reconnect instead of
         // declaring the session dead.
         if (this._host && this.io instanceof RemoteIO) {
           this.handleRemoteTailDeath()
@@ -2300,7 +2312,7 @@ export class SessionRunner {
     // Transfer local images to remote host before spawning session
     if (sshTarget) {
       const imageTransferStart = Date.now()
-      const remoteImagesDir = `/tmp/walnut-images/${crypto.randomBytes(8).toString('hex')}`
+      const remoteImagesDir = `/tmp/open-open-walnut-images/${crypto.randomBytes(8).toString('hex')}`
       try {
         message = await transferImagesForRemoteSession(message, sshTarget, remoteImagesDir)
         if (appendSystemPrompt) {
@@ -2871,7 +2883,7 @@ export class SessionRunner {
 
           // Transfer local images to remote host before resuming
           if (sshTarget) {
-            const remoteImagesDir = `/tmp/walnut-images/${crypto.randomBytes(8).toString('hex')}`
+            const remoteImagesDir = `/tmp/open-open-walnut-images/${crypto.randomBytes(8).toString('hex')}`
             try {
               combined = await transferImagesForRemoteSession(combined, sshTarget, remoteImagesDir)
             } catch (err) {
@@ -2937,7 +2949,7 @@ export class SessionRunner {
 
       // Transfer local images to remote host before resuming (existing target)
       if (resumeSshTarget) {
-        const remoteImagesDir = `/tmp/walnut-images/${crypto.randomBytes(8).toString('hex')}`
+        const remoteImagesDir = `/tmp/open-open-walnut-images/${crypto.randomBytes(8).toString('hex')}`
         try {
           combined = await transferImagesForRemoteSession(combined, resumeSshTarget, remoteImagesDir)
         } catch (err) {
