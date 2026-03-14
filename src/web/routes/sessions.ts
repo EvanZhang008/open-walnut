@@ -17,7 +17,7 @@ import { readPlanFromSession, buildPlanExecutionMessage } from '../../utils/plan
 import { getFrequentDirs, compileFromSessions } from '../../core/frequent-dirs.js'
 import type { SessionRecord, Task, WorkStatus } from '../../core/types.js'
 import type { SessionHistoryMessage } from '../../core/session-history.js'
-import { processAndSaveImages, buildImageAnnotation } from './images.js'
+import { processAndSaveImages, buildSessionImageContext } from './images.js'
 import type { ImagePayload } from './images.js'
 
 /** Diagnose message ordering — logs whether user text messages are interleaved or bunched at end. */
@@ -348,13 +348,13 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       return
     }
 
-    // Process attached images — save to disk and annotate the session message
+    // Process attached images — save to disk and build session-friendly context
     let sessionMessage = message
     if (images && images.length > 0) {
       const processed = await processAndSaveImages(images)
       if (processed) {
-        const annotation = buildImageAnnotation(processed.savedImages)
-        sessionMessage = annotation + message
+        const imageContext = buildSessionImageContext(processed.savedImages)
+        sessionMessage = imageContext + message
       }
     }
 

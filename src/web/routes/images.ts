@@ -111,10 +111,22 @@ export async function processAndSaveImages(images: ImagePayload[]): Promise<Proc
 
 /**
  * Build the <attached-images> text annotation for image paths.
+ * Used for the main agent (Bedrock API) which understands the tag format.
  */
 export function buildImageAnnotation(savedImages: Array<{ filePath: string }>): string {
   const imagePathLines = savedImages.map((s, i) => `Image ${i + 1}: ${s.filePath}`).join('\n')
   return `<attached-images>\n${imagePathLines}\n</attached-images>\n\n`
+}
+
+/**
+ * Build a natural-language image context prefix for Claude Code sessions.
+ * Unlike buildImageAnnotation(), this produces plain text that Claude Code
+ * can understand (no XML tags that might confuse the CLI).
+ */
+export function buildSessionImageContext(savedImages: Array<{ filePath: string }>): string {
+  if (savedImages.length === 0) return ''
+  const paths = savedImages.map(s => s.filePath).join('\n')
+  return `The user attached ${savedImages.length === 1 ? 'an image' : `${savedImages.length} images`}. Read ${savedImages.length === 1 ? 'this file' : 'these files'} for visual context:\n${paths}\n\n`
 }
 
 // POST /api/images/upload — upload a base64 image, return URL
