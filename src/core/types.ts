@@ -454,4 +454,6 @@ export interface SessionRecord {
   archive_reason?: string;
   /** Plan text stored on execution session (from the archived plan session). */
   planContent?: string;
+  /** Error message when work_status is 'error' — persisted for post-mortem display. */
+  errorMessage?: string;
 }

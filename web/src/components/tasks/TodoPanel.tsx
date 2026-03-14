@@ -664,7 +664,7 @@ function SortableTaskItem({ task, isFocused, isRecentlyDone, depth = 0, childCou
             {task.starred ? '\u2605' : '\u2606'}
           </button>
         )}
-        {onPinTask && !isPinned && (
+        {onPinTask && !isPinned && task.status !== 'done' && task.phase !== 'COMPLETE' && (
           <button
             className="task-pin-btn"
             onClick={(e) => { e.stopPropagation(); onPinTask(task.id); }}
@@ -1659,10 +1659,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [tasks, focusedTaskId]);
 
   // Resolve pinned task IDs to Task objects for the pinned section
+  // Filter out completed tasks (status=done or phase=COMPLETE) for display
   const pinnedTasks = useMemo(() => {
     if (!pinnedTaskIds || pinnedTaskIds.size === 0) return [];
     const taskMap = new Map(tasks.map((t) => [t.id, t]));
-    return [...pinnedTaskIds].map((id) => taskMap.get(id)).filter(Boolean) as Task[];
+    return [...pinnedTaskIds]
+      .map((id) => taskMap.get(id))
+      .filter((t): t is Task => !!t && t.status !== 'done' && t.phase !== 'COMPLETE');
   }, [tasks, pinnedTaskIds]);
 
   const sensors = useSensors(

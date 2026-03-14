@@ -40,11 +40,11 @@ export function useFocusBar(tasks: Task[]): UseFocusBarReturn {
 
   // Auto-unpin completed tasks (status=done or phase=COMPLETE)
   useEvent('task:completed', (data: unknown) => {
-    const { id } = data as { id: string };
-    if (pinnedIds.includes(id)) {
+    const { task } = data as { task: { id: string } };
+    if (task?.id && pinnedIds.includes(task.id)) {
       lastWriteRef.current = Date.now();
-      setPinnedIds((prev) => prev.filter((pid) => pid !== id));
-      focusApi.unpinTask(id).catch(() => {});
+      setPinnedIds((prev) => prev.filter((pid) => pid !== task.id));
+      focusApi.unpinTask(task.id).catch(() => {});
     }
   });
   useEvent('task:updated', (data: unknown) => {
@@ -57,6 +57,9 @@ export function useFocusBar(tasks: Task[]): UseFocusBarReturn {
   });
 
   const pin = useCallback(async (taskId: string) => {
+    // Don't pin completed tasks
+    const task = tasks.find((t) => t.id === taskId);
+    if (task && (task.status === 'done' || task.phase === 'COMPLETE')) return;
     lastWriteRef.current = Date.now();
     setPinnedIds((prev) => prev.includes(taskId) ? prev : [...prev, taskId]);
     try {
@@ -64,7 +67,7 @@ export function useFocusBar(tasks: Task[]): UseFocusBarReturn {
     } catch {
       setPinnedIds((prev) => prev.filter((id) => id !== taskId));
     }
-  }, []);
+  }, [tasks]);
 
   const unpin = useCallback(async (taskId: string) => {
     lastWriteRef.current = Date.now();

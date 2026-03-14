@@ -258,8 +258,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, onT
   });
 
   useEvent('session:error', (data) => {
-    const d = data as { sessionId?: string };
+    const d = data as { sessionId?: string; error?: string };
     if (d.sessionId === sessionId) {
+      // Immediately show error message from event (before refetch completes)
+      if (d.error) {
+        setSession(prev => prev ? { ...prev, work_status: 'error' as const, errorMessage: d.error!.slice(0, 500) } : prev);
+      }
       fetchSession(sessionId).then((s) => { if (s) setSession(s); }).catch(() => {});
     }
   });
@@ -528,6 +532,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, onT
           sessionId={sessionId}
           initialNote={session?.human_note}
         />
+        {ws === 'error' && session?.errorMessage && (
+          <div className="session-error-banner">
+            <span className="session-error-banner-icon">&#x26A0;&#xFE0F;</span>
+            <span className="session-error-banner-text">{session.errorMessage}</span>
+          </div>
+        )}
         <div className="session-panel-body" ref={bodyRef}>
           <SessionChatHistory
             key={sessionId}

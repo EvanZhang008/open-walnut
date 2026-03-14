@@ -491,6 +491,12 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
           sessionId={sessionId}
           initialNote={session.human_note}
         />
+        {ws === 'error' && session.errorMessage && (
+          <div className="session-error-banner">
+            <span className="session-error-banner-icon">&#x26A0;&#xFE0F;</span>
+            <span className="session-error-banner-text">{session.errorMessage}</span>
+          </div>
+        )}
         <SessionChatHistory
           key={sessionId}
           sessionId={sessionId}

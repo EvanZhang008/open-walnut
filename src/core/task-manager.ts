@@ -1082,6 +1082,14 @@ export async function completeTask(idPrefix: string): Promise<{ task: Task }> {
   const task = matches[0];
   guardActiveChildren(store, task);
   applyPhase(task, 'COMPLETE');
+  // Auto-unpin completed tasks so they don't linger in Focus Bar
+  if (task.pinned) {
+    task.pinned = false;
+    delete task.pin_order;
+    // Compact remaining pin orders
+    const pinned = store.tasks.filter((t) => t.pinned).sort((a, b) => (a.pin_order ?? 0) - (b.pin_order ?? 0));
+    pinned.forEach((t, i) => { t.pin_order = i; });
+  }
   task.updated_at = new Date().toISOString();
 
   await writeStore(store);
@@ -1121,6 +1129,13 @@ export async function toggleComplete(idPrefix: string): Promise<{ task: Task }> 
   } else {
     guardActiveChildren(store, task);
     applyPhase(task, 'COMPLETE');
+    // Auto-unpin completed tasks
+    if (task.pinned) {
+      task.pinned = false;
+      delete task.pin_order;
+      const pinned = store.tasks.filter((t) => t.pinned).sort((a, b) => (a.pin_order ?? 0) - (b.pin_order ?? 0));
+      pinned.forEach((t, i) => { t.pin_order = i; });
+    }
   }
   task.updated_at = new Date().toISOString();
 
@@ -2422,6 +2437,11 @@ export async function togglePin(taskId: string): Promise<{ pinned: boolean; pinn
     const task = store.tasks.find((t) => t.id === taskId);
     if (!task) throw new Error(`Task not found: ${taskId}`);
 
+    // Reject pinning completed tasks — only unpin is allowed
+    if (!task.pinned && (task.phase === 'COMPLETE' || task.status === 'done')) {
+      throw new Error(`Cannot pin a completed task: ${task.title}`);
+    }
+
     const now = new Date().toISOString();
     if (task.pinned) {
       // Unpin
@@ -2472,7 +2492,10 @@ export async function reorderPins(orderedIds: string[]): Promise<string[]> {
  */
 export async function getPinnedTasks(): Promise<Task[]> {
   const store = await readStore();
-  return store.tasks.filter((t) => t.pinned).sort((a, b) => (a.pin_order ?? 0) - (b.pin_order ?? 0));
+  // Defense-in-depth: exclude completed tasks even if they have pinned=true
+  return store.tasks
+    .filter((t) => t.pinned && t.phase !== 'COMPLETE' && t.status !== 'done')
+    .sort((a, b) => (a.pin_order ?? 0) - (b.pin_order ?? 0));
 }
 
 // ── Tag helpers ──

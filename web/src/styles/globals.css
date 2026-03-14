@@ -2679,6 +2679,30 @@ input:focus, textarea:focus, select:focus {
 .session-system-detail { font-size: 11px; opacity: 0.7; }
 .session-system-line--error { color: var(--warning); }
 
+/* ── Session Error Banner (persistent, shown at top of session chat) ── */
+.session-error-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 14px;
+  margin: 0 8px 4px;
+  background: color-mix(in srgb, var(--danger, #ff3b30) 8%, var(--bg-secondary));
+  border: 1px solid color-mix(in srgb, var(--danger, #ff3b30) 25%, transparent);
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  flex-shrink: 0;
+}
+.session-error-banner-icon { font-size: 14px; flex-shrink: 0; line-height: 1.3; }
+.session-error-banner-text {
+  color: var(--danger, #ff3b30);
+  font-family: var(--font-mono, 'SF Mono', 'Menlo', monospace);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
 /* ── Team Tab Bar (top-level: Lead | Team1 | Team2) ── */
 .team-tab-bar {
   display: flex;

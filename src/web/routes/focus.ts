@@ -87,6 +87,10 @@ focusRouter.post('/tasks/:id', async (req: Request, res: Response, next: NextFun
     bus.emit(EventNames.CONFIG_CHANGED, { key: 'focus_bar' }, ['web-ui'])
     res.json({ pinned_tasks: result.pinned_tasks })
   } catch (err) {
+    if (err instanceof Error && err.message.startsWith('Cannot pin a completed task')) {
+      res.status(409).json({ error: err.message })
+      return
+    }
     next(err)
   }
 })

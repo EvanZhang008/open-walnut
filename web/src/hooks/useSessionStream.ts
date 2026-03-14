@@ -308,12 +308,18 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
 
   // Handle session error (streaming done with error)
   useEvent('session:error', (data) => {
-    const { sessionId: sid } = data as { sessionId: string };
+    const { sessionId: sid, error } = data as { sessionId: string; error?: string };
     if (!sessionId || sid !== sessionId) return;
 
     flushPendingTextRaf();
     setIsStreaming(false);
     streamBuffer.current = '';
+
+    // Show the error inline in the session chat timeline
+    if (error) {
+      const detail = error.length > 500 ? error.slice(0, 500) + '…' : error;
+      setBlocks((prev) => [...prev, { type: 'system', variant: 'error', message: 'Session error', detail } as StreamingSystemBlock]);
+    }
   });
 
   const clear = useCallback(() => {

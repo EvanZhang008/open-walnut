@@ -33,6 +33,8 @@ export interface SessionRecord {
   archived?: boolean;
   /** Why this session was archived (e.g. "plan_executed", user-provided reason). */
   archive_reason?: string;
+  /** Error message when work_status is 'error' — for clear error display. */
+  errorMessage?: string;
 }
 
 export interface SessionTreeTask {

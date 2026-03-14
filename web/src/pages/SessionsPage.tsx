@@ -122,6 +122,34 @@ export function SessionsPage() {
   useEvent('session:started', () => { loadTree(); });
   useEvent('session:ended', () => { loadTree(); });
   useEvent('session:result', () => { loadTree(); });
+  useEvent('session:error', (data: unknown) => {
+    // Optimistically patch errorMessage so SessionDetailPanel shows it immediately
+    const d = data as { sessionId?: string; error?: string };
+    if (d.sessionId && d.error && treeData) {
+      setTreeData((prev) => {
+        if (!prev) return prev;
+        const patch = (sessions: SessionRecord[]) => {
+          for (const s of sessions) {
+            if (s.claudeSessionId === d.sessionId) {
+              s.work_status = 'error';
+              s.errorMessage = d.error!.slice(0, 500);
+              return true;
+            }
+          }
+          return false;
+        };
+        for (const cat of prev.tree) {
+          for (const t of cat.directTasks) { if (patch(t.sessions)) return { ...prev }; }
+          for (const proj of cat.projects) {
+            for (const t of proj.tasks) { if (patch(t.sessions)) return { ...prev }; }
+          }
+        }
+        if (patch(prev.orphanSessions)) return { ...prev };
+        return prev;
+      });
+    }
+    loadTree();
+  });
   useEvent('session:status-changed', (data: unknown) => {
     // Auto-switch to new exec session when "Clear Context & Execute" creates one
     const d = data as { sessionId?: string; fromPlanSessionId?: string; process_status?: string; work_status?: string; activity?: string };

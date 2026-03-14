@@ -1873,6 +1873,10 @@ export class SessionRunner {
           {
             const isError = event.name === EventNames.SESSION_ERROR
               || (eventData<'session:result'>(event) as { isError?: boolean }).isError === true
+            // Extract error message for persistence (truncated for storage)
+            const errorMessage = isError
+              ? ((eventData<'session:error'>(event) as { error?: string }).error ?? 'Unknown error').slice(0, 1000)
+              : undefined
             // For FIFO sessions (agent_complete but process still alive),
             // only persist stopped status when the process is actually dead.
             const cliSession = this.findSessionByClaudeId(sessionId)
@@ -1888,6 +1892,7 @@ export class SessionRunner {
                   work_status: isError ? 'error' : 'agent_complete',
                   activity: undefined,
                   last_status_change: new Date().toISOString(),
+                  ...(errorMessage ? { errorMessage } : {}),
                 }).catch(() => {})
               }).catch(() => {})
             } else {
@@ -1900,6 +1905,7 @@ export class SessionRunner {
                   work_status: isError ? 'error' : 'agent_complete',
                   activity: undefined,
                   last_status_change: new Date().toISOString(),
+                  ...(errorMessage ? { errorMessage } : {}),
                 }).catch(() => {})
               }).catch(() => {})
             }
@@ -2656,6 +2662,7 @@ export class SessionRunner {
           await updateSessionRecord(sessionId, {
             work_status: 'in_progress',
             activity: 'Processing follow-up...',
+            errorMessage: undefined,  // Clear stale error on resume
           })
         }
       }
