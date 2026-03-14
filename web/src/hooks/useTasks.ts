@@ -355,8 +355,13 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
   }, []);
 
   const update = useCallback((id: string, updates: tasksApi.UpdateTaskInput) => {
-    guardEcho(`update:${id}`);
-    setTasks(prev => applyFieldUpdate(prev, id, updates as Record<string, unknown>));
+    // Only guard echo + apply optimistic update when the update contains optimistic-safe fields.
+    // Non-optimistic fields (description, summary, etc.) need the WS echo to propagate.
+    const hasOptimistic = Object.keys(updates).some(k => OPTIMISTIC_FIELDS.has(k));
+    if (hasOptimistic) {
+      guardEcho(`update:${id}`);
+      setTasks(prev => applyFieldUpdate(prev, id, updates as Record<string, unknown>));
+    }
     withRetry(() => tasksApi.updateTask(id, updates)).catch(onOpError);
   }, [guardEcho, onOpError]);
 
@@ -382,8 +387,8 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
     guardEcho(`reorder:${category}/${project}`);
     setTasks((prev) => applyReorder(prev, category, project, taskIds));
     withRetry(() => tasksApi.reorderTasks(category, project, taskIds))
-      .catch(() => refetch());
-  }, [refetch, guardEcho]);
+      .catch(onOpError);
+  }, [guardEcho, onOpError]);
 
   const moveTask = useCallback((taskId: string, category: string, project: string, insertNearTaskId?: string) => {
     guardEcho(`move:${taskId}`);

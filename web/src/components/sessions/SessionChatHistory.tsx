@@ -648,6 +648,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const firstScrollDone = useRef(false);
   const initialLoadDone = useRef(false);  // true after Phase 2 completes for the first time
+  const prevOptimisticLen = useRef(0);
   const [showScrollArrow, setShowScrollArrow] = useState(false);
   // Timestamp: ignore scroll events within the debounce window (350ms) of a resize.
   // Why? When sibling components grow (UserMessagesSummary, PlanPreviewSection, SessionNotes),
@@ -682,6 +683,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     firstScrollDone.current = false;
     initialLoadDone.current = false;
     ignoreScrollUntil.current = 0;
+    prevOptimisticLen.current = 0;
     setShowScrollArrow(false);
     if (scrollRafId.current !== null) { cancelAnimationFrame(scrollRafId.current); scrollRafId.current = null; }
     if (batchTimeoutRef.current) { clearTimeout(batchTimeoutRef.current); batchTimeoutRef.current = null; }
@@ -774,6 +776,18 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       scrollLog('debounced', `SCROLL(${reason}${force ? ',forced' : ''})`, el);
     }, 250);
   }, [scrollLog]);
+
+  // Path A-0: User just sent a message — force follow-bottom so the sent message
+  // and subsequent streaming response are visible. Runs before A-1 so isAtBottom
+  // is already true when the content-change scroll fires.
+  useLayoutEffect(() => {
+    const len = optimisticMessages?.length ?? 0;
+    if (len > prevOptimisticLen.current) {
+      isAtBottom.current = true;
+      setShowScrollArrow(false);
+    }
+    prevOptimisticLen.current = len;
+  }, [optimisticMessages?.length]);
 
   // Path A-1: Content changes — immediate scroll, before paint (useLayoutEffect)
   // Fires on every messages/loading change. This is NOT the source of jumps — jumps come
