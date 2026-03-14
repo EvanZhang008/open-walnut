@@ -1,12 +1,12 @@
 {
-  "name": "walnut",
+  "name": "open-walnut",
   "version": "0.1.0",
   "description": "Personal AI butler powered by Claude — task management, Claude Code sessions, memory system, and web UI",
   "license": "MIT",
-  "homepage": "https://github.com/EvanZhang008/walnut",
+  "homepage": "https://github.com/EvanZhang008/open-walnut",
   "repository": {
     "type": "git",
-    "url": "https://github.com/EvanZhang008/walnut.git"
+    "url": "https://github.com/EvanZhang008/open-walnut.git"
   },
   "keywords": [
     "ai",
@@ -27,6 +27,7 @@
   ],
   "type": "module",
   "bin": {
+    "open-walnut": "./bin/walnut.js",
     "walnut": "./bin/walnut.js"
   },
   "main": "./dist/cli.js",

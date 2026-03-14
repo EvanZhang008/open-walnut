@@ -1,4 +1,4 @@
-# Walnut — Personal Intelligent Butler
+# Open Walnut — Personal Intelligent Butler
 
 > For full system deep-dives and diagrams, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
@@ -19,7 +19,7 @@ When referencing external integrations or plugins, use **generic descriptions** 
 
 ## What & Why
 
-Walnut is a personal AI butler that manages tasks, accumulates knowledge, and runs AI sessions — all centered around one idea: **tasks are the atom of everything**. Tasks live in a Category → Project hierarchy, can spawn Claude Code sessions, and connect to a rich memory system. The AI agent has access to your full context (tasks, memory, sessions, skills, tools) and acts on your behalf.
+Open Walnut is a personal AI butler that manages tasks, accumulates knowledge, and runs AI sessions — all centered around one idea: **tasks are the atom of everything**. Tasks live in a Category → Project hierarchy, can spawn Claude Code sessions, and connect to a rich memory system. The AI agent has access to your full context (tasks, memory, sessions, skills, tools) and acts on your behalf.
 
 ## Multi-Agent Warning
 

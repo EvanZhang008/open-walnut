@@ -10,9 +10,9 @@ const program = new Command();
 initLogging();
 
 program
-  .name('walnut')
+  .name('open-walnut')
   .version('0.1.0')
-  .description('Personal intelligent butler - CLI task manager')
+  .description('Open Walnut — Personal AI butler & task manager')
   .option('--json', 'Output as JSON', false);
 
 registerCommands(program);

@@ -1,4 +1,4 @@
-# Walnut — Architecture Deep Dive
+# Open Walnut — Architecture Deep Dive
 
 > This file is the detailed complement to [CLAUDE.md](./CLAUDE.md). It contains the full implementation docs for each subsystem. Start with CLAUDE.md for orientation; come here when you need specifics.
 

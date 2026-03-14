@@ -1,12 +1,12 @@
-# Contributing to Walnut
+# Contributing to Open Walnut
 
 Thanks for your interest in contributing! Here's how to get started.
 
 ## Development Setup
 
 ```bash
-git clone https://github.com/EvanZhang008/walnut.git
-cd walnut
+git clone https://github.com/EvanZhang008/open-walnut.git
+cd open-walnut
 npm install          # installs backend + frontend dependencies
 npm run dev          # backend watch mode
 cd web && npx vite   # frontend HMR on http://localhost:5173

@@ -1,22 +1,22 @@
-# Walnut — Personal AI Butler & Task Manager with Claude Code Web UI
+# Open Walnut — Personal AI Butler & Task Manager with Claude Code Web UI
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![CI](https://github.com/EvanZhang008/walnut/actions/workflows/ci.yml/badge.svg)](https://github.com/EvanZhang008/walnut/actions)
+[![CI](https://github.com/EvanZhang008/open-walnut/actions/workflows/ci.yml/badge.svg)](https://github.com/EvanZhang008/open-walnut/actions)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22-green.svg)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue.svg)](https://www.typescriptlang.org/)
-[![GitHub stars](https://img.shields.io/github/stars/EvanZhang008/walnut?style=social)](https://github.com/EvanZhang008/walnut)
+[![GitHub stars](https://img.shields.io/github/stars/EvanZhang008/open-walnut?style=social)](https://github.com/EvanZhang008/open-walnut)
 
-![Walnut — AI butler with chat, Claude Code sessions, and task management](docs/social-preview.png)
+![Open Walnut — AI butler with chat, Claude Code sessions, and task management](docs/social-preview.png)
 
 **An AI agent that manages your projects, notes, and coding sessions — with the missing web UI for Claude Code built in.**
 
-Walnut is not just a dashboard — it's an AI-native app. A built-in AI agent with 30+ tools manages your tasks, accumulates knowledge, spawns and monitors Claude Code sessions, and acts on your behalf. It also gives Claude Code a proper web interface: real-time session streaming, multi-session monitoring, visual task boards, and persistent memory. Think of it as an AI butler that happens to have a beautiful UI.
+Open Walnut is not just a dashboard — it's an AI-native app. A built-in AI agent with 30+ tools manages your tasks, accumulates knowledge, spawns and monitors Claude Code sessions, and acts on your behalf. It also gives Claude Code a proper web interface: real-time session streaming, multi-session monitoring, visual task boards, and persistent memory. Think of it as an AI butler that happens to have a beautiful UI.
 
-> **Philosophy**: Walnut is human-first. It amplifies *your* productivity — not by building a swarm of agents talking to each other, but by giving *you* superpowers. You stay in control. The AI handles the grunt work, surfaces what matters, and gets out of your way. The goal is simple: make your day smooth, focused, and productive.
+> **Philosophy**: Open Walnut is human-first. It amplifies *your* productivity — not by building a swarm of agents talking to each other, but by giving *you* superpowers. You stay in control. The AI handles the grunt work, surfaces what matters, and gets out of your way. The goal is simple: make your day smooth, focused, and productive.
 
 ## Table of Contents
 
-- [Why Walnut?](#why-walnut)
+- [Why Open Walnut?](#why-open-walnut)
 - [Screenshots](#screenshots)
 - [Key Features](#key-features)
 - [Multi-Agent — But Human-Centered](#multi-agent--but-human-centered)
@@ -32,7 +32,7 @@ Walnut is not just a dashboard — it's an AI-native app. A built-in AI agent wi
 - [Star History](#star-history)
 - [License](#license)
 
-## Why Walnut?
+## Why Open Walnut?
 
 **If you use Claude Code in the terminal**, you've probably felt the pain:
 - Sessions disappear when you close the tab. No history, no context.
@@ -45,9 +45,9 @@ Walnut is not just a dashboard — it's an AI-native app. A built-in AI agent wi
 - Your AI doesn't know what you're working on. You re-explain everything every time.
 - Task completion doesn't capture what was learned or decided.
 
-Walnut replaces all of that with one system:
+Open Walnut replaces all of that with one system:
 
-| What you use today | Walnut equivalent |
+| What you use today | Open Walnut equivalent |
 |---|---|
 | Claude Code (terminal) | Web UI with real-time streaming, multi-session view, model switching |
 | Todoist / Notion projects | 4-layer task hierarchy (Category → Project → Task → Subtask) |
@@ -58,15 +58,15 @@ Walnut replaces all of that with one system:
 
 ### Talk to the agent, get things done
 
-![Walnut AI task manager — create a task through natural language chat](docs/demo-create-task.png)
+![Open Walnut AI task manager — create a task through natural language chat](docs/demo-create-task.png)
 
 > "I need to file my tax before this week. Make it high priority and star."
 >
-> Walnut creates the category, project, and task — sets priority, due date, and star — in one shot.
+> Open Walnut creates the category, project, and task — sets priority, due date, and star — in one shot.
 
 ### AI sessions that work for you
 
-![Walnut Claude Code session — AI starts a coding session attached to a task](docs/demo-start-session.png)
+![Open Walnut Claude Code session — AI starts a coding session attached to a task](docs/demo-start-session.png)
 
 > The agent spawns a Claude Code session attached to the task. It runs in plan mode, reports progress, and you can check on it anytime from the session panel.
 
@@ -120,11 +120,11 @@ Walnut replaces all of that with one system:
 
 ## Multi-Agent — But Human-Centered
 
-Yes, Walnut supports multi-session and embedded subagents. You can run parallel Claude Code sessions, spawn triage agents, and automate workflows across tasks.
+Yes, Open Walnut supports multi-session and embedded subagents. You can run parallel Claude Code sessions, spawn triage agents, and automate workflows across tasks.
 
 But that's not the point.
 
-The point is **you**. Walnut doesn't try to build an autonomous agent network where bots talk to bots. That approach sounds impressive but often produces unreliable results and burns tokens. Instead, Walnut keeps the human in the loop:
+The point is **you**. Open Walnut doesn't try to build an autonomous agent network where bots talk to bots. That approach sounds impressive but often produces unreliable results and burns tokens. Instead, Open Walnut keeps the human in the loop:
 
 - **You** decide what to work on. The AI organizes and executes.
 - **You** review plans before execution. The AI doesn't go rogue.
@@ -136,8 +136,8 @@ The result: you feel in control, your day flows smoothly, and you get more done 
 ## Quick Start
 
 ```bash
-git clone https://github.com/EvanZhang008/walnut.git
-cd walnut
+git clone https://github.com/EvanZhang008/open-walnut.git
+cd open-walnut
 npm install       # installs backend + frontend dependencies
 npm start         # builds everything and starts on http://localhost:3456
 ```
@@ -259,9 +259,9 @@ npm test              # All tests (parallel)
 
 ### AI Coding Agents
 
-| Project | Stars | What It Does | How Walnut Differs |
+| Project | Stars | What It Does | How Open Walnut Differs |
 |---------|-------|--------------|-------------------|
-| [Claude Code](https://github.com/anthropics/claude-code) | - | Anthropic's CLI coding agent | Walnut orchestrates Claude Code sessions with task context and memory |
+| [Claude Code](https://github.com/anthropics/claude-code) | - | Anthropic's CLI coding agent | Open Walnut orchestrates Claude Code sessions with task context and memory |
 | [Aider](https://github.com/paul-gauthier/aider) | 30k+ | Terminal-based AI pair programmer, Git-aware | No task management, no persistent memory, no web UI |
 | [OpenHands](https://github.com/OpenHands/OpenHands) | 68k+ | Autonomous AI software engineer | Focused on single-task autonomy; no task hierarchy or session orchestration |
 | [Cline](https://github.com/cline/cline) | 30k+ | VS Code AI coding agent | IDE-bound; no standalone task/project management |
@@ -272,16 +272,16 @@ npm test              # All tests (parallel)
 
 ### Agent Orchestration & Task Management
 
-| Project | Stars | What It Does | How Walnut Differs |
+| Project | Stars | What It Does | How Open Walnut Differs |
 |---------|-------|--------------|-------------------|
-| [Gastown](https://github.com/steveyegge/gastown) | - | Multi-agent orchestration with git-backed persistence | Agent coordination focused; Walnut adds task hierarchy, memory, and web UI |
+| [Gastown](https://github.com/steveyegge/gastown) | - | Multi-agent orchestration with git-backed persistence | Agent coordination focused; Open Walnut adds task hierarchy, memory, and web UI |
 | [Vibe Kanban](https://github.com/BloopAI/vibe-kanban) | 22k+ | Kanban board for AI coding agents | Kanban-only; no built-in memory, chat agent, or session history |
 | [Claude Task Master](https://github.com/eyaltoledano/claude-task-master) | 14k+ | AI task management for Cursor/Windsurf/Roo | Drop-in for IDEs; no standalone server, web UI, or memory system |
 | [Claude Code UI](https://github.com/siteboon/claudecodeui) | - | Web UI wrapper for Claude Code CLI | Session viewer only; no task management, agent, or memory |
 
-### What Makes Walnut Different
+### What Makes Open Walnut Different
 
-Walnut is not just a coding agent or a Kanban board — it's a **complete self-hosted system** that combines:
+Open Walnut is not just a coding agent or a Kanban board — it's a **complete self-hosted system** that combines:
 - **Task hierarchy** (Category > Project > Task > Subtask) with lifecycle management
 - **AI agent with 30+ tools** that understands your tasks and acts on your behalf
 - **Claude Code session orchestration** — spawn, monitor, and manage sessions from a web UI
@@ -294,9 +294,9 @@ Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines
 
 ## Star History
 
-If you find Walnut useful, consider giving it a star — it helps others discover the project.
+If you find Open Walnut useful, consider giving it a star — it helps others discover the project.
 
-[![Star History Chart](https://api.star-history.com/svg?repos=EvanZhang008/walnut&type=Date)](https://star-history.com/#EvanZhang008/walnut&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=EvanZhang008/open-walnut&type=Date)](https://star-history.com/#EvanZhang008/open-walnut&Date)
 
 ## License
 
