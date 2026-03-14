@@ -15,8 +15,7 @@ function formatTime(dateStr: string): string {
 }
 
 export function UserMessagesSummary({ messages, loading, onMessageClick }: UserMessagesSummaryProps) {
-  // Default collapsed — expanding is user-initiated, never causes layout shift
-  const [collapsed, setCollapsed] = useState(true);
+  const [collapsed, setCollapsed] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Extract user messages with their original index in the full messages array
@@ -24,13 +23,11 @@ export function UserMessagesSummary({ messages, loading, onMessageClick }: UserM
     .map((m, i) => ({ message: m, originalIndex: i }))
     .filter(({ message }) => message.role === 'user' && message.text.trim());
 
-  // Auto-scroll to bottom when new messages arrive (only when already expanded)
-  const prevCount = useRef(userMessages.length);
+  // Always scroll to bottom to show latest messages
   useEffect(() => {
-    if (!collapsed && userMessages.length > prevCount.current && scrollRef.current) {
+    if (!collapsed && scrollRef.current && userMessages.length > 0) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-    prevCount.current = userMessages.length;
   }, [userMessages.length, collapsed]);
 
   const handleClick = useCallback((originalIndex: number) => {
@@ -52,7 +49,7 @@ export function UserMessagesSummary({ messages, loading, onMessageClick }: UserM
           <span className="user-messages-summary-count">{userMessages.length}</span>
         )}
       </button>
-      {hasMessages && !collapsed && (
+      {!collapsed && (
         <div className="user-messages-summary-list" ref={scrollRef}>
           {userMessages.map(({ message, originalIndex }) => (
             <div
