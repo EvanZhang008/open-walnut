@@ -30,12 +30,19 @@ export function useFocusBar(tasks: Task[]): UseFocusBarReturn {
     if (key === 'focus_bar') fetchPinned();
   });
 
-  // Auto-unpin completed tasks
+  // Auto-unpin completed tasks (status=done or phase=COMPLETE)
   useEvent('task:completed', (data: unknown) => {
     const { id } = data as { id: string };
     if (pinnedIds.includes(id)) {
       focusApi.unpinTask(id).catch(() => {});
       setPinnedIds((prev) => prev.filter((pid) => pid !== id));
+    }
+  });
+  useEvent('task:updated', (data: unknown) => {
+    const { task } = data as { task: { id: string; phase?: string; status?: string } };
+    if ((task.phase === 'COMPLETE' || task.status === 'done') && pinnedIds.includes(task.id)) {
+      focusApi.unpinTask(task.id).catch(() => {});
+      setPinnedIds((prev) => prev.filter((pid) => pid !== task.id));
     }
   });
 
@@ -79,10 +86,29 @@ export function useFocusBar(tasks: Task[]): UseFocusBarReturn {
     [pinnedIds],
   );
 
-  // Resolve pinned IDs to Task objects (preserving pin order)
+  // Resolve pinned IDs to Task objects (preserving pin order).
+  // Auto-unpin completed tasks found during resolution.
   const pinnedTasks = useMemo(() => {
     const taskMap = new Map(tasks.map((t) => [t.id, t]));
-    return pinnedIds.map((id) => taskMap.get(id)).filter(Boolean) as Task[];
+    const resolved: Task[] = [];
+    const toUnpin: string[] = [];
+    for (const id of pinnedIds) {
+      const t = taskMap.get(id);
+      if (!t) continue;
+      if (t.phase === 'COMPLETE' || t.status === 'done') {
+        toUnpin.push(id);
+      } else {
+        resolved.push(t);
+      }
+    }
+    if (toUnpin.length) {
+      // Defer state update + API calls to avoid updating during render
+      setTimeout(() => {
+        setPinnedIds((prev) => prev.filter((pid) => !toUnpin.includes(pid)));
+        for (const id of toUnpin) focusApi.unpinTask(id).catch(() => {});
+      }, 0);
+    }
+    return resolved;
   }, [pinnedIds, tasks]);
 
   return { pinnedIds, pinnedTasks, pin, unpin, reorder, isPinned };
