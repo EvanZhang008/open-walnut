@@ -20,7 +20,7 @@ Open Walnut is not just a dashboard — it's an AI-native app. A built-in AI age
 - [Screenshots](#screenshots)
 - [Key Features](#key-features)
 - [Multi-Agent — But Human-Centered](#multi-agent--but-human-centered)
-- [Quick Start](#quick-start)
+- [Quick Start](#quick-start) | **[Getting Started Guide](GETTING_STARTED.md)**
 - [Configuration](#configuration)
 - [Web Dashboard Pages](#web-dashboard-pages)
 - [CLI](#cli)
@@ -144,10 +144,13 @@ npm start         # builds everything and starts on http://localhost:3456
 
 Open [http://localhost:3456](http://localhost:3456) in your browser.
 
+> **New here?** See **[GETTING_STARTED.md](GETTING_STARTED.md)** for provider setup, walkthrough, and troubleshooting.
+
 ### Prerequisites
 
 - **Node.js** >= 22
-- **AWS credentials** for Claude via Bedrock (or configure another provider in `~/.open-walnut/config.yaml`)
+- **Claude Code CLI** — `npm install -g @anthropic-ai/claude-code` (powers coding sessions)
+- **API key** — Anthropic API key or AWS Bedrock credentials ([setup guide](GETTING_STARTED.md#provider-configuration))
 - **Ollama** (optional) — enables local vector search for memory
 
 ## Configuration
