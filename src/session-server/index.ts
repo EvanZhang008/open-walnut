@@ -2,10 +2,10 @@
  * Session Server — entry point.
  *
  * Usage:
- *   node dist/session-server.js [--port 7890] [--data-dir ~/.walnut]
+ *   node dist/session-server.js [--port 7890] [--data-dir ~/.open-walnut]
  *
  * Or via CLI:
- *   walnut session-server [--port 7890]
+ *   open-walnut session-server [--port 7890]
  */
 
 import { SessionServer } from './server.js'

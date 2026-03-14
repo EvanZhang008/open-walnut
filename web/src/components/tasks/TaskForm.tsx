@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import type { Task, TaskPriority } from '@walnut/core';
+import type { Task, TaskPriority } from '@open-walnut/core';
 
 export interface TaskFormData {
   title: string;

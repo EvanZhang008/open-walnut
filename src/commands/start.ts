@@ -11,11 +11,11 @@ interface StartOptions {
 }
 
 /**
- * walnut start <task_id> - Start a Claude Code session for a task.
+ * open-walnut start <task_id> - Start a Claude Code session for a task.
  *
  * Emits session:start or session:send to the event bus.
  * In CLI mode, the session runner must be initialized separately
- * (it auto-inits when using `walnut web`).
+ * (it auto-inits when using `open-walnut web`).
  */
 export async function runStart(
   taskIdPrefix: string,

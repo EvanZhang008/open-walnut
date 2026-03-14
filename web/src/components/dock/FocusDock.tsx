@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, memo, useMemo } from 'react';
-import type { Task } from '@walnut/core';
+import type { Task } from '@open-walnut/core';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { SessionChatHistory } from '@/components/sessions/SessionChatHistory';
 import { ChatInput } from '@/components/chat/ChatInput';
@@ -31,7 +31,7 @@ const PHASE_LABELS: Record<string, string> = {
 
 // ── Dock height constants ──
 
-const DOCK_HEIGHT_KEY = 'walnut-dock-height';
+const DOCK_HEIGHT_KEY = 'open-walnut-dock-height';
 const DOCK_HEIGHT_DEFAULT = 200;
 const DOCK_HEIGHT_MIN = 120;
 const DOCK_HEIGHT_MAX = 500;
@@ -215,7 +215,7 @@ export function FocusDock({ focusBar }: FocusDockProps) {
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   // Track main chat panel visibility (toggled via Chat button)
   const [chatVisible, setChatVisible] = useState<boolean>(
-    () => sessionStorage.getItem('walnut-home-chat-visible') !== 'false'
+    () => sessionStorage.getItem('open-walnut-home-chat-visible') !== 'false'
   );
 
   useEffect(() => {

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { Config } from '@walnut/core';
+import type { Config } from '@open-walnut/core';
 import { fetchConfig, updateConfig } from '@/api/config';
 
 export function useSettingsConfig() {

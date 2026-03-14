@@ -142,11 +142,11 @@ export function killSession(name: string): void {
 }
 
 /**
- * Build the standard session name for a walnut-managed tmux session.
+ * Build the standard session name for a open-walnut-managed tmux session.
  */
 export function buildSessionName(project: string, taskId?: string): string {
   const sanitized = project.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase();
-  return taskId ? `walnut-${sanitized}-${taskId}` : `walnut-${sanitized}`;
+  return taskId ? `ow-${sanitized}-${taskId}` : `ow-${sanitized}`;
 }
 
 /**

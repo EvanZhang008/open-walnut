@@ -228,7 +228,7 @@ function MemoryIcon() {
 
 function WalnutIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" strokeLinecap="round" strokeLinejoin="round" className="sidebar-walnut-icon">
+    <svg viewBox="0 0 24 24" fill="none" strokeLinecap="round" strokeLinejoin="round" className="sidebar-open-walnut-icon">
       <ellipse cx="11.5" cy="12" rx="7.5" ry="10" fill="currentColor" />
       <ellipse cx="12.5" cy="12" rx="7.5" ry="10" fill="currentColor" />
       <line x1="12" y1="2" x2="12" y2="22" stroke="var(--bg-secondary)" strokeWidth="1.5" />

@@ -183,11 +183,11 @@ Use Playwright MCP tools for pure frontend verification:
 1. **Prepare test data** — create any files, images, or state the feature needs
    ```bash
    # Example: create a test image for SCP transfer verification
-   echo "test-data" > ~/.walnut/images/verify-test.png
+   echo "test-data" > ~/.open-walnut/images/verify-test.png
    ```
 
 2. **Talk to the main agent via console chat** — use the main chat input (placeholder: "Type a message...") to ask the agent to exercise the feature. Be explicit about what you want:
-   > "Create a task 'Verify SCP Transfer' in Projects/Walnut. Start a bypass session on remote-host. In the session prompt, include a reference to the image ~/.walnut/images/verify-test.png and ask the session to confirm what path it sees for that file."
+   > "Create a task 'Verify SCP Transfer' in Projects/Walnut. Start a bypass session on remote-host. In the session prompt, include a reference to the image ~/.open-walnut/images/verify-test.png and ask the session to confirm what path it sees for that file."
 
 3. **Wait for the agent to respond** — the agent will create the task, start the session, and reply with a session link. Screenshot the response.
 

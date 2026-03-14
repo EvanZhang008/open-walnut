@@ -14,13 +14,13 @@
 import path from 'node:path';
 
 // Resolve WALNUT_HOME before importing anything
-const WALNUT_HOME = process.env.WALNUT_HOME ?? path.join(process.env.HOME!, '.walnut'); // safe: production-path
+const WALNUT_HOME = process.env.OPEN_WALNUT_HOME ?? path.join(process.env.HOME!, '.open-walnut');
 const TASKS_FILE = path.join(WALNUT_HOME, 'tasks', 'tasks.json');
 
 // Guard: refuse to run in a test environment against production data
 const isTestEnv = !!(process.env.VITEST || process.env.VITEST_WORKER_ID || process.env.NODE_ENV === 'test');
-if (isTestEnv && WALNUT_HOME === path.join(process.env.HOME!, '.walnut')) { // safe: production-path — guard comparison
-  console.error('SAFETY: refusing to run cleanup script against production ~/.walnut/ in test environment');
+if (isTestEnv && WALNUT_HOME === path.join(process.env.HOME!, '.open-walnut')) {
+  console.error('SAFETY: refusing to run cleanup script against production ~/.open-walnut/ in test environment');
   process.exit(1);
 }
 

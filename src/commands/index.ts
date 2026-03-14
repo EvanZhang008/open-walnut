@@ -72,7 +72,7 @@ export function registerCommands(program: Command): void {
 
   program
     .command('sync')
-    .description('Sync ~/.walnut via git and/or Microsoft To-Do')
+    .description('Sync ~/.open-walnut via git and/or Microsoft To-Do')
     .option('--init [remote]', 'Initialize git repo (optionally with remote URL)')
     .option('--status', 'Show sync status')
     .option('--git', 'Sync git only')

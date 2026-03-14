@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import type { Config } from '@walnut/core';
+import type { Config } from '@open-walnut/core';
 import { SectionCard } from '../inputs/SectionCard';
 import { ListEditor } from '../inputs/ListEditor';
 import { NumberInput } from '../inputs/NumberInput';

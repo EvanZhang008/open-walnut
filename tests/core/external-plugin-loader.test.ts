@@ -121,7 +121,7 @@ export default function register(api) {
 
   it('esbuild bundles .ts plugin with parent imports', async () => {
     // This plugin imports a type from ../../core/types.js — a parent-relative path
-    // that would normally fail because the plugin lives in ~/.walnut/plugins/,
+    // that would normally fail because the plugin lives in ~/.open-walnut/plugins/,
     // not in src/integrations/. The esbuild rebase-walnut-imports plugin handles this.
     const pluginDir = path.join(tmpDir, 'plugins', 'import-test');
     await writeManifest(pluginDir, {

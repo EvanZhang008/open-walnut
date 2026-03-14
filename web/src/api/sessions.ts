@@ -1,5 +1,5 @@
 import { apiGet, apiPatch, apiPost } from './client';
-import type { SessionSummary, SessionRecord } from '@walnut/core';
+import type { SessionSummary, SessionRecord } from '@open-walnut/core';
 import type { ImageAttachment } from './chat';
 
 export async function fetchSessions(): Promise<SessionSummary[]> {

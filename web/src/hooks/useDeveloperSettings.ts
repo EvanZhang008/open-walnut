@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react';
 
 /**
  * All UI Only message categories that can be individually toggled.
- * Each maps to a localStorage key: `walnut:show_ui_only_{category}`.
+ * Each maps to a localStorage key: `open-walnut:show_ui_only_{category}`.
  */
 export const UI_ONLY_CATEGORIES = [
   { key: 'triage', label: 'Triage results', description: 'Session triage analysis notifications', defaultOn: false },
@@ -15,14 +15,14 @@ export const UI_ONLY_CATEGORIES = [
 
 export type UiOnlyCategory = typeof UI_ONLY_CATEGORIES[number]['key'];
 
-const KEY_PREFIX = 'walnut:show_ui_only_';
+const KEY_PREFIX = 'open-walnut:show_ui_only_';
 
 function subscribe(cb: () => void): () => void {
   window.addEventListener('storage', cb);
-  window.addEventListener('walnut-dev-settings', cb);
+  window.addEventListener('open-walnut-dev-settings', cb);
   return () => {
     window.removeEventListener('storage', cb);
-    window.removeEventListener('walnut-dev-settings', cb);
+    window.removeEventListener('open-walnut-dev-settings', cb);
   };
 }
 
@@ -68,7 +68,7 @@ export function setShowUiOnlyCategory(category: UiOnlyCategory, value: boolean):
   try {
     localStorage.setItem(`${KEY_PREFIX}${category}`, String(value));
   } catch { /* private browsing */ }
-  window.dispatchEvent(new Event('walnut-dev-settings'));
+  window.dispatchEvent(new Event('open-walnut-dev-settings'));
 }
 
 // ── Legacy API (backwards compat) ──

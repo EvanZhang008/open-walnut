@@ -29,7 +29,7 @@ program.action(async () => {
     if (globals.json) {
       outputJson({ dashboard: 'coming soon' });
     } else {
-      console.log('Run `walnut web` to start the web GUI, or `walnut chat` for CLI chat.');
+      console.log('Run `open-walnut web` to start the web GUI, or `open-walnut chat` for CLI chat.');
     }
   }
 });

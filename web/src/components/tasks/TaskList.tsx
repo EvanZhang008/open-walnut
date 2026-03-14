@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import type { Task } from '@walnut/core';
+import type { Task } from '@open-walnut/core';
 import { TaskCard } from './TaskCard';
 import { EmptyState } from '../common/EmptyState';
 

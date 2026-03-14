@@ -7,7 +7,7 @@
     <script>
       (function() {
         var t = 'system';
-        try { t = localStorage.getItem('walnut-theme') || 'system'; } catch(e) {}
+        try { t = localStorage.getItem('open-walnut-theme') || 'system'; } catch(e) {}
         if (t === 'dark') document.documentElement.dataset.theme = 'dark';
         else if (t === 'light') document.documentElement.dataset.theme = 'light';
       })();

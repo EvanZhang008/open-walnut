@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import type { TaskPriority } from '@walnut/core';
+import type { TaskPriority } from '@open-walnut/core';
 
 const PRIORITY_ORDER: TaskPriority[] = ['immediate', 'important', 'backlog', 'none'];
 

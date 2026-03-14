@@ -1,5 +1,5 @@
 /**
- * CLI command: walnut session-server [--port 7890]
+ * CLI command: open-walnut session-server [--port 7890]
  * Starts the session server (WebSocket wrapping Claude Agent SDK).
  */
 

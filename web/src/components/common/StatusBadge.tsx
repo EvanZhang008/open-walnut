@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import type { TaskStatus, TaskPhase } from '@walnut/core';
+import type { TaskStatus, TaskPhase } from '@open-walnut/core';
 import { PersonIcon } from './PersonIcon';
 
 interface StatusBadgeProps {

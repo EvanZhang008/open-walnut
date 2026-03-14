@@ -1,5 +1,5 @@
 import { apiGet, apiPost, apiPatch, apiPut, apiDelete } from './client';
-import type { Task, DashboardData } from '@walnut/core';
+import type { Task, DashboardData } from '@open-walnut/core';
 
 export interface TaskFilter {
   status?: string;

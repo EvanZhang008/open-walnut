@@ -1,7 +1,7 @@
 /**
  * Live test: ExtSync roundtrip via ephemeral server.
  *
- * Spins up an ephemeral Walnut server (copies ~/.walnut/ to /tmp, random port),
+ * Spins up an ephemeral Walnut server (copies ~/.open-walnut/ to /tmp, random port),
  * creates tasks via REST, and verifies they sync to ExtSync and back.
  *
  * Tests:
@@ -21,7 +21,7 @@
  *
  * Requires:
  *   - WALNUT_LIVE_TEST=1 (or LIVE=1) environment variable
- *   - ~/.walnut/config.yaml with plugins.ext-sync.room_id configured
+ *   - ~/.open-walnut/config.yaml with plugins.ext-sync.room_id configured
  *   - Valid ExtSync credentials (cookie-based auth)
  *
  * Run with:
@@ -44,7 +44,7 @@ const shouldRun = isLiveTest() && hasPluginCredentials('ext-sync');
 
 function readExtSyncCategory(): string {
   try {
-    const configPath = path.join(os.homedir(), '.walnut', 'config.yaml');
+    const configPath = path.join(os.homedir(), '.open-walnut', 'config.yaml');
     const content = fs.readFileSync(configPath, 'utf-8');
     const config = yaml.load(content) as Record<string, unknown>;
     const plugins = config?.plugins as Record<string, unknown> | undefined;
@@ -189,7 +189,7 @@ describe.skipIf(!shouldRun)('ExtSync roundtrip via ephemeral server (LIVE)', () 
   // ── Ephemeral server lifecycle ──
 
   beforeAll(async () => {
-    // Start ephemeral server — copies ~/.walnut/ to temp dir, starts on random port
+    // Start ephemeral server — copies ~/.open-walnut/ to temp dir, starts on random port
     const cliPath = path.join(process.cwd(), 'dist', 'cli.js');
     const result = execSync(`node ${cliPath} web --ephemeral`, {
       encoding: 'utf-8',

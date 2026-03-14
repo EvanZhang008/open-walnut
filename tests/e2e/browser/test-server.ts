@@ -13,10 +13,10 @@ import fs from 'node:fs/promises'
 import zlib from 'node:zlib'
 
 // Set WALNUT_HOME to temp dir BEFORE importing server modules
-// WALNUT_EPHEMERAL=1 prevents the safety check from overriding back to ~/.walnut
+// WALNUT_EPHEMERAL=1 prevents the safety check from overriding back to ~/.open-walnut
 const tmpBase = path.join(os.tmpdir(), `walnut-pw-${Date.now()}`)
-process.env.WALNUT_HOME = tmpBase
-process.env.WALNUT_EPHEMERAL = '1'
+process.env.OPEN_WALNUT_HOME = tmpBase
+process.env.OPEN_WALNUT_EPHEMERAL = '1'
 
 // Ensure directories exist
 await fs.rm(tmpBase, { recursive: true, force: true })

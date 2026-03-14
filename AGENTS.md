@@ -127,13 +127,13 @@ Before a feature is done, verify:
 
 ## Production Data Protection (4-Layer Defense)
 
-Tests MUST NOT touch `~/.walnut/`. Four layers enforce this:
-- **L1**: `tests/setup/global-setup.ts` (vitest globalSetup) sets `WALNUT_HOME=/tmp/walnut-test-global/` before any fork.
-- **L2**: `assertNotProductionPath()` in `src/constants.ts` throws if a test process resolves inside `~/.walnut/`.
-- **L3**: All scripts that reference `~/.walnut/` either import from `constants.ts` or annotate with `// safe: production-path`.
+Tests MUST NOT touch `~/.open-walnut/`. Four layers enforce this:
+- **L1**: `tests/setup/global-setup.ts` (vitest globalSetup) sets `OPEN_WALNUT_HOME=/tmp/walnut-test-global/` before any fork.
+- **L2**: `assertNotProductionPath()` in `src/constants.ts` throws if a test process resolves inside `~/.open-walnut/`.
+- **L3**: All scripts that reference `~/.open-walnut/` either import from `constants.ts` or annotate with `// safe: production-path`.
 - **L4**: `scripts/lint-production-paths.sh` (wired as `npm run lint:paths`) greps for hardcoded production paths; CI fails on violations.
 
-To add a new file that legitimately references `~/.walnut/`: add `// safe: production-path` on the same line, or add the file to `ALLOWED_FILES` in the lint script.
+To add a new file that legitimately references `~/.open-walnut/`: add `// safe: production-path` on the same line, or add the file to `ALLOWED_FILES` in the lint script.
 
 ## Session Context Enrichment
 
@@ -141,11 +141,11 @@ When a session starts via `start_session`, `buildSessionContext(taskId)` in `src
 
 ## Logging
 
-**Structured logging** — `src/logging/` provides subsystem-tagged loggers writing JSON lines to `/tmp/walnut/walnut-YYYY-MM-DD.log` and colored output to stderr. Import via `import { log } from '../logging/index.js'`. Use `log.bus`, `log.agent`, `log.session`, `log.web`, `log.ws`, `log.hook`, `log.task`, `log.memory`. View logs with `walnut logs [--follow] [--subsystem NAME]`. Sensitive data is auto-redacted. See `CLAUDE.md` "Logging & Debugging" for full details.
+**Structured logging** — `src/logging/` provides subsystem-tagged loggers writing JSON lines to `/tmp/walnut/walnut-YYYY-MM-DD.log` and colored output to stderr. Import via `import { log } from '../logging/index.js'`. Use `log.bus`, `log.agent`, `log.session`, `log.web`, `log.ws`, `log.hook`, `log.task`, `log.memory`. View logs with `open-walnut logs [--follow] [--subsystem NAME]`. Sensitive data is auto-redacted. See `CLAUDE.md` "Logging & Debugging" for full details.
 
 ## Heartbeat System
 
-**Periodic AI self-check** — the heartbeat wakes the agent at configurable intervals to read `~/.walnut/HEARTBEAT.md` and decide if anything needs the user's attention. Config lives under `config.heartbeat` (enabled, every, activeHours). Core runner in `src/heartbeat/`, REST routes at `/api/heartbeat` (status) and `/api/heartbeat/trigger` (manual). Runner uses recursive setTimeout (no overlap). If the AI replies `HEARTBEAT_OK`, the UI shows a compact "All clear" line; substantive responses render with a red accent border and `❤️ HEARTBEAT` label. All heartbeat messages (both OK and substantive) are visible in chat. Detection uses `isHeartbeatOk()` (line-based matching to avoid false positives). Tests: `tests/core/heartbeat.test.ts`. Logger: `log.heartbeat`.
+**Periodic AI self-check** — the heartbeat wakes the agent at configurable intervals to read `~/.open-walnut/HEARTBEAT.md` and decide if anything needs the user's attention. Config lives under `config.heartbeat` (enabled, every, activeHours). Core runner in `src/heartbeat/`, REST routes at `/api/heartbeat` (status) and `/api/heartbeat/trigger` (manual). Runner uses recursive setTimeout (no overlap). If the AI replies `HEARTBEAT_OK`, the UI shows a compact "All clear" line; substantive responses render with a red accent border and `❤️ HEARTBEAT` label. All heartbeat messages (both OK and substantive) are visible in chat. Detection uses `isHeartbeatOk()` (line-based matching to avoid false positives). Tests: `tests/core/heartbeat.test.ts`. Logger: `log.heartbeat`.
 
 ## Plugin Sync Failure Handling
 
@@ -157,7 +157,7 @@ When a session starts via `start_session`, `buildSessionContext(taskId)` in `src
 
 ## Stateful Agent Mode
 
-**Persistent memory for embedded subagents.** Agents with a `stateful` config get project memory injected into their system prompt and can write back via `<memory_update>` tags. Memory is stored under `~/.walnut/memory/projects/{memory_project}/MEMORY.md`. The `SubagentRunner` handles injection pre-loop and persistence post-loop. Config fields: `memory_project` (required), `memory_budget_tokens` (default 4000), `memory_source`. Types in `src/core/types.ts` (`AgentStatefulConfig`), logic in `src/agent/stateful-memory.ts`. Agent registry auto-creates memory directories on create/update (`src/core/agent-registry.ts`).
+**Persistent memory for embedded subagents.** Agents with a `stateful` config get project memory injected into their system prompt and can write back via `<memory_update>` tags. Memory is stored under `~/.open-walnut/memory/projects/{memory_project}/MEMORY.md`. The `SubagentRunner` handles injection pre-loop and persistence post-loop. Config fields: `memory_project` (required), `memory_budget_tokens` (default 4000), `memory_source`. Types in `src/core/types.ts` (`AgentStatefulConfig`), logic in `src/agent/stateful-memory.ts`. Agent registry auto-creates memory directories on create/update (`src/core/agent-registry.ts`).
 
 ## Cron Action System
 
@@ -165,7 +165,7 @@ When a session starts via `start_session`, `buildSessionContext(taskId)` in `src
 
 ## Timeline / Life Tracker
 
-**Screenshot-based activity tracker.** The `screenshot-track` action (`src/core/timeline/screenshot-action.ts`, macOS-only) captures screenshots via `screencapture`, creates 640px JPEG thumbnails, and uses file-size change detection to skip unchanged screens. Thumbnails stored at `~/.walnut/timeline/{date}/thumbnails/{timestamp}.jpg`. REST API at `src/web/routes/timeline.ts`: `GET /api/timeline?date=`, `GET /api/timeline/dates`, `GET /api/timeline/images/:date/:file`, `POST /api/timeline/toggle`. Frontend: `web/src/pages/TimelinePage.tsx` with date navigation, category bar chart, and activity list.
+**Screenshot-based activity tracker.** The `screenshot-track` action (`src/core/timeline/screenshot-action.ts`, macOS-only) captures screenshots via `screencapture`, creates 640px JPEG thumbnails, and uses file-size change detection to skip unchanged screens. Thumbnails stored at `~/.open-walnut/timeline/{date}/thumbnails/{timestamp}.jpg`. REST API at `src/web/routes/timeline.ts`: `GET /api/timeline?date=`, `GET /api/timeline/dates`, `GET /api/timeline/images/:date/:file`, `POST /api/timeline/toggle`. Frontend: `web/src/pages/TimelinePage.tsx` with date navigation, category bar chart, and activity list.
 
 ### Running All Tests
 

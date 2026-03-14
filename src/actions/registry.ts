@@ -3,7 +3,7 @@
  *
  * Scans two locations for action modules:
  *   1. Built-in: dist/actions/*.js  (compiled from src/actions/*.ts)
- *   2. User:     ~/.walnut/actions/*.mjs
+ *   2. User:     ~/.open-walnut/actions/*.mjs
  *
  * Each module must export { describe, run } conforming to action types.
  * User actions override built-in actions with the same ID.

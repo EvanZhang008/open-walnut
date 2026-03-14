@@ -6,7 +6,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import type { Editor } from '@tiptap/core';
-import type { Task } from '@walnut/core';
+import type { Task } from '@open-walnut/core';
 import type { SlashCommandState, NoteSlashCommand, SlashRange } from './types';
 import { SlashCommandMenu } from './SlashCommandMenu';
 import { TaskSearchPanel } from './TaskSearchPanel';

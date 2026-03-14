@@ -214,7 +214,7 @@ export class SessionHealthMonitor {
         const sshTarget = await this.resolveHostTarget(session.host)
         if (sshTarget) {
           try {
-            const remoteJsonl = `/tmp/walnut-streams/${session.claudeSessionId}.jsonl`
+            const remoteJsonl = `/tmp/open-open-walnut-streams/${session.claudeSessionId}.jsonl`
             const { execFile: execFileCb } = await import('node:child_process')
             const hostString = sshTarget.user ? `${sshTarget.user}@${sshTarget.hostname}` : sshTarget.hostname
             const sshArgs = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=10']

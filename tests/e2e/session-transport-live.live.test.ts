@@ -8,7 +8,7 @@
  *   - WALNUT_LIVE_TEST=1 (env var gate)
  *   - SSH access to devbox (passwordless, BatchMode=yes)
  *   - Claude CLI installed on devbox (~/.local/bin/claude)
- *   - Real ~/.walnut/ config with hosts.devbox
+ *   - Real ~/.open-walnut/ config with hosts.devbox
  *
  * Run with:
  *   WALNUT_LIVE_TEST=1 npx vitest run tests/e2e/session-transport-live.live.test.ts --config vitest.live.config.ts
@@ -124,7 +124,7 @@ interface HostDef {
 
 function resolveDevboxTarget(): HostDef | null {
   try {
-    const configPath = path.join(os.homedir(), '.walnut', 'config.yaml') // safe: production-path — live test reads real config
+    const configPath = path.join(os.homedir(), '.open-walnut', 'config.yaml') // safe: production-path — live test reads real config
     const content = fsSync.readFileSync(configPath, 'utf-8')
     const config = yaml.load(content) as { hosts?: Record<string, HostDef> }
     return config?.hosts?.devbox ?? null
@@ -179,10 +179,10 @@ describe.skipIf(!isLiveTest())('Session transport live (real SSH + real Claude)'
   let devboxTarget: HostDef | null = null
 
   beforeAll(async () => {
-    // 0. Resolve devbox SSH target from real ~/.walnut/config.yaml
+    // 0. Resolve devbox SSH target from real ~/.open-walnut/config.yaml
     devboxTarget = resolveDevboxTarget()
     if (!devboxTarget) {
-      console.warn('SKIP: devbox host not found in ~/.walnut/config.yaml')
+      console.warn('SKIP: devbox host not found in ~/.open-walnut/config.yaml')
       return
     }
     console.log(`Resolved devbox: ${sshHostString(devboxTarget)}`)
@@ -201,7 +201,7 @@ describe.skipIf(!isLiveTest())('Session transport live (real SSH + real Claude)'
       return
     }
 
-    // 3. Start real server on ephemeral port (uses real ~/.walnut/ data)
+    // 3. Start real server on ephemeral port (uses real ~/.open-walnut/ data)
     const { startServer: start } = await import('../../src/web/server.js')
     server = await start({ port: 0, dev: true })
     const addr = server.address()
@@ -244,7 +244,7 @@ describe.skipIf(!isLiveTest())('Session transport live (real SSH + real Claude)'
       const portArgs = devboxTarget.port ? `-p ${devboxTarget.port}` : ''
       try {
         execSync(
-          `ssh -o BatchMode=yes ${portArgs} ${host} 'rm -f /tmp/walnut-streams/${sessionId}.* 2>/dev/null'`,
+          `ssh -o BatchMode=yes ${portArgs} ${host} 'rm -f /tmp/open-open-walnut-streams/${sessionId}.* 2>/dev/null'`,
           { stdio: 'ignore', timeout: 10_000 },
         )
       } catch { /* best-effort */ }
@@ -459,16 +459,16 @@ describe.skipIf(!isLiveTest())('Session transport live (real SSH + real Claude)'
     // The session may have already cleaned up the FIFO, but the JSONL should remain
     try {
       const result = execSync(
-        `ssh -o BatchMode=yes ${portArgs} ${host} 'ls /tmp/walnut-streams/ 2>/dev/null | head -20'`,
+        `ssh -o BatchMode=yes ${portArgs} ${host} 'ls /tmp/open-open-walnut-streams/ 2>/dev/null | head -20'`,
         { stdio: 'pipe', timeout: 15_000 },
       )
       const remoteFiles = result.toString().trim()
-      console.log(`Remote files in /tmp/walnut-streams/:\n${remoteFiles || '(empty)'}`)
+      console.log(`Remote files in /tmp/open-open-walnut-streams/:\n${remoteFiles || '(empty)'}`)
 
       // We just verify the directory was used — files may have been renamed
       // or cleaned up by session lifecycle. The important thing is the pipeline worked.
     } catch {
-      console.log('Remote /tmp/walnut-streams/ check skipped (SSH error)')
+      console.log('Remote /tmp/open-open-walnut-streams/ check skipped (SSH error)')
     }
   })
 })

@@ -5,7 +5,7 @@
  * Every component that shows session status must import from here.
  * Do NOT define local label/color maps in individual components.
  */
-import type { Task } from '@walnut/core';
+import type { Task } from '@open-walnut/core';
 import type { ProcessStatus, WorkStatus } from '@/types/session';
 
 // ── Session ID resolution ──

@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom';
-import type { Task } from '@walnut/core';
+import type { Task } from '@open-walnut/core';
 import { PriorityBadge } from '../common/PriorityBadge';
 import { StarButton } from '../common/StarButton';
 import { TagChip } from './TagChip';

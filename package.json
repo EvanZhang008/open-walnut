@@ -27,8 +27,8 @@
   ],
   "type": "module",
   "bin": {
-    "open-walnut": "./bin/walnut.js",
-    "walnut": "./bin/walnut.js"
+    "open-walnut": "./bin/open-walnut.js",
+    "walnut": "./bin/open-walnut.js"
   },
   "main": "./dist/cli.js",
   "scripts": {

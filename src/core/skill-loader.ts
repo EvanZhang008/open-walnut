@@ -4,7 +4,7 @@
  *
  * Load sources (highest priority first):
  *   ./skills/              — workspace-local
- *   ~/.walnut/skills/       — walnut global
+ *   ~/.open-walnut/skills/       — walnut global
  *   ~/.claude/skills/      — claude skills (shared across tools)
  */
 import fs from 'node:fs';
@@ -43,7 +43,7 @@ interface SkillFrontmatter {
 function getSearchDirs(): string[] {
   return [
     path.resolve('skills'),       // workspace-local (highest priority)
-    GLOBAL_SKILLS_DIR,            // ~/.walnut/skills/
+    GLOBAL_SKILLS_DIR,            // ~/.open-walnut/skills/
     CLAUDE_SKILLS_DIR,            // ~/.claude/skills/
   ];
 }

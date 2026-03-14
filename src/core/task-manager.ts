@@ -1438,7 +1438,7 @@ export async function updateTask(idPrefix: string, updates: UpdateTaskInput): Pr
       if (m.oldSource !== 'local' && m.oldExt) {
         const oldPlugin = registry.get(m.oldSource);
         if (oldPlugin) {
-          const movedTitle = `[Moved] ${m.oldTitle} [walnut:${m.task.id}]`;
+          const movedTitle = `[Moved] ${m.oldTitle} [open-walnut:${m.task.id}]`;
           const snapshot = { ...m.task, source: m.oldSource, ext: m.oldExt } as Task;
           try {
             await oldPlugin.sync.updateTitle(snapshot, movedTitle);

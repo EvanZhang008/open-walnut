@@ -46,7 +46,7 @@ describe('transferImagesForRemoteSession (mocked SSH/SCP)', () => {
     fs.writeFileSync(imgPath, 'fake-png-data')
 
     const text = `Please analyze this screenshot: ${imgPath}`
-    const remoteDir = '/tmp/walnut-images/test123'
+    const remoteDir = '/tmp/open-open-walnut-images/test123'
     const result = await transferImagesForRemoteSession(
       text,
       { hostname: 'remote.example.com', user: 'admin' },
@@ -63,7 +63,7 @@ describe('transferImagesForRemoteSession (mocked SSH/SCP)', () => {
     // SCP should have been called with the image file
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'scp',
-      expect.arrayContaining([imgPath, 'admin@remote.example.com:/tmp/walnut-images/test123/']),
+      expect.arrayContaining([imgPath, 'admin@remote.example.com:/tmp/open-open-walnut-images/test123/']),
       expect.objectContaining({ timeout: 60_000 }),
     )
 
@@ -79,7 +79,7 @@ describe('transferImagesForRemoteSession (mocked SSH/SCP)', () => {
     await transferImagesForRemoteSession(
       `See ${imgPath}`,
       { hostname: 'remote.example.com', user: 'admin', port: 2222 },
-      '/tmp/walnut-images/porttest',
+      '/tmp/open-open-walnut-images/porttest',
     )
 
     // SCP call should use -P (uppercase) for port
@@ -113,7 +113,7 @@ describe('transferImagesForRemoteSession (mocked SSH/SCP)', () => {
     const result = await transferImagesForRemoteSession(
       text,
       { hostname: 'remote.example.com' },
-      '/tmp/walnut-images/failtest',
+      '/tmp/open-open-walnut-images/failtest',
     )
 
     // Should return original text on SCP failure
@@ -132,7 +132,7 @@ describe('transferImagesForRemoteSession (mocked SSH/SCP)', () => {
     const result = await transferImagesForRemoteSession(
       text,
       { hostname: 'remote.example.com' },
-      '/tmp/walnut-images/mkdirfail',
+      '/tmp/open-open-walnut-images/mkdirfail',
     )
 
     // Should return original text on mkdir failure
@@ -146,7 +146,7 @@ describe('transferImagesForRemoteSession (mocked SSH/SCP)', () => {
     fs.writeFileSync(img2, 'data2')
 
     const text = `First: ${img1}\nSecond: ${img2}\nAgain: ${img1}`
-    const remoteDir = '/tmp/walnut-images/multi'
+    const remoteDir = '/tmp/open-open-walnut-images/multi'
     const result = await transferImagesForRemoteSession(
       text,
       { hostname: 'remote.example.com' },
@@ -164,7 +164,7 @@ describe('transferImagesForRemoteSession (mocked SSH/SCP)', () => {
     await transferImagesForRemoteSession(
       `See ${imgPath}`,
       { hostname: 'remote.example.com' },
-      '/tmp/walnut-images/nouser',
+      '/tmp/open-open-walnut-images/nouser',
     )
 
     // SSH should use hostname directly (no user@ prefix)

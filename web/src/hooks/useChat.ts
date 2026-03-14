@@ -486,7 +486,7 @@ export function useChat(): UseChatReturn {
       const firstQ = questions?.[0]?.question ?? 'The agent has a question for you'
       new Notification('Agent has a question', {
         body: firstQ.slice(0, 120),
-        tag: `walnut-question-${toolUseId ?? Date.now()}`,
+        tag: `open-walnut-question-${toolUseId ?? Date.now()}`,
       })
     }
   });

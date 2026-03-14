@@ -2,7 +2,7 @@
  * Persistent frequent-directories store.
  *
  * Replaces the on-the-fly scan of all sessions in the working-dirs API.
- * Data lives at ~/.walnut/frequent-directories.json.
+ * Data lives at ~/.open-walnut/frequent-directories.json.
  *
  * - First access auto-compiles from sessions.json if the file doesn't exist.
  * - Session start calls recordDirectory() for incremental updates.

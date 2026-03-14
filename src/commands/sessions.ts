@@ -5,7 +5,7 @@ import { shortDate } from '../utils/format.js';
 import type { GlobalOptions } from '../core/types.js';
 
 /**
- * walnut sessions - List all tracked sessions.
+ * open-walnut sessions - List all tracked sessions.
  */
 export async function runSessions(globals: GlobalOptions): Promise<void> {
   const sessions = await getRecentSessions(20);

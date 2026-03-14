@@ -22,9 +22,9 @@ interface SessionTreePanelProps {
 
 // ── localStorage persistence helpers ──
 
-const LS_COLLAPSED_CATS = 'walnut-session-tree-collapsed-cats';
-const LS_COLLAPSED_PROJS = 'walnut-session-tree-collapsed-projs';
-const LS_COLLAPSED_TASKS = 'walnut-session-tree-collapsed-tasks';
+const LS_COLLAPSED_CATS = 'open-walnut-session-tree-collapsed-cats';
+const LS_COLLAPSED_PROJS = 'open-walnut-session-tree-collapsed-projs';
+const LS_COLLAPSED_TASKS = 'open-walnut-session-tree-collapsed-tasks';
 
 function readSetFromStorage(key: string): Set<string> {
   try {

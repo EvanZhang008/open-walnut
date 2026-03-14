@@ -6,7 +6,7 @@
  *   2. POST /api/browser-logs (sendBeacon fallback on page unload)
  *
  * Writes each entry to the shared log file via writeLogEntry()
- * with subsystem='browser'. View with: `walnut logs -s browser`
+ * with subsystem='browser'. View with: `open-walnut logs -s browser`
  *
  * Rate limiting: 500 entries per 10s window per WS client (silent drop).
  */

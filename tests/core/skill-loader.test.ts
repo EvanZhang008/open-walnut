@@ -176,7 +176,7 @@ describe('formatSkillsPrompt', () => {
   it('produces correct XML structure', () => {
     const skills: SkillMeta[] = [
       { name: 'weather', description: 'Get weather', location: './skills/weather/SKILL.md' },
-      { name: 'github', description: 'GitHub CLI', location: '~/.walnut/skills/github/SKILL.md' },
+      { name: 'github', description: 'GitHub CLI', location: '~/.open-walnut/skills/github/SKILL.md' },
     ];
     const result = formatSkillsPrompt(skills);
 

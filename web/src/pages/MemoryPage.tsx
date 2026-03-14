@@ -6,7 +6,7 @@ import { MemoryContentPanel } from '@/components/memory/MemoryContentPanel';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import type { MemoryBrowseTree } from '@/api/memory';
 
-const LS_WIDTH_KEY = 'walnut-memory-list-width';
+const LS_WIDTH_KEY = 'open-walnut-memory-list-width';
 const WIDTH_MIN = 260;
 const WIDTH_MAX = 600;
 const WIDTH_DEFAULT = 320;

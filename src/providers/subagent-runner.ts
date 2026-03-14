@@ -12,7 +12,7 @@
  *
  * Phase 1 — Session UI Parity:
  *   - Creates a SessionRecord (provider='embedded') for each run
- *   - Writes JSONL history to ~/.walnut/sessions/streams/embedded-{runId}.jsonl
+ *   - Writes JSONL history to ~/.open-walnut/sessions/streams/embedded-{runId}.jsonl
  *   - Emits session:text-delta, session:tool-use, session:tool-result events
  *   - Updates SessionRecord on completion/error
  *   → Embedded sessions appear in the session tree and stream in real-time

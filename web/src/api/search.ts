@@ -1,5 +1,5 @@
 import { apiGet } from './client';
-import type { Task } from '@walnut/core';
+import type { Task } from '@open-walnut/core';
 
 export interface SearchResult {
   tasks: Task[];

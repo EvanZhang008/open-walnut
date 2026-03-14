@@ -14,7 +14,7 @@ interface AppShellProps {
 function readCollapsed(): boolean {
   try {
     // Default to collapsed when no preference stored (first visit)
-    return localStorage.getItem('walnut-sidebar-collapsed') !== 'false';
+    return localStorage.getItem('open-walnut-sidebar-collapsed') !== 'false';
   } catch {
     return true;
   }
@@ -55,7 +55,7 @@ function AppShellInner({ children }: AppShellProps) {
     setSidebarCollapsed((prev) => {
       const next = !prev;
       try {
-        localStorage.setItem('walnut-sidebar-collapsed', String(next));
+        localStorage.setItem('open-walnut-sidebar-collapsed', String(next));
       } catch { /* ignore */ }
       return next;
     });

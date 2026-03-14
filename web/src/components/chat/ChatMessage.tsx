@@ -2,7 +2,7 @@ import { useMemo, useState, useCallback, memo, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import type { Task } from '@walnut/core';
+import type { Task } from '@open-walnut/core';
 import type { MessageBlock, ThinkingBlock, ToolCallBlock, ImageBlock, TaskContext, ImageAttachment } from '@/hooks/useChat';
 import { useLightbox } from '@/hooks/useLightbox';
 import { Lightbox } from '@/components/common/Lightbox';

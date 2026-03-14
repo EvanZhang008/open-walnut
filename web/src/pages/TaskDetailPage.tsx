@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import type { Task } from '@walnut/core';
+import type { Task } from '@open-walnut/core';
 import { renderNoteMarkdown } from '@/utils/markdown';
 import { fetchTask, toggleCompleteTask, starTask, addNote, updateNote, updateDescription, deleteTask, addTag, removeTag, addDependency, removeDependency, updateTask } from '@/api/tasks';
 import { SprintPicker } from '@/components/tasks/SprintPicker';
 import { fetchSessionsForTask, updateSession } from '@/api/sessions';
-import type { SessionRecord } from '@walnut/core';
+import type { SessionRecord } from '@open-walnut/core';
 import { PriorityBadge } from '@/components/common/PriorityBadge';
 import { StatusBadge } from '@/components/common/StatusBadge';
 import { StarButton } from '@/components/common/StarButton';

@@ -14,8 +14,8 @@ import { useSlashCommands } from '@/hooks/useSlashCommands';
 import type { ImageAttachment } from '@/api/chat';
 import type { SessionTreeResponse, SessionRecord } from '@/types/session';
 
-const LS_HIDE_COMPLETED = 'walnut-session-tree-hide-completed';
-const LS_LIST_WIDTH_KEY = 'walnut-session-list-width-v2';
+const LS_HIDE_COMPLETED = 'open-walnut-session-tree-hide-completed';
+const LS_LIST_WIDTH_KEY = 'open-walnut-session-list-width-v2';
 const LIST_WIDTH_MIN = 260;
 const LIST_WIDTH_MAX_PCT = 0.45;
 const LIST_WIDTH_DEFAULT = 380;

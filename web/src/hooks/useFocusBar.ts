@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useEvent } from './useWebSocket';
 import * as focusApi from '@/api/focus';
-import type { Task } from '@walnut/core';
+import type { Task } from '@open-walnut/core';
 
 export interface UseFocusBarReturn {
   pinnedIds: string[];

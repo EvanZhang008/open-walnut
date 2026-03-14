@@ -5,7 +5,7 @@
  */
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import type { Task } from '@walnut/core';
+import type { Task } from '@open-walnut/core';
 
 const MAX_RESULTS = 15;
 

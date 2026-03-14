@@ -15,7 +15,7 @@ import { ensureMemoryFile } from './memory-file.js';
 import { seedConfigDefaults } from './config-manager.js';
 
 /**
- * Ensure the full ~/.walnut/ directory structure exists.
+ * Ensure the full ~/.open-walnut/ directory structure exists.
  */
 export async function initDirectories(): Promise<void> {
   await ensureDir(WALNUT_HOME);

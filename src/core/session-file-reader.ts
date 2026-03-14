@@ -268,6 +268,42 @@ export async function readSessionJsonlContent(
     return { content, source, ...(foundCwd ? { foundCwd } : {}) };
   };
 
+  // Helper: extract synthetic walnut-injected user events from local streams file.
+  // Remote sessions write synthetic events to the local streams capture, but the
+  // remote canonical JSONL never sees them. Merge them so user messages appear.
+  const mergeSyntheticFromLocalStreams = (remoteContent: string): string => {
+    try {
+      const files = fs.readdirSync(SESSION_STREAMS_DIR);
+      for (const file of files) {
+        if (!file.endsWith('.jsonl')) continue;
+        const filePath = path.join(SESSION_STREAMS_DIR, file);
+        try {
+          const firstLine = fs.readFileSync(filePath, 'utf-8').split('\n')[0];
+          if (!firstLine) continue;
+          const parsed = JSON.parse(firstLine);
+          if (parsed.sessionId !== sessionId && parsed.session_id !== sessionId) continue;
+          // Found the matching streams file — extract synthetic user events
+          const streamContent = fs.readFileSync(filePath, 'utf-8');
+          const syntheticLines: string[] = [];
+          for (const line of streamContent.split('\n')) {
+            if (!line.trim()) continue;
+            try {
+              const evt = JSON.parse(line);
+              if (evt.type === 'user' && evt.subtype === 'walnut-injected') {
+                syntheticLines.push(line);
+              }
+            } catch { /* skip unparseable lines */ }
+          }
+          if (syntheticLines.length > 0) {
+            return remoteContent + '\n' + syntheticLines.join('\n');
+          }
+          break; // found the file, no synthetic events
+        } catch { /* skip */ }
+      }
+    } catch { /* SESSION_STREAMS_DIR doesn't exist */ }
+    return remoteContent;
+  };
+
   // 1. Canonical JSONL — source of truth.
   //    Dispatch on host (like readSubagentContents): remote SSH first, else local fs.
   //    Remote sessions have no local canonical file, so we must SSH first.
@@ -279,15 +315,15 @@ export async function readSessionJsonlContent(
     try {
       if (exactPath) {
         const content = await reader.readFile(exactPath);
-        if (content) return withFoundCwd(content, 'remote');
+        if (content) return withFoundCwd(mergeSyntheticFromLocalStreams(content), 'remote');
       }
       // Exact path missed or no cwd — try glob
       const content = await reader.readFile(globPath);
-      if (content) return withFoundCwd(content, 'remote');
+      if (content) return withFoundCwd(mergeSyntheticFromLocalStreams(content), 'remote');
 
       // Glob also missed — try `find` (more robust than shell glob)
       const findContent = await reader.findSession(sessionId);
-      if (findContent) return withFoundCwd(findContent, 'remote');
+      if (findContent) return withFoundCwd(mergeSyntheticFromLocalStreams(findContent), 'remote');
     } catch (err) {
       log.session.debug('remote JSONL read failed', {
         host, sessionId,

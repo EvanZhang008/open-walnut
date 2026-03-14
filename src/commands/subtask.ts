@@ -10,7 +10,7 @@ export async function runSubtaskAdd(
   _title: string,
   _globalOptions: GlobalOptions,
 ): Promise<void> {
-  console.log('Subtask commands have been removed. Use child tasks instead (walnut add --parent <id>).');
+  console.log('Subtask commands have been removed. Use child tasks instead (open-walnut add --parent <id>).');
 }
 
 export async function runSubtaskDone(

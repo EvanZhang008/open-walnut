@@ -3,7 +3,7 @@ import { useState, useCallback, useRef } from 'react';
 const RATIO_DEFAULT = 0.65;
 const RATIO_MIN = 0.15;
 const RATIO_MAX = 0.85;
-const STORAGE_KEY = 'walnut-todo-detail-ratio-v2';
+const STORAGE_KEY = 'open-walnut-todo-detail-ratio-v2';
 
 function clampRatio(r: number): number {
   return Math.max(RATIO_MIN, Math.min(RATIO_MAX, r));

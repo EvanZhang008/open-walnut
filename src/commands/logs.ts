@@ -86,7 +86,7 @@ export async function runLogs(options: LogsOptions): Promise<void> {
   if (!options.follow) {
     const count = readAndPrintLines(logPath, options);
     if (count === 0) {
-      console.log('No log entries found. Start the server with `walnut web` to generate logs.');
+      console.log('No log entries found. Start the server with `open-walnut web` to generate logs.');
     }
     return;
   }

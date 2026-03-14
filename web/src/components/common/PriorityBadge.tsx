@@ -1,4 +1,4 @@
-import type { TaskPriority } from '@walnut/core';
+import type { TaskPriority } from '@open-walnut/core';
 
 interface PriorityBadgeProps {
   priority: TaskPriority;

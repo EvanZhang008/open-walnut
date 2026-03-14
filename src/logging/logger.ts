@@ -1,5 +1,5 @@
 /**
- * File transport — writes JSON-lines to /tmp/walnut/walnut-YYYY-MM-DD.log.
+ * File transport — writes JSON-lines to /tmp/open-walnut/walnut-YYYY-MM-DD.log.
  *
  * initFileLogger()  : ensures the log directory exists & prunes files > 3 days old.
  * writeLogEntry()   : appends one JSON line (after redaction).

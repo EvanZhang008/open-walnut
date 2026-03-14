@@ -40,7 +40,7 @@ export function useFullscreen() {
   const FullscreenBackdrop: ReactNode = isFullscreen
     ? createPortal(
         <div
-          className="walnut-fullscreen-backdrop"
+          className="open-walnut-fullscreen-backdrop"
           onClick={exitFullscreen}
           aria-hidden="true"
         />,
@@ -48,7 +48,7 @@ export function useFullscreen() {
       )
     : null;
 
-  const fullscreenClass = isFullscreen ? ' walnut-fullscreen' : '';
+  const fullscreenClass = isFullscreen ? ' open-walnut-fullscreen' : '';
 
   return { isFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop };
 }

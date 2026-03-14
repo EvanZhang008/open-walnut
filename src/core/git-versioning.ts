@@ -1,5 +1,5 @@
 /**
- * GitVersioningService — centralized, event-driven git versioning for ~/.walnut/.
+ * GitVersioningService — centralized, event-driven git versioning for ~/.open-walnut/.
  *
  * Subscribes to bus events, tracks dirty files, debounces commits, and runs all
  * git operations through a serial queue to prevent index.lock conflicts.

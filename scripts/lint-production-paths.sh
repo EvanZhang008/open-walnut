@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Lint guard: detect hardcoded references to ~/.walnut/ outside allowed files.
+# Lint guard: detect hardcoded references to ~/.open-walnut/ outside allowed files.
 #
 # Layer 4 of the production-data protection stack.
-# Catches patterns like:  homedir() + '.walnut'   or   HOME + '.walnut'
+# Catches patterns like:  homedir() + '.open-walnut'   or   HOME + '.open-walnut'
 # in TypeScript/JavaScript source files.
 #
 # Allowed files can annotate intentional uses with:  // safe: production-path
@@ -27,10 +27,10 @@ for f in "${ALLOWED_FILES[@]}"; do
 done
 
 # Patterns that indicate hardcoded production paths
-# Match: homedir() ... '.walnut'  or  HOME ... '.walnut'  (same line)
+# Match: homedir() ... '.open-walnut'  or  HOME ... '.open-walnut'  (same line)
 PATTERNS=(
-  "homedir\\(\\).*\\.walnut"
-  "HOME.*\\.walnut"
+  "homedir\\(\\).*\\.open-walnut"
+  "HOME.*\\.open-walnut"
 )
 
 VIOLATIONS=0

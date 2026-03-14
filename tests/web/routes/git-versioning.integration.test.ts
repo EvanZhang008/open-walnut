@@ -49,7 +49,7 @@ const { mockConst, tmpDir } = vi.hoisted(() => {
       BUILTIN_COMMANDS_DIR: _path.join(base, 'builtin-commands'),
       TIMELINE_DIR: _path.join(base, 'timeline'),
       LOG_DIR: _path.join(base, 'logs'),
-      LOG_PREFIX: 'walnut-test-',
+      LOG_PREFIX: 'open-walnut-test-',
     },
   };
 });

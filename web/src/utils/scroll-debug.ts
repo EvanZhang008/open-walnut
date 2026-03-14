@@ -12,9 +12,9 @@
  * Keyboard shortcut: Ctrl+Shift+D — copies scroll logs to clipboard + downloads as file.
  */
 
-const STORAGE_KEY = 'walnut_scroll_debug';
+const STORAGE_KEY = 'open_walnut_scroll_debug';
 const MAX_ENTRIES = 500;
-const T0_KEY = 'walnut_scroll_debug_t0';
+const T0_KEY = 'open_walnut_scroll_debug_t0';
 
 interface ScrollLogEntry {
   /** ms since first log in this session */

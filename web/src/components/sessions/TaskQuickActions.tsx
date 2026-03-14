@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
-import type { Task, TaskPhase, TaskPriority } from '@walnut/core';
+import type { Task, TaskPhase, TaskPriority } from '@open-walnut/core';
 import { fetchTask, updateTask, starTask } from '@/api/tasks';
 import { useEvent } from '@/hooks/useWebSocket';
 import { PriorityPicker } from '@/components/common/PriorityPicker';

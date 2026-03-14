@@ -97,7 +97,7 @@ function makePlugin(id: string, overrides?: Partial<RegisteredPlugin>): Register
 Tests for `loadPlugins()`, `migrateConfigToPlugins()`, and `runPluginMigrations()`. These require filesystem and config mocking because the loader reads directories, manifest files, and config.yaml.
 
 **Mock strategy**:
-- `vi.mock('../../src/constants.js', () => createMockConstants())` -- redirects `WALNUT_HOME` to tmpdir
+- `vi.mock('../../src/constants.js', () => createMockConstants())` -- redirects `OPEN_WALNUT_HOME` to tmpdir
 - Create real filesystem structures in tmpdir (manifest.json files, index.ts entry points)
 - Mock `config-manager.js` to return controlled config with `plugins` section
 - Use a fresh `IntegrationRegistry` instance (not the singleton) to avoid cross-test leakage
@@ -121,8 +121,8 @@ async function createPluginDir(baseDir: string, manifest: object, entryCode: str
 - Assertions: After loading, registry contains at least `local`. Verify by `registry.has('local')`.
 - Note: Since this tests against real plugin dirs, mock only config to disable external plugins.
 
-**A2.2: discovers external plugins from ~/.walnut/plugins/**
-- Behavior: `loadPlugins()` also scans `WALNUT_HOME/plugins/` for additional plugins.
+**A2.2: discovers external plugins from ~/.open-walnut/plugins/**
+- Behavior: `loadPlugins()` also scans `OPEN_WALNUT_HOME/plugins/` for additional plugins.
 - Setup: Create `tmpdir/plugins/test-plugin/manifest.json` and `index.ts` (with `registerSync` call).
 - Assertions: `registry.has('test-plugin')` is true after loading.
 
@@ -446,8 +446,8 @@ vi.mock('../../src/integrations/microsoft-todo.js', () => ({
 
 ```typescript
 beforeAll(async () => {
-  await fs.rm(WALNUT_HOME, { recursive: true, force: true });
-  await fs.mkdir(WALNUT_HOME, { recursive: true });
+  await fs.rm(OPEN_WALNUT_HOME, { recursive: true, force: true });
+  await fs.mkdir(OPEN_WALNUT_HOME, { recursive: true });
   server = await startServer({ port: 0, dev: true });
   port = (server.address() as any).port;
 });

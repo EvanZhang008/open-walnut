@@ -3,7 +3,7 @@
  *
  * Discovers and loads plugins from:
  * 1. Built-in dir: src/integrations/ (dev) or dist/integrations/ (prod)
- * 2. External dir: ~/.walnut/plugins/
+ * 2. External dir: ~/.open-walnut/plugins/
  *
  * For each plugin subdirectory:
  *   - Read manifest.json → validate required fields
@@ -41,9 +41,9 @@ const log = createSubsystemLogger('plugin-loader');
 
 // ── On-the-fly bundling for external .ts plugins ──
 // External plugins ship as .ts source with relative imports that reference the
-// walnut src/ tree (e.g. '../../core/config-manager.js'). These paths only
+// open-walnut src/ tree (e.g. '../../core/config-manager.js'). These paths only
 // resolve correctly when the plugin is inside src/integrations/. At runtime,
-// plugins live in ~/.walnut/plugins/ so the paths break. We use esbuild to
+// plugins live in ~/.open-walnut/plugins/ so the paths break. We use esbuild to
 // bundle the plugin on-the-fly, rebasing parent imports to the real src/ tree.
 async function bundleExternalPlugin(
   pluginDir: string,
@@ -53,7 +53,7 @@ async function bundleExternalPlugin(
     const { build } = await import('esbuild');
     const os = await import('node:os');
     const pluginName = path.basename(pluginDir);
-    const outfile = path.join(os.tmpdir(), `walnut-plugin-${pluginName}-${Date.now()}.mjs`);
+    const outfile = path.join(os.tmpdir(), `open-walnut-plugin-${pluginName}-${Date.now()}.mjs`);
 
     // BUILTIN_DIR is always {root}/dist/integrations or {root}/src/integrations
     const projectRoot = path.dirname(path.dirname(BUILTIN_DIR));
@@ -69,17 +69,17 @@ async function bundleExternalPlugin(
       banner: { js: 'import { createRequire as __cr } from "node:module"; const require = __cr(import.meta.url);' },
       logLevel: 'warning',
       plugins: [{
-        name: 'rebase-walnut-imports',
+        name: 'rebase-open-walnut-imports',
         setup(b) {
           // Rebase parent-directory imports (../../core/, ../../utils/, etc.)
-          // to the walnut src/ tree so they resolve correctly.
+          // to the open-walnut src/ tree so they resolve correctly.
           // Use src/ (not dist/) because tsup bundles everything — dist/ lacks individual module files.
           // BUILTIN_DIR = {project}/dist/integrations → srcBase = {project}/src/integrations
           const srcBase = path.join(path.dirname(path.dirname(BUILTIN_DIR)), 'src', 'integrations');
           const rebaseDir = fs.existsSync(srcBase) ? srcBase : BUILTIN_DIR;
           b.onResolve({ filter: /^\.\.\// }, (args) => {
             // Only rebase imports originating from the plugin directory itself.
-            // Once resolved into the walnut src/ tree, let esbuild handle natively.
+            // Once resolved into the open-walnut src/ tree, let esbuild handle natively.
             if (!args.importer.startsWith(pluginDir + '/')) return undefined;
             const subPath = path.relative(pluginDir, args.importer);
             const assumedImporter = path.join(rebaseDir, pluginName, subPath);

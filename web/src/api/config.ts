@@ -1,5 +1,5 @@
 import { apiGet, apiPut, apiPost } from './client';
-import type { Config } from '@walnut/core';
+import type { Config } from '@open-walnut/core';
 
 export async function fetchConfig(): Promise<Config & { _envTokenHint?: string }> {
   const res = await apiGet<{ config: Config; envTokenHint?: string }>('/api/config');

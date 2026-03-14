@@ -39,7 +39,7 @@ export function hasAwsCredentials(): boolean {
 
 /**
  * Returns true when Microsoft Graph credentials are available (for MS To-Do).
- * Checks env vars; real auth is via MSAL cache in ~/.walnut/ (set up via `walnut auth`).
+ * Checks env vars; real auth is via MSAL cache in ~/.open-walnut/ (set up via `walnut auth`).
  */
 export function hasMsGraphCredentials(): boolean {
   return !!(process.env.MS_TODO_ACCESS_TOKEN || process.env.MS_TODO_REFRESH_TOKEN);
@@ -48,9 +48,9 @@ export function hasMsGraphCredentials(): boolean {
 /** Read and parse config.yaml synchronously (for credential gate checks). */
 function readConfigSync(): Record<string, unknown> | null {
   try {
-    const home = process.env.WALNUT_HOME || path.join(os.homedir(), '.walnut'); // safe: production-path — only used in live-test mode
+    const home = process.env.OPEN_WALNUT_HOME || path.join(os.homedir(), '.open-walnut'); // safe: production-path — only used in live-test mode
     // Guard: outside live-test mode, never read from production path
-    const prodHome = path.join(os.homedir(), '.walnut');
+    const prodHome = path.join(os.homedir(), '.open-walnut');
     if (!isLiveTest() && (home === prodHome || home.startsWith(prodHome + path.sep))) {
       return null;
     }

@@ -1,7 +1,7 @@
 /**
  * File-based hook discovery.
  *
- * Scans ~/.walnut/hooks/ for .mjs files that export describe() and handle().
+ * Scans ~/.open-walnut/hooks/ for .mjs files that export describe() and handle().
  * Same pattern as the action system (src/actions/registry.ts).
  */
 
@@ -33,7 +33,7 @@ interface HookModule {
 }
 
 /**
- * Discover file-based hooks from ~/.walnut/hooks/*.mjs
+ * Discover file-based hooks from ~/.open-walnut/hooks/*.mjs
  */
 export async function discoverFileHooks(): Promise<SessionHookDefinition[]> {
   if (!fs.existsSync(HOOKS_DIR)) return [];

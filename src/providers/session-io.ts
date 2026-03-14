@@ -22,20 +22,20 @@ import { SESSION_STREAMS_DIR, REMOTE_IMAGES_DIR } from '../constants.js'
 import { log } from '../logging/index.js'
 
 // ── Embedded remote script ──
-// walnut-remote.sh is embedded as a string to avoid file path issues with bundlers.
+// open-open-walnut-remote.sh is embedded as a string to avoid file path issues with bundlers.
 // This script runs independently on the remote machine (nohup) — SSH is only the transport.
-const WALNUT_REMOTE_SCRIPT = `#!/bin/bash
-# walnut-remote.sh — Independent remote session runner for Walnut.
+const OPEN_WALNUT_REMOTE_SCRIPT = `#!/bin/bash
+# open-open-walnut-remote.sh — Independent remote session runner for Open Walnut.
 # Runs as a detached process on the remote machine (nohup).
 # SSH only starts it and tails the output — if SSH dies, the session continues.
 set -u
 
-REMOTE_DIR="\${WALNUT_REMOTE_DIR:-/tmp/walnut-streams}"
+REMOTE_DIR="\${OPEN_WALNUT_REMOTE_DIR:-/tmp/open-open-walnut-streams}"
 ACTION="\${1:-}"
 SESSION_ID="\${2:-}"
 
 if [ -z "$ACTION" ] || [ -z "$SESSION_ID" ]; then
-  echo "Usage: walnut-remote.sh {start|status|stop} <session-id> [cwd] [claude-args...]" >&2
+  echo "Usage: open-open-walnut-remote.sh {start|status|stop} <session-id> [cwd] [claude-args...]" >&2
   exit 1
 fi
 
@@ -86,7 +86,7 @@ do_start() {
   log "claude args: $CLAUDE_ARGS_LOG"
 
   if [ ! -d "$CWD" ]; then
-    log "ERROR: CWD not found: $CWD"; echo "walnut: CWD not found: $CWD" >&2; exit 1
+    log "ERROR: CWD not found: $CWD"; echo "open-walnut: CWD not found: $CWD" >&2; exit 1
   fi
   cd "$CWD" || { log "ERROR: cd failed: $CWD"; exit 1; }
   log "working directory: \$(pwd)"
@@ -418,7 +418,7 @@ export class LocalIO implements SessionIO {
 
 /** SSH connection target resolved from config.hosts */
 /** Remote directory for session files (FIFO, JSONL, PGID, logs). */
-const REMOTE_STREAMS_DIR = '/tmp/walnut-streams'
+const REMOTE_STREAMS_DIR = '/tmp/open-open-walnut-streams'
 
 export interface SshTarget {
   hostname: string
@@ -570,7 +570,7 @@ export class RemoteIO implements SessionIO {
   private remoteOutputPath: string | null = null
   /** Remote PID file path — stores the claude process PID for remote kill/cleanup. */
   private remotePgidPath: string | null = null
-  /** Remote log file path — structured debug log written by walnut-remote.sh. */
+  /** Remote log file path — structured debug log written by open-open-walnut-remote.sh. */
   private remoteLogPath: string | null = null
   private _localOutputFile: string
   private tailProc: ChildProcess | null = null
@@ -631,7 +631,7 @@ export class RemoteIO implements SessionIO {
    * Set up remote session using an independent script.
    *
    * Architecture (decoupled from SSH lifecycle):
-   *   Step 1: Deploy walnut-remote.sh to remote (~50 lines, <0.1s)
+   *   Step 1: Deploy open-open-walnut-remote.sh to remote (~50 lines, <0.1s)
    *   Step 2: Start script via SSH (nohup — detached, survives SSH drop)
    *   Step 3: Write initial message to remote FIFO (if any)
    *   Step 4: Return SSH tail args for caller to spawn the viewer process
@@ -684,12 +684,12 @@ export class RemoteIO implements SessionIO {
     ]
     if (this.sshTarget.port) baseSshArgs.push('-p', String(this.sshTarget.port))
 
-    // ── Step 1: Deploy walnut-remote.sh to remote ──
+    // ── Step 1: Deploy open-open-walnut-remote.sh to remote ──
     // Deploy via "ssh cat > file" — faster than scp and doesn't need scp binary.
-    // Script is embedded as a string constant (WALNUT_REMOTE_SCRIPT) to avoid
+    // Script is embedded as a string constant (OPEN_WALNUT_REMOTE_SCRIPT) to avoid
     // file path issues with bundlers (tsup puts everything in dist/).
-    const scriptPath = `${remoteDir}/walnut-remote.sh`
-    const scriptContent = WALNUT_REMOTE_SCRIPT
+    const scriptPath = `${remoteDir}/open-open-walnut-remote.sh`
+    const scriptContent = OPEN_WALNUT_REMOTE_SCRIPT
     try {
       execFileSync('ssh', [
         ...baseSshArgs, hostString,
@@ -699,9 +699,9 @@ export class RemoteIO implements SessionIO {
         timeout: 15_000,
         stdio: ['pipe', 'pipe', 'pipe'],
       })
-      log.session.debug('RemoteIO: deployed walnut-remote.sh', { host: this.host })
+      log.session.debug('RemoteIO: deployed open-open-walnut-remote.sh', { host: this.host })
     } catch (e) {
-      log.session.error('RemoteIO: failed to deploy walnut-remote.sh', {
+      log.session.error('RemoteIO: failed to deploy open-open-walnut-remote.sh', {
         host: this.host,
         error: e instanceof Error ? e.message : String(e),
       })
@@ -899,7 +899,7 @@ export class RemoteIO implements SessionIO {
     const baseSshArgs = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=10']
     if (this.sshTarget.port) baseSshArgs.push('-p', String(this.sshTarget.port))
 
-    const scriptPath = `${REMOTE_STREAMS_DIR}/walnut-remote.sh`
+    const scriptPath = `${REMOTE_STREAMS_DIR}/open-open-walnut-remote.sh`
     const sessionId = path.basename(this.remotePgidPath, '.pgid')
     // Use the remote script's `status` command, with a direct PGID+kill-0 fallback
     // in case the script is missing (e.g., /tmp was cleaned).

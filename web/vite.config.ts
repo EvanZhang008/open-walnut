@@ -7,7 +7,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'src'),
-      '@walnut/core': path.resolve(__dirname, '../src/core/types.ts'),
+      '@open-walnut/core': path.resolve(__dirname, '../src/core/types.ts'),
     },
   },
   server: {

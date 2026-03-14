@@ -1,6 +1,6 @@
 import { createContext, useContext, useMemo, type ReactNode } from 'react';
 import { useTasks } from '@/hooks/useTasks';
-import type { Task } from '@walnut/core';
+import type { Task } from '@open-walnut/core';
 import type { CreateTaskInput, UpdateTaskInput } from '@/api/tasks';
 
 /** The shape exposed by TasksContext — mirrors useTasks() return. */

@@ -13,7 +13,7 @@ You MUST NOT include any of the following in code, comments, commit messages, fi
 - **Credentials & secrets**: tokens, passwords, API keys, certificates, cookie values
 - **Internal processes**: oncall procedures, ticket systems, internal wikis, deployment pipelines specific to an employer
 
-When referencing external integrations or plugins, use **generic descriptions** (e.g., "external sync plugin", "company-internal tool") instead of actual product names. If an external/internal plugin must exist, it belongs in `~/.walnut/plugins/` (external, never committed) — not in this repo.
+When referencing external integrations or plugins, use **generic descriptions** (e.g., "external sync plugin", "company-internal tool") instead of actual product names. If an external/internal plugin must exist, it belongs in `~/.open-walnut/plugins/` (external, never committed) — not in this repo.
 
 **When in doubt, leave it out.**
 
@@ -53,8 +53,8 @@ npm run dev:ephemeral   # Build all → start ephemeral server (random port, tem
 
 ### Ephemeral Server Details
 
-`walnut web --ephemeral` uses a two-phase daemon pattern:
-1. **Launcher** (parent process): copies `~/.walnut/` to `/tmp/walnut-{PPID}-{random}/`, spawns a detached child server, polls for the port, prints JSON to stdout, and **exits immediately** — so `exec` captures the output.
+`open-walnut web --ephemeral` uses a two-phase daemon pattern:
+1. **Launcher** (parent process): copies `~/.open-walnut/` to `/tmp/walnut-{PPID}-{random}/`, spawns a detached child server, polls for the port, prints JSON to stdout, and **exits immediately** — so `exec` captures the output.
 2. **Child** (detached daemon): runs `startServer({ port: 0 })` — **100% identical to production** with all features (cron, sessions, sync, health monitor, event bus, WebSocket). Writes `ephemeral.json` inside its tmpdir. Self-destructs after **10 minutes of no HTTP requests** (idle timeout resets on each request).
 
 **Usage from the exec tool:**
@@ -118,7 +118,7 @@ See [ARCHITECTURE.md — Data Model](./ARCHITECTURE.md#data-model--deep-dive) fo
 
 ## Memory System
 
-Project-based memory mirrors the task hierarchy. Each project gets `~/.walnut/memory/projects/{category}/{project}/MEMORY.md`. Daily logs at `memory/daily/YYYY-MM-DD.md`. Session summaries auto-captured at `memory/sessions/`. FTS5 + BGE-M3 (Ollama) vector search via `memory-index.sqlite`.
+Project-based memory mirrors the task hierarchy. Each project gets `~/.open-walnut/memory/projects/{category}/{project}/MEMORY.md`. Daily logs at `memory/daily/YYYY-MM-DD.md`. Session summaries auto-captured at `memory/sessions/`. FTS5 + BGE-M3 (Ollama) vector search via `memory-index.sqlite`.
 
 | Component | Purpose | File |
 |---|---|---|
@@ -159,15 +159,15 @@ See [ARCHITECTURE.md — Agent System](./ARCHITECTURE.md#agent-system--internals
 
 ## Chat History & Compaction (`src/core/chat-history.ts`)
 
-Persistent chat via `~/.walnut/chat-history.json`. Unified `entries[]` with `tag: 'ai'` (model-facing) and `tag: 'ui'` (display-only). When payload exceeds ~160K tokens, two-step compaction runs: memory flush + LLM checkpoint summary. Old entries marked `compacted: true`, last 10 turns always preserved. See `src/core/AGENTS.md` for details.
+Persistent chat via `~/.open-walnut/chat-history.json`. Unified `entries[]` with `tag: 'ai'` (model-facing) and `tag: 'ui'` (display-only). When payload exceeds ~160K tokens, two-step compaction runs: memory flush + LLM checkpoint summary. Old entries marked `compacted: true`, last 10 turns always preserved. See `src/core/AGENTS.md` for details.
 
 ## Skills System (`src/core/skill-loader.ts`)
 
-Pluggable `SKILL.md` modules. Discovery order: `./skills/` → `~/.walnut/skills/` → `~/.claude/skills/`. Filtered by `requires.bins`, `requires.env`, `requires.platform`. Only eligible skills appear in the agent's `<available_skills>` XML. See [ARCHITECTURE.md — Skills System](./ARCHITECTURE.md#skills-system--detail).
+Pluggable `SKILL.md` modules. Discovery order: `./skills/` → `~/.open-walnut/skills/` → `~/.claude/skills/`. Filtered by `requires.bins`, `requires.env`, `requires.platform`. Only eligible skills appear in the agent's `<available_skills>` XML. See [ARCHITECTURE.md — Skills System](./ARCHITECTURE.md#skills-system--detail).
 
 ## Claude Code Session Lifecycle
 
-Sessions are detached `claude -p` child processes writing to a JSONL file. `SessionRunner` listens on the bus, spawns the process; `JsonlTailer` reads output and emits streaming events (`SESSION_TEXT_DELTA`, `SESSION_TOOL_USE`, `SESSION_RESULT`). **Remote SSH sessions** use an independent script architecture: `walnut-remote.sh` (embedded in `session-io.ts` as `WALNUT_REMOTE_SCRIPT`) is deployed to the remote host and run via `nohup` — the session runs independently of the SSH connection. SSH is only a viewer (`tail -f` of the JSONL file). If SSH drops, the liveness monitor (`handleRemoteTailDeath()`) checks if the remote process is still alive via `checkRemoteAlive()` and reconnects the tail viewer via `reconnectTail()` — no `--resume` needed. Setup is a 4-step process: (1) deploy script via SSH cat, (2) start via nohup, (3) write initial message to FIFO, (4) spawn tail -f viewer. Per-host limits: local=7, remote=20. **Remote PATH setup**: `buildRemotePreamble()` in `session-io.ts` handles non-interactive SSH environments. Two-layer discovery: (1) Source user's `.zshrc`/`.bashrc` (matched to `$SHELL`) with output suppressed (`>/dev/null 2>&1`) to get their full env (pyenv, nvm, conda, etc.) without polluting the JSONL stream; (2) Fallback auto-discovery tries nvm → fnm → volta → asdf if node still not found. For nvm, iterates installed versions newest-first and picks the first where `node -v` succeeds (handles GLIBC-incompatible builds and broken defaults). Per-host `shell_setup` config field available for edge cases. Uses `$SHELL -lc` (NOT `-ilc` — interactive mode writes escape codes to stdout, corrupting JSONL). **Image transfer (bidirectional)**: *Local→remote*: Before spawning a remote session, `transferImagesForRemoteSession()` in `session-io.ts` detects local image paths in the prompt, SCPs them to `/tmp/walnut-images/{random}/` on the remote host, and rewrites paths. *Remote→local*: During streaming, `rewriteRemoteImagePaths()` detects remote image paths in assistant text and tool results, rewrites them to `~/.walnut/images/remote/{sessionId}/`, and fires background SCP downloads. History replay (`rewriteHistoryRemoteImages()`) does the same for the history API. Transparent to the UI — all paths are local by the time they reach the frontend. Graceful degradation on failure.
+Sessions are detached `claude -p` child processes writing to a JSONL file. `SessionRunner` listens on the bus, spawns the process; `JsonlTailer` reads output and emits streaming events (`SESSION_TEXT_DELTA`, `SESSION_TOOL_USE`, `SESSION_RESULT`). **Remote SSH sessions** use an independent script architecture: `walnut-remote.sh` (embedded in `session-io.ts` as `WALNUT_REMOTE_SCRIPT`) is deployed to the remote host and run via `nohup` — the session runs independently of the SSH connection. SSH is only a viewer (`tail -f` of the JSONL file). If SSH drops, the liveness monitor (`handleRemoteTailDeath()`) checks if the remote process is still alive via `checkRemoteAlive()` and reconnects the tail viewer via `reconnectTail()` — no `--resume` needed. Setup is a 4-step process: (1) deploy script via SSH cat, (2) start via nohup, (3) write initial message to FIFO, (4) spawn tail -f viewer. Per-host limits: local=7, remote=20. **Remote PATH setup**: `buildRemotePreamble()` in `session-io.ts` handles non-interactive SSH environments. Two-layer discovery: (1) Source user's `.zshrc`/`.bashrc` (matched to `$SHELL`) with output suppressed (`>/dev/null 2>&1`) to get their full env (pyenv, nvm, conda, etc.) without polluting the JSONL stream; (2) Fallback auto-discovery tries nvm → fnm → volta → asdf if node still not found. For nvm, iterates installed versions newest-first and picks the first where `node -v` succeeds (handles GLIBC-incompatible builds and broken defaults). Per-host `shell_setup` config field available for edge cases. Uses `$SHELL -lc` (NOT `-ilc` — interactive mode writes escape codes to stdout, corrupting JSONL). **Image transfer (bidirectional)**: *Local→remote*: Before spawning a remote session, `transferImagesForRemoteSession()` in `session-io.ts` detects local image paths in the prompt, SCPs them to `/tmp/walnut-images/{random}/` on the remote host, and rewrites paths. *Remote→local*: During streaming, `rewriteRemoteImagePaths()` detects remote image paths in assistant text and tool results, rewrites them to `~/.open-walnut/images/remote/{sessionId}/`, and fires background SCP downloads. History replay (`rewriteHistoryRemoteImages()`) does the same for the history API. Transparent to the UI — all paths are local by the time they reach the frontend. Graceful degradation on failure.
 
 **Session file access** (`src/core/session-file-reader.ts`): Unified `SessionFileReader` interface with `LocalFileReader` (fs) and `RemoteFileReader` (SSH) implementations. `readSessionJsonlContent()` transparently reads JSONL from local or remote with three-layer fallback (exact path → glob → `find` command). Returns `foundCwd` extracted from JSONL content for CWD auto-correction when the guessed path is wrong. `readSubagentContents()` reads Task subagent JSONL files (batched SSH for remote). Used by `session-history.ts` (history parsing, plan extraction, state recovery) and `plan-message.ts` (remote plan reading).
 
@@ -185,7 +185,7 @@ Sessions are detached `claude -p` child processes writing to a JSONL file. `Sess
 
 ## Session Lifecycle Hooks (`src/core/session-hooks/`)
 
-Pluggable hooks react to session bus events. 11 hook points (`onSessionStart` → `onSessionIdle`). Dispatcher at `dispatcher.ts` dispatches in parallel (30s timeout per hook). Built-in: `session-triage` (priority 50, fires on `onTurnComplete`) and `session-error-notify` (priority 90). File-based hooks from `~/.walnut/hooks/*.mjs`. See [ARCHITECTURE.md — Session Lifecycle Hooks](./ARCHITECTURE.md#session-lifecycle-hooks--detail).
+Pluggable hooks react to session bus events. 11 hook points (`onSessionStart` → `onSessionIdle`). Dispatcher at `dispatcher.ts` dispatches in parallel (30s timeout per hook). Built-in: `session-triage` (priority 50, fires on `onTurnComplete`) and `session-error-notify` (priority 90). File-based hooks from `~/.open-walnut/hooks/*.mjs`. See [ARCHITECTURE.md — Session Lifecycle Hooks](./ARCHITECTURE.md#session-lifecycle-hooks--detail).
 
 ## Plan-mode sessions
 
@@ -193,7 +193,7 @@ Sessions can run in `mode: 'plan'` — produces a plan file (`~/.claude/plans/{s
 
 ## Heartbeat System (`src/heartbeat/`)
 
-Periodic AI self-check. Reads `~/.walnut/HEARTBEAT.md` on schedule (`heartbeat.every`, default `"30m"`, optional `activeHours`). If agent replies `HEARTBEAT_OK`, stores compact "All clear" instead of full AI messages. Trigger modes: periodic, event-driven (`session-ended`, `cron-completed`), manual (`POST /api/heartbeat/trigger`). See [ARCHITECTURE.md — Heartbeat](./ARCHITECTURE.md#heartbeat-system--implementation).
+Periodic AI self-check. Reads `~/.open-walnut/HEARTBEAT.md` on schedule (`heartbeat.every`, default `"30m"`, optional `activeHours`). If agent replies `HEARTBEAT_OK`, stores compact "All clear" instead of full AI messages. Trigger modes: periodic, event-driven (`session-ended`, `cron-completed`), manual (`POST /api/heartbeat/trigger`). See [ARCHITECTURE.md — Heartbeat](./ARCHITECTURE.md#heartbeat-system--implementation).
 
 ## Cron Job System (`src/core/cron/`)
 
@@ -249,7 +249,7 @@ See `src/logging/AGENTS.md` for subsystem loggers, log levels, and redaction pat
 
 ## Usage Tracking (`src/core/usage/`)
 
-SQLite tracking of all API costs and token usage at `~/.walnut/usage.sqlite` (WAL mode). Sources: agent, subagent, compaction, heartbeat, cron, triage, session, etc. Admin page at `/usage`. See [ARCHITECTURE.md — Usage Tracking](./ARCHITECTURE.md#usage-tracking--implementation).
+SQLite tracking of all API costs and token usage at `~/.open-walnut/usage.sqlite` (WAL mode). Sources: agent, subagent, compaction, heartbeat, cron, triage, session, etc. Admin page at `/usage`. See [ARCHITECTURE.md — Usage Tracking](./ARCHITECTURE.md#usage-tracking--implementation).
 
 ## UI Surface: Web GUI
 
@@ -276,7 +276,7 @@ React SPA communicates with the Express server via REST and WebSocket. The serve
 
 **Quick Start Sessions** (`/session` slash command): Inline popover above chat input for picking a working directory from session history. Paths ranked by frequency + recency with fuzzy search and host filter tabs. Selecting a path shows a context pill; sending creates a starred task under `"Quick Start"` project in the inferred category, starts a session, and notifies the main agent to reorganize. Backend: `GET /api/sessions/working-dirs` + `POST /api/sessions/quick-start` in `src/web/routes/sessions.ts`. Frontend: `SessionPathSelector` popover (`web/src/components/sessions/SessionPathSelector.tsx`), integrated into `MainPage.tsx` with send interception.
 
-**Global Notes**: Collapsible, resizable notes panel at the bottom of TodoPanel sidebar — a persistent scratchpad using Tiptap for WYSIWYG markdown (headings, lists, checkboxes, bold/italic, code, blockquotes, images). Supports **image paste/drop** — images uploaded to `~/.walnut/images/` via `POST /api/images/upload`, falling back to inline data URLs if upload fails. **Paste URL as hyperlink**: select text + paste a URL → wraps selection as a clickable link (only http/https, XSS-safe via `isUrl()` guard). **Per-line Tab indent**: Tab on a task item with children only indents that item — children are detached as siblings via `detachListItemChildren()` ProseMirror transaction before sinking. Shift+Tab uses standard lift behavior. Stored as `~/.walnut/global-notes.md` (local-only, not synced). Expand button opens a 60vw centered popup (backdrop blur) via React portal. **Slash commands**: Type `/` in the editor to open a floating command panel. `/task` opens a fuzzy task search (client-side filter over all tasks, focused task pinned at top); selecting a task inserts a standard markdown link `[Title](/tasks/id)` rendered as a clickable blue pill via `TaskAwareLink` (extended `@tiptap/extension-link`). Click navigates: sidebar calls `onFocusTask`, popup navigates to `/tasks/:id`. Architecture: `SlashCommandExtension` (ProseMirror plugin) detects trigger → `SlashCommandPortal` (React portal) manages state machine (commands → task-search → closed) → `SlashCommandMenu` / `TaskSearchPanel` render UI. All in `web/src/components/notes/slash-commands/`. Backend: `GET/PUT /api/notes/global` in `src/web/routes/notes.ts`. Frontend: `GlobalNotesSection` + `NotesEditor` (Tiptap + Image + Link + SlashCommand extensions) + `GlobalNotesPopup` in `web/src/components/notes/`, state via `useGlobalNotes` hook with optimized save (markdown serialization deferred to 500ms debounce — no per-keystroke serialization or React re-renders).
+**Global Notes**: Collapsible, resizable notes panel at the bottom of TodoPanel sidebar — a persistent scratchpad using Tiptap for WYSIWYG markdown (headings, lists, checkboxes, bold/italic, code, blockquotes, images). Supports **image paste/drop** — images uploaded to `~/.open-walnut/images/` via `POST /api/images/upload`, falling back to inline data URLs if upload fails. **Paste URL as hyperlink**: select text + paste a URL → wraps selection as a clickable link (only http/https, XSS-safe via `isUrl()` guard). **Per-line Tab indent**: Tab on a task item with children only indents that item — children are detached as siblings via `detachListItemChildren()` ProseMirror transaction before sinking. Shift+Tab uses standard lift behavior. Stored as `~/.open-walnut/global-notes.md` (local-only, not synced). Expand button opens a 60vw centered popup (backdrop blur) via React portal. **Slash commands**: Type `/` in the editor to open a floating command panel. `/task` opens a fuzzy task search (client-side filter over all tasks, focused task pinned at top); selecting a task inserts a standard markdown link `[Title](/tasks/id)` rendered as a clickable blue pill via `TaskAwareLink` (extended `@tiptap/extension-link`). Click navigates: sidebar calls `onFocusTask`, popup navigates to `/tasks/:id`. Architecture: `SlashCommandExtension` (ProseMirror plugin) detects trigger → `SlashCommandPortal` (React portal) manages state machine (commands → task-search → closed) → `SlashCommandMenu` / `TaskSearchPanel` render UI. All in `web/src/components/notes/slash-commands/`. Backend: `GET/PUT /api/notes/global` in `src/web/routes/notes.ts`. Frontend: `GlobalNotesSection` + `NotesEditor` (Tiptap + Image + Link + SlashCommand extensions) + `GlobalNotesPopup` in `web/src/components/notes/`, state via `useGlobalNotes` hook with optimized save (markdown serialization deferred to 500ms debounce — no per-keystroke serialization or React re-renders).
 
 **URL State Sync**: Key UI state (open session panels, focused task, active category tab) is encoded into URL query params via `useUrlSync` hook (`web/src/hooks/useUrlSync.ts`). Format: `/?s1=<sessionId>&s2=<sessionId2>&task=<taskId>&cat=<category>`. Enables deep linking for debug, refresh persistence, and shareable UI layouts. Uses debounced `replaceState` (not `pushState`). Starred tab maps to `cat=starred` in URL. Falls back to `sessionStorage` when no URL params present.
 
@@ -286,7 +286,7 @@ See `web/src/AGENTS.md` for detailed UX implementation (message isolation, task 
 
 Integrations are now plugins discovered by the loader from two directories:
 - **Built-in** (`src/integrations/*/`): ships with the repo
-- **External** (`~/.walnut/plugins/*/`): user-installed or company-internal
+- **External** (`~/.open-walnut/plugins/*/`): user-installed or company-internal
 
 Each plugin has a `manifest.json`, an entry point (`index.ts`), and registers via `PluginApi` (sync methods, source claim, display metadata, migrations, HTTP routes).
 
@@ -294,10 +294,10 @@ Each plugin has a `manifest.json`, an entry point (`index.ts`), and registers vi
 |---|---|---|---|
 | **local** | In-repo | Universal fallback (no external sync) | `src/integrations/local/` |
 | **ms-todo** | In-repo | Two-way sync with Microsoft To-Do | `src/integrations/ms-todo/` |
-| *(external)* | Plugin | Additional sync plugins installed at `~/.walnut/plugins/` | User-provided |
+| *(external)* | Plugin | Additional sync plugins installed at `~/.open-walnut/plugins/` | User-provided |
 | **git-sync** | Standalone | Version-controlled backup of task/memory data + auto-commit polling | `src/integrations/git-sync.ts` |
 
-**In-repo** plugins ship with the package. **Internal** plugins are company-specific and can be relocated to `~/.walnut/plugins/` for external deployment (see README.md in each plugin dir). The loader discovers both locations identically.
+**In-repo** plugins ship with the package. **Internal** plugins are company-specific and can be relocated to `~/.open-walnut/plugins/` for external deployment (see README.md in each plugin dir). The loader discovers both locations identically.
 
 Core code never imports plugins directly -- all access goes through `IntegrationRegistry` and dynamic imports inside each plugin's `plugin.ts`.
 
@@ -369,7 +369,7 @@ src/
 ## Data Files (on disk)
 
 ```
-~/.walnut/
+~/.open-walnut/
 ├── config.yaml          # User config (name, defaults, provider, agent, ms_todo, hosts)
 ├── tasks/
 │   ├── tasks.json       # Task store
@@ -392,7 +392,7 @@ src/
 
 ## Git Auto-Commit (`src/web/server.ts` → `src/integrations/git-sync.ts`)
 
-`startGitAutoCommit()` runs at server startup: ensures `~/.walnut/` is a git repo (`ensureRepo()`), commits any leftover dirty state, pulls remote, then polls every 30s (`commitIfDirty()`). Health state (`GitAutoCommitHealth`) tracks `protected`, `consecutiveFailures`, `error`. Status exposed via `GET /api/git-sync/status` and pushed to frontend via `git-sync:status` WebSocket event. When git is unavailable or commits fail 3+ times: (1) NotificationPanel shows a "Data Backup" card with failure details (via `useSystemHealth` hook), (2) bell icon red dot activates, (3) one-time chat notification sent via `addNotification()`. `commitIfDirty()` includes `clearStaleLock()` which auto-removes stale `.git/index.lock` files (PID liveness check + 60s age threshold). `task-manager.ts` has a backup-on-empty safety net: saves `tasks.backup.json` before writing an empty store when disk has existing tasks.
+`startGitAutoCommit()` runs at server startup: ensures `~/.open-walnut/` is a git repo (`ensureRepo()`), commits any leftover dirty state, pulls remote, then polls every 30s (`commitIfDirty()`). Health state (`GitAutoCommitHealth`) tracks `protected`, `consecutiveFailures`, `error`. Status exposed via `GET /api/git-sync/status` and pushed to frontend via `git-sync:status` WebSocket event. When git is unavailable or commits fail 3+ times: (1) NotificationPanel shows a "Data Backup" card with failure details (via `useSystemHealth` hook), (2) bell icon red dot activates, (3) one-time chat notification sent via `addNotification()`. `commitIfDirty()` includes `clearStaleLock()` which auto-removes stale `.git/index.lock` files (PID liveness check + 60s age threshold). `task-manager.ts` has a backup-on-empty safety net: saves `tasks.backup.json` before writing an empty store when disk has existing tasks.
 
 ## E2E-First Development Workflow
 
@@ -436,7 +436,7 @@ Every task — bug fix or new feature — starts with designing the verification
 - **NEVER** use `page.goto()` to simulate navigation — use real UI clicks (sidebar, buttons). `page.goto()` is a full page reload and tests a completely different scenario than SPA navigation.
 - **NEVER** say "it should work because the code is correct." Run the test.
 - Use `/verify` after implementation to run the verification workflow.
-- For the production server at port 3456, use Playwright MCP tools directly. For isolated testing, use the ephemeral server (`walnut web --ephemeral`).
+- For the production server at port 3456, use Playwright MCP tools directly. For isolated testing, use the ephemeral server (`open-walnut web --ephemeral`).
 
 ## Conventions
 

@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import type { Config } from '@walnut/core';
+import type { Config } from '@open-walnut/core';
 import { SectionCard } from '../inputs/SectionCard';
 import { UI_ONLY_CATEGORIES, setShowUiOnlyCategory, type UiOnlyCategory } from '@/hooks/useDeveloperSettings';
 import { updateConfig } from '@/api/config';
@@ -56,7 +56,7 @@ export function AdvancedSection({ config, onSave }: Props) {
     const catDef = UI_ONLY_CATEGORIES.find(c => c.key === key);
     const defaultVal = catDef?.defaultOn ?? false;
     try {
-      const stored = localStorage.getItem(`walnut:show_ui_only_${key}`);
+      const stored = localStorage.getItem(`open-walnut:show_ui_only_${key}`);
       if (stored !== null) return stored === 'true';
       return defaultVal;
     } catch { return defaultVal; }

@@ -162,7 +162,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
   const port = options.port ?? DEFAULT_PORT
   const dev = options.dev ?? false
-  const isEphemeral = !!process.env.WALNUT_EPHEMERAL
+  const isEphemeral = !!process.env.OPEN_WALNUT_EPHEMERAL
 
   const app = express()
 
@@ -1284,7 +1284,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   process.on('exit', (code) => {
     // Sync-only: last chance to log (no async allowed)
     const msg = `[${new Date().toISOString()}] SERVER EXIT: code=${code} pid=${process.pid} uptime=${process.uptime()}s`
-    try { require('node:fs').appendFileSync('/tmp/walnut-exit.log', msg + '\n') } catch { /* ignore */ }
+    try { require('node:fs').appendFileSync('/tmp/open-walnut-exit.log', msg + '\n') } catch { /* ignore */ }
   })
 
   // -- Start post-listen services (port already bound above) --
@@ -1375,7 +1375,7 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
         emitStatus()
         // Send a one-time chat notification when failures first reach the threshold
         if (health.consecutiveFailures >= 3 && !notifiedForEpisode) {
-          const notifContent = `Data backup failing \u2014 git auto-commit has failed ${health.consecutiveFailures}+ times consecutively. Check logs: \`walnut logs -s git\``
+          const notifContent = `Data backup failing \u2014 git auto-commit has failed ${health.consecutiveFailures}+ times consecutively. Check logs: \`open-walnut logs -s git\``
           notifiedForEpisode = true
           chatHistory.addNotification({
             role: 'assistant',

@@ -19,7 +19,7 @@ export async function runAuth(globals: GlobalOptions): Promise<void> {
       chalk.green('+ ') +
         `Found ${lists.length} task list${lists.length !== 1 ? 's' : ''}: ${lists.map((l) => l.displayName).join(', ')}`,
     );
-    console.log(chalk.green('+ ') + `Token saved to ~/.walnut/sync/`);
+    console.log(chalk.green('+ ') + `Token saved to ~/.open-walnut/sync/`);
 
     if (globals.json) {
       outputJson({ account, lists });

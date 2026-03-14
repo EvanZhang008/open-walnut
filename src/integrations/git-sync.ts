@@ -109,7 +109,7 @@ export function initSync(remoteUrl?: string): void {
   const hasCommits = gitSafe('log --oneline -1') !== null;
   if (!hasCommits) {
     git('add -A');
-    gitSafe('commit -m "walnut init"');
+    gitSafe('commit -m "open-walnut init"');
   }
 }
 
@@ -133,7 +133,7 @@ export function sync(): { pulled: number; pushed: number; conflicts: number } {
   const diff = gitSafe('diff --cached --stat');
   if (diff && diff.length > 0) {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    gitSafe(`commit -m "walnut sync ${timestamp}"`);
+    gitSafe(`commit -m "open-walnut sync ${timestamp}"`);
     pushed = 1;
   }
 
@@ -174,9 +174,9 @@ export function autoSync(): void {
 }
 
 /**
- * Pull latest data from the walnut git repo (best-effort, async).
+ * Pull latest data from the open-walnut git repo (best-effort, async).
  * Used by the server to fetch data pushed by remote hooks.
- * Silently does nothing if ~/.walnut/ is not a git repo or has no remote.
+ * Silently does nothing if ~/.open-walnut/ is not a git repo or has no remote.
  */
 export async function gitPullWalnut(): Promise<void> {
   try {
@@ -250,7 +250,7 @@ export function commitIfDirty(): boolean {
 }
 
 /**
- * Ensure ~/.walnut/ is a git repo. Initializes if needed.
+ * Ensure ~/.open-walnut/ is a git repo. Initializes if needed.
  * Returns { available: true } if git works, or { available: false, error } if not.
  */
 export function ensureRepo(): { available: boolean; error?: string } {

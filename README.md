@@ -90,7 +90,7 @@ Open Walnut replaces all of that with one system:
 - **Natural language task creation** — just tell the agent what you need
 
 ### Notes & Knowledge Base
-- **Per-project memory** — `~/.walnut/memory/projects/{category}/{project}/MEMORY.md`
+- **Per-project memory** — `~/.open-walnut/memory/projects/{category}/{project}/MEMORY.md`
 - **Daily activity logs** — auto-generated at `memory/daily/YYYY-MM-DD.md`
 - **Session summaries** — knowledge captured automatically when sessions end
 - **Full-text + semantic search** — SQLite FTS5 + BGE-M3 vector embeddings (local Ollama)
@@ -112,10 +112,10 @@ Open Walnut replaces all of that with one system:
 - **Event-driven triggers** — react to session completions, cron finishes, and more
 
 ### Local-First & Private
-- **100% local** — all data lives in `~/.walnut/` as plain JSON, Markdown, and SQLite files
+- **100% local** — all data lives in `~/.open-walnut/` as plain JSON, Markdown, and SQLite files
 - **No cloud database, no telemetry, no third-party accounts** required for core functionality
 - **Git-sync backup** — auto-commits your data every 30 seconds to a git repo
-- **Portable** — copy `~/.walnut/` to another machine and you're running
+- **Portable** — copy `~/.open-walnut/` to another machine and you're running
 - **Integrations are optional** — Microsoft To-Do, Jira, and custom plugins are all opt-in
 
 ## Multi-Agent — But Human-Centered
@@ -147,12 +147,12 @@ Open [http://localhost:3456](http://localhost:3456) in your browser.
 ### Prerequisites
 
 - **Node.js** >= 22
-- **AWS credentials** for Claude via Bedrock (or configure another provider in `~/.walnut/config.yaml`)
+- **AWS credentials** for Claude via Bedrock (or configure another provider in `~/.open-walnut/config.yaml`)
 - **Ollama** (optional) — enables local vector search for memory
 
 ## Configuration
 
-All configuration lives in `~/.walnut/config.yaml`:
+All configuration lives in `~/.open-walnut/config.yaml`:
 
 ```yaml
 # AI model
@@ -175,9 +175,9 @@ heartbeat:
   enabled: true
 ```
 
-Run `walnut auth` to set up Microsoft To-Do OAuth.
+Run `open-walnut auth` to set up Microsoft To-Do OAuth.
 
-External plugins go in `~/.walnut/plugins/{plugin-name}/`.
+External plugins go in `~/.open-walnut/plugins/{plugin-name}/`.
 
 ## Web Dashboard Pages
 
@@ -286,7 +286,7 @@ Open Walnut is not just a coding agent or a Kanban board — it's a **complete s
 - **AI agent with 30+ tools** that understands your tasks and acts on your behalf
 - **Claude Code session orchestration** — spawn, monitor, and manage sessions from a web UI
 - **Persistent memory** — per-project memory, daily logs, semantic search
-- **Self-hosted, local-first** — all data in `~/.walnut/` as JSON, Markdown, and SQLite
+- **Self-hosted, local-first** — all data in `~/.open-walnut/` as JSON, Markdown, and SQLite
 
 ## Contributing
 

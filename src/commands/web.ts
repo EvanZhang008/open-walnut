@@ -1,9 +1,9 @@
 /**
- * CLI command: walnut web [--port 3456] [--dev] [--ephemeral] [--_ephemeral-child]
+ * CLI command: open-walnut web [--port 3456] [--dev] [--ephemeral] [--_ephemeral-child]
  * Starts the Express + WebSocket server.
  *
  * --ephemeral: Two-phase daemon pattern for agent testing:
- *   1. Launcher (parent): copies ~/.walnut/ to /tmp/walnut-{PPID}-{random}/,
+ *   1. Launcher (parent): copies ~/.open-walnut/ to /tmp/open-walnut-{PPID}-{random}/,
  *      spawns a detached child, polls for port, prints JSON, exits.
  *   2. Child (--_ephemeral-child): runs the real server on a random port,
  *      writes ephemeral.json, self-destructs after 10 min of idle.
@@ -68,10 +68,10 @@ export async function runWeb(options: {
 
 /**
  * Parent process that:
- * 1. Reaps stale /tmp/walnut-* dirs (dead PIDs)
+ * 1. Reaps stale /tmp/open-walnut-* dirs (dead PIDs)
  * 2. Checks ephemeral concurrency limit (max 3 live servers)
  * 3. Copies WALNUT_HOME to a unique tmpdir
- * 4. Spawns a detached child: walnut web --_ephemeral-child
+ * 4. Spawns a detached child: open-walnut web --_ephemeral-child
  * 5. Polls for ephemeral.json until port appears
  * 6. Prints JSON to stdout and exits
  */
@@ -95,8 +95,8 @@ async function runEphemeralLauncher(): Promise<void> {
     return
   }
 
-  // 3. Create unique tmpdir: /tmp/walnut-{PPID}-{random}
-  const prefix = `walnut-${process.ppid}-`
+  // 3. Create unique tmpdir: /tmp/open-walnut-{PPID}-{random}
+  const prefix = `open-walnut-${process.ppid}-`
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
 
   // 4. Copy data snapshot (skip large/lockable files)
@@ -207,14 +207,14 @@ function pollForControlFile(controlFile: string): Promise<{
 }
 
 /**
- * Scan /tmp/walnut-* directories for dead ephemeral servers.
+ * Scan /tmp/open-walnut-* directories for dead ephemeral servers.
  * If ephemeral.json exists with a PID that's dead, remove the dir.
  */
 function reapStaleEphemeralDirs(): void {
   const tmpBase = os.tmpdir()
   let entries: string[]
   try {
-    entries = fs.readdirSync(tmpBase).filter((e) => e.startsWith('walnut-'))
+    entries = fs.readdirSync(tmpBase).filter((e) => e.startsWith('open-walnut-'))
   } catch {
     return
   }
@@ -261,7 +261,7 @@ function isProcessAlive(pid: number): boolean {
 }
 
 /**
- * Count currently live ephemeral servers by scanning /tmp/walnut-* dirs.
+ * Count currently live ephemeral servers by scanning /tmp/open-walnut-* dirs.
  * Only counts directories with an ephemeral.json whose PID is still alive.
  * Called AFTER reapStaleEphemeralDirs() so stale dirs are already cleaned.
  */
@@ -269,7 +269,7 @@ function countLiveEphemeralServers(): number {
   const tmpBase = os.tmpdir()
   let entries: string[]
   try {
-    entries = fs.readdirSync(tmpBase).filter((e) => e.startsWith('walnut-'))
+    entries = fs.readdirSync(tmpBase).filter((e) => e.startsWith('open-walnut-'))
   } catch {
     return 0
   }
@@ -300,7 +300,7 @@ function countLiveEphemeralServers(): number {
  * 4. Cleans up tmpdir on exit
  */
 async function runEphemeralChild(): Promise<void> {
-  const tmpDir = process.env.WALNUT_HOME
+  const tmpDir = process.env.OPEN_WALNUT_HOME
   if (!tmpDir) {
     process.stderr.write('ephemeral child: WALNUT_HOME not set\n')
     process.exit(1)

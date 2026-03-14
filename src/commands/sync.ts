@@ -22,7 +22,7 @@ async function runGitSync(options: Record<string, unknown>, globals: GlobalOptio
     try {
       initSync(remoteUrl);
       if (!globals.json) {
-        console.log(chalk.green('\u2713') + ' Git repo initialized in ~/.walnut');
+        console.log(chalk.green('\u2713') + ' Git repo initialized in ~/.open-walnut');
         if (remoteUrl) {
           console.log(`  Remote: ${remoteUrl}`);
         }
@@ -40,9 +40,9 @@ async function runGitSync(options: Record<string, unknown>, globals: GlobalOptio
   const status = getSyncStatus();
   if (!status.initialized) {
     if (!globals.json) {
-      console.log(chalk.yellow('Git not initialized.') + ' Run: walnut sync --init');
+      console.log(chalk.yellow('Git not initialized.') + ' Run: open-walnut sync --init');
     }
-    return { ran: false, result: { error: 'Not initialized. Run: walnut sync --init' } };
+    return { ran: false, result: { error: 'Not initialized. Run: open-walnut sync --init' } };
   }
 
   if (!globals.json) {
@@ -84,7 +84,7 @@ async function runTodoSync(globals: GlobalOptions): Promise<{ ran: boolean; resu
 
     if (!status.authenticated) {
       if (!globals.json) {
-        console.log(chalk.yellow('  To-Do: not authenticated.') + ' Run: walnut auth');
+        console.log(chalk.yellow('  To-Do: not authenticated.') + ' Run: open-walnut auth');
       }
       return { ran: false, result: { todo: 'not_authenticated' } };
     }

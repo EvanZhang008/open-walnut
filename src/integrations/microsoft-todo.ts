@@ -128,7 +128,7 @@ async function createMsalClient(): Promise<msal.PublicClientApplication> {
   const clientId = getMsTodoConfig(config)?.client_id;
   if (!clientId) {
     throw new Error(
-      'Microsoft To-Do client_id not configured. Add ms_todo.client_id to ~/.walnut/config.yaml',
+      'Microsoft To-Do client_id not configured. Add ms_todo.client_id to ~/.open-walnut/config.yaml',
     );
   }
 
@@ -224,7 +224,7 @@ export async function getAccessToken(): Promise<string> {
   }
 
   throw new Error(
-    'Not authenticated with Microsoft To-Do. Run "walnut auth" to sign in.',
+    'Not authenticated with Microsoft To-Do. Run "open-walnut auth" to sign in.',
   );
 }
 

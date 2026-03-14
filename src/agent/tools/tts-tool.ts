@@ -1,6 +1,6 @@
 /**
  * Text-to-speech tool using edge-tts (free, no API key needed).
- * Generates audio files saved to ~/.walnut/media/tts/.
+ * Generates audio files saved to ~/.open-walnut/media/tts/.
  */
 import fs from 'node:fs';
 import path from 'node:path';

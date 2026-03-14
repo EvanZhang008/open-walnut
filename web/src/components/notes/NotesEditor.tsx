@@ -19,7 +19,7 @@ import { uploadNoteImage } from '@/api/notes';
 import { SlashCommandExtension } from './slash-commands/SlashCommandExtension';
 import { SlashCommandPortal } from './slash-commands/SlashCommandPortal';
 import type { SlashCommandState } from './slash-commands/types';
-import type { Task } from '@walnut/core';
+import type { Task } from '@open-walnut/core';
 
 interface NotesEditorProps {
   content: string;

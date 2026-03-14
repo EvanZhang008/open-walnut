@@ -3,8 +3,8 @@
  * buffers entries in a ring buffer, and sends them to the backend via WebSocket RPC
  * (with sendBeacon fallback on page unload).
  *
- * Logs are persisted to /tmp/walnut/walnut-YYYY-MM-DD.log with subsystem='browser'.
- * View them with: `walnut logs -s browser`
+ * Logs are persisted to /tmp/open-walnut/open-walnut-YYYY-MM-DD.log with subsystem='browser'.
+ * View them with: `open-walnut logs -s browser`
  *
  * Architecture:
  *   console.log() → monkey-patch (preserves DevTools behavior)

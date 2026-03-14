@@ -107,7 +107,7 @@ export function renderDashboard(data: DashboardData): void {
   const now = new Date();
   const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-  const headerText = chalk.bold(`walnut Dashboard  ${dateStr}  ${days[now.getDay()]}`);
+  const headerText = chalk.bold(`open-open-walnut Dashboard  ${dateStr}  ${days[now.getDay()]}`);
 
   lines.push(boxTop(width));
   lines.push(boxLine(headerText, width));

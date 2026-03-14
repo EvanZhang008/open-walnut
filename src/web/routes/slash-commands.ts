@@ -3,7 +3,7 @@
  *
  * Sources:
  *   1. Skills      — ~/.claude/skills/ (via skill-loader)
- *   2. Walnut cmds  — ~/.walnut/commands/ (via command-store)
+ *   2. Walnut cmds  — ~/.open-walnut/commands/ (via command-store)
  *   3. Root cmds   — ~/.claude/commands/*.md
  *   4. Project cmds — {cwd}/.claude/commands/*.md
  */
@@ -19,7 +19,7 @@ import { CLAUDE_HOME } from '../../constants.js'
 export interface SlashCommandItem {
   name: string
   description: string
-  source: 'skill' | 'walnut' | 'claude-root' | 'project' | 'built-in'
+  source: 'skill' | 'open-walnut' | 'claude-root' | 'project' | 'built-in'
 }
 
 /**
@@ -107,7 +107,7 @@ export function createSlashCommandsRouter(): Router {
       const cwd = typeof req.query.cwd === 'string' ? req.query.cwd : undefined
 
       // Fetch all sources in parallel
-      const [skills, walnutCmds, rootCmds, projectCmds] = await Promise.all([
+      const [skills, openWalnutCmds, rootCmds, projectCmds] = await Promise.all([
         // 1. Skills
         listAvailableSkills().then((all) =>
           all.map((s): SlashCommandItem => ({
@@ -121,7 +121,7 @@ export function createSlashCommandsRouter(): Router {
           all.map((c): SlashCommandItem => ({
             name: c.name,
             description: c.description,
-            source: 'walnut',
+            source: 'open-walnut',
           })),
         ),
         // 3. Root Claude commands (~/.claude/commands/)
@@ -132,11 +132,11 @@ export function createSlashCommandsRouter(): Router {
           : Promise.resolve([]),
       ])
 
-      // Merge: project > root > walnut > skill > built-in
+      // Merge: project > root > open-walnut > skill > built-in
       // Higher priority first — user commands shadow built-ins (intentional).
       const seen = new Set<string>()
       const items: SlashCommandItem[] = []
-      for (const list of [projectCmds, rootCmds, walnutCmds, skills, BUILTIN_COMMANDS]) {
+      for (const list of [projectCmds, rootCmds, openWalnutCmds, skills, BUILTIN_COMMANDS]) {
         for (const item of list) {
           if (seen.has(item.name)) continue
           seen.add(item.name)

@@ -2,9 +2,9 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { GlobalNotesPopup } from './GlobalNotesPopup';
 import { NotesEditor } from './NotesEditor';
 import type { UseGlobalNotesReturn } from '@/hooks/useGlobalNotes';
-import type { Task } from '@walnut/core';
+import type { Task } from '@open-walnut/core';
 
-const LS_NOTES_HEIGHT_KEY = 'walnut-global-notes-height';
+const LS_NOTES_HEIGHT_KEY = 'open-walnut-global-notes-height';
 const DEFAULT_HEIGHT = 180;
 const MIN_HEIGHT = 60;
 const MAX_HEIGHT = 500;

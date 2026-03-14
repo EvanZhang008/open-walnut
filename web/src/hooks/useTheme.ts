@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 export type ThemePreference = 'light' | 'dark' | 'system';
 export type ResolvedTheme = 'light' | 'dark';
 
-const STORAGE_KEY = 'walnut-theme';
+const STORAGE_KEY = 'open-walnut-theme';
 const MQ = '(prefers-color-scheme: dark)';
 
 function getStored(): ThemePreference {

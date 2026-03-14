@@ -19,7 +19,7 @@ Same as `session-mode-change.test.ts`:
 
 ```
 beforeAll:
-  1. Create temp WALNUT_HOME via createMockConstants()
+  1. Create temp OPEN_WALNUT_HOME via createMockConstants()
   2. sessionRunner.setCliCommand(MOCK_CLI)
   3. Seed tasks.json with 5 tasks: model-switch-task-{001..005}
      Each task: { id, title, status: 'todo', priority: 'immediate',
@@ -29,7 +29,7 @@ beforeAll:
 
 afterAll:
   1. stopServer()
-  2. rm -rf WALNUT_HOME
+  2. rm -rf OPEN_WALNUT_HOME
 ```
 
 ### Shared Helpers

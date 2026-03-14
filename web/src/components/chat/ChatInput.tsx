@@ -5,7 +5,7 @@ import type { ImageAttachment } from '@/api/chat';
 import type { SlashCommandItem } from '@/api/slash-commands';
 import { MAX_QUEUE_SIZE } from '@/hooks/useChat';
 import { CommandPalette, type PaletteItem } from './CommandPalette';
-import type { Task } from '@walnut/core';
+import type { Task } from '@open-walnut/core';
 import { StatusBadge } from '../common/StatusBadge';
 
 const ALLOWED_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);

@@ -43,6 +43,6 @@ export function createMockConstants(prefix = 'walnut-test') {
     REMOTE_IMAGES_DIR: path.join(tmpBase, 'images', 'remote'),
     HEARTBEAT_FILE: path.join(tmpBase, 'HEARTBEAT.md'),
     LOG_DIR: path.join(tmpBase, 'logs'),
-    LOG_PREFIX: 'walnut-test-',
+    LOG_PREFIX: 'open-walnut-test-',
   };
 }

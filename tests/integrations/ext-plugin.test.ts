@@ -1,6 +1,6 @@
 /**
  * External plugin tests — verifies register() works correctly when loaded
- * as an external plugin from ~/.walnut/plugins/ext-sync/.
+ * as an external plugin from ~/.open-walnut/plugins/ext-sync/.
  *
  * Uses esbuild to bundle the plugin on-the-fly (same approach as the
  * production integration-loader), then dynamically imports the bundle.
@@ -16,7 +16,7 @@ import type { IntegrationSync } from '../../src/core/integration-types.js';
 
 // ── Plugin location ──
 
-const PLUGIN_DIR = path.join(os.homedir(), '.walnut', 'plugins', 'ext-sync');
+const PLUGIN_DIR = path.join(os.homedir(), '.open-walnut', 'plugins', 'ext-sync');
 const PLUGIN_ENTRY = path.join(PLUGIN_DIR, 'plugin.ts');
 
 // The built-in integrations dir inside the walnut repo (used for rebasing imports)
@@ -40,7 +40,7 @@ beforeAll(async () => {
 
   const { build } = await import('esbuild');
   const pluginName = 'ext-sync';
-  const outfile = path.join(os.tmpdir(), `walnut-test-plugin-${pluginName}-${Date.now()}.mjs`);
+  const outfile = path.join(os.tmpdir(), `open-walnut-test-plugin-${pluginName}-${Date.now()}.mjs`);
 
   await build({
     entryPoints: [PLUGIN_ENTRY],

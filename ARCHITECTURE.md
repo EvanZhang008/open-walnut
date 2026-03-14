@@ -208,7 +208,7 @@ Hidden `.metadata` tasks per project with YAML config (e.g., `default_host`, `de
 ### Layout on disk
 
 ```
-~/.walnut/
+~/.open-walnut/
 ├── MEMORY.md                          # Global memory (preferences, facts)
 └── memory/
     ├── daily/                         # Time-indexed activity
@@ -264,7 +264,7 @@ See `src/agent/AGENTS.md` for retry/abort/caching/subagent internals.
 
 ```
 1. ./skills/             # Workspace-local (highest priority)
-2. ~/.walnut/skills/      # Walnut global
+2. ~/.open-walnut/skills/      # Walnut global
 3. ~/.claude/skills/     # Claude-shared (lowest priority)
 ```
 
@@ -349,7 +349,7 @@ A pluggable hook system that reacts to session bus events. Replaces hardcoded tr
 
 **Built-in hooks** (`builtins.ts`): `session-triage` (priority 50, dispatches triage subagent on `onTurnComplete`) and `session-error-notify` (priority 90, logs errors on `onTurnError`). Both can be disabled/overridden via `config.session_hooks.overrides`.
 
-**File-based hooks** (`discovery.ts`): Scans `~/.walnut/hooks/*.mjs` for modules exporting `describe()` → descriptor and `handle()` → handler. Same pattern as action system.
+**File-based hooks** (`discovery.ts`): Scans `~/.open-walnut/hooks/*.mjs` for modules exporting `describe()` → descriptor and `handle()` → handler. Same pattern as action system.
 
 **Filtering**: Hooks can specify `filter: { modes, projects, categories }`. Strict mode: denies when filter is specified but context is missing (prevents unintended dispatch).
 
@@ -375,7 +375,7 @@ A pluggable hook system that reacts to session bus events. Replaces hardcoded tr
 src/core/cron/
 ├── index.ts       # Barrel + normalization helpers
 ├── types.ts       # CronJob, Schedule, Payload interfaces
-├── store.ts       # JSON file persistence (~/.walnut/cron-jobs.json)
+├── store.ts       # JSON file persistence (~/.open-walnut/cron-jobs.json)
 ├── schedule.ts    # Schedule evaluation (at, every, cron expr)
 ├── timer.ts       # Timer management (setTimeout-based)
 ├── service.ts     # CronService class — main orchestrator
@@ -390,7 +390,7 @@ src/core/cron/
 
 ### Action System
 
-`src/actions/`: File-based action discovery mirroring the agent registry pattern. Actions are discovered from two locations: built-in (`dist/actions/*.js`, compiled from `src/actions/*.ts`) and user (`~/.walnut/actions/*.mjs`). Each module exports `describe()` → `ActionDescriptor` and `run(ctx)` → `ActionResult { invoke, content?, image? }`. User actions override built-in actions with the same ID. Platform filtering via `descriptor.platform`. REST: `GET /api/cron/actions` lists discovered actions. Frontend: CronJobForm has an "Init Processor" checkbox with action dropdown (showing source badges), target agent, and model override fields.
+`src/actions/`: File-based action discovery mirroring the agent registry pattern. Actions are discovered from two locations: built-in (`dist/actions/*.js`, compiled from `src/actions/*.ts`) and user (`~/.open-walnut/actions/*.mjs`). Each module exports `describe()` → `ActionDescriptor` and `run(ctx)` → `ActionResult { invoke, content?, image? }`. User actions override built-in actions with the same ID. Platform filtering via `descriptor.platform`. REST: `GET /api/cron/actions` lists discovered actions. Frontend: CronJobForm has an "Init Processor" checkbox with action dropdown (showing source badges), target agent, and model override fields.
 
 ---
 
@@ -460,7 +460,7 @@ See `src/logging/AGENTS.md` for code examples, log levels, and redaction pattern
 
 ## Web GUI — Server Setup
 
-- **Start**: `walnut web` (`src/commands/web.ts`). Default port 3456.
+- **Start**: `open-walnut web` (`src/commands/web.ts`). Default port 3456.
 - **Server**: `startServer()` at `src/web/server.ts`. Same port: REST + static files + WebSocket.
 - **WebSocket**: `attachWss()` at `src/web/ws/handler.ts`. Server subscribes to bus as `'web-ui'` and broadcasts events to all browsers.
 - **REST routes**: `src/web/routes/` — tasks, sessions, search, memory, config, categories, dashboard, cron, chat-history, session-chat, context-inspector, favorites, ordering, local-image.

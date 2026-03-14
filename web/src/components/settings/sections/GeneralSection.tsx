@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import type { Config, TaskPriority } from '@walnut/core';
+import type { Config, TaskPriority } from '@open-walnut/core';
 import { SectionCard } from '../inputs/SectionCard';
 import { ListEditor } from '../inputs/ListEditor';
 import { useTheme, type ThemePreference } from '@/hooks/useTheme';

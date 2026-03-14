@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { Config } from '@walnut/core';
+import type { Config } from '@open-walnut/core';
 import { SectionCard } from '../inputs/SectionCard';
 import { SecretInput } from '../inputs/SecretInput';
 import { StatusIndicator } from '../inputs/StatusIndicator';

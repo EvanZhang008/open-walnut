@@ -12,7 +12,7 @@ export async function writeJsonFile(filePath: string, data: unknown): Promise<vo
 
   const tmpFile = path.join(
     os.tmpdir(),
-    `walnut-${crypto.randomBytes(8).toString('hex')}.tmp`,
+    `open-walnut-${crypto.randomBytes(8).toString('hex')}.tmp`,
   );
   await fs.writeFile(tmpFile, JSON.stringify(data, null, 2) + '\n', 'utf-8');
   await fs.rename(tmpFile, filePath);

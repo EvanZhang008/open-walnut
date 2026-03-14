@@ -53,7 +53,7 @@ export const getCommandTool: ToolDefinition = {
 
 export const createCommandTool: ToolDefinition = {
   name: 'create_command',
-  description: 'Create a new user slash command. Stored in ~/.walnut/commands/ as a .md file.',
+  description: 'Create a new user slash command. Stored in ~/.open-walnut/commands/ as a .md file.',
   input_schema: {
     type: 'object',
     properties: {

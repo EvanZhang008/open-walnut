@@ -245,7 +245,7 @@ input:focus, textarea:focus, select:focus {
   color: var(--fg);
 }
 
-.sidebar-walnut-icon {
+.sidebar-open-walnut-icon {
   width: 22px;
   height: 22px;
   flex-shrink: 0;
@@ -5859,7 +5859,7 @@ img[data-lightbox-src],
 }
 
 /* --- CSS-promotion fullscreen (used by SessionPanel + DockTaskCard) --- */
-.walnut-fullscreen-backdrop {
+.open-walnut-fullscreen-backdrop {
   position: fixed;
   inset: 0;
   z-index: 9000;
@@ -5869,7 +5869,7 @@ img[data-lightbox-src],
   animation: fullscreen-fade-in 0.15s ease-out;
 }
 
-.walnut-fullscreen {
+.open-walnut-fullscreen {
   position: fixed !important;
   top: 50%;
   left: 50%;
@@ -5886,7 +5886,7 @@ img[data-lightbox-src],
 }
 
 /* Dock cards need extra overrides when fullscreen */
-.dock-task-card.walnut-fullscreen {
+.dock-task-card.open-walnut-fullscreen {
   flex-direction: column;
 }
 
@@ -6023,8 +6023,8 @@ img[data-lightbox-src],
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .walnut-fullscreen-backdrop,
-  .walnut-fullscreen,
+  .open-walnut-fullscreen-backdrop,
+  .open-walnut-fullscreen,
   .plan-popup-overlay { animation: none; }
 }
 

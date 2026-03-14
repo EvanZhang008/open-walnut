@@ -2,7 +2,7 @@ import { useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { NotesEditor } from './NotesEditor';
 import type { Editor } from '@tiptap/core';
-import type { Task } from '@walnut/core';
+import type { Task } from '@open-walnut/core';
 
 interface GlobalNotesPopupProps {
   content: string;

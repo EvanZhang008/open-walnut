@@ -227,7 +227,7 @@ sessionsRouter.get('/list-dirs', async (req: Request, res: Response, next: NextF
       const hostString = hostDef.user ? `${hostDef.user}@${hostname}` : hostname
 
       // SSH ControlMaster: reuse persistent connection
-      const controlDir = '/tmp/walnut-ssh-mux'
+      const controlDir = '/tmp/open-open-walnut-ssh-mux'
       fs.mkdirSync(controlDir, { recursive: true, mode: 0o700 })
       const controlPath = `${controlDir}/%r@%h-%p`
 

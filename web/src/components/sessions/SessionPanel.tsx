@@ -63,7 +63,7 @@ class SessionPanelErrorBoundary extends Component<SessionPanelErrorBoundaryProps
           <button
             className="btn btn-sm btn-primary"
             onClick={() => {
-              sessionStorage.removeItem('walnut-home-session-columns');
+              sessionStorage.removeItem('open-walnut-home-session-columns');
               this.props.onClose(this.props.sessionId);
             }}
           >
@@ -171,7 +171,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, onT
   // Task title for the breadcrumb link
   const [taskTitle, setTaskTitle] = useState<string | null>(null);
   // Full task object — passed to TaskQuickActions to avoid a duplicate fetch
-  const [sessionTask, setSessionTask] = useState<import('@walnut/core').Task | null>(null);
+  const [sessionTask, setSessionTask] = useState<import('@open-walnut/core').Task | null>(null);
 
   // Pin state — self-contained (calls focus API directly)
   const [pinned, setPinned] = useState(false);

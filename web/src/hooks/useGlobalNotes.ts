@@ -14,7 +14,7 @@ export interface UseGlobalNotesReturn {
   closePopup: () => void;
 }
 
-const COLLAPSE_KEY = 'walnut-global-notes-collapsed';
+const COLLAPSE_KEY = 'open-walnut-global-notes-collapsed';
 
 export function useGlobalNotes(): UseGlobalNotesReturn {
   const [content, setContent] = useState('');

@@ -2,7 +2,7 @@
  * E2E tests for image upload — disk-based storage.
  *
  * Verifies:
- * 1. Images are saved to ~/.walnut/images/{timestamp}-{hash}.{ext}
+ * 1. Images are saved to ~/.open-walnut/images/{timestamp}-{hash}.{ext}
  * 2. GET /api/images/:filename serves saved images correctly
  * 3. Chat history stores path-based image blocks (not inline base64)
  * 4. getModelContext() hydrates path-based images back to base64 for API
@@ -262,22 +262,22 @@ describe('<attached-images> annotation in chat.ts', () => {
   it('annotation format: 1-indexed, one path per line, XML-wrapped', () => {
     // Reproduce the exact logic from chat.ts lines 412-413
     const saved = [
-      { filePath: '/home/user/.walnut/images/1700000000000-abc123.png' },
-      { filePath: '/home/user/.walnut/images/1700000000001-def456.jpg' },
+      { filePath: '/home/user/.open-walnut/images/1700000000000-abc123.png' },
+      { filePath: '/home/user/.open-walnut/images/1700000000001-def456.jpg' },
     ];
     const imagePathLines = saved.map((s, i) => `Image ${i + 1}: ${s.filePath}`).join('\n');
     const imageAnnotation = `<attached-images>\n${imagePathLines}\n</attached-images>\n\n`;
 
     expect(imageAnnotation).toBe(
       '<attached-images>\n' +
-      'Image 1: /home/user/.walnut/images/1700000000000-abc123.png\n' +
-      'Image 2: /home/user/.walnut/images/1700000000001-def456.jpg\n' +
+      'Image 1: /home/user/.open-walnut/images/1700000000000-abc123.png\n' +
+      'Image 2: /home/user/.open-walnut/images/1700000000001-def456.jpg\n' +
       '</attached-images>\n\n',
     );
   });
 
   it('annotation with single image', () => {
-    const saved = [{ filePath: '/home/user/.walnut/images/1700000000000-abc123.png' }];
+    const saved = [{ filePath: '/home/user/.open-walnut/images/1700000000000-abc123.png' }];
     const imagePathLines = saved.map((s, i) => `Image ${i + 1}: ${s.filePath}`).join('\n');
     const imageAnnotation = `<attached-images>\n${imagePathLines}\n</attached-images>\n\n`;
 

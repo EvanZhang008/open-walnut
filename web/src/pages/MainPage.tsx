@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useMemo, useRef, Fragment } from 'react';
 import type { NavigateFunction } from 'react-router-dom';
-import type { Task } from '@walnut/core';
+import type { Task } from '@open-walnut/core';
 import { useChat, type TaskContext, type ImageAttachment } from '@/hooks/useChat';
 import type { ChatStats } from '@/api/chat';
 import { useWebSocket, useEvent } from '@/hooks/useWebSocket';
@@ -97,13 +97,13 @@ function ChatHeaderRow({ title, stats, connectionState, inspectorOpen, onToggleI
   );
 }
 
-const SS_TASK_KEY = 'walnut-home-focused-task';
-const SS_SESSION_COLUMNS_KEY = 'walnut-home-session-columns';
+const SS_TASK_KEY = 'open-walnut-home-focused-task';
+const SS_SESSION_COLUMNS_KEY = 'open-walnut-home-session-columns';
 const SS_TODO_SCROLL_KEY = 'walnut-home-todo-scroll';
-const SS_CHAT_VISIBLE_KEY = 'walnut-home-chat-visible';
+const SS_CHAT_VISIBLE_KEY = 'open-walnut-home-chat-visible';
 
 // Legacy key for migration
-const SS_SESSION_KEY_LEGACY = 'walnut-home-session-panel';
+const SS_SESSION_KEY_LEGACY = 'open-walnut-home-session-panel';
 
 // ── Session column queue helpers (max 2, or max 1 if triage open) ──
 
@@ -179,7 +179,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Active category tab — mirrors TodoPanel's tab for URL sync.
   // Initialize from the same localStorage key so the URL reflects the initial tab.
   const [activeCategory, setActiveCategory] = useState<string | undefined>(() => {
-    try { return localStorage.getItem('walnut-todo-active-tab') ?? undefined; } catch { return undefined; }
+    try { return localStorage.getItem('open-walnut-todo-active-tab') ?? undefined; } catch { return undefined; }
   });
   const urlSync = useUrlSync({
     focusedTaskId: focusedTask?.id,
@@ -223,16 +223,16 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   taskMapRef.current = taskMap;
 
   // Resizable panels
-  const todoPanel = useResizablePanel('walnut-todo-width', 25);
+  const todoPanel = useResizablePanel('open-walnut-todo-width', 25);
   const sessionPanel = useResizablePanel('walnut-session-panel-width-v2', 35);
 
   // Column split ratio: left column gets splitPct%, right gets (100-splitPct)%
   const [colSplitPct, setColSplitPct] = useState(() => {
-    try { const v = parseFloat(localStorage.getItem('walnut-col-split') ?? ''); return isNaN(v) ? 50 : Math.min(80, Math.max(20, v)); } catch { return 50; }
+    try { const v = parseFloat(localStorage.getItem('open-walnut-col-split') ?? ''); return isNaN(v) ? 50 : Math.min(80, Math.max(20, v)); } catch { return 50; }
   });
   const colSplitRef = useRef(colSplitPct);
   colSplitRef.current = colSplitPct;
-  useEffect(() => { try { localStorage.setItem('walnut-col-split', String(colSplitPct)); } catch {} }, [colSplitPct]);
+  useEffect(() => { try { localStorage.setItem('open-walnut-col-split', String(colSplitPct)); } catch {} }, [colSplitPct]);
 
   const handleColSplitStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();

@@ -59,7 +59,7 @@ export interface PolicyResult {
  */
 function checkHardcodedRules(command: string): PolicyResult | undefined {
   // Block ANY command that references port 3456 combined with kill-like intent.
-  // The production Walnut server listens on 3456 — sessions must never restart it.
+  // The production Open Walnut server listens on 3456 — sessions must never restart it.
   // Catches patterns like:
   //   kill $(lsof -t -i:3456)
   //   lsof -i :3456 | head -1   (used to find PID for killing)
@@ -73,7 +73,7 @@ function checkHardcodedRules(command: string): PolicyResult | undefined {
   if (port3456Pattern.test(command)) {
     return {
       allowed: false,
-      reason: 'Blocked: port 3456 is the production Walnut server. Use `walnut web --ephemeral` to start an isolated test server instead.',
+      reason: 'Blocked: port 3456 is the production Open Walnut server. Use `open-walnut web --ephemeral` to start an isolated test server instead.',
     };
   }
 
@@ -82,21 +82,21 @@ function checkHardcodedRules(command: string): PolicyResult | undefined {
   if (serverRestartPattern.test(command)) {
     return {
       allowed: false,
-      reason: 'Blocked: restarting the production Walnut server is not allowed from sessions. Use `walnut web --ephemeral` for testing.',
+      reason: 'Blocked: restarting the production Open Walnut server is not allowed from sessions. Use `open-walnut web --ephemeral` for testing.',
     };
   }
 
-  // Block process-kill commands that target walnut by name.
+  // Block process-kill commands that target open-walnut by name.
   // Catches patterns like:
-  //   pkill -f walnut
-  //   killall walnut
-  //   pkill walnut
-  //   pgrep -f walnut | xargs kill
-  const walnutKillPattern = /(?:pkill|killall)\b.*\bwalnut/i;
-  if (walnutKillPattern.test(command)) {
+  //   pkill -f open-walnut
+  //   killall open-walnut
+  //   pkill open-walnut
+  //   pgrep -f open-walnut | xargs kill
+  const openWalnutKillPattern = /(?:pkill|killall)\b.*\bopen-walnut/i;
+  if (openWalnutKillPattern.test(command)) {
     return {
       allowed: false,
-      reason: 'Blocked: killing walnut processes directly is not allowed. Use `walnut web --ephemeral` for testing.',
+      reason: 'Blocked: killing walnut processes directly is not allowed. Use `open-walnut web --ephemeral` for testing.',
     };
   }
 

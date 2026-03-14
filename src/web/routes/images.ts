@@ -1,7 +1,7 @@
 /**
  * Image storage and serving routes.
  *
- * Images are saved to ~/.walnut/images/{timestamp}-{hash}.{ext}
+ * Images are saved to ~/.open-walnut/images/{timestamp}-{hash}.{ext}
  * and served via GET /api/images/:filename.
  *
  * This avoids storing large base64 blobs in chat-history.json.

@@ -3,7 +3,7 @@
  *
  * Two storage layers:
  *   1. Built-in commands — shipped in dist/data/slash-commands/*.md (read-only)
- *   2. User commands    — stored in ~/.walnut/commands/*.md (read-write)
+ *   2. User commands    — stored in ~/.open-walnut/commands/*.md (read-write)
  *
  * Lookup: user dir first, then built-in. User commands override built-in by name.
  */
