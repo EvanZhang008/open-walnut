@@ -240,17 +240,15 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
         }
         return false;
       },
-      // Per-line Tab: only indent current item, detach children first
+      // Per-line Tab: sink item first (with children), then detach children as siblings
       handleKeyDown: (_view, event) => {
         if (event.key !== 'Tab') return false;
         const { $from } = _view.state.selection;
         let listItemType: string | null = null;
-        let listItemDepth = 0;
         for (let d = $from.depth; d > 0; d--) {
           const name = $from.node(d).type.name;
           if (name === 'taskItem' || name === 'listItem') {
             listItemType = name;
-            listItemDepth = d;
             break;
           }
         }
@@ -259,12 +257,9 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
         if (event.shiftKey) {
           editorRef.current.commands.liftListItem(listItemType);
         } else {
-          // Only detach children if sink is possible (has previous sibling in parent list)
-          const parentListDepth = listItemDepth - 1;
-          if (parentListDepth >= 0 && $from.index(parentListDepth) > 0) {
-            detachListItemChildren(editorRef.current);
-          }
-          editorRef.current.commands.sinkListItem(listItemType);
+          // Sink first (standard — moves item with children), then detach children
+          const sunk = editorRef.current.commands.sinkListItem(listItemType);
+          if (sunk) detachListItemChildren(editorRef.current);
         }
         return true;
       },
