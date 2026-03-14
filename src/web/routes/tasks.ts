@@ -472,26 +472,19 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
 
     // HUMAN_VERIFIED: auto-push session to run code review + commit.
     // Only fires via REST (UI phase picker) — agent update_task calls bypass this intentionally.
+    // No process_status guard — SESSION_SEND handler resumes stopped sessions via --resume.
     if (req.body.phase === 'HUMAN_VERIFIED' && result.task.session_id) {
-      const { getSessionByClaudeId } = await import('../../core/session-tracker.js')
-      const session = await getSessionByClaudeId(result.task.session_id)
-      if (session && session.process_status !== 'stopped') {
-        const pushMessage = 'User has verified this work and approved it. Please proceed:\n1. Run /code-review to review all changes\n2. After review, run /close-session-with-commit to commit and close'
-        const { enqueueMessage } = await import('../../core/session-message-queue.js')
-        await enqueueMessage(result.task.session_id, pushMessage)
-        bus.emit(EventNames.SESSION_SEND, {
-          sessionId: result.task.session_id,
-          taskId: result.task.id,
-          message: pushMessage,
-        }, ['session-runner'], { source: 'api' })
-        log.web.info('HUMAN_VERIFIED: auto-pushing session', {
-          taskId: result.task.id, sessionId: result.task.session_id,
-        })
-      } else if (session) {
-        log.web.warn('HUMAN_VERIFIED: session is stopped, auto-push skipped', {
-          taskId: result.task.id, sessionId: result.task.session_id,
-        })
-      }
+      const pushMessage = 'User has verified this work and approved it. Please proceed:\n1. Run /code-review to review all changes\n2. After review, run /close-session-with-commit to commit and close'
+      const { enqueueMessage } = await import('../../core/session-message-queue.js')
+      await enqueueMessage(result.task.session_id, pushMessage)
+      bus.emit(EventNames.SESSION_SEND, {
+        sessionId: result.task.session_id,
+        taskId: result.task.id,
+        message: pushMessage,
+      }, ['session-runner'], { source: 'api' })
+      log.web.info('HUMAN_VERIFIED: auto-pushing session', {
+        taskId: result.task.id, sessionId: result.task.session_id,
+      })
     }
 
     res.json(result)
