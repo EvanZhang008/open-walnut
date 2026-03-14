@@ -87,28 +87,13 @@ export function useFocusBar(tasks: Task[]): UseFocusBarReturn {
   );
 
   // Resolve pinned IDs to Task objects (preserving pin order).
-  // Auto-unpin completed tasks found during resolution.
+  // Completed tasks are filtered out of the display list; event handlers
+  // (task:completed, task:updated) handle server-side cleanup.
   const pinnedTasks = useMemo(() => {
     const taskMap = new Map(tasks.map((t) => [t.id, t]));
-    const resolved: Task[] = [];
-    const toUnpin: string[] = [];
-    for (const id of pinnedIds) {
-      const t = taskMap.get(id);
-      if (!t) continue;
-      if (t.phase === 'COMPLETE' || t.status === 'done') {
-        toUnpin.push(id);
-      } else {
-        resolved.push(t);
-      }
-    }
-    if (toUnpin.length) {
-      // Defer state update + API calls to avoid updating during render
-      setTimeout(() => {
-        setPinnedIds((prev) => prev.filter((pid) => !toUnpin.includes(pid)));
-        for (const id of toUnpin) focusApi.unpinTask(id).catch(() => {});
-      }, 0);
-    }
-    return resolved;
+    return pinnedIds
+      .map((id) => taskMap.get(id))
+      .filter((t): t is Task => !!t && t.phase !== 'COMPLETE' && t.status !== 'done');
   }, [pinnedIds, tasks]);
 
   return { pinnedIds, pinnedTasks, pin, unpin, reorder, isPinned };
