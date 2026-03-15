@@ -22,6 +22,7 @@ export function errorHandler(err: Error, req: Request, res: Response, _next: Nex
   const message = err.message || 'Internal server error'
 
   log.web.error(`${req.method} ${req.originalUrl} → ${status}`, {
+    reqId: req.reqId,
     status,
     message,
     stack: status >= 500 ? err.stack : undefined,

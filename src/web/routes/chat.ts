@@ -442,7 +442,8 @@ export async function resolveEntityRefs(text: string): Promise<string> {
           ? `${task.project} / ${task.title}`
           : task.title
         taskLabels.set(id, label)
-      } catch {
+      } catch (err) {
+        log.web.debug('failed to resolve task label', { taskId: id, error: err instanceof Error ? err.message : String(err) })
         taskLabels.set(id, id)
       }
     }),
@@ -450,7 +451,8 @@ export async function resolveEntityRefs(text: string): Promise<string> {
       try {
         const session = await getSessionByClaudeId(id)
         sessionLabels.set(id, session?.title || id)
-      } catch {
+      } catch (err) {
+        log.web.debug('failed to resolve session label', { sessionId: id, error: err instanceof Error ? err.message : String(err) })
         sessionLabels.set(id, id)
       }
     }),
@@ -732,7 +734,18 @@ export function registerChatRpc(): void {
           },
           onUsage: (usage) => {
             bus.emit('agent:usage', { usage }, ['web-ui'], { source: 'agent' })
-            try { usageTracker.record({ source: 'agent', model: usage.model ?? 'unknown', input_tokens: usage.input_tokens, output_tokens: usage.output_tokens, cache_creation_input_tokens: usage.cache_creation_input_tokens, cache_read_input_tokens: usage.cache_read_input_tokens }) } catch {}
+            try {
+              usageTracker.record({
+                source: 'agent',
+                model: usage.model ?? 'unknown',
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
+                cache_creation_input_tokens: usage.cache_creation_input_tokens,
+                cache_read_input_tokens: usage.cache_read_input_tokens,
+              })
+            } catch (err) {
+              log.web.warn('failed to record usage', { error: err instanceof Error ? err.message : String(err) })
+            }
           },
         // Note: onText is intentionally not provided — agent:response is sent once
         // at the end of the turn (not per text block) so isStreaming stays true

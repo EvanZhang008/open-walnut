@@ -12,6 +12,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import yaml from 'js-yaml';
+import { log } from '../logging/index.js';
 import { GLOBAL_SKILLS_DIR, CLAUDE_SKILLS_DIR } from '../constants.js';
 
 export interface SkillMeta {
@@ -54,8 +55,12 @@ async function discoverSkills(dirs: string[]): Promise<Map<string, { dir: string
     let entries: string[];
     try {
       entries = await fsp.readdir(base);
-    } catch {
-      continue; // directory doesn't exist
+    } catch (err) {
+      log.task.debug('skill-loader: skills directory not found', {
+        dir: base,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      continue;
     }
     for (const entry of entries) {
       if (found.has(entry)) continue; // higher-priority source already registered
@@ -66,7 +71,7 @@ async function discoverSkills(dirs: string[]): Promise<Map<string, { dir: string
           found.set(entry, { dir: path.join(base, entry), file: skillFile });
         }
       } catch {
-        // no SKILL.md in this subdir
+        // no SKILL.md in this subdir — expected, not all subdirs are skills
       }
     }
   }
@@ -83,7 +88,10 @@ function parseFrontmatter(raw: string): { frontmatter: SkillFrontmatter; body: s
   let frontmatter: SkillFrontmatter;
   try {
     frontmatter = (yaml.load(fmText) as SkillFrontmatter) ?? {};
-  } catch {
+  } catch (err) {
+    log.task.warn('skill-loader: failed to parse YAML frontmatter', {
+      error: err instanceof Error ? err.message : String(err),
+    });
     frontmatter = {};
   }
   return { frontmatter, body };
@@ -96,7 +104,7 @@ function hasBin(name: string): boolean {
     execFileSync('which', [name], { stdio: 'ignore' });
     return true;
   } catch {
-    return false;
+    return false;  // binary not found — expected for eligibility filtering
   }
 }
 
@@ -182,7 +190,11 @@ async function getEligibleSkills(): Promise<(SkillMeta & { dirName: string })[]>
     let raw: string;
     try {
       raw = await fsp.readFile(file, 'utf-8');
-    } catch {
+    } catch (err) {
+      log.task.debug('skill-loader: failed to read skill file', {
+        file,
+        error: err instanceof Error ? err.message : String(err),
+      });
       continue;
     }
     const { frontmatter } = parseFrontmatter(raw);

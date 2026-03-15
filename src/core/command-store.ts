@@ -10,6 +10,7 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import yaml from 'js-yaml';
+import { log } from '../logging/index.js';
 import { parseFrontmatter } from '../utils/frontmatter.js';
 import { COMMANDS_DIR, BUILTIN_COMMANDS_DIR } from '../constants.js';
 
@@ -57,7 +58,11 @@ function nameFromFile(filename: string): string | null {
 async function readDir(dir: string): Promise<string[]> {
   try {
     return await fsp.readdir(dir);
-  } catch {
+  } catch (err) {
+    log.task.debug('command-store: readDir failed', {
+      dir,
+      error: err instanceof Error ? err.message : String(err),
+    });
     return [];
   }
 }
@@ -193,7 +198,11 @@ export async function deleteCommand(name: string): Promise<void> {
   const userPath = path.join(COMMANDS_DIR, toFilename(name));
   try {
     await fsp.access(userPath);
-  } catch {
+  } catch (err) {
+    log.task.debug('command-store: user command file not found, checking builtin', {
+      name,
+      error: err instanceof Error ? err.message : String(err),
+    });
     // Check if it's a builtin-only command
     const builtin = await readCommandFile(
       path.join(BUILTIN_COMMANDS_DIR, toFilename(name)),

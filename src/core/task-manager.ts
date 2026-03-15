@@ -109,7 +109,13 @@ async function migrateSessionSlots(store: TaskStore): Promise<boolean> {
         let rec;
         try {
           rec = await getSessionByClaudeId(sid);
-        } catch { continue; }
+        } catch (err) {
+          log.task.debug('failed to lookup session for task migration', {
+            sessionId: sid,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          continue;
+        }
         if (!rec || rec.work_status === 'completed' || rec.work_status === 'error') continue;
         if (rec.mode === 'plan' && !task.plan_session_id) {
           task.plan_session_id = sid;
@@ -427,8 +433,10 @@ async function writeStore(store: TaskStore): Promise<void> {
           backupPath, previousTaskCount: existing.tasks.length,
         });
       }
-    } catch {
-      // No existing file or read failed — safe to write empty
+    } catch (err) {
+      log.task.debug('no existing tasks file to back up before empty write', {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
   await writeJsonFile(TASKS_FILE, store);
@@ -747,7 +755,11 @@ async function detectListMigration(task: Task): Promise<boolean> {
     const { resolveListIdForTask } = await import('../integrations/microsoft-todo.js');
     const targetListId = await resolveListIdForTask(task);
     return currentListId !== targetListId;
-  } catch {
+  } catch (err) {
+    log.task.debug('failed to detect list migration', {
+      taskId: task.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
     return false;
   }
 }
@@ -2240,10 +2252,11 @@ function parseMetadataYaml(task: Task): Record<string, unknown> | null {
       return parsed as Record<string, unknown>;
     }
     return null;
-  } catch {
+  } catch (err) {
     log.task.warn('failed to parse metadata YAML description', {
       taskId: task.id,
       title: task.title,
+      error: err instanceof Error ? err.message : String(err),
     });
     return null;
   }

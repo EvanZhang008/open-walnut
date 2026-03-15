@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { log } from '../logging/index.js';
 import { listTasks } from './task-manager.js';
 import { listMemories, type MemoryEntry } from './memory.js';
 import type { SearchMode } from './embedding/types.js';
@@ -215,7 +216,10 @@ async function embedQuery(query: string): Promise<Float32Array | null> {
   try {
     const { embed } = await import('./embedding/client.js');
     return await embed(query);
-  } catch {
+  } catch (err) {
+    log.web.debug('search: failed to embed query', {
+      error: err instanceof Error ? err.message : String(err),
+    });
     return null;
   }
 }
@@ -291,7 +295,10 @@ async function vectorSearchAll(
     }
 
     return results;
-  } catch {
+  } catch (err) {
+    log.web.debug('search: vector search failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
     return [];
   }
 }
@@ -380,7 +387,11 @@ async function bm25ScoreMemory(
       }
       return results;
     }
-  } catch { /* FTS unavailable */ }
+  } catch (err) {
+    log.web.debug('search: FTS5 index unavailable', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   // Fallback: in-memory scan
   const memories: MemoryEntry[] = category ? listMemories(category) : listMemories();

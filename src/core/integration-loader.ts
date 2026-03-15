@@ -90,7 +90,7 @@ async function bundleExternalPlugin(
               resolved,
               path.join(resolved.replace(/\.js$/, ''), 'index.ts'),
             ]) {
-              try { if (fs.statSync(candidate).isFile()) return { path: candidate }; } catch { /* next */ }
+              try { if (fs.statSync(candidate).isFile()) return { path: candidate }; } catch { /* expected: candidate doesn't exist */ }
             }
             return undefined;
           });
@@ -123,7 +123,7 @@ function resolveBuiltinDir(): string {
     ]) {
       try {
         if (fs.statSync(candidate).isDirectory()) return candidate;
-      } catch { /* keep walking */ }
+      } catch { /* expected: candidate doesn't exist, keep walking */ }
     }
     dir = path.dirname(dir);
   }
@@ -270,13 +270,14 @@ async function discoverPluginDirs(): Promise<Array<{ dir: string; isBuiltin: boo
         try {
           await fsp.access(manifestPath, fs.constants.R_OK);
           results.push({ dir: path.join(BUILTIN_DIR, entry.name), isBuiltin: true });
-        } catch {
-          // Not a plugin directory (no manifest.json)
-        }
+        } catch { /* expected: not a plugin directory (no manifest.json) */ }
       }
     }
-  } catch {
-    log.debug('Built-in integrations dir not found', { dir: BUILTIN_DIR });
+  } catch (err) {
+    log.debug('Built-in integrations dir not found', {
+      dir: BUILTIN_DIR,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 
   // Scan external dir
@@ -288,13 +289,14 @@ async function discoverPluginDirs(): Promise<Array<{ dir: string; isBuiltin: boo
         try {
           await fsp.access(manifestPath, fs.constants.R_OK);
           results.push({ dir: path.join(EXTERNAL_DIR, entry.name), isBuiltin: false });
-        } catch {
-          // Not a plugin directory (no manifest.json)
-        }
+        } catch { /* expected: not a plugin directory (no manifest.json) */ }
       }
     }
-  } catch {
-    // External plugins dir doesn't exist — that's fine
+  } catch (err) {
+    log.debug('external plugins dir not accessible', {
+      dir: EXTERNAL_DIR,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 
   return results;
@@ -418,14 +420,17 @@ async function loadPlugin(
         break;
       }
       // File loaded but no default export — try next candidate
-    } catch {
-      // Try next candidate
+    } catch (err) {
+      log.debug('plugin entry candidate failed', {
+        id: pluginId, filename,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
   if (!registerFn || typeof registerFn !== 'function') {
     log.warn('No valid entry point found', { id: pluginId, dir: pluginDir, tried: candidates });
-    if (bundledFile) try { await fsp.unlink(bundledFile); } catch { /* cleanup */ }
+    if (bundledFile) try { await fsp.unlink(bundledFile); } catch { /* non-critical cleanup */ }
     return;
   }
 
@@ -539,7 +544,10 @@ export async function migrateConfigToPlugins(): Promise<boolean> {
   try {
     const content = await fsp.readFile(CONFIG_FILE, 'utf-8');
     raw = (yaml.load(content) as Record<string, unknown>) ?? {};
-  } catch {
+  } catch (err) {
+    log.debug('config file not readable for migration', {
+      error: err instanceof Error ? err.message : String(err),
+    });
     return false; // No config file — nothing to migrate
   }
 

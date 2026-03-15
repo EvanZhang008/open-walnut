@@ -8,6 +8,7 @@
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { log } from '../../logging/index.js';
 import type { ToolDefinition } from '../tools.js';
 import { compressForApi, MAX_BASE64_BYTES } from '../../utils/image-compress.js';
 import { readFileWithMeta } from '../../utils/file-ops.js';
@@ -81,7 +82,7 @@ export const readTool: ToolDefinition = {
         const base64 = buffer.toString('base64');
 
         if (base64.length > MAX_BASE64_BYTES) {
-          console.warn(`[read_file] image too large after compression: ${filePath} (${(buffer.length / 1_048_576).toFixed(1)} MB)`);
+          log.agent.warn('image too large after compression', { filePath, sizeMB: (buffer.length / 1_048_576).toFixed(1) });
           return `[Image file: ${filePath}] (${stat.size} bytes, ${mime}) — too large for inline vision even after compression`;
         }
 

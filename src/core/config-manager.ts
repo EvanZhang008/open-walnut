@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import yaml from 'js-yaml';
+import { log } from '../logging/index.js';
 import { CONFIG_FILE } from '../constants.js';
 import { VALID_PRIORITIES, type Config, type TaskPriority } from './types.js';
 
@@ -74,7 +75,10 @@ export async function getConfig(): Promise<Config> {
       config.agent = { ...config.agent, main_model: defaultOneM };
     }
     return config;
-  } catch {
+  } catch (err) {
+    log.session.debug('config-manager: config file not found, using defaults', {
+      error: err instanceof Error ? err.message : String(err),
+    });
     const defaultOneM = DEFAULT_AVAILABLE_MODELS.find(m => m.includes('opus') && m.includes('[1m]')) ?? DEFAULT_AVAILABLE_MODELS[0];
     return { ...DEFAULT_CONFIG, agent: { available_models: DEFAULT_AVAILABLE_MODELS, main_model: defaultOneM } };
   }
@@ -127,8 +131,10 @@ export async function updateConfig(partial: Partial<Config>): Promise<void> {
     try {
       const content = await fs.readFile(CONFIG_FILE, 'utf-8');
       existing = (yaml.load(content) as Record<string, unknown>) ?? {};
-    } catch {
-      // No config file — start from empty
+    } catch (err) {
+      log.session.debug('config-manager: no existing config file, starting from empty', {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
 
     // Merge: each top-level key in partial replaces the existing key
@@ -162,8 +168,10 @@ export async function seedConfigDefaults(): Promise<void> {
     if (!raw.includes('available_models')) {
       needsWrite = true;
     }
-  } catch {
-    // No config file at all — write the full default
+  } catch (err) {
+    log.session.debug('config-manager: no config file found, will write defaults', {
+      error: err instanceof Error ? err.message : String(err),
+    });
     needsWrite = true;
   }
 

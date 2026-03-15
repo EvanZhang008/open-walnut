@@ -12,6 +12,7 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import fsp from 'node:fs/promises'
 import { IMAGES_DIR } from '../../constants.js'
+import { log } from '../../logging/index.js'
 import { compressForApi } from '../../utils/image-compress.js'
 
 export interface ImagePayload {
@@ -73,7 +74,8 @@ export async function readImageAsBase64(filePath: string): Promise<{ data: strin
     const ext = path.extname(filePath).slice(1).toLowerCase()
     const mediaType = EXT_TO_MIME[ext] || 'image/png'
     return { data: buffer.toString('base64'), mediaType }
-  } catch {
+  } catch (err) {
+    log.web.debug('failed to read image as base64', { filePath, error: err instanceof Error ? err.message : String(err) })
     return null
   }
 }
@@ -170,7 +172,8 @@ imagesRouter.get('/:filename', async (req: Request, res: Response, next: NextFun
     // Check file exists
     try {
       await fsp.access(filePath)
-    } catch {
+    } catch (err) {
+      log.web.debug('image file not found', { filePath, error: err instanceof Error ? err.message : String(err) })
       res.status(404).json({ error: 'Image not found' })
       return
     }

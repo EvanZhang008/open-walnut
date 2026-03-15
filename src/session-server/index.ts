@@ -9,6 +9,7 @@
  */
 
 import { SessionServer } from './server.js'
+import { log } from '../logging/index.js'
 
 export interface SessionServerCLIOptions {
   port: number
@@ -58,7 +59,7 @@ export async function runSessionServer(options: {
 
   // Keep alive until SIGINT/SIGTERM
   const shutdown = () => {
-    console.error('Session server shutting down...')
+    log.session.info('shutting down session server')
     process.exit(0)
   }
   process.on('SIGINT', shutdown)
@@ -78,6 +79,7 @@ if (isMainModule) {
   if (dataDirIdx !== -1 && args[dataDirIdx + 1]) options.dataDir = args[dataDirIdx + 1]
   runSessionServer(options).catch((err) => {
     console.error('Fatal:', err)
+    log.session.fatal('fatal error in session server', { error: err instanceof Error ? err.message : String(err), stack: err instanceof Error ? err.stack : undefined })
     process.exit(1)
   })
 }

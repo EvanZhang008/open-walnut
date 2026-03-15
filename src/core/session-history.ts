@@ -187,8 +187,10 @@ function parseSessionMessages(content: string): SessionHistoryMessage[] {
   for (const line of lines) {
     try {
       rawMessages.push(JSON.parse(line));
-    } catch {
-      // Skip unparseable lines
+    } catch (err) {
+      log.session.debug('failed to parse JSONL entry', {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
@@ -595,8 +597,11 @@ export async function readSessionHistory(sessionId: string, cwd?: string, host?:
             }
           }
         }
-      } catch {
-        // Plan file may have been deleted — use JSONL content as fallback
+      } catch (err) {
+        log.session.debug('failed to read plan file from disk', {
+          planFilePath,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     }
   }
@@ -656,7 +661,12 @@ export async function extractPlanContent(sessionId: string, cwd?: string, host?:
   if (localPath) {
     try {
       content = fs.readFileSync(localPath, 'utf-8');
-    } catch { /* fall through */ }
+    } catch (err) {
+      log.session.debug('failed to read local JSONL for plan extraction', {
+        localPath,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   // If no local content and host provided, try remote
@@ -677,7 +687,10 @@ export async function extractPlanContent(sessionId: string, cwd?: string, host?:
       let parsed: RawJsonlLine;
       try {
         parsed = JSON.parse(line);
-      } catch {
+      } catch (err) {
+        log.session.debug('failed to parse JSONL line in plan extraction', {
+          error: err instanceof Error ? err.message : String(err),
+        });
         continue;
       }
 
@@ -760,7 +773,12 @@ export async function recoverStateFromJsonl(sessionId: string, cwd?: string, hos
   if (localPath) {
     try {
       content = fs.readFileSync(localPath, 'utf-8');
-    } catch { /* fall through */ }
+    } catch (err) {
+      log.session.debug('failed to read local JSONL for state recovery', {
+        localPath,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   // If no local content and host provided, try remote
@@ -780,7 +798,10 @@ export async function recoverStateFromJsonl(sessionId: string, cwd?: string, hos
       let parsed: Record<string, unknown>;
       try {
         parsed = JSON.parse(line);
-      } catch {
+      } catch (err) {
+        log.session.debug('failed to parse JSONL line in state recovery', {
+          error: err instanceof Error ? err.message : String(err),
+        });
         continue;
       }
 
@@ -940,8 +961,11 @@ export async function rewriteHistoryRemoteImages(
         sshTarget = { hostname, user: hostDef.user, port: hostDef.port }
       }
     }
-  } catch {
-    log.session.warn('failed to resolve host config for history image rewrite', { host, sessionId })
+  } catch (err) {
+    log.session.warn('failed to resolve host config for history image rewrite', {
+      host, sessionId,
+      error: err instanceof Error ? err.message : String(err),
+    })
   }
 
   if (!sshTarget) return messages

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { log } from '../logging/index.js';
 import { MEMORY_FILE } from '../constants.js';
 import { computeContentHash, editFileContent, writeFileChecked } from '../utils/file-ops.js';
 
@@ -23,7 +24,10 @@ export function getMemoryFile(): MemoryFileResult | null {
   try {
     const content = fs.readFileSync(MEMORY_FILE, 'utf-8');
     return { content, contentHash: computeContentHash(content) };
-  } catch {
+  } catch (err) {
+    log.memory.debug('memory-file: MEMORY.md not found or unreadable', {
+      error: err instanceof Error ? err.message : String(err),
+    });
     return null;
   }
 }

@@ -11,6 +11,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import path from 'node:path'
 import fsp from 'node:fs/promises'
 import { TIMELINE_DIR, PROJECTS_MEMORY_DIR } from '../../constants.js'
+import { log } from '../../logging/index.js'
 import { getCronService } from './cron.js'
 
 export const timelineRouter = Router()
@@ -102,8 +103,8 @@ timelineRouter.get('/', async (req: Request, res: Response, next: NextFunction) 
     let memoryContent = ''
     try {
       memoryContent = await fsp.readFile(memFile, 'utf-8')
-    } catch {
-      // No memory file yet — return empty
+    } catch (err) {
+      log.web.debug('no life tracker memory file yet', { error: err instanceof Error ? err.message : String(err) })
     }
 
     // Parse the YAML description from MEMORY.md — the agent's working memory
@@ -123,8 +124,8 @@ timelineRouter.get('/', async (req: Request, res: Response, next: NextFunction) 
         )
         tracking = trackerJob?.enabled ?? false
       }
-    } catch {
-      // Cron service not available
+    } catch (err) {
+      log.web.debug('cron service not available for tracking status', { error: err instanceof Error ? err.message : String(err) })
     }
 
     const response: TimelineResponse = { date, entries, summary, tracking }
@@ -146,8 +147,8 @@ timelineRouter.get('/dates', async (_req: Request, res: Response, next: NextFunc
           dates.push(entry.name)
         }
       }
-    } catch {
-      // TIMELINE_DIR doesn't exist yet
+    } catch (err) {
+      log.web.debug('timeline directory not available', { error: err instanceof Error ? err.message : String(err) })
     }
     dates.sort().reverse()
     res.json({ dates })
@@ -185,7 +186,8 @@ timelineRouter.get('/images/:date/:file', async (req: Request, res: Response, ne
     let stat
     try {
       stat = await fsp.stat(filePath)
-    } catch {
+    } catch (err) {
+      log.web.debug('timeline image not found', { filePath, error: err instanceof Error ? err.message : String(err) })
       res.status(404).json({ error: 'Image not found' })
       return
     }

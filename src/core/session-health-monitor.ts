@@ -62,7 +62,10 @@ export class SessionHealthMonitor {
     let sessions
     try {
       sessions = await listNonTerminalSessions()
-    } catch {
+    } catch (err) {
+      log.session.warn('health monitor: failed to list non-terminal sessions', {
+        error: err instanceof Error ? err.message : String(err),
+      })
       return
     }
 
@@ -175,8 +178,10 @@ export class SessionHealthMonitor {
       if (mins != null) {
         idleTimeoutMs = mins === 0 ? 0 : mins * 60 * 1000
       }
-    } catch {
-      // Config not available — use default
+    } catch (err) {
+      log.session.debug('health monitor: config not available, using default idle timeout', {
+        error: err instanceof Error ? err.message : String(err),
+      })
     }
 
     // 0 = disabled
@@ -199,7 +204,12 @@ export class SessionHealthMonitor {
       try {
         const stat = fs.statSync(session.outputFile)
         mtimeMs = stat.mtimeMs
-      } catch {
+      } catch (err) {
+        log.session.debug('health monitor: cannot stat output file', {
+          sessionId: session.claudeSessionId,
+          outputFile: session.outputFile,
+          error: err instanceof Error ? err.message : String(err),
+        })
         continue  // Can't stat file — skip (file may be on remote host only)
       }
 
@@ -241,8 +251,11 @@ export class SessionHealthMonitor {
                 continue  // Remote is still active — don't kill
               }
             }
-          } catch {
-            // SSH check failed — fall through to kill based on local mtime
+          } catch (err) {
+            log.session.debug('health monitor: SSH remote mtime check failed, falling through to local mtime', {
+              sessionId: session.claudeSessionId,
+              error: err instanceof Error ? err.message : String(err),
+            })
           }
         }
       }
@@ -341,8 +354,11 @@ export class SessionHealthMonitor {
           work_status: 'await_human_action',
           activity: `Possibly stuck — no output for ${staleMinutes} min`,
         }, ['*'], { source: 'health-monitor' })
-      } catch {
-        // Can't stat file — skip
+      } catch (err) {
+        log.session.debug('health monitor: cannot stat output file for stale check', {
+          sessionId: session.claudeSessionId,
+          error: err instanceof Error ? err.message : String(err),
+        })
       }
     }
   }
@@ -418,8 +434,10 @@ export class SessionHealthMonitor {
       if (killed > 0) {
         log.session.info('health monitor: killed orphaned processes', { count: killed })
       }
-    } catch {
-      // Non-critical — will retry on next health check
+    } catch (err) {
+      log.session.debug('health monitor: orphan process cleanup failed, will retry', {
+        error: err instanceof Error ? err.message : String(err),
+      })
     }
   }
 
@@ -435,7 +453,11 @@ export class SessionHealthMonitor {
       const hostname = hostDef.hostname ?? (hostDef as Record<string, unknown>).ssh as string | undefined
       if (!hostname) return null
       return { hostname, user: hostDef.user, port: hostDef.port }
-    } catch {
+    } catch (err) {
+      log.session.debug('health monitor: failed to resolve host target', {
+        hostAlias,
+        error: err instanceof Error ? err.message : String(err),
+      })
       return null
     }
   }
@@ -508,13 +530,16 @@ export class SessionHealthMonitor {
           try {
             const event = JSON.parse(line)
             if (event.type === 'result') return true
-          } catch { continue }
+          } catch { continue }  // expected: partial JSON lines in tail buffer
         }
       } finally {
         fs.closeSync(fd)
       }
-    } catch {
-      // File doesn't exist or can't be read
+    } catch (err) {
+      log.session.debug('health monitor: cannot read output file for result check', {
+        filePath,
+        error: err instanceof Error ? err.message : String(err),
+      })
     }
     return false
   }

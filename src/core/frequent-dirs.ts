@@ -50,7 +50,10 @@ function readStore(): FrequentDirsStore | null {
     // Schema validation: reject corrupted or incompatible data
     if (parsed?.version !== 1 || !Array.isArray(parsed?.directories)) return null
     return parsed as FrequentDirsStore
-  } catch {
+  } catch (err) {
+    log.session.debug('frequent-dirs: failed to read store', {
+      error: err instanceof Error ? err.message : String(err),
+    })
     return null
   }
 }
@@ -176,8 +179,8 @@ async function compileFromSessionsInternal(): Promise<void> {
     }
 
     writeStore(store)
-    log.info('frequent-dirs: compiled from sessions', { count: store.directories.length })
+    log.session.info('frequent-dirs: compiled from sessions', { count: store.directories.length })
   } catch (err) {
-    log.warn('frequent-dirs: compile failed', { error: err instanceof Error ? err.message : String(err) })
+    log.session.warn('frequent-dirs: compile failed', { error: err instanceof Error ? err.message : String(err) })
   }
 }

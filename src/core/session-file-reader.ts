@@ -70,7 +70,11 @@ export function extractCwdFromJsonlContent(content: string): string | undefined 
       if ((entry.type === 'user' || entry.type === 'human') && entry.cwd) {
         return entry.cwd;
       }
-    } catch { /* skip malformed lines */ }
+    } catch (err) {
+      log.session.debug('failed to parse JSONL line while extracting cwd', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
   return undefined;
 }
@@ -90,7 +94,11 @@ export class LocalFileReader implements SessionFileReader {
   async readFile(filePath: string): Promise<string | null> {
     try {
       return await fsp.readFile(filePath, 'utf-8');
-    } catch {
+    } catch (err) {
+      log.session.debug('local file read failed', {
+        filePath,
+        error: err instanceof Error ? err.message : String(err),
+      });
       return null;
     }
   }
@@ -98,7 +106,11 @@ export class LocalFileReader implements SessionFileReader {
   async listDir(dirPath: string): Promise<string[]> {
     try {
       return await fsp.readdir(dirPath);
-    } catch {
+    } catch (err) {
+      log.session.debug('local dir read failed', {
+        dirPath,
+        error: err instanceof Error ? err.message : String(err),
+      });
       return [];
     }
   }
@@ -141,7 +153,11 @@ export class RemoteFileReader implements SessionFileReader {
         `ssh ${this.sshArgs.join(' ')} ${this.sshTarget} "${escaped}"`,
         { encoding: 'utf-8', timeout, maxBuffer: 10 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'] },
       );
-    } catch {
+    } catch (err) {
+      log.session.debug('SSH command failed', {
+        target: this.sshTarget,
+        error: err instanceof Error ? err.message : String(err),
+      });
       return null;
     }
   }
@@ -231,8 +247,11 @@ export function findLocalJsonlPath(sessionId: string, cwd?: string): string | nu
       const filePath = path.join(projectsDir, dir, `${sessionId}.jsonl`);
       if (fs.existsSync(filePath)) return filePath;
     }
-  } catch {
-    // projects dir doesn't exist
+  } catch (err) {
+    log.session.debug('failed to scan projects dir for session', {
+      projectsDir,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 
   return null;
@@ -292,15 +311,27 @@ export async function readSessionJsonlContent(
               if (evt.type === 'user' && evt.subtype === 'walnut-injected') {
                 syntheticLines.push(line);
               }
-            } catch { /* skip unparseable lines */ }
+            } catch (err) {
+              log.session.debug('failed to parse stream event line', {
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
           }
           if (syntheticLines.length > 0) {
             return remoteContent + '\n' + syntheticLines.join('\n');
           }
           break; // found the file, no synthetic events
-        } catch { /* skip */ }
+        } catch (err) {
+          log.session.debug('failed to read stream file for synthetic merge', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
-    } catch { /* SESSION_STREAMS_DIR doesn't exist */ }
+    } catch (err) {
+      log.session.debug('streams dir not accessible for synthetic merge', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     return remoteContent;
   };
 
@@ -337,8 +368,11 @@ export async function readSessionJsonlContent(
       try {
         const content = fs.readFileSync(localPath, 'utf-8');
         if (content) return withFoundCwd(content, 'local');
-      } catch {
-        // Fall through
+      } catch (err) {
+        log.session.debug('failed to read local JSONL file', {
+          localPath,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     }
   }
@@ -359,9 +393,17 @@ export async function readSessionJsonlContent(
             if (content) return withFoundCwd(content, 'stream');
           }
         }
-      } catch { /* Skip */ }
+      } catch (err) {
+        log.session.debug('failed to read stream capture file', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
-  } catch { /* SESSION_STREAMS_DIR doesn't exist */ }
+  } catch (err) {
+    log.session.debug('streams dir not accessible', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   // 3. Direct outputFile path (tmp file not yet renamed)
   if (outputFile) {
@@ -370,7 +412,12 @@ export async function readSessionJsonlContent(
         const content = fs.readFileSync(outputFile, 'utf-8');
         if (content) return withFoundCwd(content, 'outputFile');
       }
-    } catch { /* Fall through */ }
+    } catch (err) {
+      log.session.debug('failed to read output file', {
+        outputFile,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   return null;
@@ -408,7 +455,12 @@ function readLocalSubagentContents(sessionId: string, cwd?: string): Map<string,
       const candidate = path.join(projectsDir, dir, sessionId, 'subagents');
       if (!candidates.includes(candidate)) candidates.push(candidate);
     }
-  } catch { /* projects dir doesn't exist */ }
+  } catch (err) {
+    log.session.debug('failed to scan projects dir for subagents', {
+      projectsDir,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   for (const subDir of candidates) {
     if (!fs.existsSync(subDir)) continue;
@@ -420,9 +472,19 @@ function readLocalSubagentContents(sessionId: string, cwd?: string): Map<string,
         try {
           const content = fs.readFileSync(path.join(subDir, file), 'utf-8');
           if (content) result.set(agentId, content);
-        } catch { /* skip */ }
+        } catch (err) {
+          log.session.debug('failed to read subagent file', {
+            file,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
-    } catch { /* skip */ }
+    } catch (err) {
+      log.session.debug('failed to read subagent directory', {
+        subDir,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     if (result.size > 0) break;
   }
 

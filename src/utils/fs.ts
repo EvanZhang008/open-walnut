@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
+import { log } from '../logging/index.js';
 
 /**
  * Atomically write JSON to a file (write to tmp, then rename).
@@ -33,7 +34,7 @@ export async function readJsonFile<T>(filePath: string, fallback: T): Promise<T>
       return fallback;
     }
     // Permission error, etc. → log and use fallback (matches previous behavior)
-    console.warn(`[readJsonFile] non-ENOENT error reading ${filePath}: ${err instanceof Error ? (err as Error).message : String(err)}`);
+    log.web.warn('non-ENOENT error reading JSON file', { filePath, error: err instanceof Error ? err.message : String(err) });
     return fallback;
   }
 

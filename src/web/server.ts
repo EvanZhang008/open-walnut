@@ -15,6 +15,7 @@ import { bus, EventNames, eventData } from '../core/event-bus.js'
 import { attachWss, broadcastEvent, sendStreamEvent, closeWss } from './ws/handler.js'
 import { sessionStreamBuffer } from './session-stream-buffer.js'
 import { notFoundHandler, errorHandler } from './middleware/error-handler.js'
+import { requestLogger } from './middleware/request-logger.js'
 import { tasksRouter } from './routes/tasks.js'
 import { dashboardRouter } from './routes/dashboard.js'
 import { sessionsRouter } from './routes/sessions.js'
@@ -171,6 +172,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use(express.json({ limit: '15mb' }))
   // Auth middleware: localhost passthrough, remote requires Bearer token
   app.use('/api', authMiddleware)
+  app.use('/api', requestLogger)
 
   // -- Cron service --
   const cronService = new CronService({
@@ -436,7 +438,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   })
   const label = dev ? 'dev' : 'production'
   log.web.info(`server listening on http://localhost:${port}`, { mode: label, port })
-  console.log(`Walnut web server (${label}) listening on http://localhost:${port}`)
 
   // -- Register RPC methods on the WebSocket handler --
   registerChatRpc()
@@ -1317,7 +1318,6 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
   const repo = ensureRepo()
   if (!repo.available) {
     const msg = repo.error ?? 'git not available'
-    console.error(`\u26A0 WARNING: data NOT protected \u2014 ${msg}`)
     log.git.warn('data not protected', { error: msg })
     health.error = msg
     emitStatus()
