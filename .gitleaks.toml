@@ -1,0 +1,10 @@
+# Gitleaks configuration — allowlist for known false positives
+# https://github.com/gitleaks/gitleaks#configuration
+
+title = "open-walnut gitleaks config"
+
+[allowlist]
+  # Test fixtures that intentionally contain fake secrets
+  paths = [
+    '''tests/logging/redact\.test\.ts''',
+  ]
