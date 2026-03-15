@@ -62,7 +62,7 @@ Open [http://localhost:3456](http://localhost:3456) — type "hello" in the chat
 |---|---|---|---|
 | **Node.js** | >= 22 | [nodejs.org](https://nodejs.org/) or `nvm install 22` | Runtime for the server and frontend build |
 | **npm** | (comes with Node.js) | — | Package manager for dependencies |
-| **Claude Code CLI** | Latest | `npm install -g @anthropic-ai/claude-code` | Powers coding sessions |
+| **Claude Code CLI** | Latest | `npm install -g @anthropic-ai/claude-code` | Required for coding sessions (chat, tasks, and memory work without it) |
 | **API Key** | — | See [Provider Configuration](#provider-configuration) | Either an Anthropic API key or AWS Bedrock credentials |
 
 > **Native modules**: Open Walnut uses `better-sqlite3` (for search index) and `sharp` (for image processing). Both ship prebuilt binaries for macOS, Linux, and Windows — no compiler needed in most cases. If prebuilds fail on your platform, you may need Python 3 and a C++ compiler (`xcode-select --install` on macOS, `build-essential` on Ubuntu).
@@ -148,7 +148,7 @@ Open Walnut supports additional providers via the `config.yaml` providers sectio
 ```yaml
 providers:
   my-provider:
-    api: anthropic-messages      # Protocol: anthropic-messages or bedrock
+    api: anthropic-messages      # Protocol: anthropic-messages, openai-chat, bedrock, google-generative-ai, or ollama
     api_key: ${env:MY_API_KEY}   # Can reference environment variables
     base_url: https://api.example.com  # Custom endpoint (optional)
 ```
@@ -222,17 +222,17 @@ Click the **+** button in the Todo panel on the right side of the home page. Fil
 #### 3. CLI
 
 ```bash
-open-walnut add "Set up monitoring" -c Work -l HomeLab -p high
+walnut add "Set up monitoring" -c Work -l HomeLab -p immediate
 ```
 
 Where `-c` is category, `-l` is project (label), and `-p` is priority.
 
 ### Task Lifecycle
 
-Tasks move through phases automatically:
+Tasks move through phases automatically (simplified — see [README](README.md) for the full 9-phase lifecycle):
 
 ```
-TODO → IN_PROGRESS → AGENT_COMPLETE → AWAIT_HUMAN_ACTION → COMPLETE
+TODO → IN_PROGRESS → ... → AGENT_COMPLETE → ... → COMPLETE
 ```
 
 When the AI finishes its work, the task moves to `AGENT_COMPLETE`. Only you mark it `COMPLETE` — the AI never closes tasks without your approval.
@@ -362,7 +362,7 @@ Or configure via the Settings page. Three schedule types:
 
 | Type | Example | Use Case |
 |---|---|---|
-| `at` | `2025-01-15T09:00:00` | One-time scheduled event |
+| `at` | `2030-01-15T09:00:00` | One-time scheduled event |
 | `every` | `30m`, `2h`, `1d` | Recurring interval |
 | `cron` | `0 9 * * 1-5` (+ timezone) | Complex schedules (cron expression) |
 
@@ -438,7 +438,7 @@ plugins:
     client_id: YOUR_CLIENT_ID
 ```
 
-3. Run `open-walnut auth` to complete OAuth flow
+3. Run `walnut auth` to complete OAuth flow
 
 Tasks sync bidirectionally — changes in either direction are reflected.
 
@@ -464,29 +464,29 @@ Install additional sync plugins in `~/.open-walnut/plugins/{plugin-name}/`. Each
 
 ```bash
 # Server
-open-walnut web                          # Start web UI (port 3456)
-open-walnut web --port 8080              # Custom port
-open-walnut web --ephemeral              # Isolated test server (temp data, random port)
+walnut web                          # Start web UI (port 3456)
+walnut web --port 8080              # Custom port
+walnut web --ephemeral              # Isolated test server (temp data, random port)
 
 # Tasks
-open-walnut add "title" -c Category -l Project -p high   # Create task
-open-walnut tasks                        # List all tasks
-open-walnut tasks -s todo -c work        # Filter by status and category
-open-walnut done <task-id>               # Complete a task
+walnut add "title" -c Category -l Project -p immediate   # Create task
+walnut tasks                        # List all tasks
+walnut tasks -s todo -c work        # Filter by status and category
+walnut done <task-id>               # Complete a task
 
 # Sessions
-open-walnut sessions                     # List sessions
-open-walnut start <task-id>              # Start coding session for task
+walnut sessions                     # List sessions
+walnut start <task-id>              # Start coding session for task
 
 # Memory & Search
-open-walnut recall "query"               # Search across all memory
-open-walnut projects                     # List projects
+walnut recall "query"               # Search across all memory
+walnut projects                     # List projects
 
 # Chat & Logs
-open-walnut chat                         # Chat with agent in terminal
-open-walnut logs                         # View recent logs
-open-walnut logs -f -s agent             # Follow agent logs
-open-walnut logs --json                  # Raw JSON output
+walnut chat                         # Chat with agent in terminal
+walnut logs                         # View recent logs
+walnut logs -f -s agent             # Follow agent logs
+walnut logs --json                  # Raw JSON output
 ```
 
 All commands support `--json` for structured output.
@@ -501,7 +501,7 @@ All commands support `--json` for structured output.
 
 **Fixes**:
 1. Check your API key: `echo $ANTHROPIC_API_KEY` (should not be empty)
-2. Check server logs: `open-walnut logs -s agent` for error details
+2. Check server logs: `walnut logs -s agent` for error details
 3. If using Bedrock, verify your AWS credentials: `aws sts get-caller-identity`
 4. Check `~/.open-walnut/config.yaml` for provider configuration errors
 
@@ -520,7 +520,7 @@ All commands support `--json` for structured output.
 **Symptoms**: `EADDRINUSE: address already in use :::3456`
 
 **Fixes**:
-1. Use a different port: `open-walnut web --port 8080`
+1. Use a different port: `walnut web --port 8080`
 2. Find what's using port 3456: `lsof -i :3456`
 3. If it's an old Walnut process, stop it and restart
 
