@@ -105,7 +105,7 @@ export function registerSessionChatRpc(): void {
         const hostname = hostDef?.hostname ?? (hostDef as Record<string, unknown> | undefined)?.ssh as string | undefined
         if (hostname) {
           const sshTarget: SshTarget = { hostname, user: hostDef?.user, port: hostDef?.port }
-          const remoteDir = `/tmp/open-open-walnut-images/${crypto.randomBytes(8).toString('hex')}`
+          const remoteDir = `/tmp/open-walnut-images/${crypto.randomBytes(8).toString('hex')}`
           augmentedMessage = await transferImagesForRemoteSession(augmentedMessage, sshTarget, remoteDir)
         }
       } catch (err) {

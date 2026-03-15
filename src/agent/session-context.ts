@@ -212,7 +212,7 @@ export async function buildSessionContext(taskId: string): Promise<SessionContex
     '<server_safety>',
     'IMPORTANT: Port 3456 is the user\'s PRODUCTION Walnut server. NEVER kill, restart, or interfere with it.',
     '',
-    'For development and testing, ALWAYS use `open-open-walnut web --ephemeral` which:',
+    'For development and testing, ALWAYS use `open-walnut web --ephemeral` which:',
     '- Copies data to a temp dir, starts a FULL server on a random port (identical to production)',
     '- Prints JSON to stdout: {"pid":12345,"port":54321,"tmpDir":"/tmp/open-walnut-..."}',
     '- Self-destructs after 10 min of no HTTP requests (idle timeout)',

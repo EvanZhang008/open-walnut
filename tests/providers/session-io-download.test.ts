@@ -49,10 +49,10 @@ afterEach(async () => {
 
 describe('findRemoteImagePaths', () => {
   it('finds absolute image paths in text', () => {
-    const text = 'Screenshot at /tmp/open-open-walnut-images/abc123/screenshot.png and /home/user/photo.jpg'
+    const text = 'Screenshot at /tmp/open-walnut-images/abc123/screenshot.png and /home/user/photo.jpg'
     const paths = findRemoteImagePaths(text)
     expect(paths).toHaveLength(2)
-    expect(paths).toContain('/tmp/open-open-walnut-images/abc123/screenshot.png')
+    expect(paths).toContain('/tmp/open-walnut-images/abc123/screenshot.png')
     expect(paths).toContain('/home/user/photo.jpg')
   })
 
@@ -87,7 +87,7 @@ describe('downloadRemoteImage', () => {
     const localPath = path.join(tmpBase, 'downloaded.png')
     const result = await downloadRemoteImage(
       { hostname: 'remote.example.com', user: 'admin' },
-      '/tmp/open-open-walnut-images/abc/screenshot.png',
+      '/tmp/open-walnut-images/abc/screenshot.png',
       localPath,
     )
 
@@ -95,7 +95,7 @@ describe('downloadRemoteImage', () => {
     expect(mockExecFile).toHaveBeenCalledWith(
       'scp',
       expect.arrayContaining([
-        'admin@remote.example.com:/tmp/open-open-walnut-images/abc/screenshot.png',
+        'admin@remote.example.com:/tmp/open-walnut-images/abc/screenshot.png',
         localPath,
       ]),
       expect.objectContaining({ timeout: 30_000 }),
@@ -146,7 +146,7 @@ describe('downloadRemoteImage', () => {
 
 describe('rewriteRemoteImagePaths', () => {
   it('rewrites remote paths to local paths', () => {
-    const text = 'Screenshot at /tmp/open-open-walnut-images/abc123/screenshot.png done.'
+    const text = 'Screenshot at /tmp/open-walnut-images/abc123/screenshot.png done.'
     const cache = new Map<string, string>()
     const result = rewriteRemoteImagePaths(
       text,
@@ -156,7 +156,7 @@ describe('rewriteRemoteImagePaths', () => {
     )
 
     expect(result).toContain('images/remote/session-abc/screenshot.png')
-    expect(result).not.toContain('/tmp/open-open-walnut-images/')
+    expect(result).not.toContain('/tmp/open-walnut-images/')
   })
 
   it('caches paths to avoid re-downloading', () => {
@@ -222,11 +222,11 @@ describe('rewriteRemoteImagePaths', () => {
   })
 
   it('handles paths with spaces in double quotes', () => {
-    const text = 'File at "/tmp/open-open-walnut-images/abc/My Screenshot.png" saved'
+    const text = 'File at "/tmp/open-walnut-images/abc/My Screenshot.png" saved'
     const cache = new Map<string, string>()
     const result = rewriteRemoteImagePaths(text, { hostname: 'h' }, 'sess-dq', cache)
 
-    expect(result).not.toContain('/tmp/open-open-walnut-images/abc/My Screenshot.png')
+    expect(result).not.toContain('/tmp/open-walnut-images/abc/My Screenshot.png')
     expect(result).toContain('images/remote/sess-dq/My Screenshot.png')
   })
 })

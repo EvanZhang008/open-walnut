@@ -2318,7 +2318,7 @@ export class SessionRunner {
     // Transfer local images to remote host before spawning session
     if (sshTarget) {
       const imageTransferStart = Date.now()
-      const remoteImagesDir = `/tmp/open-open-walnut-images/${crypto.randomBytes(8).toString('hex')}`
+      const remoteImagesDir = `/tmp/open-walnut-images/${crypto.randomBytes(8).toString('hex')}`
       try {
         message = await transferImagesForRemoteSession(message, sshTarget, remoteImagesDir)
         if (appendSystemPrompt) {
@@ -2890,7 +2890,7 @@ export class SessionRunner {
 
           // Transfer local images to remote host before resuming
           if (sshTarget) {
-            const remoteImagesDir = `/tmp/open-open-walnut-images/${crypto.randomBytes(8).toString('hex')}`
+            const remoteImagesDir = `/tmp/open-walnut-images/${crypto.randomBytes(8).toString('hex')}`
             try {
               combined = await transferImagesForRemoteSession(combined, sshTarget, remoteImagesDir)
             } catch (err) {
@@ -2956,7 +2956,7 @@ export class SessionRunner {
 
       // Transfer local images to remote host before resuming (existing target)
       if (resumeSshTarget) {
-        const remoteImagesDir = `/tmp/open-open-walnut-images/${crypto.randomBytes(8).toString('hex')}`
+        const remoteImagesDir = `/tmp/open-walnut-images/${crypto.randomBytes(8).toString('hex')}`
         try {
           combined = await transferImagesForRemoteSession(combined, resumeSshTarget, remoteImagesDir)
         } catch (err) {

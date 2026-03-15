@@ -244,7 +244,7 @@ describe.skipIf(!isLiveTest())('Session transport live (real SSH + real Claude)'
       const portArgs = devboxTarget.port ? `-p ${devboxTarget.port}` : ''
       try {
         execSync(
-          `ssh -o BatchMode=yes ${portArgs} ${host} 'rm -f /tmp/open-open-walnut-streams/${sessionId}.* 2>/dev/null'`,
+          `ssh -o BatchMode=yes ${portArgs} ${host} 'rm -f /tmp/open-walnut-streams/${sessionId}.* 2>/dev/null'`,
           { stdio: 'ignore', timeout: 10_000 },
         )
       } catch { /* best-effort */ }
@@ -459,16 +459,16 @@ describe.skipIf(!isLiveTest())('Session transport live (real SSH + real Claude)'
     // The session may have already cleaned up the FIFO, but the JSONL should remain
     try {
       const result = execSync(
-        `ssh -o BatchMode=yes ${portArgs} ${host} 'ls /tmp/open-open-walnut-streams/ 2>/dev/null | head -20'`,
+        `ssh -o BatchMode=yes ${portArgs} ${host} 'ls /tmp/open-walnut-streams/ 2>/dev/null | head -20'`,
         { stdio: 'pipe', timeout: 15_000 },
       )
       const remoteFiles = result.toString().trim()
-      console.log(`Remote files in /tmp/open-open-walnut-streams/:\n${remoteFiles || '(empty)'}`)
+      console.log(`Remote files in /tmp/open-walnut-streams/:\n${remoteFiles || '(empty)'}`)
 
       // We just verify the directory was used — files may have been renamed
       // or cleaned up by session lifecycle. The important thing is the pipeline worked.
     } catch {
-      console.log('Remote /tmp/open-open-walnut-streams/ check skipped (SSH error)')
+      console.log('Remote /tmp/open-walnut-streams/ check skipped (SSH error)')
     }
   })
 })

@@ -614,8 +614,8 @@ describe('RemoteIO', () => {
     const io = new RemoteIO('test-images-dir-set', 'dev-host', {
       hostname: 'remote.example.com',
     })
-    io.remoteImagesDir = '/tmp/open-open-walnut-images/abc123'
-    expect(io.remoteImagesDir).toBe('/tmp/open-open-walnut-images/abc123')
+    io.remoteImagesDir = '/tmp/open-walnut-images/abc123'
+    expect(io.remoteImagesDir).toBe('/tmp/open-walnut-images/abc123')
   })
 })
 
@@ -784,7 +784,7 @@ describe('transferImagesForRemoteSession', () => {
     const result = await transferImagesForRemoteSession(
       text,
       { hostname: 'remote.example.com', user: 'admin' },
-      '/tmp/open-open-walnut-images/abc123',
+      '/tmp/open-walnut-images/abc123',
     )
     expect(result).toBe(text)
   })
@@ -794,7 +794,7 @@ describe('transferImagesForRemoteSession', () => {
     const result = await transferImagesForRemoteSession(
       text,
       { hostname: 'remote.example.com' },
-      '/tmp/open-open-walnut-images/abc123',
+      '/tmp/open-walnut-images/abc123',
     )
     expect(result).toBe(text)
   })

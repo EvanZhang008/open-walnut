@@ -119,7 +119,7 @@ async function runEphemeralLauncher(): Promise<void> {
   // 5. Spawn detached child
   const binPath = process.argv[1]
   const child = spawn(process.execPath, [binPath, 'web', '--_ephemeral-child'], {
-    env: { ...process.env, WALNUT_HOME: tmpDir, WALNUT_EPHEMERAL: '1' },
+    env: { ...process.env, OPEN_WALNUT_HOME: tmpDir, OPEN_WALNUT_EPHEMERAL: '1' },
     stdio: 'ignore',  // No pipes — no SIGPIPE risk
     detached: true,
   })
@@ -302,7 +302,7 @@ function countLiveEphemeralServers(): number {
 async function runEphemeralChild(): Promise<void> {
   const tmpDir = process.env.OPEN_WALNUT_HOME
   if (!tmpDir) {
-    process.stderr.write('ephemeral child: WALNUT_HOME not set\n')
+    process.stderr.write('ephemeral child: OPEN_WALNUT_HOME not set\n')
     process.exit(1)
     return
   }
