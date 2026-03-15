@@ -138,6 +138,12 @@ Messages reach Claude Code via two paths, which produce different JSONL patterns
 
 **Frontend implications:** See `web/src/AGENTS.md` "Session Chat" section for how the frontend deduplicates optimistic messages against these JSONL patterns. Key issue: FIFO-delivered messages may or may not appear in JSONL depending on timing, so the frontend must handle both cases (message in persisted history vs. not).
 
+## Session JSONL Files
+
+Each session has two JSONL files:
+- **Canonical JSONL** (`~/.claude/projects/<cwd>/<id>.jsonl`): owned by Claude Code, source of truth for `--resume` (uuid/parentUuid chain) — Walnut must never write to it.
+- **Output-stream JSONL** (`~/.open-walnut/sessions/streams/<id>.jsonl`): owned by Walnut (`_outputFile`), used for real-time tailing and `writeSyntheticUserEvent()`.
+
 ## Chat History & Compaction Details
 
 The main agent chat persists via `~/.open-walnut/chat-history.json`. Unified `entries[]` array (v2 schema):

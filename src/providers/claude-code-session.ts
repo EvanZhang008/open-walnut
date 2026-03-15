@@ -274,6 +274,14 @@ export class ClaudeCodeSession {
   private _handlingRemoteDeath = false
   /** Timestamp when spawn() was called — used to measure time-to-init for diagnostics. */
   private _spawnTs = 0
+  /** Timestamp of the last message delivery (FIFO write or --resume spawn). */
+  private _lastMessageDeliveryTs = 0
+  /** Timestamp of the last JSONL event received from the output file. */
+  private _lastJsonlEventTs = 0
+  /** Output file size at the time of last message delivery — used to detect stalled output. */
+  private _fileSizeAtDelivery = 0
+  /** Timer for diagnosing "Running but no response" — fires if no JSONL event arrives after message delivery. */
+  private _stallDiagTimer: ReturnType<typeof setTimeout> | null = null
   /** Per-session cache for remote→local image path rewriting (avoids re-downloading). */
   private _remoteImageCache = new Map<string, string>()
   /** Cache tool_use input file paths for image tools — used to resolve tool_result image content blocks to file paths. */
@@ -574,6 +582,10 @@ export class ClaudeCodeSession {
 
     // Start liveness monitoring
     this.startLivenessMonitor()
+
+    // Start stall diagnostic timer — if no JSONL event arrives within 30s of spawn,
+    // log comprehensive state for debugging "Running but no response" issues.
+    this.startStallDiagTimer('resume-spawn')
   }
 
   /**
@@ -771,6 +783,7 @@ export class ClaudeCodeSession {
       }).catch(() => {})
     }
     log.session.info('message sent to session via FIFO', { taskId: this.taskId, sessionId: this.claudeSessionId, messageLength: message.length })
+    this.startStallDiagTimer('fifo-write')
     return true
   }
 
@@ -781,8 +794,7 @@ export class ClaudeCodeSession {
    * never sees user messages, and the frontend relies entirely on optimistic copies
    * that can fail to dedup.
    *
-   * By writing a synthetic event at delivery time, the local JSONL becomes a complete
-   * record. Phase 1 reads include user messages at the correct chronological position.
+   * Writes ONLY to the streams file (_outputFile), never to canonical JSONL.
    * The walnutMessageId enables deterministic dedup against optimistic copies.
    */
   writeSyntheticUserEvent(message: string, walnutMessageId: string): void {
@@ -796,24 +808,18 @@ export class ClaudeCodeSession {
       timestamp: new Date().toISOString(),
     })
     const line = event + '\n'
-    // Write to streams capture file (always — this is _outputFile)
+    // Write to streams capture file only (_outputFile).
+    // ⛔ NEVER write to canonical JSONL (~/.claude/projects/<cwd>/<sessionId>.jsonl).
+    // Canonical is owned by Claude Code; writing entries without uuid/parentUuid
+    // breaks the conversation tree and causes --resume to lose all history.
+    // The streams file is sufficient: tailer reads it for real-time display,
+    // and walnutMessageId enables frontend dedup.
     fsp.appendFile(outputFile, line).catch((err) => {
       log.session.debug('writeSyntheticUserEvent failed on streams file (non-fatal)', {
         sessionId: this.claudeSessionId,
         error: err instanceof Error ? err.message : String(err),
       })
     })
-    // Also write to canonical JSONL (local sessions only).
-    // readSessionJsonlContent reads canonical first (higher priority than streams),
-    // so the synthetic event must be in BOTH files for Phase 1 to see it.
-    if (!this._host && this.claudeSessionId && this._cwd) {
-      import('../core/session-file-reader.js').then(({ canonicalJsonlPath }) => {
-        const canonPath = canonicalJsonlPath(this.claudeSessionId!, this._cwd!)
-        fsp.appendFile(canonPath, line).catch(() => {
-          // Canonical file may not exist yet (pre-rename) — non-fatal
-        })
-      }).catch(() => {})
-    }
   }
 
   /**
@@ -1169,6 +1175,62 @@ export class ClaudeCodeSession {
   private stopMonitoring(): void {
     this.stopLivenessMonitor()
     this.io?.stopTail()
+    this.clearStallDiagTimer()
+  }
+
+  /**
+   * Start a diagnostic timer after message delivery (FIFO write or --resume spawn).
+   * If no JSONL event arrives within 30s, log comprehensive state for debugging
+   * "Running but no response" issues. Does NOT kill anything — purely diagnostic.
+   *
+   * Motivation: users report sessions stuck at "Running" with no output. Root causes
+   * vary widely — FIFO write silently failing, Claude process hung on tool execution,
+   * tailer not attached, output file on wrong path. Without diagnostics at the moment
+   * of stall, we can't distinguish these cases from logs alone. The 30s threshold
+   * balances early detection vs false positives (some tool calls legitimately take 20s+).
+   */
+  private startStallDiagTimer(trigger: 'fifo-write' | 'resume-spawn'): void {
+    this.clearStallDiagTimer()
+    this._lastMessageDeliveryTs = Date.now()
+    this._fileSizeAtDelivery = this.io?.fileSize ?? 0
+
+    this._stallDiagTimer = setTimeout(() => {
+      this._stallDiagTimer = null
+      const now = Date.now()
+      const currentFileSize = this.io?.fileSize ?? 0
+      const fileSizeGrew = currentFileSize > this._fileSizeAtDelivery
+      const pidAlive = this.pid !== null && isProcessAlive(this.pid, this.io?.processName ?? 'claude')
+      const msSinceDelivery = now - this._lastMessageDeliveryTs
+      const msSinceLastEvent = this._lastJsonlEventTs ? now - this._lastJsonlEventTs : -1
+      const hasTailer = !!this.io && !!(this.io as unknown as Record<string, unknown>)._onLine
+
+      log.session.warn('STALL DIAGNOSTIC: no JSONL event 30s after message delivery', {
+        trigger,
+        sessionId: this.claudeSessionId,
+        taskId: this.taskId,
+        pid: this.pid,
+        pidAlive,
+        host: this._host,
+        processStatus: this._processStatus,
+        workStatus: this._workStatus,
+        hasPipe: this.io?.hasPipe ?? false,
+        hasTailer,
+        fileSizeAtDelivery: this._fileSizeAtDelivery,
+        currentFileSize,
+        fileSizeGrew,
+        msSinceDelivery,
+        msSinceLastEvent,
+        outputFile: this._outputFile,
+      })
+    }, 30_000)
+  }
+
+  /** Clear the stall diagnostic timer. Called when any JSONL event arrives or session stops. */
+  private clearStallDiagTimer(): void {
+    if (this._stallDiagTimer) {
+      clearTimeout(this._stallDiagTimer)
+      this._stallDiagTimer = null
+    }
   }
 
   /**
@@ -1190,6 +1252,10 @@ export class ClaudeCodeSession {
   private _firstLineSeen = false
 
   private handleStreamLine(line: string): void {
+    // Clear stall diagnostic timer — we're receiving output, session is responsive
+    this._lastJsonlEventTs = Date.now()
+    this.clearStallDiagTimer()
+
     if (!this._firstLineSeen) {
       this._firstLineSeen = true
       log.session.info('first JSONL line received from output', {
@@ -1237,11 +1303,18 @@ export class ClaudeCodeSession {
           }
 
           // Capture model from init event for in-memory state (used by emitStatusChanged below)
-          if (typeof sys.model === 'string' && sys.model) {
-            this._initModel = sys.model
+          // Strip ANSI escape codes first — Claude CLI's --verbose mode embeds ANSI bold/color
+          // sequences in the sys.model JSON field (e.g. "global.anthropic.claude-opus-4-6-v1\x1b[1m").
+          // Without stripping, the "[1m]" suffix triggers the 1M context window detection path
+          // (stripModelSuffix), and the model display shows garbage characters in the UI.
+          const rawModel = typeof sys.model === 'string' && sys.model
+            // eslint-disable-next-line no-control-regex
+            ? sys.model.replace(/\x1b\[[0-9;]*m/g, '').replace(/\[[\d;]*m/g, '')
+            : undefined
+          if (rawModel) {
+            this._initModel = rawModel
             // Extract short model ID for display (e.g. "claude-opus-4-6")
-            // Init model format: "global.anthropic.claude-opus-4-6-v1[1m]"
-            const shortModel = sys.model.replace(/^.*\./, '').replace(/[-_]v\d+.*$/, '') || sys.model
+            const shortModel = rawModel.replace(/^.*\./, '').replace(/[-_]v\d+.*$/, '') || rawModel
             this._model = shortModel
           }
 
@@ -1249,7 +1322,7 @@ export class ClaudeCodeSession {
           // receive the session ID until sessions.json is written.  Without this,
           // concurrent starts could return an ID that has no matching record.
           // handleStreamLine is sync, so we wrap in an async IIFE.
-          const initModel = typeof sys.model === 'string' && sys.model ? sys.model : undefined
+          const initModel = rawModel
           ;(async () => {
             try {
               if (expectedId && expectedId !== newId) {
@@ -1806,23 +1879,18 @@ export class SessionRunner {
         }
       }
 
-      // Phase 2: load queue from disk, re-process pending messages
-      // Collect Claude session IDs of reconnected (alive) sessions so we skip them.
-      // Their process is still running and will emit results normally via the tailer.
-      const reconnectedSessionIds = new Set<string>()
-      for (const [, session] of this.sessions) {
-        if (session.sessionId && session.active) {
-          reconnectedSessionIds.add(session.sessionId)
-        }
-      }
-
+      // Phase 2: load queue from disk, re-process pending messages.
+      // Race condition: the REST API starts accepting /send requests before SessionRunner
+      // initialization completes. Messages received during this window get persisted to
+      // the queue file, but the corresponding SESSION_SEND bus events fire before any
+      // subscriber exists — so they're lost. Previously we skipped reconnected (alive)
+      // sessions here, assuming their process would handle it. But that's wrong: the
+      // queued message never reaches the FIFO because processNext() was never called.
+      // Fix: process ALL pending queues including alive sessions. processNext() detects
+      // alive sessions and uses the FIFO write path (not --resume spawn), so this is safe.
       await loadQueue()
       const pendingSessions = await getAllSessionsWithPending()
       for (const sessionId of pendingSessions) {
-        if (reconnectedSessionIds.has(sessionId)) {
-          log.session.info('startup recovery: skipping session with alive process', { sessionId })
-          continue
-        }
         log.session.info('recovering pending queue messages on startup', { sessionId })
         this.processNext(sessionId).catch((err) => {
           log.session.error('startup queue recovery failed', { sessionId, error: err instanceof Error ? err.message : String(err) })
@@ -2819,7 +2887,7 @@ export class SessionRunner {
         if (targetSession.writeMessage(combined)) {
           log.session.info('processNext: message sent via stdin (no new process)', { sessionId })
 
-          // Write synthetic user events to local JSONL so Phase 1 has user messages.
+          // Write synthetic user events to streams file so Phase 1 has user messages.
           // One event per queued message so each optimistic copy can dedup by ID.
           for (const wmId of walnutMessageIds) {
             const msgText = msgs.find(m => m.id === wmId)!.message
