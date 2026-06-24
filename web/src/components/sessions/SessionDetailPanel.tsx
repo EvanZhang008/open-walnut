@@ -52,6 +52,10 @@ interface SessionDetailPanelProps {
   /** Bubbles the stream hook's isStreaming up to page-level so the page doesn't
    *  need its own useSessionStream mount (would double RPCs + race defensive clear). */
   onStreamingChange?: (isStreaming: boolean) => void;
+  /** Changed view (full-screen File Diff + chat) is owned by the page (it holds the
+   *  ChatInput). The panel only renders the chip + reflects its open state. */
+  changedOpen?: boolean;
+  onToggleChanged?: () => void;
 }
 
 /** Renders plan markdown content inside the plan popover with scrollable area */
@@ -156,7 +160,7 @@ function EditableTitle({ sessionId, taskId, title, onSaved }: { sessionId: strin
   );
 }
 
-export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged, onSessionReplaced, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onClearCommitted, onRetryFailed, onDismissFailed, onStreamingChange }: SessionDetailPanelProps) {
+export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged, onSessionReplaced, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onClearCommitted, onRetryFailed, onDismissFailed, onStreamingChange, changedOpen, onToggleChanged }: SessionDetailPanelProps) {
   const navigate = useNavigate();
   const enabledModes = useEnabledModes();
   const [executing, setExecuting] = useState(false);
@@ -731,6 +735,15 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
             >
               Files
             </button>
+            {onToggleChanged && (
+              <button
+                className={`session-action-chip${changedOpen ? ' session-action-chip-active' : ''}`}
+                onClick={onToggleChanged}
+                title="See the files this session changed — full-screen diff alongside the chat"
+              >
+                Changed
+              </button>
+            )}
             <button
               className={`session-action-chip${terminalOpen ? ' session-action-chip-active' : ''}`}
               onClick={() => setTerminalOpen(o => !o)}

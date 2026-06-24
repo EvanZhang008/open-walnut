@@ -35,6 +35,7 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
   'fs.ls',
   'fs.find',
   'fs.stat',
+  'git.diff',
   'list',
   'ping',
   'hello',

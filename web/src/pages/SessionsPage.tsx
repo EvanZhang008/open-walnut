@@ -3,9 +3,13 @@ import { useSearchParams, useNavigate, useLocation } from 'react-router-dom';
 import { fetchSessionTree, fetchSession } from '@/api/sessions';
 import { SessionTreePanel } from '@/components/sessions/SessionTreePanel';
 import { SessionDetailPanel } from '@/components/sessions/SessionDetailPanel';
+import { SessionDiffView } from '@/components/sessions/SessionDiffView';
+import { buildSelectionPrefill } from '@/components/sessions/diffPrefill';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { ModelPicker } from '@/components/sessions/ModelPicker';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { useFullscreen } from '@/hooks/useFullscreen';
+import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { wsClient } from '@/api/ws';
 import { useEvent } from '@/hooks/useWebSocket';
 import { useSessionSend } from '@/hooks/useSessionSend';
@@ -304,6 +308,44 @@ export function SessionsPage() {
   // Model picker state
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
 
+  // Changed view: full-screen [File Diff | existing chat]. The page owns the
+  // ChatInput, so it also owns the diff column + prefill driver. CSS-promotion
+  // fullscreen (no remount — the chat below stays mounted).
+  const { isFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop } = useFullscreen();
+  const [changedOpen, setChangedOpen] = useState(false);
+  const [prefillText, setPrefillText] = useState<string | undefined>(undefined);
+  const [prefillNonce, setPrefillNonce] = useState(0);
+  // Chat column in the Changed split: resizable width (% of viewport) + collapse.
+  const chatPanel = useResizablePanel('open-walnut-changed-chat-w', 30, 'right');
+  const [chatCollapsed, setChatCollapsed] = useState(false);
+  const handleSelectCode = useCallback((filePath: string, line: number | undefined, code: string) => {
+    setPrefillText(buildSelectionPrefill(filePath, line, code));
+    setPrefillNonce((n) => n + 1);
+  }, []);
+  // A line comment from the diff → send straight to this session's main agent.
+  const handleDiffComment = useCallback((message: string) => {
+    if (!selectedId) return false;
+    void sessionSend.send(selectedId, message);
+    return true;
+  }, [selectedId, sessionSend]);
+  const toggleChanged = useCallback(() => {
+    setChangedOpen((open) => {
+      const next = !open;
+      if (next) enterFullscreen(); else exitFullscreen();
+      return next;
+    });
+  }, [enterFullscreen, exitFullscreen]);
+  // ESC / backdrop exits fullscreen → also close Changed.
+  useEffect(() => {
+    if (!isFullscreen && changedOpen) setChangedOpen(false);
+  }, [isFullscreen, changedOpen]);
+  // Switching sessions closes the Changed view.
+  useEffect(() => {
+    setChangedOpen(false);
+    setChatCollapsed(false);
+    exitFullscreen();
+  }, [selectedId, exitFullscreen]);
+
   const handleControlCommand = useCallback((command: string) => {
     if (command === 'model') {
       setModelPickerOpen(true);
@@ -344,7 +386,39 @@ export function SessionsPage() {
         />
       </div>
       <div className="sessions-resize-handle" onMouseDown={handleResizeStart} />
-      <div className="sessions-detail-pane">
+      {FullscreenBackdrop}
+      <div className={`sessions-detail-pane${fullscreenClass}${changedOpen ? ' is-changed-open' : ''}`}>
+        {/* Split: when Changed is open, File Diff column on the left, the existing
+            detail+chat on the right. Closed → display:contents (no layout change). */}
+        <div className={`sessions-detail-split${changedOpen ? ' is-changed-open' : ''}${changedOpen && chatCollapsed ? ' is-chat-collapsed' : ''}`}>
+          {changedOpen && selectedId && (
+            <div className="sessions-detail-diff-col">
+              <SessionDiffView sessionId={selectedId} sessionCwd={selectedSession?.cwd} sessionHost={selectedSession?.host} onSelectCode={handleSelectCode} onComment={handleDiffComment} />
+            </div>
+          )}
+          {changedOpen && (
+            chatCollapsed ? (
+              <button
+                className="session-chat-collapsed-rail"
+                onClick={() => setChatCollapsed(false)}
+                title="Show chat"
+              >💬</button>
+            ) : (
+              <div className="sessions-detail-chat-resize" onMouseDown={chatPanel.handleResizeStart} title="Drag to resize chat" />
+            )
+          )}
+          <div
+            className="sessions-detail-chat-col"
+            ref={changedOpen ? chatPanel.panelRef : undefined}
+            style={changedOpen && !chatCollapsed ? { width: chatPanel.width, flex: `0 0 ${chatPanel.width}` } : undefined}
+          >
+            {changedOpen && !chatCollapsed && (
+              <button
+                className="session-chat-collapse-btn"
+                onClick={() => setChatCollapsed(true)}
+                title="Collapse chat"
+              >⟩</button>
+            )}
         <SessionDetailPanel
           session={selectedSession}
           taskTitle={selectedTaskTitle}
@@ -361,6 +435,8 @@ export function SessionsPage() {
           onRetryFailed={handleRetryFailed}
           onDismissFailed={sessionSend.dismissFailed}
           onStreamingChange={setIsStreaming}
+          changedOpen={changedOpen}
+          onToggleChanged={selectedSession ? toggleChanged : undefined}
         />
         {selectedSession && (
           <div className="session-chat-input-wrapper">
@@ -380,6 +456,8 @@ export function SessionsPage() {
               onRefreshSessionCommands={refreshSlashCommands}
               onControlCommand={handleControlCommand}
               draftKey={selectedId ? `draft:session:${selectedId}` : undefined}
+              prefillText={prefillText}
+              prefillNonce={prefillNonce}
             />
             {modelPickerOpen && (
               <ModelPicker
@@ -390,6 +468,8 @@ export function SessionsPage() {
             )}
           </div>
         )}
+          </div>{/* .sessions-detail-chat-col */}
+        </div>{/* .sessions-detail-split */}
       </div>
     </div>
   );

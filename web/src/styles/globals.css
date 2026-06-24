@@ -19584,6 +19584,44 @@ a.file-link:hover {
   align-items: center;
   gap: 8px;
 }
+/* Comparison-base selector — keeps it grouped with the title on the left,
+   pushing the action buttons (Rendered/Split/Refresh) to the far right. */
+.session-diff-base-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.session-diff-base-label { font-weight: 600; }
+.session-diff-base-select select {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 3px 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.session-diff-base-select select:hover { border-color: var(--accent); }
+/* Scope toggle (All files ↔ This session) — only shown for git bases. */
+.session-diff-scope-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.session-diff-scope-btn {
+  border: none;
+  background: var(--bg);
+  color: var(--fg-muted);
+  font-size: 12px;
+  padding: 3px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.session-diff-scope-btn.is-active { background: var(--accent); color: #fff; }
 .session-diff-viewtoggle {
   display: inline-flex;
   border: 1px solid var(--border);
@@ -19779,10 +19817,113 @@ a.file-link:hover {
 
 /* Rendered-markdown view of a changed .md file */
 .session-diff-rendered {
-  padding: 16px 22px 60px;
-  max-width: 920px;
-  line-height: 1.65;
+  padding: 24px 32px 80px;
+  max-width: 900px;
+  margin: 0 auto;
+  line-height: 1.7;
+  font-family: var(--font-sans, -apple-system, system-ui, sans-serif);
+  font-size: 15px;
+  color: var(--fg);
 }
+/* Line-numbered preview: each top-level block gets a source line-number gutter
+   on the left aligned to the block's first rendered line. */
+.session-diff-rendered.markdown-rendered-gutter { padding-left: 12px; }
+.session-diff-rendered-row {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  column-gap: 14px;
+  align-items: start;
+}
+.session-diff-rendered-lineno {
+  text-align: right;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 12px;
+  color: var(--fg-muted);
+  opacity: 0.55;
+  user-select: none;
+  /* Nudge down so the number sits on the block's first text line, not its top
+     margin (headings/paragraphs carry a top margin). */
+  padding-top: 0.35em;
+}
+.session-diff-rendered-block { min-width: 0; }
+/* The block's first child must NOT carry a top margin, or it pushes the text
+   below the row-aligned line number (headings carry a 26px top margin). The
+   `.markdown-rendered-gutter` prefix lifts this rule's specificity above the
+   `.session-diff-rendered .markdown-body h1..h4` heading rules so the reset wins.
+   Per-block separation comes from the row's padding-bottom instead. */
+.markdown-rendered-gutter .session-diff-rendered-block > :first-child { margin-top: 0; }
+.session-diff-rendered-row { padding-bottom: 8px; }
+/* GitHub-class document styling for the rendered-markdown view (scoped so it
+   does not affect the compact chat-message markdown). */
+.session-diff-rendered .markdown-body h1,
+.session-diff-rendered .markdown-body h2,
+.session-diff-rendered .markdown-body h3,
+.session-diff-rendered .markdown-body h4 {
+  margin-top: 26px;
+  margin-bottom: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.session-diff-rendered .markdown-body h1 {
+  font-size: 26px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.session-diff-rendered .markdown-body h2 {
+  font-size: 20px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.session-diff-rendered .markdown-body h3 { font-size: 17px; }
+.session-diff-rendered .markdown-body h4 { font-size: 15px; }
+.session-diff-rendered .markdown-body p { margin: 0 0 14px; }
+.session-diff-rendered .markdown-body ul,
+.session-diff-rendered .markdown-body ol { padding-left: 26px; margin: 0 0 14px; }
+.session-diff-rendered .markdown-body li { margin: 4px 0; }
+.session-diff-rendered .markdown-body li > ul,
+.session-diff-rendered .markdown-body li > ol { margin: 4px 0; }
+.session-diff-rendered .markdown-body code {
+  background: var(--bg-tertiary);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 85%;
+}
+.session-diff-rendered .markdown-body pre {
+  background: var(--bg-tertiary);
+  padding: 14px 16px;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin: 0 0 16px;
+  line-height: 1.5;
+}
+.session-diff-rendered .markdown-body blockquote {
+  margin: 0 0 16px;
+  padding: 2px 16px;
+  color: var(--fg-muted);
+  border-left: 3px solid var(--border);
+}
+.session-diff-rendered .markdown-body table {
+  border-collapse: collapse;
+  margin: 0 0 16px;
+  display: block;
+  overflow-x: auto;
+  width: max-content;
+  max-width: 100%;
+}
+.session-diff-rendered .markdown-body th,
+.session-diff-rendered .markdown-body td {
+  border: 1px solid var(--border);
+  padding: 6px 13px;
+  text-align: left;
+}
+.session-diff-rendered .markdown-body th { background: var(--bg-tertiary); font-weight: 600; }
+.session-diff-rendered .markdown-body tr:nth-child(2n) td { background: var(--bg-secondary, var(--bg-tertiary)); }
+.session-diff-rendered .markdown-body a { color: var(--accent); text-decoration: none; }
+.session-diff-rendered .markdown-body a:hover { text-decoration: underline; }
+.session-diff-rendered .markdown-body hr {
+  height: 1px; border: 0; background: var(--border); margin: 24px 0;
+}
+.session-diff-rendered .markdown-body img { max-width: 100%; }
 
 /* react-diff-view table tuning to match the app */
 .session-diff-table {
@@ -19791,6 +19932,281 @@ a.file-link:hover {
   width: 100%;
 }
 .session-diff-table .diff-gutter { min-width: 2.2em; }
+
+/* Syntax highlighting (refractor/Prism token classes) — GitHub-like palette,
+   theme-aware. react-diff-view renders highlighted tokens as <span class="token
+   keyword|string|comment|…">. Colors default to GitHub Light and flip to GitHub
+   Dark under the dark theme. The add/del row backgrounds still come from
+   react-diff-view; these only color the foreground text. */
+.session-diff-table .token.comment,
+.session-diff-table .token.prolog,
+.session-diff-table .token.doctype,
+.session-diff-table .token.cdata { color: #6e7781; font-style: italic; }
+.session-diff-table .token.punctuation { color: #24292f; }
+.session-diff-table .token.namespace { opacity: 0.7; }
+.session-diff-table .token.property,
+.session-diff-table .token.tag,
+.session-diff-table .token.boolean,
+.session-diff-table .token.number,
+.session-diff-table .token.constant,
+.session-diff-table .token.symbol,
+.session-diff-table .token.deleted { color: #0550ae; }
+.session-diff-table .token.selector,
+.session-diff-table .token.attr-name,
+.session-diff-table .token.string,
+.session-diff-table .token.char,
+.session-diff-table .token.builtin,
+.session-diff-table .token.inserted { color: #0a3069; }
+.session-diff-table .token.operator,
+.session-diff-table .token.entity,
+.session-diff-table .token.url,
+.session-diff-table .language-css .token.string,
+.session-diff-table .style .token.string { color: #0550ae; }
+.session-diff-table .token.atrule,
+.session-diff-table .token.attr-value,
+.session-diff-table .token.keyword { color: #cf222e; }
+.session-diff-table .token.function,
+.session-diff-table .token.class-name { color: #8250df; }
+.session-diff-table .token.regex,
+.session-diff-table .token.important,
+.session-diff-table .token.variable { color: #953800; }
+.session-diff-table .token.important,
+.session-diff-table .token.bold { font-weight: 600; }
+.session-diff-table .token.italic { font-style: italic; }
+
+[data-theme="dark"] .session-diff-table .token.comment,
+[data-theme="dark"] .session-diff-table .token.prolog,
+[data-theme="dark"] .session-diff-table .token.doctype,
+[data-theme="dark"] .session-diff-table .token.cdata { color: #8b949e; }
+[data-theme="dark"] .session-diff-table .token.punctuation { color: #c9d1d9; }
+[data-theme="dark"] .session-diff-table .token.property,
+[data-theme="dark"] .session-diff-table .token.tag,
+[data-theme="dark"] .session-diff-table .token.boolean,
+[data-theme="dark"] .session-diff-table .token.number,
+[data-theme="dark"] .session-diff-table .token.constant,
+[data-theme="dark"] .session-diff-table .token.symbol,
+[data-theme="dark"] .session-diff-table .token.deleted { color: #79c0ff; }
+[data-theme="dark"] .session-diff-table .token.selector,
+[data-theme="dark"] .session-diff-table .token.attr-name,
+[data-theme="dark"] .session-diff-table .token.string,
+[data-theme="dark"] .session-diff-table .token.char,
+[data-theme="dark"] .session-diff-table .token.builtin,
+[data-theme="dark"] .session-diff-table .token.inserted { color: #a5d6ff; }
+[data-theme="dark"] .session-diff-table .token.operator,
+[data-theme="dark"] .session-diff-table .token.entity,
+[data-theme="dark"] .session-diff-table .token.url { color: #79c0ff; }
+[data-theme="dark"] .session-diff-table .token.atrule,
+[data-theme="dark"] .session-diff-table .token.attr-value,
+[data-theme="dark"] .session-diff-table .token.keyword { color: #ff7b72; }
+[data-theme="dark"] .session-diff-table .token.function,
+[data-theme="dark"] .session-diff-table .token.class-name { color: #d2a8ff; }
+[data-theme="dark"] .session-diff-table .token.regex,
+[data-theme="dark"] .session-diff-table .token.important,
+[data-theme="dark"] .session-diff-table .token.variable { color: #ffa657; }
+
+/* Honor the OS dark preference when no explicit theme is set. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .session-diff-table .token.comment,
+  :root:not([data-theme]) .session-diff-table .token.prolog,
+  :root:not([data-theme]) .session-diff-table .token.doctype,
+  :root:not([data-theme]) .session-diff-table .token.cdata { color: #8b949e; }
+  :root:not([data-theme]) .session-diff-table .token.punctuation { color: #c9d1d9; }
+  :root:not([data-theme]) .session-diff-table .token.property,
+  :root:not([data-theme]) .session-diff-table .token.tag,
+  :root:not([data-theme]) .session-diff-table .token.boolean,
+  :root:not([data-theme]) .session-diff-table .token.number,
+  :root:not([data-theme]) .session-diff-table .token.constant,
+  :root:not([data-theme]) .session-diff-table .token.symbol,
+  :root:not([data-theme]) .session-diff-table .token.deleted { color: #79c0ff; }
+  :root:not([data-theme]) .session-diff-table .token.selector,
+  :root:not([data-theme]) .session-diff-table .token.attr-name,
+  :root:not([data-theme]) .session-diff-table .token.string,
+  :root:not([data-theme]) .session-diff-table .token.char,
+  :root:not([data-theme]) .session-diff-table .token.builtin,
+  :root:not([data-theme]) .session-diff-table .token.inserted { color: #a5d6ff; }
+  :root:not([data-theme]) .session-diff-table .token.operator,
+  :root:not([data-theme]) .session-diff-table .token.entity,
+  :root:not([data-theme]) .session-diff-table .token.url { color: #79c0ff; }
+  :root:not([data-theme]) .session-diff-table .token.atrule,
+  :root:not([data-theme]) .session-diff-table .token.attr-value,
+  :root:not([data-theme]) .session-diff-table .token.keyword { color: #ff7b72; }
+  :root:not([data-theme]) .session-diff-table .token.function,
+  :root:not([data-theme]) .session-diff-table .token.class-name { color: #d2a8ff; }
+  :root:not([data-theme]) .session-diff-table .token.regex,
+  :root:not([data-theme]) .session-diff-table .token.important,
+  :root:not([data-theme]) .session-diff-table .token.variable { color: #ffa657; }
+}
+
+/* Commentable diff: gutter + code show a pointer + hover highlight so it's
+   discoverable that clicking a line opens a comment box (GitHub-style). */
+.session-diff-commentable .diff-gutter { cursor: pointer; }
+.session-diff-commentable .diff-gutter:hover {
+  background: var(--accent);
+  color: #fff;
+}
+.session-diff-commentable .diff-code { cursor: text; }
+.session-diff-filepane-hint {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--fg-muted);
+  opacity: 0.7;
+}
+
+/* Inline comment box (rendered under a line via react-diff-view widgets) */
+.session-diff-comment-box {
+  margin: 6px 10px 10px;
+  padding: 10px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--card-bg);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  font-family: var(--font-sans, system-ui, sans-serif);
+}
+.session-diff-comment-loc {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin-bottom: 6px;
+}
+.session-diff-comment-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 9px;
+}
+.session-diff-comment-input:focus { outline: none; border-color: var(--accent); }
+.session-diff-comment-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+.session-diff-comment-cancel,
+.session-diff-comment-sendnow,
+.session-diff-comment-add {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  background: var(--bg);
+  color: var(--fg);
+}
+/* "Send now" is the secondary send option — outlined accent, not filled. */
+.session-diff-comment-sendnow {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+/* "Add comment" is the primary (default) option — filled accent. */
+.session-diff-comment-add {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+.session-diff-comment-sendnow:disabled,
+.session-diff-comment-add:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Recorded (pending) comment card, rendered read-only under its line. */
+.session-diff-pending-card {
+  margin: 6px 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: var(--card-bg);
+  font-family: var(--font-sans, system-ui, sans-serif);
+}
+.session-diff-pending-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.session-diff-pending-loc {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-diff-pending-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+.session-diff-pending-copy,
+.session-diff-pending-remove {
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--fg-muted);
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.session-diff-pending-copy:hover,
+.session-diff-pending-remove:hover { color: var(--fg); border-color: var(--accent); }
+.session-diff-pending-body {
+  font-size: 13px;
+  color: var(--fg);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Sticky review footer: the bulk Copy all + Submit review controls. */
+.session-diff-reviewbar {
+  position: sticky;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--card-bg);
+  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.12);
+}
+.session-diff-reviewbar-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.session-diff-reviewbar-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+.session-diff-reviewbar-discard,
+.session-diff-reviewbar-copy,
+.session-diff-reviewbar-submit {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 14px;
+  font-size: 12px;
+  cursor: pointer;
+  background: var(--bg);
+  color: var(--fg);
+}
+.session-diff-reviewbar-discard { color: var(--fg-muted); }
+.session-diff-reviewbar-discard:hover { color: var(--danger, #d33); border-color: var(--danger, #d33); }
+.session-diff-reviewbar-submit {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  font-weight: 600;
+}
 
 /* Floating "Ask about this" pill at the selection */
 .session-diff-ask-pill {

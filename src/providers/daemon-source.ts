@@ -771,6 +771,7 @@ function handleCommand(ws, msg) {
     case 'fs.ls': return cmdFsLs(ws, id, cmd);
     case 'fs.find': return cmdFsFind(ws, id, cmd);
     case 'fs.stat': return cmdFsStat(ws, id, cmd);
+    case 'git.diff': return cmdGitDiff(ws, id, cmd);
     case 'list': return cmdList(ws, id);
     case 'ping': return sendOk(ws, id, { pong: true });
     case 'hello': return sendOk(ws, id, {
@@ -1755,6 +1756,98 @@ async function cmdFsStat(ws, id, cmd) {
       return;
     }
     sendError(ws, id, 'fs.stat failed: ' + err.message);
+  }
+}
+
+// -- Git diff (whole-repo, host-local) --
+// Inlined equivalent of git-diff-core.ts (this daemon code is an embedded string
+// template, so it can NOT import and must NOT contain backticks). Runs git HERE
+// on the host, so no per-file network round trips. Keep in sync with git-diff-core.ts.
+async function cmdGitDiff(ws, id, cmd) {
+  let cwd = cmd.cwd;
+  const base = cmd.base;
+  if (!cwd) return sendError(ws, id, 'git.diff: missing cwd');
+  if (base !== 'uncommitted' && base !== 'previous' && base !== 'remote') {
+    return sendError(ws, id, 'git.diff: invalid base');
+  }
+  if (cwd === '~' || cwd.startsWith('~/')) cwd = (process.env.HOME || '/root') + cwd.slice(1);
+
+  const cp = require('child_process');
+  const exec = (argv, runCwd) => new Promise((resolve) => {
+    cp.execFile(argv[0], argv.slice(1), { cwd: runCwd, timeout: 25000, maxBuffer: 64 * 1024 * 1024, encoding: 'utf-8' },
+      (err, stdout, stderr) => {
+        if (!err) return resolve({ stdout: stdout, stderr: stderr, code: 0 });
+        resolve({ stdout: stdout || '', stderr: stderr || err.message, code: typeof err.code === 'number' ? err.code : 1 });
+      });
+  });
+  const readText = async (absPath) => {
+    try { return await fs.promises.readFile(absPath, 'utf-8'); } catch (e) { return ''; }
+  };
+  const joinPosix = (a, b) => !a ? b : (a.endsWith('/') ? a + b : a + '/' + b);
+
+  try {
+    const rootRes = await exec(['git', 'rev-parse', '--show-toplevel'], cwd);
+    if (rootRes.code !== 0 || !rootRes.stdout.trim()) return sendOk(ws, id, { repoRoot: null, files: [] });
+    const repoRoot = rootRes.stdout.trim();
+
+    // Resolve base rev.
+    let baseRev;
+    if (base === 'uncommitted') baseRev = 'HEAD';
+    else if (base === 'previous') baseRev = 'HEAD~1';
+    else {
+      const up = await exec(['git', 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], repoRoot);
+      if (up.code === 0 && up.stdout.trim()) baseRev = up.stdout.trim();
+      else {
+        const br = await exec(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], repoRoot);
+        const branch = br.stdout.trim();
+        baseRev = (branch && branch !== 'HEAD') ? ('origin/' + branch) : 'origin/HEAD';
+      }
+    }
+
+    const ns = await exec(['git', 'diff', '--name-status', '-z', baseRev], repoRoot);
+    if (ns.code !== 0) return sendError(ws, id, ns.stderr.trim() || ('git diff against ' + baseRev + ' failed'));
+
+    // Parse name-status -z.
+    const entries = [];
+    const parts = ns.stdout.split('\0');
+    for (let i = 0; i < parts.length;) {
+      const code = parts[i];
+      if (!code) { i++; continue; }
+      const letter = code[0];
+      if (letter === 'R' || letter === 'C') {
+        const oldRel = parts[i + 1], newRel = parts[i + 2]; i += 3;
+        if (newRel) entries.push({ status: 'modified', relPath: newRel, oldRelPath: oldRel });
+      } else {
+        const rel = parts[i + 1]; i += 2;
+        if (rel) entries.push({ status: letter === 'A' ? 'added' : letter === 'D' ? 'deleted' : 'modified', relPath: rel });
+      }
+    }
+
+    // Untracked (read-only) → 'added'.
+    const tracked = new Set(entries.map((e) => e.relPath));
+    const others = await exec(['git', 'ls-files', '--others', '--exclude-standard', '-z'], repoRoot);
+    if (others.code === 0) {
+      for (const rel of others.stdout.split('\0')) {
+        if (rel && !tracked.has(rel)) { entries.push({ status: 'added', relPath: rel }); tracked.add(rel); }
+      }
+    }
+    if (entries.length === 0) return sendOk(ws, id, { repoRoot: repoRoot, files: [] });
+
+    const files = [];
+    for (const e of entries) {
+      const beforePath = e.oldRelPath || e.relPath;
+      let before = '';
+      if (e.status !== 'added') {
+        const show = await exec(['git', 'show', baseRev + ':' + beforePath], repoRoot);
+        before = show.code === 0 ? show.stdout : '';
+      }
+      const after = e.status === 'deleted' ? '' : await readText(joinPosix(repoRoot, e.relPath));
+      files.push({ relPath: e.relPath, before: before, after: after, status: e.status });
+    }
+    files.sort((a, b) => a.relPath.localeCompare(b.relPath));
+    sendOk(ws, id, { repoRoot: repoRoot, files: files });
+  } catch (err) {
+    sendError(ws, id, 'git.diff failed: ' + err.message);
   }
 }
 

@@ -36,6 +36,8 @@ import {
   type PendingCtrl,
 } from './daemon-core.js'
 import { REQUIRED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
+import { computeGitDiff, GitDiffError, type GitDiffBase } from './git-diff-core.js'
+import { execFile as execFileCb } from 'node:child_process'
 
 // ── Version ──
 // Baked in at compile time via `bun build --define` (see scripts/build-daemon.sh).
@@ -537,6 +539,7 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
     case 'fs.ls': return cmdFsLs(ws, id as number, cmd)
     case 'fs.find': return cmdFsFind(ws, id as number, cmd)
     case 'fs.stat': return cmdFsStat(ws, id as number, cmd)
+    case 'git.diff': return cmdGitDiff(ws, id as number, cmd)
     case 'list': return cmdList(ws, id as number)
     case 'ping': return sendOk(ws, id as number, { pong: true })
     case 'hello': return sendOk(ws, id as number, {
@@ -1522,6 +1525,40 @@ async function cmdFsStat(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       return
     }
     sendError(ws, id, 'fs.stat failed: ' + e.message)
+  }
+}
+
+// ── Git diff (whole-repo, host-local) ──
+// Runs the shared git-diff core HERE on the remote host, so git + the files are
+// local — no per-file network round trips. Returns the full {repoRoot,files}
+// in one response. This is why remote git-diff goes through the daemon, not SSH.
+async function cmdGitDiff(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  let cwd = cmd.cwd as string
+  const base = cmd.base as GitDiffBase
+  if (!cwd) return sendError(ws, id, 'git.diff: missing cwd')
+  if (base !== 'uncommitted' && base !== 'previous' && base !== 'remote') {
+    return sendError(ws, id, 'git.diff: invalid base')
+  }
+  if (cwd === '~' || cwd.startsWith('~/')) cwd = (process.env.HOME || '/root') + cwd.slice(1)
+
+  const exec = (argv: string[], runCwd: string) => new Promise<{ stdout: string; stderr: string; code: number }>((resolve) => {
+    execFileCb(argv[0], argv.slice(1), { cwd: runCwd, timeout: 25_000, maxBuffer: 64 * 1024 * 1024, encoding: 'utf-8' },
+      (err: NodeJS.ErrnoException | null, stdout: string, stderr: string) => {
+        if (!err) return resolve({ stdout, stderr, code: 0 })
+        resolve({ stdout: stdout || '', stderr: stderr || err.message, code: typeof err.code === 'number' ? err.code : 1 })
+      })
+  })
+  const readText = async (absPath: string) => {
+    try { return await fs.promises.readFile(absPath, 'utf-8') } catch { return '' }
+  }
+
+  try {
+    const result = await computeGitDiff(base, cwd, exec, readText)
+    if (!result) return sendOk(ws, id, { repoRoot: null, files: [] }) // not a git repo
+    sendOk(ws, id, { repoRoot: result.repoRoot, files: result.files })
+  } catch (err: unknown) {
+    if (err instanceof GitDiffError) return sendError(ws, id, err.message)
+    sendError(ws, id, 'git.diff failed: ' + (err as Error).message)
   }
 }
 

@@ -16,6 +16,13 @@ const runs = [
     name: 'e2e',
     args: ['vitest', 'run', '--config', 'vitest.e2e.config.ts'],
   },
+  {
+    // FRONTEND diff pipeline (react-diff-view/diff) — deps live in web/node_modules,
+    // so it runs under a web-rooted config. Guards the session "Changed" view's
+    // createPatch→parseDiff→tokenize path (a parse throw here blanks the page).
+    name: 'diff-view',
+    args: ['vitest', 'run', '--config', 'vitest.diff-view.config.ts'],
+  },
 ];
 
 const children = new Set();

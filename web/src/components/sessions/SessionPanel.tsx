@@ -4,6 +4,8 @@ import { SessionChatHistory } from './SessionChatHistory';
 import { SessionNotes } from './SessionNotes';
 import { SessionFileExplorer } from './SessionFileExplorer';
 import { SessionTerminal } from './SessionTerminal';
+import { SessionDiffView } from './SessionDiffView';
+import { buildSelectionPrefill } from './diffPrefill';
 import { FileViewer } from '../common/FileViewer';
 import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_LOCK, ICON_UNLOCK, ICON_LOCATE, ICON_SEARCH, ICON_NEW_TAB } from '../common/Icons';
 import { openPopout } from '@/popout/openPopout';
@@ -30,6 +32,7 @@ import { SessionCopyButtons } from './SessionCopyButtons';
 import { ModelPicker } from './ModelPicker';
 import { TaskQuickActions } from './TaskQuickActions';
 import { useFullscreen } from '@/hooks/useFullscreen';
+import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { useSessionUsage, formatModelName, getContextWindowSize } from '@/hooks/useSessionUsage';
 import { useSessionPlan } from '@/hooks/useSessionPlan';
 import { PlanContentContext } from '@/contexts/PlanContentContext';
@@ -386,6 +389,32 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   const [messagesOpen, setMessagesOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
+  // Changed view: split the body into [File Diff | existing chat], fullscreen.
+  const [changedOpen, setChangedOpen] = useState(false);
+  // ChatInput prefill driver — selecting code in the diff drops a prompt into the
+  // existing input (no new chat, no fork; goes to the main agent via normal send).
+  const [prefillText, setPrefillText] = useState<string | undefined>(undefined);
+  const [prefillNonce, setPrefillNonce] = useState(0);
+  const handleSelectCode = useCallback((filePath: string, line: number | undefined, code: string) => {
+    setPrefillText(buildSelectionPrefill(filePath, line, code));
+    setPrefillNonce((n) => n + 1);
+  }, []);
+  // A line comment from the diff → send straight to this session's main agent.
+  const handleDiffComment = useCallback((message: string) => {
+    void send(sessionId, message);
+    return true;
+  }, [send, sessionId]);
+  // Chat column in the Changed split: resizable width (% of viewport) + collapse.
+  const chatPanel = useResizablePanel('open-walnut-changed-chat-w', 30, 'right');
+  const [chatCollapsed, setChatCollapsed] = useState(false);
+  // Toggling Changed enters/exits the no-max-width fullscreen variant.
+  const toggleChanged = useCallback(() => {
+    setChangedOpen((open) => {
+      const next = !open;
+      if (next) enterFullscreen(); else { exitFullscreen(); setChatCollapsed(false); }
+      return next;
+    });
+  }, [enterFullscreen, exitFullscreen]);
   // planPopoverRef removed — modal uses backdrop click
 
   // Auto-refresh plan content when modal opens
@@ -420,8 +449,15 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     setPlanPopoverOpen(false);
     setNotesOpen(false);
     setMessagesOpen(false);
+    setChangedOpen(false);
     exitFullscreen();
   }, [sessionId, exitFullscreen]);
+
+  // If the user exits fullscreen (ESC / backdrop) while Changed is open, close
+  // Changed too so the body returns to the normal single-column chat.
+  useEffect(() => {
+    if (!isFullscreen && changedOpen) setChangedOpen(false);
+  }, [isFullscreen, changedOpen]);
 
   // planCompleted=true means the plan is definitively done — show Execute even if session is still running
   // (SSH FIFO sessions stay alive after plan completion; execution creates a new session anyway).
@@ -574,7 +610,11 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     <PlanContentContext.Provider value={planContentValue}>
     <SessionPanelErrorBoundary sessionId={sessionId} onClose={onClose}>
       {FullscreenBackdrop}
-      <div className={`session-panel${fullscreenClass}`}>
+      {/* is-changed-open must sit on the SAME element as open-walnut-fullscreen
+          (the .session-panel root) so the `.open-walnut-fullscreen.is-changed-open`
+          rule that drops the 1400px cap actually matches — otherwise the Changed
+          view stays guttered at 1400px in this slide-out. */}
+      <div className={`session-panel${fullscreenClass}${changedOpen ? ' is-changed-open' : ''}`}>
         <div className="session-panel-header">
           <div className="session-panel-header-top">
             <div className="session-panel-title-area">
@@ -846,6 +886,13 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               Files
             </button>
             <button
+              className={`session-action-chip${changedOpen ? ' session-action-chip-active' : ''}`}
+              onClick={toggleChanged}
+              title="See the files this session changed — full-screen diff alongside the chat"
+            >
+              Changed
+            </button>
+            <button
               className={`session-action-chip${terminalOpen ? ' session-action-chip-active' : ''}`}
               onClick={() => setTerminalOpen(o => !o)}
               title="Open a terminal in the session working directory"
@@ -936,6 +983,39 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             </button>
           </div>
         )}
+        {/* Split container: when Changed is open, becomes [File Diff | chat] as a
+            flex row; when closed it's display:contents so the chat lays out exactly
+            as before. The chat subtree below NEVER changes shape — same JSX, same
+            position — so SessionChatHistory's WS/stream stays mounted (no remount). */}
+        <div className={`session-panel-split${changedOpen ? ' is-changed-open' : ''}${changedOpen && chatCollapsed ? ' is-chat-collapsed' : ''}`}>
+          {changedOpen && sessionId && (
+            <div className="session-panel-diff-col">
+              <SessionDiffView sessionId={sessionId} sessionCwd={session?.cwd} sessionHost={session?.host} onSelectCode={handleSelectCode} onComment={handleDiffComment} />
+            </div>
+          )}
+          {changedOpen && (
+            chatCollapsed ? (
+              <button
+                className="session-chat-collapsed-rail"
+                onClick={() => setChatCollapsed(false)}
+                title="Show chat"
+              >💬</button>
+            ) : (
+              <div className="session-panel-chat-resize" onMouseDown={chatPanel.handleResizeStart} title="Drag to resize chat" />
+            )
+          )}
+          <div
+            className="session-panel-chat-col"
+            ref={changedOpen ? chatPanel.panelRef : undefined}
+            style={changedOpen && !chatCollapsed ? { width: chatPanel.width, flex: `0 0 ${chatPanel.width}` } : undefined}
+          >
+            {changedOpen && !chatCollapsed && (
+              <button
+                className="session-chat-collapse-btn"
+                onClick={() => setChatCollapsed(true)}
+                title="Collapse chat"
+              >⟩</button>
+            )}
         <div className="session-panel-body" ref={bodyRef}>
           <SessionChatHistory
             key={sessionId}
@@ -1018,6 +1098,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             mentionCwd={session?.cwd}
             mentionHost={session?.host}
             draftKey={`draft:session:${sessionId}`}
+            prefillText={prefillText}
+            prefillNonce={prefillNonce}
             onToggleMode={session ? () => {
               const cur = session.mode || 'default';
               const next = enabledModes[(enabledModes.indexOf(cur) + 1) % enabledModes.length]!;
@@ -1036,6 +1118,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             />
           )}
         </div>
+          </div>{/* .session-panel-chat-col */}
+        </div>{/* .session-panel-split */}
         {fileViewerState && (
           <FileViewer
             path={fileViewerState.path}

@@ -6,6 +6,8 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { log } from '../../logging/index.js'
 import { listSessions, getRecentSessions, getSessionSummaries, getSessionsForTask, getSessionByClaudeId, updateSessionRecord, isTriageSession, isEnvironmentSession } from '../../core/session-tracker.js'
 import { readSessionHistory, readSingleSubagentHistory, reconstructWorkflowProgress, extractPlanContent, rewriteHistoryRemoteImages } from '../../core/session-history.js'
+import { computeSessionChanges } from '../../core/session-changes.js'
+import { computeSessionGitDiff, type GitDiffBase } from '../../core/session-git-diff.js'
 import { listTasks, getTask, addTask, updateTask, togglePin, setFocusTier, linkSession } from '../../core/task-manager.js'
 import { getConfig } from '../../core/config-manager.js'
 import { bus, EventNames, eventData } from '../../core/event-bus.js'
@@ -1003,6 +1005,60 @@ sessionsRouter.get('/:sessionId/workflow', async (req: Request, res: Response, n
       return
     }
     res.json(payload)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/sessions/:sessionId/changes — the files this session changed, with
+// reconstructed before/after content for a GitHub-style diff view.
+//
+// ?base= selects what to compare AGAINST:
+//   (absent) / 'session' → JSONL-only, this session's OWN edits (default; the only
+//                           mode that can attribute concurrent edits to a session).
+//   'uncommitted'         → `git diff HEAD` (working tree vs last commit)
+//   'previous'            → `git diff HEAD~1` (incl. last commit, vs the one before)
+//   'remote'              → `git diff @{upstream}` (unpushed vs remote)
+//
+// ?base= chooses the comparison baseline; ?scope= selects WHICH of the session's
+// touched repos' files to show. Both git and session modes are scoped to what
+// THIS session actually edited (never the cwd repo wholesale):
+//   base=session (default) → JSONL replay of the session's own edits (no git).
+//   base=uncommitted|previous|remote → git diff of the repos the session touched,
+//     against HEAD / HEAD~1 / @{upstream}, with:
+//       scope=session (default) → only the files this session edited.
+//       scope=all               → every change in those touched repos.
+// scope is ignored for base=session (already session-scoped by definition).
+// ?refresh=1 bypasses the mtime cache.
+const GIT_BASES: ReadonlySet<string> = new Set(['uncommitted', 'previous', 'remote'])
+sessionsRouter.get('/:sessionId/changes', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const sessionId = req.params.sessionId as string
+    const record = await getSessionByClaudeId(sessionId)
+    if (!record) {
+      res.status(404).json({ error: 'Session not found' })
+      return
+    }
+    const base = typeof req.query.base === 'string' ? req.query.base : 'session'
+    const scope = req.query.scope === 'all' ? 'all' : 'session'
+    const noCache = req.query.refresh === '1' || req.query.refresh === 'true'
+    let result
+    try {
+      if (GIT_BASES.has(base)) {
+        // Repo universe + (for scope=session) file set both come from the session's
+        // own edits — computeSessionGitDiff diffs only the repos it touched.
+        result = await computeSessionGitDiff(sessionId, base as GitDiffBase, record.cwd, record.host, scope, record.outputFile, { noCache })
+      } else {
+        result = await computeSessionChanges(sessionId, record.cwd, record.host, record.outputFile, { noCache })
+      }
+    } catch (err) {
+      // Surface remote read errors (SSH/daemon) + git failures to the frontend like /history does.
+      const msg = err instanceof Error ? err.message : String(err)
+      log.web.warn('session changes read failed', { sessionId, host: record.host, base, scope, error: msg })
+      res.status(502).json({ error: msg })
+      return
+    }
+    res.json(result)
   } catch (err) {
     next(err)
   }
