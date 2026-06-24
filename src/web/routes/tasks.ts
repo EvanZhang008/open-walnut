@@ -26,6 +26,12 @@ import {
   getAllTags,
   CircularDependencyError,
   isTaskBlocked,
+  groupTasks,
+  addToGroup,
+  removeFromGroup,
+  renameGroup,
+  listGroups,
+  TaskGroupScopeError,
   type SlimTask,
 } from '../../core/task-manager.js'
 import { listSessions } from '../../core/session-tracker.js'
@@ -59,7 +65,7 @@ function isActiveSession(info: SessionInfo): boolean {
 }
 
 /** Enrich tasks that have slot sessions with session status info. */
-async function enrichTasksWithSessionStatus(tasks: Task[]): Promise<Task[]> {
+export async function enrichTasksWithSessionStatus(tasks: Task[]): Promise<Task[]> {
   // Collect ALL session IDs needed across all tasks
   const sessionIds = new Set<string>()
   for (const t of tasks) {
@@ -379,6 +385,16 @@ tasksRouter.get('/enriched', async (_req: Request, res: Response, next: NextFunc
   }
 })
 
+// GET /api/tasks/groups — list all virtual groups. MUST be registered before
+// GET /:id below, or Express treats "groups" as a task id (returns 404).
+tasksRouter.get('/groups', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    res.json({ groups: await listGroups() })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // GET /api/tasks/:id
 tasksRouter.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -483,6 +499,106 @@ tasksRouter.patch('/reorder', async (req: Request, res: Response, next: NextFunc
     await reorderTasks(category, project, taskIds)
     bus.emit(EventNames.TASK_REORDERED, { category, project, taskIds }, ['web-ui'], { source: 'api' })
     res.json({ ok: true })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ── Virtual task groups ──
+// NOTE: the POST/PATCH `/groups…` paths are registered before the POST/PATCH
+// `/:id` routes below so Express doesn't treat "groups" as a task id. The
+// GET `/groups` listing is registered separately, above GET `/:id` (search for
+// "GET /api/tasks/groups — list" earlier in this file), for the same reason.
+
+// POST /api/tasks/groups — create a group from ≥2 tasks
+tasksRouter.post('/groups', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { task_ids, label } = req.body as { task_ids?: string[]; label?: string }
+    if (!Array.isArray(task_ids) || task_ids.length < 2 || !task_ids.every((id) => typeof id === 'string')) {
+      res.status(400).json({ error: 'task_ids must be an array of at least 2 task id strings' })
+      return
+    }
+    const result = await groupTasks(task_ids, label)
+    bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui', 'main-agent'], { source: 'api' })
+    // Refine the AI label in the background when the caller didn't supply one.
+    if (!label?.trim()) {
+      const gid = result.group_id
+      const ids = result.member_ids
+      void (async () => {
+        try {
+          const titles: string[] = []
+          for (const id of ids) {
+            try { titles.push((await getTask(id)).title) } catch { /* skip */ }
+          }
+          const { summarizeGroupLabel } = await import('../../core/fork-title.js')
+          const aiLabel = await summarizeGroupLabel(titles)
+          if (!aiLabel) return
+          const r = await renameGroup(gid, aiLabel)
+          bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: r.group_id, label: r.label }, ['web-ui', 'main-agent'], { source: 'api' })
+        } catch (err) {
+          log.web.warn('group label refine failed', { groupId: gid, error: err instanceof Error ? err.message : String(err) })
+        }
+      })()
+    }
+    res.json(result)
+  } catch (err) {
+    if (err instanceof TaskGroupScopeError) {
+      res.status(409).json({ error: err.message })
+      return
+    }
+    next(err)
+  }
+})
+
+// POST /api/tasks/groups/:groupId/add — add tasks to a group
+tasksRouter.post('/groups/:groupId/add', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const groupId = param(req.params.groupId)
+    const { task_ids } = req.body as { task_ids?: string[] }
+    if (!Array.isArray(task_ids) || task_ids.length < 1 || !task_ids.every((id) => typeof id === 'string')) {
+      res.status(400).json({ error: 'task_ids must be a non-empty array of task id strings' })
+      return
+    }
+    const result = await addToGroup(groupId, task_ids)
+    bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui', 'main-agent'], { source: 'api' })
+    res.json(result)
+  } catch (err) {
+    if (err instanceof TaskGroupScopeError) {
+      res.status(409).json({ error: err.message })
+      return
+    }
+    next(err)
+  }
+})
+
+// POST /api/tasks/groups/remove — remove tasks from their group(s)
+tasksRouter.post('/groups/remove', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { task_ids } = req.body as { task_ids?: string[] }
+    if (!Array.isArray(task_ids) || task_ids.length < 1 || !task_ids.every((id) => typeof id === 'string')) {
+      res.status(400).json({ error: 'task_ids must be a non-empty array of task id strings' })
+      return
+    }
+    const result = await removeFromGroup(task_ids)
+    bus.emit(EventNames.TASK_GROUPS_CHANGED, { dissolved_group_ids: result.dissolved_group_ids }, ['web-ui', 'main-agent'], { source: 'api' })
+    res.json(result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// PATCH /api/tasks/groups/:groupId — rename a group
+tasksRouter.patch('/groups/:groupId', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const groupId = param(req.params.groupId)
+    const { label } = req.body as { label?: string }
+    if (typeof label !== 'string' || !label.trim()) {
+      res.status(400).json({ error: 'label must be a non-empty string' })
+      return
+    }
+    const result = await renameGroup(groupId, label)
+    bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui', 'main-agent'], { source: 'api' })
+    res.json(result)
   } catch (err) {
     next(err)
   }

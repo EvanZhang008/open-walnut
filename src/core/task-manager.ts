@@ -6,7 +6,7 @@ import { generateId, parseGroupFromCategory } from '../utils/format.js';
 import { initDirectories } from './init.js';
 import { getConfig, updateConfig } from './config-manager.js';
 import { bus, EventNames } from './event-bus.js';
-import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type CategoryRecord } from './types.js';
+import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type CategoryRecord, type TaskGroupRecord } from './types.js';
 import { applyPhase, deriveStatusFromPhase, phaseFromStatus, VALID_PHASES, TERMINAL_PHASES } from './phase.js';
 import { registry } from './integration-registry.js';
 import { getDb, rowToTask, taskToRow, TASK_COLUMNS, transaction as dbTransaction, TASK_DB_PATH } from './task-db.js';
@@ -232,9 +232,18 @@ async function readStore(): Promise<TaskStore> {
     categories[row.name] = { source: row.source as CategoryRecord['source'] };
   }
 
+  const groupRows = db
+    .prepare('SELECT id, label FROM task_groups')
+    .all() as { id: string; label: string }[];
+  const taskGroups: Record<string, TaskGroupRecord> = {};
+  for (const row of groupRows) {
+    taskGroups[row.id] = { label: row.label };
+  }
+
   const store: TaskStore = {
     tasks,
     ...(Object.keys(categories).length > 0 ? { categories } : {}),
+    ...(Object.keys(taskGroups).length > 0 ? { task_groups: taskGroups } : {}),
   };
   if (STORE_CACHE_ENABLED) {
     taskStoreCache = store;
@@ -266,6 +275,7 @@ function cloneTaskStore(store: TaskStore): TaskStore {
     ...store,
     tasks: store.tasks.map((t) => ({ ...t })),
     ...(store.categories ? { categories: { ...store.categories } } : {}),
+    ...(store.task_groups ? { task_groups: { ...store.task_groups } } : {}),
   };
 }
 
@@ -347,6 +357,16 @@ async function writeStore(store: TaskStore): Promise<void> {
     for (const [name, rec] of Object.entries(store.categories ?? {})) {
       catInsert.run({ name, source: rec?.source ?? 'local', order_index: idx });
       idx += 1;
+    }
+
+    // Full-snapshot rewrite of the group-name registry (mirrors categories).
+    // Membership lives on tasks.group_id; this table only holds labels.
+    handle.prepare('DELETE FROM task_groups').run();
+    const groupInsert = handle.prepare(
+      'INSERT INTO task_groups (id, label) VALUES (@id, @label)'
+    );
+    for (const [id, rec] of Object.entries(store.task_groups ?? {})) {
+      if (rec?.label) groupInsert.run({ id, label: rec.label });
     }
   });
 }
@@ -2243,7 +2263,10 @@ export async function deleteTask(idPrefix: string): Promise<{ task: Task }> {
   }
 
   // Remove from store
+  const deletedGroupId = task.group_id;
   store.tasks = store.tasks.filter((t) => t.id !== task.id);
+  // A virtual group needs ≥2 members; deleting one may leave a lone task — prune.
+  if (deletedGroupId) pruneVirtualGroup(store, deletedGroupId);
   await writeStore(store);
 
   // Fire-and-forget: delete from remote provider via plugin
@@ -2257,6 +2280,205 @@ export async function deleteTask(idPrefix: string): Promise<{ task: Task }> {
 
   return { task };
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Virtual task groups (local-only)
+//
+// A "group" is a lightweight visual grouping: tasks sharing a `group_id` render
+// boxed together in the list, ordered after the group's lead (top-sorted member).
+// This is NOT a parent/subtask relationship — grouped tasks stay flat and fully
+// independent (separate lifecycles, no inherited fields, never moved). All
+// members must share the same category + project. The group_id lives on each
+// task (round-trips via the SQLite payload blob); the human-readable name lives
+// in store.task_groups. Nothing here is ever pushed to external sync backends.
+//
+// Invariant: a group has ≥2 members. Any op that would leave <2 members prunes
+// the group (clears the lone member's group_id + drops the name registry entry).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Error thrown when a grouping op violates the same-category+project invariant. */
+export class TaskGroupScopeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TaskGroupScopeError';
+  }
+}
+
+/**
+ * In-place: if `groupId` has fewer than 2 live members, dissolve it — clear the
+ * lone member's group_id and remove the name-registry entry. Mutates `store`.
+ * Caller is responsible for writeStore(). Returns true if the group was pruned.
+ */
+function pruneVirtualGroup(store: TaskStore, groupId: string): boolean {
+  const members = store.tasks.filter((t) => t.group_id === groupId);
+  if (members.length >= 2) return false;
+  for (const m of members) delete m.group_id;
+  if (store.task_groups?.[groupId]) {
+    delete store.task_groups[groupId];
+    if (Object.keys(store.task_groups).length === 0) delete store.task_groups;
+  }
+  return true;
+}
+
+/** Resolve a list of id-prefixes to full tasks, erroring on miss/ambiguity. */
+function resolveTasksByPrefix(store: TaskStore, idPrefixes: string[]): Task[] {
+  const resolved: Task[] = [];
+  for (const prefix of idPrefixes) {
+    const matches = store.tasks.filter((t) => t.id.startsWith(prefix));
+    if (matches.length === 0) throw new Error(`No task found matching ID prefix "${prefix}"`);
+    if (matches.length > 1) throw new Error(`Ambiguous ID prefix "${prefix}" matches ${matches.length} tasks. Be more specific.`);
+    resolved.push(matches[0]);
+  }
+  return resolved;
+}
+
+/** Assert every task shares the same category + project (the group scope rule). */
+function assertSameScope(tasks: Task[]): void {
+  if (tasks.length < 2) return;
+  const cat = tasks[0].category;
+  const proj = tasks[0].project;
+  for (const t of tasks) {
+    if (t.category !== cat || t.project !== proj) {
+      throw new TaskGroupScopeError(
+        `All grouped tasks must share the same category + project. ` +
+        `"${tasks[0].title}" is in ${cat}/${proj} but "${t.title}" is in ${t.category}/${t.project}.`,
+      );
+    }
+  }
+}
+
+export interface GroupResult {
+  group_id: string;
+  label: string;
+  member_ids: string[];
+}
+
+/**
+ * Create a new virtual group from ≥2 tasks (by id or prefix). All must share the
+ * same category + project. If any task is already in a group, its existing group
+ * is merged in (all those members are absorbed into the new group). The label is
+ * set synchronously to the provided value, or a placeholder (the lead task's
+ * title) the caller can refine asynchronously via summarizeGroupLabel +
+ * renameGroup (see the fork handler / the task_group agent tool). Returns the
+ * new group id + member ids.
+ */
+export async function groupTasks(idPrefixes: string[], label?: string): Promise<GroupResult> {
+  return withWriteLock(async () => {
+    const store = await readStore();
+    const seed = resolveTasksByPrefix(store, [...new Set(idPrefixes)]);
+    if (seed.length < 2) throw new Error('A group needs at least 2 tasks.');
+    assertSameScope(seed);
+
+    // Absorb any pre-existing groups the seed tasks belong to (merge semantics).
+    const absorbedGroupIds = new Set(seed.map((t) => t.group_id).filter(Boolean) as string[]);
+    const memberSet = new Set(seed.map((t) => t.id));
+    for (const t of store.tasks) {
+      if (t.group_id && absorbedGroupIds.has(t.group_id)) memberSet.add(t.id);
+    }
+    const members = store.tasks.filter((t) => memberSet.has(t.id));
+    assertSameScope(members); // absorbed members must also be in-scope
+
+    const groupId = `g_${generateId()}`;
+    for (const t of members) t.group_id = groupId;
+    // Drop absorbed group name entries (their members now live under groupId).
+    if (store.task_groups) {
+      for (const old of absorbedGroupIds) delete store.task_groups[old];
+    }
+    const resolvedLabel = (label?.trim()) || members[0].title;
+    store.task_groups = { ...(store.task_groups ?? {}), [groupId]: { label: resolvedLabel } };
+
+    await writeStore(store);
+    return { group_id: groupId, label: resolvedLabel, member_ids: members.map((t) => t.id) };
+  });
+}
+
+/**
+ * Add tasks to an existing group. All resulting members must share the same
+ * category + project. No-op-safe: tasks already in the group are skipped.
+ */
+export async function addToGroup(groupId: string, idPrefixes: string[]): Promise<GroupResult> {
+  return withWriteLock(async () => {
+    const store = await readStore();
+    const existing = store.tasks.filter((t) => t.group_id === groupId);
+    if (existing.length === 0 && !store.task_groups?.[groupId]) {
+      throw new Error(`Group "${groupId}" not found.`);
+    }
+    const toAdd = resolveTasksByPrefix(store, [...new Set(idPrefixes)]);
+    assertSameScope([...existing, ...toAdd]);
+    // Capture any groups we're stealing tasks from so we can prune a donor that
+    // drops below 2 members (otherwise it'd keep a lone member + stale registry).
+    const donorGroups = new Set(
+      toAdd.map((t) => t.group_id).filter((g): g is string => !!g && g !== groupId),
+    );
+    for (const t of toAdd) t.group_id = groupId;
+    for (const donor of donorGroups) pruneVirtualGroup(store, donor);
+    const members = store.tasks.filter((t) => t.group_id === groupId);
+    const label = store.task_groups?.[groupId]?.label ?? members[0]?.title ?? groupId;
+    if (!store.task_groups?.[groupId]) {
+      store.task_groups = { ...(store.task_groups ?? {}), [groupId]: { label } };
+    }
+    await writeStore(store);
+    return { group_id: groupId, label, member_ids: members.map((t) => t.id) };
+  });
+}
+
+/**
+ * Remove tasks from their group (clears group_id). If a group drops below 2
+ * members it is dissolved. Returns the affected group ids.
+ */
+export async function removeFromGroup(idPrefixes: string[]): Promise<{ removed_ids: string[]; dissolved_group_ids: string[] }> {
+  return withWriteLock(async () => {
+    const store = await readStore();
+    const tasks = resolveTasksByPrefix(store, [...new Set(idPrefixes)]);
+    const touchedGroups = new Set<string>();
+    const removedIds: string[] = [];
+    for (const t of tasks) {
+      if (t.group_id) {
+        touchedGroups.add(t.group_id);
+        delete t.group_id;
+        removedIds.push(t.id);
+      }
+    }
+    const dissolved: string[] = [];
+    for (const gid of touchedGroups) {
+      if (pruneVirtualGroup(store, gid)) dissolved.push(gid);
+    }
+    await writeStore(store);
+    return { removed_ids: removedIds, dissolved_group_ids: dissolved };
+  });
+}
+
+/** Rename a group's label. */
+export async function renameGroup(groupId: string, label: string): Promise<{ group_id: string; label: string }> {
+  return withWriteLock(async () => {
+    const store = await readStore();
+    const trimmed = label.trim();
+    if (!trimmed) throw new Error('Group label cannot be empty.');
+    const hasMembers = store.tasks.some((t) => t.group_id === groupId);
+    if (!hasMembers && !store.task_groups?.[groupId]) throw new Error(`Group "${groupId}" not found.`);
+    store.task_groups = { ...(store.task_groups ?? {}), [groupId]: { label: trimmed } };
+    await writeStore(store);
+    return { group_id: groupId, label: trimmed };
+  });
+}
+
+/** List all groups with their labels and member ids (members with ≥1 task only). */
+export async function listGroups(): Promise<Array<{ group_id: string; label: string; member_ids: string[] }>> {
+  const store = await readStore();
+  const byGroup = new Map<string, string[]>();
+  for (const t of store.tasks) {
+    if (t.group_id) {
+      if (!byGroup.has(t.group_id)) byGroup.set(t.group_id, []);
+      byGroup.get(t.group_id)!.push(t.id);
+    }
+  }
+  const out: Array<{ group_id: string; label: string; member_ids: string[] }> = [];
+  for (const [gid, ids] of byGroup) {
+    const label = store.task_groups?.[gid]?.label ?? ids[0];
+    out.push({ group_id: gid, label, member_ids: ids });
+  }
+  return out;
 }
 
 /**

@@ -112,6 +112,14 @@ interface TodoPanelProps {
   externalCategory?: string;
   /** Fires whenever the active category tab changes (for URL sync). */
   onCategoryChange?: (cat: string) => void;
+  /** Virtual-group name registry: group_id → label. */
+  taskGroups?: Record<string, string>;
+  /** Create a virtual group from ≥2 task ids (label AI-generated if omitted). */
+  onGroupTasks?: (taskIds: string[], label?: string) => void;
+  /** Remove a single task from its virtual group. */
+  onUngroupTask?: (taskId: string) => void;
+  /** Rename a virtual group. */
+  onRenameGroup?: (groupId: string, label: string) => void;
 }
 
 const STARRED_TAB = '\u2605';
@@ -223,7 +231,10 @@ interface SortableTaskItemProps {
   childCount?: number;
   isExpanded?: boolean;           // Whether children are visible (only for parents)
   onToggleExpand?: () => void;    // Toggle children visibility
-  onClick: () => void;
+  /** Receives the mouse event so callers can detect Cmd/Ctrl/Shift multi-select. */
+  onClick: (e?: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }) => void;
+  /** True when this task is part of the current multi-select set (group-building). */
+  isSelected?: boolean;
   onSetPhase: (id: string, phase: string) => void;
   onStar?: (id: string) => void;
   onDelete?: (id: string) => void;
@@ -247,9 +258,21 @@ interface SortableTaskItemProps {
   searchSemanticScore?: number; // Normalized semantic contribution [0,1]
   filterOverrideReason?: string;  // Why this task is outside current filters (focus override)
   isFadingOverride?: boolean;     // Task is fading out after focus moved away
+  /** Virtual-group rendering: present when this task is part of a multi-member group. */
+  groupInfo?: GroupRenderInfo;
+  onRenameGroup?: (groupId: string, currentLabel: string) => void;  // Rename the whole group
+  onUngroupTask?: (taskId: string) => void;                          // Remove this task from its group
 }
 
-function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isNestTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, onSetPhase, onStar, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onUnparent, onMoveUp, isPinned, pinnedTier, searchContext, searchMatchField, searchScore, searchKeywordScore, searchSemanticScore, filterOverrideReason, isFadingOverride }: SortableTaskItemProps) {
+/** Per-task virtual-group render metadata (computed in TodoPanel, consumed by SortableTaskItem). */
+interface GroupRenderInfo {
+  groupId: string;
+  label: string;
+  isLead: boolean;   // first member in sorted order — chip + top rounding go here
+  isLast: boolean;   // last member — bottom rounding goes here
+}
+
+function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isNestTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, onSetPhase, onStar, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onUnparent, onMoveUp, isPinned, pinnedTier, searchContext, searchMatchField, searchScore, searchKeywordScore, searchSemanticScore, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask }: SortableTaskItemProps) {
   const hookPhases = usePhaseHooks();
   const {
     attributes,
@@ -298,6 +321,10 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isNes
     filterOverrideReason ? 'task-filter-override' : '',
     isFadingOverride ? 'task-filter-override-fading' : '',
     isNestTarget ? 'todo-panel-item-nest-target' : '',
+    groupInfo ? 'task-grouped' : '',
+    groupInfo?.isLead ? 'task-group-lead' : '',
+    groupInfo?.isLast ? 'task-group-last' : '',
+    isSelected ? 'task-multi-selected' : '',
   ].filter(Boolean).join(' ');
 
   const dueDateLabel = formatDateDisplay(task.due_date);
@@ -377,6 +404,13 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isNes
   const handleTitleClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
+    // Modifier-click on the title must still toggle multi-selection (the title is
+    // the natural click target) — forward the event so the row handler sees the
+    // metaKey/ctrlKey/shiftKey instead of treating it as a plain focus click.
+    if (e.metaKey || e.ctrlKey || e.shiftKey) {
+      onClick(e);
+      return;
+    }
     // First click on an unfocused task → focus it (open detail panel).
     // Only enter editing mode when task is already focused.
     if (!isFocused) {
@@ -407,16 +441,35 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isNes
   const activeListeners = isEditing ? {} : listeners;
 
   return (
+    <>
+    {/* Group header chip — only above the lead member; names the whole cluster. */}
+    {groupInfo?.isLead && (
+      <div
+        className="task-group-chip"
+        style={depth > 0 ? { marginLeft: `${depth * 22}px` } : undefined}
+        title="Forked / grouped tasks — independent tasks shown together"
+      >
+        <span className="task-group-chip-icon" aria-hidden="true">⑂</span>
+        <span
+          className="task-group-chip-label"
+          onClick={(e) => { e.stopPropagation(); onRenameGroup?.(groupInfo.groupId, groupInfo.label); }}
+          title="Rename group"
+        >
+          {groupInfo.label}
+        </span>
+      </div>
+    )}
     <div
       ref={setNodeRef}
       style={style}
       className={className}
       data-task-id={task.id}
+      data-group-id={groupInfo?.groupId}
       onClick={(e) => {
         if (isEditing) return;
         // Title has its own click handler (focus first, edit on second click)
         if ((e.target as HTMLElement).closest('.todo-item-title')) return;
-        onClick();
+        onClick(e);
       }}
       onKeyDown={(e) => { if (e.key === 'Enter' && !isEditing) onClick(); }}
       {...activeAttributes}
@@ -530,6 +583,7 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isNes
             onSetDate={onSetDate}
             onUnparent={onUnparent}
             onMoveUp={onMoveUp}
+            onUngroup={onUngroupTask}
             onDelete={onDelete}
           />
         </div>
@@ -579,6 +633,7 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isNes
         )}
       </div>
     </div>
+    </>
   );
 }
 
@@ -1560,7 +1615,7 @@ function SortableRecentCard({ task, isFocused, isSessionOpen, isDetailOpen, onCl
 
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, pinnedTaskIds, focusTaskIds, waitTaskIds, suppressDetail, openSessionIds, openSessionTaskIds, onClearOperationError, onOperationError, externalCategory, onCategoryChange }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, pinnedTaskIds, focusTaskIds, waitTaskIds, suppressDetail, openSessionIds, openSessionTaskIds, onClearOperationError, onOperationError, externalCategory, onCategoryChange, taskGroups, onGroupTasks, onUngroupTask, onRenameGroup }: TodoPanelProps) {
   // TEMP drag-flash trace — remove after diagnosis
   const __renderCountRef = useRef(0);
   __renderCountRef.current += 1;
@@ -2646,6 +2701,21 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       for (const children of childrenOf.values()) children.sort(cmp);
     }
 
+    // Virtual-group clustering: top-level members sharing a group_id are kept
+    // contiguous, anchored at the group's LEAD (the first member in sorted
+    // topLevel order). The lead keeps its natural sort position; the other
+    // members are pulled up right after it. Only top-level tasks cluster —
+    // a grouped task that is also someone's child stays under its parent.
+    const groupTopMembers = new Map<string, Task[]>();
+    for (const task of topLevel) {
+      if (task.group_id) {
+        let arr = groupTopMembers.get(task.group_id);
+        if (!arr) { arr = []; groupTopMembers.set(task.group_id, arr); }
+        arr.push(task);
+      }
+    }
+    const emittedGroups = new Set<string>();
+
     // Recursive interleave: parent → children → grandchildren
     const order: string[] = [];
     const visited = new Set<string>();
@@ -2656,7 +2726,20 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const children = childrenOf.get(task.id);
       if (children) for (const child of children) emitWithChildren(child);
     }
-    for (const task of topLevel) emitWithChildren(task);
+    for (const task of topLevel) {
+      if (visited.has(task.id)) continue;
+      // Group lead: emit the whole cluster contiguously, then mark it done so
+      // later members (already visited) are skipped in place.
+      const members = task.group_id && !emittedGroups.has(task.group_id)
+        ? groupTopMembers.get(task.group_id)
+        : undefined;
+      if (members && members.length > 1) {
+        emittedGroups.add(task.group_id!);
+        for (const m of members) emitWithChildren(m);
+      } else {
+        emitWithChildren(task);
+      }
+    }
     return order;
   }, [sortBy]);
 
@@ -2895,6 +2978,39 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     for (const task of sorted) getDepth(task.id);
     return { childTaskIds: childIds, childParentMap: parentMap, depthMap: depths };
   }, [sorted]);
+
+  // Virtual-group render metadata: taskId → { groupId, label, isLead, isLast }.
+  // computeSortOrder already clusters group members contiguously, so we just walk
+  // `sorted` and mark the first occurrence of each group as the lead (chip + top
+  // rounding) and the last as the tail (bottom rounding). Singleton groups (only
+  // one member visible) get no treatment — a group needs ≥2 to box.
+  const groupRenderMap = useMemo(() => {
+    const map = new Map<string, GroupRenderInfo>();
+    // Count members per group from the *displayed* set (`sorted`), not the full task
+    // list: a group needs ≥2 *visible* members to box. If a secondary filter (search,
+    // collapsed parent, status filter) hides a sibling, the lone survivor must NOT get
+    // a chip+rail — that would read as a broken 1-item group. computeSortOrder clusters
+    // members contiguously, so counting occurrences in `sorted` == counting contiguous
+    // visible members.
+    const counts = new Map<string, number>();
+    for (const t of sorted) if (t.group_id) counts.set(t.group_id, (counts.get(t.group_id) ?? 0) + 1);
+    const firstSeen = new Set<string>();
+    const lastIdxByGroup = new Map<string, number>();
+    sorted.forEach((t, i) => { if (t.group_id && (counts.get(t.group_id) ?? 0) >= 2) lastIdxByGroup.set(t.group_id, i); });
+    sorted.forEach((t, i) => {
+      const gid = t.group_id;
+      if (!gid || (counts.get(gid) ?? 0) < 2) return;
+      const isLead = !firstSeen.has(gid);
+      if (isLead) firstSeen.add(gid);
+      map.set(t.id, {
+        groupId: gid,
+        label: taskGroups?.[gid] ?? '',
+        isLead,
+        isLast: lastIdxByGroup.get(gid) === i,
+      });
+    });
+    return map;
+  }, [sorted, taskGroups]);
 
   // Determine if a child task should be hidden (any ancestor is collapsed — walks full chain)
   const isChildHidden = useCallback((taskId: string) => {
@@ -3389,6 +3505,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     onReparentTask(taskId, null);
   }, [onReparentTask, ensureManualSort]);
 
+  // Group chip click → rename the group. Uses a native prompt for now (a
+  // dedicated inline-edit dialog is a follow-up); cancel/empty keeps the name.
+  const handleRenameGroup = useCallback((groupId: string, currentLabel: string) => {
+    if (!onRenameGroup) return;
+    const next = window.prompt('Rename group', currentLabel);
+    if (next == null) return; // cancelled
+    const trimmed = next.trim();
+    if (!trimmed || trimmed === currentLabel) return;
+    onRenameGroup(groupId, trimmed);
+  }, [onRenameGroup]);
+
   // Kebab "Move up" — map of taskId → handler that swaps the task with the
   // previous sibling in its group. Siblings are grouped by parent_task_id so
   // child tasks only move among their own siblings. Tasks that are already
@@ -3453,12 +3580,43 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   // Click task row (or pinned card) = select + scroll + open session (if any). Never open detail panel.
   // Pinned cards and list rows share identical behavior — single handler, one alias.
-  const handleTaskClick = useCallback((task: Task) => {
+  // Multi-select for grouping: Cmd/Ctrl-click (or Shift-click) toggles a task
+  // into the selection instead of opening it. A plain click clears the selection
+  // and behaves normally. ≥2 same-scope selected tasks reveal a "Group" action bar.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  const handleTaskClick = useCallback((task: Task, e?: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }) => {
+    if (e && (e.metaKey || e.ctrlKey || e.shiftKey)) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(task.id)) next.delete(task.id); else next.add(task.id);
+        return next;
+      });
+      return; // don't open/focus while building a selection
+    }
+    if (selectedIds.size > 0) setSelectedIds(new Set()); // plain click clears selection
     const sid = resolveTaskSessionId(task);
     if (sid) onOpenSession?.(sid);
     // Always scroll to position; suppress detail panel (ⓘ button is the only way to open detail)
     onFocusTask?.(task, { openDetail: false });
-  }, [onFocusTask, onOpenSession]);
+  }, [onFocusTask, onOpenSession, selectedIds]);
+
+  // Resolve the current selection to actual tasks + validate same category+project
+  // (the hard scope rule). Drives the floating action bar's enabled/disabled state.
+  const selectionInfo = useMemo(() => {
+    const picked = tasks.filter((t) => selectedIds.has(t.id));
+    if (picked.length < 2) return { tasks: picked, sameScope: false };
+    const cat = picked[0].category;
+    const proj = picked[0].project;
+    const sameScope = picked.every((t) => t.category === cat && t.project === proj);
+    return { tasks: picked, sameScope };
+  }, [tasks, selectedIds]);
+
+  const handleGroupSelected = useCallback(() => {
+    if (!onGroupTasks || selectionInfo.tasks.length < 2 || !selectionInfo.sameScope) return;
+    onGroupTasks(selectionInfo.tasks.map((t) => t.id));
+    setSelectedIds(new Set());
+  }, [onGroupTasks, selectionInfo]);
 
   const handlePinnedCardClick = handleTaskClick;
 
@@ -3765,7 +3923,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     childCount={searchChildCount.get(task.id)}
                     isExpanded={expandedParents.has(task.id)}
                     onToggleExpand={() => toggleParentExpand(task.id)}
-                    onClick={() => handleTaskClick(task)}
+                    onClick={(e) => handleTaskClick(task, e)}
+                  isSelected={selectedIds.has(task.id)}
                     onSetPhase={setPhaseOrComplete}
                     onStar={onStar}
                     onDelete={onDelete}
@@ -3813,7 +3972,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   childCount={trueChildCountMap.get(task.id)}
                   isExpanded={expandedParents.has(task.id)}
                   onToggleExpand={() => toggleParentExpand(task.id)}
-                  onClick={() => handleTaskClick(task)}
+                  onClick={(e) => handleTaskClick(task, e)}
+                  isSelected={selectedIds.has(task.id)}
                   onSetPhase={setPhaseOrComplete}
                   onStar={onStar}
                   onDelete={onDelete}
@@ -3831,6 +3991,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   searchContext={`${task.category}${task.project && task.project !== task.category ? ` / ${task.project}` : ''}`}
                   filterOverrideReason={(task.id === filterOverrideId || task.id === fadingOverrideId) ? filterOverrideReason : undefined}
                   isFadingOverride={fadingOverrideId === task.id}
+                  groupInfo={groupRenderMap.get(task.id)}
+                  onRenameGroup={handleRenameGroup}
+                  onUngroupTask={onUngroupTask}
                 />
               );
             })}
@@ -3894,7 +4057,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                   childCount={trueChildCountMap.get(task.id)}
                                   isExpanded={expandedParents.has(task.id)}
                                   onToggleExpand={() => toggleParentExpand(task.id)}
-                                  onClick={() => handleTaskClick(task)}
+                                  onClick={(e) => handleTaskClick(task, e)}
+                  isSelected={selectedIds.has(task.id)}
                                   onSetPhase={setPhaseOrComplete}
                                   onStar={onStar}
                                   onDelete={onDelete}
@@ -3913,6 +4077,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     pinnedTier={getTier(task.id)}
                                   filterOverrideReason={(task.id === filterOverrideId || task.id === fadingOverrideId) ? filterOverrideReason : undefined}
                                   isFadingOverride={fadingOverrideId === task.id}
+                                  groupInfo={groupRenderMap.get(task.id)}
+                                  onRenameGroup={handleRenameGroup}
+                                  onUngroupTask={onUngroupTask}
                                 />
                               );
                             })}
@@ -3969,7 +4136,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                                 childCount={trueChildCountMap.get(task.id)}
                                                 isExpanded={expandedParents.has(task.id)}
                                                 onToggleExpand={() => toggleParentExpand(task.id)}
-                                                onClick={() => handleTaskClick(task)}
+                                                onClick={(e) => handleTaskClick(task, e)}
+                  isSelected={selectedIds.has(task.id)}
                                                 onSetPhase={setPhaseOrComplete}
                                                 onStar={onStar}
                                                 onDelete={onDelete}
@@ -3988,6 +4156,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     pinnedTier={getTier(task.id)}
                                                 filterOverrideReason={(task.id === filterOverrideId || task.id === fadingOverrideId) ? filterOverrideReason : undefined}
                                                 isFadingOverride={fadingOverrideId === task.id}
+                                                groupInfo={groupRenderMap.get(task.id)}
+                                                onRenameGroup={handleRenameGroup}
+                                                onUngroupTask={onUngroupTask}
                                               />
                                             );
                                           })}
@@ -4150,6 +4321,25 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           if (task) handleTaskClick(task);
         }}
       />
+
+      {/* Multi-select action bar — appears while ≥2 tasks are Cmd/Ctrl-selected.
+          "Group" is enabled only when they share one category+project (the scope rule). */}
+      {onGroupTasks && selectionInfo.tasks.length >= 2 && (
+        <div className="task-selection-bar">
+          <span className="task-selection-count">{selectionInfo.tasks.length} selected</span>
+          <button
+            className="task-selection-group-btn"
+            disabled={!selectionInfo.sameScope}
+            title={selectionInfo.sameScope ? 'Group these tasks together' : 'Tasks must be in the same category and project to group'}
+            onClick={handleGroupSelected}
+          >
+            ⑂ Group
+          </button>
+          <button className="task-selection-clear-btn" onClick={() => setSelectedIds(new Set())}>
+            Clear
+          </button>
+        </div>
+      )}
     </div>
   );
 });

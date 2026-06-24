@@ -22,6 +22,10 @@ export interface TasksContextValue {
   reparentTask: (taskId: string, newParentId: string | null, opts?: { insertAfterId?: string }) => void;
   deleteTask: (id: string) => Promise<void>;
   bakeOrder: (orderedIds: string[]) => void;
+  taskGroups: Record<string, string>;
+  groupTasks: (taskIds: string[], label?: string) => void;
+  ungroupTasks: (taskIds: string[]) => void;
+  renameGroup: (groupId: string, label: string) => void;
 }
 
 const TasksContext = createContext<TasksContextValue | null>(null);
@@ -34,7 +38,7 @@ export function TasksProvider({ children }: { children: ReactNode }) {
   // useTasks callbacks are already stable (useCallback), so only data fields trigger updates.
   const value = useMemo<TasksContextValue>(() => t,
     // eslint-disable-next-line react-hooks/exhaustive-deps -- t's callbacks are stable via useCallback
-    [t.tasks, t.loading, t.error, t.operationError]);
+    [t.tasks, t.taskGroups, t.loading, t.error, t.operationError]);
 
   return <TasksContext.Provider value={value}>{children}</TasksContext.Provider>;
 }

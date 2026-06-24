@@ -16,6 +16,8 @@ export interface TaskStarredEvent { task: Task; starred: boolean }
 export interface TaskDeletedEvent { id?: string; task: Task }
 export interface TaskReorderedEvent { category: string; project: string; taskIds: string[] }
 export interface TaskUnblockedEvent { task: Task; unblockedBy: Task }
+/** Virtual task-group membership or label changed (created / renamed / dissolved). */
+export interface TaskGroupsChangedEvent { group_id?: string; label?: string; dissolved_group_ids?: string[] }
 
 // ── Category events ──
 
@@ -500,6 +502,7 @@ export interface EventPayloadMap {
   'task:deleted': TaskDeletedEvent;
   'task:reordered': TaskReorderedEvent;
   'task:unblocked': TaskUnblockedEvent;
+  'task:groups-changed': TaskGroupsChangedEvent;
 
   'category:created': CategoryCreatedEvent;
   'category:updated': CategoryUpdatedEvent;

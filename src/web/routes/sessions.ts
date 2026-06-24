@@ -8,7 +8,7 @@ import { listSessions, getRecentSessions, getSessionSummaries, getSessionsForTas
 import { readSessionHistory, readSingleSubagentHistory, reconstructWorkflowProgress, extractPlanContent, rewriteHistoryRemoteImages } from '../../core/session-history.js'
 import { computeSessionChanges } from '../../core/session-changes.js'
 import { computeSessionGitDiff, type GitDiffBase } from '../../core/session-git-diff.js'
-import { listTasks, getTask, addTask, updateTask, togglePin, setFocusTier, linkSession } from '../../core/task-manager.js'
+import { listTasks, getTask, addTask, updateTask, togglePin, setFocusTier, linkSession, groupTasks, addToGroup, renameGroup } from '../../core/task-manager.js'
 import { getConfig } from '../../core/config-manager.js'
 import { bus, EventNames, eventData } from '../../core/event-bus.js'
 import fsp from 'node:fs/promises'
@@ -1831,65 +1831,87 @@ sessionsRouter.post('/:sessionId/fork', async (req: Request, res: Response, next
     let childTaskCreated = false
 
     if (create_child_task) {
-      // Auto-create a child task under the source session's task
+      // Fork = create a SIBLING task and visually group it with the source task
+      // (NOT a parent/subtask — they have independent lifecycles). The new task
+      // inherits the source task's category/project/source but has NO parent; we
+      // then put both the source task and the fork into a lightweight virtual
+      // group (reusing the source task's existing group if it already has one).
       if (!sourceRecord.taskId) {
-        res.status(400).json({ error: 'Source session has no task — cannot create child task' })
+        res.status(400).json({ error: 'Source session has no task — cannot create fork task' })
         return
       }
-      let parentTask: Task
+      let sourceTask: Task
       try {
-        parentTask = await getTask(sourceRecord.taskId)
+        sourceTask = await getTask(sourceRecord.taskId)
       } catch {
-        res.status(404).json({ error: `Parent task "${sourceRecord.taskId}" not found` })
+        res.status(404).json({ error: `Source task "${sourceRecord.taskId}" not found` })
         return
       }
       // When the caller didn't supply an explicit child_title, we use a plain
-      // `Fork of <parent>` placeholder now and (below, after addTask) refine it
-      // asynchronously into `<2-4 word summary of the fork prompt> - fork of <parent>`.
+      // `Fork of <source>` placeholder now and (below, after addTask) refine it
+      // asynchronously into `<2-4 word summary of the fork prompt> - fork of <source>`.
       // Use `||` (not `??`) so an empty-string child_title also falls back to the
       // placeholder — consistent with `autoTitle = !child_title` below.
       const autoTitle = !child_title
-      const newTitle = child_title || `Fork of ${parentTask.title}`
-      // No _skipPluginOps: a forked child inherits the parent's source (e.g.
-      // an external sync plugin) and must pass the same content validation + push
-      // as any other task. Skipping it previously let CJK titles inherited from a
-      // parent slip into the external backend. addTask throws on CJK → surfaced via next(err).
-      const { task: newChild } = await addTask({
+      const newTitle = child_title || `Fork of ${sourceTask.title}`
+      // No _skipPluginOps: a fork inherits the source's source (e.g. an external
+      // sync plugin) and must pass the same content validation + push as any
+      // other task. addTask throws on CJK → surfaced via next(err).
+      const { task: newFork } = await addTask({
         title: newTitle,
-        category: parentTask.category,
-        project: parentTask.project,
-        parent_task_id: parentTask.id,
-        source: parentTask.source,
+        category: sourceTask.category,
+        project: sourceTask.project,
+        source: sourceTask.source,
       })
-      // Inherit the parent's pin/tier so a fork of a Focus task lands in Focus
-      // too — addTask() never sets focus_tier, so without this the child always
-      // defaults to satellite regardless of where the parent lived. Mirrors the
-      // quick-start pin/tier block above; best-effort, non-fatal on failure.
-      if (parentTask.pinned && parentTask.focus_tier) {
+      // Inherit the source's pin/tier so a fork of a Focus task lands in Focus
+      // too — addTask() never sets focus_tier. Best-effort, non-fatal on failure.
+      if (sourceTask.pinned && sourceTask.focus_tier) {
         try {
-          await togglePin(newChild.id)
-          await setFocusTier(newChild.id, parentTask.focus_tier)
+          await togglePin(newFork.id)
+          await setFocusTier(newFork.id, sourceTask.focus_tier)
         } catch (err) {
-          log.web.warn('fork: failed to inherit pin/tier from parent', {
-            taskId: newChild.id,
-            parentTaskId: parentTask.id,
-            tier: parentTask.focus_tier,
+          log.web.warn('fork: failed to inherit pin/tier from source', {
+            taskId: newFork.id,
+            sourceTaskId: sourceTask.id,
+            tier: sourceTask.focus_tier,
             error: err instanceof Error ? err.message : String(err),
           })
         }
       }
-      bus.emit(EventNames.TASK_CREATED, { task: newChild }, ['web-ui', 'main-agent'], { source: 'fork' })
-      task = newChild
+      bus.emit(EventNames.TASK_CREATED, { task: newFork }, ['web-ui', 'main-agent'], { source: 'fork' })
+      task = newFork
       childTaskCreated = true
 
+      // Visually group the source task + fork. Reuse the source task's existing
+      // group if it already belongs to one (continuous forks accrete into one
+      // group: source + fork1 + fork2…). Best-effort: a grouping failure must not
+      // abort the fork — the fork task still exists standalone.
+      let forkGroupId: string | undefined
+      try {
+        if (sourceTask.group_id) {
+          const r = await addToGroup(sourceTask.group_id, [newFork.id])
+          forkGroupId = r.group_id
+        } else {
+          // Seed label with the source title; refined to an AI group name below.
+          const r = await groupTasks([sourceTask.id, newFork.id], sourceTask.title)
+          forkGroupId = r.group_id
+        }
+      } catch (err) {
+        log.web.warn('fork: failed to group source + fork', {
+          sourceTaskId: sourceTask.id,
+          forkTaskId: newFork.id,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+
       // Refine the auto-generated title in the background: summarize the fork's new
-      // prompt into a few English words → `<words> - fork of <parent>`. Fire-and-forget
-      // so the fork response is not blocked; failures keep the `Fork of <parent>`
+      // prompt into a few English words → `<words> - fork of <source>`. Fire-and-forget
+      // so the fork response is not blocked; failures keep the `Fork of <source>`
       // placeholder. Only runs when the title was auto-generated AND a custom fork
       // message was provided (no point summarizing the "Continue working on:" default).
       if (autoTitle && message?.trim()) {
-        const childId = newChild.id
-        const parentTitle = parentTask.title
+        const forkId = newFork.id
+        const sourceTitle = sourceTask.title
         const placeholderTitle = newTitle
         void (async () => {
           try {
@@ -1897,20 +1919,43 @@ sessionsRouter.post('/:sessionId/fork', async (req: Request, res: Response, next
             const label = await summarizeForkPrompt(message)
             if (!label) return
             // Don't clobber a concurrent user rename: only refine if the title is
-            // still the `Fork of <parent>` placeholder we created moments ago.
-            const current = await getTask(childId)
+            // still the `Fork of <source>` placeholder we created moments ago.
+            const current = await getTask(forkId)
             if (current.title !== placeholderTitle) {
-              log.web.info('fork title refine skipped — title changed since fork', { taskId: childId })
+              log.web.info('fork title refine skipped — title changed since fork', { taskId: forkId })
               return
             }
-            const refinedTitle = `${label} - fork of ${parentTitle}`
-            const { task: updated } = await updateTask(childId, { title: refinedTitle }, { source: 'fork-title' })
+            const refinedTitle = `${label} - fork of ${sourceTitle}`
+            const { task: updated } = await updateTask(forkId, { title: refinedTitle }, { source: 'fork-title' })
             bus.emit(EventNames.TASK_UPDATED, { task: updated }, ['web-ui', 'main-agent'], { source: 'fork-title' })
-            log.web.info('fork title refined', { taskId: childId, title: refinedTitle })
+            log.web.info('fork title refined', { taskId: forkId, title: refinedTitle })
           } catch (err) {
-            // Best-effort: a failed refine just leaves the `Fork of <parent>` title.
+            // Best-effort: a failed refine just leaves the `Fork of <source>` title.
             log.web.warn('fork title refine failed', {
-              taskId: childId,
+              taskId: forkId,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          }
+        })()
+      }
+
+      // Refine the GROUP name in the background from both task titles (only when
+      // we created a fresh group — an existing group keeps its established name).
+      // Best-effort, fire-and-forget; failures keep the source-title placeholder.
+      if (forkGroupId && !sourceTask.group_id) {
+        const gid = forkGroupId
+        const seedTitles = [sourceTask.title, newTitle]
+        void (async () => {
+          try {
+            const { summarizeGroupLabel } = await import('../../core/fork-title.js')
+            const label = await summarizeGroupLabel(seedTitles)
+            if (!label) return
+            await renameGroup(gid, label)
+            bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: gid, label }, ['web-ui', 'main-agent'], { source: 'fork' })
+            log.web.info('fork group label refined', { groupId: gid, label })
+          } catch (err) {
+            log.web.warn('fork group label refine failed', {
+              groupId: gid,
               error: err instanceof Error ? err.message : String(err),
             })
           }

@@ -166,10 +166,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const agentConsole = useAgentConsole();
   const conversations = useConversations(agentConsole.activeAgentId);
   const chat = useChat(agentConsole.activeAgentId, conversations.activeConversationId);
-  const { health, setupComplete } = useSystemHealth();
+  const { health } = useSystemHealth();
   const { mode: chatMode, toggleMode, getPlanPayload } = usePlanMode();
   const { connectionState } = useWebSocket();
-  const { tasks, loading, toggleComplete, setPhase, star, create, update, reorder, moveTask, reparentTask, deleteTask, bakeOrder, clearOperationError, showOperationError } = useTasksContext();
+  const { tasks, loading, toggleComplete, setPhase, star, create, update, reorder, moveTask, reparentTask, deleteTask, bakeOrder, clearOperationError, showOperationError, taskGroups, groupTasks, ungroupTasks, renameGroup } = useTasksContext();
   const favorites = useFavorites();
   const focusBar = useFocusBarContext();
   const pinnedTaskIdSet = useMemo(() => new Set(focusBar.pinnedIds), [focusBar.pinnedIds]);
@@ -1096,6 +1096,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onMoveTask={moveTask}
           onReparentTask={reparentTask}
           onBakeOrder={bakeOrder}
+          taskGroups={taskGroups}
+          onGroupTasks={groupTasks}
+          onUngroupTask={(taskId) => ungroupTasks([taskId])}
+          onRenameGroup={renameGroup}
           onOpenSession={handleToggleSession}
           onTaskClick={handleFocusTaskById}
           openSessionIds={openSessionIdSet}
@@ -1160,9 +1164,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             />
           )}
 
-          {!setupComplete && (
-            <SetupBanner health={health} onNavigateSettings={handleNavigateSettings} />
-          )}
+          {/* SetupBanner decides internally what to show: full onboarding when no provider,
+              a small "auto-detected" note when a non-config source was used, or nothing when
+              fully configured. So mount it unconditionally rather than gating on setupComplete
+              (which is true once auto-detected and would hide the auto-detect note). */}
+          <SetupBanner health={health} onNavigateSettings={handleNavigateSettings} />
 
           <ChatPanel messageCount={chat.messages.length} prependedRef={chat.prependedRef}>
             {chat.hasMore && (

@@ -34,6 +34,8 @@ interface TaskKebabMenuProps {
   onUnparent?: (id: string) => void;
   /** Move task up one slot among its siblings. Pass undefined when task is already first. */
   onMoveUp?: (id: string) => void;
+  /** Remove this task from its virtual group. Only shown when task.group_id is set. */
+  onUngroup?: (id: string) => void;
   onDelete?: (id: string) => void;
 }
 
@@ -56,7 +58,7 @@ const PRIORITY_OPTIONS: { value: TaskPriority; icon: string; label: string }[] =
   { value: 'none', icon: '--', label: 'None' },
 ];
 
-export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedTier, isDone, onExpandDetail, onClearFocus, onSetPriority, onStar, onPinTask, onUnpinTask, onSetTier, onOpenSession, onSetDate, onUnparent, onMoveUp, onDelete }: TaskKebabMenuProps) {
+export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedTier, isDone, onExpandDetail, onClearFocus, onSetPriority, onStar, onPinTask, onUnpinTask, onSetTier, onOpenSession, onSetDate, onUnparent, onMoveUp, onUngroup, onDelete }: TaskKebabMenuProps) {
   const integrations = useIntegrations();
   const [open, setOpen] = useState(false);
   const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
@@ -202,6 +204,24 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
                   <span>Move up</span>
                 </button>
               )}
+            </>
+          )}
+
+          {/* Ungroup — remove this task from its virtual group */}
+          {onUngroup && task.group_id && (
+            <>
+              <div className="task-kebab-divider" />
+              <button
+                className="task-kebab-item"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onUngroup(task.id);
+                  closeMenu();
+                }}
+              >
+                <span className="task-kebab-icon">⑂</span>
+                <span>Remove from group</span>
+              </button>
             </>
           )}
 

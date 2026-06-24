@@ -1,3 +1,4 @@
+import type { MouseEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
 import { PriorityBadge } from '../common/PriorityBadge';
@@ -8,11 +9,29 @@ import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
 import { useConfirm } from '@/hooks/useConfirm';
 import { ICON_TRASH } from '../common/Icons';
 
+/** Virtual-group render metadata for a card (mirrors TodoPanel's GroupRenderInfo). */
+export interface CardGroupInfo {
+  groupId: string;
+  label: string;
+  isLead: boolean;
+  isLast: boolean;
+}
+
 interface TaskCardProps {
   task: Task;
   onComplete: (id: string) => void;
   onStar: (id: string) => void;
   onDelete?: (id: string) => void;
+  /** Virtual-group treatment: tinted rail on every member, chip above the lead. */
+  groupInfo?: CardGroupInfo;
+  /** True while this card is part of an in-progress multi-select. */
+  isSelected?: boolean;
+  /** Modifier-click toggles selection instead of navigating. */
+  onSelectToggle?: (taskId: string) => void;
+  /** Rename the whole group (chip click). */
+  onRenameGroup?: (groupId: string, currentLabel: string) => void;
+  /** Remove this task from its group (kebab/affordance). */
+  onUngroup?: (taskId: string) => void;
 }
 
 /** Legacy field lookup for backward compat before ext migration. */
@@ -76,16 +95,54 @@ function SyncIndicator({ task }: { task: Task }) {
   );
 }
 
-export function TaskCard({ task, onComplete, onStar, onDelete }: TaskCardProps) {
+export function TaskCard({ task, onComplete, onStar, onDelete, groupInfo, isSelected, onSelectToggle, onRenameGroup, onUngroup }: TaskCardProps) {
   const navigate = useNavigate();
   const confirm = useConfirm();
   const subtasksDone = task.subtasks?.filter((s) => s.done).length ?? 0;
   const subtasksTotal = task.subtasks?.length ?? 0;
 
+  const className = [
+    'task-card',
+    task.phase === 'COMPLETE' ? 'task-card-done' : '',
+    groupInfo ? 'task-grouped' : '',
+    groupInfo?.isLead ? 'task-group-lead' : '',
+    groupInfo?.isLast ? 'task-group-last' : '',
+    isSelected ? 'task-multi-selected' : '',
+  ].filter(Boolean).join(' ');
+
+  // Modifier-click builds a multi-selection; a plain click opens the task.
+  const handleCardClick = (e: MouseEvent) => {
+    if (onSelectToggle && (e.metaKey || e.ctrlKey || e.shiftKey)) {
+      e.preventDefault();
+      onSelectToggle(task.id);
+      return;
+    }
+    navigate(`/tasks/${task.id}`);
+  };
+
   return (
+    <>
+    {/* Group header chip — only above the lead member; names the whole cluster. */}
+    {groupInfo?.isLead && (
+      <div
+        className="task-group-chip"
+        title="Forked / grouped tasks — independent tasks shown together"
+      >
+        <span className="task-group-chip-icon" aria-hidden="true">⑂</span>
+        <span
+          className="task-group-chip-label"
+          onClick={(e) => { e.stopPropagation(); onRenameGroup?.(groupInfo.groupId, groupInfo.label); }}
+          title="Rename group"
+        >
+          {groupInfo.label}
+        </span>
+      </div>
+    )}
     <div
-      className={`task-card${task.phase === 'COMPLETE' ? ' task-card-done' : ''}`}
-      onClick={() => navigate(`/tasks/${task.id}`)}
+      className={className}
+      data-task-id={task.id}
+      data-group-id={groupInfo?.groupId}
+      onClick={handleCardClick}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => { if (e.key === 'Enter') navigate(`/tasks/${task.id}`); }}
@@ -102,6 +159,17 @@ export function TaskCard({ task, onComplete, onStar, onDelete }: TaskCardProps) 
       </button>
 
       <StarButton starred={!!task.starred} onClick={() => onStar(task.id)} />
+
+      {groupInfo && onUngroup && (
+        <button
+          className="task-ungroup-btn"
+          onClick={(e) => { e.stopPropagation(); onUngroup(task.id); }}
+          aria-label="Remove from group"
+          title="Remove from group"
+        >
+          ⑂
+        </button>
+      )}
 
       {onDelete && (
         <button
@@ -158,6 +226,7 @@ export function TaskCard({ task, onComplete, onStar, onDelete }: TaskCardProps) 
         </div>
       </div>
     </div>
+    </>
   );
 }
 

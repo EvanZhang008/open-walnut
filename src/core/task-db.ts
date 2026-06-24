@@ -360,6 +360,14 @@ const SCHEMA_SQL = `
     source TEXT NOT NULL,
     order_index INTEGER
   );
+
+  -- Virtual task-group name registry (local-only). Maps Task.group_id (stored in
+  -- the tasks.payload blob) to a human-readable group label. Membership itself
+  -- lives on the tasks (tasks.group_id); this table only holds the names.
+  CREATE TABLE IF NOT EXISTS task_groups (
+    id TEXT PRIMARY KEY,
+    label TEXT NOT NULL
+  );
 `;
 
 /**

@@ -9,7 +9,7 @@ import { TaskForm, type TaskFormData } from '@/components/tasks/TaskForm';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 
 export function DashboardPage() {
-  const { tasks, loading, error, toggleComplete, star, create } = useTasksContext();
+  const { tasks, loading, error, toggleComplete, star, create, taskGroups, groupTasks, ungroupTasks, renameGroup } = useTasksContext();
   const { categoryOrder } = useOrdering();
   const [statusFilter, setStatusFilter] = useState('todo');
   const [priorityFilter, setPriorityFilter] = useState('');
@@ -100,6 +100,10 @@ export function DashboardPage() {
         onComplete={toggleComplete}
         onStar={star}
         onAdd={() => setShowForm(true)}
+        taskGroups={taskGroups}
+        onGroupTasks={groupTasks}
+        onUngroupTask={(taskId) => ungroupTasks([taskId])}
+        onRenameGroup={renameGroup}
       />
 
       {showForm && (

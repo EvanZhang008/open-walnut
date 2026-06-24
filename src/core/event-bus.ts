@@ -23,6 +23,7 @@ export const EventNames = {
   TASK_DELETED: 'task:deleted',
   TASK_REORDERED: 'task:reordered',
   TASK_UNBLOCKED: 'task:unblocked',
+  TASK_GROUPS_CHANGED: 'task:groups-changed',
 
   // Inline subagent streaming
   AGENT_SUBAGENT_STREAM: 'agent:subagent-stream',

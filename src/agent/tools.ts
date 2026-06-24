@@ -26,6 +26,12 @@ import {
   togglePin,
   setFocusTier,
   getPinnedTasks,
+  groupTasks,
+  addToGroup,
+  removeFromGroup,
+  renameGroup,
+  listGroups,
+  TaskGroupScopeError,
 } from '../core/task-manager.js';
 import { VALID_PHASES } from '../core/phase.js';
 import { bm25ScoreTasks, expandChildTasks } from '../core/search.js';
@@ -80,6 +86,27 @@ function sessionRef(id: string, label: string): string {
 /** Build a `<task-ref>` XML tag. */
 function taskRef(id: string, label: string): string {
   return `<task-ref id="${escAttr(id)}" label="${escAttr(label)}"/>`;
+}
+
+/**
+ * Fire-and-forget: refine a freshly-created group's name from its members' titles
+ * via a cheap LLM call. Best-effort — failures leave the placeholder label.
+ */
+async function refineGroupLabel(groupId: string, memberIds: string[]): Promise<void> {
+  try {
+    const titles: string[] = [];
+    for (const id of memberIds) {
+      try { titles.push((await getTask(id)).title); } catch { /* skip */ }
+    }
+    if (titles.length === 0) return;
+    const { summarizeGroupLabel } = await import('../core/fork-title.js');
+    const label = await summarizeGroupLabel(titles);
+    if (!label) return;
+    const result = await renameGroup(groupId, label);
+    bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui'], { source: 'agent' });
+  } catch (err) {
+    log.agent?.warn?.('refineGroupLabel failed', { groupId, error: err instanceof Error ? err.message : String(err) });
+  }
 }
 
 // readPlanFromSession and buildPlanExecutionMessage removed — plan execution now handled by UI buttons via REST endpoints
@@ -216,6 +243,7 @@ export const tools: ToolDefinition[] = [
             starred: { type: 'boolean', description: 'Filter starred/favorite tasks (includes individually starred tasks and tasks in favorited categories/projects).' },
             needs_attention: { type: 'boolean', description: 'Filter to tasks flagged as needing human attention.' },
             parent_task_id: { type: 'string', description: 'Filter to children of a parent task (by ID prefix).' },
+            group_id: { type: 'string', description: 'Filter to members of a virtual group (exact group id, e.g. "g_xxx").' },
             tags: { type: 'array', items: { type: 'string' }, description: 'Filter to tasks with any of these tags (OR match).' },
             blocked: { type: 'boolean', description: 'Filter to tasks that are blocked/unblocked by dependencies.' },
             sprint: { type: 'string', description: 'Filter by sprint name (exact match).' },
@@ -361,6 +389,11 @@ export const tools: ToolDefinition[] = [
         tasks = tasks.filter((t) => t.parent_task_id?.startsWith(parentPrefix));
       }
 
+      // Apply group_id filter (exact match — group ids are full, not prefixes)
+      if (where.group_id) {
+        tasks = tasks.filter((t) => t.group_id === where.group_id);
+      }
+
       // Apply tags filter (OR match: task has any of the specified tags)
       if (where.tags && Array.isArray(where.tags) && (where.tags as string[]).length > 0) {
         const filterTags = new Set(where.tags as string[]);
@@ -412,6 +445,7 @@ export const tools: ToolDefinition[] = [
         if (t.plan_session_id) entry.plan_session = t.plan_session_id;
         if (t.exec_session_id) entry.exec_session = t.exec_session_id;
         if (t.parent_task_id) entry.parent_task_id = t.parent_task_id;
+        if (t.group_id) entry.group_id = t.group_id;
         if (includeNoteFlags) {
           entry.has_description = !!t.description;
           entry.has_summary = !!t.summary;
@@ -855,6 +889,90 @@ For categories (type='category'): rename a category across all tasks (requires o
         if (err instanceof ActiveSessionError) {
           return `Cannot delete: task has ${err.activeSessionIds.length} active session(s): ${err.activeSessionIds.join(', ')}. Stop or complete those sessions first.`;
         }
+        return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    },
+  },
+
+  {
+    name: 'task_group',
+    description: `Group related tasks together into a lightweight VISUAL group — they render boxed together in the task list, ordered right after the group's lead (top-sorted) task.
+
+This is NOT a parent/subtask relationship: grouped tasks stay flat and fully independent (separate lifecycles, no inherited fields, none is "under" another). Use it to say "these tasks belong together" (e.g. a task and its forks, or several tasks tackling one theme) without the heaviness of subtasks.
+
+Rules:
+- All tasks in a group MUST share the same category AND project.
+- A group needs ≥2 tasks. Removing members until fewer than 2 remain dissolves the group automatically.
+- The group name is AI-suggested but you can set/override it via 'label'.
+
+Actions:
+- create: make a new group from 2+ tasks (task_ids). If a task is already grouped, its existing group is merged in.
+- add: add task(s) to an existing group (group_id + task_ids).
+- remove: remove task(s) from their group (task_ids).
+- rename: change a group's name (group_id + label).
+- list: list all groups with their members.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['create', 'add', 'remove', 'rename', 'list'], description: 'The grouping operation to perform.' },
+        task_ids: { type: 'array', items: { type: 'string' }, description: 'Task IDs or prefixes. Required for create (≥2), add (≥1), remove (≥1).' },
+        group_id: { type: 'string', description: 'Target group id (e.g. "g_xxx"). Required for add and rename.' },
+        label: { type: 'string', description: 'Group name. Optional for create (AI-generated if omitted); required for rename.' },
+      },
+      required: ['action'],
+    },
+    async execute(params) {
+      const action = params.action as string;
+      const taskIds = (params.task_ids as string[] | undefined) ?? [];
+      const groupId = params.group_id as string | undefined;
+      const label = params.label as string | undefined;
+      try {
+        if (action === 'list') {
+          const groups = await listGroups();
+          if (groups.length === 0) return 'No task groups.';
+          return groups
+            .map((g) => `${g.label} (${g.group_id}): ${g.member_ids.length} tasks`)
+            .join('\n');
+        }
+
+        if (action === 'create') {
+          if (taskIds.length < 2) return 'Error: "create" needs at least 2 task_ids.';
+          const result = await groupTasks(taskIds, label);
+          bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui'], { source: 'agent' });
+          // Refine the name in the background when the caller didn't supply one.
+          if (!label?.trim()) void refineGroupLabel(result.group_id, result.member_ids);
+          return `Grouped ${result.member_ids.length} tasks as "${result.label}" (${result.group_id}).`;
+        }
+
+        if (action === 'add') {
+          if (!groupId) return 'Error: "add" requires group_id.';
+          if (taskIds.length < 1) return 'Error: "add" requires task_ids.';
+          const result = await addToGroup(groupId, taskIds);
+          bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui'], { source: 'agent' });
+          return `Group "${result.label}" now has ${result.member_ids.length} tasks.`;
+        }
+
+        if (action === 'remove') {
+          if (taskIds.length < 1) return 'Error: "remove" requires task_ids.';
+          const result = await removeFromGroup(taskIds);
+          bus.emit(EventNames.TASK_GROUPS_CHANGED, { dissolved_group_ids: result.dissolved_group_ids }, ['web-ui'], { source: 'agent' });
+          const dissolvedNote = result.dissolved_group_ids.length
+            ? ` (${result.dissolved_group_ids.length} group(s) dissolved — fewer than 2 members left)`
+            : '';
+          return `Removed ${result.removed_ids.length} task(s) from their group${dissolvedNote}.`;
+        }
+
+        if (action === 'rename') {
+          if (!groupId) return 'Error: "rename" requires group_id.';
+          if (!label?.trim()) return 'Error: "rename" requires a non-empty label.';
+          const result = await renameGroup(groupId, label);
+          bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui'], { source: 'agent' });
+          return `Group renamed to "${result.label}" (${result.group_id}).`;
+        }
+
+        return `Error: unknown action "${action}".`;
+      } catch (err) {
+        if (err instanceof TaskGroupScopeError) return `Error: ${err.message}`;
         return `Error: ${err instanceof Error ? err.message : String(err)}`;
       }
     },

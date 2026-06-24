@@ -217,3 +217,33 @@ export async function addDependency(taskId: string, depId: string): Promise<Task
 export async function removeDependency(taskId: string, depId: string): Promise<Task> {
   return updateTask(taskId, { remove_depends_on: [depId] } as UpdateTaskInput);
 }
+
+// ── Virtual task groups ──
+
+export interface TaskGroup {
+  group_id: string;
+  label: string;
+  member_ids: string[];
+}
+
+export async function fetchTaskGroups(): Promise<TaskGroup[]> {
+  const res = await apiGet<{ groups: TaskGroup[] }>('/api/tasks/groups');
+  return res.groups;
+}
+
+/** Create a group from ≥2 tasks. Label optional (AI-generated if omitted). */
+export async function createTaskGroup(taskIds: string[], label?: string): Promise<TaskGroup> {
+  return apiPost<TaskGroup>('/api/tasks/groups', { task_ids: taskIds, ...(label ? { label } : {}) });
+}
+
+export async function addTasksToGroup(groupId: string, taskIds: string[]): Promise<TaskGroup> {
+  return apiPost<TaskGroup>(`/api/tasks/groups/${groupId}/add`, { task_ids: taskIds });
+}
+
+export async function removeTasksFromGroup(taskIds: string[]): Promise<{ removed_ids: string[]; dissolved_group_ids: string[] }> {
+  return apiPost('/api/tasks/groups/remove', { task_ids: taskIds });
+}
+
+export async function renameTaskGroup(groupId: string, label: string): Promise<{ group_id: string; label: string }> {
+  return apiPatch(`/api/tasks/groups/${groupId}`, { label });
+}

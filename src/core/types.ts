@@ -90,6 +90,14 @@ export interface Task {
   /** @deprecated Use session_status instead. Kept for backward compat during migration. */
   exec_session_status?: { process_status: ProcessStatus; activity?: string; mode?: SessionMode; provider?: SessionProvider };
   parent_task_id?: string;     // If set, this is a child task of the parent
+  /** Local-only virtual grouping. Tasks sharing a group_id render as ONE visual
+   *  group in the list (boxed together, ordered after the group's lead task) —
+   *  this is NOT a parent/subtask relationship: the tasks stay flat and fully
+   *  independent (separate lifecycles). All members must share the same
+   *  category + project. Never pushed to external sync backends; round-trips via
+   *  the SQLite `payload` blob (not a dedicated column). The human-readable group
+   *  name lives in TaskStore.task_groups. */
+  group_id?: string;
   depends_on?: string[];       // Full IDs of tasks that must complete before this one
   description: string;
   summary: string;
@@ -135,6 +143,15 @@ export interface TaskStore {
   version?: 1 | 2 | 3 | 4;
   tasks: Task[];
   categories?: Record<string, CategoryRecord>;
+  /** Virtual task-group name registry: group_id → { label }. Maps the local-only
+   *  Task.group_id to a human-readable (AI-generated) group name. Groups with
+   *  fewer than 2 live members are pruned. Local-only; never synced. */
+  task_groups?: Record<string, TaskGroupRecord>;
+}
+
+export interface TaskGroupRecord {
+  /** Human-readable group name (AI-generated on creation; user-renamable). */
+  label: string;
 }
 
 export interface CacheConfig {

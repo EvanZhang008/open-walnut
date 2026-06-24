@@ -844,6 +844,74 @@ input:focus, textarea:focus, select:focus {
   color: #fff;
 }
 
+/* ── Onboarding: hero (paste-into-Claude-Code) + alt paths ── */
+.setup-hero {
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-secondary));
+}
+
+.setup-hero-label {
+  font-size: 13px;
+  color: var(--fg);
+  line-height: 1.45;
+  margin-bottom: 8px;
+}
+
+.setup-hero-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #fff;
+  background: var(--accent);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.setup-copy-wrap-multiline {
+  align-items: flex-start;
+}
+
+.setup-command-multiline {
+  display: block;
+  flex: 1;
+  white-space: pre-wrap;
+  line-height: 1.5;
+  padding: 8px 10px;
+}
+
+.setup-alt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.setup-link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: inherit;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.setup-banner-autodetect {
+  background: color-mix(in srgb, #34c759 7%, var(--bg-secondary));
+  border-color: color-mix(in srgb, #34c759 35%, var(--border));
+}
+
+.setup-banner-autodetect .setup-banner-title {
+  color: #2a9d4a;
+}
+
 /* Install button */
 .install-btn-wrap { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .install-btn {
@@ -8808,6 +8876,104 @@ img[data-lightbox-src],
   font-weight: 500;
 }
 
+/* ── Virtual task groups ── */
+/* Members of a group share a tinted left rail so they read as one cluster,
+   without being subtasks. The chip above the lead names the cluster. */
+.task-group-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px 2px;
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  border-left: 2px solid var(--accent);
+  background: linear-gradient(to right, rgba(0, 122, 255, 0.07), transparent 70%);
+  border-top-left-radius: 7px;
+  user-select: none;
+}
+.task-group-chip-icon {
+  font-size: 11px;
+  opacity: 0.85;
+}
+.task-group-chip-label {
+  cursor: text;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+}
+.task-group-chip-label:hover {
+  text-decoration: underline dotted;
+}
+/* The tinted rail on every grouped row, plus rounding at the cluster ends.
+   Shared by the home Todo panel (.todo-panel-item) and the /tasks list (.task-card). */
+.todo-panel-item.task-grouped,
+.task-card.task-grouped {
+  border-left: 2px solid var(--accent);
+  background: linear-gradient(to right, rgba(0, 122, 255, 0.04), transparent 60%);
+}
+.todo-panel-item.task-group-last,
+.task-card.task-group-last {
+  border-bottom-left-radius: 7px;
+}
+
+/* ── Multi-select (group building) ── */
+.todo-panel-item.task-multi-selected,
+.task-card.task-multi-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: rgba(0, 122, 255, 0.06);
+}
+.task-selection-bar {
+  position: sticky;
+  bottom: 12px;
+  align-self: center;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px auto 12px;
+  padding: 7px 12px;
+  background: var(--bg-elevated, #fff);
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  z-index: 20;
+  font-size: 13px;
+}
+.task-selection-count {
+  color: var(--fg-muted);
+  font-weight: 500;
+}
+.task-selection-group-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 12px;
+  border: none;
+  border-radius: 7px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+.task-selection-group-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.task-selection-clear-btn {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.task-selection-clear-btn:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
 .task-blocked-badge {
   font-size: 0.65rem;
   padding: 1px 5px;
@@ -11156,6 +11322,22 @@ img[data-lightbox-src],
 .task-card:hover .task-delete-btn { opacity: 1; }
 .task-delete-btn:hover { color: var(--danger, #ff453a); background: rgba(255, 69, 58, 0.12); }
 
+/* Remove-from-group affordance on a grouped /tasks card (hover-revealed, accent-tinted). */
+.task-ungroup-btn {
+  opacity: 0;
+  transition: opacity 0.15s;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  border-radius: 5px;
+  padding: 2px 5px;
+  font-size: 12px;
+  line-height: 1;
+}
+.task-card:hover .task-ungroup-btn { opacity: 0.7; }
+.task-ungroup-btn:hover { color: var(--accent); background: rgba(0, 122, 255, 0.12); opacity: 1; }
+
 /* ===== Task Kebab Menu ===== */
 
 .task-kebab-wrapper {
@@ -11284,6 +11466,17 @@ a.task-kebab-info:hover {
   height: 1px;
   background: var(--border);
   margin: 4px 8px;
+}
+
+/* Section header inside the kebab dropdown (e.g. the "Session" half appended
+   below the task actions via TaskQuickActions extraSection). */
+.task-kebab-section-label {
+  padding: 4px 12px 2px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
 }
 
 .task-kebab-priority {

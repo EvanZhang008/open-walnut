@@ -34,7 +34,7 @@ const OPTIMISTIC_STARTING_STATUS = { process_status: 'running' as const };
 function tasksShallowEqual(a: Task, b: Task): boolean {
   const scalarKeys: (keyof Task)[] = [
     'title', 'status', 'phase', 'priority', 'category', 'project',
-    'parent_task_id', 'starred', 'due_date', 'completed_at', 'updated_at',
+    'parent_task_id', 'group_id', 'starred', 'due_date', 'completed_at', 'updated_at',
     'sync_error', 'external_url', 'needs_attention', 'source', 'sprint',
     'cwd', 'session_id', 'plan_session_id', 'exec_session_id',
   ];
@@ -236,14 +236,35 @@ interface UseTasksReturn {
    * Used by manual-sort auto-switch so the display doesn't reshuffle across sort modes.
    */
   bakeOrder: (orderedIds: string[]) => void;
+  /** Virtual-group name registry: group_id → label. */
+  taskGroups: Record<string, string>;
+  /** Create a virtual group from ≥2 task ids (label AI-generated if omitted). */
+  groupTasks: (taskIds: string[], label?: string) => void;
+  /** Remove task(s) from their virtual group. */
+  ungroupTasks: (taskIds: string[]) => void;
+  /** Rename a virtual group. */
+  renameGroup: (groupId: string, label: string) => void;
 }
 
 export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [taskGroups, setTaskGroups] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
   const opErrorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Refresh the group-name registry (group_id → label). Cheap, separate from
+  // the task list; called on initial load + whenever groups change.
+  const refetchGroups = useCallback(() => {
+    tasksApi.fetchTaskGroups()
+      .then((groups) => {
+        const map: Record<string, string> = {};
+        for (const g of groups) map[g.group_id] = g.label;
+        setTaskGroups(map);
+      })
+      .catch(() => { /* groups are best-effort UI sugar — ignore fetch errors */ });
+  }, []);
 
   const showOperationError = useCallback((msg: string) => {
     setOperationError(msg);
@@ -324,7 +345,8 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
 
   useEffect(() => {
     refetch();
-  }, [refetch]);
+    refetchGroups();
+  }, [refetch, refetchGroups]);
 
   // Track WS connection state — refetch tasks on reconnect (server restart, network blip)
   const isFirstConnect = useRef(true);
@@ -434,6 +456,15 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
     if (consumeEcho(`reorder:${category}/${project}`)) { scrollLog('drag-trace-ws-reordered-echo', { cat: category, proj: project }); return; }
     scrollLog('drag-trace-ws-reordered-APPLY', { cat: category, proj: project, count: taskIds.length });
     setTasks((prev) => applyReorder(prev, category, project, taskIds));
+  });
+
+  // Virtual task group created / renamed / dissolved. Membership lives on the
+  // tasks' group_id (carried by task:created/task:updated) but the group LABEL
+  // lives in a separate registry, so the simplest correct refresh is a refetch.
+  useEvent('task:groups-changed', () => {
+    log.info('tasks', 'ws task:groups-changed → refetch tasks + groups');
+    refetch();
+    refetchGroups();
   });
 
   // When a session's status changes, update the enriched session status on the affected task
@@ -692,5 +723,35 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
     });
   }, [onOpError, refetch]);
 
-  return { tasks, loading, error, operationError, clearOperationError, showOperationError, refetch, create, update, toggleComplete, setPhase, star, reorder, moveTask, reparentTask, bakeOrder, deleteTask };
+  // ── Virtual task groups ── (optimistic group_id flips + API; WS groups-changed
+  // reconciles labels/membership; on error we refetch to resync.)
+  const groupTasksCb = useCallback((taskIds: string[], label?: string) => {
+    tasksApi.createTaskGroup(taskIds, label)
+      .then((g) => {
+        setTasks((prev) => prev.map((t) => g.member_ids.includes(t.id) ? { ...t, group_id: g.group_id } : t));
+        setTaskGroups((prev) => ({ ...prev, [g.group_id]: g.label }));
+      })
+      .catch((err) => { onOpError(err); refetch(); refetchGroups(); });
+  }, [onOpError, refetch, refetchGroups]);
+
+  const ungroupTasksCb = useCallback((taskIds: string[]) => {
+    const idSet = new Set(taskIds);
+    setTasks((prev) => prev.map((t) => idSet.has(t.id) ? { ...t, group_id: undefined } : t));
+    // Removing a member can auto-dissolve the whole group (backend prunes groups left
+    // with <2 members), which also ungroups the lone survivor — a task NOT in taskIds.
+    // The optimistic flip above only clears the removed ids, so refetch on success to
+    // pick up the survivor's cleared group_id (the WS event may also arrive, but a
+    // direct refetch makes the resync deterministic).
+    tasksApi.removeTasksFromGroup(taskIds)
+      .then(() => { refetch(); refetchGroups(); })
+      .catch((err) => { onOpError(err); refetch(); refetchGroups(); });
+  }, [onOpError, refetch, refetchGroups]);
+
+  const renameGroupCb = useCallback((groupId: string, label: string) => {
+    setTaskGroups((prev) => ({ ...prev, [groupId]: label }));
+    tasksApi.renameTaskGroup(groupId, label)
+      .catch((err) => { onOpError(err); refetchGroups(); });
+  }, [onOpError, refetchGroups]);
+
+  return { tasks, taskGroups, loading, error, operationError, clearOperationError, showOperationError, refetch, create, update, toggleComplete, setPhase, star, reorder, moveTask, reparentTask, bakeOrder, deleteTask, groupTasks: groupTasksCb, ungroupTasks: ungroupTasksCb, renameGroup: renameGroupCb };
 }

@@ -132,3 +132,55 @@ export async function summarizeForkPrompt(prompt: string, timeoutMs = 15_000): P
     return heuristicLabel(trimmed);
   }
 }
+
+const GROUP_LABEL_SYSTEM =
+  'You name a group of related coding tasks. Given several task titles, reply ' +
+  'with a 2-4 word English group name in Title Case that captures their common ' +
+  'theme. No quotes, no punctuation, no trailing period, English only. ' +
+  'Examples: "Login Flow", "Stream Parser Forks", "Onboarding Polish".';
+
+/**
+ * Summarize a set of task titles into a short English group label. Mirrors
+ * summarizeForkPrompt: cheap Haiku-tier call, best-effort, NEVER throws (returns
+ * a heuristic label or '' so the caller can fall back to the lead task's title).
+ */
+export async function summarizeGroupLabel(titles: string[], timeoutMs = 15_000): Promise<string> {
+  const cleaned = titles.map((t) => (t ?? '').trim()).filter(Boolean);
+  if (cleaned.length === 0) return '';
+  const joined = cleaned.slice(0, 12).map((t) => `- ${t}`).join('\n');
+
+  try {
+    const { getConfig } = await import('./config-manager.js');
+    const config = await getConfig();
+    const providerName = config.agent?.main_provider ?? 'bedrock';
+    const model = cheapModelFor(providerName);
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let result;
+    try {
+      result = await sendMessage({
+        system: GROUP_LABEL_SYSTEM,
+        messages: [{ role: 'user', content: `Task titles:\n${joined.slice(0, 2000)}\n\nGroup name:` }],
+        config: { maxTokens: 64, ...(model ? { model } : {}) },
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+
+    const text = (result.content ?? [])
+      .map((b) => (b.type === 'text' && 'text' in b ? (b as { text: string }).text : ''))
+      .join('')
+      .trim();
+
+    const label = normalizeLabel(text);
+    if (label) return label;
+    return heuristicLabel(cleaned.join(' '));
+  } catch (err) {
+    log.web.warn('summarizeGroupLabel failed, using heuristic', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return heuristicLabel(cleaned.join(' '));
+  }
+}
