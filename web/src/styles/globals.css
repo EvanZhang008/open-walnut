@@ -27,6 +27,9 @@
   --priority-medium: #FF9500;
   --priority-low: #34C759;
   --sidebar-width: 240px;
+  /* Code/monospace stack — GitHub's, so diffs & code blocks read crisply (and
+     never fall back to Courier serif on machines without Consolas). */
+  --font-mono: ui-monospace, 'SF Mono', 'SFMono-Regular', 'Menlo', 'Cascadia Code', 'Fira Code', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
@@ -19834,6 +19837,10 @@ a.file-link:hover {
   column-gap: 14px;
   align-items: start;
 }
+/* The line number is a click-AND-drag comment affordance (same as the diff
+   gutter): a borderless button that highlights on hover so it reads as
+   actionable. Click = comment one block; drag DOWN the number column = select a
+   contiguous range. cell-grab cursors hint the drag. */
 .session-diff-rendered-lineno {
   text-align: right;
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
@@ -19841,10 +19848,30 @@ a.file-link:hover {
   color: var(--fg-muted);
   opacity: 0.55;
   user-select: none;
-  /* Nudge down so the number sits on the block's first text line, not its top
-     margin (headings/paragraphs carry a top margin). */
-  padding-top: 0.35em;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0.35em 4px 0 0;
+  border-radius: 4px;
+  transition: background 0.1s, color 0.1s, opacity 0.1s;
 }
+.session-diff-rendered-lineno:hover {
+  opacity: 1;
+  background: var(--accent);
+  color: #fff;
+}
+/* Row tint while it's in the live drag range, its composer is open, or it
+   carries recorded comments. The line number stays solid-highlighted across the
+   whole selected range so a multi-block selection reads as one block (GitHub). */
+.session-diff-rendered-row.is-active { background: var(--accent-subtle, rgba(31, 111, 235, 0.06)); }
+.session-diff-rendered-row.is-active > .session-diff-rendered-lineno {
+  opacity: 1;
+  color: var(--accent);
+}
+/* While dragging the number column, suppress native text selection in the body
+   so the drag reads as a range pick, not a text highlight. */
+.session-diff-rendered.is-dragging .session-diff-rendered-block { user-select: none; }
+.session-diff-rendered-main { min-width: 0; }
 .session-diff-rendered-block { min-width: 0; }
 /* The block's first child must NOT carry a top margin, or it pushes the text
    below the row-aligned line number (headings carry a 26px top margin). The
@@ -19925,12 +19952,25 @@ a.file-link:hover {
 }
 .session-diff-rendered .markdown-body img { max-width: 100%; }
 
-/* react-diff-view table tuning to match the app */
+/* react-diff-view table tuning to match the app. The actual code text font is
+   controlled by react-diff-view's own `--diff-font-family` var (set on .diff-line
+   / .diff-code / .diff-decoration-content with HIGHER specificity than this table
+   rule) — its default is `Consolas,Courier,monospace`, which falls back to the
+   ugly Courier SERIF on machines without Consolas (e.g. macOS). Override that var
+   to our crisp GitHub-style mono stack so the diff never renders in a serif. */
 .session-diff-table {
-  font-family: var(--font-mono, ui-monospace, monospace);
+  --diff-font-family: var(--font-mono);
+  font-family: var(--font-mono);
   font-size: 12px;
+  line-height: 1.5;
   width: 100%;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-variant-ligatures: none; /* code reads truer without => ≠ ligature merging */
 }
+.session-diff-table .diff-line { font-family: var(--font-mono); }
+.session-diff-table .diff-code,
+.session-diff-table .diff-gutter { font-family: var(--font-mono); }
 .session-diff-table .diff-gutter { min-width: 2.2em; }
 
 /* Syntax highlighting (refractor/Prism token classes) — GitHub-like palette,
@@ -20038,13 +20078,28 @@ a.file-link:hover {
 }
 
 /* Commentable diff: gutter + code show a pointer + hover highlight so it's
-   discoverable that clicking a line opens a comment box (GitHub-style). */
-.session-diff-commentable .diff-gutter { cursor: pointer; }
+   discoverable that clicking a line opens a comment box (GitHub-style). The
+   gutter also supports drag-select across a line range. */
+.session-diff-commentable .diff-gutter { cursor: pointer; user-select: none; }
 .session-diff-commentable .diff-gutter:hover {
   background: var(--accent);
   color: #fff;
 }
 .session-diff-commentable .diff-code { cursor: text; }
+/* Drag-selecting a range over the gutter: show a row-resize cursor and suppress
+   the browser's native text selection so only OUR range highlight shows. */
+.session-diff-commentable.is-dragging,
+.session-diff-commentable.is-dragging .diff-gutter,
+.session-diff-commentable.is-dragging .diff-code { cursor: row-resize; user-select: none; }
+/* Highlight the selected line range (react-diff-view sets *-selected). Accent
+   tint on the code + a solid accent gutter, so a 15→20 drag reads as one block. */
+.session-diff-commentable .diff-gutter-selected {
+  background: var(--accent);
+  color: #fff;
+}
+.session-diff-commentable .diff-code-selected {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
 .session-diff-filepane-hint {
   margin-left: auto;
   font-size: 11px;

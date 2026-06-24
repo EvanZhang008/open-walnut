@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, useCallback, type ReactNode } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, useCallback, type ReactNode, type MouseEvent as ReactMouseEvent } from 'react';
 import {
   Diff, Hunk, tokenize, markEdits,
   getChangeKey, computeOldLineNumber, computeNewLineNumber, isDelete,
@@ -10,7 +10,7 @@ import { buildFileData } from '@/components/sessions/diffPatch';
 import { buildDiffTree, flattenFiles, allContainerIds, isMarkdownPath, type DiffTreeNode, type DiffTreeRepoNode } from '@/components/sessions/diffTree';
 import { languageForPath, diffRefractor } from '@/components/sessions/diffHighlight';
 import { buildCommentMessage, buildReviewMessage } from '@/components/sessions/diffPrefill';
-import { markdownBlocksWithLines, type MarkdownBlock } from '@/components/sessions/diffMarkdownBlocks';
+import { markdownBlocksWithLines, markdownCommentRange, type MarkdownBlock } from '@/components/sessions/diffMarkdownBlocks';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ICON_REFRESH, ICON_WARNING } from '@/components/common/Icons';
@@ -47,6 +47,10 @@ interface CommentDraft {
   relPath: string;
   /** react-diff-view change key of the anchor line (where the widget renders). */
   anchorKey: string;
+  /** Change keys of EVERY line in the selected range — kept so the range stays
+   *  highlighted (via `selectedChanges`) while the composer is open, not just
+   *  during the drag. */
+  changeKeys: string[];
   /** Display location, e.g. "src/x.ts:L10" or "src/x.ts:L10-L14". */
   loc: string;
   /** The selected code lines (for quoting into the message). */
@@ -61,6 +65,9 @@ interface PendingComment {
   id: number;
   filePath: string;
   anchorKey: string;
+  /** Change keys of the commented line range — kept so the range stays
+   *  highlighted in the diff after the comment is recorded (GitHub-style). */
+  changeKeys: string[];
   loc: string;
   code: string;
   comment: string;
@@ -182,15 +189,22 @@ function TreeRow({
  *    immediately (the old behavior), bypassing the batch.
  * ⌘/Ctrl+Enter = Add (the default); ⌘/Ctrl+Shift+Enter = Send now.
  */
-function CommentBox({ loc, onAdd, onSendNow, onCancel }: {
+function CommentBox({ loc, onAdd, onSendNow, onCancel, onDirtyChange }: {
   loc: string;
   onAdd: (text: string) => void;
   onSendNow: (text: string) => void;
   onCancel: () => void;
+  /** Reports whether the box holds unsaved text. The parent uses this to LOCK the
+   *  composer: while it's dirty, clicking another line is ignored so a half-typed
+   *  comment is never silently discarded — the user must Add / Send now / Cancel. */
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const [text, setText] = useState('');
   const ref = useRef<HTMLTextAreaElement>(null);
   useEffect(() => { ref.current?.focus(); }, []);
+  // Clear the dirty lock when this box goes away (Add / Send / Cancel / file switch).
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
+  const update = (v: string) => { setText(v); onDirtyChange?.(v.trim().length > 0); };
   const add = () => { const t = text.trim(); if (t) onAdd(t); };
   const sendNow = () => { const t = text.trim(); if (t) onSendNow(t); };
   return (
@@ -201,7 +215,7 @@ function CommentBox({ loc, onAdd, onSendNow, onCancel }: {
         className="session-diff-comment-input"
         placeholder="Leave a comment… (⌘/Ctrl+Enter to add, +Shift to send now)"
         value={text}
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => update(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
             e.preventDefault();
@@ -255,36 +269,73 @@ function PendingCommentCard({ loc, code, comment, onCopy, onRemove }: {
 
 // ── Rendered markdown pane ────────────────────────────────────────────────────
 
-/** One rendered markdown block (heading/paragraph/list/…) with a source
- *  line-number gutter to its left. Behind React.memo keyed on (line, html) so a
- *  selection-only re-render of the parent is a no-op here — see RenderedMarkdown. */
-const RenderedMarkdownBlock = memo(function RenderedMarkdownBlock({ line, html }: MarkdownBlock) {
+/** The rendered HTML body of one markdown block, isolated behind React.memo
+ *  keyed on the html string — see RenderedMarkdown's note on why this prevents
+ *  the "selection collapses on re-render" bug. */
+const MarkdownBlockBody = memo(function MarkdownBlockBody({ html }: { html: string }) {
+  return <div className="markdown-body session-diff-rendered-block" dangerouslySetInnerHTML={{ __html: html }} />;
+});
+
+/** One rendered markdown block with a DRAGGABLE source line number on its left
+ *  (same comment affordance as the diff gutter): clicking the number opens the
+ *  comment composer under this row; dragging DOWN the line-number column selects a
+ *  contiguous range of blocks (GitHub-style multi-line comment), and any recorded
+ *  comments for this line stack beneath it. `active` tints the row while it's part
+ *  of the live drag / open composer's range, or it has recorded cards. The drag is
+ *  driven by `index` (the block's position in renderedBlocks), mirroring how the
+ *  diff gutter drags by flatChanges index. */
+function RenderedMarkdownRow({ line, html, index, active, onLineDown, onLineEnter, onLineUp, children }: {
+  line: number;
+  html: string;
+  /** Position in renderedBlocks — the unit a range drag selects over. */
+  index: number;
+  active: boolean;
+  onLineDown: (index: number, e: ReactMouseEvent) => void;
+  onLineEnter: (index: number) => void;
+  onLineUp: () => void;
+  /** Pending cards + open composer for this line, rendered under the block. */
+  children?: ReactNode;
+}) {
   return (
-    <div className="session-diff-rendered-row">
-      <span className="session-diff-rendered-lineno" aria-hidden>{line}</span>
-      <div className="markdown-body session-diff-rendered-block" dangerouslySetInnerHTML={{ __html: html }} />
+    <div className={`session-diff-rendered-row${active ? ' is-active' : ''}`}>
+      <button
+        className="session-diff-rendered-lineno"
+        title={`Comment on line ${line} — or drag to select a range`}
+        onMouseDown={(e) => onLineDown(index, e)}
+        onMouseEnter={() => onLineEnter(index)}
+        onMouseUp={onLineUp}
+      >{line}</button>
+      <div className="session-diff-rendered-main">
+        <MarkdownBlockBody html={html} />
+        {children}
+      </div>
     </div>
   );
-});
+}
 
 /** The rendered-markdown body: source content rendered as HTML with a left
  *  line-number gutter (each top-level block tagged with the source line it
- *  begins on — GitHub shows none, but this is a review view where locating a
- *  block in the file matters).
+ *  begins on). The line numbers are CLICKABLE — clicking one leaves a comment on
+ *  that line, exactly like the diff view's gutter, so a markdown file is just as
+ *  commentable in rendered mode as in diff mode.
  *
- *  WHY blocks + React.memo: selecting text fires the parent's onMouseUp →
- *  setSelection → FileDiffPane re-renders. Inlining `dangerouslySetInnerHTML`
- *  would make React re-apply innerHTML on every such re-render (new object
- *  identity), tearing down and rebuilding all the text nodes and COLLAPSING the
- *  live selection ~3ms after mouseup — the "won't keep the selection" bug.
- *  Memoizing each block on its html means a selection-only re-render is a no-op,
- *  so the DOM (and the live selection) survives. */
-const RenderedMarkdown = memo(function RenderedMarkdown({ blocks }: { blocks: MarkdownBlock[] }) {
+ *  WHY blocks + React.memo on the body: selecting text fires the parent's
+ *  onMouseUp → setSelection → FileDiffPane re-renders. Inlining
+ *  `dangerouslySetInnerHTML` would make React re-apply innerHTML on every such
+ *  re-render (new object identity), tearing down and rebuilding all the text
+ *  nodes and COLLAPSING the live selection ~3ms after mouseup. Memoizing the body
+ *  on its html means a selection-only re-render is a no-op, so the live selection
+ *  survives. */
+const RenderedMarkdown = memo(function RenderedMarkdown({ blocks, dragging, renderRow }: {
+  blocks: MarkdownBlock[];
+  /** True while a line-number range drag is in progress (suppresses body text selection). */
+  dragging: boolean;
+  /** Render the comment composer + recorded cards for a given block. */
+  renderRow: (block: MarkdownBlock, index: number) => ReactNode;
+}) {
   return (
-    <div className="session-diff-rendered markdown-rendered-gutter">
-      {blocks.map((b, i) => (
-        <RenderedMarkdownBlock key={`${b.line}-${i}`} line={b.line} html={b.html} />
-      ))}
+    <div className={`session-diff-rendered markdown-rendered-gutter${dragging ? ' is-dragging' : ''}`}>
+      {blocks.map((b, i) => renderRow(b, i))}
     </div>
   );
 });
@@ -303,7 +354,7 @@ function FileDiffPane({
   /** Recorded comments anchored in THIS file (subset of the review batch). */
   pending: PendingComment[];
   /** Record a comment to the pending review batch (the "Add comment" path). */
-  onAddComment: (c: { filePath: string; anchorKey: string; loc: string; code: string; comment: string }) => void;
+  onAddComment: (c: { filePath: string; anchorKey: string; changeKeys: string[]; loc: string; code: string; comment: string }) => void;
   /** Send a single comment to the agent immediately (the "Send now" path). */
   onSendNow: (message: string) => void;
   /** Copy a single recorded comment's composed text to the clipboard. */
@@ -322,8 +373,36 @@ function FileDiffPane({
 
   // The line the user clicked the gutter on → an open comment draft anchored there.
   const [draft, setDraft] = useState<CommentDraft | null>(null);
-  // Reset any open draft when the selected file changes.
-  useEffect(() => { setDraft(null); }, [change.filePath]);
+  // True while the open composer holds unsaved text. A ref (not state) so typing
+  // doesn't re-render the whole diff, and so the gutter handlers can read the
+  // latest value synchronously. While dirty, opening a DIFFERENT draft is blocked
+  // — the half-typed comment is never silently discarded (the reported bug).
+  const draftDirtyRef = useRef(false);
+  // Guard before opening/replacing a draft: if the current composer is dirty,
+  // refuse to move (keep the box + its text). Returns false = caller should abort.
+  const canOpenDraft = useCallback(() => !draftDirtyRef.current, []);
+  // In-progress drag selection over the gutter: [anchorIdx, focusIdx] into the
+  // flattened change list. null = not dragging. Lets the user drag L15→L20 and
+  // comment on the whole range (GitHub-style), not just one line at a time.
+  const [dragSel, setDragSel] = useState<{ anchor: number; focus: number } | null>(null);
+  // Reset any open draft / drag when the selected file changes OR the view
+  // toggles between diff and rendered (dragSel's index means different things in
+  // each mode — flatChanges vs renderedBlocks — so a stale index must not carry over).
+  // Also release the dirty lock so a switched-to file isn't stuck refusing clicks.
+  useEffect(() => { setDraft(null); setDragSel(null); draftDirtyRef.current = false; }, [change.filePath, rendered]);
+
+  // All changes flattened in render order, so a gutter event can be located by
+  // index and a drag can select a contiguous [min,max] range across hunks.
+  const flatChanges = useMemo<ChangeData[]>(() => {
+    const out: ChangeData[] = [];
+    for (const h of file?.hunks ?? []) for (const c of h.changes) out.push(c);
+    return out;
+  }, [file]);
+  const keyToIdx = useMemo(() => {
+    const m = new Map<string, number>();
+    flatChanges.forEach((c, i) => m.set(getChangeKey(c), i));
+    return m;
+  }, [flatChanges]);
 
   const { adds, dels } = useMemo(() => {
     let a = 0, d = 0;
@@ -343,48 +422,139 @@ function FileDiffPane({
     return markdownBlocksWithLines(change.after || change.before || '', sessionCwd, sessionHost);
   }, [rendered, change.after, change.before, sessionCwd, sessionHost]);
 
-  // Open a comment draft anchored to the clicked line. `change` is a react-diff-view
-  // ChangeData; we derive a human line number + the line's text for quoting.
-  const openDraftAt = useCallback((c: ChangeData) => {
-    const lineNo = isDelete(c) ? computeOldLineNumber(c) : computeNewLineNumber(c);
-    const loc = lineNo > 0 ? `${change.relPath}:L${lineNo}` : change.relPath;
+  // Open a comment draft over a contiguous range [i..j] of RENDERED-MARKDOWN
+  // blocks (indices into renderedBlocks). A single block (i===j) reads
+  // `path:L15`; a multi-block range reads `path:L15-L20` and quotes every block's
+  // source. Markdown has no diff changeKey, so each block is anchored by a
+  // synthetic `md:L<line>` key — that's what the pending card / composer key off,
+  // stable across re-renders. Anchored at the LAST block so the box renders just
+  // below the selection (mirrors openDraftRange for the diff view).
+  const openMarkdownDraftRange = useCallback((i: number, j: number) => {
+    if (draftDirtyRef.current) return; // keep the half-typed comment; don't replace it
+    if (!renderedBlocks) return;
+    const range = markdownCommentRange(renderedBlocks, change.relPath, i, j);
+    if (!range) return;
+    setDraft({ filePath: change.filePath, relPath: change.relPath, ...range });
+  }, [renderedBlocks, change.filePath, change.relPath]);
+
+  // Human line number for one change (new-side, or old-side for deletions).
+  const lineNoOf = useCallback((c: ChangeData) => (isDelete(c) ? computeOldLineNumber(c) : computeNewLineNumber(c)), []);
+
+  // Open a comment draft over a contiguous range [i..j] of flatChanges. A single
+  // line (i===j) reads `path:L15`; a range reads `path:L15-L20` and quotes every
+  // line in between (GitHub-style multi-line comment). Anchored at the LAST line
+  // so the box renders just below the selection.
+  const openDraftRange = useCallback((i: number, j: number) => {
+    if (draftDirtyRef.current) return; // keep the half-typed comment; don't replace it
+    const lo = Math.min(i, j), hi = Math.max(i, j);
+    const slice = flatChanges.slice(lo, hi + 1);
+    if (slice.length === 0) return;
+    const first = lineNoOf(slice[0]!);
+    const last = lineNoOf(slice[slice.length - 1]!);
+    const loc = first > 0
+      ? (slice.length > 1 && last > 0 && last !== first ? `${change.relPath}:L${first}-L${last}` : `${change.relPath}:L${first}`)
+      : change.relPath;
     setDraft({
       filePath: change.filePath,
       relPath: change.relPath,
-      anchorKey: getChangeKey(c),
+      anchorKey: getChangeKey(slice[slice.length - 1]!),
+      changeKeys: slice.map((c) => getChangeKey(c)),
       loc,
-      code: c.content ?? '',
+      code: slice.map((c) => c.content ?? '').join('\n'),
     });
-  }, [change.filePath, change.relPath]);
+  }, [flatChanges, lineNoOf, change.filePath, change.relPath]);
 
-  // Gutter click (the line-number column) → open a comment box on that line.
+  // Gutter drag = range select (GitHub): mousedown starts, mouseenter extends
+  // while held, mouseup opens the comment box over the whole range. A plain
+  // click (no drag) collapses to a single line. We track via dragSel and only
+  // open on mouseup so the box doesn't flicker mid-drag.
   const gutterEvents = useMemo<EventMap>(() => ({
-    onClick: (args: ChangeEventArgs) => { if (args.change) openDraftAt(args.change); },
-  }), [openDraftAt]);
-  // Clicking the code cell also opens a draft (bigger hit target, GitHub-like).
+    onMouseDown: (args: ChangeEventArgs, e) => {
+      if (!args.change) return;
+      if (draftDirtyRef.current) return; // an unsaved composer is open — don't start a new selection
+      e.preventDefault(); // don't start a native text selection while range-dragging
+      const idx = keyToIdx.get(getChangeKey(args.change));
+      if (idx == null) return;
+      setDraft(null);
+      setDragSel({ anchor: idx, focus: idx });
+    },
+    onMouseEnter: (args: ChangeEventArgs) => {
+      if (!args.change) return;
+      const idx = keyToIdx.get(getChangeKey(args.change));
+      if (idx == null) return;
+      setDragSel((prev) => (prev ? { anchor: prev.anchor, focus: idx } : prev));
+    },
+    onMouseUp: (args: ChangeEventArgs) => {
+      setDragSel((prev) => {
+        if (prev) openDraftRange(prev.anchor, prev.focus);
+        return null;
+      });
+    },
+  }), [keyToIdx, openDraftRange]);
+  // Clicking the code cell also opens a single-line draft (bigger hit target).
   const codeEvents = useMemo<EventMap>(() => ({
     onClick: (args: ChangeEventArgs) => {
       if (!args.change) return;
       // Don't hijack text selection: only open if the user didn't select text.
       const sel = window.getSelection();
       if (sel && !sel.isCollapsed) return;
-      openDraftAt(args.change);
+      const idx = keyToIdx.get(getChangeKey(args.change));
+      if (idx != null) openDraftRange(idx, idx);
     },
-  }), [openDraftAt]);
+  }), [keyToIdx, openDraftRange]);
+
+  // Lines react-diff-view paints as selected = the union of three sources, so a
+  // selection STAYS highlighted from the moment you drag, through the open
+  // composer, and after it's recorded to the batch (GitHub keeps the commented
+  // range tinted): (1) the live drag range, (2) the open draft's range, (3)
+  // every recorded comment's range in THIS file.
+  const selectedChanges = useMemo<string[]>(() => {
+    const keys = new Set<string>();
+    if (dragSel) {
+      const lo = Math.min(dragSel.anchor, dragSel.focus), hi = Math.max(dragSel.anchor, dragSel.focus);
+      for (const c of flatChanges.slice(lo, hi + 1)) keys.add(getChangeKey(c));
+    }
+    if (draft) for (const k of draft.changeKeys) keys.add(k);
+    for (const c of pending) for (const k of c.changeKeys) keys.add(k);
+    return [...keys];
+  }, [dragSel, flatChanges, draft, pending]);
+
+  // A drag can end outside the gutter (mouseup over the page) — finalize there
+  // too. Dispatch to the right opener: markdown drags index into renderedBlocks,
+  // diff drags into flatChanges.
+  useEffect(() => {
+    if (!dragSel) return;
+    const open = rendered ? openMarkdownDraftRange : openDraftRange;
+    const onUp = () => setDragSel((prev) => { if (prev) open(prev.anchor, prev.focus); return null; });
+    window.addEventListener('mouseup', onUp);
+    return () => window.removeEventListener('mouseup', onUp);
+  }, [dragSel, rendered, openDraftRange, openMarkdownDraftRange]);
 
   // "Add comment" → record to the pending review batch (the default option).
   const addDraft = useCallback((commentText: string) => {
     if (!draft) return;
-    onAddComment({ filePath: draft.filePath, anchorKey: draft.anchorKey, loc: draft.loc, code: draft.code, comment: commentText });
+    draftDirtyRef.current = false; // recorded → composer no longer holds unsaved text
+    onAddComment({ filePath: draft.filePath, anchorKey: draft.anchorKey, changeKeys: draft.changeKeys, loc: draft.loc, code: draft.code, comment: commentText });
     setDraft(null);
   }, [draft, onAddComment]);
 
   // "Send now" → fire this one comment to the agent immediately (the 2nd option).
   const sendDraftNow = useCallback((commentText: string) => {
     if (!draft) return;
+    draftDirtyRef.current = false; // sent → composer no longer holds unsaved text
     onSendNow(buildCommentMessage(draft.loc, draft.code, commentText));
     setDraft(null);
   }, [draft, onSendNow]);
+
+  // Cancel the open composer: drop its text AND clear the dirty lock so the next
+  // line click works immediately (the only way, besides Add/Send, to release it).
+  const cancelDraft = useCallback(() => {
+    draftDirtyRef.current = false;
+    setDraft(null);
+  }, []);
+  // Reported by CommentBox's textarea: keeps draftDirtyRef in sync with whether
+  // the open composer holds unsaved text (the lock that blocks clicking away).
+  const onDraftDirtyChange = useCallback((dirty: boolean) => { draftDirtyRef.current = dirty; }, []);
 
   // Widgets rendered under lines: every recorded comment's read-only card, plus
   // the open composer (if any). Multiple comments can share one anchor line, so
@@ -411,7 +581,7 @@ function FileDiffPane({
             />
           ))}
           {draftHere && (
-            <CommentBox loc={draft!.loc} onAdd={addDraft} onSendNow={sendDraftNow} onCancel={() => setDraft(null)} />
+            <CommentBox loc={draft!.loc} onAdd={addDraft} onSendNow={sendDraftNow} onCancel={cancelDraft} onDirtyChange={onDraftDirtyChange} />
           )}
         </>
       );
@@ -419,11 +589,92 @@ function FileDiffPane({
     // Draft anchored on a line that has no recorded comments yet.
     if (draft && !byAnchor.has(draft.anchorKey)) {
       map[draft.anchorKey] = (
-        <CommentBox loc={draft.loc} onAdd={addDraft} onSendNow={sendDraftNow} onCancel={() => setDraft(null)} />
+        <CommentBox loc={draft.loc} onAdd={addDraft} onSendNow={sendDraftNow} onCancel={cancelDraft} onDirtyChange={onDraftDirtyChange} />
       );
     }
     return Object.keys(map).length ? map : undefined;
-  }, [pending, draft, addDraft, sendDraftNow, onCopyComment, onRemoveComment]);
+  }, [pending, draft, addDraft, sendDraftNow, cancelDraft, onDraftDirtyChange, onCopyComment, onRemoveComment]);
+
+  // Recorded comments for the RENDERED-MARKDOWN view, grouped by their md anchor
+  // key (`md:L<n>`) so each row can show its own cards + composer (the diff view
+  // does the equivalent via react-diff-view `widgets`).
+  const mdPendingByAnchor = useMemo(() => {
+    const m = new Map<string, PendingComment[]>();
+    for (const c of pending) {
+      if (!c.anchorKey.startsWith('md:')) continue;
+      if (!m.has(c.anchorKey)) m.set(c.anchorKey, []);
+      m.get(c.anchorKey)!.push(c);
+    }
+    return m;
+  }, [pending]);
+
+  // Line-number drag on the RENDERED-MARKDOWN gutter = range select, mirroring
+  // the diff gutter's gutterEvents: mousedown starts (dragSel indices now point
+  // into renderedBlocks), mouseenter extends while held, mouseup opens the
+  // composer over the whole range. A plain click (anchor===focus on mouseup)
+  // collapses to one block. preventDefault stops a native text selection forming
+  // while dragging the number column.
+  const onMdLineDown = useCallback((index: number, e: ReactMouseEvent) => {
+    if (draftDirtyRef.current) return; // an unsaved composer is open — don't start a new selection
+    e.preventDefault();
+    setDraft(null);
+    setDragSel({ anchor: index, focus: index });
+  }, []);
+  const onMdLineEnter = useCallback((index: number) => {
+    setDragSel((prev) => (prev ? { anchor: prev.anchor, focus: index } : prev));
+  }, []);
+  const onMdLineUp = useCallback(() => {
+    setDragSel((prev) => {
+      if (prev) openMarkdownDraftRange(prev.anchor, prev.focus);
+      return null;
+    });
+  }, [openMarkdownDraftRange]);
+
+  // While dragging in markdown mode, the set of block indices the live drag
+  // covers — so every row in the range tints active (parallels selectedChanges
+  // for the diff view). null when not dragging.
+  const mdDragRange = useMemo(() => {
+    if (!rendered || !dragSel) return null;
+    return { lo: Math.min(dragSel.anchor, dragSel.focus), hi: Math.max(dragSel.anchor, dragSel.focus) };
+  }, [rendered, dragSel]);
+
+  // Render one rendered-markdown row: the block + (under it) its recorded cards
+  // and the open composer if the draft is anchored here. Reuses the SAME
+  // CommentBox / PendingCommentCard / batch as the diff view. The row is "active"
+  // (tinted) when it's in the live drag range, its anchor holds the open draft,
+  // or it has recorded cards.
+  const renderMarkdownRow = useCallback((block: MarkdownBlock, index: number) => {
+    const anchorKey = `md:L${block.line}`;
+    const cards = mdPendingByAnchor.get(anchorKey) ?? [];
+    const draftHere = draft?.anchorKey === anchorKey;
+    const inDrag = mdDragRange != null && index >= mdDragRange.lo && index <= mdDragRange.hi;
+    return (
+      <RenderedMarkdownRow
+        key={`${block.line}-${index}`}
+        line={block.line}
+        html={block.html}
+        index={index}
+        active={inDrag || draftHere || cards.length > 0}
+        onLineDown={onMdLineDown}
+        onLineEnter={onMdLineEnter}
+        onLineUp={onMdLineUp}
+      >
+        {cards.map((c) => (
+          <PendingCommentCard
+            key={c.id}
+            loc={c.loc}
+            code={c.code}
+            comment={c.comment}
+            onCopy={() => onCopyComment(c)}
+            onRemove={() => onRemoveComment(c.id)}
+          />
+        ))}
+        {draftHere && (
+          <CommentBox loc={draft!.loc} onAdd={addDraft} onSendNow={sendDraftNow} onCancel={cancelDraft} onDirtyChange={onDraftDirtyChange} />
+        )}
+      </RenderedMarkdownRow>
+    );
+  }, [mdPendingByAnchor, draft, mdDragRange, onMdLineDown, onMdLineEnter, onMdLineUp, addDraft, sendDraftNow, cancelDraft, onDraftDirtyChange, onCopyComment, onRemoveComment]);
 
   return (
     <div className="session-diff-filepane" data-file-path={change.filePath}>
@@ -433,10 +684,14 @@ function FileDiffPane({
           {adds > 0 && <span className="session-diff-stat-add">+{adds}</span>}
           {dels > 0 && <span className="session-diff-stat-del">{'−'}{dels}</span>}
         </span>
-        {!rendered && <span className="session-diff-filepane-hint">Click a line to comment</span>}
+        <span className="session-diff-filepane-hint">
+          {rendered
+            ? 'Click a line number — or drag down the numbers to select a range — to comment'
+            : 'Click a line — or drag the gutter to select a range — to comment'}
+        </span>
       </div>
       {rendered && renderedBlocks != null ? (
-        <RenderedMarkdown blocks={renderedBlocks} />
+        <RenderedMarkdown blocks={renderedBlocks} dragging={mdDragRange != null} renderRow={renderMarkdownRow} />
       ) : file ? (
         <Diff
           viewType={effectiveViewType}
@@ -446,7 +701,8 @@ function FileDiffPane({
           widgets={widgets}
           gutterEvents={gutterEvents}
           codeEvents={codeEvents}
-          className="session-diff-table session-diff-commentable"
+          selectedChanges={selectedChanges}
+          className={`session-diff-table session-diff-commentable${dragSel ? ' is-dragging' : ''}`}
         >
           {(hunks: HunkData[]) => hunks.map((hunk) => <Hunk key={hunk.content} hunk={hunk} />)}
         </Diff>
@@ -455,6 +711,33 @@ function FileDiffPane({
       )}
     </div>
   );
+}
+
+// ── Pending-review persistence ────────────────────────────────────────────────
+// A drafted review (recorded comments not yet submitted) must survive leaving the
+// Changed tab, closing the panel, and full reloads — it belongs to the session and
+// only Discard/Submit clears it. So we mirror it to localStorage, keyed per session.
+const REVIEW_STORAGE_PREFIX = 'open-walnut-diff-review:';
+
+function loadPendingReview(sessionId: string): PendingComment[] {
+  try {
+    const raw = localStorage.getItem(REVIEW_STORAGE_PREFIX + sessionId);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    // Light validation so a corrupt/old record can never crash the panel.
+    return parsed.filter((c): c is PendingComment =>
+      !!c && typeof c.id === 'number' && typeof c.filePath === 'string'
+      && typeof c.anchorKey === 'string' && Array.isArray(c.changeKeys)
+      && typeof c.loc === 'string' && typeof c.code === 'string' && typeof c.comment === 'string');
+  } catch { return []; }
+}
+
+function savePendingReview(sessionId: string, pending: PendingComment[]): void {
+  try {
+    if (pending.length === 0) localStorage.removeItem(REVIEW_STORAGE_PREFIX + sessionId);
+    else localStorage.setItem(REVIEW_STORAGE_PREFIX + sessionId, JSON.stringify(pending));
+  } catch { /* quota exceeded / storage disabled — non-fatal */ }
 }
 
 // ── Main view ─────────────────────────────────────────────────────────────────
@@ -593,10 +876,17 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   // Recorded comments accumulate HERE (not in FileDiffPane) so they survive file
   // switches — the user can comment across many files, then submit the whole
   // review in bulk. "Send now" bypasses this and fires one comment immediately.
-  const [pending, setPending] = useState<PendingComment[]>([]);
+  const [pending, setPending] = useState<PendingComment[]>(() => loadPendingReview(sessionId));
+  // nextId must clear any persisted ids so a restored batch keeps stable, unique keys.
   const nextId = useRef(1);
-  // Reset the batch when the session changes (a review belongs to one session).
-  useEffect(() => { setPending([]); }, [sessionId]);
+  useEffect(() => {
+    const restored = loadPendingReview(sessionId);
+    setPending(restored);
+    nextId.current = restored.reduce((m, c) => Math.max(m, c.id), 0) + 1;
+  }, [sessionId]);
+  // Mirror every change of the batch to localStorage so it survives leaving the
+  // Changed tab / closing the panel / a reload — only Discard or Submit clears it.
+  useEffect(() => { savePendingReview(sessionId, pending); }, [sessionId, pending]);
 
   // Send one composed message to the agent (shared by "Send now" + "Submit review").
   // Falls back to prefilling the chat input when the parent didn't wire onComment.
@@ -605,7 +895,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     onSelectCode('', undefined, message);
   }, [onComment, onSelectCode]);
 
-  const addComment = useCallback((c: { filePath: string; anchorKey: string; loc: string; code: string; comment: string }) => {
+  const addComment = useCallback((c: { filePath: string; anchorKey: string; changeKeys: string[]; loc: string; code: string; comment: string }) => {
     setPending((prev) => [...prev, { id: nextId.current++, ...c }]);
   }, []);
   const removeComment = useCallback((id: number) => {
