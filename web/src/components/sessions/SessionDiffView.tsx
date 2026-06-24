@@ -751,68 +751,145 @@ function savePendingReview(sessionId: string, pending: PendingComment[]): void {
 }
 
 // ── Compare schematic ─────────────────────────────────────────────────────────
-// A tiny VERTICAL git-graph that explains, at a glance, what the chosen Compare
-// mode is diffing — because the labels alone can't convey that (with git-sync
-// auto-committing every 30s) "Uncommitted" and "Not yet pushed" can be hundreds
-// of commits apart. It's a SCHEMATIC, not real history: a fixed trunk of
-//   ◉ working tree (now)  →  ● last commit  →  ⋮ (unpushed commits)  →  ○ remote
-// with the active mode's SPAN highlighted. "What this session changed" hangs off
-// the trunk as a side node (◆, dashed) because it isn't a commit-to-commit diff —
-// it's reconstructed from the session's own edits, spanning whatever it committed.
-const COMPARE_GRAPH_ROWS: ReadonlyArray<{ id: SessionDiffBase | 'trunk'; label: string; node: 'now' | 'commit' | 'ellipsis' | 'remote' | 'session' }> = [
-  { id: 'trunk', label: 'Working tree (now)', node: 'now' },
-  { id: 'session', label: 'What this session changed', node: 'session' },
-  { id: 'uncommitted', label: 'Last commit', node: 'commit' },
-  { id: 'trunk', label: 'unpushed commits…', node: 'ellipsis' },
-  { id: 'remote', label: 'Remote (origin)', node: 'remote' },
+// A VERTICAL git-graph that shows ALL THREE compare modes side by side so you can
+// see, at a glance, how their spans differ — because the labels alone can't convey
+// that (with git-sync auto-committing every 30s) "Uncommitted" and "Not yet pushed"
+// can be hundreds of commits apart. It's a SCHEMATIC, not real history: a fixed
+// trunk of nodes
+//   ◉ working tree (now) · ◆ this session · ● last commit · ⋮ unpushed · ○ remote
+// with THREE coloured rails drawn next to it — each running from "now" down to that
+// mode's anchor, so their relative lengths make the difference obvious. The
+// currently-selected mode's rail + legend row are emphasised; the others stay
+// visible (dimmed) for comparison.
+
+// Trunk nodes, top→bottom. `row` is the 0-based vertical slot (each ROW_H tall).
+const COMPARE_TRUNK: ReadonlyArray<{ node: 'now' | 'session' | 'commit' | 'ellipsis' | 'remote'; label: string; glyph: string; row: number }> = [
+  { node: 'now', label: 'Working tree (now)', glyph: '◉', row: 0 },
+  { node: 'session', label: 'This session’s edits', glyph: '◆', row: 1 },
+  { node: 'commit', label: 'Last commit', glyph: '●', row: 2 },
+  { node: 'ellipsis', label: 'unpushed commits…', glyph: '⋮', row: 3 },
+  { node: 'remote', label: 'Remote (origin)', glyph: '○', row: 4 },
 ];
 
-/** The vertical schematic. `base` = the currently-selected mode → highlight its
- *  span (from the working tree down to that mode's anchor). Pure presentational. */
+// The three rails. `anchorRow` = the trunk row each span reaches (from row 0,
+// "now", down to its anchor). Rendered as absolutely-positioned bar elements in a column
+// to the RIGHT of the labels, so they can never overlap the text.
+const COMPARE_SPANS: ReadonlyArray<{ id: SessionDiffBase; anchorRow: number; label: string; meaning: string }> = [
+  { id: 'session', anchorRow: 1, label: 'What this session changed', meaning: 'This session’s own edits, across any commits it made (rebuilt from history)' },
+  { id: 'uncommitted', anchorRow: 2, label: 'Uncommitted changes', meaning: 'Working tree vs your last commit' },
+  { id: 'remote', anchorRow: 4, label: 'Not yet pushed', meaning: 'Working tree vs the remote — may span many local commits' },
+];
+
+const CMP_ROW_H = 26;   // px height of one trunk row
+const CMP_RAIL_W = 6;   // px width of a rail bar
+const CMP_RAIL_GAP = 5; // px gap between parallel rails
+
+/** The vertical schematic showing all three spans at once. `base` = the
+ *  currently-selected mode → emphasise its rail + legend row. Pure presentational.
+ *  Layout: a left "trunk + labels" stack (flow layout, no overlap possible) and a
+ *  right rail strip with absolutely-positioned bar elements whose pixel heights are
+ *  computed from row counts — so the three spans' relative lengths are obvious and
+ *  the rails are physically separated from the label text. */
 function CompareGraph({ base }: { base: SessionDiffBase }) {
-  // Which trunk rows fall inside the highlighted span [now … anchor].
-  // session: just the working-tree↔side-node link; uncommitted: now→last commit;
-  // remote: now→remote (the whole trunk).
-  const spanEndNode = base === 'session' ? 'session' : base === 'uncommitted' ? 'commit' : 'remote';
+  const stackH = COMPARE_TRUNK.length * CMP_ROW_H;
+  const railStripW = COMPARE_SPANS.length * CMP_RAIL_W + (COMPARE_SPANS.length - 1) * CMP_RAIL_GAP;
   return (
-    <div className="compare-graph" role="img" aria-label={`Comparing against: ${BASE_OPTIONS.find((o) => o.value === base)?.label}`}>
-      <div className="compare-graph-title">Comparing your code against:</div>
-      <ol className="compare-graph-rows">
-        {COMPARE_GRAPH_ROWS.map((row, i) => {
-          // A row is "in span" when it sits between the top (now) and the active anchor.
-          const order = ['now', 'session', 'commit', 'ellipsis', 'remote'];
-          const inSpan = base === 'remote'
-            ? true // whole trunk down to remote
-            : base === 'uncommitted'
-              ? order.indexOf(row.node) <= order.indexOf('commit') && row.node !== 'session'
-              : row.node === 'now' || row.node === 'session'; // session mode
-          const isAnchor = row.node === spanEndNode;
-          const isSide = row.node === 'session';
-          return (
-            <li
-              key={`${row.id}-${i}`}
-              className={`compare-graph-row node-${row.node}${inSpan ? ' in-span' : ''}${isAnchor ? ' is-anchor' : ''}${isSide ? ' is-side' : ''}`}
-            >
-              <span className="compare-graph-node" aria-hidden>
-                {row.node === 'now' ? '◉'
-                  : row.node === 'commit' ? '●'
-                    : row.node === 'remote' ? '○'
-                      : row.node === 'session' ? '◆'
-                        : '⋮'}
-              </span>
-              <span className="compare-graph-label">{row.label}</span>
-            </li>
-          );
-        })}
-      </ol>
+    <div className="compare-graph" role="img" aria-label="How the three compare modes overlap">
+      <div className="compare-graph-title">All three, compared</div>
+      <div className="compare-graph-body" style={{ height: stackH }}>
+        {/* LEFT: trunk line + node glyph + label, one flow row each (no overlap). */}
+        <div className="compare-graph-trunk">
+          <span className="compare-graph-trunkline" aria-hidden style={{ top: CMP_ROW_H / 2, bottom: CMP_ROW_H / 2 }} />
+          {COMPARE_TRUNK.map((n) => (
+            <div key={n.node} className="compare-graph-traw" style={{ height: CMP_ROW_H }}>
+              <span className={`compare-graph-node node-${n.node}`} aria-hidden>{n.glyph}</span>
+              <span className={`compare-graph-nodelabel node-${n.node}`}>{n.label}</span>
+            </div>
+          ))}
+        </div>
+        {/* RIGHT: rail strip — three parallel rails, each from row 0 to its anchor. */}
+        <div className="compare-graph-rails" style={{ width: railStripW }}>
+          {COMPARE_SPANS.map((s, i) => (
+            <span
+              key={s.id}
+              className={`compare-graph-rail rail-${s.id}${base === s.id ? ' is-active' : ''}`}
+              style={{
+                left: i * (CMP_RAIL_W + CMP_RAIL_GAP),
+                top: CMP_ROW_H / 2,
+                height: s.anchorRow * CMP_ROW_H,
+                width: CMP_RAIL_W,
+              }}
+              title={`${s.label} — ${s.meaning}`}
+            />
+          ))}
+        </div>
+      </div>
+      {/* colour legend: maps each rail → mode name + one-line meaning; active row bold */}
+      <ul className="compare-graph-legend">
+        {COMPARE_SPANS.map((s) => (
+          <li key={`leg-${s.id}`} className={`rail-${s.id}${base === s.id ? ' is-active' : ''}`}>
+            <span className="compare-graph-swatch" aria-hidden />
+            <span className="compare-graph-legtext">
+              <b>{s.label}</b>
+              <span className="compare-graph-legmeaning">{s.meaning}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
       <div className="compare-graph-note">
         {base === 'session'
-          ? <>Reconstructed from this session’s own edits (not a git diff). <span className="compare-graph-warn">⚠ If another process changed the same lines after the edit, that file is rebuilt best-effort and flagged.</span></>
+          ? <>You’re viewing <b>What this session changed</b>. <span className="compare-graph-warn">⚠ If another process changed the same lines after an edit, that file is rebuilt best-effort and flagged.</span></>
           : base === 'uncommitted'
-            ? 'Everything in your working tree that you haven’t committed yet.'
-            : 'Everything not yet pushed — may span many local commits (e.g. auto-saves).'}
+            ? <>You’re viewing <b>Uncommitted changes</b> — everything in your working tree you haven’t committed yet.</>
+            : <>You’re viewing <b>Not yet pushed</b> — may span many local commits (e.g. auto-saves).</>}
       </div>
     </div>
+  );
+}
+
+/** The (?) chip + its hover/focus popover. The popover is rendered FIXED (escaping
+ *  the diff column's `overflow:hidden`, which was clipping an absolutely-positioned
+ *  child) and positioned from the chip's live rect, clamped to the viewport. */
+function CompareHelp({ base }: { base: SessionDiffBase }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const chipRef = useRef<HTMLSpanElement>(null);
+  const POP_W = 340;
+
+  const place = useCallback(() => {
+    const r = chipRef.current?.getBoundingClientRect();
+    if (!r) return;
+    // Prefer left-aligned under the chip; clamp so the panel stays fully on-screen.
+    const left = Math.min(Math.max(8, r.left), window.innerWidth - POP_W - 8);
+    setPos({ left, top: r.bottom + 8 });
+  }, []);
+
+  const show = useCallback(() => { place(); setOpen(true); }, [place]);
+  const hide = useCallback(() => setOpen(false), []);
+
+  return (
+    <span
+      ref={chipRef}
+      className="session-diff-base-help"
+      tabIndex={0}
+      aria-label="Explain the comparison modes"
+      onMouseEnter={show}
+      onMouseLeave={hide}
+      onFocus={show}
+      onBlur={hide}
+    >?
+      {open && pos && (
+        <span
+          className="session-diff-base-popover is-fixed"
+          role="tooltip"
+          style={{ left: pos.left, top: pos.top, width: POP_W }}
+          onMouseEnter={show}
+          onMouseLeave={hide}
+        >
+          <CompareGraph base={base} />
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -1038,12 +1115,8 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
               ))}
             </select>
           </label>
-          {/* Hover affordance → the vertical schematic explaining the current mode's span. */}
-          <span className="session-diff-base-help" tabIndex={0} aria-label="Explain the comparison modes">?
-            <span className="session-diff-base-popover" role="tooltip">
-              <CompareGraph base={base} />
-            </span>
-          </span>
+          {/* Hover affordance → the vertical schematic explaining all three spans. */}
+          <CompareHelp base={base} />
         </div>
         {base !== 'session' && (
           <div className="session-diff-scope-toggle" role="group" aria-label="File scope" title="Only the files this session edited, or every change in the repos it touched">
