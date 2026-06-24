@@ -55,6 +55,10 @@ npm run test:all      # lint + all tests + Playwright browser tests
 - Use the [feature request template](.github/ISSUE_TEMPLATE/feature_request.md) for ideas
 - Search existing issues before creating a new one
 
+## Code of Conduct
+
+This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md). By participating, you agree to uphold its terms.
+
 ## License
 
 By contributing, you agree that your contributions will be licensed under the [MIT License](LICENSE).
