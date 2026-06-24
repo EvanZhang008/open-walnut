@@ -19589,11 +19589,20 @@ a.file-link:hover {
 }
 /* Comparison-base selector — keeps it grouped with the title on the left,
    pushing the action buttons (Rendered/Split/Refresh) to the far right. */
+/* Compare control: the select + the (?) help that reveals the schematic. The
+   wrapper carries the margin-right:auto so the rest of the toolbar still pushes
+   to the right edge. */
+.session-diff-base-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: auto;
+  position: relative;
+}
 .session-diff-base-select {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  margin-right: auto;
   font-size: 12px;
   color: var(--fg-muted);
 }
@@ -19608,6 +19617,119 @@ a.file-link:hover {
   cursor: pointer;
 }
 .session-diff-base-select select:hover { border-color: var(--accent); }
+
+/* (?) help chip — hover/focus reveals the CompareGraph popover below it. */
+.session-diff-base-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: help;
+  user-select: none;
+  position: relative;
+}
+.session-diff-base-help:hover,
+.session-diff-base-help:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+  outline: none;
+}
+.session-diff-base-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 50;
+  display: none;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: var(--card-shadow-hover);
+  padding: 12px 14px;
+  width: max-content;
+  max-width: 320px;
+  cursor: default;
+}
+.session-diff-base-help:hover .session-diff-base-popover,
+.session-diff-base-help:focus-within .session-diff-base-popover,
+.session-diff-base-popover:hover { display: block; }
+
+/* ── Vertical compare schematic ───────────────────────────────────────────── */
+.compare-graph-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.compare-graph-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  position: relative;
+}
+/* The trunk line connecting nodes — drawn behind the node glyphs. */
+.compare-graph-rows::before {
+  content: '';
+  position: absolute;
+  left: 7px;
+  top: 10px;
+  bottom: 10px;
+  width: 2px;
+  background: var(--border-strong);
+}
+.compare-graph-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 0;
+  position: relative;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.compare-graph-node {
+  width: 16px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--fg-muted);
+  background: var(--bg-elevated); /* mask the trunk line behind the glyph */
+  z-index: 1;
+}
+.compare-graph-row.node-now .compare-graph-node { color: var(--fg); }
+/* The session side-node hangs off the trunk (indented, dashed connector). */
+.compare-graph-row.is-side { padding-left: 18px; }
+.compare-graph-row.is-side .compare-graph-node { color: var(--session-ref); background: transparent; }
+.compare-graph-row.is-side::before {
+  content: '';
+  position: absolute;
+  left: 7px;
+  top: 50%;
+  width: 14px;
+  border-top: 1.5px dashed var(--session-ref);
+}
+/* Highlight the active mode's span: bright label + accent nodes. */
+.compare-graph-row.in-span { color: var(--fg); }
+.compare-graph-row.in-span .compare-graph-node { color: var(--accent); }
+.compare-graph-row.is-side.in-span .compare-graph-node,
+.compare-graph-row.is-side.in-span::before { color: var(--session-ref); border-color: var(--session-ref); }
+.compare-graph-row.is-anchor .compare-graph-label { font-weight: 700; }
+.compare-graph-row.node-ellipsis .compare-graph-label { font-style: italic; opacity: 0.8; }
+.compare-graph-note {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--fg-secondary);
+}
+.compare-graph-warn { display: block; margin-top: 4px; color: var(--warning); }
 /* Scope toggle (All files ↔ This session) — only shown for git bases. */
 .session-diff-scope-toggle {
   display: inline-flex;

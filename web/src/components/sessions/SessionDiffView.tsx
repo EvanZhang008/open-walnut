@@ -20,12 +20,22 @@ export type DiffViewType = 'split' | 'unified';
 
 /** Comparison-BASE options. Every mode is scoped to the repos THIS session
  *  edited — the base only changes the baseline `before`/`after` is read from,
- *  never which repo is shown (a session that edited nothing is empty in all). */
+ *  never which repo is shown (a session that edited nothing is empty in all).
+ *
+ *  Labels are deliberately plain-English ("what am I looking at?") instead of git
+ *  jargon — with git-sync auto-committing every 30s, "vs last commit" vs "vs
+ *  remote" can differ by hundreds of commits, and the old names gave no hint of
+ *  that span. The CompareGraph schematic (shown on hover) visualizes the span.
+ *
+ *  'previous' (HEAD~1) is intentionally NOT offered: it only approximated "what
+ *  this session did" when you'd committed exactly once, and "What this session
+ *  changed" now answers that precisely regardless of commit count. The backend
+ *  still accepts base=previous (tested + daemon-supported) — it's just not a
+ *  user-facing choice anymore. */
 const BASE_OPTIONS: ReadonlyArray<{ value: SessionDiffBase; label: string; hint: string }> = [
-  { value: 'session', label: 'Session changes', hint: "What THIS session edited, reconstructed from its own history (no git)" },
-  { value: 'uncommitted', label: 'vs last commit', hint: "This session's files, compared against the last commit (git diff HEAD)" },
-  { value: 'previous', label: 'vs previous commit', hint: "This session's files, compared against the commit before HEAD (git diff HEAD~1)" },
-  { value: 'remote', label: 'vs remote (unpushed)', hint: "This session's files, compared against the pushed/remote branch (git diff @{upstream})" },
+  { value: 'session', label: 'What this session changed', hint: "Everything THIS session edited — reconstructed from its own edit history, across any commits it made (no git baseline)" },
+  { value: 'uncommitted', label: 'Uncommitted changes', hint: "Your working tree vs your last commit (git diff HEAD) — what you haven't committed yet" },
+  { value: 'remote', label: 'Not yet pushed', hint: "Your working tree vs the remote branch (git diff @{upstream}) — everything not yet pushed, which may span many local commits" },
 ];
 
 interface SessionDiffViewProps {
@@ -740,6 +750,72 @@ function savePendingReview(sessionId: string, pending: PendingComment[]): void {
   } catch { /* quota exceeded / storage disabled — non-fatal */ }
 }
 
+// ── Compare schematic ─────────────────────────────────────────────────────────
+// A tiny VERTICAL git-graph that explains, at a glance, what the chosen Compare
+// mode is diffing — because the labels alone can't convey that (with git-sync
+// auto-committing every 30s) "Uncommitted" and "Not yet pushed" can be hundreds
+// of commits apart. It's a SCHEMATIC, not real history: a fixed trunk of
+//   ◉ working tree (now)  →  ● last commit  →  ⋮ (unpushed commits)  →  ○ remote
+// with the active mode's SPAN highlighted. "What this session changed" hangs off
+// the trunk as a side node (◆, dashed) because it isn't a commit-to-commit diff —
+// it's reconstructed from the session's own edits, spanning whatever it committed.
+const COMPARE_GRAPH_ROWS: ReadonlyArray<{ id: SessionDiffBase | 'trunk'; label: string; node: 'now' | 'commit' | 'ellipsis' | 'remote' | 'session' }> = [
+  { id: 'trunk', label: 'Working tree (now)', node: 'now' },
+  { id: 'session', label: 'What this session changed', node: 'session' },
+  { id: 'uncommitted', label: 'Last commit', node: 'commit' },
+  { id: 'trunk', label: 'unpushed commits…', node: 'ellipsis' },
+  { id: 'remote', label: 'Remote (origin)', node: 'remote' },
+];
+
+/** The vertical schematic. `base` = the currently-selected mode → highlight its
+ *  span (from the working tree down to that mode's anchor). Pure presentational. */
+function CompareGraph({ base }: { base: SessionDiffBase }) {
+  // Which trunk rows fall inside the highlighted span [now … anchor].
+  // session: just the working-tree↔side-node link; uncommitted: now→last commit;
+  // remote: now→remote (the whole trunk).
+  const spanEndNode = base === 'session' ? 'session' : base === 'uncommitted' ? 'commit' : 'remote';
+  return (
+    <div className="compare-graph" role="img" aria-label={`Comparing against: ${BASE_OPTIONS.find((o) => o.value === base)?.label}`}>
+      <div className="compare-graph-title">Comparing your code against:</div>
+      <ol className="compare-graph-rows">
+        {COMPARE_GRAPH_ROWS.map((row, i) => {
+          // A row is "in span" when it sits between the top (now) and the active anchor.
+          const order = ['now', 'session', 'commit', 'ellipsis', 'remote'];
+          const inSpan = base === 'remote'
+            ? true // whole trunk down to remote
+            : base === 'uncommitted'
+              ? order.indexOf(row.node) <= order.indexOf('commit') && row.node !== 'session'
+              : row.node === 'now' || row.node === 'session'; // session mode
+          const isAnchor = row.node === spanEndNode;
+          const isSide = row.node === 'session';
+          return (
+            <li
+              key={`${row.id}-${i}`}
+              className={`compare-graph-row node-${row.node}${inSpan ? ' in-span' : ''}${isAnchor ? ' is-anchor' : ''}${isSide ? ' is-side' : ''}`}
+            >
+              <span className="compare-graph-node" aria-hidden>
+                {row.node === 'now' ? '◉'
+                  : row.node === 'commit' ? '●'
+                    : row.node === 'remote' ? '○'
+                      : row.node === 'session' ? '◆'
+                        : '⋮'}
+              </span>
+              <span className="compare-graph-label">{row.label}</span>
+            </li>
+          );
+        })}
+      </ol>
+      <div className="compare-graph-note">
+        {base === 'session'
+          ? <>Reconstructed from this session’s own edits (not a git diff). <span className="compare-graph-warn">⚠ If another process changed the same lines after the edit, that file is rebuilt best-effort and flagged.</span></>
+          : base === 'uncommitted'
+            ? 'Everything in your working tree that you haven’t committed yet.'
+            : 'Everything not yet pushed — may span many local commits (e.g. auto-saves).'}
+      </div>
+    </div>
+  );
+}
+
 // ── Main view ─────────────────────────────────────────────────────────────────
 
 export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCode, onComment }: SessionDiffViewProps) {
@@ -950,17 +1026,25 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
         <span className="session-diff-toolbar-title">
           {empty ? 'No file changes' : `${data!.fileCount} file${data!.fileCount === 1 ? '' : 's'} changed`}
         </span>
-        <label className="session-diff-base-select" title="Choose what the diff compares against">
-          <span className="session-diff-base-label">Compare:</span>
-          <select
-            value={base}
-            onChange={(e) => setBase(e.target.value as SessionDiffBase)}
-          >
-            {BASE_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value} title={o.hint}>{o.label}</option>
-            ))}
-          </select>
-        </label>
+        <div className="session-diff-base-wrap">
+          <label className="session-diff-base-select" title="Choose what the diff compares against">
+            <span className="session-diff-base-label">Compare:</span>
+            <select
+              value={base}
+              onChange={(e) => setBase(e.target.value as SessionDiffBase)}
+            >
+              {BASE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value} title={o.hint}>{o.label}</option>
+              ))}
+            </select>
+          </label>
+          {/* Hover affordance → the vertical schematic explaining the current mode's span. */}
+          <span className="session-diff-base-help" tabIndex={0} aria-label="Explain the comparison modes">?
+            <span className="session-diff-base-popover" role="tooltip">
+              <CompareGraph base={base} />
+            </span>
+          </span>
+        </div>
         {base !== 'session' && (
           <div className="session-diff-scope-toggle" role="group" aria-label="File scope" title="Only the files this session edited, or every change in the repos it touched">
             <button

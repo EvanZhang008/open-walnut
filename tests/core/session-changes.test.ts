@@ -162,6 +162,134 @@ describe('computeSessionChanges — Edit reconstruction', () => {
   });
 });
 
+// The "granularity" questions: what shows when the SAME region is edited more
+// than once, and what happens when ANOTHER process mutates the file between/after
+// the session's edits. Reconstruction is string-level (matches new_string, not
+// line numbers), reverse-applied newest→oldest, so: repeated edits to one region
+// collapse to a single net before→after, and an outside clobber that erases a
+// recorded new_string degrades that file to `partial` (flagged in the UI) rather
+// than lying about a clean diff.
+describe('computeSessionChanges — granularity & multi-edit-of-same-region', () => {
+  it('the SAME line edited twice collapses to one net change (first old → last new), middle value gone', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const file = path.join(repo, 'cfg.ts');
+    // One line goes v1 → v2 → v3 across two edits; siblings untouched. Disk = v3.
+    await putFile(file, 'const KEEP_TOP = 0;\nconst N = 3;\nconst KEEP_BOT = 9;\n');
+
+    await writeSessionJsonl('s1', repo, [
+      assistantToolUse(repo, [{ name: 'Edit', input: { file_path: file, old_string: 'const N = 1;', new_string: 'const N = 2;' } }]),
+      assistantToolUse(repo, [{ name: 'Edit', input: { file_path: file, old_string: 'const N = 2;', new_string: 'const N = 3;' } }]),
+    ]);
+
+    const res = await computeSessionChanges('s1', repo);
+    const change = res.groups[0].files[0];
+    // before reverses BOTH edits on that one line → N = 1; the intermediate "N = 2"
+    // never appears in either side (it's a net diff, not a per-edit history).
+    expect(change.before).toBe('const KEEP_TOP = 0;\nconst N = 1;\nconst KEEP_BOT = 9;\n');
+    expect(change.after).toBe('const KEEP_TOP = 0;\nconst N = 3;\nconst KEEP_BOT = 9;\n');
+    expect(change.before).not.toContain('N = 2'); // the middle state is collapsed away
+    expect(change.partial).toBe(false);
+    expect(change.ops).toBe(2);
+  });
+
+  it('two DIFFERENT regions edited once each both reverse independently (multi-hunk net diff)', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const file = path.join(repo, 'two.ts');
+    await putFile(file, 'top = NEW1;\nmiddle stays;\nbot = NEW2;\n');
+
+    await writeSessionJsonl('s1', repo, [
+      assistantToolUse(repo, [{ name: 'Edit', input: { file_path: file, old_string: 'top = OLD1;', new_string: 'top = NEW1;' } }]),
+      assistantToolUse(repo, [{ name: 'Edit', input: { file_path: file, old_string: 'bot = OLD2;', new_string: 'bot = NEW2;' } }]),
+    ]);
+
+    const res = await computeSessionChanges('s1', repo);
+    const change = res.groups[0].files[0];
+    expect(change.before).toBe('top = OLD1;\nmiddle stays;\nbot = OLD2;\n');
+    expect(change.after).toBe('top = NEW1;\nmiddle stays;\nbot = NEW2;\n');
+    expect(change.partial).toBe(false);
+  });
+
+  it('an OUTSIDE process clobbered the edited region after the edit → that file is partial (not a false clean diff)', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const file = path.join(repo, 'race.ts');
+    // The session edited `was = OLD` → `was = MINE`. But by the time we read the
+    // file, another process has overwritten that very text with `was = THEIRS`,
+    // so reverse-apply can't locate `was = MINE` → reconstruction is best-effort.
+    await putFile(file, 'was = THEIRS;\nother = untouched;\n');
+
+    await writeSessionJsonl('s1', repo, [
+      assistantToolUse(repo, [{ name: 'Edit', input: { file_path: file, old_string: 'was = OLD;', new_string: 'was = MINE;' } }]),
+    ]);
+
+    const res = await computeSessionChanges('s1', repo);
+    const change = res.groups[0].files[0];
+    expect(change.partial).toBe(true);    // flagged, not silently wrong
+    expect(res.anyPartial).toBe(true);
+    expect(change.after).toBe('was = THEIRS;\nother = untouched;\n'); // after is always current disk
+  });
+
+  it('an outside change to a DIFFERENT region (session region intact) still reconstructs cleanly', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const file = path.join(repo, 'coexist.ts');
+    // Session changed the TOP line; an outside process changed the BOTTOM line.
+    // The session's new_string is still present → its edit reverses cleanly; the
+    // outside change just rides along in both before and after (not the session's).
+    await putFile(file, 'top = MINE;\nbot = THEIRS;\n');
+
+    await writeSessionJsonl('s1', repo, [
+      assistantToolUse(repo, [{ name: 'Edit', input: { file_path: file, old_string: 'top = OLD;', new_string: 'top = MINE;' } }]),
+    ]);
+
+    const res = await computeSessionChanges('s1', repo);
+    const change = res.groups[0].files[0];
+    expect(change.partial).toBe(false);          // session region matched → clean
+    expect(change.before).toBe('top = OLD;\nbot = THEIRS;\n'); // only the session's edit reversed
+    expect(change.after).toBe('top = MINE;\nbot = THEIRS;\n');
+  });
+
+  it('edited then reverted to identical bytes → net no-op, dropped from the result', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const file = path.join(repo, 'roundtrip.ts');
+    // x → y → x: disk ends at the original. before === after, not partial → dropped.
+    await putFile(file, 'value = x;\n');
+
+    await writeSessionJsonl('s1', repo, [
+      assistantToolUse(repo, [{ name: 'Edit', input: { file_path: file, old_string: 'value = x;', new_string: 'value = y;' } }]),
+      assistantToolUse(repo, [{ name: 'Edit', input: { file_path: file, old_string: 'value = y;', new_string: 'value = x;' } }]),
+    ]);
+
+    const res = await computeSessionChanges('s1', repo);
+    // A clean net no-op is noise (and would desync from the git modes) → dropped.
+    expect(res.fileCount).toBe(0);
+    expect(res.groups).toEqual([]);
+  });
+
+  it('a later Write supersedes earlier edits: before resets to empty (created), after = current disk', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const file = path.join(repo, 'rewritten.ts');
+    await putFile(file, 'final whole-file content\n');
+
+    await writeSessionJsonl('s1', repo, [
+      assistantToolUse(repo, [{ name: 'Edit', input: { file_path: file, old_string: 'a', new_string: 'b' } }]),
+      assistantToolUse(repo, [{ name: 'Write', input: { file_path: file, content: 'final whole-file content\n' } }]),
+    ]);
+
+    const res = await computeSessionChanges('s1', repo);
+    const change = res.groups[0].files[0];
+    // Newest→oldest: the Write resets `before` to '' (whole file replaced); the
+    // earlier Edit can't change that. So it reads as a creation.
+    expect(change.before).toBe('');
+    expect(change.after).toBe('final whole-file content\n');
+    expect(change.status).toBe('added');
+  });
+});
+
 describe('computeSessionChanges — MultiEdit', () => {
   it('applies edits[] in order and reverses them', async () => {
     const repo = path.join(workRoot, 'repo');
