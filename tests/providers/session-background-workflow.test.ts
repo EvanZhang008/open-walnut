@@ -6,11 +6,14 @@
  * events for one such turn (the main "launched in background" result PLUS one per
  * subagent completion fed back via ask()), so `result` is NOT a turn boundary.
  *
- * The authoritative turn-over signal is `session_state_changed{state:'idle'}`,
- * which the CLI emits exactly once, strictly after all background tasks finish
- * (gated by CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS, which the daemon now sets).
- * When that signal is absent (old CLI), we fall back to the `_bgTasksInFlight`
- * counter (task_started − task_notification).
+ * ⚠️ `session_state_changed{state:'idle'}` is NOT a one-shot end-of-turn signal.
+ * POC-verified (see memory claude-code-session-state-semantics): the CLI emits
+ * `idle` ~20×/run — between every sub-agent / phase — because its idle-wait loop
+ * excludes `in_process_teammate` tasks. So idle == "foreground quiet right now". The
+ * turn is over only at an idle that arrives AFTER our `_bgTasksInFlight` counter
+ * (task_started − task_notification) has drained to 0. The counter is the AUTHORITY;
+ * idle is just the completion trigger. (Gated by CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS,
+ * which the daemon sets; when absent we complete via `result` + the counter.)
  *
  * These tests verify the handleStreamLine() branches in ClaudeCodeSession:
  *   1. running → task_progress×N → idle: stays 'running' mid-workflow, only
@@ -20,6 +23,8 @@
  *      and a trailing idle does NOT double-fire SESSION_RESULT.
  *   4. session-history replay reconstructs bgTasksInFlight / cliSessionState.
  *   5. old CLI (no session_state_changed) falls back to the counter — no deadlock.
+ *   6. mid-workflow idle×N while tasks in flight does NOT complete (the real bug:
+ *      idle fired with bgInFlight=5 → false await_human). Completes only at idle@0.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -405,6 +410,33 @@ describe('session-history replay: reconstructs bgTasksInFlight / cliSessionState
     expect(state!.cliSessionState).toBe('idle')
     expect(state!.workStatus).toBe('agent_complete')
   })
+
+  it('mid-workflow JSONL ENDING in idle while bg>0 → still running, NOT agent_complete', async () => {
+    // The realistic restart: a workflow run emits idle ~20×/run between sub-agents.
+    // A server restart mid-workflow recovers JSONL whose tail contains an idle even
+    // though tasks are live. The OLD replay set agent_complete + zeroed the counter on
+    // ANY idle → marked a running workflow complete on restart. Gate on the counter.
+    const sid = 'replay-idle-bg-live'
+    const cwd = '/Users/test/wf-project3'
+    await writeJsonl(sid, cwd, [
+      makeInitEvent(sid),
+      makeTaskStartedEvent(sid, 'bg-A', { workflowName: 'audit' }),
+      makeTaskStartedEvent(sid, 'bg-B', { workflowName: 'audit' }),
+      makeTaskStartedEvent(sid, 'bg-C', { workflowName: 'audit' }),
+      makeResultEvent(sid, 0.01, 'Workflow launched in background'),
+      makeTaskNotificationEvent(sid, 'bg-A', 'completed'),
+      // The CLI flips idle between sub-agents while B + C still run.
+      makeSessionStateEvent(sid, 'idle'),
+    ])
+
+    const state = await recoverStateFromJsonl(sid, cwd)
+    expect(state).not.toBeNull()
+    // 3 started, 1 finished → 2 in flight; idle must NOT have zeroed it.
+    expect(state!.bgTasksInFlight).toBe(2)
+    expect(state!.cliSessionState).toBe('idle')
+    // A mid-workflow idle is NOT turn-over: must NOT recover as agent_complete.
+    expect(state!.workStatus).not.toBe('agent_complete')
+  })
 })
 
 // ═══════════════════════════════════════════════════════════════════
@@ -553,5 +585,92 @@ describe('Dynamic workflow: workflow_progress[] → phases + per-agent breakdown
     expect((snap.agents as unknown[]).length).toBe(0)
     expect(snap.scriptSource).toBe('second-script')
     expect(snap.workflowName).toBe('second')
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════
+//  Test 7: mid-workflow idle storm — the real incident (idle@bgInFlight=5)
+// ═══════════════════════════════════════════════════════════════════
+//
+// Reproduces a real remote-session incident: the CLI emitted ~20
+// session_state_changed{idle} during ONE workflow run — one between every
+// sub-agent — because its idle-wait loop excludes in_process_teammate tasks. The
+// real replay showed 18/20 idles firing with 1–5 tasks still in flight, including
+// a run of idle@bgInFlight=5 (the panel's "5 running"). The OLD code treated the
+// first such idle as turn-over → hard-reset the counter to 0 → AGENT_COMPLETE →
+// the agent self-reported await_human_action while the workflow was still running.
+//
+// The fix: idle completes the turn ONLY when our bgTasksInFlight counter has
+// drained to 0; a mid-workflow idle is ignored (status stays running, counter
+// untouched). This test feeds the real interleaved pattern and asserts no
+// premature completion + exactly one completion at the final idle@0.
+describe('Dynamic workflow: mid-workflow idle storm does NOT complete prematurely', () => {
+  it('idle fired repeatedly while tasks in flight stays running; completes only at idle@bgInFlight=0', () => {
+    const sid = 'wf-idle-storm'
+    const session = makeRunningRemoteSession('task-idle-storm')
+
+    const resultEvents: Array<Record<string, unknown>> = []
+    bus.subscribe('main-ai', (e: BusEvent) => {
+      if (e.name === EventNames.SESSION_RESULT) resultEvents.push(e.data as Record<string, unknown>)
+    })
+
+    const inFlight = () => (session as unknown as { _bgTasksInFlight: number })._bgTasksInFlight
+
+    feedLines(session, [
+      makeInitEvent(sid),
+      makeAssistantEvent(sid, 'Launching workflow'),
+      // Fan out 5 sub-agents (each a real task with its own task_started, like the
+      // local_agent tasks the wiki-skill workflow spawned).
+      makeTaskStartedEvent(sid, 't1', { workflowName: 'agentsmd-batch' }),
+      makeTaskStartedEvent(sid, 't2', { workflowName: 'agentsmd-batch' }),
+      makeTaskStartedEvent(sid, 't3', { workflowName: 'agentsmd-batch' }),
+      makeTaskStartedEvent(sid, 't4', { workflowName: 'agentsmd-batch' }),
+      makeTaskStartedEvent(sid, 't5', { workflowName: 'agentsmd-batch' }),
+    ])
+    expect(inFlight()).toBe(5)
+    expect(session.processStatus).toBe('running')
+
+    // The main turn's own result arrives early ("launched in background") — withheld.
+    feedLines(session, [makeResultEvent(sid, 0.5, 'Workflow launched in background')])
+    expect(resultEvents.length).toBe(0)
+    expect(session.processStatus).toBe('running')
+
+    // Now the idle STORM: the CLI flips running⇄idle between sub-agents. Feed 10
+    // idles while all 5 tasks are still running. NONE may complete the turn, and the
+    // counter must NOT be reset — this is the exact bug.
+    for (let i = 0; i < 10; i++) {
+      feedLines(session, [
+        makeSessionStateEvent(sid, 'idle'),
+        makeSessionStateEvent(sid, 'running'),
+      ])
+      expect(inFlight()).toBe(5)               // counter never clobbered
+      expect(resultEvents.length).toBe(0)      // never completed
+      expect(session.processStatus).toBe('running')
+      expect(session.hasActiveBackgroundWork()).toBe(true)
+    }
+
+    // Tasks drain one by one, each followed by a mid-workflow idle (still not over).
+    for (const tid of ['t1', 't2', 't3', 't4']) {
+      feedLines(session, [
+        makeTaskNotificationEvent(sid, tid, 'completed'),
+        makeSessionStateEvent(sid, 'idle'),
+      ])
+      expect(resultEvents.length).toBe(0)      // 4 still>0 … down to 1, never 0 yet
+      expect(session.processStatus).toBe('running')
+    }
+    expect(inFlight()).toBe(1)
+
+    // Last task finishes → counter hits 0. The NEXT idle is the real turn-over.
+    feedLines(session, [makeTaskNotificationEvent(sid, 't5', 'completed')])
+    expect(session.hasActiveBackgroundWork()).toBe(false)
+    expect(resultEvents.length).toBe(0)        // notification alone never completes
+
+    feedLines(session, [makeSessionStateEvent(sid, 'idle')])
+    expect(resultEvents.length).toBe(1)        // completed exactly once, at idle@0
+    expect(session.processStatus).toBe('idle')
+
+    // A further trailing idle (the CLI keeps emitting them) must be a no-op.
+    feedLines(session, [makeSessionStateEvent(sid, 'idle')])
+    expect(resultEvents.length).toBe(1)
   })
 })

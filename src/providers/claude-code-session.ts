@@ -369,15 +369,17 @@ export class ClaudeCodeSession {
   // A dynamic-workflow turn (or any background subagent) fans out N tasks that
   // outlive the agent's text turn. The CLI emits a `result` as soon as the main
   // turn produces output ("Workflow launched in background"), but background tasks
-  // keep running and the CLI only emits session_state_changed{idle} once ALL of
-  // them finish. So `result` must NOT drive turn-completion while bg work is live.
+  // keep running — so `result` must NOT drive turn-completion while bg work is live.
   //
-  // `session_state_changed` (gated by CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS, which
-  // the daemon now sets) is the authoritative signal. `_sessionStateSeen` flips true
-  // the first time we observe one — once true, we trust the CLI's running/idle and
-  // demote `result` to bookkeeping. If we NEVER see one (old CLI), we fall back to
-  // the `_bgTasksInFlight` counter + the daemon-PULL liveness invariant.
-  /** True once we've observed any session_state_changed event → trust CLI state. */
+  // AUTHORITY for "is bg work in flight" is our own `_bgTasksInFlight` counter
+  // (task_started − task_notification), NOT the CLI's idle. POC-verified (see
+  // [[claude_code_session_state_semantics]]): the CLI emits session_state_changed
+  // {idle} ~20×/run — between every sub-agent/phase — NOT once at the end. So idle is
+  // only the turn-over *trigger*: the turn is done when we see idle AND the counter is
+  // 0. `_sessionStateSeen` flips true the first time we observe a session_state event;
+  // when false (old CLI) we complete via `result` + the counter + the daemon-PULL
+  // liveness invariant instead.
+  /** True once we've observed any session_state_changed event → idle is the turn-over trigger. */
   private _sessionStateSeen = false
   /** Most recent CLI session state, when emitted. */
   private _cliSessionState: 'running' | 'idle' | 'requires_action' | undefined
@@ -404,11 +406,19 @@ export class ClaudeCodeSession {
 
   /** True when any background subagent / dynamic-workflow task is still running.
    *  Single choke point: every "is this turn's result intermediate?" decision consults
-   *  THIS, so adding a future bg mechanism only touches one place. Combines the CLI's
-   *  authoritative idle signal (when present) with the in-flight counter (fallback). */
+   *  THIS, so adding a future bg mechanism only touches one place.
+   *
+   *  AUTHORITY = our own `_bgTasksInFlight` counter (task_started − task_notification),
+   *  NOT the CLI's `idle`. POC-verified (see [[claude_code_session_state_semantics]]):
+   *  the CLI emits `session_state_changed{idle}` ~20×/run — once between every
+   *  sub-agent / phase — because its idle-wait loop excludes `in_process_teammate`
+   *  tasks (fork `print.ts:2390-2459`). So `idle` means "foreground thread quiet right
+   *  now", NOT "all background work done". An earlier version short-circuited this to
+   *  `false` on idle; that's exactly what completed turns mid-workflow (→ false
+   *  await_human). The counter reliably drains and idle re-fires once it hits 0, so
+   *  trusting the counter never hangs. `_cliSessionState` is kept for status DISPLAY
+   *  and as the turn-over *trigger* (see the idle handler), never as an override here. */
   hasActiveBackgroundWork(): boolean {
-    // When the CLI emits session-state, idle is authoritative: idle ⇒ no bg work.
-    if (this._sessionStateSeen && this._cliSessionState === 'idle') return false
     return this._bgTasksInFlight > 0
   }
 
@@ -1131,7 +1141,12 @@ export class ClaudeCodeSession {
           session._sessionStateSeen = true
           session._cliSessionState = recovered.cliSessionState
         }
-        if (session._bgTasksInFlight > 0 && session._cliSessionState !== 'idle') {
+        // Counter is the SOLE authority for "work in flight" — NOT _cliSessionState.
+        // A workflow persists idle ~20×/run, so a mid-workflow restart often recovers
+        // with cliSessionState='idle' while tasks are genuinely live; gating on
+        // `!== 'idle'` here would drop us out of running status (the same idle-override
+        // bug fixed in hasActiveBackgroundWork / the idle handler). Trust the counter.
+        if (session._bgTasksInFlight > 0) {
           session._processStatus = 'running'
           session._activity = 'Background tasks running'
           session._lastBgActivityTs = Date.now()
@@ -2240,15 +2255,21 @@ export class ClaudeCodeSession {
             // 181 system blocks landing directly on a thinking block. Swallowing
             // the event here lets thinking-delta keep appending to one block.
           } else if (sys.subtype === 'session_state_changed') {
-            // ── Authoritative session state (the turn-over signal) ──
+            // ── CLI session state (turn-over TRIGGER, gated on the bg-work counter) ──
             // Gated by CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS (daemon sets it).
-            // 'idle' is the ONLY reliable "turn truly over" signal: a dynamic-workflow
-            // turn emits many `result` events as background subagents finish, so
-            // `result` is not a boundary. 'running' keeps us active; 'requires_action'
-            // means the CLI paused on a permission/AskUserQuestion prompt (NOT done).
-            // We do NOT drive AGENT_COMPLETE here — the result handler owns that, but
-            // now consults hasActiveBackgroundWork()/_cliSessionState. We just record
-            // state + nudge UI; idle-driven completion is handled where result is.
+            //
+            // ⚠️ `idle` does NOT mean "turn over". POC-verified (see
+            // [[claude_code_session_state_semantics]]): a dynamic-workflow run emits
+            // `idle` ~20× — once between every sub-agent / phase — because the CLI's
+            // idle-wait loop excludes `in_process_teammate` tasks (fork
+            // `print.ts:2390-2459`). idle == "foreground thread quiet right now". In one
+            // real incident 18/20 idles fired while 1–5 workflow tasks were still
+            // running; treating the first as turn-over completed the turn mid-workflow
+            // (→ false await_human). So idle completes the turn ONLY when our own
+            // in-flight counter has actually drained (`!hasActiveBackgroundWork()`).
+            // The counter is authoritative; idle is just the signal that, IF nothing is
+            // in flight, the turn is over. 'running' keeps us active; 'requires_action'
+            // = paused on a permission/AskUserQuestion prompt (NOT done).
             this._sessionStateSeen = true
             const newState = sys.state as 'running' | 'idle' | 'requires_action' | undefined
             this._cliSessionState = newState
@@ -2262,16 +2283,30 @@ export class ClaudeCodeSession {
                 this.emitStatusChanged('IN_PROGRESS')
               }
             } else if (newState === 'idle') {
-              // Authoritative turn-over. If a result was withheld because bg work was
-              // live, emit completion now. Guard with resultEmitted to avoid double-fire
-              // when result + idle are adjacent (normal single-turn case the result
-              // handler already completed).
-              this._bgTasksInFlight = 0
-              if (!this.resultEmitted && this._turnResultEmitted) {
-                // result already processed this turn (normal path) — nothing to do.
+              if (this.hasActiveBackgroundWork()) {
+                // Mid-workflow idle: background tasks still in flight. NOT turn-over —
+                // do NOT complete and do NOT touch the counter (it's the authority; a
+                // task_notification will decrement it). Stay running; the real
+                // end-of-workflow idle (after the counter drains to 0) completes below.
+                log.session.info('idle while background work in flight — staying running, awaiting drain', {
+                  sessionId: sid, taskId: this.taskId, bgTasksInFlight: this._bgTasksInFlight,
+                })
+                if (this._processStatus !== 'running') {
+                  this._processStatus = 'running'
+                  this._activity = this._workflowName ? `Workflow: ${this._workflowName}` : 'Background tasks running'
+                  this.emitStatusChanged('IN_PROGRESS')
+                }
+              } else if (!this.resultEmitted && this._turnResultEmitted) {
+                // result already processed this turn (normal single-turn path) — nothing to do.
               } else if (!this.resultEmitted) {
+                // Authoritative turn-over: idle AND no background work in flight. If a
+                // result was withheld because bg work was live, emit completion now.
+                // Set _turnResultEmitted so the NEXT idle (the CLI keeps emitting them
+                // after the turn ends) falls into the "nothing to do" branch above and
+                // does NOT re-fire SESSION_RESULT. Mirrors the result handler (~3053).
                 this._activity = undefined
                 this._processStatus = 'idle'
+                this._turnResultEmitted = true
                 this.emitStatusChanged('AGENT_COMPLETE')
                 bus.emit(EventNames.SESSION_RESULT, {
                   sessionId: sid, taskId: this.taskId,
@@ -2807,16 +2842,17 @@ export class ClaudeCodeSession {
         // A dynamic-workflow turn emits MANY `result` events: the main turn's own
         // result (often "Workflow launched in background...") PLUS one per background
         // subagent completion that the CLI feeds back into a fresh ask(). NONE of these
-        // mean "session is done" — only session_state_changed{idle} does (verified live:
-        // idle fires once, strictly after the last result + all task_notifications).
+        // mean "session is done". The turn is over only at a session_state_changed{idle}
+        // that arrives AFTER our `_bgTasksInFlight` counter has drained to 0 — NOT at the
+        // first idle (POC-verified: idle fires ~20×/run, between every sub-agent; see
+        // [[claude_code_session_state_semantics]] and the session_state_changed handler).
         //
         // Two filters:
         //  (a) origin.kind === 'task-notification' → a result produced by the CLI
         //      processing a completion notification. Never a real turn-over. Skip
         //      completion entirely (don't even update _lastResultCost — it's noise).
-        //  (b) the CLI has told us (session_state_changed) that work is still running,
-        //      OR our in-flight counter shows live background tasks → withhold
-        //      AGENT_COMPLETE; stay running. The trailing idle event will complete it.
+        //  (b) our in-flight counter shows live background tasks → withhold
+        //      AGENT_COMPLETE; stay running. The idle-after-drain event completes it.
         const resultOrigin = (event as Record<string, unknown>).origin as { kind?: string } | undefined
         const isTaskNotificationResult = resultOrigin?.kind === 'task-notification'
         if (isTaskNotificationResult) {

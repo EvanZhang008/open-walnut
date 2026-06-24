@@ -1102,9 +1102,16 @@ export async function recoverStateFromJsonl(sessionId: string, cwd?: string, hos
           const s = (parsed as Record<string, unknown>).state as
             | 'running' | 'idle' | 'requires_action' | undefined;
           state.cliSessionState = s;
-          // idle is the authoritative turn-over signal: it fires only after ALL
-          // background tasks finish. Trust it over any intermediate `result`.
-          if (s === 'idle') { state.workStatus = 'agent_complete'; state.bgTasksInFlight = 0; }
+          // idle is the turn-over TRIGGER, not turn-over itself. POC-verified (see memory
+          // claude-code-session-state-semantics): the CLI emits idle ~20×/run — between
+          // every sub-agent / phase — because its idle-wait loop excludes
+          // in_process_teammate tasks. So a mid-workflow restart's JSONL almost always
+          // contains idle events while tasks are still in flight. The turn is over only
+          // when idle coincides with a drained counter. The OLD code unconditionally set
+          // agent_complete + zeroed the counter on ANY idle, which marked a still-running
+          // workflow complete on restart (defeating the recovery this whole block exists
+          // for). Gate on the counter; NEVER hard-reset it (task_notification owns that).
+          if (s === 'idle' && (state.bgTasksInFlight ?? 0) === 0) { state.workStatus = 'agent_complete'; }
           else if (s === 'running') { state.workStatus = undefined; }
         }
       }
