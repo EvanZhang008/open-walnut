@@ -4,17 +4,17 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Walnut — The open-source home for all your Claude Code</title>
-<meta name="description" content="Walnut is a self-hosted, open-source web UI for managing your Claude Code sessions — plus tasks, notes, a calendar, and a self-organizing memory. Local-first, MIT licensed." />
+<meta name="description" content="Walnut is a self-hosted, open-source web UI that runs every Claude Code session on your laptop and your remote dev boxes from one console — plus a per-session diff review, tasks, notes, and a self-organizing memory. Local-first, MIT licensed." />
 <link rel="icon" type="image/png" href="assets/walnut-icon.png" />
 
 <!-- Open Graph / social -->
 <meta property="og:type" content="website" />
 <meta property="og:title" content="Walnut — The open-source home for all your Claude Code" />
-<meta property="og:description" content="A self-hosted web UI for your Claude Code sessions — plus tasks, notes, calendar, and memory. Local-first, MIT." />
+<meta property="og:description" content="One console that runs every Claude Code session — local and remote-over-SSH — with GitHub-style per-session diff review, tasks, notes, and a memory that organizes itself. Local-first, MIT." />
 <meta property="og:image" content="assets/hero.png" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="Walnut — The open-source home for all your Claude Code" />
-<meta name="twitter:description" content="A self-hosted web UI for your Claude Code sessions — plus tasks, notes, calendar, and memory." />
+<meta name="twitter:description" content="One console for every Claude Code session, local and remote-over-SSH — per-session diff review, tasks, notes, and a self-organizing memory." />
 <meta name="twitter:image" content="assets/hero.png" />
 
 <style>
@@ -119,7 +119,7 @@
   <header>
     <span class="pill">● OPEN SOURCE · SELF-HOSTED · MIT</span>
     <h1>The open-source home for<br/>all your <span class="hl">Claude Code</span></h1>
-    <p class="sub">A self-hosted web UI that runs and monitors every Claude Code session — plus tasks, notes, a calendar, and a memory that organizes itself. Your data stays on your machine.</p>
+    <p class="sub">A self-hosted web UI that runs every Claude Code session on your laptop <i>and</i> your remote dev boxes from one console — streaming every tool call live, with a GitHub-style review of exactly what each session changed. Plus tasks, notes, and a memory that organizes itself. Your data stays on your machine.</p>
     <div class="cta">
       <a class="btn btn-primary" href="https://github.com/EvanZhang008/open-walnut">★ Star on GitHub</a>
       <a class="btn btn-ghost" href="https://youtu.be/uN4WCZ-n2mw">▶ Watch the demo</a>
@@ -140,6 +140,15 @@
   <section id="features">
     <h2>One app for everything around Claude Code</h2>
     <p class="lead">Stop losing sessions in terminal tabs. Walnut gives Claude Code a real UI and ties it to the work it's for.</p>
+
+    <div class="feature">
+      <div class="ftext">
+        <h3>One console, every machine</h3>
+        <p>Add a <code>hosts:</code> block to your config and one Walnut console drives Claude Code on your laptop <b>and</b> every remote dev box over SSH. Walnut works with your node manager (nvm / fnm / volta / asdf) and deploys its own daemon — gzipped and chunked so it survives corporate proxies, no manual <code>scp</code>. Terminal, file browser, the command &amp; skill palettes, and the diff view all work over SSH exactly like local.</p>
+        <p>Sessions are <b>resilient</b>: if the tunnel or daemon dies, the remote daemon adopts and reconciles the still-running <code>claude -p</code> processes on restart — the remote session log is the source of truth, so nothing is lost.</p>
+      </div>
+      <img src="assets/remote-topology.svg" alt="One Walnut console driving local and multiple remote hosts over SSH"/>
+    </div>
 
     <div class="feature">
       <div class="ftext">
@@ -182,12 +191,15 @@
     </div>
 
     <div class="grid">
-      <div class="gcard"><h4>🖥️ Multi-session dashboard</h4><p>Run and monitor dozens of Claude Code sessions side by side, with live status.</p></div>
-      <div class="gcard"><h4>🔌 Remote over SSH</h4><p>Run sessions on remote machines with automatic Node version detection.</p></div>
-      <div class="gcard"><h4>🧠 Self-organizing memory</h4><p>A background agent distills session history into searchable topic pages.</p></div>
-      <div class="gcard"><h4>📅 Tasks &amp; calendar</h4><p>4-layer task hierarchy, priorities, due dates, and a calendar view.</p></div>
-      <div class="gcard"><h4>🔒 Local-first &amp; private</h4><p>Plain JSON / Markdown / SQLite in a local folder. No telemetry, no cloud DB.</p></div>
-      <div class="gcard"><h4>⚙️ Cron &amp; automation</h4><p>Scheduled jobs, heartbeat checklists, and automated session triage.</p></div>
+      <div class="gcard"><h4>🖥️ Multi-session dashboard</h4><p>Run and monitor dozens of Claude Code sessions side by side, with live status, mid-session model switching, and plan → execute.</p></div>
+      <div class="gcard"><h4>✅ Tasks that drive sessions</h4><p>A 4-layer Category → Project → Task → Subtask hierarchy with priorities, due dates, dependencies, and tags — each task wired to its Claude Code session.</p></div>
+      <div class="gcard"><h4>🧠 Self-organizing memory</h4><p>Working memory updates as you go, and a background agent distills daily logs into searchable topic pages — recency-weighted, hybrid BM25 + vector search.</p></div>
+      <div class="gcard"><h4>📓 Notes the AI can search</h4><p>Obsidian-style markdown with [[wiki-links]], backlinks, a folder tree, and hybrid search — injected into every session as context.</p></div>
+      <div class="gcard"><h4>💬 Multi-conversation agents</h4><p>Create on-demand agents, each with independent fresh-context conversations; what you discuss is auto-distilled into that agent's memory.</p></div>
+      <div class="gcard"><h4>⚙️ Cron &amp; automation</h4><p>One-time, interval, and cron-expression jobs with timezones, heartbeat checklists, and automated session triage on a dedicated page.</p></div>
+      <div class="gcard"><h4>⌨️ Command &amp; skill palettes</h4><p>Browse and run slash commands and skills from one place — including the ones discovered on your remote hosts.</p></div>
+      <div class="gcard"><h4>🔊 Free text-to-speech</h4><p>A built-in TTS tool the agent can speak through — no API key, no extra cost.</p></div>
+      <div class="gcard"><h4>🔒 Local-first &amp; private</h4><p>Plain JSON / Markdown / SQLite in a local folder. No telemetry, no cloud database — your data stays on your machine.</p></div>
     </div>
   </section>
 

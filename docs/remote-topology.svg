@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="430" viewBox="0 0 880 430" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif" role="img" aria-label="One Walnut console drives a local host plus three remote hosts; the remote hosts are reached over resilient SSH tunnels.">
+  <title>One console drives a local host plus three remote hosts over resilient SSH</title>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto">
+      <path d="M1 1 L11 6 L1 11 z" fill="#7c5cff"/>
+    </marker>
+    <marker id="arrowLocal" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto">
+      <path d="M1 1 L11 6 L1 11 z" fill="#a78bfa"/>
+    </marker>
+  </defs>
+
+  <!-- backdrop -->
+  <rect x="0" y="0" width="880" height="430" rx="18" fill="#0b0f1a"/>
+  <rect x="0.75" y="0.75" width="878.5" height="428.5" rx="17.25" fill="none" stroke="rgba(160,175,255,.16)" stroke-width="1.5"/>
+
+  <!-- ===================== Local connector (solid, NOT SSH) ===================== -->
+  <path d="M256 214 C 360 110, 470 96, 596 92" stroke="#a78bfa" stroke-width="2" fill="none" stroke-linecap="round" opacity="0.7" marker-end="url(#arrowLocal)"/>
+
+  <!-- ===================== SSH tunnels to the 3 REMOTE hosts (dashed) ===================== -->
+  <g stroke="#7c5cff" stroke-width="2" fill="none" stroke-dasharray="7 6" stroke-linecap="round" opacity="0.9">
+    <path d="M256 214 C 360 176, 470 170, 596 166" marker-end="url(#arrow)"/>
+    <path d="M256 214 C 360 250, 470 256, 596 262" marker-end="url(#arrow)"/>
+    <path d="M256 214 C 360 330, 470 340, 596 340" marker-end="url(#arrow)"/>
+  </g>
+
+  <!-- tunnel label -->
+  <text x="430" y="206" text-anchor="middle" font-size="12.5" fill="#b8c2dc" letter-spacing="0.4">SSH tunnels · I/O both ways</text>
+
+  <!-- ===================== LEFT: Walnut console ===================== -->
+  <g>
+    <rect x="40" y="150" width="200" height="128" rx="14" fill="#141a2b" stroke="#7c5cff" stroke-width="1.5"/>
+    <!-- monitor / browser glyph, top-center -->
+    <g transform="translate(110,166)">
+      <rect x="0" y="0" width="60" height="40" rx="5" fill="none" stroke="#a78bfa" stroke-width="2"/>
+      <line x1="0" y1="11" x2="60" y2="11" stroke="#a78bfa" stroke-width="2"/>
+      <circle cx="7.5" cy="5.5" r="1.8" fill="#a78bfa"/>
+      <circle cx="14" cy="5.5" r="1.8" fill="#a78bfa"/>
+      <circle cx="20.5" cy="5.5" r="1.8" fill="#a78bfa"/>
+      <line x1="22" y1="48" x2="38" y2="48" stroke="#a78bfa" stroke-width="2"/>
+      <line x1="30" y1="40" x2="30" y2="48" stroke="#a78bfa" stroke-width="2"/>
+    </g>
+    <text x="140" y="234" text-anchor="middle" font-size="15.5" font-weight="600" fill="#eef1f8">Walnut console</text>
+    <text x="140" y="253" text-anchor="middle" font-size="11.5" fill="#b8c2dc">one UI · many hosts</text>
+    <text x="140" y="269" text-anchor="middle" font-size="11.5" fill="#b8c2dc">terminal · files · diff</text>
+  </g>
+
+  <!-- ===================== RIGHT: 4 host cards ===================== -->
+
+  <!-- local (in-process, no SSH) -->
+  <g transform="translate(600,58)">
+    <rect x="0" y="0" width="240" height="68" rx="12" fill="#141a2b" stroke="rgba(160,175,255,.16)" stroke-width="1.5"/>
+    <text x="14" y="26" font-size="13.5" font-weight="600" fill="#eef1f8">local</text>
+    <rect x="106" y="13" width="60" height="20" rx="10" fill="#0b0f1a" stroke="#a78bfa" stroke-width="1.2"/>
+    <text x="136" y="27" text-anchor="middle" font-size="10.5" fill="#a78bfa">daemon</text>
+    <rect x="174" y="13" width="58" height="20" rx="10" fill="#0b0f1a" stroke="#7c5cff" stroke-width="1.2"/>
+    <text x="203" y="27" text-anchor="middle" font-size="10" fill="#a9b4d0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">claude -p</text>
+    <line x1="166" y1="23" x2="174" y2="23" stroke="#7c5cff" stroke-width="1.4"/>
+    <text x="14" y="52" font-size="11.5" fill="#b8c2dc">in-process daemon · no SSH</text>
+  </g>
+
+  <!-- remote-1 -->
+  <g transform="translate(600,132)">
+    <rect x="0" y="0" width="240" height="68" rx="12" fill="#141a2b" stroke="rgba(160,175,255,.16)" stroke-width="1.5"/>
+    <text x="14" y="26" font-size="13.5" font-weight="600" fill="#eef1f8">remote-1</text>
+    <rect x="106" y="13" width="60" height="20" rx="10" fill="#0b0f1a" stroke="#a78bfa" stroke-width="1.2"/>
+    <text x="136" y="27" text-anchor="middle" font-size="10.5" fill="#a78bfa">daemon</text>
+    <rect x="174" y="13" width="58" height="20" rx="10" fill="#0b0f1a" stroke="#7c5cff" stroke-width="1.2"/>
+    <text x="203" y="27" text-anchor="middle" font-size="10" fill="#a9b4d0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">claude -p</text>
+    <line x1="166" y1="23" x2="174" y2="23" stroke="#7c5cff" stroke-width="1.4"/>
+    <text x="14" y="52" font-size="11" fill="#b8c2dc">bun binary · JSONL = source of truth</text>
+  </g>
+
+  <!-- remote-2 -->
+  <g transform="translate(600,228)">
+    <rect x="0" y="0" width="240" height="68" rx="12" fill="#141a2b" stroke="rgba(160,175,255,.16)" stroke-width="1.5"/>
+    <text x="14" y="26" font-size="13.5" font-weight="600" fill="#eef1f8">remote-2</text>
+    <rect x="106" y="13" width="60" height="20" rx="10" fill="#0b0f1a" stroke="#a78bfa" stroke-width="1.2"/>
+    <text x="136" y="27" text-anchor="middle" font-size="10.5" fill="#a78bfa">daemon</text>
+    <rect x="174" y="13" width="58" height="20" rx="10" fill="#0b0f1a" stroke="#7c5cff" stroke-width="1.2"/>
+    <text x="203" y="27" text-anchor="middle" font-size="10" fill="#a9b4d0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">claude -p</text>
+    <line x1="166" y1="23" x2="174" y2="23" stroke="#7c5cff" stroke-width="1.4"/>
+    <text x="14" y="52" font-size="11.5" fill="#b8c2dc">FIFO keeps the CLI alive</text>
+  </g>
+
+  <!-- remote-3 -->
+  <g transform="translate(600,324)">
+    <rect x="0" y="0" width="240" height="68" rx="12" fill="#141a2b" stroke="rgba(160,175,255,.16)" stroke-width="1.5"/>
+    <text x="14" y="26" font-size="13.5" font-weight="600" fill="#eef1f8">remote-3</text>
+    <rect x="106" y="13" width="60" height="20" rx="10" fill="#0b0f1a" stroke="#a78bfa" stroke-width="1.2"/>
+    <text x="136" y="27" text-anchor="middle" font-size="10.5" fill="#a78bfa">daemon</text>
+    <rect x="174" y="13" width="58" height="20" rx="10" fill="#0b0f1a" stroke="#7c5cff" stroke-width="1.2"/>
+    <text x="203" y="27" text-anchor="middle" font-size="10" fill="#a9b4d0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">claude -p</text>
+    <line x1="166" y1="23" x2="174" y2="23" stroke="#7c5cff" stroke-width="1.4"/>
+    <text x="14" y="52" font-size="11.5" fill="#b8c2dc">auto-detects remote node version</text>
+  </g>
+
+  <!-- ===================== Callout (a): resilience — placed in the clear band between tunnel-2 and tunnel-3 ===================== -->
+  <g transform="translate(330,294)">
+    <rect x="0" y="0" width="244" height="30" rx="15" fill="#0b0f1a" stroke="#a78bfa" stroke-width="1.3"/>
+    <!-- reconnect / refresh glyph -->
+    <g transform="translate(16,15)" stroke="#a78bfa" stroke-width="1.8" fill="none" stroke-linecap="round">
+      <path d="M-6 0 A6 6 0 1 1 -3 5"/>
+      <path d="M-6 -4 L-6 0 L-2 0" fill="#a78bfa" stroke="none"/>
+    </g>
+    <text x="34" y="19" font-size="11.5" fill="#a78bfa">survives tunnel / daemon restart</text>
+  </g>
+
+  <!-- ===================== Callout (b): auto-deploy near console->host edge ===================== -->
+  <g transform="translate(296,108)">
+    <rect x="0" y="0" width="214" height="28" rx="14" fill="#0b0f1a" stroke="#7c5cff" stroke-width="1.2"/>
+    <!-- upload glyph -->
+    <g transform="translate(16,14)" stroke="#a78bfa" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="0" y1="-5" x2="0" y2="4"/>
+      <path d="M-4 -1 L0 -5 L4 -1"/>
+      <line x1="-5" y1="6" x2="5" y2="6"/>
+    </g>
+    <text x="32" y="18" font-size="11.5" fill="#a78bfa">auto-deploys its own binary</text>
+  </g>
+
+</svg>

@@ -6,7 +6,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue.svg)](https://www.typescriptlang.org/)
 [![GitHub stars](https://img.shields.io/github/stars/EvanZhang008/open-walnut?style=social)](https://github.com/EvanZhang008/open-walnut)
 
-[![Open Walnut — the open-source home for all your Claude Code, notes, tasks, and calendar (click to watch the demo)](docs/demo-video-thumb.png)](https://youtu.be/uN4WCZ-n2mw)
+[![Open Walnut — the open-source home for all your Claude Code sessions, tasks, notes, and memory (click to watch the demo)](docs/demo-video-thumb.png)](https://youtu.be/uN4WCZ-n2mw)
 
 <p align="center"><b>▶️ <a href="https://youtu.be/uN4WCZ-n2mw">Watch the 3-minute demo on YouTube</a></b></p>
 
@@ -32,6 +32,8 @@ Open Walnut is not just a dashboard — it's an AI-native app. A built-in AI age
 ## Table of Contents
 
 - [Why Open Walnut?](#why-open-walnut)
+- [Drive local and remote machines from one tab](#drive-local-and-remote-machines-from-one-tab)
+- [Review what the agent changed](#review-what-the-agent-changed)
 - [See it in action](#see-it-in-action)
 - [Key Features](#key-features)
 - [Multi-Agent — But Human-Centered](#multi-agent--but-human-centered)
@@ -68,6 +70,42 @@ Open Walnut replaces all of that with one system:
 | Todoist / Notion projects | 4-layer task hierarchy (Category → Project → Task → Subtask) |
 | Apple Notes / Obsidian | Notes vault (wiki-links, backlinks, PARA folders) + agent-maintained memory (daily logs, topics, project memory) |
 | Manual AI workflows | 30+ agent tools, cron jobs, automated triage |
+
+## Drive local and remote machines from one tab
+
+**One Walnut console runs Claude Code on your laptop and on any number of SSH hosts — without a second tool.**
+
+![Open Walnut topology: one console driving local and many remote hosts over SSH](docs/remote-topology.svg)
+
+- **Crash-resilient sessions** — Walnut talks to a small daemon on each remote host that spawns and supervises the `claude -p` CLI. If your SSH tunnel drops or the daemon restarts, your sessions don't die: on reconnect the daemon adopts and reconciles the still-running CLI processes, and the remote JSONL stream stays the source of truth. A FIFO keeps each long-running CLI alive between turns, so on reconnect you rejoin the turn that's still running instead of restarting it.
+- **Zero-setup remotes** — point at a host and Walnut auto-detects its node version (nvm / fnm / volta / asdf) and auto-deploys its own daemon binary over SSH. The binary is gzipped and chunked so it survives corporate proxies that kill transfers over 5MB — no manual `scp`, no remote install steps.
+- **Everything works remote** — streaming chat, the terminal, file browser, diff view, and command palette all run over SSH; the palette even lists skills and commands installed on the remote host, not just locally.
+
+Add hosts in `~/.open-walnut/config.yaml`:
+
+```yaml
+hosts:
+  my-server:
+    hostname: dev.example.com
+    user: myuser
+    # Optional: identity_file, port, shell_setup
+```
+
+See **[GETTING_STARTED.md](GETTING_STARTED.md#remote-sessions-via-ssh)** for the full remote setup.
+
+## Review what the agent changed
+
+**A GitHub-style, per-session diff — see exactly what each session touched, then talk to the agent right inside the review.**
+
+Click a session's **Changed** chip and the panel goes full-screen: a split view with the file diff on the left and that session's chat on the right. It lists every file the session edited — before/after, split or unified, with word-level highlighting — grouped by repository, and it handles cross-repo and subagent edits cleanly.
+
+By default the before/after is reconstructed from the **session's own JSONL** (not git), so edits are attributed *per session* even when several agents are hammering the same repo concurrently — you see what *this* session changed, not the repo's combined working tree. (You can also switch the baseline to compare against uncommitted or not-yet-pushed git changes.)
+
+- **Markdown files** get a **Rendered** toggle so docs read like docs, not raw diffs.
+- **Select code in the diff → "Ask about this"** pre-fills the *same* main agent's chat with full context — no fork, no re-explaining.
+- **Click a line → a PR-style comment box** that batches your comments into a single review to hand back to the agent.
+
+Works for local and remote sessions alike.
 
 ## See it in action
 
@@ -108,7 +146,7 @@ Open Walnut replaces all of that with one system:
 - **Multi-session dashboard** — run and monitor multiple Claude Code sessions side by side
 - **Mid-session model switching** — swap between Opus, Sonnet, and Haiku without losing context
 - **Plan → Execute workflow** — sessions produce a plan file for your review, then execute on approval
-- **Remote sessions via SSH** — run Claude Code on remote machines with automatic node version detection (nvm, fnm, volta, asdf)
+- **Local + remote hosts** — drive Claude Code on your laptop and any number of SSH hosts from one console ([details](#drive-local-and-remote-machines-from-one-tab))
 - **Session history & search** — every session is saved, searchable, and attached to a task
 - **Focus Bar** — pin active tasks to a dock at the bottom; see live session previews, send messages, switch context in one click
 
@@ -167,11 +205,20 @@ Session Summaries   ──────────►    Memory Index (table of 
 - **Sessions**: start, monitor, message, and archive Claude Code sessions
 - **Execution**: run shell commands, read/write/edit files, apply patches
 - **Web**: search the internet, fetch pages, analyze images
+- **Text-to-speech**: turn any text into spoken audio with edge-tts — free, no API key required
 - **Scheduling**: cron jobs, heartbeat checklists, automated triage
 - **Integrations**: Microsoft To-Do two-way sync, Slack notifications, plugin system
 
+### Multi-Conversation Agents
+
+A dedicated **`/agents`** page for spinning up purpose-built agents on demand. Each agent holds **N independent, fresh-context conversations** — open one to think through a problem with a clean slate, close it when you're done, no cross-talk between threads. When a conversation wraps, its knowledge is automatically distilled into that agent's own memory, so the agent gets sharper over time without you maintaining anything by hand.
+
+### Commands & Skills
+
+Browse and run your Claude Code slash commands and skills from two dedicated pages — **`/commands`** and **`/skills`** — without dropping back to a terminal. Both palettes surface commands and skills discovered on **remote hosts** too, not just your local machine, so the same tooling is one click away wherever a session is running.
+
 ### Automation & Scheduling
-- **Cron jobs** — one-time, interval, or cron expression with timezone support
+, managed from a dedicated `/cron` page
 - **Heartbeat checklists** — daily/weekly routines the agent runs autonomously
 - **Session triage** — AI reviews session results and surfaces what needs your attention
 - **Event-driven triggers** — react to session completions, cron finishes, and more
@@ -252,13 +299,16 @@ External plugins go in `~/.open-walnut/plugins/{plugin-name}/`.
 | Route | Page | What it does |
 |---|---|---|
 | `/` | **Home** | Chat (left) + Session panels (middle) + Todo panel (right) + Focus Bar (bottom) |
-| `/sessions` | **Sessions** | Task tree browser + full session detail with chat, model picker, plan preview |
+| `/sessions` | **Sessions** | Task tree browser + full session detail with chat, model picker, plan preview, and the per-session Changed diff view |
 | `/tasks` | **Task Board** | Full task management with filters, search, drag-and-drop |
 | `/tasks/:id` | **Task Detail** | Single task view with subtasks, sessions, notes, dependencies |
 | `/notes` | **Notes** | Obsidian-style knowledge vault with wiki-links, backlinks, tree navigation, and rich editor |
-| `/search` | **Search** | Hybrid full-text + semantic search across tasks, memory, and notes |
-| `/usage` | **Usage** | Token costs, cache efficiency, daily spending charts |
-| `/settings` | **Settings** | Config editor, integration management |
+| `/memory` | **Memory** | Browse working memory, daily logs, and Dream-distilled topic pages |
+| `/cron` | **Cron** | Manage scheduled jobs — one-time, interval, or cron expression with timezone |
+| `/agents` | **Agents** | Create on-demand agents, each with multiple fresh-context conversations |
+| `/commands` | **Commands** | Browse and run slash commands, including ones discovered on remote hosts |
+| `/skills` | **Skills** | Browse and run skills, including ones discovered on remote hosts |
+| `/settings` | **Settings** | Config editor, integration management, and token usage / cost charts |
 
 ## CLI
 
@@ -355,6 +405,7 @@ Open Walnut is not just a coding agent or a Kanban board — it's a **complete s
 - **AI agent with 30+ tools** that understands your tasks and acts on your behalf
 - **Claude Code session orchestration** — spawn, monitor, and manage sessions from a web UI
 - **Memory that gets smarter, not messier** — working memory survives compaction, daily logs auto-distill into wiki-style topics via Dream consolidation, old noise decays while evergreen knowledge persists. Hybrid search (BM25 + vector + re-ranking) spans memory and your personal notes vault
+- **One console for local and remote** — drive Claude Code on your laptop or any SSH host from one tab, with sessions that survive tunnel/daemon crashes and a per-session diff (rebuilt from each session's own JSONL, so edits stay attributed per session even when agents share a repo)
 - **Self-hosted, local-first** — all data in `~/.open-walnut/` as JSON, Markdown, and SQLite
 
 ## Contributing
