@@ -480,6 +480,43 @@ if (outputFormat === 'stream-json') {
       return;
     }
 
+    // 2a.8. "workflow-test-big" — a LARGE fan-out (10 subagents in one phase) so the
+    //        panel's density-bar Level-of-Detail path (>DENSITY_THRESHOLD) is exercised
+    //        by the Playwright UI verification. Same lifecycle shape as workflow-test.
+    if (effectiveMessage === 'workflow-test-big') {
+      function emitWf(line) { process.stdout.write(JSON.stringify(line) + '\n'); }
+      const sid = outputSessionId;
+      const N = 10;
+      const mkAgents = (state) => Array.from({ length: N }, (_, i) => ({
+        type: 'workflow_agent', index: i + 1, label: `review:file-${i + 1}`,
+        phaseIndex: 1, phaseTitle: 'Review', agentId: `wfa-big-${i + 1}`,
+        model: 'global.anthropic.claude-sonnet-4-6', state,
+        startedAt: 1, ...(state === 'done' ? { tokens: 1500 + i * 10, durationMs: 2000 + i * 50, resultPreview: `Reviewed file-${i + 1}` } : { promptPreview: `Review file-${i + 1}` }),
+      }));
+
+      emitWf({ type: 'assistant', message: { id: 'msg_wf_big', type: 'message', role: 'assistant', model: 'mock-model', content: [{ type: 'text', text: 'Big workflow launched' }], stop_reason: 'end_turn', usage: { input_tokens: 100, output_tokens: 30 } }, session_id: sid });
+      emitWf({ type: 'system', subtype: 'task_started', session_id: sid, task_id: 'wf-big', task_type: 'local_workflow', workflow_name: 'review-all-files', description: 'Review 10 files in parallel', prompt: "export const meta = { name: 'review-all-files' }\nphase('Review')\nawait parallel(files.map(f => () => agent('review '+f)))" });
+      emitWf({ type: 'result', subtype: 'success', is_error: false, duration_ms: 200, num_turns: 1, result: 'Big workflow launched', session_id: sid, total_cost_usd: 0.002, usage: { input_tokens: 100, output_tokens: 30 } });
+
+      setTimeout(() => {
+        emitWf({ type: 'system', subtype: 'task_progress', session_id: sid, task_id: 'wf-big', summary: 'Review', usage: { total_tokens: 12000 }, workflow_progress: [
+          { type: 'workflow_phase', index: 1, title: 'Review' },
+          ...mkAgents('start'),
+        ] });
+      }, 150);
+      setTimeout(() => {
+        emitWf({ type: 'system', subtype: 'task_progress', session_id: sid, task_id: 'wf-big', summary: 'Review done', usage: { total_tokens: 30000 }, workflow_progress: [
+          { type: 'workflow_phase', index: 1, title: 'Review' },
+          ...mkAgents('done'),
+        ] });
+        emitWf({ type: 'system', subtype: 'task_notification', session_id: sid, task_id: 'wf-big', status: 'completed' });
+      }, 300);
+      setTimeout(() => {
+        emitWf({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
+      }, 450);
+      return;
+    }
+
     // 2b. For "tool-test" messages, emit a tool_use + tool_result before the text
     if (effectiveMessage === 'tool-test') {
       const toolUseEvent = {

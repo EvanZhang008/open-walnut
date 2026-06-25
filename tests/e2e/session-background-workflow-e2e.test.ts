@@ -204,4 +204,36 @@ describe('Dynamic workflow E2E: stays running until idle, surfaces progress', ()
 
     ws.close()
   }, 30000)
+
+  it('large fan-out: agents union exceeds the density threshold (feeds the density-bar view)', async () => {
+    const ws = await connectWs()
+    const bgCollector = collectWsEvents(ws, 'session:background-tasks')
+
+    const rpc = await sendWsRpc(ws, 'session:start', {
+      taskId: 'wf-task-001',
+      message: 'workflow-test-big',
+      project: 'Walnut',
+    })
+    expect((rpc as Record<string, unknown>).ok).toBe(true)
+
+    await waitForWsEvent(ws, 'session:result', 15000)
+    await delay(300)
+    bgCollector.cleanup()
+
+    // The big fan-out accumulates to 10 agents in ONE phase — that's > DENSITY_THRESHOLD
+    // (6), the condition under which the panel folds the phase into a density bar.
+    type Agent = { agentId: string; status: string; phaseIndex?: number }
+    type BgData = { phases?: { index: number; title: string }[]; agents?: Agent[]; workflowName?: string }
+    const maxAgents = Math.max(...bgCollector.events.map(e => ((e.data as BgData).agents ?? []).length))
+    expect(maxAgents).toBe(10)
+    const named = bgCollector.events.find(e => (e.data as BgData).workflowName)
+    expect((named?.data as BgData | undefined)?.workflowName).toBe('review-all-files')
+    // All 10 land in the single "Review" phase (phaseIndex 1) → one density-bar group.
+    const finalAgents = (bgCollector.events[bgCollector.events.length - 1].data as BgData).agents ?? []
+    expect(finalAgents.length).toBe(10)
+    expect(finalAgents.every(a => a.phaseIndex === 1)).toBe(true)
+    expect(finalAgents.every(a => a.status === 'completed')).toBe(true)
+
+    ws.close()
+  }, 30000)
 })

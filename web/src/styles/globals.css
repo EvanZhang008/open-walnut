@@ -3384,6 +3384,7 @@ input:focus, textarea:focus, select:focus {
   border-radius: 8px;
 }
 .wf-card-running { color: var(--accent); }
+.wf-card-failed { color: var(--warning); }
 .wf-card-tokens { margin-left: auto; font-size: 11px; color: var(--fg-muted); }
 /* Full-screen toggle — small icon button, mirrors the session panel's expand. */
 .wf-card-fullscreen {
@@ -3578,6 +3579,174 @@ input:focus, textarea:focus, select:focus {
   cursor: pointer;
 }
 .wf-transcript-toggle:hover { background: var(--bg); }
+
+/* ════════════════════════════════════════════════════════════════════════
+   WorkflowGraph — flow-graph visualization (vertical timeline / horizontal lanes)
+   Reuses .wf-task-dot-* colors + session-pulse animation; adds layout only.
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ── shared phase header + agent node (both orientations) ── */
+.wf-gphase-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+}
+.wf-gphase-title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wf-gphase-count { font-weight: 500; flex: none; }
+
+.wf-gnode { display: flex; flex-direction: column; }
+.wf-gnode-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  color: var(--fg);
+}
+.wf-gnode-head:hover { background: var(--bg); }
+.wf-gnode-caret { font-size: 9px; color: var(--fg-muted); flex: none; width: 10px; }
+.wf-gnode-name {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+.wf-gnode-meta { margin-left: auto; font-size: 11px; color: var(--fg-muted); flex: none; }
+.wf-gnode-expanded { background: var(--bg); }
+.wf-gnode-completed .wf-gnode-name,
+.wf-gnode-stopped .wf-gnode-name { color: var(--fg-muted); }
+
+/* ── vertical: stacked phases, each with a left rail (the PRIMARY / narrow view) ── */
+.wf-graph-vertical { display: flex; flex-direction: column; }
+.wf-graph-vertical .wf-gphase { display: flex; flex-direction: column; }
+.wf-graph-vertical .wf-gphase-head {
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+}
+.wf-graph-vertical .wf-gphase-rail {
+  display: flex;
+  flex-direction: column;
+  margin-left: 18px;
+  border-left: 2px solid var(--border-subtle, var(--border));
+}
+/* the connector tick from rail to each node */
+.wf-graph-vertical .wf-gnode { position: relative; }
+.wf-graph-vertical .wf-gnode::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 15px;
+  width: 8px;
+  height: 2px;
+  background: var(--border-subtle, var(--border));
+}
+.wf-graph-vertical .wf-gnode-head { padding-left: 14px; }
+
+/* ── horizontal: swimlane columns + SVG connectors (fullscreen only) ── */
+.wf-graph-horizontal {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  padding: 12px 8px;
+  overflow-x: auto;
+  min-height: 200px;
+}
+.wf-graph-edges {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 0;
+}
+.wf-graph-edge { fill: none; stroke-width: 2; }
+.wf-graph-edge-barrier { stroke: var(--fg-muted); opacity: 0.55; }
+.wf-graph-edge-flow { stroke: var(--accent); stroke-dasharray: 4 4; opacity: 0.7; }
+.wf-glane {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-width: 200px;
+  padding: 0 18px;
+  display: flex;
+  flex-direction: column;
+}
+.wf-glane + .wf-glane { border-left: 1px dashed var(--border-subtle, var(--border)); }
+.wf-glane-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  justify-content: center;
+  flex: 1;
+  min-height: 0;       /* allow the flex child to shrink so overflow-y can engage */
+  overflow-y: auto;    /* expanded cards in a tall lane scroll instead of spilling out */
+  padding-top: 12px;
+}
+/* in lane mode, nodes are cards */
+.wf-graph-horizontal .wf-gnode-card {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.wf-graph-horizontal .wf-gnode-card .wf-gnode-head { padding: 9px 11px; }
+.wf-graph-horizontal .wf-gnode-card.wf-gnode-running { border-color: var(--accent); }
+
+/* ── density bar: aggregate histogram for a large fan-out ── */
+.wf-density { display: flex; flex-direction: column; gap: 8px; padding: 8px 12px 12px; }
+.wf-density-stats { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--fg-muted); }
+.wf-density-stat { display: inline-flex; align-items: center; gap: 4px; }
+.wf-density-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.wf-density-cell { width: 9px; height: 9px; border-radius: 2px; background: var(--bg-tertiary); }
+.wf-density-cell-completed { background: #34c759; }
+/* Running cells are a STATIC accent — deliberately NOT pulsing. The density bar exists
+   for large fan-outs (designed for hundreds of agents); pulsing every running cell
+   would mean hundreds of simultaneous infinite animations. The aggregate "N running"
+   stat above the bar already conveys liveness. */
+.wf-density-cell-running { background: var(--accent); }
+.wf-density-cell-failed { background: var(--warning); }
+.wf-density-cell-stopped,
+.wf-density-cell-killed { background: var(--fg-muted); }
+.wf-density-cell-paused { background: var(--fg-muted); }
+.wf-density-more {
+  align-self: flex-start;
+  font-size: 11px;
+  color: var(--accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+.wf-density-list {
+  display: flex;
+  flex-direction: column;
+  margin-top: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border-subtle, var(--border));
+}
 
 /* ── Full-screen subagent transcript reader (WorkflowTranscriptModal) ── */
 .wf-modal-overlay {

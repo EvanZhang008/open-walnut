@@ -23,6 +23,13 @@ const runs = [
     name: 'diff-view',
     args: ['vitest', 'run', '--config', 'vitest.diff-view.config.ts'],
   },
+  {
+    // FRONTEND WorkflowGraph layout logic (buildLayout/phaseCounts) — pure data
+    // transforms behind the dynamic-workflow flow-graph panel. Runs under a
+    // repo-root-rooted config that aliases @ → web/src (no DOM needed).
+    name: 'workflow-graph',
+    args: ['vitest', 'run', '--config', 'vitest.workflow-graph.config.ts'],
+  },
 ];
 
 const children = new Set();

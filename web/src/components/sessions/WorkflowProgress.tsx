@@ -3,13 +3,14 @@
  *
  * Driven by the `session:background-tasks` stream (see useBackgroundTasks). A dynamic
  * workflow fans out many subagents that outlive the agent's text turn. This panel
- * mirrors Claude Code's own `/workflows` view: it shows WHAT workflow was created
- * (name + generated script), the phases, and every subagent grouped by phase — each
- * row clickable to reveal its prompt + result. Rendered inside SessionChatHistory so
- * BOTH the /sessions page and the home slide-out get it for free.
+ * shows WHAT workflow was created (name + generated script) and visualizes the run as
+ * a FLOW GRAPH (see WorkflowGraph): phases as layers, agents as nodes — vertical
+ * stacked timeline when narrow (Home Panel, the PRIMARY surface), horizontal swimlanes
+ * with connectors when fullscreen. Rendered inside SessionChatHistory so BOTH the
+ * /sessions page and the home slide-out get it for free.
  *
  * Two render modes:
- *   - Workflow mode (agents.length > 0): rich phase/agent breakdown.
+ *   - Workflow mode (agents.length > 0): the rich WorkflowGraph.
  *   - Legacy mode (no agents): flat background-task list (plain background tasks).
  *
  * The counts here are DISPLAY-ONLY — completion is driven by the backend's
@@ -18,40 +19,11 @@
 
 import { memo, useState } from 'react';
 import { useBackgroundTasks, type BackgroundTask, type WorkflowAgent } from '@/hooks/useBackgroundTasks';
+import { WorkflowGraph, StatusDot, fmtTokens, agentMeta } from './WorkflowGraph';
+import { phaseCounts } from './workflow-layout';
 import { WorkflowTranscriptModal, type TranscriptTarget } from './WorkflowTranscriptModal';
 import { useFullscreen } from '@/hooks/useFullscreen';
 import { ICON_EXPAND, ICON_COLLAPSE } from '../common/Icons';
-
-const TERMINAL = new Set(['completed', 'failed', 'stopped', 'killed']);
-
-function StatusDot({ status }: { status: string }) {
-  if (status === 'running') return <span className="wf-task-dot wf-task-dot-running" title="Running">{'●'}</span>;
-  if (status === 'completed') return <span className="wf-task-dot wf-task-dot-done" title="Completed">{'✓'}</span>;
-  if (status === 'failed') return <span className="wf-task-dot wf-task-dot-error" title="Failed">{'✗'}</span>;
-  if (status === 'stopped' || status === 'killed') return <span className="wf-task-dot wf-task-dot-stopped" title="Stopped">{'■'}</span>;
-  if (status === 'paused') return <span className="wf-task-dot wf-task-dot-paused" title="Paused">{'⏸'}</span>;
-  return <span className="wf-task-dot wf-task-dot-pending" title="Pending">{'⏳'}</span>;
-}
-
-function fmtTokens(n?: number): string {
-  if (!n) return '';
-  if (n >= 1000) return `${Math.round(n / 1000)}k`;
-  return String(n);
-}
-
-function fmtDuration(ms?: number): string {
-  if (!ms) return '';
-  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${ms}ms`;
-}
-
-/** Short model label that KEEPS the version (e.g. "opus-4-8"), per the user's
- *  preference to distinguish versions — not just "opus". */
-function shortModel(model?: string): string {
-  if (!model) return '';
-  const last = model.split('.').pop() ?? model;
-  return last.replace(/^claude-/, '').replace(/-v\d+.*$/, '').replace(/\[1m\]$/, ' 1M');
-}
 
 // ── Legacy flat task row (non-workflow background tasks) ──
 const TaskRow = memo(function TaskRow({ task }: { task: BackgroundTask }) {
@@ -68,57 +40,6 @@ const TaskRow = memo(function TaskRow({ task }: { task: BackgroundTask }) {
         <span className="wf-task-activity">{activity.slice(0, 80)}</span>
       )}
       {task.tokens ? <span className="wf-task-tokens">{fmtTokens(task.tokens)}</span> : null}
-    </div>
-  );
-});
-
-/** Build the "model · tokens · duration" meta line for an agent. */
-function agentMeta(agent: WorkflowAgent): string {
-  return [shortModel(agent.model), fmtTokens(agent.tokens) && `${fmtTokens(agent.tokens)} tok`, fmtDuration(agent.durationMs)]
-    .filter(Boolean).join(' · ');
-}
-
-// ── Rich workflow subagent row (clickable → inline prompt/result preview;
-//    "View full transcript" opens the large modal reader) ──
-const WorkflowAgentRow = memo(function WorkflowAgentRow({
-  agent, expanded, onToggle, onOpenTranscript,
-}: {
-  agent: WorkflowAgent; expanded: boolean;
-  onToggle: () => void; onOpenTranscript: (a: WorkflowAgent) => void;
-}) {
-  const meta = agentMeta(agent);
-  return (
-    <div className={`wf-agent ${expanded ? 'wf-agent-expanded' : ''}`}>
-      <button className="wf-agent-row" onClick={onToggle} title={agent.agentId}>
-        <span className="wf-agent-caret">{expanded ? '▾' : '▸'}</span>
-        <StatusDot status={agent.status} />
-        <span className="wf-agent-name">{agent.label || agent.agentId.slice(0, 8)}</span>
-        {meta && <span className="wf-agent-meta">{meta}</span>}
-      </button>
-      {expanded && (
-        <div className="wf-agent-detail">
-          {agent.promptPreview && (
-            <div className="wf-agent-block">
-              <div className="wf-agent-block-label">Prompt</div>
-              <div className="wf-agent-prompt">{agent.promptPreview}</div>
-            </div>
-          )}
-          <div className="wf-agent-block">
-            <div className="wf-agent-block-label">Result</div>
-            {agent.resultPreview ? (
-              <div className="wf-agent-result">{agent.resultPreview}</div>
-            ) : (
-              <div className="wf-agent-result wf-agent-result-empty">
-                {agent.status === 'running' ? 'Running…' : 'No result yet'}
-              </div>
-            )}
-          </div>
-          {/* Full transcript is too long for this cramped box → open the large modal reader. */}
-          <button className="wf-transcript-toggle" onClick={() => onOpenTranscript(agent)}>
-            View full transcript →
-          </button>
-        </div>
-      )}
     </div>
   );
 });
@@ -141,14 +62,20 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
   // Nothing to show until at least one background task / agent has appeared.
   if (!isWorkflow && tasks.length === 0 && inFlight === 0) return null;
 
-  // Counts: workflow mode derives from the agents union; legacy from the flat task list.
-  const total = isWorkflow ? agents.length : tasks.length;
+  // Counts: workflow mode derives from the agents union via the SAME phaseCounts()
+  // the per-phase headers + density bar use — single source of truth, so the panel
+  // header and the phase headers can't disagree on whether a 'failed' agent counts as
+  // "done" (it does NOT: phaseCounts puts failed in its own bucket, surfaced separately
+  // below). One pass over the union instead of three separate filter/reduce scans.
+  const wfCounts = phaseCounts(agents);
+  const total = isWorkflow ? wfCounts.total : tasks.length;
   const done = isWorkflow
-    ? agents.filter(a => TERMINAL.has(a.status)).length
+    ? wfCounts.done
     : tasks.filter(t => t.status !== 'running' && t.status !== 'pending' && t.status !== 'paused').length;
-  const running = isWorkflow ? agents.filter(a => a.status === 'running').length : inFlight;
+  const running = isWorkflow ? wfCounts.running : inFlight;
+  const failed = isWorkflow ? wfCounts.failed : 0;
   const totalTokens = isWorkflow
-    ? agents.reduce((s, a) => s + (a.tokens ?? 0), 0)
+    ? wfCounts.tokens
     : tasks.reduce((s, t) => s + (t.tokens ?? 0), 0);
 
   // Collapse: default collapsed once the run is finished (nothing running) so the
@@ -156,26 +83,14 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
   // Fullscreen forces expanded — a collapsed full-screen panel makes no sense.
   const collapsed = !isFullscreen && (collapseOverride ?? (running === 0));
 
-  // Group agents by phase for the rich view; keep phase order by index.
-  // ONE sentinel for "agent has no phaseIndex" in BOTH the group match and the orphan
-  // check — otherwise an agent with undefined phaseIndex could match phase 0 AND be
-  // treated as an orphan, rendering twice (duplicate React key).
-  const NO_PHASE = -1;
-  const phaseList = phases.length
-    ? [...phases].sort((a, b) => a.index - b.index)
-    : [{ index: 0, title: '' }];
-  const agentsByPhase = (phaseIndex: number) =>
-    agents.filter(a => (a.phaseIndex ?? NO_PHASE) === phaseIndex).sort((a, b) => a.index - b.index);
-  // Catch-all for agents whose phaseIndex matches no known phase. This happens
-  // naturally with partial snapshots: a workflow_agent entry can arrive carrying a
-  // phaseIndex before its workflow_phase entry has been accumulated — so this is the
-  // consequence of sparse/out-of-order snapshots, not dead defensive code.
-  const orphanAgents = phases.length
-    ? agents.filter(a => !phases.some(p => p.index === (a.phaseIndex ?? NO_PHASE)))
-    : [];
+  // Orientation: Home Panel stays VERTICAL (glanceable stacked timeline — the daily
+  // surface); only fullscreen promotes to the HORIZONTAL swimlane graph (space is
+  // guaranteed there). Deliberately NOT width-based — predictable, no surprise flips.
+  const orientation = isFullscreen ? 'horizontal' : 'vertical';
 
   const openTranscript = (a: WorkflowAgent) =>
     setTranscriptTarget({ agentId: a.agentId, label: a.label, model: a.model, meta: agentMeta(a) });
+  const toggleAgent = (id: string) => setExpandedAgent(prev => (prev === id ? null : id));
 
   return (
     <>
@@ -199,6 +114,7 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
         <span className="wf-card-count">
           {done}/{total}{isWorkflow ? ' agents' : ''}
           {running > 0 && <span className="wf-card-running"> · {running} running</span>}
+          {failed > 0 && <span className="wf-card-failed"> · {failed} failed</span>}
         </span>
         {totalTokens > 0 && <span className="wf-card-tokens">{fmtTokens(totalTokens)} tok</span>}
         {scriptSource && (
@@ -229,38 +145,14 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
 
           {isWorkflow ? (
             <div className="wf-card-tasks">
-              {phaseList.map(phase => {
-                const phaseAgents = phases.length ? agentsByPhase(phase.index) : agents;
-                if (phaseAgents.length === 0) return null;
-                return (
-                  <div key={phase.index} className="wf-phase">
-                    {phase.title && (
-                      <div className="wf-phase-header">
-                        <span className="wf-phase-title">{phase.title}</span>
-                        <span className="wf-phase-count">{phaseAgents.filter(a => TERMINAL.has(a.status)).length}/{phaseAgents.length}</span>
-                      </div>
-                    )}
-                    {phaseAgents.map(a => (
-                      <WorkflowAgentRow
-                        key={a.agentId}
-                        agent={a}
-                        expanded={expandedAgent === a.agentId}
-                        onToggle={() => setExpandedAgent(prev => prev === a.agentId ? null : a.agentId)}
-                        onOpenTranscript={openTranscript}
-                      />
-                    ))}
-                  </div>
-                );
-              })}
-              {orphanAgents.map(a => (
-                <WorkflowAgentRow
-                  key={a.agentId}
-                  agent={a}
-                  expanded={expandedAgent === a.agentId}
-                  onToggle={() => setExpandedAgent(prev => prev === a.agentId ? null : a.agentId)}
-                  onOpenTranscript={openTranscript}
-                />
-              ))}
+              <WorkflowGraph
+                phases={phases}
+                agents={agents}
+                orientation={orientation}
+                expandedAgent={expandedAgent}
+                onToggleAgent={toggleAgent}
+                onOpenTranscript={openTranscript}
+              />
             </div>
           ) : (
             <div className="wf-card-tasks">
