@@ -206,7 +206,7 @@ Session Summaries   ──────────►    Memory Index (table of 
 - **Web**: search the internet, fetch pages, analyze images
 - **Text-to-speech**: turn any text into spoken audio with edge-tts — free, no API key required
 - **Scheduling**: cron jobs, heartbeat checklists, automated triage
-- **Integrations**: Microsoft To-Do two-way sync, Slack notifications, plugin system
+- **Integrations**: two-way task sync (Microsoft To-Do & Jira built in; any platform via the plugin system), Slack notifications
 
 ### Multi-Conversation Agents
 
@@ -215,6 +215,18 @@ A dedicated **`/agents`** page for spinning up purpose-built agents on demand. E
 ### Commands & Skills
 
 Browse and run your Claude Code slash commands and skills from two dedicated pages — **`/commands`** and **`/skills`** — without dropping back to a terminal. Both palettes surface commands and skills discovered on **remote hosts** too, not just your local machine, so the same tooling is one click away wherever a session is running.
+
+### Connect any task platform — via the plugin system
+
+Walnut ships with **two-way sync to Microsoft To-Do and Jira** out of the box, so your tasks stay in lockstep with whatever your team already lives in — create, edit, re-prioritize, or complete a task on either side and it reconciles both ways (with echo-detection so a push never bounces back as a phantom edit).
+
+But the real point is that **those two are just plugins** — Walnut is built around a single generic sync contract (`IntegrationSync`), so **any** task platform (Asana, Linear, Todoist, GitHub Issues, an internal ticketing system…) can be onboarded by dropping in a plugin that implements it. No fork, no core changes:
+
+- **Built-in plugins** live in `src/integrations/` (Microsoft To-Do, Jira) — read them as working references.
+- **Your own plugins** — internal or external — go in `~/.open-walnut/plugins/{name}/` and are **never committed**, so a company-internal task system stays private to your machine. Walnut bundles and loads them on the fly.
+- Implement one interface — `createTask` / `pushTask` / `syncPoll` (pull) / field updates — and the platform is fully wired into the 4-layer hierarchy, phases, priorities, due dates, and subtasks.
+
+If it has an API, you can sync Walnut tasks with it.
 
 ### Automation & Scheduling
 , managed from a dedicated `/cron` page
