@@ -1,6 +1,6 @@
-import { memo, useEffect, useMemo, useRef, useState, useCallback, type ReactNode, type MouseEvent as ReactMouseEvent } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, useCallback, type ReactNode, type ReactElement, type MouseEvent as ReactMouseEvent } from 'react';
 import {
-  Diff, Hunk, tokenize, markEdits,
+  Diff, Hunk, Decoration, tokenize, markEdits, useSourceExpansion,
   getChangeKey, computeOldLineNumber, computeNewLineNumber, isDelete,
   type HunkData, type FileData, type ChangeData, type ChangeEventArgs, type EventMap,
 } from 'react-diff-view';
@@ -11,6 +11,7 @@ import { buildDiffTree, flattenFiles, allContainerIds, isMarkdownPath, type Diff
 import { languageForPath, diffRefractor } from '@/components/sessions/diffHighlight';
 import { buildCommentMessage, buildReviewMessage } from '@/components/sessions/diffPrefill';
 import { markdownBlocksWithLines, markdownCommentRange, type MarkdownBlock } from '@/components/sessions/diffMarkdownBlocks';
+import { computeExpandGaps, oldSourceLineCount, UNFOLD_CHUNK } from '@/components/sessions/diffExpand';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ICON_REFRESH, ICON_WARNING } from '@/components/common/Icons';
@@ -82,6 +83,10 @@ interface PendingComment {
   code: string;
   comment: string;
 }
+
+// Stable empty-hunks ref so useSourceExpansion's deps don't change identity when
+// there's no parsed file (a new array each render would clear expansions / loop).
+const EMPTY_HUNKS: HunkData[] = [];
 
 /** Build a parsed FileData from a change. The crash-prone createPatch→parseDiff
  *  pipeline lives in diffPatch.ts (React-free, unit-tested); returns null on any
@@ -277,6 +282,45 @@ function PendingCommentCard({ loc, code, comment, onCopy, onRemove }: {
   );
 }
 
+// ── Expand-collapsed-context control (GitHub-style "unfold") ──────────────────
+
+/** A clickable bar rendered (via `Decoration`) in place of a collapsed block of
+ *  unchanged lines, letting the user reveal the surrounding context that the diff
+ *  hides by default. Small gaps get a single "expand all" button; larger gaps add
+ *  directional chevrons that reveal one UNFOLD_CHUNK-sized slice nearest the
+ *  adjacent hunk (↓ = just below the hunk above, ↑ = just above the hunk below).
+ *  `onUp`/`onDown` are omitted at the file's head/tail where only one direction
+ *  makes sense. Pure presentational — the parent supplies the expand callbacks. */
+function ExpandRow({ lines, onAll, onUp, onDown }: {
+  lines: number;
+  onAll: () => void;
+  onUp?: () => void;
+  onDown?: () => void;
+}) {
+  const small = lines <= UNFOLD_CHUNK;
+  return (
+    <div className="session-diff-expander">
+      {small ? (
+        <button className="session-diff-expand-btn is-all" onClick={onAll} title={`Show ${lines} hidden line${lines === 1 ? '' : 's'}`}>
+          <span className="session-diff-expand-glyph">↕</span> Expand {lines} hidden line{lines === 1 ? '' : 's'}
+        </button>
+      ) : (
+        <>
+          {onDown && (
+            <button className="session-diff-expand-btn is-dir" onClick={onDown} title={`Show ${UNFOLD_CHUNK} lines below`}>↓ {UNFOLD_CHUNK}</button>
+          )}
+          <button className="session-diff-expand-btn is-all" onClick={onAll} title={`Show all ${lines} hidden lines`}>
+            Expand all {lines} hidden lines
+          </button>
+          {onUp && (
+            <button className="session-diff-expand-btn is-dir" onClick={onUp} title={`Show ${UNFOLD_CHUNK} lines above`}>↑ {UNFOLD_CHUNK}</button>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── Rendered markdown pane ────────────────────────────────────────────────────
 
 /** The rendered HTML body of one markdown block, isolated behind React.memo
@@ -373,7 +417,14 @@ function FileDiffPane({
   onRemoveComment: (id: number) => void;
 }) {
   const file = useMemo(() => buildFile(change), [change]);
-  const tokens = useTokens(file?.hunks, change.relPath);
+  // Expand collapsed context on demand: we already hold the full OLD source as
+  // `change.before` (git HEAD/upstream content, or the reconstructed pre-session
+  // file), so react-diff-view can splice the hidden surrounding lines back in.
+  // `hunks` is the (possibly expanded) set actually rendered; `expandRange(start,
+  // end)` reveals old-side lines [start,end). The hook auto-clears expansions when
+  // `file.hunks` identity or the source changes — i.e. on every file switch.
+  const [hunks, expandRange] = useSourceExpansion(file?.hunks ?? EMPTY_HUNKS, change.before ?? null);
+  const tokens = useTokens(hunks, change.relPath);
 
   // Added files have no "before" — a split view would show an empty left pane.
   // Force unified so the whole new file reads as one continuous green column
@@ -402,18 +453,21 @@ function FileDiffPane({
   useEffect(() => { setDraft(null); setDragSel(null); draftDirtyRef.current = false; }, [change.filePath, rendered]);
 
   // All changes flattened in render order, so a gutter event can be located by
-  // index and a drag can select a contiguous [min,max] range across hunks.
+  // index and a drag can select a contiguous [min,max] range across hunks. Built
+  // from the EXPANDED hunks so a comment can anchor on a revealed context line too.
   const flatChanges = useMemo<ChangeData[]>(() => {
     const out: ChangeData[] = [];
-    for (const h of file?.hunks ?? []) for (const c of h.changes) out.push(c);
+    for (const h of hunks) for (const c of h.changes) out.push(c);
     return out;
-  }, [file]);
+  }, [hunks]);
   const keyToIdx = useMemo(() => {
     const m = new Map<string, number>();
     flatChanges.forEach((c, i) => m.set(getChangeKey(c), i));
     return m;
   }, [flatChanges]);
 
+  // Stat counts come from the ORIGINAL hunks (not the expanded ones) so revealing
+  // context never inflates the +N/−N badges with normal lines.
   const { adds, dels } = useMemo(() => {
     let a = 0, d = 0;
     for (const h of file?.hunks ?? []) {
@@ -501,17 +555,10 @@ function FileDiffPane({
       });
     },
   }), [keyToIdx, openDraftRange]);
-  // Clicking the code cell also opens a single-line draft (bigger hit target).
-  const codeEvents = useMemo<EventMap>(() => ({
-    onClick: (args: ChangeEventArgs) => {
-      if (!args.change) return;
-      // Don't hijack text selection: only open if the user didn't select text.
-      const sel = window.getSelection();
-      if (sel && !sel.isCollapsed) return;
-      const idx = keyToIdx.get(getChangeKey(args.change));
-      if (idx != null) openDraftRange(idx, idx);
-    },
-  }), [keyToIdx, openDraftRange]);
+  // NOTE: clicking the CODE cell intentionally does NOT open a comment — only the
+  // left line-number gutter does (gutterEvents above). This keeps the code text
+  // freely selectable (double-click a word, drag to select) without a stray click
+  // popping the composer. Commenting is a deliberate gutter action, GitHub-style.
 
   // Lines react-diff-view paints as selected = the union of three sources, so a
   // selection STAYS highlighted from the moment you drag, through the open
@@ -686,6 +733,40 @@ function FileDiffPane({
     );
   }, [mdPendingByAnchor, draft, mdDragRange, onMdLineDown, onMdLineEnter, onMdLineUp, addDraft, sendDraftNow, cancelDraft, onDraftDirtyChange, onCopyComment, onRemoveComment]);
 
+  // Number of lines in the OLD source (= the ceiling expansion can draw from).
+  const oldLineCount = useMemo(() => oldSourceLineCount(change.before), [change.before]);
+
+  // Render the hunks with a GitHub-style "unfold" bar (Decoration) wherever the
+  // diff hides a block of unchanged lines: above the first hunk, between hunks,
+  // and after the last hunk. The [start,end) old-side ranges each button reveals
+  // come from the pure, unit-tested computeExpandGaps; here we just map them to
+  // Decoration rows + expandRange() calls. Keyed by hunkIndex so the leading/tail
+  // unfold rows stay stable as expansions merge hunks. The gaps are computed against the
+  // CURRENTLY-rendered (possibly already-expanded) hunks the render-prop hands us. */
+  const renderHunks = useCallback((rendered: HunkData[]): ReactElement[] => {
+    const gaps = computeExpandGaps(rendered, oldLineCount);
+    const gapByIndex = new Map(gaps.map((g) => [g.hunkIndex, g]));
+    const out: ReactElement[] = [];
+    const emit = (g: typeof gaps[number]) => out.push(
+      <Decoration key={`exp-${g.hunkIndex}`}>
+        <ExpandRow
+          lines={g.lines}
+          onAll={() => expandRange(g.all[0], g.all[1])}
+          onDown={g.down ? () => expandRange(g.down![0], g.down![1]) : undefined}
+          onUp={g.up ? () => expandRange(g.up![0], g.up![1]) : undefined}
+        />
+      </Decoration>,
+    );
+    rendered.forEach((hunk, i) => {
+      const g = gapByIndex.get(i);
+      if (g) emit(g);
+      out.push(<Hunk key={hunk.content} hunk={hunk} />);
+    });
+    const tail = gapByIndex.get(rendered.length);
+    if (tail) emit(tail);
+    return out;
+  }, [expandRange, oldLineCount]);
+
   return (
     <div className="session-diff-filepane" data-file-path={change.filePath}>
       <div className="session-diff-filepane-head">
@@ -706,15 +787,14 @@ function FileDiffPane({
         <Diff
           viewType={effectiveViewType}
           diffType={file.type}
-          hunks={file.hunks}
+          hunks={hunks}
           tokens={tokens}
           widgets={widgets}
           gutterEvents={gutterEvents}
-          codeEvents={codeEvents}
           selectedChanges={selectedChanges}
           className={`session-diff-table session-diff-commentable${dragSel ? ' is-dragging' : ''}`}
         >
-          {(hunks: HunkData[]) => hunks.map((hunk) => <Hunk key={hunk.content} hunk={hunk} />)}
+          {renderHunks}
         </Diff>
       ) : (
         <div className="session-diff-file-empty">No textual diff (binary, identical, or unreadable content).</div>

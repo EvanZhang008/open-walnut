@@ -20466,6 +20466,46 @@ a.file-link:hover {
   opacity: 0.7;
 }
 
+/* Expand-collapsed-context bar (GitHub-style "unfold"), rendered via the
+   react-diff-view Decoration row in place of a hidden block of unchanged lines.
+   It fills the whole decoration row; the buttons reveal more surrounding source. */
+.session-diff-expander {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 2px 6px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg-subtle, transparent));
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.session-diff-expand-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 9px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  line-height: 1.7;
+  color: var(--accent);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.session-diff-expand-btn:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.session-diff-expand-btn.is-dir {
+  font-variant-numeric: tabular-nums;
+  min-width: 44px;
+  justify-content: center;
+}
+.session-diff-expand-glyph { font-size: 12px; line-height: 1; }
+
 /* Inline comment box (rendered under a line via react-diff-view widgets) */
 .session-diff-comment-box {
   margin: 6px 10px 10px;

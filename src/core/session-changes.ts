@@ -300,12 +300,48 @@ function groupMeta(repoRoot: string, sessionCwd: string | undefined, cwdRepoRoot
   return { label: name, kind: 'other' };
 }
 
-// ── .claude filtering ──
+// ── bookkeeping / agent-memory filtering ──
 
-/** True if a path is Claude/Walnut bookkeeping (plans + project memory) that
- *  should be excluded UNLESS the session also changed other files. */
+/** True if a path is Claude/Walnut bookkeeping (plans + Claude Code's per-project
+ *  memory dir) — agent scratch, not project code under review. */
 function isBookkeepingPath(filePath: string): boolean {
   return /(^|\/)\.claude\/(plans|projects)\//.test(filePath);
+}
+
+/**
+ * True if a path is an AGENT MEMORY STORE entry — the butler's (or a subagent's)
+ * persistent memory, not project code. The Changed view is for reviewing code a
+ * session wrote; an agent distilling notes into its own MEMORY.md is noise.
+ *
+ * Walnut's memory store lives at `<WALNUT_HOME>/memory/` with a fixed layout
+ * (projects/ agents/ repos/ daily/ topics/ compaction/ sessions/ vault/
+ * knowledge/ + index.md / working-memory.md), plus the global `<WALNUT_HOME>/
+ * MEMORY.md`. WALNUT_HOME differs per environment (`~/.open-walnut` locally,
+ * `/tmp/walnut-test-*` in tests, the REMOTE host's home for cloud sessions), so
+ * we match the STRUCTURE — a `memory/` segment followed by a store subdir or a
+ * canonical memory file — never a fixed prefix. This deliberately does NOT match
+ * source files that merely contain "memory" in their name (e.g.
+ * `src/core/memory-search.ts`, `web/src/components/memory/Panel.tsx`,
+ * `src/core/working-memory.ts`): those live under `src/`/`web/`, not under a
+ * `memory/` store dir, and aren't `.md`. Claude Code's per-project memory
+ * (`.claude/projects/<enc>/memory/MEMORY.md`) is already handled by
+ * isBookkeepingPath; the bare-`MEMORY.md` rule here additionally catches the
+ * all-caps agent-memory convention wherever it sits. */
+function isAgentMemoryPath(filePath: string): boolean {
+  return (
+    /(^|\/)memory\/(projects|agents|repos|daily|topics|compaction|sessions|vault|knowledge)\//.test(filePath)
+    || /(^|\/)memory\/(index|working-memory)\.md$/.test(filePath)
+    || /(^|\/)MEMORY\.md$/.test(filePath)
+  );
+}
+
+/** Paths excluded from the Changed view entirely (agent scratch / memory, not
+ *  reviewable code). A group made only of these is dropped. Exported so the git
+ *  comparison path (session-git-diff.ts, scope=all) applies the IDENTICAL filter
+ *  — otherwise switching to "All in repo" would re-surface the memory files this
+ *  hides in the default session scope. */
+export function isExcludedPath(filePath: string): boolean {
+  return isBookkeepingPath(filePath) || isAgentMemoryPath(filePath);
 }
 
 // ── mtime cache ──
@@ -487,11 +523,12 @@ export async function computeSessionChanges(
     group.files.push(change);
   }
 
-  // 5. .claude filtering: drop files whose path is bookkeeping (plans/projects).
-  //    A whole group made only of bookkeeping files is dropped too. Other .claude
-  //    files (settings/skills/...) are kept.
+  // 5. Filtering: drop bookkeeping (plans / Claude per-project memory) AND agent
+  //    memory-store entries (the butler's or a subagent's MEMORY.md / notes) —
+  //    they're agent scratch, not reviewable code. A whole group made only of
+  //    these is dropped in step 6. Other .claude files (settings/skills/...) stay.
   for (const group of groupsByRoot.values()) {
-    group.files = group.files.filter((f) => !isBookkeepingPath(f.filePath));
+    group.files = group.files.filter((f) => !isExcludedPath(f.filePath));
   }
 
   // 6. Order: cwd group first, then submodules, then other repos; files sorted by relPath.

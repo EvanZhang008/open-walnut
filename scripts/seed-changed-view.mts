@@ -34,7 +34,15 @@ async function main() {
   const submodule = path.join(cwdRepo, 'vendor', 'widget');
   for (const r of [cwdRepo, otherRepo, submodule]) await fs.mkdir(path.join(r, '.git'), { recursive: true });
 
+  // A LONG file whose session edit touches only ONE line in the middle, so the
+  // "Changed" view collapses the surrounding context (lines 1-26 above, 34-60
+  // below are hidden) — this is what the expand/unfold controls reveal.
+  const longLines = Array.from({ length: 60 }, (_, i) => `  const line${i + 1} = ${i + 1};`);
+  const longBefore = longLines.join('\n') + '\n';
+  const longAfter = longLines.map((l, i) => (i === 29 ? '  const line30 = 3000; // edited by the session' : l)).join('\n') + '\n';
+
   const files: Array<{ abs: string; after: string }> = [
+    { abs: path.join(cwdRepo, 'src', 'long-file.ts'), after: longAfter }, // long → collapsed context to expand
     { abs: path.join(cwdRepo, 'src', 'event-types.ts'), after: 'export interface Tool {\n  name: string;\n  toolName: string; // added\n  changedFiles?: string[];\n}\n' },
     { abs: path.join(cwdRepo, 'src', 'session-changes.ts'), after: 'export const NEW = true;\nexport const KEEP = 1;\n' },
     { abs: path.join(submodule, 'index.ts'), after: 'export const widget = "v2";\nexport const shared = true;\n' },
@@ -42,6 +50,10 @@ async function main() {
     { abs: path.join(cwdRepo, '.claude', 'plans', 'plan-x.md'), after: '# Plan v2\n' }, // filtered out
     { abs: path.join(cwdRepo, '.claude', 'settings.json'), after: '{"version": 2}\n' }, // kept
     { abs: path.join(cwdRepo, 'docs', 'README.md'), after: '# Project\n\nA **bold** intro with a list:\n\n- one\n- two\n\n```ts\nconst x = 2;\n```\n' }, // markdown → Rendered toggle
+    // Agent memory-store writes (a subagent distilling notes into MEMORY.md) — these
+    // must be FILTERED OUT of the Changed view (agent scratch, not reviewable code).
+    { abs: path.join(cwdRepo, 'memory', 'MEMORY.md'), after: '# Agent memory\n\n- learned something\n' }, // filtered
+    { abs: path.join(cwdRepo, 'memory', 'projects', 'work', 'walnut.md'), after: '# Walnut notes\n\ndistilled\n' }, // filtered
   ];
   for (const f of files) { await fs.mkdir(path.dirname(f.abs), { recursive: true }); await fs.writeFile(f.abs, f.after); }
 
@@ -53,13 +65,16 @@ async function main() {
       message: {
         id: 'asst-1', role: 'assistant', model: 'global.anthropic.claude-opus-4-8[1m]',
         content: [
-          { type: 'tool_use', id: 'e1', name: 'Edit', input: { file_path: files[0].abs, old_string: '  name: string;\n}', new_string: '  name: string;\n  toolName: string; // added\n  changedFiles?: string[];\n}' } },
-          { type: 'tool_use', id: 'w1', name: 'Write', input: { file_path: files[1].abs, content: files[1].after } },
-          { type: 'tool_use', id: 'e2', name: 'Edit', input: { file_path: files[2].abs, old_string: 'export const widget = "v1";', new_string: 'export const widget = "v2";' } },
-          { type: 'tool_use', id: 'e3', name: 'Edit', input: { file_path: files[3].abs, old_string: 'return 1;', new_string: 'return 2;' } },
-          { type: 'tool_use', id: 'w2', name: 'Write', input: { file_path: files[4].abs, content: files[4].after } },
-          { type: 'tool_use', id: 'e4', name: 'Edit', input: { file_path: files[5].abs, old_string: '{"version": 1}', new_string: '{"version": 2}' } },
-          { type: 'tool_use', id: 'w3', name: 'Write', input: { file_path: files[6].abs, content: files[6].after } },
+          { type: 'tool_use', id: 'e0', name: 'Edit', input: { file_path: files[0].abs, old_string: '  const line30 = 30;', new_string: '  const line30 = 3000; // edited by the session' } },
+          { type: 'tool_use', id: 'e1', name: 'Edit', input: { file_path: files[1].abs, old_string: '  name: string;\n}', new_string: '  name: string;\n  toolName: string; // added\n  changedFiles?: string[];\n}' } },
+          { type: 'tool_use', id: 'w1', name: 'Write', input: { file_path: files[2].abs, content: files[2].after } },
+          { type: 'tool_use', id: 'e2', name: 'Edit', input: { file_path: files[3].abs, old_string: 'export const widget = "v1";', new_string: 'export const widget = "v2";' } },
+          { type: 'tool_use', id: 'e3', name: 'Edit', input: { file_path: files[4].abs, old_string: 'return 1;', new_string: 'return 2;' } },
+          { type: 'tool_use', id: 'w2', name: 'Write', input: { file_path: files[5].abs, content: files[5].after } },
+          { type: 'tool_use', id: 'e4', name: 'Edit', input: { file_path: files[6].abs, old_string: '{"version": 1}', new_string: '{"version": 2}' } },
+          { type: 'tool_use', id: 'w3', name: 'Write', input: { file_path: files[7].abs, content: files[7].after } },
+          { type: 'tool_use', id: 'w4', name: 'Write', input: { file_path: files[8].abs, content: files[8].after } }, // memory/MEMORY.md → filtered
+          { type: 'tool_use', id: 'w5', name: 'Write', input: { file_path: files[9].abs, content: files[9].after } }, // memory/projects/... → filtered
         ],
       },
     },

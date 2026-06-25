@@ -468,6 +468,86 @@ describe('computeSessionChanges — .claude filtering', () => {
   });
 });
 
+describe('computeSessionChanges — agent memory-store filtering', () => {
+  it('excludes the agent memory store (memory/{MEMORY.md,index,projects,agents,…}) but keeps real code', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    // The butler's memory store lives under a `memory/` dir (here nested in the
+    // repo so git-sync would track it). Every shape the store uses must be hidden.
+    const memRoot = path.join(repo, 'memory', 'MEMORY.md');
+    const memIndex = path.join(repo, 'memory', 'index.md');
+    const memWorking = path.join(repo, 'memory', 'working-memory.md');
+    const memProject = path.join(repo, 'memory', 'projects', 'work', 'walnut.md');
+    const memAgent = path.join(repo, 'memory', 'agents', 'note-agent', 'MEMORY.md');
+    const memRepo = path.join(repo, 'memory', 'repos', 'walnut', 'MEMORY.md');
+    const memDaily = path.join(repo, 'memory', 'daily', '2026-06-24.md');
+    const bareMemory = path.join(repo, 'docs', 'MEMORY.md'); // all-caps convention anywhere
+    const codeFile = path.join(repo, 'src', 'app.ts');
+    for (const [f, c] of [
+      [memRoot, 'm\n'], [memIndex, 'i\n'], [memWorking, 'w\n'], [memProject, 'p\n'],
+      [memAgent, 'a\n'], [memRepo, 'r\n'], [memDaily, 'd\n'], [bareMemory, 'b\n'], [codeFile, 'code v2\n'],
+    ] as const) await putFile(f, c);
+
+    await writeSessionJsonl('s1', repo, [
+      assistantToolUse(repo, [
+        { name: 'Write', input: { file_path: memRoot, content: 'm\n' } },
+        { name: 'Write', input: { file_path: memIndex, content: 'i\n' } },
+        { name: 'Write', input: { file_path: memWorking, content: 'w\n' } },
+        { name: 'Write', input: { file_path: memProject, content: 'p\n' } },
+        { name: 'Write', input: { file_path: memAgent, content: 'a\n' } },
+        { name: 'Write', input: { file_path: memRepo, content: 'r\n' } },
+        { name: 'Write', input: { file_path: memDaily, content: 'd\n' } },
+        { name: 'Write', input: { file_path: bareMemory, content: 'b\n' } },
+        { name: 'Edit', input: { file_path: codeFile, old_string: 'code v1', new_string: 'code v2' } },
+      ]),
+    ]);
+
+    const res = await computeSessionChanges('s1', repo);
+    const paths = res.groups.flatMap(g => g.files.map(f => f.filePath));
+    // Only the real code file survives.
+    expect(paths).toEqual([codeFile]);
+    for (const m of [memRoot, memIndex, memWorking, memProject, memAgent, memRepo, memDaily, bareMemory]) {
+      expect(paths).not.toContain(m);
+    }
+  });
+
+  it('KEEPS source files that merely have "memory" in their name (no false positives)', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    // These are real code — must NOT be mistaken for the memory store.
+    const a = path.join(repo, 'src', 'core', 'memory-search.ts');
+    const b = path.join(repo, 'src', 'core', 'working-memory.ts');
+    const c = path.join(repo, 'web', 'src', 'components', 'memory', 'MemoryPanel.tsx');
+    for (const f of [a, b, c]) await putFile(f, 'v2\n');
+
+    await writeSessionJsonl('s1', repo, [
+      assistantToolUse(repo, [
+        { name: 'Edit', input: { file_path: a, old_string: 'v1', new_string: 'v2' } },
+        { name: 'Edit', input: { file_path: b, old_string: 'v1', new_string: 'v2' } },
+        { name: 'Edit', input: { file_path: c, old_string: 'v1', new_string: 'v2' } },
+      ]),
+    ]);
+
+    const res = await computeSessionChanges('s1', repo);
+    const paths = res.groups.flatMap(g => g.files.map(f => f.filePath)).sort();
+    expect(paths).toEqual([a, b, c].sort());
+  });
+
+  it('drops a group whose ONLY changes are memory-store files (no empty group surfaces)', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const memOnly = path.join(repo, 'memory', 'projects', 'life', 'goals.md');
+    await putFile(memOnly, 'v2\n');
+    await writeSessionJsonl('s1', repo, [
+      assistantToolUse(repo, [{ name: 'Write', input: { file_path: memOnly, content: 'v2\n' } }]),
+    ]);
+
+    const res = await computeSessionChanges('s1', repo);
+    expect(res.fileCount).toBe(0);
+    expect(res.groups).toEqual([]);
+  });
+});
+
 describe('computeSessionChanges — empty + identical', () => {
   it('returns empty result when the session edited nothing', async () => {
     const repo = path.join(workRoot, 'repo');

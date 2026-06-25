@@ -288,4 +288,34 @@ describe('GET /api/sessions/:id/changes?scope= (within the touched repos)', () =
     expect(res.body.fileCount).toBe(1);
     expect(res.body.groups[0].files[0].relPath).toBe('mine.ts');
   });
+
+  it('scope=all in a git mode STILL hides agent memory-store files (e.g. a git-synced memory dir)', async () => {
+    // The repo doubles as an agent memory store (like ~/.open-walnut is git-synced):
+    // it has a memory/ tree AND real code. The session edits both; the git mode's
+    // scope=all takes git's RAW file list, so without the filter the memory files
+    // would re-surface here even though session scope hides them.
+    await createSessionRecord(SID, 'task-1', 'proj', REPO);
+    await fs.mkdir(path.join(REPO, 'memory', 'projects', 'work'), { recursive: true });
+    await fs.writeFile(path.join(REPO, 'app.ts'), 'v1\n');
+    await fs.writeFile(path.join(REPO, 'MEMORY.md'), 'mem v1\n');
+    await fs.writeFile(path.join(REPO, 'memory', 'index.md'), 'idx v1\n');
+    await fs.writeFile(path.join(REPO, 'memory', 'projects', 'work', 'walnut.md'), 'note v1\n');
+    await git(REPO, 'add', '-A');
+    await git(REPO, 'commit', '-q', '-m', 'baseline');
+    // All four change in the working tree; the session records editing app.ts + MEMORY.md.
+    await fs.writeFile(path.join(REPO, 'app.ts'), 'v2\n');
+    await fs.writeFile(path.join(REPO, 'MEMORY.md'), 'mem v2\n');
+    await fs.writeFile(path.join(REPO, 'memory', 'index.md'), 'idx v2\n');
+    await fs.writeFile(path.join(REPO, 'memory', 'projects', 'work', 'walnut.md'), 'note v2\n');
+    await writeSessionJsonl(REPO, [
+      { file: path.join(REPO, 'app.ts'), oldStr: 'v1', newStr: 'v2' },
+      { file: path.join(REPO, 'MEMORY.md'), oldStr: 'mem v1', newStr: 'mem v2' },
+    ]);
+
+    const all = await request(createApp()).get(`/api/sessions/${SID}/changes`).query({ base: 'uncommitted', scope: 'all' });
+    expect(all.status).toBe(200);
+    const allPaths = all.body.groups.flatMap((g: { files: { relPath: string }[] }) => g.files.map((f) => f.relPath)).sort();
+    // Only the real code file — every memory-store path (incl. the bare MEMORY.md) is hidden.
+    expect(allPaths).toEqual(['app.ts']);
+  });
 });

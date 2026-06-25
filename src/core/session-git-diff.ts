@@ -55,7 +55,7 @@ import {
   type ExecFn,
   type ReadTextFn,
 } from '../providers/git-diff-core.js';
-import { computeSessionChanges, type SessionChangesResult, type SessionFileChange, type SessionRepoGroup } from './session-changes.js';
+import { computeSessionChanges, isExcludedPath, type SessionChangesResult, type SessionFileChange, type SessionRepoGroup } from './session-changes.js';
 import { log } from '../logging/index.js';
 
 const execFileAsync = promisify(execFile);
@@ -158,10 +158,13 @@ export async function computeSessionGitDiff(
     const gitResult = await runGitDiffForRepo(base, editGroup.repoRoot, host, sessionId);
     if (!gitResult || gitResult.files.length === 0) continue;
 
-    // scope=session: keep only the files this session edited (intersect on the
-    // repo-relative path — both engines compute relPath against the same repo
-    // root, so this matches even when absolute paths differ via symlinks).
-    let gitFiles = gitResult.files;
+    // Drop agent memory / bookkeeping in BOTH scopes — identical to the JSONL
+    // engine's filter. For scope=session the intersect below already excludes them
+    // (the edit set is pre-filtered), but scope=all takes git's raw file list, so
+    // without this an agent's MEMORY.md / notes would re-appear under "All in repo"
+    // (e.g. the git-synced ~/.open-walnut memory store). One filter, both paths.
+    let gitFiles = gitResult.files.filter((f) => !isExcludedPath(path.posix.join(gitResult.repoRoot, f.relPath)));
+    if (gitFiles.length === 0) continue;
     if (scope === 'session') {
       const editedRel = new Set(editGroup.files.map((f) => f.relPath));
       gitFiles = gitFiles.filter((f) => editedRel.has(f.relPath));
