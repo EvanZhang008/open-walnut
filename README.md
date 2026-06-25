@@ -97,6 +97,8 @@ See **[GETTING_STARTED.md](GETTING_STARTED.md#remote-sessions-via-ssh)** for the
 
 **A GitHub-style, per-session diff — see exactly what each session touched, then talk to the agent right inside the review.**
 
+![A per-session diff in Open Walnut: a GitHub-style view of exactly what one Claude Code session changed, with syntax highlighting and click-a-line comments](docs/session-changed.png)
+
 Click a session's **Changed** chip and the panel goes full-screen: a split view with the file diff on the left and that session's chat on the right. It lists every file the session edited — before/after, split or unified, with word-level highlighting — grouped by repository, and it handles cross-repo and subagent edits cleanly.
 
 By default the before/after is reconstructed from the **session's own JSONL** (not git), so edits are attributed *per session* even when several agents are hammering the same repo concurrently — you see what *this* session changed, not the repo's combined working tree. (You can also switch the baseline to compare against uncommitted or not-yet-pushed git changes.)
@@ -104,6 +106,8 @@ By default the before/after is reconstructed from the **session's own JSONL** (n
 - **Markdown files** get a **Rendered** toggle so docs read like docs, not raw diffs.
 - **Select code in the diff → "Ask about this"** pre-fills the *same* main agent's chat with full context — no fork, no re-explaining.
 - **Click a line → a PR-style comment box** that batches your comments into a single review to hand back to the agent.
+
+![Click a line in the diff to leave a PR-style comment and hand it back to the agent](docs/session-changed-comment.png)
 
 Works for local and remote sessions alike.
 
