@@ -143,33 +143,6 @@
 
     <div class="feature">
       <div class="ftext">
-        <h3>One console, every machine</h3>
-        <p>Add a <code>hosts:</code> block to your config and one Walnut console drives Claude Code on your laptop <b>and</b> every remote dev box over SSH. Walnut works with your node manager (nvm / fnm / volta / asdf) and deploys its own daemon — gzipped and chunked so it survives corporate proxies, no manual <code>scp</code>. Terminal, file browser, the command &amp; skill palettes, and the diff view all work over SSH exactly like local.</p>
-        <p>Sessions are <b>resilient</b>: if the tunnel or daemon dies, the remote daemon adopts and reconciles the still-running <code>claude -p</code> processes on restart — the remote session log is the source of truth, so nothing is lost.</p>
-      </div>
-      <img src="assets/remote-topology.svg" alt="One Walnut console driving local and multiple remote hosts over SSH"/>
-    </div>
-
-    <div class="feature">
-      <div class="ftext">
-        <h3>Review what the agent changed</h3>
-        <p>A <b>GitHub-style, per-session diff</b> — see exactly what each session touched. Split or unified, word-level highlighting, grouped by repo, with cross-repo and subagent edits handled cleanly. Before/after is rebuilt from the session's <b>own history</b>, so edits stay attributed per session even when several agents share a repo.</p>
-        <p><b>Select code → "Ask about this"</b> pre-fills the same agent's chat with full context, and <b>click a line</b> for a PR-style comment box that batches into one review. Works for local and remote sessions alike.</p>
-      </div>
-      <img src="assets/session-changed.png" alt="A GitHub-style per-session diff in Walnut showing exactly what one Claude Code session changed"/>
-    </div>
-
-    <div class="feature">
-      <div class="ftext">
-        <h3>Review it like a pull request</h3>
-        <p>Click any line to drop a <b>PR-style comment</b> — or drag the gutter to comment on a range. Your notes batch into a single review you hand straight back to the agent, so fixing a whole pass of feedback is one round-trip, not a dozen back-and-forths.</p>
-        <p>Markdown files get a <b>Rendered</b> toggle so docs read like docs. Nothing leaves your machine.</p>
-      </div>
-      <img src="assets/session-changed-comment.png" alt="Click a line in the Walnut diff to leave a PR-style comment and hand it back to the agent"/>
-    </div>
-
-    <div class="feature">
-      <div class="ftext">
         <h3>Natural language → task → live session</h3>
         <p>Tell the main agent what you want. It creates the task and spawns a Claude Code session for it — in one shot — then streams every tool call and output live in your browser.</p>
       </div>
@@ -206,6 +179,24 @@
         <p>An Obsidian-style notes vault stored locally and indexed in a local vector database. Ask <i>"what is my health routine?"</i> and the agent finds it across your notes — nothing leaves your disk.</p>
       </div>
       <img src="assets/05-notes-memory.gif" alt="Ask the AI to find information across your local notes"/>
+    </div>
+
+    <div class="feature">
+      <div class="ftext">
+        <h3>One console, every machine</h3>
+        <p>One Walnut console drives Claude Code on your laptop <b>and</b> any number of SSH hosts — and the main agent can drive both. Point at a host and Walnut auto-detects its node version and deploys its own daemon over SSH; no manual <code>scp</code>.</p>
+        <p><b>Crash-resilient</b>: if the tunnel or daemon dies, the daemon re-adopts the still-running <code>claude -p</code> processes on reconnect — nothing is lost. Terminal, files, diff, and the command palette all work over SSH.</p>
+      </div>
+      <img src="assets/remote-topology.svg" alt="One Walnut console driving local and multiple remote hosts over SSH"/>
+    </div>
+
+    <div class="feature">
+      <div class="ftext">
+        <h3>Review what the agent changed</h3>
+        <p>A <b>GitHub-style, per-session diff</b> — see exactly what each session touched, split or unified, grouped by repo. Rebuilt from the session's <b>own history</b>, so edits stay attributed per session even when several agents share a repo.</p>
+        <p><b>Select code → "Ask about this"</b> drops it into the same agent's chat, and <b>click a line</b> for a PR-style comment box that batches into one review.</p>
+      </div>
+      <img src="assets/session-changed.png" alt="A GitHub-style per-session diff in Walnut showing exactly what one Claude Code session changed"/>
     </div>
 
     <div class="grid">
