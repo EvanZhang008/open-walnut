@@ -10,6 +10,19 @@
 
 <p align="center"><b>▶️ <a href="https://youtu.be/uN4WCZ-n2mw">Watch the 3-minute demo on YouTube</a></b></p>
 
+<p align="center"><sub><b>USED BY ENGINEERS AT</b></sub></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo-amazon-white.svg" />
+    <img src="docs/logo-amazon-dark.svg" alt="Amazon" height="26" />
+  </picture>
+  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo-doordash-white.svg" />
+    <img src="docs/logo-doordash-dark.svg" alt="DoorDash" height="26" />
+  </picture>
+</p>
+
 **An AI agent that manages your projects, notes, and coding sessions — with the missing web UI for Claude Code built in.**
 
 Open Walnut is not just a dashboard — it's an AI-native app. A built-in AI agent with 30+ tools manages your tasks, spawns and monitors Claude Code sessions, and builds a **self-organizing knowledge base** that gets smarter the more you use it. Raw daily observations auto-distill into organized topic pages. Old noise decays. Important patterns persist. It also gives Claude Code a proper web interface: real-time streaming, multi-session monitoring, visual task boards, and a personal notes vault. Think of it as an AI butler with a perfect memory and a beautiful UI.

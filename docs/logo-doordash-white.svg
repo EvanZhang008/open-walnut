@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 250 60" role="img" aria-label="DoorDash">
+  <g transform="translate(0,16) scale(1.1)">
+    <path fill="#FF3008" d="M23.071 8.409a6.09 6.09 0 00-5.396-3.228H.584A.589.589 0 00.17 6.184L3.894 9.93a1.999 1.999 0 001.414.586h12.06a1.689 1.689 0 010 3.377H8.93a.587.587 0 00-.415 1.003l3.724 3.744a2 2 0 001.414.586h4.022c5.122 0 9.001-5.495 5.396-12.417z"/>
+  </g>
+  <text x="34" y="40" font-family="Arial, Helvetica, sans-serif" font-size="34" font-weight="800" letter-spacing="-0.5" fill="#ffffff">DoorDash</text>
+</svg>

@@ -60,6 +60,16 @@
   .sub{font-size:clamp(16px,2.4vw,21px);color:var(--muted);max-width:680px;margin:18px auto 0}
   .cta{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-top:30px}
 
+  /* trusted-by logo strip */
+  .trusted{margin-top:34px}
+  .trusted .label{font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#6f7b9c;margin-bottom:18px}
+  .logos{display:flex;gap:56px;align-items:center;justify-content:center;flex-wrap:wrap}
+  .logos img{height:30px;width:auto;display:block;opacity:.78;filter:grayscale(100%);transition:.25s}
+  .logos img:hover{opacity:1;filter:grayscale(0%)}
+  @keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+  .logos img{animation:floaty 4s ease-in-out infinite}
+  .logos img:nth-child(2){animation-delay:.8s}
+
   /* video */
   .video-wrap{max-width:880px;margin:42px auto 0;border-radius:16px;overflow:hidden;
     border:1px solid var(--line);box-shadow:0 30px 80px rgba(0,0,0,.5);position:relative;aspect-ratio:16/9;background:#000}
@@ -114,6 +124,14 @@
       <a class="btn btn-primary" href="https://github.com/EvanZhang008/open-walnut">★ Star on GitHub</a>
       <a class="btn btn-ghost" href="https://youtu.be/uN4WCZ-n2mw">▶ Watch the demo</a>
     </div>
+    <div class="trusted">
+      <div class="label">Used by engineers at</div>
+      <div class="logos">
+        <img src="assets/logo-amazon.svg" alt="Amazon" />
+        <img src="assets/logo-doordash.svg" alt="DoorDash" />
+      </div>
+    </div>
+
     <div class="video-wrap">
       <iframe src="https://www.youtube.com/embed/uN4WCZ-n2mw" title="Walnut demo" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
     </div>
