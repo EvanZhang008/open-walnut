@@ -31,6 +31,7 @@ import {
 } from '../../src/core/chat-history.js';
 import { WALNUT_HOME, conversationFile } from '../../src/constants.js';
 import { getActiveConversationId } from '../../src/core/conversations.js';
+import { recordLastTurnTokens, getLastTurnTokens, clearLastTurnTokens } from '../../src/core/token-truth.js';
 import type { DisplayMessage } from '../../src/core/types.js';
 import type { MessageParam } from '../../src/agent/model.js';
 import fss from 'node:fs';
@@ -265,6 +266,11 @@ describe('getCompactionSummary', () => {
 });
 
 describe('needsCompaction', () => {
+  beforeEach(() => {
+    // Each test gets a clean exact-token cache so the real-token gate is deterministic.
+    clearLastTurnTokens(convId);
+  });
+
   it('returns false for empty history', async () => {
     const result = await needsCompaction();
     expect(result).toBe(false);
@@ -277,6 +283,42 @@ describe('needsCompaction', () => {
     );
     const result = await needsCompaction();
     expect(result).toBe(false);
+  });
+
+  it('REGRESSION: fires on the EXACT-token signal even when the offline estimate undercounts', async () => {
+    // The bug: a real ~1.03M-token conversation estimated only ~758K (35% undercount)
+    // and sailed under the 800K (80% of 1M) gate, so compaction NEVER ran. Simulate it:
+    // a tiny on-disk history (trivial estimate) but a large EXACT count from the last API
+    // turn. The gate must now reason in real-token space and return true.
+    await addTurn(
+      [{ role: 'user', content: 'tiny' }, { role: 'assistant', content: 'tiny reply' }],
+      [
+        { role: 'user', content: 'tiny', timestamp: '2025-01-01T00:00:00Z' },
+        { role: 'assistant', content: 'tiny reply', timestamp: '2025-01-01T00:00:01Z' },
+      ],
+    );
+    // Without the exact signal the estimate is tiny → gate is false.
+    expect(await needsCompaction()).toBe(false);
+    // Record a real 1.03M-token API turn for this conversation (what onUsage does in prod).
+    recordLastTurnTokens(convId, 1_030_000);
+    // Now the gate must fire — this is the fix.
+    expect(await needsCompaction()).toBe(true);
+  });
+
+  it('REGRESSION: clears the stale exact count after a prune so it stops re-firing', async () => {
+    recordLastTurnTokens(convId, 1_030_000);
+    expect(getLastTurnTokens(convId)).toBe(1_030_000);
+    // compact() calls clearLastTurnTokens after a successful prune; emulate that contract here.
+    clearLastTurnTokens(convId);
+    await addTurn(
+      [{ role: 'user', content: 'post-compact' }, { role: 'assistant', content: 'ok' }],
+      [
+        { role: 'user', content: 'post-compact', timestamp: '2025-01-01T00:00:00Z' },
+        { role: 'assistant', content: 'ok', timestamp: '2025-01-01T00:00:01Z' },
+      ],
+    );
+    // Stale 1.03M no longer cached → small post-prune conversation is under the gate.
+    expect(await needsCompaction()).toBe(false);
   });
 });
 

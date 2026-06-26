@@ -16,6 +16,7 @@ import { CHAT_HISTORY_FILE, chatHistoryFile, conversationFile } from '../constan
 import { readJsonFile, writeJsonFile } from '../utils/fs.js';
 import { estimateMessagesTokens, estimateFullPayload, compactDailyLog, formatDateKey } from './daily-log.js';
 import { getWorkingMemory, isWorkingMemoryEmpty, truncateWorkingMemoryForCompact, snapshotWorkingMemory } from './working-memory.js';
+import { effectiveTotalTokens, getLastTurnTokens, clearLastTurnTokens } from './token-truth.js';
 import { log } from '../logging/index.js';
 import fsp from 'node:fs/promises';
 import { compressForApi, MAX_BASE64_BYTES } from '../utils/image-compress.js';
@@ -960,13 +961,25 @@ export async function needsCompaction(agentId?: string, conversationId?: string)
     breakdown = { system: FALLBACK_OVERHEAD, tools: 0, messages: msgTokens, total: fullTotal };
   }
 
-  const needed = fullTotal > threshold;
+  // Gate in REAL-token space, not estimate space. The offline estimator undercounts
+  // Claude 3+ payloads by ~35%, so a real ~1.03M-token history estimated ~758K and
+  // sailed under the 800K threshold — compaction NEVER fired and the conversation grew
+  // until it 400'd at the hard ~1M API limit. effectiveTotalTokens() takes the larger
+  // of (estimate × 1.35) and the last EXACT API input_tokens for this conversation.
+  // (Same root cause + fix as the triage bail — see token-truth.ts.)
+  const effectiveTotal = effectiveTotalTokens(fullTotal, conversationId);
+  const needed = effectiveTotal > threshold;
   log.agent.info('needsCompaction check', {
     messageCount: modelMsgs.length,
     systemTokens: `~${Math.round(breakdown.system / 1000)}K`,
     toolsTokens: `~${Math.round(breakdown.tools / 1000)}K`,
     messageTokens: `~${Math.round(breakdown.messages / 1000)}K`,
+    // `fullTotal` retained as an alias of the raw estimate for backward-compatible log
+    // scraping; `effectiveTotal` is the real-token-space value the gate actually uses.
     fullTotal: `~${Math.round(fullTotal / 1000)}K`,
+    rawEstimate: `~${Math.round(fullTotal / 1000)}K`,
+    effectiveTotal: `~${Math.round(effectiveTotal / 1000)}K`,
+    lastExact: (() => { const e = getLastTurnTokens(conversationId ?? ''); return e ? `~${Math.round(e / 1000)}K` : 'unknown'; })(),
     threshold: `${Math.round(threshold / 1000)}K`,
     needed,
   });
@@ -1383,6 +1396,11 @@ export async function compact(
       store.compactionSummary = summary;
       store.compactionCount++;
       await writeStore(store, agentId, conversationId);
+
+      // The conversation just shrank — forget the pre-prune exact token count so the
+      // next needsCompaction/triage gate doesn't re-fire on a now-stale large value.
+      // (The next real turn re-populates it via the onUsage callback.)
+      if (conversationId) clearLastTurnTokens(conversationId);
 
       log.agent.info('compaction pruned entries', {
         prunedCount,

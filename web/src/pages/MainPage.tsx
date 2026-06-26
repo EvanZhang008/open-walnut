@@ -168,7 +168,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const agentConsole = useAgentConsole();
   const conversations = useConversations(agentConsole.activeAgentId);
   const chat = useChat(agentConsole.activeAgentId, conversations.activeConversationId);
-  const { health } = useSystemHealth();
+  const { health, loading: healthLoading } = useSystemHealth();
   const { mode: chatMode, toggleMode, getPlanPayload } = usePlanMode();
   const { connectionState } = useWebSocket();
   const { tasks, loading, toggleComplete, setPhase, star, create, update, reorder, moveTask, reparentTask, deleteTask, bakeOrder, clearOperationError, showOperationError, taskGroups, groupTasks, ungroupTasks, renameGroup } = useTasksContext();
@@ -1220,7 +1220,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               a small "auto-detected" note when a non-config source was used, or nothing when
               fully configured. So mount it unconditionally rather than gating on setupComplete
               (which is true once auto-detected and would hide the auto-detect note). */}
-          <SetupBanner health={health} onNavigateSettings={handleNavigateSettings} />
+          <SetupBanner health={health} loading={healthLoading} onNavigateSettings={handleNavigateSettings} />
 
           <ChatPanel messageCount={chat.messages.length} prependedRef={chat.prependedRef}>
             {chat.hasMore && (

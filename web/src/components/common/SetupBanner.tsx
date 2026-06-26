@@ -41,10 +41,14 @@ const SOURCE_LABELS: Record<string, string> = {
 
 interface SetupBannerProps {
   health: SystemHealth;
+  /** True while the first /api/system/health fetch is in flight. The banner must
+   *  render nothing until this is false — otherwise `hasReadyProvider` is undefined
+   *  and we'd flash the "no provider" onboarding on every refresh before health arrives. */
+  loading?: boolean;
   onNavigateSettings: (hash?: string) => void;
 }
 
-export function SetupBanner({ health, onNavigateSettings }: SetupBannerProps) {
+export function SetupBanner({ health, loading, onNavigateSettings }: SetupBannerProps) {
   const [dismissed, setDismissed] = useState(() => {
     try { return localStorage.getItem(LS_DISMISS_KEY) === 'true'; } catch { return false; }
   });
@@ -68,6 +72,11 @@ export function SetupBanner({ health, onNavigateSettings }: SetupBannerProps) {
     window.addEventListener(SETUP_SHOW_EVENT, handler);
     return () => window.removeEventListener(SETUP_SHOW_EVENT, handler);
   }, []);
+
+  // Render nothing until health has actually loaded. Before the first fetch resolves,
+  // hasReadyProvider is undefined; treating that as "not ready" is what made the
+  // onboarding banner flash on every page refresh even when a provider was configured.
+  if (loading || health.hasReadyProvider === undefined) return null;
 
   const providerOk = health.hasReadyProvider ?? false;
   const cliOk = health.claudeCliAvailable ?? true;

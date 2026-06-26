@@ -10,19 +10,6 @@
 
 <p align="center"><b>▶️ <a href="https://youtu.be/uN4WCZ-n2mw">Watch the 3-minute demo on YouTube</a></b></p>
 
-<p align="center"><sub><b>USED BY ENGINEERS AT</b></sub></p>
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/logo-amazon-white.svg" />
-    <img src="docs/logo-amazon-dark.svg" alt="Amazon" height="26" />
-  </picture>
-  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/logo-doordash-white.svg" />
-    <img src="docs/logo-doordash-dark.svg" alt="DoorDash" height="26" />
-  </picture>
-</p>
-
 **An AI agent that manages your projects, notes, and coding sessions — with the missing web UI for Claude Code built in.**
 
 Open Walnut is not just a dashboard — it's an AI-native app. A built-in AI agent with 30+ tools manages your tasks, spawns and monitors Claude Code sessions, and builds a **self-organizing knowledge base** that gets smarter the more you use it. Raw daily observations auto-distill into organized topic pages. Old noise decays. Important patterns persist. It also gives Claude Code a proper web interface: real-time streaming, multi-session monitoring, visual task boards, and a personal notes vault. Think of it as an AI butler with a perfect memory and a beautiful UI.
@@ -35,6 +22,7 @@ Open Walnut is not just a dashboard — it's an AI-native app. A built-in AI age
 - [See it in action](#see-it-in-action)
 - [Drive local and remote machines from one tab](#drive-local-and-remote-machines-from-one-tab)
 - [Review what the agent changed](#review-what-the-agent-changed)
+- [See dynamic workflows as a live flow-graph](#see-dynamic-workflows-as-a-live-flow-graph)
 - [Key Features](#key-features)
 - [Multi-Agent — But Human-Centered](#multi-agent--but-human-centered)
 - [Quick Start](#quick-start) | **[Getting Started Guide](GETTING_STARTED.md)**
@@ -137,6 +125,19 @@ Click a session's **Changed** chip for a full-screen diff: every file it edited,
 - **Click a line → a PR-style comment box** that batches into one review you hand back to the agent.
 
 ![Click a line in the diff to leave a PR-style comment and hand it back to the agent](docs/session-changed-comment.png)
+
+## See dynamic workflows as a live flow-graph
+
+**Claude Code can fan out into a dynamic multi-agent workflow — Open Walnut is the place you actually *watch* it run.**
+
+![Open Walnut visualizing a Claude Code dynamic workflow as a phase flow-graph: a FAN OUT stage of 4 parallel subagents feeding a SYNTHESIZE stage, each agent showing its model, tokens, and duration](docs/workflow-viz.png)
+
+When a session spawns a dynamic workflow, Walnut renders it as a **phase flow-graph** in real time — each phase (fan-out, synthesize, …) as a column, each subagent as a node with its live status, model, token spend, and duration. No more guessing what the parallel agents are doing from a wall of interleaved text.
+
+- **Full Claude Code dynamic-workflow support** — phases, parallel fan-out, and sequential stages are parsed straight from the session stream and laid out as they happen.
+- **Drill into any subagent** — click a node to open that subagent's full transcript; **View script** shows the workflow that's driving it.
+- **Survives a reload** — the graph is rebuilt from the workflow's on-disk manifest, so refreshing the page (or reconnecting to a remote host) restores the whole flow, not just the latest line.
+- **Collapsible & full-screen** — fold it away while you work, or pop the whole panel full-screen to follow a big fan-out.
 
 ## Key Features
 
