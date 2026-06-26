@@ -49,7 +49,7 @@ afterEach(async () => {
 async function makeTasks(titles: string[], category = 'Work', project = 'EKS'): Promise<string[]> {
   const ids: string[] = [];
   for (const title of titles) {
-    const { task } = await addTask({ title, category, project, _skipDedup: true });
+    const { task } = await addTask({ title, category, project });
     ids.push(task.id);
   }
   return ids;

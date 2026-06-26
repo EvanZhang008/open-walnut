@@ -120,6 +120,45 @@ describe('fork focus prompt + image attachment', () => {
     expect(message).toContain('Continue working on: Fork of Plain Parent');
   });
 
+  it('forks a long-titled source whose live session is busy → creates a NEW sibling task (no 409)', async () => {
+    // Regression for the user-reported fork failure. The fork route titles the new
+    // child `Fork of <source>`, a string that closely resembles the source title.
+    // A previous "near-duplicate dedup safety net" in addTask() would, for a source
+    // title with enough distinctive tokens, collapse the fork ONTO the source task
+    // and return it unchanged — then the 1-session-per-task check saw the source's
+    // own live session and 409'd with "Target task already has a session". That
+    // safety net was a band-aid (the real fix is the read-only triage tool set that
+    // stops triage from creating tasks at all) and has been removed, so a fork must
+    // ALWAYS mint a brand-new task regardless of how similar the title is. A long,
+    // distinctive source title is the case that used to break — guard it here so
+    // any future re-introduction of title-similarity collapsing is caught.
+    const longTitle = 'Review the payment retry handler and reconcile pending refund records';
+    const parent = await addTask({ title: longTitle, category: 'Inbox' });
+    const sid = 'fork-dedup-src';
+    // The source task must already own a live session — that's what turned a collapse
+    // into a 409 (not just a silent no-op).
+    await createSessionRecord(sid, parent.task.id, 'proj', '/tmp/fork-dedup-cwd');
+
+    const res = await fetch(apiUrl(`/api/sessions/${sid}/fork`), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ create_child_task: true, message: 'New angle on the explanation' }),
+    });
+
+    // Must NOT 409: the fork has to create a brand-new sibling task, not collapse
+    // onto the source.
+    expect(res.status).toBe(200);
+    const body = await res.json() as { taskId: string };
+    // The returned task is a NEW task, distinct from the source.
+    expect(body.taskId).toBeTruthy();
+    expect(body.taskId).not.toBe(parent.task.id);
+
+    // And the fork actually started a session for that new task.
+    const message = await getSessionStartMessage(body.taskId);
+    expect(message).toContain('This is a forked session');
+    expect(message).toContain('New angle on the explanation');
+  });
+
   it('saves an attached image and prepends a read-these-files context', async () => {
     const parent = await addTask({ title: 'Visual Task', category: 'Inbox' });
     const sid = 'fork-focus-src-3';

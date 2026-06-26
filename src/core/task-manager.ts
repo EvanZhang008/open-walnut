@@ -393,98 +393,6 @@ export interface AddTaskInput {
   asyncPush?: boolean;
   /** Skip plugin content-validation & auto-push (fork children are internal). */
   _skipPluginOps?: boolean;
-  /** Skip near-duplicate detection. Set by internal callers that legitimately
-   * create rapid same-parent tasks (e.g. batch import). Normal agent task_create
-   * leaves this off so the dedup safety net applies. */
-  _skipDedup?: boolean;
-}
-
-// ── Near-duplicate task detection (fix #2: dedup safety net) ──
-//
-// Context: a blind-trimmed triage turn used to re-call task_create with a
-// slightly-reworded title, spawning ~17 near-identical "CIS FE re-query …"
-// tasks under the same parent within minutes. Fix #1 (read-only triage tools)
-// removes the primary trigger; this is the defense-in-depth backstop so ANY
-// caller that hammers task_create with a reworded title in a short window is
-// collapsed onto the first task instead of breeding.
-
-/** Window within which a same-parent, near-identical title is treated as a dup. */
-const DEDUP_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
-/** Jaccard threshold on normalized title token sets (0..1). */
-const DEDUP_TITLE_JACCARD = 0.8;
-/** Minimum significant tokens before a title is distinctive enough to dedup on.
- * Below this, the signal is too weak (e.g. "Todo 1" / "Fix bug" normalize to a
- * single token and would false-match), so we never collapse such short titles. */
-const DEDUP_MIN_TOKENS = 3;
-
-/** Generic/boilerplate words that carry no identity — stripped before comparing
- * so "re-query plan first" vs "query plan" don't dilute the real signal. */
-const DEDUP_TITLE_STOPWORDS: ReadonlySet<string> = new Set([
-  'a', 'an', 'the', 'of', 'in', 'on', 'for', 'to', 'and', 'or', 'with', 'by',
-  'plan', 'first', 'query', 're', 'requery', 'v2', 'task', 'please',
-]);
-
-/** Light stem: drop a trailing plural 's' so "account" and "accounts" match.
- * Keeps short tokens and "ss" endings (e.g. "access") intact. */
-function stem(token: string): string {
-  if (token.length > 3 && token.endsWith('s') && !token.endsWith('ss')) {
-    return token.slice(0, -1);
-  }
-  return token;
-}
-
-/** Normalize a title to a set of significant lowercase word tokens (word order
- * insensitive). Splits on non-alphanumerics, drops stopwords and 1-char tokens,
- * and stems trailing plurals so singular/plural variants collapse together. */
-function titleTokenSet(title: string): Set<string> {
-  const tokens = title
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((t) => t.length > 1 && !DEDUP_TITLE_STOPWORDS.has(t))
-    .map(stem);
-  return new Set(tokens);
-}
-
-/** Jaccard similarity of two token sets: |∩| / |∪|. Empty-vs-empty → 1. */
-function jaccard(a: Set<string>, b: Set<string>): number {
-  if (a.size === 0 && b.size === 0) return 1;
-  if (a.size === 0 || b.size === 0) return 0;
-  let inter = 0;
-  for (const t of a) if (b.has(t)) inter++;
-  return inter / (a.size + b.size - inter);
-}
-
-/**
- * Find an existing task that is a near-duplicate of a proposed new task:
- * same scope (same parent, or same category+project when both are top-level),
- * created within DEDUP_WINDOW_MS, and title token-set Jaccard ≥ threshold.
- * Returns the matched task, or undefined if none. Completed/terminal tasks are
- * ignored — re-creating after completion is intentional.
- */
-function findNearDuplicate(
-  tasks: Task[],
-  proposed: { title: string; parentId?: string; category: string; project: string },
-  nowMs: number,
-): Task | undefined {
-  const proposedTokens = titleTokenSet(proposed.title);
-  // Too few distinctive tokens → unreliable, never dedup (avoids "Todo 1"/"Todo 2" false-match).
-  if (proposedTokens.size < DEDUP_MIN_TOKENS) return undefined;
-  for (const t of tasks) {
-    // Only collapse onto a still-active task; a finished one (done / terminal phase)
-    // re-created later is a deliberate new request, not breeding.
-    if (t.status === 'done' || TERMINAL_PHASES.has(t.phase)) continue;
-    // Same scope: prefer parent match; otherwise both must be top-level in the same list.
-    const sameScope = proposed.parentId
-      ? t.parent_task_id === proposed.parentId
-      : !t.parent_task_id && t.category === proposed.category && t.project === proposed.project;
-    if (!sameScope) continue;
-    const createdMs = Date.parse(t.created_at ?? '');
-    if (!Number.isFinite(createdMs) || nowMs - createdMs > DEDUP_WINDOW_MS) continue;
-    const candidateTokens = titleTokenSet(t.title);
-    if (candidateTokens.size < DEDUP_MIN_TOKENS) continue;
-    if (jaccard(proposedTokens, candidateTokens) >= DEDUP_TITLE_JACCARD) return t;
-  }
-  return undefined;
 }
 
 /**
@@ -913,7 +821,7 @@ export async function migrateCompletedTaskSessions(): Promise<number> {
  */
 export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncResult: SyncResult }> {
   // Read-modify-write under lock; sync push happens outside to avoid holding lock during network I/O
-  const { task, deduped } = await withWriteLock(async () => {
+  const task = await withWriteLock(async () => {
     const config = await getConfig();
     const store = await readStore();
 
@@ -964,24 +872,6 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       throw new CategorySourceConflictError(validation.error, category, source, validation.existingSource);
     }
 
-    // Fix #2 (dedup safety net): collapse a near-identical same-scope task created
-    // in the last few minutes onto the existing one instead of breeding a duplicate.
-    // Returns the existing task so callers stay idempotent (no new id, no sync push).
-    if (!input._skipDedup) {
-      const dup = findNearDuplicate(
-        store.tasks,
-        { title: input.title, parentId: parentTask?.id, category, project: project ?? category },
-        Date.parse(now),
-      );
-      if (dup) {
-        log.task.warn('task_create deduped: near-identical task created recently', {
-          existingId: dup.id, existingTitle: dup.title, proposedTitle: input.title,
-          parentTaskId: parentTask?.id, category, project: project ?? category,
-        });
-        return { task: dup, deduped: true }; // skip push/writeStore — return canonical task
-      }
-    }
-
     const newTask: Task = {
       id: generateId(),
       title: input.title,
@@ -1028,14 +918,8 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
 
     await writeStore(store);
 
-    return { task: newTask, deduped: false };
+    return newTask;
   });
-
-  // Dedup hit: the returned task already exists and is already synced — skip the
-  // push + re-read entirely so we stay idempotent and don't touch the sync target.
-  if (deduped) {
-    return { task, syncResult: { success: true } as SyncResult };
-  }
 
   // Local-source tasks never push, so async vs sync is moot — skip the branch.
   if (input._skipPluginOps || task.source === 'local') {
