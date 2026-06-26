@@ -23,9 +23,16 @@
   </picture>
 </p>
 
-**An AI agent that manages your projects, notes, and coding sessions — with the missing web UI for Claude Code built in.**
+**One web console for every Claude Code session — on your laptop *and* your remote SSH boxes — that survives crashes, shows you exactly what each session changed, and ties it all to your tasks, notes, and memory.**
 
-Open Walnut is not just a dashboard — it's an AI-native app. A built-in AI agent with 30+ tools manages your tasks, spawns and monitors Claude Code sessions, and builds a **self-organizing knowledge base** that gets smarter the more you use it. Raw daily observations auto-distill into organized topic pages. Old noise decays. Important patterns persist. It also gives Claude Code a proper web interface: real-time streaming, multi-session monitoring, visual task boards, and a personal notes vault. Think of it as an AI butler with a perfect memory and a beautiful UI.
+The two things you won't find elsewhere:
+
+- 🖥️ **One console, local + remote, crash-resilient.** Drive Claude Code on your laptop and any number of SSH hosts from one tab. If the tunnel or daemon dies, the session doesn't — the daemon re-adopts the still-running `claude -p` on reconnect, so a dropped connection never loses your work.
+- 🔍 **Review every change like a PR.** After a session runs, see a GitHub-style per-session diff of exactly what it touched, click a line to ask the agent why, and watch dynamic multi-agent workflows render as a live flow-graph.
+
+And underneath it's a full **AI-native butler**: a built-in agent with 30+ tools that manages your tasks, keeps a **self-organizing memory** that gets smarter the more you use it, and an Obsidian-style notes vault the AI can search — all **local-first, no telemetry**.
+
+<p align="center"><sub>⭐ If Walnut saves you a lost session, a star helps a solo maintainer keep shipping it. &nbsp;·&nbsp; <a href="#quick-start">Run it in 2 minutes ↓</a></sub></p>
 
 > **Philosophy**: Open Walnut is human-first. It amplifies *your* productivity — not by building a swarm of agents talking to each other, but by giving *you* superpowers. You stay in control. The AI handles the grunt work, surfaces what matters, and gets out of your way. The goal is simple: make your day smooth, focused, and productive.
 
@@ -281,13 +288,32 @@ npm start         # builds everything and starts on http://localhost:3456
 
 Open [http://localhost:3456](http://localhost:3456) in your browser.
 
-> **New here?** See **[GETTING_STARTED.md](GETTING_STARTED.md)** for provider setup, walkthrough, and troubleshooting.
+### 🥜 Already use Claude Code? Let it set Walnut up for you
+
+You don't have to configure credentials by hand. Paste this into your **own**
+already-authenticated Claude Code session and it does the whole setup *for you* — it mirrors
+**however your Claude Code is already authenticated** (SSO profile, Bedrock token, or access
+keys) into Walnut, installs dependencies, starts the server, **proves it works with a real
+model call**, and fixes any auth errors it hits along the way:
+
+```text
+Set up Open Walnut for me: read and run the skill at
+https://github.com/EvanZhang008/open-walnut/blob/main/skills/setup-walnut/SKILL.md
+```
+
+See **[skills/setup-walnut/SKILL.md](skills/setup-walnut/SKILL.md)** for exactly what it does.
+
+> **Prefer to do it yourself?** See **[GETTING_STARTED.md](GETTING_STARTED.md)** for provider setup, walkthrough, and troubleshooting.
 
 ### Prerequisites
 
 - **Node.js** >= 22
 - **Claude Code CLI** — `npm install -g @anthropic-ai/claude-code` (powers coding sessions)
-- **API key** — Anthropic API key or AWS Bedrock credentials ([setup guide](GETTING_STARTED.md#provider-configuration))
+- **API key** — Anthropic API key or AWS Bedrock credentials. Already use Claude Code? The
+  [setup-walnut skill](skills/setup-walnut/SKILL.md) mirrors its auth into Walnut for you (or
+  see the [manual setup guide](GETTING_STARTED.md#provider-configuration)). *Coding sessions
+  work with zero config* — they reuse your logged-in `claude`; only the home-page butler needs
+  a credential.
 - **Embedding model** — BGE-M3 (~1.16 GB) auto-downloads on first start; configurable via `QMD_EMBED_MODEL` env var
 
 ## Configuration
