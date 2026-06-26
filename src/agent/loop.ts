@@ -135,7 +135,7 @@ export async function runAgentLoop(
   history: MessageParam[],
   callbacks?: AgentCallbacks,
   options?: AgentLoopOptions,
-): Promise<{ messages: MessageParam[]; response: string; aborted?: boolean; tokenBreakdown?: { system: number; tools: number; messages: number; total: number } }> {
+): Promise<{ messages: MessageParam[]; newMessages: MessageParam[]; response: string; aborted?: boolean; tokenBreakdown?: { system: number; tools: number; messages: number; total: number } }> {
   const config = await getConfig();
 
   // Use custom system/tools/model if provided (subagent mode), else defaults.
@@ -159,10 +159,25 @@ export async function runAgentLoop(
     ? dateTimePrefix + userMessage
     : [{ type: 'text', text: dateTimePrefix } as unknown, ...userMessage];
 
+  const userTurnMessage = { role: 'user', content: prefixedMessage } as MessageParam;
   let messages: MessageParam[] = [
     ...history,
-    { role: 'user', content: prefixedMessage } as MessageParam,
+    userTurnMessage,
   ];
+
+  // Messages produced THIS turn (user prompt + every assistant/tool message).
+  // Tracked independently of `messages` so that emergency trim / budget guard —
+  // which delete OLD history from the FRONT of `messages` — can never corrupt the
+  // "what's new this turn" slice. Callers persist this instead of the fragile
+  // `result.messages.slice(history.length)` (which overshoots after a trim shortens
+  // the array, silently dropping the assistant reply — the root cause of the
+  // duplicate-task / orphaned-message bug).
+  const newMessages: MessageParam[] = [userTurnMessage];
+  /** Append a this-turn message to BOTH the working array and the new-messages accumulator. */
+  const pushTurnMessage = (msg: MessageParam): void => {
+    messages.push(msg);
+    newMessages.push(msg);
+  };
 
   const modelConfig: ModelConfig = options?.modelConfig ?? {
     model: config.agent?.main_model ?? config.agent?.model,
@@ -244,15 +259,17 @@ export async function runAgentLoop(
     // Abort checkpoint 1: before calling model
     if (signal?.aborted) {
       log.agent.info(`${logTag} aborted before round ${round + 1}`);
-      return { messages, response: finalText, aborted: true, tokenBreakdown: buildTokenBreakdown() };
+      return { messages, newMessages, response: finalText, aborted: true, tokenBreakdown: buildTokenBreakdown() };
     }
 
     // Compute token estimate: use exact baseline from last API response + estimated delta for
     // new messages. Falls back to full estimation when no baseline exists (round 0).
     let tokenEstimate: number | undefined;
     if (lastExactTokens !== null) {
-      const newMessages = messages.slice(lastExactMessageCount);
-      tokenEstimate = lastExactTokens + estimateMessagesTokens(newMessages);
+      // NB: distinct from the outer `newMessages` accumulator — this is just the
+      // messages added since the last exact API baseline, for the delta estimate.
+      const messagesSinceBaseline = messages.slice(lastExactMessageCount);
+      tokenEstimate = lastExactTokens + estimateMessagesTokens(messagesSinceBaseline);
     }
 
     log.agent.info(`${logTag} round ${round + 1}/${maxToolRounds}`, {
@@ -333,12 +350,12 @@ export async function runAgentLoop(
     if (result.aborted) {
       log.agent.info(`${logTag} model call aborted`);
       if (result.content.length > 0) {
-        messages.push({ role: 'assistant', content: result.content });
+        pushTurnMessage({ role: 'assistant', content: result.content });
         for (const block of result.content) {
           if (block.type === 'text') finalText += block.text;
         }
       }
-      return { messages, response: finalText, aborted: true, tokenBreakdown: buildTokenBreakdown() };
+      return { messages, newMessages, response: finalText, aborted: true, tokenBreakdown: buildTokenBreakdown() };
     }
 
     cacheTTLTracker.touch();
@@ -374,7 +391,7 @@ export async function runAgentLoop(
     }
 
     // Add assistant message to history
-    messages.push({ role: 'assistant', content: result.content });
+    pushTurnMessage({ role: 'assistant', content: result.content });
 
     // If no tool calls, check if we need to continue due to max_tokens
     if (toolUseBlocks.length === 0) {
@@ -388,19 +405,19 @@ export async function runAgentLoop(
           if (signal?.aborted) break;
           continuations++;
           log.agent.info(`${logTag} continuation ${continuations}/${MAX_CONTINUATION_ROUNDS}`);
-          messages.push({ role: 'user', content: 'Continue.' });
+          pushTurnMessage({ role: 'user', content: 'Continue.' });
 
           const contResult = await callModel();
 
           // Abort checkpoint: continuation call was aborted
           if (contResult.aborted) {
             if (contResult.content.length > 0) {
-              messages.push({ role: 'assistant', content: contResult.content });
+              pushTurnMessage({ role: 'assistant', content: contResult.content });
               for (const block of contResult.content) {
                 if (block.type === 'text') finalText += block.text;
               }
             }
-            return { messages, response: finalText, aborted: true, tokenBreakdown: buildTokenBreakdown() };
+            return { messages, newMessages, response: finalText, aborted: true, tokenBreakdown: buildTokenBreakdown() };
           }
 
           cacheTTLTracker.touch();
@@ -422,7 +439,7 @@ export async function runAgentLoop(
             }
           }
 
-          messages.push({ role: 'assistant', content: contResult.content });
+          pushTurnMessage({ role: 'assistant', content: contResult.content });
           finalText += contTextParts.join('\n');
 
           if (contResult.stopReason !== 'max_tokens') break;
@@ -478,12 +495,12 @@ export async function runAgentLoop(
     // Feed tool results back to the model
     // Cast needed: ToolResultContent uses a loose type for flexibility, but the SDK
     // expects specific union types. The actual values produced by tools conform.
-    messages.push({ role: 'user', content: toolResults as MessageParam['content'] });
+    pushTurnMessage({ role: 'user', content: toolResults as MessageParam['content'] });
 
     // If aborted during tool execution, stop the loop
     if (signal?.aborted) {
       if (textParts.length > 0) finalText += textParts.join('\n');
-      return { messages, response: finalText, aborted: true, tokenBreakdown: buildTokenBreakdown() };
+      return { messages, newMessages, response: finalText, aborted: true, tokenBreakdown: buildTokenBreakdown() };
     }
 
     // If there was also text in the response with tools, accumulate it
@@ -509,7 +526,7 @@ export async function runAgentLoop(
     finalText += notice;
 
     // Give the model one final chance to respond without tools
-    messages.push({
+    pushTurnMessage({
       role: 'user',
       content: `[System: You have used all ${maxToolRounds} tool rounds. You cannot call any more tools. Respond to the user with what you have so far.]`,
     } as MessageParam);
@@ -536,13 +553,13 @@ export async function runAgentLoop(
         callbacks?.onText?.(block.text);
       }
     }
-    messages.push({ role: 'assistant', content: finalResult.content });
+    pushTurnMessage({ role: 'assistant', content: finalResult.content });
     finalText += closingParts.join('\n');
 
     log.agent.info(`${logTag} final response after max rounds`, { textLength: finalText.length });
   }
 
-  return { messages, response: finalText, tokenBreakdown: buildTokenBreakdown() };
+  return { messages, newMessages, response: finalText, tokenBreakdown: buildTokenBreakdown() };
 }
 
 /**

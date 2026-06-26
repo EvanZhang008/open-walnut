@@ -211,7 +211,7 @@ describe('prompt caching integration', () => {
     const systemBlocks = call.system as Array<{ type: string; text: string; cache_control?: unknown }>;
     expect(systemBlocks).toHaveLength(1);
     expect(systemBlocks[0].type).toBe('text');
-    expect(systemBlocks[0].cache_control).toEqual({ type: 'ephemeral', ttl: '5m' });
+    expect(systemBlocks[0].cache_control).toEqual({ type: 'ephemeral', ttl: '1h' });
   });
 
   it('sends tools with cache_control on the last tool', async () => {
@@ -230,7 +230,7 @@ describe('prompt caching integration', () => {
     for (let i = 0; i < tools.length - 1; i++) {
       expect(tools[i].cache_control).toBeUndefined();
     }
-    expect(tools[tools.length - 1].cache_control).toEqual({ type: 'ephemeral', ttl: '5m' });
+    expect(tools[tools.length - 1].cache_control).toEqual({ type: 'ephemeral', ttl: '1h' });
   });
 
   it('sends messages with cache_control on the last user message', async () => {
@@ -249,7 +249,7 @@ describe('prompt caching integration', () => {
     expect(messages[0].role).toBe('user');
     expect(Array.isArray(messages[0].content)).toBe(true);
     const blocks = messages[0].content as Array<{ type: string; text: string; cache_control?: unknown }>;
-    expect(blocks[0].cache_control).toEqual({ type: 'ephemeral', ttl: '5m' });
+    expect(blocks[0].cache_control).toEqual({ type: 'ephemeral', ttl: '1h' });
   });
 
   it('applies cache markers on tool-loop continuation calls', async () => {
@@ -285,7 +285,7 @@ describe('prompt caching integration', () => {
     const lastUserMsg = secondCall.messages[2];
     expect(lastUserMsg.role).toBe('user');
     const content = lastUserMsg.content as Array<{ cache_control?: unknown }>;
-    expect(content[content.length - 1].cache_control).toEqual({ type: 'ephemeral', ttl: '5m' });
+    expect(content[content.length - 1].cache_control).toEqual({ type: 'ephemeral', ttl: '1h' });
   });
 
   it('passes usage stats through from API response', async () => {

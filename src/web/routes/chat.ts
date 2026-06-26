@@ -892,7 +892,7 @@ export function registerChatRpc(): void {
         // Handle aborted turn: persist partial response but skip compaction.
         // User message is already on disk (eagerly persisted above).
         if (result.aborted) {
-          const allNewMsgs = result.messages.slice(history.length) as MessageParam[]
+          const allNewMsgs = result.newMessages as MessageParam[]
           // Skip the eagerly-persisted user message (first in the new batch)
           const afterUser = allNewMsgs.length > 0 && (allNewMsgs[0] as { role: string }).role === 'user'
             ? allNewMsgs.slice(1)
@@ -933,8 +933,12 @@ export function registerChatRpc(): void {
         }
 
         // Extract the new messages added during this turn.
-        // Skip the first user message (already eagerly persisted with turnId).
-        const allNewMsgs = result.messages.slice(history.length) as MessageParam[]
+        // result.newMessages is [userPrompt, ...ai messages]; the user prompt was
+        // already eagerly persisted with turnId, so skip it. Using newMessages (not
+        // slice(history.length)) is trim-safe: an emergency trim shortens the front
+        // of result.messages, which would make slice(history.length) overshoot and
+        // silently drop the assistant reply (the duplicate-task / orphan bug).
+        const allNewMsgs = result.newMessages as MessageParam[]
         const newApiMsgs = allNewMsgs.length > 0 && (allNewMsgs[0] as { role: string }).role === 'user'
           ? allNewMsgs.slice(1)
           : allNewMsgs
@@ -964,6 +968,9 @@ export function registerChatRpc(): void {
           const contextWindow = getContextWindowSize(config.agent?.main_model)
           const compacted = !!(await chatHistory.getCompactionSummary(agentId, conversationId))
           stats = {
+            // Display-only stat from the post-loop working array. After a mid-turn
+            // 400-trim this is the SHORTENED in-memory array, so it can under-report
+            // the on-disk message count — it is never persisted and not the canonical count.
             apiMessageCount: result.messages.filter((m: { compacted?: boolean }) => !m.compacted).length,
             estimatedTokens: result.tokenBreakdown.messages,
             systemTokens: result.tokenBreakdown.system,
