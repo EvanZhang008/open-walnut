@@ -14,6 +14,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      # The build compiles the remote-session daemon with Bun
+      # (scripts/build-daemon.sh). Without it, `npm run build` fails with
+      # `bun: command not found` (exit 127).
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
       - run: npm install
       - run: npm run lint
       - run: npm run build
