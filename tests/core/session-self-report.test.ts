@@ -6,7 +6,7 @@
  * and missing fields) and summaryFromSelfReport (field selection + formatting).
  */
 import { describe, it, expect } from 'vitest';
-import { extractField, summaryFromSelfReport } from '../../src/core/session-hooks/builtins.js';
+import { extractField, summaryFromSelfReport, milestoneFromSelfReport } from '../../src/core/session-hooks/builtins.js';
 
 const SAMPLE = `WHAT_I_DID: Added READ_ONLY_TOOL_NAMES allowlist in tools.ts and wired triage to use it.
 STATUS: succeeded — build passes, triage can no longer create tasks.
@@ -58,25 +58,65 @@ describe('extractField', () => {
 });
 
 describe('summaryFromSelfReport', () => {
-  it('builds a 3-field Tier-1 summary (Session Summary + Status + Next Steps)', () => {
+  it('builds ONE single-paragraph summary (no labelled sub-sections)', () => {
     const out = summaryFromSelfReport(SAMPLE);
-    expect(out).toContain('**Session Summary**:');
-    expect(out).toContain('**Current Agent Status**:');
-    expect(out).toContain('**Next Steps**:');
-    // Session Summary merges WHAT_I_DID + CHANGES_TRIED.
+    // Single paragraph: WHAT_I_DID is the spine + a trailing "Next: …" clause.
     expect(out).toContain('READ_ONLY_TOOL_NAMES allowlist');
-    expect(out).toContain('First tried a denylist');
+    expect(out).toContain('Next: Run /verify');
+    // No multi-section bold field labels — this is the core of the "one summary" fix.
+    expect(out).not.toContain('**Session Summary**');
+    expect(out).not.toContain('**Current Agent Status**');
+    expect(out).not.toContain('**Next Steps**');
+    // It's one line (no embedded newlines).
+    expect(out).not.toContain('\n');
   });
 
-  it('omits fields that are absent rather than emitting empty labels', () => {
+  it('appends a status qualifier only for failed/blocked/waiting (not "succeeded")', () => {
+    const blocked = `WHAT_I_DID: Wired the FIFO reader.\nSTATUS: blocked — port conflict.\nPHASE_SIGNAL: verify-fail`;
+    const out = summaryFromSelfReport(blocked);
+    expect(out).toContain('Wired the FIFO reader.');
+    expect(out).toContain('(blocked — port conflict.)');
+    // A "succeeded" status is implied by progress and should NOT be appended.
+    const succeeded = `WHAT_I_DID: Shipped the parser.\nSTATUS: succeeded — all good.`;
+    expect(summaryFromSelfReport(succeeded)).toBe('Shipped the parser.');
+  });
+
+  it('falls back to STATUS when WHAT_I_DID is absent', () => {
     const partial = `STATUS: blocked — port conflict.\nPHASE_SIGNAL: verify-fail`;
-    const out = summaryFromSelfReport(partial);
-    expect(out).toBe('**Current Agent Status**: blocked — port conflict.');
-    expect(out).not.toContain('Session Summary');
-    expect(out).not.toContain('Next Steps');
+    expect(summaryFromSelfReport(partial)).toBe('blocked — port conflict.');
   });
 
   it('returns empty string when the report has no usable fields', () => {
     expect(summaryFromSelfReport('garbage with no labels')).toBe('');
+  });
+});
+
+describe('milestoneFromSelfReport', () => {
+  it('builds a one-line milestone for a real PHASE_SIGNAL transition', () => {
+    const m = milestoneFromSelfReport(SAMPLE);
+    expect(m).not.toBeNull();
+    expect(m!.signal).toBe('implement-done');
+    expect(m!.line).toBe('🔧 Implemented — Added READ_ONLY_TOOL_NAMES allowlist in tools.ts and wired triage to use it.');
+  });
+
+  it('matches the bare keyword inside committed(<hash>)', () => {
+    const report = `WHAT_I_DID: Closed the session with a commit.\nPHASE_SIGNAL: committed(abc1234)`;
+    const m = milestoneFromSelfReport(report);
+    expect(m).not.toBeNull();
+    expect(m!.signal).toBe('committed');
+    expect(m!.line).toBe('📦 Committed — Closed the session with a commit.');
+  });
+
+  it('returns null for noise signals (conversational / reconfirmed)', () => {
+    expect(milestoneFromSelfReport(`WHAT_I_DID: Answered a question.\nPHASE_SIGNAL: conversational(user-asked-question)`)).toBeNull();
+    expect(milestoneFromSelfReport(`WHAT_I_DID: Re-checked the plan.\nPHASE_SIGNAL: reconfirmed`)).toBeNull();
+  });
+
+  it('returns null when WHAT_I_DID is missing even on a real signal', () => {
+    expect(milestoneFromSelfReport(`PHASE_SIGNAL: verify-pass`)).toBeNull();
+  });
+
+  it('returns null when there is no PHASE_SIGNAL at all', () => {
+    expect(milestoneFromSelfReport(`WHAT_I_DID: did stuff.`)).toBeNull();
   });
 });

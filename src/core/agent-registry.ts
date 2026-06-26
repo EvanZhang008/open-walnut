@@ -111,7 +111,7 @@ If your context contains a **<session_self_summary>** block, the session already
    - \`conversational(user-asked-question)\` → **Outcome B** (user is engaged — see Conversational Turn Detection)
 2. **USER_INTENT overrides** workflow advancement: \`question-pending\` → **Outcome B**, never push. \`workflow-command\` / \`autonomous\` → normal phase logic.
 3. **VERIFIED gates "done" claims**: if STATUS says succeeded but VERIFIED is \`assumed\`, treat verification as NOT done — do not notify "verified".
-4. **Update task.summary by reconciling**: merge the report's WHAT_I_DID / CHANGES_TRIED into the existing **Session Summary**, set **Current Agent Status** from STATUS, set **Next Steps** from NEXT_STEPS. Preserve **Original Request** and **Current Customer Focus**. (A Tier-1 summary was already persisted from the report; refine it — don't discard prior context.)
+4. **Update task.summary by reconciling**: the summary is ONE short paragraph (≤3 sentences) — what the task is about + where it stands now + the immediate next step. Merge the report's WHAT_I_DID / STATUS / NEXT_STEPS into the existing single-paragraph summary; do NOT split it into labelled sub-sections. (A Tier-1 summary was already persisted from the report; refine it — don't discard prior context.)
 5. **Put ARTIFACTS** (commit/PR/plan path/key files) into the task.note's Decisions/Progress sections.
 6. **notify_main_agent** rules below are unchanged — only notify on Outcome-B milestones.
 
@@ -176,9 +176,13 @@ Otherwise (fallback): your context includes a <session_history> section with rec
 
 If a message is truncated and you need full details (e.g., to find a commit hash), call session_history with index=N to see the complete message including tool inputs and results.
 
-### Step 2: Update task.summary (4 fields, 2-4 sentences each)
+### Step 2: Update task.summary (ONE short paragraph)
 
-The summary has 4 fixed fields, each starting with a **bold label**:
+The summary is a SINGLE plain-text paragraph (≤3 sentences) — the task's one-glance
+dashboard line. It answers: what is this task about, where does it stand now, and what's
+the immediate next step. **Do NOT split it into labelled sub-sections** (no "**Session
+Summary**:", "**Current Agent Status**:", etc.) — one paragraph, no bold field labels.
+Merge new progress into the existing paragraph on each triage; don't discard prior context.
 
 **Self-Contained Writing Rule (important)**:
 Every sentence must be independently understandable. Never use vague references like "this bug" or "the feature" — the reader may not have read the preceding context.
@@ -189,22 +193,11 @@ Avoid meaningless statistics — "6 files changed" / "npm run build passed" carr
 ❌ "6 files changed, npm run build passed"
 ✅ "Fixed session ID mismatch detection in claude-code-session.ts + added renameSessionId() to session-tracker.ts, build passed"
 
-**Original Request**: What this task is actually about. Write it on the first triage, rarely change it afterward (unless the task scope is redefined).
-
-**Session Summary**: Cumulative progress — what has been accomplished, which phase we're at, key milestones. Not a play-by-play of the latest turn, but the overall story of this task to date. Merge new progress in on each triage.
-
-**Current Customer Focus**: What the user currently cares about. This field is primarily maintained by message-send-triage; you generally preserve it as-is. Only update if the session result clearly shows the focus has changed (e.g., the user's request is fulfilled, moved to a new topic).
-
-**Current Agent Status**: What the agent did this turn and its current state. What succeeded, what failed, what's blocked. Let the user see the agent's situation at a glance.
-
 **Language rule (important)**:
 - Check the task's plugin language setting. Use the language hint from the plugin's display metadata. Default: English.
 
-Example:
-**Original Request**: Implement retry logic for webhook delivery failures with exponential backoff
-**Session Summary**: Core retry framework merged (3 files). Unit tests pass. Integration test pending — need staging env access.
-**Current Customer Focus**: Wants retry metrics dashboard before deploying to prod
-**Current Agent Status**: Phase 4 VERIFY — E2E passed on ephemeral server. Running /code-review next.
+Example (one paragraph, no labels):
+"Implement retry logic for webhook delivery failures with exponential backoff. Core retry framework merged (3 files) and unit tests pass; integration test still pending on staging env access. Next: run /verify once staging access is granted, then /code-review."
 
 ### Step 3: Update task.note (structured document, not append-only)
 
@@ -337,12 +330,12 @@ present), if the user just asked a question, they are still engaged — wait for
 const BUILTIN_MESSAGE_SEND_TRIAGE: AgentDefinition = {
   id: 'message-send-triage',
   name: 'Message Send Triage (onMessageSend)',
-  description: 'Fires on onMessageSend hook — detects user focus shifts and updates Current Customer Focus',
+  description: 'Fires on onMessageSend hook — detects user focus shifts and refreshes the task summary',
   runner: 'embedded',
   max_tool_rounds: 2,
   system_prompt: `You are the Message Send Triage Agent. The user just sent a message to a session.
 
-Your only job: determine whether the user's focus has changed. If it changed, update "Current Customer Focus" in the summary. If not, do nothing. Fast in, fast out — at most 2 tool calls.
+Your only job: determine whether the user's direction has changed. If it changed, refresh the task summary to reflect the new direction. If not, do nothing. Fast in, fast out — at most 2 tool calls.
 
 ---
 
@@ -355,27 +348,23 @@ Your only job: determine whether the user's focus has changed. If it changed, up
    - **ESCALATE**: User is unhappy, reporting a serious error, demanding immediate action.
 3. Decide:
    - **CONTINUE** → Do nothing, return immediately. **Most messages fall here.**
-   - **REDIRECT / ESCALATE** → Use task_update to update "Current Customer Focus" in the summary.
+   - **REDIRECT / ESCALATE** → Use task_update to refresh the summary so its direction matches what the user now wants.
 
 ## How to update summary
 
-The summary has 4 fields. You **only change Current Customer Focus**; copy the other 3 as-is:
+The summary is ONE short plain-text paragraph (≤3 sentences) — what the task is about,
+where it stands, and the immediate next step. **No labelled sub-sections, no bold field
+labels.** On a REDIRECT, rewrite the paragraph so its goal/next-step reflect the user's
+new direction; preserve the factual progress already captured. Keep it tight.
 
-**Original Request**: [copy as-is]
-**Session Summary**: [copy as-is]
-**Current Customer Focus**: [update to reflect the user's current direction]
-**Current Agent Status**: [copy as-is]
-
-"Current Customer Focus" answers: "What does the user want right now?"
-- Not a paraphrase of the latest message — it's the user's current goal/direction.
-- 5 consecutive messages about the same thing → focus hasn't changed → don't update.
+- It's the user's current goal/direction — not a paraphrase of their latest message.
+- 5 consecutive messages about the same thing → direction unchanged → don't update.
 - Only update when the user truly changed direction.
-- Write 1-2 sentences, specific, faithful to the original intent.
 
 ## Examples
 
 Message: "Fix that project tag format bug"
-→ REDIRECT — Current Customer Focus: "Fix the project tag format bug"
+→ REDIRECT — summary goal now: fixing the project tag format bug.
 
 Message: "ok continue"
 → CONTINUE — no update
@@ -384,10 +373,7 @@ Message: "Did you run the tests?"
 → CONTINUE — no update (still talking about the same bug)
 
 Message: "Hold off on the bug, the layout is broken — switch to percentage-based"
-→ REDIRECT — Current Customer Focus: "Switch layout from fixed pixels to percentage-based (bug on hold)"
-
-Message: "Layout is done, go back to the previous bug"
-→ REDIRECT — Current Customer Focus: "Resume fixing the project tag format bug"
+→ REDIRECT — summary goal now: switch layout to percentage-based (tag bug on hold).
 
 ## Language rule
 - Check the task's plugin language hint. Use the language specified by the plugin. Default: English.

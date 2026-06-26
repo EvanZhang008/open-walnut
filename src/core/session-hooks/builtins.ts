@@ -25,6 +25,29 @@ import type {
 const triageLastDispatch = new Map<string, number>();
 const TRIAGE_COOLDOWN_MS = 5_000; // 5 seconds — normal triage cycle takes 10-30s
 
+// ── Triage trailing-debounce state ──
+// Turn-complete triage is the expensive path (Opus subagent + optional main-agent
+// turn over the full conversation). Running it on EVERY turn during an interactive
+// back-and-forth burns money for no benefit. Instead we trailing-debounce: each
+// turn-complete (re)arms a per-session timer; a user message cancels it (interaction
+// is ongoing). Triage fires ONCE only after the session has been quiet for the
+// configured window — which is also the best available approximation of "the session
+// finished" on a long-running CLI (the only real end-signal is the 2h idle reap).
+// Key: sessionId, Value: pending timer. The map self-bounds: every armed timer either
+// fires (and self-deletes) or is cancelled (and deletes), so no separate prune needed.
+const triageDebounceTimers = new Map<string, NodeJS.Timeout>();
+const DEFAULT_TRIAGE_DEBOUNCE_MS = 3 * 60_000; // 3 minutes
+
+/** Cancel a pending debounced triage for a session — used when the user resumes
+ *  interaction (message-send), so a mid-conversation triage never fires. */
+function cancelPendingTriage(sessionId: string): void {
+  const t = triageDebounceTimers.get(sessionId);
+  if (t) {
+    clearTimeout(t);
+    triageDebounceTimers.delete(sessionId);
+  }
+}
+
 // ── Session self-report (side_question / "/btw") ──
 // Instead of the triage subagent reading the full session JSONL to GUESS what the
 // session did, we ask the SESSION ITSELF for a structured self-report via the
@@ -83,59 +106,98 @@ export function extractField(report: string, label: string): string {
 export function summaryFromSelfReport(report: string): string {
   const status = extractField(report, 'STATUS');
   const did = extractField(report, 'WHAT_I_DID');
-  const tried = extractField(report, 'CHANGES_TRIED');
   const next = extractField(report, 'NEXT_STEPS');
-  const sessionSummary = [did, tried].filter(Boolean).join(' ');
-  const lines: string[] = [];
-  if (sessionSummary) lines.push(`**Session Summary**: ${sessionSummary}`);
-  if (status) lines.push(`**Current Agent Status**: ${status}`);
-  if (next) lines.push(`**Next Steps**: ${next}`);
-  return lines.join('\n');
+  // Single-paragraph summary: WHAT_I_DID is the spine; append the NEXT_STEPS as a
+  // trailing "Next: …" clause when present, and a short status qualifier only when
+  // it adds signal (failed / blocked / waiting — "succeeded" is implied by progress).
+  // No multi-section **labels** — one task summary, not a stack of sub-headers.
+  const base = did || status;
+  if (!base) return '';
+  let summary = base.trim();
+  const lowStatus = status.toLowerCase();
+  if (status && /(fail|block|wait)/.test(lowStatus) && !summary.toLowerCase().includes(status.trim().toLowerCase())) {
+    summary += ` (${status.trim()})`;
+  }
+  if (next) summary += ` Next: ${next.trim()}`;
+  return summary.replace(/\s+/g, ' ').trim();
+}
+
+/** PHASE_SIGNAL values that mark a real, milestone-worthy transition. The noise
+ *  values (reconfirmed / conversational) are intentionally excluded so the
+ *  milestone log stays one-line-per-meaningful-step, not per-turn. */
+const MILESTONE_PHASE_SIGNALS = [
+  'plan-written', 'implement-done', 'verify-pass', 'verify-fail', 'review-done', 'committed',
+] as const;
+
+/** Friendly label per milestone phase, prefixed to the WHAT_I_DID line. */
+const MILESTONE_LABELS: Record<string, string> = {
+  'plan-written': '📝 Plan written',
+  'implement-done': '🔧 Implemented',
+  'verify-pass': '✅ Verified',
+  'verify-fail': '❌ Verify failed',
+  'review-done': '🔎 Reviewed',
+  'committed': '📦 Committed',
+};
+
+/**
+ * Build a ONE-LINE milestone string from a self-report, or null if this turn's
+ * PHASE_SIGNAL isn't a real milestone. The line is `<label> — <WHAT_I_DID>`; the
+ * matched signal is returned so callers can log/test it. Exported for unit tests.
+ */
+export function milestoneFromSelfReport(report: string): { signal: string; line: string } | null {
+  const rawSignal = extractField(report, 'PHASE_SIGNAL').toLowerCase();
+  if (!rawSignal) return null;
+  // PHASE_SIGNAL may be `committed(abc1234)` or `conversational(user-asked-question)`
+  // — match on the bare keyword prefix.
+  const signal = MILESTONE_PHASE_SIGNALS.find((s) => rawSignal.startsWith(s));
+  if (!signal) return null;
+  const did = extractField(report, 'WHAT_I_DID').replace(/\s+/g, ' ').trim();
+  if (!did) return null;
+  return { signal, line: `${MILESTONE_LABELS[signal]} — ${did}` };
 }
 
 /**
- * turn-complete-triage: Dispatches a triage subagent on turn completion.
- * Hook: onTurnComplete. Replaces the hardcoded triage block in server.ts.
+ * runTriage: the actual (expensive) turn-complete triage work — session self-report
+ * + triage subagent dispatch. Invoked from the trailing-debounce timer below, NOT
+ * directly on turn completion, so a burst of interactive turns collapses into one run.
+ *
+ * The TRIAGE_COOLDOWN_MS guard is checked HERE (fire time), not at arm time: the
+ * debounce re-arms on every turn-complete during an interactive burst, and checking
+ * the cooldown at arm time would suppress those legitimate re-arms. Checked at fire
+ * time it only suppresses the rare case where two fires land within the cooldown
+ * (e.g. a replayed event firing right after a real one). Exported for unit tests.
  */
-export const turnCompleteTriageHook: SessionHookDefinition = {
-  id: 'turn-complete-triage',
-  name: 'Turn Complete Triage (onTurnComplete)',
-  description: 'Dispatches triage subagent when a session turn completes successfully.',
-  hooks: ['onTurnComplete'],
-  priority: 50,
-  source: 'builtin',
-  enabled: true,
-  handler: async (payload) => {
-    const p = payload as OnTurnCompletePayload;
-    if (!p.taskId) return; // No task → no triage
+export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
+  // Defensive: the arming handler already gated on taskId/task, but runTriage may be
+  // called directly (tests) and the timer fires asynchronously — re-narrow taskId so
+  // the type flows and a stale/cleared task can't trigger a no-op triage.
+  if (!p.taskId) return;
+  const taskId = p.taskId;
 
-    // Skip triage for embedded subagent sessions (provider='embedded').
-    if (p.session?.provider === 'embedded') return;
+  // Cooldown: prevent burst dispatches from replayed events after server restart.
+  // The daemon may replay N result events in milliseconds — without this guard,
+  // each one spawns a full triage subagent (task_get + task_update + notify_main_agent).
+  const dedupKey = `${p.sessionId}:${p.taskId}`;
+  const now = Date.now();
 
-    // Cooldown: prevent burst dispatches from replayed events after server restart.
-    // The daemon may replay N result events in milliseconds — without this guard,
-    // each one spawns a full triage subagent (task_get + task_update + notify_main_agent).
-    const dedupKey = `${p.sessionId}:${p.taskId}`;
-    const now = Date.now();
-
-    // Prune stale entries to prevent unbounded growth
-    if (triageLastDispatch.size > 100) {
-      for (const [k, ts] of triageLastDispatch) {
-        if (now - ts > TRIAGE_COOLDOWN_MS) triageLastDispatch.delete(k);
-      }
+  // Prune stale entries to prevent unbounded growth
+  if (triageLastDispatch.size > 100) {
+    for (const [k, ts] of triageLastDispatch) {
+      if (now - ts > TRIAGE_COOLDOWN_MS) triageLastDispatch.delete(k);
     }
+  }
 
-    const lastAt = triageLastDispatch.get(dedupKey);
-    if (lastAt && now - lastAt < TRIAGE_COOLDOWN_MS) {
-      log.session.warn('turn-complete-triage: skipped — cooldown', {
-        taskId: p.taskId, sessionId: p.sessionId,
-        msSinceLast: now - lastAt,
-      });
-      return;
-    }
-    triageLastDispatch.set(dedupKey, now);
+  const lastAt = triageLastDispatch.get(dedupKey);
+  if (lastAt && now - lastAt < TRIAGE_COOLDOWN_MS) {
+    log.session.warn('turn-complete-triage: skipped — cooldown', {
+      taskId: p.taskId, sessionId: p.sessionId,
+      msSinceLast: now - lastAt,
+    });
+    return;
+  }
+  triageLastDispatch.set(dedupKey, now);
 
-    try {
+  try {
       const { DEFAULT_TRIAGE_AGENT_ID } = await import('../agent-registry.js');
       const { getConfig } = await import('../config-manager.js');
       const config = await getConfig();
@@ -190,13 +252,33 @@ export const turnCompleteTriageHook: SessionHookDefinition = {
             if (summary) {
               try {
                 const { updateSummary } = await import('../task-manager.js');
-                await updateSummary(p.taskId, summary);
+                await updateSummary(taskId, summary);
               } catch (err) {
                 log.session.debug('turn-complete-triage: early summary persist skipped (triage subagent will still summarize)', {
                   taskId: p.taskId, error: err instanceof Error ? err.message : String(err),
                 });
               }
             }
+
+            // (b) Append a compact milestone line — only on a real PHASE_SIGNAL
+            // transition (plan-written / implement-done / verify-* / review-done /
+            // committed). This replaces the verbose per-turn conversation_log: one
+            // line per meaningful step, sourced from the session's own WHAT_I_DID.
+            const milestone = milestoneFromSelfReport(selfReport);
+            if (milestone) {
+              try {
+                const { appendMilestone } = await import('../task-manager.js');
+                await appendMilestone(taskId, milestone.line);
+                log.session.info('turn-complete-triage: milestone recorded', {
+                  taskId: p.taskId, sessionId: p.sessionId, signal: milestone.signal,
+                });
+              } catch (err) {
+                log.session.debug('turn-complete-triage: milestone persist skipped', {
+                  taskId: p.taskId, error: err instanceof Error ? err.message : String(err),
+                });
+              }
+            }
+
             log.session.info('turn-complete-triage: got session self-report', {
               sessionId: p.sessionId, taskId: p.taskId, reportLen: selfReport.length,
             });
@@ -235,18 +317,69 @@ export const turnCompleteTriageHook: SessionHookDefinition = {
         ...(combinedContext ? { context: combinedContext } : {}),
       }, ['subagent-runner'], { source: 'turn-complete-triage' });
 
-      log.session.info('turn-complete-triage hook: dispatched', {
-        sessionId: p.sessionId,
-        taskId: p.taskId,
-        agentId: triageAgentId,
-      });
-    } catch (err) {
-      log.session.error('turn-complete-triage hook failed', {
-        sessionId: p.sessionId,
-        taskId: p.taskId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+    log.session.info('turn-complete-triage hook: dispatched', {
+      sessionId: p.sessionId,
+      taskId: p.taskId,
+      agentId: triageAgentId,
+    });
+  } catch (err) {
+    log.session.error('turn-complete-triage hook failed', {
+      sessionId: p.sessionId,
+      taskId: p.taskId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
+ * turn-complete-triage: trailing-debounces the (expensive) triage work on turn
+ * completion. Hook: onTurnComplete. Each turn-complete (re)arms a per-session timer;
+ * triage fires ONCE only after the session has been quiet for `debounce_minutes`
+ * (config.agent.triage.debounce_minutes, default 3). A user message-send cancels the
+ * pending timer (see messageSendTriageHook) — interaction resumed, no mid-chat triage.
+ */
+export const turnCompleteTriageHook: SessionHookDefinition = {
+  id: 'turn-complete-triage',
+  name: 'Turn Complete Triage (onTurnComplete)',
+  description: 'Dispatches triage subagent when a session turn completes successfully.',
+  hooks: ['onTurnComplete'],
+  priority: 50,
+  source: 'builtin',
+  enabled: true,
+  handler: async (payload) => {
+    const p = payload as OnTurnCompletePayload;
+    // No real task → no triage. Catches both a taskless session (taskId === '',
+    // the sentinel for ad-hoc /sessions chats and on-demand agent conversations)
+    // and a dangling taskId (non-empty, but the task no longer exists in
+    // tasks.json — deleted/stale/cross-workspace; the payload builder resolves
+    // `task` via getTask() and leaves it undefined when that throws). Triaging a
+    // nonexistent task burns an Opus round-trip + side_question updating nothing.
+    if (!p.taskId || !p.task) return;
+
+    // Skip triage for embedded subagent sessions (provider='embedded').
+    if (p.session?.provider === 'embedded') return;
+
+    // Trailing debounce: (re)arm the per-session timer. A prior pending run for this
+    // session is cancelled — a burst of turn-completes thus collapses into one run
+    // that fires only after the configured quiet window. Read the window fresh each
+    // time so a settings change takes effect on the next turn.
+    const { getConfig } = await import('../config-manager.js');
+    const config = await getConfig();
+    const debounceMs = config.agent?.triage?.debounce_minutes != null
+      ? Math.max(0, config.agent.triage.debounce_minutes * 60_000)
+      : DEFAULT_TRIAGE_DEBOUNCE_MS;
+
+    cancelPendingTriage(p.sessionId);
+    const timer = setTimeout(() => {
+      triageDebounceTimers.delete(p.sessionId);
+      void runTriage(p);
+    }, debounceMs);
+    timer.unref?.(); // don't keep the process alive for a pending triage
+    triageDebounceTimers.set(p.sessionId, timer);
+
+    log.session.debug('turn-complete-triage: armed debounce', {
+      sessionId: p.sessionId, taskId: p.taskId, debounceMs,
+    });
   },
 };
 
@@ -264,7 +397,16 @@ export const messageSendTriageHook: SessionHookDefinition = {
   enabled: true,
   handler: async (payload) => {
     const p = payload as OnMessageSendPayload;
-    if (!p.taskId) return; // No task → skip
+    // Interaction resumed: cancel any pending debounced turn-complete triage for this
+    // session so it never fires mid-conversation. Done first, unconditionally — the
+    // dispatcher only delivers onMessageSend for user-initiated sends (it skips
+    // 'agent'/'subagent-runner' sources), so this is always a real user message.
+    cancelPendingTriage(p.sessionId);
+
+    // No real task → skip. Mirrors turnCompleteTriageHook: a taskless session
+    // (taskId === '') or a dangling taskId (task no longer in tasks.json) has
+    // nothing to triage. See that hook for the full rationale.
+    if (!p.taskId || !p.task) return;
 
     // Skip subagent sends (provider='embedded') to prevent loop
     if (p.session?.provider === 'embedded') return;

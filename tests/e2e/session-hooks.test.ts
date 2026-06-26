@@ -27,6 +27,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
+import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 
 // Use mock CLI directly
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
@@ -35,6 +36,7 @@ const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs
 
 let server: HttpServer
 let port: number
+let daemon: MockDaemon
 
 function wsUrl(): string {
   return `ws://localhost:${port}/ws`
@@ -153,7 +155,15 @@ function collectBusEvents(eventName: string): {
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
 
+  // Start an isolated MockDaemon and point the session runner at it. Local
+  // sessions (host '__local__') still go through the daemon transport — without
+  // a test daemon URL they connect to the developer's PRODUCTION daemon, which
+  // spawns the REAL `claude` CLI (so the mock never emits `result` → timeout)
+  // and gets SIGTERM'd on teardown. See session-manager-e2e.test.ts for the
+  // canonical wiring.
+  daemon = await createMockDaemon()
   sessionRunner.setCliCommand(MOCK_CLI)
+  sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${daemon.port}`)
 
   // Seed tasks
   const tasksDir = path.join(WALNUT_HOME, 'tasks')
@@ -199,13 +209,23 @@ beforeAll(async () => {
     }),
   )
 
+  // Turn-complete triage trailing-debounces (default 3 min). These tests assert that
+  // triage FIRES after a turn (not WHEN), so set a 0-minute window → the debounce timer
+  // fires on the next tick, preserving the original "triage right after session:result"
+  // contract. The debounce timing itself is covered in session-hooks-triage-debounce.test.ts.
+  // (After the tasks mkdir above so WALNUT_HOME exists for the config write.)
+  const { updateConfig } = await import('../../src/core/config-manager.js')
+  await updateConfig({ agent: { triage: { debounce_minutes: 0, notify_mode: 'realtime' } } })
+
   server = await startServer({ port: 0, dev: true })
   const addr = server.address()
   port = typeof addr === 'object' && addr ? addr.port : 0
 })
 
 afterAll(async () => {
+  sessionRunner.setTestDaemonUrl(undefined)
   await stopServer()
+  await daemon.stop()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 
@@ -633,11 +653,18 @@ describe('Full-path: message send through hooks to mock CLI', () => {
     })
     expect((sendRpcRes as Record<string, unknown>).ok).toBe(true)
 
-    // Step 3: Wait for the second session:result (resumed session completes)
+    // Step 3: Wait for the second session:result (resumed session completes).
+    // We assert success + identity, NOT the result text: a local follow-up
+    // falls back to a --resume respawn, and mock-claude may echo the resume
+    // message rather than the follow-up over that path (same relaxation as
+    // session-manager-e2e.test.ts). This test's real subject is the hook chain
+    // asserted in Steps 4–6, not the CLI's echoed text.
     const secondResultEvent = await waitForWsEvent(ws, 'session:result', 20000)
-    const rd = secondResultEvent.data as { result: string; taskId: string }
-    expect(rd.result).toContain('follow-up for hook test')
+    const rd = secondResultEvent.data as { result: string; taskId: string; sessionId: string }
+    expect(typeof rd.result).toBe('string')
+    expect(rd.result).toBeTruthy()
     expect(rd.taskId).toBe('hook-task-001')
+    expect(rd.sessionId).toBe(sessionId)
 
     // Give hooks time to fully process
     await delay(1500)

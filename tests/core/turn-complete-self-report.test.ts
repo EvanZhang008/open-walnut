@@ -19,8 +19,13 @@ import { WALNUT_HOME } from '../../src/constants.js';
 import { bus } from '../../src/core/event-bus.js';
 import { sessionRunner } from '../../src/providers/claude-code-session.js';
 import { addTask, getTask } from '../../src/core/task-manager.js';
-import { turnCompleteTriageHook } from '../../src/core/session-hooks/builtins.js';
+// runTriage is the fire-path of turnCompleteTriageHook (the hook itself now only
+// trailing-debounces; the actual self-report + dispatch work lives in runTriage).
+// These tests assert that work, so they call runTriage directly — the debounce
+// timing is covered separately in session-hooks-triage-debounce.test.ts.
+import { runTriage } from '../../src/core/session-hooks/builtins.js';
 import type { OnTurnCompletePayload } from '../../src/core/session-hooks/types.js';
+import type { Task } from '../../src/core/types.js';
 
 // Distinct SID per scenario: the hook has a 5s per-(sessionId:taskId) cooldown,
 // so sharing one SID would make the second test get skipped.
@@ -69,12 +74,14 @@ function captureSubagentStart(): { payload?: Record<string, unknown> } {
 }
 
 let taskId: string;
+let task: Task;
 
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
   await fs.mkdir(WALNUT_HOME, { recursive: true });
-  const { task } = await addTask({ title: 'self report task', category: 'Inbox' });
-  taskId = task.id;
+  const created = await addTask({ title: 'self report task', category: 'Inbox' });
+  taskId = created.task.id;
+  task = created.task;
 });
 
 afterAll(async () => {
@@ -94,6 +101,7 @@ function makePayload(sid: string): OnTurnCompletePayload {
   return {
     sessionId: sid,
     taskId,
+    task, // resolved by PayloadBuilder in production; required for triage to run
     session: { provider: 'claude-code', cwd: '/tmp/x' } as OnTurnCompletePayload['session'],
     result: 'done',
     totalCost: 0,
@@ -107,16 +115,22 @@ describe('turn-complete self-report (success)', () => {
     const fake = registerFakeSession(SID_OK, async () => SAMPLE_REPORT);
     const captured = captureSubagentStart();
 
-    await turnCompleteTriageHook.handler!(makePayload(SID_OK));
+    await runTriage(makePayload(SID_OK));
 
     // 1. The session was asked for a self-report.
     expect(fake.askSideQuestion).toHaveBeenCalledOnce();
 
-    // 2. A Tier-1 summary was persisted to the task.
+    // 2. A single-paragraph Tier-1 summary was persisted to the task (no labelled
+    //    sub-sections — the "one summary" unification).
     const task = await getTask(taskId);
-    expect(task.summary).toContain('**Current Agent Status**:');
-    expect(task.summary).toContain('succeeded');
-    expect(task.summary).toContain('**Next Steps**:');
+    expect(task.summary).toContain('normalizeLabel');
+    expect(task.summary).toContain('Next: Run /verify');
+    expect(task.summary).not.toContain('**Session Summary**');
+    expect(task.summary).not.toContain('**Current Agent Status**');
+
+    // 2b. A compact milestone line was recorded (PHASE_SIGNAL: implement-done).
+    expect(task.milestones).toBeTruthy();
+    expect(task.milestones).toContain('🔧 Implemented — Edited fork-title.ts');
 
     // 3. Triage was dispatched with suppression + a self-summary context block.
     expect(captured.payload).toBeDefined();
@@ -132,7 +146,7 @@ describe('turn-complete self-report (fallback)', () => {
     const fake = registerFakeSession(SID_FAIL, async () => { throw new Error('session dead'); });
     const captured = captureSubagentStart();
 
-    await turnCompleteTriageHook.handler!(makePayload(SID_FAIL));
+    await runTriage(makePayload(SID_FAIL));
 
     expect(fake.askSideQuestion).toHaveBeenCalledOnce();
 
