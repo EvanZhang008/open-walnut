@@ -2392,16 +2392,17 @@ input:focus, textarea:focus, select:focus {
 }
 
 .session-fork-popover {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  width: 320px;
+  /* Rendered in a portal on document.body with fixed coords (see SessionForkButton)
+     so neighbouring session panels can never clip it. z-index sits above the
+     fullscreen panel (9001) and terminal overlay (9999). width + maxHeight are set
+     inline from the JS POPOVER_WIDTH constant (single source for the placement math). */
+  position: fixed;
   background: #fff;
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px;
   box-shadow: 0 4px 20px rgba(0,0,0,0.15);
-  z-index: 100;
+  z-index: 10001;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -2442,6 +2443,67 @@ input:focus, textarea:focus, select:focus {
   align-items: center;
   gap: 6px;
 }
+
+/* Drag-over highlight when dropping an image onto the popover. */
+.session-fork-popover.is-drag-over {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+}
+
+/* Attached-image thumbnails (mirrors ChatInput's .chat-image-previews). */
+.session-fork-image-previews {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.session-fork-image-preview {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.session-fork-image-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.session-fork-image-remove {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 16px;
+  height: 16px;
+  line-height: 14px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.session-fork-image-remove:hover { background: rgba(0, 0, 0, 0.85); }
+
+/* Attach (📎) button, left of the hint in the actions row. */
+.session-fork-attach {
+  padding: 2px 6px;
+  font-size: 13px;
+  line-height: 1;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.session-fork-attach:hover:not(:disabled) { background: var(--border); }
+.session-fork-attach:disabled { opacity: 0.4; cursor: default; }
 
 .session-fork-divider-line {
   border: none;
@@ -3810,6 +3872,20 @@ input:focus, textarea:focus, select:focus {
   text-align: center;
   color: var(--fg-muted);
   font-size: 13px;
+}
+
+/* ── Full-screen task detail (TaskDetailModal hosts TodoPanel's TaskDetailPane) ── */
+/* The pane is its own scroll container; inside the flex wf-modal shell it must flex
+   to fill and allow its own overflow (min-height:0 lets the scroll region shrink). */
+.task-detail-modal .todo-detail-pane {
+  flex: 1;
+  min-height: 0;
+  padding: 20px 28px;
+}
+/* The pane brings its own header/close, so the sticky category row reads as the title. */
+.task-detail-modal .todo-detail-close {
+  font-size: 20px;
+  opacity: 0.7;
 }
 
 .team-card-placeholder {
@@ -8350,7 +8426,17 @@ img[data-lightbox-src],
 }
 .vd-trigger:hover { border-color: var(--accent); }
 .vd-has-filter { color: var(--accent); border-color: var(--accent); }
-.vd-caret { font-size: 10px; line-height: 1; }
+/* Icon-only variant — square button showing the sliders glyph (View options). */
+.vd-trigger-icon {
+  padding: 5px; gap: 0;
+  color: var(--fg-secondary);
+}
+.vd-trigger-icon svg { display: block; }
+.vd-trigger-icon.vd-has-filter { color: var(--accent); }
+.vd-trigger-icon .vd-dot {
+  position: absolute; top: 2px; right: 2px; margin: 0;
+}
+.vd-trigger-icon { position: relative; }
 .vd-dot {
   display: inline-block; width: 6px; height: 6px;
   border-radius: 50%; background: var(--accent); margin-left: 2px;
@@ -9076,6 +9162,31 @@ img[data-lightbox-src],
 .task-group-chip-label:hover {
   text-decoration: underline dotted;
 }
+/* Dissolve-group button on the chip — the discoverable inverse of grouping.
+   Subtle until the chip is hovered, then clearly clickable. */
+.task-group-chip-dissolve {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 2px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s;
+}
+.task-group-chip:hover .task-group-chip-dissolve { opacity: 0.7; }
+.task-group-chip-dissolve:hover {
+  opacity: 1;
+  background: rgba(0, 122, 255, 0.14);
+}
 /* The tinted rail on every grouped row, plus rounding at the cluster ends.
    Shared by the home Todo panel (.todo-panel-item) and the /tasks list (.task-card). */
 .todo-panel-item.task-grouped,
@@ -9094,6 +9205,29 @@ img[data-lightbox-src],
   outline: 2px solid var(--accent);
   outline-offset: -2px;
   background: rgba(0, 122, 255, 0.06);
+}
+/* Leading checkbox shown on each row while in select mode. */
+.todo-item-select-checkbox {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin-right: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  line-height: 1;
+  color: #fff;
+  background: transparent;
+  border: 1.5px solid var(--border, rgba(255, 255, 255, 0.3));
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.todo-item-select-checkbox:hover { border-color: var(--accent); }
+.todo-item-select-checkbox.checked {
+  background: var(--accent);
+  border-color: var(--accent);
 }
 .task-selection-bar {
   position: sticky;
@@ -9141,6 +9275,35 @@ img[data-lightbox-src],
 }
 .task-selection-clear-btn:hover {
   background: rgba(0, 0, 0, 0.06);
+}
+
+/* Group split-button: [⑂ Group | ▾] — caret opens a side dropdown of batch actions. */
+.task-batch-menu { position: relative; }
+.task-batch-split { display: inline-flex; align-items: stretch; }
+.task-batch-split .task-batch-group {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.task-batch-caret {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0 7px;
+  border: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.25);
+  border-top-right-radius: 7px;
+  border-bottom-right-radius: 7px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  cursor: pointer;
+}
+.task-batch-caret:disabled { opacity: 0.45; cursor: not-allowed; }
+.task-batch-caret:hover:not(:disabled) { filter: brightness(1.08); }
+/* Dropdown opens ABOVE the bar. Positioned via inline position:fixed coords (computed
+   from the caret in TaskBatchMenu) so it escapes the .todo-panel-list overflow:auto clip
+   box — a plain position:absolute child of the sticky bar gets cut off in a short panel.
+   This rule only carries sizing; the fixed coords + z-index come from the inline style. */
+.task-batch-dropdown {
+  min-width: 210px;
 }
 
 .task-blocked-badge {
@@ -19380,6 +19543,19 @@ a.file-link:hover {
   overflow: hidden;
 }
 
+/* Embedded in the session full-screen split's left column — fill it flush
+   (no centered-modal sizing, no rounded corners / shadow / outer border). */
+.session-terminal-panel.session-terminal-panel-embedded {
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
 .session-terminal-header {
   display: flex;
   align-items: center;
@@ -19750,6 +19926,22 @@ a.file-link:hover {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
+}
+.app-modal-input {
+  width: 100%;
+  margin-top: 14px;
+  padding: 8px 11px;
+  font-size: 14px;
+  color: var(--fg-primary, #e8eaed);
+  background: var(--bg-input, var(--bg-secondary, #1c1e24));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
+  border-radius: 8px;
+  outline: none;
+  box-sizing: border-box;
+}
+.app-modal-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.25);
 }
 .app-modal-actions {
   display: flex;

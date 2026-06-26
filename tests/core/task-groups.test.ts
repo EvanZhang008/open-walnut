@@ -26,6 +26,8 @@ import {
   removeFromGroup,
   renameGroup,
   listGroups,
+  updateTaskRaw,
+  updateTasksBulk,
   TaskGroupScopeError,
   _resetForTesting,
 } from '../../src/core/task-manager.js';
@@ -177,6 +179,54 @@ describe('group_id persistence', () => {
     const reloaded = (await listTasks()).filter((t) => [a, b].includes(t.id));
     expect(reloaded).toHaveLength(2);
     for (const t of reloaded) expect(t.group_id).toBe(g.group_id);
+  });
+});
+
+describe('group_id survives raw partial updates (regression: vanishing groups)', () => {
+  // Repro for the user-reported bug: a grouped session/incident task loses its
+  // group after a while. Root cause — group_id lives in the SQLite `payload`
+  // blob (no dedicated column). A raw partial update whose patch carries ANY
+  // non-column key (e.g. needs_attention, set on every session phase
+  // transition) made taskToRow rewrite the WHOLE payload column from just the
+  // patch, silently dropping group_id. Session tasks transition phase often, so
+  // their group "disappeared"; plain tasks rarely raw-update, so it looked
+  // intermittent.
+  it('keeps group_id when updateTaskRaw patches a payload field (needs_attention)', async () => {
+    const [a, b] = await makeTasks(['Session task', 'Sibling']);
+    const g = await groupTasks([a, b]);
+    expect((await getTask(a)).group_id).toBe(g.group_id);
+
+    // Mirror phase.ts: a session phase transition sets a payload-only field.
+    await updateTaskRaw(a, { phase: 'AWAIT_HUMAN_ACTION', needs_attention: true });
+
+    const reloaded = await getTask(a);
+    expect(reloaded.needs_attention).toBe(true);          // the patch applied
+    expect(reloaded.group_id).toBe(g.group_id);           // ...and group_id survived
+    // The group still lists both members.
+    const groups = await listGroups();
+    expect(groups).toHaveLength(1);
+    expect(groups[0].member_ids.sort()).toEqual([a, b].sort());
+  });
+
+  it('keeps group_id across a fresh DB read after a raw payload-field update', async () => {
+    const [a, b] = await makeTasks(['A', 'B']);
+    const g = await groupTasks([a, b]);
+    await updateTaskRaw(a, { needs_attention: true });
+
+    // Force a real reload from SQLite — proves it persisted, not just in-memory.
+    closeDb();
+    _resetForTesting();
+
+    expect((await getTask(a)).group_id).toBe(g.group_id);
+  });
+
+  it('keeps group_id when updateTasksBulk patches a payload field', async () => {
+    const [a, b] = await makeTasks(['A', 'B']);
+    const g = await groupTasks([a, b]);
+
+    await updateTasksBulk([{ id: a, patch: { needs_attention: true } }]);
+
+    expect((await getTask(a)).group_id).toBe(g.group_id);
   });
 });
 

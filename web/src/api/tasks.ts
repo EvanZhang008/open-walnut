@@ -15,6 +15,11 @@ export interface CreateTaskInput {
   project?: string;
   due_date?: string;
   sprint?: string;
+  /** Explicit platform/source for the new task (e.g. 'local', 'ms-todo'). When set,
+   *  overrides the backend's category-based source inference — used by quick-add so a
+   *  task lands on the user's configured Default Platform instead of inheriting an
+   *  external source from the active category. */
+  source?: string;
 }
 
 export interface UpdateTaskInput {

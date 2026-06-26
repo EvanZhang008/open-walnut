@@ -12,12 +12,14 @@ import { useCallback } from 'react';
 import { BubbleMenu } from '@tiptap/react/menus';
 import type { Editor } from '@tiptap/core';
 import { turnInto } from './block-transforms';
+import { usePrompt } from '@/hooks/useConfirm';
 
 interface NotesBubbleMenuProps {
   editor: Editor;
 }
 
 export function NotesBubbleMenu({ editor }: NotesBubbleMenuProps) {
+  const prompt = usePrompt();
   // Only show for a non-empty text selection that is NOT inside a table cell or
   // code block (those have their own editing model / no inline marks).
   const shouldShow = useCallback(({ editor: ed, from, to }: { editor: Editor; from: number; to: number }) => {
@@ -28,16 +30,17 @@ export function NotesBubbleMenu({ editor }: NotesBubbleMenuProps) {
     return ed.state.doc.textBetween(from, to, ' ').trim().length > 0;
   }, []);
 
-  const setLink = useCallback(() => {
+  const setLink = useCallback(async () => {
     const prev = editor.getAttributes('link').href as string | undefined;
-    const url = window.prompt('Link URL', prev ?? 'https://');
+    // allowEmpty: clearing the field removes the link.
+    const url = await prompt({ title: 'Link URL', defaultValue: prev ?? 'https://', placeholder: 'https://…', confirmLabel: 'Apply', allowEmpty: true });
     if (url === null) return; // cancelled
-    if (url === '') {
+    if (url.trim() === '') {
       editor.chain().focus().extendMarkRange('link').unsetLink().run();
       return;
     }
-    editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run();
-  }, [editor]);
+    editor.chain().focus().extendMarkRange('link').setLink({ href: url.trim() }).run();
+  }, [editor, prompt]);
 
   return (
     <BubbleMenu

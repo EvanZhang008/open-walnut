@@ -385,6 +385,12 @@ export interface AddTaskInput {
   sprint?: string;
   /** Explicit source override. Only needed for the first task in a new category (e.g. source='local'). */
   source?: TaskSource;
+  /** Don't block the return on the external sync push. The task is written locally and
+   *  returned immediately; the push to the external target runs in the background and
+   *  backfills ext/external_url/sync_error via a TASK_UPDATED event. Set by the web
+   *  create path so the UI is instant. Programmatic callers that report syncResult
+   *  (agent task_create, CLI) leave this off and keep synchronous semantics. */
+  asyncPush?: boolean;
   /** Skip plugin content-validation & auto-push (fork children are internal). */
   _skipPluginOps?: boolean;
   /** Skip near-duplicate detection. Set by internal callers that legitimately
@@ -1031,10 +1037,28 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
     return { task, syncResult: { success: true } as SyncResult };
   }
 
-  // Push to sync target and capture result (outside lock to avoid holding it during network I/O)
-  const syncResult = input._skipPluginOps
-    ? { success: true } as SyncResult
-    : await autoPushIfConfigured(task);
+  // Local-source tasks never push, so async vs sync is moot — skip the branch.
+  if (input._skipPluginOps || task.source === 'local') {
+    return { task, syncResult: { success: true } as SyncResult };
+  }
+
+  // Async push: write-locally-then-push. Return the local task immediately; the push
+  // runs in the background and reconciles ext/external_url/sync_error via TASK_UPDATED.
+  // This is what makes web quick-add feel instant even when the target is external.
+  if (input.asyncPush) {
+    autoPushIfConfigured(task).catch((err) => {
+      log.task.warn('async task push failed', {
+        taskId: task.id, source: task.source,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+    // syncResult is "accepted, pending" — the caller doesn't block on the round-trip.
+    return { task, syncResult: { success: true } as SyncResult };
+  }
+
+  // Synchronous push (programmatic callers that report syncResult): push to sync target
+  // and capture result (outside lock to avoid holding it during network I/O).
+  const syncResult = await autoPushIfConfigured(task);
 
   // Re-read the task from the store to pick up ext fields set by the push (e.g. plugin ext data).
   // autoPushIfConfigured writes these to the store but the local `task` object is stale.
@@ -1910,8 +1934,23 @@ export async function addNote(idPrefix: string, content: string): Promise<{ task
 }
 
 /**
+ * Build the `### YYYY-MM-DD HH:MM` heading prepended to both conversation_log and
+ * milestone entries. The format is shared on purpose so the UI can reverse/render
+ * both with the same helper — keep it here as the single source of truth so a tweak
+ * can't drift the two logs apart (which would silently break that shared render).
+ */
+function logTimestampHeading(now: Date): string {
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  const hh = String(now.getHours()).padStart(2, '0');
+  const min = String(now.getMinutes()).padStart(2, '0');
+  return `### ${yyyy}-${mm}-${dd} ${hh}:${min}`;
+}
+
+/**
  * Append an entry to a task's conversation_log by partial ID match.
- * Auto-prepends a timestamp heading (### MM-DD HH:MM).
+ * Auto-prepends a timestamp heading (### YYYY-MM-DD HH:MM).
  */
 export async function appendConversationLog(idPrefix: string, entry: string): Promise<{ task: Task }> {
   // Lock-internal: validate + persist. Push moved outside lock to avoid self-deadlock.
@@ -1931,12 +1970,7 @@ export async function appendConversationLog(idPrefix: string, entry: string): Pr
     const t = matches[0];
     runPluginContentValidation(t, 'conversation_log', entry);
     const now = new Date();
-    const yyyy = now.getFullYear();
-    const mm = String(now.getMonth() + 1).padStart(2, '0');
-    const dd = String(now.getDate()).padStart(2, '0');
-    const hh = String(now.getHours()).padStart(2, '0');
-    const min = String(now.getMinutes()).padStart(2, '0');
-    const fullEntry = `### ${yyyy}-${mm}-${dd} ${hh}:${min}\n${entry}`;
+    const fullEntry = `${logTimestampHeading(now)}\n${entry}`;
 
     t.conversation_log = t.conversation_log
       ? t.conversation_log + '\n\n' + fullEntry
@@ -1952,6 +1986,43 @@ export async function appendConversationLog(idPrefix: string, entry: string): Pr
   if (!syncResult.success) {
     throw new Error(`Sync to ${task.source} failed: ${syncResult.error ?? 'unknown error'}`);
   }
+
+  bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'internal' });
+  return { task };
+}
+
+/**
+ * Append a ONE-LINE milestone to a task's compact milestone log by partial ID match.
+ * Auto-prepends the same `### YYYY-MM-DD HH:MM` heading as conversation_log (via
+ * logTimestampHeading) so the UI can reuse the same reverse/render helper.
+ *
+ * Unlike appendConversationLog this is LOCAL UI metadata: it runs no plugin content
+ * validation and does not push to external sync — the self-report it's built from can
+ * drift to CJK (see CLAUDE.md Opus note) and a milestone is a nice-to-have dashboard
+ * line, not something worth failing a turn over. It DOES still throw on empty/no-match/
+ * ambiguous input (programmer errors); the best-effort guarantee is the CALLER's job —
+ * the sole caller (session-hooks/builtins.ts) wraps it in try/catch + debug-log, so a
+ * bad milestone never breaks the flow. New callers must do the same.
+ */
+export async function appendMilestone(idPrefix: string, entry: string): Promise<{ task: Task }> {
+  const oneLine = entry.replace(/\s+/g, ' ').trim();
+  if (!oneLine) throw new Error('appendMilestone: empty entry');
+  const task = await withWriteLock(async () => {
+    const store = await readStore();
+    const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
+    if (matches.length === 0) throw new Error(`No task found matching ID prefix "${idPrefix}"`);
+    if (matches.length > 1) throw new Error(`Ambiguous ID prefix "${idPrefix}" matches ${matches.length} tasks. Be more specific.`);
+
+    const t = matches[0];
+    const now = new Date();
+    const fullEntry = `${logTimestampHeading(now)}\n${oneLine}`;
+
+    t.milestones = t.milestones ? t.milestones + '\n\n' + fullEntry : fullEntry;
+    t.updated_at = now.toISOString();
+
+    await writeStore(store);
+    return t;
+  });
 
   bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'internal' });
   return { task };
@@ -3506,6 +3577,19 @@ export async function updateTaskRaw(
     // Build the UPDATE dynamically from the fields that actually changed.
     // taskToRow() already handles column mapping + JSON encoding + payload spill.
     const patchRow = taskToRow(prepared);
+    // payload is a SINGLE column holding ALL non-column fields (group_id,
+    // needs_attention, …). taskToRow(prepared) rebuilds it from the PATCH alone,
+    // so a patch that touches any payload field (e.g. session phase transitions
+    // set needs_attention) would overwrite the whole column and silently drop
+    // every untouched payload field — notably group_id, which made grouped
+    // session tasks "lose" their group. Recompute payload from the fully-merged
+    // task so untouched payload fields survive the partial update.
+    // `?? null` is safe: a full merged Task never carries a literal `payload` key,
+    // so taskToRow().payload is only ever a JSON string (has spill fields) or
+    // undefined (none) — never an explicit-clear null we'd be collapsing.
+    if ('payload' in patchRow) {
+      patchRow.payload = taskToRow({ ...task, ...prepared }).payload ?? null;
+    }
     const cols = Object.keys(patchRow);
     if (cols.length === 0) return undefined;
 
@@ -3573,6 +3657,11 @@ export async function updateTasksBulk(
         const prepared = prepareRawUpdate(task, patch);
         if (!prepared) continue;
         const patchRow = taskToRow(prepared);
+        // See updateTaskRaw: recompute the payload column from the merged task so
+        // a patch touching one payload field doesn't wipe the others (group_id …).
+        if ('payload' in patchRow) {
+          patchRow.payload = taskToRow({ ...task, ...prepared }).payload ?? null;
+        }
         const cols = Object.keys(patchRow);
         if (cols.length === 0) continue;
         const setClause = cols.map((c) => `${c} = @${c}`).join(', ');

@@ -250,12 +250,15 @@ export async function respondToPermission(
 
 export async function forkSessionInWalnut(
   sessionId: string,
-  opts?: { child_title?: string; message?: string; model?: string },
+  opts?: { child_title?: string; message?: string; model?: string; images?: ImageAttachment[] },
 ): Promise<{ status: string; sourceSessionId: string; taskId: string; childTaskCreated?: boolean }> {
-  return apiPost(`/api/sessions/${sessionId}/fork`, {
-    create_child_task: true,
-    ...opts,
-  });
+  const { images, ...rest } = opts ?? {};
+  const body: Record<string, unknown> = { create_child_task: true, ...rest };
+  // Convert ImageAttachment[] → backend ImagePayload (data + mediaType only).
+  if (images?.length) {
+    body.images = images.map(img => ({ data: img.data, mediaType: img.mediaType }));
+  }
+  return apiPost(`/api/sessions/${sessionId}/fork`, body);
 }
 
 // ── Forensic Observability ──

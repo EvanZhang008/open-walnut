@@ -19,6 +19,7 @@ import path from 'node:path'
 import type { Server as HttpServer } from 'node:http'
 import { WebSocket } from 'ws'
 import { createMockConstants } from '../helpers/mock-constants.js'
+import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants())
 
@@ -32,6 +33,7 @@ const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs
 
 let server: HttpServer
 let port: number
+let daemon: MockDaemon
 
 function wsUrl(): string {
   return `ws://localhost:${port}/ws`
@@ -114,7 +116,13 @@ function delay(ms: number): Promise<void> {
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
 
+  // Route the server's local sessions through a MockDaemon that spawns the mock
+  // CLI. All local sessions go through a daemon, so a bare setCliCommand can't
+  // reach the spawn — without setTestDaemonUrl the session falls back to the
+  // shared global daemon (real `claude`) and the mode-change events never fire.
+  daemon = await createMockDaemon()
   sessionRunner.setCliCommand(MOCK_CLI)
+  sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${daemon.port}`)
 
   // Seed a test task
   const tasksDir = path.join(WALNUT_HOME, 'tasks')
@@ -148,7 +156,9 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  sessionRunner.setTestDaemonUrl(undefined)
   await stopServer()
+  await daemon.stop()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 

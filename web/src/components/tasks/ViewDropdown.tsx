@@ -5,6 +5,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { ICON_SLIDERS } from '../common/Icons';
 
 // ── Types ──
 
@@ -108,11 +109,12 @@ export function ViewDropdown({
   return (
     <div className="vd" ref={containerRef}>
       <button
-        className={`vd-trigger${hasActiveFilter ? ' vd-has-filter' : ''}`}
+        className={`vd-trigger vd-trigger-icon${hasActiveFilter ? ' vd-has-filter' : ''}`}
         onClick={() => setOpen(!open)}
         title="Filter, sort, and group tasks"
+        aria-label="View options"
       >
-        <span className="vd-caret">&#x25BE;</span> View
+        {ICON_SLIDERS}
         {hasActiveFilter && <span className="vd-dot" />}
       </button>
 

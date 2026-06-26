@@ -8,6 +8,7 @@ import { fetchTask, updateTask as apiUpdateTask } from '@/api/tasks';
 import { SprintPicker } from '@/components/tasks/SprintPicker';
 import { fetchTriageHistory } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
+import { usePrompt } from '@/hooks/useConfirm';
 import { useNotifications } from '@/contexts/notifications';
 import { timeAgo } from '@/utils/time';
 import { scrollLog } from '@/utils/scroll-debug';
@@ -46,6 +47,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { TaskKebabMenu } from './TaskKebabMenu';
+import { TaskBatchMenu } from './TaskBatchMenu';
 import { ViewDropdown, type SortBy, type GroupBy, type DateFilter } from './ViewDropdown';
 import { DatePicker, formatDateDisplay, isOverdue, parseDateLocal } from '../common/DatePicker';
 import { PersonIcon } from '../common/PersonIcon';
@@ -71,7 +73,7 @@ interface TodoPanelProps {
   loading: boolean;
   onComplete: (id: string) => void;
   onSetPhase?: (id: string, phase: string) => void;
-  onCreate: (input: { title: string; priority: string; category?: string; project?: string; starred?: boolean; pinnedTier?: FocusTier }) => Promise<Task | unknown>;
+  onCreate: (input: { title: string; priority: string; category?: string; project?: string; starred?: boolean; pinnedTier?: FocusTier; capture?: boolean }) => Promise<Task | unknown>;
   onUpdate?: (id: string, updates: { title?: string }) => void;
   onStar?: (id: string) => void;
   onDelete?: (id: string) => void;
@@ -118,6 +120,8 @@ interface TodoPanelProps {
   onGroupTasks?: (taskIds: string[], label?: string) => void;
   /** Remove a single task from its virtual group. */
   onUngroupTask?: (taskId: string) => void;
+  /** Remove several tasks from their group(s) in one call (used to dissolve a whole cluster). */
+  onUngroupTasks?: (taskIds: string[]) => void;
   /** Rename a virtual group. */
   onRenameGroup?: (groupId: string, label: string) => void;
 }
@@ -235,6 +239,13 @@ interface SortableTaskItemProps {
   onClick: (e?: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }) => void;
   /** True when this task is part of the current multi-select set (group-building). */
   isSelected?: boolean;
+  /** When true, the panel is in explicit select mode: show a leading checkbox and a
+   *  plain click toggles selection (no navigation). */
+  selectMode?: boolean;
+  /** Toggle this task in/out of the multi-selection (checkbox + select-mode clicks). */
+  onSelectToggle?: (taskId: string) => void;
+  /** Enter multi-select mode with this task picked (kebab "Select…" entry). */
+  onStartSelect?: (taskId: string) => void;
   onSetPhase: (id: string, phase: string) => void;
   onStar?: (id: string) => void;
   onDelete?: (id: string) => void;
@@ -262,6 +273,7 @@ interface SortableTaskItemProps {
   groupInfo?: GroupRenderInfo;
   onRenameGroup?: (groupId: string, currentLabel: string) => void;  // Rename the whole group
   onUngroupTask?: (taskId: string) => void;                          // Remove this task from its group
+  onDissolveGroup?: (groupId: string) => void;                       // Ungroup ALL members (dissolve the cluster)
 }
 
 /** Per-task virtual-group render metadata (computed in TodoPanel, consumed by SortableTaskItem). */
@@ -272,7 +284,7 @@ interface GroupRenderInfo {
   isLast: boolean;   // last member — bottom rounding goes here
 }
 
-function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isNestTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, onSetPhase, onStar, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onUnparent, onMoveUp, isPinned, pinnedTier, searchContext, searchMatchField, searchScore, searchKeywordScore, searchSemanticScore, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask }: SortableTaskItemProps) {
+function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isNestTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, selectMode, onSelectToggle, onStartSelect, onSetPhase, onStar, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onUnparent, onMoveUp, isPinned, pinnedTier, searchContext, searchMatchField, searchScore, searchKeywordScore, searchSemanticScore, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask, onDissolveGroup }: SortableTaskItemProps) {
   const hookPhases = usePhaseHooks();
   const {
     attributes,
@@ -404,6 +416,8 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isNes
   const handleTitleClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
+    // Select mode: a click on the title toggles selection (never edits/navigates).
+    if (selectMode) { onSelectToggle?.(task.id); return; }
     // Modifier-click on the title must still toggle multi-selection (the title is
     // the natural click target) — forward the event so the row handler sees the
     // metaKey/ctrlKey/shiftKey instead of treating it as a plain focus click.
@@ -420,7 +434,7 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isNes
     if (!onUpdateTitle) return;
     clickPosRef.current = { x: e.clientX, y: e.clientY };
     setIsEditing(true);
-  }, [isFocused, onClick, onUpdateTitle]);
+  }, [isFocused, onClick, onUpdateTitle, selectMode, onSelectToggle, task.id]);
 
   // Click-outside handler: exits editing when clicking outside the title span.
   // Also serves as a fallback when blur doesn't fire (e.g. click on non-focusable element).
@@ -457,6 +471,17 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isNes
         >
           {groupInfo.label}
         </span>
+        {/* Dissolve the whole group — the discoverable counterpart to grouping. */}
+        {onDissolveGroup && (
+          <button
+            className="task-group-chip-dissolve"
+            onClick={(e) => { e.stopPropagation(); onDissolveGroup(groupInfo.groupId); }}
+            aria-label="Ungroup these tasks"
+            title="Ungroup — dissolve this group"
+          >
+            ✕
+          </button>
+        )}
       </div>
     )}
     <div
@@ -467,6 +492,8 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isNes
       data-group-id={groupInfo?.groupId}
       onClick={(e) => {
         if (isEditing) return;
+        // Select mode: a plain click anywhere toggles selection (no navigation/edit).
+        if (selectMode) { onSelectToggle?.(task.id); return; }
         // Title has its own click handler (focus first, edit on second click)
         if ((e.target as HTMLElement).closest('.todo-item-title')) return;
         onClick(e);
@@ -475,6 +502,20 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isNes
       {...activeAttributes}
       {...activeListeners}
     >
+      {/* Select-mode checkbox — explicit multi-select affordance (leading the row). */}
+      {selectMode && (
+        <button
+          className={`todo-item-select-checkbox${isSelected ? ' checked' : ''}`}
+          onClick={(e) => { e.stopPropagation(); onSelectToggle?.(task.id); }}
+          role="checkbox"
+          aria-checked={!!isSelected}
+          aria-label={isSelected ? 'Deselect task' : 'Select task'}
+          title={isSelected ? 'Deselect' : 'Select'}
+        >
+          {isSelected ? '✓' : ''}
+        </button>
+      )}
+
       {/* Chevron — absolutely positioned in left padding area (only for parent tasks) */}
       {childCount > 0 && (
         <button
@@ -584,6 +625,7 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isNes
             onUnparent={onUnparent}
             onMoveUp={onMoveUp}
             onUngroup={onUngroupTask}
+            onStartSelect={onStartSelect}
             onDelete={onDelete}
           />
         </div>
@@ -894,8 +936,11 @@ function reverseConversationLogEntries(log: string): string {
 }
 
 // ── TaskDetailPane ──
+// Exported so it can be hosted in a full-screen modal (TaskDetailModal) rather than
+// only the cramped inline split-pane. The home page renders it via the modal; the
+// dedicated /tasks page still embeds it inline.
 
-function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenTriageForTask, onFocusChild, style }: { task: Task; allTasks?: Task[]; onClose?: () => void; onOpenSession?: (sessionId: string) => void; onOpenTriageForTask?: (taskId: string) => void; onFocusChild?: (task: Task) => void; style?: CSSProperties }) {
+export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenTriageForTask, onFocusChild, style }: { task: Task; allTasks?: Task[]; onClose?: () => void; onOpenSession?: (sessionId: string) => void; onOpenTriageForTask?: (taskId: string) => void; onFocusChild?: (task: Task) => void; style?: CSSProperties }) {
   const navigate = useNavigate();
   const integrations = useIntegrations();
   const taskRec = task as Record<string, unknown>;
@@ -906,16 +951,18 @@ function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenTriageFo
   const hasSummary = !!task.summary || !!taskRec.has_summary;
   const hasExt = !!(task.ext && Object.keys(task.ext).length > 0) || !!taskRec.has_ext;
   const hasNote = !!task.note || !!taskRec.has_note;
-  const hasConversationLog = !!task.conversation_log || !!taskRec.has_conversation_log;
+  // conversation_log is retained server-side but no longer rendered (too verbose).
+  // Milestones (one compact line per major phase transition) replace it in the UI.
+  const milestonesContent = (task as Record<string, unknown>).milestones as string | undefined;
+  const hasMilestones = !!milestonesContent;
 
   // Lazy-load full task when any stripped field's content is needed (slim or
-  // minimal mode). One fetchTask(id) call rehydrates summary/description/ext/
-  // note/conversation_log together.
+  // minimal mode). One fetchTask(id) call rehydrates summary/description/ext/note
+  // together. (milestones rides in the always-selected payload — no lazy-load.)
   const [fullTask, setFullTask] = useState<Task | null>(null);
   useEffect(() => { setFullTask(null); }, [task.id]); // Reset on task change
   const needsFullLoad =
     (hasNote && !task.note) ||
-    (hasConversationLog && !task.conversation_log) ||
     (hasSummary && !task.summary) ||
     (hasDescription && !task.description) ||
     (hasExt && !task.ext);
@@ -927,7 +974,6 @@ function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenTriageFo
   }, [needsFullLoad, fullTask, task.id]);
   // Use full task data when available for stripped-field rendering
   const noteContent = task.note ?? fullTask?.note;
-  const conversationLogContent = task.conversation_log ?? fullTask?.conversation_log;
   const summaryContent = task.summary ?? fullTask?.summary;
   const descriptionContent = task.description ?? fullTask?.description;
   const hasSubtasks = task.subtasks && task.subtasks.length > 0;
@@ -1279,13 +1325,10 @@ function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenTriageFo
         </div>
       )}
 
-      {hasConversationLog && (
+      {hasMilestones && (
         <div className="todo-detail-section">
-          <div className="todo-detail-section-label">Conversation Log</div>
-          {conversationLogContent
-            ? <div className="todo-detail-note markdown-body conversation-log" dangerouslySetInnerHTML={{ __html: renderNoteMarkdown(reverseConversationLogEntries(conversationLogContent)) }} />
-            : <div className="text-sm text-muted">Loading...</div>
-          }
+          <div className="todo-detail-section-label">Milestones</div>
+          <div className="todo-detail-note markdown-body conversation-log" dangerouslySetInnerHTML={{ __html: renderNoteMarkdown(reverseConversationLogEntries(milestonesContent!)) }} />
         </div>
       )}
 
@@ -1334,7 +1377,7 @@ function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenTriageFo
         </div>
       )}
 
-      {!hasDescription && !hasSummary && !hasNote && !hasConversationLog && !hasSubtasks && !hasSessions && triageTotal === 0 && (
+      {!hasDescription && !hasSummary && !hasNote && !hasMilestones && !hasSubtasks && !hasSessions && triageTotal === 0 && (
         <div className="todo-detail-empty text-sm text-muted">No details</div>
       )}
     </div>
@@ -1615,7 +1658,7 @@ function SortableRecentCard({ task, isFocused, isSessionOpen, isDetailOpen, onCl
 
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, pinnedTaskIds, focusTaskIds, waitTaskIds, suppressDetail, openSessionIds, openSessionTaskIds, onClearOperationError, onOperationError, externalCategory, onCategoryChange, taskGroups, onGroupTasks, onUngroupTask, onRenameGroup }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, pinnedTaskIds, focusTaskIds, waitTaskIds, suppressDetail, openSessionIds, openSessionTaskIds, onClearOperationError, onOperationError, externalCategory, onCategoryChange, taskGroups, onGroupTasks, onUngroupTask, onUngroupTasks, onRenameGroup }: TodoPanelProps) {
   // TEMP drag-flash trace — remove after diagnosis
   const __renderCountRef = useRef(0);
   __renderCountRef.current += 1;
@@ -1624,6 +1667,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const tasks = useMemo(() => rawTasks.filter((t) => !t.title.startsWith('.metadata')), [rawTasks]);
   const { tierLimits } = useFocusBarContext();
   const navigate = useNavigate();
+  const prompt = usePrompt();
   const [showCompleted, setShowCompleted] = useState(false);
   const [priorityFilter, setPriorityFilter] = useState('');
   const [phaseFilter, setPhaseFilter] = useState('');
@@ -2049,11 +2093,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       });
     }
   });
-
-  const focusedTask = useMemo(() => {
-    if (!focusedTaskId) return null;
-    return tasks.find((t) => t.id === focusedTaskId) ?? null;
-  }, [tasks, focusedTaskId]);
 
   // Resolve pinned task IDs to Task objects for the pinned section
   // Filter out completed tasks (status=done or phase=COMPLETE) for display
@@ -3505,16 +3544,30 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     onReparentTask(taskId, null);
   }, [onReparentTask, ensureManualSort]);
 
-  // Group chip click → rename the group. Uses a native prompt for now (a
-  // dedicated inline-edit dialog is a follow-up); cancel/empty keeps the name.
-  const handleRenameGroup = useCallback((groupId: string, currentLabel: string) => {
+  // Group chip click → rename the group via the app's own prompt dialog (never the
+  // browser-native prompt). Cancel/empty/unchanged keeps the name.
+  const handleRenameGroup = useCallback(async (groupId: string, currentLabel: string) => {
     if (!onRenameGroup) return;
-    const next = window.prompt('Rename group', currentLabel);
-    if (next == null) return; // cancelled
+    const next = await prompt({ title: 'Rename group', defaultValue: currentLabel, confirmLabel: 'Rename' });
+    if (next == null) return; // cancelled or left empty
     const trimmed = next.trim();
     if (!trimmed || trimmed === currentLabel) return;
     onRenameGroup(groupId, trimmed);
-  }, [onRenameGroup]);
+  }, [onRenameGroup, prompt]);
+
+  // Group chip ✕ → dissolve the whole cluster (ungroup every member at once). The
+  // backend dissolves a group once it drops below 2 members, so removing all members
+  // tears it down cleanly. This is the discoverable inverse of grouping.
+  const handleDissolveGroup = useCallback((groupId: string) => {
+    const memberIds = tasks.filter((t) => t.group_id === groupId).map((t) => t.id);
+    if (memberIds.length === 0) return;
+    // Prefer the single batch call (one API round-trip + one refetch). The per-task
+    // fallback exists only for a consumer that wires onUngroupTask but not onUngroupTasks
+    // (today MainPage passes both); it would fan out into N calls, so it's a safety net,
+    // not the hot path.
+    if (onUngroupTasks) onUngroupTasks(memberIds);
+    else if (onUngroupTask) memberIds.forEach((id) => onUngroupTask(id));
+  }, [onUngroupTasks, onUngroupTask, tasks]);
 
   // Kebab "Move up" — map of taskId → handler that swaps the task with the
   // previous sibling in its group. Siblings are grouped by parent_task_id so
@@ -3584,6 +3637,28 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // into the selection instead of opening it. A plain click clears the selection
   // and behaves normally. ≥2 same-scope selected tasks reveal a "Group" action bar.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // Explicit select mode (toolbar "Select" toggle): every row shows a checkbox and a
+  // plain click toggles selection. The modifier-click path keeps working independently.
+  const [selectMode, setSelectMode] = useState(false);
+
+  const onSelectToggle = useCallback((taskId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId); else next.add(taskId);
+      return next;
+    });
+  }, []);
+
+  // Kebab "Select…" entry — enter select mode with this task already picked.
+  const onStartSelect = useCallback((taskId: string) => {
+    setSelectMode(true);
+    setSelectedIds(new Set([taskId]));
+  }, []);
+
+  const exitSelectMode = useCallback(() => {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  }, []);
 
   const handleTaskClick = useCallback((task: Task, e?: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }) => {
     if (e && (e.metaKey || e.ctrlKey || e.shiftKey)) {
@@ -3616,7 +3691,37 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (!onGroupTasks || selectionInfo.tasks.length < 2 || !selectionInfo.sameScope) return;
     onGroupTasks(selectionInfo.tasks.map((t) => t.id));
     setSelectedIds(new Set());
+    setSelectMode(false);
   }, [onGroupTasks, selectionInfo]);
+
+  // Batch operations from the "Group ▾" side dropdown — apply one action to every
+  // selected task, then exit select mode (the action is the user's intent, done).
+  const batchSetPriority = useCallback((priority: string) => {
+    selectionInfo.tasks.forEach((t) => { if (t.priority !== priority) onSetPriority?.(t.id, priority); });
+    exitSelectMode();
+  }, [selectionInfo, onSetPriority, exitSelectMode]);
+
+  const batchSetDate = useCallback((date: string | null) => {
+    selectionInfo.tasks.forEach((t) => onSetDate?.(t.id, date));
+    exitSelectMode();
+  }, [selectionInfo, onSetDate, exitSelectMode]);
+
+  const batchPinToTier = useCallback((tier: FocusTier) => {
+    // Pin any unpinned task first, then set its tier. The 100ms gap is the same race
+    // guard documented in TaskKebabMenu's tier buttons: the pin must register before
+    // setTier targets it, or the tier is dropped. Already-pinned tasks need no pin and
+    // no delay, so set their tier synchronously.
+    selectionInfo.tasks.forEach((t) => {
+      const alreadyPinned = pinnedTaskIds?.has(t.id);
+      if (alreadyPinned) {
+        onSetTier?.(t.id, tier);
+      } else {
+        onPinTask?.(t.id);
+        setTimeout(() => onSetTier?.(t.id, tier), 100);
+      }
+    });
+    exitSelectMode();
+  }, [selectionInfo, pinnedTaskIds, onPinTask, onSetTier, exitSelectMode]);
 
   const handlePinnedCardClick = handleTaskClick;
 
@@ -3682,6 +3787,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             clearFocusOverride();
           }}
         />
+        {/* Multi-select grouping is entered from each task's ⋮ menu ("Select…") or
+            Cmd/Ctrl/Shift-click — no separate toolbar button (keeps the bar clean). */}
       </div>
 
       {/* Unified DndContext wrapping both Pinned + Recent — enables drag from Recent to Pin */}
@@ -3715,7 +3822,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                             ))}
                           </TierDropZone>
                           <InlineAdd label="Add to Focus…" onAdd={async (title) => {
-                            const result = await onCreate({ title, priority: 'none', category: effectiveDefaultCategory, pinnedTier: 'focus' });
+                            // capture:true → routes to configured Default Platform/Category (fast local Inbox by default)
+                            const result = await onCreate({ title, priority: 'none', pinnedTier: 'focus', capture: true });
                             const newTask = result as Task | undefined;
                             if (newTask?.id) onFocusTask?.(newTask);
                           }} />
@@ -3740,7 +3848,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                               <SortableTierCard key={task.id} task={task} tier="satellite" isFocused={focusedTaskId === task.id} isSessionOpen={openSessionTaskIds?.has(task.id) ?? false} isDetailOpen={focusedTaskId === task.id && !suppressDetail} onClick={handlePinnedCardClick} onSetTier={onSetTier} onUnpinTask={onUnpinTask} onPinTask={onPinTask} onSetPriority={onSetPriority} onSetDate={onSetDate} onStar={onStar} onExpandDetail={handleExpandDetail} onClearFocus={onClearFocus} onOpenSession={onOpenSession} onSetPhase={setPhaseOrComplete} onUpdateTitle={onUpdate ? handleUpdateTitle : undefined} onDelete={onDelete} />
                             ))}
                             <InlineAdd label="Add to Satellite…" onAdd={async (title) => {
-                              const result = await onCreate({ title, priority: 'none', category: effectiveDefaultCategory, pinnedTier: 'satellite' });
+                              const result = await onCreate({ title, priority: 'none', pinnedTier: 'satellite', capture: true });
                               const newTask = result as Task | undefined;
                               if (newTask?.id) onFocusTask?.(newTask);
                             }} />
@@ -3767,7 +3875,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                             ))}
                           </TierDropZone>
                           <InlineAdd label="Add to Wait…" onAdd={async (title) => {
-                            const result = await onCreate({ title, priority: 'none', category: effectiveDefaultCategory, pinnedTier: 'wait' });
+                            const result = await onCreate({ title, priority: 'none', pinnedTier: 'wait', capture: true });
                             const newTask = result as Task | undefined;
                             if (newTask?.id) onFocusTask?.(newTask);
                           }} />
@@ -3833,12 +3941,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         </DndContext>
       )}
 
-      {/* Draggable divider between PINNED+RECENT and the main task list */}
-      {(pinnedTasks.length > 0 || recentTasks.length > 0) && !((focusedTask && !suppressDetail) || detailTarget) && (
+      {/* Draggable divider between PINNED+RECENT and the main task list.
+          Task detail now opens in a full-screen modal (hosted by MainPage), so only
+          the inline project/category pane (detailTarget) compresses the list here. */}
+      {(pinnedTasks.length > 0 || recentTasks.length > 0) && !detailTarget && (
         <div className="todo-pinned-splitter" onMouseDown={pinnedSplitterMouseDown} />
       )}
 
-      <div className="todo-panel-list" style={((focusedTask && !suppressDetail) || detailTarget) ? { flex: `${1 - detailRatio} 1 0%` } : (pinnedTasks.length > 0 || recentTasks.length > 0) ? { flex: `${listRatio} 1 0%` } : undefined}>
+      <div className="todo-panel-list" style={detailTarget ? { flex: `${1 - detailRatio} 1 0%` } : (pinnedTasks.length > 0 || recentTasks.length > 0) ? { flex: `${listRatio} 1 0%` } : undefined}>
         {loading && (
           <div className="empty-state" style={{ padding: '24px 8px' }}>
             <div className="spinner" style={{ width: 20, height: 20, borderWidth: 2, margin: '0 auto' }} />
@@ -3925,6 +4035,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     onToggleExpand={() => toggleParentExpand(task.id)}
                     onClick={(e) => handleTaskClick(task, e)}
                   isSelected={selectedIds.has(task.id)}
+                  selectMode={selectMode}
+                  onSelectToggle={onSelectToggle}
+                  onStartSelect={onStartSelect}
                     onSetPhase={setPhaseOrComplete}
                     onStar={onStar}
                     onDelete={onDelete}
@@ -3974,6 +4087,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   onToggleExpand={() => toggleParentExpand(task.id)}
                   onClick={(e) => handleTaskClick(task, e)}
                   isSelected={selectedIds.has(task.id)}
+                  selectMode={selectMode}
+                  onSelectToggle={onSelectToggle}
+                  onStartSelect={onStartSelect}
                   onSetPhase={setPhaseOrComplete}
                   onStar={onStar}
                   onDelete={onDelete}
@@ -3994,6 +4110,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   groupInfo={groupRenderMap.get(task.id)}
                   onRenameGroup={handleRenameGroup}
                   onUngroupTask={onUngroupTask}
+                  onDissolveGroup={handleDissolveGroup}
                 />
               );
             })}
@@ -4059,6 +4176,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                   onToggleExpand={() => toggleParentExpand(task.id)}
                                   onClick={(e) => handleTaskClick(task, e)}
                   isSelected={selectedIds.has(task.id)}
+                  selectMode={selectMode}
+                  onSelectToggle={onSelectToggle}
+                  onStartSelect={onStartSelect}
                                   onSetPhase={setPhaseOrComplete}
                                   onStar={onStar}
                                   onDelete={onDelete}
@@ -4080,6 +4200,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                   groupInfo={groupRenderMap.get(task.id)}
                                   onRenameGroup={handleRenameGroup}
                                   onUngroupTask={onUngroupTask}
+                  onDissolveGroup={handleDissolveGroup}
                                 />
                               );
                             })}
@@ -4138,6 +4259,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                                 onToggleExpand={() => toggleParentExpand(task.id)}
                                                 onClick={(e) => handleTaskClick(task, e)}
                   isSelected={selectedIds.has(task.id)}
+                  selectMode={selectMode}
+                  onSelectToggle={onSelectToggle}
+                  onStartSelect={onStartSelect}
                                                 onSetPhase={setPhaseOrComplete}
                                                 onStar={onStar}
                                                 onDelete={onDelete}
@@ -4159,6 +4283,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                                 groupInfo={groupRenderMap.get(task.id)}
                                                 onRenameGroup={handleRenameGroup}
                                                 onUngroupTask={onUngroupTask}
+                  onDissolveGroup={handleDissolveGroup}
                                               />
                                             );
                                           })}
@@ -4202,11 +4327,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         )}
       </div>
 
-      {/* Detail pane: task, project, or category */}
-      {((focusedTask && !suppressDetail) || detailTarget) && <div className="todo-detail-splitter" onMouseDown={splitterMouseDown} />}
-      {focusedTask && !suppressDetail ? (
-        <TaskDetailPane task={focusedTask} allTasks={tasks} onClose={onClearFocus} onOpenSession={onOpenSession} onOpenTriageForTask={onOpenTriageForTask} onFocusChild={onFocusTask} style={{ flex: `${detailRatio} 1 0%` }} />
-      ) : detailTarget?.type === 'project' ? (
+      {/* Detail pane: project or category (inline split-pane). Task detail now
+          opens in a full-screen modal hosted by MainPage, not inline here. */}
+      {detailTarget && <div className="todo-detail-splitter" onMouseDown={splitterMouseDown} />}
+      {detailTarget?.type === 'project' ? (
         <ProjectDetailPane
           category={detailTarget.category}
           project={detailTarget.project}
@@ -4322,21 +4446,30 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         }}
       />
 
-      {/* Multi-select action bar — appears while ≥2 tasks are Cmd/Ctrl-selected.
-          "Group" is enabled only when they share one category+project (the scope rule). */}
-      {onGroupTasks && selectionInfo.tasks.length >= 2 && (
+      {/* Multi-select action bar — shown in explicit select mode, or whenever ≥2 tasks
+          are selected (incl. the Cmd/Ctrl-click path). "Group" is enabled only when the
+          selection shares one category+project (the scope rule). */}
+      {onGroupTasks && (selectMode || selectionInfo.tasks.length >= 2) && (
         <div className="task-selection-bar">
-          <span className="task-selection-count">{selectionInfo.tasks.length} selected</span>
+          <span className="task-selection-count">
+            {selectionInfo.tasks.length > 0
+              ? `${selectionInfo.tasks.length} selected`
+              : 'Select tasks to group'}
+          </span>
+          {/* Group split-button + side dropdown of batch actions (reuses the kebab panel). */}
+          <TaskBatchMenu
+            count={selectionInfo.tasks.length}
+            sameScope={selectionInfo.sameScope}
+            onGroup={handleGroupSelected}
+            onSetPriorityAll={batchSetPriority}
+            onPinAllToTier={batchPinToTier}
+            onSetDateAll={batchSetDate}
+          />
           <button
-            className="task-selection-group-btn"
-            disabled={!selectionInfo.sameScope}
-            title={selectionInfo.sameScope ? 'Group these tasks together' : 'Tasks must be in the same category and project to group'}
-            onClick={handleGroupSelected}
+            className="task-selection-clear-btn"
+            onClick={() => (selectMode ? exitSelectMode() : setSelectedIds(new Set()))}
           >
-            ⑂ Group
-          </button>
-          <button className="task-selection-clear-btn" onClick={() => setSelectedIds(new Set())}>
-            Clear
+            {selectMode ? 'Done' : 'Clear'}
           </button>
         </div>
       )}

@@ -118,3 +118,45 @@ describe('saveConfig (full replace)', () => {
     expect(result.user.name).toBe('TestUser');
   });
 });
+
+describe('default platform + Inbox reservation', () => {
+  it('new users default to local platform + Inbox category', async () => {
+    // No config file on disk → DEFAULT_CONFIG applies
+    const config = await getConfig();
+    expect(config.defaults.platform).toBe('local');
+    expect(config.defaults.category).toBe('Inbox');
+  });
+
+  it('reserves both Local and Inbox as local-only categories by default', async () => {
+    const config = await getConfig();
+    const cats = (config.local?.categories ?? []).map((c) => c.toLowerCase());
+    expect(cats).toContain('local');
+    expect(cats).toContain('inbox');
+  });
+
+  it('keeps Inbox reserved even when user config overrides local.categories', async () => {
+    // User config that reserves only a custom category — Local + Inbox must still be added
+    await fs.writeFile(CONFIG_FILE, yaml.dump({
+      version: 1,
+      defaults: { priority: 'none', category: 'MyInbox', platform: 'local' },
+      local: { categories: ['MyStuff'] },
+    }), 'utf-8');
+
+    const config = await getConfig();
+    const cats = (config.local?.categories ?? []).map((c) => c.toLowerCase());
+    expect(cats).toContain('mystuff');
+    expect(cats).toContain('local');
+    expect(cats).toContain('inbox');
+  });
+
+  it('does NOT re-route an existing user whose defaults are already on disk', async () => {
+    // Pre-existing setup pointing at personal — must be preserved, not forced to Inbox
+    await fs.writeFile(CONFIG_FILE, yaml.dump({
+      version: 1,
+      defaults: { priority: 'none', category: 'personal' },
+    }), 'utf-8');
+
+    const config = await getConfig();
+    expect(config.defaults.category).toBe('personal');
+  });
+});

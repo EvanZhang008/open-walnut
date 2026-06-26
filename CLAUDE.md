@@ -35,7 +35,13 @@ Personal AI butler: tasks + knowledge + AI sessions. **Tasks are the atom.** `Ca
 - `create_task type=task` requires category AND project to exist first
 - Phase: `TODO` → … → `AGENT_COMPLETE` → … → `COMPLETE` (agent sets AGENT_COMPLETE, human marks COMPLETE)
 - **NEVER force-kill Claude Code processes** — bypasses on-stop hook
-- Sessions displayed in **TWO places**: `/sessions` page + home slide-out — update both
+- **Tasks & Sessions live in TWO surfaces — the Homepage panel is the PRIMARY one.** Both
+  Tasks and Sessions render in (1) the **Homepage (`/`) side panels** — `TodoPanel` for
+  tasks, `SessionPanel` for sessions — AND (2) the dedicated full pages (`/tasks` →
+  `DashboardPage`/`TaskList`/`TaskCard`, `/sessions` → `SessionDetailPanel`). **Default to
+  the Homepage panel** for any Task/Session work, demos, and recordings — it's what the
+  user sees daily. The dedicated page is the **secondary** surface: still implement & test
+  it for parity, but it's the second option, never the primary scenario.
 - Concurrency: `tasks.json`/`sessions.json` use in-process + cross-process file locks
 
 ### Remote Session Daemon (resilience model)

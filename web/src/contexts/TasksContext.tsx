@@ -1,5 +1,5 @@
 import { createContext, useContext, useMemo, type ReactNode } from 'react';
-import { useTasks } from '@/hooks/useTasks';
+import { useTasks, type CreateHooks } from '@/hooks/useTasks';
 import type { Task } from '@open-walnut/core';
 import type { CreateTaskInput, UpdateTaskInput } from '@/api/tasks';
 
@@ -12,7 +12,7 @@ export interface TasksContextValue {
   clearOperationError: () => void;
   showOperationError: (msg: string) => void;
   refetch: () => void;
-  create: (input: CreateTaskInput) => Promise<Task>;
+  create: (input: CreateTaskInput, hooks?: CreateHooks) => Promise<Task>;
   update: (id: string, updates: UpdateTaskInput) => void;
   toggleComplete: (id: string) => void;
   setPhase: (id: string, phase: string) => void;

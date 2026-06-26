@@ -8,22 +8,31 @@ import { MODEL_CATALOG } from '../agent/providers/model-catalog.js';
 const DEFAULT_CONFIG: Config = {
   version: 1,
   user: {},
-  defaults: { priority: 'none', category: 'personal' },
+  // New users default to a local 'Inbox' so quick-add is instant and never silently
+  // routed to an external sync target. `platform: 'local'` makes the source explicit.
+  // Existing users keep whatever `defaults` is already on disk (getConfig spreads
+  // parsed over DEFAULT_CONFIG), so this never re-routes an established setup.
+  defaults: { priority: 'none', category: 'Inbox', platform: 'local' },
   provider: { type: 'claude-code' },
-  // 'Local' is a built-in category reserved for local-only tasks (e.g. Quick Start).
-  // Hard-reserved via validateCategorySource so no sync plugin can claim it.
-  local: { categories: ['Local'] },
+  // 'Local' and 'Inbox' are built-in categories reserved for local-only tasks
+  // (Quick Start, default quick-add). Hard-reserved via validateCategorySource so
+  // no sync plugin can claim them.
+  local: { categories: ['Local', 'Inbox'] },
 };
 
-/** Ensure the built-in 'Local' category stays reserved even when user config overrides `local`. */
+/** Built-in categories always kept local-reserved, regardless of user config. */
+const BUILTIN_LOCAL_CATEGORIES = ['Local', 'Inbox'];
+
+/** Ensure the built-in local categories stay reserved even when user config overrides `local`. */
 function ensureBuiltInLocalReservation(config: Config): void {
   if (!config.local) config.local = {};
-  const cats = config.local.categories ?? [];
-  if (!cats.some(c => c.toLowerCase() === 'local')) {
-    config.local.categories = [...cats, 'Local'];
-  } else if (config.local.categories === undefined) {
-    config.local.categories = cats;
+  let cats = config.local.categories ?? [];
+  for (const builtin of BUILTIN_LOCAL_CATEGORIES) {
+    if (!cats.some(c => c.toLowerCase() === builtin.toLowerCase())) {
+      cats = [...cats, builtin];
+    }
   }
+  config.local.categories = cats;
 }
 
 /**

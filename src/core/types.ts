@@ -103,6 +103,11 @@ export interface Task {
   summary: string;
   note: string;
   conversation_log?: string;  // Append-only markdown log of user↔agent interactions
+  /** Append-only compact milestone log — ONE line per major PHASE_SIGNAL transition
+   *  (plan-written, implement-done, verify-pass/fail, review-done, committed). Written
+   *  by turn-complete triage from the session's own WHAT_I_DID self-report. Replaces the
+   *  verbose per-turn conversation_log in the UI; conversation_log is kept but hidden. */
+  milestones?: string;
   phase: TaskPhase;
   sprint?: string;
   tags?: string[];
@@ -255,6 +260,18 @@ export interface AgentConfig {
   session_triage_agent?: string;
   /** Agent ID to use for message-send triage. Default: 'message-send-triage' (builtin). */
   message_send_triage_agent?: string;
+  /**
+   * Triage throttling. Turn-complete triage trailing-debounces by `debounce_minutes`
+   * (default 3) so a burst of interactive turns collapses into one end-of-interaction
+   * triage. `notify_mode` gates the expensive main-agent notification:
+   *   - 'off' (default): never wake the main agent; task.summary still updates (poll model)
+   *   - 'buffered': don't wake in real time, but nudge the heartbeat to review soon
+   *   - 'realtime': enqueue a main-agent turn immediately on each Outcome-B milestone
+   */
+  triage?: {
+    debounce_minutes?: number;
+    notify_mode?: 'off' | 'buffered' | 'realtime';
+  };
   /** Predefined model IDs shown in the agent form dropdown. Supports both string[] (legacy Bedrock IDs)
    *  and ModelEntry[] (new multi-provider format). */
   available_models?: string[] | import('../agent/providers/types.js').ModelEntry[];
@@ -269,7 +286,16 @@ export interface AgentConfig {
 export interface Config {
   version: 1;
   user: { name?: string };
-  defaults: { priority: TaskPriority; category: string };
+  defaults: {
+    priority: TaskPriority;
+    category: string;
+    /** Default platform/source for new tasks created via quick-add. Unset = 'local'
+     *  (created locally, never blocks on an external sync round-trip). User picks this
+     *  in Settings → General. */
+    platform?: TaskSource;
+    /** Optional default project for new quick-add tasks. */
+    project?: string;
+  };
   provider: {
     type: string;
     model?: string;

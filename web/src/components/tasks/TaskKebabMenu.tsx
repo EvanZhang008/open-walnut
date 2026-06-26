@@ -36,6 +36,8 @@ interface TaskKebabMenuProps {
   onMoveUp?: (id: string) => void;
   /** Remove this task from its virtual group. Only shown when task.group_id is set. */
   onUngroup?: (id: string) => void;
+  /** Enter multi-select mode with this task picked (to group several tasks). Only on list rows. */
+  onStartSelect?: (id: string) => void;
   onDelete?: (id: string) => void;
 }
 
@@ -58,7 +60,131 @@ const PRIORITY_OPTIONS: { value: TaskPriority; icon: string; label: string }[] =
   { value: 'none', icon: '--', label: 'None' },
 ];
 
-export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedTier, isDone, onExpandDetail, onClearFocus, onSetPriority, onStar, onPinTask, onUnpinTask, onSetTier, onOpenSession, onSetDate, onUnparent, onMoveUp, onUngroup, onDelete }: TaskKebabMenuProps) {
+/**
+ * Shared set-priority / pin-to-tier / set-date blocks — the SAME panel rows the
+ * per-task kebab shows, reused by the multi-select "Group ▸" batch dropdown so
+ * there is one definition of these actions (no drift). In batch mode `task` is
+ * null: there is no single current value to highlight, so every option renders
+ * un-selected and the callback fans out across the caller's selection.
+ */
+export function TaskActionMenuItems({
+  task, isPinned, pinnedTier, isDone, batchMode,
+  onSetPriority, onPinTask, onUnpinTask, onSetTier, onSetDate, afterAction,
+}: {
+  /** Single task (kebab) — null in batch mode. */
+  task: Task | null;
+  isPinned: boolean;
+  pinnedTier?: FocusTier;
+  isDone: boolean;
+  /** Batch mode: tier button calls onSetTier(tier) directly (caller fans out pin+tier per task). */
+  batchMode?: boolean;
+  onSetPriority?: (priority: string) => void;
+  onPinTask?: () => void;
+  onUnpinTask?: () => void;
+  onSetTier?: (tier: FocusTier) => void;
+  onSetDate?: (date: string | null) => void;
+  /** Close the menu after an action fires. */
+  afterAction: () => void;
+}) {
+  return (
+    <>
+      {/* Pin / Tier */}
+      {(batchMode ? !!onSetTier : !isDone && (onPinTask || isPinned)) && (
+        <>
+          <div className="task-kebab-divider" />
+          {!batchMode && isPinned && onUnpinTask && (
+            <button
+              className="task-kebab-item"
+              onClick={(e) => { e.stopPropagation(); onUnpinTask(); afterAction(); }}
+            >
+              <span className="task-kebab-icon">{ICONS.ICON_PIN_FILLED}</span>
+              <span>Unpin</span>
+            </button>
+          )}
+          <div className="task-kebab-tier">
+            <span className="task-kebab-tier-label">{!batchMode && isPinned ? 'Move to' : 'Pin to'}</span>
+            <div className="task-kebab-tier-options">
+              {TIER_OPTIONS.map((t) => (
+                <button
+                  key={t.value}
+                  className={`task-kebab-tier-btn${!batchMode && pinnedTier === t.value ? ' active' : ''}`}
+                  style={{ color: TIER_COLORS[t.value] }}
+                  title={t.label}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (batchMode) {
+                      // Caller fans out pin+tier across the whole selection.
+                      onSetTier?.(t.value);
+                    } else if (isPinned) {
+                      if (pinnedTier !== t.value) onSetTier?.(t.value);
+                    } else {
+                      // Pin first, then set the tier. The 100ms gap is a race guard: the
+                      // pin must register (server write + local focus-store update) before
+                      // setTier targets it — fired synchronously, setTier hits a task the
+                      // focus store doesn't yet know is pinned and the tier is dropped.
+                      // (Not a hard guarantee; the proper fix is a pin-with-tier API. This
+                      // same pattern is mirrored in TodoPanel.batchPinToTier.)
+                      onPinTask?.();
+                      setTimeout(() => onSetTier?.(t.value), 100);
+                    }
+                    afterAction();
+                  }}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Priority */}
+      {onSetPriority && (
+        <>
+          <div className="task-kebab-divider" />
+          <div className="task-kebab-priority">
+            <span className="task-kebab-priority-label">Priority</span>
+            <div className="task-kebab-priority-options">
+              {PRIORITY_OPTIONS.map((p) => (
+                <button
+                  key={p.value}
+                  className={`badge badge-${p.value}${task && task.priority === p.value ? ' badge-active' : ''} badge-clickable`}
+                  title={p.label}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (!task || p.value !== task.priority) onSetPriority(p.value);
+                    afterAction();
+                  }}
+                >
+                  {p.icon}
+                </button>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Date */}
+      {onSetDate && (
+        <>
+          <div className="task-kebab-divider" />
+          <div className="task-kebab-date">
+            <span className="task-kebab-date-label">
+              Date{task?.due_date ? `: ${formatDateDisplay(task.due_date)}` : ''}
+            </span>
+            <DatePicker
+              date={task?.due_date}
+              onChange={(date) => { onSetDate(date); afterAction(); }}
+              inline
+            />
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedTier, isDone, onExpandDetail, onClearFocus, onSetPriority, onStar, onPinTask, onUnpinTask, onSetTier, onOpenSession, onSetDate, onUnparent, onMoveUp, onUngroup, onStartSelect, onDelete }: TaskKebabMenuProps) {
   const integrations = useIntegrations();
   const [open, setOpen] = useState(false);
   const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
@@ -174,6 +300,21 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
             </button>
           )}
 
+          {/* Select — enter multi-select mode with this task picked, to group several together */}
+          {onStartSelect && (
+            <button
+              className="task-kebab-item"
+              onClick={(e) => {
+                e.stopPropagation();
+                onStartSelect(task.id);
+                closeMenu();
+              }}
+            >
+              <span className="task-kebab-icon">☑</span>
+              <span>Select…</span>
+            </button>
+          )}
+
           {/* Move actions — hierarchy + order shortcuts (precise alternative to drag) */}
           {((onUnparent && task.parent_task_id) || onMoveUp) && (
             <>
@@ -225,93 +366,19 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
             </>
           )}
 
-          {/* Pin / Tier */}
-          {!isDone && (onPinTask || isPinned) && (
-            <>
-              <div className="task-kebab-divider" />
-              {isPinned && onUnpinTask && (
-                <button
-                  className="task-kebab-item"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onUnpinTask(task.id);
-                    closeMenu();
-                  }}
-                >
-                  <span className="task-kebab-icon">{ICONS.ICON_PIN_FILLED}</span>
-                  <span>Unpin</span>
-                </button>
-              )}
-              <div className="task-kebab-tier">
-                <span className="task-kebab-tier-label">{isPinned ? 'Move to' : 'Pin to'}</span>
-                <div className="task-kebab-tier-options">
-                  {TIER_OPTIONS.map((t) => (
-                    <button
-                      key={t.value}
-                      className={`task-kebab-tier-btn${pinnedTier === t.value ? ' active' : ''}`}
-                      style={{ color: TIER_COLORS[t.value] }}
-                      title={t.label}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (isPinned) {
-                          if (pinnedTier !== t.value) onSetTier?.(task.id, t.value);
-                        } else {
-                          onPinTask?.(task.id);
-                          setTimeout(() => onSetTier?.(task.id, t.value), 100);
-                        }
-                        closeMenu();
-                      }}
-                    >
-                      {t.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </>
-          )}
-
-          {/* Priority */}
-          {onSetPriority && (
-            <>
-              <div className="task-kebab-divider" />
-              <div className="task-kebab-priority">
-                <span className="task-kebab-priority-label">Priority</span>
-                <div className="task-kebab-priority-options">
-                  {PRIORITY_OPTIONS.map((p) => (
-                    <button
-                      key={p.value}
-                      className={`badge badge-${p.value}${task.priority === p.value ? ' badge-active' : ''} badge-clickable`}
-                      title={p.label}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (p.value !== task.priority) onSetPriority(task.id, p.value);
-                        closeMenu();
-                      }}
-                    >
-                      {p.icon}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </>
-          )}
-
-          {/* Date */}
-          {onSetDate && (
-            <>
-              <div className="task-kebab-divider" />
-              <div className="task-kebab-date">
-                <span className="task-kebab-date-label">
-                  Date{task.due_date ? `: ${formatDateDisplay(task.due_date)}` : ''}
-                </span>
-                <DatePicker
-                  date={task.due_date}
-                  onChange={(date) => { onSetDate(task.id, date); closeMenu(); }}
-                  inline
-                />
-              </div>
-            </>
-          )}
+          {/* Pin / Tier · Priority · Date — shared with the multi-select batch dropdown */}
+          <TaskActionMenuItems
+            task={task}
+            isPinned={isPinned}
+            pinnedTier={pinnedTier}
+            isDone={isDone}
+            onSetPriority={onSetPriority ? (p) => onSetPriority(task.id, p) : undefined}
+            onPinTask={onPinTask ? () => onPinTask(task.id) : undefined}
+            onUnpinTask={onUnpinTask ? () => onUnpinTask(task.id) : undefined}
+            onSetTier={onSetTier ? (t) => onSetTier(task.id, t) : undefined}
+            onSetDate={onSetDate ? (d) => onSetDate(task.id, d) : undefined}
+            afterAction={closeMenu}
+          />
 
           {/* Source badge — combined with external link if available */}
           {task.source && (() => {

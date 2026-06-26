@@ -3,7 +3,7 @@
  *
  * Core rule: connection-break events (WS flap, idle, server restart) NEVER kill
  * the dtach session — that's the whole point. Only explicit intent (user
- * "结束终端"), loss of ownership (session deleted), or a clean orphan sweep may
+ * "End terminal"), loss of ownership (session deleted), or a clean orphan sweep may
  * destroy it. Task completion uses a conditional kill: a dtach session running
  * a real foreground process (build/test) is kept; an idle shell is reaped.
  *

@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback } from 'react';
 import type { Task } from '@open-walnut/core';
 import { TaskCard, type CardGroupInfo } from './TaskCard';
 import { EmptyState } from '../common/EmptyState';
+import { usePrompt } from '@/hooks/useConfirm';
 
 interface TaskListProps {
   tasks: Task[];
@@ -48,6 +49,7 @@ export function TaskList({
 }: TaskListProps) {
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
+  const prompt = usePrompt();
   // ── Multi-select for group building ── (Cmd/Ctrl/Shift-click a card to toggle.)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
@@ -126,14 +128,14 @@ export function TaskList({
     setSelectedIds(new Set());
   }, [onGroupTasks, selectionInfo]);
 
-  const handleRenameGroup = useCallback((groupId: string, currentLabel: string) => {
+  const handleRenameGroup = useCallback(async (groupId: string, currentLabel: string) => {
     if (!onRenameGroup) return;
-    const next = window.prompt('Rename group', currentLabel);
-    if (next === null) return;
+    const next = await prompt({ title: 'Rename group', defaultValue: currentLabel, confirmLabel: 'Rename' });
+    if (next === null) return; // cancelled or left empty
     const trimmed = next.trim();
     if (!trimmed) return;
     onRenameGroup(groupId, trimmed);
-  }, [onRenameGroup]);
+  }, [onRenameGroup, prompt]);
 
   if (tasks.length === 0) {
     return <EmptyState message="No tasks found" actionLabel={onAdd ? 'Add Task' : undefined} onAction={onAdd} />;

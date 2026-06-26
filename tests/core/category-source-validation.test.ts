@@ -893,11 +893,13 @@ describe('v3 migration — store.categories populated from config + tasks', () =
     );
 
     const storeCategories = await getStoreCategories();
-    // 'Local' is always seeded as a built-in category (ensureBuiltInCategories) on every store read,
-    // even when store.categories already exists — so it appears alongside the pre-existing 'Custom'.
+    // 'Local' and 'Inbox' are always seeded as built-in local categories on every store
+    // read, even when store.categories already exists — so they appear alongside the
+    // pre-existing 'Custom'.
     expect(storeCategories).toEqual({
       'Custom': { source: 'local' },
       'Local': { source: 'local' },
+      'Inbox': { source: 'local' },
     });
   });
 });

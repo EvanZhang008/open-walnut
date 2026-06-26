@@ -462,8 +462,11 @@ tasksRouter.post('/', async (req: Request, res: Response, next: NextFunction) =>
         return
       }
     }
-    // source is passed through to addTask; validation happens in task-manager via store.categories
-    const result = await addTask(req.body)
+    // source is passed through to addTask; validation happens in task-manager via store.categories.
+    // asyncPush: the web UI is optimistic (renders the task immediately), so don't block the
+    // HTTP response on an external sync round-trip — push runs in the background and backfills
+    // ext/sync_error via TASK_UPDATED. Local-source tasks never push regardless.
+    const result = await addTask({ ...req.body, asyncPush: true })
     log.web.info('task created via REST', { taskId: result.task.id, category: result.task.category, project: result.task.project })
     bus.emit(EventNames.TASK_CREATED, { task: result.task }, ['web-ui', 'main-agent'], { source: 'api' })
     res.status(201).json(result)

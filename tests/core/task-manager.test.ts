@@ -9,7 +9,7 @@ let configFile: string;
 vi.mock('../../src/constants.js', () => createMockConstants());
 
 // Import after mocking
-import { addTask, listTasks, completeTask, getDashboardData, reorderTasks, deleteTask, linkSessionSlot, clearSessionSlot, ActiveSessionError, updateTask, getProjectMetadata, autoPushIfConfigured, updateTaskRaw, _resetForTesting } from '../../src/core/task-manager.js';
+import { addTask, listTasks, completeTask, getDashboardData, reorderTasks, deleteTask, linkSessionSlot, clearSessionSlot, ActiveSessionError, updateTask, getProjectMetadata, autoPushIfConfigured, updateTaskRaw, appendMilestone, getTask, _resetForTesting } from '../../src/core/task-manager.js';
 import { closeDb } from '../../src/core/task-db.js';
 import { WALNUT_HOME, TASKS_FILE, CONFIG_FILE } from '../../src/constants.js';
 
@@ -37,7 +37,9 @@ describe('addTask', () => {
     expect(task.title).toBe('Test task');
     expect(task.status).toBe('todo');
     expect(task.priority).toBe('none');
-    expect(task.category).toBe('personal');
+    // Default category is the built-in local 'Inbox' (was 'personal' before the
+    // default-platform change) — quick-add lands here, instant + local, by default.
+    expect(task.category).toBe('Inbox');
     expect(task.session_ids).toEqual([]);
     expect(task.description).toBe('');
     expect(task.note).toBe('');
@@ -766,6 +768,46 @@ describe('autoPushIfConfigured sync_error lifecycle', () => {
     const { task } = await addTask({ title: 'Local task' });
     const result = await autoPushIfConfigured(task);
     expect(result.success).toBe(true);
+  });
+});
+
+describe('appendMilestone', () => {
+  it('appends a timestamped one-line milestone and round-trips via storage', async () => {
+    const { task } = await addTask({ title: 'Milestone task' });
+    await appendMilestone(task.id, '🔧 Implemented — wired the FIFO reader');
+
+    const after = await getTask(task.id);
+    expect(after.milestones).toBeTruthy();
+    // Same `### YYYY-MM-DD HH:MM` heading format as conversation_log (UI reuses the reverse helper).
+    expect(after.milestones).toMatch(/^### \d{4}-\d{2}-\d{2} \d{2}:\d{2}\n🔧 Implemented — wired the FIFO reader$/);
+  });
+
+  it('accumulates multiple milestones newest-appended-last, separated by blank line', async () => {
+    const { task } = await addTask({ title: 'Multi milestone' });
+    await appendMilestone(task.id, '📝 Plan written — drafted the approach');
+    await appendMilestone(task.id, '📦 Committed — abc1234');
+
+    const after = await getTask(task.id);
+    const headings = (after.milestones ?? '').match(/^### /gm) ?? [];
+    expect(headings.length).toBe(2);
+    expect(after.milestones).toContain('📝 Plan written — drafted the approach');
+    expect(after.milestones).toContain('📦 Committed — abc1234');
+    expect(after.milestones).toContain('\n\n###'); // blank-line separated entries
+  });
+
+  it('collapses internal whitespace/newlines into a single line', async () => {
+    const { task } = await addTask({ title: 'Whitespace milestone' });
+    await appendMilestone(task.id, '✅ Verified —   ran   /verify\non ephemeral');
+
+    const after = await getTask(task.id);
+    // The entry body (after the heading line) must be a single physical line.
+    const body = (after.milestones ?? '').split('\n').slice(1).join('\n');
+    expect(body).toBe('✅ Verified — ran /verify on ephemeral');
+  });
+
+  it('throws on an empty entry', async () => {
+    const { task } = await addTask({ title: 'Empty milestone' });
+    await expect(appendMilestone(task.id, '   ')).rejects.toThrow(/empty/);
   });
 });
 

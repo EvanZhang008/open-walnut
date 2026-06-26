@@ -1796,13 +1796,14 @@ sessionsRouter.post('/:sessionId/restart', async (req: Request, res: Response, n
 sessionsRouter.post('/:sessionId/fork', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const sourceSessionId = req.params.sessionId as string
-    const { task_id, create_child_task, child_title, message, title, model } = req.body as {
+    const { task_id, create_child_task, child_title, message, title, model, images } = req.body as {
       task_id?: string
       create_child_task?: boolean
       child_title?: string
       message?: string
       title?: string
       model?: string
+      images?: ImagePayload[]
     }
 
     if (!task_id && !create_child_task) {
@@ -1981,7 +1982,24 @@ sessionsRouter.post('/:sessionId/fork', async (req: Request, res: Response, next
       return
     }
 
-    const forkMessage = message || `Continue working on: ${task.title}`
+    // A fork inherits the full parent conversation via --resume, so the model tends
+    // to keep grinding on the parent's task. Lead with a focus directive so it treats
+    // the fork message as the new mission and only revisits prior work on request.
+    const userRequest = message?.trim() || `Continue working on: ${task.title}`
+    const FORK_FOCUS_PREFIX =
+      'This is a forked session. Focus on the NEW request below — treat it as your primary task. ' +
+      'Do not resume or continue the parent session\'s previous work unless the user explicitly asks you to.\n\n'
+
+    // Attached images: save to disk + build a "read these files" annotation (same
+    // path-based flow as quick-start, so the CLI can read them as files). The image
+    // context sits AFTER the focus directive but BEFORE the request, so the directive
+    // stays the first thing the model anchors on.
+    let imageContext = ''
+    if (images && images.length > 0) {
+      const processed = await processAndSaveImages(images)
+      if (processed) imageContext = buildSessionImageContext(processed.savedImages)
+    }
+    const forkMessage = `${FORK_FOCUS_PREFIX}${imageContext}New request:\n${userRequest}`
 
     // Emit SESSION_START with forkedFromSessionId — handleStart() uses Claude Code's
     // native --resume + --fork-session to transfer conversation context efficiently.

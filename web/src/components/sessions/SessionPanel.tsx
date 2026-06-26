@@ -6,8 +6,9 @@ import { SessionFileExplorer } from './SessionFileExplorer';
 import { SessionTerminal } from './SessionTerminal';
 import { SessionDiffView } from './SessionDiffView';
 import { buildSelectionPrefill } from './diffPrefill';
+import type { SessionSplitView } from './sessionSplitView';
 import { FileViewer } from '../common/FileViewer';
-import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_LOCK, ICON_UNLOCK, ICON_LOCATE, ICON_SEARCH, ICON_NEW_TAB } from '../common/Icons';
+import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_LOCK, ICON_UNLOCK, ICON_LOCATE, ICON_NEW_TAB } from '../common/Icons';
 import { openPopout } from '@/popout/openPopout';
 import { UserMessagesSummary } from './UserMessagesSummary';
 // PlanPreviewSection replaced by inline plan popover in meta bar
@@ -28,7 +29,8 @@ import { fetchPinnedTasks, pinTask, unpinTask, setTaskTier } from '@/api/focus';
 import type { FocusTier } from '@/api/focus';
 import { timeAgo } from '@/utils/time';
 import { ProcessStatusBadge } from './WorkStatusPicker';
-import { SessionCopyButtons } from './SessionCopyButtons';
+import { SessionForkButton } from './SessionForkButton';
+import { SessionKebabSection } from './SessionKebabSection';
 import { ModelPicker } from './ModelPicker';
 import { TaskQuickActions } from './TaskQuickActions';
 import { useFullscreen } from '@/hooks/useFullscreen';
@@ -114,6 +116,8 @@ interface SessionPanelProps {
   /** Toggle the lock state. Parent re-orders slots so locked panels sit on the right. */
   onToggleLock?: (sessionId: string) => void;
   onTaskClick?: (taskId: string) => void;
+  /** Open the task's full-screen detail modal (shared with the home task panel). */
+  onOpenTaskDetail?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
   /** Called when "Clear Context & Execute" creates a new session — receives (oldId, newId). */
   onSessionReplaced?: (oldSessionId: string, newSessionId: string) => void;
@@ -125,7 +129,7 @@ interface SessionPanelProps {
   onForkFailed?: (errorMessage?: string) => void;
 }
 
-export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, locked, onToggleLock, onTaskClick, onSessionClick, onSessionReplaced, onForkPending, onForkResolved, onForkFailed }: SessionPanelProps) {
+export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, locked, onToggleLock, onTaskClick, onOpenTaskDetail, onSessionClick, onSessionReplaced, onForkPending, onForkResolved, onForkFailed }: SessionPanelProps) {
   const navigate = useNavigate();
   const enabledModes = useEnabledModes();
   const [session, setSession] = useState<SessionRecord | null>(null);
@@ -179,6 +183,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   // so without this the Plan chip would be hidden during active planning.
   const shouldFetchPlan = hasPlan || isFromPlan || session?.mode === 'plan';
   const { plan, loading: planLoading, refresh: planRefresh } = useSessionPlan(sessionId || undefined, shouldFetchPlan);
+  // Plan chip visibility is gated on whether a plan actually EXISTS — not on mode.
+  // A bypass session that produced a plan (planCompleted / from-plan) still shows it;
+  // a plan-mode session that hasn't produced one yet shows it once the content loads.
+  const hasPlanContent = hasPlan || isFromPlan || !!plan?.content;
 
   // Real-time model + context window usage
   const liveUsage = useSessionUsage(sessionId);
@@ -387,10 +395,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   const [planPopoverOpen, setPlanPopoverOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
   const [messagesOpen, setMessagesOpen] = useState(false);
-  const [filesOpen, setFilesOpen] = useState(false);
-  const [terminalOpen, setTerminalOpen] = useState(false);
-  // Changed view: split the body into [File Diff | existing chat], fullscreen.
-  const [changedOpen, setChangedOpen] = useState(false);
+  // Changed / Files / Terminal all share ONE full-screen split: [ left panel | chat ].
+  // null = none open. Opening any view promotes the panel to fullscreen.
+  const [activeView, setActiveView] = useState<SessionSplitView | null>(null);
+  const splitOpen = activeView !== null;
   // ChatInput prefill driver — selecting code in the diff drops a prompt into the
   // existing input (no new chat, no fork; goes to the main agent via normal send).
   const [prefillText, setPrefillText] = useState<string | undefined>(undefined);
@@ -404,13 +412,13 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     void send(sessionId, message);
     return true;
   }, [send, sessionId]);
-  // Chat column in the Changed split: resizable width (% of viewport) + collapse.
+  // Chat column in the split: resizable width (% of viewport) + collapse.
   const chatPanel = useResizablePanel('open-walnut-changed-chat-w', 30, 'right');
   const [chatCollapsed, setChatCollapsed] = useState(false);
-  // Toggling Changed enters/exits the no-max-width fullscreen variant.
-  const toggleChanged = useCallback(() => {
-    setChangedOpen((open) => {
-      const next = !open;
+  // Toggle a split view: same view → close (exit fullscreen); other/none → open it.
+  const toggleView = useCallback((view: SessionSplitView) => {
+    setActiveView((cur) => {
+      const next = cur === view ? null : view;
       if (next) enterFullscreen(); else { exitFullscreen(); setChatCollapsed(false); }
       return next;
     });
@@ -449,15 +457,15 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     setPlanPopoverOpen(false);
     setNotesOpen(false);
     setMessagesOpen(false);
-    setChangedOpen(false);
+    setActiveView(null);
     exitFullscreen();
   }, [sessionId, exitFullscreen]);
 
-  // If the user exits fullscreen (ESC / backdrop) while Changed is open, close
-  // Changed too so the body returns to the normal single-column chat.
+  // If the user exits fullscreen (ESC / backdrop) while a split view is open, close
+  // it too so the body returns to the normal single-column chat.
   useEffect(() => {
-    if (!isFullscreen && changedOpen) setChangedOpen(false);
-  }, [isFullscreen, changedOpen]);
+    if (!isFullscreen && splitOpen) setActiveView(null);
+  }, [isFullscreen, splitOpen]);
 
   // planCompleted=true means the plan is definitively done — show Execute even if session is still running
   // (SSH FIFO sessions stay alive after plan completion; execution creates a new session anyway).
@@ -602,7 +610,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   // Header content — prefer the linked task title; fall back to session metadata.
   const sessionFallbackTitle = session?.title || session?.description || session?.slug || null;
   const headerTitle = (session?.taskId ? taskTitle : null) || sessionFallbackTitle;
-  const sessionsPageUrl = `/sessions?id=${sessionId}`;
 
   const planContentValue = plan?.content ?? null;
 
@@ -612,9 +619,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
       {FullscreenBackdrop}
       {/* is-changed-open must sit on the SAME element as open-walnut-fullscreen
           (the .session-panel root) so the `.open-walnut-fullscreen.is-changed-open`
-          rule that drops the 1400px cap actually matches — otherwise the Changed
+          rule that drops the 1400px cap actually matches — otherwise the split
           view stays guttered at 1400px in this slide-out. */}
-      <div className={`session-panel${fullscreenClass}${changedOpen ? ' is-changed-open' : ''}`}>
+      <div className={`session-panel${fullscreenClass}${splitOpen ? ' is-changed-open' : ''}`}>
         <div className="session-panel-header">
           <div className="session-panel-header-top">
             <div className="session-panel-title-area">
@@ -645,16 +652,37 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                   {ICON_LOCATE}
                 </button>
               )}
-              {!loading && session?.taskId && (
+              {!loading && sessionId && (
                 <TaskQuickActions
-                  taskId={session.taskId}
-                  task={sessionTask}
+                  taskId={session?.taskId}
+                  task={session?.taskId ? sessionTask : null}
                   isPinned={pinned}
                   pinnedTier={pinnedTier}
                   onPinTask={handlePinTask}
                   onUnpinTask={handleUnpinTask}
                   onSetTier={handleSetTier}
+                  onOpenTaskDetail={onOpenTaskDetail}
                   slot="kebab"
+                  extraSection={(close) => (
+                    <SessionKebabSection
+                      sessionId={sessionId}
+                      cwd={session?.cwd}
+                      host={session?.host}
+                      hostname={session?.hostname}
+                      archived={session?.archived}
+                      notesOpen={notesOpen}
+                      onToggleNotes={() => setNotesOpen(o => !o)}
+                      messagesOpen={messagesOpen}
+                      onToggleMessages={() => setMessagesOpen(o => !o)}
+                      msgCount={historyMessages.filter(m => m.role === 'user' && m.text.trim()).length}
+                      onRestart={handleRestart}
+                      restartBusy={restartBusy}
+                      onInvestigate={handleInvestigate}
+                      investigating={investigating}
+                      investigateResult={investigateResult}
+                      onAfterAction={close}
+                    />
+                  )}
                 />
               )}
               {!loading && session?.provider === 'embedded' && (
@@ -712,78 +740,14 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               </button>
             </div>
           </div>
-          {/* Meta row 1: ID + copy chips + SSH */}
-          <div className="session-panel-meta">
-            <span
-              className="session-panel-id session-panel-id-link"
-              role="button"
-              tabIndex={0}
-              onClick={() => navigate(sessionsPageUrl)}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate(sessionsPageUrl); }}
-              title={`Open in Sessions page\n${sessionId}`}
-            >
-              {sessionId} &#x2197;
-            </span>
-            <SessionCopyButtons
-              sessionId={sessionId}
-              cwd={session?.cwd}
-              project={session?.project}
-              taskId={session?.taskId}
-              taskTitle={taskTitle ?? undefined}
-              onForkStarted={(cwd, host) => {
-                onForkPending?.(cwd, host);
-              }}
-              onForkComplete={(newTaskId) => {
-                onForkResolved?.(newTaskId);
-                onTaskClick?.(newTaskId);
-              }}
-              onForkFailed={(errMsg) => onForkFailed?.(errMsg)}
-            />
-            {!session?.archived && (
-              <button
-                className="session-copy-chip"
-                onClick={handleRestart}
-                disabled={restartBusy}
-                title="Restart session"
-              >
-                {restartBusy ? 'Restarting...' : 'Restart'}
-              </button>
-            )}
-            <button
-              className="session-copy-chip"
-              onClick={handleInvestigate}
-              disabled={investigating}
-              title="Capture an evidence bundle (logs + CLI stream + daemon), open an incident, and copy all related ids to the clipboard"
-            >
-              {ICON_SEARCH}{' '}
-              {investigating
-                ? 'Capturing…'
-                : investigateResult?.kind === 'ok'
-                  ? `Copied — ${investigateResult.id} ✓`
-                  : investigateResult?.kind === 'error'
-                    ? 'Capture failed'
-                    : 'Investigate'}
-            </button>
-            {session?.host && (
-              <span
-                className="session-panel-host"
-                style={{
-                  background: 'var(--bg-tertiary)',
-                  color: 'var(--fg-muted)',
-                  padding: '1px 5px',
-                  borderRadius: '4px',
-                  fontSize: '10px',
-                  fontWeight: 600,
-                }}
-                title={session.hostname || session.host}
-              >
-                SSH: {session.host}
-              </span>
-            )}
-          </div>
-          {/* Meta row 2: Plan / Notes / Messages action chips + model + time */}
+          {/* Meta row 1 removed — session id + SSH host both moved into the ⋮ kebab
+              Session section; open-in-Sessions-page is the title-bar ↗ popout. */}
+          {/* Meta row 2: the kept-visible actions (Plan / Fork / Changed / Files /
+              Terminal) + model + time. Everything else lives in the \u22EE kebab. */}
           <div className="session-meta-row-2">
-            {(shouldFetchPlan || showExecuteButtons) && (
+            {/* Plan & Execute \u2014 shown whenever a plan actually exists (regardless
+                of mode), or there's something executable. */}
+            {(hasPlanContent || showExecuteButtons) && (
               <>
                 <button
                   className={`session-action-chip${planPopoverOpen ? ' session-action-chip-active' : ''}`}
@@ -860,42 +824,32 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                 )}
               </>
             )}
+            <SessionForkButton
+              sessionId={sessionId}
+              cwd={session?.cwd}
+              taskId={session?.taskId}
+              onForkStarted={(cwd, host) => { onForkPending?.(cwd, host); }}
+              onForkComplete={(newTaskId) => { onForkResolved?.(newTaskId); onTaskClick?.(newTaskId); }}
+              onForkFailed={(errMsg) => onForkFailed?.(errMsg)}
+            />
             <button
-              className={`session-action-chip${notesOpen ? ' session-action-chip-active' : ''}`}
-              onClick={() => setNotesOpen(o => !o)}
-              title="Session notes"
-            >
-              Notes
-            </button>
-            <button
-              className={`session-action-chip${messagesOpen ? ' session-action-chip-active' : ''}`}
-              onClick={() => setMessagesOpen(o => !o)}
-              title="My messages in this session"
-            >
-              Msgs
-              {!historyLoading && (() => {
-                const count = historyMessages.filter(m => m.role === 'user' && m.text.trim()).length;
-                return count > 0 ? <span className="session-action-chip-count">{count}</span> : null;
-              })()}
-            </button>
-            <button
-              className={`session-action-chip${filesOpen ? ' session-action-chip-active' : ''}`}
-              onClick={() => setFilesOpen(o => !o)}
-              title="Browse session working directory"
-            >
-              Files
-            </button>
-            <button
-              className={`session-action-chip${changedOpen ? ' session-action-chip-active' : ''}`}
-              onClick={toggleChanged}
+              className={`session-action-chip${activeView === 'changed' ? ' session-action-chip-active' : ''}`}
+              onClick={() => toggleView('changed')}
               title="See the files this session changed — full-screen diff alongside the chat"
             >
               Changed
             </button>
             <button
-              className={`session-action-chip${terminalOpen ? ' session-action-chip-active' : ''}`}
-              onClick={() => setTerminalOpen(o => !o)}
-              title="Open a terminal in the session working directory"
+              className={`session-action-chip${activeView === 'files' ? ' session-action-chip-active' : ''}`}
+              onClick={() => toggleView('files')}
+              title="Browse the session working directory — full-screen alongside the chat"
+            >
+              Files
+            </button>
+            <button
+              className={`session-action-chip${activeView === 'terminal' ? ' session-action-chip-active' : ''}`}
+              onClick={() => toggleView('terminal')}
+              title="Open a terminal in the session working directory — full-screen alongside the chat"
             >
               Terminal
             </button>
@@ -938,19 +892,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             />
           </div>
         )}
-        {filesOpen && (
-          <div className="session-action-panel session-action-panel-files">
-            <SessionFileExplorer cwd={session?.cwd} host={session?.host} />
-          </div>
-        )}
-        {terminalOpen && sessionId && (
-          <SessionTerminal
-            sessionId={sessionId}
-            label={session?.cwd ?? session?.host ?? 'Terminal'}
-            host={session?.host}
-            onClose={() => setTerminalOpen(false)}
-          />
-        )}
         {ps === 'error' && session?.errorMessage && (() => {
           // Coupling: 'Connection lost' is set by session-health-monitor when daemon unreachable.
           // 'Reconnecting' activity is set by the same monitor's recoverConnectionLostSessions().
@@ -983,17 +924,32 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             </button>
           </div>
         )}
-        {/* Split container: when Changed is open, becomes [File Diff | chat] as a
-            flex row; when closed it's display:contents so the chat lays out exactly
-            as before. The chat subtree below NEVER changes shape — same JSX, same
-            position — so SessionChatHistory's WS/stream stays mounted (no remount). */}
-        <div className={`session-panel-split${changedOpen ? ' is-changed-open' : ''}${changedOpen && chatCollapsed ? ' is-chat-collapsed' : ''}`}>
-          {changedOpen && sessionId && (
+        {/* Split container: when a view (Changed/Files/Terminal) is open, becomes
+            [ left panel | chat ] as a flex row; when closed it's display:contents so
+            the chat lays out exactly as before. The chat subtree below NEVER changes
+            shape — same JSX, same position — so SessionChatHistory's WS/stream stays
+            mounted (no remount). */}
+        <div className={`session-panel-split${splitOpen ? ' is-changed-open' : ''}${splitOpen && chatCollapsed ? ' is-chat-collapsed' : ''}`}>
+          {splitOpen && sessionId && (
             <div className="session-panel-diff-col">
-              <SessionDiffView sessionId={sessionId} sessionCwd={session?.cwd} sessionHost={session?.host} onSelectCode={handleSelectCode} onComment={handleDiffComment} />
+              {activeView === 'changed' && (
+                <SessionDiffView sessionId={sessionId} sessionCwd={session?.cwd} sessionHost={session?.host} onSelectCode={handleSelectCode} onComment={handleDiffComment} />
+              )}
+              {activeView === 'files' && (
+                <SessionFileExplorer cwd={session?.cwd} host={session?.host} />
+              )}
+              {activeView === 'terminal' && (
+                <SessionTerminal
+                  sessionId={sessionId}
+                  label={session?.cwd ?? session?.host ?? 'Terminal'}
+                  host={session?.host}
+                  onClose={() => toggleView('terminal')}
+                  embedded
+                />
+              )}
             </div>
           )}
-          {changedOpen && (
+          {splitOpen && (
             chatCollapsed ? (
               <button
                 className="session-chat-collapsed-rail"
@@ -1006,10 +962,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
           )}
           <div
             className="session-panel-chat-col"
-            ref={changedOpen ? chatPanel.panelRef : undefined}
-            style={changedOpen && !chatCollapsed ? { width: chatPanel.width, flex: `0 0 ${chatPanel.width}` } : undefined}
+            ref={splitOpen ? chatPanel.panelRef : undefined}
+            style={splitOpen && !chatCollapsed ? { width: chatPanel.width, flex: `0 0 ${chatPanel.width}` } : undefined}
           >
-            {changedOpen && !chatCollapsed && (
+            {splitOpen && !chatCollapsed && (
               <button
                 className="session-chat-collapse-btn"
                 onClick={() => setChatCollapsed(true)}

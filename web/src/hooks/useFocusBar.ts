@@ -23,6 +23,20 @@ export interface UseFocusBarReturn {
   unpin: (taskId: string) => Promise<void>;
   reorder: (newIds: string[]) => Promise<void>;
   setTier: (taskId: string, tier: FocusTier) => Promise<void>;
+  /**
+   * Local-only optimistic pin into a tier (no server call). Used by quick-add so a
+   * newly-created task shows up in its Focus tier the instant the user hits Enter,
+   * before the create round-trip returns the real id. Pair with replaceLocalPinId
+   * (swap temp→real id) + commitPin (persist) once the server id is known, or
+   * removeLocalPin to roll back on failure.
+   */
+  addLocalPin: (taskId: string, tier: FocusTier) => void;
+  /** Swap a temp id for the real one across all tier arrays (same position). */
+  replaceLocalPinId: (tempId: string, realId: string) => void;
+  /** Remove a (temp or real) id from all tier arrays — rollback path. */
+  removeLocalPin: (taskId: string) => void;
+  /** Persist a pin+tier to the server (no optimistic state change here). */
+  commitPin: (taskId: string, tier: FocusTier) => Promise<void>;
   isPinned: (taskId: string) => boolean;
   tierOf: (taskId: string) => FocusTier;
   visible: boolean;
@@ -67,6 +81,11 @@ export function useFocusBar(tasks: Task[]): UseFocusBarReturn {
   const [waitIds, setWaitIds] = useState<string[]>([]);
   const [visible, setVisibleState] = useState(readVisible);
   const [tierLimits, setTierLimitsState] = useState<TierLimits>(readTierLimits);
+
+  // Mirror of pinnedIds for async closures (commitPin) that need the current
+  // order without being re-created on every render.
+  const pinnedIdsRef = useRef<string[]>([]);
+  pinnedIdsRef.current = pinnedIds;
 
   const setVisible = useCallback((v: boolean) => {
     setVisibleState(v);
@@ -188,6 +207,58 @@ export function useFocusBar(tasks: Task[]): UseFocusBarReturn {
     }
   }, [applyData, fetchPinned]);
 
+  // ── Optimistic local pin helpers (for quick-add: show in tier before the create
+  // round-trip returns a real id). Pure state mutations + a separate persist call so
+  // the editor can pipeline temp-id → real-id without a perceptible gap. ──
+
+  // Set the cooldown so the config:changed echo from commitPin doesn't refetch and
+  // clobber the optimistic state while the round-trip is still settling.
+  const addLocalPin = useCallback((taskId: string, tier: FocusTier) => {
+    lastWriteRef.current = Date.now();
+    // Append to the BOTTOM of its tier — the task stays exactly where the user added
+    // it (the "+ Add to …" line is at the bottom), like Apple Reminders. commitPin then
+    // persists this bottom position so it survives a reload.
+    setPinnedIds((prev) => prev.includes(taskId) ? prev : [...prev, taskId]);
+    const addBottom = (prev: string[]) => prev.includes(taskId) ? prev : [...prev, taskId];
+    const drop = (prev: string[]) => prev.includes(taskId) ? prev.filter((id) => id !== taskId) : prev;
+    setFocusIds(tier === 'focus' ? addBottom : drop);
+    setSatelliteIds(tier === 'satellite' ? addBottom : drop);
+    setWaitIds(tier === 'wait' ? addBottom : drop);
+  }, []);
+
+  const replaceLocalPinId = useCallback((tempId: string, realId: string) => {
+    const swap = (prev: string[]) => {
+      const i = prev.indexOf(tempId);
+      if (i === -1) return prev;
+      const next = prev.slice();
+      next[i] = realId;
+      return next;
+    };
+    setPinnedIds(swap);
+    setFocusIds(swap);
+    setSatelliteIds(swap);
+    setWaitIds(swap);
+  }, []);
+
+  const removeLocalPin = useCallback((taskId: string) => {
+    removeFromAll(taskId);
+  }, [removeFromAll]);
+
+  const commitPin = useCallback(async (taskId: string, tier: FocusTier) => {
+    lastWriteRef.current = Date.now();
+    await focusApi.pinTask(taskId);
+    await focusApi.setTaskTier(taskId, tier);
+    // The backend pins new tasks at the TOP (pin_order = min - 1), but the user added
+    // this at the bottom of its tier. Persist the bottom position by reordering: take
+    // the current optimistic pinned order (already has taskId at the end) and push it
+    // to the server so a reload keeps the same place. Apply the server's echo as truth.
+    const desiredOrder = pinnedIdsRef.current.includes(taskId)
+      ? pinnedIdsRef.current
+      : [...pinnedIdsRef.current, taskId];
+    const result = await focusApi.reorderPinnedTasks(desiredOrder);
+    applyData(result);
+  }, [applyData]);
+
   const isPinned = useCallback((taskId: string) => pinnedIds.includes(taskId), [pinnedIds]);
 
   const tierOf = useCallback((taskId: string): FocusTier => {
@@ -214,6 +285,7 @@ export function useFocusBar(tasks: Task[]): UseFocusBarReturn {
     focusIds, satelliteIds, waitIds,
     focusTasks, satelliteTasks, waitTasks,
     pin, unpin, reorder, setTier,
+    addLocalPin, replaceLocalPinId, removeLocalPin, commitPin,
     isPinned, tierOf,
     visible, setVisible,
     tierLimits, setTierLimits,

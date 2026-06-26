@@ -7,6 +7,7 @@ import { ListEditor } from '../inputs/ListEditor';
 import { useTheme, type ThemePreference } from '@/hooks/useTheme';
 import { useFocusBarContext } from '@/contexts/FocusBarContext';
 import { useSessionPanelMode, type SessionPanelMode } from '@/hooks/useSessionPanelMode';
+import { useIntegrations } from '@/hooks/useIntegrations';
 
 const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
   { value: 'system', label: 'System' },
@@ -43,9 +44,12 @@ export function GeneralSection({ config, onSave }: Props) {
   const { theme, setTheme } = useTheme();
   const focusBar = useFocusBarContext();
   const { mode: panelMode, setMode: setPanelMode } = useSessionPanelMode();
+  const integrations = useIntegrations();
   const [userName, setUserName] = useState(config.user?.name ?? '');
   const [defaultPriority, setDefaultPriority] = useState<TaskPriority>(config.defaults?.priority ?? 'none');
   const [defaultCategory, setDefaultCategory] = useState(config.defaults?.category ?? '');
+  const [defaultPlatform, setDefaultPlatform] = useState(config.defaults?.platform ?? 'local');
+  const [defaultProject, setDefaultProject] = useState(config.defaults?.project ?? '');
   const [localCategories, setLocalCategories] = useState<string[]>(config.local?.categories ?? []);
   const [bumpTiers, setBumpTiers] = useState<BumpTiersState>(() => resolveBumpTiers(config));
 
@@ -53,6 +57,8 @@ export function GeneralSection({ config, onSave }: Props) {
     setUserName(config.user?.name ?? '');
     setDefaultPriority(config.defaults?.priority ?? 'none');
     setDefaultCategory(config.defaults?.category ?? '');
+    setDefaultPlatform(config.defaults?.platform ?? 'local');
+    setDefaultProject(config.defaults?.project ?? '');
     setLocalCategories(config.local?.categories ?? []);
     setBumpTiers(resolveBumpTiers(config));
   }, [config]);
@@ -66,7 +72,12 @@ export function GeneralSection({ config, onSave }: Props) {
     const baseUi = latest?.ui ?? config.ui;
     await onSave({
       user: { name: userName },
-      defaults: { priority: defaultPriority, category: defaultCategory },
+      defaults: {
+        priority: defaultPriority,
+        category: defaultCategory,
+        platform: defaultPlatform,
+        ...(defaultProject.trim() ? { project: defaultProject.trim() } : {}),
+      },
       local: { ...config.local, categories: localCategories },
       ui: { ...baseUi, bump_tiers: bumpTiers },
     });
@@ -75,11 +86,13 @@ export function GeneralSection({ config, onSave }: Props) {
   // Auto-save: write when local edits drift from the persisted config. The `baseline` is
   // recomputed from the config prop so a post-save refresh matches `current` and won't echo.
   useAutoSave({
-    current: JSON.stringify({ userName, defaultPriority, defaultCategory, localCategories, bumpTiers }),
+    current: JSON.stringify({ userName, defaultPriority, defaultCategory, defaultPlatform, defaultProject, localCategories, bumpTiers }),
     baseline: JSON.stringify({
       userName: config.user?.name ?? '',
       defaultPriority: config.defaults?.priority ?? 'none',
       defaultCategory: config.defaults?.category ?? '',
+      defaultPlatform: config.defaults?.platform ?? 'local',
+      defaultProject: config.defaults?.project ?? '',
       localCategories: config.local?.categories ?? [],
       bumpTiers: resolveBumpTiers(config),
     }),
@@ -216,7 +229,38 @@ export function GeneralSection({ config, onSave }: Props) {
             type="text"
             value={defaultCategory}
             onChange={(e) => setDefaultCategory(e.target.value)}
-            placeholder="e.g., Work"
+            placeholder="e.g., Inbox"
+          />
+        </div>
+      </div>
+
+      <div className="form-row">
+        <div className="form-group">
+          <label htmlFor="settings-platform">Default Platform</label>
+          <select
+            id="settings-platform"
+            value={defaultPlatform}
+            onChange={(e) => setDefaultPlatform(e.target.value)}
+          >
+            <option value="local">Local (this device — instant)</option>
+            {integrations.map((i) => (
+              <option key={i.id} value={i.id}>{i.name}</option>
+            ))}
+          </select>
+          <p className="text-sm text-muted" style={{ margin: '4px 0 0' }}>
+            Where new tasks from quick-add (&ldquo;Add to Focus&rdquo;) are created. Local is
+            instant and never synced; pick an external service to sync new captures there.
+          </p>
+        </div>
+
+        <div className="form-group">
+          <label htmlFor="settings-project">Default Project <span className="text-muted">(optional)</span></label>
+          <input
+            id="settings-project"
+            type="text"
+            value={defaultProject}
+            onChange={(e) => setDefaultProject(e.target.value)}
+            placeholder="e.g., Inbox"
           />
         </div>
       </div>

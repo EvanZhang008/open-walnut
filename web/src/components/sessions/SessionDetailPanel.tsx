@@ -2,13 +2,13 @@ import { useState, useRef, useEffect, useCallback, useMemo, type KeyboardEvent }
 import { useNavigate } from 'react-router-dom';
 import { SessionChatHistory } from './SessionChatHistory';
 import { SessionNotes } from './SessionNotes';
-import { SessionFileExplorer } from './SessionFileExplorer';
-import { SessionTerminal } from './SessionTerminal';
 import { FileViewer } from '../common/FileViewer';
+import type { SessionSplitView } from './sessionSplitView';
 import { UserMessagesSummary } from './UserMessagesSummary';
 // PlanPreviewSection replaced by inline plan popover in meta bar
 import { ProcessStatusBadge } from './WorkStatusPicker';
-import { SessionCopyButtons } from './SessionCopyButtons';
+import { SessionForkButton } from './SessionForkButton';
+import { SessionKebabSection } from './SessionKebabSection';
 import { TaskQuickActions } from './TaskQuickActions';
 import { updateSession, executePlanSession, executePlanContinue, restartSession, investigateSession } from '@/api/sessions';
 import { log } from '@/utils/log';
@@ -27,7 +27,7 @@ import type { SessionRecord, TaskPhase } from '@/types/session';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
 import { timeAgo } from '@/utils/time';
 import { wsClient } from '@/api/ws';
-import { ICON_CLIPBOARD, ICON_LIGHTNING, ICON_WARNING, ICON_LOCATE, ICON_SEARCH } from '@/components/common/Icons';
+import { ICON_CLIPBOARD, ICON_LIGHTNING, ICON_WARNING, ICON_LOCATE } from '@/components/common/Icons';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 
 interface SessionDetailPanelProps {
@@ -52,10 +52,11 @@ interface SessionDetailPanelProps {
   /** Bubbles the stream hook's isStreaming up to page-level so the page doesn't
    *  need its own useSessionStream mount (would double RPCs + race defensive clear). */
   onStreamingChange?: (isStreaming: boolean) => void;
-  /** Changed view (full-screen File Diff + chat) is owned by the page (it holds the
-   *  ChatInput). The panel only renders the chip + reflects its open state. */
-  changedOpen?: boolean;
-  onToggleChanged?: () => void;
+  /** The full-screen split (Changed / Files / Terminal) is owned by the page (it
+   *  holds the ChatInput + diff/files/terminal column). The panel only renders the
+   *  chips + reflects which view is active. null = none open. */
+  activeView?: SessionSplitView | null;
+  onSelectView?: (view: SessionSplitView) => void;
 }
 
 /** Renders plan markdown content inside the plan popover with scrollable area */
@@ -73,27 +74,6 @@ function formatDate(dateStr: string): string {
   const d = new Date(dateStr);
   if (isNaN(d.getTime())) return '';
   return d.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-}
-
-function CopyableId({ value, truncate }: { value: string; truncate?: number }) {
-  const [copied, setCopied] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => () => { clearTimeout(timerRef.current); }, []);
-  const copy = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    navigator.clipboard.writeText(value).then(() => {
-      setCopied(true);
-      clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => setCopied(false), 1500);
-    }).catch(() => { /* clipboard unavailable */ });
-  };
-  const display = truncate ? value.slice(0, truncate) + '\u2026' : value;
-  return (
-    <span className="session-detail-copyable" onClick={copy} title={`Click to copy: ${value}`}>
-      <code>{display}</code>
-      <span className="session-detail-copy-icon">{copied ? 'Copied' : 'Copy'}</span>
-    </span>
-  );
 }
 
 function EditableTitle({ sessionId, taskId, title, onSaved }: { sessionId: string; taskId?: string; title: string; onSaved?: () => void }) {
@@ -160,7 +140,7 @@ function EditableTitle({ sessionId, taskId, title, onSaved }: { sessionId: strin
   );
 }
 
-export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged, onSessionReplaced, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onClearCommitted, onRetryFailed, onDismissFailed, onStreamingChange, changedOpen, onToggleChanged }: SessionDetailPanelProps) {
+export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged, onSessionReplaced, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onClearCommitted, onRetryFailed, onDismissFailed, onStreamingChange, activeView, onSelectView }: SessionDetailPanelProps) {
   const navigate = useNavigate();
   const enabledModes = useEnabledModes();
   const [executing, setExecuting] = useState(false);
@@ -225,12 +205,11 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
     if (modeOverride !== null) setModeOverride(null);
   }
 
-  // Action chip toggle state
+  // Action chip toggle state. Changed/Files/Terminal are owned by the page (split
+  // view); the panel just renders the chips and reflects `activeView`.
   const [planPopoverOpen, setPlanPopoverOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
   const [messagesOpen, setMessagesOpen] = useState(false);
-  const [filesOpen, setFilesOpen] = useState(false);
-  const [terminalOpen, setTerminalOpen] = useState(false);
 
   // Fetch messages for the UserMessagesSummary
   const sessionId_ = session?.claudeSessionId || '';
@@ -243,6 +222,10 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
   // so without this the Plan chip would be hidden during active planning.
   const shouldFetchPlan = hasPlan || isFromPlan || session?.mode === 'plan';
   const { plan, loading: planLoading, refresh: planRefresh } = useSessionPlan(sessionId_ || undefined, shouldFetchPlan);
+  // Plan chip visibility is gated on whether a plan actually EXISTS — not on mode.
+  // A bypass session that produced a plan still shows it; a plan-mode session that
+  // hasn't produced one yet shows it once the content loads.
+  const hasPlanContent = hasPlan || isFromPlan || !!plan?.content;
 
   // Auto-refresh plan content when modal opens
   useEffect(() => {
@@ -491,16 +474,36 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
                 {ICON_LOCATE}
               </button>
             )}
-            {session.taskId && (
+            {sessionId && (
               <TaskQuickActions
                 taskId={session.taskId}
-                task={sessionTask}
+                task={session.taskId ? sessionTask : null}
                 isPinned={pinned}
                 pinnedTier={pinnedTier}
                 onPinTask={handlePinTask}
                 onUnpinTask={handleUnpinTask}
                 onSetTier={handleSetTier}
                 slot="kebab"
+                extraSection={(close) => (
+                  <SessionKebabSection
+                    sessionId={sessionId}
+                    cwd={session.cwd}
+                    host={session.host}
+                    hostname={session.hostname}
+                    archived={session.archived}
+                    notesOpen={notesOpen}
+                    onToggleNotes={() => setNotesOpen(o => !o)}
+                    messagesOpen={messagesOpen}
+                    onToggleMessages={() => setMessagesOpen(o => !o)}
+                    msgCount={historyMessages.filter(m => m.role === 'user' && m.text.trim()).length}
+                    onRestart={handleRestart}
+                    restartBusy={restartBusy}
+                    onInvestigate={handleInvestigate}
+                    investigating={investigating}
+                    investigateResult={investigateResult}
+                    onAfterAction={close}
+                  />
+                )}
               />
             )}
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -525,15 +528,8 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
                   Embedded
                 </span>
               )}
-              {session.host && (
-                <span
-                  className="session-detail-badge"
-                  style={{ color: 'var(--fg-muted)', background: 'var(--bg-tertiary)', fontSize: '11px', fontWeight: 600 }}
-                  title={session.hostname || session.host}
-                >
-                  SSH: {session.host}
-                </span>
-              )}
+              {/* SSH host badge moved into the ⋮ kebab Session section (read-only
+                  info line); still shown in the collapsible Details below. */}
               <ProcessStatusBadge
                 processStatus={ps}
                 size="md"
@@ -568,41 +564,6 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
             {session.lastActiveAt && (
               <span title={new Date(session.lastActiveAt).toLocaleString()}>{timeAgo(session.lastActiveAt)}</span>
             )}
-            {/* onForkComplete omitted: fork resolves asynchronously, new session appears via list refresh */}
-            {sessionId && (
-              <SessionCopyButtons
-                sessionId={sessionId}
-                cwd={session.cwd}
-                project={session.project}
-                taskId={session.taskId}
-                taskTitle={taskTitle}
-              />
-            )}
-            {!session.archived && (
-              <button
-                className="session-copy-chip"
-                onClick={handleRestart}
-                disabled={restartBusy}
-                title="Restart session"
-              >
-                {restartBusy ? 'Restarting...' : 'Restart'}
-              </button>
-            )}
-            <button
-              className="session-copy-chip"
-              onClick={handleInvestigate}
-              disabled={investigating}
-              title="Capture an evidence bundle (logs + CLI stream + daemon), open an incident, and copy all related ids to the clipboard"
-            >
-              {ICON_SEARCH}{' '}
-              {investigating
-                ? 'Capturing…'
-                : investigateResult?.kind === 'ok'
-                  ? `Copied — ${investigateResult.id} ✓`
-                  : investigateResult?.kind === 'error'
-                    ? 'Capture failed'
-                    : 'Investigate'}
-            </button>
             {(ps === 'stopped' || ps === 'error') && !session.archived && (
               <button
                 className="btn btn-sm"
@@ -625,9 +586,12 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
             )}
           </div>
 
-          {/* Action chips row: Plan / Notes / Messages */}
+          {/* Action chips row: the kept-visible actions (Plan / Fork / Changed /
+              Files / Terminal). Everything else lives in the \u22EE kebab. */}
           <div className="session-meta-row-2">
-            {(shouldFetchPlan || showExecuteButtons) && (
+            {/* Plan & Execute \u2014 shown whenever a plan actually exists (regardless
+                of mode), or there's something executable. */}
+            {(hasPlanContent || showExecuteButtons) && (
               <>
                 <button
                   className={`session-action-chip${planPopoverOpen ? ' session-action-chip-active' : ''}`}
@@ -710,47 +674,36 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
                 )}
               </>
             )}
-            <button
-              className={`session-action-chip${notesOpen ? ' session-action-chip-active' : ''}`}
-              onClick={() => setNotesOpen(o => !o)}
-              title="Session notes"
-            >
-              Notes
-            </button>
-            <button
-              className={`session-action-chip${messagesOpen ? ' session-action-chip-active' : ''}`}
-              onClick={() => setMessagesOpen(o => !o)}
-              title="My messages in this session"
-            >
-              Msgs
-              {!historyLoading && (() => {
-                const count = historyMessages.filter(m => m.role === 'user' && m.text.trim()).length;
-                return count > 0 ? <span className="session-action-chip-count">{count}</span> : null;
-              })()}
-            </button>
-            <button
-              className={`session-action-chip${filesOpen ? ' session-action-chip-active' : ''}`}
-              onClick={() => setFilesOpen(o => !o)}
-              title="Browse session working directory"
-            >
-              Files
-            </button>
-            {onToggleChanged && (
-              <button
-                className={`session-action-chip${changedOpen ? ' session-action-chip-active' : ''}`}
-                onClick={onToggleChanged}
-                title="See the files this session changed — full-screen diff alongside the chat"
-              >
-                Changed
-              </button>
+            <SessionForkButton
+              sessionId={sessionId}
+              cwd={session.cwd}
+              taskId={session.taskId}
+            />
+            {onSelectView && (
+              <>
+                <button
+                  className={`session-action-chip${activeView === 'changed' ? ' session-action-chip-active' : ''}`}
+                  onClick={() => onSelectView('changed')}
+                  title="See the files this session changed — full-screen diff alongside the chat"
+                >
+                  Changed
+                </button>
+                <button
+                  className={`session-action-chip${activeView === 'files' ? ' session-action-chip-active' : ''}`}
+                  onClick={() => onSelectView('files')}
+                  title="Browse the session working directory — full-screen alongside the chat"
+                >
+                  Files
+                </button>
+                <button
+                  className={`session-action-chip${activeView === 'terminal' ? ' session-action-chip-active' : ''}`}
+                  onClick={() => onSelectView('terminal')}
+                  title="Open a terminal in the session working directory — full-screen alongside the chat"
+                >
+                  Terminal
+                </button>
+              </>
             )}
-            <button
-              className={`session-action-chip${terminalOpen ? ' session-action-chip-active' : ''}`}
-              onClick={() => setTerminalOpen(o => !o)}
-              title="Open a terminal in the session working directory"
-            >
-              Terminal
-            </button>
             {(() => {
               const LABELS: Record<string, string> = { default: 'Default', bypass: 'Bypass', plan: 'Plan', accept: 'Accept' };
               const ICONS: Record<string, string> = { default: '\u2699\uFE0F', bypass: '\u26A1', plan: '\uD83D\uDCCB', accept: '\u2705' };
@@ -879,19 +832,6 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
               initialNote={session.human_note}
             />
           </div>
-        )}
-        {filesOpen && (
-          <div className="session-action-panel session-action-panel-files">
-            <SessionFileExplorer cwd={session.cwd} host={session.host} />
-          </div>
-        )}
-        {terminalOpen && (
-          <SessionTerminal
-            sessionId={sessionId}
-            label={session.cwd ?? session.host ?? 'Terminal'}
-            host={session.host}
-            onClose={() => setTerminalOpen(false)}
-          />
         )}
         {ps === 'error' && session.errorMessage && (() => {
           // Coupling: 'Connection lost' is set by session-health-monitor when daemon unreachable.

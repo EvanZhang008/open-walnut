@@ -214,6 +214,20 @@ async function withRetry<T>(
 /** How long (ms) an operation error banner stays visible before auto-dismissing. */
 const OPERATION_ERROR_TIMEOUT_MS = 6000;
 
+/**
+ * Side-effect hooks for create(), fired in the SAME synchronous block as the
+ * matching tasks state mutation so a caller (e.g. quick-add-to-focus) can keep
+ * its own optimistic UI (Focus tier) in lockstep with no perceptible gap:
+ *   - onOptimistic(tempId): right after the temp task is inserted
+ *   - onReconcile(tempId, realId): right after the server task replaces the temp one
+ *   - onError(tempId): after the temp task is rolled back on failure
+ */
+export interface CreateHooks {
+  onOptimistic?: (tempId: string) => void;
+  onReconcile?: (tempId: string, realId: string) => void;
+  onError?: (tempId: string) => void;
+}
+
 interface UseTasksReturn {
   tasks: Task[];
   loading: boolean;
@@ -222,7 +236,7 @@ interface UseTasksReturn {
   clearOperationError: () => void;
   showOperationError: (msg: string) => void;
   refetch: () => void;
-  create: (input: tasksApi.CreateTaskInput) => Promise<Task>;
+  create: (input: tasksApi.CreateTaskInput, hooks?: CreateHooks) => Promise<Task>;
   update: (id: string, updates: tasksApi.UpdateTaskInput) => void;
   toggleComplete: (id: string) => void;
   setPhase: (id: string, phase: string) => void;
@@ -253,6 +267,9 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
   const [error, setError] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
   const opErrorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // True once the first fetch has populated the list — gates the loading spinner so
+  // later background re-syncs (WS / post-mutation) don't blank the list into a spinner.
+  const hasLoadedRef = useRef(false);
 
   // Refresh the group-name registry (group_id → label). Cheap, separate from
   // the task list; called on initial load + whenever groups change.
@@ -306,10 +323,16 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
     return true;
   }, []);
 
+  // `refetch` doubles as a background re-sync (WS groups-changed, post-mutation
+  // reconcile) AND the genuine first load. Flipping `loading` blanks the whole
+  // list into a spinner — fine on first load, but a jarring full-screen flicker
+  // when we're just reconciling after a group/ungroup/bulk edit. So only show the
+  // spinner until the first successful load; afterwards re-sync silently and let
+  // the new data swap in place (the "natural, in-place" update the user expects).
   const refetch = useCallback((attempt = 0) => {
     const MAX_RETRIES = 3;
     if (attempt === 0) {
-      setLoading(true);
+      if (!hasLoadedRef.current) setLoading(true);
       setError(null);
       // Reset WS event counters on fresh fetch
       wsEventCounts.current = { created: 0, updated: 0, completed: 0, sessionChanged: 0, lastLogAt: 0 };
@@ -325,6 +348,7 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
         endPerf?.(`${tasks.length} tasks`);
         log.info('tasks', 'fetch complete', { count: tasks.length, elapsed, attempt });
         setTasks(tasks);
+        hasLoadedRef.current = true;
         setLoading(false);
       })
       .catch((e: Error) => {
@@ -502,7 +526,7 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
     refetch();
   }, [showOperationError, refetch]);
 
-  const create = useCallback(async (input: tasksApi.CreateTaskInput) => {
+  const create = useCallback(async (input: tasksApi.CreateTaskInput, hooks?: CreateHooks) => {
     // Optimistic local-first insert: show the task immediately under a temp id,
     // then reconcile with the server's real task (or roll back on failure).
     const tmpId = `tmp-${crypto.randomUUID()}`;
@@ -519,6 +543,9 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
       updated_at: now,
     } as unknown as Task;
     setTasks((prev) => [optimistic, ...prev]);
+    // Fired in the same tick as the insert so dependent optimistic UI (e.g. the
+    // Focus tier) renders the card in the same frame — React 19 batches both.
+    hooks?.onOptimistic?.(tmpId);
     try {
       const task = await tasksApi.createTask(input);
       // Suppress the incoming task:created WS echo so we don't double-insert.
@@ -527,9 +554,11 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
         const withoutTmp = prev.filter((t) => t.id !== tmpId);
         return withoutTmp.some((t) => t.id === task.id) ? withoutTmp : [task, ...withoutTmp];
       });
+      hooks?.onReconcile?.(tmpId, task.id);
       return task;
     } catch (err) {
       setTasks((prev) => prev.filter((t) => t.id !== tmpId));
+      hooks?.onError?.(tmpId);
       onOpError(err as Error);
       throw err;
     }

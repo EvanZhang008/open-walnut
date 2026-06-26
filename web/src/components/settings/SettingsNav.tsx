@@ -7,7 +7,7 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { id: 'providers', label: 'AI Provider' },
   { id: 'general', label: 'General' },
-  { id: 'sessions', label: 'Claude Code Session' },
+  { id: 'sessions', label: 'Tasks & Sessions' },
   { id: 'integrations', label: 'Integrations' },
   { id: 'search', label: 'Search & Embeddings' },
   { id: 'stt', label: 'Speech-to-Text' },

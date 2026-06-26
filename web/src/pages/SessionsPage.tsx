@@ -4,7 +4,10 @@ import { fetchSessionTree, fetchSession } from '@/api/sessions';
 import { SessionTreePanel } from '@/components/sessions/SessionTreePanel';
 import { SessionDetailPanel } from '@/components/sessions/SessionDetailPanel';
 import { SessionDiffView } from '@/components/sessions/SessionDiffView';
+import { SessionFileExplorer } from '@/components/sessions/SessionFileExplorer';
+import { SessionTerminal } from '@/components/sessions/SessionTerminal';
 import { buildSelectionPrefill } from '@/components/sessions/diffPrefill';
+import type { SessionSplitView } from '@/components/sessions/sessionSplitView';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { ModelPicker } from '@/components/sessions/ModelPicker';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
@@ -308,14 +311,15 @@ export function SessionsPage() {
   // Model picker state
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
 
-  // Changed view: full-screen [File Diff | existing chat]. The page owns the
-  // ChatInput, so it also owns the diff column + prefill driver. CSS-promotion
-  // fullscreen (no remount — the chat below stays mounted).
+  // Changed / Files / Terminal share ONE full-screen split: [ left panel | chat ].
+  // The page owns the ChatInput, so it also owns the left column + prefill driver.
+  // CSS-promotion fullscreen (no remount — the chat below stays mounted).
   const { isFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop } = useFullscreen();
-  const [changedOpen, setChangedOpen] = useState(false);
+  const [activeView, setActiveView] = useState<SessionSplitView | null>(null);
+  const splitOpen = activeView !== null;
   const [prefillText, setPrefillText] = useState<string | undefined>(undefined);
   const [prefillNonce, setPrefillNonce] = useState(0);
-  // Chat column in the Changed split: resizable width (% of viewport) + collapse.
+  // Chat column in the split: resizable width (% of viewport) + collapse.
   const chatPanel = useResizablePanel('open-walnut-changed-chat-w', 30, 'right');
   const [chatCollapsed, setChatCollapsed] = useState(false);
   const handleSelectCode = useCallback((filePath: string, line: number | undefined, code: string) => {
@@ -328,20 +332,21 @@ export function SessionsPage() {
     void sessionSend.send(selectedId, message);
     return true;
   }, [selectedId, sessionSend]);
-  const toggleChanged = useCallback(() => {
-    setChangedOpen((open) => {
-      const next = !open;
-      if (next) enterFullscreen(); else exitFullscreen();
+  // Toggle a split view: same view → close (exit fullscreen); other/none → open it.
+  const selectView = useCallback((view: SessionSplitView) => {
+    setActiveView((cur) => {
+      const next = cur === view ? null : view;
+      if (next) enterFullscreen(); else { exitFullscreen(); setChatCollapsed(false); }
       return next;
     });
   }, [enterFullscreen, exitFullscreen]);
-  // ESC / backdrop exits fullscreen → also close Changed.
+  // ESC / backdrop exits fullscreen → also close the split view.
   useEffect(() => {
-    if (!isFullscreen && changedOpen) setChangedOpen(false);
-  }, [isFullscreen, changedOpen]);
-  // Switching sessions closes the Changed view.
+    if (!isFullscreen && splitOpen) setActiveView(null);
+  }, [isFullscreen, splitOpen]);
+  // Switching sessions closes the split view.
   useEffect(() => {
-    setChangedOpen(false);
+    setActiveView(null);
     setChatCollapsed(false);
     exitFullscreen();
   }, [selectedId, exitFullscreen]);
@@ -387,16 +392,31 @@ export function SessionsPage() {
       </div>
       <div className="sessions-resize-handle" onMouseDown={handleResizeStart} />
       {FullscreenBackdrop}
-      <div className={`sessions-detail-pane${fullscreenClass}${changedOpen ? ' is-changed-open' : ''}`}>
-        {/* Split: when Changed is open, File Diff column on the left, the existing
-            detail+chat on the right. Closed → display:contents (no layout change). */}
-        <div className={`sessions-detail-split${changedOpen ? ' is-changed-open' : ''}${changedOpen && chatCollapsed ? ' is-chat-collapsed' : ''}`}>
-          {changedOpen && selectedId && (
+      <div className={`sessions-detail-pane${fullscreenClass}${splitOpen ? ' is-changed-open' : ''}`}>
+        {/* Split: when a view (Changed/Files/Terminal) is open, that panel is the
+            left column, the existing detail+chat on the right. Closed →
+            display:contents (no layout change). */}
+        <div className={`sessions-detail-split${splitOpen ? ' is-changed-open' : ''}${splitOpen && chatCollapsed ? ' is-chat-collapsed' : ''}`}>
+          {splitOpen && selectedId && (
             <div className="sessions-detail-diff-col">
-              <SessionDiffView sessionId={selectedId} sessionCwd={selectedSession?.cwd} sessionHost={selectedSession?.host} onSelectCode={handleSelectCode} onComment={handleDiffComment} />
+              {activeView === 'changed' && (
+                <SessionDiffView sessionId={selectedId} sessionCwd={selectedSession?.cwd} sessionHost={selectedSession?.host} onSelectCode={handleSelectCode} onComment={handleDiffComment} />
+              )}
+              {activeView === 'files' && (
+                <SessionFileExplorer cwd={selectedSession?.cwd} host={selectedSession?.host} />
+              )}
+              {activeView === 'terminal' && (
+                <SessionTerminal
+                  sessionId={selectedId}
+                  label={selectedSession?.cwd ?? selectedSession?.host ?? 'Terminal'}
+                  host={selectedSession?.host}
+                  onClose={() => selectView('terminal')}
+                  embedded
+                />
+              )}
             </div>
           )}
-          {changedOpen && (
+          {splitOpen && (
             chatCollapsed ? (
               <button
                 className="session-chat-collapsed-rail"
@@ -409,10 +429,10 @@ export function SessionsPage() {
           )}
           <div
             className="sessions-detail-chat-col"
-            ref={changedOpen ? chatPanel.panelRef : undefined}
-            style={changedOpen && !chatCollapsed ? { width: chatPanel.width, flex: `0 0 ${chatPanel.width}` } : undefined}
+            ref={splitOpen ? chatPanel.panelRef : undefined}
+            style={splitOpen && !chatCollapsed ? { width: chatPanel.width, flex: `0 0 ${chatPanel.width}` } : undefined}
           >
-            {changedOpen && !chatCollapsed && (
+            {splitOpen && !chatCollapsed && (
               <button
                 className="session-chat-collapse-btn"
                 onClick={() => setChatCollapsed(true)}
@@ -435,8 +455,8 @@ export function SessionsPage() {
           onRetryFailed={handleRetryFailed}
           onDismissFailed={sessionSend.dismissFailed}
           onStreamingChange={setIsStreaming}
-          changedOpen={changedOpen}
-          onToggleChanged={selectedSession ? toggleChanged : undefined}
+          activeView={activeView}
+          onSelectView={selectedSession ? selectView : undefined}
         />
         {selectedSession && (
           <div className="session-chat-input-wrapper">

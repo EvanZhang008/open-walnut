@@ -19,11 +19,11 @@ export type DtachProbe =
 
 /** Install hint shown when we couldn't provision dtach (missing compiler). */
 function installHint(host?: string): string {
-  const where = host ? `目标主机 (${host})` : '本机'
+  const where = host ? `the target host (${host})` : 'this machine'
   return (
-    `无法在${where}上自动编译 dtach(终端持久化需要它)。` +
-    `通常因为缺少 C 编译器。请安装编译工具后重试,例如:\n` +
-    `  Linux:  sudo yum install -y gcc   # 或 sudo apt-get install -y gcc\n` +
+    `Couldn't auto-compile dtach on ${where} (the terminal needs it to persist across disconnects). ` +
+    `This usually means a C compiler is missing. Install build tools and retry, for example:\n` +
+    `  Linux:  sudo yum install -y gcc   # or sudo apt-get install -y gcc\n` +
     `  macOS:  xcode-select --install`
   )
 }

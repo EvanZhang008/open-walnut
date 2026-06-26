@@ -24,6 +24,10 @@ export function SessionsSection({ config, onSave }: Props) {
   const [enabledModes, setEnabledModes] = useState<SessionMode[]>(config.session?.enabled_modes ?? DEFAULT_MODES);
   const [sdkEnabled, setSdkEnabled] = useState(config.session_server?.enabled ?? false);
   const [sdkPort, setSdkPort] = useState<number | undefined>(config.session_server?.port ?? 7890);
+  // Triage throttling (config.agent.triage)
+  type TriageNotifyMode = 'off' | 'buffered' | 'realtime';
+  const [triageNotifyMode, setTriageNotifyMode] = useState<TriageNotifyMode>(config.agent?.triage?.notify_mode ?? 'off');
+  const [triageDebounce, setTriageDebounce] = useState<number | undefined>(config.agent?.triage?.debounce_minutes ?? 3);
 
   useEffect(() => {
     setSessionModel(config.agent?.session_model ?? 'opus-1m');
@@ -35,6 +39,8 @@ export function SessionsSection({ config, onSave }: Props) {
     setEnabledModes(config.session?.enabled_modes ?? DEFAULT_MODES);
     setSdkEnabled(config.session_server?.enabled ?? false);
     setSdkPort(config.session_server?.port ?? 7890);
+    setTriageNotifyMode(config.agent?.triage?.notify_mode ?? 'off');
+    setTriageDebounce(config.agent?.triage?.debounce_minutes ?? 3);
   }, [config]);
 
   // Normalize the per-host limits to numbers. The KeyValueEditor yields strings while a
@@ -50,7 +56,13 @@ export function SessionsSection({ config, onSave }: Props) {
 
   const handleSave = async () => {
     await onSave({
-      agent: { ...config.agent, session_model: sessionModel },
+      // Spread ...config.agent so sibling agent fields (main_model, available_models,
+      // session_triage_agent, …) survive — updateConfig replaces the whole `agent` key.
+      agent: {
+        ...config.agent,
+        session_model: sessionModel,
+        triage: { notify_mode: triageNotifyMode, debounce_minutes: triageDebounce ?? 3 },
+      },
       session: {
         idle_timeout_minutes: idleTimeout,
         max_idle: maxIdle,
@@ -72,6 +84,7 @@ export function SessionsSection({ config, onSave }: Props) {
       sessionModel, idleTimeout, maxIdle,
       sessionLimits: normalizeLimits(sessionLimits),
       permissionPrompt, autoApproveBypass, enabledModes, sdkEnabled, sdkPort,
+      triageNotifyMode, triageDebounce: triageDebounce ?? 3,
     }),
     baseline: JSON.stringify({
       sessionModel: config.agent?.session_model ?? 'opus-1m',
@@ -83,12 +96,14 @@ export function SessionsSection({ config, onSave }: Props) {
       enabledModes: config.session?.enabled_modes ?? ['bypass', 'plan'],
       sdkEnabled: config.session_server?.enabled ?? false,
       sdkPort: config.session_server?.port ?? 7890,
+      triageNotifyMode: config.agent?.triage?.notify_mode ?? 'off',
+      triageDebounce: config.agent?.triage?.debounce_minutes ?? 3,
     }),
     save: handleSave,
   });
 
   return (
-    <SectionCard id="sessions" title="Claude Code Session" description="Default model, timeouts, and limits for Claude Code sessions. Changes save automatically." onSave={handleSave} showSave={false}>
+    <SectionCard id="sessions" title="Tasks & Sessions" description="How Claude Code sessions run, and how their work is triaged back onto tasks. Changes save automatically." onSave={handleSave} showSave={false}>
       <div className="form-group">
         <label htmlFor="session-model">Session Model</label>
         <select
@@ -245,6 +260,57 @@ export function SessionsSection({ config, onSave }: Props) {
           />
         </div>
       )}
+
+      <div className="settings-divider" />
+
+      {/* Task Triage — a TASK concern (updates the task's summary/note/phase and decides
+          task notifications), merely triggered by a session turn. Grouped here under
+          "Tasks & Sessions" rather than buried in the session-runtime knobs above. */}
+      <div className="form-group">
+        <label style={{ fontWeight: 600 }}>Task Triage</label>
+        <p className="text-sm text-muted" style={{ margin: '2px 0 0' }}>
+          After a session turn, a triage agent updates the task&rsquo;s summary and decides
+          whether anything needs your attention. These control its cost and noisiness.
+        </p>
+      </div>
+
+      <div className="form-row">
+        <div className="form-group">
+          <label htmlFor="triage-notify-mode">Notify Main Agent</label>
+          <select
+            id="triage-notify-mode"
+            value={triageNotifyMode}
+            onChange={(e) => setTriageNotifyMode(e.target.value as TriageNotifyMode)}
+            style={{ maxWidth: 220 }}
+          >
+            <option value="off">Off — quiet (poll only)</option>
+            <option value="buffered">Buffered — review on heartbeat</option>
+            <option value="realtime">Realtime — notify immediately</option>
+          </select>
+          <p className="text-sm text-muted" style={{ marginTop: 2 }}>
+            The task summary is <strong>always</strong> updated. This only controls whether the
+            main agent is woken to tell you about it. <strong>Off</strong> stays silent — the agent
+            sees it next time it checks the task. <strong>Realtime</strong> is the most expensive
+            (reads the whole conversation each time).
+          </p>
+        </div>
+
+        <div className="form-group">
+          <label htmlFor="triage-debounce">Triage Debounce</label>
+          <NumberInput
+            id="triage-debounce"
+            value={triageDebounce}
+            onChange={setTriageDebounce}
+            suffix="minutes"
+            placeholder="3"
+            min={0}
+          />
+          <p className="text-sm text-muted" style={{ marginTop: 2 }}>
+            Wait this long after the last turn before triaging, so a burst of back-and-forth
+            collapses into one triage. 0 = triage on every turn.
+          </p>
+        </div>
+      </div>
     </SectionCard>
   );
 }

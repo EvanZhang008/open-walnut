@@ -311,13 +311,15 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
     [task?.summary],
   );
 
-  const renderedConversationLog = useMemo(() => {
-    if (!task?.conversation_log) return '';
-    const log = task.conversation_log;
-    const entries = log.split(/(?=^### \d{4}-\d{2}-\d{2} \d{2}:\d{2})/m).filter(Boolean);
-    const reversed = entries.length > 1 ? entries.reverse().join('\n\n') : log;
+  // Milestones replace the verbose conversation_log (kept server-side, no longer
+  // rendered). One compact line per major phase transition; newest first.
+  const renderedMilestones = useMemo(() => {
+    const ms = (task as Record<string, unknown> | null)?.milestones as string | undefined;
+    if (!ms) return '';
+    const entries = ms.split(/(?=^### \d{4}-\d{2}-\d{2} \d{2}:\d{2})/m).filter(Boolean);
+    const reversed = entries.length > 1 ? entries.reverse().join('\n\n') : ms;
     return renderNoteMarkdown(reversed);
-  }, [task?.conversation_log]);
+  }, [task]);
 
   if (loading) return <LoadingSpinner />;
   if (error) return <div className="empty-state"><p>Error: {error}</p></div>;
@@ -750,11 +752,11 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
         </div>
       )}
 
-      {/* Conversation Log */}
-      {task.conversation_log && (
+      {/* Milestones (replaces the old verbose Conversation Log) */}
+      {renderedMilestones && (
         <div className="card mb-4">
-          <h2 className="mb-2" style={{ fontSize: '16px', fontWeight: 600 }}>Conversation Log</h2>
-          <div className="markdown-body conversation-log" dangerouslySetInnerHTML={{ __html: renderedConversationLog }} />
+          <h2 className="mb-2" style={{ fontSize: '16px', fontWeight: 600 }}>Milestones</h2>
+          <div className="markdown-body conversation-log" dangerouslySetInnerHTML={{ __html: renderedMilestones }} />
         </div>
       )}
 

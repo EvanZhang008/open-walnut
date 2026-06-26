@@ -1,5 +1,5 @@
 /**
- * SessionTerminal — embedded xterm.js terminal for a session, in a portal modal.
+ * SessionTerminal — embedded xterm.js terminal for a session.
  *
  * The shell runs under dtach on the target host (local or remote/SSH) so its
  * state survives disconnects. dtach (unlike tmux) does NOT grab the mouse or use
@@ -7,6 +7,11 @@
  * This component owns the xterm instance (in a ref — never React state, since
  * xterm manages its own canvas/DOM) and delegates the WS lifecycle to
  * useSessionTerminal.
+ *
+ * Two presentations (same inner content):
+ * - default: a centered portal modal over a dim backdrop.
+ * - `embedded`: renders inline (no portal, no backdrop) so it can fill the left
+ *   column of the session full-screen split — matching Changed / Files.
  *
  * When dtach can't be provisioned on the target, useSessionTerminal returns a
  * NO_DTACH result and we render an install-hint card instead of mounting xterm.
@@ -27,9 +32,14 @@ interface SessionTerminalProps {
   label?: string;
   host?: string;
   onClose: () => void;
+  /**
+   * When true, render inline (fills its parent) instead of a centered portal
+   * modal — used by the session full-screen split's left column.
+   */
+  embedded?: boolean;
 }
 
-export function SessionTerminal({ sessionId, label, host, onClose }: SessionTerminalProps) {
+export function SessionTerminal({ sessionId, label, host, onClose, embedded = false }: SessionTerminalProps) {
   const confirm = useConfirm();
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -117,15 +127,31 @@ export function SessionTerminal({ sessionId, label, host, onClose }: SessionTerm
     }
   }, [status, sendResize]);
 
-  // Escape closes (detach, dtach session kept).
+  // Centered-modal mode: Escape closes (detach, dtach session kept).
   useEffect(() => {
+    if (embedded) return;
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
+  }, [onClose, embedded]);
+
+  // Embedded mode: ESC is a real terminal key (vim/less/etc.), but this terminal lives
+  // INSIDE the fullscreen split whose useFullscreen() registers a document-level ESC
+  // listener that closes the split. xterm sends ESC to the shell during its own keydown
+  // on the helper textarea (bubble phase, at the target), so by stopping propagation at
+  // the xterm container we let the shell receive ESC yet prevent it from reaching
+  // useFullscreen — otherwise every ESC keypress would tear the terminal down.
+  useEffect(() => {
+    if (!embedded) return;
+    const el = containerRef.current;
+    if (!el) return;
+    const stopEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') e.stopPropagation(); };
+    el.addEventListener('keydown', stopEsc);
+    return () => el.removeEventListener('keydown', stopEsc);
+  }, [embedded, noDtach]);
 
   const handleKill = useCallback(async () => {
-    if (await confirm({ title: '结束终端?', message: '结束终端会关闭 dtach 会话,正在运行的进程将被终止。', confirmLabel: '结束', cancelLabel: '取消', danger: true })) {
+    if (await confirm({ title: 'End terminal?', message: 'Ending the terminal will close the dtach session and terminate any running processes.', confirmLabel: 'End', cancelLabel: 'Cancel', danger: true })) {
       kill();
       onClose();
     }
@@ -140,9 +166,8 @@ export function SessionTerminal({ sessionId, label, host, onClose }: SessionTerm
     }).catch(() => {});
   }, [noDtach]);
 
-  const overlay = (
-    <div className="session-terminal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="session-terminal-panel">
+  const panel = (
+    <div className={`session-terminal-panel${embedded ? ' session-terminal-panel-embedded' : ''}`}>
         <div className="session-terminal-header">
           <div className="session-terminal-title">
             <span className="session-terminal-icon">&#x2328;</span>
@@ -152,13 +177,16 @@ export function SessionTerminal({ sessionId, label, host, onClose }: SessionTerm
           </div>
           <div className="session-terminal-actions">
             {!noDtach && status !== 'no_dtach' && (
-              <button className="session-terminal-btn session-terminal-btn-kill" onClick={handleKill} title="结束终端 (kill dtach)">
-                结束终端
+              <button className="session-terminal-btn session-terminal-btn-kill" onClick={handleKill} title="End terminal (kill dtach)">
+                End terminal
               </button>
             )}
-            <button className="session-terminal-close" onClick={onClose} title="关闭 (Esc) — 保留 dtach 会话">
-              &#x2715;
-            </button>
+            {/* In embedded mode the split's header owns closing (Changed/Files/Terminal toggle). */}
+            {!embedded && (
+              <button className="session-terminal-close" onClick={onClose} title="Close (Esc) — keeps the dtach session">
+                &#x2715;
+              </button>
+            )}
           </div>
         </div>
 
@@ -166,19 +194,19 @@ export function SessionTerminal({ sessionId, label, host, onClose }: SessionTerm
           <div className="session-terminal-error-card">
             <div className="session-terminal-error-icon">&#x26A0;&#xFE0F;</div>
             <div className="session-terminal-error-title">
-              无法启动终端:无法在目标主机{noDtach.host ? ` (${noDtach.host})` : ''} 上准备 dtach
+              Can't start terminal: unable to provision dtach on the target host{noDtach.host ? ` (${noDtach.host})` : ''}
             </div>
             <p className="session-terminal-error-body">
-              终端用 dtach 保证 SSH 断开后会话不丢失。Walnut 会自动编译它,但该主机似乎缺少 C 编译器:
+              The terminal uses dtach so the session survives SSH disconnects. Walnut compiles it automatically, but this host appears to be missing a C compiler:
             </p>
             <div className="session-terminal-install">
               <code>{noDtach.installHint}</code>
               <button className="session-terminal-btn" onClick={handleCopyHint}>
-                {copied ? '已复制' : '复制'}
+                {copied ? 'Copied' : 'Copy'}
               </button>
             </div>
             <button className="session-terminal-btn session-terminal-retry" onClick={retry}>
-              重试
+              Retry
             </button>
           </div>
         ) : (
@@ -187,14 +215,22 @@ export function SessionTerminal({ sessionId, label, host, onClose }: SessionTerm
             {status === 'error' && errorMessage && (
               <div className="session-terminal-inline-error">
                 {errorMessage}
-                <button className="session-terminal-btn" onClick={retry}>重试</button>
+                <button className="session-terminal-btn" onClick={retry}>Retry</button>
               </div>
             )}
           </div>
         )}
-      </div>
     </div>
   );
 
-  return createPortal(overlay, document.body);
+  // Embedded: render inline so it fills the split's left column.
+  if (embedded) return panel;
+
+  // Default: centered portal modal over a dim backdrop.
+  return createPortal(
+    <div className="session-terminal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      {panel}
+    </div>,
+    document.body,
+  );
 }

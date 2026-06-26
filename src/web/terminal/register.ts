@@ -97,7 +97,7 @@ export async function registerTerminalRpc(): Promise<boolean> {
   registerMethod('terminal:kill', async (payload: unknown) => {
     const o = asObj(payload, 'terminal:kill')
     const terminalId = str(o, 'terminalId', 'terminal:kill')
-    // Explicit "结束终端": detach the pty AND kill the persistent dtach session.
+    // Explicit "End terminal": detach the pty AND kill the persistent dtach session.
     terminalManager.close(terminalId)
     const record = await getSessionByClaudeId(terminalId)
     if (record) await killDtachSession(record)
