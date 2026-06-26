@@ -41,6 +41,19 @@ export const BETA_CONTEXT_1M = 'context-1m-2025-08-07';
 export const INTERLEAVED_THINKING_BETA = 'interleaved-thinking-2025-05-14';
 
 /**
+ * Beta flag string for the 1-hour extended prompt-cache TTL (`cache_control.ttl: '1h'`).
+ *
+ * IMPORTANT — do NOT send this to Bedrock. The 1h cache duration is GA on both the
+ * Claude API and Amazon Bedrock and needs no beta header; the `ttl:'1h'` marker flows
+ * through `cache_control` directly. We verified empirically (skill-e2e against real
+ * Bedrock) that adding this flag makes every request fail with `400 invalid beta flag`.
+ *
+ * Kept only as documentation of the flag name and this finding — it is intentionally
+ * NOT pushed into the betas array (see model.ts resolveForCall).
+ */
+export const EXTENDED_CACHE_TTL_BETA = 'extended-cache-ttl-2025-04-11';
+
+/**
  * Sanitize a model string from Claude CLI's system init event.
  *
  * Claude CLI may embed ANSI escape codes (e.g. `\x1b[1m` for bold) in the

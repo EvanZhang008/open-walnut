@@ -21,7 +21,7 @@ import {
   WORKING_MEMORY_FILE,
   DAILY_DIR,
 } from '../../src/constants.js';
-import { buildMemoryContext, buildSystemPrompt } from '../../src/agent/context.js';
+import { buildMemoryContext, buildSystemPrompt, buildSystemPromptSplit } from '../../src/agent/context.js';
 import { formatDateKey } from '../../src/core/daily-log.js';
 import { WORKING_MEMORY_TEMPLATE } from '../../src/core/working-memory.js';
 import type { AgentDefinition } from '../../src/core/types.js';
@@ -44,7 +44,7 @@ afterEach(async () => {
 });
 
 describe('buildMemoryContext', () => {
-  it('8.1: uses 8K budget and contains expected sections', () => {
+  it('8.1: uses 8K budget and contains expected sections', async () => {
     // Create minimal data
     fs.mkdirSync(DAILY_DIR, { recursive: true });
     const dateKey = formatDateKey();
@@ -54,7 +54,7 @@ describe('buildMemoryContext', () => {
       'utf-8',
     );
 
-    const result = buildMemoryContext();
+    const result = await buildMemoryContext();
     expect(typeof result).toBe('string');
     expect(result).toContain('## Task Categories & Projects');
     expect(result).toContain('## Your long-term memory');
@@ -62,7 +62,7 @@ describe('buildMemoryContext', () => {
     expect(result).toContain('memory_notes_search');
   });
 
-  it('8.2: injects memory index when present', () => {
+  it('8.2: injects memory index when present', async () => {
     fs.mkdirSync(path.dirname(MEMORY_INDEX_FILE), { recursive: true });
     fs.writeFileSync(
       MEMORY_INDEX_FILE,
@@ -70,13 +70,13 @@ describe('buildMemoryContext', () => {
       'utf-8',
     );
 
-    const result = buildMemoryContext();
+    const result = await buildMemoryContext();
     expect(result).toContain('## Memory index');
     expect(result).toContain('[Walnut](topics/walnut.md)');
   });
 
-  it('8.3: omits memory index when absent', () => {
-    const result = buildMemoryContext();
+  it('8.3: omits memory index when absent', async () => {
+    const result = await buildMemoryContext();
     expect(result).not.toContain('## Memory index');
   });
 });
@@ -116,6 +116,98 @@ describe('buildSystemPrompt — working memory injection', () => {
     const prompt = await buildSystemPrompt();
 
     expect(prompt).not.toContain('## Earlier conversation context');
+  });
+
+  it('8.8: injected summary carries the "background reference, do not resume" preface', async () => {
+    // The preface is the semantic guard against replaying stale "In Progress"/"Next Steps"
+    // items as fresh tasks (the 13-orphan batch-bug family). It must appear with the summary.
+    fs.mkdirSync(path.dirname(WORKING_MEMORY_FILE), { recursive: true });
+    fs.writeFileSync(WORKING_MEMORY_FILE, WORKING_MEMORY_TEMPLATE, 'utf-8'); // empty → use summary branch
+    vi.mocked(getCompactionSummary).mockResolvedValue('## Next Steps\n1. Re-query CIS accounts');
+
+    const prompt = await buildSystemPrompt();
+
+    expect(prompt).toContain('## Earlier conversation context');
+    expect(prompt).toContain('Background reference only');
+    expect(prompt).toContain('Do NOT resume');
+    expect(prompt).toContain('latest message is the only source of truth');
+    // Preface must come BEFORE the summary body so the agent reads the framing first.
+    expect(prompt.indexOf('Background reference only')).toBeLessThan(prompt.indexOf('Re-query CIS accounts'));
+  });
+
+  it('8.9: preface is also applied to the working-memory branch', async () => {
+    fs.mkdirSync(path.dirname(WORKING_MEMORY_FILE), { recursive: true });
+    fs.writeFileSync(WORKING_MEMORY_FILE, '# Active Focus\nMid-refactor of the compaction gate\n', 'utf-8');
+    vi.mocked(getCompactionSummary).mockResolvedValue('Previous compaction summary');
+
+    const prompt = await buildSystemPrompt();
+
+    expect(prompt).toContain('## Earlier conversation context (working memory)');
+    expect(prompt).toContain('Background reference only');
+    expect(prompt).toContain('Mid-refactor of the compaction gate');
+    expect(prompt.indexOf('Background reference only')).toBeLessThan(prompt.indexOf('Mid-refactor of the compaction gate'));
+  });
+});
+
+describe('buildSystemPromptSplit — stable / dynamic cache split (Thing 2)', () => {
+  it('keeps volatile memory context OUT of the stable (cacheable) prefix', async () => {
+    fs.mkdirSync(DAILY_DIR, { recursive: true });
+    const dateKey = formatDateKey();
+    fs.writeFileSync(
+      path.join(DAILY_DIR, `${dateKey}.md`),
+      `# Daily Log: ${dateKey}\n\n## 10:00 -- agent\nWorked on cache split.\n`,
+      'utf-8',
+    );
+    vi.mocked(getCompactionSummary).mockResolvedValue(null);
+
+    const { stable, dynamic } = await buildSystemPromptSplit();
+
+    // The memory context (task inventory, daily logs) is volatile and must live in
+    // `dynamic`, never in the cached `stable` prefix. Assert on the section headers,
+    // which are unique to buildMemoryContext (tool *names* like memory_notes_search
+    // also appear in the stable role prompt, so they're not a reliable discriminator).
+    expect(stable).not.toContain('## Task Categories & Projects');
+    expect(stable).not.toContain('## Recent activity');
+    expect(dynamic).toContain('## Task Categories & Projects');
+    expect(dynamic).toContain('## Recent activity');
+  });
+
+  it('routes the per-conversation "Earlier conversation context" into dynamic, not stable', async () => {
+    fs.mkdirSync(path.dirname(WORKING_MEMORY_FILE), { recursive: true });
+    fs.writeFileSync(WORKING_MEMORY_FILE, WORKING_MEMORY_TEMPLATE, 'utf-8'); // empty → summary branch
+    vi.mocked(getCompactionSummary).mockResolvedValue('Prior summary text');
+
+    const { stable, dynamic } = await buildSystemPromptSplit();
+
+    expect(stable).not.toContain('## Earlier conversation context');
+    expect(dynamic).toContain('## Earlier conversation context');
+    expect(dynamic).toContain('Prior summary text');
+  });
+
+  it('CORE INVARIANT: stable prefix is byte-identical even as the volatile memory context changes', async () => {
+    vi.mocked(getCompactionSummary).mockResolvedValue(null);
+
+    // Turn 1: one daily log.
+    fs.mkdirSync(DAILY_DIR, { recursive: true });
+    const dateKey = formatDateKey();
+    const logPath = path.join(DAILY_DIR, `${dateKey}.md`);
+    fs.writeFileSync(logPath, `# Daily Log: ${dateKey}\n\n## 10:00 -- agent\nfirst activity\n`, 'utf-8');
+    const turn1 = await buildSystemPromptSplit();
+
+    // Turn 2: the daily log grew (a real every-turn change). The dynamic part must
+    // differ, but the cached stable prefix must NOT — otherwise the cache misses.
+    fs.appendFileSync(logPath, '## 11:00 -- agent\nsecond activity, totally different\n', 'utf-8');
+    const turn2 = await buildSystemPromptSplit();
+
+    expect(turn2.stable).toBe(turn1.stable);     // ← the cache-hit guarantee
+    expect(turn2.dynamic).not.toBe(turn1.dynamic); // sanity: the volatile part did change
+  });
+
+  it('backward-compatible buildSystemPrompt = stable + dynamic concatenated', async () => {
+    vi.mocked(getCompactionSummary).mockResolvedValue(null);
+    const { stable, dynamic } = await buildSystemPromptSplit();
+    const full = await buildSystemPrompt();
+    expect(full).toBe(`${stable}\n\n${dynamic}`);
   });
 });
 

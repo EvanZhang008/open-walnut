@@ -17,6 +17,15 @@ import { listTasks } from '../core/task-manager.js';
 import { NOTES_DIR, MEMORY_INDEX_FILE } from '../constants.js';
 
 /**
+ * Framing prepended to the injected compaction summary / working memory.
+ * The summary necessarily contains "In Progress" and "Next Steps" lines that read
+ * like live instructions; without this preface the agent treats them as a fresh
+ * request and re-executes them (the root semantic cause of replayed / duplicate
+ * tasks). Mirrors Hermes's compaction-summary prefix.
+ */
+const CONTEXT_PREFACE = `> _Background reference only — a compacted record of earlier turns in THIS conversation, written as a handoff snapshot. It is NOT a new instruction. The user's latest message is the only source of truth for what to do now. Do NOT resume, re-run, or re-create any "In Progress" / "Next Steps" items listed below unless the user explicitly asks again — treat them as "what had happened", not "what to do next"._`;
+
+/**
  * Build a compact overview of task categories, projects, and counts.
  * Only counts non-completed tasks. Filters out .metadata tasks.
  * Routes through task-manager.listTasks (SQLite-backed).
@@ -270,7 +279,30 @@ async function buildSyncSection(): Promise<string> {
 }
 
 /**
- * Build the main agent's system prompt for a specific conversation.
+ * A split system prompt: a STABLE prefix that is byte-identical across turns
+ * (and therefore prompt-cacheable), and a VOLATILE remainder that changes every
+ * turn and must NOT sit inside the cached prefix.
+ *
+ * This mirrors Claude Code's `splitSysPromptPrefix` (fork: `utils/api.ts`):
+ * static content is cached, dynamic content (task counts, daily logs, the
+ * per-conversation compaction summary) is appended after the cache boundary so a
+ * single byte change in it never invalidates the cached system prefix + tools.
+ */
+export interface SplitSystemPrompt {
+  /** Stable, cacheable prefix: role / sync / skills / subagents. Byte-identical across turns. */
+  stable: string;
+  /**
+   * Volatile remainder: "Earlier conversation context" (summary / working memory)
+   * + the memory context (task inventory, daily logs). Changes per turn — the agent
+   * loop injects this into the current user turn, NOT the cached system block.
+   * Empty string when there's nothing dynamic to inject.
+   */
+  dynamic: string;
+}
+
+/**
+ * Build the main agent's system prompt for a specific conversation, split into a
+ * cacheable stable prefix and a volatile dynamic remainder.
  *
  * The conversation identity (agentId + conversationId) is REQUIRED to inject the
  * correct "Earlier conversation context" — the compaction summary + working memory
@@ -278,7 +310,7 @@ async function buildSyncSection(): Promise<string> {
  * file, so a compacted conversation's agent would lose its own summary (C1). The
  * agent loop always knows which conversation it runs for, so it always passes these.
  */
-export async function buildSystemPrompt(agentId?: string, conversationId?: string): Promise<string> {
+export async function buildSystemPromptSplit(agentId?: string, conversationId?: string): Promise<SplitSystemPrompt> {
   const config = await getConfig();
   const name = config.user.name ?? 'the user';
 
@@ -287,6 +319,12 @@ export async function buildSystemPrompt(agentId?: string, conversationId?: strin
   const syncSection = await buildSyncSection();
   const agentsSection = await buildAgentsSection();
 
+  // ── STABLE prefix: role / sync / skills / subagents. These don't change within
+  // a session, so they form the cacheable prompt prefix (cache_control marker goes
+  // here). Nothing volatile may be appended, or every turn busts the cache. ──
+  const stable = `${roleSection}${syncSection}${skillsSection ? `\n\n${skillsSection}` : ''}${agentsSection ? `\n\n${agentsSection}` : ''}`;
+
+  // ── VOLATILE remainder: earlier-conversation context + live memory context. ──
   // Working memory is only injected when compaction has occurred (i.e., conversation is long
   // enough to have been compacted). On a fresh conversation, the full message history is still
   // in context, so injecting working memory would duplicate information.
@@ -297,17 +335,33 @@ export async function buildSystemPrompt(agentId?: string, conversationId?: strin
     if (summary) {
       // Compaction has occurred — prefer working memory over the LLM summary
       const workingMemory = getWorkingMemory(agentId, conversationId);
-      if (workingMemory && !isWorkingMemoryEmpty(workingMemory)) {
-        contextSection = `\n\n## Earlier conversation context (working memory)\n${workingMemory}`;
-      } else {
-        contextSection = `\n\n## Earlier conversation context\n${summary}`;
-      }
+      const body = (workingMemory && !isWorkingMemoryEmpty(workingMemory))
+        ? { label: '## Earlier conversation context (working memory)', text: workingMemory }
+        : { label: '## Earlier conversation context', text: summary };
+      // CONTEXT_PREFACE is load-bearing: the summary lists "In Progress" / "Next Steps"
+      // items that READ like live instructions. Without framing them as a *historical
+      // handoff record*, the agent re-executes them as if freshly asked — which is the
+      // semantic source of replayed/duplicate tasks (the 13-orphan batch-bug family).
+      // Tell it plainly: this is background reference, the latest user message is the
+      // only source of truth, do not resume listed work unless the user asks again.
+      contextSection = `${body.label}\n${CONTEXT_PREFACE}\n\n${body.text}\n\n`;
     }
   } catch {
     // Chat history file may not exist yet — that's fine
   }
 
-  return `${roleSection}${syncSection}${skillsSection ? `\n\n${skillsSection}` : ''}${agentsSection ? `\n\n${agentsSection}` : ''}${contextSection}
+  const dynamic = `${contextSection}${await buildMemoryContext()}`;
 
-${await buildMemoryContext()}`;
+  return { stable, dynamic };
+}
+
+/**
+ * Backward-compatible single-string system prompt: stable prefix + dynamic remainder
+ * concatenated. Used by callers that want the full prompt for display / token counting
+ * (context-inspector, chat-history compaction fork) where cache splitting is irrelevant.
+ * The agent loop itself uses buildSystemPromptSplit() to keep the dynamic part out of cache.
+ */
+export async function buildSystemPrompt(agentId?: string, conversationId?: string): Promise<string> {
+  const { stable, dynamic } = await buildSystemPromptSplit(agentId, conversationId);
+  return `${stable}\n\n${dynamic}`;
 }

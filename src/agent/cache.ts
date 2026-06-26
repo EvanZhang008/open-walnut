@@ -27,7 +27,18 @@ const DEFAULT_TTL_MS = TTL_MS[DEFAULT_TTL];
 // ── System prompt ──
 
 /**
- * Convert a system prompt string into TextBlockParam[] with a cache marker.
+ * Convert a system prompt string into a single cached TextBlockParam.
+ *
+ * The system prompt passed here must be the STABLE part only (role/sync/skills/
+ * subagents) — it is byte-identical across turns, so the whole block (plus the
+ * tools before it) is cacheable behind one breakpoint.
+ *
+ * IMPORTANT: volatile content (the per-turn memory context — task counts, daily
+ * logs) must NOT go in the system prompt. Render order is tools → system →
+ * messages, so anything volatile placed in `system` sits BEFORE the message
+ * history and would invalidate the entire message-history cache every turn. The
+ * volatile remainder is instead appended to the END of the message array, after
+ * the message cache breakpoint — see `appendEphemeralContext`.
  */
 export function toSystemBlocks(
   text: string,
@@ -124,6 +135,61 @@ export function injectMessageCacheMarkers(
   });
 
   return result as MessageParam[];
+}
+
+/**
+ * Append volatile per-turn context (the memory context: task counts, daily logs)
+ * to the END of the message array, AFTER the message cache breakpoint.
+ *
+ * This is the load-bearing half of the cache design. The volatile content must sit
+ * after the breakpoint so the entire prior conversation prefix (tools + stable system
+ * + all earlier messages) stays byte-identical across turns and keeps cache-hitting —
+ * a rolling cache over the whole ~1M-token history. Putting this content anywhere in
+ * `system` (before messages in render order) would invalidate the message-history
+ * cache every turn instead.
+ *
+ * Call this AFTER injectMessageCacheMarkers so the breakpoint is already on the last
+ * real (persisted) message; we then append the ephemeral block past it.
+ *
+ * EPHEMERAL: the caller must inject this only into the transient array sent to the API,
+ * never into persisted history — otherwise the volatile text freezes into the prefix
+ * and bloats history. Returns a shallow clone; does not mutate the input.
+ */
+export function appendEphemeralContext(
+  messages: MessageParam[],
+  context: string,
+): MessageParam[] {
+  if (!context) return messages;
+
+  const block = { type: 'text' as const, text: context };
+
+  // Find the last user message and append the ephemeral block to its content.
+  // (It already carries the cache breakpoint on its prior last block; the new block
+  //  lands after the breakpoint, so it is never part of the cached prefix.)
+  let lastUserIdx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') {
+      lastUserIdx = i;
+      break;
+    }
+  }
+
+  // No user message at all → append a fresh trailing user message carrying the context.
+  if (lastUserIdx === -1) {
+    return [...messages, { role: 'user', content: [block] } as MessageParam];
+  }
+
+  return messages.map((m, i) => {
+    if (i !== lastUserIdx) return m;
+    const content = m.content;
+    if (typeof content === 'string') {
+      return { ...m, content: [{ type: 'text' as const, text: content }, block] };
+    }
+    if (Array.isArray(content)) {
+      return { ...m, content: [...content, block] };
+    }
+    return m;
+  }) as MessageParam[];
 }
 
 // ── Context pruning ──

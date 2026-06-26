@@ -22,6 +22,7 @@ import { WALNUT_HOME } from '../../src/constants.js';
 import { sendMessageStream } from '../../src/agent/model.js';
 import { runAgentLoop } from '../../src/agent/loop.js';
 import { cacheTTLTracker } from '../../src/agent/cache.js';
+import type { MessageParam } from '@anthropic-ai/sdk/resources/messages';
 
 const mockSendMessage = vi.mocked(sendMessageStream);
 
@@ -196,7 +197,7 @@ describe('runAgentLoop', () => {
 });
 
 describe('prompt caching integration', () => {
-  it('sends structured system blocks with cache_control to sendMessage', async () => {
+  it('system is a SINGLE cached block; volatile memory context rides the message tail (Thing 2)', async () => {
     mockSendMessage.mockResolvedValueOnce({
       content: [{ type: 'text', text: 'Hi' }],
       stopReason: 'end_turn',
@@ -206,12 +207,25 @@ describe('prompt caching integration', () => {
 
     const call = mockSendMessage.mock.calls[0][0];
 
-    // system should be an array of TextBlockParam, not a plain string
+    // system = ONE cached block, stable-only. The volatile memory context must NOT be
+    // here (it would sit before messages in render order and bust the history cache).
     expect(Array.isArray(call.system)).toBe(true);
     const systemBlocks = call.system as Array<{ type: string; text: string; cache_control?: unknown }>;
     expect(systemBlocks).toHaveLength(1);
-    expect(systemBlocks[0].type).toBe('text');
     expect(systemBlocks[0].cache_control).toEqual({ type: 'ephemeral', ttl: '1h' });
+    expect(systemBlocks[0].text).not.toContain('## Task Categories & Projects');
+
+    // The volatile memory context rides the LAST user message, appended AFTER the
+    // cache breakpoint, so the cached prefix (tools + system + prior history) is stable.
+    const msgs = call.messages as MessageParam[];
+    const lastUser = [...msgs].reverse().find(m => m.role === 'user')!;
+    const blocks = lastUser.content as Array<{ type: string; text: string; cache_control?: unknown }>;
+    const ephemeral = blocks[blocks.length - 1];
+    expect(ephemeral.text).toContain('## Task Categories & Projects');
+    expect(ephemeral.cache_control).toBeUndefined();
+    // The block carrying the breakpoint is the user's own text, NOT the ephemeral context.
+    const marked = blocks.find(b => b.cache_control);
+    expect(marked?.text).toContain('Hello');
   });
 
   it('sends tools with cache_control on the last tool', async () => {
@@ -281,11 +295,19 @@ describe('prompt caching integration', () => {
     const secondCall = mockSendMessage.mock.calls[1][0];
     expect(secondCall.messages.length).toBe(3);
 
-    // Last user message (tool_result) should have cache_control on its last block
+    // Last user message (tool_result) carries the cache breakpoint, and the volatile
+    // memory context is appended AFTER it (the final block, uncached). So:
+    //   - the breakpoint sits on the tool_result block (the real prefix boundary)
+    //   - the trailing ephemeral block has NO cache_control
     const lastUserMsg = secondCall.messages[2];
     expect(lastUserMsg.role).toBe('user');
-    const content = lastUserMsg.content as Array<{ cache_control?: unknown }>;
-    expect(content[content.length - 1].cache_control).toEqual({ type: 'ephemeral', ttl: '1h' });
+    const content = lastUserMsg.content as Array<{ type?: string; cache_control?: unknown }>;
+    const lastBlock = content[content.length - 1];
+    expect(lastBlock.cache_control).toBeUndefined();            // ephemeral context, uncached
+    const marked = content.filter(b => b.cache_control);
+    expect(marked).toHaveLength(1);                             // exactly one breakpoint
+    expect(marked[0].cache_control).toEqual({ type: 'ephemeral', ttl: '1h' });
+    expect((marked[0] as { type?: string }).type).toBe('tool_result'); // on the real boundary
   });
 
   it('passes usage stats through from API response', async () => {

@@ -116,6 +116,12 @@ async function resolveForCall(config?: ModelConfig) {
     betas.push(BETA_CONTEXT_1M);
   }
 
+  // NB: the 1h extended prompt-cache TTL (`cache_control.ttl:'1h'`) is GA on Bedrock
+  // and the Claude API — it needs NO beta header. We verified empirically (skill-e2e,
+  // real Bedrock) that sending `extended-cache-ttl-2025-04-11` returns
+  // `400 invalid beta flag`, so we deliberately do NOT add it. The ttl marker flows
+  // through cache_control verbatim. (See EXTENDED_CACHE_TTL_BETA in defaults.ts.)
+
   // Thinking config — from catalog compat
   let thinking: ThinkingConfig | undefined;
   if (catalogEntry?.compat?.thinking_format === 'anthropic') {

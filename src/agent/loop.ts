@@ -3,12 +3,13 @@
  */
 import { sendMessageStream, DEFAULT_MODEL, type MessageParam, type Tool, type TextBlockParam, type UsageStats, type ModelConfig, type ModelResult } from './model.js';
 import { getToolSchemas, executeTool, type ToolDefinition, type ToolResultContent } from './tools.js';
-import { buildSystemPrompt } from './context.js';
+import { buildSystemPromptSplit } from './context.js';
 import { getConfig } from '../core/config-manager.js';
 import {
   toSystemBlocks,
   addToolCacheMarker,
   injectMessageCacheMarkers,
+  appendEphemeralContext,
   pruneContext,
   cacheTTLTracker,
 } from './cache.js';
@@ -96,6 +97,13 @@ function prepareWithCache(
   tools: Tool[],
   messages: MessageParam[],
   cacheConfig?: CacheConfig,
+  /** Volatile per-turn memory context (task counts, daily logs, the
+   *  per-conversation compaction summary). Injected at the END of the message
+   *  array — AFTER the message cache breakpoint — so it never busts the cached
+   *  prefix (tools + stable system + the whole prior message history). Ephemeral:
+   *  injected only into the transient send array, never persisted. See
+   *  appendEphemeralContext(). */
+  dynamicContext?: string,
 ): {
   system: string | TextBlockParam[];
   tools: Tool[];
@@ -104,7 +112,10 @@ function prepareWithCache(
   const enabled = cacheConfig?.enabled !== false; // default: true
 
   if (!enabled) {
-    return { system, tools, messages };
+    // No caching, but the volatile context must still reach the model — append it
+    // to the message tail (same placement, just no cache markers).
+    const merged = dynamicContext ? appendEphemeralContext(messages, dynamicContext) : messages;
+    return { system, tools, messages: merged };
   }
 
   // Prune context if enabled AND cache TTL has expired
@@ -113,10 +124,18 @@ function prepareWithCache(
     processedMessages = pruneContext(messages, cacheConfig.pruneOptions);
   }
 
+  // Order matters: mark the cache breakpoint on the last REAL (persisted) message
+  // FIRST, then append the ephemeral context past it. The volatile block thus lands
+  // after the breakpoint and never enters the cached prefix.
+  let preparedMessages = injectMessageCacheMarkers(processedMessages);
+  if (dynamicContext) {
+    preparedMessages = appendEphemeralContext(preparedMessages, dynamicContext);
+  }
+
   return {
     system: toSystemBlocks(system),
     tools: addToolCacheMarker(tools),
-    messages: injectMessageCacheMarkers(processedMessages),
+    messages: preparedMessages,
   };
 }
 
@@ -139,9 +158,25 @@ export async function runAgentLoop(
   const config = await getConfig();
 
   // Use custom system/tools/model if provided (subagent mode), else defaults.
-  // buildSystemPrompt is conversation-scoped so the injected "Earlier conversation
+  // buildSystemPromptSplit is conversation-scoped so the injected "Earlier conversation
   // context" comes from THIS conversation, not the legacy ghost file.
-  const system = options?.system ?? await buildSystemPrompt(options?.agentId, options?.conversationId);
+  //
+  // Split: `system` = stable, cacheable prefix (role/sync/skills/subagents);
+  // `dynamicContext` = volatile memory context (task counts, daily logs, the
+  // per-conversation compaction summary). The volatile part is injected at the END of
+  // the message array (after the cache breakpoint), NOT in the system prompt — so the
+  // cached prefix (tools + stable system + the WHOLE prior message history) stays
+  // byte-identical across turns and keeps hitting. Subagent mode supplies its own
+  // `system` and has no dynamic part.
+  let system: string;
+  let dynamicContext: string | undefined;
+  if (options?.system !== undefined) {
+    system = options.system;
+  } else {
+    const split = await buildSystemPromptSplit(options?.agentId, options?.conversationId);
+    system = split.stable;
+    dynamicContext = split.dynamic || undefined;
+  }
   const customTools = options?.tools;
   const toolSchemas = customTools
     ? customTools.map((t) => ({ name: t.name, description: t.description, input_schema: t.input_schema })) as Tool[]
@@ -190,8 +225,14 @@ export async function runAgentLoop(
   const signal = options?.signal;
   const logTag = options?.source ?? (options?.system ? 'subagent' : 'agent');
 
+  // Token accounting: the volatile context IS sent every turn (just on the message tail,
+  // not in system), so its tokens must be counted. Folding it into the system string for
+  // estimation purposes is the simplest correct accounting — the estimator only sums
+  // buckets, and the dynamic token count is the same wherever it physically rides.
+  const systemForEstimate = dynamicContext ? `${system}\n\n${dynamicContext}` : system;
+
   // Log token breakdown before the loop starts; also capture fixed overhead for 400 recovery.
-  const initialBreakdown = estimateFullPayload({ system, tools: toolSchemas as ToolSchema[], messages });
+  const initialBreakdown = estimateFullPayload({ system: systemForEstimate, tools: toolSchemas as ToolSchema[], messages });
   log.agent.info(`${logTag} loop start`, {
     source: logTag,
     systemTokens: `~${Math.round(initialBreakdown.system / 1000)}K`,
@@ -240,7 +281,7 @@ export async function runAgentLoop(
   async function callModel(): Promise<ModelResult> {
     // Hydrate path-based images to base64 before sending to the API
     const hydratedMessages = await hydrateImagePaths(messages);
-    const prepared = prepareWithCache(system, toolSchemas, hydratedMessages, cacheConfig);
+    const prepared = prepareWithCache(system, toolSchemas, hydratedMessages, cacheConfig, dynamicContext);
     // Always use streaming — non-streaming bedrock.messages.create() can timeout
     // on models that produce long responses (e.g. embedded subagents).
     return sendMessageStream({
@@ -284,7 +325,7 @@ export async function runAgentLoop(
     // Falls through to full estimateFullPayload only on round 0 or when over budget.
     {
       const budgetResult = await guardBudget({
-        system,
+        system: systemForEstimate,
         tools: toolSchemas as ToolSchema[],
         messages,
         source: logTag,
@@ -320,7 +361,7 @@ export async function runAgentLoop(
         // Our estimator can undercount by 15-25%; using the ratio ensures we
         // trim enough so the retry actually fits under the API's hard limit.
         const currentEstimate = estimateFullPayload({
-          system, tools: toolSchemas as ToolSchema[], messages,
+          system: systemForEstimate, tools: toolSchemas as ToolSchema[], messages,
         }).total;
         const correctionRatio = currentEstimate > 0
           ? Math.max(1.0, Math.min(actualTokens / currentEstimate, 2.0))
@@ -531,7 +572,7 @@ export async function runAgentLoop(
       content: `[System: You have used all ${maxToolRounds} tool rounds. You cannot call any more tools. Respond to the user with what you have so far.]`,
     } as MessageParam);
 
-    const prepared = prepareWithCache(system, [], messages, cacheConfig); // empty tools array
+    const prepared = prepareWithCache(system, [], messages, cacheConfig, dynamicContext); // empty tools array
     const finalResult = await sendMessageStream({
       system: prepared.system,
       messages: prepared.messages,

@@ -41,6 +41,45 @@ Each tier has its own config. All tiers except Live run in parallel.
 `scripts/test-parallel.mjs` orchestrates unit + integration + e2e as 3 parallel groups.
 `*.live.test.ts` is excluded from all non-live configs — never runs accidentally.
 
+## Judging whether YOUR change caused a failure (read before you panic)
+
+The suite has a meaningful baseline of **pre-existing failures** — a full `npm test` /
+full-integration run reports a large, scary aggregate number that is mostly NOT your fault.
+Do **not** judge regressions from the aggregate count. Instead:
+
+1. **Run the touched file(s) in isolation** — `npx vitest run --config <tier>.config.ts <file>`.
+2. **Diff against a clean HEAD baseline** — stash-free method (project policy blocks `git
+   stash`): `cp` your working files aside, `git checkout HEAD -- <src>`, run the same isolated
+   file, then restore your files. If the failure count + the failing test *names* are identical
+   on HEAD, the failure is pre-existing and not yours.
+
+This is byte-for-byte reliable because each test file mocks `constants.js` to a **unique random
+tmpdir** (`createMockConstants()` uses `Date.now()`+random) and resets module singletons
+(`_resetForTesting()`). **There is no shared-`WALNUT_HOME` cross-file data pollution** — verified:
+a file's failing-test set is identical run-alone vs run-in-the-full-suite. Aggregate numbers look
+noisy only because of (a) the pre-existing failures below and (b) real **resource contention**
+when many forks spawn real sessions at once (`Timed out waiting for session result (15000ms)`),
+which is a perf artifact, not a correctness one.
+
+### Known pre-existing failures (NOT regressions — don't chase these)
+
+- **`tests/providers/claude-code-session.test.ts`, `tests/providers/session-io.test.ts`,
+  `tests/e2e/ssh-session.test.ts`** import `buildRemoteCommand` (and `session-io.test.ts` also
+  `RemoteIO`, `transferImagesForRemoteSession`) — **these symbols no longer exist in
+  `src/providers/session-io.ts`** (a 2026-05-26 refactor, commit `3970344`, removed them while the
+  2026-03-28 tests still reference them). The bad import throws, failing **every** test in the
+  file (~57 in claude-code-session, ~22 in session-io). Fix is to update the test imports to the
+  surviving exports (`shellQuote`, `buildRemotePreamble`, `wrapInLoginShell`, `REMOTE_BASE_PATH`,
+  `createSessionIO`) — owned by the sessions subsystem, tracked separately.
+- **`claude-code-session.test.ts`** also needs a running local daemon
+  (`Local daemon not running. Call localDaemon.ensureRunning()`); ~37 fail without it under a bare
+  `npx vitest` invocation.
+- Assorted contract-drift assertions (e.g. `context-inspector` expecting model `claude-opus-4-6`;
+  task DELETE expecting `200` vs actual `204`).
+
+Bottom line: a clean change can sit on top of a red full-suite run. Trust the isolated +
+HEAD-baseline diff, not the aggregate.
+
 ## Mock Constants
 
 Use the shared `createMockConstants()` helper instead of inline mock blocks:

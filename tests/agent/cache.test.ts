@@ -3,6 +3,7 @@ import {
   toSystemBlocks,
   addToolCacheMarker,
   injectMessageCacheMarkers,
+  appendEphemeralContext,
   pruneContext,
   CacheTTLTracker,
 } from '../../src/agent/cache.js';
@@ -32,6 +33,85 @@ describe('toSystemBlocks', () => {
     expect(result).toHaveLength(1);
     expect(result[0].text).toBe('');
     expect(result[0].cache_control).toBeDefined();
+  });
+
+  it('stays a SINGLE cached block — volatile content never goes in system', () => {
+    // The whole cache design depends on `system` being stable-only. Even when a long
+    // prompt is passed, toSystemBlocks must produce exactly one cached block — the
+    // volatile remainder rides the message tail (appendEphemeralContext), not here.
+    expect(toSystemBlocks('any stable prompt')).toHaveLength(1);
+  });
+});
+
+// ── Thing 2: volatile context rides the message tail, AFTER the cache breakpoint ──
+describe('appendEphemeralContext', () => {
+  const CTX = '## Recent activity\n- did X\n(task count: 3)';
+
+  it('appends the context as a trailing block on the last user message', () => {
+    const msgs: MessageParam[] = [
+      { role: 'user', content: 'hello' },
+      { role: 'assistant', content: 'hi' },
+      { role: 'user', content: 'what now' },
+    ];
+    const out = appendEphemeralContext(msgs, CTX);
+    const last = out[2];
+    expect(Array.isArray(last.content)).toBe(true);
+    const blocks = last.content as Array<{ type: string; text: string; cache_control?: unknown }>;
+    // Original text preserved, context appended AS THE LAST block.
+    expect(blocks[0].text).toBe('what now');
+    expect(blocks[blocks.length - 1].text).toBe(CTX);
+    // The appended block carries NO cache_control — it must sit past the breakpoint.
+    expect(blocks[blocks.length - 1].cache_control).toBeUndefined();
+  });
+
+  it('lands AFTER the cache breakpoint when used as the loop does (mark then append)', () => {
+    // Mirrors prepareWithCache order: injectMessageCacheMarkers first, then append.
+    const msgs: MessageParam[] = [
+      { role: 'user', content: 'turn 1' },
+      { role: 'assistant', content: 'reply 1' },
+      { role: 'user', content: 'turn 2' },
+    ];
+    const marked = injectMessageCacheMarkers(msgs);
+    const out = appendEphemeralContext(marked, CTX);
+    const blocks = out[2].content as Array<{ type: string; text: string; cache_control?: unknown }>;
+    // The breakpoint is on the ORIGINAL last block ('turn 2'); the ephemeral block
+    // follows it WITHOUT a marker — so it's never part of the cached prefix.
+    const turn2Block = blocks.find(b => b.text === 'turn 2')!;
+    expect(turn2Block.cache_control).toEqual({ type: 'ephemeral', ttl: '1h' });
+    expect(blocks[blocks.length - 1].text).toBe(CTX);
+    expect(blocks[blocks.length - 1].cache_control).toBeUndefined();
+  });
+
+  it('CORE INVARIANT: prior messages are byte-identical when only the context changes', () => {
+    // The cache-hit guarantee for the whole message history: turn 2's changed memory
+    // context must not alter ANY earlier message (the cached prefix).
+    const history: MessageParam[] = [
+      { role: 'user', content: 'q1' },
+      { role: 'assistant', content: 'a1' },
+      { role: 'user', content: 'q2' },
+    ];
+    const t1 = appendEphemeralContext(history, 'tasks: 3 | log A');
+    const t2 = appendEphemeralContext(history, 'tasks: 9 | log B totally different');
+    // Everything before the last user message is identical.
+    expect(t1[0]).toEqual(t2[0]);
+    expect(t1[1]).toEqual(t2[1]);
+    // The last user message's ORIGINAL content is identical; only the appended block differs.
+    const b1 = t1[2].content as Array<{ text: string }>;
+    const b2 = t2[2].content as Array<{ text: string }>;
+    expect(b1[0]).toEqual(b2[0]);                       // 'q2' block identical
+    expect(b1[b1.length - 1].text).not.toBe(b2[b2.length - 1].text); // context differs
+  });
+
+  it('no-ops on empty context', () => {
+    const msgs: MessageParam[] = [{ role: 'user', content: 'hi' }];
+    expect(appendEphemeralContext(msgs, '')).toBe(msgs);
+  });
+
+  it('appends a fresh trailing user message when there is no user message', () => {
+    const msgs: MessageParam[] = [{ role: 'assistant', content: 'orphan' }];
+    const out = appendEphemeralContext(msgs, CTX);
+    expect(out).toHaveLength(2);
+    expect(out[1].role).toBe('user');
   });
 });
 
