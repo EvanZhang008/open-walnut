@@ -10,6 +10,8 @@
  *   5. Resolves secrets before passing config to adapters
  */
 import type { ApiProtocol, ProtocolAdapter, ProviderConfig } from './types.js';
+import type { Config } from '../../core/types.js';
+import { resolveCredentials } from '../../core/credential-resolver.js';
 import { resolveProviderSecrets, autoDetectApiKey } from './secret.js';
 import { KNOWN_PROVIDERS } from './defaults.js';
 import { BedrockAdapter } from './adapter-bedrock.js';
@@ -79,9 +81,15 @@ export function resolveProvider(
 /**
  * Build the merged providers map: explicit config + auto-detected from env.
  * Explicit config always wins over auto-detected.
+ *
+ * `fullConfig` (optional) lets Bedrock auth be filled from the unified credential
+ * resolver — which adds ~/.claude/settings.json's env block as a source on top of
+ * env + ~/.aws. Callers that only have the providers slice can omit it; they then
+ * get the original env-token-only behavior for backward compatibility.
  */
 export function buildProviderMap(
   explicitProviders?: Record<string, ProviderConfig>,
+  fullConfig?: Config,
 ): Record<string, ProviderConfig> {
   const result: Record<string, ProviderConfig> = {};
 
@@ -100,46 +108,63 @@ export function buildProviderMap(
     }
   }
 
-  // 3. Inject Bedrock bearer token from env if no auth method is explicitly configured.
-  //    Only inject when there's no bearer_token, no access keys, and no profile —
-  //    otherwise the env token would override the user's chosen auth method.
+  // 3. Fill Bedrock auth when none is explicitly configured, using the unified
+  //    resolver (settings.json env → process.env → ~/.aws). Only fill when there's
+  //    no bearer_token / access keys / profile so the user's chosen auth wins.
   if (result.bedrock && !result.bedrock.bearer_token
       && !result.bedrock.aws_access_key_id && !result.bedrock.aws_profile) {
-    const envToken = process.env.AWS_BEARER_TOKEN_BEDROCK;
-    if (envToken) {
-      result.bedrock = { ...result.bedrock, bearer_token: envToken };
-    }
+    result.bedrock = applyResolvedBedrockAuth(result.bedrock, fullConfig);
   }
 
   return result;
 }
 
 /**
- * Synthesize a providers map from legacy config fields.
- * Called when config has no `providers` section — backward compat.
+ * Fill a Bedrock ProviderConfig's auth fields from the unified credential resolver.
+ * `aws_chain` / `none` add no explicit fields — the SDK's default credential chain
+ * handles them. Region is filled only when not already set on the provider config.
  */
-export function synthesizeFromLegacy(config: {
-  provider?: { bedrock_region?: string; bedrock_bearer_token?: string };
-  agent?: { region?: string };
-}): Record<string, ProviderConfig> {
-  const region = config.provider?.bedrock_region
-    ?? config.agent?.region
-    ?? process.env.AWS_REGION
-    ?? 'us-west-2';
+function applyResolvedBedrockAuth(bedrock: ProviderConfig, fullConfig?: Config): ProviderConfig {
+  const cfg = fullConfig ?? ({ version: 1, user: {}, defaults: { priority: 'none', category: 'personal' }, provider: { type: 'claude-code' } } as Config);
+  const resolved = resolveCredentials(cfg);
+  const out: ProviderConfig = { ...bedrock };
+  if (!out.region && resolved.region) out.region = resolved.region;
+  switch (resolved.method) {
+    case 'bearer_token':
+      out.bearer_token = resolved.bearerToken;
+      break;
+    case 'access_keys':
+      out.aws_access_key_id = resolved.accessKeyId;
+      out.aws_secret_access_key = resolved.secretAccessKey;
+      break;
+    case 'profile':
+      out.aws_profile = resolved.profile;
+      break;
+    // 'aws_chain' / null: leave as-is — default credential chain applies.
+  }
+  return out;
+}
 
-  const bearerToken = config.provider?.bedrock_bearer_token
-    ?? process.env.AWS_BEARER_TOKEN_BEDROCK;
+/**
+ * Synthesize a providers map from legacy config fields.
+ * Called when config has no `providers` section — backward compat AND the
+ * fresh-install path (no providers yet), which is exactly when onboarding
+ * matters. We seed only the region here and let buildProviderMap fill the
+ * Bedrock auth via the unified resolver, so settings.json/env/~/.aws are all
+ * considered with one consistent priority (rather than env-only here).
+ */
+export function synthesizeFromLegacy(config: Config & { agent?: { region?: string } }): Record<string, ProviderConfig> {
+  const region = config.provider?.bedrock_region
+    ?? (config.agent as { region?: string } | undefined)?.region
+    ?? undefined; // resolver fills the env/default region when this is absent
 
   const providers: Record<string, ProviderConfig> = {
-    bedrock: {
-      api: 'bedrock',
-      region,
-      ...(bearerToken ? { bearer_token: bearerToken } : {}),
-    },
+    bedrock: { api: 'bedrock', ...(region ? { region } : {}) },
   };
 
-  // Also auto-detect other providers from env
-  return buildProviderMap(providers);
+  // buildProviderMap auto-detects other providers from env AND fills Bedrock auth
+  // from the unified resolver (settings.json → env → ~/.aws).
+  return buildProviderMap(providers, config as Config);
 }
 
 /**

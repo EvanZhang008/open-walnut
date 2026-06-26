@@ -1,5 +1,16 @@
 /**
- * SetupBanner — onboarding checklist shown in the chat area when system isn't fully configured.
+ * SetupBanner — first-run onboarding shown in the chat area until the butler
+ * has a working AI provider. It routes between THREE paths to a credential:
+ *
+ *   1. Auto-detect  — when Walnut already resolved a credential from a non-config
+ *      source (env / ~/.claude/settings.json / ~/.aws), show a small dismissible
+ *      "Auto-detected via <source>" confirmation instead of the full checklist.
+ *   2. Hero (paste)  — a one-click copy block the user pastes into their OWN
+ *      already-authenticated Claude Code; the setup-walnut skill mirrors the exact
+ *      working credential into Walnut, installs deps, and starts the server.
+ *   3. Manual        — jump to Settings → AI Provider (the existing Bedrock form
+ *      with bearer-token / access-keys / profile + live Test Connection).
+ *
  * Dismissible via localStorage; re-accessible from NotificationPanel.
  */
 import { useState, useCallback, useEffect } from 'react';
@@ -7,9 +18,26 @@ import type { SystemHealth } from '@/hooks/useSystemHealth';
 import { InstallButton } from './InstallButton';
 
 const LS_DISMISS_KEY = 'walnut-setup-dismissed';
+/** Separate key so dismissing the small "auto-detected" note doesn't hide the real checklist later. */
+const LS_AUTODETECT_DISMISS_KEY = 'walnut-setup-autodetect-dismissed';
 
 /** Custom event name dispatched by NotificationPanel to re-show the banner. */
 export const SETUP_SHOW_EVENT = 'setup:show-guide';
+
+/** The exact line the user pastes into their own Claude Code session (path 2, the hero). */
+export const SETUP_SKILL_PASTE =
+  'Set up Open Walnut for me: read and run the skill at ' +
+  'https://github.com/EvanZhang008/open-walnut/blob/main/skills/setup-walnut/SKILL.md ' +
+  '— copy the Bedrock credentials this Claude Code is already using into ~/.open-walnut/config.yaml, ' +
+  'install dependencies, and start the server.';
+
+/** Human label for each credential source. */
+const SOURCE_LABELS: Record<string, string> = {
+  config: 'saved configuration',
+  'claude-settings': '~/.claude/settings.json',
+  env: 'environment variables',
+  'aws-files': '~/.aws credentials',
+};
 
 interface SetupBannerProps {
   health: SystemHealth;
@@ -20,57 +48,96 @@ export function SetupBanner({ health, onNavigateSettings }: SetupBannerProps) {
   const [dismissed, setDismissed] = useState(() => {
     try { return localStorage.getItem(LS_DISMISS_KEY) === 'true'; } catch { return false; }
   });
+  const [autoNoteDismissed, setAutoNoteDismissed] = useState(() => {
+    try { return localStorage.getItem(LS_AUTODETECT_DISMISS_KEY) === 'true'; } catch { return false; }
+  });
 
   const handleDismiss = useCallback(() => {
     setDismissed(true);
-    try { localStorage.setItem(LS_DISMISS_KEY, 'true'); } catch {}
+    try { localStorage.setItem(LS_DISMISS_KEY, 'true'); } catch { /* ignore */ }
   }, []);
 
-  // Listen for "Show Setup Guide" from NotificationPanel
+  const handleAutoNoteDismiss = useCallback(() => {
+    setAutoNoteDismissed(true);
+    try { localStorage.setItem(LS_AUTODETECT_DISMISS_KEY, 'true'); } catch { /* ignore */ }
+  }, []);
+
+  // Listen for "Show Setup Guide" from NotificationPanel — clears both dismiss flags.
   useEffect(() => {
-    const handler = () => setDismissed(false);
+    const handler = () => { setDismissed(false); setAutoNoteDismissed(false); };
     window.addEventListener(SETUP_SHOW_EVENT, handler);
     return () => window.removeEventListener(SETUP_SHOW_EVENT, handler);
   }, []);
 
+  const providerOk = health.hasReadyProvider ?? false;
+  const cliOk = health.claudeCliAvailable ?? true;
+  const source = health.credentialSource;
+
+  // ── Path 1: auto-detected. Provider is ready from a NON-config source → show a
+  //    small confirmation note (transparent + overridable), not the full checklist. ──
+  const autoDetected = providerOk && !!source && source !== 'config' && source !== 'none';
+  if (autoDetected) {
+    if (autoNoteDismissed) return null;
+    return (
+      <div className="setup-banner setup-banner-autodetect">
+        <div className="setup-banner-header">
+          <span className="setup-banner-title">
+            {'✓'} Auto-detected Bedrock via {SOURCE_LABELS[source] ?? source}
+          </span>
+          <button className="setup-banner-dismiss" onClick={handleAutoNoteDismiss} aria-label="Dismiss">&times;</button>
+        </div>
+        <p className="text-sm text-muted" style={{ margin: 0 }}>
+          Walnut is using {health.credentialDetail ? <code style={{ fontSize: 11 }}>{health.credentialDetail}</code> : 'detected credentials'}.
+          {' '}
+          <button className="setup-link-btn" onClick={() => onNavigateSettings('#providers')}>Change provider</button>
+        </p>
+      </div>
+    );
+  }
+
+  // Provider ready from config (explicit) and CLI present → fully set up, nothing to show.
+  if (providerOk && cliOk) return null;
   if (dismissed) return null;
 
-  const cliOk = health.claudeCliAvailable ?? true;
-  const providerOk = health.hasReadyProvider ?? true;
-
-  // All steps done — don't show banner
-  if (cliOk && providerOk) return null;
-
+  // ── Provider NOT ready → full onboarding with the three paths. ──
   return (
     <div className="setup-banner">
       <div className="setup-banner-header">
-        <span className="setup-banner-title">Setup Checklist</span>
+        <span className="setup-banner-title">Get Walnut talking</span>
         <button className="setup-banner-dismiss" onClick={handleDismiss} aria-label="Dismiss setup banner">&times;</button>
       </div>
 
-      <div className="setup-banner-steps">
-        {/* Step 1: Claude Code CLI */}
-        <SetupStep
-          done={cliOk}
-          label="Install Claude Code CLI"
-          required
-        >
-          <InstallButton target="claude-cli" />
-          <CopyCommand command="npm install -g @anthropic-ai/claude-code" />
-        </SetupStep>
+      {!providerOk && (
+        <>
+          {/* Path 2 — the hero: paste into your own Claude Code */}
+          <div className="setup-hero">
+            <div className="setup-hero-label">
+              <span className="setup-hero-badge">Fastest</span>
+              Already using Claude Code? Paste this into it — it copies your working
+              credentials into Walnut and starts everything:
+            </div>
+            <CopyCommand command={SETUP_SKILL_PASTE} multiline />
+          </div>
 
-        {/* Step 2: AI Provider */}
-        <SetupStep
-          done={providerOk}
-          label="Configure an AI provider"
-          required
-        >
-          <button className="setup-step-btn" onClick={() => onNavigateSettings('#providers')}>
-            Settings &rarr; AI Provider
-          </button>
-        </SetupStep>
+          {/* Path 3 — manual */}
+          <div className="setup-alt">
+            <span className="text-sm text-muted">Or configure a provider yourself:</span>
+            <button className="setup-step-btn" onClick={() => onNavigateSettings('#providers')}>
+              Settings &rarr; AI Provider
+            </button>
+          </div>
+        </>
+      )}
 
-      </div>
+      {/* CLI install — optional, only powers coding sessions (the butler doesn't need it). */}
+      {!cliOk && (
+        <div className="setup-banner-steps" style={{ marginTop: 10 }}>
+          <SetupStep done={false} label="Install Claude Code CLI (for coding sessions)" required={false}>
+            <InstallButton target="claude-cli" />
+            <CopyCommand command="npm install -g @anthropic-ai/claude-code" />
+          </SetupStep>
+        </div>
+      )}
     </div>
   );
 }
@@ -83,7 +150,7 @@ function SetupStep({ done, label, required, children }: {
 }) {
   return (
     <div className={`setup-step ${done ? 'done' : 'pending'}`}>
-      <span className="setup-step-icon">{done ? '\u2713' : '\u25CB'}</span>
+      <span className="setup-step-icon">{done ? '✓' : '○'}</span>
       <div className="setup-step-content">
         <span className="setup-step-label">
           {label}
@@ -95,21 +162,21 @@ function SetupStep({ done, label, required, children }: {
   );
 }
 
-function CopyCommand({ command }: { command: string }) {
+function CopyCommand({ command, multiline }: { command: string; multiline?: boolean }) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(command).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    }).catch(() => {});
+    }).catch(() => { /* clipboard blocked — user can still select the text */ });
   }, [command]);
 
   return (
-    <span className="setup-copy-wrap">
-      <code className="setup-command" onClick={handleCopy} title="Click to copy">{command}</code>
+    <span className={`setup-copy-wrap${multiline ? ' setup-copy-wrap-multiline' : ''}`}>
+      <code className={`setup-command${multiline ? ' setup-command-multiline' : ''}`} onClick={handleCopy} title="Click to copy">{command}</code>
       <button className="setup-copy-btn" onClick={handleCopy} aria-label="Copy command">
-        {copied ? '\u2713' : '\u2398'}
+        {copied ? '✓' : '⎘'}
       </button>
     </span>
   );

@@ -18,8 +18,19 @@ export interface DaemonHealth {
   connected: boolean;
 }
 
+/** Where the active Bedrock credential was resolved from. Mirrors the server's CredentialSource. */
+export type CredentialSource = 'config' | 'claude-settings' | 'env' | 'aws-files' | 'none';
+
 export interface SystemHealth {
   daemons?: DaemonHealth[];
+  /** True when the Claude Code CLI is on the server's PATH (coding sessions work). */
+  claudeCliAvailable?: boolean;
+  /** True when at least one AI provider has a usable credential (the butler can talk). */
+  hasReadyProvider?: boolean;
+  /** Where the active Bedrock credential came from (for the onboarding "auto-detected" note). */
+  credentialSource?: CredentialSource;
+  /** Short human-readable provenance, e.g. "AWS_BEARER_TOKEN_BEDROCK" or "profile: dev". */
+  credentialDetail?: string;
 }
 
 const defaultHealth: SystemHealth = {};
@@ -76,5 +87,10 @@ export function useSystemHealth() {
   const gitSyncFailing = !gitSync.protected || gitSync.consecutiveFailures >= 3;
   const hasIssues = gitSyncFailing;
 
-  return { health, gitSync, hasIssues, loading };
+  // Setup is "complete" once the butler has a provider AND the CLI is present.
+  // Fields are optional on the wire; treat undefined as "not yet known" → not complete,
+  // so the banner can appear on first load rather than flashing complete-then-incomplete.
+  const setupComplete = health.claudeCliAvailable === true && health.hasReadyProvider === true;
+
+  return { health, gitSync, hasIssues, loading, setupComplete };
 }

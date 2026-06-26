@@ -25,6 +25,9 @@ vi.mock('../../src/core/config-manager.js', () => ({
     provider: { type: 'bedrock' },
     plugins: {},
   })),
+  // ensureInit() → initDirectories() calls seedConfigDefaults(); mock it so the
+  // task-store-touching migration tests don't hit a missing-export error.
+  seedConfigDefaults: vi.fn(async () => {}),
 }));
 
 import { WALNUT_HOME, TASKS_FILE, CONFIG_FILE } from '../../src/constants.js';
@@ -188,6 +191,46 @@ describe('migrateConfigToPlugins', () => {
 
     const changed = await migrateConfigToPlugins();
     expect(changed).toBe(false);
+  });
+
+  // Regression: `providers` is a first-class config key (the butler reads
+  // config.providers). It must NOT be migrated into plugins.providers, which used
+  // to silently break Bedrock auth for every onboarding path that writes a provider.
+  it('does NOT migrate the first-class `providers` key into plugins', async () => {
+    const config = {
+      version: 1,
+      providers: { bedrock: { api: 'bedrock', region: 'us-west-2', bearer_token: 'tok' } },
+    };
+    await fsp.writeFile(CONFIG_FILE, yaml.dump(config));
+
+    const changed = await migrateConfigToPlugins();
+    expect(changed).toBe(false);
+
+    const result = yaml.load(await fsp.readFile(CONFIG_FILE, 'utf-8')) as Record<string, unknown>;
+    expect(result.providers).toBeDefined();
+    expect((result.providers as Record<string, unknown>).bedrock).toBeDefined();
+    expect((result.plugins as Record<string, unknown> | undefined)?.providers).toBeUndefined();
+  });
+
+  // Self-heal: a previous build mis-migrated providers into plugins.providers.
+  // The migration must move it back to the top level so the butler can authenticate.
+  it('self-heals a mis-migrated plugins.providers back to top-level providers', async () => {
+    const config = {
+      version: 1,
+      plugins: { providers: { enabled: true, bedrock: { api: 'bedrock', region: 'us-west-2', bearer_token: 'tok' } } },
+    };
+    await fsp.writeFile(CONFIG_FILE, yaml.dump(config));
+
+    const changed = await migrateConfigToPlugins();
+    expect(changed).toBe(true);
+
+    const result = yaml.load(await fsp.readFile(CONFIG_FILE, 'utf-8')) as Record<string, unknown>;
+    const providers = result.providers as Record<string, unknown>;
+    expect(providers).toBeDefined();
+    expect(providers.bedrock).toEqual({ api: 'bedrock', region: 'us-west-2', bearer_token: 'tok' });
+    // the injected `enabled` flag is dropped and plugins.providers is gone
+    expect(providers.enabled).toBeUndefined();
+    expect((result.plugins as Record<string, unknown>).providers).toBeUndefined();
   });
 });
 

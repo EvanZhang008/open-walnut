@@ -1,0 +1,24 @@
+# Keep the build context lean AND keep host secrets/artifacts out of the image.
+# Native modules are rebuilt inside the container, so never ship host node_modules/dist.
+node_modules
+web/node_modules
+dist
+web/dist
+build
+
+# Local-only, large, or sensitive — must never enter the image.
+demo
+.open-walnut
+**/.env
+**/.env.*
+**/*.pem
+**/credentials
+
+# VCS + editor noise
+.git
+.github
+*.log
+.DS_Store
+coverage
+test-results
+playwright-report

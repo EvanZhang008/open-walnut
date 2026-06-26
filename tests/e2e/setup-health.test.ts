@@ -67,6 +67,19 @@ describe('GET /api/system/health — setup fields', () => {
     expect([true, false]).toContain(body.hasReadyProvider)
   })
 
+  it('exposes credentialSource consistent with hasReadyProvider', async () => {
+    const res = await fetch(apiUrl('/api/system/health'))
+    const body = await res.json()
+    // credentialSource is one of the known provenance labels (or 'none' when unconfigured).
+    expect(['config', 'claude-settings', 'env', 'aws-files', 'none', undefined]).toContain(body.credentialSource)
+    // When a provider is ready the source must NOT be 'none'; when not ready it must be 'none'.
+    if (body.hasReadyProvider) {
+      expect(body.credentialSource).not.toBe('none')
+    } else {
+      expect(body.credentialSource).toBe('none')
+    }
+  })
+
   it('health response includes all expected top-level fields', async () => {
     const res = await fetch(apiUrl('/api/system/health'))
     const body = await res.json()

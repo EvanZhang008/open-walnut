@@ -92,7 +92,7 @@ async function resolveForCall(config?: ModelConfig) {
   // Build providers map: auto-detected (env) + explicit config.providers overlay
   const hasExplicitProviders = fullConfig.providers && Object.keys(fullConfig.providers).length > 0;
   let providers = hasExplicitProviders
-    ? buildProviderMap(fullConfig.providers)
+    ? buildProviderMap(fullConfig.providers, fullConfig)
     : synthesizeFromLegacy(fullConfig);
 
   // Resolve the provider

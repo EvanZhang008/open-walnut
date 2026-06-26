@@ -1,0 +1,55 @@
+# Pristine clean-room image for testing/recording Open Walnut's first-run onboarding.
+#
+# Why a dedicated image: the dev's Mac is "polluted" — a real AWS_BEARER_TOKEN_BEDROCK in
+# the shell and a populated ~/.claude — so it can never honestly show the new-user flow.
+# A container gives a guaranteed-empty home (fresh ~/.claude, no AWS env, empty
+# ~/.open-walnut) where the onboarding banner actually fires.
+#
+# It builds the app fresh inside the image (Linux native modules: better-sqlite3, sharp).
+# Search/embedding is disabled (WALNUT_DISABLE_SEARCH=1) so no 1.16GB model download.
+#
+# Build:  docker build -f Dockerfile.onboarding -t walnut-onboarding .
+# Run  :  docker run --rm -p 3457:3457 walnut-onboarding              # path 1/3: no creds
+#         docker run --rm -p 3457:3457 \
+#           -e AWS_BEARER_TOKEN_BEDROCK=... -e AWS_REGION=us-west-2 \
+#           walnut-onboarding                                          # path 2 happy-path
+#
+# The container CANNOT touch the production server on :3456 — separate kernel namespace,
+# separate home, separate port. Nothing is mounted from the host.
+
+FROM node:22-bookworm-slim
+
+# Build toolchain for native modules (better-sqlite3, sharp, node-pty) + git for the skill demo.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3 make g++ git ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Run as a non-root user with a fresh, empty HOME → fresh ~/.claude + ~/.open-walnut.
+RUN useradd -m -u 10001 walnut
+USER walnut
+WORKDIR /home/walnut/app
+
+# Install backend deps first (layer cache). Copy package manifests only.
+COPY --chown=walnut:walnut package.json package-lock.json* ./
+COPY --chown=walnut:walnut web/package.json web/package-lock.json* ./web/
+# postinstall runs patch-package + (cd web && npm install) + patch-qmd; needs the patches/ + scripts/.
+COPY --chown=walnut:walnut patches ./patches
+COPY --chown=walnut:walnut scripts ./scripts
+RUN npm install
+
+# Copy the rest of the source and build (server → dist/, SPA → web/dist/).
+COPY --chown=walnut:walnut . .
+RUN npm run web:build
+
+# Clean-room runtime env:
+#  - empty HOME means ~/.claude and ~/.aws don't exist → resolver finds nothing → onboarding fires
+#  - no AWS_*/ANTHROPIC_* baked in (pass at `docker run -e` only for the happy-path demo)
+#  - search disabled so boot is fast and the image stays lean
+ENV WALNUT_DISABLE_SEARCH=1 \
+    PORT=3457 \
+    NODE_ENV=production
+
+EXPOSE 3457
+
+# Serve the prebuilt dist on :3457. (web:build already ran above, so just run the server.)
+CMD ["node", "dist/cli.js", "web", "--port", "3457"]

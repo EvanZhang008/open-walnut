@@ -604,7 +604,7 @@ export async function loadPlugins(registry: IntegrationRegistry): Promise<void> 
 
 // Known non-plugin top-level config keys — everything else is treated as a legacy plugin key.
 const KNOWN_NON_PLUGIN_KEYS = new Set([
-  'version', 'user', 'defaults', 'provider', 'agent', 'local',
+  'version', 'user', 'defaults', 'provider', 'providers', 'agent', 'local',
   'favorites', 'ordering', 'session_server', 'hosts', 'session_limits', 'session',
   'heartbeat', 'tools', 'search', 'git_versioning', 'session_hooks', 'plugins', 'focus_bar',
   'stt', 'tts', 'api_keys', 'push_tokens',
@@ -632,6 +632,18 @@ export async function migrateConfigToPlugins(): Promise<boolean> {
 
   let changed = false;
   const plugins = (raw.plugins ?? {}) as Record<string, Record<string, unknown>>;
+
+  // Self-heal: a previous build mis-migrated the first-class `providers` key into
+  // plugins.providers (it was missing from KNOWN_NON_PLUGIN_KEYS). The butler reads
+  // top-level config.providers, so a mis-migrated config left it unable to authenticate.
+  // Move it back to the top level (drop the injected `enabled` flag) before re-migrating.
+  if (plugins.providers && raw.providers == null) {
+    const { enabled: _enabled, ...providerEntries } = plugins.providers;
+    raw.providers = providerEntries;
+    delete plugins.providers;
+    log.info('config migration: restored plugins.providers → top-level providers');
+    changed = true;
+  }
 
   for (const [key, val] of Object.entries(raw)) {
     if (KNOWN_NON_PLUGIN_KEYS.has(key)) continue;

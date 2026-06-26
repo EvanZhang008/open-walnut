@@ -167,6 +167,11 @@ export interface SystemHealthState {
   daemons?: Array<{ host: string; label: string; connected: boolean }>;
   claudeCliAvailable: boolean;
   hasReadyProvider: boolean;
+  /** Where the active Bedrock credential was resolved from (for the onboarding UI).
+   *  Undefined until a health refresh runs; 'none' when nothing is configured. */
+  credentialSource?: import('../core/credential-resolver.js').CredentialSource;
+  /** Short human-readable provenance, e.g. "AWS_BEARER_TOKEN_BEDROCK" or "profile: dev". */
+  credentialDetail?: string;
 }
 
 const systemHealth: SystemHealthState = {
@@ -181,7 +186,10 @@ export function getSystemHealth(): SystemHealthState {
 /** Re-run all health checks, update shared state, and broadcast to clients. */
 export async function refreshSystemHealth(): Promise<SystemHealthState> {
   systemHealth.claudeCliAvailable = checkClaudeCliAvailable()
-  systemHealth.hasReadyProvider = await checkHasReadyProvider()
+  const cred = await resolveCredentialHealth()
+  systemHealth.hasReadyProvider = cred.hasReadyProvider
+  systemHealth.credentialSource = cred.source
+  systemHealth.credentialDetail = cred.detail
   broadcastEvent('system:health', systemHealth)
   return systemHealth
 }
@@ -196,40 +204,41 @@ function checkClaudeCliAvailable(): boolean {
   }
 }
 
-/** Check if at least one AI provider is ready.
- *  Uses the same buildProviderMap + credential detection as the Settings page
- *  so the two always agree. */
-async function checkHasReadyProvider(): Promise<boolean> {
+/** Resolve provider readiness + where the Bedrock credential came from.
+ *  Bedrock detection delegates to the unified credential resolver (config →
+ *  ~/.claude/settings.json env → process.env → ~/.aws) so the Settings page,
+ *  the butler, and onboarding all agree on one priority chain. Non-Bedrock
+ *  providers count as ready when they carry an explicit key. */
+async function resolveCredentialHealth(): Promise<{
+  hasReadyProvider: boolean
+  source?: import('../core/credential-resolver.js').CredentialSource
+  detail?: string
+}> {
   try {
     const { getConfig } = await import('../core/config-manager.js')
+    const { resolveCredentials } = await import('../core/credential-resolver.js')
     const { buildProviderMap } = await import('../agent/providers/registry.js')
     const config = await getConfig()
-    // buildProviderMap auto-detects bedrock + merges env-based providers
-    const providers = buildProviderMap(config.providers)
-    for (const [, prov] of Object.entries(providers)) {
-      if (prov.api === 'ollama') continue
-      const implemented = prov.api === 'bedrock' || prov.api === 'anthropic-messages'
-        || prov.api === 'openai-chat' || prov.api === 'google-generative-ai'
-      if (!implemented) continue
-      // For bedrock: check the full AWS credential chain (env, files, profiles)
-      if (prov.api === 'bedrock') {
-        if (prov.bearer_token || prov.api_key) return true
-        if (process.env.AWS_BEARER_TOKEN_BEDROCK) return true
-        if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) return true
-        // Check ~/.aws/credentials file
-        const { existsSync } = await import('node:fs')
-        const { join } = await import('node:path')
-        const home = process.env.HOME ?? ''
-        if (existsSync(join(home, '.aws', 'credentials'))) return true
-        if (existsSync(join(home, '.aws', 'config'))) return true
-        continue
-      }
-      // Other providers need an explicit key
-      if (prov.api_key || prov.bearer_token) return true
+
+    // Bedrock — the primary path for our audience.
+    const cred = resolveCredentials(config)
+    if (cred.source !== 'none') {
+      return { hasReadyProvider: true, source: cred.source, detail: cred.detail }
     }
-    return false
+
+    // Other providers (Anthropic direct, OpenAI, Google) — ready if they have a key.
+    const providers = buildProviderMap(config.providers, config)
+    for (const [, prov] of Object.entries(providers)) {
+      if (prov.api === 'bedrock' || prov.api === 'ollama') continue
+      const implemented = prov.api === 'anthropic-messages'
+        || prov.api === 'openai-chat' || prov.api === 'google-generative-ai'
+      if (implemented && (prov.api_key || prov.bearer_token)) {
+        return { hasReadyProvider: true, source: 'config', detail: prov.api }
+      }
+    }
+    return { hasReadyProvider: false, source: 'none' }
   } catch {
-    return false
+    return { hasReadyProvider: false, source: 'none' }
   }
 }
 
@@ -249,9 +258,16 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   if (!systemHealth.claudeCliAvailable) {
     log.web.warn('Claude Code CLI not found on PATH — sessions will not work')
   }
-  systemHealth.hasReadyProvider = await checkHasReadyProvider()
-  if (!systemHealth.hasReadyProvider) {
-    log.web.warn('No AI provider configured — configure one in Settings')
+  {
+    const cred = await resolveCredentialHealth()
+    systemHealth.hasReadyProvider = cred.hasReadyProvider
+    systemHealth.credentialSource = cred.source
+    systemHealth.credentialDetail = cred.detail
+    if (!systemHealth.hasReadyProvider) {
+      log.web.warn('No AI provider configured — configure one in Settings')
+    } else if (cred.source && cred.source !== 'config') {
+      log.web.info('Auto-detected Bedrock credential', { source: cred.source, detail: cred.detail })
+    }
   }
 
   // Event-loop lag monitor — makes starvation visible (logs a warn whenever a
@@ -387,8 +403,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           if (result.response) {
             broadcastEvent('agent:response', { text: result.response, source: 'cron' })
           }
-          // Persist agent response to chat history
-          const newApiMsgs = result.messages.slice(history.length)
+          // Persist agent response to chat history. newMessages (not slice(history.length))
+          // is trim-safe — see chat.ts. NB: pass the WHOLE array incl. the user prompt at [0];
+          // unlike chat.ts we did NOT eager-persist the prompt, so it must be persisted here.
+          const newApiMsgs = result.newMessages
           await chatHistory.addAIMessages(newApiMsgs, { source: 'cron', agentId: 'general', conversationId })
           log.cron.info('agent done', { jobName, newMessages: newApiMsgs.length })
           // Trigger background compaction outside the turn queue
@@ -765,7 +783,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   }
 
   // -- QMD hybrid search stores --
-  try {
+  // Opt-out for lean/clean-room deployments (Docker onboarding test, CI) where the
+  // ~1.16GB embedding model download is unwanted and search isn't exercised.
+  if (process.env.WALNUT_DISABLE_SEARCH === '1') {
+    log.memory.info('QMD search disabled via WALNUT_DISABLE_SEARCH=1 — skipping embedding model init')
+  } else try {
     const { initQmdStores } = await import('../core/qmd-store.js')
     const { startQmdWatcher } = await import('../core/qmd-watcher.js')
     const { setQmdRouteStatus } = await import('./routes/qmd.js')
@@ -1082,8 +1104,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     if (event.name !== EventNames.CONFIG_CHANGED) return
     try {
       const prev = systemHealth.hasReadyProvider
-      systemHealth.hasReadyProvider = await checkHasReadyProvider()
-      if (systemHealth.hasReadyProvider !== prev) {
+      const prevSource = systemHealth.credentialSource
+      const cred = await resolveCredentialHealth()
+      systemHealth.hasReadyProvider = cred.hasReadyProvider
+      systemHealth.credentialSource = cred.source
+      systemHealth.credentialDetail = cred.detail
+      if (cred.hasReadyProvider !== prev || cred.source !== prevSource) {
         broadcastEvent('system:health', systemHealth)
       }
     } catch { /* non-critical */ }
@@ -1700,7 +1726,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // Notification decision comes from the structured notify_main_agent tool call,
         // not from parsing text tags. Tool calls are binary — called or not called.
         const triageUpdate = notification?.trim() ?? ''
-        const willNotifyMainAgent = !!(triageUpdate && taskId)
+        // notify_mode gates the EXPENSIVE main-agent turn (loads the full, never-compacted
+        // conversation into the costly model). Default 'off': the triage subagent already
+        // wrote task.summary/note/phase via its own tools, so the main agent sees the work
+        // when it next polls the task — no real-time wake needed. 'realtime' = legacy behavior
+        // (enqueue a main-agent turn now). 'buffered' = don't enqueue, but nudge the heartbeat
+        // to review on its next cycle.
+        const notifyMode = triageConf2.agent?.triage?.notify_mode ?? 'off'
+        const willNotifyMainAgent = !!(triageUpdate && taskId) && notifyMode === 'realtime'
 
         // Build display-safe task ref (uses <task-ref> XML tag for clickable link rendering)
         let displayTaskRef: string
@@ -1714,8 +1747,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         }
         const triageTimestamp = new Date().toISOString()
 
-        // Wake heartbeat after session triage
-        if (heartbeatHandle) {
+        // Wake heartbeat after session triage — only when notify_mode allows it. In 'off'
+        // mode the user wants the main agent fully quiet (poll-only), so skip the wake too;
+        // waking it would re-introduce the cost via a heartbeat turn. 'buffered' and
+        // 'realtime' both let the heartbeat review on its next cycle.
+        if (heartbeatHandle && notifyMode !== 'off') {
           heartbeatHandle.requestNow('session-ended', `Session for task ${taskId} just completed and was triaged.`)
         }
 
@@ -1842,7 +1878,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
               if (agentResult.response) {
                 broadcastEvent('agent:response', { text: agentResult.response, source: 'triage', conversationId })
               }
-              const newApiMsgs = agentResult.messages.slice(history.length)
+              // newMessages (not slice(history.length)) is trim-safe — see chat.ts. NB: pass
+              // the WHOLE array incl. the user prompt at [0]; unlike chat.ts we did NOT
+              // eager-persist the prompt, so it must be persisted here.
+              const newApiMsgs = agentResult.newMessages
               await chatHistory.addAIMessages(newApiMsgs, { source: 'triage', taskId, agentId: 'general', conversationId })
               log.web.info('triage main agent done', { taskId, newMessages: newApiMsgs.length })
               triggerBackgroundCompaction('triage', { agentId: 'general', conversationId })
@@ -2233,8 +2272,10 @@ async function startHeartbeatIfConfigured(): Promise<void> {
             broadcastEvent('agent:response', { text: responseText, source: 'heartbeat' })
           }
 
-          // Persist agent response to chat history
-          const newApiMsgs = result.messages.slice(history.length)
+          // Persist agent response to chat history. newMessages (not slice(history.length))
+          // is trim-safe — see chat.ts. NB: pass the WHOLE array incl. the user prompt at [0];
+          // unlike chat.ts we did NOT eager-persist the prompt, so it must be persisted here.
+          const newApiMsgs = result.newMessages
 
           // Check for HEARTBEAT_OK — if the AI says nothing needs attention,
           // persist a compact notification instead of full AI messages.

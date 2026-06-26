@@ -15,12 +15,14 @@ import { ChatPanel } from '@/components/chat/ChatPanel';
 import { ChatMessage, type RouteInfo } from '@/components/chat/ChatMessage';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { TodoPanel } from '@/components/tasks/TodoPanel';
+import { TaskDetailModal } from '@/components/tasks/TaskDetailModal';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { PendingSessionPanel } from '@/components/sessions/PendingSessionPanel';
 import { SessionPathSelector, type QuickStartPath, type QuickStartTaskMeta } from '@/components/sessions/SessionPathSelector';
 import { QuestionPopover, parseAskQuestionInput } from '@/components/chat/QuestionPopover';
 import { TriagePanel } from '@/components/triage/TriagePanel';
 import { fetchSession, fetchSessionsForTask, quickStartSession } from '@/api/sessions';
+import { fetchConfig } from '@/api/config';
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
 import { QuickAccessBar } from '@/components/chat/QuickAccessBar';
 import { AgentTabBar, slugifyAgentId } from '@/components/chat/AgentTabBar';
@@ -176,6 +178,22 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const focusTaskIdSet = useMemo(() => new Set(focusBar.focusIds), [focusBar.focusIds]);
   const waitTaskIdSet = useMemo(() => new Set(focusBar.waitIds), [focusBar.waitIds]);
   const ordering = useOrdering();
+  // Configured task defaults (platform/category/project) for quick-add capture. Fetched
+  // once; refreshed on config:changed. Quick-add ("Add to Focus") routes to these instead
+  // of inheriting the active tab's (possibly external-synced) category/source.
+  const [taskDefaults, setTaskDefaults] = useState<{ platform?: string; category?: string; project?: string }>({});
+  useEffect(() => {
+    let alive = true;
+    fetchConfig()
+      .then((c) => { if (alive) setTaskDefaults({ platform: c.defaults?.platform, category: c.defaults?.category, project: c.defaults?.project }); })
+      .catch(() => { /* defaults stay empty — falls back to local/Inbox below */ });
+    return () => { alive = false; };
+  }, []);
+  useEvent('config:changed', () => {
+    fetchConfig()
+      .then((c) => setTaskDefaults({ platform: c.defaults?.platform, category: c.defaults?.category, project: c.defaults?.project }))
+      .catch(() => {});
+  });
   const [focusedTask, setFocusedTask] = useState<Task | null>(null);
   // Nonce that increments on every focus action — forces re-scroll even for same task
   const [focusNonce, setFocusNonce] = useState(0);
@@ -811,24 +829,44 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     } catch { /* non-critical */ }
   }, []);
 
-  const handleCreate = useCallback(async (input: { title: string; priority: string; category?: string; project?: string; starred?: boolean; pinnedTier?: 'focus' | 'satellite' | 'wait' }) => {
-    const task = await create({
-      title: input.title,
-      priority: input.priority as 'high' | 'low' | 'none',
-      category: input.category,
-      project: input.project,
-    });
+  const handleCreate = useCallback(async (input: { title: string; priority: string; category?: string; project?: string; starred?: boolean; pinnedTier?: 'focus' | 'satellite' | 'wait'; capture?: boolean }) => {
+    const tier = input.pinnedTier;
+    // Quick-capture ("Add to Focus/Satellite/Wait", Focus Dock) routes to the user's
+    // configured Default Platform + Category instead of the active tab's category — so a
+    // capture made while viewing an external-synced tab (e.g. personal → MS To-Do) still
+    // lands in the fast local Inbox unless the user changed the default. Falls back to
+    // local/Inbox if config hasn't loaded. The main Quick Add form (explicit category
+    // picker) is NOT a capture and keeps its chosen category/source.
+    const captureCategory = taskDefaults.category || 'Inbox';
+    const captureSource = taskDefaults.platform || 'local';
+    const task = await create(
+      {
+        title: input.title,
+        priority: input.priority as 'high' | 'low' | 'none',
+        category: input.capture ? captureCategory : input.category,
+        project: input.capture ? taskDefaults.project : input.project,
+        ...(input.capture ? { source: captureSource } : {}),
+      },
+      tier
+        ? {
+            onOptimistic: (tempId) => focusBar.addLocalPin(tempId, tier),
+            onReconcile: (tempId, realId) => {
+              focusBar.replaceLocalPinId(tempId, realId);
+              // Persist to the server (pin + tier). Optimistic state already shows it,
+              // so a failure just rolls the row back out of the tier.
+              focusBar.commitPin(realId, tier).catch(() => focusBar.removeLocalPin(realId));
+            },
+            onError: (tempId) => focusBar.removeLocalPin(tempId),
+          }
+        : undefined,
+    );
     try {
       if (input.starred && task?.id) star(task.id);
-      if (input.pinnedTier && task?.id) {
-        // Pin first (defaults to satellite), then set the requested tier unconditionally.
-        // Previously 'focus' was skipped here, leaving the task stuck in satellite.
-        await focusBar.pin(task.id);
-        await focusBar.setTier(task.id, input.pinnedTier);
-        // Locate the task wherever it landed (any tier, not just focus). Focusing it
-        // scrolls the Pinned region to the right tier card. Set focus directly from the
-        // returned task object — dispatching the dock event alone is unreliable here
-        // because the task may not be in the local map yet (arrives via WS).
+      if (tier && task?.id) {
+        // Locate the task wherever it landed. Focusing it scrolls the Pinned region to
+        // the right tier card. Set focus directly from the returned task object —
+        // dispatching the dock event alone is unreliable because the task may not be in
+        // the local map yet (arrives via WS).
         setFocusedTask(task);
         setFocusNonce((n) => n + 1);
         window.dispatchEvent(new CustomEvent('dock:activate-task', { detail: { taskId: task.id } }));
@@ -837,11 +875,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       console.warn('Quick add post-create side-effect failed', err);
     }
     return task;
-  }, [create, star, focusBar]);
+  }, [create, star, focusBar, taskDefaults]);
 
   // Inline "+" in the Focus Dock — create a task and pin it straight to the Focus tier.
+  // capture:true routes it to the configured Default Platform/Category (fast local Inbox
+  // by default) rather than the active tab.
   const handleQuickAddToFocus = useCallback(async (title: string) => {
-    await handleCreate({ title, priority: 'none', pinnedTier: 'focus' });
+    await handleCreate({ title, priority: 'none', pinnedTier: 'focus', capture: true });
   }, [handleCreate]);
 
   // Ref to avoid re-creating handleFocusTask on every focus change (which defeats React.memo on TodoPanel)
@@ -882,6 +922,17 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   const handleClearFocus = useCallback(() => {
     setFocusedTask(null);
+    setSuppressDetail(false);
+  }, []);
+
+  // Open the full-screen task detail modal for a taskId (used by the Session panel
+  // kebab "Task detail"). Unlike handleFocusTaskById this OPENS the detail (no
+  // suppressDetail) and does not touch the session panel rotation.
+  const handleOpenTaskDetailById = useCallback((taskId: string) => {
+    const task = taskMapRef.current.get(taskId);
+    if (!task) return;
+    setFocusedTask(task);
+    setFocusNonce(n => n + 1);
     setSuppressDetail(false);
   }, []);
 
@@ -1099,6 +1150,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           taskGroups={taskGroups}
           onGroupTasks={groupTasks}
           onUngroupTask={(taskId) => ungroupTasks([taskId])}
+          onUngroupTasks={ungroupTasks}
           onRenameGroup={renameGroup}
           onOpenSession={handleToggleSession}
           onTaskClick={handleFocusTaskById}
@@ -1355,6 +1407,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                   onToggleLock={handleToggleLockSession}
                   onClose={handleCloseSession}
                   onTaskClick={handleFocusTaskById}
+                  onOpenTaskDetail={handleOpenTaskDetailById}
                   onSessionClick={handleSessionClick}
                   onSessionReplaced={handleSessionReplaced}
                   onForkPending={handleForkPending}
@@ -1373,6 +1426,20 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       {focusBar.visible && <FocusDock focusBar={focusBar} onQuickAddToFocus={handleQuickAddToFocus} />}
 
       </div>{/* end .main-page-right */}
+
+      {/* Full-screen task detail — shared by TodoPanel clicks AND the Session panel
+          kebab "Task detail" item (both drive focusedTask). suppressDetail (set by
+          openDetail:false focus calls, e.g. locating a task) keeps it closed. */}
+      {focusedTask && !suppressDetail && (
+        <TaskDetailModal
+          task={focusedTask}
+          allTasks={tasks}
+          onClose={handleClearFocus}
+          onOpenSession={handleToggleSession}
+          onOpenTriageForTask={handleOpenTriageForTask}
+          onFocusChild={handleFocusTask}
+        />
+      )}
 
     </div>
   );
