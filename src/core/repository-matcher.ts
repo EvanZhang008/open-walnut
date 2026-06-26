@@ -110,7 +110,7 @@ function parseRepoYaml(content: string): ParsedRepo | undefined {
 
     // Flush multiline value when we hit a non-indented line
     if (multilineKey && trimmed && !line.startsWith(' ') && !line.startsWith('\t')) {
-      (result as Record<string, unknown>)[multilineKey] = multilineValue.join('\n').trim();
+      (result as unknown as Record<string, unknown>)[multilineKey] = multilineValue.join('\n').trim();
       multilineKey = null;
       multilineValue = [];
     }
@@ -207,7 +207,7 @@ function parseRepoYaml(content: string): ParsedRepo | undefined {
 
   // Flush final multiline value
   if (multilineKey) {
-    (result as Record<string, unknown>)[multilineKey] = multilineValue.join('\n').trim();
+    (result as unknown as Record<string, unknown>)[multilineKey] = multilineValue.join('\n').trim();
   }
 
   // Must have at least one host to be useful

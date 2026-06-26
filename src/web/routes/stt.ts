@@ -10,7 +10,7 @@ import { getConfig, updateConfig } from '../../core/config-manager.js';
 import { transcribeAudio, createEngine, getOrCreateEngine, type SttResult } from '../../core/stt/index.js';
 import { createWhisperCppEngine } from '../../core/stt/engine-whisper-cpp.js';
 import { detectSystem } from '../../core/stt/detect.js';
-import { installViaBrew, downloadGgmlModel, MODEL_CATALOG, VAD_MODEL, getModelDir, SHERPA_MODEL_CATALOG, downloadSherpaModel, getSherpaModelDir, findSherpaModels } from '../../core/stt/setup.js';
+import { installViaBrew, downloadGgmlModel, MODEL_CATALOG, VAD_MODEL, getModelDir, SHERPA_MODEL_CATALOG, downloadSherpaModel, getSherpaModelDir, findSherpaModels, type SetupEvent } from '../../core/stt/setup.js';
 import { log } from '../../logging/index.js';
 
 export const sttRouter = Router();
@@ -189,7 +189,7 @@ sttRouter.post('/setup', express.json(), async (req: Request, res: Response) => 
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
 
-  const send = (data: Record<string, unknown>) => {
+  const send = (data: SetupEvent | Record<string, unknown>) => {
     res.write(`data: ${JSON.stringify(data)}\n\n`);
   };
 
@@ -267,7 +267,8 @@ sttRouter.post('/setup', express.json(), async (req: Request, res: Response) => 
  */
 sttRouter.delete('/models/:name', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { name } = req.params;
+    // Route param is always a single string; the express types widen it to a union.
+    const { name } = req.params as { name: string };
     const catalogEntry = MODEL_CATALOG.find(m => m.name === name);
     if (!catalogEntry) {
       res.status(404).json({ error: `Unknown model: ${name}` });

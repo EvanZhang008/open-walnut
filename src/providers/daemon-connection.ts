@@ -230,11 +230,11 @@ export class DaemonConnection {
     }
     if (changed && onPoolStatusChange) {
       try {
-        const result = onPoolStatusChange()
+        const result: void | Promise<void> = onPoolStatusChange()
         // Handle async callbacks: swallow unhandled rejection warnings.
         // The registered callback already has its own inner try/catch for logging.
-        if (result && typeof (result as unknown as Promise<void>).catch === 'function') {
-          ;(result as unknown as Promise<void>).catch(() => {})
+        if (result instanceof Promise) {
+          result.catch(() => {})
         }
       } catch {}
     }
@@ -1990,14 +1990,15 @@ export class DaemonConnection {
 
 // ── Pool-level status change callback ──
 
-let onPoolStatusChange: (() => void) | null = null
+let onPoolStatusChange: (() => void | Promise<void>) | null = null
 
 /**
  * Register a callback that fires whenever any DaemonConnection's
  * connected state changes.  Used by server.ts to broadcast daemon
- * status to the frontend via WebSocket.
+ * status to the frontend via WebSocket. May be async — the caller
+ * swallows the returned promise's rejection.
  */
-export function setOnDaemonStatusChange(cb: () => void): void {
+export function setOnDaemonStatusChange(cb: () => void | Promise<void>): void {
   onPoolStatusChange = cb
 }
 

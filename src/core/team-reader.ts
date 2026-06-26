@@ -738,12 +738,13 @@ export async function extractTeamsFromLeadJsonlRemote(
   try {
     const { DaemonFileReader } = await import('./daemon-file-reader.js');
     const reader = new DaemonFileReader(host);
-    const content = await reader.findSession(sessionId);
-    if (!content) {
+    // findSession returns { content, path } (or null), not a raw string.
+    const found = await reader.findSession(sessionId);
+    if (!found) {
       log.session.debug('extractTeamsFromLeadJsonlRemote: lead JSONL not found', { sessionId, host });
       return new Map();
     }
-    const teams = extractTeamsFromContent(content);
+    const teams = extractTeamsFromContent(found.content);
     log.session.debug('extractTeamsFromLeadJsonlRemote', {
       sessionId, host, teams: [...teams.keys()],
       agentCount: [...teams.values()].reduce((n, a) => n + a.length, 0),

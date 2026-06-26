@@ -205,8 +205,9 @@ export function getModelsForProvider(
       // User override replaces catalog entry (spread keeps catalog defaults for missing fields)
       merged[idx] = { ...merged[idx], ...override };
     } else {
-      // New model from user — append with provider set
-      merged.push({ provider: providerName, ...override });
+      // New model from user — append with provider defaulted to this provider
+      // (override.provider wins if the user set one explicitly).
+      merged.push({ ...override, provider: override.provider ?? providerName });
     }
   }
   return merged;

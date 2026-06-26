@@ -18,7 +18,7 @@ import { readPlanFromSession, buildPlanExecutionMessage } from '../../utils/plan
 import { injectCompactBoundary, buildCompactSummary } from '../../utils/compact-inject.js'
 import { findLocalJsonlPath } from '../../core/session-file-reader.js'
 import { getFrequentDirs, compileFromSessions } from '../../core/frequent-dirs.js'
-import type { SessionRecord, Task } from '../../core/types.js'
+import type { SessionRecord, SessionMode, Task } from '../../core/types.js'
 import { VALID_SESSION_MODEL_IDS } from '../../core/types.js'
 import type { SessionHistoryMessage } from '../../core/session-history.js'
 import { processAndSaveImages, buildSessionImageContext } from './images.js'
@@ -762,7 +762,7 @@ sessionsRouter.patch('/:sessionId', async (req: Request, res: Response, next: Ne
     if (mode !== undefined && existingRecord?.mode !== mode) {
       const liveSession = sessionRunner.findByClaudeId(sessionId)
       if (liveSession) {
-        liveSession._mode = mode as SessionMode
+        liveSession.setMode(mode as SessionMode)
       }
       // Set pendingMode so processNext() knows to skip FIFO and use --resume
       // with the new --permission-mode flag. Without this, a FIFO session would
@@ -1585,7 +1585,7 @@ sessionsRouter.post('/:sessionId/retry', async (req: Request, res: Response, nex
       if (alive) {
         // Case 2 — process alive, connection dropped: just clear error state
         await updateSessionRecord(sessionId, { process_status: 'running', errorMessage: undefined, status_reason: 'retry_reconnect', status_changed_by: 'user' } as any)
-        bus.emit(EventNames.SESSION_STATUS_CHANGED, { sessionId, process_status: 'running', taskId: record.taskId })
+        bus.emit(EventNames.SESSION_STATUS_CHANGED, { sessionId, process_status: 'running', taskId: record.taskId }, ['web-ui'])
         log.web.info('session retry: reconnected (process alive)', { sessionId, taskId: record.taskId })
         res.json({ status: 'reconnected', sessionId })
         return

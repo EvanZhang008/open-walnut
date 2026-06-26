@@ -125,6 +125,9 @@ function convertResponse(choice: OpenAI.Chat.Completions.ChatCompletion.Choice):
 
   if (choice.message.tool_calls) {
     for (const tc of choice.message.tool_calls) {
+      // SDK models tool_calls as a union (function | custom). We only emit
+      // function tools, so skip any custom-tool variant that lacks `.function`.
+      if (tc.type !== 'function') continue;
       let input: Record<string, unknown> = {};
       try { input = JSON.parse(tc.function.arguments); } catch { /* empty */ }
       blocks.push({

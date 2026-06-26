@@ -1609,11 +1609,13 @@ defaults (same resolution chain as session_start).`,
           const exactPath = remoteJsonlPath(sessionId, resolvedCwd);
           jsonlContent = await reader.readFile(exactPath);
           if (!jsonlContent) {
-            // Canonical path missed — try `find` on the remote host
-            jsonlContent = await reader.findSession(sessionId);
-            if (jsonlContent) {
+            // Canonical path missed — try `find` on the remote host.
+            // findSession returns { content, path } (or null), not a raw string.
+            const found = await reader.findSession(sessionId);
+            if (found) {
+              jsonlContent = found.content;
               log.session.info('import_session: JSONL found via remote find fallback', {
-                sessionId, host: resolvedHost, triedPath: exactPath,
+                sessionId, host: resolvedHost, triedPath: exactPath, foundPath: found.path,
               });
             }
           }

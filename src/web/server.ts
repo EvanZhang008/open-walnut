@@ -79,6 +79,7 @@ import { addNotification as addFeedNotification } from '../core/notifications/st
 import { registerAuthRpc } from './routes/auth-rpc.js'
 import { initPushNotifications } from '../core/push-notification.js'
 import { enqueueMainAgentTurn, getQueueStatus, recordLastTurnTokens, getLastTurnTokens } from './agent-turn-queue.js'
+import { effectiveTotalTokens, ESTIMATE_CORRECTION } from '../core/token-truth.js'
 import { triggerBackgroundCompaction } from './background-compaction.js'
 import {
   startHeartbeatRunner,
@@ -1738,12 +1739,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // Build display-safe task ref (uses <task-ref> XML tag for clickable link rendering)
         let displayTaskRef: string
         try {
+          if (!taskId) throw new Error('no taskId')
           const refTask = await getTask(taskId)
           const refLabel = refTask.project && refTask.project !== refTask.category
             ? `${refTask.project} / ${refTask.title}` : refTask.title
           displayTaskRef = `<task-ref id="${taskId}" label="${refLabel}"/>`
         } catch {
-          displayTaskRef = taskId
+          displayTaskRef = taskId ?? ''
         }
         const triageTimestamp = new Date().toISOString()
 
@@ -1815,19 +1817,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
                 estimatedTotal = contextLimit // force bail
               }
 
-              // Fix 2: the offline estimator (estimateFullPayload → @anthropic-ai/tokenizer,
-              // Claude-2 BPE) undercounts Claude 3+ payloads by ~35%, so the raw estimate
-              // sailed under the 0.92 threshold even at a real ~1.03M tokens — the bail
-              // never fired. Decide in REAL-token space using two independent signals,
-              // taking the larger (more conservative):
-              //   1. estimate × ESTIMATE_CORRECTION — static calibration (~1.35 observed in logs)
-              //   2. last turn's EXACT API input_tokens for this conversation — ground truth;
-              //      history only grows between turns (a successful compaction would shrink it,
-              //      but over-bailing just degrades to notification-only, which is safe).
-              const ESTIMATE_CORRECTION = 1.35
+              // Decide in REAL-token space (estimator undercounts Claude 3+ by ~35%, so the
+              // raw estimate sailed under the threshold even at a real ~1.03M tokens — the bail
+              // never fired). effectiveTotalTokens = max(estimate × 1.35, last EXACT API tokens).
+              // Same shared helper as background-compaction's needsCompaction gate — one impl,
+              // one source-of-truth map. See token-truth.ts.
               const correctedEstimate = Math.round(estimatedTotal * ESTIMATE_CORRECTION)
               const lastExact = getLastTurnTokens(conversationId) ?? 0
-              const effectiveTotal = Math.max(correctedEstimate, lastExact)
+              const effectiveTotal = effectiveTotalTokens(estimatedTotal, conversationId)
 
               if (effectiveTotal > contextLimit * TRIAGE_BAIL_PERCENT) {
                 log.web.warn('triage main agent skipped: history near context limit', {

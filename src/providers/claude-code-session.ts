@@ -314,9 +314,11 @@ export class ClaudeCodeSession {
    *  invariant compares this against result.subtype (success + null = truncation). */
   private _lastStopReason: string | null | undefined
   /** Delivery latency + path of the most recent delivered batch, surfaced into the
-   *  per-turn wide event (forensic observability). Stamped by logDeliveryLatency. */
-  private _lastDeliveryMs: number | undefined
-  private _lastDeliveryPath: string | undefined
+   *  per-turn wide event (forensic observability). Stamped by SessionRunner's
+   *  logDeliveryLatency onto the target session instance (not `private` because the
+   *  runner writes it across instances). */
+  _lastDeliveryMs: number | undefined
+  _lastDeliveryPath: string | undefined
   private livenessTimer: ReturnType<typeof setInterval> | null = null
   private _outputFile: string | null = null
   private cliCommand: string
@@ -581,8 +583,9 @@ export class ClaudeCodeSession {
   }>()
   /** Timestamp when spawn() was called — used to measure time-to-init for diagnostics. */
   private _spawnTs = 0
-  /** Wall-clock ts of the HTTP request that triggered this start (latency instrumentation only). */
-  private _requestTs = 0
+  /** Wall-clock ts of the HTTP request that triggered this start (latency instrumentation only).
+   *  Not `private` — SessionRunner stamps it on the instance before send(). */
+  _requestTs = 0
   /** Ts when transport.start() resolved (daemon spawned the CLI). For init-latency breakdown. */
   private _transportReadyTs = 0
   /** Timestamp of the last message delivery (FIFO write or --resume spawn). */
@@ -657,6 +660,13 @@ export class ClaudeCodeSession {
 
   get mode(): SessionMode {
     return this._mode
+  }
+
+  /** Update the in-memory session mode so emitStatusChanged() reflects the new
+   *  value. The next message still forces --resume (via pendingMode) to actually
+   *  apply the new --permission-mode. Called from the REST mode-change handler. */
+  setMode(mode: SessionMode): void {
+    this._mode = mode
   }
 
   get activity(): string | undefined {
@@ -2773,7 +2783,7 @@ export class ClaudeCodeSession {
             // from the tool_use input instead of the base64 data. This keeps the
             // streaming pipeline lightweight — paths are short and the frontend's
             // findImagePaths() detects them and renders via /api/local-image.
-            const hasImageBlocks = Array.isArray(block.content) && block.content.some((c: Record<string, unknown>) => c.type === 'image')
+            const hasImageBlocks = Array.isArray(block.content) && block.content.some((c) => (c as { type?: string }).type === 'image')
             const cachedPath = block.tool_use_id ? this._toolInputFilePaths.get(block.tool_use_id) : undefined
             if (hasImageBlocks && cachedPath) {
               // Use the file path from the tool input — avoids piping 130K+ base64 through the bus
@@ -2853,7 +2863,7 @@ export class ClaudeCodeSession {
         //      completion entirely (don't even update _lastResultCost — it's noise).
         //  (b) our in-flight counter shows live background tasks → withhold
         //      AGENT_COMPLETE; stay running. The idle-after-drain event completes it.
-        const resultOrigin = (event as Record<string, unknown>).origin as { kind?: string } | undefined
+        const resultOrigin = (event as { origin?: { kind?: string } }).origin
         const isTaskNotificationResult = resultOrigin?.kind === 'task-notification'
         if (isTaskNotificationResult) {
           log.session.info('result is task-notification origin — bookkeeping only, no turn-over', {
@@ -2916,8 +2926,8 @@ export class ClaudeCodeSession {
 
         // Extract error messages from the result (e.g. "No conversation found with session ID: ...")
         let resultText = result.result ?? this.fullText
-        const resultErrors = Array.isArray((result as Record<string, unknown>).errors)
-          ? ((result as Record<string, unknown>).errors as string[])
+        const resultErrors = Array.isArray((result as { errors?: unknown }).errors)
+          ? ((result as { errors?: string[] }).errors)
           : undefined
 
         // Detect Claude Code "soft" is_error — the turn actually produced real output
@@ -5051,7 +5061,7 @@ export class SessionRunner {
       // includes these messages when the turn eventually completes
       this.batchCounts.set(sessionId, (this.batchCounts.get(sessionId) ?? 0) + newMsgs.length)
       log.session.info('handleSend: message injected mid-turn via stdin', { sessionId, count: newMsgs.length })
-      this.logDeliveryLatency(sessionId, 'mid-turn', newMsgs)
+      this.logDeliveryLatency(sessionId, 'mid-turn', newMsgs, targetSession)
 
       // Write synthetic user events so history has user messages for dedup.
       // Without this, mid-turn injected messages are missing from JSONL history,
@@ -5095,7 +5105,7 @@ export class SessionRunner {
    * single message from RPC through delivery. deliveryMs = now - enqueuedAt
    * of the oldest message in the batch (worst-case wait the user felt).
    */
-  private logDeliveryLatency(sessionId: string, path: 'stdin' | 'mid-turn' | 'resume', msgs: QueuedMessage[]): void {
+  private logDeliveryLatency(sessionId: string, path: 'stdin' | 'mid-turn' | 'resume', msgs: QueuedMessage[], session?: ClaudeCodeSession): void {
     const now = Date.now()
     let maxMs = 0
     let oldestId: string | undefined
@@ -5113,9 +5123,15 @@ export class SessionRunner {
       deliveryMs: maxMs,
       messageId: oldestId,
     })
-    // Stash for the next per-turn wide event (forensic observability).
-    this._lastDeliveryMs = maxMs
-    this._lastDeliveryPath = path
+    // Stash on the target session instance for its next per-turn wide event
+    // (forensic observability). The result handler that reads these lives on
+    // ClaudeCodeSession, so the values MUST land on that instance — not on the
+    // runner. Fall back to a lookup if the caller didn't pass the instance.
+    const target = session ?? this.findByClaudeId(sessionId)
+    if (target) {
+      target._lastDeliveryMs = maxMs
+      target._lastDeliveryPath = path
+    }
   }
 
   /**
@@ -5135,7 +5151,7 @@ export class SessionRunner {
       sessionId,
       count: msgs.length,
     }, ['main-ai'], { source: 'session-runner' })
-    this.logDeliveryLatency(sessionId, 'resume', msgs)
+    this.logDeliveryLatency(sessionId, 'resume', msgs, session)
   }
 
   /**
@@ -5356,7 +5372,7 @@ export class SessionRunner {
         // No local PID pre-flight check needed.
         if (await targetSession.writeMessage(combined)) {
           log.session.info('processNext: message sent via stdin (no new process)', { sessionId })
-          this.logDeliveryLatency(sessionId, 'stdin', msgs)
+          this.logDeliveryLatency(sessionId, 'stdin', msgs, targetSession)
 
           // Write synthetic user events to streams file so Phase 1 has user messages.
           // One event per queued message so each optimistic copy can dedup by ID.

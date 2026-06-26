@@ -61,16 +61,16 @@ async function executeOneHook(
         await executeSendMessage(hook, task)
         break
       case 'invoke_agent':
-        log.core.warn('invoke_agent hook not yet implemented', { hookId: hook.id })
+        log.task.warn('invoke_agent hook not yet implemented', { hookId: hook.id })
         break
       case 'schedule_check':
-        log.core.warn('schedule_check hook not yet implemented', { hookId: hook.id })
+        log.task.warn('schedule_check hook not yet implemented', { hookId: hook.id })
         break
     }
-    log.core.info('phase hook executed', { hookId: hook.id, taskId: task.id, phase: task.phase })
+    log.task.info('phase hook executed', { hookId: hook.id, taskId: task.id, phase: task.phase })
     return { hookId: hook.id, executed: true }
   } catch (err) {
-    log.core.error('phase hook failed', { hookId: hook.id, taskId: task.id, error: String(err) })
+    log.task.error('phase hook failed', { hookId: hook.id, taskId: task.id, error: String(err) })
     return { hookId: hook.id, executed: false, skipped: `error: ${String(err)}` }
   }
 }

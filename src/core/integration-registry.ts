@@ -22,6 +22,7 @@ const noopLocalSync: IntegrationSync = {
   updateDependencies: async () => {},
   associateSubtask: async () => {},
   disassociateSubtask: async () => {},
+  pushTask: async () => ({ serverTimestamp: new Date().toISOString() }),
   syncPoll: async () => {},
 };
 

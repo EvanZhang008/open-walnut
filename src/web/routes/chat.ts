@@ -971,7 +971,7 @@ export function registerChatRpc(): void {
             // Display-only stat from the post-loop working array. After a mid-turn
             // 400-trim this is the SHORTENED in-memory array, so it can under-report
             // the on-disk message count — it is never persisted and not the canonical count.
-            apiMessageCount: result.messages.filter((m: { compacted?: boolean }) => !m.compacted).length,
+            apiMessageCount: result.messages.filter((m) => !(m as { compacted?: boolean }).compacted).length,
             estimatedTokens: result.tokenBreakdown.messages,
             systemTokens: result.tokenBreakdown.system,
             toolsTokens: result.tokenBreakdown.tools,
