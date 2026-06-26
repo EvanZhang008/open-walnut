@@ -1,0 +1,13 @@
+# Pre-commit gate (committed). Intentionally light — the heavy checks
+# (type-check, full scan) run at push time in .husky/pre-push.
+#
+# Runs an OPTIONAL local-only scanner (scripts/local/scan-sensitive-staged.sh,
+# gitignored) if present — the maintainer uses it to catch private content in
+# staged changes before it ever lands in a commit. Absent for everyone else,
+# so this hook is a no-op for them.
+#
+# Bypass with `git commit --no-verify`.
+
+if [ -x scripts/local/scan-sensitive-staged.sh ]; then
+  scripts/local/scan-sensitive-staged.sh || exit 1
+fi

@@ -1,0 +1,28 @@
+# Pre-push gate (committed; runs for everyone who installs deps).
+#
+# 1. TypeScript type-check — matches CI's `npm run lint` (tsc --noEmit).
+#    The local dev build uses tsup/esbuild, which ONLY transpiles and SKIPS
+#    type-checking, so type errors stay invisible locally and surface only in
+#    CI. This makes a local push fail for the same reason CI would, before the
+#    error reaches the remote.
+#
+# 2. An OPTIONAL local-only scanner (scripts/local/scan-sensitive.sh, gitignored)
+#    runs afterwards if present — used by this repo's maintainer to scan for
+#    private content before pushing to the public mirror. Absent for everyone
+#    else, so this hook degrades to just the type-check.
+#
+# Bypass everything with `git push --no-verify` (not recommended).
+
+echo "Type-checking before push (tsc --noEmit)…"
+if ! npm run --silent lint; then
+  echo ""
+  echo "Push blocked: TypeScript errors above (CI would fail too)."
+  echo "Fix them, or bypass with: git push --no-verify"
+  exit 1
+fi
+echo "✓ Type-check passed."
+
+# Optional local sensitive-content scanner — forward stdin (the pre-push refs).
+if [ -x scripts/local/scan-sensitive.sh ]; then
+  scripts/local/scan-sensitive.sh || exit 1
+fi

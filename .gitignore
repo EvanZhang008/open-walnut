@@ -66,3 +66,6 @@ tools/
 
 # Local demo assets (4K video, clips, thumbnails, launch kit) — large + local-only, never committed
 demo/
+
+# Local-only maintainer scripts (sensitive-content scanners — contain private grep patterns, never commit)
+scripts/local/
