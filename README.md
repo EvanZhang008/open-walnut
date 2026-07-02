@@ -137,7 +137,7 @@ See **[GETTING_STARTED.md](GETTING_STARTED.md#remote-sessions-via-ssh)** for the
 
 **A GitHub-style, per-session diff — see exactly what each session touched.**
 
-![A per-session diff in Open Walnut: a GitHub-style view of exactly what one Claude Code session changed](docs/session-changed.png)
+![A per-session diff in Open Walnut: a GitHub-style view of exactly what one Claude Code session changed](docs/gifs/06-changed-review.gif)
 
 Click a session's **Changed** chip for a full-screen diff: every file it edited, split or unified, grouped by repo. The before/after is rebuilt from the session's **own history** (not git), so edits stay attributed per session even when several agents share a repo.
 
