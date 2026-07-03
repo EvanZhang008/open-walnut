@@ -15,14 +15,19 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { WALNUT_HOME } from '../../constants.js';
+import { LOG_DIR } from '../../constants.js';
 import { log } from '../../logging/index.js';
 import { bus, EventNames } from '../event-bus.js';
 import { registerIncidentSink } from './recorder.js';
 import type { Incident, IncidentStatus, InvariantViolation, TurnEvent } from './types.js';
 
-/** incidents.json lives next to sessions.json / tasks/ under WALNUT_HOME. */
-const INCIDENTS_FILE = path.join(WALNUT_HOME, 'incidents.json');
+/**
+ * incidents.json lives under LOG_DIR (/tmp/open-walnut), next to the evidence
+ * bundles it indexes — NOT under WALNUT_HOME (git-sync commits that every 30s).
+ * The index and its bundles are ephemeral forensic state; keeping them together
+ * in /tmp avoids dangling bundlePath refs and keeps them out of version control.
+ */
+const INCIDENTS_FILE = path.join(LOG_DIR, 'incidents.json');
 /** Keep the store bounded — most-recent N. Older incidents drop off the tail. */
 const MAX_INCIDENTS = 200;
 /** Don't open a second incident for the same sid+rule within this window. */

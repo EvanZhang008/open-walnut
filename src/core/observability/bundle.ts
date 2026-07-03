@@ -15,7 +15,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { CLAUDE_HOME, LOG_DIR, SESSION_STREAMS_DIR, WALNUT_HOME } from '../../constants.js';
+import { CLAUDE_HOME, LOG_DIR, SESSION_STREAMS_DIR } from '../../constants.js';
 import { log } from '../../logging/index.js';
 
 /** Default look-back window for server/turn log lines. */
@@ -33,7 +33,10 @@ interface BundleMeta {
 
 /**
  * Capture an all-layer evidence bundle for a session into
- * `WALNUT_HOME/incidents/<sessionId>-<ts>` and return that absolute dir path.
+ * `LOG_DIR/incidents/<sessionId>-<ts>` and return that absolute dir path.
+ * Lives under LOG_DIR (/tmp/open-walnut) — same place as the source logs it
+ * copies — NOT under WALNUT_HOME, which git-sync commits every 30s. An evidence
+ * bundle is an ephemeral forensic dump; it must never enter version control.
  * Defensive: a missing/unreadable source is recorded in meta.notesIfMissing
  * rather than thrown — the bundle is best-effort by design.
  */
@@ -43,7 +46,7 @@ export async function captureBundle(
 ): Promise<string> {
   const windowMins = opts?.windowMins ?? DEFAULT_WINDOW_MINS;
   const ts = Date.now();
-  const dir = path.join(WALNUT_HOME, 'incidents', `${sessionId}-${ts}`);
+  const dir = path.join(LOG_DIR, 'incidents', `${sessionId}-${ts}`);
 
   const meta: BundleMeta = {
     sessionId,

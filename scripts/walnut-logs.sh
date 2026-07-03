@@ -347,9 +347,10 @@ PY
     # observability module is inlined into the big cli.js/server.js bundles —
     # there's no standalone dist/core/observability/bundle.js to import.
     sid="${1:?usage: bundle <sid> [mins]}"; mins="${2:-60}"
-    home="${OPEN_WALNUT_HOME:-$HOME/.open-walnut}"
+    # Bundles live under LOG_DIR (/tmp/open-walnut/incidents), next to the source
+    # logs — NOT under OPEN_WALNUT_HOME, which git-sync commits. Matches bundle.ts.
     ts="$(date +%s)000"   # epoch ms (matches Date.now() in the in-process version)
-    dir="$home/incidents/$sid-$ts"
+    dir="$LOG_DIR/incidents/$sid-$ts"
     mkdir -p "$dir"
     cutoff_ms=$(( ($(date +%s) - mins * 60) * 1000 ))
     included=(); missing=()
