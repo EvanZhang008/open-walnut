@@ -482,6 +482,27 @@ export function renderMarkdownWithRefs(text: string, sessionCwd?: string, host?:
   return html;
 }
 
+/**
+ * Render markdown to clean, self-contained HTML suitable for copying as RICH TEXT
+ * into external editors (Docs / Word / email / Slack).
+ *
+ * Unlike renderMarkdownWithRefs, this deliberately does NOT inject walnut-internal
+ * links (file-link / task-ref / session-ref / image proxy). Those are meaningless
+ * — and can leak internal filesystem paths — once pasted outside the app. Output is
+ * standard semantic HTML only (h/ul/ol/table/pre/code/strong/a…), so the paste
+ * target applies its own styling. Uses the same marked config as the on-screen
+ * render so the copied rich text matches what the user sees.
+ */
+export function markdownToRichHtml(text: string): string {
+  try {
+    const raw = marked.parse(text);
+    const html = typeof raw === 'string' ? raw : '';
+    return DOMPurify.sanitize(html);
+  } catch {
+    return DOMPurify.sanitize(text);
+  }
+}
+
 // ── Shared constants for tool call markdown field expansion (Phase 2) ──
 
 /** Input field keys that should never get markdown expansion (IDs, paths, etc.) */
