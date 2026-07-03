@@ -1,5 +1,6 @@
 import type { UsageByGroup } from '@/api/usage';
 import { formatTokens } from '@/utils/format';
+import { usageDisplayName } from '@/utils/usageLabels';
 
 interface Props {
   data: UsageByGroup[];
@@ -26,7 +27,7 @@ export function UsageBreakdownTable({ data, loading }: Props) {
       <tbody>
         {data.map((row) => (
           <tr key={row.name}>
-            <td><span className="usage-source-badge">{row.name}</span></td>
+            <td><span className="usage-source-badge">{usageDisplayName(row.name)}</span></td>
             <td className="num">${row.cost_usd.toFixed(4)}</td>
             <td className="num">{formatTokens(row.input_tokens)}</td>
             <td className="num">{formatTokens(row.cache_read_tokens)}</td>

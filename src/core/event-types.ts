@@ -83,7 +83,15 @@ export interface SessionResultEvent {
   taskId?: string;
   result: string;
   isError?: boolean;
+  /** CLI's cumulative cost for the current process (running total, restarts at 0
+   *  on each --resume). For DISPLAY only — do NOT bill this; it would re-charge the
+   *  whole running total every turn (the 13× session-cost inflation bug). */
   totalCost?: number;
+  /** The billable INCREMENT since the last result (totalCost minus the per-process
+   *  watermark). This is what gets recorded to the usage ledger. 0 for replayed
+   *  results. Absent on legacy daemon payloads — consumers must NOT fall back to
+   *  billing totalCost when this is undefined. */
+  costDelta?: number;
   duration?: number;
   usage?: { input_tokens: number; output_tokens: number };
   /** True when a Claude Code team (in_process_teammate) is still active — this is an

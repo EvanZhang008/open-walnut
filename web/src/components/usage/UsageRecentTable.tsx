@@ -1,5 +1,6 @@
 import type { UsageRecord } from '@/api/usage';
 import { formatTokens } from '@/utils/format';
+import { usageDisplayName } from '@/utils/usageLabels';
 
 interface Props {
   data: UsageRecord[];
@@ -17,6 +18,7 @@ export function UsageRecentTable({ data, loading }: Props) {
           <tr>
             <th>Time</th>
             <th>Source</th>
+            <th>Agent</th>
             <th>Model</th>
             <th className="num">Input</th>
             <th className="num">Cache Read</th>
@@ -30,9 +32,10 @@ export function UsageRecentTable({ data, loading }: Props) {
             <tr key={r.id}>
               <td className="mono">{formatTime(r.timestamp)}</td>
               <td>
-                <span className="usage-source-badge">{r.source}</span>
-                {r.parent_source && <span className="usage-parent-source">via {r.parent_source}</span>}
+                <span className="usage-source-badge">{usageDisplayName(r.source)}</span>
+                {r.parent_source && <span className="usage-parent-source">via {usageDisplayName(r.parent_source)}</span>}
               </td>
+              <td>{r.agentId ? <span className="usage-source-badge">{usageDisplayName(r.agentId)}</span> : <span className="usage-parent-source">—</span>}</td>
               <td className="mono">{shortenModel(r.model)}</td>
               <td className="num">{formatTokens(r.input_tokens)}</td>
               <td className="num">{formatTokens(r.cache_read_input_tokens)}</td>

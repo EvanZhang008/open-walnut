@@ -45,6 +45,7 @@ export interface UsageRecord {
   taskId?: string;
   sessionId?: string;
   runId?: string;
+  agentId?: string;
   external_cost_usd?: number;
   duration_ms?: number;
   parent_source?: string;
@@ -77,6 +78,11 @@ export async function fetchBySource(period: Period = '30d'): Promise<UsageByGrou
 export async function fetchByModel(period: Period = '30d'): Promise<UsageByGroup[]> {
   const res = await apiGet<{ models: UsageByGroup[] }>('/api/usage/by-model', { period });
   return res.models;
+}
+
+export async function fetchByAgent(period: Period = '30d'): Promise<UsageByGroup[]> {
+  const res = await apiGet<{ agents: UsageByGroup[] }>('/api/usage/by-agent', { period });
+  return res.agents;
 }
 
 export async function fetchRecentRecords(limit = 50): Promise<UsageRecord[]> {

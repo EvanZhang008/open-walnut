@@ -14,7 +14,7 @@ const PERIODS: { value: Period; label: string }[] = [
 ];
 
 export function UsageSection() {
-  const { summary, daily, bySource, byModel, recent, loading, error, period, setPeriod, refresh } = useUsage();
+  const { summary, daily, bySource, byModel, byAgent, recent, loading, error, period, setPeriod, refresh } = useUsage();
 
   const activeSummary = summary?.[period === 'today' ? 'today' : period === '7d' ? 'week' : period === '30d' ? 'month' : 'allTime'];
 
@@ -52,6 +52,10 @@ export function UsageSection() {
         <div className="usage-breakdown-panel">
           <h2>By Source</h2>
           <UsageBreakdownTable data={bySource} loading={loading} />
+        </div>
+        <div className="usage-breakdown-panel">
+          <h2>By Agent</h2>
+          <UsageBreakdownTable data={byAgent} loading={loading} />
         </div>
         <div className="usage-breakdown-panel">
           <h2>By Model</h2>

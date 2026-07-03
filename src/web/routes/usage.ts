@@ -43,6 +43,15 @@ usageRouter.get('/by-model', (req: Request, res: Response, next: NextFunction) =
   } catch (err) { next(err) }
 })
 
+// GET /api/usage/by-agent?period=30d — breakdown by the agent that spent it
+usageRouter.get('/by-agent', (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const period = parsePeriod(req.query.period as string)
+    const agents = usageTracker.getByAgent(period)
+    res.json({ agents })
+  } catch (err) { next(err) }
+})
+
 // GET /api/usage/recent?limit=50 — recent records
 usageRouter.get('/recent', (req: Request, res: Response, next: NextFunction) => {
   try {

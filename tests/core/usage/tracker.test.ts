@@ -65,6 +65,19 @@ describe('UsageTracker', () => {
       expect(rec.duration_ms).toBe(30000);
     });
 
+    it('persists agentId and round-trips it through getRecentRecords', () => {
+      const rec = tracker.record({
+        source: 'subagent',
+        model: 'claude-opus-4-6',
+        input_tokens: 100,
+        agentId: 'turn-complete-triage',
+      });
+      expect(rec.agentId).toBe('turn-complete-triage');
+
+      const [recent] = tracker.getRecentRecords(1);
+      expect(recent.agentId).toBe('turn-complete-triage');
+    });
+
     it('uses external_cost_usd as cost_usd when provided', () => {
       const rec = tracker.record({
         source: 'session',
@@ -197,6 +210,36 @@ describe('UsageTracker', () => {
       expect(models.length).toBe(2);
       expect(models.some(m => m.name === 'claude-opus-4-6')).toBe(true);
       expect(models.some(m => m.name === 'claude-sonnet-4')).toBe(true);
+    });
+  });
+
+  describe('getByAgent', () => {
+    it('groups records by the agent that spent the cost', () => {
+      tracker.record({ source: 'subagent', model: 'claude-opus-4-6', input_tokens: 1000, agentId: 'turn-complete-triage' });
+      tracker.record({ source: 'subagent', model: 'claude-opus-4-6', input_tokens: 500, agentId: 'turn-complete-triage' });
+      tracker.record({ source: 'agent', model: 'claude-opus-4-6', input_tokens: 2000, agentId: 'general' });
+
+      const agents = tracker.getByAgent('all');
+      expect(agents.length).toBe(2);
+
+      const triage = agents.find(a => a.name === 'turn-complete-triage');
+      const general = agents.find(a => a.name === 'general');
+      expect(triage).toBeDefined();
+      expect(triage!.api_calls).toBe(2);
+      expect(triage!.input_tokens).toBe(1500);
+      expect(general).toBeDefined();
+      expect(general!.api_calls).toBe(1);
+    });
+
+    it("surfaces records without an agentId (old rows) as 'unknown'", () => {
+      tracker.record({ source: 'agent', model: 'claude-opus-4-6', input_tokens: 1000 });          // no agentId
+      tracker.record({ source: 'subagent', model: 'claude-opus-4-6', input_tokens: 500, agentId: 'note-agent' });
+
+      const agents = tracker.getByAgent('all');
+      const unknown = agents.find(a => a.name === 'unknown');
+      expect(unknown).toBeDefined();
+      expect(unknown!.api_calls).toBe(1);
+      expect(agents.some(a => a.name === 'note-agent')).toBe(true);
     });
   });
 

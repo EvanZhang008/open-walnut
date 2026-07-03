@@ -29,6 +29,7 @@ export interface UsageRecord {
   taskId?: string;
   sessionId?: string;
   runId?: string;
+  agentId?: string;            // which agent spent this (e.g. 'turn-complete-triage', 'note-agent', 'general')
   external_cost_usd?: number;  // Claude Code CLI's self-reported cost
   duration_ms?: number;
   parent_source?: UsageSource;  // which source invoked this (e.g. subagent via 'agent')
@@ -77,6 +78,7 @@ export interface RecordParams {
   taskId?: string;
   sessionId?: string;
   runId?: string;
+  agentId?: string;            // which agent spent this (e.g. 'turn-complete-triage', 'note-agent', 'general')
   external_cost_usd?: number;
   duration_ms?: number;
   parent_source?: UsageSource;  // which source invoked this (e.g. subagent via 'agent')

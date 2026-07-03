@@ -59,6 +59,9 @@ export class UsageTracker {
 
     // Idempotent migration: add parent_source column for existing databases
     try { this.db.exec('ALTER TABLE usage ADD COLUMN parent_source TEXT'); } catch { /* column already exists */ }
+    // Idempotent migration: add agent_id so spend is attributable per agent (the "By Agent"
+    // dashboard view). Old rows have NULL agent_id → surfaced as "unknown".
+    try { this.db.exec('ALTER TABLE usage ADD COLUMN agent_id TEXT'); } catch { /* column already exists */ }
 
     return this.db;
   }
@@ -92,8 +95,8 @@ export class UsageTracker {
     const stmt = db.prepare(`
       INSERT INTO usage (id, timestamp, date, source, model, input_tokens, output_tokens,
         cache_creation_input_tokens, cache_read_input_tokens, cost_usd,
-        task_id, session_id, run_id, external_cost_usd, duration_ms, parent_source)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        task_id, session_id, run_id, external_cost_usd, duration_ms, parent_source, agent_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -108,6 +111,7 @@ export class UsageTracker {
       params.external_cost_usd ?? null,
       params.duration_ms ?? null,
       params.parent_source ?? null,
+      params.agentId ?? null,
     );
 
     log.usage.debug('recorded usage', {
@@ -129,6 +133,7 @@ export class UsageTracker {
       taskId: params.taskId,
       sessionId: params.sessionId,
       runId: params.runId,
+      agentId: params.agentId,
       external_cost_usd: params.external_cost_usd,
       duration_ms: params.duration_ms,
       parent_source: params.parent_source,
@@ -216,6 +221,15 @@ export class UsageTracker {
   }
 
   /**
+   * Get usage grouped by the agent that spent it. Rows recorded before the
+   * agent_id column existed (or sources that don't carry an agent) surface as
+   * 'unknown'.
+   */
+  getByAgent(period: UsagePeriod): UsageByGroup[] {
+    return this.getGrouped('agent_id', period);
+  }
+
+  /**
    * Get recent usage records.
    */
   getRecentRecords(limit: number): UsageRecord[] {
@@ -226,7 +240,7 @@ export class UsageTracker {
         input_tokens, output_tokens,
         cache_creation_input_tokens, cache_read_input_tokens,
         cost_usd, task_id, session_id, run_id,
-        external_cost_usd, duration_ms, parent_source
+        external_cost_usd, duration_ms, parent_source, agent_id
       FROM usage
       ORDER BY timestamp DESC
       LIMIT ?
@@ -236,7 +250,7 @@ export class UsageTracker {
       cache_creation_input_tokens: number; cache_read_input_tokens: number;
       cost_usd: number; task_id: string | null; session_id: string | null;
       run_id: string | null; external_cost_usd: number | null; duration_ms: number | null;
-      parent_source: string | null;
+      parent_source: string | null; agent_id: string | null;
     }>;
 
     return rows.map((r) => ({
@@ -253,6 +267,7 @@ export class UsageTracker {
       taskId: r.task_id ?? undefined,
       sessionId: r.session_id ?? undefined,
       runId: r.run_id ?? undefined,
+      agentId: r.agent_id ?? undefined,
       external_cost_usd: r.external_cost_usd ?? undefined,
       duration_ms: r.duration_ms ?? undefined,
       parent_source: (r.parent_source as UsageRecord['source']) ?? undefined,
@@ -284,12 +299,15 @@ export class UsageTracker {
 
   // ── Private helpers ──
 
-  private getGrouped(column: 'source' | 'model', period: UsagePeriod): UsageByGroup[] {
+  private getGrouped(column: 'source' | 'model' | 'agent_id', period: UsagePeriod): UsageByGroup[] {
     const db = this.getDb();
     const { clause, params } = this.periodToWhere(period);
+    // NULL group keys (e.g. old rows or sources with no agent_id) collapse to 'unknown'
+    // so they still surface as a row rather than a blank/dropped bucket.
+    const nameExpr = `COALESCE(${column}, 'unknown')`;
     const rows = db.prepare(`
       SELECT
-        ${column} AS name,
+        ${nameExpr} AS name,
         COALESCE(SUM(cost_usd), 0) AS cost_usd,
         COALESCE(SUM(input_tokens), 0) AS input_tokens,
         COALESCE(SUM(output_tokens), 0) AS output_tokens,
@@ -298,7 +316,7 @@ export class UsageTracker {
         COUNT(*) AS api_calls
       FROM usage
       ${clause}
-      GROUP BY ${column}
+      GROUP BY ${nameExpr}
       ORDER BY cost_usd DESC
     `).all(...params) as Array<{
       name: string; cost_usd: number; input_tokens: number;

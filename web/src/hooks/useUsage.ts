@@ -7,6 +7,7 @@ interface UseUsageReturn {
   daily: DailyCost[];
   bySource: UsageByGroup[];
   byModel: UsageByGroup[];
+  byAgent: UsageByGroup[];
   recent: UsageRecord[];
   loading: boolean;
   error: string | null;
@@ -20,6 +21,7 @@ export function useUsage(): UseUsageReturn {
   const [daily, setDaily] = useState<DailyCost[]>([]);
   const [bySource, setBySource] = useState<UsageByGroup[]>([]);
   const [byModel, setByModel] = useState<UsageByGroup[]>([]);
+  const [byAgent, setByAgent] = useState<UsageByGroup[]>([]);
   const [recent, setRecent] = useState<UsageRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -29,17 +31,19 @@ export function useUsage(): UseUsageReturn {
     setLoading(true);
     setError(null);
     try {
-      const [summaryData, dailyData, sourceData, modelData, recentData] = await Promise.all([
+      const [summaryData, dailyData, sourceData, modelData, agentData, recentData] = await Promise.all([
         usageApi.fetchUsageSummary(),
         usageApi.fetchDailyCosts(period === 'today' ? 1 : period === '7d' ? 7 : period === 'all' ? 365 : 30),
         usageApi.fetchBySource(period),
         usageApi.fetchByModel(period),
+        usageApi.fetchByAgent(period),
         usageApi.fetchRecentRecords(50),
       ]);
       setSummary(summaryData);
       setDaily(dailyData);
       setBySource(sourceData);
       setByModel(modelData);
+      setByAgent(agentData);
       setRecent(recentData);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -50,5 +54,5 @@ export function useUsage(): UseUsageReturn {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  return { summary, daily, bySource, byModel, recent, loading, error, period, setPeriod, refresh };
+  return { summary, daily, bySource, byModel, byAgent, recent, loading, error, period, setPeriod, refresh };
 }
