@@ -6,11 +6,80 @@ import { useState, useRef, useCallback, useEffect, memo, type CSSProperties, typ
 import type { Task } from '@walnut/core';
 import type { FocusTier } from '@/api/focus';
 import { useSortable } from '@dnd-kit/sortable';
-import { useDroppable } from '@dnd-kit/core';
+import { useDroppable, useDraggable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import { TaskKebabMenu } from './TaskKebabMenu';
 import { PersonIcon } from '../common/PersonIcon';
 import * as ICONS from '../common/Icons';
+
+/**
+ * Draggable group header chip (Focus area). The chip represents the WHOLE cluster:
+ * grabbing its grip (⣿) drags the entire group as a unit — the pinned drag handlers
+ * detect the `group:<id>` draggable id and relocate every member together (reorder
+ * within a tier, or move the whole group across tiers). The label still click-to-
+ * renames; the ⊘/✕ buttons still hide/dissolve. Split out into its own component so
+ * `useDraggable` sits at a stable top-level hook position (it can't be called from
+ * the conditional chip JSX inside SortableTierCard).
+ */
+function GroupChip({ groupId, tier, label, onRename, onDissolve, onHide }: {
+  groupId: string;
+  tier: FocusTier;
+  label: string;
+  onRename?: (groupId: string, label: string) => void;
+  onDissolve?: (groupId: string) => void;
+  onHide?: (groupId: string) => void;
+}) {
+  // Draggable id encodes the tier so a group split across tiers (rare) renders two
+  // distinct chips without a dnd-kit id collision. The pinned drag handler parses
+  // `group:<gid>:<tier>` back out.
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: `group:${groupId}:${tier}`,
+    data: { type: 'group', groupId, tier },
+  });
+  const style: CSSProperties | undefined = transform
+    ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`, opacity: isDragging ? 0.6 : undefined, zIndex: isDragging ? 20 : undefined, position: 'relative' }
+    : undefined;
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`task-group-chip${isDragging ? ' task-group-chip-dragging' : ''}`}
+      title="Grouped tasks — drag the grip to move the whole group"
+    >
+      {/* Grip = the whole-group drag handle. Kept distinct from the label (rename) and
+          the ⊘/✕ buttons so those gestures never conflict with the drag. */}
+      <span className="task-group-chip-grip" {...attributes} {...listeners} title="Drag to move the whole group" aria-label="Drag group">⣿</span>
+      <span className="task-group-chip-icon" aria-hidden="true">⑂</span>
+      <span
+        className="task-group-chip-label"
+        onClick={(e) => { e.stopPropagation(); onRename?.(groupId, label); }}
+        title="Rename group"
+      >
+        {label}
+      </span>
+      {onHide && (
+        <button
+          className="task-group-chip-hide"
+          onClick={(e) => { e.stopPropagation(); onHide(groupId); }}
+          aria-label="Hide this group from Focus"
+          title="Hide from Focus — collapse this group (unhide from the strip below)"
+        >
+          ⊘
+        </button>
+      )}
+      {onDissolve && (
+        <button
+          className="task-group-chip-dissolve"
+          onClick={(e) => { e.stopPropagation(); onDissolve(groupId); }}
+          aria-label="Ungroup these tasks"
+          title="Ungroup — dissolve this group"
+        >
+          ✕
+        </button>
+      )}
+    </div>
+  );
+}
 
 const PHASE_ICON: Record<string, ReactNode> = {
   TODO: ICONS.ICON_PHASE_TODO,
@@ -42,6 +111,14 @@ const PHASE_ORDER: string[] = [
 // Without memo, every RAF tick from bumpDragTick would re-render all cards in all tiers,
 // compounding into the React #185 maximum update depth error.
 
+/** Per-tier virtual-group render info — same shape as the main list's GroupRenderInfo. */
+export interface TierGroupRenderInfo {
+  groupId: string;
+  label: string;
+  isLead: boolean;
+  isLast: boolean;
+}
+
 interface SortableTierCardProps {
   task: Task;
   tier: FocusTier;
@@ -61,9 +138,26 @@ interface SortableTierCardProps {
   onSetPhase?: (id: string, phase: string) => void;
   onUpdateTitle?: (id: string, title: string) => void;
   onDelete?: (id: string) => void;
+  /** Virtual-group cluster info for this card (chip on lead, rail on every member). */
+  groupInfo?: TierGroupRenderInfo;
+  /** Rename the group (chip label click). */
+  onRenameGroup?: (groupId: string, label: string) => void;
+  /** Dissolve the whole group (chip ✕). */
+  onDissolveGroup?: (groupId: string) => void;
+  /** Hide the whole group from the Focus area (chip ⊘) — membership untouched. */
+  onHideGroup?: (groupId: string) => void;
+  /** Multi-select (shared with the main list): in select mode a click toggles
+   *  selection instead of opening the card; a leading checkbox + highlight show state. */
+  selectMode?: boolean;
+  isSelected?: boolean;
+  onSelectToggle?: (taskId: string) => void;
+  /** Enter select mode with this task pre-picked (kebab "Select…"). */
+  onStartSelect?: (taskId: string) => void;
+  /** True when a drag is hovering this card and dropping would group the two. */
+  isGroupTarget?: boolean;
 }
 
-export const SortableTierCard = memo(function SortableTierCard({ task, tier, isFocused, isSessionOpen, isDetailOpen, onClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onStar, onExpandDetail, onClearFocus, onOpenSession, onSetPhase, onUpdateTitle, onDelete }: SortableTierCardProps) {
+export const SortableTierCard = memo(function SortableTierCard({ task, tier, isFocused, isSessionOpen, isDetailOpen, onClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onStar, onExpandDetail, onClearFocus, onOpenSession, onSetPhase, onUpdateTitle, onDelete, groupInfo, onRenameGroup, onDissolveGroup, onHideGroup, selectMode, isSelected, onSelectToggle, onStartSelect, isGroupTarget }: SortableTierCardProps) {
   const {
     attributes,
     listeners,
@@ -71,7 +165,9 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: task.id });
+    // Disable drag in select mode so a press toggles selection instead of starting a
+    // drag (mirrors the main list — drag + multi-select gestures otherwise conflict).
+  } = useSortable({ id: task.id, disabled: selectMode });
 
   // Phase picker state — uses fixed positioning to escape overflow:hidden scroll containers
   const [phaseMenuOpen, setPhaseMenuOpen] = useState(false);
@@ -167,25 +263,58 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
 
   const needsAttention = task.phase === 'AGENT_COMPLETE' || task.phase === 'AWAIT_HUMAN_ACTION';
   const cardClass = tier === 'focus' ? 'todo-focus-card' : 'todo-pinned-card';
+  // Virtual-group cluster classes — reuse the main list's rail/rounding styling.
+  const groupClass = groupInfo
+    ? ` task-grouped${groupInfo.isLead ? ' task-group-lead' : ''}${groupInfo.isLast ? ' task-group-last' : ''}`
+    : '';
 
   return (
+    <>
+    {/* Group header chip — only above the lead member; names + drags the whole cluster. */}
+    {groupInfo?.isLead && (
+      <GroupChip
+        groupId={groupInfo.groupId}
+        tier={tier}
+        label={groupInfo.label}
+        onRename={onRenameGroup}
+        onDissolve={onDissolveGroup}
+        onHide={onHideGroup}
+      />
+    )}
     <div
       ref={setNodeRef}
       style={style}
       data-task-id={task.id}
-      className={`${cardClass}${isFocused ? ' todo-pinned-card-active' : ''}${needsAttention ? ' todo-pinned-card-attention' : ''}${isSessionOpen ? ' todo-pinned-card-session-open' : ''}`}
+      data-group-id={groupInfo?.groupId}
+      className={`${cardClass}${groupClass}${isFocused ? ' todo-pinned-card-active' : ''}${needsAttention ? ' todo-pinned-card-attention' : ''}${isSessionOpen ? ' todo-pinned-card-session-open' : ''}${isSelected ? ' task-multi-selected' : ''}${isGroupTarget ? ' todo-panel-item-group-target' : ''}`}
       onClick={(e) => {
         if (isEditing) return;
+        // Select mode: a click anywhere toggles selection (no navigation/edit).
+        if (selectMode) { onSelectToggle?.(task.id); return; }
         if ((e.target as HTMLElement).closest('.pinned-phase-picker')) return;
         onClick?.(task);
       }}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter' && !isEditing) { e.preventDefault(); onClick?.(task); } }}
+      onKeyDown={(e) => { if (e.key === 'Enter' && !isEditing) { e.preventDefault(); selectMode ? onSelectToggle?.(task.id) : onClick?.(task); } }}
     >
-      <span className="todo-pinned-drag-handle" {...attributes} {...listeners} title="Drag to reorder">
-        &#x2630;
-      </span>
+      {/* Select-mode checkbox — leading affordance, same as the main list rows. */}
+      {selectMode ? (
+        <button
+          className={`todo-item-select-checkbox${isSelected ? ' checked' : ''}`}
+          onClick={(e) => { e.stopPropagation(); onSelectToggle?.(task.id); }}
+          role="checkbox"
+          aria-checked={!!isSelected}
+          aria-label={isSelected ? 'Deselect task' : 'Select task'}
+          title={isSelected ? 'Deselect' : 'Select'}
+        >
+          {isSelected ? '✓' : ''}
+        </button>
+      ) : (
+        <span className="todo-pinned-drag-handle" {...attributes} {...listeners} title="Drag to reorder">
+          &#x2630;
+        </span>
+      )}
       {/* Phase icon with picker */}
       <div className="phase-picker-wrapper phase-picker-inline pinned-phase-picker" ref={phaseWrapperRef}>
         <button
@@ -269,9 +398,11 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
         onUnpinTask={onUnpinTask}
         onSetTier={onSetTier}
         onOpenSession={onOpenSession}
+        onStartSelect={onStartSelect}
         onDelete={onDelete}
       />
     </div>
+    </>
   );
 });
 

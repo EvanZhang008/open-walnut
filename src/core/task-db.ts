@@ -366,7 +366,8 @@ const SCHEMA_SQL = `
   -- lives on the tasks (tasks.group_id); this table only holds the names.
   CREATE TABLE IF NOT EXISTS task_groups (
     id TEXT PRIMARY KEY,
-    label TEXT NOT NULL
+    label TEXT NOT NULL,
+    hidden INTEGER NOT NULL DEFAULT 0
   );
 `;
 
@@ -384,7 +385,7 @@ const SCHEMA_SQL = `
  * Bump SCHEMA_VERSION and add an `if (from < N)` branch for each new one-time
  * migration. Keep the branch append-only — never edit or reorder old ones.
  */
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 function runOneTimeMigrations(handle: DatabaseType): void {
   const current = handle.pragma('user_version', { simple: true }) as number;
@@ -414,6 +415,17 @@ function runOneTimeMigrations(handle: DatabaseType): void {
     // We don't recreate the indexes here — the integration loader calls
     // ensureExtIndexes() after plugins are loaded, which recreates whatever
     // the currently-installed plugin set declares.
+  }
+
+  if (current < 3) {
+    // v2 → v3: add the `hidden` flag to task_groups (Focus-area collapse). Older
+    // DBs created the table without it; CREATE TABLE IF NOT EXISTS won't alter an
+    // existing table, so add the column here. Guard against re-runs (a fresh DB
+    // already has it from the current CREATE) by sniffing the column list.
+    const cols = handle.prepare(`PRAGMA table_info(task_groups)`).all() as { name: string }[];
+    if (!cols.some((c) => c.name === 'hidden')) {
+      handle.exec(`ALTER TABLE task_groups ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;`);
+    }
   }
 
   handle.pragma('user_version = ' + SCHEMA_VERSION);

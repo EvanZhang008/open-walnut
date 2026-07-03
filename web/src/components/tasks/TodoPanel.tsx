@@ -116,14 +116,20 @@ interface TodoPanelProps {
   onCategoryChange?: (cat: string) => void;
   /** Virtual-group name registry: group_id → label. */
   taskGroups?: Record<string, string>;
+  /** Group ids hidden from the Focus (pinned) area — their cards are skipped there. */
+  hiddenGroups?: Set<string>;
   /** Create a virtual group from ≥2 task ids (label AI-generated if omitted). */
   onGroupTasks?: (taskIds: string[], label?: string) => void;
+  /** Add task(s) to an existing group — used when dragging a task onto a grouped one. */
+  onAddToGroup?: (groupId: string, taskIds: string[]) => void;
   /** Remove a single task from its virtual group. */
   onUngroupTask?: (taskId: string) => void;
   /** Remove several tasks from their group(s) in one call (used to dissolve a whole cluster). */
   onUngroupTasks?: (taskIds: string[]) => void;
   /** Rename a virtual group. */
   onRenameGroup?: (groupId: string, label: string) => void;
+  /** Show/hide a group in the Focus (pinned) area (membership untouched). */
+  onSetGroupHidden?: (groupId: string, hidden: boolean) => void;
 }
 
 const STARRED_TAB = '\u2605';
@@ -229,8 +235,10 @@ interface SortableTaskItemProps {
   isFocused: boolean;
   isDetailOpen?: boolean;
   isRecentlyDone?: boolean;
-  /** True when a drag is hovering this task long enough to nest into it. */
+  /** True when a drag over this task's RIGHT indent zone would nest it as a subtask. */
   isNestTarget?: boolean;
+  /** True when a drag over this task's LEFT zone would group the two together. */
+  isGroupTarget?: boolean;
   depth?: number;               // Nesting depth (0 = top-level, 1 = child, 2 = grandchild, etc.)
   childCount?: number;
   isExpanded?: boolean;           // Whether children are visible (only for parents)
@@ -274,6 +282,8 @@ interface SortableTaskItemProps {
   onRenameGroup?: (groupId: string, currentLabel: string) => void;  // Rename the whole group
   onUngroupTask?: (taskId: string) => void;                          // Remove this task from its group
   onDissolveGroup?: (groupId: string) => void;                       // Ungroup ALL members (dissolve the cluster)
+  isGroupHidden?: boolean;                                           // This task's group is hidden from Focus
+  onUnhideGroup?: (groupId: string) => void;                         // Restore a Focus-hidden group
 }
 
 /** Per-task virtual-group render metadata (computed in TodoPanel, consumed by SortableTaskItem). */
@@ -284,7 +294,68 @@ interface GroupRenderInfo {
   isLast: boolean;   // last member — bottom rounding goes here
 }
 
-function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isNestTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, selectMode, onSelectToggle, onStartSelect, onSetPhase, onStar, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onUnparent, onMoveUp, isPinned, pinnedTier, searchContext, searchMatchField, searchScore, searchKeywordScore, searchSemanticScore, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask, onDissolveGroup }: SortableTaskItemProps) {
+/**
+ * Cluster a tier's tasks so same-group members are contiguous, anchored at the
+ * group's first member in the given order. Flat (no parent/child nesting) version
+ * of the main list's computeSortOrder clustering. Only groups with ≥2 members IN
+ * THIS tier cluster — a lone pinned member of a group stays in place. Pure and
+ * order-stable, so re-running on already-clustered input is a no-op. Returns ids.
+ */
+function clusterTierByGroup(tasks: Task[]): string[] {
+  const byGroup = new Map<string, string[]>();
+  for (const t of tasks) {
+    if (t.group_id) {
+      let arr = byGroup.get(t.group_id);
+      if (!arr) { arr = []; byGroup.set(t.group_id, arr); }
+      arr.push(t.id);
+    }
+  }
+  const emitted = new Set<string>();
+  const out: string[] = [];
+  for (const t of tasks) {
+    const members = t.group_id ? byGroup.get(t.group_id) : undefined;
+    if (t.group_id && members && members.length >= 1) {
+      if (emitted.has(t.group_id)) continue; // already flushed at the lead
+      emitted.add(t.group_id);
+      out.push(...members);
+    } else {
+      out.push(t.id);
+    }
+  }
+  return out;
+}
+
+/**
+ * Per-tier virtual-group render metadata: taskId → { groupId, label, isLead, isLast }.
+ * Mirrors the main list's groupRenderMap but scoped to a single tier's displayed
+ * tasks (already clustered). A group renders its chip/box down to a SINGLE member
+ * (a 1-member group is valid — it acts like a tag and stays visible until the user
+ * dissolves it). For a lone member isLead and isLast both hold → chip on top +
+ * rounded bottom = a complete one-card box. `displayed` must be in clustered order.
+ */
+function buildTierGroupMeta(displayed: Task[], labels?: Record<string, string>): Map<string, GroupRenderInfo> {
+  const map = new Map<string, GroupRenderInfo>();
+  const counts = new Map<string, number>();
+  for (const t of displayed) if (t.group_id) counts.set(t.group_id, (counts.get(t.group_id) ?? 0) + 1);
+  const firstSeen = new Set<string>();
+  const lastIdxByGroup = new Map<string, number>();
+  displayed.forEach((t, i) => { if (t.group_id && (counts.get(t.group_id) ?? 0) >= 1) lastIdxByGroup.set(t.group_id, i); });
+  displayed.forEach((t, i) => {
+    const gid = t.group_id;
+    if (!gid || (counts.get(gid) ?? 0) < 1) return;
+    const isLead = !firstSeen.has(gid);
+    if (isLead) firstSeen.add(gid);
+    map.set(t.id, {
+      groupId: gid,
+      label: labels?.[gid] ?? '',
+      isLead,
+      isLast: lastIdxByGroup.get(gid) === i,
+    });
+  });
+  return map;
+}
+
+function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isNestTarget, isGroupTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, selectMode, onSelectToggle, onStartSelect, onSetPhase, onStar, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onUnparent, onMoveUp, isPinned, pinnedTier, searchContext, searchMatchField, searchScore, searchKeywordScore, searchSemanticScore, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask, onDissolveGroup, isGroupHidden, onUnhideGroup }: SortableTaskItemProps) {
   const hookPhases = usePhaseHooks();
   const {
     attributes,
@@ -333,6 +404,7 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isNes
     filterOverrideReason ? 'task-filter-override' : '',
     isFadingOverride ? 'task-filter-override-fading' : '',
     isNestTarget ? 'todo-panel-item-nest-target' : '',
+    isGroupTarget ? 'todo-panel-item-group-target' : '',
     groupInfo ? 'task-grouped' : '',
     groupInfo?.isLead ? 'task-group-lead' : '',
     groupInfo?.isLast ? 'task-group-last' : '',
@@ -625,6 +697,8 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isNes
             onUnparent={onUnparent}
             onMoveUp={onMoveUp}
             onUngroup={onUngroupTask}
+            isGroupHidden={isGroupHidden}
+            onUnhideGroup={onUnhideGroup}
             onStartSelect={onStartSelect}
             onDelete={onDelete}
           />
@@ -912,6 +986,45 @@ const snapToCursor: Modifier = ({ activatorEvent, draggingNodeRect, transform })
   const offsetY = event.clientY - draggingNodeRect.top - 12;
   return { ...transform, x: transform.x + offsetX, y: transform.y + offsetY };
 };
+
+// ── Live pointer tracker for drop-intent detection ──────────────────────────
+// dnd-kit's DragOverEvent does NOT carry the live cursor position (only the
+// activatorEvent at drag START). To decide whether a drop on a task card means
+// "join its group" (left side) vs "become its subtask" (right indent zone) vs
+// "reorder" (gap), we need where the pointer is RIGHT NOW. A single passive
+// window pointermove listener (installed on drag start, removed on end) keeps the
+// latest coords in a module ref the drag handlers read. Module-level (not React
+// state) so it never triggers a re-render — the React #185 loop guard the DnD
+// code is littered with depends on dragOver NOT churning state.
+const livePointer = { x: 0, y: 0 };
+function trackPointer(e: PointerEvent) { livePointer.x = e.clientX; livePointer.y = e.clientY; }
+
+// left 2/3 of a card = group zone, right 1/3 = subtask (indent) zone.
+export const GROUP_ZONE_RATIO = 2 / 3;
+
+/**
+ * Pure threshold: given the cursor's horizontal fraction within a card (0 = left
+ * edge, 1 = right edge), return the drop intent. `frac >= GROUP_ZONE_RATIO` (right
+ * indent zone) → 'subtask', else → 'group'. Out-of-range/NaN falls back to 'group'
+ * (the safe default — grouping is non-destructive and works in every surface).
+ * Exported for unit testing the zone boundary.
+ */
+export function classifyDropFraction(frac: number): 'group' | 'subtask' {
+  if (!Number.isFinite(frac)) return 'group';
+  return frac >= GROUP_ZONE_RATIO ? 'subtask' : 'group';
+}
+
+/**
+ * Classify a drop on a task card by the live pointer's horizontal position within
+ * it. Caller decides whether 'subtask' is allowed (Main list yes, Pin tiers no —
+ * they have no subtasks). Falls back to 'group' if the card rect can't be measured.
+ */
+function classifyDropOnCard(cardEl: Element | null): 'group' | 'subtask' {
+  if (!cardEl) return 'group';
+  const r = cardEl.getBoundingClientRect();
+  if (r.width <= 0) return 'group';
+  return classifyDropFraction((livePointer.x - r.left) / r.width);
+}
 
 // Session info colors — imported from single source of truth.
 // Re-exported as local aliases for backwards compat with type signature.
@@ -1658,7 +1771,7 @@ function SortableRecentCard({ task, isFocused, isSessionOpen, isDetailOpen, onCl
 
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, pinnedTaskIds, focusTaskIds, waitTaskIds, suppressDetail, openSessionIds, openSessionTaskIds, onClearOperationError, onOperationError, externalCategory, onCategoryChange, taskGroups, onGroupTasks, onUngroupTask, onUngroupTasks, onRenameGroup }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, pinnedTaskIds, focusTaskIds, waitTaskIds, suppressDetail, openSessionIds, openSessionTaskIds, onClearOperationError, onOperationError, externalCategory, onCategoryChange, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden }: TodoPanelProps) {
   // TEMP drag-flash trace — remove after diagnosis
   const __renderCountRef = useRef(0);
   __renderCountRef.current += 1;
@@ -1795,23 +1908,22 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [loading, tasks]);
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const [activeDragType, setActiveDragType] = useState<string | null>(null);
-  // Apple-Reminders-style dwell-to-nest: when a task is dragged onto another
-  // task and held still for NEST_DWELL_MS, the target highlights and a drop
-  // here will nest the dragged task under it (regardless of edge/center).
-  // The dwell-selected target sits in state for the visual ring; the target
-  // under consideration sits in a ref so rapid onDragOver events don't
-  // trigger state churn while the timer is still counting down.
+  // Position-based drop intent (replaces the old dwell-to-nest timer): while a task
+  // is dragged OVER another task card, the pointer's horizontal position decides the
+  // intent and we highlight the target accordingly —
+  //   • cursor in the LEFT ~2/3 of the card → `groupTargetId` lit ("join its group")
+  //   • cursor in the RIGHT ~1/3 indent zone → `nestTargetId` lit ("become subtask",
+  //     Main list only; Pin tiers have no subtasks so they always read as group)
+  // Only one is ever set at a time. A ref mirrors the current over-target so rapid
+  // onDragOver events that don't change the (target, intent) pair skip setState
+  // (React #185 guard — dragOver must not churn SortableContext-affecting state).
   const [nestTargetId, setNestTargetId] = useState<string | null>(null);
-  const nestDwellTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const nestDwellTargetRef = useRef<string | null>(null);
-  // Cancel any pending dwell timer if the panel unmounts mid-drag (prevents
-  // setState-after-unmount warnings + leaked timers on route change).
-  useEffect(() => () => {
-    if (nestDwellTimerRef.current) {
-      clearTimeout(nestDwellTimerRef.current);
-      nestDwellTimerRef.current = null;
-    }
-  }, []);
+  const [groupTargetId, setGroupTargetId] = useState<string | null>(null);
+  // ref holds `${overId}:${intent}` of the last applied highlight, to dedupe.
+  const dropIntentRef = useRef<string | null>(null);
+  // Remove the live-pointer listener if the panel unmounts mid-drag (prevents a
+  // leaked window listener on route change during a drag).
+  useEffect(() => () => { window.removeEventListener('pointermove', trackPointer); }, []);
   const [detailTarget, setDetailTarget] = useState<DetailTarget>(null);
 
   // Search state
@@ -2095,14 +2207,41 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   });
 
   // Resolve pinned task IDs to Task objects for the pinned section
-  // Filter out completed tasks (status=done or phase=COMPLETE) for display
+  // Filter out completed tasks (status=done or phase=COMPLETE) for display, and
+  // members of a HIDDEN group — hiding collapses the whole cluster out of the Focus
+  // area (membership untouched; unhide via a member's kebab / the /tasks page). This
+  // single filter propagates to all three tiers + clustering + drag for free.
   const pinnedTasks = useMemo(() => {
     if (!pinnedTaskIds || pinnedTaskIds.size === 0) return [];
     const taskMap = new Map(tasks.map((t) => [t.id, t]));
     return [...pinnedTaskIds]
       .map((id) => taskMap.get(id))
-      .filter((t): t is Task => !!t && t.status !== 'done' && t.phase !== 'COMPLETE');
-  }, [tasks, pinnedTaskIds]);
+      .filter((t): t is Task => !!t && t.status !== 'done' && t.phase !== 'COMPLETE'
+        && !(t.group_id && hiddenGroups?.has(t.group_id)));
+  }, [tasks, pinnedTaskIds, hiddenGroups]);
+
+  // Hidden groups that HAVE pinned members — these were collapsed out of the tiers
+  // above, so we surface them as a compact "hidden" strip at the bottom of the Pinned
+  // section with an unhide affordance. Without this the user has no in-Focus way to
+  // bring a hidden group back (its cards vanish from every tier). Each entry carries
+  // the group's label + live member count (for the chip text).
+  const hiddenPinnedGroups = useMemo(() => {
+    if (!pinnedTaskIds || pinnedTaskIds.size === 0 || !hiddenGroups || hiddenGroups.size === 0) return [];
+    const counts = new Map<string, number>();
+    const taskMap = new Map(tasks.map((t) => [t.id, t]));
+    for (const id of pinnedTaskIds) {
+      const t = taskMap.get(id);
+      if (!t || t.status === 'done' || t.phase === 'COMPLETE') continue;
+      if (t.group_id && hiddenGroups.has(t.group_id)) {
+        counts.set(t.group_id, (counts.get(t.group_id) ?? 0) + 1);
+      }
+    }
+    return [...counts.entries()].map(([groupId, count]) => ({
+      groupId,
+      count,
+      label: taskGroups?.[groupId] ?? 'Hidden group',
+    }));
+  }, [tasks, pinnedTaskIds, hiddenGroups, taskGroups]);
 
   // Split pinned into Focus / Next / Satellite
   const focusTasksLocal = useMemo(() => {
@@ -2199,19 +2338,35 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const dragSatelliteIds = dragSatelliteIdsRef.current;
   const dragWaitIds = dragWaitIdsRef.current;
 
-  // Active arrays: use drag overrides when dragging, else the source-of-truth.
-  // MUST be memoized — .map() creates a new array on every render, which makes
-  // SortableContext receive new `items` each time → internal re-registration →
-  // state update → re-render → infinite loop (React #185) during drag-end.
-  const focusIds_arr = useMemo(() => dragFocusIds ?? focusTasksLocal.map((t) => t.id), [dragFocusIds, focusTasksLocal]);
-  const satelliteIds_arr = useMemo(() => dragSatelliteIds ?? satelliteTasksLocal.map((t) => t.id), [dragSatelliteIds, satelliteTasksLocal]);
-  const waitIds_arr = useMemo(() => dragWaitIds ?? waitTasksLocal.map((t) => t.id), [dragWaitIds, waitTasksLocal]);
+  // Active arrays: use drag overrides when dragging, else the source-of-truth
+  // (clustered so grouped pins sit together). MUST be memoized — .map() creates a
+  // new array on every render, which makes SortableContext receive new `items` each
+  // time → internal re-registration → state update → re-render → infinite loop
+  // (React #185) during drag-end.
+  //
+  // clusterTierByGroup keeps same-group members contiguous within a tier, anchored
+  // at the group's first member in the tier's current order. It mirrors the main
+  // list's computeSortOrder clustering but flat (tiers have no parent/child nesting).
+  // Pure + order-stable → idempotent. We do NOT cluster mid-drag (dragXxxIds present):
+  // during a drag the user's live order is authority and clustering would fight it;
+  // it re-applies once the drag lands.
+  const focusIds_arr = useMemo(() => dragFocusIds ?? clusterTierByGroup(focusTasksLocal), [dragFocusIds, focusTasksLocal]);
+  const satelliteIds_arr = useMemo(() => dragSatelliteIds ?? clusterTierByGroup(satelliteTasksLocal), [dragSatelliteIds, satelliteTasksLocal]);
+  const waitIds_arr = useMemo(() => dragWaitIds ?? clusterTierByGroup(waitTasksLocal), [dragWaitIds, waitTasksLocal]);
 
   // Resolve tier ID arrays to Task objects (uses drag overrides when active)
   const pinnedTaskMap = useMemo(() => new Map(pinnedTasks.map((t) => [t.id, t])), [pinnedTasks]);
   const focusTasksDisplay = useMemo(() => focusIds_arr.map((id) => pinnedTaskMap.get(id)).filter(Boolean) as Task[], [focusIds_arr, pinnedTaskMap]);
   const satelliteTasksDisplay = useMemo(() => satelliteIds_arr.map((id) => pinnedTaskMap.get(id)).filter(Boolean) as Task[], [satelliteIds_arr, pinnedTaskMap]);
   const waitTasksDisplay = useMemo(() => waitIds_arr.map((id) => pinnedTaskMap.get(id)).filter(Boolean) as Task[], [waitIds_arr, pinnedTaskMap]);
+
+  // Per-tier group render metadata (chip on the lead, rail on every member, rounded
+  // ends). Each tier boxes independently: a group split across tiers (e.g. 2 pins in
+  // Focus, 1 in Satellite) only clusters where ≥2 of its members live — so the lone
+  // Satellite member shows no box. Mirrors the main list's grouped look in the pins.
+  const focusGroupMeta = useMemo(() => buildTierGroupMeta(focusTasksDisplay, taskGroups), [focusTasksDisplay, taskGroups]);
+  const satelliteGroupMeta = useMemo(() => buildTierGroupMeta(satelliteTasksDisplay, taskGroups), [satelliteTasksDisplay, taskGroups]);
+  const waitGroupMeta = useMemo(() => buildTierGroupMeta(waitTasksDisplay, taskGroups), [waitTasksDisplay, taskGroups]);
 
   // Snapshot of original tier arrays at drag start (for revert on cancel)
   const dragStartSnapshot = useRef<{ focus: string[]; satellite: string[]; wait: string[]; recent?: string[] } | null>(null);
@@ -2228,6 +2383,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   // Recent task IDs for SortableContext
   const recentIds = useMemo(() => recentTasks.map((t) => t.id), [recentTasks]);
+
+  // Set of every real task card id in the pinned area (pinned tiers + Recent).
+  // The pinned DnD handlers use this to tell a real card apart from a tier
+  // drop-zone id ("tier-*"). MUST be declared before the handlePinned* callbacks:
+  // a callback's deps array is evaluated synchronously at render time, so
+  // referencing the main-list `taskGroupMap` (declared far below) from there would
+  // hit its temporal dead zone and crash the whole panel on first render. It's also
+  // more correct here — `taskGroupMap` is the filtered main-list grouping, so a
+  // pinned task hidden by an active filter would be missing from it.
+  const pinnedCardIds = useMemo(
+    () => new Set<string>([...pinnedTaskIds_arr, ...recentIds]),
+    [pinnedTaskIds_arr, recentIds],
+  );
 
   // Stable fallback for onSetPhase — avoids creating a new arrow function every render
   // which would defeat React.memo on SortableTierCard and other memoized task items.
@@ -2248,6 +2416,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     dragSatelliteIdsRef.current = sArr;
     dragWaitIdsRef.current = wArr;
     setActiveDragPinnedId(event.active.id as string);
+    // Track the live cursor so dragOver/End can highlight "join group" when hovering
+    // a card (Pin tiers have no subtasks → the whole card is the group zone).
+    window.addEventListener('pointermove', trackPointer, { passive: true });
+    dropIntentRef.current = null;
+    setGroupTargetId(null);
   }, [focusTasksLocal, satelliteTasksLocal, waitTasksLocal, recentTasks]);
 
   // Live movement: when hovering over a different tier, move item between arrays
@@ -2257,6 +2430,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (!over) return;
     const activeId = active.id as string;
     const overId = over.id as string;
+
+    // Whole-group drag (chip grip): the active id is `group:<gid>`, not a task id.
+    // Skip all per-item cross-tier / group-target logic here — the final relocation
+    // is resolved in handlePinnedDragEnd. Clear any stale group-target highlight.
+    if (activeId.startsWith('group:')) {
+      if (dropIntentRef.current !== null) { dropIntentRef.current = null; setGroupTargetId((prev) => (prev === null ? prev : null)); }
+      return;
+    }
 
     // Skip when hovering over the dragged item itself — its tier is determined
     // by where we already placed it, not by where it was at drag start.
@@ -2270,6 +2451,28 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
     // Check if this item came from Recent
     const isFromRecent = snap.recent?.includes(activeId) ?? false;
+
+    // Drop-into-group highlight: hovering another task card (drop zones have ids like
+    // "tier-*", real cards are task ids in pinnedCardIds) lights it as a group target.
+    // Pin tiers have no subtasks, so the WHOLE card is the group zone (no left/right
+    // split). Dedupe via dropIntentRef so we don't churn state every dragOver tick.
+    // GROUPED-MEMBER EXEMPTION: if the dragged card is ALREADY in a group, NEVER light
+    // the group target. A grouped member has two valid outcomes only: drop on a
+    // neighbor → reorder; drop elsewhere → pull OUT (handled at drag end). Lighting
+    // "join group" here caused the reported bug — groupTasks() ABSORBS, so grouping a
+    // member with an outside card merged its whole group + the target into a new group
+    // instead of just popping the member out.
+    const activeGroupId = tasks.find((t) => t.id === activeId)?.group_id;
+    if (overId !== activeId && pinnedCardIds.has(overId) && !activeGroupId) {
+      const key = `${overId}:group`;
+      if (dropIntentRef.current !== key) {
+        dropIntentRef.current = key;
+        setGroupTargetId(overId);
+      }
+    } else if (dropIntentRef.current !== null) {
+      dropIntentRef.current = null;
+      setGroupTargetId((prev) => (prev === null ? prev : null));
+    }
 
     // Determine target tier from drop zone or the CURRENT position of the over-card.
     // Use drag refs (live state during drag) with snapshot as fallback.
@@ -2331,7 +2534,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     setArr(currentTier, remove(getArr(currentTier)));
     setArr(targetTier, addAt(getArr(targetTier), overId));
     bumpDragTick(); // trigger visual update
-  }, [bumpDragTick]);
+  }, [bumpDragTick, pinnedCardIds, tasks]);
 
   const clearDragState = useCallback(() => {
     if (dragRafRef.current) { cancelAnimationFrame(dragRafRef.current); dragRafRef.current = 0; }
@@ -2340,6 +2543,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     dragWaitIdsRef.current = null;
     dragStartSnapshot.current = null;
     setActiveDragPinnedId(null);
+    // Tear down the drop-intent highlight + live-pointer listener started in
+    // handlePinnedDragStart.
+    window.removeEventListener('pointermove', trackPointer);
+    dropIntentRef.current = null;
+    setGroupTargetId((prev) => (prev === null ? prev : null));
   }, []);
 
   const handlePinnedDragCancel = useCallback(() => {
@@ -2364,8 +2572,109 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const activeId = active.id as string;
     const overId = over.id as string;
 
+    // ── Whole-group drag (chip grip) ── active id is `group:<gid>:<tier>`. Move the
+    // ENTIRE group as one block: figure out the target tier + insert anchor from the
+    // drop target, retier every member that changed tier, and rebuild the global
+    // pinned order with the group's members (in their current relative order) spliced
+    // in at the anchor. Members keep their intra-group order; the cluster stays
+    // contiguous because clusterTierByGroup re-groups on render.
+    if (activeId.startsWith('group:')) {
+      const gid = activeId.slice('group:'.length).replace(/:(focus|satellite|wait)$/, '');
+      // Members in their current on-screen order (focus → satellite → wait), so the
+      // moved block preserves how the user sees them.
+      const orderedMembers = [
+        ...(liveFocus ?? snap.focus),
+        ...(liveSatellite ?? snap.satellite),
+        ...(liveWait ?? snap.wait),
+      ].filter((id) => tasks.find((t) => t.id === id)?.group_id === gid);
+      if (orderedMembers.length === 0) return;
+      const memberSet = new Set(orderedMembers);
+
+      // Resolve the target tier: a tier drop-zone id, else the tier of the over-card.
+      const overTier: FocusTier | undefined = DROP_ZONE_TIERS[overId]
+        ?? ((liveFocus ?? snap.focus).includes(overId) ? 'focus' : undefined)
+        ?? ((liveSatellite ?? snap.satellite).includes(overId) ? 'satellite' : undefined)
+        ?? ((liveWait ?? snap.wait).includes(overId) ? 'wait' : undefined);
+      if (!overTier) return;
+
+      // Retier any member not already in the target tier (optimistic; no per-call order).
+      for (const mid of orderedMembers) {
+        const cur: FocusTier = (liveFocus ?? snap.focus).includes(mid) ? 'focus'
+          : (liveWait ?? snap.wait).includes(mid) ? 'wait' : 'satellite';
+        if (cur !== overTier) onSetTier?.(mid, overTier);
+      }
+
+      // Rebuild the global pinned order: drop the members from wherever they were,
+      // then splice the whole block back in adjacent to the drop anchor.
+      const globalOrder = [...(liveFocus ?? snap.focus), ...(liveSatellite ?? snap.satellite), ...(liveWait ?? snap.wait)];
+      const without = globalOrder.filter((id) => !memberSet.has(id));
+      let insertAt: number;
+      if (DROP_ZONE_TIERS[overId] || memberSet.has(overId)) {
+        // Dropped on the tier zone itself, or on one of our own members → append to
+        // the end of the target tier's run in the filtered order.
+        const tierIds = overTier === 'focus' ? (liveFocus ?? snap.focus)
+          : overTier === 'wait' ? (liveWait ?? snap.wait) : (liveSatellite ?? snap.satellite);
+        const lastNonMember = [...tierIds].reverse().find((id) => !memberSet.has(id));
+        insertAt = lastNonMember ? without.indexOf(lastNonMember) + 1 : without.length;
+      } else {
+        // Dropped on another card → insert the block just before that card.
+        const idx = without.indexOf(overId);
+        insertAt = idx === -1 ? without.length : idx;
+      }
+      const newOrder = [...without.slice(0, insertAt), ...orderedMembers, ...without.slice(insertAt)];
+      onReorderPinned?.(newOrder);
+      return;
+    }
+
     // Check if item came from Recent section
     const isFromRecent = snap.recent?.includes(activeId) ?? false;
+
+    // ── Drag-into-group ── A drop onto ANOTHER task card (not a tier drop-zone)
+    // means "group these together" — the whole card is the group zone in the pinned
+    // area (no subtasks here). If the target is already in a group, join it; else
+    // create a new group from the two. Takes precedence over tier-move/reorder
+    // (those still apply for drops onto a tier drop-zone). A task from Recent is
+    // pinned to the target's tier first so it shows up inside the cluster.
+    // GUARD: only an UNGROUPED active card can join here. If the dragged card is
+    // already in a group, dropping it on an outside card must NOT group-merge (that
+    // ABSORBED the member's whole group + the target — the reported bug); instead it
+    // falls through to the drag-OUT logic below, which pops just this member out.
+    if (activeId !== overId && pinnedCardIds.has(overId)) {
+      const overTask = tasks.find((t) => t.id === overId);
+      const activeTask = tasks.find((t) => t.id === activeId);
+      if (overTask && activeTask && !activeTask.group_id && activeTask.group_id !== overTask.group_id) {
+        if (isFromRecent) {
+          const overTier: FocusTier =
+            (liveFocus ?? snap.focus).includes(overId) ? 'focus' :
+            (liveWait ?? snap.wait).includes(overId) ? 'wait' : 'satellite';
+          onPinTask?.(activeId);
+          setTimeout(() => onSetTier?.(activeId, overTier), 100);
+        }
+        if (overTask.group_id && onAddToGroup) {
+          onAddToGroup(overTask.group_id, [activeId]);
+          return;
+        }
+        if (!overTask.group_id && onGroupTasks) {
+          onGroupTasks([overTask.id, activeId]);
+          return;
+        }
+      }
+    }
+
+    // ── Drag OUT of a group (pinned area) ── The dragged card is a group member and
+    // this drop is NOT a "join group" (those return above), i.e. it landed on a tier
+    // drop-zone, empty space, or a card in a DIFFERENT group (same-group hovers are
+    // exempted in dragOver so they never light the target). Pull it out of its
+    // cluster, then FALL THROUGH to the tier-move / reorder logic so it also lands
+    // where it was dropped. Mirrors the Main list's drag-out.
+    if (onUngroupTask && !isFromRecent) {
+      const activeTask = tasks.find((t) => t.id === activeId);
+      const overTask = tasks.find((t) => t.id === overId);
+      if (activeTask?.group_id && activeTask.group_id !== overTask?.group_id) {
+        onUngroupTask(activeId);
+        // fall through — the tier-move / reorder logic below repositions it
+      }
+    }
 
     // Build global pinned order from live tier refs, optionally adjusting the
     // active item's position within a tier to match the final drop target.
@@ -2443,7 +2752,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     newOrder.splice(oldIndex, 1);
     newOrder.splice(newIndex, 0, activeId);
     onReorderPinned?.(newOrder);
-  }, [pinnedTaskIds_arr, onReorderPinned, onSetTier, onPinTask, clearDragState]);
+  }, [pinnedTaskIds_arr, onReorderPinned, onSetTier, onPinTask, clearDragState, onAddToGroup, onGroupTasks, onUngroupTask, pinnedCardIds, tasks]);
 
   // Recently completed: tracks tasks completed in the last few seconds.
   // Used for BOTH visual styling (isRecentlyDone green tint) AND filtering —
@@ -2772,7 +3081,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const members = task.group_id && !emittedGroups.has(task.group_id)
         ? groupTopMembers.get(task.group_id)
         : undefined;
-      if (members && members.length > 1) {
+      if (members && members.length >= 1) {
         emittedGroups.add(task.group_id!);
         for (const m of members) emitWithChildren(m);
       } else {
@@ -3021,24 +3330,24 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Virtual-group render metadata: taskId → { groupId, label, isLead, isLast }.
   // computeSortOrder already clusters group members contiguously, so we just walk
   // `sorted` and mark the first occurrence of each group as the lead (chip + top
-  // rounding) and the last as the tail (bottom rounding). Singleton groups (only
-  // one member visible) get no treatment — a group needs ≥2 to box.
+  // rounding) and the last as the tail (bottom rounding). A group renders down to a
+  // SINGLE member — a 1-member group is valid (acts like a tag) and stays boxed
+  // until the user dissolves it; a lone member is both lead and last (chip on top +
+  // rounded bottom = a complete one-card box).
   const groupRenderMap = useMemo(() => {
     const map = new Map<string, GroupRenderInfo>();
     // Count members per group from the *displayed* set (`sorted`), not the full task
-    // list: a group needs ≥2 *visible* members to box. If a secondary filter (search,
-    // collapsed parent, status filter) hides a sibling, the lone survivor must NOT get
-    // a chip+rail — that would read as a broken 1-item group. computeSortOrder clusters
-    // members contiguously, so counting occurrences in `sorted` == counting contiguous
-    // visible members.
+    // list. A group boxes with ≥1 *visible* member. computeSortOrder clusters members
+    // contiguously, so counting occurrences in `sorted` == counting contiguous visible
+    // members.
     const counts = new Map<string, number>();
     for (const t of sorted) if (t.group_id) counts.set(t.group_id, (counts.get(t.group_id) ?? 0) + 1);
     const firstSeen = new Set<string>();
     const lastIdxByGroup = new Map<string, number>();
-    sorted.forEach((t, i) => { if (t.group_id && (counts.get(t.group_id) ?? 0) >= 2) lastIdxByGroup.set(t.group_id, i); });
+    sorted.forEach((t, i) => { if (t.group_id && (counts.get(t.group_id) ?? 0) >= 1) lastIdxByGroup.set(t.group_id, i); });
     sorted.forEach((t, i) => {
       const gid = t.group_id;
-      if (!gid || (counts.get(gid) ?? 0) < 2) return;
+      if (!gid || (counts.get(gid) ?? 0) < 1) return;
       const isLead = !firstSeen.has(gid);
       if (isLead) firstSeen.add(gid);
       map.set(t.id, {
@@ -3231,66 +3540,81 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     setActiveDragId(id);
     const type = (event.active.data?.current as { type?: string })?.type ?? 'task';
     setActiveDragType(type);
-    // Reset dwell state on every new drag
-    if (nestDwellTimerRef.current) { clearTimeout(nestDwellTimerRef.current); nestDwellTimerRef.current = null; }
-    nestDwellTargetRef.current = null;
+    // Start tracking the live cursor so handleDragOver/End can read horizontal
+    // position within the over-card (group vs subtask vs reorder).
+    window.addEventListener('pointermove', trackPointer, { passive: true });
+    dropIntentRef.current = null;
     setNestTargetId(null);
+    setGroupTargetId(null);
   }, []);
 
-  /** Clear any pending dwell timer + UI ring — call on drag end/cancel. */
-  const clearNestDwell = useCallback(() => {
-    if (nestDwellTimerRef.current) {
-      clearTimeout(nestDwellTimerRef.current);
-      nestDwellTimerRef.current = null;
-    }
-    nestDwellTargetRef.current = null;
+  /** Clear all drop-intent highlights + stop pointer tracking — on drag end/cancel. */
+  const clearDropIntent = useCallback(() => {
+    window.removeEventListener('pointermove', trackPointer);
+    dropIntentRef.current = null;
     setNestTargetId((prev) => (prev === null ? prev : null));
+    setGroupTargetId((prev) => (prev === null ? prev : null));
   }, []);
-
-  /** Milliseconds the cursor must rest on a target task before it becomes a nest target. */
-  const NEST_DWELL_MS = 500;
 
   const handleDragOver = useCallback((event: DragOverEvent) => {
     const activeType = (event.active.data?.current as { type?: string })?.type ?? 'task';
-    // Dwell-to-nest only applies to task drags (not category/project group drags)
-    if (activeType !== 'task') { clearNestDwell(); return; }
+    // Drop-intent highlighting only applies to task drags (not cat/proj group drags).
+    if (activeType !== 'task') { clearDropIntent(); return; }
 
     const activeId = String(event.active.id);
     const overId = event.over?.id ? String(event.over.id) : null;
 
-    // Only dwell on other tasks — not on headers, not on the dragged task itself
-    if (!overId || overId === activeId || !taskGroupMap.has(overId)) { clearNestDwell(); return; }
+    // Only over another task card — not headers, not the dragged task itself.
+    if (!overId || overId === activeId || !taskGroupMap.has(overId)) {
+      if (dropIntentRef.current !== null) clearDropIntent();
+      return;
+    }
 
-    // Prevent cycle: the target cannot be the dragged task OR any of its descendants.
-    // Walk up from target — if we ever hit activeId, it's a descendant. (childParentMap
-    // maps child → parent, so walking up eventually reaches a root.)
+    // Prevent cycle: target can't be the dragged task or any of its descendants.
     let walk: string | undefined = overId;
     for (let i = 0; i < 32 && walk; i++) {
-      if (walk === activeId) { clearNestDwell(); return; }
+      if (walk === activeId) { if (dropIntentRef.current !== null) clearDropIntent(); return; }
       walk = childParentMap.get(walk);
     }
 
-    // Skip dwell if target is already the active task's current parent — nesting
-    // there would be a confusing no-op. Existing "drop on parent = unparent"
-    // gesture still works for drags that don't dwell.
+    // Classify by the live cursor's horizontal position within the over-card:
+    // right indent zone → subtask (Main only), else → group. The Pin/Focus tiers
+    // have their own DnD handler (handlePinnedDragOver); this one is the Main list,
+    // which supports subtasks, so both intents are live here.
+    const cardEl = document.querySelector(`.todo-panel-item[data-task-id="${overId}"]`);
+    let intent = classifyDropOnCard(cardEl); // 'group' | 'subtask'
+
+    // ── Grouped-member exemption ── If the dragged task is ALREADY in a group, a
+    // group-zone hover must NEVER light "join group". A member being dragged has only
+    // two valid outcomes: drop on a same-group neighbor → intra-group reorder; drop
+    // anywhere else → pull OUT of the group (handled at drag end). Lighting the group
+    // target while dragging a grouped member is exactly what caused the reported bug:
+    // groupTasks() has ABSORB semantics, so "grouping" a member with an outside card
+    // merged the member's WHOLE group plus the target into a new group instead of just
+    // popping the member out. Suppress the highlight; a right-zone subtask nest is
+    // still allowed (that's a reparent, independent of grouping).
+    const activeGroup = tasks.find((t) => t.id === activeId)?.group_id;
+    if (intent === 'group' && activeGroup) {
+      if (dropIntentRef.current !== null) clearDropIntent();
+      return;
+    }
+
+    // "subtask" onto the active task's CURRENT parent is a confusing no-op — fall
+    // back to 'group' there (drop-on-own-parent = unparent still works at drag end).
     const activeParentId = childParentMap.get(activeId);
-    if (activeParentId && activeParentId === overId) { clearNestDwell(); return; }
+    if (intent === 'subtask' && activeParentId && activeParentId === overId) intent = 'group';
 
-    // Same target as the one we're already dwelling on → nothing to do
-    if (nestDwellTargetRef.current === overId) return;
-
-    // Switched to a different target — reset timer & clear any active ring
-    if (nestDwellTimerRef.current) clearTimeout(nestDwellTimerRef.current);
-    nestDwellTargetRef.current = overId;
-    setNestTargetId((prev) => (prev === null ? prev : null));
-    nestDwellTimerRef.current = setTimeout(() => {
-      // Double-check we're still on the same target (ref may have moved)
-      if (nestDwellTargetRef.current === overId) {
-        setNestTargetId(overId);
-      }
-      nestDwellTimerRef.current = null;
-    }, NEST_DWELL_MS);
-  }, [taskGroupMap, childParentMap, clearNestDwell]);
+    const key = `${overId}:${intent}`;
+    if (dropIntentRef.current === key) return; // same target+intent — no state churn
+    dropIntentRef.current = key;
+    if (intent === 'subtask') {
+      setGroupTargetId((prev) => (prev === null ? prev : null));
+      setNestTargetId(overId);
+    } else {
+      setNestTargetId((prev) => (prev === null ? prev : null));
+      setGroupTargetId(overId);
+    }
+  }, [taskGroupMap, childParentMap, clearDropIntent, tasks]);
 
   // Auto-switch to manual sort when the user performs a manual action (drag
   // reorder / Move up / Move left). If a priority/date/updated sort is active,
@@ -3311,15 +3635,59 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [sortBy, sortOrder, onBakeOrder, showSortToast]);
 
   const handleDragEnd = useCallback((event: DragEndEvent) => {
-    // Capture dwell state BEFORE clearing — if the user hovered a task long
-    // enough to trigger the nest ring, drop-here means "nest as subtask"
-    // regardless of normal reparent heuristics. (Apple Reminders style.)
+    // Capture the drop intent BEFORE clearing. Position-based (set in handleDragOver
+    // from the cursor's horizontal position over the target card):
+    //   • nestTarget  → dropped in the right indent zone → nest as subtask
+    //   • groupTarget → dropped in the left zone of a card → join/create a group
     const dwellNest = nestTargetId;
+    const groupDrop = groupTargetId;
     setActiveDragId(null);
     setActiveDragType(null);
-    clearNestDwell();
+    clearDropIntent();
     const { active, over } = event;
     if (!over || active.id === over.id) return;
+
+    // ── Drag-into-group (Main list) ── A left-zone drop on a task card means
+    // "group these together". If the target is already in a group, join it; else
+    // create a new group from the two. This takes precedence over reparent/reorder
+    // (which only run for gap drops or right-zone subtask drops). Grouping has no
+    // scope rule, so cross-category/project drops are fine.
+    // GUARD: only an UNGROUPED active can join here. A grouped member dropped on an
+    // outside card must NOT group-merge (groupTasks ABSORBS the member's whole group +
+    // the target — the reported bug); it falls through to the drag-OUT block below.
+    if (groupDrop && String(over.id) === groupDrop && groupDrop !== String(active.id)) {
+      const activeId = String(active.id);
+      const overTask = tasks.find((t) => t.id === groupDrop);
+      const activeTask = tasks.find((t) => t.id === activeId);
+      if (overTask && activeTask && !activeTask.group_id && activeTask.group_id !== overTask.group_id) {
+        if (overTask.group_id && onAddToGroup) {
+          onAddToGroup(overTask.group_id, [activeId]);
+          return;
+        }
+        if (!overTask.group_id && onGroupTasks) {
+          onGroupTasks([overTask.id, activeId]);
+          return;
+        }
+      }
+    }
+
+    // ── Drag OUT of a group ── The dragged task is a group member, this drop is NOT
+    // a "join group" action (those return above), and it landed somewhere that is
+    // NOT a same-group member (a header, the gap, or an unrelated task — same-group
+    // hovers are exempted in dragOver so they never light the group target). That
+    // means the user is pulling the member OUT of its cluster: clear its group_id,
+    // then FALL THROUGH to the normal reorder/reparent/move below so it also lands
+    // where it was dropped. Without this a grouped member can't leave by dragging —
+    // clusterByGroup keeps snapping it back into the contiguous cluster.
+    if (onUngroupTask) {
+      const activeId = String(active.id);
+      const activeTask = tasks.find((t) => t.id === activeId);
+      const overTask = tasks.find((t) => t.id === String(over.id));
+      if (activeTask?.group_id && activeTask.group_id !== overTask?.group_id) {
+        onUngroupTask(activeId);
+        // fall through — the reorder/reparent/move logic below repositions it
+      }
+    }
 
     const activeType = (active.data?.current as { type?: string })?.type ?? 'task';
 
@@ -3533,7 +3901,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       ensureManualSort();
       onMoveTask(activeId, targetCategory, targetProject, insertNearTaskId);
     }
-  }, [onReorder, onMoveTask, onReparentTask, ordering, taskGroupMap, grouped, fullGrouped, sorted, childParentMap, trueChildCountMap, ensureManualSort, nestTargetId, clearNestDwell]);
+  }, [onReorder, onMoveTask, onReparentTask, ordering, taskGroupMap, grouped, fullGrouped, sorted, childParentMap, trueChildCountMap, ensureManualSort, nestTargetId, groupTargetId, clearDropIntent, tasks, onAddToGroup, onGroupTasks]);
 
   // Kebab "Move left" — promote subtask to top-level via onReparentTask(id, null).
   // Also primes scroll restoration so the task stays visible after refetch.
@@ -3568,6 +3936,18 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (onUngroupTasks) onUngroupTasks(memberIds);
     else if (onUngroupTask) memberIds.forEach((id) => onUngroupTask(id));
   }, [onUngroupTasks, onUngroupTask, tasks]);
+
+  // Group chip ⊘ → hide the whole cluster from the Focus area. Unlike dissolve this
+  // keeps the group + membership intact — only the pinned rendering collapses it.
+  // Unhide from a member's kebab ("Unhide group") or the /tasks page.
+  const handleHideGroup = useCallback((groupId: string) => {
+    onSetGroupHidden?.(groupId, true);
+  }, [onSetGroupHidden]);
+
+  // Kebab "Unhide group in Focus" → restore a Focus-hidden group.
+  const handleUnhideGroup = useCallback((groupId: string) => {
+    onSetGroupHidden?.(groupId, false);
+  }, [onSetGroupHidden]);
 
   // Kebab "Move up" — map of taskId → handler that swaps the task with the
   // previous sibling in its group. Siblings are grouped by parent_task_id so
@@ -3676,23 +4056,20 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     onFocusTask?.(task, { openDetail: false });
   }, [onFocusTask, onOpenSession, selectedIds]);
 
-  // Resolve the current selection to actual tasks + validate same category+project
-  // (the hard scope rule). Drives the floating action bar's enabled/disabled state.
+  // Resolve the current selection to actual tasks. Grouping has NO scope rule
+  // anymore — any ≥2 tasks can be grouped regardless of category/project (a group
+  // is a pure visual cluster). `canGroup` is therefore just "≥2 selected"; it
+  // drives the floating action bar's Group enabled/disabled state.
   const selectionInfo = useMemo(() => {
     const picked = tasks.filter((t) => selectedIds.has(t.id));
-    if (picked.length < 2) return { tasks: picked, sameScope: false };
-    const cat = picked[0].category;
-    const proj = picked[0].project;
-    const sameScope = picked.every((t) => t.category === cat && t.project === proj);
-    return { tasks: picked, sameScope };
+    return { tasks: picked, canGroup: picked.length >= 2 };
   }, [tasks, selectedIds]);
 
   const handleGroupSelected = useCallback(() => {
-    if (!onGroupTasks || selectionInfo.tasks.length < 2 || !selectionInfo.sameScope) return;
+    if (!onGroupTasks || selectionInfo.tasks.length < 2) return;
     onGroupTasks(selectionInfo.tasks.map((t) => t.id));
-    setSelectedIds(new Set());
-    setSelectMode(false);
-  }, [onGroupTasks, selectionInfo]);
+    exitSelectMode();
+  }, [onGroupTasks, selectionInfo, exitSelectMode]);
 
   // Batch operations from the "Group ▾" side dropdown — apply one action to every
   // selected task, then exit select mode (the action is the user's intent, done).
@@ -3792,7 +4169,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       </div>
 
       {/* Unified DndContext wrapping both Pinned + Recent — enables drag from Recent to Pin */}
-      {(pinnedTasks.length > 0 || recentTasks.length > 0) && (
+      {(pinnedTasks.length > 0 || recentTasks.length > 0 || hiddenPinnedGroups.length > 0) && (
         <DndContext sensors={pinnedSensors} collisionDetection={closestCenter} onDragStart={handlePinnedDragStart} onDragOver={handlePinnedDragOver} onDragEnd={handlePinnedDragEnd} onDragCancel={handlePinnedDragCancel}>
           <div className="todo-pinned-wrapper" style={{ flex: `${1 - listRatio} 1 0%` }}>
           {/* PINNED section — Focus + Satellite + Wait sub-groups */}
@@ -3818,7 +4195,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         <div className="todo-pinned-list-scroll" style={focusTasksDisplay.length > tierLimits.focus ? { maxHeight: tierLimits.focus * CARD_HEIGHT_PX } : undefined}>
                           <TierDropZone id="focus-drop-zone" isEmpty={focusTasksDisplay.length === 0}>
                             {focusTasksDisplay.map((task) => (
-                              <SortableTierCard key={task.id} task={task} tier="focus" isFocused={focusedTaskId === task.id} isSessionOpen={openSessionTaskIds?.has(task.id) ?? false} isDetailOpen={focusedTaskId === task.id && !suppressDetail} onClick={handlePinnedCardClick} onSetTier={onSetTier} onUnpinTask={onUnpinTask} onPinTask={onPinTask} onSetPriority={onSetPriority} onSetDate={onSetDate} onStar={onStar} onExpandDetail={handleExpandDetail} onClearFocus={onClearFocus} onOpenSession={onOpenSession} onSetPhase={setPhaseOrComplete} onUpdateTitle={onUpdate ? handleUpdateTitle : undefined} onDelete={onDelete} />
+                              <SortableTierCard key={task.id} task={task} tier="focus" isFocused={focusedTaskId === task.id} isSessionOpen={openSessionTaskIds?.has(task.id) ?? false} isDetailOpen={focusedTaskId === task.id && !suppressDetail} onClick={handlePinnedCardClick} onSetTier={onSetTier} onUnpinTask={onUnpinTask} onPinTask={onPinTask} onSetPriority={onSetPriority} onSetDate={onSetDate} onStar={onStar} onExpandDetail={handleExpandDetail} onClearFocus={onClearFocus} onOpenSession={onOpenSession} onSetPhase={setPhaseOrComplete} onUpdateTitle={onUpdate ? handleUpdateTitle : undefined} onDelete={onDelete} groupInfo={focusGroupMeta.get(task.id)} onRenameGroup={handleRenameGroup} onDissolveGroup={handleDissolveGroup} onHideGroup={handleHideGroup} selectMode={selectMode} isSelected={selectedIds.has(task.id)} onSelectToggle={onSelectToggle} onStartSelect={onStartSelect} isGroupTarget={groupTargetId === task.id} />
                             ))}
                           </TierDropZone>
                           <InlineAdd label="Add to Focus…" onAdd={async (title) => {
@@ -3845,7 +4222,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         <SortableContext items={satelliteIds_arr} strategy={verticalListSortingStrategy}>
                           <div className="todo-pinned-list todo-pinned-list-scroll" style={satelliteTasksDisplay.length > tierLimits.satellite ? { maxHeight: tierLimits.satellite * CARD_HEIGHT_PX } : undefined}>
                             {satelliteTasksDisplay.map((task) => (
-                              <SortableTierCard key={task.id} task={task} tier="satellite" isFocused={focusedTaskId === task.id} isSessionOpen={openSessionTaskIds?.has(task.id) ?? false} isDetailOpen={focusedTaskId === task.id && !suppressDetail} onClick={handlePinnedCardClick} onSetTier={onSetTier} onUnpinTask={onUnpinTask} onPinTask={onPinTask} onSetPriority={onSetPriority} onSetDate={onSetDate} onStar={onStar} onExpandDetail={handleExpandDetail} onClearFocus={onClearFocus} onOpenSession={onOpenSession} onSetPhase={setPhaseOrComplete} onUpdateTitle={onUpdate ? handleUpdateTitle : undefined} onDelete={onDelete} />
+                              <SortableTierCard key={task.id} task={task} tier="satellite" isFocused={focusedTaskId === task.id} isSessionOpen={openSessionTaskIds?.has(task.id) ?? false} isDetailOpen={focusedTaskId === task.id && !suppressDetail} onClick={handlePinnedCardClick} onSetTier={onSetTier} onUnpinTask={onUnpinTask} onPinTask={onPinTask} onSetPriority={onSetPriority} onSetDate={onSetDate} onStar={onStar} onExpandDetail={handleExpandDetail} onClearFocus={onClearFocus} onOpenSession={onOpenSession} onSetPhase={setPhaseOrComplete} onUpdateTitle={onUpdate ? handleUpdateTitle : undefined} onDelete={onDelete} groupInfo={satelliteGroupMeta.get(task.id)} onRenameGroup={handleRenameGroup} onDissolveGroup={handleDissolveGroup} onHideGroup={handleHideGroup} selectMode={selectMode} isSelected={selectedIds.has(task.id)} onSelectToggle={onSelectToggle} onStartSelect={onStartSelect} isGroupTarget={groupTargetId === task.id} />
                             ))}
                             <InlineAdd label="Add to Satellite…" onAdd={async (title) => {
                               const result = await onCreate({ title, priority: 'none', pinnedTier: 'satellite', capture: true });
@@ -3871,7 +4248,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         <div className="todo-pinned-list-scroll" style={waitTasksDisplay.length > tierLimits.wait ? { maxHeight: tierLimits.wait * CARD_HEIGHT_PX } : undefined}>
                           <TierDropZone id="wait-drop-zone" isEmpty={waitTasksDisplay.length === 0}>
                             {waitTasksDisplay.map((task) => (
-                              <SortableTierCard key={task.id} task={task} tier="wait" isFocused={focusedTaskId === task.id} isSessionOpen={openSessionTaskIds?.has(task.id) ?? false} isDetailOpen={focusedTaskId === task.id && !suppressDetail} onClick={handlePinnedCardClick} onSetTier={onSetTier} onUnpinTask={onUnpinTask} onPinTask={onPinTask} onSetPriority={onSetPriority} onSetDate={onSetDate} onStar={onStar} onExpandDetail={handleExpandDetail} onClearFocus={onClearFocus} onOpenSession={onOpenSession} onSetPhase={setPhaseOrComplete} onUpdateTitle={onUpdate ? handleUpdateTitle : undefined} onDelete={onDelete} />
+                              <SortableTierCard key={task.id} task={task} tier="wait" isFocused={focusedTaskId === task.id} isSessionOpen={openSessionTaskIds?.has(task.id) ?? false} isDetailOpen={focusedTaskId === task.id && !suppressDetail} onClick={handlePinnedCardClick} onSetTier={onSetTier} onUnpinTask={onUnpinTask} onPinTask={onPinTask} onSetPriority={onSetPriority} onSetDate={onSetDate} onStar={onStar} onExpandDetail={handleExpandDetail} onClearFocus={onClearFocus} onOpenSession={onOpenSession} onSetPhase={setPhaseOrComplete} onUpdateTitle={onUpdate ? handleUpdateTitle : undefined} onDelete={onDelete} groupInfo={waitGroupMeta.get(task.id)} onRenameGroup={handleRenameGroup} onDissolveGroup={handleDissolveGroup} onHideGroup={handleHideGroup} selectMode={selectMode} isSelected={selectedIds.has(task.id)} onSelectToggle={onSelectToggle} onStartSelect={onStartSelect} isGroupTarget={groupTargetId === task.id} />
                             ))}
                           </TierDropZone>
                           <InlineAdd label="Add to Wait…" onAdd={async (title) => {
@@ -3885,6 +4262,28 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   </div>
                 </>
               )}
+            </div>
+          )}
+
+          {/* Hidden-groups strip — compact chips for groups collapsed out of the tiers
+              above, each with an unhide (⊙) affordance. Rendered as a sibling of the
+              Pinned section so it shows even when every pinned task is in a hidden
+              group (pinnedTasks would be empty then). This is the in-Focus way back —
+              without it a hidden group's cards vanish with no local restore point. */}
+          {hiddenPinnedGroups.length > 0 && (
+            <div className="todo-pinned-hidden-strip">
+              {hiddenPinnedGroups.map((g) => (
+                <button
+                  key={g.groupId}
+                  className="todo-pinned-hidden-chip"
+                  onClick={() => handleUnhideGroup(g.groupId)}
+                  title={`Unhide "${g.label}" (${g.count} task${g.count === 1 ? '' : 's'}) back into Focus`}
+                >
+                  <span className="todo-pinned-hidden-chip-icon" aria-hidden="true">⊙</span>
+                  <span className="todo-pinned-hidden-chip-label">{g.label}</span>
+                  <span className="todo-pinned-hidden-chip-count">{g.count}</span>
+                </button>
+              ))}
             </div>
           )}
 
@@ -4028,7 +4427,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     isFocused={focusedTaskId === task.id}
                     isDetailOpen={focusedTaskId === task.id && !suppressDetail}
                     isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
-                    isNestTarget={nestTargetId === task.id}
+                    isNestTarget={nestTargetId === task.id} isGroupTarget={groupTargetId === task.id}
                     depth={depthMap.get(task.id) ?? 0}
                     childCount={searchChildCount.get(task.id)}
                     isExpanded={expandedParents.has(task.id)}
@@ -4080,7 +4479,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   isFocused={focusedTaskId === task.id}
                   isDetailOpen={focusedTaskId === task.id && !suppressDetail}
                   isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
-                  isNestTarget={nestTargetId === task.id}
+                  isNestTarget={nestTargetId === task.id} isGroupTarget={groupTargetId === task.id}
                   depth={depthMap.get(task.id) ?? 0}
                   childCount={trueChildCountMap.get(task.id)}
                   isExpanded={expandedParents.has(task.id)}
@@ -4110,6 +4509,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   groupInfo={groupRenderMap.get(task.id)}
                   onRenameGroup={handleRenameGroup}
                   onUngroupTask={onUngroupTask}
+                  isGroupHidden={!!(task.group_id && hiddenGroups?.has(task.group_id))}
+                  onUnhideGroup={handleUnhideGroup}
                   onDissolveGroup={handleDissolveGroup}
                 />
               );
@@ -4124,7 +4525,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             onDragStart={handleDragStart}
             onDragOver={handleDragOver}
             onDragEnd={handleDragEnd}
-            onDragCancel={clearNestDwell}
+            onDragCancel={clearDropIntent}
           >
             <SortableContext items={grouped.map((g) => `cat:${g.category}`)} strategy={verticalListSortingStrategy}>
               {grouped.map(({ category, directTasks, projects }) => (
@@ -4169,7 +4570,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                   isFocused={focusedTaskId === task.id}
                                   isDetailOpen={focusedTaskId === task.id && !suppressDetail}
                                   isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
-                                  isNestTarget={nestTargetId === task.id}
+                                  isNestTarget={nestTargetId === task.id} isGroupTarget={groupTargetId === task.id}
                                   depth={depthMap.get(task.id) ?? 0}
                                   childCount={trueChildCountMap.get(task.id)}
                                   isExpanded={expandedParents.has(task.id)}
@@ -4200,6 +4601,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                   groupInfo={groupRenderMap.get(task.id)}
                                   onRenameGroup={handleRenameGroup}
                                   onUngroupTask={onUngroupTask}
+                  isGroupHidden={!!(task.group_id && hiddenGroups?.has(task.group_id))}
+                  onUnhideGroup={handleUnhideGroup}
                   onDissolveGroup={handleDissolveGroup}
                                 />
                               );
@@ -4252,7 +4655,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                                 isFocused={focusedTaskId === task.id}
                                                 isDetailOpen={focusedTaskId === task.id && !suppressDetail}
                                                 isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
-                                                isNestTarget={nestTargetId === task.id}
+                                                isNestTarget={nestTargetId === task.id} isGroupTarget={groupTargetId === task.id}
                                                 depth={depthMap.get(task.id) ?? 0}
                                                 childCount={trueChildCountMap.get(task.id)}
                                                 isExpanded={expandedParents.has(task.id)}
@@ -4283,6 +4686,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                                 groupInfo={groupRenderMap.get(task.id)}
                                                 onRenameGroup={handleRenameGroup}
                                                 onUngroupTask={onUngroupTask}
+                  isGroupHidden={!!(task.group_id && hiddenGroups?.has(task.group_id))}
+                  onUnhideGroup={handleUnhideGroup}
                   onDissolveGroup={handleDissolveGroup}
                                               />
                                             );
@@ -4447,8 +4852,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       />
 
       {/* Multi-select action bar — shown in explicit select mode, or whenever ≥2 tasks
-          are selected (incl. the Cmd/Ctrl-click path). "Group" is enabled only when the
-          selection shares one category+project (the scope rule). */}
+          are selected (incl. the Cmd/Ctrl-click path). "Group" is enabled once ≥2 tasks
+          are picked (no category/project scope rule). "Cancel" abandons the selection and
+          leaves select mode (it used to be a confusing "Done"). */}
       {onGroupTasks && (selectMode || selectionInfo.tasks.length >= 2) && (
         <div className="task-selection-bar">
           <span className="task-selection-count">
@@ -4459,7 +4865,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           {/* Group split-button + side dropdown of batch actions (reuses the kebab panel). */}
           <TaskBatchMenu
             count={selectionInfo.tasks.length}
-            sameScope={selectionInfo.sameScope}
+            canGroup={selectionInfo.canGroup}
             onGroup={handleGroupSelected}
             onSetPriorityAll={batchSetPriority}
             onPinAllToTier={batchPinToTier}
@@ -4469,7 +4875,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             className="task-selection-clear-btn"
             onClick={() => (selectMode ? exitSelectMode() : setSelectedIds(new Set()))}
           >
-            {selectMode ? 'Done' : 'Clear'}
+            Cancel
           </button>
         </div>
       )}

@@ -93,10 +93,10 @@ export function TaskList({
       for (const t of lane) if (t.group_id) counts.set(t.group_id, (counts.get(t.group_id) ?? 0) + 1);
       const firstSeen = new Set<string>();
       const lastIdx = new Map<string, number>();
-      lane.forEach((t, i) => { if (t.group_id && (counts.get(t.group_id) ?? 0) >= 2) lastIdx.set(t.group_id, i); });
+      lane.forEach((t, i) => { if (t.group_id && (counts.get(t.group_id) ?? 0) >= 1) lastIdx.set(t.group_id, i); });
       lane.forEach((t, i) => {
         const gid = t.group_id;
-        if (!gid || (counts.get(gid) ?? 0) < 2) return;
+        if (!gid || (counts.get(gid) ?? 0) < 1) return;
         const isLead = !firstSeen.has(gid);
         if (isLead) firstSeen.add(gid);
         map.set(t.id, { groupId: gid, label: taskGroups?.[gid] ?? '', isLead, isLast: lastIdx.get(gid) === i });
@@ -113,17 +113,15 @@ export function TaskList({
     });
   }, []);
 
-  // Resolve selection → tasks + validate same category+project (the hard scope rule).
+  // Resolve selection → tasks. Grouping has NO scope rule — any ≥2 tasks can be
+  // grouped regardless of category/project (a group is a pure visual cluster).
   const selectionInfo = useMemo(() => {
     const picked = tasks.filter((t) => selectedIds.has(t.id));
-    if (picked.length < 2) return { tasks: picked, sameScope: false };
-    const { category, project } = picked[0];
-    const sameScope = picked.every((t) => t.category === category && t.project === project);
-    return { tasks: picked, sameScope };
+    return { tasks: picked, canGroup: picked.length >= 2 };
   }, [tasks, selectedIds]);
 
   const handleGroupSelected = useCallback(() => {
-    if (!onGroupTasks || selectionInfo.tasks.length < 2 || !selectionInfo.sameScope) return;
+    if (!onGroupTasks || selectionInfo.tasks.length < 2) return;
     onGroupTasks(selectionInfo.tasks.map((t) => t.id));
     setSelectedIds(new Set());
   }, [onGroupTasks, selectionInfo]);
@@ -223,14 +221,14 @@ export function TaskList({
           <span className="task-selection-count">{selectionInfo.tasks.length} selected</span>
           <button
             className="task-selection-group-btn"
-            disabled={!selectionInfo.sameScope}
-            title={selectionInfo.sameScope ? 'Group these tasks together' : 'Tasks must be in the same category and project to group'}
+            disabled={!selectionInfo.canGroup}
+            title={selectionInfo.canGroup ? 'Group these tasks together' : 'Select at least 2 tasks'}
             onClick={handleGroupSelected}
           >
             ⑂ Group
           </button>
           <button className="task-selection-clear-btn" onClick={() => setSelectedIds(new Set())}>
-            Clear
+            Cancel
           </button>
         </div>
       )}

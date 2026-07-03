@@ -12,9 +12,11 @@
  *      `task:groups-changed` WS event fires, GET /api/tasks/groups lists the new
  *      group (group_id + label + member_ids), and the grouped tasks have group_id
  *      persisted (re-fetched via GET /api/tasks/:id).
- *   2. POST /api/tasks/groups with cross-category tasks → HTTP 409 (TaskGroupScopeError).
- *   3. POST /api/tasks/groups/remove dropping a 2-member group to 1 → group dissolves
- *      (response reports dissolved_group_ids; both tasks lose group_id).
+ *   2. POST /api/tasks/groups with cross-category tasks → HTTP 200, group created
+ *      (grouping has NO scope rule — any tasks can be grouped).
+ *   3. POST /api/tasks/groups/remove dropping a 2-member group to 1 → group SURVIVES
+ *      with the lone member (acts like a tag); only removing the last member (0 left)
+ *      dissolves it (response reports dissolved_group_ids then).
  *   4. PATCH /api/tasks/groups/:groupId → response body + WS event carry the new label.
  *
  * Each test asserts on the HTTP response body + WS events + persisted GET — never on
@@ -57,6 +59,7 @@ interface GroupResult {
 interface GroupSummary {
   group_id: string;
   label: string;
+  hidden?: boolean;
   member_ids: string[];
 }
 
@@ -220,11 +223,13 @@ describe('task-group REST API (REST → core → bus → WS)', () => {
 
   /**
    * Test 2: POST /api/tasks/groups across two different categories.
-   *   The core throws TaskGroupScopeError → the route maps it to HTTP 409.
-   * Fails if reverted: the scope rule (or its 409 mapping) is gone.
+   *   A group is a pure visual cluster with NO scope rule — this must succeed (200)
+   *   and persist group_id on both cross-category tasks.
+   * Fails if reverted: if the old same-category+project scope rule came back, this
+   *   cross-category group would 409 instead of 200.
    */
-  it('POST /groups with cross-category tasks returns 409 and creates no group', async () => {
-    // Distinct categories ⇒ different scope.
+  it('POST /groups with cross-category tasks creates the group (no scope rule)', async () => {
+    // Distinct categories — used to be rejected; now allowed.
     const a = await createTask('Cross-scope A', 'e2e-grp-work', 'alpha');
     const b = await createTask('Cross-scope B', 'e2e-grp-life', 'home');
     expect(a.category).not.toBe(b.category);
@@ -234,24 +239,26 @@ describe('task-group REST API (REST → core → bus → WS)', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ task_ids: [a.id, b.id] }),
     });
-    expect(res.status).toBe(409);
-    const body = (await res.json()) as { error: string };
-    expect(body.error).toMatch(/same category \+ project/i);
+    expect(res.status).toBe(200);
+    const created = (await res.json()) as GroupResult;
+    expect(created.member_ids.sort()).toEqual([a.id, b.id].sort());
 
-    // Downstream: the rejected grouping left NO group_id on either task.
-    expect((await getTask(a.id)).group_id).toBeUndefined();
-    expect((await getTask(b.id)).group_id).toBeUndefined();
+    // Downstream: both cross-category tasks now carry the new group_id (persisted).
+    expect((await getTask(a.id)).group_id).toBe(created.group_id);
+    expect((await getTask(b.id)).group_id).toBe(created.group_id);
   });
 
   /**
    * Test 3: POST /api/tasks/groups/remove dropping a 2-member group to 1.
-   *   The lone survivor is pruned → the whole group auto-dissolves.
-   *   - Response reports dissolved_group_ids (the dissolved group).
-   *   - The `task:groups-changed` WS event carries dissolved_group_ids.
-   *   - Both tasks lose group_id (re-fetched via GET /api/tasks/:id).
-   * Fails if reverted: auto-dissolve (≥2-member invariant) is gone.
+   *   A group survives down to 1 member (acts like a tag) — removing one of two does
+   *   NOT dissolve it. Only removing the LAST member (0 left) dissolves the group.
+   *   - First remove: response reports removed_ids=[a], dissolved_group_ids=[]; the
+   *     lone survivor b keeps the group_id.
+   *   - Second remove (b): now dissolved_group_ids=[group], b loses group_id.
+   * Fails if reverted: if the old ≥2-member auto-dissolve came back, the FIRST remove
+   *   would dissolve the group instead of keeping b as a lone member.
    */
-  it('POST /groups/remove dissolves the group when it would drop below 2 members', async () => {
+  it('POST /groups/remove keeps a lone member, dissolving only when the last is removed', async () => {
     const a = await createTask('Dissolve A');
     const b = await createTask('Dissolve B');
 
@@ -269,8 +276,7 @@ describe('task-group REST API (REST → core → bus → WS)', () => {
 
     const ws = await connectWs();
     try {
-      const eventPromise = waitForWsEvent(ws, 'task:groups-changed');
-
+      // First removal: a leaves, b stays as the lone member — group NOT dissolved.
       const res = await fetch(apiUrl('/api/tasks/groups/remove'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -282,17 +288,25 @@ describe('task-group REST API (REST → core → bus → WS)', () => {
         dissolved_group_ids: string[];
       };
       expect(result.removed_ids).toContain(a.id);
-      expect(result.dissolved_group_ids).toContain(created.group_id);
+      expect(result.dissolved_group_ids).toEqual([]);
 
-      // WS event reports the dissolution.
+      // Downstream: a ungrouped, b STILL in the group (lone-member group survives).
+      expect((await getTask(a.id)).group_id).toBeUndefined();
+      expect((await getTask(b.id)).group_id).toBe(created.group_id);
+
+      // Second removal: b is the last member → now the group dissolves.
+      const eventPromise = waitForWsEvent(ws, 'task:groups-changed');
+      const res2 = await fetch(apiUrl('/api/tasks/groups/remove'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task_ids: [b.id] }),
+      });
+      expect(res2.status).toBe(200);
+      const result2 = (await res2.json()) as { dissolved_group_ids: string[] };
+      expect(result2.dissolved_group_ids).toContain(created.group_id);
+
       const frame = await eventPromise;
       expect(frame.name).toBe('task:groups-changed');
-      const evData = frame.data as { dissolved_group_ids?: string[] };
-      expect(evData.dissolved_group_ids).toContain(created.group_id);
-
-      // Both tasks are ungrouped (a removed explicitly, b pruned as lone survivor) —
-      // the dissolution downstream effect, verified on the persisted tasks.
-      expect((await getTask(a.id)).group_id).toBeUndefined();
       expect((await getTask(b.id)).group_id).toBeUndefined();
     } finally {
       ws.close();
@@ -344,5 +358,85 @@ describe('task-group REST API (REST → core → bus → WS)', () => {
       ws.close();
       await delay(50);
     }
+  });
+
+  /**
+   * Test 5: PATCH /api/tasks/groups/:groupId/hidden hides then unhides a group.
+   *   Hiding is a Focus-area rendering flag — the group + membership stay intact and
+   *   the GET /groups listing reports hidden=true; unhiding flips it back. Verifies
+   *   the response body, the `task:groups-changed` WS event (carrying the hidden
+   *   flag), and the downstream persisted state via the listing.
+   * Fails if reverted: no hidden field on the listing, no route, or no WS event.
+   */
+  it('PATCH /groups/:groupId/hidden hides then unhides a group (listing + WS reflect it)', async () => {
+    const a = await createTask('Hide A');
+    const b = await createTask('Hide B');
+
+    const createRes = await fetch(apiUrl('/api/tasks/groups'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_ids: [a.id, b.id], label: 'Hideable' }),
+    });
+    expect(createRes.status).toBe(200);
+    const created = (await createRes.json()) as GroupResult;
+
+    // Sanity: not hidden on creation.
+    let listed = (await listGroups()).find((g) => g.group_id === created.group_id);
+    expect(listed?.hidden).toBe(false);
+
+    const ws = await connectWs();
+    try {
+      // Hide.
+      const hideEvent = waitForWsEvent(ws, 'task:groups-changed');
+      const hideRes = await fetch(apiUrl(`/api/tasks/groups/${created.group_id}/hidden`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hidden: true }),
+      });
+      expect(hideRes.status).toBe(200);
+      expect((await hideRes.json())).toEqual({ group_id: created.group_id, hidden: true });
+
+      const hideFrame = await hideEvent;
+      expect(hideFrame.name).toBe('task:groups-changed');
+      expect((hideFrame.data as { hidden?: boolean }).hidden).toBe(true);
+
+      // Downstream: the listing now reports hidden=true, membership intact.
+      listed = (await listGroups()).find((g) => g.group_id === created.group_id);
+      expect(listed?.hidden).toBe(true);
+      expect(listed?.member_ids.sort()).toEqual([a.id, b.id].sort());
+
+      // Unhide.
+      const unhideRes = await fetch(apiUrl(`/api/tasks/groups/${created.group_id}/hidden`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hidden: false }),
+      });
+      expect(unhideRes.status).toBe(200);
+      expect((await unhideRes.json())).toEqual({ group_id: created.group_id, hidden: false });
+      listed = (await listGroups()).find((g) => g.group_id === created.group_id);
+      expect(listed?.hidden).toBe(false);
+    } finally {
+      ws.close();
+      await delay(50);
+    }
+  });
+
+  /** Test 6: a non-boolean `hidden` body is rejected 400 (input validation). */
+  it('PATCH /groups/:groupId/hidden rejects a non-boolean hidden with 400', async () => {
+    const a = await createTask('Bad hidden A');
+    const b = await createTask('Bad hidden B');
+    const createRes = await fetch(apiUrl('/api/tasks/groups'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_ids: [a.id, b.id] }),
+    });
+    const created = (await createRes.json()) as GroupResult;
+
+    const res = await fetch(apiUrl(`/api/tasks/groups/${created.group_id}/hidden`), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hidden: 'yes' }),
+    });
+    expect(res.status).toBe(400);
   });
 });

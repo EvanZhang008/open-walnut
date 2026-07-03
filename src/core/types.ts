@@ -157,6 +157,11 @@ export interface TaskStore {
 export interface TaskGroupRecord {
   /** Human-readable group name (AI-generated on creation; user-renamable). */
   label: string;
+  /** When true, the group is collapsed/hidden from the Focus (pinned) area — its
+   *  members and membership are untouched, only the pinned rendering skips them.
+   *  The group still renders normally on the /tasks page; unhide via a member's
+   *  kebab menu. Local-only, never synced. */
+  hidden?: boolean;
 }
 
 export interface CacheConfig {

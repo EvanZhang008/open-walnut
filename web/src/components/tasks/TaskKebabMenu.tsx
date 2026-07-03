@@ -36,6 +36,10 @@ interface TaskKebabMenuProps {
   onMoveUp?: (id: string) => void;
   /** Remove this task from its virtual group. Only shown when task.group_id is set. */
   onUngroup?: (id: string) => void;
+  /** True when this task's group is hidden from the Focus area — enables "Unhide group". */
+  isGroupHidden?: boolean;
+  /** Unhide this task's group back into the Focus area. Only shown when isGroupHidden. */
+  onUnhideGroup?: (groupId: string) => void;
   /** Enter multi-select mode with this task picked (to group several tasks). Only on list rows. */
   onStartSelect?: (id: string) => void;
   onDelete?: (id: string) => void;
@@ -184,7 +188,7 @@ export function TaskActionMenuItems({
   );
 }
 
-export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedTier, isDone, onExpandDetail, onClearFocus, onSetPriority, onStar, onPinTask, onUnpinTask, onSetTier, onOpenSession, onSetDate, onUnparent, onMoveUp, onUngroup, onStartSelect, onDelete }: TaskKebabMenuProps) {
+export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedTier, isDone, onExpandDetail, onClearFocus, onSetPriority, onStar, onPinTask, onUnpinTask, onSetTier, onOpenSession, onSetDate, onUnparent, onMoveUp, onUngroup, isGroupHidden, onUnhideGroup, onStartSelect, onDelete }: TaskKebabMenuProps) {
   const integrations = useIntegrations();
   const [open, setOpen] = useState(false);
   const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
@@ -364,6 +368,22 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
                 <span>Remove from group</span>
               </button>
             </>
+          )}
+
+          {/* Unhide group — restore a Focus-hidden group back into the pinned area.
+              Only shown when this task belongs to a currently-hidden group. */}
+          {onUnhideGroup && task.group_id && isGroupHidden && (
+            <button
+              className="task-kebab-item"
+              onClick={(e) => {
+                e.stopPropagation();
+                onUnhideGroup(task.group_id!);
+                closeMenu();
+              }}
+            >
+              <span className="task-kebab-icon">⊙</span>
+              <span>Unhide group in Focus</span>
+            </button>
           )}
 
           {/* Pin / Tier · Priority · Date — shared with the multi-select batch dropdown */}

@@ -14,8 +14,9 @@ import { TaskActionMenuItems } from './TaskKebabMenu';
 interface TaskBatchMenuProps {
   /** Number of selected tasks (drives the label + group-enabled state). */
   count: number;
-  /** Whether the selection shares one category+project (group scope rule). */
-  sameScope: boolean;
+  /** Whether the selection can be grouped — true once ≥2 tasks are picked (a
+   *  group has no category/project scope rule; any tasks can be grouped). */
+  canGroup: boolean;
   onGroup: () => void;
   /** Apply to every selected task. */
   onSetPriorityAll: (priority: string) => void;
@@ -23,7 +24,7 @@ interface TaskBatchMenuProps {
   onSetDateAll: (date: string | null) => void;
 }
 
-export function TaskBatchMenu({ count, sameScope, onGroup, onSetPriorityAll, onPinAllToTier, onSetDateAll }: TaskBatchMenuProps) {
+export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPinAllToTier, onSetDateAll }: TaskBatchMenuProps) {
   const [open, setOpen] = useState(false);
   // Fixed-position coords for the dropdown. The selection bar is position:sticky at the
   // bottom of the .todo-panel-list scroll container (overflow:auto), so a plain
@@ -35,7 +36,6 @@ export function TaskBatchMenu({ count, sameScope, onGroup, onSetPriorityAll, onP
   const wrapRef = useRef<HTMLDivElement>(null);
   const caretRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const canGroup = count >= 2 && sameScope;
   const close = useCallback(() => setOpen(false), []);
 
   const toggle = useCallback(() => {
@@ -86,13 +86,7 @@ export function TaskBatchMenu({ count, sameScope, onGroup, onSetPriorityAll, onP
         <button
           className="task-selection-group-btn task-batch-group"
           disabled={!canGroup}
-          title={
-            count < 2
-              ? 'Select at least 2 tasks'
-              : sameScope
-                ? 'Group these tasks together'
-                : 'Tasks must be in the same category and project to group'
-          }
+          title={count < 2 ? 'Select at least 2 tasks' : 'Group these tasks together'}
           onClick={onGroup}
         >
           ⑂ Group

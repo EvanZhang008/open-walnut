@@ -3,8 +3,10 @@
  *
  * Covers the core store ops in task-manager.ts: groupTasks / addToGroup /
  * removeFromGroup / renameGroup / listGroups, plus the invariants:
- *  - members must share the same category + project
- *  - a group needs ≥2 members (drops below → auto-dissolve)
+ *  - any tasks can be grouped — NO category/project scope rule (a group is a pure
+ *    visual cluster; cross-category/project members are allowed)
+ *  - CREATING a group needs ≥2 tasks, but a created group survives down to 1 member
+ *    (a lone-member group is valid, acts like a tag); only 0 members dissolves it
  *  - group_id round-trips through the SQLite payload blob (no dedicated column)
  *  - deleting a task prunes a group it would leave with <2 members
  *  - group_id is local-only (never part of a plugin push) — verified structurally
@@ -25,10 +27,10 @@ import {
   addToGroup,
   removeFromGroup,
   renameGroup,
+  setGroupHidden,
   listGroups,
   updateTaskRaw,
   updateTasksBulk,
-  TaskGroupScopeError,
   _resetForTesting,
 } from '../../src/core/task-manager.js';
 import { closeDb } from '../../src/core/task-db.js';
@@ -85,10 +87,14 @@ describe('groupTasks', () => {
     await expect(groupTasks([a])).rejects.toThrow(/at least 2/);
   });
 
-  it('rejects tasks from different category/project (scope rule)', async () => {
+  it('groups tasks from different category/project (no scope rule)', async () => {
+    // A group is a pure visual cluster — cross-category/project members are allowed.
     const [a] = await makeTasks(['A'], 'Work', 'EKS');
     const [b] = await makeTasks(['B'], 'Life', 'Home');
-    await expect(groupTasks([a, b])).rejects.toBeInstanceOf(TaskGroupScopeError);
+    const result = await groupTasks([a, b]);
+    expect(result.member_ids.sort()).toEqual([a, b].sort());
+    expect((await getTask(a)).group_id).toBe(result.group_id);
+    expect((await getTask(b)).group_id).toBe(result.group_id);
   });
 
   it('absorbs a pre-existing group when a member is already grouped (merge)', async () => {
@@ -106,7 +112,7 @@ describe('groupTasks', () => {
 });
 
 describe('addToGroup', () => {
-  it('adds a same-scope task to an existing group', async () => {
+  it('adds a task to an existing group', async () => {
     const [a, b, c] = await makeTasks(['A', 'B', 'C']);
     const g = await groupTasks([a, b], 'G');
     const result = await addToGroup(g.group_id, [c]);
@@ -114,25 +120,42 @@ describe('addToGroup', () => {
     expect((await getTask(c)).group_id).toBe(g.group_id);
   });
 
-  it('rejects adding an out-of-scope task', async () => {
+  it('adds an out-of-scope task to an existing group (no scope rule)', async () => {
+    // Cross-category/project members are allowed — grouping has no scope rule.
     const [a, b] = await makeTasks(['A', 'B'], 'Work', 'EKS');
     const [c] = await makeTasks(['C'], 'Life', 'Home');
     const g = await groupTasks([a, b]);
-    await expect(addToGroup(g.group_id, [c])).rejects.toBeInstanceOf(TaskGroupScopeError);
+    const result = await addToGroup(g.group_id, [c]);
+    expect(result.member_ids.sort()).toEqual([a, b, c].sort());
+    expect((await getTask(c)).group_id).toBe(g.group_id);
   });
 });
 
 describe('removeFromGroup', () => {
-  it('removes a member and dissolves the group when fewer than 2 remain', async () => {
+  it('keeps the group alive with a lone member when one of two is removed', async () => {
+    // A group survives down to 1 member (acts like a tag) — removing one of two does
+    // NOT dissolve it; the lone survivor stays grouped until explicitly dissolved.
     const [a, b] = await makeTasks(['A', 'B']);
     const g = await groupTasks([a, b]);
 
     const result = await removeFromGroup([a]);
     expect(result.removed_ids).toEqual([a]);
-    expect(result.dissolved_group_ids).toEqual([g.group_id]);
+    expect(result.dissolved_group_ids).toEqual([]);
 
-    // Both members end up ungrouped (a removed explicitly, b pruned as the lone survivor).
+    // a is ungrouped; b stays in the group as the lone member.
     expect((await getTask(a)).group_id).toBeUndefined();
+    expect((await getTask(b)).group_id).toBe(g.group_id);
+    const groups = await listGroups();
+    expect(groups).toHaveLength(1);
+    expect(groups[0].member_ids).toEqual([b]);
+  });
+
+  it('dissolves the group only when its LAST member is removed (0 left)', async () => {
+    const [a, b] = await makeTasks(['A', 'B']);
+    const g = await groupTasks([a, b]);
+    await removeFromGroup([a]);          // → b is the lone member, group still alive
+    const result = await removeFromGroup([b]); // → 0 members, now it dissolves
+    expect(result.dissolved_group_ids).toEqual([g.group_id]);
     expect((await getTask(b)).group_id).toBeUndefined();
     expect(await listGroups()).toHaveLength(0);
   });
@@ -164,6 +187,58 @@ describe('renameGroup', () => {
     const [a, b] = await makeTasks(['A', 'B']);
     const g = await groupTasks([a, b]);
     await expect(renameGroup(g.group_id, '   ')).rejects.toThrow(/empty/);
+  });
+});
+
+describe('setGroupHidden (Focus-area collapse)', () => {
+  it('marks a group hidden and unhidden without touching membership', async () => {
+    // Hiding is a pure rendering flag: members + labels + group_id all survive; only
+    // the `hidden` bit flips. This is what lets the Focus area collapse a cluster
+    // while /tasks still shows it (and unhide restores it).
+    const [a, b] = await makeTasks(['A', 'B']);
+    const g = await groupTasks([a, b], 'Keep Me');
+
+    // Default: not hidden.
+    let groups = await listGroups();
+    expect(groups[0].hidden).toBe(false);
+
+    // Hide it.
+    const hres = await setGroupHidden(g.group_id, true);
+    expect(hres).toEqual({ group_id: g.group_id, hidden: true });
+    groups = await listGroups();
+    expect(groups[0].hidden).toBe(true);
+    // Membership + label untouched.
+    expect(groups[0].member_ids.sort()).toEqual([a, b].sort());
+    expect(groups[0].label).toBe('Keep Me');
+    expect((await getTask(a)).group_id).toBe(g.group_id);
+    expect((await getTask(b)).group_id).toBe(g.group_id);
+
+    // Unhide it.
+    const ures = await setGroupHidden(g.group_id, false);
+    expect(ures).toEqual({ group_id: g.group_id, hidden: false });
+    groups = await listGroups();
+    expect(groups[0].hidden).toBe(false);
+    expect(groups[0].member_ids.sort()).toEqual([a, b].sort());
+  });
+
+  it('persists the hidden flag across a fresh DB read', async () => {
+    const [a, b] = await makeTasks(['A', 'B']);
+    const g = await groupTasks([a, b]);
+    await setGroupHidden(g.group_id, true);
+
+    // Force a real reload from SQLite (proves the column persisted, not just memory).
+    closeDb();
+    _resetForTesting();
+
+    const groups = await listGroups();
+    const reloaded = groups.find((x) => x.group_id === g.group_id);
+    expect(reloaded?.hidden).toBe(true);
+    // The label + membership round-trip alongside it.
+    expect(reloaded?.member_ids.sort()).toEqual([a, b].sort());
+  });
+
+  it('throws for an unknown group id', async () => {
+    await expect(setGroupHidden('g_does_not_exist', true)).rejects.toThrow(/not found/);
   });
 });
 
@@ -231,13 +306,24 @@ describe('group_id survives raw partial updates (regression: vanishing groups)',
 });
 
 describe('deleteTask group cleanup', () => {
-  it('prunes a group that a deletion would leave with a single member', async () => {
+  it('keeps a group alive when a deletion leaves a single member (lone group survives)', async () => {
     const [a, b] = await makeTasks(['A', 'B']);
     const g = await groupTasks([a, b]);
 
     await deleteTask(a);
-    // b is now the lone member → group dissolved, b ungrouped.
-    expect((await getTask(b)).group_id).toBeUndefined();
+    // b is now the lone member, but the group survives (acts like a tag).
+    expect((await getTask(b)).group_id).toBe(g.group_id);
+    const groups = await listGroups();
+    expect(groups).toHaveLength(1);
+    expect(groups[0].member_ids).toEqual([b]);
+  });
+
+  it('prunes the group only when its LAST member is deleted (0 left)', async () => {
+    const [a, b] = await makeTasks(['A', 'B']);
+    await groupTasks([a, b]);
+
+    await deleteTask(a);  // lone member b remains, group alive
+    await deleteTask(b);  // 0 members → group pruned
     expect(await listGroups()).toHaveLength(0);
   });
 

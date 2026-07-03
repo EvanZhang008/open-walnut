@@ -30,8 +30,8 @@ import {
   addToGroup,
   removeFromGroup,
   renameGroup,
+  setGroupHidden,
   listGroups,
-  TaskGroupScopeError,
   type SlimTask,
 } from '../../core/task-manager.js'
 import { listSessions } from '../../core/session-tracker.js'
@@ -545,10 +545,6 @@ tasksRouter.post('/groups', async (req: Request, res: Response, next: NextFuncti
     }
     res.json(result)
   } catch (err) {
-    if (err instanceof TaskGroupScopeError) {
-      res.status(409).json({ error: err.message })
-      return
-    }
     next(err)
   }
 })
@@ -566,10 +562,6 @@ tasksRouter.post('/groups/:groupId/add', async (req: Request, res: Response, nex
     bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui', 'main-agent'], { source: 'api' })
     res.json(result)
   } catch (err) {
-    if (err instanceof TaskGroupScopeError) {
-      res.status(409).json({ error: err.message })
-      return
-    }
     next(err)
   }
 })
@@ -601,6 +593,25 @@ tasksRouter.patch('/groups/:groupId', async (req: Request, res: Response, next: 
     }
     const result = await renameGroup(groupId, label)
     bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui', 'main-agent'], { source: 'api' })
+    res.json(result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// PATCH /api/tasks/groups/:groupId/hidden — show/hide a group in the Focus area.
+// Registered as a distinct 3-segment path so it isn't shadowed by the 2-segment
+// rename route above (`/groups/:groupId`).
+tasksRouter.patch('/groups/:groupId/hidden', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const groupId = param(req.params.groupId)
+    const { hidden } = req.body as { hidden?: boolean }
+    if (typeof hidden !== 'boolean') {
+      res.status(400).json({ error: 'hidden must be a boolean' })
+      return
+    }
+    const result = await setGroupHidden(groupId, hidden)
+    bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, hidden: result.hidden }, ['web-ui', 'main-agent'], { source: 'api' })
     res.json(result)
   } catch (err) {
     next(err)

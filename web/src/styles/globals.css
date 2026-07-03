@@ -11,6 +11,9 @@
   --accent: #007AFF;
   --accent-hover: #0066D6;
   --accent-subtle: rgba(0, 122, 255, 0.08);
+  /* Virtual-group cluster outline — soft accent, strong enough to read as one box
+     but never competing with a task's own status background. */
+  --group-outline: rgba(0, 122, 255, 0.32);
   --border: rgba(0, 0, 0, 0.08);
   --border-strong: rgba(0, 0, 0, 0.12);
   --card-bg: #FFFFFF;
@@ -59,6 +62,8 @@
   --accent: #0A84FF;
   --accent-hover: #409CFF;
   --accent-subtle: rgba(10, 132, 255, 0.12);
+  /* Brighter on dark so the thin cluster outline stays visible on near-black cards. */
+  --group-outline: rgba(10, 132, 255, 0.45);
   --border: rgba(255, 255, 255, 0.08);
   --border-strong: rgba(255, 255, 255, 0.14);
   --card-bg: #1C1C1E;
@@ -84,6 +89,7 @@
     --accent: #0A84FF;
     --accent-hover: #409CFF;
     --accent-subtle: rgba(10, 132, 255, 0.12);
+    --group-outline: rgba(10, 132, 255, 0.45);
     --border: rgba(255, 255, 255, 0.08);
     --border-strong: rgba(255, 255, 255, 0.14);
     --card-bg: #1C1C1E;
@@ -2660,9 +2666,36 @@ input:focus, textarea:focus, select:focus {
   font-size: 11px;
 }
 
+/* Clickable variant (a <button>): opens the ModelPicker to switch model/effort.
+   Reset button chrome, keep the pill look, add a hover affordance. */
+.session-detail-model-pill-clickable {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 1px 6px;
+  margin: 0 -6px 0 -6px;
+  font: inherit;
+  font-weight: 600;
+  font-size: 11px;
+  color: inherit;
+  cursor: pointer;
+  border-radius: var(--radius-sm, 6px);
+  transition: background 0.12s ease;
+}
+
+.session-detail-model-pill-clickable:hover {
+  background: var(--bg-hover, rgba(127, 127, 127, 0.12));
+}
+
 .session-detail-context-pct {
   font-weight: 500;
   font-variant-numeric: tabular-nums;
+}
+
+.session-detail-effort-badge {
+  font-weight: 500;
+  color: var(--fg-muted);
+  text-transform: capitalize;
 }
 
 .session-detail-meta-bar .session-detail-copyable {
@@ -4191,6 +4224,56 @@ input:focus, textarea:focus, select:focus {
 
 .session-msg-text {
   white-space: pre-wrap;
+}
+
+/* ── Per-message copy actions (Markdown / Rich text) ── */
+/* A bottom action bar under the message body, ChatGPT/Claude style. */
+.session-msg-actions {
+  display: flex;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.msg-copy-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.msg-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--fg-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.msg-copy-btn:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+  border-color: var(--border);
+}
+
+.msg-copy-btn svg { flex-shrink: 0; }
+
+.msg-copy-label { white-space: nowrap; }
+
+/* On the blue user bubble, muted greys are invisible — use translucent white. */
+.session-msg-user .msg-copy-btn {
+  color: rgba(255, 255, 255, 0.75);
+}
+.session-msg-user .msg-copy-btn:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.3);
 }
 
 .session-msg-meta {
@@ -9134,6 +9217,9 @@ img[data-lightbox-src],
 /* ── Virtual task groups ── */
 /* Members of a group share a tinted left rail so they read as one cluster,
    without being subtasks. The chip above the lead names the cluster. */
+/* The chip sits flush on TOP of the cluster box and forms its top edge: left/right/top
+   walls + top rounding mirror the member outline so chip + members read as one ring.
+   No fill — keeps it lightweight and lets nothing compete with member status colors. */
 .task-group-chip {
   display: flex;
   align-items: center;
@@ -9143,15 +9229,34 @@ img[data-lightbox-src],
   font-size: 11px;
   font-weight: 600;
   color: var(--accent);
-  border-left: 2px solid var(--accent);
-  background: linear-gradient(to right, rgba(0, 122, 255, 0.07), transparent 70%);
+  border: 1.5px solid var(--group-outline);
+  border-bottom: none;
   border-top-left-radius: 7px;
+  border-top-right-radius: 7px;
+  background: transparent;
   user-select: none;
 }
 .task-group-chip-icon {
   font-size: 11px;
   opacity: 0.85;
 }
+/* Whole-group drag grip — grab here to move the entire cluster. Kept subtle until
+   the chip is hovered so it doesn't compete with the label. */
+.task-group-chip-grip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 9px;
+  line-height: 1;
+  letter-spacing: -1px;
+  color: var(--accent);
+  opacity: 0.4;
+  cursor: grab;
+  touch-action: none;
+  transition: opacity 0.12s;
+}
+.task-group-chip:hover .task-group-chip-grip { opacity: 0.8; }
+.task-group-chip-grip:active { cursor: grabbing; }
+.task-group-chip-dragging { opacity: 0.6; }
 .task-group-chip-label {
   cursor: text;
   white-space: nowrap;
@@ -9187,24 +9292,127 @@ img[data-lightbox-src],
   opacity: 1;
   background: rgba(0, 122, 255, 0.14);
 }
-/* The tinted rail on every grouped row, plus rounding at the cluster ends.
-   Shared by the home Todo panel (.todo-panel-item) and the /tasks list (.task-card). */
-.todo-panel-item.task-grouped,
-.task-card.task-grouped {
-  border-left: 2px solid var(--accent);
-  background: linear-gradient(to right, rgba(0, 122, 255, 0.04), transparent 60%);
+/* Hide-from-Focus button (⊘) — same affordance as dissolve, sits to its left.
+   Collapses the group out of the Focus area without touching membership. */
+.task-group-chip-hide {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 2px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s;
 }
+.task-group-chip:hover .task-group-chip-hide { opacity: 0.7; }
+.task-group-chip-hide:hover {
+  opacity: 1;
+  background: rgba(0, 122, 255, 0.14);
+}
+/* Hidden-groups strip — compact restore chips shown at the bottom of the Pinned
+   section for groups collapsed out of the tiers (the in-Focus way to unhide). */
+.todo-pinned-hidden-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 8px 6px;
+}
+.todo-pinned-hidden-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 2px 7px;
+  border: 1px dashed var(--group-outline, rgba(0, 122, 255, 0.32));
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-secondary, #8a8a8e);
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.todo-pinned-hidden-chip:hover {
+  background: rgba(0, 122, 255, 0.1);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.todo-pinned-hidden-chip-icon { font-size: 11px; opacity: 0.85; }
+.todo-pinned-hidden-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+}
+.todo-pinned-hidden-chip-count {
+  font-size: 10px;
+  opacity: 0.7;
+  padding: 0 4px;
+  border-radius: 6px;
+  background: rgba(120, 120, 128, 0.16);
+}
+/* Cluster outline — a lightweight BOX drawn around the group's members, NOT a
+   background fill. Rationale: members carry their own state colors (red attention,
+   active, session-open). A tinted fill or left rail would override/clash with those
+   — so a grouped task used to lose its red attention background. Instead we only draw
+   a thin border "ring": left + right walls on every member, top edge + rounding on the
+   lead, bottom edge + rounding on the last. The card's own background (incl. status
+   colors) shows through untouched. Shared by the home Todo panel (.todo-panel-item),
+   the /tasks list (.task-card), and the pinned-tier cards (.todo-focus-card /
+   .todo-pinned-card). --group-outline tracks the theme accent at low strength. */
+.todo-panel-item.task-grouped,
+.task-card.task-grouped,
+.todo-focus-card.task-grouped,
+.todo-pinned-card.task-grouped {
+  border-left: 1.5px solid var(--group-outline);
+  border-right: 1.5px solid var(--group-outline);
+  /* Square the per-card corners so members fuse into one continuous box. The only
+     rounding is the chip's top corners + .task-group-last's bottom corners (below). */
+  border-radius: 0;
+}
+/* Focus/Pinned tiers lay cards out in a flex column with `gap: 2px`, which would
+   slice a 2px page-background stripe between every grouped member (the "line break"
+   the box look must avoid). Pull each grouped member up by exactly that gap so its
+   side walls run flush into the previous member's — and the lead's flush into the
+   chip's — making the whole cluster read as a single outlined box. (The home list
+   and /tasks list use border-bottom separators, no gap, so they need no pull.) */
+.todo-focus-card.task-grouped,
+.todo-pinned-card.task-grouped {
+  margin-top: -2px;
+}
+/* The lead's top edge is supplied by the chip sitting directly above it (the chip
+   draws the box's top wall + rounding), so the lead itself only needs the side walls
+   from .task-grouped — no extra top border, or it'd double up against the chip. */
 .todo-panel-item.task-group-last,
-.task-card.task-group-last {
+.task-card.task-group-last,
+.todo-focus-card.task-group-last,
+.todo-pinned-card.task-group-last {
+  border-bottom: 1.5px solid var(--group-outline);
   border-bottom-left-radius: 7px;
+  border-bottom-right-radius: 7px;
 }
 
 /* ── Multi-select (group building) ── */
+/* Selection is a SOLID accent ring drawn INSIDE the card (outline, not border, so it
+   never shifts layout and sits visually "on top"). No background fill — a fill would
+   hide a task's red attention state and blur into the group's outline box. The inset
+   solid ring + the leading ✓ checkbox read as "picked" distinctly from the group's
+   thin outline walls. Applies to the pinned-tier cards too. */
 .todo-panel-item.task-multi-selected,
-.task-card.task-multi-selected {
+.task-card.task-multi-selected,
+.todo-focus-card.task-multi-selected,
+.todo-pinned-card.task-multi-selected {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
-  background: rgba(0, 122, 255, 0.06);
+  border-radius: 7px;
 }
 /* Leading checkbox shown on each row while in select mode. */
 .todo-item-select-checkbox {
@@ -11569,10 +11777,10 @@ img[data-lightbox-src],
   background: var(--accent-subtle);
 }
 
-/* ===== Dwell-to-nest target (Apple Reminders-style drag-to-nest) =====
- * When the user drags a task and hovers another task for ~500ms, that
- * target lights up with a clear ring — dropping there nests the drag
- * source as a subtask of the target. */
+/* ===== Drop-intent: NEST as subtask (right indent zone) =====
+ * While dragging a task, when the cursor is over the RIGHT ~1/3 (indent zone) of
+ * another task card, that target lights up with a full ring — dropping there nests
+ * the dragged task as a subtask. (Main list only; Pin tiers have no subtasks.) */
 .todo-panel-item-nest-target {
   background: var(--accent-subtle);
   box-shadow: inset 0 0 0 2px var(--accent);
@@ -11587,6 +11795,24 @@ img[data-lightbox-src],
 @keyframes todo-nest-pulse {
   0%, 100% { box-shadow: inset 0 0 0 2px var(--accent); }
   50%      { box-shadow: inset 0 0 0 2px var(--accent), 0 0 0 2px var(--accent-subtle); }
+}
+
+/* ===== Drop-intent: GROUP together (left zone / whole pinned card) =====
+ * While dragging a task, when the cursor is over the LEFT zone of another task card
+ * (or anywhere on a pinned-tier card, which has no subtask concept), the target
+ * lights up to signal "drop = group these together". Visually distinct from the
+ * nest ring: a thick LEFT accent bar + faint tint reading as "fold into a box",
+ * echoing the group cluster's left outline. Uses inset box-shadow (no layout shift)
+ * and an explicit accent fill so it's unmistakable against the nest ring. Applies to
+ * both the main list (.todo-panel-item) and pinned-tier cards. */
+.todo-panel-item-group-target {
+  box-shadow: inset 3px 0 0 0 var(--accent), inset 0 0 0 1.5px var(--group-outline, rgba(0,122,255,0.32));
+  border-radius: 6px;
+  animation: todo-group-pulse 1.1s ease-in-out infinite;
+}
+@keyframes todo-group-pulse {
+  0%, 100% { box-shadow: inset 3px 0 0 0 var(--accent), inset 0 0 0 1.5px var(--group-outline, rgba(0,122,255,0.32)); }
+  50%      { box-shadow: inset 3px 0 0 0 var(--accent), inset 0 0 0 1.5px var(--group-outline, rgba(0,122,255,0.32)), 0 0 0 2px var(--accent-subtle); }
 }
 
 /* ===== Focus override: task temporarily shown outside current filters ===== */
@@ -14194,6 +14420,169 @@ a.task-kebab-info:hover {
 
 .model-picker-close:hover {
   color: var(--fg-primary);
+}
+
+/* ── Reasoning-effort segmented control ── */
+.model-picker-effort {
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-subtle, rgba(128, 128, 128, 0.2));
+}
+
+.model-picker-effort-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  margin-bottom: 6px;
+}
+
+.model-picker-effort-hint {
+  font-weight: 400;
+  font-style: italic;
+}
+
+.model-picker-effort-segments {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--border-subtle, rgba(128, 128, 128, 0.3));
+  border-radius: 6px;
+  overflow: hidden;
+  width: fit-content;
+}
+
+.model-picker-effort-seg {
+  background: none;
+  border: none;
+  border-right: 1px solid var(--border-subtle, rgba(128, 128, 128, 0.3));
+  color: var(--fg-primary);
+  font-size: 12px;
+  padding: 5px 14px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.model-picker-effort-seg:last-child {
+  border-right: none;
+}
+
+.model-picker-effort-seg:hover:not(:disabled):not(.model-picker-effort-seg-active) {
+  background: var(--bg-hover, rgba(128, 128, 128, 0.12));
+}
+
+.model-picker-effort-seg-active {
+  background: var(--accent, #0a84ff);
+  color: #fff;
+  font-weight: 600;
+}
+
+.model-picker-effort-seg:disabled {
+  color: var(--fg-disabled, rgba(128, 128, 128, 0.45));
+  cursor: not-allowed;
+}
+
+/* Requested-but-not-applied effort (CLI override/downgrade) — amber outline */
+.model-picker-effort-seg-requested {
+  border: 1px solid var(--warning, #e6a700);
+  color: var(--warning, #e6a700);
+}
+
+/* Live-truth strip: CLI's actual runtime settings pulled via get_settings on open */
+.model-picker-live {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  background: var(--bg-subtle, rgba(128, 128, 128, 0.08));
+  color: var(--fg-muted, rgba(128, 128, 128, 0.9));
+}
+
+.model-picker-live-dot {
+  color: var(--success, #34c759);
+  font-size: 9px;
+}
+
+.model-picker-live-warn {
+  background: color-mix(in srgb, var(--warning, #e6a700) 12%, transparent);
+}
+
+.model-picker-live-mismatch {
+  color: var(--warning, #e6a700);
+  font-weight: 600;
+}
+
+.model-picker-live-checking,
+.model-picker-live-offline {
+  font-style: italic;
+}
+
+.model-picker-details-toggle {
+  margin-left: auto;
+  border: none;
+  background: none;
+  color: var(--fg-muted, rgba(128, 128, 128, 0.9));
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.model-picker-details-toggle:hover {
+  background: var(--bg-subtle, rgba(128, 128, 128, 0.12));
+  color: var(--fg, inherit);
+}
+
+.model-picker-details {
+  margin: -4px 0 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  background: var(--bg-subtle, rgba(128, 128, 128, 0.06));
+  color: var(--fg-muted, rgba(128, 128, 128, 0.95));
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.model-picker-details-loading {
+  font-style: italic;
+  padding: 2px 0;
+}
+
+.model-picker-details-block + .model-picker-details-block {
+  margin-top: 8px;
+}
+
+.model-picker-details-title {
+  font-weight: 600;
+  color: var(--fg, inherit);
+  margin-bottom: 3px;
+}
+
+.model-picker-details-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 1px 0;
+}
+
+.model-picker-details-row > span:last-child {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.model-picker-details-version {
+  margin-top: 8px;
+  border-top: 1px solid var(--border-subtle, rgba(128, 128, 128, 0.15));
+  padding-top: 6px;
+}
+
+.model-picker-option-requested {
+  color: var(--warning, #e6a700);
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .model-picker-options {
@@ -21048,4 +21437,103 @@ a.file-link:hover {
   transform: translateX(-50%);
   border: 5px solid transparent;
   border-top-color: var(--accent);
+}
+
+/* ── Routines (panel + composer + cards) ── */
+
+.main-page-routines {
+  width: 400px;
+  min-width: 320px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--color-border);
+  background: var(--color-bg);
+  overflow: hidden;
+}
+
+.routines-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.routines-panel-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.routines-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.routines-view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.routine-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.routine-composer-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-secondary, var(--color-bg));
+  color: inherit;
+  font: inherit;
+  resize: vertical;
+}
+
+.routine-composer-input:focus {
+  outline: none;
+  border-color: var(--color-primary, #4a7dff);
+}
+
+.routine-composer-templates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.routine-template-chip {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 14px;
+  background: var(--color-bg-tertiary, rgba(128, 128, 128, 0.12));
+  color: var(--color-text-muted, inherit);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.routine-template-chip:hover {
+  background: var(--color-bg-hover, rgba(128, 128, 128, 0.2));
+}
+
+.routine-composer-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.routine-executor-badge {
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--color-bg-tertiary, rgba(128, 128, 128, 0.12));
+  font-size: 11px;
+  white-space: nowrap;
+  align-self: center;
+  color: var(--color-text-muted, inherit);
+}
+
+.routines-view-compact .routine-composer-templates {
+  display: none;
 }

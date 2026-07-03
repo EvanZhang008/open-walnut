@@ -228,6 +228,8 @@ export async function removeDependency(taskId: string, depId: string): Promise<T
 export interface TaskGroup {
   group_id: string;
   label: string;
+  /** When true, the group is collapsed/hidden from the Focus (pinned) area. */
+  hidden?: boolean;
   member_ids: string[];
 }
 
@@ -251,4 +253,9 @@ export async function removeTasksFromGroup(taskIds: string[]): Promise<{ removed
 
 export async function renameTaskGroup(groupId: string, label: string): Promise<{ group_id: string; label: string }> {
   return apiPatch(`/api/tasks/groups/${groupId}`, { label });
+}
+
+/** Show/hide a group in the Focus (pinned) area (membership untouched). */
+export async function setTaskGroupHidden(groupId: string, hidden: boolean): Promise<{ group_id: string; hidden: boolean }> {
+  return apiPatch(`/api/tasks/groups/${groupId}/hidden`, { hidden });
 }

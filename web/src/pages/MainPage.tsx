@@ -15,6 +15,7 @@ import { ChatPanel } from '@/components/chat/ChatPanel';
 import { ChatMessage, type RouteInfo } from '@/components/chat/ChatMessage';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { TodoPanel } from '@/components/tasks/TodoPanel';
+import { RoutinesView } from '@/components/routines/RoutinesView';
 import { TaskDetailModal } from '@/components/tasks/TaskDetailModal';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { PendingSessionPanel } from '@/components/sessions/PendingSessionPanel';
@@ -122,6 +123,7 @@ const SS_SESSION_COLUMNS_KEY = 'open-walnut-home-session-columns';
 const SS_TODO_SCROLL_KEY = 'walnut-home-todo-scroll';
 const SS_CHAT_VISIBLE_KEY = 'open-walnut-home-chat-visible';
 const SS_TODO_VISIBLE_KEY = 'open-walnut-home-todo-visible';
+const SS_ROUTINES_VISIBLE_KEY = 'open-walnut-home-routines-visible';
 
 // Legacy key for migration
 const SS_SESSION_KEY_LEGACY = 'open-walnut-home-session-panel';
@@ -171,7 +173,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const { health, loading: healthLoading } = useSystemHealth();
   const { mode: chatMode, toggleMode, getPlanPayload } = usePlanMode();
   const { connectionState } = useWebSocket();
-  const { tasks, loading, toggleComplete, setPhase, star, create, update, reorder, moveTask, reparentTask, deleteTask, bakeOrder, clearOperationError, showOperationError, taskGroups, groupTasks, ungroupTasks, renameGroup } = useTasksContext();
+  const { tasks, loading, toggleComplete, setPhase, star, create, update, reorder, moveTask, reparentTask, deleteTask, bakeOrder, clearOperationError, showOperationError, taskGroups, hiddenGroups, groupTasks, addToGroup, ungroupTasks, renameGroup, setGroupHidden } = useTasksContext();
   const favorites = useFavorites();
   const focusBar = useFocusBarContext();
   const pinnedTaskIdSet = useMemo(() => new Set(focusBar.pinnedIds), [focusBar.pinnedIds]);
@@ -263,6 +265,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Todo panel visibility — toggle via Sidebar toggle button
   const [todoVisible, setTodoVisible] = useState<boolean>(
     () => sessionStorage.getItem(SS_TODO_VISIBLE_KEY) !== 'false'
+  );
+
+  // Routines panel visibility — hidden by default, toggle via Sidebar
+  const [routinesVisible, setRoutinesVisible] = useState<boolean>(
+    () => sessionStorage.getItem(SS_ROUTINES_VISIBLE_KEY) === 'true'
   );
 
   // Session columns state — up to 2 sessions displayed side by side
@@ -541,6 +548,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     window.dispatchEvent(new CustomEvent('main:todo-visible', { detail: { visible: todoVisible } }));
   }, [todoVisible]);
 
+  // Persist routinesVisible + broadcast to Sidebar
+  useEffect(() => {
+    sessionStorage.setItem(SS_ROUTINES_VISIBLE_KEY, String(routinesVisible));
+    window.dispatchEvent(new CustomEvent('main:routines-visible', { detail: { visible: routinesVisible } }));
+  }, [routinesVisible]);
+
   // ── Listen for FocusDock events ──
   useEffect(() => {
     const handleDockTask = (e: Event) => {
@@ -555,15 +568,18 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     };
     const handleSessionLauncher = () => setPathSelectorOpen(true);
     const handleToggleTodo = () => setTodoVisible(prev => !prev);
+    const handleToggleRoutines = () => setRoutinesVisible(prev => !prev);
     window.addEventListener('dock:activate-task', handleDockTask);
     window.addEventListener('dock:activate-chat', handleDockChat);
     window.addEventListener('session-launcher:open', handleSessionLauncher);
     window.addEventListener('sidebar:toggle-todo', handleToggleTodo);
+    window.addEventListener('sidebar:toggle-routines', handleToggleRoutines);
     return () => {
       window.removeEventListener('dock:activate-task', handleDockTask);
       window.removeEventListener('dock:activate-chat', handleDockChat);
       window.removeEventListener('session-launcher:open', handleSessionLauncher);
       window.removeEventListener('sidebar:toggle-todo', handleToggleTodo);
+      window.removeEventListener('sidebar:toggle-routines', handleToggleRoutines);
     };
   }, []);
 
@@ -1148,10 +1164,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onReparentTask={reparentTask}
           onBakeOrder={bakeOrder}
           taskGroups={taskGroups}
+          hiddenGroups={hiddenGroups}
           onGroupTasks={groupTasks}
+          onAddToGroup={addToGroup}
           onUngroupTask={(taskId) => ungroupTasks([taskId])}
           onUngroupTasks={ungroupTasks}
           onRenameGroup={renameGroup}
+          onSetGroupHidden={setGroupHidden}
           onOpenSession={handleToggleSession}
           onTaskClick={handleFocusTaskById}
           openSessionIds={openSessionIdSet}
@@ -1174,6 +1193,25 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
       {/* Todo Resize Handle — only shown when todo is visible */}
       {todoVisible && <div className="todo-resize-handle" onMouseDown={todoPanel.handleResizeStart} />}
+
+      {/* Routines Panel (slide-out, toggled via Sidebar) */}
+      {routinesVisible && (
+        <div className="main-page-routines">
+          <div className="routines-panel-header">
+            <span className="routines-panel-title">&#9889; Routines</span>
+            <button
+              className="btn btn-sm"
+              onClick={() => setRoutinesVisible(false)}
+              title="Close routines"
+            >
+              &#10005;
+            </button>
+          </div>
+          <div className="routines-panel-body">
+            <RoutinesView compact />
+          </div>
+        </div>
+      )}
 
       {/* Right column: Chat + Sessions + FocusDock */}
       <div className="main-page-right">

@@ -252,17 +252,24 @@ interface UseTasksReturn {
   bakeOrder: (orderedIds: string[]) => void;
   /** Virtual-group name registry: group_id → label. */
   taskGroups: Record<string, string>;
+  /** Set of group_ids currently hidden from the Focus (pinned) area. */
+  hiddenGroups: Set<string>;
   /** Create a virtual group from ≥2 task ids (label AI-generated if omitted). */
   groupTasks: (taskIds: string[], label?: string) => void;
+  /** Add task(s) to an existing group (used by drag-onto-a-grouped-task). */
+  addToGroup: (groupId: string, taskIds: string[]) => void;
   /** Remove task(s) from their virtual group. */
   ungroupTasks: (taskIds: string[]) => void;
   /** Rename a virtual group. */
   renameGroup: (groupId: string, label: string) => void;
+  /** Show/hide a group in the Focus (pinned) area (membership untouched). */
+  setGroupHidden: (groupId: string, hidden: boolean) => void;
 }
 
 export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [taskGroups, setTaskGroups] = useState<Record<string, string>>({});
+  const [hiddenGroups, setHiddenGroups] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
@@ -277,8 +284,13 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
     tasksApi.fetchTaskGroups()
       .then((groups) => {
         const map: Record<string, string> = {};
-        for (const g of groups) map[g.group_id] = g.label;
+        const hidden = new Set<string>();
+        for (const g of groups) {
+          map[g.group_id] = g.label;
+          if (g.hidden) hidden.add(g.group_id);
+        }
         setTaskGroups(map);
+        setHiddenGroups(hidden);
       })
       .catch(() => { /* groups are best-effort UI sugar — ignore fetch errors */ });
   }, []);
@@ -763,6 +775,21 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
       .catch((err) => { onOpError(err); refetch(); refetchGroups(); });
   }, [onOpError, refetch, refetchGroups]);
 
+  const addToGroupCb = useCallback((groupId: string, taskIds: string[]) => {
+    // Optimistic: flip the dragged tasks' group_id immediately. The backend absorbs
+    // any group the dragged task already belonged to (and prunes a donor left with
+    // <2 members), so on success we refetch to pick up those side effects.
+    const idSet = new Set(taskIds);
+    setTasks((prev) => prev.map((t) => idSet.has(t.id) ? { ...t, group_id: groupId } : t));
+    tasksApi.addTasksToGroup(groupId, taskIds)
+      .then((g) => {
+        setTasks((prev) => prev.map((t) => g.member_ids.includes(t.id) ? { ...t, group_id: g.group_id } : t));
+        setTaskGroups((prev) => ({ ...prev, [g.group_id]: g.label }));
+        refetch(); refetchGroups();
+      })
+      .catch((err) => { onOpError(err); refetch(); refetchGroups(); });
+  }, [onOpError, refetch, refetchGroups]);
+
   const ungroupTasksCb = useCallback((taskIds: string[]) => {
     const idSet = new Set(taskIds);
     setTasks((prev) => prev.map((t) => idSet.has(t.id) ? { ...t, group_id: undefined } : t));
@@ -782,5 +809,16 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
       .catch((err) => { onOpError(err); refetchGroups(); });
   }, [onOpError, refetchGroups]);
 
-  return { tasks, taskGroups, loading, error, operationError, clearOperationError, showOperationError, refetch, create, update, toggleComplete, setPhase, star, reorder, moveTask, reparentTask, bakeOrder, deleteTask, groupTasks: groupTasksCb, ungroupTasks: ungroupTasksCb, renameGroup: renameGroupCb };
+  const setGroupHiddenCb = useCallback((groupId: string, hidden: boolean) => {
+    // Optimistic flip so the group vanishes/reappears in the Focus area instantly.
+    setHiddenGroups((prev) => {
+      const next = new Set(prev);
+      if (hidden) next.add(groupId); else next.delete(groupId);
+      return next;
+    });
+    tasksApi.setTaskGroupHidden(groupId, hidden)
+      .catch((err) => { onOpError(err); refetchGroups(); });
+  }, [onOpError, refetchGroups]);
+
+  return { tasks, taskGroups, hiddenGroups, loading, error, operationError, clearOperationError, showOperationError, refetch, create, update, toggleComplete, setPhase, star, reorder, moveTask, reparentTask, bakeOrder, deleteTask, groupTasks: groupTasksCb, addToGroup: addToGroupCb, ungroupTasks: ungroupTasksCb, renameGroup: renameGroupCb, setGroupHidden: setGroupHiddenCb };
 }
