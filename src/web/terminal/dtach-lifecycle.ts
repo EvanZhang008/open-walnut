@@ -22,7 +22,17 @@ import { log } from '../../logging/index.js'
 
 const CMD_TIMEOUT_MS = 8_000
 
-/** Shell names that mean "no foreground task" when reported as the descendant command. */
+/**
+ * Shell names that mean "no foreground task" when reported as the descendant command.
+ *
+ * CROSS-FILE COUPLING (do NOT prune the dash-prefixed / `login` entries):
+ * spawn.ts launches the shell as a LOGIN shell (`-l`). A login shell reports in
+ * `ps comm` with a LEADING DASH (`-zsh`, `-bash`, …) or, on some systems, as
+ * `login`. These are NOT duplicates of `zsh`/`bash` — they are the exact strings
+ * hasForegroundProcess() will see for an idle login shell. If they're removed,
+ * an idle login shell is misclassified as a running task → conditionalReap
+ * returns 'kept' → the terminal is NEVER reaped (permanent, silent leak).
+ */
 const SHELL_COMMANDS = new Set([
   'bash', 'zsh', '-zsh', '-bash', 'sh', '-sh', 'fish', '-fish',
   'tcsh', '-tcsh', 'csh', '-csh', 'ksh', 'dash', '-dash',

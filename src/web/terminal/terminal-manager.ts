@@ -293,6 +293,22 @@ class TerminalManager {
     }
   }
 
+  /**
+   * Snapshot of the terminals this process currently holds, as
+   * `{ sessionId, host }`. This in-memory map is the periodic reaper's ENTRY
+   * POINT ("which terminals/hosts should I check") — NOT an authority on what to
+   * kill. The reaper still decides kill/keep from ground truth (the session
+   * registry + the live dtach process tree), so a drifted/stale snapshot is
+   * harmless (at worst it checks a host that has nothing to reap).
+   */
+  listActive(): { sessionId: string; host?: string }[] {
+    const out: { sessionId: string; host?: string }[] = []
+    for (const t of this.terminals.values()) {
+      out.push({ sessionId: t.sessionId, host: t.host })
+    }
+    return out
+  }
+
   /** Release all local ptys on server shutdown (dtach sessions survive). */
   shutdown(): void {
     for (const t of this.terminals.values()) t.shutdown()

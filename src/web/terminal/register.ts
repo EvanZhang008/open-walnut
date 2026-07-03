@@ -14,6 +14,7 @@ import { registerMethod } from '../ws/handler.js'
 import { terminalManager } from './terminal-manager.js'
 import { probeDtach } from './dtach-check.js'
 import { killDtachSession } from './dtach-lifecycle.js'
+import { prewarmRemoteHost } from './spawn.js'
 import { getSessionByClaudeId } from '../../core/session-tracker.js'
 import { log } from '../../logging/index.js'
 
@@ -65,6 +66,20 @@ export async function registerTerminalRpc(): Promise<boolean> {
 
     const result = await terminalManager.open(sessionId, client, cols, rows)
     return { ok: true, ...result }
+  })
+
+  // Prewarm: open the remote host's ControlMaster + provision dtach ahead of the
+  // click so a later terminal:open is ~0.2s instead of ~2.5s. Fire-and-forget
+  // from the UI when a remote session panel mounts. No-op for local sessions.
+  registerMethod('terminal:prewarm', async (payload: unknown) => {
+    const o = asObj(payload, 'terminal:prewarm')
+    const sessionId = str(o, 'sessionId', 'terminal:prewarm')
+    const record = await getSessionByClaudeId(sessionId)
+    if (!record) return { warmed: false } // session gone; nothing to warm
+    // Don't await — return immediately so the UI's fire-and-forget call resolves
+    // fast; the warming happens in the background and the next open reuses it.
+    void prewarmRemoteHost(record.host)
+    return { warmed: Boolean(record.host) }
   })
 
   registerMethod('terminal:input', async (payload: unknown) => {

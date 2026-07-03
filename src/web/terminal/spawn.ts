@@ -4,8 +4,16 @@
  * Returns an `IPty` handle for a session's shell. The shell runs under `dtach`
  * (a ~50KB detach/attach tool) on the target host so it survives ssh/server
  * death WITHOUT taking over the terminal the way tmux does:
- *   - local:  node-pty spawns `dtach -A <socket> -z -E <shell>`
- *   - remote: node-pty spawns `ssh -tt <host> 'cd <cwd> && exec dtach -A ...'`
+ *   - local:  node-pty spawns `dtach -A <socket> -z -E ... <$SHELL> -l`
+ *   - remote: node-pty spawns `ssh -tt <host> 'cd <cwd> && exec dtach -A ... "$SHELL" -l'`
+ *
+ * The shell is the user's DEFAULT $SHELL launched as a LOGIN shell (`-l`), so
+ * the embedded terminal feels exactly like opening tmux on that host: the full
+ * startup chain loads (zsh: ~/.zprofile + ~/.zlogin for PATH, ~/.zshrc for
+ * aliases; bash: ~/.bash_profile→~/.bashrc), so every alias and PATH entry from
+ * the user's normal interactive terminal is present. (Earlier we exec'd a bare
+ * non-login `bash`, which sourced none of that — the "weird shell with no
+ * aliases" report. tmux's default-command is a LOGIN shell; we now match it.)
  *
  * Why dtach instead of tmux:
  *   - dtach does ONE thing — detach/reattach a pty — and does NOT create an
@@ -129,12 +137,24 @@ function sshKeepaliveArgs(t: SshTarget): string[] {
  *       just continue. The browser-side scrollback lives in xterm.js.
  *
  * `dtachBin` is the resolved dtach path (provisioned per host). `shell` is the
- * login shell to launch on first create.
+ * user's default shell; we pass `-l` so dtach execs it as a LOGIN shell (loads
+ * the full ~/.zprofile→~/.zshrc / ~/.bash_profile→~/.bashrc chain → PATH +
+ * aliases present, matching tmux). On REATTACH dtach ignores the command, so
+ * `-l` (like cwd) only takes effect on first create — exactly what we want.
  */
 export function buildDtachArgs(dtachBin: string, sessionId: string, shell: string): string[] {
   const sock = dtachSocketPath(sessionId)
-  return [dtachBin, '-A', sock, '-z', '-E', '-r', 'winch', shell]
+  return [dtachBin, '-A', sock, '-z', '-E', '-r', 'winch', shell, '-l']
 }
+
+/**
+ * Default remote shell expression. NOT shell-quoted: it is meant to be expanded
+ * BY the remote shell, so the login user's actual shell (from the passwd entry,
+ * which sshd exports as $SHELL — verified `/bin/zsh` on our dev hosts) is used,
+ * exactly like tmux picks the user's shell. Falls back to bash if unset. It is
+ * a fixed literal we author (no user input), so emitting it unquoted is safe.
+ */
+const REMOTE_DEFAULT_SHELL = '"${SHELL:-/bin/bash}"'
 
 /**
  * The remote command run over ssh: ensure the socket dir exists, cd to the
@@ -142,11 +162,18 @@ export function buildDtachArgs(dtachBin: string, sessionId: string, shell: strin
  * inherits the launching shell's cwd; on REATTACH dtach keeps the existing
  * pane's cwd, so the `cd` is harmless). `exec` replaces the shell so the ssh
  * process becomes dtach directly (clean signal handling).
+ *
+ * `shell` defaults to the remote `$SHELL` (expanded remotely) and is launched
+ * with `-l` so it's a LOGIN shell — the embedded terminal then loads the user's
+ * full startup chain (PATH + aliases), matching tmux. A caller MAY pass an
+ * explicit shell token (already shell-safe) to override.
  */
-export function buildRemoteDtachCommand(dtachBin: string, sessionId: string, shell: string, cwd?: string): string {
+export function buildRemoteDtachCommand(dtachBin: string, sessionId: string, shell: string = REMOTE_DEFAULT_SHELL, cwd?: string): string {
   const sock = dtachSocketPath(sessionId)
   const mkdir = `mkdir -p ${shellQuote(DTACH_SOCKET_DIR)}`
-  const dtach = `exec ${shellQuote(dtachBin)} -A ${shellQuote(sock)} -z -E -r winch ${shellQuote(shell)}`
+  // `-l` → login shell. `shell` is either our unquoted REMOTE_DEFAULT_SHELL
+  // (must expand remotely) or an explicit safe token, so it is NOT re-quoted.
+  const dtach = `exec ${shellQuote(dtachBin)} -A ${shellQuote(sock)} -z -E -r winch ${shell} -l`
   const body = cwd ? `cd ${shellQuote(cwd)} && ${dtach}` : dtach
   return `${mkdir}; ${body}`
 }
@@ -157,7 +184,7 @@ export function buildRemoteSshArgs(
   dtachBin: string,
   sessionId: string,
   target: SshTarget,
-  shell: string,
+  shell: string = REMOTE_DEFAULT_SHELL,
   cwd?: string,
   host?: string,
 ): string[] {
@@ -169,11 +196,37 @@ export function buildRemoteSshArgs(
   ]
 }
 
-/** Login shell to launch inside dtach. Remote: rely on $SHELL via `sh -lc`-free
- * exec — we just pass the shell name and let dtach exec it as a login shell.
- * Local: the user's $SHELL, falling back to bash. */
+/** The local shell to launch inside dtach: the user's default $SHELL (the
+ * server inherits it from the launching terminal), falling back to bash.
+ * `buildDtachArgs` appends `-l` so it runs as a login shell. */
 function localShell(): string {
   return process.env.SHELL || '/bin/bash'
+}
+
+/**
+ * Prewarm a remote host so a later `terminal:open` is fast. The entire cost of
+ * opening a remote terminal is the FIRST ssh connection (measured ~2.5s to
+ * establish the ControlMaster through the proxy); subsequent ssh calls reuse
+ * that master in ~0.2s. So we warm two things ahead of the click:
+ *   1. the shared ControlMaster connection (the expensive part), and
+ *   2. dtach provisioning (probe/build), which is memoized per host.
+ *
+ * `remoteDtachPath()` already does an ssh round-trip over the SAME shared
+ * ControlMaster socket the real spawn uses, so calling it here BOTH provisions
+ * dtach AND leaves a warm master connection behind (ControlPersist keeps it
+ * alive ~120s). Local sessions need no prewarm (no ssh; ~0.02s to open), so
+ * this is a no-op for them. Best-effort — failures just mean the open pays the
+ * cold cost as before. Idempotent: dtach provisioning is memoized.
+ */
+export async function prewarmRemoteHost(host: string | undefined): Promise<void> {
+  if (!host) return // local: nothing to warm
+  try {
+    await remoteDtachPath(host) // warms ControlMaster + provisions dtach (memoized)
+    log.web.info('terminal prewarm complete', { host })
+  } catch (err) {
+    // Non-fatal: the real open will surface NO_DTACH / connection errors itself.
+    log.web.debug('terminal prewarm failed (open will retry)', { host, error: String(err) })
+  }
 }
 
 /**
@@ -195,11 +248,11 @@ export async function resolveSpawnForSession(
   if (record.host) {
     const target = await resolveSshTarget(record.host)
     const dtachBin = await remoteDtachPath(record.host)
-    // Remote shell: dtach execs this directly. We pass plain `bash` (interactive,
-    // NOT a login shell — no `-l`), so only interactive rc files load, not the
-    // login profile chain. Most dev hosts have bash; matches session behaviour.
-    const shell = 'bash'
-    const args = buildRemoteSshArgs(dtachBin, record.claudeSessionId, target, shell, record.cwd, record.host)
+    // Remote shell: let buildRemoteSshArgs default to the remote `$SHELL` (the
+    // login user's actual shell from passwd, e.g. zsh) launched as a LOGIN
+    // shell. This loads the full startup chain (PATH + aliases) so the embedded
+    // terminal matches what the user sees in tmux — not a bare aliasless bash.
+    const args = buildRemoteSshArgs(dtachBin, record.claudeSessionId, target, undefined, record.cwd, record.host)
     log.web.info('terminal spawn (remote/dtach)', { sessionId: record.claudeSessionId, host: record.host, cwd: record.cwd })
     const p = pty.spawn('ssh', args, { name: 'xterm-256color', cols, rows, cwd: os.homedir(), env })
     return { pty: p, cwd: record.cwd, host: record.host }

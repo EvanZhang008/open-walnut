@@ -46,3 +46,12 @@ export function terminalClose(terminalId: string): Promise<void> {
 export function terminalKill(terminalId: string): Promise<{ killed: boolean }> {
   return wsClient.sendRpc<{ killed: boolean }>('terminal:kill', { terminalId });
 }
+
+/**
+ * Prewarm the remote host's ssh ControlMaster + dtach ahead of the click, so a
+ * later terminalOpen is ~0.2s instead of ~2.5s. Fire-and-forget; no-op for
+ * local sessions (server returns warmed:false). Safe to call repeatedly.
+ */
+export function terminalPrewarm(sessionId: string): Promise<{ warmed: boolean }> {
+  return wsClient.sendRpc<{ warmed: boolean }>('terminal:prewarm', { sessionId });
+}
