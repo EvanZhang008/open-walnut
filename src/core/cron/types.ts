@@ -16,6 +16,31 @@ export type CronSchedule =
 
 export type CronSessionTarget = 'main' | 'isolated';
 
+// ── Executor (routines layer) ──
+//
+// Base shapes live here (not in ../routines/) so the cron engine can reference
+// them without a circular import. The routines module re-exports them and adds
+// the registry/definition machinery.
+
+/** Which executor runs this job + its type-specific config. */
+export type RoutineExecutorRef = {
+  type: string;
+  config: Record<string, unknown>;
+};
+
+export type ExecutorRunResult = {
+  status: 'ok' | 'error';
+  summary?: string;
+  error?: string;
+};
+
+/** Injected by the server: dispatches a due job to its executor implementation. */
+export type RunExecutorFn = (
+  job: CronJob,
+  executor: RoutineExecutorRef,
+  message: string,
+) => Promise<ExecutorRunResult>;
+
 // ── Wake mode ──
 
 export type CronWakeMode = 'now' | 'next-cycle';
@@ -80,16 +105,25 @@ export type CronJob = {
   initProcessor?: InitProcessor;
   payload: CronPayload;
   delivery?: CronDelivery;
+  /**
+   * Routines layer: which executor runs this job. Kept in sync with the legacy
+   * sessionTarget/payload fields (both directions) so old binaries/tools keep
+   * working. Canonical source of the instructions text when present.
+   */
+  executor?: RoutineExecutorRef;
   state: CronJobState;
 };
 
 export type CronStoreFile = {
-  version: 1;
+  version: 1 | 2;
   jobs: CronJob[];
 };
 
-export type CronJobCreate = Omit<CronJob, 'id' | 'createdAtMs' | 'updatedAtMs' | 'state'> & {
+export type CronJobCreate = Omit<CronJob, 'id' | 'createdAtMs' | 'updatedAtMs' | 'state' | 'sessionTarget' | 'payload'> & {
   state?: Partial<CronJobState>;
+  /** Legacy fields — optional when `executor` is provided (derived from it). */
+  sessionTarget?: CronSessionTarget;
+  payload?: CronPayload;
 };
 
 export type CronJobPatch = Partial<Omit<CronJob, 'id' | 'createdAtMs' | 'state' | 'payload' | 'initProcessor'>> & {
@@ -97,6 +131,7 @@ export type CronJobPatch = Partial<Omit<CronJob, 'id' | 'createdAtMs' | 'state' 
   payload?: CronPayloadPatch;
   delivery?: Partial<CronDelivery>;
   state?: Partial<CronJobState>;
+  executor?: RoutineExecutorRef;
 };
 
 // ── Events ──
@@ -127,6 +162,13 @@ export type CronServiceDeps = {
     summary?: string;
     error?: string;
   }>;
+  /**
+   * Routines layer: dispatch a due job to its registered executor. When
+   * provided, this supersedes runMainAgentWithPrompt/runIsolatedAgentJob for
+   * job dispatch (those remain for the announce/delivery path and as the
+   * fallback when no executor registry is wired, e.g. in unit tests).
+   */
+  runExecutor?: RunExecutorFn;
   runAction?: (actionId: string, params: Record<string, unknown>) => Promise<{
     status: 'ok' | 'error';
     summary?: string;

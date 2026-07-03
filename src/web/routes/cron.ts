@@ -1,11 +1,16 @@
 /**
- * Cron job routes — CRUD and control for scheduled jobs.
+ * Routine routes — CRUD, control, drafting, and executor discovery.
+ *
+ * Mounted at BOTH /api/routines (canonical) and /api/cron (back-compat alias).
+ * "Routine" is the product name for a scheduled job with an executor; the
+ * underlying engine and WS event names (cron:job-*) are unchanged.
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { log } from '../../logging/index.js'
 import type { CronService } from '../../core/cron/index.js'
 import { normalizeCronJobCreate, normalizeCronJobPatch, listActions } from '../../core/cron/index.js'
+import { getConfig } from '../../core/config-manager.js'
 
 // ── Module-level service accessor (for agent tools) ──
 
@@ -50,6 +55,57 @@ export function createCronRouter(cronService: CronService): Router {
     try {
       const status = await cronService.status()
       res.json(status)
+    } catch (err) {
+      next(err)
+    }
+  })
+
+  // GET /api/routines/executors — executor definitions + dynamic form options
+  router.get('/executors', async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { listExecutors } = await import('../../core/routines/index.js')
+      const config = await getConfig()
+      const hosts = Object.entries(config.hosts ?? {}).map(([alias, def]) => ({
+        value: alias,
+        label: (def as { label?: string })?.label ?? alias,
+      }))
+      const { SESSION_MODELS } = await import('../../core/types.js')
+      const models = SESSION_MODELS.map((m) => ({ value: m.id, label: m.label }))
+      res.json({
+        executors: listExecutors().map((e) => ({
+          type: e.type,
+          label: e.label,
+          description: e.description,
+          configSchema: e.configSchema,
+        })),
+        options: { hosts, models },
+      })
+    } catch (err) {
+      next(err)
+    }
+  })
+
+  // POST /api/routines/draft — natural language → populated routine draft
+  router.post('/draft', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const text = typeof req.body?.text === 'string' ? req.body.text : ''
+      if (!text.trim()) {
+        res.status(400).json({ error: 'text is required' })
+        return
+      }
+      const { draftRoutine } = await import('../../core/routines/draft.js')
+      const config = await getConfig()
+      const { SESSION_MODELS } = await import('../../core/types.js')
+      const result = await draftRoutine(text, {
+        hosts: Object.keys(config.hosts ?? {}),
+        models: SESSION_MODELS.map((m) => m.id),
+      })
+      if (!result.ok) {
+        log.web.warn('routine draft failed', { error: result.error })
+        res.status(422).json({ error: result.error, raw: result.raw })
+        return
+      }
+      res.json({ draft: result.draft })
     } catch (err) {
       next(err)
     }

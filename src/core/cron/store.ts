@@ -10,9 +10,10 @@ import fs from 'node:fs/promises';
 import type { CronStoreFile, CronServiceState } from './types.js';
 import { readJsonFile, writeJsonFile } from '../../utils/fs.js';
 import { recomputeNextRuns } from './jobs.js';
+import { syncExecutorFields } from './executor-compat.js';
 
 function emptyStore(): CronStoreFile {
-  return { version: 1, jobs: [] };
+  return { version: 2, jobs: [] };
 }
 
 export async function ensureLoaded(
@@ -72,8 +73,15 @@ export async function ensureLoaded(
       delete jobRaw.targetAgentModel;
       dirty = true;
     }
+    // v1 → v2: ensure every job carries an executor (lossless — legacy
+    // sessionTarget/payload are kept and stay in sync). Idempotent: a v2 job
+    // whose fields already agree is left untouched.
+    if (syncExecutorFields(job)) {
+      dirty = true;
+    }
   }
-  state.store = { version: 1, jobs: loaded.jobs ?? [] };
+  if (loaded.version !== 2) dirty = true;
+  state.store = { version: 2, jobs: loaded.jobs ?? [] };
   if (dirty) {
     await persist(state);
   }

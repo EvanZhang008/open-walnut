@@ -176,6 +176,26 @@ function coerceInitProcessor(raw: UnknownRecord): UnknownRecord | null {
   return next;
 }
 
+// ── Executor coercion (routines layer) ──
+
+function coerceExecutor(raw: UnknownRecord): UnknownRecord | null {
+  const type = typeof raw.type === 'string' ? raw.type.trim() : '';
+  if (!type) return null;
+  const config = isRecord(raw.config) ? { ...raw.config } : {};
+  // Common field hygiene — instructions is the one field every executor shares
+  if (typeof config.instructions === 'string') {
+    config.instructions = config.instructions.trim();
+  }
+  if ('timeoutSeconds' in config) {
+    if (typeof config.timeoutSeconds === 'number' && Number.isFinite(config.timeoutSeconds)) {
+      config.timeoutSeconds = Math.max(1, Math.floor(config.timeoutSeconds));
+    } else {
+      delete config.timeoutSeconds;
+    }
+  }
+  return { type, config };
+}
+
 // ── Unwrap ──
 
 function unwrapJob(raw: UnknownRecord): UnknownRecord {
@@ -323,6 +343,18 @@ function normalizeCronJobInput(
     next.delivery = coerceDelivery(base.delivery);
   }
 
+  // Coerce executor (routines layer). Executor-shaped input needs no payload;
+  // create-mode defaults below and jobs.ts syncExecutorFields derive the
+  // legacy fields from it.
+  if (isRecord(base.executor)) {
+    const coerced = coerceExecutor(base.executor as UnknownRecord);
+    if (coerced) {
+      next.executor = coerced;
+    } else {
+      delete next.executor;
+    }
+  }
+
   // Copy top-level timeoutSeconds into payload if applicable
   if (isRecord(next.payload) && next.payload.kind === 'agentTurn') {
     if (typeof next.payload.timeoutSeconds !== 'number' && typeof next.timeoutSeconds === 'number') {
@@ -348,16 +380,18 @@ function normalizeCronJobInput(
       next.enabled = true;
     }
 
-    // Infer name if missing
+    // Infer name if missing — executor instructions double as payload content
+    const nameSource: UnknownRecord | null = isRecord(next.payload)
+      ? (next.payload as UnknownRecord)
+      : isRecord(next.executor) && isRecord((next.executor as UnknownRecord).config)
+        ? { kind: (next.executor as UnknownRecord).type, message: ((next.executor as UnknownRecord).config as UnknownRecord).instructions }
+        : null;
     if (
       (typeof next.name !== 'string' || !next.name.trim()) &&
       isRecord(next.schedule) &&
-      isRecord(next.payload)
+      nameSource
     ) {
-      next.name = inferName(
-        next.schedule as UnknownRecord,
-        next.payload as UnknownRecord,
-      );
+      next.name = inferName(next.schedule as UnknownRecord, nameSource);
     } else if (typeof next.name === 'string') {
       const trimmed = next.name.trim();
       if (trimmed) next.name = trimmed;

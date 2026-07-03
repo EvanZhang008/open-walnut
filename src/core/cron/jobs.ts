@@ -14,6 +14,7 @@ import type {
   InitProcessor,
 } from './types.js';
 import { computeNextRunAtMs } from './schedule.js';
+import { syncExecutorFields } from './executor-compat.js';
 
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000; // 2 hours
 
@@ -126,6 +127,14 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
 
   const enabled = typeof input.enabled === 'boolean' ? input.enabled : true;
 
+  // Executor-shaped input may omit the legacy fields; syncExecutorFields below
+  // derives them from the executor. Input with neither is invalid.
+  if (!input.executor && !input.payload) {
+    throw new Error('cron job requires a payload or an executor');
+  }
+  const legacySessionTarget = input.sessionTarget ?? 'isolated';
+  const legacyPayload: CronPayload = input.payload ?? { kind: 'agentTurn', message: '' };
+
   const job: CronJob = {
     id,
     name: input.name.trim(),
@@ -135,14 +144,17 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     createdAtMs: now,
     updatedAtMs: now,
     schedule,
-    sessionTarget: input.sessionTarget,
+    sessionTarget: legacySessionTarget,
     wakeMode: input.wakeMode,
     initProcessor: input.initProcessor,
-    payload: input.payload,
+    payload: legacyPayload,
     delivery: input.delivery,
+    executor: input.executor,
     state: { ...input.state },
   };
 
+  // Keep executor ↔ legacy fields consistent (derives whichever side is missing)
+  syncExecutorFields(job);
   assertSupportedJobSpec(job);
   job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
   return job;
@@ -192,6 +204,23 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch): void {
   if (patch.state) {
     job.state = { ...job.state, ...patch.state };
   }
+  // Executor ↔ legacy consistency:
+  // - patch.executor present → executor is canonical, legacy fields re-derived.
+  // - legacy-only patch on a legacy-type job → re-derive executor from legacy.
+  // - legacy-only patch on a non-legacy job (e.g. claude-code) → carry the new
+  //   instructions into the executor config, don't downgrade the type.
+  if (patch.executor) {
+    job.executor = patch.executor;
+  } else if (patch.payload || patch.sessionTarget) {
+    const type = job.executor?.type;
+    if (!type || type === 'main-agent' || type === 'walnut-agent') {
+      job.executor = undefined; // re-derived by syncExecutorFields below
+    } else if (job.executor) {
+      const instructions = job.payload.kind === 'agentTurn' ? job.payload.message : job.payload.text;
+      job.executor = { ...job.executor, config: { ...job.executor.config, instructions } };
+    }
+  }
+  syncExecutorFields(job);
   assertSupportedJobSpec(job);
 }
 

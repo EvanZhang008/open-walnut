@@ -68,4 +68,12 @@ export class CronService {
   async run(id: string, mode?: 'due' | 'force') {
     return await ops.run(this.state, id, mode);
   }
+
+  /**
+   * Expose the injected deps so the routines executor registry can reuse the
+   * same closures (notification/announce/isolated-run) without re-wiring them.
+   */
+  getDeps(): CronServiceState['deps'] {
+    return this.state.deps;
+  }
 }

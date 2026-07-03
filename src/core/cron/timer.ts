@@ -244,6 +244,26 @@ async function executeJobCore(
       || `[action '${job.initProcessor.actionId}' completed with no output]`;
   }
 
+  // ── Routines layer: non-legacy executors (e.g. claude-code) dispatch via
+  // runExecutor. main-agent/walnut-agent executors fall through to the legacy
+  // paths below, which carry the notification/announce plumbing.
+  const executor = job.executor;
+  const isLegacyExecutor =
+    !executor || executor.type === 'main-agent' || executor.type === 'walnut-agent';
+  if (!isLegacyExecutor) {
+    if (!state.deps.runExecutor) {
+      return { status: 'skipped', error: `executor '${executor.type}' requires runExecutor dependency` };
+    }
+    const instructions = typeof executor.config?.instructions === 'string'
+      ? executor.config.instructions
+      : '';
+    if (!instructions.trim() && !initOutput) {
+      return { status: 'skipped', error: `executor '${executor.type}' requires non-empty instructions` };
+    }
+    const message = initOutput ? `${initOutput}\n\n${instructions}` : instructions;
+    return await state.deps.runExecutor(job, executor, message);
+  }
+
   if (job.sessionTarget === 'main') {
     if (job.payload.kind !== 'systemEvent' || !job.payload.text.trim()) {
       return {

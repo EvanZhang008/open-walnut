@@ -8,7 +8,7 @@ import { TaskDetailPage } from './pages/TaskDetailPage';
 
 import { SessionsPage } from './pages/SessionsPage';
 import { SettingsPage } from './pages/SettingsPage';
-import { CronPage } from './pages/CronPage';
+import { RoutinesPage } from './pages/RoutinesPage';
 
 import { AgentsPage } from './pages/AgentsPage';
 import { CommandsPage } from './pages/CommandsPage';
@@ -61,7 +61,8 @@ export function App() {
         <Route path="/sessions" element={<SessionsPage />} />
         <Route path="/memory" element={<MemoryPage />} />
         <Route path="/notes" element={<NotesPage />} />
-        <Route path="/cron" element={<CronPage />} />
+        <Route path="/routines" element={<RoutinesPage />} />
+        <Route path="/cron" element={<Navigate to="/routines" replace />} />
         <Route path="/usage" element={<Navigate to="/settings#usage" replace />} />
         <Route path="/agents" element={<AgentsPage />} />
         <Route path="/commands" element={<CommandsPage />} />

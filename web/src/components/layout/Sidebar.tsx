@@ -7,6 +7,7 @@ import { NotificationPanel } from '@/components/common/NotificationPanel';
 
 const SS_CHAT_VISIBLE_KEY = 'open-walnut-home-chat-visible';
 const SS_TODO_VISIBLE_KEY = 'open-walnut-home-todo-visible';
+const SS_ROUTINES_VISIBLE_KEY = 'open-walnut-home-routines-visible';
 
 interface SidebarProps {
   open: boolean;
@@ -42,6 +43,9 @@ export function Sidebar({ open, collapsed, onToggleCollapse }: SidebarProps) {
   const [todoVisible, setTodoVisible] = useState<boolean>(
     () => sessionStorage.getItem(SS_TODO_VISIBLE_KEY) !== 'false'
   );
+  const [routinesVisible, setRoutinesVisible] = useState<boolean>(
+    () => sessionStorage.getItem(SS_ROUTINES_VISIBLE_KEY) === 'true'
+  );
 
   useEffect(() => {
     const handleChatVisible = (e: Event) => {
@@ -50,14 +54,19 @@ export function Sidebar({ open, collapsed, onToggleCollapse }: SidebarProps) {
     const handleTodoVisible = (e: Event) => {
       setTodoVisible((e as CustomEvent).detail?.visible ?? true);
     };
+    const handleRoutinesVisible = (e: Event) => {
+      setRoutinesVisible((e as CustomEvent).detail?.visible ?? false);
+    };
     // Clicking a persistent toast's body opens the notification center.
     const handleOpenCenter = () => setNotifOpen(true);
     window.addEventListener('main:chat-visible', handleChatVisible);
     window.addEventListener('main:todo-visible', handleTodoVisible);
+    window.addEventListener('main:routines-visible', handleRoutinesVisible);
     window.addEventListener('notification:open-center', handleOpenCenter);
     return () => {
       window.removeEventListener('main:chat-visible', handleChatVisible);
       window.removeEventListener('main:todo-visible', handleTodoVisible);
+      window.removeEventListener('main:routines-visible', handleRoutinesVisible);
       window.removeEventListener('notification:open-center', handleOpenCenter);
     };
   }, []);
@@ -67,6 +76,9 @@ export function Sidebar({ open, collapsed, onToggleCollapse }: SidebarProps) {
   };
   const handleToggleTodo = () => {
     window.dispatchEvent(new CustomEvent('sidebar:toggle-todo'));
+  };
+  const handleToggleRoutines = () => {
+    window.dispatchEvent(new CustomEvent('sidebar:toggle-routines'));
   };
 
   return (
@@ -102,6 +114,14 @@ export function Sidebar({ open, collapsed, onToggleCollapse }: SidebarProps) {
           <TodoListIcon />
           <span className="sidebar-label">Todo</span>
         </button>
+        <button
+          className={`sidebar-link sidebar-panel-toggle${routinesVisible ? ' active' : ''}`}
+          onClick={handleToggleRoutines}
+          title={collapsed ? 'Routines' : undefined}
+        >
+          <ScheduleIcon />
+          <span className="sidebar-label">Routines</span>
+        </button>
         <div className="sidebar-nav-divider" />
         <NavLink to="/" end className={navLinkClass} title={collapsed ? 'Home' : undefined}>
           <HomeIcon />
@@ -125,9 +145,9 @@ export function Sidebar({ open, collapsed, onToggleCollapse }: SidebarProps) {
           <span className="sidebar-label">Notes</span>
         </NavLink>
 
-        <NavLink to="/cron" className={navLinkClass} title={collapsed ? 'Scheduled' : undefined}>
+        <NavLink to="/routines" className={navLinkClass} title={collapsed ? 'Routines' : undefined}>
           <ScheduleIcon />
-          <span className="sidebar-label">Scheduled</span>
+          <span className="sidebar-label">Routines</span>
         </NavLink>
 
         <NavLink to="/agents" className={navLinkClass} title={collapsed ? 'Agents' : undefined}>
