@@ -11,6 +11,7 @@ import { SessionForkButton } from './SessionForkButton';
 import { SessionKebabSection } from './SessionKebabSection';
 import { TaskQuickActions } from './TaskQuickActions';
 import { updateSession, executePlanSession, executePlanContinue, restartSession, investigateSession } from '@/api/sessions';
+import { terminalPrewarm } from '@/api/terminal';
 import { log } from '@/utils/log';
 import { buildInvestigationClip } from '@/utils/investigation-clipboard';
 import { fetchTask, updateTask } from '@/api/tasks';
@@ -21,6 +22,7 @@ import { SideQuestionDrawer } from './SideQuestionDrawer';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
 import { useSessionPlan } from '@/hooks/useSessionPlan';
 import { useSessionUsage, formatModelName, getContextWindowSize } from '@/hooks/useSessionUsage';
+import { modelSupportsEffort, DEFAULT_SESSION_EFFORT } from '@open-walnut/core';
 import { useEvent } from '@/hooks/useWebSocket';
 import { PlanContentContext } from '@/contexts/PlanContentContext';
 import type { SessionRecord, TaskPhase } from '@/types/session';
@@ -57,6 +59,9 @@ interface SessionDetailPanelProps {
    *  chips + reflects which view is active. null = none open. */
   activeView?: SessionSplitView | null;
   onSelectView?: (view: SessionSplitView) => void;
+  /** Click on the model/effort pill — page opens its ModelPicker (it owns the
+   *  picker instance next to ChatInput, same as the /model slash command). */
+  onModelPillClick?: () => void;
 }
 
 /** Renders plan markdown content inside the plan popover with scrollable area */
@@ -140,7 +145,7 @@ function EditableTitle({ sessionId, taskId, title, onSaved }: { sessionId: strin
   );
 }
 
-export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged, onSessionReplaced, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onClearCommitted, onRetryFailed, onDismissFailed, onStreamingChange, activeView, onSelectView }: SessionDetailPanelProps) {
+export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged, onSessionReplaced, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onClearCommitted, onRetryFailed, onDismissFailed, onStreamingChange, activeView, onSelectView, onModelPillClick }: SessionDetailPanelProps) {
   const navigate = useNavigate();
   const enabledModes = useEnabledModes();
   const [executing, setExecuting] = useState(false);
@@ -192,6 +197,16 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
     fetchTask(session.taskId).then(setSessionTask).catch(() => {});
     refreshPinState(session.taskId);
   }, [session?.taskId, refreshPinState]);
+
+  // Prewarm the remote terminal transport (ssh ControlMaster + dtach) when a
+  // remote session is viewed, so a later Terminal click is ~0.2s not ~2.5s.
+  // Fire-and-forget; server no-ops for local. Keyed on session+host → fires once
+  // per remote session. (Sessions render in two surfaces — SessionPanel mirrors this.)
+  useEffect(() => {
+    if (session?.claudeSessionId && session?.host) {
+      terminalPrewarm(session.claudeSessionId).catch(() => { /* best-effort */ });
+    }
+  }, [session?.claudeSessionId, session?.host]);
   // Track latest sessionId so async callbacks can detect navigation
   const sessionIdRef = useRef(session?.claudeSessionId);
   sessionIdRef.current = session?.claudeSessionId;
@@ -541,7 +556,12 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
           {/* Compact meta bar */}
           <div className="session-detail-meta-bar">
             {displayModel && (
-              <span className="session-detail-model-pill" title={liveUsage.model || session?.model || ''}>
+              <button
+                type="button"
+                className="session-detail-model-pill session-detail-model-pill-clickable"
+                title={`${liveUsage.model || session?.model || ''} — click to switch model / effort`}
+                onClick={onModelPillClick}
+              >
                 {displayModel}
                 {contextPercent != null && (
                   <span
@@ -556,7 +576,27 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
                     {' '}{contextPercent}%
                   </span>
                 )}
-              </span>
+                {modelSupportsEffort(rawModel) && (() => {
+                  // Badge shows the CLI's TRUE effort (effectiveEffort, read back via
+                  // get_settings) — falling back to the requested level, then the API
+                  // default. When the CLI overrode the request (env / downgrade), flag it.
+                  const shown = session?.effectiveEffort ?? session?.effort ?? DEFAULT_SESSION_EFFORT;
+                  const overridden = session?.effectiveEffort != null && session?.effort != null
+                    && session.effectiveEffort !== session.effort;
+                  const title = overridden
+                    ? `Reasoning effort: ${session!.effectiveEffort} (requested ${session!.effort}, overridden by env/model)`
+                    : session?.effectiveEffort
+                    ? `Reasoning effort: ${session.effectiveEffort} (confirmed by CLI)`
+                    : session?.effort
+                    ? `Reasoning effort: ${session.effort} (requested)`
+                    : `Reasoning effort: ${DEFAULT_SESSION_EFFORT} (default)`;
+                  return (
+                    <span className="session-detail-effort-badge" title={title}>
+                      {' · '}{shown}{overridden ? ' ⚠' : ''}
+                    </span>
+                  );
+                })()}
+              </button>
             )}
             {session.messageCount != null && session.messageCount > 0 && (
               <span>{session.messageCount} msgs</span>

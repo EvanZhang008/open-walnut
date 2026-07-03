@@ -126,7 +126,6 @@ export async function enqueueMessage(sessionId: string, message: string): Promis
  * @param opts.source - identifies who sent the message (e.g. 'ui', 'agent', 'phase-hook')
  * @param opts.taskId - optional task ID associated with the session
  * @param opts.mode - optional permission mode override for the session
- * @param opts.model - optional model override (triggers --resume with new model)
  * @param opts.interrupt - if true, interrupt the current turn before sending
  * @param opts.enqueueMessage - if provided, enqueue this text (may include image refs);
  *   the original `message` is used for bus events (UI display). Defaults to `message`.
@@ -138,7 +137,6 @@ export async function sendMessageToSession(
     source?: string;
     taskId?: string;
     mode?: string;
-    model?: string;
     interrupt?: boolean;
     enqueueMessage?: string;
   },
@@ -153,7 +151,6 @@ export async function sendMessageToSession(
     taskId: opts?.taskId,
     message,
     mode: opts?.mode,
-    model: opts?.model,
     interrupt: opts?.interrupt || undefined,
   }, ['session-runner'], { source });
 

@@ -31,6 +31,7 @@ import type {
   SessionResultSubtype,
   SessionStartParams,
 } from './types.js'
+import { CostWatermark } from '../core/usage/cost-watermark.js'
 
 // ── Types ──
 
@@ -114,6 +115,13 @@ export class SdkSession {
   private _mode: string
   private _sessionId?: string
 
+  /** Converts the SDK's cumulative total_cost_usd into a billable per-result
+   *  increment. The total is a running total per query(); a resume starts a fresh
+   *  query() whose total restarts at 0, so we reset on every start()/resume().
+   *  Without this the whole running total was billed every turn (the 13×
+   *  session-cost inflation bug). See core/usage/cost-watermark.ts. */
+  private _costWatermark = new CostWatermark()
+
   /** Map of pending interactive requests (question/permission) by requestId */
   private pendingInteractions = new Map<string, PendingInteraction>()
 
@@ -129,6 +137,12 @@ export class SdkSession {
   get mode(): string { return this._mode }
   get sessionId(): string | undefined { return this._sessionId }
 
+  /** Billable cost increment since the last result; advances the per-query
+   *  watermark. Returns 0 for replayed/stale results. See cost-watermark.ts. */
+  private billableCostDelta(totalCostUsd: number | undefined): number {
+    return this._costWatermark.bill(totalCostUsd)
+  }
+
   /**
    * Start a new query (or resume) and begin streaming events.
    */
@@ -139,6 +153,7 @@ export class SdkSession {
     this._mode = params.mode ?? 'default'
     this._sessionId = params.sessionId
     this._status = 'running'
+    this._costWatermark.reset()  // Fresh query — its total_cost_usd restarts at 0
 
     // Build options
     const options: Options = {
@@ -247,6 +262,7 @@ export class SdkSession {
     const { query } = await import('@anthropic-ai/claude-agent-sdk')
 
     this._status = 'running'
+    this._costWatermark.reset()  // Fresh query() — its total_cost_usd restarts at 0
     this.abortController = new AbortController()
 
     const options: Options = {
@@ -559,6 +575,7 @@ export class SdkSession {
         result: resultText,
         subtype,
         cost: result.total_cost_usd,
+        costDelta: this.billableCostDelta(result.total_cost_usd),
         duration: result.duration_ms,
         usage: result.usage ? {
           input_tokens: result.usage.input_tokens,

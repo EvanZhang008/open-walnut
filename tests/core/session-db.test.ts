@@ -130,8 +130,6 @@ describe('session-db: rowToSession / sessionToRow round trip', () => {
       fromPlanSessionId: 'plan-1',
       forkedFromSessionId: 'fork-1',
       human_note: 'note',
-      pendingModel: 'opus',
-      pendingMode: 'plan',
       model: 'claude-opus-4-7',
       cliModel: 'opus',
       archived: false,

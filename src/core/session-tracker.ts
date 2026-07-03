@@ -466,7 +466,7 @@ export async function createSessionRecord(
   taskId: string,
   project: string,
   cwd?: string,
-  extra?: { pid?: number; outputFile?: string; title?: string; description?: string; mode?: SessionMode; planFile?: string; planCompleted?: boolean; host?: string; provider?: import('./types.js').SessionProvider; type?: SessionType; fromPlanSessionId?: string; forkedFromSessionId?: string; cliModel?: string },
+  extra?: { pid?: number; outputFile?: string; title?: string; description?: string; mode?: SessionMode; planFile?: string; planCompleted?: boolean; host?: string; provider?: import('./types.js').SessionProvider; type?: SessionType; fromPlanSessionId?: string; forkedFromSessionId?: string; cliModel?: string; effort?: import('./types.js').SessionEffort },
 ): Promise<SessionRecord> {
   await ensureSessionInit();
   return withWriteLock(async () => {
@@ -495,6 +495,7 @@ export async function createSessionRecord(
       if (extra?.fromPlanSessionId && existing.fromPlanSessionId !== extra.fromPlanSessionId) materialChange = true;
       if (extra?.forkedFromSessionId && existing.forkedFromSessionId !== extra.forkedFromSessionId) materialChange = true;
       if (extra?.cliModel && existing.cliModel !== extra.cliModel) materialChange = true;
+      if (extra?.effort && existing.effort !== extra.effort) materialChange = true;
 
       if (!materialChange) {
         return existing;
@@ -528,6 +529,7 @@ export async function createSessionRecord(
       if (extra?.fromPlanSessionId) existing.fromPlanSessionId = extra.fromPlanSessionId;
       if (extra?.forkedFromSessionId) existing.forkedFromSessionId = extra.forkedFromSessionId;
       if (extra?.cliModel) existing.cliModel = extra.cliModel;
+      if (extra?.effort) existing.effort = extra.effort;
 
       writeSessionRowSqlite(db, existing);
       return existing;
@@ -556,6 +558,7 @@ export async function createSessionRecord(
       ...(extra?.fromPlanSessionId ? { fromPlanSessionId: extra.fromPlanSessionId } : {}),
       ...(extra?.forkedFromSessionId ? { forkedFromSessionId: extra.forkedFromSessionId } : {}),
       ...(extra?.cliModel ? { cliModel: extra.cliModel } : {}),
+      ...(extra?.effort ? { effort: extra.effort } : {}),
     };
 
     writeSessionRowSqlite(db, record);

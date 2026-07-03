@@ -18,14 +18,14 @@ import { readPlanFromSession, buildPlanExecutionMessage } from '../../utils/plan
 import { injectCompactBoundary, buildCompactSummary } from '../../utils/compact-inject.js'
 import { findLocalJsonlPath } from '../../core/session-file-reader.js'
 import { getFrequentDirs, compileFromSessions } from '../../core/frequent-dirs.js'
-import type { SessionRecord, SessionMode, Task } from '../../core/types.js'
-import { VALID_SESSION_MODEL_IDS } from '../../core/types.js'
+import type { SessionRecord, SessionMode, Task, SessionEffort } from '../../core/types.js'
+import { VALID_SESSION_MODEL_IDS, SESSION_MODEL_CLI_MAP, VALID_SESSION_EFFORT_IDS, modelSupportsEffort, modelSupportsXhighEffort, modelSupportsMaxEffort } from '../../core/types.js'
 import type { SessionHistoryMessage } from '../../core/session-history.js'
 import { processAndSaveImages, buildSessionImageContext } from './images.js'
 import { sessionRunner } from '../../providers/claude-code-session.js'
 import { listSideQuestions, addSideQuestion, getSideQuestion, markPromoted, deleteSideQuestion } from '../../core/side-questions.js'
 import type { ImagePayload } from './images.js'
-import { spillLargePromptToFile } from './quick-start-spill.js'
+import { quickStartSession, QuickStartError } from '../../core/sessions/quick-start.js'
 import { QUICK_START_MESSAGE_HARD_LIMIT } from '../../constants.js'
 
 /** Diagnose message ordering — logs whether user text messages are interleaved or bunched at end. */
@@ -402,137 +402,36 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       return
     }
 
-    // Spill-to-disk: messages above the inline limit are saved to a temp file and
-    // replaced with a short pointer prompt so Claude reads the full context via the Read tool.
-    let spilledMessage = message
-    let largePromptFile: { localPath: string; originalLength: number } | undefined
-    const spill = spillLargePromptToFile(message)
-    if (spill) {
-      spilledMessage = spill.promptWithPointer
-      largePromptFile = { localPath: spill.filePath, originalLength: spill.originalLength }
-      log.web.info('quick-start: spilled large prompt to file', {
-        filePath: spill.filePath,
-        originalLength: spill.originalLength,
-        host,
-      })
-    }
-
-    // Process attached images — save to disk and build session-friendly context
-    let sessionMessage = spilledMessage
+    // Process attached images — save to disk and build session-friendly context.
+    // Prefix is applied AFTER spill inside quickStartSession (same order as before).
+    let messagePrefix: string | undefined
     if (images && images.length > 0) {
       const processed = await processAndSaveImages(images)
       if (processed) {
-        const imageContext = buildSessionImageContext(processed.savedImages)
-        sessionMessage = imageContext + spilledMessage
+        messagePrefix = buildSessionImageContext(processed.savedImages)
       }
-    }
-
-    // Quick Start tasks always go to the built-in 'Local' category (source=local,
-    // hard-reserved via config.local.categories so no sync plugin can claim it).
-    // The session AI will move the task to the correct category/project after completion.
-    const taskCategory = 'Local'
-
-    let updatedTask: Task
-
-    if (existingTaskId) {
-      // Retry mode: reuse existing task, archive error sessions.
-      // Note: footer taskMeta picks (starred/needs_attention/priority/pinTier) are
-      // intentionally IGNORED on retry — we preserve the original task's metadata.
-      updatedTask = await getTask(existingTaskId)
-      if (!updatedTask) {
-        res.status(404).json({ error: `Task "${existingTaskId}" not found` })
-        return
-      }
-      // Archive all error/stopped sessions under this task to free the slot
-      const existingSessions = await getSessionsForTask(updatedTask.id)
-      for (const s of existingSessions) {
-        if (!s.archived && (s.process_status === 'error' || s.process_status === 'stopped')) {
-          await updateSessionRecord(s.claudeSessionId, { archived: true, archive_reason: 'retry' })
-          try {
-            const { clearSession, clearSessionSlot } = await import('../../core/task-manager.js')
-            await clearSession(updatedTask.id, s.claudeSessionId)
-            await clearSessionSlot(updatedTask.id, s.claudeSessionId)
-          } catch { /* task may not exist */ }
-        }
-      }
-    } else {
-      // Normal mode: create new task
-      const title = `Session: ${path.basename(cwd.replace(/\/+$/, '') || '/')}`
-      const { task } = await addTask({
-        title,
-        category: taskCategory,
-        project: 'Quick Start',
-        source: 'local',
-      })
-      // Merge taskMeta into initial update; `starred` defaults to true for quick-start.
-      const updates: Partial<Task> = {
-        starred: taskMeta?.starred ?? true,
-        cwd,
-      }
-      if (taskMeta?.needs_attention) updates.needs_attention = true
-      // 'none' is a sentinel meaning "don't write priority" — lets a future retry
-      // branch or other caller omit the field without clearing an existing value.
-      // For freshly-created tasks the distinction is moot, but we keep the contract
-      // consistent across code paths.
-      if (taskMeta?.priority && taskMeta.priority !== 'none') updates.priority = taskMeta.priority
-      await updateTask(task.id, updates, { source: 'quick-start' })
-      // Pin + tier — only for new tasks, only when user picked a tier.
-      //
-      // Sequencing matters: setFocusTier() throws if the task isn't pinned, so
-      // togglePin() MUST run first. The two calls are separate write-lock
-      // operations (non-atomic), but that's safe here because the task was just
-      // created above and no other code references it yet.
-      //
-      // Best-effort: if either call fails, we log and let the session start anyway
-      // rather than rolling back the task — the user can pin manually later.
-      if (taskMeta?.pinTier) {
-        try {
-          await togglePin(task.id)
-          await setFocusTier(task.id, taskMeta.pinTier)
-        } catch (err) {
-          log.web.warn('quick-start: failed to apply pin/tier', {
-            taskId: task.id,
-            tier: taskMeta.pinTier,
-            error: err instanceof Error ? err.message : String(err),
-          })
-        }
-      }
-      updatedTask = await getTask(task.id)
-    }
-
-    if (!existingTaskId) {
-      bus.emit(EventNames.TASK_CREATED, { task: updatedTask }, ['web-ui', 'main-agent'], { source: 'quick-start' })
     }
 
     // No system-prompt hint is injected for quick-start sessions. (We used to
     // tell the session to rename/recategorize the task on completion, but that
     // pushed sessions into unrelated task-management side-quests.) Extension
-    // point: pass an `appendSystemPrompt` on SESSION_START below if a future
-    // need arises.
+    // point: pass an `appendSystemPrompt` on SESSION_START if a future need arises.
 
-    // A quick-start (incl. its retry) to a remote host is a deliberate human action —
-    // forget any cached connection failure so we reconnect fresh rather than fast-fail.
-    if (host) {
-      const { clearDaemonFailureCache } = await import('../../providers/daemon-connection.js')
-      clearDaemonFailureCache(host)
+    // Shared core (also used by the claude-code routine executor): task create/
+    // reuse + TASK_CREATED + SESSION_START emit + remote failure-cache clear.
+    try {
+      const updatedTask = await quickStartSession({
+        message, messagePrefix, cwd, host, model, mode,
+        existingTaskId, taskMeta, source: 'quick-start', requestTs,
+      })
+      res.json({ taskId: updatedTask.id, task: updatedTask })
+    } catch (err) {
+      if (err instanceof QuickStartError) {
+        res.status(err.statusCode).json({ error: err.message })
+        return
+      }
+      throw err
     }
-
-    // Emit SESSION_START event (sessionMessage includes image path annotations if images were attached)
-    bus.emit(EventNames.SESSION_START, {
-      taskId: updatedTask.id,
-      message: sessionMessage,
-      cwd,
-      project: 'Quick Start',
-      mode,
-      model,
-      host,
-      largePromptFile,
-      requestTs,
-    }, ['session-runner'], { source: 'quick-start' })
-
-    log.web.info('quick-start: created task + started session', { taskId: updatedTask.id, cwd, host, category: taskCategory, retry: !!existingTaskId })
-
-    res.json({ taskId: updatedTask.id, task: updatedTask })
   } catch (err) {
     next(err)
   }
@@ -756,19 +655,30 @@ sessionsRouter.patch('/:sessionId', async (req: Request, res: Response, next: Ne
     const updated = await updateSessionRecord(sessionId, updates)
     log.web.info('session updated via REST', { sessionId, fields: Object.keys(updates) })
 
-    // Sync mode to in-memory session so emitStatusChanged() uses the new value.
-    // Also set pendingMode so the next message forces --resume instead of FIFO write.
-    // FIFO stdin doesn't carry permission-mode — only --resume spawn applies it.
+    // Mode change: LIVE via set_permission_mode control_request — the third
+    // member of the live-settings family (model/effort/mode). No respawn, no
+    // pendingMode, the running turn is untouched. The CLI echoes the new mode
+    // in the control_response AND emits a system/status event with the new
+    // permissionMode, which the existing status handler uses to reconcile
+    // _mode + record + daemon policy (same path as an in-CLI EnterPlanMode).
+    // record.mode (persisted above) is the durable fallback: processNext
+    // passes it as --permission-mode on any cold --resume.
     if (mode !== undefined && existingRecord?.mode !== mode) {
       const liveSession = sessionRunner.findByClaudeId(sessionId)
+        ?? (updated.process_status !== 'stopped'
+          ? await sessionRunner.getOrAttachLiveSession(sessionId).catch(() => undefined)
+          : undefined)
       if (liveSession) {
         liveSession.setMode(mode as SessionMode)
-      }
-      // Set pendingMode so processNext() knows to skip FIFO and use --resume
-      // with the new --permission-mode flag. Without this, a FIFO session would
-      // silently keep running in the old mode until the process dies.
-      if (updated.process_status !== 'stopped') {
-        await updateSessionRecord(sessionId, { pendingMode: mode })
+        liveSession.applyPermissionMode(mode as SessionMode)
+          .then((confirmed) => {
+            if (!confirmed) {
+              log.web.warn('set_permission_mode not confirmed — record.mode persisted, applies on next resume', { sessionId, mode })
+            }
+          })
+          .catch((err) => log.web.warn('live mode apply failed — record.mode persisted, applies on next resume', {
+            sessionId, mode, error: err instanceof Error ? err.message : String(err),
+          }))
       }
     }
 
@@ -1187,6 +1097,194 @@ sessionsRouter.post('/:sessionId/permission', async (req: Request, res: Response
 // The native Claude Code side_question control_request, run INSIDE the live coding
 // session (reuses its own prompt-cache prefix), answer kept OUT of the main
 // transcript. See ClaudeCodeSession.askSideQuestion + side-questions.ts store.
+
+// POST /api/sessions/:sessionId/effort — change reasoning effort mid-session.
+// Delivers via apply_flag_settings control_request (no respawn) when the CLI is live;
+// always persists record.effort so the badge reflects it and a cold --resume re-applies
+// --effort. Validates the level and gates `max` to max-capable models (the CLI itself
+// silently accepts an invalid `max`, so the guard MUST live here — verified against 2.1.170).
+sessionsRouter.post('/:sessionId/effort', async (req: Request, res: Response, next: NextFunction) => {
+  const sessionId = req.params.sessionId as string
+  const { effort: rawEffort } = req.body as { effort?: string }
+  try {
+    if (typeof rawEffort !== 'string' || !VALID_SESSION_EFFORT_IDS.has(rawEffort)) {
+      res.status(400).json({ error: `effort must be one of low/medium/high/xhigh/max` })
+      return
+    }
+    const effort = rawEffort as SessionEffort
+
+    const record = await getSessionByClaudeId(sessionId)
+    if (!record) {
+      res.status(404).json({ error: 'session not found' })
+      return
+    }
+    // Capability gates (the CLI does NOT enforce these — see route header).
+    const model = record.cliModel || record.model
+    if (!modelSupportsEffort(model)) {
+      res.status(409).json({ error: `Model "${model ?? 'unknown'}" does not support reasoning effort` })
+      return
+    }
+    if (effort === 'xhigh' && !modelSupportsXhighEffort(model)) {
+      res.status(409).json({ error: `Model "${model ?? 'unknown'}" does not support "xhigh" effort (Fable 5, Opus 4.7/4.8, Sonnet 5 only)` })
+      return
+    }
+    if (effort === 'max' && !modelSupportsMaxEffort(model)) {
+      res.status(409).json({ error: `Model "${model ?? 'unknown'}" does not support "max" effort (Fable 5, Opus 4.6+, Sonnet 4.6)` })
+      return
+    }
+
+    // Persist first so the badge + cold-resume fallback reflect the choice even if
+    // the session isn't live right now (idle-reaped → next spawn re-applies --effort).
+    await updateSessionRecord(sessionId, { effort })
+
+    // If the CLI is live, push the change now via control_request (no respawn).
+    // Attach-on-demand (same as the side-question route) so a genuinely-alive session
+    // the reconciler didn't map doesn't falsely report "not live".
+    let applied = false
+    let effectiveEffort: string | undefined
+    const session = await sessionRunner.getOrAttachLiveSession(sessionId).catch(() => undefined)
+    if (session) {
+      try {
+        applied = await session.applyEffort(effort)
+        // VERIFY: the apply_flag_settings ACK returns success even when the CLI
+        // silently overrides (env CLAUDE_CODE_EFFORT_LEVEL) or downgrades the level.
+        // So we don't trust the ACK — read back the CLI's true effort and report it.
+        // null (old CLI / read failed) ⇒ leave effectiveEffort undefined, no clobber.
+        if (applied) {
+          effectiveEffort = (await session.refreshEffectiveEffort('effort-change').catch(() => null)) ?? undefined
+        }
+      } catch (err) {
+        // Non-fatal: the persisted effort still applies on the next (re)spawn.
+        log.web.warn('applyEffort control_request failed — persisted for next spawn', {
+          sessionId, effort, error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+
+    // overridden = the CLI is actually using a DIFFERENT level than requested (env
+    // override or model downgrade). Only assert it when we got a trusted read-back.
+    const overridden = effectiveEffort !== undefined && effectiveEffort !== effort
+    log.web.info('session effort changed', { sessionId, effort, appliedLive: applied, effectiveEffort, overridden })
+    res.json({ effort, appliedLive: applied, effectiveEffort, overridden })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/sessions/:sessionId/model — change the model mid-session.
+// Same mechanism as /effort: apply_flag_settings control_request (no respawn, the
+// running turn is untouched) + get_settings read-back for the true applied model.
+// Persists record.cliModel so a cold --resume respawns with the new --model.
+sessionsRouter.post('/:sessionId/model', async (req: Request, res: Response, next: NextFunction) => {
+  const sessionId = req.params.sessionId as string
+  const { model: rawModel } = req.body as { model?: string }
+  try {
+    if (typeof rawModel !== 'string' || !VALID_SESSION_MODEL_IDS.has(rawModel)) {
+      res.status(400).json({ error: `model must be one of: ${[...VALID_SESSION_MODEL_IDS].join('/')}` })
+      return
+    }
+    const cliModel = SESSION_MODEL_CLI_MAP[rawModel]
+
+    const record = await getSessionByClaudeId(sessionId)
+    if (!record) {
+      res.status(404).json({ error: 'session not found' })
+      return
+    }
+
+    // Persist first — the durable cold-resume fallback (apply_flag_settings is
+    // in-memory only).
+    await updateSessionRecord(sessionId, { cliModel })
+
+    // If the CLI is live, push the change now via control_request (no respawn).
+    let applied = false
+    let effectiveModel: string | undefined
+    const session = await sessionRunner.getOrAttachLiveSession(sessionId).catch(() => undefined)
+    if (session) {
+      try {
+        applied = await session.applyModel(cliModel)
+        // VERIFY: the ACK is success even for a silently-ignored value (verified on
+        // 2.1.170 with a garbage model). Read back applied.model as the truth.
+        if (applied) {
+          effectiveModel = (await session.refreshAppliedSettings('model-change').catch(() => null))?.model ?? undefined
+        }
+      } catch (err) {
+        // Non-fatal: the persisted cliModel still applies on the next (re)spawn.
+        log.web.warn('applyModel control_request failed — persisted for next spawn', {
+          sessionId, model: cliModel, error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+
+    log.web.info('session model changed', { sessionId, model: rawModel, cliModel, appliedLive: applied, effectiveModel })
+    res.json({ model: rawModel, cliModel, appliedLive: applied, effectiveModel })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/sessions/:sessionId/settings — LIVE pull of the CLI's true runtime
+// settings (get_settings → applied.model/effort), paired with Walnut's requested
+// values so the UI can show full visibility: what you asked for vs what the CLI
+// is actually using (env overrides / silent downgrades / ignored values).
+// `live:false` ⇒ CLI not reachable (dead/old build) → applied fields are null and
+// the UI should fall back to the record values without claiming them as truth.
+//
+// ?details=1 additionally pulls the heavier live reads for the picker's
+// collapsed "Live details" section (fetched lazily on expand, not on open):
+//   • get_context_usage — the CLI's own per-category context breakdown, same
+//     source as the /context command (incl. effective window after env clamps)
+//   • get_usage        — CLI-accounted cost + per-model tokens (incl. subagents)
+//   • get_binary_version
+// All three run in parallel with the settings read; each degrades to null
+// independently (same untrusted-read contract).
+sessionsRouter.get('/:sessionId/settings', async (req: Request, res: Response, next: NextFunction) => {
+  const sessionId = req.params.sessionId as string
+  const wantDetails = req.query.details === '1'
+  try {
+    const record = await getSessionByClaudeId(sessionId)
+    if (!record) {
+      res.status(404).json({ error: 'session not found' })
+      return
+    }
+    const requested = {
+      model: record.cliModel ?? record.model,
+      effort: record.effort,
+      mode: record.mode,
+    }
+    // Attach-on-demand (same as /effort and /model) so a live-but-unmapped session
+    // still answers. getSettings() resolves null on timeout/old CLI — never throws.
+    let applied: { model: string | null; effort: string | null; mode: string | null } | null = null
+    let details: {
+      contextUsage: import('../../providers/claude-code-session.js').CliContextUsage | null
+      usage: Record<string, unknown> | null
+      binaryVersion: { version?: string; buildTime?: string } | null
+    } | undefined
+    const session = await sessionRunner.getOrAttachLiveSession(sessionId).catch(() => undefined)
+    if (session) {
+      const [settings, contextUsage, usage, binaryVersion] = await Promise.all([
+        session.getSettings().catch(() => null),
+        wantDetails ? session.getContextUsage().catch(() => null) : Promise.resolve(null),
+        wantDetails ? session.getUsage().catch(() => null) : Promise.resolve(null),
+        wantDetails ? session.getBinaryVersion().catch(() => null) : Promise.resolve(null),
+      ])
+      if (settings) {
+        // Mode has no field in get_settings' applied block — the live session's
+        // _mode IS the runtime truth (reconciled from the CLI's system/status
+        // events, incl. our set_permission_mode echoes and in-CLI EnterPlanMode).
+        applied = { model: settings.model ?? null, effort: settings.effort ?? null, mode: session.mode ?? null }
+        // Opportunistically reconcile record/badge state from this same read —
+        // one round-trip serves both the picker and the persisted truth.
+        void session.refreshAppliedSettings('picker-pull').catch(() => null)
+      }
+      if (wantDetails) details = { contextUsage, usage, binaryVersion }
+    } else if (wantDetails) {
+      details = { contextUsage: null, usage: null, binaryVersion: null }
+    }
+    res.json({ live: applied !== null, requested, applied, ...(details !== undefined ? { details } : {}) })
+  } catch (err) {
+    next(err)
+  }
+})
 
 // GET /api/sessions/:sessionId/side-questions — history list for the drawer
 sessionsRouter.get('/:sessionId/side-questions', async (req: Request, res: Response, next: NextFunction) => {

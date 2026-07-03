@@ -1640,3 +1640,473 @@ describe('ClaudeCodeSession.askSideQuestion', () => {
     await expect(promise).resolves.toBe('right');
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════
+//  applyEffort — mid-session reasoning-effort change via the
+//  apply_flag_settings control_request (OUTBOUND ack, no respawn).
+//  Same transport/feed harness as askSideQuestion above; the ack
+//  branch is checked BEFORE the side-question branch in the handler.
+// ═══════════════════════════════════════════════════════════════════
+
+describe('ClaudeCodeSession.applyEffort', () => {
+  function makeSessionWithStubTransport() {
+    const session = new ClaudeCodeSession('task-eff', 'proj', MOCK_CLI);
+    const writes: string[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any)._transport = {
+      writeRaw: (json: string) => { writes.push(json); return Promise.resolve(true); },
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any)._active = true;
+    return { session, writes };
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const feed = (session: ClaudeCodeSession, obj: unknown) => (session as any).handleStreamLine(JSON.stringify(obj));
+
+  it('sends an apply_flag_settings control_request carrying the effort level', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    void session.applyEffort('low');
+    await new Promise((r) => setTimeout(r, 5));
+
+    expect(writes.length).toBe(1);
+    const env = JSON.parse(writes[0]!);
+    expect(env.type).toBe('control_request');
+    expect(env.request.subtype).toBe('apply_flag_settings');
+    expect(env.request.settings.effortLevel).toBe('low');
+    expect(typeof env.request_id).toBe('string');
+    expect(env.request_id.startsWith('eff-')).toBe(true);
+  });
+
+  it('reflects the new effort immediately (for the badge / persistence) before the ack', () => {
+    const { session } = makeSessionWithStubTransport();
+    void session.applyEffort('medium');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((session as any)._effort).toBe('medium');
+  });
+
+  it('resolves true when a success control_response arrives', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    const promise = session.applyEffort('high');
+    await new Promise((r) => setTimeout(r, 5));
+    const requestId = JSON.parse(writes[0]!).request_id as string;
+
+    feed(session, {
+      type: 'control_response',
+      response: { subtype: 'success', request_id: requestId },
+    });
+
+    await expect(promise).resolves.toBe(true);
+  });
+
+  it('rejects on an error control_response', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    const promise = session.applyEffort('low');
+    await new Promise((r) => setTimeout(r, 5));
+    const requestId = JSON.parse(writes[0]!).request_id as string;
+
+    feed(session, {
+      type: 'control_response',
+      response: { subtype: 'error', request_id: requestId, error: 'bad effort' },
+    });
+
+    await expect(promise).rejects.toThrow('bad effort');
+  });
+
+  it('throws synchronously when the session has no transport', async () => {
+    const session = new ClaudeCodeSession('task-eff-dead', 'proj', MOCK_CLI);
+    await expect(session.applyEffort('low')).rejects.toThrow('session not started');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+//  applyModel — mid-session model change via the SAME apply_flag_settings
+//  control_request as effort (live-verified on 2.1.170: {model:'sonnet'}
+//  flips the NEXT turn's assistant model; [1m] suffixes round-trip; a
+//  garbage value is ACKed but ignored → read-back is mandatory).
+//  Replaces the old pendingModel → interrupt + --resume respawn path.
+// ═══════════════════════════════════════════════════════════════════
+
+describe('ClaudeCodeSession.applyModel', () => {
+  function makeSessionWithStubTransport() {
+    const session = new ClaudeCodeSession('task-mdl', 'proj', MOCK_CLI);
+    const writes: string[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any)._transport = {
+      writeRaw: (json: string) => { writes.push(json); return Promise.resolve(true); },
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any)._active = true;
+    return { session, writes };
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const feed = (session: ClaudeCodeSession, obj: unknown) => (session as any).handleStreamLine(JSON.stringify(obj));
+
+  it('sends an apply_flag_settings control_request carrying the CLI model value', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    void session.applyModel('sonnet[1m]');
+    await new Promise((r) => setTimeout(r, 5));
+
+    expect(writes.length).toBe(1);
+    const env = JSON.parse(writes[0]!);
+    expect(env.type).toBe('control_request');
+    expect(env.request.subtype).toBe('apply_flag_settings');
+    expect(env.request.settings.model).toBe('sonnet[1m]');
+    expect((env.request_id as string).startsWith('mdl-')).toBe(true);
+  });
+
+  it('reflects the new cliModel immediately (for resume persistence) before the ack', () => {
+    const { session } = makeSessionWithStubTransport();
+    void session.applyModel('haiku');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((session as any)._cliModel).toBe('haiku');
+  });
+
+  it('resolves true when a success control_response arrives', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    const promise = session.applyModel('sonnet');
+    await new Promise((r) => setTimeout(r, 5));
+    const requestId = JSON.parse(writes[0]!).request_id as string;
+
+    feed(session, {
+      type: 'control_response',
+      response: { subtype: 'success', request_id: requestId },
+    });
+
+    await expect(promise).resolves.toBe(true);
+  });
+
+  it('throws when the session has no transport', async () => {
+    const session = new ClaudeCodeSession('task-mdl-dead', 'proj', MOCK_CLI);
+    await expect(session.applyModel('sonnet')).rejects.toThrow('session not started');
+  });
+
+  it('refreshAppliedSettings reconciles the live model from applied.model (read-back)', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any).claudeSessionId = 'sid-mdl';
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any)._model = 'claude-opus-4-8';
+    const promise = session.refreshAppliedSettings('test');
+    await new Promise((r) => setTimeout(r, 5));
+    const gs = writes.map(w => JSON.parse(w)).find(e => e.request?.subtype === 'get_settings');
+    expect(gs).toBeTruthy();
+    feed(session, {
+      type: 'control_response',
+      response: {
+        subtype: 'success',
+        request_id: gs.request_id,
+        // Verbatim 2.1.170 shape after apply_flag_settings{model:'sonnet[1m]'}
+        response: { applied: { model: 'us.anthropic.claude-sonnet-4-6[1m]', effort: 'high', ultracode: false } },
+      },
+    });
+    const result = await promise;
+    expect(result?.model).toBe('us.anthropic.claude-sonnet-4-6[1m]');
+    // _model reconciled to the short display form; _initModel keeps the full ID
+    // so 1M-context detection follows the switch.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((session as any)._model).toBe('claude-sonnet-4-6[1m]');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((session as any)._initModel).toBe('us.anthropic.claude-sonnet-4-6[1m]');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+//  applyPermissionMode — mid-session permission-mode change via the
+//  dedicated set_permission_mode control_request (NO respawn). The third
+//  member of the live-settings family after model/effort. Live-verified on
+//  2.1.170: the response ECHOES the new mode ({"mode":"plan"}) and the CLI
+//  emits a system/status event with the new permissionMode (which the
+//  existing status handler reconciles). Replaces pendingMode → --resume.
+// ═══════════════════════════════════════════════════════════════════
+
+describe('ClaudeCodeSession.applyPermissionMode', () => {
+  function makeSessionWithStubTransport() {
+    const session = new ClaudeCodeSession('task-pmode', 'proj', MOCK_CLI);
+    const writes: string[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any)._transport = {
+      writeRaw: (json: string) => { writes.push(json); return Promise.resolve(true); },
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any)._active = true;
+    return { session, writes };
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const feed = (session: ClaudeCodeSession, obj: unknown) => (session as any).handleStreamLine(JSON.stringify(obj));
+
+  it('sends set_permission_mode with the CLI vocabulary (bypass → bypassPermissions)', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    void session.applyPermissionMode('bypass');
+    await new Promise((r) => setTimeout(r, 5));
+
+    expect(writes.length).toBe(1);
+    const env = JSON.parse(writes[0]!);
+    expect(env.type).toBe('control_request');
+    expect(env.request.subtype).toBe('set_permission_mode');
+    expect(env.request.mode).toBe('bypassPermissions');
+    expect((env.request_id as string).startsWith('pmode-')).toBe(true);
+  });
+
+  it('resolves true when the CLI echoes the mode back (verbatim 2.1.170 shape)', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    const promise = session.applyPermissionMode('plan');
+    await new Promise((r) => setTimeout(r, 5));
+    const requestId = JSON.parse(writes[0]!).request_id as string;
+
+    feed(session, {
+      type: 'control_response',
+      response: { subtype: 'success', request_id: requestId, response: { mode: 'plan' } },
+    });
+
+    await expect(promise).resolves.toBe(true);
+    // Optimistic in-memory mode set immediately.
+    expect(session.mode).toBe('plan');
+  });
+
+  it('resolves false when the echo does not match (unconfirmed switch)', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    const promise = session.applyPermissionMode('accept');
+    await new Promise((r) => setTimeout(r, 5));
+    const requestId = JSON.parse(writes[0]!).request_id as string;
+
+    // CLI answered but with a different (or missing) mode → not confirmed.
+    feed(session, {
+      type: 'control_response',
+      response: { subtype: 'success', request_id: requestId, response: {} },
+    });
+
+    await expect(promise).resolves.toBe(false);
+  });
+
+  it('throws when the session has no transport', async () => {
+    const session = new ClaudeCodeSession('task-pmode-dead', 'proj', MOCK_CLI);
+    await expect(session.applyPermissionMode('plan')).rejects.toThrow('session not started');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+//  getContextUsage / getUsage / getBinaryVersion — payload-carrying reads
+//  over the same control_request plumbing (shared _pendingPayloadReads).
+//  Shapes verbatim from a 2.1.170 live probe.
+// ═══════════════════════════════════════════════════════════════════
+
+describe('ClaudeCodeSession payload reads (context usage / usage / version)', () => {
+  function makeSessionWithStubTransport() {
+    const session = new ClaudeCodeSession('task-reads', 'proj', MOCK_CLI);
+    const writes: string[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any)._transport = {
+      writeRaw: (json: string) => { writes.push(json); return Promise.resolve(true); },
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any)._active = true;
+    return { session, writes };
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const feed = (session: ClaudeCodeSession, obj: unknown) => (session as any).handleStreamLine(JSON.stringify(obj));
+
+  it('getContextUsage normalizes categories/totals from the get_context_usage payload', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    const promise = session.getContextUsage();
+    await new Promise((r) => setTimeout(r, 5));
+    const env = JSON.parse(writes[0]!);
+    expect(env.request.subtype).toBe('get_context_usage');
+
+    // Verbatim 2.1.170 probe shape (gridRows and colors dropped by normalizer).
+    feed(session, {
+      type: 'control_response',
+      response: {
+        subtype: 'success',
+        request_id: env.request_id,
+        response: {
+          categories: [
+            { name: 'System prompt', tokens: 6219, color: 'promptBorder' },
+            { name: 'MCP tools', tokens: 120132, color: 'cyan' },
+            { name: 'Free space', tokens: 5479, color: 'promptBorder' },
+          ],
+          totalTokens: 111177, maxTokens: 200000, rawMaxTokens: 200000, percentage: 56,
+          gridRows: [[]],
+        },
+      },
+    });
+
+    const result = await promise;
+    expect(result).toEqual({
+      categories: [
+        { name: 'System prompt', tokens: 6219 },
+        { name: 'MCP tools', tokens: 120132 },
+        { name: 'Free space', tokens: 5479 },
+      ],
+      totalTokens: 111177, maxTokens: 200000, percentage: 56,
+    });
+  });
+
+  it('getContextUsage seeds _cliContextWindow via seedCliContextWindow (context% denominator)', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(session as any).seedCliContextWindow('test');
+    await new Promise((r) => setTimeout(r, 5));
+    const env = JSON.parse(writes[0]!);
+    feed(session, {
+      type: 'control_response',
+      response: {
+        subtype: 'success',
+        request_id: env.request_id,
+        // env CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000 clamps a sonnet[1m] session
+        // to an effective 400K — the exact case the string-guess can't see.
+        response: { categories: [], totalTokens: 36762, maxTokens: 400000, percentage: 9 },
+      },
+    });
+    await new Promise((r) => setTimeout(r, 5));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((session as any)._cliContextWindow).toBe(400000);
+  });
+
+  it('getUsage resolves the session block (cost + per-model usage)', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    const promise = session.getUsage();
+    await new Promise((r) => setTimeout(r, 5));
+    const env = JSON.parse(writes[0]!);
+    expect(env.request.subtype).toBe('get_usage');
+
+    feed(session, {
+      type: 'control_response',
+      response: {
+        subtype: 'success',
+        request_id: env.request_id,
+        response: {
+          session: {
+            total_cost_usd: 0.139,
+            model_usage: { 'us.anthropic.claude-haiku-4-5-20251001-v1:0': { inputTokens: 10, outputTokens: 86, contextWindow: 200000 } },
+          },
+          subscription_type: null,
+        },
+      },
+    });
+
+    const result = await promise;
+    expect(result?.total_cost_usd).toBe(0.139);
+    expect((result?.model_usage as Record<string, unknown>)['us.anthropic.claude-haiku-4-5-20251001-v1:0']).toBeTruthy();
+  });
+
+  it('getBinaryVersion resolves {version, buildTime}; errors resolve null (untrusted)', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    const p1 = session.getBinaryVersion();
+    await new Promise((r) => setTimeout(r, 5));
+    const env1 = JSON.parse(writes[0]!);
+    expect(env1.request.subtype).toBe('get_binary_version');
+    feed(session, {
+      type: 'control_response',
+      response: { subtype: 'success', request_id: env1.request_id, response: { version: '2.1.170', buildTime: '2026-06-09T15:09:09Z' } },
+    });
+    await expect(p1).resolves.toEqual({ version: '2.1.170', buildTime: '2026-06-09T15:09:09Z' });
+
+    const p2 = session.getContextUsage();
+    await new Promise((r) => setTimeout(r, 5));
+    const env2 = JSON.parse(writes[1]!);
+    feed(session, {
+      type: 'control_response',
+      response: { subtype: 'error', request_id: env2.request_id, error: 'unknown subtype' },
+    });
+    await expect(p2).resolves.toBeNull();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+//  getSettings — read the CLI's TRUE runtime effort via get_settings.
+//  The apply_flag_settings ACK can't be trusted (CLI silently overrides
+//  via env / downgrades unsupported levels and still ACKs success), so
+//  we read back response.response.applied.effort — the runtime-resolved
+//  value. Verified verbatim against binary 2.1.170.
+// ═══════════════════════════════════════════════════════════════════
+
+describe('ClaudeCodeSession.getSettings (effort read-back)', () => {
+  function makeSessionWithStubTransport() {
+    const session = new ClaudeCodeSession('task-gs', 'proj', MOCK_CLI);
+    const writes: string[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any)._transport = {
+      writeRaw: (json: string) => { writes.push(json); return Promise.resolve(true); },
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any)._active = true;
+    return { session, writes };
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const feed = (session: ClaudeCodeSession, obj: unknown) => (session as any).handleStreamLine(JSON.stringify(obj));
+
+  it('sends a get_settings control_request', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    void session.getSettings();
+    await new Promise((r) => setTimeout(r, 5));
+    expect(writes.length).toBe(1);
+    const env = JSON.parse(writes[0]!);
+    expect(env.type).toBe('control_request');
+    expect(env.request.subtype).toBe('get_settings');
+    expect((env.request_id as string).startsWith('gs-')).toBe(true);
+  });
+
+  it('resolves the applied block (model + true effort) from the nested response', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    const promise = session.getSettings();
+    await new Promise((r) => setTimeout(r, 5));
+    const requestId = JSON.parse(writes[0]!).request_id as string;
+    // Real shape (verbatim 2.1.170): response.response.applied.effort is the
+    // runtime truth; effective.effortLevel is the disk merge (ignored here).
+    feed(session, {
+      type: 'control_response',
+      response: {
+        subtype: 'success',
+        request_id: requestId,
+        response: {
+          effective: { effortLevel: 'xhigh' },   // disk value — NOT what we read
+          applied: { model: 'claude-opus-4-8', effort: 'high', ultracode: false }, // env override → high
+        },
+      },
+    });
+    await expect(promise).resolves.toEqual({ model: 'claude-opus-4-8', effort: 'high', ultracode: false });
+  });
+
+  it('resolves null on an error control_response (untrusted — never clobber)', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    const promise = session.getSettings();
+    await new Promise((r) => setTimeout(r, 5));
+    const requestId = JSON.parse(writes[0]!).request_id as string;
+    feed(session, {
+      type: 'control_response',
+      response: { subtype: 'error', request_id: requestId, error: 'nope' },
+    });
+    await expect(promise).resolves.toBeNull();
+  });
+
+  it('resolves null (not throw) when there is no transport', async () => {
+    const session = new ClaudeCodeSession('task-gs-dead', 'proj', MOCK_CLI);
+    await expect(session.getSettings()).resolves.toBeNull();
+  });
+
+  it('refreshEffectiveEffort reconciles _effectiveEffort from applied.effort and flags override', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any).claudeSessionId = 'sid-gs';
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any)._effort = 'xhigh';         // requested xhigh
+    const promise = session.refreshEffectiveEffort('test');
+    await new Promise((r) => setTimeout(r, 5));
+    // find the get_settings write (refreshEffectiveEffort calls getSettings internally)
+    const gs = writes.map(w => JSON.parse(w)).find(e => e.request?.subtype === 'get_settings');
+    expect(gs).toBeTruthy();
+    feed(session, {
+      type: 'control_response',
+      response: {
+        subtype: 'success',
+        request_id: gs.request_id,
+        response: { applied: { model: 'claude-opus-4-8', effort: 'high' } }, // env forced high
+      },
+    });
+    const eff = await promise;
+    expect(eff).toBe('high');                    // true runtime value
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((session as any)._effectiveEffort).toBe('high');
+    // requested xhigh ≠ effective high ⇒ this is the "overridden" case the badge flags
+  });
+});

@@ -29,6 +29,7 @@
 import type { SshTarget } from './session-io.js'
 import { RemoteSessionManager } from './remote-session-manager.js'
 import { localDaemon } from './local-daemon.js'
+import type { DaemonTaskState } from './daemon-connection.js'
 
 // ── Output Events ──
 
@@ -197,6 +198,14 @@ export interface SessionManager {
    * For local: PID check. For remote: daemon status query.
    */
   isAlive(): Promise<boolean>
+
+  /**
+   * L2: PULL the daemon-authoritative background-task state (source of truth) to reconcile a
+   * lost-terminal event without guessing liveness. Returns null when the daemon can't be reached
+   * or has no record — callers treat null as "no authoritative answer, keep current state".
+   * Optional — only daemon-backed managers implement it.
+   */
+  getState?(): Promise<DaemonTaskState | null>
 
   /**
    * Set the permission mode for this session on the daemon.

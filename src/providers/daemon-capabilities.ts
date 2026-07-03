@@ -25,6 +25,7 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
   'sendRaw',
   'stop',
   'status',
+  'getState',
   'rename',
   'read-history',
   'subscribe-agent',

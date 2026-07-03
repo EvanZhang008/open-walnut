@@ -33,6 +33,7 @@ export interface SessionStartEvent {
   cwd?: string;
   mode?: string;
   model?: string;
+  effort?: import('./types.js').SessionEffort;
   project?: string;
   title?: string;
   appendSystemPrompt?: string;
@@ -58,7 +59,6 @@ export interface SessionSendEvent {
   taskId?: string;
   message: string;
   mode?: string;
-  model?: string;
   interrupt?: boolean;
 }
 

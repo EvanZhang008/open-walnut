@@ -981,9 +981,14 @@ export interface RecoveredSessionState {
   jsonlByteLength?: number;
   /** True if the last TeamCreate/TeamDelete pair leaves the session in team mode. */
   teamActive?: boolean;
-  /** Count of background tasks (dynamic workflows / subagents) still in flight per the
-   *  replayed task_started/task_notification events — used to rebuild running vs idle
-   *  after reconnect/restart so an intermediate `result` isn't mistaken for turn-over. */
+  /** Authoritative background-task set rebuilt from the replayed lifecycle events
+   *  (task_started / task_updated / task_notification), keyed by task_id → latest status.
+   *  This is the source of truth on recovery; the live session rebuilds its `_bgTasks` from
+   *  it so "is work in flight" is DERIVED (count of non-terminal), never an accumulated
+   *  counter that a duplicate / lost / out-of-order event could desync. */
+  bgTasks?: Record<string, string>;
+  /** DERIVED count of still-running background tasks (non-terminal entries in `bgTasks`).
+   *  Kept for existing readers; computed from the set, not accumulated. */
   bgTasksInFlight?: number;
   /** Last observed CLI session_state_changed.state, when present in the stream. */
   cliSessionState?: 'running' | 'idle' | 'requires_action';
@@ -1006,6 +1011,15 @@ export interface RecoveredSessionState {
  * Supports both local and remote sessions via readSessionJsonlContent().
  * Scans forward through the file, keeping only the LAST value of each field.
  */
+/** Count background tasks whose status is non-terminal (still running). Derived view over
+ *  the rebuilt task set — mirrors ClaudeCodeSession._runningBgCount so the replay and live
+ *  paths agree by construction. */
+function runningBgCount(bgTasks: Map<string, string>, terminal: Set<string>): number {
+  let n = 0;
+  for (const status of bgTasks.values()) if (!terminal.has(status)) n++;
+  return n;
+}
+
 export async function recoverStateFromJsonl(sessionId: string, cwd?: string, host?: string): Promise<RecoveredSessionState | null> {
   // Try local first (fast path — most common case for crash recovery)
   const localPath = await findLocalJsonlPath(sessionId, cwd);
@@ -1036,6 +1050,13 @@ export async function recoverStateFromJsonl(sessionId: string, cwd?: string, hos
     const state: RecoveredSessionState = {
       jsonlByteLength: Buffer.byteLength(content, 'utf-8'),
     };
+    // Authoritative background-task set, rebuilt by REPLAYING lifecycle events into a
+    // task_id → status map (NOT an accumulated +1/-1 counter). This mirrors the live path
+    // (ClaudeCodeSession._bgTasks): a duplicate / out-of-order / lost / new-kind event can
+    // never desync a derived count the way it desyncs an accumulator. "Terminal is terminal":
+    // once a task reaches a terminal status, later started/progress events don't revive it.
+    const bgTasks = new Map<string, string>();
+    const BG_TERMINAL = new Set(['completed', 'failed', 'stopped', 'cancelled']);
 
     for (const line of lines) {
       let parsed: Record<string, unknown>;
@@ -1089,15 +1110,26 @@ export async function recoverStateFromJsonl(sessionId: string, cwd?: string, hos
       }
 
       // ── Background-task lifecycle (dynamic workflows / subagents) ──
-      // Rebuild the in-flight count so we can tell, after reconnect/restart, whether
-      // a replayed `result` is a real turn-over or just an intermediate result emitted
-      // while background work continues.
+      // Rebuild the authoritative task SET so we can tell, after reconnect/restart, whether
+      // a replayed `result` is a real turn-over or just an intermediate result emitted while
+      // background work continues. In-flight is DERIVED (count of non-terminal) at the end.
       if (type === 'system') {
         const subtype = (parsed as Record<string, unknown>).subtype as string | undefined;
-        if (subtype === 'task_started') {
-          state.bgTasksInFlight = (state.bgTasksInFlight ?? 0) + 1;
-        } else if (subtype === 'task_notification') {
-          state.bgTasksInFlight = Math.max(0, (state.bgTasksInFlight ?? 0) - 1);
+        const taskId = (parsed as Record<string, unknown>).task_id as string | undefined;
+        if (subtype === 'task_started' && taskId != null) {
+          // Terminal is terminal: a replayed/out-of-order started must not revive a finished task.
+          if (!BG_TERMINAL.has(bgTasks.get(taskId) ?? '')) bgTasks.set(taskId, 'running');
+        } else if (subtype === 'task_notification' && taskId != null) {
+          const status = ((parsed as Record<string, unknown>).status as string | undefined) ?? 'completed';
+          bgTasks.set(taskId, status);
+        } else if (subtype === 'task_updated' && taskId != null) {
+          // A task_updated whose patch.status is terminal is the FIRST terminal signal on
+          // newer CLIs — record it (idempotent with the later task_notification).
+          const patchStatus = ((parsed as Record<string, unknown>).patch as Record<string, unknown> | undefined)
+            ?.status as string | undefined;
+          if (patchStatus) bgTasks.set(taskId, patchStatus);
+        } else if (subtype === 'task_progress' && taskId != null) {
+          if (!bgTasks.has(taskId)) bgTasks.set(taskId, 'running');
         } else if (subtype === 'session_state_changed') {
           const s = (parsed as Record<string, unknown>).state as
             | 'running' | 'idle' | 'requires_action' | undefined;
@@ -1107,11 +1139,11 @@ export async function recoverStateFromJsonl(sessionId: string, cwd?: string, hos
           // every sub-agent / phase — because its idle-wait loop excludes
           // in_process_teammate tasks. So a mid-workflow restart's JSONL almost always
           // contains idle events while tasks are still in flight. The turn is over only
-          // when idle coincides with a drained counter. The OLD code unconditionally set
-          // agent_complete + zeroed the counter on ANY idle, which marked a still-running
-          // workflow complete on restart (defeating the recovery this whole block exists
-          // for). Gate on the counter; NEVER hard-reset it (task_notification owns that).
-          if (s === 'idle' && (state.bgTasksInFlight ?? 0) === 0) { state.workStatus = 'agent_complete'; }
+          // when idle coincides with NO running task in the set. The OLD code unconditionally
+          // set agent_complete on ANY idle, which marked a still-running workflow complete on
+          // restart (defeating the recovery this whole block exists for). Gate on the derived
+          // running-count; "terminal is terminal" keeps the set monotone toward done.
+          if (s === 'idle' && runningBgCount(bgTasks, BG_TERMINAL) === 0) { state.workStatus = 'agent_complete'; }
           else if (s === 'running') { state.workStatus = undefined; }
         }
       }
@@ -1126,7 +1158,7 @@ export async function recoverStateFromJsonl(sessionId: string, cwd?: string, hos
         const isErr = (parsed as Record<string, unknown>).is_error;
         if (isErr) {
           state.workStatus = 'error';
-        } else if ((state.bgTasksInFlight ?? 0) === 0 && state.cliSessionState !== 'running') {
+        } else if (runningBgCount(bgTasks, BG_TERMINAL) === 0 && state.cliSessionState !== 'running') {
           state.workStatus = 'agent_complete';
         }
         // else: intermediate result during live background work — leave workStatus as-is.
@@ -1226,6 +1258,12 @@ export async function recoverStateFromJsonl(sessionId: string, cwd?: string, hos
           state.pendingControlRequest = undefined;
         }
       }
+    }
+
+    // Finalize the background-task set: expose the rebuilt set + the DERIVED running count.
+    if (bgTasks.size > 0) {
+      state.bgTasks = Object.fromEntries(bgTasks);
+      state.bgTasksInFlight = runningBgCount(bgTasks, BG_TERMINAL);
     }
 
     return state;

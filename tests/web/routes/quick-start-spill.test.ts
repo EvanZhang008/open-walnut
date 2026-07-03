@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import fs from 'node:fs';
-import { spillLargePromptToFile } from '../../../src/web/routes/quick-start-spill.js';
+import { spillLargePromptToFile } from '../../../src/core/sessions/quick-start-spill.js';
 import { QUICK_START_MESSAGE_SPILL_LIMIT } from '../../../src/constants.js';
 
 const createdFiles: string[] = [];

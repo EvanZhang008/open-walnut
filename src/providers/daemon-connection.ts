@@ -46,11 +46,36 @@ export interface DaemonCommandResult {
   [key: string]: unknown
 }
 
+/** L2: daemon-authoritative per-session background-task state, returned by the `getState` RPC.
+ *  The daemon materializes this from the same task_* events Walnut sees, so Walnut can PULL it
+ *  to reconcile a lost-terminal event without guessing liveness. `resourceVersion` = the byte
+ *  offset of the latest applied event (monotonic, rebuilt from the jsonl after a daemon restart). */
+export interface DaemonTaskStateEntry { status: string; v: number; t: number; description?: string }
+export interface DaemonTaskState {
+  tasks: Record<string, DaemonTaskStateEntry>
+  resourceVersion: number
+  updatedAt: number
+  derivedRunning: number
+  recentTransitions: Array<{ taskId: string; status: string; v: number; t: number }>
+}
+/** Reply shape of the `getState` RPC. `exists:false` = daemon has no record (treat as no bg work).
+ *  Extends DaemonCommandResult so a `conn.send()` result casts cleanly (carries `ok`). */
+export interface DaemonGetStateResult extends DaemonCommandResult {
+  exists?: boolean
+  alive?: boolean
+  state?: 'running' | 'dead'
+  taskState?: DaemonTaskState
+}
+
 export interface DaemonEvent {
   ev: string
   sid?: string
   line?: string
   lines?: string[]
+  /** L1 versioned events: monotonic per-session byte offset (end of this line in the
+   *  append-only jsonl). Identical whether the line is delivered live or via replay, so the
+   *  client orders + dedupes by `v` alone. Absent from old daemons — RSM falls back to uuid dedup. */
+  v?: number
   agent?: string
   code?: number
   /** Stderr content from the process (only present on exit events with non-zero code) */

@@ -478,7 +478,7 @@ export class SubagentRunner {
         onUsage: (usage) => {
           if (usage.input_tokens) totalUsage.input_tokens += usage.input_tokens;
           if (usage.output_tokens) totalUsage.output_tokens += usage.output_tokens;
-          try { usageTracker.record({ source: 'subagent', model: usage.model ?? 'unknown', input_tokens: usage.input_tokens, output_tokens: usage.output_tokens, cache_creation_input_tokens: usage.cache_creation_input_tokens, cache_read_input_tokens: usage.cache_read_input_tokens, runId: run.runId, taskId: data.taskId, parent_source: 'agent' }); } catch {}
+          try { usageTracker.record({ source: 'subagent', model: usage.model ?? 'unknown', input_tokens: usage.input_tokens, output_tokens: usage.output_tokens, cache_creation_input_tokens: usage.cache_creation_input_tokens, cache_read_input_tokens: usage.cache_read_input_tokens, runId: run.runId, taskId: data.taskId, agentId: run.agentId, parent_source: 'agent' }); } catch {}
         },
       }, {
         system: systemPrompt,

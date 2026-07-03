@@ -385,7 +385,7 @@ export class SessionHealthMonitor {
     const WARN_THRESHOLD_MS = 5 * 60 * 1000  // log warning after 5 min with no Claude output
     const flaggedIds = new Set<string>()
 
-    let runner: { getSessionTimestamps(id: string): { lastClaudeOutputAt: number; lastMessageDeliveryAt: number } | undefined; isTeamActive(id: string): boolean; isBackgroundWorkActive(id: string): boolean } | undefined
+    let runner: { getSessionTimestamps(id: string): { lastClaudeOutputAt: number; lastMessageDeliveryAt: number } | undefined; isTeamActive(id: string): boolean; isBackgroundWorkActive(id: string): boolean | Promise<boolean> } | undefined
     try {
       const { sessionRunner } = await import('../providers/claude-code-session.js')
       runner = sessionRunner
@@ -397,8 +397,10 @@ export class SessionHealthMonitor {
       // Skip team-active sessions — poll loop produces no Claude output, but is not hung
       if (runner.isTeamActive(session.claudeSessionId)) continue
       // Skip sessions running a dynamic workflow / background subagents — the main turn
-      // produces no output for minutes, but the session is busy, not hung.
-      if (runner.isBackgroundWorkActive(session.claudeSessionId)) continue
+      // produces no output for minutes, but the session is busy, not hung. L2: this PULLs the
+      // daemon-authoritative task state and reconciles any lost-terminal event before deciding,
+      // so a wedged session self-heals on this tick (see claude-code-session reconcileFromDaemon).
+      if (await runner.isBackgroundWorkActive(session.claudeSessionId)) continue
 
       const ts = runner.getSessionTimestamps(session.claudeSessionId)
       if (!ts) continue
@@ -481,7 +483,7 @@ export class SessionHealthMonitor {
     const { getRegisteredSessionManager } = await import('../providers/session-manager.js')
 
     // Import sessionRunner for team-active + background-work + permission checks (lazy, cached by Node module system)
-    let runner: { isTeamActive(id: string): boolean; isBackgroundWorkActive?(id: string): boolean; hasPendingPermission?(id: string): boolean } | undefined
+    let runner: { isTeamActive(id: string): boolean; isBackgroundWorkActive?(id: string): boolean | Promise<boolean>; hasPendingPermission?(id: string): boolean } | undefined
     try {
       const { sessionRunner } = await import('../providers/claude-code-session.js')
       runner = sessionRunner
@@ -510,7 +512,9 @@ export class SessionHealthMonitor {
       // Skip sessions running a dynamic workflow / background subagents — they can run
       // for many minutes (up to the CLI's 10-min bg-wait ceiling) with no main-turn
       // output, but the session is busy, not idle. Killing it would abort the workflow.
-      if (runner?.isBackgroundWorkActive?.(session.claudeSessionId)) {
+      // L2: PULLs the daemon-authoritative task state and reconciles any lost-terminal event
+      // first, so a wedged session self-heals on this tick (see reconcileFromDaemon).
+      if (await runner?.isBackgroundWorkActive?.(session.claudeSessionId)) {
         log.session.debug('health monitor: skipping idle check — background work active', {
           sessionId: session.claudeSessionId, taskId: session.taskId,
         })

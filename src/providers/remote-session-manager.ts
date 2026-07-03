@@ -19,7 +19,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { REMOTE_IMAGES_DIR } from '../constants.js'
 import { log } from '../logging/index.js'
-import { getDaemonConnection, DaemonConnection, type DaemonEvent } from './daemon-connection.js'
+import { getDaemonConnection, DaemonConnection, type DaemonEvent, type DaemonTaskState, type DaemonGetStateResult } from './daemon-connection.js'
 import {
   findLocalImagePaths,
   findRemoteImagePaths,
@@ -57,6 +57,12 @@ export class RemoteSessionManager implements SessionManager {
   // history into the UI (the "whole conversation replays" bug, path #4).
   private _fileSize = 0
   private _cursorValid = false
+  // L1 versioned events: highest event version (byte offset `v`) already delivered
+  // downstream. The daemon stamps each jsonl event with `v` (monotonic per session,
+  // identical live vs replay), so `v <= _lastSeenV` is a deterministic skip — covering
+  // duplicates AND out-of-order replay in one comparison. Old daemons send no `v`; for
+  // those we fall back to the uuid Set below. -1 = nothing seen yet.
+  private _lastSeenV = -1
   private _imageCache = new Map<string, string>()
   private unsubscribeEvent: (() => void) | null = null
   private _onOutput: ((event: { line: string }) => void) | null = null
@@ -140,6 +146,17 @@ export class RemoteSessionManager implements SessionManager {
     return this._cursorValid ? this._fileSize : Number.MAX_SAFE_INTEGER
   }
 
+  /** Adopt the daemon's authoritative absolute stream offset as our cursor. Keeps the L1
+   *  version watermark in lockstep: after adopting offset X, any replayed/live line the daemon
+   *  sends next has `v > X` (its byte range starts at X), so seeding `_lastSeenV = X` skips
+   *  nothing legitimate while still dropping a stale event whose `v <= X`. Single choke point
+   *  so _fileSize / _cursorValid / _lastSeenV can never drift apart across start/attach/reconnect. */
+  private adoptCursor(offset: number): void {
+    this._fileSize = offset
+    this._cursorValid = true
+    if (offset > this._lastSeenV) this._lastSeenV = offset
+  }
+
   // ── Startup ──
 
   async start(opts: TransportStartOptions): Promise<TransportStartResult> {
@@ -206,8 +223,7 @@ export class RemoteSessionManager implements SessionManager {
     // cmdStart reply `offset` is the absolute stream-file position at spawn
     // (0 for fresh, statSync size for resume) — a valid cursor.
     const fileSize = (result.offset as number) ?? 0
-    this._fileSize = fileSize
-    this._cursorValid = true
+    this.adoptCursor(fileSize)
 
     log.session.info('RemoteSessionManager: session started', {
       // DUP-DEBUG
@@ -259,8 +275,7 @@ export class RemoteSessionManager implements SessionManager {
         const attachResult = await this.conn!.send('attach', { sid, fromOffset: this.attachFromOffset() })
         // Dead session → no watcher → currentOffset 0 is meaningless; skip.
         if (attachResult.alive && typeof attachResult.currentOffset === 'number') {
-          this._fileSize = attachResult.currentOffset
-          this._cursorValid = true
+          this.adoptCursor(attachResult.currentOffset)
         }
         // Merge pid from status into attach result for consistent return shape
         return { ...attachResult, pid: status.pid, outputFile: status.outputFile, offset: this._fileSize }
@@ -334,8 +349,7 @@ export class RemoteSessionManager implements SessionManager {
     // assignment here also corrects any double-count from the replay itself.)
     // Dead session → no watcher → currentOffset 0 is meaningless; skip.
     if (alive && typeof result.currentOffset === 'number') {
-      this._fileSize = result.currentOffset
-      this._cursorValid = true
+      this.adoptCursor(result.currentOffset)
     }
 
     log.session.info('RemoteSessionManager: attached to session', {
@@ -393,8 +407,7 @@ export class RemoteSessionManager implements SessionManager {
       if (result.ok) {
         // Dead session → no watcher → currentOffset 0 is meaningless; skip.
         if (result.alive && typeof result.currentOffset === 'number') {
-          this._fileSize = result.currentOffset
-          this._cursorValid = true
+          this.adoptCursor(result.currentOffset)
         }
         log.session.info('RemoteSessionManager: reattached watcher after reconnect', {
           // DUP-DEBUG: every reattach re-subscribes onEvent. If logs show
@@ -631,6 +644,22 @@ export class RemoteSessionManager implements SessionManager {
     }
   }
 
+  /** L2: PULL the daemon-authoritative background-task state (the source of truth). Returns null
+   *  when we can't reach the daemon (disconnected) or it doesn't support getState (old binary —
+   *  capability handshake will have forced a redeploy, but be defensive) — callers must treat
+   *  null as "no authoritative answer, keep current state", NOT as "no work". */
+  async getState(): Promise<DaemonTaskState | null> {
+    if (!this._sid || !this.conn?.connected) return null
+    try {
+      const result = await this.conn.send('getState', { sid: this._sid }) as DaemonGetStateResult
+      if (!result.ok) return null
+      if (result.exists === false) return null // daemon has no record — no authoritative task state
+      return result.taskState ?? null
+    } catch {
+      return null // send failed (reconnecting / unsupported) — no authoritative answer
+    }
+  }
+
   // ── Session Management ──
 
   renameForSession(sessionId: string): void {
@@ -831,7 +860,19 @@ export class RemoteSessionManager implements SessionManager {
       case 'jsonl':
         if ((event.sid === this._sid || event.sid === this._prevSid) && event.line) {
           this._lastEventAt = Date.now()
-          this._fileSize += Buffer.byteLength(event.line + '\n', 'utf-8') // feeds fromOffset in retryStartAfterReconnect()
+
+          // L1 version-skip (preferred path when the daemon stamps `v`). `v` is the byte
+          // offset at the END of this line — monotonic per session, identical live vs replay.
+          // A single comparison kills BOTH duplicates and out-of-order replay: anything we've
+          // already advanced past is dropped. When present, `v` is also the authoritative
+          // cursor (more reliable than locally summing line bytes), so we adopt it directly.
+          if (typeof event.v === 'number') {
+            if (event.v <= this._lastSeenV) return // already delivered (dup / out-of-order replay) — skip
+            this.adoptCursor(event.v) // v is the authoritative absolute cursor; keeps the watermark in sync
+          } else {
+            // Old daemon (no `v`): advance the cursor by line bytes and fall back to uuid dedup.
+            this._fileSize += Buffer.byteLength(event.line + '\n', 'utf-8') // feeds fromOffset in retryStartAfterReconnect()
+          }
 
           // UUID-based dedup. The daemon's cmdAttach catch-up may replay
           // bytes that were already delivered via realtime push before a

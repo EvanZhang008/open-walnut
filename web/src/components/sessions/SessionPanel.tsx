@@ -20,7 +20,8 @@ import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
 import type { ImageAttachment } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
-import { fetchSession, executePlanContinue, executePlanSession, updateSession, restartSession, investigateSession } from '@/api/sessions';
+import { fetchSession, executePlanContinue, executePlanSession, updateSession, restartSession, investigateSession, setSessionEffort, setSessionModel } from '@/api/sessions';
+import { terminalPrewarm } from '@/api/terminal';
 import { log } from '@/utils/log';
 import { buildInvestigationClip } from '@/utils/investigation-clipboard';
 import { fetchTask } from '@/api/tasks';
@@ -32,6 +33,7 @@ import { ProcessStatusBadge } from './WorkStatusPicker';
 import { SessionForkButton } from './SessionForkButton';
 import { SessionKebabSection } from './SessionKebabSection';
 import { ModelPicker } from './ModelPicker';
+import { modelSupportsEffort, DEFAULT_SESSION_EFFORT } from '@open-walnut/core';
 import { TaskQuickActions } from './TaskQuickActions';
 import { useFullscreen } from '@/hooks/useFullscreen';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
@@ -160,18 +162,40 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     }
   }, []);
 
-  const handleModelSwitch = useCallback((model: string, immediate: boolean) => {
+  const handleModelSwitch = useCallback((model: string) => {
     setModelPickerOpen(false);
-    // Send RPC with model switch (empty message is fine -- backend handles it via pendingModel)
-    wsClient.sendRpc('session:send', {
-      sessionId,
-      message: '',
-      model,
-      interrupt: immediate || undefined,
+    // Live switch via apply_flag_settings (no respawn, no message send) — same
+    // mechanism as effort. Optimistically reflect it, then reconcile from the
+    // get_settings read-back (effectiveModel = the CLI's true runtime model).
+    const prevModel = session?.model;
+    setSession(prev => prev ? { ...prev, model } : prev);
+    setSessionModel(sessionId, model).then((res) => {
+      if (res.effectiveModel) {
+        setSession(prev => prev ? { ...prev, model: res.effectiveModel } : prev);
+      }
     }).catch((err) => {
       console.error('Model switch failed:', err);
+      setSession(prev => prev ? { ...prev, model: prevModel } : prev);
     });
-  }, [sessionId]);
+  }, [sessionId, session?.model]);
+
+  const handleEffortSwitch = useCallback((effort: import('@open-walnut/core').SessionEffort) => {
+    setModelPickerOpen(false);
+    // Optimistically reflect the requested effort so the pill/badge updates immediately.
+    // Backend delivers it via apply_flag_settings, then READS BACK the CLI's true effort.
+    // Reconcile effectiveEffort from the response so the badge shows what the CLI actually
+    // uses (and flags an env/model override). Revert on failure (model rejected the level).
+    const prevEffort = session?.effort;
+    const prevEffective = session?.effectiveEffort;
+    setSession(prev => prev ? { ...prev, effort } : prev);
+    setSessionEffort(sessionId, effort).then((res) => {
+      // Trust the CLI read-back: effectiveEffort is what actually took (may differ).
+      setSession(prev => prev ? { ...prev, effort, effectiveEffort: res.effectiveEffort ?? prev.effectiveEffort } : prev);
+    }).catch((err) => {
+      console.error('Effort switch failed:', err);
+      setSession(prev => prev ? { ...prev, effort: prevEffort, effectiveEffort: prevEffective } : prev);
+    });
+  }, [sessionId, session?.effort, session?.effectiveEffort]);
 
   // Fetch messages for the UserMessagesSummary
   const { messages: historyMessages, loading: historyLoading } = useSessionHistory(sessionId);
@@ -302,6 +326,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
       if (!cancelled) {
         setSession(s);
         setLoading(false);
+        // Prewarm the remote terminal transport (ssh ControlMaster + dtach) so a
+        // later Terminal click is ~0.2s instead of ~2.5s. Fire-and-forget; the
+        // server no-ops for local sessions. Cheap, idempotent, self-expires.
+        if (s?.host) {
+          terminalPrewarm(sessionId).catch(() => { /* best-effort; open will still work */ });
+        }
         // Fetch associated task title + pin state
         if (s?.taskId) {
           fetchTask(s.taskId).then((t) => {
@@ -854,7 +884,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               Terminal
             </button>
             {displayModel && (
-              <span className="session-detail-model-pill" title={rawModel || ''}>
+              <button
+                type="button"
+                className="session-detail-model-pill session-detail-model-pill-clickable"
+                title={`${rawModel || ''} — click to switch model / effort`}
+                onClick={() => setModelPickerOpen((v) => !v)}
+              >
                 {displayModel}
                 {contextPercent != null && (
                   <span
@@ -869,7 +904,27 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                     {' '}{contextPercent}%
                   </span>
                 )}
-              </span>
+                {modelSupportsEffort(rawModel) && (() => {
+                  // Badge shows the CLI's TRUE effort (effectiveEffort, read back via
+                  // get_settings) — falling back to the requested level, then the API
+                  // default. When the CLI overrode the request (env / downgrade), flag it.
+                  const shown = session?.effectiveEffort ?? session?.effort ?? DEFAULT_SESSION_EFFORT;
+                  const overridden = session?.effectiveEffort != null && session?.effort != null
+                    && session.effectiveEffort !== session.effort;
+                  const title = overridden
+                    ? `Reasoning effort: ${session!.effectiveEffort} (requested ${session!.effort}, overridden by env/model)`
+                    : session?.effectiveEffort
+                    ? `Reasoning effort: ${session.effectiveEffort} (confirmed by CLI)`
+                    : session?.effort
+                    ? `Reasoning effort: ${session.effort} (requested)`
+                    : `Reasoning effort: ${DEFAULT_SESSION_EFFORT} (default)`;
+                  return (
+                    <span className="session-detail-effort-badge" title={title}>
+                      {' · '}{shown}{overridden ? ' ⚠' : ''}
+                    </span>
+                  );
+                })()}
+              </button>
             )}
             {session?.lastActiveAt && <span className="session-panel-time">{timeAgo(session.lastActiveAt)}</span>}
           </div>
@@ -1069,7 +1124,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
           {modelPickerOpen && (
             <ModelPicker
               currentModel={rawModel}
+              currentEffort={session?.effectiveEffort ?? session?.effort}
+              sessionId={sessionId}
               onSwitch={handleModelSwitch}
+              onEffortSwitch={handleEffortSwitch}
               onClose={() => setModelPickerOpen(false)}
             />
           )}

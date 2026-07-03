@@ -131,10 +131,12 @@ export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<In
     timeoutMs,
   });
 
+  // Note: we do NOT set CLAUDE_CODE_DISABLE_BACKGROUND_TASKS — background Bash tasks
+  // are a useful capability and there's no reason to disable them for subagents.
   const proc = spawn('claude', args, {
     stdio: ['pipe', 'pipe', 'pipe'],
     cwd: cwd ?? process.cwd(),
-    env: { ...cleanEnv, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' },
+    env: cleanEnv,
   });
 
   activeProcesses.add(proc);

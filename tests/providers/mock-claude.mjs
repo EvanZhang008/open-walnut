@@ -28,6 +28,7 @@ let appendSystemPrompt = null;
 let outputFormat = 'json';
 let inputFormat = null;
 let modelFlag = null;
+let effortFlag = null;
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--resume') {
@@ -46,6 +47,8 @@ for (let i = 0; i < args.length; i++) {
     inputFormat = args[++i];
   } else if (args[i] === '--model' && args[i + 1]) {
     modelFlag = args[++i];
+  } else if (args[i] === '--effort' && args[i + 1]) {
+    effortFlag = args[++i];
   } else if (args[i] === '-p' || args[i] === '--verbose') {
     // skip known flags
   } else {
@@ -124,7 +127,8 @@ const permPart = permissionMode ? ` [permission-mode:${permissionMode}]` : '';
 const cwdPart = ` [cwd:${process.cwd()}]`;
 const sysPart = appendSystemPrompt ? ` [has-system-prompt]` : '';
 const modelPart = modelFlag ? ` [model:${modelFlag}]` : '';
-const resultText = `Hello! I processed your message: ${effectiveMessage}${permPart}${cwdPart}${sysPart}${modelPart}`;
+const effortPart = effortFlag ? ` [effort:${effortFlag}]` : '';
+const resultText = `Hello! I processed your message: ${effectiveMessage}${permPart}${cwdPart}${sysPart}${modelPart}${effortPart}`;
 
 // ── stream-json mode: emit JSONL lines ──
 if (outputFormat === 'stream-json') {

@@ -157,15 +157,17 @@ Reuse the exact helpers from `session-mode-change.test.ts`:
 - REST response status is 200.
 - Session record exists and has a valid `claudeSessionId`.
 - Session `work_status` is a terminal status (e.g., `'agent_complete'` or `'completed'`).
-- `pendingModel` is `undefined` (cleared after consumption by processNext).
+
+> Note (post-migration): model switches are now applied LIVE via `apply_flag_settings`
+> and persisted as `cliModel`; there is no `pendingModel` field anymore.
 
 **Cleanup**: `ws.close()`
 
 ---
 
-### Test 4: pendingModel cleared after consumption — no stale model on next send
+### Test 4: model switch is durable — no stale model on next send
 
-**What it proves**: After a model switch is consumed by `processNext()`, subsequent sends without a `model` field do NOT re-apply the old model. The mock CLI should produce a result without `[model:sonnet]` (it only echoes the flag if `--model` is passed).
+**What it proves**: After a model switch (live apply + persisted `cliModel`), subsequent sends without a `model` field keep the new model and do NOT re-apply the old one. The mock CLI should produce a result without `[model:sonnet]` (it only echoes the flag if `--model` is passed).
 
 **Setup**: None beyond shared setup.
 

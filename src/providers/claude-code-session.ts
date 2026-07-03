@@ -28,6 +28,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { bus, EventNames, eventData } from '../core/event-bus.js'
+import { CostWatermark } from '../core/usage/cost-watermark.js'
 import { isProcessAliveAsync } from '../utils/process.js'
 import { isLocalJsonlFresh } from '../utils/session-liveness.js'
 import { SESSION_STREAMS_DIR, CLAUDE_HOME } from '../constants.js'
@@ -39,10 +40,11 @@ import type { QueuedMessage } from '../core/session-message-queue.js'
 import type { SshTarget } from './session-io.js'
 import { createSessionManager, registerSessionManager, unregisterSessionManager } from './session-manager.js'
 import type { SessionManager } from './session-manager.js'
+import type { DaemonTaskState } from './daemon-connection.js'
 import { checkCwdExists } from './cwd-check.js'
 import { recoverStateFromJsonl, extractImageFilePathFromInput } from '../core/session-history.js'
 import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase } from '../core/types.js'
-import { SESSION_MODEL_CLI_MAP, DEFAULT_CLI_MODEL } from '../core/types.js'
+import { SESSION_MODEL_CLI_MAP, DEFAULT_CLI_MODEL, modelSupportsEffort } from '../core/types.js'
 import { classifyStreamEvent, classifyDelta } from './claude-stream-event-map.js'
 import { accumulateWorkflowProgress, sortedPhases, sortedAgents } from '../core/workflow-progress.js'
 import type { WorkflowPhaseInfo, WorkflowAgentInfo } from '../core/event-types.js'
@@ -143,6 +145,29 @@ interface StreamControlRequestEvent {
   type: 'control_request'
   request_id: string
   request: Record<string, unknown>
+}
+
+/** The `applied` block of a get_settings control_response — the CLI's
+ *  runtime-resolved settings AFTER env overrides + model downgrades. This is the
+ *  authoritative "what the model will actually use" (path:
+ *  control_response.response.response.applied). `effort` here already accounts for
+ *  CLAUDE_CODE_EFFORT_LEVEL and unsupported-level→high downgrade. */
+export interface CliAppliedSettings {
+  model?: string
+  /** True runtime effort (low/medium/high/xhigh/max) or null if none/unset. */
+  effort?: string | null
+  ultracode?: boolean
+}
+
+/** Normalized get_context_usage payload — the CLI's own per-category context
+ *  breakdown (same source as the interactive /context command). maxTokens is
+ *  the CLI's EFFECTIVE window (reflects env clamps like
+ *  CLAUDE_CODE_AUTO_COMPACT_WINDOW), which Walnut's [1m]-string guess cannot know. */
+export interface CliContextUsage {
+  categories: Array<{ name: string; tokens: number }>
+  totalTokens: number | null
+  maxTokens: number | null
+  percentage: number | null
 }
 
 /** control_response: CLI's reply to a Walnut-initiated control_request (e.g.
@@ -310,6 +335,11 @@ export class ClaudeCodeSession {
   private _turnStartOffset = 0
   /** Cumulative cost from the last result event — used to detect stale/replayed results. */
   private _lastResultCost: number | undefined
+  /** Converts the CLI's cumulative total_cost_usd into a billable per-result
+   *  increment. Reset on every spawn (the new process's total restarts at 0).
+   *  Without this, every turn re-recorded the whole running total → the 13×
+   *  inflated "$222K" session cost. See core/usage/cost-watermark.ts. */
+  private _costWatermark = new CostWatermark()
   /** stop_reason of the most recent assistant message_delta — the truncated-success
    *  invariant compares this against result.subtype (success + null = truncation). */
   private _lastStopReason: string | null | undefined
@@ -337,6 +367,23 @@ export class ClaudeCodeSession {
   private _initModel: string | undefined
   /** CLI model string passed to --model (e.g. "opus[1m]"). Preserved for resume. */
   private _cliModel: string | undefined
+  /** REQUESTED reasoning-effort passed to --effort (low/medium/high/xhigh/max). User intent;
+   *  preserved for resume. NOT ground truth — see _effectiveEffort. */
+  private _effort: import('../core/types.js').SessionEffort | undefined
+  /** TRUE runtime effort last read back from the CLI via get_settings (applied.effort).
+   *  Authoritative — reflects env override + model downgrade. Undefined until first read. */
+  private _effectiveEffort: import('../core/types.js').SessionEffort | undefined
+  /** CLI-reported EFFECTIVE context window (get_context_usage.maxTokens), cached
+   *  from the turn-end read. Authoritative denominator for context% — reflects env
+   *  clamps (CLAUDE_CODE_AUTO_COMPACT_WINDOW) that the [1m]-string guess cannot see.
+   *  Undefined until first successful read → fall back to the string guess. */
+  private _cliContextWindow: number | undefined
+  /** One-shot guard for the attach-path window probe (see refreshAppliedSettings):
+   *  an old CLI that can't answer get_context_usage must not be re-probed per turn. */
+  private _cliContextWindowProbed = false
+  /** Guard so the session-start effort read-back fires at most once per live process
+   *  (init can re-fire on auto-continuation/compaction; we only want the first). */
+  private _initEffortRead = false
   /** The session ID we expect after a --resume. If Claude returns a different ID,
    *  we rename the existing record instead of creating a phantom new one. */
   private _expectedSessionId: string | null = null
@@ -373,25 +420,36 @@ export class ClaudeCodeSession {
   // turn produces output ("Workflow launched in background"), but background tasks
   // keep running — so `result` must NOT drive turn-completion while bg work is live.
   //
-  // AUTHORITY for "is bg work in flight" is our own `_bgTasksInFlight` counter
-  // (task_started − task_notification), NOT the CLI's idle. POC-verified (see
+  // AUTHORITY for "is bg work in flight" is the LIVE SET of background tasks (`_bgTasks`,
+  // keyed by task_id, each carrying a status), NOT the CLI's idle. POC-verified (see
   // [[claude_code_session_state_semantics]]): the CLI emits session_state_changed
   // {idle} ~20×/run — between every sub-agent/phase — NOT once at the end. So idle is
-  // only the turn-over *trigger*: the turn is done when we see idle AND the counter is
-  // 0. `_sessionStateSeen` flips true the first time we observe a session_state event;
-  // when false (old CLI) we complete via `result` + the counter + the daemon-PULL
-  // liveness invariant instead.
+  // only the turn-over *trigger*: the turn is done when we see idle AND no task in the set
+  // is still running. `_sessionStateSeen` flips true the first time we observe a
+  // session_state event; when false (old CLI) we complete via `result` + the set + the
+  // daemon-PULL liveness invariant instead.
+  //
+  // ⚠️ DESIGN — level-triggered, NOT edge-triggered (k8s-style). We deliberately do NOT
+  // keep an incremental `++/--` counter of in-flight tasks. An accumulator assumes every
+  // lifecycle event arrives exactly once; in reality they duplicate (daemon restart replays
+  // JSONL), go missing (SSH drop / daemon restart never re-emits a notification), or gain
+  // NEW kinds (a `task_updated{status:completed}` that lands BEFORE the matching
+  // task_notification — the exact event that wedged incident inc-…afr3cs: it flipped the
+  // status to 'completed', the decrement guard `status==='running'` then skipped, the
+  // counter leaked, and the session showed "Running" 29 min after the turn ended). EVERY one
+  // of those desyncs a counter permanently. Instead, in-flight is DERIVED on read from the
+  // task set (count of status==='running'), so a duplicate/late/new-kind event that just
+  // sets a status is automatically correct and idempotent. The remaining failure — a
+  // genuinely LOST terminal event leaving a task forever 'running' — is backstopped by
+  // process-death turn completion (see the comment block above hasActiveBackgroundWork).
   /** True once we've observed any session_state_changed event → idle is the turn-over trigger. */
   private _sessionStateSeen = false
   /** Most recent CLI session state, when emitted. */
   private _cliSessionState: 'running' | 'idle' | 'requires_action' | undefined
-  /** Count of background tasks started but not yet terminated (task_started − task_notification).
-   *  Source of truth for "is background work in flight" when session_state events are absent. */
-  private _bgTasksInFlight = 0
-  /** task_id → live description, for the workflow/background-task progress UI. */
+  /** THE authoritative set of background tasks (dynamic workflows / subagents), keyed by
+   *  task_id, each carrying its latest status. "Is bg work in flight" is derived from this
+   *  set (see hasActiveBackgroundWork) — there is no parallel scalar counter to desync. */
   private _bgTasks = new Map<string, { description?: string; subagentType?: string; status: string; tokens?: number; lastTool?: string; summary?: string; workflowName?: string }>()
-  /** Wall-clock of the most recent task_* event — feeds the "JSONL still moving ⇒ running" invariant. */
-  private _lastBgActivityTs = 0
   /** Workflow name from the most recent task_started with task_type==='local_workflow'. */
   private _workflowName: string | undefined
   /** The workflow script Claude generated (task_started.prompt) + its description —
@@ -406,22 +464,127 @@ export class ClaudeCodeSession {
    *  workflow-progress module so reload-from-disk reconstruction stays in sync. */
   private _workflowAgents = new Map<string, WorkflowAgentInfo>()
 
+  /** Terminal task statuses — a task in any of these is no longer in flight. */
+  private static readonly _BG_TERMINAL_STATUSES = new Set(['completed', 'failed', 'stopped', 'cancelled'])
+
+  /** Number of background tasks still running. DERIVED from the authoritative task set on
+   *  every read — never an accumulated counter, so no event can desync it. */
+  private _runningBgCount(): number {
+    let n = 0
+    for (const t of this._bgTasks.values()) {
+      if (!ClaudeCodeSession._BG_TERMINAL_STATUSES.has(t.status)) n++
+    }
+    return n
+  }
+
   /** True when any background subagent / dynamic-workflow task is still running.
    *  Single choke point: every "is this turn's result intermediate?" decision consults
    *  THIS, so adding a future bg mechanism only touches one place.
    *
-   *  AUTHORITY = our own `_bgTasksInFlight` counter (task_started − task_notification),
-   *  NOT the CLI's `idle`. POC-verified (see [[claude_code_session_state_semantics]]):
-   *  the CLI emits `session_state_changed{idle}` ~20×/run — once between every
-   *  sub-agent / phase — because its idle-wait loop excludes `in_process_teammate`
-   *  tasks (fork `print.ts:2390-2459`). So `idle` means "foreground thread quiet right
-   *  now", NOT "all background work done". An earlier version short-circuited this to
-   *  `false` on idle; that's exactly what completed turns mid-workflow (→ false
-   *  await_human). The counter reliably drains and idle re-fires once it hits 0, so
-   *  trusting the counter never hangs. `_cliSessionState` is kept for status DISPLAY
-   *  and as the turn-over *trigger* (see the idle handler), never as an override here. */
+   *  AUTHORITY = the live task set `_bgTasks` (count of non-terminal status), NOT the CLI's
+   *  `idle`. POC-verified (see [[claude_code_session_state_semantics]]): the CLI emits
+   *  `session_state_changed{idle}` ~20×/run — once between every sub-agent / phase — because
+   *  its idle-wait loop excludes `in_process_teammate` tasks (fork `print.ts:2390-2459`). So
+   *  `idle` means "foreground thread quiet right now", NOT "all background work done". An
+   *  earlier version short-circuited this to `false` on idle; that's exactly what completed
+   *  turns mid-workflow (→ false await_human). Deriving from the set means a duplicate, late,
+   *  or new-kind lifecycle event that merely sets a status can never leave us wedged (the
+   *  incident inc-…afr3cs failure mode); a genuinely lost terminal event is backstopped by
+   *  process-death turn completion (see the comment block below). `_cliSessionState` is kept for
+   *  status DISPLAY and as the turn-over *trigger* (see the idle handler), never as an override here. */
   hasActiveBackgroundWork(): boolean {
-    return this._bgTasksInFlight > 0
+    return this._runningBgCount() > 0
+  }
+
+  // ── Why there is NO activity-based "reconcile" of stuck background tasks ──
+  //
+  // Layer 1 (deriving in-flight from the _bgTasks set) makes every DUPLICATE / OUT-OF-ORDER /
+  // NEW-KIND lifecycle event benign. The only residual failure is a genuinely LOST terminal
+  // event (SSH drop / daemon restart that never re-emits) leaving a task 'running' forever.
+  //
+  // It is TEMPTING to "reconcile" that by inferring liveness — e.g. the subagent transcript
+  // file's mtime. We deliberately DON'T, because no such signal can answer the only question
+  // that matters — "is this task alive RIGHT NOW?":
+  //   • transcript mtime is PAST-tense: a fresh mtime proves it wrote a moment ago, not that
+  //     it's alive now; a stale mtime cannot distinguish "dead" from "alive but blocked on a
+  //     slow 5-min tool call that produces no output". Either way it's a guess that can KILL a
+  //     live task (→ premature AGENT_COMPLETE, the mirror bug [[premature_idle_completes_running_workflow]]).
+  //   • "CLI is idle ⟹ no subagent running" is FALSE — verified: the CLI reports idle ~20×/run
+  //     while in-process subagents are still executing ([[claude_code_session_state_semantics]]).
+  //   • The CLI exposes NO control_request to query task status over stdio (verified against the
+  //     SDK control schema), the canonical JSONL records ZERO task_* events, and in-process
+  //     subagents have no OS pid to probe.
+  // So "is this in-process task alive now?" is simply NOT OBSERVABLE through any interface
+  // Walnut can reach. The ONLY authoritative truth is process liveness:
+  //   • CLI process DEAD (daemon-authoritative) ⟹ its in-process subagents are necessarily
+  //     dead too → handleProcessDeath() already completes the turn (AGENT_COMPLETE), regardless
+  //     of leftover _bgTasks state. This is the deterministic Layer-2 backstop — no guessing.
+  //   • CLI process ALIVE but a terminal event was truly lost ⟹ unobservable → we do NOT guess;
+  //     the session honestly shows 'running' until the daemon's 2h idle-kill / health-monitor
+  //     idle-timeout reaps the process, which then funnels into the DEAD path above.
+  // Net: zero risk of killing a live task, at the cost of slower convergence in the (rare)
+  // truly-lost-event-without-process-death case. That trade is the honest one — we never claim
+  // a liveness we cannot observe.
+
+  /** Emit the withheld turn-over (AGENT_COMPLETE + SESSION_RESULT) exactly once. Called by
+   *  the idle handler when the CLI goes idle with no background work left.
+   *  `_turnResultEmitted` guards against the CLI's trailing idles re-firing it. */
+  private _completeTurnOnIdle(): void {
+    const sid = this.claudeSessionId
+    if (!sid) return
+    this._activity = undefined
+    this._processStatus = 'idle'
+    this._turnResultEmitted = true
+    this.emitStatusChanged('AGENT_COMPLETE')
+    bus.emit(EventNames.SESSION_RESULT, {
+      sessionId: sid, taskId: this.taskId,
+      result: this.fullText, isError: false,
+    }, ['main-ai', 'session-runner'], { source: 'session-runner' })
+    // Read back the CLI's true settings (effort + model) at turn-end (fire-and-forget
+    // — never blocks completion). Keeps the badge honest across turns: settings can
+    // drift if a hook or env changed them mid-turn, and the CLI never pushes that to us.
+    void this.refreshAppliedSettings('turn-end')
+  }
+
+  /** L2: reconcile the local task set against the DAEMON's authoritative state (the source of
+   *  truth). The daemon sits closest to the CLI and persisted every event in the append-only
+   *  jsonl, so it knows the true terminal status of a task even when Walnut's live event stream
+   *  dropped the terminal bookend (SSH flap / daemon-restart gap / post-restart future-only
+   *  subscribe — the inc-…afr3cs failure class).
+   *
+   *  We ONLY ever adopt a MORE-terminal status from the daemon — never revive, never infer death
+   *  from silence. If the daemon says a task we hold 'running' is actually completed/failed/etc,
+   *  we record that; if the daemon can't be reached (disconnected / old binary), getState returns
+   *  null and we leave local state untouched (fall back to the derived count + process-death
+   *  backstop). When this drains the last running task and the turn was withheld, we complete it. */
+  async reconcileFromDaemon(): Promise<void> {
+    const getState = this._transport?.getState
+    if (!getState) return // local non-daemon transport or no support — nothing to PULL
+    let daemonState: DaemonTaskState | null
+    try { daemonState = await this._transport!.getState!() } catch { return }
+    if (!daemonState) return // no authoritative answer — keep current state
+
+    let adopted = 0
+    for (const [taskId, local] of this._bgTasks) {
+      if (ClaudeCodeSession._BG_TERMINAL_STATUSES.has(local.status)) continue // already terminal locally
+      const remote = daemonState.tasks[taskId]
+      if (remote && ClaudeCodeSession._BG_TERMINAL_STATUSES.has(remote.status)) {
+        // Daemon recorded a terminal status our live stream missed — adopt the source of truth.
+        this._bgTasks.set(taskId, { ...local, status: remote.status })
+        adopted++
+      }
+    }
+    if (adopted === 0) return
+
+    log.session.info('reconcileFromDaemon: adopted daemon-authoritative terminal status', {
+      sessionId: this.claudeSessionId, taskId: this.taskId,
+      adopted, remainingInFlight: this._runningBgCount(), daemonRv: daemonState.resourceVersion,
+    })
+    // If the withheld turn can now complete (CLI already idle, all bg work terminal), finish it.
+    if (this._runningBgCount() === 0 && !this.resultEmitted && !this._turnResultEmitted
+      && this._cliSessionState === 'idle') {
+      this._completeTurnOnIdle()
+    }
   }
 
   /** Snapshot of background tasks for the UI (Workflow progress panel). */
@@ -463,7 +626,7 @@ export class ClaudeCodeSession {
       sessionId,
       taskId: this.taskId,
       workflowName: this._workflowName,
-      inFlight: this._bgTasksInFlight,
+      inFlight: this._runningBgCount(),
       tasks: this.backgroundTasks,
       phases: sortedPhases(this._workflowPhases),
       agents: this.workflowAgents,
@@ -495,6 +658,17 @@ export class ClaudeCodeSession {
       // If we can't check (e.g. remote session), fall through to clear _teamActive
     }
     return false
+  }
+
+  /**
+   * Billable cost INCREMENT for a result event (advances the per-process
+   * watermark). The CLI's total_cost_usd is a running total for the current
+   * process; we record only what's new since the last result so the same spend
+   * isn't billed every turn (the root of the 13× inflated session cost).
+   * Returns 0 for replayed/stale results. See core/usage/cost-watermark.ts.
+   */
+  private billableCostDelta(totalCostUsd: number | undefined): number {
+    return this._costWatermark.bill(totalCostUsd)
   }
 
   /**
@@ -535,6 +709,9 @@ export class ClaudeCodeSession {
         taskId: this.taskId,
         result: resultText ?? '(team-idle timeout)',
         totalCost,
+        // Same total already billed by the teamActive emit — billableCostDelta
+        // returns 0 here (total ≤ watermark), so this re-emit doesn't double-bill.
+        costDelta: this.billableCostDelta(totalCost),
         duration: durationMs,
         isError: false,
       }, ['main-ai', 'session-runner'], { source: 'session-runner' })
@@ -578,6 +755,27 @@ export class ClaudeCodeSession {
    *  permission control_response already uses (no new daemon plumbing, no new flag). */
   private _pendingSideQuestions = new Map<string, {
     resolve: (answer: string) => void
+    reject: (err: Error) => void
+    timer: ReturnType<typeof setTimeout>
+  }>()
+  /** Pending Walnut→CLI control_requests that only need a success/error ACK (no
+   *  nested payload) — e.g. `apply_flag_settings` for mid-session effort switch.
+   *  Separate from _pendingSideQuestions because those parse a 3-level-nested
+   *  answer string, whereas these resolve `true` on `subtype:'success'`.
+   *  Same transport + same control_response inbound branch, matched by request_id. */
+  private _pendingControlAcks = new Map<string, {
+    resolve: (ok: boolean) => void
+    reject: (err: Error) => void
+    timer: ReturnType<typeof setTimeout>
+  }>()
+  /** Pending payload-carrying control_requests (get_settings, get_context_usage,
+   *  get_usage, get_binary_version, …). Unlike _pendingControlAcks (which resolve
+   *  `true`), these capture the whole `response.response` PAYLOAD object; each
+   *  wrapper (getSettings/getContextUsage/…) extracts what it needs. One map + one
+   *  inbound branch serves every read subtype — matched by request_id, so mixed
+   *  in-flight reads can't cross wires. Same transport as the permission flow. */
+  private _pendingPayloadReads = new Map<string, {
+    resolve: (payload: Record<string, unknown> | null) => void
     reject: (err: Error) => void
     timer: ReturnType<typeof setTimeout>
   }>()
@@ -663,8 +861,10 @@ export class ClaudeCodeSession {
   }
 
   /** Update the in-memory session mode so emitStatusChanged() reflects the new
-   *  value. The next message still forces --resume (via pendingMode) to actually
-   *  apply the new --permission-mode. Called from the REST mode-change handler. */
+   *  value immediately. The actual CLI-side switch is applyPermissionMode()
+   *  (live set_permission_mode control_request — no respawn); callers invoke
+   *  both. Kept separate because attach/reconcile paths need the in-memory
+   *  update without firing a control_request. */
   setMode(mode: SessionMode): void {
     this._mode = mode
   }
@@ -719,6 +919,7 @@ export class ClaudeCodeSession {
     permissionPrompt?: boolean,
     spillFile?: { localPath: string },
     streamPartialMessages?: boolean,
+    effort?: import('../core/types.js').SessionEffort,
     // Invoked once the daemon settles the spawn: ok=true when the CLI process
     // actually started (pid returned), ok=false (with err) when spawn/SSH/daemon
     // deploy failed. CRITICAL: spawn is fire-and-forget (startSpawn runs async and
@@ -766,6 +967,23 @@ export class ClaudeCodeSession {
     const cliModel = SESSION_MODEL_CLI_MAP[model ?? ''] ?? (model || DEFAULT_CLI_MODEL)
     this._cliModel = cliModel
     args.push('--model', cliModel)
+    // Reasoning effort (low/medium/high/max) → --effort. This is the SPAWN-TIME
+    // path: initial start + cold --resume (mid-session changes go through
+    // applyEffort()'s apply_flag_settings control_request instead, no respawn).
+    // The flag here is the durable fallback: apply_flag_settings is in-memory only,
+    // so a cold-resumed CLI needs record.effort re-applied as --effort (same idea as
+    // cliModel restoring [1m]). Only pass it for effort-capable models (Haiku isn't);
+    // unset = no flag = API default ('high'). max-gating is enforced upstream (UI).
+    if (effort && modelSupportsEffort(cliModel)) {
+      this._effort = effort
+      args.push('--effort', effort)
+    } else if (effort) {
+      // effort requested but model can't use it (e.g. Haiku) — don't send the flag,
+      // but keep _effort so the record/display still reflect the user's intent.
+      this._effort = effort
+    } else {
+      this._effort = undefined
+    }
     if (resumeSessionId) {
       args.push('--resume', resumeSessionId)
       if (forkSession) {
@@ -827,6 +1045,7 @@ export class ClaudeCodeSession {
     this.resultEmitted = false
     this._turnResultEmitted = false
     this._lastResultCost = undefined  // Fresh session — no previous cost to compare
+    this._costWatermark.reset()       // Fresh process — its total_cost_usd restarts at 0
     this._askUserIntercepted = false
     this.fullText = ''
     this._emittedStreamKeys.clear()
@@ -1144,25 +1363,28 @@ export class ClaudeCodeSession {
         if (recovered.jsonlByteLength) jsonlByteLength = recovered.jsonlByteLength
         if (recovered.teamActive != null) session._teamActive = recovered.teamActive
         // ── Recover background-task / workflow state ──
-        // Without this, a server restart mid-workflow loses the in-flight count and the
-        // next replayed/real `result` would be mistaken for turn-over (the bug we fixed).
-        if (recovered.bgTasksInFlight != null) session._bgTasksInFlight = recovered.bgTasksInFlight
+        // Without this, a server restart mid-workflow loses the task set and the next
+        // replayed/real `result` would be mistaken for turn-over. We rebuild the
+        // AUTHORITATIVE set (id→status); in-flight is derived from it, never a scalar.
+        if (recovered.bgTasks) {
+          for (const [taskId, status] of Object.entries(recovered.bgTasks)) {
+            session._bgTasks.set(taskId, { status })
+          }
+        }
         if (recovered.cliSessionState != null) {
           session._sessionStateSeen = true
           session._cliSessionState = recovered.cliSessionState
         }
-        // Counter is the SOLE authority for "work in flight" — NOT _cliSessionState.
-        // A workflow persists idle ~20×/run, so a mid-workflow restart often recovers
-        // with cliSessionState='idle' while tasks are genuinely live; gating on
-        // `!== 'idle'` here would drop us out of running status (the same idle-override
-        // bug fixed in hasActiveBackgroundWork / the idle handler). Trust the counter.
-        if (session._bgTasksInFlight > 0) {
+        // The task set is the SOLE authority for "work in flight" — NOT _cliSessionState.
+        // A workflow persists idle ~20×/run, so a mid-workflow restart often recovers with
+        // cliSessionState='idle' while tasks are genuinely live; gating on `!== 'idle'` here
+        // would drop us out of running status. Trust the derived count.
+        if (session.hasActiveBackgroundWork()) {
           session._processStatus = 'running'
           session._activity = 'Background tasks running'
-          session._lastBgActivityTs = Date.now()
           log.session.info('recovery: background work in flight — keeping running status', {
             sessionId: session.claudeSessionId, taskId: session.taskId,
-            bgTasksInFlight: session._bgTasksInFlight,
+            runningBgTasks: (session as unknown as { _runningBgCount(): number })._runningBgCount(),
           })
         }
         // Arm team-idle safety timer when recovering into team mode.
@@ -1608,6 +1830,20 @@ export class ClaudeCodeSession {
       pending.reject(new Error(reason))
     }
     this._pendingSideQuestions.clear()
+    // Also settle any ACK-only control_requests (effort switches) so their
+    // promises don't hang until their own timeout on teardown.
+    for (const pending of this._pendingControlAcks.values()) {
+      clearTimeout(pending.timer)
+      pending.reject(new Error(reason))
+    }
+    this._pendingControlAcks.clear()
+    // Payload reads (get_settings & friends) settle to null (untrusted) on
+    // teardown, never throw — a hanging read must not clobber a known value.
+    for (const pending of this._pendingPayloadReads.values()) {
+      clearTimeout(pending.timer)
+      pending.resolve(null)
+    }
+    this._pendingPayloadReads.clear()
   }
 
   // ── Private ──
@@ -2127,6 +2363,20 @@ export class ClaudeCodeSession {
             this._model = shortModel
           }
 
+          // Session-start settings read-back (once per live process). Fire slightly
+          // deferred so the CLI has finished wiring its ask() loop before we send a
+          // control_request. Fire-and-forget; getSettings() returns null (no-op) if
+          // the CLI isn't ready or is an old build. This seeds effectiveEffort (and
+          // reconciles a stale model) so the badge is correct from the first render.
+          if (!this._initEffortRead) {
+            this._initEffortRead = true
+            setTimeout(() => {
+              void this.refreshAppliedSettings('session-start')
+              // Also seed the CLI's effective context window (context% denominator).
+              this.seedCliContextWindow('session-start')
+            }, 1500)
+          }
+
           // Persist session record BEFORE resolving sessionReady — callers must not
           // receive the session ID until sessions.json is written.  Without this,
           // concurrent starts could return an ID that has no matching record.
@@ -2275,17 +2525,17 @@ export class ClaudeCodeSession {
             // `print.ts:2390-2459`). idle == "foreground thread quiet right now". In one
             // real incident 18/20 idles fired while 1–5 workflow tasks were still
             // running; treating the first as turn-over completed the turn mid-workflow
-            // (→ false await_human). So idle completes the turn ONLY when our own
-            // in-flight counter has actually drained (`!hasActiveBackgroundWork()`).
-            // The counter is authoritative; idle is just the signal that, IF nothing is
-            // in flight, the turn is over. 'running' keeps us active; 'requires_action'
-            // = paused on a permission/AskUserQuestion prompt (NOT done).
+            // (→ false await_human). So idle completes the turn ONLY when no task in the set
+            // is still running (`!hasActiveBackgroundWork()`). The task set is authoritative;
+            // idle is just the signal that, IF nothing is in flight, the turn is over.
+            // 'running' keeps us active; 'requires_action' = paused on a
+            // permission/AskUserQuestion prompt (NOT done).
             this._sessionStateSeen = true
             const newState = sys.state as 'running' | 'idle' | 'requires_action' | undefined
             this._cliSessionState = newState
             log.session.info('session_state_changed', {
               sessionId: sid, taskId: this.taskId, state: newState,
-              bgTasksInFlight: this._bgTasksInFlight,
+              runningBgTasks: this._runningBgCount(),
             })
             if (newState === 'running') {
               if (this._processStatus !== 'running') {
@@ -2293,13 +2543,16 @@ export class ClaudeCodeSession {
                 this.emitStatusChanged('IN_PROGRESS')
               }
             } else if (newState === 'idle') {
+              // The idle handler only withholds completion while the derived count says
+              // background work is in flight. A genuinely lost terminal event is backstopped by
+              // process-death turn completion + the daemon idle-kill, not by an inline reconcile
+              // here (see the comment block above hasActiveBackgroundWork).
               if (this.hasActiveBackgroundWork()) {
-                // Mid-workflow idle: background tasks still in flight. NOT turn-over —
-                // do NOT complete and do NOT touch the counter (it's the authority; a
-                // task_notification will decrement it). Stay running; the real
-                // end-of-workflow idle (after the counter drains to 0) completes below.
+                // Mid-workflow idle: a task in the set is still running. NOT turn-over —
+                // do NOT complete. Stay running; the real end-of-workflow idle (once every
+                // task is terminal) completes below.
                 log.session.info('idle while background work in flight — staying running, awaiting drain', {
-                  sessionId: sid, taskId: this.taskId, bgTasksInFlight: this._bgTasksInFlight,
+                  sessionId: sid, taskId: this.taskId, runningBgTasks: this._runningBgCount(),
                 })
                 if (this._processStatus !== 'running') {
                   this._processStatus = 'running'
@@ -2309,19 +2562,8 @@ export class ClaudeCodeSession {
               } else if (!this.resultEmitted && this._turnResultEmitted) {
                 // result already processed this turn (normal single-turn path) — nothing to do.
               } else if (!this.resultEmitted) {
-                // Authoritative turn-over: idle AND no background work in flight. If a
-                // result was withheld because bg work was live, emit completion now.
-                // Set _turnResultEmitted so the NEXT idle (the CLI keeps emitting them
-                // after the turn ends) falls into the "nothing to do" branch above and
-                // does NOT re-fire SESSION_RESULT. Mirrors the result handler (~3053).
-                this._activity = undefined
-                this._processStatus = 'idle'
-                this._turnResultEmitted = true
-                this.emitStatusChanged('AGENT_COMPLETE')
-                bus.emit(EventNames.SESSION_RESULT, {
-                  sessionId: sid, taskId: this.taskId,
-                  result: this.fullText, isError: false,
-                }, ['main-ai', 'session-runner'], { source: 'session-runner' })
+                // Authoritative turn-over: idle AND no background work in flight.
+                this._completeTurnOnIdle()
               } else {
                 // Already completed by result handler — just confirm idle status.
                 if (this._processStatus === 'running') {
@@ -2333,9 +2575,11 @@ export class ClaudeCodeSession {
             // requires_action: leave status as-is; the permission flow drives AWAIT.
           } else if (sys.subtype === 'task_started') {
             // ── Background task / dynamic-workflow lifecycle (opening bookend) ──
+            // Idempotent: just record the task as 'running' in the authoritative set. A
+            // replayed task_started (daemon restart) overwrites with the same status — no
+            // double-count, because in-flight is DERIVED from the set, not accumulated.
             const taskId = sys.task_id as string | undefined
             if (taskId) {
-              if (!this._bgTasks.has(taskId)) this._bgTasksInFlight++
               const workflowName = sys.workflow_name as string | undefined
               // A dynamic workflow opens with task_type='local_workflow' and carries the
               // generated script in `prompt`. Capture it (and reset any prior run's agents)
@@ -2346,13 +2590,18 @@ export class ClaudeCodeSession {
                 if (typeof sys.description === 'string') this._workflowDescription = sys.description
               }
               if (workflowName) this._workflowName = workflowName
+              const prevStarted = this._bgTasks.get(taskId)
+              // Terminal is terminal: never let an out-of-order / replayed task_started
+              // revive a task that already reached a terminal status.
+              const startedStatus = prevStarted && ClaudeCodeSession._BG_TERMINAL_STATUSES.has(prevStarted.status)
+                ? prevStarted.status : 'running'
               this._bgTasks.set(taskId, {
+                ...prevStarted,
                 description: sys.description as string | undefined,
                 subagentType: sys.subagent_type as string | undefined,
-                status: 'running',
+                status: startedStatus,
                 workflowName,
               })
-              this._lastBgActivityTs = Date.now()
               if (this._processStatus !== 'running') {
                 this._processStatus = 'running'
                 this._activity = workflowName ? `Workflow: ${workflowName}` : 'Background task running'
@@ -2360,9 +2609,8 @@ export class ClaudeCodeSession {
               this._emitBackgroundTasksUpdate(sid)
             }
           } else if (sys.subtype === 'task_progress') {
-            // Heartbeat — refresh activity timestamp (feeds the liveness invariant) + UI.
+            // Heartbeat — refresh the task set + UI.
             const taskId = sys.task_id as string | undefined
-            this._lastBgActivityTs = Date.now()
             // Dynamic-workflow per-subagent breakdown rides on task_progress in the
             // `workflow_progress` array — accumulate it (the CLI sends only the currently
             // active agents per snapshot). This is the data behind the rich progress panel.
@@ -2372,11 +2620,14 @@ export class ClaudeCodeSession {
             if (taskId) {
               const prev = this._bgTasks.get(taskId) ?? { status: 'running' }
               const usage = sys.usage as { total_tokens?: number } | undefined
+              // Terminal is terminal: a late progress event must NOT revive a finished task.
+              const progressStatus = ClaudeCodeSession._BG_TERMINAL_STATUSES.has(prev.status)
+                ? prev.status : 'running'
               this._bgTasks.set(taskId, {
                 ...prev,
                 description: (sys.description as string | undefined) ?? prev.description,
                 subagentType: (sys.subagent_type as string | undefined) ?? prev.subagentType,
-                status: 'running',
+                status: progressStatus,
                 tokens: usage?.total_tokens ?? prev.tokens,
                 lastTool: (sys.last_tool_name as string | undefined) ?? prev.lastTool,
                 summary: (sys.summary as string | undefined) ?? prev.summary,
@@ -2386,33 +2637,42 @@ export class ClaudeCodeSession {
             // task_id must still push the accumulated agents to the panel.
             if (taskId || ingestedWorkflow) this._emitBackgroundTasksUpdate(sid)
           } else if (sys.subtype === 'task_updated') {
-            // Status patch — merge into local task map.
+            // Status patch — merge into the task set. If patch.status is terminal, this is
+            // ALSO a terminal bookend (newer CLIs emit it BEFORE the matching
+            // task_notification). No counter to touch: in-flight is derived from the set, so
+            // simply recording the terminal status here is correct AND idempotent with the
+            // later notification. (Pre-fix this exact ordering wedged incident inc-…afr3cs.)
             const taskId = sys.task_id as string | undefined
             const patch = sys.patch as Record<string, unknown> | undefined
-            this._lastBgActivityTs = Date.now()
             if (taskId && patch) {
               const prev = this._bgTasks.get(taskId) ?? { status: 'running' }
+              const patchStatus = patch.status as string | undefined
+              const nextStatus = patchStatus ?? prev.status
               this._bgTasks.set(taskId, {
                 ...prev,
-                status: (patch.status as string | undefined) ?? prev.status,
+                status: nextStatus,
                 description: (patch.description as string | undefined) ?? prev.description,
               })
+              if (patchStatus && ClaudeCodeSession._BG_TERMINAL_STATUSES.has(patchStatus)) {
+                log.session.info('background task terminal', {
+                  sessionId: sid, taskId: this.taskId, bgTaskId: taskId, status: patchStatus,
+                  remainingInFlight: this._runningBgCount(), via: 'task_updated',
+                })
+              }
               this._emitBackgroundTasksUpdate(sid)
             }
           } else if (sys.subtype === 'task_notification') {
-            // Terminal bookend — task reached completed|failed|stopped.
+            // Terminal bookend — task reached completed|failed|stopped. Just record the
+            // status; in-flight is derived from the set, so this is idempotent whether or
+            // not an earlier task_updated already reported the same terminal status.
             const taskId = sys.task_id as string | undefined
             const status = (sys.status as string | undefined) ?? 'completed'
-            this._lastBgActivityTs = Date.now()
             if (taskId) {
               const prev = this._bgTasks.get(taskId)
-              if (prev && prev.status === 'running') {
-                this._bgTasksInFlight = Math.max(0, this._bgTasksInFlight - 1)
-              }
               this._bgTasks.set(taskId, { ...(prev ?? {}), status })
               log.session.info('background task terminal', {
                 sessionId: sid, taskId: this.taskId, bgTaskId: taskId, status,
-                remainingInFlight: this._bgTasksInFlight,
+                remainingInFlight: this._runningBgCount(), via: 'task_notification',
               })
               this._emitBackgroundTasksUpdate(sid)
             }
@@ -2737,7 +2997,12 @@ export class ClaudeCodeSession {
             const totalInput = usage.input_tokens
               + (usage.cache_creation_input_tokens ?? 0)
               + (usage.cache_read_input_tokens ?? 0)
-            // Detect context window size:
+            // Detect context window size — prefer the CLI's own answer:
+            //   0) _cliContextWindow: get_context_usage.maxTokens read from the
+            //      live CLI (seeded at session-start / model change). This is the
+            //      EFFECTIVE window incl. env clamps (e.g.
+            //      CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000 on a sonnet[1m] session
+            //      → 400K, not the 1M the string guess would report).
             //   1) init model string contains [1m] → 1M
             //   2) totalInput > 200K → must be 1M (defense-in-depth: processNext
             //      now preserves record.model on resume, but this catches any
@@ -2745,7 +3010,7 @@ export class ClaudeCodeSession {
             //   3) default → 200K
             const is1M = (this._initModel?.includes('[1m]') ?? false)
               || totalInput > CONTEXT_WINDOW_DEFAULT
-            const contextWindowSize = is1M ? 1_000_000 : 200_000
+            const contextWindowSize = this._cliContextWindow ?? (is1M ? 1_000_000 : 200_000)
             const contextPercent = Math.round(totalInput / contextWindowSize * 100)
             // Use assistant message model only as fallback when init event didn't
             // provide one. Init model is the source of truth — it reflects the
@@ -2853,15 +3118,15 @@ export class ClaudeCodeSession {
         // result (often "Workflow launched in background...") PLUS one per background
         // subagent completion that the CLI feeds back into a fresh ask(). NONE of these
         // mean "session is done". The turn is over only at a session_state_changed{idle}
-        // that arrives AFTER our `_bgTasksInFlight` counter has drained to 0 — NOT at the
-        // first idle (POC-verified: idle fires ~20×/run, between every sub-agent; see
+        // that arrives AFTER every task in the set is terminal — NOT at the first idle
+        // (POC-verified: idle fires ~20×/run, between every sub-agent; see
         // [[claude_code_session_state_semantics]] and the session_state_changed handler).
         //
         // Two filters:
         //  (a) origin.kind === 'task-notification' → a result produced by the CLI
         //      processing a completion notification. Never a real turn-over. Skip
         //      completion entirely (don't even update _lastResultCost — it's noise).
-        //  (b) our in-flight counter shows live background tasks → withhold
+        //  (b) the derived running-count shows live background tasks → withhold
         //      AGENT_COMPLETE; stay running. The idle-after-drain event completes it.
         const resultOrigin = (event as { origin?: { kind?: string } }).origin
         const isTaskNotificationResult = resultOrigin?.kind === 'task-notification'
@@ -2877,7 +3142,7 @@ export class ClaudeCodeSession {
         if (this.hasActiveBackgroundWork()) {
           log.session.info('result while background work in flight — staying running, awaiting idle', {
             sessionId: this.claudeSessionId, taskId: this.taskId,
-            bgTasksInFlight: this._bgTasksInFlight, cliState: this._cliSessionState,
+            runningBgTasks: this._runningBgCount(), cliState: this._cliSessionState,
           })
           if (typeof result.result === 'string' && result.result) this.fullText = result.result
           if (result.total_cost_usd !== undefined) this._lastResultCost = result.total_cost_usd
@@ -3107,6 +3372,7 @@ export class ClaudeCodeSession {
             taskId: this.taskId,
             result: resultText,
             totalCost: result.total_cost_usd,
+            costDelta: this.billableCostDelta(result.total_cost_usd),
             duration: result.duration_ms,
             isError: effectiveIsError ?? false,
             teamActive: true,
@@ -3124,9 +3390,15 @@ export class ClaudeCodeSession {
             taskId: this.taskId,
             result: resultText,
             totalCost: result.total_cost_usd,
+            costDelta: this.billableCostDelta(result.total_cost_usd),
             duration: result.duration_ms,
             isError: effectiveIsError ?? false,
           }, ['main-ai', 'session-runner'], { source: 'session-runner' })
+          // Turn-end read-back of the CLI's true settings (effort + model, fire-and-
+          // forget). Same rationale as _completeTurnOnIdle: keep the badge in sync with
+          // what the model actually used, which the CLI never pushes to us. Skipped for
+          // team (intermediate) results above — only fires on real turn-over.
+          void this.refreshAppliedSettings('turn-end')
         }
 
         break
@@ -3300,6 +3572,43 @@ export class ClaudeCodeSession {
         }
         const requestId = cr.response?.request_id
         if (!requestId) break
+        // Payload reads (get_settings / get_context_usage / get_usage / …):
+        // capture the whole response.response object; the wrapper that issued the
+        // request extracts its fields. Checked first — these carry a payload,
+        // unlike the ACK-only requests below.
+        const payloadRead = this._pendingPayloadReads.get(requestId)
+        if (payloadRead) {
+          this._pendingPayloadReads.delete(requestId)
+          clearTimeout(payloadRead.timer)
+          if (cr.response?.subtype === 'error') {
+            // Errored read ⇒ untrusted; resolve null (never clobber a known value).
+            payloadRead.resolve(null)
+          } else {
+            const payload = (cr.response?.response as Record<string, unknown> | undefined) ?? null
+            log.session.debug('control_request payload read resolved', {
+              sessionId: this.claudeSessionId, taskId: this.taskId, requestId,
+              keys: payload ? Object.keys(payload).slice(0, 8) : null,
+            })
+            payloadRead.resolve(payload)
+          }
+          break
+        }
+        // ACK-only control_requests (apply_flag_settings, etc.): resolve true on
+        // success, reject on error. Checked first — these carry no nested answer.
+        const ack = this._pendingControlAcks.get(requestId)
+        if (ack) {
+          this._pendingControlAcks.delete(requestId)
+          clearTimeout(ack.timer)
+          if (cr.response?.subtype === 'error') {
+            ack.reject(new Error(cr.response.error || 'control request failed'))
+          } else {
+            log.session.info('control_request ack resolved', {
+              sessionId: this.claudeSessionId, taskId: this.taskId, requestId,
+            })
+            ack.resolve(true)
+          }
+          break
+        }
         const pending = this._pendingSideQuestions.get(requestId)
         if (!pending) break // not ours (or a stale replay we already resolved)
         this._pendingSideQuestions.delete(requestId)
@@ -3575,6 +3884,380 @@ export class ClaudeCodeSession {
   }
 
   /**
+   * Change the session's reasoning effort MID-SESSION, without respawning the CLI.
+   *
+   * ── How it works (stream-json control protocol, OUTBOUND — same as askSideQuestion) ──
+   * Sends `{subtype:'apply_flag_settings', settings:{effortLevel:<level>}}` over the
+   * FIFO (writeRaw → daemon sendRaw → CLI stdin). The fork merges it into the in-memory
+   * flag-settings layer and syncs AppState.effortValue (fork print.ts:3699 →
+   * applySettingsChange.ts:88), so the NEXT turn's API call picks up the new effort.
+   * The running turn is NOT interrupted; no --resume, no respawn.
+   *
+   * Live-verified against binary 2.1.170 (Bedrock): apply_flag_settings{effortLevel:'low'}
+   * flipped get_settings' applied.effort high→low on the same live process, and the CLI
+   * NEVER errors on invalid/unsupported values (garbage is ignored; `max` on a non-Opus-4.6
+   * model is a no-op guard we enforce in the UI, since the CLI silently accepts it).
+   *
+   * NOTE: apply_flag_settings is IN-MEMORY only (setFlagSettingsInline — never written to
+   * disk, verified in fork bootstrap/state.ts). So if this CLI later dies and cold-resumes,
+   * the effort is gone; the caller persists record.effort and send() re-applies `--effort`
+   * on the cold --resume spawn as the durable fallback (same pattern as cliModel/[1m]).
+   *
+   * @param effort  one of low/medium/high/xhigh/max — caller must have gated
+   *                `xhigh`/`max` to capable models (CLI won't reject them).
+   */
+  async applyEffort(effort: import('../core/types.js').SessionEffort, timeoutMs = 15_000): Promise<boolean> {
+    if (!this._transport) throw new Error('session not started')
+    this._effort = effort  // reflect immediately for persistSessionRecord / display
+    return this.sendFlagSettings(`eff-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
+      { effortLevel: effort }, timeoutMs)
+  }
+
+  /**
+   * Change the session's MODEL mid-session, without respawning the CLI — the exact
+   * same apply_flag_settings mechanism as applyEffort above.
+   *
+   * Live-verified against binary 2.1.170: apply_flag_settings{model:'sonnet'} on a
+   * process spawned with --model opus[1m] made the NEXT turn answer as
+   * claude-sonnet-4-6 (assistant message model field), with get_settings'
+   * applied.model flipping accordingly. `[1m]` suffixes round-trip intact
+   * (model:'sonnet[1m]' → applied "…sonnet-4-6[1m]"). A garbage model value is
+   * ACKed success but silently ignored — same untrustworthy-ACK contract as effort,
+   * so callers MUST read back applied.model (refreshAppliedSettings) to know the truth.
+   *
+   * This replaces the old pendingModel → interrupt + --resume respawn path, which
+   * killed the running turn and broke on remote daemons (empty-message start
+   * rejected: "start: missing required fields"). Like effort, apply_flag_settings is
+   * IN-MEMORY only — the caller persists record.cliModel so a cold --resume respawns
+   * with the new --model.
+   *
+   * @param cliModel  a CLI --model value (e.g. 'sonnet[1m]', 'haiku') — caller
+   *                  validates against the SESSION_MODELS registry.
+   */
+  async applyModel(cliModel: string, timeoutMs = 15_000): Promise<boolean> {
+    if (!this._transport) throw new Error('session not started')
+    this._cliModel = cliModel  // reflect immediately for persistSessionRecord / resume
+    return this.sendFlagSettings(`mdl-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
+      { model: cliModel }, timeoutMs)
+  }
+
+  /**
+   * Change the session's PERMISSION MODE mid-session, without respawning — the
+   * third member of the live-settings family (model/effort/mode), completing the
+   * retirement of the pending-switch respawn paths.
+   *
+   * Uses the dedicated `set_permission_mode` control_request (NOT
+   * apply_flag_settings). Live-verified on 2.1.170: the response ECHOES the new
+   * mode ({"mode":"plan"}) — a real confirmation, unlike apply_flag_settings'
+   * blind ACK — and the CLI then emits a `system`/`status` event with the new
+   * permissionMode, which our existing status handler picks up to reconcile
+   * _mode, the session record, and the daemon auto-response policy. So this
+   * method only needs to fire the request and verify the echo; record/state
+   * reconciliation rides the same event path as an in-CLI EnterPlanMode.
+   *
+   * Durability: record.mode is persisted by the caller (PATCH route) and
+   * processNext already falls back to record.mode on a cold --resume
+   * (`resumeMode = … ?? record.mode`), so no pendingMode flag is needed.
+   *
+   * @param mode  Walnut SessionMode ('bypass'|'accept'|'plan'|'default') —
+   *              mapped to the CLI's permission-mode vocabulary here.
+   */
+  async applyPermissionMode(mode: SessionMode, timeoutMs = 15_000): Promise<boolean> {
+    if (!this._transport) throw new Error('session not started')
+    const cliMode = mode === 'bypass' ? 'bypassPermissions'
+      : mode === 'accept' ? 'acceptEdits'
+      : mode
+    this._mode = mode  // optimistic; the CLI's status event re-confirms
+    const payload = await this.readControlPayloadWithRequest(
+      `pmode-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
+      { subtype: 'set_permission_mode', mode: cliMode }, timeoutMs)
+    const echoed = (payload as { mode?: string } | null)?.mode
+    log.session.info('set_permission_mode applied', {
+      sessionId: this.claudeSessionId, taskId: this.taskId, requested: cliMode, echoed: echoed ?? null,
+    })
+    return echoed === cliMode
+  }
+
+  /** Shared transport plumbing for apply_flag_settings control_requests (ACK-only). */
+  private sendFlagSettings(requestId: string, settings: Record<string, unknown>, timeoutMs: number): Promise<boolean> {
+    const envelope = JSON.stringify({
+      type: 'control_request',
+      request_id: requestId,
+      request: { subtype: 'apply_flag_settings', settings },
+    })
+    log.session.info('apply_flag_settings dispatching', {
+      sessionId: this.claudeSessionId, taskId: this.taskId, requestId, settings,
+    })
+    return new Promise<boolean>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this._pendingControlAcks.delete(requestId)
+        reject(new Error('apply_flag_settings timed out'))
+      }, timeoutMs)
+      this._pendingControlAcks.set(requestId, { resolve, reject, timer })
+      Promise.resolve(this._transport!.writeRaw(envelope)).then((ok) => {
+        if (!ok) {
+          const pending = this._pendingControlAcks.get(requestId)
+          if (pending) {
+            this._pendingControlAcks.delete(requestId)
+            clearTimeout(pending.timer)
+            reject(new Error('failed to write apply_flag_settings control_request to session'))
+          }
+        }
+      }).catch((err) => {
+        const pending = this._pendingControlAcks.get(requestId)
+        if (pending) {
+          this._pendingControlAcks.delete(requestId)
+          clearTimeout(pending.timer)
+          reject(err instanceof Error ? err : new Error(String(err)))
+        }
+      })
+    })
+  }
+
+  /**
+   * Read the CLI's TRUE runtime settings via a `get_settings` control_request.
+   * Returns `applied` — the runtime-resolved values AFTER env overrides + model
+   * downgrades (path: control_response.response.response.applied). Use
+   * `applied.effort` as the authoritative effort the model will actually use:
+   * it reflects a CLAUDE_CODE_EFFORT_LEVEL override and an unsupported-level→high
+   * downgrade, whereas `effective.effortLevel` (the disk merge) does NOT.
+   * Verified verbatim against binary 2.1.170.
+   *
+   * This is the source-of-truth read behind the effort badge: Walnut's optimistic
+   * record.effort is only a REQUEST; the CLI can silently ignore/override it and
+   * still ACK success (apply_flag_settings has no error path for effort). So we
+   * never trust the ACK alone — we read back.
+   *
+   * Returns null (never throws) when the read can't be trusted: no transport, the
+   * FIFO write fails, the CLI is an old build that doesn't answer get_settings, or
+   * it times out. Callers MUST treat null as "don't change what you have" (same
+   * contract as reconcileFromDaemon) — never clobber a known value with null.
+   */
+  async getSettings(timeoutMs = 5_000): Promise<CliAppliedSettings | null> {
+    const payload = await this.readControlPayload('gs', 'get_settings', timeoutMs)
+    return (payload as { applied?: CliAppliedSettings } | null)?.applied ?? null
+  }
+
+  /**
+   * Read the CLI's own per-category context breakdown via `get_context_usage` —
+   * the same data source as the interactive `/context` command (fork:
+   * collectContextData → analyzeContextUsage), so the numbers reflect what the
+   * model ACTUALLY sees: system prompt / tools / MCP / memory / skills /
+   * messages / autocompact buffer, plus the CLI's own effective window size.
+   *
+   * Live-verified on 2.1.170: categories[] + totalTokens + maxTokens +
+   * percentage. NOTE maxTokens is the CLI's EFFECTIVE window — e.g. with
+   * CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000 a sonnet[1m] session reports
+   * maxTokens=400000, not 1M. That's exactly why this read exists: Walnut's
+   * own [1m]→1M guess can't know about env clamps.
+   *
+   * Returns null (never throws) when unreadable — dead CLI / old build /
+   * timeout — same untrusted-read contract as getSettings.
+   *
+   * TIMEOUT: measured 16s on a real remote session with a large MCP surface
+   * (the CLI tokenizes every tool schema to answer). 45s covers pathological
+   * sessions; a long timeout is harmless — the promise resolves the moment the
+   * answer arrives, a dead CLI fails fast on writeRaw, and teardown settles
+   * pending reads to null.
+   */
+  async getContextUsage(timeoutMs = 45_000): Promise<CliContextUsage | null> {
+    const payload = await this.readControlPayload('cu', 'get_context_usage', timeoutMs)
+    if (!payload) return null
+    const categories = Array.isArray(payload.categories)
+      ? (payload.categories as Array<Record<string, unknown>>)
+          .filter((c) => typeof c.name === 'string' && typeof c.tokens === 'number')
+          .map((c) => ({ name: c.name as string, tokens: c.tokens as number }))
+      : []
+    return {
+      categories,
+      totalTokens: typeof payload.totalTokens === 'number' ? payload.totalTokens : null,
+      maxTokens: typeof payload.maxTokens === 'number' ? payload.maxTokens : null,
+      percentage: typeof payload.percentage === 'number' ? payload.percentage : null,
+    }
+  }
+
+  /**
+   * Read structured per-model usage + cost via `get_usage` (live-verified on
+   * 2.1.170: session.total_cost_usd, per-model tokens, contextWindow). This is
+   * the CLI's own accounting — includes subagent calls Walnut never sees.
+   *
+   * TIMEOUT: cheap by itself, but the CLI answers control_requests serially on
+   * its stdin loop — when fired alongside getContextUsage (the details pull),
+   * this answer queues behind that 16s+ tokenization. Same 45s bound.
+   */
+  async getUsage(timeoutMs = 45_000): Promise<Record<string, unknown> | null> {
+    const payload = await this.readControlPayload('gu', 'get_usage', timeoutMs)
+    return (payload as { session?: Record<string, unknown> } | null)?.session ?? null
+  }
+
+  /** Read the CLI build version via `get_binary_version` ({version, buildTime}).
+   *  45s: queues behind getContextUsage in the details pull (see getUsage). */
+  async getBinaryVersion(timeoutMs = 45_000): Promise<{ version?: string; buildTime?: string } | null> {
+    const payload = await this.readControlPayload('bv', 'get_binary_version', timeoutMs)
+    return (payload as { version?: string; buildTime?: string } | null) ?? null
+  }
+
+  /** Seed _cliContextWindow from get_context_usage.maxTokens — the CLI's
+   *  EFFECTIVE window (env clamps included), used as the authoritative context%
+   *  denominator. Called once at session-start and again after a model change
+   *  (the only events that can change the window; NOT per turn — the read
+   *  tokenizes the full tool surface on the CLI side, too heavy for turn-end).
+   *  Fire-and-forget safe; an unreadable CLI just keeps the string-guess fallback. */
+  private seedCliContextWindow(reason: string): void {
+    void this.getContextUsage().then((cu) => {
+      if (cu?.maxTokens && cu.maxTokens > 0 && cu.maxTokens !== this._cliContextWindow) {
+        log.session.info('cli context window seeded', {
+          sessionId: this.claudeSessionId, taskId: this.taskId, reason,
+          maxTokens: cu.maxTokens, prev: this._cliContextWindow ?? null,
+        })
+        this._cliContextWindow = cu.maxTokens
+      }
+    }).catch(() => {})
+  }
+
+  /** Shared plumbing for payload-carrying control_request reads. Resolves the
+   *  response.response object, or null on ANY failure mode (no transport, FIFO
+   *  write failed, CLI errored/doesn't know the subtype, timeout) — callers
+   *  treat null as "untrusted, don't change what you have". */
+  private readControlPayload(prefix: string, subtype: string, timeoutMs: number): Promise<Record<string, unknown> | null> {
+    return this.readControlPayloadWithRequest(
+      `${prefix}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
+      { subtype }, timeoutMs)
+  }
+
+  /** Full-request variant of readControlPayload for subtypes that carry
+   *  parameters (e.g. set_permission_mode{mode}). Same null-on-failure contract. */
+  private readControlPayloadWithRequest(requestId: string, request: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown> | null> {
+    if (!this._transport) return Promise.resolve(null)
+    const envelope = JSON.stringify({
+      type: 'control_request',
+      request_id: requestId,
+      request,
+    })
+    return new Promise<Record<string, unknown> | null>((resolve) => {
+      const timer = setTimeout(() => {
+        this._pendingPayloadReads.delete(requestId)
+        log.session.debug('control payload read timed out', {
+          sessionId: this.claudeSessionId, taskId: this.taskId, requestId, subtype: request.subtype,
+        })
+        resolve(null) // timeout ⇒ untrusted, don't clobber
+      }, timeoutMs)
+      // reject collapses to null too: an errored read must not overwrite a known value.
+      this._pendingPayloadReads.set(requestId, {
+        resolve,
+        reject: () => { this._pendingPayloadReads.delete(requestId); clearTimeout(timer); resolve(null) },
+        timer,
+      })
+      Promise.resolve(this._transport!.writeRaw(envelope)).then((ok) => {
+        if (!ok) {
+          const pending = this._pendingPayloadReads.get(requestId)
+          if (pending) {
+            this._pendingPayloadReads.delete(requestId)
+            clearTimeout(pending.timer)
+            resolve(null) // FIFO write failed ⇒ untrusted
+          }
+        }
+      }).catch(() => {
+        const pending = this._pendingPayloadReads.get(requestId)
+        if (pending) {
+          this._pendingPayloadReads.delete(requestId)
+          clearTimeout(pending.timer)
+          resolve(null)
+        }
+      })
+    })
+  }
+
+  /**
+   * Read the CLI's true runtime settings via getSettings() and reconcile BOTH
+   * `_effectiveEffort` AND the live model, persisting what changed. This is the
+   * single write-path for effectiveEffort/model truth, called at the trust
+   * points: session start, each turn-end, after an effort change, and after a
+   * model change. Fire-and-forget safe — never throws, never blocks the caller.
+   *
+   * One get_settings round-trip serves both settings — effort and model share the
+   * same untrustworthy-ACK problem (the CLI ACKs success even when it silently
+   * ignores/overrides a value), so they share the same read-back.
+   *
+   * `reason` is for logging only. Returns `{effort, model}` as read (or null when
+   * the read was untrusted — old CLI / timeout / write fail — in which case we
+   * leave stored values untouched, mirroring reconcileFromDaemon).
+   */
+  async refreshAppliedSettings(reason: string): Promise<{ effort: import('../core/types.js').SessionEffort | null; model: string | null } | null> {
+    const sid = this.claudeSessionId
+    if (!sid) return null
+    const applied = await this.getSettings().catch(() => null)
+    if (!applied) return null // untrusted read — don't clobber
+
+    // ── Effort ──
+    // applied.effort may be null (no effort set → API default 'high') or a level
+    // string. Normalize: null/absent means "API default", which we represent as
+    // undefined effectiveEffort (badge then shows the DEFAULT_SESSION_EFFORT hint).
+    const raw = applied.effort
+    const { VALID_SESSION_EFFORT_IDS } = await import('../core/types.js')
+    const next = (typeof raw === 'string' && VALID_SESSION_EFFORT_IDS.has(raw))
+      ? (raw as import('../core/types.js').SessionEffort)
+      : undefined
+
+    // ── Model ──
+    // applied.model is the full runtime ID (e.g. "us.anthropic.claude-sonnet-4-6[1m]").
+    // Reconcile _model (short display form, same shortening as the init handler) so
+    // usage events and the header pill reflect a live switch immediately, and persist
+    // record.model so the UI is right after a reload too.
+    const appliedModel = typeof applied.model === 'string' && applied.model ? applied.model : undefined
+    let modelChanged = false
+    if (appliedModel) {
+      const shortModel = appliedModel.replace(/^.*\./, '').replace(/[-_]v\d+(\[1m\])?$/, '$1') || appliedModel
+      if (shortModel !== this._model) {
+        modelChanged = true
+        this._model = shortModel
+        this._initModel = appliedModel // keep 1M-context detection in sync with the switch
+        // Window size can change with the model (200K↔1M, env clamps) — re-seed
+        // the authoritative context% denominator from the CLI.
+        this.seedCliContextWindow('model-change')
+      }
+    }
+    // First settings read with no window seeded yet (e.g. a session ATTACHED
+    // after a server restart — no init event fires, model never changes, so
+    // neither seed trigger above would ever run). One attempt per process:
+    // the flag (not the result) gates, so an old CLI that can't answer
+    // get_context_usage doesn't get re-probed on every turn-end.
+    if (this._cliContextWindow === undefined && !this._cliContextWindowProbed) {
+      this._cliContextWindowProbed = true
+      this.seedCliContextWindow('first-settings-read')
+    }
+
+    const effortChanged = next !== this._effectiveEffort
+    if (!effortChanged && !modelChanged) return { effort: next ?? null, model: appliedModel ?? null }
+
+    const prev = this._effectiveEffort
+    this._effectiveEffort = next
+    log.session.info('applied-settings read-back', {
+      sessionId: sid, taskId: this.taskId, reason,
+      requested: this._effort ?? null, effective: next ?? null, prev: prev ?? null,
+      overridden: this._effort !== undefined && next !== undefined && next !== this._effort,
+      model: appliedModel ?? null, modelChanged,
+    })
+    try {
+      const { updateSessionRecord } = await import('../core/session-tracker.js')
+      await updateSessionRecord(sid, {
+        ...(effortChanged ? { effectiveEffort: next } : {}),
+        ...(modelChanged ? { model: appliedModel } : {}),
+      })
+    } catch (err) {
+      log.session.debug('applied-settings persist failed (non-fatal)', {
+        sessionId: sid, error: err instanceof Error ? err.message : String(err),
+      })
+    }
+    return { effort: next ?? null, model: appliedModel ?? null }
+  }
+
+  /** Back-compat wrapper — effort-only view of refreshAppliedSettings. */
+  async refreshEffectiveEffort(reason: string): Promise<import('../core/types.js').SessionEffort | null> {
+    return (await this.refreshAppliedSettings(reason))?.effort ?? null
+  }
+
+  /**
    * Resolve a pending permission request from the UI.
    * Called by the API route when the user clicks allow/deny.
    */
@@ -3699,6 +4382,7 @@ export class ClaudeCodeSession {
       fromPlanSessionId: this.fromPlanSessionId,
       forkedFromSessionId: this.forkedFromSessionId,
       cliModel: this._cliModel,
+      effort: this._effort,
     })
   }
 }
@@ -4229,10 +4913,20 @@ export class SessionRunner {
 
   /** Check if a session has background workflow/subagent tasks still running.
    *  Used by health monitor to skip the idle-timeout kill — a dynamic workflow can run
-   *  for many minutes with no main-turn output, but the session is NOT idle. */
-  isBackgroundWorkActive(claudeSessionId: string): boolean {
+   *  for many minutes with no main-turn output, but the session is NOT idle.
+   *
+   *  L2: PULLs the daemon-authoritative task state first (the source of truth) and reconciles
+   *  any task Walnut still thinks is 'running' but the daemon — which persisted every event in
+   *  the append-only jsonl — has recorded terminal. This deterministically heals a lost-terminal
+   *  event (the inc-…afr3cs failure mode that survived a transport gap) WITHOUT guessing
+   *  liveness: we adopt a more-authoritative record, we never infer "probably dead". Falls back
+   *  to the local derived count when the daemon can't be reached or doesn't support getState.
+   *  See docs/plan/daemon-source-of-truth-versioned-events.md. */
+  async isBackgroundWorkActive(claudeSessionId: string): Promise<boolean> {
     const session = this.findSessionByClaudeId(claudeSessionId)
-    return session?.hasActiveBackgroundWork() ?? false
+    if (!session) return false
+    await session.reconcileFromDaemon()
+    return session.hasActiveBackgroundWork()
   }
 
   /** Check if a session has a pending permission request. Used by health monitor to skip idle timeout. */
@@ -4255,6 +4949,7 @@ export class SessionRunner {
     project?: string
     mode?: string
     model?: string
+    effort?: import('../core/types.js').SessionEffort
     title?: string
     appendSystemPrompt?: string
     host?: string
@@ -4318,6 +5013,7 @@ export class SessionRunner {
     project?: string
     mode?: string
     model?: string
+    effort?: import('../core/types.js').SessionEffort
     title?: string
     appendSystemPrompt?: string
     host?: string
@@ -4485,6 +5181,8 @@ export class SessionRunner {
 
     // Resolve model: explicit caller value > config default > hardcoded 'opus' fallback in send()
     const resolvedModel = model ?? config.agent?.session_model
+    // Resolve effort: explicit caller value > config default > undefined (no --effort, API default)
+    const resolvedEffort = data.effort ?? config.agent?.session_effort
 
     // Resolve SSH host config if specified
     let sshTarget: SshTarget | undefined
@@ -4517,7 +5215,7 @@ export class SessionRunner {
     // Carry the HTTP request ts onto the session instance so the init handler can
     // compute the full route→init latency breakdown (instrumentation only).
     session._requestTs = data.requestTs ?? 0
-    session.send(message, cwd, resumeId, mode, resolvedModel, appendSystemPrompt, data.host, sshTarget, isFork, config.session?.permission_prompt, spillFile, config.session?.stream_partial_messages)
+    session.send(message, cwd, resumeId, mode, resolvedModel, appendSystemPrompt, data.host, sshTarget, isFork, config.session?.permission_prompt, spillFile, config.session?.stream_partial_messages, resolvedEffort)
 
     // Record directory usage for the frequent-dirs persistent store (fire-and-forget)
     if (cwd) {
@@ -4862,10 +5560,9 @@ export class SessionRunner {
     sessionId: string
     message: string
     mode?: string
-    model?: string
     interrupt?: boolean
   }): Promise<void> {
-    const { sessionId, mode, model, interrupt } = data
+    const { sessionId, mode, interrupt } = data
 
     if (interrupt) {
       // Interrupt: gracefully stop the running session (SIGINT + wait for exit),
@@ -4892,29 +5589,10 @@ export class SessionRunner {
       }
     }
 
-    // pendingModel/pendingMode is saved at the RPC layer (session-chat.ts) BEFORE
-    // enqueueMessage, preventing a race with concurrent processNext() calls.
-
-    // If model switch requested on an active session, interrupt to force --resume with new model
-    if (model && this.activeProcessing.has(sessionId) && !interrupt) {
-      log.session.info('handleSend: forcing interrupt for model switch', { sessionId, model })
-      for (const [, session] of this.sessions) {
-        if (session.sessionId === sessionId) {
-          await session.interrupt()
-          break
-        }
-      }
-      // Clean up batch tracking for the interrupted turn (no removeProcessed
-      // sweep — same in-flight-batch protection as the interrupt path above).
-      if (this.activeProcessing.has(sessionId)) {
-        const oldBatchCount = this.batchCounts.get(sessionId) ?? 1
-        this.clearActiveProcessing(sessionId)
-        bus.emit(EventNames.SESSION_BATCH_COMPLETED, {
-          sessionId,
-          count: oldBatchCount,
-        }, ['main-ai'], { source: 'session-runner' })
-      }
-    }
+    // Model/mode switches no longer come through here — both are applied live at
+    // the RPC/route layer (applyModel via apply_flag_settings; applyPermissionMode
+    // via set_permission_mode — no interrupt/respawn), with cliModel/record.mode
+    // persisted as the durable fallback that processNext reads on cold --resume.
 
     // Message delivery is top priority — trigger it NOW, before any task/phase
     // bookkeeping. Those writes go through the global task write-lock, which
@@ -5239,20 +5917,18 @@ export class SessionRunner {
         }
       }
 
-      // Check for pending model/mode switch — requires --resume (can't change via FIFO)
+      // Resolve cold-resume spawn args from the record. Model/mode/effort changes
+      // are all applied LIVE via control_requests (applyModel / applyPermissionMode /
+      // applyEffort — no respawn); the record fields read here are the durable
+      // fallback so a cold --resume re-applies them (control_requests are in-memory
+      // only, lost when the CLI dies).
       let resolvedModel: string | undefined
-      let resolvedMode: string | undefined
-      let hasPendingSwitch = false
+      let resolvedEffort: import('../core/types.js').SessionEffort | undefined
       try {
-        const { getSessionByClaudeId: getSession, updateSessionRecord: updateRecord } = await import('../core/session-tracker.js')
+        const { getSessionByClaudeId: getSession } = await import('../core/session-tracker.js')
         const record = await getSession(sessionId)
-        if (record?.pendingModel || record?.pendingMode) {
-          resolvedModel = record.pendingModel
-          resolvedMode = record.pendingMode ?? mode
-          hasPendingSwitch = true
-          // Clear pending fields
-          await updateRecord(sessionId, { pendingModel: undefined, pendingMode: undefined })
-          log.session.info('processNext: consuming pending model/mode switch', { sessionId, model: resolvedModel, mode: resolvedMode })
+        if (record?.effort) {
+          resolvedEffort = record.effort
         }
         // Fall back to stored CLI model for --resume so the [1m] context window
         // marker is preserved.  record.cliModel stores the original --model arg
@@ -5282,7 +5958,7 @@ export class SessionRunner {
           }
         }
       } catch (err) {
-        log.session.warn('processNext: failed to read pending model/mode', { sessionId, error: err instanceof Error ? err.message : String(err) })
+        log.session.warn('processNext: failed to read record for resume args', { sessionId, error: err instanceof Error ? err.message : String(err) })
       }
 
       // Rehydrate: if this.sessions lost the entry (e.g. reconciler didn't flag the
@@ -5294,10 +5970,7 @@ export class SessionRunner {
       // — not a Walnut string, don't grep locally — when its abortController is
       // aborted with a non-"interrupt" reason, i.e. exactly what a --resume respawn
       // does to the in-flight turn).
-      //
-      // Skip when a pending model/mode switch is in flight — that path must go
-      // through --resume (the CLI args change), so rehydrating would be wasted work.
-      if (!targetSession && !hasPendingSwitch) {
+      if (!targetSession) {
         try {
           const { getSessionByClaudeId } = await import('../core/session-tracker.js')
           const record = await getSessionByClaudeId(sessionId)
@@ -5336,19 +6009,13 @@ export class SessionRunner {
         }
       }
 
-      // If pending model/mode switch, force --resume path (skip FIFO)
-      if (hasPendingSwitch && targetSession) {
-        log.session.info('processNext: forcing --resume for model/mode switch', { sessionId, model: resolvedModel, mode: resolvedMode })
-        await targetSession.gracefulStop()
-      }
-
       // Build walnutMessageIds from the batch — one synthetic event per queued message.
       // Each optimistic copy in the frontend has a unique queueId; we need a matching
       // walnutMessageId in the JSONL for each one so Layer 1 dedup can remove them all.
       const walnutMessageIds = msgs.map(m => m.id).filter(Boolean)
 
       // Try stdin write first (stream-json mode — reuses running process)
-      if (targetSession && !hasPendingSwitch) {
+      if (targetSession) {
         // If Claude Code is blocked on a permission prompt (control_request), auto-deny
         // the pending permissions so Claude unblocks and can process the user's new message.
         // Previously this reverted messages to pending and re-emitted the permission UI,
@@ -5454,13 +6121,13 @@ export class SessionRunner {
 
           // Fall back to record.mode when no explicit mode provided — prevents
           // mode silently reverting to 'default' on --resume (send() treats undefined as default).
-          const resumeMode = resolvedMode ?? mode ?? record.mode
+          const resumeMode = mode ?? record.mode
           log.session.info('resuming session via CLI', { sessionId, taskId: record.taskId, messageLength: combined.length, model: resolvedModel, mode: resumeMode })
           // Settle the queue from send()'s spawn callback — NOT synchronously after
           // send() returns. send() is fire-and-forget; the SSH/daemon deploy that can
           // fail (publickey denied) happens asynchronously. Removing the message before
           // that confirmation is what silently lost messages. See onSpawnSettled doc.
-          session.send(combined, record.cwd ?? undefined, sessionId, resumeMode, resolvedModel, undefined, record.host ?? undefined, sshTarget, undefined, resumeConfig.session?.permission_prompt, undefined, resumeConfig.session?.stream_partial_messages,
+          session.send(combined, record.cwd ?? undefined, sessionId, resumeMode, resolvedModel, undefined, record.host ?? undefined, sshTarget, undefined, resumeConfig.session?.permission_prompt, undefined, resumeConfig.session?.stream_partial_messages, resolvedEffort,
             (ok, err) => {
               if (ok) this.settleResumeSuccess(sessionId, session, msgs)
               else this.settleResumeFailure(sessionId, msgs, err ?? new Error('resume spawn failed'))
@@ -5501,12 +6168,12 @@ export class SessionRunner {
 
       // Resume the session with the combined message (with optional mode/model override).
       // Fall back to targetSession._mode to prevent mode silently reverting to 'default'.
-      const existingResumeMode = resolvedMode ?? mode ?? targetSession.mode
+      const existingResumeMode = mode ?? targetSession.mode
       log.session.info('resuming session via CLI (existing target)', { sessionId, taskId: targetSession.taskId, messageLength: combined.length, host: resumeHost, model: resolvedModel, mode: existingResumeMode })
       // Settle the queue from send()'s spawn callback, not synchronously — the remote
       // SSH/daemon deploy can fail AFTER send() returns. See onSpawnSettled doc on send().
       const settleTarget = targetSession
-      targetSession.send(combined, targetSession.cwd ?? undefined, sessionId, existingResumeMode, resolvedModel, undefined, resumeHost ?? undefined, resumeSshTarget, undefined, resumeConfig2.session?.permission_prompt, undefined, resumeConfig2.session?.stream_partial_messages,
+      targetSession.send(combined, targetSession.cwd ?? undefined, sessionId, existingResumeMode, resolvedModel, undefined, resumeHost ?? undefined, resumeSshTarget, undefined, resumeConfig2.session?.permission_prompt, undefined, resumeConfig2.session?.stream_partial_messages, resolvedEffort,
         (ok, err) => {
           if (ok) this.settleResumeSuccess(sessionId, settleTarget, msgs)
           else this.settleResumeFailure(sessionId, msgs, err ?? new Error('resume spawn failed'))

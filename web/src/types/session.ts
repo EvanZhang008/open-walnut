@@ -28,6 +28,12 @@ export interface SessionRecord {
   human_note?: string;
   /** Claude model used by this session (e.g. "claude-opus-4-6"). */
   model?: string;
+  /** REQUESTED reasoning-effort level (low/medium/high/xhigh/max). User intent — the
+   *  CLI may override it. Undefined = API default ('high'). */
+  effort?: import('@open-walnut/core').SessionEffort;
+  /** TRUE runtime effort the CLI actually uses (read back via get_settings). Reflects
+   *  env override + model downgrade. Undefined until first read-back. Badge prefers this. */
+  effectiveEffort?: import('@open-walnut/core').SessionEffort;
   /** Archived — hidden from UI but data preserved. */
   archived?: boolean;
   /** Why this session was archived (e.g. "plan_executed", user-provided reason). */

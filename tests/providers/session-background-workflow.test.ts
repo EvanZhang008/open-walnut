@@ -10,10 +10,12 @@
  * POC-verified (see memory claude-code-session-state-semantics): the CLI emits
  * `idle` ~20×/run — between every sub-agent / phase — because its idle-wait loop
  * excludes `in_process_teammate` tasks. So idle == "foreground quiet right now". The
- * turn is over only at an idle that arrives AFTER our `_bgTasksInFlight` counter
- * (task_started − task_notification) has drained to 0. The counter is the AUTHORITY;
- * idle is just the completion trigger. (Gated by CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS,
- * which the daemon sets; when absent we complete via `result` + the counter.)
+ * turn is over only at an idle that arrives AFTER every task in the authoritative set
+ * (`_bgTasks`, id→status) is terminal. In-flight is DERIVED (count of non-terminal),
+ * NOT an accumulated counter — so a duplicate / lost / out-of-order / new-kind lifecycle
+ * event cannot desync it (the level-triggered, k8s-style design). idle is just the
+ * completion trigger. (Gated by CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS, which the daemon
+ * sets; when absent we complete via `result` + the set.)
  *
  * These tests verify the handleStreamLine() branches in ClaudeCodeSession:
  *   1. running → task_progress×N → idle: stays 'running' mid-workflow, only
@@ -115,6 +117,18 @@ function makeTaskProgressEvent(
 function makeTaskNotificationEvent(sessionId: string, taskId: string, status = 'completed'): string {
   return JSON.stringify({
     type: 'system', subtype: 'task_notification', session_id: sessionId, task_id: taskId, status,
+  })
+}
+
+/** A task_updated status patch. Newer CLIs emit this with patch.status='completed' just
+ *  BEFORE the matching task_notification — the exact event that wedged incident …afr3cs:
+ *  it pre-set the task's status to 'completed', and the OLD decrement (gated on
+ *  status==='running') then skipped, leaking the in-flight counter forever. */
+function makeTaskUpdatedEvent(
+  sessionId: string, taskId: string, patch: Record<string, unknown>,
+): string {
+  return JSON.stringify({
+    type: 'system', subtype: 'task_updated', session_id: sessionId, task_id: taskId, patch,
   })
 }
 
@@ -614,7 +628,8 @@ describe('Dynamic workflow: mid-workflow idle storm does NOT complete prematurel
       if (e.name === EventNames.SESSION_RESULT) resultEvents.push(e.data as Record<string, unknown>)
     })
 
-    const inFlight = () => (session as unknown as { _bgTasksInFlight: number })._bgTasksInFlight
+    // In-flight is DERIVED from the task set (no scalar counter exists anymore).
+    const inFlight = () => (session as unknown as { _runningBgCount(): number })._runningBgCount()
 
     feedLines(session, [
       makeInitEvent(sid),
@@ -672,5 +687,268 @@ describe('Dynamic workflow: mid-workflow idle storm does NOT complete prematurel
     // A further trailing idle (the CLI keeps emitting them) must be a no-op.
     feedLines(session, [makeSessionStateEvent(sid, 'idle')])
     expect(resultEvents.length).toBe(1)
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════
+//  Test 8: task_updated-before-notification — the counter-leak wedge
+// ═══════════════════════════════════════════════════════════════════
+//
+// Reproduces incident inc-…afr3cs (session ab736795): a plan-mode turn fanned out 2
+// `local_agent` Explore subagents. The REAL CLI emits, per task:
+//     task_started → … → task_updated{patch.status:'completed'} → task_notification
+// i.e. a task_updated flips the task's status to 'completed' BEFORE the notification.
+// The OLD decrement gated on `_bgTasks[id].status === 'running'`, so by the time the
+// notification arrived the status was already 'completed' and the decrement was SKIPPED.
+// Both tasks leaked → bgTasksInFlight stuck at 2 → hasActiveBackgroundWork() forever true
+// → the trailing idle hit "awaiting drain" and never completed → the session showed green
+// "Running" 29 min after the turn ended (server.log: remainingInFlight:2 logged TWICE).
+//
+// The existing tests never sent task_updated, so they passed against the buggy code. This
+// asserts the counter drains to 0 and the turn completes exactly once through the real
+// task_updated→task_notification ordering.
+describe('Dynamic workflow: task_updated before task_notification still drains the counter', () => {
+  it('task_updated{completed} then task_notification drains exactly once; idle completes', () => {
+    const sid = 'wf-updated-before-notif'
+    const session = makeRunningRemoteSession('task-updated-notif')
+
+    const resultEvents: Array<Record<string, unknown>> = []
+    bus.subscribe('main-ai', (e: BusEvent) => {
+      if (e.name === EventNames.SESSION_RESULT) resultEvents.push(e.data as Record<string, unknown>)
+    })
+    // In-flight is DERIVED from the task set (no scalar counter exists anymore).
+    const inFlight = () => (session as unknown as { _runningBgCount(): number })._runningBgCount()
+
+    // Two local_agent subagents fan out (the real incident's shape).
+    feedLines(session, [
+      makeInitEvent(sid),
+      makeAssistantEvent(sid, 'Researching in background'),
+      makeTaskStartedEvent(sid, 'a34e', { description: 'Explore CDK stack', subagentType: 'Explore' }),
+      makeTaskStartedEvent(sid, 'a5e5', { description: 'Explore IAM role', subagentType: 'Explore' }),
+    ])
+    expect(inFlight()).toBe(2)
+    expect(session.hasActiveBackgroundWork()).toBe(true)
+
+    // The main turn's own result lands while subagents run — withheld.
+    feedLines(session, [makeResultEvent(sid, 1.75, 'Launched research')])
+    expect(resultEvents.length).toBe(0)
+
+    // Task A reaches terminal the REAL way: task_updated{completed} THEN task_notification.
+    feedLines(session, [
+      makeTaskUpdatedEvent(sid, 'a34e', { status: 'completed', end_time: 1782511274842 }),
+    ])
+    expect(inFlight()).toBe(1)                      // drained by task_updated (the fix)
+    feedLines(session, [
+      makeTaskNotificationEvent(sid, 'a34e', 'completed'),
+    ])
+    expect(inFlight()).toBe(1)                      // notification must NOT double-decrement
+
+    // Task B, same ordering.
+    feedLines(session, [
+      makeTaskUpdatedEvent(sid, 'a5e5', { status: 'completed', end_time: 1782511393401 }),
+      makeTaskNotificationEvent(sid, 'a5e5', 'completed'),
+    ])
+    expect(inFlight()).toBe(0)                       // counter fully drained — no leak
+    expect(session.hasActiveBackgroundWork()).toBe(false)
+    expect(resultEvents.length).toBe(0)             // notifications alone never complete
+
+    // The trailing authoritative idle now completes the turn (pre-fix it wedged here).
+    feedLines(session, [makeSessionStateEvent(sid, 'idle')])
+    expect(resultEvents.length).toBe(1)
+    expect(session.processStatus).toBe('idle')
+  })
+
+  it('replay of a task_updated→notification JSONL drains bgTasksInFlight to 0', async () => {
+    // The session-history replay path must agree with the live path: a JSONL tail where
+    // each task has BOTH task_updated{completed} and task_notification must reconstruct
+    // bgTasksInFlight=0 (drained once per task), not -0-with-double-count or a leak.
+    const sid = 'replay-updated-before-notif'
+    const cwd = '/Users/test/wf-updated'
+    const dir = path.join(CLAUDE_HOME, 'projects', encodeProjectPath(cwd))
+    await fsp.mkdir(dir, { recursive: true })
+    await fsp.writeFile(path.join(dir, `${sid}.jsonl`), [
+      makeInitEvent(sid),
+      makeTaskStartedEvent(sid, 'a34e', { description: 'Explore A' }),
+      makeTaskStartedEvent(sid, 'a5e5', { description: 'Explore B' }),
+      makeResultEvent(sid, 1.75, 'Launched research'),
+      makeTaskUpdatedEvent(sid, 'a34e', { status: 'completed' }),
+      makeTaskNotificationEvent(sid, 'a34e', 'completed'),
+      makeTaskUpdatedEvent(sid, 'a5e5', { status: 'completed' }),
+      makeTaskNotificationEvent(sid, 'a5e5', 'completed'),
+      makeSessionStateEvent(sid, 'idle'),
+    ].join('\n') + '\n')
+
+    const state = await recoverStateFromJsonl(sid, cwd)
+    expect(state).not.toBeNull()
+    expect(state!.bgTasksInFlight).toBe(0)          // drained once per task, no leak
+    expect(state!.cliSessionState).toBe('idle')
+    expect(state!.workStatus).toBe('agent_complete') // idle@0 → genuine turn-over
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════
+//  Test 9: level-triggered architecture resilience (the "100% reliable" proof)
+// ═══════════════════════════════════════════════════════════════════
+//
+// The fix replaced the edge-triggered ++/-- counter with a DERIVED in-flight count over
+// an authoritative task set. These tests prove the failure modes that permanently desync
+// an accumulator are all benign here: duplicate events and out-of-order events. (A genuinely
+// LOST terminal event with the CLI still alive is backstopped by process-death turn completion,
+// not reconciled in-process — see the note at the end of this describe block.)
+describe('Architecture resilience: derived count (no accumulator desync)', () => {
+  const inFlight = (s: ClaudeCodeSession) => (s as unknown as { _runningBgCount(): number })._runningBgCount()
+
+  it('duplicate task_started / task_notification never desync the derived count', () => {
+    const sid = 'resilience-dup-events'
+    const session = makeRunningRemoteSession('task-dup')
+    feedLines(session, [
+      makeInitEvent(sid),
+      makeTaskStartedEvent(sid, 'd1'),
+      makeTaskStartedEvent(sid, 'd1'),        // duplicate start (daemon replay) — still 1
+      makeTaskStartedEvent(sid, 'd2'),
+    ])
+    expect(inFlight(session)).toBe(2)          // an accumulator would read 3
+
+    feedLines(session, [
+      makeTaskNotificationEvent(sid, 'd1', 'completed'),
+      makeTaskNotificationEvent(sid, 'd1', 'completed'),  // duplicate terminal — still idempotent
+    ])
+    expect(inFlight(session)).toBe(1)          // an accumulator would read -1/0 (desync)
+    feedLines(session, [makeTaskNotificationEvent(sid, 'd2', 'completed')])
+    expect(inFlight(session)).toBe(0)
+    expect(session.hasActiveBackgroundWork()).toBe(false)
+  })
+
+  it('out-of-order: a late task_started/task_progress cannot revive a terminal task', () => {
+    const sid = 'resilience-out-of-order'
+    const session = makeRunningRemoteSession('task-ooo')
+    feedLines(session, [
+      makeInitEvent(sid),
+      makeTaskStartedEvent(sid, 'x1'),
+      makeTaskNotificationEvent(sid, 'x1', 'completed'),
+      // Reordered stragglers arriving AFTER terminal — must NOT resurrect the task.
+      makeTaskStartedEvent(sid, 'x1'),
+      makeTaskProgressEvent(sid, 'x1', { summary: 'late heartbeat' }),
+    ])
+    expect(inFlight(session)).toBe(0)
+    expect(session.hasActiveBackgroundWork()).toBe(false)
+  })
+
+})
+
+// ═══════════════════════════════════════════════════════════════════
+//  Test 10: L2 — daemon-authoritative PULL reconcile (lost-terminal self-heal)
+// ═══════════════════════════════════════════════════════════════════
+//
+// The disease Layer 1 could NOT cure: a terminal event genuinely LOST in transport (SSH flap /
+// daemon-restart gap) while the CLI stays alive — the task set holds a phantom 'running' forever.
+// The cure is the daemon (source of truth — it persisted every event in the append-only jsonl):
+// reconcileFromDaemon() PULLs its task state and adopts any terminal status Walnut missed, WITHOUT
+// guessing liveness. See docs/plan/daemon-source-of-truth-versioned-events.md.
+describe('L2: daemon-authoritative PULL reconcile (reconcileFromDaemon)', () => {
+  const inFlight = (s: ClaudeCodeSession) => (s as unknown as { _runningBgCount(): number })._runningBgCount()
+
+  // Build a remote session whose transport exposes a getState() returning the given daemon truth.
+  function makeSessionWithDaemonState(
+    taskId: string,
+    daemonTasks: Record<string, { status: string; v: number }>,
+  ): ClaudeCodeSession {
+    const session = makeRunningRemoteSession(taskId)
+    const taskState = {
+      tasks: Object.fromEntries(Object.entries(daemonTasks).map(([id, t]) => [id, { ...t, t: 0 }])),
+      resourceVersion: Math.max(0, ...Object.values(daemonTasks).map(t => t.v)),
+      updatedAt: 0,
+      derivedRunning: Object.values(daemonTasks).filter(t => !['completed', 'failed', 'stopped', 'cancelled'].includes(t.status)).length,
+      recentTransitions: [],
+    }
+    ;(session as unknown as { _transport: Record<string, unknown> })._transport.getState = async () => taskState
+    return session
+  }
+
+  it('adopts a daemon-terminal status for a task Walnut still holds running (lost-terminal heal)', async () => {
+    const sid = 'l2-lost-terminal'
+    // Daemon (source of truth) says g2 completed; Walnut's live stream missed that notification.
+    const session = makeSessionWithDaemonState('task-l2-lost', {
+      g1: { status: 'completed', v: 100 },
+      g2: { status: 'completed', v: 200 },
+    })
+    const resultEvents: Array<Record<string, unknown>> = []
+    bus.subscribe('main-ai', (e: BusEvent) => {
+      if (e.name === EventNames.SESSION_RESULT) resultEvents.push(e.data as Record<string, unknown>)
+    })
+    feedLines(session, [
+      makeInitEvent(sid),
+      makeAssistantEvent(sid, 'Launching'),
+      makeTaskStartedEvent(sid, 'g1'),
+      makeTaskStartedEvent(sid, 'g2'),
+      makeResultEvent(sid, 0.5, 'Workflow launched in background'),
+      makeTaskNotificationEvent(sid, 'g1', 'completed'), // g1 delivered; g2's terminal LOST
+      makeSessionStateEvent(sid, 'idle'),                // idle while g2 still 'running' locally
+    ])
+    // Pre-reconcile: g2 keeps us in flight, turn correctly withheld (no premature complete).
+    expect(inFlight(session)).toBe(1)
+    expect(resultEvents.length).toBe(0)
+
+    // PULL the daemon truth → adopt g2=completed → withheld turn completes exactly once.
+    await (session as unknown as { reconcileFromDaemon(): Promise<void> }).reconcileFromDaemon()
+    expect(inFlight(session)).toBe(0)
+    expect(session.hasActiveBackgroundWork()).toBe(false)
+    expect(resultEvents.length).toBe(1)
+    expect(session.processStatus).toBe('idle')
+  })
+
+  it('leaves a task running when the daemon ALSO reports it running (no false heal)', async () => {
+    const sid = 'l2-still-running'
+    // Daemon agrees h1 is still running — reconcile must NOT complete the turn.
+    const session = makeSessionWithDaemonState('task-l2-live', {
+      h1: { status: 'running', v: 100 },
+    })
+    feedLines(session, [
+      makeInitEvent(sid),
+      makeTaskStartedEvent(sid, 'h1'),
+      makeSessionStateEvent(sid, 'idle'),
+    ])
+    expect(inFlight(session)).toBe(1)
+    await (session as unknown as { reconcileFromDaemon(): Promise<void> }).reconcileFromDaemon()
+    // Daemon confirms it's genuinely running → still in flight, turn stays open.
+    expect(inFlight(session)).toBe(1)
+    expect(session.hasActiveBackgroundWork()).toBe(true)
+  })
+
+  it('is a no-op when the transport cannot answer (getState returns null) — keeps local state', async () => {
+    const sid = 'l2-no-answer'
+    const session = makeRunningRemoteSession('task-l2-null')
+    ;(session as unknown as { _transport: Record<string, unknown> })._transport.getState = async () => null
+    feedLines(session, [
+      makeInitEvent(sid),
+      makeTaskStartedEvent(sid, 'k1'),
+      makeSessionStateEvent(sid, 'idle'),
+    ])
+    expect(inFlight(session)).toBe(1)
+    // No authoritative answer (disconnected / old daemon) → do NOT guess, keep current state.
+    await (session as unknown as { reconcileFromDaemon(): Promise<void> }).reconcileFromDaemon()
+    expect(inFlight(session)).toBe(1)
+    expect(session.hasActiveBackgroundWork()).toBe(true)
+  })
+
+  it('does NOT complete the turn while the CLI is still running (only when idle)', async () => {
+    const sid = 'l2-cli-running'
+    const session = makeSessionWithDaemonState('task-l2-cli', {
+      r1: { status: 'completed', v: 100 },
+    })
+    const resultEvents: Array<Record<string, unknown>> = []
+    bus.subscribe('main-ai', (e: BusEvent) => {
+      if (e.name === EventNames.SESSION_RESULT) resultEvents.push(e.data as Record<string, unknown>)
+    })
+    feedLines(session, [
+      makeInitEvent(sid),
+      makeTaskStartedEvent(sid, 'r1'),
+      makeSessionStateEvent(sid, 'running'), // CLI actively running, not idle
+    ])
+    await (session as unknown as { reconcileFromDaemon(): Promise<void> }).reconcileFromDaemon()
+    // The task is reconciled to terminal (daemon truth), but the turn must NOT complete while the
+    // CLI is mid-turn — completion only fires on an idle (the normal turn-over trigger).
+    expect(inFlight(session)).toBe(0)
+    expect(resultEvents.length).toBe(0)
   })
 })

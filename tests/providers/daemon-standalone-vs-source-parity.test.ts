@@ -166,3 +166,60 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     expect(templateSrc).toMatch(/idle-scan-missed-exit/)
   })
 })
+
+// ── L1/L2 parity: versioned events + daemon-authoritative task state ──
+// These live in daemon-standalone.ts (real TS) and daemon-source.ts (embedded JS template).
+// They MUST stay byte-equivalent — this block fails loudly if one side drifts.
+describe('L1/L2 daemon-standalone vs daemon-source parity (versioned events + task state)', () => {
+  const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+  const templateSrc = readFile(sourcePath)
+
+  // L1 — both stamp `v` (end-of-line byte offset) on forwarded jsonl events, live AND replay.
+  it('both stamp v = lineStartV + byteLength(line) + 1 in the watcher loop', () => {
+    const re = /lineStartV\s*\+\s*Buffer\.byteLength\(line,\s*['"]utf-8['"]\)\s*\+\s*1/
+    expect(standaloneSrc).toMatch(re)
+    expect(templateSrc).toMatch(re)
+  })
+  it('both forward jsonl events WITH the v field', () => {
+    expect(standaloneSrc).toMatch(/sendEvent\(ws,\s*['"]jsonl['"],\s*\{\s*sid,\s*line,\s*v\s*\}\)/)
+    expect(templateSrc).toMatch(/sendEvent\(ws,\s*['"]jsonl['"],\s*\{\s*sid,\s*line,\s*v\s*\}\)/)
+  })
+
+  // L2 — both define the task-state helpers with identical terminal set + transition cap.
+  it('both define the BG terminal status set (completed/failed/stopped/cancelled)', () => {
+    const re = /BG_TERMINAL_STATUSES\s*=\s*new Set\(\[['"]completed['"],\s*['"]failed['"],\s*['"]stopped['"],\s*['"]cancelled['"]\]\)/
+    expect(standaloneSrc).toMatch(re)
+    expect(templateSrc).toMatch(re)
+  })
+  it('both define applyTaskEvent + emptyTaskState + rebuildTaskStateFromJsonl', () => {
+    for (const fn of ['applyTaskEvent', 'emptyTaskState', 'rebuildTaskStateFromJsonl', 'runningTaskCount']) {
+      expect(standaloneSrc.includes(fn)).toBe(true)
+      expect(templateSrc.includes(fn)).toBe(true)
+    }
+  })
+  it('both enforce terminal-is-terminal on task_started/task_progress', () => {
+    // a late/duplicate start or progress must not revive a finished task
+    const re = /BG_TERMINAL_STATUSES\.has\(prev\.status\)\s*\?\s*prev\.status\s*:\s*['"]running['"]/
+    expect(standaloneSrc).toMatch(re)
+    expect(templateSrc).toMatch(re)
+  })
+  it('both feed task_* lines into applyTaskEvent from the watcher (substring pre-filter)', () => {
+    expect(standaloneSrc).toMatch(/line\.includes\(['"]"task_['"]\)/)
+    expect(templateSrc).toMatch(/line\.includes\(['"]"task_['"]\)/)
+    expect(standaloneSrc).toMatch(/applyTaskEvent\(s\.taskState,\s*parsed,\s*v,\s*Date\.now\(\)\)/)
+    expect(templateSrc).toMatch(/applyTaskEvent\(s\.taskState,\s*parsed,\s*v,\s*Date\.now\(\)\)/)
+  })
+  it('both expose the getState RPC (case + handler) and rebuild-from-jsonl fallback', () => {
+    expect(standaloneSrc).toMatch(/case\s*['"]getState['"]:/)
+    expect(templateSrc).toMatch(/case\s*['"]getState['"]:/)
+    expect(standaloneSrc).toMatch(/function cmdGetState/)
+    expect(templateSrc).toMatch(/function cmdGetState/)
+    // unknown-in-memory → rebuild from the durable jsonl
+    expect(standaloneSrc).toMatch(/rebuildTaskStateFromJsonl\(jsonlPath,\s*Date\.now\(\)\)/)
+    expect(templateSrc).toMatch(/rebuildTaskStateFromJsonl\(jsonlPath,\s*Date\.now\(\)\)/)
+  })
+  it('getState is declared in REQUIRED_DAEMON_CAPABILITIES', () => {
+    const capsSrc = readFile(path.join(ROOT, 'src/providers/daemon-capabilities.ts'))
+    expect(capsSrc).toMatch(/['"]getState['"]/)
+  })
+})

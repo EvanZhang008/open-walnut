@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useSearchParams, useNavigate, useLocation } from 'react-router-dom';
-import { fetchSessionTree, fetchSession } from '@/api/sessions';
+import { fetchSessionTree, fetchSession, setSessionEffort, setSessionModel } from '@/api/sessions';
 import { SessionTreePanel } from '@/components/sessions/SessionTreePanel';
 import { SessionDetailPanel } from '@/components/sessions/SessionDetailPanel';
 import { SessionDiffView } from '@/components/sessions/SessionDiffView';
@@ -18,7 +18,8 @@ import { useEvent } from '@/hooks/useWebSocket';
 import { useSessionSend } from '@/hooks/useSessionSend';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import type { ImageAttachment } from '@/api/chat';
-import type { SessionTreeResponse, SessionRecord } from '@/types/session';
+import type { SessionTreeResponse, SessionTreeTask, SessionRecord } from '@/types/session';
+import type { SessionEffort } from '@open-walnut/core';
 
 const LS_HIDE_COMPLETED = 'open-walnut-session-tree-hide-completed';
 const LS_LIST_WIDTH_KEY = 'open-walnut-session-list-width-v2';
@@ -357,18 +358,45 @@ export function SessionsPage() {
     }
   }, []);
 
-  const handleModelSwitch = useCallback((model: string, immediate: boolean) => {
+  const handleModelSwitch = useCallback((model: string) => {
     setModelPickerOpen(false);
     if (!selectedId) return;
-    wsClient.sendRpc('session:send', {
-      sessionId: selectedId,
-      message: '',
-      model,
-      interrupt: immediate || undefined,
-    }).catch((err: Error) => {
+    // Live switch via apply_flag_settings (no respawn) — same mechanism as effort.
+    setSessionModel(selectedId, model).catch((err: Error) => {
       console.error('Model switch failed:', err);
     });
   }, [selectedId]);
+
+  const handleEffortSwitch = useCallback((effort: import('@open-walnut/core').SessionEffort) => {
+    setModelPickerOpen(false);
+    if (!selectedId) return;
+    // Optimistically reflect the new effort so the header badge updates immediately.
+    // The session can live deep in the tree (category → project/directTasks → task →
+    // sessions) or as a directly-fetched orphan, so patch both. Backend delivers it
+    // live via apply_flag_settings (no respawn) and persists it; revert on failure.
+    const applyEffortToTree = (data: SessionTreeResponse, value?: SessionEffort): SessionTreeResponse => {
+      const patch = (s: SessionRecord): SessionRecord =>
+        s.claudeSessionId === selectedId ? { ...s, effort: value } : s;
+      const patchTask = (t: SessionTreeTask): SessionTreeTask => ({ ...t, sessions: t.sessions.map(patch) });
+      return {
+        ...data,
+        tree: data.tree.map((cat) => ({
+          ...cat,
+          projects: cat.projects.map((p) => ({ ...p, tasks: p.tasks.map(patchTask) })),
+          directTasks: cat.directTasks.map(patchTask),
+        })),
+        orphanSessions: data.orphanSessions.map(patch),
+      };
+    };
+    setTreeData((prev) => prev ? applyEffortToTree(prev, effort) : prev);
+    setDirectSession((prev) => prev && prev.claudeSessionId === selectedId ? { ...prev, effort } : prev);
+    setSessionEffort(selectedId, effort).catch((err: Error) => {
+      console.error('Effort switch failed:', err);
+      const prevEffort = selectedSession?.effort;
+      setTreeData((prev) => prev ? applyEffortToTree(prev, prevEffort) : prev);
+      setDirectSession((prev) => prev && prev.claudeSessionId === selectedId ? { ...prev, effort: prevEffort } : prev);
+    });
+  }, [selectedId, selectedSession?.effort]);
 
   if (loading) return <LoadingSpinner />;
   if (error) return <div className="empty-state"><p>Error: {error}</p></div>;
@@ -457,6 +485,7 @@ export function SessionsPage() {
           onStreamingChange={setIsStreaming}
           activeView={activeView}
           onSelectView={selectedSession ? selectView : undefined}
+          onModelPillClick={() => setModelPickerOpen((v) => !v)}
         />
         {selectedSession && (
           <div className="session-chat-input-wrapper">
@@ -482,7 +511,10 @@ export function SessionsPage() {
             {modelPickerOpen && (
               <ModelPicker
                 currentModel={selectedSession?.model}
+                currentEffort={selectedSession?.effectiveEffort ?? selectedSession?.effort}
+                sessionId={selectedId ?? undefined}
                 onSwitch={handleModelSwitch}
+                onEffortSwitch={handleEffortSwitch}
                 onClose={() => setModelPickerOpen(false)}
               />
             )}

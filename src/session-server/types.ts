@@ -190,7 +190,11 @@ export interface SessionResultData {
   sessionId: string
   result: string
   subtype: SessionResultSubtype
+  /** Cumulative cost for the current query (display only — do NOT bill). */
   cost?: number
+  /** Billable increment since the last result (already net of the per-query
+   *  watermark; 0 for replays). This is what the ledger records. */
+  costDelta?: number
   duration?: number
   usage?: { input_tokens: number; output_tokens: number }
   modelUsage?: Record<string, { input_tokens: number; output_tokens: number }>

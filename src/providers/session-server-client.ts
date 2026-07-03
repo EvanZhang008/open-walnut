@@ -341,6 +341,7 @@ export class SessionServerClient {
         taskId: (d as unknown as Record<string, unknown>).taskId,
         result: d.result,
         totalCost: d.cost,
+        costDelta: d.costDelta,  // billable increment (net of per-query watermark)
         duration: d.duration,
         isError: d.subtype !== 'success' && d.subtype !== 'interrupted',
         subtype: d.subtype,

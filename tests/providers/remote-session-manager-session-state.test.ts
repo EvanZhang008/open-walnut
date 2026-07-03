@@ -155,4 +155,51 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
     expect(ok).toBe(false)
     expect(onExit).toHaveBeenCalledWith(137)
   })
+
+  // ── L1 versioned events: skip by `v` (covers duplicate + out-of-order in one comparison) ──
+  // The daemon stamps each jsonl event with `v` (end-of-line byte offset, monotonic per session,
+  // identical live vs replay). RSM drops any event whose v <= the highest already delivered. This
+  // replaces the uuid-Set dedup for daemons that send `v`, and uniquely also catches out-of-order
+  // (which uuid dedup never did) and uuid-less lines (which uuid dedup let through).
+  //
+  // Count ONLY our own marker lines (the mock daemon's start() also tails a real `result` line
+  // from the seeded jsonl, which is unrelated background noise carrying no `v`).
+  const countDelivered = (prefix: string) =>
+    onOutput.mock.calls.filter((c) => typeof c[0]?.line === 'string' && (c[0].line as string).startsWith(prefix)).length
+
+  it('L1-1: forwards lines with strictly increasing v (no false skip)', async () => {
+    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1A:x1', v: 100 })
+    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1A:x2', v: 200 })
+    await new Promise((r) => setTimeout(r, 30))
+    expect(countDelivered('L1A:')).toBe(2)
+  })
+
+  it('L1-2: skips a duplicate replay (same v) even with NO uuid', async () => {
+    const line = 'L1B:no-uuid' // uuid-less: uuid dedup would NOT catch this; only version-skip does
+    daemon.emitEvent('jsonl', { sid: 'sid-test', line, v: 300 })
+    daemon.emitEvent('jsonl', { sid: 'sid-test', line, v: 300 }) // replay at same v → must skip
+    await new Promise((r) => setTimeout(r, 30))
+    expect(countDelivered('L1B:')).toBe(1)
+  })
+
+  it('L1-3: skips an OUT-OF-ORDER stale line (v < last seen) — uuid dedup never did this', async () => {
+    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1C:newer', v: 500 })
+    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1C:older', v: 400 }) // stale → skip
+    await new Promise((r) => setTimeout(r, 30))
+    expect(countDelivered('L1C:')).toBe(1)
+  })
+
+  it('L1-4: a replay window [from,current) after live delivery is fully skipped', async () => {
+    // Live delivery advances the watermark to 800.
+    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1D:a', v: 600 })
+    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1D:b', v: 700 })
+    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1D:c', v: 800 })
+    await new Promise((r) => setTimeout(r, 20))
+    // Reconnect replays [600, 800] — all <= 800 → every one skipped.
+    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1D:a', v: 600 })
+    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1D:b', v: 700 })
+    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1D:c', v: 800 })
+    await new Promise((r) => setTimeout(r, 30))
+    expect(countDelivered('L1D:')).toBe(3) // only the 3 live ones
+  })
 })

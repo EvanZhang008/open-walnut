@@ -156,6 +156,17 @@ const LOG_FILE = path.join(DAEMON_DIR, `daemon-${DAEMON_INSTANCE_ID}.log`)
 })()
 
 // ── Types ──
+// L2: per-session background-task state. `resourceVersion` = byte offset of the latest
+// applied event (monotonic, rebuildable from the jsonl). Served on `getState`.
+interface TaskStateEntry { status: string; v: number; t: number; description?: string }
+interface TaskState {
+  tasks: Record<string, TaskStateEntry>
+  resourceVersion: number
+  updatedAt: number
+  derivedRunning: number
+  recentTransitions: Array<{ taskId: string; status: string; v: number; t: number }>
+}
+
 interface SessionData {
   proc: ChildProcess | null
   pipePath: string
@@ -163,6 +174,9 @@ interface SessionData {
   pgidPath: string
   pid: number | null
   offset: number
+  // L2: daemon-authoritative background-task state, materialized from task_* events in the
+  // watcher loop and served on the `getState` RPC. Rebuilt from jsonl on adopt/discover.
+  taskState: TaskState
   // Session-bound file tailer. Lifecycle = session process lifetime. NOT tied
   // to any WebSocket. Closed only by reapSession or daemon shutdown.
   watcher: { pollTimer: ReturnType<typeof setInterval>; offset: number } | null
@@ -427,6 +441,85 @@ function statSizeOrZero(p: string): number {
   try { return fs.statSync(p).size } catch { return 0 }
 }
 
+// ── L2: daemon-authoritative per-session task state (the k8s `.status` object) ──
+// The daemon sits closest to the CLI and persists every event in the append-only jsonl, so
+// it is the natural source of truth for background-task state. It materializes `taskState`
+// by applying task_* events with the SAME idempotent, terminal-is-terminal rules Walnut uses
+// (so the two never disagree), and serves it on the `getState` RPC. Walnut PULLs it to
+// reconcile a lost-terminal event WITHOUT guessing liveness. `resourceVersion` = the event's
+// byte offset `v` — monotonic, and rebuildable from the jsonl after a daemon restart.
+// MUST stay byte-for-byte equivalent to daemon-source.ts (CLAUDE.md). See
+// docs/plan/daemon-source-of-truth-versioned-events.md.
+const BG_TERMINAL_STATUSES = new Set(['completed', 'failed', 'stopped', 'cancelled'])
+const BG_TRANSITION_CAP = 50 // recentTransitions ring buffer bound
+
+function emptyTaskState(): TaskState {
+  return { tasks: {}, resourceVersion: 0, updatedAt: 0, derivedRunning: 0, recentTransitions: [] }
+}
+
+function runningTaskCount(ts: TaskState): number {
+  let n = 0
+  for (const id in ts.tasks) if (!BG_TERMINAL_STATUSES.has(ts.tasks[id].status)) n++
+  return n
+}
+
+// Apply one parsed jsonl line to the task state. Idempotent: duplicate / out-of-order /
+// new-kind events all converge. `v` is the line's byte-offset version; `now` is wall-clock.
+// Returns true if a task transition was recorded (for logging). Mirrors Walnut's four handlers.
+function applyTaskEvent(ts: TaskState, parsed: Record<string, unknown>, v: number, now: number): boolean {
+  if (parsed.type !== 'system') return false
+  const subtype = parsed.subtype as string | undefined
+  const taskId = parsed.task_id as string | undefined
+  if (!subtype || !taskId) return false
+  const prev = ts.tasks[taskId]
+  let nextStatus: string | undefined
+  if (subtype === 'task_started') {
+    // Terminal is terminal: a late/duplicate start can't revive a finished task.
+    nextStatus = prev && BG_TERMINAL_STATUSES.has(prev.status) ? prev.status : 'running'
+  } else if (subtype === 'task_progress') {
+    nextStatus = prev && BG_TERMINAL_STATUSES.has(prev.status) ? prev.status : 'running'
+  } else if (subtype === 'task_updated') {
+    const patch = parsed.patch as Record<string, unknown> | undefined
+    const ps = patch?.status as string | undefined
+    nextStatus = ps ?? prev?.status ?? 'running'
+  } else if (subtype === 'task_notification') {
+    nextStatus = (parsed.status as string | undefined) ?? prev?.status ?? 'running'
+  } else {
+    return false
+  }
+  const wasTerminal = prev ? BG_TERMINAL_STATUSES.has(prev.status) : false
+  const isTerminal = BG_TERMINAL_STATUSES.has(nextStatus)
+  ts.tasks[taskId] = { status: nextStatus, v, t: now, description: (parsed.description as string | undefined) ?? prev?.description }
+  if (v > ts.resourceVersion) ts.resourceVersion = v
+  ts.updatedAt = now
+  ts.derivedRunning = runningTaskCount(ts)
+  // Record only genuine transitions into a terminal state (the bookend that matters for recovery).
+  if (!wasTerminal && isTerminal) {
+    ts.recentTransitions.push({ taskId, status: nextStatus, v, t: now })
+    if (ts.recentTransitions.length > BG_TRANSITION_CAP) ts.recentTransitions.shift()
+    return true
+  }
+  return false
+}
+
+// Rebuild task state from scratch by replaying the whole jsonl. Used on adopt/discover (a new
+// daemon generation has no in-memory state) — the jsonl is the durable log, so this recovers
+// the exact state the previous generation held, including any terminal events Walnut's live
+// stream missed. `v` is computed identically to the watcher (end-of-line byte offset).
+function rebuildTaskStateFromJsonl(jsonlPath: string, now: number): TaskState {
+  const ts = emptyTaskState()
+  let text: string
+  try { text = fs.readFileSync(jsonlPath, 'utf-8') } catch { return ts }
+  let lineStartV = 0
+  for (const line of text.split('\n')) {
+    const v = lineStartV + Buffer.byteLength(line, 'utf-8') + 1
+    lineStartV = v
+    if (!line.trim() || !line.includes('"task_')) continue
+    try { applyTaskEvent(ts, JSON.parse(line) as Record<string, unknown>, v, now) } catch {}
+  }
+  return ts
+}
+
 // ── daemon-core wiring ──
 // SessionData already extends CoreSessionData (same field names). Core reaps,
 // persists, and reconciles in pure functions; we inject the Bun-specific
@@ -467,6 +560,9 @@ const core = createDaemonCore<SessionData>({
     // symptom: whole conversation replays after a daemon restart). Subscribers
     // that genuinely need history request it via attach fromOffset.
     offset: statSizeOrZero(entry.jsonlPath),
+    // Rebuild task state from the durable jsonl — recovers terminal events the previous
+    // daemon generation saw (and Walnut's live stream may have missed across the restart).
+    taskState: rebuildTaskStateFromJsonl(entry.jsonlPath, Date.now()),
     watcher: null,
     subscribers: new Set(),
     exitCode: null,
@@ -529,6 +625,7 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
     case 'stop': return cmdStop(ws, id as number, cmd)
     case 'setMode': return cmdSetMode(ws, id as number, cmd)
     case 'status': return cmdStatus(ws, id as number, cmd)
+    case 'getState': return cmdGetState(ws, id as number, cmd)
     case 'rename': return cmdRename(ws, id as number, cmd)
     case 'read-history': return cmdReadHistory(ws, id as number, cmd)
     case 'subscribe-agent': return cmdSubscribeAgent(ws, id as number, cmd)
@@ -666,9 +763,16 @@ function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, u
     // the only reliable turn-over signal; a dynamic-workflow turn emits MANY result
     // events (one per background subagent finishing), so result is NOT a turn
     // boundary. Keep in sync with daemon-source.ts.
+    //
+    // We intentionally DO NOT set CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: background
+    // Bash tasks (run_in_background) are a useful capability and there's no reason to
+    // amputate them. The original orphan-process worry doesn't hold: the CLI is
+    // spawned detached (pid === PGID) and reapSession() kills the whole process group
+    // (SIGTERM→SIGKILL), so any background shell is cleaned up with the CLI. Verified
+    // by live capture that enabling it leaves the running→idle turn-completion signal
+    // intact.
     env: {
       ...process.env,
-      CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',
       MCP_CONNECTION_NONBLOCKING: '1',
       CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
     },
@@ -724,6 +828,8 @@ function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, u
     pgidPath,
     pid,
     offset,
+    // Fresh spawn → empty; resume → rebuild from the existing jsonl (its tasks may still be live).
+    taskState: resume ? rebuildTaskStateFromJsonl(jsonlPath, Date.now()) : emptyTaskState(),
     watcher: null,
     subscribers: new Set(),
     exitCode: null,
@@ -790,13 +896,22 @@ function ensureWatcher(sid: string) {
       const buf = Buffer.alloc(bytesToRead)
       fs.readSync(fd, buf, 0, bytesToRead, offset)
       fs.closeSync(fd)
+      const batchStart = offset
       offset = stat.size
       if (s.watcher) s.watcher.offset = offset // expose for catch-up
 
       const text = buf.toString('utf-8')
       const lines = text.split('\n')
       let sawResult = false
+      // L1 versioned events: `v` is the byte offset at the END of this line in the
+      // append-only jsonl — monotonic per session, and identical whether the line is
+      // delivered live (here) or via replay (addSubscriber), so the client orders and
+      // dedupes by `v` alone. Accumulate across EVERY line (incl. skipped/control) so
+      // `v` stays byte-aligned with the file regardless of which lines we forward.
+      let lineStartV = batchStart
       for (const line of lines) {
+        const v = lineStartV + Buffer.byteLength(line, 'utf-8') + 1 // +1 = the '\n' split() removed
+        lineStartV = v
         if (!line.trim()) continue
 
         // ── Latency instrumentation: time from CLI spawn → first init line ──
@@ -807,6 +922,22 @@ function ensureWatcher(sid: string) {
           logMsg('info', 'first init line from CLI', {
             sid, spawnToInitMs: s.spawnTs ? Date.now() - s.spawnTs : null,
           })
+        }
+
+        // ── L2: materialize daemon-authoritative task state ──
+        // Cheap substring pre-filter (task_* events are `"type":"system"` lines carrying a
+        // `task_` subtype) so we JSON.parse only the relevant ~1% of lines. The applied state
+        // is served on `getState` so Walnut can reconcile a lost-terminal event without guessing.
+        if (line.includes('"task_')) {
+          try {
+            const parsed = JSON.parse(line) as Record<string, unknown>
+            if (applyTaskEvent(s.taskState, parsed, v, Date.now())) {
+              logMsg('info', 'task transition', {
+                sid, bgTaskId: parsed.task_id, status: s.taskState.tasks[parsed.task_id as string]?.status,
+                derivedRunning: s.taskState.derivedRunning, v,
+              })
+            }
+          } catch { /* malformed line — skip */ }
         }
 
         // ── Permission policy intercept ──
@@ -964,7 +1095,12 @@ function addSubscriber(ws: ServerWebSocket<WsData>, sid: string, fromOffset: num
       fs.readSync(fd, buf, 0, bytesToRead, start)
       fs.closeSync(fd)
       const text = buf.toString('utf-8')
+      // L1: stamp `v` (end-of-line byte offset) identically to the live watcher so the
+      // client dedupes a replayed line against the same `v` it may already have seen live.
+      let lineStartV = start
       for (const line of text.split('\n')) {
+        const v = lineStartV + Buffer.byteLength(line, 'utf-8') + 1
+        lineStartV = v
         if (!line.trim() || ws.readyState !== 1) continue
         // Skip transient permission-protocol lines on replay. control_request/
         // control_response are RPC handshake lines, not session history; replaying
@@ -973,7 +1109,7 @@ function addSubscriber(ws: ServerWebSocket<WsData>, sid: string, fromOffset: num
         // NOT via replay — so dropping all control lines here loses nothing.
         // Keep in sync with daemon-source.ts addSubscriber (CLAUDE.md).
         if (line.includes('"control_request"') || line.includes('"control_response"')) continue
-        try { sendEvent(ws, 'jsonl', { sid, line }) } catch {}
+        try { sendEvent(ws, 'jsonl', { sid, line, v }) } catch {}
       }
     } catch {}
   } else {
@@ -1021,6 +1157,7 @@ function cmdAttach(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, 
       // ways: 0 re-fans the whole file; MAX_SAFE_INTEGER (future-only
       // sentinel) freezes the watcher forever (stat.size <= offset).
       offset: statSizeOrZero(jsonlPath),
+      taskState: rebuildTaskStateFromJsonl(jsonlPath, Date.now()),
       watcher: null,
       subscribers: new Set(),
       exitCode: alive ? null : 0,
@@ -1194,6 +1331,32 @@ function cmdStatus(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, 
     exitReason: session.exitReason,
     pendingCtrl: session.pendingCtrl,
   })
+}
+
+// ── L2: getState — daemon-authoritative background-task state (the PULL source of truth) ──
+// Returns the materialized task state plus process liveness. Walnut PULLs this to reconcile a
+// lost-terminal event: if the daemon (which persisted every event) says a task is terminal that
+// Walnut still has 'running', Walnut adopts the daemon's truth and completes the withheld turn —
+// no liveness guessing. If the session is unknown but its jsonl exists, rebuild from disk so a
+// post-restart PULL still returns truth. Keep in sync with daemon-source.ts (CLAUDE.md).
+function cmdGetState(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const { sid } = cmd as { sid: string }
+  if (!sid) return sendError(ws, id, 'getState: missing sid')
+
+  const session = sessions.get(sid)
+  if (session) {
+    return sendOk(ws, id, {
+      exists: true,
+      alive: session.state === 'running',
+      state: session.state,
+      taskState: session.taskState,
+    })
+  }
+  // Unknown in memory — rebuild from the durable jsonl if it exists (post-restart PULL).
+  const jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl')
+  if (!fs.existsSync(jsonlPath)) return sendOk(ws, id, { exists: false })
+  const taskState = rebuildTaskStateFromJsonl(jsonlPath, Date.now())
+  return sendOk(ws, id, { exists: true, alive: false, state: 'dead', taskState })
 }
 
 // ── Rename session files ──
@@ -1769,6 +1932,7 @@ function cleanupOrphanedProcessGroups() {
             pgidPath,
             pid,
             offset: 0,
+            taskState: rebuildTaskStateFromJsonl(jsonlPath, Date.now()),
             watcher: null,
             subscribers: new Set(),
             exitCode: null,

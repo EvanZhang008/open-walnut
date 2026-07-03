@@ -454,6 +454,71 @@ function startOrphanPoll(sid) {
   session.orphanPollTimer = timer;
 }
 
+// ── L2: daemon-authoritative per-session task state (the k8s .status object) ──
+// Materializes background-task state from task_* events with the SAME idempotent,
+// terminal-is-terminal rules Walnut uses, served on the getState RPC so Walnut can reconcile a
+// lost-terminal event without guessing liveness. resourceVersion = the event byte offset v
+// (monotonic, rebuildable from the jsonl). MUST stay byte-equivalent to daemon-standalone.ts.
+const BG_TERMINAL_STATUSES = new Set(['completed', 'failed', 'stopped', 'cancelled']);
+const BG_TRANSITION_CAP = 50;
+
+function emptyTaskState() {
+  return { tasks: {}, resourceVersion: 0, updatedAt: 0, derivedRunning: 0, recentTransitions: [] };
+}
+
+function runningTaskCount(ts) {
+  let n = 0;
+  for (const id in ts.tasks) if (!BG_TERMINAL_STATUSES.has(ts.tasks[id].status)) n++;
+  return n;
+}
+
+function applyTaskEvent(ts, parsed, v, now) {
+  if (parsed.type !== 'system') return false;
+  const subtype = parsed.subtype;
+  const taskId = parsed.task_id;
+  if (!subtype || !taskId) return false;
+  const prev = ts.tasks[taskId];
+  let nextStatus;
+  if (subtype === 'task_started') {
+    nextStatus = prev && BG_TERMINAL_STATUSES.has(prev.status) ? prev.status : 'running';
+  } else if (subtype === 'task_progress') {
+    nextStatus = prev && BG_TERMINAL_STATUSES.has(prev.status) ? prev.status : 'running';
+  } else if (subtype === 'task_updated') {
+    const ps = parsed.patch && parsed.patch.status;
+    nextStatus = ps || (prev && prev.status) || 'running';
+  } else if (subtype === 'task_notification') {
+    nextStatus = parsed.status || (prev && prev.status) || 'running';
+  } else {
+    return false;
+  }
+  const wasTerminal = prev ? BG_TERMINAL_STATUSES.has(prev.status) : false;
+  const isTerminal = BG_TERMINAL_STATUSES.has(nextStatus);
+  ts.tasks[taskId] = { status: nextStatus, v, t: now, description: parsed.description || (prev && prev.description) };
+  if (v > ts.resourceVersion) ts.resourceVersion = v;
+  ts.updatedAt = now;
+  ts.derivedRunning = runningTaskCount(ts);
+  if (!wasTerminal && isTerminal) {
+    ts.recentTransitions.push({ taskId, status: nextStatus, v, t: now });
+    if (ts.recentTransitions.length > BG_TRANSITION_CAP) ts.recentTransitions.shift();
+    return true;
+  }
+  return false;
+}
+
+function rebuildTaskStateFromJsonl(jsonlPath, now) {
+  const ts = emptyTaskState();
+  let text;
+  try { text = fs.readFileSync(jsonlPath, 'utf-8'); } catch { return ts; }
+  let lineStartV = 0;
+  for (const line of text.split('\\n')) {
+    const v = lineStartV + Buffer.byteLength(line, 'utf-8') + 1;
+    lineStartV = v;
+    if (!line.trim() || !line.includes('"task_')) continue;
+    try { applyTaskEvent(ts, JSON.parse(line), v, now); } catch {}
+  }
+  return ts;
+}
+
 // ── Startup reconcile (Phase C, primitive P4) ──
 function reconcileRegistry() {
   const registry = readRegistry();
@@ -478,6 +543,7 @@ function reconcileRegistry() {
       pgidPath: entry.pgidPath,
       pid,
       offset: adoptOffset,
+      taskState: rebuildTaskStateFromJsonl(entry.jsonlPath, Date.now()),
       watcher: null,
       subscribers: new Set(),
       exitCode: null,
@@ -761,6 +827,7 @@ function handleCommand(ws, msg) {
     case 'stop': return cmdStop(ws, id, cmd);
     case 'setMode': return cmdSetMode(ws, id, cmd);
     case 'status': return cmdStatus(ws, id, cmd);
+    case 'getState': return cmdGetState(ws, id, cmd);
     case 'rename': return cmdRename(ws, id, cmd);
     case 'read-history': return cmdReadHistory(ws, id, cmd);
     case 'subscribe-agent': return cmdSubscribeAgent(ws, id, cmd);
@@ -866,12 +933,16 @@ function cmdStart(ws, id, cmd) {
     // MANY result events as background subagents finish, so result is NOT a turn
     // boundary). Verified by live capture: idle fires exactly once, strictly after
     // the last result + all task_notifications. Walnut keys turn-completion off
-    // this instead of result. NOTE: this disables NOTHING; dynamic workflows
-    // (CLAUDE_CODE_DISABLE_WORKFLOWS) are orthogonal to CLAUDE_CODE_DISABLE_BACKGROUND_TASKS
-    // (which only gates Bash run_in_background / Ctrl+B, not the Workflow tool).
+    // this instead of result.
+    //
+    // We intentionally DO NOT set CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: background
+    // Bash tasks (run_in_background) are a useful capability with no reason to be
+    // amputated. The orphan-process worry doesn't hold — the CLI is spawned detached
+    // (pid === PGID) and reapSession() kills the whole process group, so a background
+    // shell is reaped with the CLI. Verified that enabling it leaves the running→idle
+    // turn-completion signal intact. Keep in sync with daemon-standalone.ts.
     env: {
       ...process.env,
-      CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',
       MCP_CONNECTION_NONBLOCKING: '1',
       CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
     },
@@ -905,6 +976,7 @@ function cmdStart(ws, id, cmd) {
     pgidPath,
     pid,
     offset,
+    taskState: resume ? rebuildTaskStateFromJsonl(jsonlPath, Date.now()) : emptyTaskState(),
     watcher: null,           // session-bound file tailer (see ensureWatcher)
     subscribers: new Set(),  // ws clients receiving push events
     exitCode: null,
@@ -1037,12 +1109,19 @@ function ensureWatcher(sid) {
       const buf = Buffer.alloc(bytesToRead);
       fs.readSync(fd, buf, 0, bytesToRead, offset);
       fs.closeSync(fd);
+      const batchStart = offset;
       offset = stat.size;
       s.watcher.offset = offset; // expose for catch-up
 
       const text = buf.toString('utf-8');
       const lines = text.split('\\n');
+      // L1 versioned events: v = end-of-line byte offset in the append-only jsonl
+      // (monotonic per session, identical live vs replay). Accumulate across EVERY line
+      // incl. skipped/control so v stays byte-aligned. Keep in sync with daemon-standalone.ts.
+      let lineStartV = batchStart;
       for (const line of lines) {
+        const v = lineStartV + Buffer.byteLength(line, 'utf-8') + 1;
+        lineStartV = v;
         if (!line.trim()) continue;
 
         // ── Latency instrumentation: time from CLI spawn to first init line ──
@@ -1053,6 +1132,21 @@ function ensureWatcher(sid) {
           logMsg('info', 'first init line from CLI', {
             sid, spawnToInitMs: s.spawnTs ? Date.now() - s.spawnTs : null,
           });
+        }
+
+        // ── L2: materialize daemon-authoritative task state ──
+        // Cheap substring pre-filter so we JSON.parse only task_* lines. Served on getState
+        // so Walnut reconciles a lost-terminal event without guessing liveness.
+        if (line.includes('"task_')) {
+          try {
+            const parsed = JSON.parse(line);
+            if (applyTaskEvent(s.taskState, parsed, v, Date.now())) {
+              logMsg('info', 'task transition', {
+                sid, bgTaskId: parsed.task_id, status: s.taskState.tasks[parsed.task_id] && s.taskState.tasks[parsed.task_id].status,
+                derivedRunning: s.taskState.derivedRunning, v,
+              });
+            }
+          } catch {}
         }
 
         // ── Permission policy intercept ──
@@ -1080,7 +1174,7 @@ function ensureWatcher(sid) {
 
         for (const ws of s.subscribers) {
           if (ws.readyState === 1) {
-            try { sendEvent(ws, 'jsonl', { sid, line }); } catch {}
+            try { sendEvent(ws, 'jsonl', { sid, line, v }); } catch {}
           } else {
             s.subscribers.delete(ws);
           }
@@ -1133,7 +1227,12 @@ function addSubscriber(ws, sid, fromOffset) {
       fs.readSync(fd, buf, 0, bytesToRead, start);
       fs.closeSync(fd);
       const text = buf.toString('utf-8');
+      // L1: stamp v identically to the live watcher so a replayed line dedupes against the
+      // same v the client may already have seen live. Keep in sync with daemon-standalone.ts.
+      let lineStartV = start;
       for (const line of text.split('\\n')) {
+        const v = lineStartV + Buffer.byteLength(line, 'utf-8') + 1;
+        lineStartV = v;
         if (!line.trim() || ws.readyState !== 1) continue;
         // Skip transient permission-protocol lines on replay. control_request/
         // control_response are RPC handshake lines, not session history; replaying
@@ -1142,7 +1241,7 @@ function addSubscriber(ws, sid, fromOffset) {
         // NOT via replay — so dropping all control lines here loses nothing.
         // Keep in sync with daemon-standalone.ts addSubscriber (CLAUDE.md).
         if (line.includes('"control_request"') || line.includes('"control_response"')) continue;
-        try { sendEvent(ws, 'jsonl', { sid, line }); } catch {}
+        try { sendEvent(ws, 'jsonl', { sid, line, v }); } catch {}
       }
     } catch {}
   } else {
@@ -1204,6 +1303,7 @@ function cmdAttach(ws, id, cmd) {
       pgidPath,
       pid,
       offset: discoveredOffset,
+      taskState: rebuildTaskStateFromJsonl(jsonlPath, Date.now()),
       watcher: null,
       subscribers: new Set(),
       exitCode: alive ? null : 0,
@@ -1426,6 +1526,28 @@ function cmdStatus(ws, id, cmd) {
     exitReason: session.exitReason,
     pendingCtrl: session.pendingCtrl,
   });
+}
+
+// ── L2: getState — daemon-authoritative background-task state (the PULL source of truth) ──
+// Walnut PULLs this to reconcile a lost-terminal event without guessing liveness. If unknown in
+// memory but the jsonl exists, rebuild from disk. Keep in sync with daemon-standalone.ts.
+function cmdGetState(ws, id, cmd) {
+  const { sid } = cmd;
+  if (!sid) return sendError(ws, id, 'getState: missing sid');
+
+  const session = sessions.get(sid);
+  if (session) {
+    return sendOk(ws, id, {
+      exists: true,
+      alive: session.state === 'running',
+      state: session.state,
+      taskState: session.taskState,
+    });
+  }
+  const jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl');
+  if (!fs.existsSync(jsonlPath)) return sendOk(ws, id, { exists: false });
+  const taskState = rebuildTaskStateFromJsonl(jsonlPath, Date.now());
+  return sendOk(ws, id, { exists: true, alive: false, state: 'dead', taskState });
 }
 
 // ── Rename session files ──
@@ -2002,6 +2124,7 @@ function cleanupOrphanedProcessGroups() {
             pgidPath,
             pid,
             offset: 0,
+            taskState: rebuildTaskStateFromJsonl(jsonlPath, Date.now()),
             watcher: null,
       subscribers: new Set(),
             exitCode: null,

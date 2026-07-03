@@ -8,7 +8,8 @@
 
 import { registerMethod } from '../ws/handler.js'
 import { bus, EventNames } from '../../core/event-bus.js'
-import { VALID_SESSION_MODEL_IDS } from '../../core/types.js'
+import { VALID_SESSION_MODEL_IDS, SESSION_MODEL_CLI_MAP, VALID_SESSION_EFFORT_IDS } from '../../core/types.js'
+import type { SessionEffort, SessionMode } from '../../core/types.js'
 import { getSessionByClaudeId, updateSessionRecord } from '../../core/session-tracker.js'
 import { sendMessageToSession, editMessage, deleteMessage, getQueue } from '../../core/session-message-queue.js'
 import { sessionStreamBuffer } from '../session-stream-buffer.js'
@@ -45,6 +46,8 @@ export function registerSessionChatRpc(): void {
       project: typeof data.project === 'string' ? data.project : undefined,
       mode: typeof data.mode === 'string' ? data.mode : undefined,
       model: typeof data.model === 'string' ? data.model : undefined,
+      effort: typeof data.effort === 'string' && VALID_SESSION_EFFORT_IDS.has(data.effort)
+        ? (data.effort as SessionEffort) : undefined,
       host: typeof data.host === 'string' ? data.host : undefined,
     }, ['session-runner'], { source: 'web-ui' })
   })
@@ -118,16 +121,48 @@ export function registerSessionChatRpc(): void {
     // Validate and normalize model value (allowlist check) against the
     // SESSION_MODELS registry (single source of truth in core/types.ts).
     const model = typeof data.model === 'string' && VALID_SESSION_MODEL_IDS.has(data.model) ? data.model : undefined
+    // NOTE: reasoning-effort is NOT changed here. Mid-session effort switches go
+    // through POST /api/sessions/:id/effort → applyEffort() (apply_flag_settings
+    // control_request, no respawn).
 
-    // Save pendingModel/pendingMode to the session record BEFORE enqueuing the message.
-    // This prevents a race where processNext (triggered by a prior turn's result handler)
-    // dequeues the message before handleSend has a chance to save the pending model.
-    if (model || typeof data.mode === 'string') {
-      const pendingUpdates: Record<string, unknown> = {}
-      if (model) pendingUpdates.pendingModel = model
-      if (typeof data.mode === 'string') pendingUpdates.pendingMode = data.mode
-      await updateSessionRecord(data.sessionId, pendingUpdates)
-      log.web.info('session:send RPC saved pending model/mode', { sessionId: data.sessionId, model, mode: data.mode })
+    // Model switch: SAME live mechanism as the /model route — apply_flag_settings
+    // control_request (no respawn, running turn untouched) + persisted cliModel for
+    // cold resume.
+    if (model) {
+      const cliModel = SESSION_MODEL_CLI_MAP[model]
+      await updateSessionRecord(data.sessionId, { cliModel })
+      log.web.info('session:send RPC model switch (live apply)', { sessionId: data.sessionId, model, cliModel })
+      const live = await sessionRunner.getOrAttachLiveSession(data.sessionId as string).catch(() => undefined)
+      if (live) {
+        live.applyModel(cliModel)
+          .then(() => live.refreshAppliedSettings('model-change'))
+          .catch((err) => log.web.warn('session:send live model apply failed — persisted for next spawn', {
+            sessionId: data.sessionId, cliModel, error: err instanceof Error ? err.message : String(err),
+          }))
+      }
+    }
+    // Mode switch: LIVE via set_permission_mode control_request — same live-settings
+    // family as model/effort, no respawn. record.mode (persisted here) is the durable
+    // cold-resume fallback (processNext passes it as --permission-mode).
+    if (typeof data.mode === 'string') {
+      const nextMode = data.mode as SessionMode
+      await updateSessionRecord(data.sessionId, { mode: nextMode })
+      log.web.info('session:send RPC mode switch (live apply)', { sessionId: data.sessionId, mode: nextMode })
+      const liveForMode = await sessionRunner.getOrAttachLiveSession(data.sessionId as string).catch(() => undefined)
+      if (liveForMode) {
+        liveForMode.setMode(nextMode)
+        liveForMode.applyPermissionMode(nextMode)
+          .catch((err) => log.web.warn('session:send live mode apply failed — record.mode persists for next resume', {
+            sessionId: data.sessionId, mode: nextMode, error: err instanceof Error ? err.message : String(err),
+          }))
+      }
+    }
+
+    // Pure model switch (no message text): the live apply above did all the work —
+    // nothing to enqueue, no turn to trigger. (The old path needed an empty-message
+    // send to force a respawn; the new one doesn't respawn at all.)
+    if (model && !(data.message as string).trim()) {
+      return { messageId: `model-switch-${Date.now()}` }
     }
 
     // User-initiated send to a remote session = a deliberate retry. Forget any
@@ -140,12 +175,13 @@ export function registerSessionChatRpc(): void {
 
     // Enqueue and notify in one call. augmentedMessage may include image refs;
     // original data.message is used for bus events (UI display).
+    // NOTE: model is NOT forwarded — it was already applied live above (and
+    // persisted as cliModel for cold resume); SESSION_SEND carries no model field.
     log.web.info('session message via RPC', { sessionId: data.sessionId, taskId: record?.taskId, messageLength: augmentedMessage.length })
     const msg = await sendMessageToSession(data.sessionId, data.message as string, {
       source: 'ui',
       taskId: record?.taskId,
       mode: typeof data.mode === 'string' ? data.mode : undefined,
-      model,
       interrupt: data.interrupt === true ? true : undefined,
       enqueueMessage: augmentedMessage,
     })

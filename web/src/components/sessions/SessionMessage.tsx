@@ -8,6 +8,7 @@ import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { useLivePlanContent } from '@/contexts/PlanContentContext';
 import { fetchSubagentHistory } from '@/api/sessions';
 import { getSubagentCache, setSubagentCache } from '@/cache/session-cache';
+import { CopyMessageButtons } from '@/components/common/CopyMessageButtons';
 import { log } from '@/utils/log';
 
 // ── Edit Diff View ──
@@ -634,6 +635,11 @@ export const SessionMessage = memo(function SessionMessage({ message, sessionId,
             </div>
           );
         })()}
+        {text && text.trim() && (
+          <div className="session-msg-actions">
+            <CopyMessageButtons markdown={text} />
+          </div>
+        )}
       </div>
       {!isUser && usage && (
         <div className="session-msg-meta">
