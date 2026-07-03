@@ -867,6 +867,7 @@ export function registerChatRpc(): void {
                 output_tokens: usage.output_tokens,
                 cache_creation_input_tokens: usage.cache_creation_input_tokens,
                 cache_read_input_tokens: usage.cache_read_input_tokens,
+                agentId,
               })
             } catch (err) {
               log.web.warn('failed to record usage', { error: err instanceof Error ? err.message : String(err) })

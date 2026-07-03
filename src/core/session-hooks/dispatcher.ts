@@ -158,9 +158,10 @@ export class SessionHookDispatcher {
     if (!name.startsWith('session:')) return;
 
     // Guard: skip session:result/session:error/session:send from embedded subagent sessions.
-    // Without this, a triage subagent's session:result would re-trigger triage
-    // dispatch, creating an infinite loop. session:send is also guarded to prevent
-    // message-send-triage from firing when turn-complete-triage calls session_send.
+    // Without this, a summary subagent's session:result would re-trigger the summary
+    // dispatch, creating an infinite loop. (session:send is kept in the guard defensively —
+    // the summary agent no longer has a session_send tool, but a custom replacement agent
+    // could, and its sends must not re-enter the hook pipeline.)
     if ((name === EventNames.SESSION_RESULT || name === EventNames.SESSION_ERROR
         || name === EventNames.SESSION_SEND)
         && event.source === 'subagent-runner') {

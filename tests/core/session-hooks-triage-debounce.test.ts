@@ -82,9 +82,9 @@ function turnPayload(sid: string): OnTurnCompletePayload {
   } as OnTurnCompletePayload;
 }
 
-// Taskless message payload: cancelPendingTriage runs BEFORE the task guard in the
-// message-send hook, so this cancels the pending turn-complete triage WITHOUT the
-// message-send hook dispatching its own subagent — keeping the cancel assertion clean.
+// A user message-send payload. The message-send hook's ENTIRE job is now
+// cancelPendingTriage — it never dispatches a subagent (the per-message triage agent
+// was removed) — so this cleanly cancels the pending turn-complete triage.
 function messagePayload(sid: string): OnMessageSendPayload {
   return {
     sessionId: sid,
@@ -170,6 +170,26 @@ describe('turn-complete triage: trailing debounce', () => {
 
     // Even well past the original window, the cancelled turn-complete triage never fires.
     await sleep(DEBOUNCE_MS * 3);
+    expect(cap.firedFor(sid)).toBe(0);
+  });
+
+  it('message-send hook dispatches NO subagent (per-message triage removed)', async () => {
+    const sid = 'dbnc-no-dispatch';
+    registerFakeSession(sid);
+    const cap = captureDispatches();
+
+    // A user message-send with a real taskId — historically this would have dispatched
+    // the message-send-triage subagent. It must now dispatch nothing.
+    await messageSendTriageHook.handler!({
+      sessionId: sid,
+      taskId,
+      task,
+      session: { provider: 'claude-code', cwd: '/tmp/x' } as OnMessageSendPayload['session'],
+      message: 'switch direction: do X instead',
+      isResume: true,
+    } as OnMessageSendPayload);
+
+    await sleep(DEBOUNCE_MS * 2);
     expect(cap.firedFor(sid)).toBe(0);
   });
 

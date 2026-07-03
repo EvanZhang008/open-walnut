@@ -247,31 +247,29 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   }, []);
 
   const processFiles = useCallback((files: FileList | File[]) => {
-    const fileArray = Array.from(files);
-    for (const file of fileArray) {
-      if (!ALLOWED_TYPES.has(file.type)) continue;
-
-      setImages((prev) => {
-        if (prev.length >= MAX_IMAGES) return prev;
-        // Read file as base64
-        const reader = new FileReader();
-        reader.onload = () => {
-          const dataUrl = reader.result as string;
-          // Strip "data:image/png;base64," prefix
-          const base64 = dataUrl.split(',')[1];
-          if (!base64) return;
-          setImages((curr) => {
-            if (curr.length >= MAX_IMAGES) return curr;
-            return [...curr, {
-              data: base64,
-              mediaType: file.type,
-              name: file.name || 'pasted-image',
-            }];
-          });
-        };
-        reader.readAsDataURL(file);
-        return prev;
-      });
+    // Start the FileReader OUTSIDE any setState updater. The reader is a side effect;
+    // React invokes state updaters more than once (always in StrictMode, and possibly
+    // on a concurrent re-render), so kicking off the read inside a setImages(prev => …)
+    // updater fired two FileReaders per file and appended the same image twice — every
+    // pasted/dropped photo showed up doubled. Keep the updater pure; do the read here.
+    const imageFiles = Array.from(files).filter((f) => ALLOWED_TYPES.has(f.type));
+    for (const file of imageFiles) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result as string;
+        // Strip "data:image/png;base64," prefix
+        const base64 = dataUrl.split(',')[1];
+        if (!base64) return;
+        setImages((curr) => {
+          if (curr.length >= MAX_IMAGES) return curr;
+          return [...curr, {
+            data: base64,
+            mediaType: file.type,
+            name: file.name || 'pasted-image',
+          }];
+        });
+      };
+      reader.readAsDataURL(file);
     }
   }, []);
 

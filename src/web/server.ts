@@ -123,6 +123,7 @@ let healthMonitor: SessionHealthMonitor | null = null
 let sessionReaper: SessionReaper | null = null
 let heartbeatHandle: HeartbeatRunnerHandle | null = null
 let recordingReaperHandle: { stop: () => void } | null = null
+let terminalReaperHandle: { stop: () => void } | null = null
 let qmdWatcherHandle: { stop: () => void } | null = null
 let gitAutoCommitHandle: { stop: () => void; health: GitAutoCommitHealth } | null = null
 let dreamTimerHandle: ReturnType<typeof setInterval> | null = null
@@ -397,7 +398,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
             // onText intentionally NOT provided — fires per text block per round.
             // agent:response is fired ONCE below after the loop completes.
             onUsage: (usage) => {
-              try { usageTracker.record({ source: 'cron', model: usage.model ?? 'unknown', input_tokens: usage.input_tokens, output_tokens: usage.output_tokens, cache_creation_input_tokens: usage.cache_creation_input_tokens, cache_read_input_tokens: usage.cache_read_input_tokens }) } catch {}
+              try { usageTracker.record({ source: 'cron', model: usage.model ?? 'unknown', input_tokens: usage.input_tokens, output_tokens: usage.output_tokens, cache_creation_input_tokens: usage.cache_creation_input_tokens, cache_read_input_tokens: usage.cache_read_input_tokens, agentId: 'general' }) } catch {}
             },
           }, { source: 'cron', agentId: 'general', conversationId })
           // Fire agent:response exactly once after loop completes
@@ -433,7 +434,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const { runAgentLoop } = await import('../agent/loop.js')
       const result = await runAgentLoop(message, [], {
         onUsage: (usage) => {
-          try { usageTracker.record({ source: 'cron', model: usage.model ?? 'unknown', input_tokens: usage.input_tokens, output_tokens: usage.output_tokens, cache_creation_input_tokens: usage.cache_creation_input_tokens, cache_read_input_tokens: usage.cache_read_input_tokens }) } catch {}
+          try { usageTracker.record({ source: 'cron', model: usage.model ?? 'unknown', input_tokens: usage.input_tokens, output_tokens: usage.output_tokens, cache_creation_input_tokens: usage.cache_creation_input_tokens, cache_read_input_tokens: usage.cache_read_input_tokens, agentId: 'general' }) } catch {}
         },
       }, { source: 'cron-isolated' })
       return { status: 'ok', summary: (result.response ?? '').slice(0, 2000) }
@@ -500,7 +501,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       try {
         const result = await runAgentLoop(message, [], {
           onUsage: (usage) => {
-            try { usageTracker.record({ source: 'subagent', model: usage.model ?? 'unknown', input_tokens: usage.input_tokens, output_tokens: usage.output_tokens, cache_creation_input_tokens: usage.cache_creation_input_tokens, cache_read_input_tokens: usage.cache_read_input_tokens, parent_source: 'cron' }) } catch {}
+            try { usageTracker.record({ source: 'subagent', model: usage.model ?? 'unknown', input_tokens: usage.input_tokens, output_tokens: usage.output_tokens, cache_creation_input_tokens: usage.cache_creation_input_tokens, cache_read_input_tokens: usage.cache_read_input_tokens, agentId, parent_source: 'cron' }) } catch {}
           },
         }, {
           system: systemPrompt,
@@ -517,6 +518,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         return { status: 'error' as const, error: err instanceof Error ? err.message : String(err) }
       }
     },
+    runExecutor: async (job, executor, message) => {
+      const { runExecutor } = await import('../core/routines/index.js')
+      return await runExecutor(job, executor, message)
+    },
     onEvent: (evt) => {
       broadcastEvent(`cron:job-${evt.action}`, evt)
       // Wake heartbeat when a cron job finishes
@@ -527,6 +532,25 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   })
   cronServiceInstance = cronService
   setCronService(cronService)
+
+  // ── Routines executor registry ──
+  // main-agent / walnut-agent reuse the cron dep closures above (the cron
+  // engine still dispatches those two through its legacy paths, which own the
+  // notification/announce plumbing); claude-code is dispatched via runExecutor.
+  {
+    const { registerExecutor, createMainAgentExecutor, createWalnutAgentExecutor, createClaudeCodeExecutor } =
+      await import('../core/routines/index.js')
+    const cronDeps = cronService.getDeps()
+    registerExecutor(createMainAgentExecutor({
+      broadcastCronNotification: cronDeps.broadcastCronNotification,
+      runMainAgentWithPrompt: cronDeps.runMainAgentWithPrompt,
+      queueCronNotificationForAgent: cronDeps.queueCronNotificationForAgent,
+    }))
+    registerExecutor(createWalnutAgentExecutor({
+      runIsolatedAgentJob: cronDeps.runIsolatedAgentJob,
+    }))
+    registerExecutor(createClaudeCodeExecutor())
+  }
 
   // -- Discover file-based cron actions --
   try {
@@ -540,7 +564,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   }
 
   // -- API routes --
-  app.use('/api/cron', createCronRouter(cronService))
+  // Routines (canonical) + legacy /api/cron alias — same router, same engine.
+  const routinesRouter = createCronRouter(cronService)
+  app.use('/api/routines', routinesRouter)
+  app.use('/api/cron', routinesRouter)
   app.use('/api/tasks', tasksRouter)
   app.use('/api/dashboard', dashboardRouter)
   app.use('/api/sessions', sessionsRouter)
@@ -651,10 +678,25 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const enabled = await registerTerminalRpc()
     if (enabled) {
       onClientDisconnect((ws) => terminalManager.onClientDisconnect(ws))
-      // Sweep leaked walnut-*.dsock dtach sessions whose backing session is gone.
-      import('./terminal/dtach-lifecycle.js')
-        .then(({ reapOrphanDtach }) => reapOrphanDtach())
-        .catch((err) => log.web.warn('reapOrphanDtach failed', { error: String(err) }))
+      // Ephemeral/sandbox instances share the machine-global dtach socket dir
+      // (/tmp/open-walnut-term) but have an isolated, empty session registry, so
+      // letting them run the orphan sweep / periodic reaper would enumerate
+      // PRODUCTION's sockets, find none in their own registry, and kill prod's
+      // live terminals. Gate both behind !IS_EPHEMERAL (3457/ephemeral never
+      // touches 3456/production).
+      if (!IS_EPHEMERAL) {
+        // Sweep leaked walnut-*.dsock dtach sessions whose backing session is gone.
+        import('./terminal/dtach-lifecycle.js')
+          .then(({ reapOrphanDtach }) => reapOrphanDtach())
+          .catch((err) => log.web.warn('reapOrphanDtach failed', { error: String(err) }))
+        // Periodic reaper: the startup sweep above only runs once, and a dtach
+        // session kept past task-completion (foreground build) needs rechecking
+        // after the build finishes. Run both checks on a timer (same pattern as
+        // sessionReaper).
+        const { terminalReaper } = await import('../core/terminal-reaper.js')
+        terminalReaper.start()
+        terminalReaperHandle = terminalReaper
+      }
     }
   }
 
@@ -1486,17 +1528,24 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         }
       }
 
-      const { sessionId, taskId, result, isError, totalCost, duration } = eventData<'session:result'>(event)
+      const { sessionId, taskId, result, isError, totalCost, costDelta, duration } = eventData<'session:result'>(event)
       log.web.info('session result received', { sessionId, taskId, resultLength: result?.length ?? 0 })
 
-      // Record session cost (external Claude Code CLI process)
-      if (totalCost != null && totalCost > 0) {
+      // Record session cost (external Claude Code CLI process).
+      // Bill the per-result INCREMENT (costDelta), never the cumulative totalCost:
+      // the CLI's total_cost_usd is a running total for the current process, so
+      // recording it every turn re-charged the entire history each turn (the 13×
+      // inflated "$222K" session cost). costDelta is already net of the per-process
+      // watermark and is 0 for replayed events. If costDelta is absent (legacy
+      // daemon payload), skip billing rather than fall back to totalCost and
+      // reintroduce the bug — a missed increment is far cheaper than a 13× overcount.
+      if (costDelta != null && costDelta > 0) {
         try { usageTracker.record({
           source: 'session',
           model: 'claude-code-cli',
           sessionId,
           taskId,
-          external_cost_usd: totalCost,
+          external_cost_usd: costDelta,
           duration_ms: duration,
         }) } catch {}
       }
@@ -1709,11 +1758,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const subagentTaskRef = taskId ? await resolveTaskRef(taskId) : null
 
       // Check if this is a triage agent result — compact notification only
-      const { DEFAULT_TRIAGE_AGENT_ID, DEFAULT_MESSAGE_SEND_TRIAGE_AGENT_ID } = await import('../core/agent-registry.js')
+      const { DEFAULT_TRIAGE_AGENT_ID } = await import('../core/agent-registry.js')
       const { getConfig: getTriageConf } = await import('../core/config-manager.js')
       const triageConf2 = await getTriageConf()
       const triageAgentId = triageConf2.agent?.session_triage_agent ?? DEFAULT_TRIAGE_AGENT_ID
-      const triageAgentIds = new Set([triageAgentId, DEFAULT_MESSAGE_SEND_TRIAGE_AGENT_ID])
+      // 'message-send-triage' is a retired agent (no longer dispatched) but historical
+      // persisted runs still carry that agentId — keep recognising it so old results render.
+      const triageAgentIds = new Set([triageAgentId, 'message-send-triage'])
       const isTriageResult = triageAgentIds.has(agentId)
 
       if (isTriageResult) {
@@ -1865,7 +1916,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
                 onToolResult: (toolName, result) => broadcastEvent('agent:tool-result', { toolName, result }),
                 onToolActivity: (activity) => broadcastEvent('agent:tool-activity', activity),
                 onUsage: (u) => {
-                  try { usageTracker.record({ source: 'triage', model: u.model ?? 'unknown', input_tokens: u.input_tokens, output_tokens: u.output_tokens, cache_creation_input_tokens: u.cache_creation_input_tokens, cache_read_input_tokens: u.cache_read_input_tokens }) } catch {}
+                  try { usageTracker.record({ source: 'triage', model: u.model ?? 'unknown', input_tokens: u.input_tokens, output_tokens: u.output_tokens, cache_creation_input_tokens: u.cache_creation_input_tokens, cache_read_input_tokens: u.cache_read_input_tokens, agentId: 'general' }) } catch {}
                   // Fix 2: cache the EXACT input-token count (incl. cache) so the next
                   // triage turn's bail pre-check can reason in real-token space.
                   try { recordLastTurnTokens(conversationId, (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0)) } catch {}
@@ -2258,6 +2309,7 @@ async function startHeartbeatIfConfigured(): Promise<void> {
                   output_tokens: usage.output_tokens,
                   cache_creation_input_tokens: usage.cache_creation_input_tokens,
                   cache_read_input_tokens: usage.cache_read_input_tokens,
+                  agentId: 'general',
                 })
               } catch { /* non-critical */ }
             },
@@ -2644,6 +2696,10 @@ export async function stopServer(): Promise<void> {
   if (recordingReaperHandle) {
     recordingReaperHandle.stop()
     recordingReaperHandle = null
+  }
+  if (terminalReaperHandle) {
+    terminalReaperHandle.stop()
+    terminalReaperHandle = null
   }
   // Save current audio recording chunk before shutdown (prevents data loss on restart)
   try {

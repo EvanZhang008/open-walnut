@@ -31,7 +31,6 @@ import {
   removeFromGroup,
   renameGroup,
   listGroups,
-  TaskGroupScopeError,
 } from '../core/task-manager.js';
 import { VALID_PHASES } from '../core/phase.js';
 import { bm25ScoreTasks, expandChildTasks } from '../core/search.js';
@@ -901,7 +900,7 @@ For categories (type='category'): rename a category across all tasks (requires o
 This is NOT a parent/subtask relationship: grouped tasks stay flat and fully independent (separate lifecycles, no inherited fields, none is "under" another). Use it to say "these tasks belong together" (e.g. a task and its forks, or several tasks tackling one theme) without the heaviness of subtasks.
 
 Rules:
-- All tasks in a group MUST share the same category AND project.
+- Any tasks can be grouped together — there is no category/project restriction (a group is a pure visual cluster).
 - A group needs ≥2 tasks. Removing members until fewer than 2 remain dissolves the group automatically.
 - The group name is AI-suggested but you can set/override it via 'label'.
 
@@ -972,7 +971,6 @@ Actions:
 
         return `Error: unknown action "${action}".`;
       } catch (err) {
-        if (err instanceof TaskGroupScopeError) return `Error: ${err.message}`;
         return `Error: ${err instanceof Error ? err.message : String(err)}`;
       }
     },
@@ -2239,14 +2237,14 @@ defaults (same resolution chain as session_start).`,
   webSearchTool,
   webFetchTool,
 
-  // ── Cron Tools ──
+  // ── Routine (cron) Tools ──
   {
     name: 'cron_list',
-    description: 'List all scheduled cron jobs with their status, schedule, and last run info.',
+    description: 'List all routines (scheduled jobs) with their status, schedule, executor, and last run info.',
     input_schema: {
       type: 'object',
       properties: {
-        include_disabled: { type: 'boolean', description: 'Include disabled jobs (default: false)' },
+        include_disabled: { type: 'boolean', description: 'Include disabled routines (default: false)' },
       },
     },
     async execute(params) {
@@ -2254,13 +2252,13 @@ defaults (same resolution chain as session_start).`,
       const service = getCronService();
       if (!service) return 'Cron service is not running.';
       const jobs = await service.list({ includeDisabled: params.include_disabled as boolean ?? false });
-      if (jobs.length === 0) return 'No cron jobs found.';
+      if (jobs.length === 0) return 'No routines found.';
       return json(jobs.map((j) => ({
         id: j.id, name: j.name, enabled: j.enabled,
-        schedule: j.schedule, sessionTarget: j.sessionTarget,
+        schedule: j.schedule,
+        executor: j.executor ?? { type: j.sessionTarget === 'main' ? 'main-agent' : 'walnut-agent' },
         wakeMode: j.wakeMode,
         ...(j.initProcessor ? { initProcessor: j.initProcessor } : {}),
-        payload: j.payload,
         nextRunAtMs: j.state.nextRunAtMs,
         lastStatus: j.state.lastStatus,
         lastRunAtMs: j.state.lastRunAtMs,
@@ -2271,18 +2269,19 @@ defaults (same resolution chain as session_start).`,
 
   {
     name: 'cron_manage',
-    description: 'Manage cron jobs. Actions: add, update, remove, toggle (enable/disable), run (manual trigger), status (scheduler info).',
+    description: 'Manage routines (scheduled jobs). Actions: add, update, remove, toggle (enable/disable), run (manual trigger), status (scheduler info). A routine = schedule + executor. Executor types: "main-agent" (inject instructions into the main butler conversation), "walnut-agent" (isolated in-process agent run), "claude-code" (start a real Claude Code session — config needs cwd, optional host alias for remote / omit for local, optional model).',
     input_schema: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['add', 'update', 'remove', 'toggle', 'run', 'status'], description: 'The action to perform' },
-        job_id: { type: 'string', description: 'Job ID (required for update, remove, toggle, run)' },
-        name: { type: 'string', description: 'Job name (for add/update)' },
-        description: { type: 'string', description: 'Job description (for add/update)' },
+        job_id: { type: 'string', description: 'Routine ID (required for update, remove, toggle, run)' },
+        name: { type: 'string', description: 'Routine name (for add/update)' },
+        description: { type: 'string', description: 'Routine description (for add/update)' },
         schedule: { type: 'object', description: 'Schedule config: { kind: "at"|"every"|"cron", at?: string, everyMs?: number, expr?: string, tz?: string }' },
-        session_target: { type: 'string', enum: ['main', 'isolated'], description: 'Where to run: main session or isolated' },
+        executor: { type: 'object', description: 'Where to run: { type: "main-agent"|"walnut-agent"|"claude-code", config: { instructions: string, cwd?: string (claude-code required), host?: string (claude-code, omit=local), model?: string, timeoutSeconds?: number } }. Preferred over session_target/payload.' },
+        session_target: { type: 'string', enum: ['main', 'isolated'], description: 'LEGACY (use executor instead): main session or isolated' },
         wake_mode: { type: 'string', enum: ['now', 'next-cycle'], description: 'How urgently to notify' },
-        payload: { type: 'object', description: 'What to execute: { kind: "systemEvent"|"agentTurn", text?: string, message?: string }' },
+        payload: { type: 'object', description: 'LEGACY (use executor instead): { kind: "systemEvent"|"agentTurn", text?: string, message?: string }' },
         init_processor: { type: 'object', description: 'Optional pre-step action: { actionId: string, params?: object, invokeAgent?: boolean, targetAgent?: string, targetAgentModel?: string, timeoutSeconds?: number }. Set to null to remove.' },
         enabled: { type: 'boolean', description: 'Enable/disable (for update)' },
       },
@@ -2302,28 +2301,30 @@ defaults (same resolution chain as session_start).`,
           const { normalizeCronJobCreate } = await import('../core/cron/index.js');
           const input = normalizeCronJobCreate({
             name: params.name, description: params.description,
-            schedule: params.schedule, sessionTarget: params.session_target,
+            schedule: params.schedule, executor: params.executor,
+            sessionTarget: params.session_target,
             wakeMode: params.wake_mode, payload: params.payload,
             init_processor: params.init_processor,
             enabled: params.enabled,
           });
-          if (!input) return 'Error: invalid input. Provide at least schedule and payload.';
+          if (!input) return 'Error: invalid input. Provide at least schedule and executor (or legacy payload).';
           const job = await service.add(input);
-          return `Cron job created: [${job.id}] "${job.name}" — next run: ${job.state.nextRunAtMs ? new Date(job.state.nextRunAtMs).toISOString() : 'none'}`;
+          return `Routine created: [${job.id}] "${job.name}" — next run: ${job.state.nextRunAtMs ? new Date(job.state.nextRunAtMs).toISOString() : 'none'}`;
         }
         if (action === 'update') {
           if (!params.job_id) return 'Error: job_id is required for update.';
           const { normalizeCronJobPatch } = await import('../core/cron/index.js');
           const patch = normalizeCronJobPatch({
             name: params.name, description: params.description,
-            schedule: params.schedule, sessionTarget: params.session_target,
+            schedule: params.schedule, executor: params.executor,
+            sessionTarget: params.session_target,
             wakeMode: params.wake_mode, payload: params.payload,
             init_processor: params.init_processor,
             enabled: params.enabled,
           });
           if (!patch) return 'Error: invalid patch input.';
           const job = await service.update(params.job_id as string, patch);
-          return `Cron job updated: [${job.id}] "${job.name}"`;
+          return `Routine updated: [${job.id}] "${job.name}"`;
         }
         if (action === 'remove') {
           if (!params.job_id) return 'Error: job_id is required for remove.';

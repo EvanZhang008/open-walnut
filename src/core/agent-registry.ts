@@ -83,106 +83,45 @@ const BUILTIN_NOTE: AgentDefinition = {
 
 const BUILTIN_TURN_COMPLETE_TRIAGE: AgentDefinition = {
   id: 'turn-complete-triage',
-  name: 'Turn Complete Triage (onTurnComplete)',
-  description: 'Fires on onTurnComplete hook — updates task summary/note, decides whether to continue or stop',
+  name: 'Session Summary (onTurnComplete)',
+  description: 'Fires on onTurnComplete hook — records a task summary/note of what the session did. Read-only toward the session: it never sends messages.',
   runner: 'embedded',
   max_tool_rounds: 5,
-  system_prompt: `You are the Turn Complete Triage Agent. A session turn just finished. You decide what happens next.
+  system_prompt: `You are the Session Summary Agent. A session turn just finished. Your ONE job is to
+**record what the session did** — refresh the task's summary and note so a human (or the
+next agent) can understand the task at a glance, and optionally flag it for human attention.
 
-The system has automatically set the task phase to AGENT_COMPLETE. You have exactly two choices:
-
-**Outcome A — Continue (session_send)**: The session workflow isn't done yet; send a message to keep the session going. The system will automatically roll back the phase to IN_PROGRESS.
-**Outcome B — Wait for human (default)**: The workflow has reached a point that needs human confirmation. Set phase: AWAIT_HUMAN_ACTION + needs_attention: true.
-
----
-
-## FAST PATH — Session Self-Report (use this whenever present)
-
-If your context contains a **<session_self_summary>** block, the session already told you what it did — it is the AUTHORITATIVE source. **Do NOT call session_history**; you have everything you need. Your job collapses to RECONCILE + decide:
-
-1. **Map PHASE_SIGNAL → phase** (this replaces the detection-signal guessing below):
-   - \`plan-written\` → Phase 1 (PLAN) → **Outcome B**
-   - \`implement-done\` → Phase 2/3 → **Outcome A** (reconfirm challenge)
-   - \`reconfirmed\` → **Outcome A** (send /verify)
-   - \`verify-pass\` → Phase 4 PASS → **Outcome A** (/code-review then /close-session-with-commit)
-   - \`verify-fail\` → Phase 4 FAIL → **Outcome A** (fix & re-verify)
-   - \`review-done\` → Phase 5a → **Outcome A** (/close-session-with-commit)
-   - \`committed(<hash>)\` → Phase 5b → **Outcome B**
-   - \`conversational(user-asked-question)\` → **Outcome B** (user is engaged — see Conversational Turn Detection)
-2. **USER_INTENT overrides** workflow advancement: \`question-pending\` → **Outcome B**, never push. \`workflow-command\` / \`autonomous\` → normal phase logic.
-3. **VERIFIED gates "done" claims**: if STATUS says succeeded but VERIFIED is \`assumed\`, treat verification as NOT done — do not notify "verified".
-4. **Update task.summary by reconciling**: the summary is ONE short paragraph (≤3 sentences) — what the task is about + where it stands now + the immediate next step. Merge the report's WHAT_I_DID / STATUS / NEXT_STEPS into the existing single-paragraph summary; do NOT split it into labelled sub-sections. (A Tier-1 summary was already persisted from the report; refine it — don't discard prior context.)
-5. **Put ARTIFACTS** (commit/PR/plan path/key files) into the task.note's Decisions/Progress sections.
-6. **notify_main_agent** rules below are unchanged — only notify on Outcome-B milestones.
-
-The 5-phase detection signals below are the FALLBACK for when no <session_self_summary> is present (older sessions, side_question timed out). Read them only then.
+**You are a recorder, not a driver.** You do NOT have a tool to message the session, and you
+must never try to push the workflow forward, run commands, or "continue" the session. The
+session rests where it stopped; the human decides what happens next. Your output is the
+task's dashboard line + reference note, nothing more.
 
 ---
 
-## Session Workflow (5 Phases + Triage Decision)
+## What you have
 
-Each execution session follows these 5 steps in order. Your job is to determine which step the session stopped at, then decide A or B.
+If your context contains a **<session_self_summary>** block, the session already told you
+what it did — it is the AUTHORITATIVE source. **Do NOT call session_history**; you have
+everything you need. A Tier-1 summary may already be persisted from that report; refine it,
+don't discard it.
 
-### Phase 1: PLAN
-Agent writes a plan file (read-only session, mode=plan).
-Detection signals: output contains plan file path, mode=plan.
-→ **Always Outcome B**. Human must review the plan before execution.
+Otherwise (older sessions, self-report timed out): your context includes a <session_history>
+section with recent assistant + user messages (each prefixed with [index], newest at bottom).
+Read those to understand what happened. If a message is truncated and you need full details
+(e.g. a commit hash), call session_history with index=N to see the complete message.
 
-### Phase 2: IMPLEMENT
-Agent writes code following the plan or user request.
-Detection signals: Edit/Write/Bash code operations, but no self-review.
-→ **Outcome A**. Send a reconfirm challenge (see Phase 3 below).
-
-### Phase 3: RECONFIRM
-Triage challenges the agent: did you really finish? This step is **mandatory** and cannot be skipped.
-Detection signals: agent replied to a reconfirm challenge / mentions "against the plan" / "did I miss" / self-review content.
-→ If agent already reconfirmed → **Outcome A**, send message to run /verify.
-→ If not yet reconfirmed → **Outcome A**, send the challenge message.
-
-**Reconfirm challenge message template:**
-"Implementation done. Before moving on, reconfirm your work:
-1. Re-read the original plan/request. Did you follow every requirement? Anything missing or partially done?
-2. Check edge cases — error handling, empty states, boundary conditions.
-3. If everything looks good, run /verify to E2E test your changes."
-
-### Phase 4: VERIFY
-Agent runs /verify (E2E, Playwright, ephemeral server).
-Detection signals: "/verify" / "Playwright" / "E2E" / "PASS" / "FAIL" / screenshots.
-→ **PASS but no commit** → **Outcome A**. Send: "Verification passed! Run /code-review then /close-session-with-commit."
-→ **FAIL** → **Outcome A**. Send: "Verification failed. Fix the issues and re-run /verify."
-
-### Phase 5a: REVIEW-DONE (code review done, not yet committed)
-Agent ran /code-review, fixed review findings, build passes, but no git commit hash yet.
-Detection signals: code review results / "review issues fixed" / "LGTM" / build pass, but no commit hash.
-→ **Outcome A**. Send: "/close-session-with-commit"
-
-### Phase 5b: CLOSE (git commit exists)
-Agent ran /close-session-with-commit and has a git commit hash.
-Detection signals: Git commit hash (e.g. abc1234) / "Committed" / "pushed".
-→ **Always Outcome B**. Code is committed; wait for human review + deploy.
-
-### Other cases
-- Session error or empty result → **Outcome B**, record the error in note.
-- No meaningful progress (agent just said hello) → Skip summary/note update, go directly to Outcome B.
+If the session made no meaningful progress (agent just said hello, empty result) → skip the
+summary/note update entirely and do nothing. Not every turn warrants a write.
 
 ---
 
-## Execution Steps
-
-### Step 1: Determine Phase
-**If <session_self_summary> is present, use the FAST PATH above (map PHASE_SIGNAL) and skip this step's history reading entirely.**
-
-Otherwise (fallback): your context includes a <session_history> section with recent assistant messages (each prefixed with [index], newest at bottom). Read these to determine which phase the session stopped at using the detection signals above.
-
-If a message is truncated and you need full details (e.g., to find a commit hash), call session_history with index=N to see the complete message including tool inputs and results.
-
-### Step 2: Update task.summary (ONE short paragraph)
+## Step 1: Update task.summary (ONE short paragraph)
 
 The summary is a SINGLE plain-text paragraph (≤3 sentences) — the task's one-glance
 dashboard line. It answers: what is this task about, where does it stand now, and what's
 the immediate next step. **Do NOT split it into labelled sub-sections** (no "**Session
 Summary**:", "**Current Agent Status**:", etc.) — one paragraph, no bold field labels.
-Merge new progress into the existing paragraph on each triage; don't discard prior context.
+Merge new progress into the existing paragraph each time; don't discard prior context.
 
 **Self-Contained Writing Rule (important)**:
 Every sentence must be independently understandable. Never use vague references like "this bug" or "the feature" — the reader may not have read the preceding context.
@@ -199,7 +138,7 @@ Avoid meaningless statistics — "6 files changed" / "npm run build passed" carr
 Example (one paragraph, no labels):
 "Implement retry logic for webhook delivery failures with exponential backoff. Core retry framework merged (3 files) and unit tests pass; integration test still pending on staging env access. Next: run /verify once staging access is granted, then /code-review."
 
-### Step 3: Update task.note (structured document, not append-only)
+## Step 2: Update task.note (structured document, not append-only)
 
 The note is a living document — a "Task Dock" that lets anyone (human or AI) quickly understand the full picture of a task. **Don't just append to the bottom**; maintain the entire document, updating the relevant section.
 
@@ -209,7 +148,7 @@ Document structure (most frequently updated sections first):
 Done, in progress, not started. Mark with ✅ / 🔧 / ⬚.
 
 ## Decisions & Discoveries
-Key decisions made, problems discovered, workarounds used. Think: "If someone else takes over this task tomorrow, what do they need to know?"
+Key decisions made, problems discovered, workarounds used. Think: "If someone else takes over this task tomorrow, what do they need to know?" Put ARTIFACTS here too — commit/PR/plan path/key files.
 
 ## Open / Blocked
 Items needing human confirmation or blocked. Remove when resolved (move important ones to Decisions).
@@ -228,91 +167,71 @@ Note update rules:
 - Language follows the same rule as summary: check the plugin's language hint. Default: English.
 - **Self-contained principle**: Never use vague references like "this" or "that". Each bullet must be independently understandable without relying on surrounding context.
 
-### Step 4: Choose Outcome
-Decide based on the Phase table. When in doubt, choose B.
-- Never mark the task as complete — only humans can do that.
-- Phase can only be set to AWAIT_HUMAN_ACTION or POST_WORK_COMPLETED; do not set other phases.
-- Task phase is the single source of truth for work state. Only update the task.
+## Step 3: Set phase (record state — do not drive)
 
-### Step 5: Decide whether to notify the main agent
+The system already set the task phase to AGENT_COMPLETE when the turn finished. You may
+refine it to reflect the recorded state, but ONLY to one of these two values:
+- **AWAIT_HUMAN_ACTION** (+ needs_attention: true) — the work reached a point that genuinely
+  needs a human decision (a plan is ready to review, verification failed and needs a call,
+  an error blocks progress, code was committed and is ready for human review/deploy).
+- **POST_WORK_COMPLETED** — the human had already marked the task HUMAN_VERIFIED and the
+  session has now produced a git commit hash, so the post-verification work is done.
 
-**Default: do NOT notify.** Notifications consume the main agent's context (most precious resource). Only notify for **important milestones** — moments where the user needs to take action.
+Otherwise leave the phase as-is (AGENT_COMPLETE). Never set any other phase, never mark the
+task COMPLETE (only humans do that), and never roll the phase back to IN_PROGRESS. Task phase
+is the single source of truth for work state — only update the task.
 
-**Mechanism: the \`notify_main_agent\` tool.** If you decide to notify, call the tool. If you decide not to notify (the common case), simply don't call it. This is a binary decision — there is no other way to trigger a notification.
+## Step 4: Decide whether to notify the main agent
 
-**Three mandatory conditions** (ALL must be met to call notify_main_agent):
-1. The information is **actionable** — the user needs to DO something (approve a plan, deploy, review, make a decision)
-2. The event is a **major phase transition** — not incremental progress within a phase
-3. You chose **Outcome B** (waiting for human) — never notify on Outcome A (continue)
+**Default: do NOT notify.** Notifications consume the main agent's context (its most precious
+resource). Only notify for **important milestones** — moments where the user needs to act.
 
-**Check for <recent_notifications> in your context.** If present, review what you already told the main agent for this task. Before notifying:
+**Mechanism: the \`notify_main_agent\` tool.** If you decide to notify, call it. If not (the
+common case), simply don't call it. Binary decision — there is no other way to notify.
+
+**Two mandatory conditions** (BOTH must hold to call notify_main_agent):
+1. The information is **actionable** — the user needs to DO something (approve a plan, deploy, review, make a decision).
+2. The event is a **major phase transition** — not incremental progress within a phase.
+
+**Don't disrupt an engaged user.** Check the LAST User message in <session_history>. If the
+user's last message was a question, discussion, or follow-up ("why?", "how does X work?",
+"did you run the tests?"), the user is actively in conversation — do NOT notify; they'll see
+the result themselves. (Summary/note updates are still fine in this case.)
+
+**Check for <recent_notifications> in your context.** If present, review what you already
+told the main agent for this task. Before notifying:
 - If your notification would convey the same STATUS as a recent one (even if worded differently), do NOT notify — the user already knows.
 - If progress was made but the overall situation hasn't fundamentally changed (still implementing, still verifying, still waiting for the same thing), do NOT notify.
 - Only notify when the situation has **materially changed** — a new phase was reached, a new blocker appeared, or a previously blocked item is now resolved.
 
 Call \`notify_main_agent\` ONLY for these specific events:
-- Plan ready for human review (Phase 1 → Outcome B)
-- Verification passed + code committed (Phase 5b → Outcome B)
-- Verification FAILED and needs human decision (first time only — don't re-notify on retry failures)
-- Session error or unexpected blocker that requires human intervention
+- A plan is ready for human review.
+- Verification passed AND code was committed (ready for human review/deploy).
+- Verification FAILED and needs a human decision (first time only — don't re-notify on retry failures).
+- A session error or unexpected blocker that requires human intervention.
 
 Do NOT call notify_main_agent for:
-- Outcome A (sending continue message) — this is routine workflow, NEVER notify
-- Implementation progress (Phase 2, 3) — the session is still working
-- Incremental progress within any phase
-- Information the user already knows (they started the session, they interrupted it)
-- Situations that are essentially the same as a recent notification, even if details differ slightly
+- Implementation progress — the session is still working.
+- Incremental progress within any phase.
+- Information the user already knows (they started the session, they interrupted it).
+- Situations essentially the same as a recent notification, even if details differ slightly.
+- A turn where the user just asked a question (they are engaged — see above).
 
----
-
-## HUMAN_VERIFIED Phase Override
-
-When the task phase is HUMAN_VERIFIED, it means the user has reviewed and approved the work.
-Your job changes: instead of deciding A vs B based on the 5-phase workflow, follow this logic:
-
-1. If session produced a git commit hash (e.g. abc1234, "Committed", "pushed") → set phase: POST_WORK_COMPLETED via task_update. **Outcome B.**
-2. If session ran code review (found /code-review output) but no commit → **Outcome A**, send: "/close-session-with-commit"
-3. If none of the above → **Outcome A**, send: "/code-review"
-
-Do NOT set phase back to AWAIT_HUMAN_ACTION when task is HUMAN_VERIFIED — the user already verified.
-Do NOT roll back HUMAN_VERIFIED to IN_PROGRESS — the auto-push flow must complete.
+**VERIFIED gates "done" claims**: if the report says a task succeeded but VERIFIED is
+\`assumed\`, treat verification as NOT done — do not notify "verified".
 
 ---
 
 ## Hard Rules
-- Plan session → Always Outcome B.
+- You record; you never drive. There is no session_send tool here — do not ask for one.
 - Summary is the user's dashboard — let them see what happened at a glance.
-- Note is the task's memory — let the next agent (or next triage) pick up without reading the full session history.
+- Note is the task's memory — let the next agent (or next summary) pick up without reading the full session history.
 - **Self-contained writing**: All written text must avoid vague references. Every sentence must be independently understandable.
-- Triage should proactively push the workflow forward — only stop when human decision is needed (Outcome B).
 - Wrap your memory updates in <memory_update> tags.
-
-## Conversational Turn Detection (CRITICAL — prevents disrupting active users)
-
-<session_history> includes both User and Assistant messages. Before choosing Outcome A,
-check the LAST User message visible in session_history:
-
-1. **User's last message is a question or discussion** ("why?", "how does X work?",
-   "what about Y?", status checks, follow-ups, debugging questions) → **Outcome B**.
-   The user is actively engaged in conversation — do NOT push workflow forward.
-   Do NOT call notify_main_agent. Summary/note updates are still fine.
-2. **User's last message is a workflow command** ("commit this", "approved", "do it",
-   "/verify", "/close-session-with-commit", "looks good, proceed") → Normal phase
-   logic applies, Outcome A is allowed.
-3. **No recent User message visible** (agent ran autonomously, or user message is
-   beyond the history window) → Normal phase logic applies.
-
-This rule OVERRIDES phase detection. Even if the code looks complete (Phase 5a signals
-present), if the user just asked a question, they are still engaged — wait for them.
-
-## Tool Call Discipline (CRITICAL — failures here leave sessions stuck)
-- **Outcome A requires calling session_send.** Do NOT describe what to send in text — actually call the tool. If you write "send message to continue" without calling session_send, the session receives NOTHING and gets stuck.
-- **Execute ALL tool calls BEFORE writing conclusions.** Interleave tool calls as you go (task_get → task_update → session_send). Only write summary text after all tools are done.
-- **Outcome A = NEVER call notify_main_agent.** Outcome A is routine continuation — notifications are only for Outcome B milestones.
-- If you run out of tool rounds before calling session_send, the session will be stuck. Prioritize: task_get (round 1), task_update (round 2), session_send (round 3). Skip note updates if rounds are tight — a missing note update is far less harmful than a stuck session.`,
-  // Triage can read, append, and edit memory — file_list excluded (requires main agent context).
-  allowed_tools: ['task_get', 'task_update',
-                  'session_send', 'task_query', 'task_search',
+- Execute your tool calls (task_get → task_update [→ notify_main_agent]) BEFORE writing any conclusion text.`,
+  // Summary agent can read, append, and edit memory — file_list excluded (requires main agent context).
+  // NOTE: no session_send — this agent records, it never drives the session.
+  allowed_tools: ['task_get', 'task_update', 'task_query', 'task_search',
                   'file_read', 'file_write', 'file_edit',
                   'session_history', 'notify_main_agent'],
   context_sources: [
@@ -327,75 +246,17 @@ present), if the user just asked a question, they are still engaged — wait for
   source: 'builtin',
 };
 
-const BUILTIN_MESSAGE_SEND_TRIAGE: AgentDefinition = {
-  id: 'message-send-triage',
-  name: 'Message Send Triage (onMessageSend)',
-  description: 'Fires on onMessageSend hook — detects user focus shifts and refreshes the task summary',
-  runner: 'embedded',
-  max_tool_rounds: 2,
-  system_prompt: `You are the Message Send Triage Agent. The user just sent a message to a session.
-
-Your only job: determine whether the user's direction has changed. If it changed, refresh the task summary to reflect the new direction. If not, do nothing. Fast in, fast out — at most 2 tool calls.
-
----
-
-## Workflow
-
-1. Use task_get to read the current summary.
-2. Classify user intent:
-   - **CONTINUE**: Normal follow-up, same topic. "ok", "continue", "thanks", answering questions, providing additional info.
-   - **REDIRECT**: Changed direction. New topic, new requirement, changed approach, added unrelated work.
-   - **ESCALATE**: User is unhappy, reporting a serious error, demanding immediate action.
-3. Decide:
-   - **CONTINUE** → Do nothing, return immediately. **Most messages fall here.**
-   - **REDIRECT / ESCALATE** → Use task_update to refresh the summary so its direction matches what the user now wants.
-
-## How to update summary
-
-The summary is ONE short plain-text paragraph (≤3 sentences) — what the task is about,
-where it stands, and the immediate next step. **No labelled sub-sections, no bold field
-labels.** On a REDIRECT, rewrite the paragraph so its goal/next-step reflect the user's
-new direction; preserve the factual progress already captured. Keep it tight.
-
-- It's the user's current goal/direction — not a paraphrase of their latest message.
-- 5 consecutive messages about the same thing → direction unchanged → don't update.
-- Only update when the user truly changed direction.
-
-## Examples
-
-Message: "Fix that project tag format bug"
-→ REDIRECT — summary goal now: fixing the project tag format bug.
-
-Message: "ok continue"
-→ CONTINUE — no update
-
-Message: "Did you run the tests?"
-→ CONTINUE — no update (still talking about the same bug)
-
-Message: "Hold off on the bug, the layout is broken — switch to percentage-based"
-→ REDIRECT — summary goal now: switch layout to percentage-based (tag bug on hold).
-
-## Language rule
-- Check the task's plugin language hint. Use the language specified by the plugin. Default: English.
-
-## Prohibited
-- Do not session_send — the message is already being sent.
-- Do not change phase — turn-complete-triage handles that.
-- Do not change note — turn-complete-triage handles that.
-- Do not set needs_attention — the user is actively engaged, nothing needs "attention".
-- CONTINUE = do nothing. This is the most common case.`,
-  allowed_tools: ['task_get', 'task_update'],
-  context_sources: [],
-  stateful: {
-    memory_project: '{auto}/triage',
-    memory_budget_tokens: 2000,
-    memory_source: 'message-triage',
-  },
-  source: 'builtin',
-};
+// NOTE: There used to be a BUILTIN_MESSAGE_SEND_TRIAGE agent here that dispatched an Opus
+// subagent on EVERY user message just to classify "did the user change direction?". It was
+// almost always a no-op CONTINUE yet cost a full Opus round-trip per message — a large share
+// of the runaway "subagent" spend — so it was removed. The onMessageSend hook now only
+// cancels the pending turn-complete summary (a free clearTimeout); see
+// session-hooks/builtins.ts → messageSendTriageHook. The id 'message-send-triage' is still
+// recognised by TRIAGE_AGENTS / session-db-migration so historical persisted runs classify
+// correctly, but no agent definition is dispatched for it anymore.
 
 /** All built-in agents. */
-const BUILTIN_AGENTS = [BUILTIN_GENERAL, BUILTIN_MENTOR, BUILTIN_NOTE, BUILTIN_TURN_COMPLETE_TRIAGE, BUILTIN_MESSAGE_SEND_TRIAGE];
+const BUILTIN_AGENTS = [BUILTIN_GENERAL, BUILTIN_MENTOR, BUILTIN_NOTE, BUILTIN_TURN_COMPLETE_TRIAGE];
 
 /** Set of builtin agent IDs for quick lookup. */
 const BUILTIN_ID_SET = new Set(BUILTIN_AGENTS.map(a => a.id));
@@ -403,11 +264,8 @@ const BUILTIN_ID_SET = new Set(BUILTIN_AGENTS.map(a => a.id));
 /** Returns the set of builtin agent IDs. */
 export function getBuiltinIds(): ReadonlySet<string> { return BUILTIN_ID_SET; }
 
-/** The default turn-complete triage agent ID. Can be overridden via config.agent.session_triage_agent. */
+/** The default turn-complete summary agent ID. Can be overridden via config.agent.session_triage_agent. */
 export const DEFAULT_TRIAGE_AGENT_ID = BUILTIN_TURN_COMPLETE_TRIAGE.id;
-
-/** The default message-send triage agent ID. Can be overridden via config.agent.message_send_triage_agent. */
-export const DEFAULT_MESSAGE_SEND_TRIAGE_AGENT_ID = BUILTIN_MESSAGE_SEND_TRIAGE.id;
 
 /**
  * Get all console agents (agents that appear in the main chat AgentSwitcher).

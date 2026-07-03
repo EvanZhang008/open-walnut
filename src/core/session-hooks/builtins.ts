@@ -296,8 +296,8 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
       // report) and reads PHASE_SIGNAL directly — no JSONL guessing. Without one,
       // it falls back to reading <session_history>.
       const triageTask = selfReport
-        ? `A Claude Code ${sessionType}session just finished for task ${p.taskId}. Session ID: ${p.sessionId}. Turn index: ${p.turnIndex ?? 'unknown'}.\n\nThe session reported its own status below (<session_self_summary>). Use it as the authoritative source — do NOT call session_history (you already have what you need). Reconcile it with the existing task summary, then decide the outcome from its PHASE_SIGNAL and USER_INTENT fields.`
-        : `A Claude Code ${sessionType}session just finished for task ${p.taskId}. Session ID: ${p.sessionId}. Turn index: ${p.turnIndex ?? 'unknown'}.\n\nThe <session_history> context below contains recent messages (User + Assistant) with [index] labels. Use these to determine the current phase. If you need full details of a specific message, call session_history with index=N.`;
+        ? `A Claude Code ${sessionType}session just finished for task ${p.taskId}. Session ID: ${p.sessionId}. Turn index: ${p.turnIndex ?? 'unknown'}.\n\nThe session reported its own status below (<session_self_summary>). Use it as the authoritative source — do NOT call session_history (you already have what you need). Reconcile it with the existing task summary, refresh the summary/note, and decide from its PHASE_SIGNAL and USER_INTENT fields only whether to notify the main agent.`
+        : `A Claude Code ${sessionType}session just finished for task ${p.taskId}. Session ID: ${p.sessionId}. Turn index: ${p.turnIndex ?? 'unknown'}.\n\nThe <session_history> context below contains recent messages (User + Assistant) with [index] labels. Use these to understand what happened, refresh the summary/note, and decide whether to notify. If you need full details of a specific message, call session_history with index=N.`;
 
       const selfReportContext = selfReport
         ? `<session_self_summary>\nThe session produced this structured self-report of the turn it just finished. Treat it as authoritative; do not re-read the transcript.\n\n${selfReport}\n</session_self_summary>`
@@ -384,13 +384,24 @@ export const turnCompleteTriageHook: SessionHookDefinition = {
 };
 
 /**
- * message-send-triage: Dispatches a lightweight triage subagent on user message send.
- * Classifies user intent, updates task.summary.Latest, logs the interaction.
+ * message-send-triage: On user message-send, cancels any pending turn-complete
+ * triage so it never fires mid-conversation.
+ *
+ * NOTE: This hook NO LONGER dispatches a per-message triage subagent. That
+ * behaviour (an Opus subagent on EVERY user message just to classify "did the
+ * user change direction?") was almost always a no-op CONTINUE yet cost a full
+ * Opus round-trip per message — a large share of the runaway "subagent" spend.
+ * Turn-complete triage already refreshes summary/phase/note after each turn,
+ * which is sufficient. We keep the hook solely for its cancel side-effect: a
+ * user message means the user is engaged, so the debounced turn-complete triage
+ * must be cancelled (otherwise it could fire while the user is mid-chat — the
+ * mid-conversation triage problem). Re-enable per-message triage only behind an
+ * explicit opt-in if a real need resurfaces.
  */
 export const messageSendTriageHook: SessionHookDefinition = {
   id: 'message-send-triage',
   name: 'Message Send Triage',
-  description: 'Dispatches lightweight triage subagent when a user sends a message to a session.',
+  description: 'Cancels pending turn-complete triage on user message-send (no per-message subagent).',
   hooks: ['onMessageSend'],
   priority: 60,
   source: 'builtin',
@@ -398,46 +409,11 @@ export const messageSendTriageHook: SessionHookDefinition = {
   handler: async (payload) => {
     const p = payload as OnMessageSendPayload;
     // Interaction resumed: cancel any pending debounced turn-complete triage for this
-    // session so it never fires mid-conversation. Done first, unconditionally — the
+    // session so it never fires mid-conversation. Done unconditionally — the
     // dispatcher only delivers onMessageSend for user-initiated sends (it skips
     // 'agent'/'subagent-runner' sources), so this is always a real user message.
+    // This is now the hook's ENTIRE job — no subagent is dispatched.
     cancelPendingTriage(p.sessionId);
-
-    // No real task → skip. Mirrors turnCompleteTriageHook: a taskless session
-    // (taskId === '') or a dangling taskId (task no longer in tasks.json) has
-    // nothing to triage. See that hook for the full rationale.
-    if (!p.taskId || !p.task) return;
-
-    // Skip subagent sends (provider='embedded') to prevent loop
-    if (p.session?.provider === 'embedded') return;
-
-    try {
-      const { DEFAULT_MESSAGE_SEND_TRIAGE_AGENT_ID } = await import('../agent-registry.js');
-      const { getConfig } = await import('../config-manager.js');
-      const config = await getConfig();
-      const agentId = config.agent?.message_send_triage_agent ?? DEFAULT_MESSAGE_SEND_TRIAGE_AGENT_ID;
-
-      const triageTask = `User sent a message to session ${p.sessionId} for task ${p.taskId}.\n\nMessage:\n${(p.message ?? '').slice(0, 2000)}`;
-
-      bus.emit('subagent:start', {
-        agentId,
-        task: triageTask,
-        taskId: p.taskId,
-        context_override: { taskId: p.taskId, sessionId: p.sessionId, cwd: p.session?.cwd, host: p.session?.host },
-      }, ['subagent-runner'], { source: 'message-send-triage' });
-
-      log.session.info('message-send-triage hook: dispatched', {
-        sessionId: p.sessionId,
-        taskId: p.taskId,
-        agentId,
-      });
-    } catch (err) {
-      log.session.error('message-send-triage hook failed', {
-        sessionId: p.sessionId,
-        taskId: p.taskId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
   },
 };
 

@@ -119,6 +119,7 @@ export async function summarizeSession(
           output_tokens: result.usage.output_tokens,
           cache_creation_input_tokens: result.usage.cache_creation_input_tokens,
           cache_read_input_tokens: result.usage.cache_read_input_tokens,
+          agentId: agentId ?? 'session-summarizer',
         });
       } catch { /* non-critical */ }
     }

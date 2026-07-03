@@ -8,9 +8,8 @@
  * dispatching one would burn tokens on a subagent that has no task to update,
  * and historically risked self-propagating task_create loops.
  *
- * Both turn-boundary triage hooks short-circuit when there is no REAL task:
+ * The turn-complete summary hook short-circuits when there is no REAL task:
  *   - turnCompleteTriageHook  (onTurnComplete) → builtins.ts: `if (!p.taskId || !p.task) return`
- *   - messageSendTriageHook   (onMessageSend)  → builtins.ts: `if (!p.taskId || !p.task) return`
  *
  * The guard has two arms, and both are exercised here:
  *   1. taskId === '' (or undefined) — the sentinel a taskless session is created
@@ -21,11 +20,18 @@
  *      leaves it undefined when that throws, so the `!p.taskId` arm alone would
  *      let these through and triage a nonexistent task.
  *
- * This locks that behavior so a future refactor of the hook bodies (which now
+ * The onMessageSend hook (messageSendTriageHook) is even simpler: it NEVER
+ * dispatches a subagent anymore. The per-message triage agent — an Opus run on
+ * every user message just to classify "did the user change direction?" — was
+ * removed; the hook's only remaining job is to cancel any pending turn-complete
+ * summary (a free clearTimeout) so it can't fire mid-conversation. So a
+ * message-send dispatches zero subagents regardless of whether a task exists.
+ *
+ * This locks that behavior so a future refactor of the hook bodies (which still
  * do real work — side_question self-report, summary persistence, notification
- * history) can't silently regress the guard. A with-task control case in each
- * block proves the capture harness actually observes a dispatch, so the
- * no-triage assertions can't pass vacuously.
+ * history) can't silently regress the guards. The turn-complete control case
+ * proves the capture harness actually observes a dispatch, so the no-triage
+ * assertions can't pass vacuously.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
@@ -186,8 +192,11 @@ describe('taskless session: turn-complete triage', () => {
   });
 });
 
-describe('taskless session: message-send triage', () => {
-  it('does NOT dispatch triage when taskId is absent', async () => {
+describe('message-send hook: never dispatches a subagent', () => {
+  // The per-message triage agent was removed; the hook only cancels a pending
+  // turn-complete summary. So NONE of these — taskless, dangling, OR a real task —
+  // may dispatch a subagent.
+  it('does NOT dispatch when taskId is absent', async () => {
     const captured = captureSubagentStarts();
 
     await messageSendTriageHook.handler!(messagePayload(SID_TASKLESS_MSG, undefined));
@@ -195,7 +204,7 @@ describe('taskless session: message-send triage', () => {
     expect(captured.count).toBe(0);
   });
 
-  it('does NOT dispatch triage for a dangling taskId (task no longer exists)', async () => {
+  it('does NOT dispatch for a dangling taskId (task no longer exists)', async () => {
     const captured = captureSubagentStarts();
 
     await messageSendTriageHook.handler!(messagePayload(SID_DANGLING_MSG, DANGLING_TASK_ID, undefined));
@@ -203,12 +212,13 @@ describe('taskless session: message-send triage', () => {
     expect(captured.count).toBe(0);
   });
 
-  it('control: WITH a real task it DOES dispatch (capture harness is real)', async () => {
+  it('does NOT dispatch even WITH a real task (per-message triage removed)', async () => {
     const captured = captureSubagentStarts();
 
     await messageSendTriageHook.handler!(messagePayload(SID_WITHTASK_MSG, realTaskId, realTask));
 
-    expect(captured.count).toBe(1);
-    expect(captured.payloads[0].taskId).toBe(realTaskId);
+    // The turn-complete control case proves the harness sees real dispatches; here
+    // a real-task message-send must still produce zero.
+    expect(captured.count).toBe(0);
   });
 });

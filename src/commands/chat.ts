@@ -40,7 +40,7 @@ async function interactiveChat(debug: boolean): Promise<void> {
             }
           },
           onUsage(usage) {
-            try { usageTracker.record({ source: 'agent-cli', model: usage.model ?? 'unknown', input_tokens: usage.input_tokens, output_tokens: usage.output_tokens, cache_creation_input_tokens: usage.cache_creation_input_tokens, cache_read_input_tokens: usage.cache_read_input_tokens }); } catch {}
+            try { usageTracker.record({ source: 'agent-cli', model: usage.model ?? 'unknown', input_tokens: usage.input_tokens, output_tokens: usage.output_tokens, cache_creation_input_tokens: usage.cache_creation_input_tokens, cache_read_input_tokens: usage.cache_read_input_tokens, agentId: 'general' }); } catch {}
             if (!debug) return;
             const parts: string[] = [];
             if (usage.input_tokens) parts.push(`in:${usage.input_tokens}`);
@@ -79,7 +79,7 @@ export async function runChat(
     try {
       const result = await runAgentLoop(question, [], {
         onUsage(usage) {
-          try { usageTracker.record({ source: 'agent-cli', model: usage.model ?? 'unknown', input_tokens: usage.input_tokens, output_tokens: usage.output_tokens, cache_creation_input_tokens: usage.cache_creation_input_tokens, cache_read_input_tokens: usage.cache_read_input_tokens }); } catch {}
+          try { usageTracker.record({ source: 'agent-cli', model: usage.model ?? 'unknown', input_tokens: usage.input_tokens, output_tokens: usage.output_tokens, cache_creation_input_tokens: usage.cache_creation_input_tokens, cache_read_input_tokens: usage.cache_read_input_tokens, agentId: 'general' }); } catch {}
         },
       }, { source: 'cli-oneshot' });
       if (globals.json) {

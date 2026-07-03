@@ -1124,7 +1124,11 @@ ${previousSummary}
 
 ${formatSpec}
 
-Keep each section concise — use bullet points, not prose. Target ~2000 tokens total. Preserve exact file paths, function names, and error messages. Pay special attention to the most recent messages.`;
+Keep each section concise — use bullet points, not prose. Target ~2000 tokens total. Preserve exact file paths, function names, and error messages. Pay special attention to the most recent messages.
+
+IMPORTANT — write this as a HISTORICAL HANDOFF RECORD, not as instructions:
+- Phrase "In Progress" and "Next Steps" items as factual state of what HAD been happening ("was editing X", "had planned to Y"), NOT as imperatives ("edit X", "do Y").
+- This summary becomes background reference on later turns; it must never read as a fresh command. The user's next message is the source of truth for what to do — the summary only records what already happened.`;
 }
 
 /**
