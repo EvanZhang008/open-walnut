@@ -1,17 +1,21 @@
 /**
  * E2E test for session model switching.
  *
- * Verifies the full data flow when a follow-up message includes a `model`
- * field (e.g., 'sonnet', 'haiku'):
+ * Model switches use the SAME live mechanism as effort (verified on binary
+ * 2.1.170): apply_flag_settings control_request on the live CLI (no respawn,
+ * running turn untouched) + record.cliModel persisted as the durable cold-resume
+ * fallback. Two entry points, one mechanism:
  *
- *   session:send RPC with { model: 'sonnet' }
- *   → handleSend saves pendingModel to session record
- *   → processNext consumes pendingModel, stops process, re-spawns with --model sonnet
- *   → mock CLI echoes [model:sonnet] in result text
- *   → session:result event carries the proof
+ *   POST /api/sessions/:id/model   (what the ModelPicker calls)
+ *   session:send RPC with { model } (message + switch in one call)
+ *
+ * The mock CLI exits per turn (it can't hold the control loop), so what these
+ * tests can prove is: route/RPC validation, cliModel persistence, and that the
+ * NEXT turn's cold resume carries --model <new> (echoed as [model:…]). The live
+ * apply_flag_settings delivery itself is proven by real-binary probes.
  *
  * What's real: Express server, WebSocket, event bus, session-tracker, task-manager.
- * What's mocked: constants.js (temp dir), Claude CLI (mock-claude.mjs).
+ * What's mocked: constants.js (temp dir), Claude CLI (mock-claude.mjs), daemon.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -25,6 +29,7 @@ vi.mock('../../src/constants.js', () => createMockConstants())
 import { WALNUT_HOME } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
+import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -32,6 +37,7 @@ const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs
 
 let server: HttpServer
 let port: number
+let daemon: MockDaemon
 
 function wsUrl(): string {
   return `ws://localhost:${port}/ws`
@@ -114,7 +120,12 @@ function delay(ms: number): Promise<void> {
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
 
+  // Isolated mock daemon — without this, sessions route through the REAL local
+  // daemon and spawn the REAL claude CLI (setCliCommand alone isn't enough since
+  // the daemon became the mandatory transport). Same harness as session-effort-cli.
+  daemon = await createMockDaemon()
   sessionRunner.setCliCommand(MOCK_CLI)
+  sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${daemon.port}`)
 
   // Seed test tasks (one per test scenario)
   const tasksDir = path.join(WALNUT_HOME, 'tasks')
@@ -123,7 +134,7 @@ beforeAll(async () => {
     path.join(tasksDir, 'tasks.json'),
     JSON.stringify({
       version: 1,
-      tasks: ['001', '002', '003', '004', '005'].map(n => ({
+      tasks: ['001', '002', '003', '004', '005', '006', '007', '008'].map(n => ({
         id: `model-switch-task-${n}`,
         title: `Model switch test task ${n}`,
         status: 'todo',
@@ -148,7 +159,9 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  sessionRunner.setTestDaemonUrl(undefined)
   await stopServer()
+  await daemon.stop()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 
@@ -177,11 +190,15 @@ describe('Session model switch: E2E', () => {
     // First turn uses default model (opus) — should NOT contain [model:sonnet]
     expect(firstText).not.toContain('[model:sonnet]')
 
-    // Send follow-up with model switch to sonnet
+    // Send follow-up with model switch to sonnet. New semantics: the model is
+    // applied live (apply_flag_settings) + persisted as cliModel; the mock CLI
+    // exits per turn, so this next turn cold-resumes with --model sonnet.
+    // Predicate filters by content — a replayed first result must not match.
     const secondResultPromise = waitForWsEvent(
       ws,
       'session:result',
-      (evt) => (evt.data as { sessionId?: string })?.sessionId === sessionId,
+      (evt) => (evt.data as { sessionId?: string })?.sessionId === sessionId
+        && ((evt.data as { result?: string })?.result ?? '').includes('follow-up after model switch'),
     )
     await sendWsRpc(ws, 'session:send', {
       sessionId,
@@ -194,7 +211,6 @@ describe('Session model switch: E2E', () => {
 
     // Second turn must have [model:sonnet] — proves --model sonnet was passed
     expect(secondText).toContain('[model:sonnet]')
-    expect(secondText).toContain('follow-up after model switch')
 
     ws.close()
     await delay(50)
@@ -295,21 +311,17 @@ describe('Session model switch: E2E', () => {
     const sessData = (await sessRes.json()) as {
       session: {
         claudeSessionId: string
-        pendingModel?: string
       }
     }
 
     // Session record should exist with a valid claude session ID
     expect(sessData.session.claudeSessionId).toBeTruthy()
 
-    // pendingModel must be cleared (consumed by processNext)
-    expect(sessData.session.pendingModel).toBeUndefined()
-
     ws.close()
     await delay(50)
   })
 
-  it('pendingModel cleared after consumption — no stale model on next send', async () => {
+  it('model switch is durable — a later send without model keeps the new model', async () => {
     const ws = await connectWs()
 
     // Turn 1: start session (default model = opus)
@@ -324,15 +336,15 @@ describe('Session model switch: E2E', () => {
     const firstResult = await firstResultPromise
     const sessionId = (firstResult.data as { sessionId: string }).sessionId
 
-    // Wait for the result handler's processNext() to run and find an empty queue.
-    // This prevents a race where the RPC enqueues before handleSend saves pendingModel.
+    // Let the first turn's result handler drain before the next send.
     await delay(500)
 
-    // Turn 2: switch to sonnet
+    // Turn 2: switch to sonnet (persisted as cliModel — durable, not one-shot)
     const secondResultPromise = waitForWsEvent(
       ws,
       'session:result',
-      (evt) => (evt.data as { sessionId?: string })?.sessionId === sessionId,
+      (evt) => (evt.data as { sessionId?: string })?.sessionId === sessionId
+        && ((evt.data as { result?: string })?.result ?? '').includes('switch to sonnet'),
     )
     await sendWsRpc(ws, 'session:send', {
       sessionId,
@@ -347,13 +359,14 @@ describe('Session model switch: E2E', () => {
     // Wait for turn 2's result handler processNext to drain before sending turn 3
     await delay(500)
 
-    // Turn 3: send WITHOUT model field — should NOT re-apply sonnet
+    // Turn 3: send WITHOUT model field — the switch is durable (cliModel), so the
+    // session STAYS on sonnet. This is the new contract: a model switch behaves
+    // like the CLI's own /model — set once, stays until changed again.
     const thirdResultPromise = waitForWsEvent(
       ws,
       'session:result',
       (evt) => {
         const d = evt.data as { sessionId?: string; result?: string }
-        // Match on sessionId AND ensure it's a new result (contains our message text)
         return d.sessionId === sessionId && (d.result?.includes('no model override this time') ?? false)
       },
     )
@@ -365,19 +378,14 @@ describe('Session model switch: E2E', () => {
     const thirdResult = await thirdResultPromise
     const thirdText = (thirdResult.data as { result?: string }).result ?? ''
 
-    // Third result should NOT contain [model:sonnet] — pendingModel was cleared
-    expect(thirdText).not.toContain('[model:sonnet]')
-    expect(thirdText).not.toContain('[model:haiku]')
-    // It should contain the message text (proves it processed)
     expect(thirdText).toContain('no model override this time')
-    // Default model is opus (always passed by send()), so it will have [model:opus]
-    expect(thirdText).toContain('[model:opus]')
+    expect(thirdText).toContain('[model:sonnet]')
 
     ws.close()
     await delay(50)
   })
 
-  it('empty message model switch — { message: "", model: "sonnet" }', async () => {
+  it('empty message model switch — pure switch, no turn triggered, applies on next real turn', async () => {
     const ws = await connectWs()
 
     // Start session
@@ -391,32 +399,171 @@ describe('Session model switch: E2E', () => {
 
     const firstResult = await firstResultPromise
     const sessionId = (firstResult.data as { sessionId: string }).sessionId
-
-    // Wait for the result handler's processNext() to run and find an empty queue.
-    // Without this delay, our session:send RPC enqueues the message before handleSend
-    // saves pendingModel, causing a race where processNext (triggered by the first turn's
-    // result handler) dequeues our message without the pending model switch.
     await delay(500)
 
-    // Send empty message with model switch
-    const secondResultPromise = waitForWsEvent(
-      ws,
-      'session:result',
-      (evt) => (evt.data as { sessionId?: string })?.sessionId === sessionId,
-    )
-    await sendWsRpc(ws, 'session:send', {
+    // Empty message + model = a PURE switch under the new semantics: applied live /
+    // persisted, nothing enqueued, no turn, RPC resolves immediately (old path had
+    // to fake an empty-message turn to force a respawn).
+    const rpcRes = await sendWsRpc(ws, 'session:send', {
       sessionId,
       message: '',
       model: 'sonnet',
     })
+    expect((rpcRes as Record<string, unknown>).ok).toBe(true)
 
+    // Persisted for cold resume.
+    const recResp = await fetch(`http://localhost:${port}/api/sessions/${sessionId}`)
+    const recBody = await recResp.json() as { session?: { cliModel?: string } }
+    expect(recBody.session?.cliModel).toBe('sonnet')
+
+    // The next REAL turn resumes with --model sonnet.
+    const secondResultPromise = waitForWsEvent(
+      ws,
+      'session:result',
+      (evt) => (evt.data as { sessionId?: string })?.sessionId === sessionId
+        && ((evt.data as { result?: string })?.result ?? '').includes('real turn after pure switch'),
+    )
+    await sendWsRpc(ws, 'session:send', { sessionId, message: 'real turn after pure switch' })
+    const secondText = ((await secondResultPromise).data as { result?: string }).result ?? ''
+    expect(secondText).toContain('[model:sonnet]')
+
+    ws.close()
+    await delay(50)
+  })
+})
+
+// ── Live model switch via POST /api/sessions/:id/model ─────────────────────
+// The NEW primary switch path (what the ModelPicker now calls): NO message send,
+// NO respawn — apply_flag_settings control_request on the live CLI + persisted
+// cliModel for cold resume. The live control_request delivery itself is proven by
+// real-binary probes (2.1.170: {model:'sonnet'} flips the next turn's assistant
+// model, ACK lies for garbage values, [1m] round-trips); the mock CLI can't drive
+// the control loop, so this E2E covers route validation, persistence, and the
+// cold-resume fallback.
+describe('POST /api/sessions/:id/model — live switch route', () => {
+  it('persists cliModel and a later resume uses it', async () => {
+    const ws = await connectWs()
+
+    const firstResultPromise = waitForWsEvent(ws, 'session:result')
+    await sendWsRpc(ws, 'session:start', {
+      taskId: 'model-switch-task-006',
+      message: 'initial turn before REST model switch',
+      project: 'Walnut',
+      mode: 'bypass',
+    })
+    const firstResult = await firstResultPromise
+    const sessionId = (firstResult.data as { sessionId: string }).sessionId
+    expect(sessionId).toBeTruthy()
+    await delay(500)
+
+    // Switch via the REST route (no message, no respawn).
+    const resp = await fetch(`http://localhost:${port}/api/sessions/${sessionId}/model`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'sonnet' }),
+    })
+    expect(resp.status).toBe(200)
+    const body = await resp.json() as { model?: string; cliModel?: string; appliedLive?: boolean }
+    expect(body.model).toBe('sonnet')
+    expect(body.cliModel).toBe('sonnet')
+
+    // Persisted onto the record (durable cold-resume fallback).
+    const recResp = await fetch(`http://localhost:${port}/api/sessions/${sessionId}`)
+    const recBody = await recResp.json() as { session?: { cliModel?: string } }
+    expect(recBody.session?.cliModel).toBe('sonnet')
+
+    // Cold-resume fallback: the next turn (mock CLI exits per turn → respawn with
+    // --resume) must carry --model sonnet from the persisted cliModel.
+    const secondResultPromise = waitForWsEvent(
+      ws,
+      'session:result',
+      (evt) => (evt.data as { sessionId?: string })?.sessionId === sessionId
+        && ((evt.data as { result?: string })?.result ?? '').includes('turn after REST switch'),
+    )
+    await sendWsRpc(ws, 'session:send', { sessionId, message: 'turn after REST switch' })
     const secondResult = await secondResultPromise
     const secondText = (secondResult.data as { result?: string }).result ?? ''
-
-    // Session must not stall — a result should arrive
-    expect(secondResult).toBeTruthy()
-    // Result should contain [model:sonnet] — proves model switch worked with empty message
     expect(secondText).toContain('[model:sonnet]')
+
+    ws.close()
+    await delay(50)
+  })
+
+  it('rejects an unknown model alias (400) and a missing session (404)', async () => {
+    const ws = await connectWs()
+    const resultPromise = waitForWsEvent(ws, 'session:result')
+    await sendWsRpc(ws, 'session:start', {
+      taskId: 'model-switch-task-007',
+      message: 'validation test session',
+      project: 'Walnut',
+      mode: 'bypass',
+    })
+    const sessionId = ((await resultPromise).data as { sessionId: string }).sessionId
+    await delay(400)
+
+    const bad = await fetch(`http://localhost:${port}/api/sessions/${sessionId}/model`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-5' }),
+    })
+    expect(bad.status).toBe(400)
+
+    const missing = await fetch(`http://localhost:${port}/api/sessions/no-such-session/model`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'sonnet' }),
+    })
+    expect(missing.status).toBe(404)
+
+    ws.close()
+    await delay(50)
+  })
+})
+
+describe('PATCH /api/sessions/:id mode — live switch (set_permission_mode, no pendingMode)', () => {
+  // Mode joined the live-settings family: PATCH persists record.mode and fires a
+  // set_permission_mode control_request at any live CLI. The old respawn trigger
+  // (pendingMode) must never be set — a later send must NOT force --resume.
+  // (The live control-loop delivery itself is proven by the real-binary probe +
+  // the gated session-mode-live suite; the mock CLI exits per turn, so here we
+  // assert route semantics: persistence + no pendingMode debris.)
+  it('persists record.mode without setting pendingMode; cold resume carries the new mode', async () => {
+    const ws = await connectWs()
+
+    const firstResultPromise = waitForWsEvent(ws, 'session:result')
+    await sendWsRpc(ws, 'session:start', {
+      taskId: 'model-switch-task-008',
+      message: 'initial turn before mode PATCH',
+      project: 'Walnut',
+      mode: 'bypass',
+    })
+    const sessionId = ((await firstResultPromise).data as { sessionId: string }).sessionId
+    expect(sessionId).toBeTruthy()
+    await delay(500)
+
+    const resp = await fetch(`http://localhost:${port}/api/sessions/${sessionId}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'accept' }),
+    })
+    expect(resp.status).toBe(200)
+    await delay(300)
+
+    // record.mode persisted (durable cold-resume fallback); pendingMode NOT set.
+    const recResp = await fetch(`http://localhost:${port}/api/sessions/${sessionId}`)
+    const recBody = await recResp.json() as { session?: { mode?: string; pendingMode?: string } }
+    expect(recBody.session?.mode).toBe('accept')
+    expect(recBody.session?.pendingMode).toBeUndefined()
+
+    // Cold resume (mock CLI exits per turn) falls back to record.mode —
+    // the respawn carries --permission-mode acceptEdits without any pendingMode.
+    const secondResultPromise = waitForWsEvent(
+      ws,
+      'session:result',
+      (evt) => (evt.data as { sessionId?: string })?.sessionId === sessionId
+        && ((evt.data as { result?: string })?.result ?? '').includes('turn after mode patch'),
+    )
+    await sendWsRpc(ws, 'session:send', { sessionId, message: 'turn after mode patch' })
+    const secondText = ((await secondResultPromise).data as { result?: string }).result ?? ''
+    expect(secondText).toContain('[permission-mode:acceptEdits]')
 
     ws.close()
     await delay(50)

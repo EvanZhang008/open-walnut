@@ -1,5 +1,5 @@
 import { apiGet, apiPatch, apiPost } from './client';
-import type { SessionSummary, SessionRecord } from '@open-walnut/core';
+import type { SessionSummary, SessionRecord, SessionEffort } from '@open-walnut/core';
 import type { ImageAttachment } from './chat';
 import { log } from '@/utils/log';
 
@@ -110,6 +110,93 @@ export async function fetchSession(sessionId: string): Promise<SessionRecord | n
   } catch {
     return null;
   }
+}
+
+/**
+ * Change a session's reasoning effort. Backend delivers it live via an
+ * apply_flag_settings control_request (no respawn) when the CLI is running, then
+ * READS BACK the CLI's true effort via get_settings (the ACK alone can't be
+ * trusted — the CLI silently overrides via env or downgrades unsupported levels).
+ * Always persists the requested level (for cold --resume fallback).
+ *
+ * Returns:
+ *  - `effort`: the requested level (echoed).
+ *  - `appliedLive`: the control_request reached a live CLI process.
+ *  - `effectiveEffort`: what the CLI ACTUALLY uses now (undefined if not live /
+ *    old CLI that can't answer get_settings).
+ *  - `overridden`: true when effectiveEffort ≠ requested (env override / downgrade)
+ *    — the caller should surface this so the user knows it didn't fully take.
+ * Throws on 4xx (invalid level / model can't do it).
+ */
+export async function setSessionEffort(
+  sessionId: string,
+  effort: SessionEffort,
+): Promise<{ effort: string; appliedLive: boolean; effectiveEffort?: SessionEffort; overridden?: boolean }> {
+  return apiPost(`/api/sessions/${sessionId}/effort`, { effort });
+}
+
+/**
+ * Change a session's model mid-session — same mechanism as setSessionEffort:
+ * apply_flag_settings control_request on the live CLI (NO respawn, the running
+ * turn is untouched; the NEXT turn uses the new model) + persisted cliModel for
+ * cold-resume. Replaces the old empty-message session:send respawn path.
+ *
+ * Returns:
+ *  - `model`: the requested picker alias (echoed, e.g. 'sonnet-1m').
+ *  - `cliModel`: the CLI --model value persisted (e.g. 'sonnet[1m]').
+ *  - `appliedLive`: the control_request reached a live CLI process.
+ *  - `effectiveModel`: the CLI's true runtime model from the get_settings
+ *    read-back (undefined if not live / old CLI). Full ID, e.g.
+ *    "us.anthropic.claude-sonnet-4-6[1m]".
+ * Throws on 4xx (unknown model alias / session not found).
+ */
+export async function setSessionModel(
+  sessionId: string,
+  model: string,
+): Promise<{ model: string; cliModel: string; appliedLive: boolean; effectiveModel?: string }> {
+  return apiPost(`/api/sessions/${sessionId}/model`, { model });
+}
+
+/** LIVE runtime settings pulled straight from the CLI (get_settings), paired with
+ *  Walnut's requested values. `live:false` ⇒ CLI unreachable; applied is null and
+ *  callers should fall back to requested/record values without claiming truth. */
+export interface SessionLiveSettings {
+  live: boolean;
+  requested: { model?: string; effort?: SessionEffort; mode?: string };
+  applied: { model: string | null; effort: string | null; mode: string | null } | null;
+  /** Present only when fetched with details=true (the picker's collapsed
+   *  "Live details" section). Each field degrades to null independently. */
+  details?: {
+    /** get_context_usage — the CLI's own per-category breakdown (same source as
+     *  /context). maxTokens = EFFECTIVE window incl. env clamps. */
+    contextUsage: {
+      categories: Array<{ name: string; tokens: number }>;
+      totalTokens: number | null;
+      maxTokens: number | null;
+      percentage: number | null;
+    } | null;
+    /** get_usage → session block: total_cost_usd, model_usage per model, … */
+    usage: {
+      total_cost_usd?: number;
+      total_api_duration_ms?: number;
+      total_lines_added?: number;
+      total_lines_removed?: number;
+      model_usage?: Record<string, {
+        inputTokens?: number; outputTokens?: number;
+        cacheReadInputTokens?: number; cacheCreationInputTokens?: number;
+        costUSD?: number; contextWindow?: number;
+      }>;
+    } | null;
+    binaryVersion: { version?: string; buildTime?: string } | null;
+  };
+}
+
+export async function fetchSessionLiveSettings(sessionId: string, opts?: { details?: boolean }): Promise<SessionLiveSettings> {
+  // details pull waits on the CLI's get_context_usage, which tokenizes the whole
+  // tool surface — measured 16s on a large remote session. Give it 60s (server
+  // side bounds each read at 45s); the basic pull keeps the default 15s.
+  return apiGet(`/api/sessions/${sessionId}/settings${opts?.details ? '?details=1' : ''}`,
+    undefined, opts?.details ? { timeoutMs: 60_000 } : undefined);
 }
 
 export interface SessionPlanResponse {

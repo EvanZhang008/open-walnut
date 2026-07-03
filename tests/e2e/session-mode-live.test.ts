@@ -2,8 +2,11 @@
  * Live E2E tests for session mode propagation — real Claude CLI + Haiku model.
  *
  * These tests verify that --permission-mode is correctly passed to the real
- * Claude Code CLI, and that mode switches via PATCH → pendingMode → --resume
- * actually result in a new process with the correct permission mode.
+ * Claude Code CLI at spawn, and that mid-session mode switches via
+ * PATCH → set_permission_mode control_request apply LIVE on the SAME process
+ * (no respawn — the third member of the live-settings family after
+ * model/effort). The CLI confirms by echoing the mode in the control_response
+ * and emitting a system/status event with the new permissionMode.
  *
  * Three-layer verification:
  *   Layer A: Walnut streaming capture (outputFile) — system/init events with permissionMode
@@ -140,6 +143,26 @@ function parseStreamInitEvents(content: string): JsonlEvent[] {
 }
 
 /**
+ * Parse ALL mode-bearing system events (init + status) in stream order.
+ * A LIVE set_permission_mode switch emits a `status` event with the new
+ * permissionMode on the SAME process — no new init. So "current mode" is the
+ * last mode-bearing event of either subtype, not the last init.
+ */
+function parseStreamModeEvents(content: string): { subtype: string; permissionMode: string }[] {
+  const events: { subtype: string; permissionMode: string }[] = []
+  for (const line of content.split('\n').filter(Boolean)) {
+    try {
+      const evt = JSON.parse(line) as JsonlEvent
+      if (evt.type === 'system' && (evt.subtype === 'init' || evt.subtype === 'status')
+        && typeof evt.permissionMode === 'string') {
+        events.push({ subtype: evt.subtype, permissionMode: evt.permissionMode })
+      }
+    } catch { /* skip malformed lines */ }
+  }
+  return events
+}
+
+/**
  * Parse permissionMode from Claude Code's canonical JSONL (session history format).
  * The canonical format uses { type: 'user', permissionMode: '...' } — no system/init events.
  * Each user turn carries the current permissionMode, so we collect all unique modes.
@@ -160,19 +183,45 @@ function parseCanonicalModes(content: string): { permissionMode: string; timesta
   return modes
 }
 
+/** Resolve the session's stream JSONL: record.outputFile when persisted (resume
+ *  path writes it), else the daemon's stream file — local FIFO sessions never
+ *  persist outputFile (they don't respawn), so the daemon path is the norm for
+ *  live-switch tests. Remote sessions' stream lives on the remote host: read it
+ *  over ssh via WALNUT_LIVE_SSH_HOST (the resolved hostname — the Walnut host
+ *  alias in record.host is not ssh-resolvable). */
+async function readStreamContent(sessionId: string): Promise<string | null> {
+  const res = await fetch(apiUrl(`/api/sessions/${sessionId}`))
+  if (res.status !== 200) return null
+  const body = await res.json() as { session: { outputFile?: string; host?: string | null } }
+  if (body.session.host) {
+    const sshHost = process.env.WALNUT_LIVE_SSH_HOST
+    if (!sshHost) return null
+    try {
+      const { execFile } = await import('node:child_process')
+      const { promisify } = await import('node:util')
+      const { stdout } = await promisify(execFile)(
+        'ssh', [sshHost, 'cat', `/tmp/open-walnut-streams/${sessionId}.jsonl`],
+        { maxBuffer: 64 * 1024 * 1024 },
+      )
+      return stdout
+    } catch { return null }
+  }
+  const candidates = [
+    body.session.outputFile,
+    `/tmp/open-walnut-streams/${sessionId}.jsonl`,
+  ].filter(Boolean) as string[]
+  for (const p of candidates) {
+    try { return await fsp.readFile(p, 'utf-8') } catch { /* next */ }
+  }
+  return null
+}
+
 /**
- * Layer A: Read init events from Walnut's streaming capture (outputFile).
- * This is the file that Walnut creates and tails in real-time.
+ * Layer A: Read init events from Walnut's streaming capture.
  */
 async function readStreamInitEvents(sessionId: string): Promise<JsonlEvent[]> {
-  const res = await fetch(apiUrl(`/api/sessions/${sessionId}`))
-  if (res.status !== 200) return []
-  const body = await res.json() as { session: { outputFile?: string } }
-  if (!body.session.outputFile) return []
-  try {
-    const content = await fsp.readFile(body.session.outputFile, 'utf-8')
-    return parseStreamInitEvents(content)
-  } catch { return [] }
+  const content = await readStreamContent(sessionId)
+  return content ? parseStreamInitEvents(content) : []
 }
 
 /**
@@ -197,10 +246,13 @@ async function readCanonicalModes(sessionId: string): Promise<string[]> {
   return []
 }
 
-/** Convenience: get last init mode from streaming capture. */
+/** Convenience: get the CURRENT stream mode — the last mode-bearing system
+ *  event (init at spawn OR status from a live set_permission_mode switch). */
 async function getLastStreamInitMode(sessionId: string): Promise<string | undefined> {
-  const inits = await readStreamInitEvents(sessionId)
-  return inits.length > 0 ? inits[inits.length - 1].permissionMode : undefined
+  const content = await readStreamContent(sessionId)
+  if (!content) return undefined
+  const events = parseStreamModeEvents(content)
+  return events.length > 0 ? events[events.length - 1]!.permissionMode : undefined
 }
 
 /** Convenience: get last permissionMode from Claude Code's canonical file. */
@@ -379,7 +431,7 @@ describeIf('Live mode tests (real Claude CLI + Haiku)', () => {
       body: JSON.stringify({ mode }),
     })
     expect(res.status).toBe(200)
-    // Wait for pendingMode to be persisted
+    // Give the fire-and-forget set_permission_mode control_request a moment to land
     await delay(200)
   }
 
@@ -441,7 +493,7 @@ describeIf('Live mode tests (real Claude CLI + Haiku)', () => {
   describe('Mode switch via PATCH', () => {
     let switchSessionId: string
 
-    it('T5: bypass→plan — PATCH + send triggers --resume, all 3 layers update', async () => {
+    it('T5: bypass→plan — PATCH applies LIVE (set_permission_mode, same process), all 3 layers update', async () => {
       // Start in bypass
       const { sessionId } = await startSessionAndWait({
         taskId: 'mode-live-task-005',
@@ -450,24 +502,31 @@ describeIf('Live mode tests (real Claude CLI + Haiku)', () => {
       })
       switchSessionId = sessionId
       console.log(`T5: started in bypass, sessionId=${sessionId}`)
+      const pidBefore = (await getSession(sessionId)).pid
+      expect(pidBefore).toBeTruthy()
 
-      // PATCH mode to plan → sets pendingMode
+      // PATCH mode to plan → LIVE set_permission_mode control_request (no respawn).
+      // The CLI emits a system/status event with the new permissionMode.
+      // NOTE: init events are NOT a respawn detector — the CLI emits an init per
+      // TURN (query-loop semantics) even on the same long-running process. The
+      // same-process proof is pid stability on the record.
       await patchMode(sessionId, 'plan')
-
-      // Send follow-up — triggers --resume with --permission-mode plan
-      await sendAndWait({ sessionId, message: SIMPLE_PROMPT })
-      console.log(`T5: follow-up sent after mode switch to plan`)
-
       await delay(2000)
 
-      // After mode switch, stream should have 2+ init events (original + --resume)
-      const streamInits = await readStreamInitEvents(sessionId)
-      expect(streamInits.length).toBeGreaterThanOrEqual(2)
+      // Follow-up rides the SAME FIFO (no --resume) and must run in plan mode —
+      // its canonical user events carry permissionMode:'plan' (Layer B).
+      await sendAndWait({ sessionId, message: SIMPLE_PROMPT })
+      console.log(`T5: follow-up sent after live mode switch to plan`)
+      await delay(2000)
 
-      // All 3 layers: stream, canonical, record
+      // LIVE switch = SAME process across the PATCH and the follow-up.
+      const pidAfter = (await getSession(sessionId)).pid
+      expect(pidAfter).toBe(pidBefore)
+
+      // All 3 layers: stream (status event), canonical, record
       await assertModeAllLayers('T5', sessionId, 'plan', 'plan')
 
-      // pendingMode should be cleared after processNext consumed it
+      // The old respawn path is gone — pendingMode must never be set.
       const session = await getSession(sessionId)
       expect(session.pendingMode).toBeUndefined()
     }, 180_000)
@@ -503,28 +562,29 @@ describeIf('Live mode tests (real Claude CLI + Haiku)', () => {
       mode: 'bypass',
     })
     console.log(`T7: started in bypass, sessionId=${sessionId}`)
+    const pid0 = (await getSession(sessionId)).pid
+    expect(pid0).toBeTruthy()
 
     await delay(2000)
     await assertModeAllLayers('T7-initial', sessionId, 'bypassPermissions', 'bypass')
 
-    // Switch to plan
+    // Switch to plan — LIVE, same process (pid stable; init count is per-turn,
+    // not a respawn detector).
     await patchMode(sessionId, 'plan')
     await sendAndWait({ sessionId, message: SIMPLE_PROMPT })
     console.log(`T7: switched to plan`)
 
     await delay(2000)
-    const streamInits = await readStreamInitEvents(sessionId)
-    expect(streamInits.length).toBeGreaterThanOrEqual(2)
+    expect((await getSession(sessionId)).pid).toBe(pid0)
     await assertModeAllLayers('T7-plan', sessionId, 'plan', 'plan')
 
-    // Switch back to bypass
+    // Switch back to bypass — still the same live process.
     await patchMode(sessionId, 'bypass')
     await sendAndWait({ sessionId, message: SIMPLE_PROMPT })
     console.log(`T7: switched back to bypass`)
 
     await delay(2000)
-    const finalInits = await readStreamInitEvents(sessionId)
-    expect(finalInits.length).toBeGreaterThanOrEqual(3)
+    expect((await getSession(sessionId)).pid).toBe(pid0)
     await assertModeAllLayers('T7-bypass', sessionId, 'bypassPermissions', 'bypass')
   }, 300_000)
 

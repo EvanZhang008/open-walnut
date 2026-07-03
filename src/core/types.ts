@@ -59,6 +59,159 @@ export const DEFAULT_SESSION_MODEL_ID = 'opus-1m';
 /** Default CLI --model value when no model is specified. */
 export const DEFAULT_CLI_MODEL = 'opus[1m]';
 
+// ── Reasoning effort (maps to the `claude -p --effort <level>` CLI flag) ──
+// The CLI accepts low/medium/high/xhigh/max (verified against binary 2.1.170:
+// EFFORT_LEVELS = ['low','medium','high','xhigh','max']). When no --effort is
+// passed the API resolves to 'high'. `xhigh` and `max` are honored only by a
+// subset of models (see MODEL_EFFORT_FAMILY_DEFAULTS); the CLI silently
+// downgrades an unsupported level to 'high', so we grey them out in the picker
+// to keep the UI honest.
+export type SessionEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export interface SessionEffortEntry {
+  /** Picker / CLI value. */
+  id: SessionEffort;
+  /** Display label. */
+  label: string;
+  /** Dropdown / tooltip description. */
+  description: string;
+}
+export const SESSION_EFFORTS: readonly SessionEffortEntry[] = [
+  { id: 'low',    label: 'Low',    description: 'Quick, minimal reasoning' },
+  { id: 'medium', label: 'Medium', description: 'Balanced speed & depth' },
+  { id: 'high',   label: 'High',   description: 'Deep reasoning (API default)' },
+  { id: 'xhigh',  label: 'X-High', description: 'Extended exploration (select models only)' },
+  { id: 'max',    label: 'Max',    description: 'Deepest reasoning, no limit (select models only)' },
+] as const;
+/** Ordered effort ids — also the CLI-accepted values. */
+export const SESSION_EFFORT_IDS: readonly SessionEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+/** Set of valid effort ids — runtime allowlist validation. */
+export const VALID_SESSION_EFFORT_IDS: ReadonlySet<string> = new Set(SESSION_EFFORT_IDS);
+/** Effort level the API falls back to when no --effort flag is sent. */
+export const DEFAULT_SESSION_EFFORT: SessionEffort = 'high';
+
+/**
+ * Reasoning-effort capability of a model: whether it accepts an effort level at
+ * all, and whether it accepts the higher `xhigh` / top `max` levels specifically.
+ * Nesting: max ⊇ xhigh ⊇ effort (a model with `max` always has `xhigh` + `effort`).
+ */
+export interface ModelEffortCapability {
+  /** Accepts an effort parameter (low/medium/high) at all. */
+  effort: boolean;
+  /** Accepts the `xhigh` effort level (extended exploration). */
+  xhigh: boolean;
+  /** Accepts the top `max` effort level. */
+  max: boolean;
+}
+
+/**
+ * Per-FAMILY defaults — the fallback a model inherits when no explicit
+ * per-model override matches. This is what makes the map forward-compatible:
+ * a brand-new version (e.g. a surprise "opus-4-9") automatically inherits its
+ * series' capabilities without a code change. Keyed by SessionModelFamily.
+ *
+ * Verified by decompiling the real CLI binary (2.1.170) — the two allowlists are:
+ *  - xhigh (`XJH`, label "Fable 5, Opus 4.8/4.7 only"):
+ *      opus-4-8, opus-4-7, fable-5, sonnet-5 (+ mythos-5) → true; everything else false.
+ *  - max   (`gNH`, label "Fable 5, Opus 4.6+, Sonnet 4.6"):
+ *      opus-4-6/4-7/4-8, sonnet-4-6, fable-5 (+ mythos-5) → true; else false.
+ *
+ * Family defaults chosen to match the FLAGSHIP/latest member of each family so a
+ * surprise future version is covered generously (per-model overrides below pin
+ * older members that deviate):
+ *  - opus:   effort + xhigh + max (4.7/4.8 have all three; 4.6 lacks xhigh — see override).
+ *  - sonnet: effort + max, xhigh only on Sonnet 5 (4.6 has max but not xhigh — see override).
+ *  - fable:  effort + xhigh + max (Fable 5 has all three).
+ *  - haiku:  none (fastest tier; passing --effort errors on the CLI).
+ */
+export const MODEL_EFFORT_FAMILY_DEFAULTS: Record<SessionModelFamily, ModelEffortCapability> = {
+  opus:   { effort: true,  xhigh: true,  max: true  },
+  sonnet: { effort: true,  xhigh: true,  max: true  },
+  fable:  { effort: true,  xhigh: true,  max: true  },
+  haiku:  { effort: false, xhigh: false, max: false },
+};
+
+/**
+ * Per-MODEL overrides — ONLY list a specific version here when it deviates from
+ * its family default above. Matched by case-insensitive substring against the
+ * model id/string, most-specific first. Empty by default: today every shipped
+ * version matches its family default, so the family table alone is correct.
+ * (This is the escape hatch for "version X of family Y behaves differently" —
+ * e.g. if a future Sonnet gained `max`, add `{ match: 'sonnet-4-9', max: true }`.)
+ */
+export const MODEL_EFFORT_OVERRIDES: ReadonlyArray<{ match: string } & Partial<ModelEffortCapability>> = [
+  // Older shipping members that deviate from their family flagship (verified
+  // against binary 2.1.170's XJH/gNH allowlists). Matched most-specific first.
+  // Opus 4.6: has `max` but was released before `xhigh` existed.
+  { match: 'opus-4-6', xhigh: false },
+  // Sonnet 4.6: has `max`, no `xhigh` (xhigh arrived with Sonnet 5).
+  { match: 'sonnet-4-6', xhigh: false },
+  // Legacy Claude 4 pre-effort models: no xhigh, no max (only base effort, if any).
+  { match: 'opus-4-5',   xhigh: false, max: false },
+  { match: 'opus-4-1',   xhigh: false, max: false },
+  { match: 'opus-4-0',   xhigh: false, max: false },
+  { match: 'sonnet-4-5', xhigh: false, max: false },
+  { match: 'sonnet-4-0', xhigh: false, max: false },
+];
+
+/** Resolve a model string/alias to which SessionModelFamily it belongs to. */
+function effortFamilyOf(model: string): SessionModelFamily | undefined {
+  const m = model.toLowerCase();
+  if (m.includes('haiku')) return 'haiku';
+  if (m.includes('sonnet')) return 'sonnet';
+  if (m.includes('fable')) return 'fable';
+  if (m.includes('opus')) return 'opus';
+  return undefined;
+}
+
+/**
+ * Full effort capability of a model (picker alias id OR raw model string).
+ * Resolution order: explicit per-model override → per-family default → a
+ * permissive fallback for unrecognized first-party strings (matches the CLI,
+ * which defaults unknown 1P models to effort-capable). This is the single
+ * source of truth behind both modelSupportsEffort and modelSupportsMaxEffort.
+ */
+export function modelEffortCapability(model?: string): ModelEffortCapability {
+  if (!model) return { effort: true, xhigh: false, max: false };
+  const m = model.toLowerCase();
+  // 1) Most-specific: an explicit per-model override wins.
+  const override = MODEL_EFFORT_OVERRIDES.find((o) => m.includes(o.match.toLowerCase()));
+  const family = effortFamilyOf(m);
+  const base: ModelEffortCapability = family
+    ? MODEL_EFFORT_FAMILY_DEFAULTS[family]
+    // 2) Unknown family → permissive effort (CLI defaults unknown 1P to true), no xhigh/max.
+    : { effort: true, xhigh: false, max: false };
+  return {
+    effort: override?.effort ?? base.effort,
+    xhigh: override?.xhigh ?? base.xhigh,
+    max: override?.max ?? base.max,
+  };
+}
+
+/**
+ * Whether a model supports the effort parameter at all. Thin wrapper over the
+ * capability map so the picker grey-out logic reads clearly.
+ */
+export function modelSupportsEffort(model?: string): boolean {
+  return modelEffortCapability(model).effort;
+}
+
+/**
+ * Whether a model supports the `xhigh` effort level (extended exploration).
+ * Per binary 2.1.170: Fable 5, Opus 4.7/4.8, Sonnet 5 (+ Mythos 5).
+ */
+export function modelSupportsXhighEffort(model?: string): boolean {
+  return modelEffortCapability(model).xhigh;
+}
+
+/**
+ * Whether a model supports the top `max` effort level specifically. `max` is a
+ * strict subset of `effort` (a model with max always has effort). We grey `max`
+ * out in the picker for models whose capability map says max=false.
+ */
+export function modelSupportsMaxEffort(model?: string): boolean {
+  return modelEffortCapability(model).max;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -261,10 +414,8 @@ export interface AgentConfig {
   agents?: Omit<AgentDefinition, 'source'>[];
   /** Agent ID to use for session summarization (defined in config.yaml agent.agents[]). */
   session_summarizer_agent?: string;
-  /** Agent ID to use for turn-complete triage. Default: 'turn-complete-triage' (builtin). */
+  /** Agent ID to use for the turn-complete session summary. Default: 'turn-complete-triage' (builtin). */
   session_triage_agent?: string;
-  /** Agent ID to use for message-send triage. Default: 'message-send-triage' (builtin). */
-  message_send_triage_agent?: string;
   /**
    * Triage throttling. Turn-complete triage trailing-debounces by `debounce_minutes`
    * (default 3) so a burst of interactive turns collapses into one end-of-interaction
@@ -282,6 +433,9 @@ export interface AgentConfig {
   available_models?: string[] | import('../agent/providers/types.js').ModelEntry[];
   /** Default model passed as --model to claude CLI sessions. Defaults to 'opus'. */
   session_model?: string;
+  /** Default reasoning-effort passed as --effort to claude CLI sessions (low/medium/high/max).
+   *  Unset = let the CLI/API pick its default (resolves to 'high'). */
+  session_effort?: SessionEffort;
   /** Model ID for the main AI agent. Defaults to DEFAULT_MODEL (Opus 4.6). */
   main_model?: string;
   /** Default provider name for the main agent. Maps to config.providers[name]. */
@@ -690,12 +844,24 @@ export interface SessionRecord {
   /** Source session ID when this session was forked from another session. */
   forkedFromSessionId?: string;
   human_note?: string;
-  pendingModel?: string;
-  pendingMode?: string;
   /** Claude model used by this session (e.g. "claude-opus-4-6"). Display only. */
   model?: string;
   /** CLI model string passed to --model (e.g. "opus[1m]"). Preserves [1m] suffix for resume. */
   cliModel?: string;
+  /** REQUESTED reasoning-effort level (low/medium/high/xhigh/max) — what the user/config
+   *  asked for. Set live via apply_flag_settings control_request; persisted for cold
+   *  --resume --effort fallback. NOTE: this is intent, not ground truth — the CLI can
+   *  silently override it (env CLAUDE_CODE_EFFORT_LEVEL) or downgrade an unsupported
+   *  level to 'high', and still ACK success. For what the model ACTUALLY uses, see
+   *  `effectiveEffort` below. */
+  effort?: SessionEffort;
+  /** TRUE runtime effort as reported by the CLI's get_settings (`applied.effort`),
+   *  read back at session start, each turn-end, and after every effort change. This is
+   *  the authoritative value the model actually uses — it already reflects env overrides
+   *  and model downgrades. The badge shows this (falling back to `effort`, then the API
+   *  default). Undefined until the first successful read-back (or on an old CLI that
+   *  doesn't answer get_settings). May legitimately differ from `effort` (= override). */
+  effectiveEffort?: SessionEffort;
   /** Archived — hidden from UI but data preserved. */
   archived?: boolean;
   /** Why this session was archived (e.g. "plan_executed", user-provided reason). */
