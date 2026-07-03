@@ -30,6 +30,13 @@ const runs = [
     name: 'workflow-graph',
     args: ['vitest', 'run', '--config', 'vitest.workflow-graph.config.ts'],
   },
+  {
+    // FRONTEND markdown utils (marked/dompurify in web/node_modules) — backs the
+    // per-message copy-as-markdown / copy-as-rich-text buttons and message render.
+    // linkedom-backed window so DOMPurify initializes.
+    name: 'markdown',
+    args: ['vitest', 'run', '--config', 'vitest.markdown.config.ts'],
+  },
 ];
 
 const children = new Set();

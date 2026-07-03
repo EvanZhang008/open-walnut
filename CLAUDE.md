@@ -2,6 +2,18 @@
 
 > **References**: [ARCHITECTURE.md](./ARCHITECTURE.md) | [src/core/AGENTS.md](./src/core/AGENTS.md) | [src/agent/AGENTS.md](./src/agent/AGENTS.md) | [web/src/AGENTS.md](./web/src/AGENTS.md) | [tests/AGENTS.md](./tests/AGENTS.md) | [src/logging/AGENTS.md](./src/logging/AGENTS.md)
 
+## Ownership: You Are the CTO
+
+**Act as the CTO of this repo — proactive, decisive, and accountable for the outcome.**
+Don't wait to be told the obvious next step or stop to ask which way to go when the
+intent is clear. Make good, thoughtful decisions: weigh all the trade-offs (UX,
+maintainability, performance, blast radius, root-cause vs. band-aid), pick the option
+you'd defend in a design review, and state the call + the reasoning as you go. When a
+choice is genuinely the user's to make (irreversible, a real product fork, or it
+contradicts a stated preference) surface it with a recommendation — otherwise pick the
+obvious option and proceed. Fix root causes, not symptoms. Verify your own work
+(build + real-UI E2E) before claiming it's done. Default to finishing the whole job.
+
 ## CRITICAL: Open Source Repository
 
 **PUBLIC repo. Every commit is visible to the internet.**
@@ -25,6 +37,36 @@ No company-internal names, personal info, internal URLs, credentials, or interna
 npm run dev:prod        # Build all → restart 3456 with latest code
 npm run dev:ephemeral   # Ephemeral server (random port, temp data, auto-cleans)
 ```
+
+### Isolated sandbox for onboarding / provider testing / demos
+
+`scripts/walnut-sandbox.sh` spins up a fully isolated Walnut on **:3457** (`env -i` + throwaway
+HOME + isolated data/daemon dir) to test any credential or record onboarding — **never touches
+prod 3456** (the script refuses to act on 3456). Docker-free (corp Docker is org-locked).
+
+```bash
+scripts/walnut-sandbox.sh clean                  # no creds → first-run onboarding banner
+scripts/walnut-sandbox.sh token   [region]       # use host AWS_BEARER_TOKEN_BEDROCK
+scripts/walnut-sandbox.sh keys    [region]       # use host AWS access keys
+scripts/walnut-sandbox.sh profile <name> [region]# use a ~/.aws profile (incl. credential_process)
+scripts/walnut-sandbox.sh test  '{...}'          # POST /api/config/test-connection (real round-trip)
+scripts/walnut-sandbox.sh chat  "msg"            # one message to the butler → prints its reply
+scripts/walnut-sandbox.sh record out.mp4         # record the onboarding chain (needs a bearer token)
+scripts/walnut-sandbox.sh status | stop          # health | stop+wipe
+```
+
+- **HOME differs by mode (subtle):** `clean`/`token`/`keys` use a **fake HOME** (hides `~/.aws`,
+  `~/.claude`); `profile` uses the **real HOME** + `~/.toolbox/bin` on PATH so `credential_process`
+  (e.g. `ada`) can resolve. Token would otherwise win over a profile, so token isn't injected in profile mode.
+- `chat`/`record` use `scripts/walnut-sandbox-chat.mjs` / `onboarding-chain.mjs` (WS RPC + CDP recorder).
+- **Rebuild gotcha:** the sandbox runs `dist/cli.js`; `web:build`/`build` DO recompile the server
+  via `tsup`, but if you edit server code and forget to rebuild, the sandbox runs STALE server logic.
+  A `400 invalid beta flag` on `chat` while `test` passes is the classic symptom of a stale `dist`
+  (an old build that still sent the removed `extended-cache-ttl` beta). Rebuild (`npx tsup`) and re-run.
+- **Verified-good provider behavior (do NOT "fix"):** the butler does NOT send `extended-cache-ttl`
+  to Bedrock — the 1h cache is GA and rides `cache_control.ttl:'1h'` directly (`src/agent/cache.ts`,
+  `DEFAULT_TTL='1h'`). opus-4-8 uses `thinking:{type:'adaptive'}` + the `interleaved-thinking` beta.
+  This combo + a `~/.aws` profile is confirmed working end-to-end against real Bedrock.
 
 ## What Is Walnut
 

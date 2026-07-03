@@ -24,12 +24,12 @@ const LS_AUTODETECT_DISMISS_KEY = 'walnut-setup-autodetect-dismissed';
 /** Custom event name dispatched by NotificationPanel to re-show the banner. */
 export const SETUP_SHOW_EVENT = 'setup:show-guide';
 
-/** The exact line the user pastes into their own Claude Code session (path 2, the hero). */
+/** The exact line the user pastes into their own Claude Code session (path 2, the hero).
+ *  The skill is proactive: it mirrors however the user's Claude Code is already
+ *  authenticated into Walnut, then verifies with a real model call. */
 export const SETUP_SKILL_PASTE =
   'Set up Open Walnut for me: read and run the skill at ' +
-  'https://github.com/EvanZhang008/open-walnut/blob/main/skills/setup-walnut/SKILL.md ' +
-  '— copy the Bedrock credentials this Claude Code is already using into ~/.open-walnut/config.yaml, ' +
-  'install dependencies, and start the server.';
+  'https://github.com/EvanZhang008/open-walnut/blob/main/skills/setup-walnut/SKILL.md';
 
 /** Human label for each credential source. */
 const SOURCE_LABELS: Record<string, string> = {
@@ -122,8 +122,9 @@ export function SetupBanner({ health, loading, onNavigateSettings }: SetupBanner
           <div className="setup-hero">
             <div className="setup-hero-label">
               <span className="setup-hero-badge">Fastest</span>
-              Already using Claude Code? Paste this into it — it copies your working
-              credentials into Walnut and starts everything:
+              Already using Claude Code? Paste this into it — it mirrors how your Claude Code
+              is authenticated into Walnut, installs and starts everything, and verifies it
+              with a real model call:
             </div>
             <CopyCommand command={SETUP_SKILL_PASTE} multiline />
           </div>

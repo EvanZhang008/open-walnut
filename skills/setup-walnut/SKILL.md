@@ -1,105 +1,162 @@
 ---
 name: setup-walnut
-description: One-shot setup for Open Walnut. Paste into your OWN already-authenticated Claude Code session — it copies the exact Bedrock/Anthropic credentials this Claude Code is already using into ~/.open-walnut/config.yaml, installs dependencies, and starts the Walnut server. Use when a user wants to install or set up Open Walnut and already has Claude Code working.
+description: Hands-on setup agent for Open Walnut. Paste into your OWN Claude Code session — it makes Walnut's butler able to talk on first launch. It mirrors however THIS Claude Code is already authenticated (SSO profile, bearer token, or access keys) into Walnut, installs, starts the server, and proves it works with a real model call — fixing auth errors itself and asking you only when it truly can't proceed. Use when a user wants to install or set up Open Walnut.
 ---
 
-# Set up Open Walnut from this Claude Code's working credentials
+# Set up Open Walnut — we do it for you
 
-**Goal:** make Open Walnut's main agent (the "butler") able to talk on first launch by
-reusing the *exact* credential this Claude Code session is already authenticated with —
-no guessing, no asking the user to paste a key. Then install dependencies and start the server.
+**Goal:** make Open Walnut's main agent (the "butler") able to talk on first launch.
+You are doing the setup *for* the user. Be **proactive**: do everything you can yourself,
+write the config yourself, verify with a real model call yourself, and fix errors yourself.
+Ask the user a question **only** when you genuinely cannot proceed without an answer they alone have.
 
-Open Walnut's butler calls the model API **directly via the SDK** (it does not need the
-`claude` CLI for the butler — the CLI only powers optional coding sessions). So setup =
-"put one working credential where Walnut can resolve it."
+## Two truths that shape this skill
 
-Walnut resolves Bedrock credentials with this priority:
+1. **The butler needs a real model credential.** Walnut's main agent calls the model API
+   **directly via the SDK** (Bedrock / Anthropic / OpenAI / Google / Ollama). It does **not**
+   go through the `claude` CLI and has no OAuth path. So the butler (home-page chat, triage,
+   memory, cron) only works once one real credential is resolvable.
+
+2. **Coding sessions already work with zero config.** The `/sessions` Claude Code sessions
+   spawn the user's **own logged-in `claude` binary** and use its login — they need *nothing*
+   from Walnut's config. So even before the butler has a credential, the user can clone, start,
+   and open coding sessions. Tell them this so they're never blocked: *"You can start using
+   coding sessions right now; let's also wire up the butler so home-page chat works."*
+
+Walnut resolves the butler's Bedrock credential with this priority:
 `~/.open-walnut/config.yaml` → `~/.claude/settings.json` env block → process env → `~/.aws`.
-Writing `config.yaml` is the most explicit and portable, so that's what this skill does.
+Writing `config.yaml` is the most explicit and portable, so that's what this skill writes.
+
+## Guiding principle: **mirror, don't manufacture**
+
+The cleanest, most reliable credential is **whatever this Claude Code is already using
+successfully**. Copy *that exact method* into Walnut. Do **not** mint new IAM users or keys
+unless mirroring is impossible — in many managed/corporate accounts `iam:CreateUser` is
+blocked by org policy and will just fail. Provisioning is the **last** resort, and even then
+you *guide* rather than force.
 
 ---
 
-## Step 1 — Discover the credential THIS Claude Code is using
+## Step 1 — Detect HOW this Claude Code authenticates, and mirror it
 
-Inspect, in order, and pick the first that yields a usable Bedrock (or Anthropic) credential.
-**Do not print secret values back to the user** — refer to them by name only.
+Figure out the method first; the method dictates everything downstream.
+**Refer to secrets by name only — never echo their values.**
 
-1. **`~/.claude/settings.json` `env` block** — read it and look for any of:
-   - `AWS_BEARER_TOKEN_BEDROCK` (Bedrock bearer token — Identity Center/SSO)
-   - `AWS_PROFILE` (+ `AWS_REGION` / `AWS_DEFAULT_REGION`)
-   - `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`
-   - `ANTHROPIC_API_KEY` (direct Anthropic, not Bedrock)
-   - `CLAUDE_CODE_USE_BEDROCK` (a hint that Bedrock is the active provider)
+1. **`~/.claude/settings.json` `env` block** — this is the most likely place a working setup
+   lives. Read it and identify the method:
 
    ```bash
    cat ~/.claude/settings.json 2>/dev/null
    ```
 
-2. **The current shell environment** — the same vars may be exported here:
+   - `AWS_PROFILE` present → **method = profile** (very common in SSO / corporate setups).
+   - `AWS_BEARER_TOKEN_BEDROCK` present → **method = bearer token**.
+   - `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` → **method = access keys**.
+   - `ANTHROPIC_API_KEY` → **method = Anthropic direct** (not Bedrock).
+   - `CLAUDE_CODE_USE_BEDROCK=1` is a strong hint Bedrock is the active provider.
+
+2. **The current shell environment** — same vars may be exported here:
 
    ```bash
-   # Presence check only — never echo the values
-   for v in AWS_BEARER_TOKEN_BEDROCK AWS_PROFILE AWS_REGION AWS_DEFAULT_REGION \
+   for v in AWS_PROFILE AWS_BEARER_TOKEN_BEDROCK AWS_REGION AWS_DEFAULT_REGION \
             AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY ANTHROPIC_API_KEY CLAUDE_CODE_USE_BEDROCK; do
      [ -n "${!v}" ] && echo "$v is set"
    done
    ```
 
-3. **`~/.aws`** — if `~/.aws/credentials` or `~/.aws/config` exists, the AWS default
-   credential chain (or a named profile) can be used:
+3. **`~/.aws`** — enumerate the profiles (names only). If a profile is in play, that's almost
+   always the right thing to mirror — it keeps secrets out of Walnut's config and respects SSO:
 
    ```bash
-   ls -1 ~/.aws/ 2>/dev/null
-   grep -E '^\[' ~/.aws/config ~/.aws/credentials 2>/dev/null   # profile names only
+   grep -E '^\[' ~/.aws/config ~/.aws/credentials 2>/dev/null
+   aws sts get-caller-identity 2>/dev/null   # confirms the default/active creds actually work
    ```
 
-Choose the **highest-priority** credential found. Prefer, in this order:
-**bearer token → access keys → profile → default AWS chain (`~/.aws` present)**.
-Resolve the region from `AWS_REGION`/`AWS_DEFAULT_REGION` (or a profile's region), defaulting to `us-west-2`.
+**Pick the method to mirror, in this order of preference:**
+**profile → bearer token → access keys → Anthropic API key.**
+Profile is preferred because it works with SSO, holds no secret in Walnut's file, and refreshes
+itself. Resolve the region from `AWS_REGION`/`AWS_DEFAULT_REGION` (or the profile's region),
+defaulting to `us-west-2`. Then go to **Step 3**.
 
-> If you find **nothing**, stop and tell the user: they need Bedrock or Anthropic access
-> first — point them to the in-app "AI Provider" settings or GETTING_STARTED.md. Do not invent a key.
+If Step 1 finds a usable method → mirror it, skip Step 2.
+If it finds **nothing usable** → go to **Step 2**.
 
 ---
 
-## Step 2 — Locate (or clone) the Open Walnut repo
+## Step 2 — Nothing to mirror? Guide the user to a credential (don't manufacture one)
+
+Reaching here means there's no working method on the machine to copy. **Do not silently create
+IAM users/keys** — in many accounts that's blocked and it's not your call to make. Instead,
+figure out what the user *can* use and guide the smallest path. Ask one short question:
+
+> "I couldn't find an existing credential to reuse. Which do you have access to —
+> (a) an AWS account with Bedrock, or (b) an Anthropic API key?"
+
+### (a) AWS Bedrock
+
+- **First check if the default chain already works** (they may have creds without env vars):
+  ```bash
+  aws sts get-caller-identity        # if this works, you can mirror the default chain / a profile
+  ```
+  If it works, use a **profile** or the default chain (Step 3) — no new resources needed.
+
+- **If they need a key**, prefer guiding them to **generate one themselves** rather than you
+  creating IAM resources:
+  - **Bedrock console → API keys** → *Generate short-term* (≤12h, inherits their permissions,
+    no IAM user) or *Generate long-term* (stable, but creates an IAM user — may be blocked in
+    corporate accounts). Have them paste the resulting key; use it as a **bearer token** in Step 3.
+  - Only if the user explicitly asks you to create a long-term key *and* has the rights, you may
+    run the AWS CLI to do it — but **stop immediately on `AccessDenied`** and fall back to the
+    console-self-serve path above. (Long-term keys are "exploration only" per AWS; a personal
+    local butler is an acceptable use, and it can be rotated/revoked later.)
+
+- **Model access is a common real blocker.** Bedrock requires the account to have **model
+  access** enabled for Claude models before any call succeeds. If Step 5's test returns
+  `AccessDeniedException`, send them to Bedrock console → **Model access** → enable the Claude
+  models, then retry. This can't be automated — guide them.
+
+### (b) Anthropic API key
+
+Have them grab a key from the Anthropic console and either export `ANTHROPIC_API_KEY` or paste it;
+write the Anthropic variant in Step 3.
+
+> Meanwhile, remind them coding sessions already work with their logged-in `claude` — they're
+> not blocked while sorting out the butler credential.
+
+---
+
+## Step 3 — Locate (or clone) the Open Walnut repo
 
 ```bash
-# If already cloned, cd into it. Otherwise clone it.
 test -d open-walnut || git clone https://github.com/EvanZhang008/open-walnut.git
 cd open-walnut
-```
-
-Resolve `OPEN_WALNUT_HOME` (defaults to `~/.open-walnut`) and ensure it exists:
-
-```bash
 WALNUT_HOME="${OPEN_WALNUT_HOME:-$HOME/.open-walnut}"
 mkdir -p "$WALNUT_HOME"
 ```
 
 ---
 
-## Step 3 — Write the credential into `~/.open-walnut/config.yaml`
+## Step 4 — Write the mirrored credential into `~/.open-walnut/config.yaml`
 
-Write **only** a `providers.bedrock` block (Walnut merges it with its other config keys).
-Pick the variant matching what you found in Step 1. **Never commit this file; it holds secrets.**
+Write **only** a `providers.bedrock` block (Walnut merges it with its other keys). Pick the
+variant matching the method you chose. **Merge, don't clobber** an existing file. **Never commit it.**
 
-**Bearer token:**
+**Profile (preferred — SSO-safe, no secret in the file):**
 ```yaml
 providers:
   bedrock:
     api: bedrock
-    region: us-west-2            # the resolved region
-    bearer_token: <the AWS_BEARER_TOKEN_BEDROCK value>
+    region: us-west-2          # the resolved region
+    aws_profile: <profile name>
 ```
 
-**AWS profile** (preferred when SSO/credential_process is in play — keeps secrets out of the file):
+**Bearer token** (mirrored `AWS_BEARER_TOKEN_BEDROCK`, or a key the user generated):
 ```yaml
 providers:
   bedrock:
     api: bedrock
     region: us-west-2
-    aws_profile: <profile name>
+    bearer_token: <the token value>
 ```
 
 **Access keys:**
@@ -122,54 +179,65 @@ agent:
   main_provider: anthropic
 ```
 
-**Important — merge, don't clobber.** If `config.yaml` already exists, read it first and
-merge the `providers` (and optional `agent.main_provider`) keys in, preserving everything else.
-A safe way is to use Walnut's own config endpoint after the server is up (Step 5), or edit the
-YAML carefully by hand. When the credential is an env var or `~/.aws` profile, prefer referencing
-it (`${env:...}` / `aws_profile`) over inlining the secret.
+When the credential is an env var or `~/.aws` profile, prefer **referencing** it (`${env:...}` /
+`aws_profile`) over inlining a secret.
 
 ---
 
-## Step 4 — Install dependencies
+## Step 5 — Install, start, and PROVE it works (real model call)
 
 ```bash
-npm install        # installs backend + frontend deps (runs postinstall patches)
-```
-
----
-
-## Step 5 — Start the server and verify
-
-```bash
+npm install        # backend + frontend deps (runs postinstall patches)
 npm start          # builds everything, serves http://localhost:3456
 ```
 
-Then verify the butler can authenticate. Two ways:
+**The proof is a real round-trip, not just "a credential exists."** Use Walnut's own
+test endpoint — it actually calls the model (Haiku, 1 token) with the config you wrote:
 
-- **UI:** open http://localhost:3456 and type "hello" — a reply means the credential works.
-- **API (scriptable):**
-  ```bash
-  curl -s http://localhost:3456/api/system/health | python3 -m json.tool
-  ```
-  Expect `"hasReadyProvider": true` and a `"credentialSource"` that is **not** `"none"`
-  (it will be `"config"` since you wrote config.yaml). If it's `false`, re-check Step 1/3.
-
-If you want a no-token sanity check of the credential before spending tokens, hit the
-Settings test endpoint:
 ```bash
 curl -s -X POST http://localhost:3456/api/config/test-connection \
   -H 'content-type: application/json' -d '{}' | python3 -m json.tool
-# {"ok": true, "authMethod": "...", "latencyMs": ...}
+# success → {"ok": true, "authMethod": "...", "latencyMs": ...}
+# failure → {"ok": false, "error": "<the real AWS/Anthropic error>"}
 ```
+
+Cross-check overall health:
+```bash
+curl -s http://localhost:3456/api/system/health | python3 -m json.tool
+# expect "hasReadyProvider": true and "credentialSource": "config"
+```
+
+Final confirmation — actually talk to the butler in the UI: open http://localhost:3456 and
+type "hello". A real reply is the ground truth that onboarding succeeded.
 
 ---
 
-## Done
+## Step 6 — If it fails, fix it yourself and re-test (the proactive loop)
 
-Report to the user:
-- which credential **source** + **method** you used (by name, never the secret),
+Don't stop at the first error. Read `error` from `test-connection`, map it, fix it, **edit
+`config.yaml` yourself, and call `test-connection` again** — loop until `ok: true`.
+
+| `test-connection` error | Cause | Your fix |
+|---|---|---|
+| `AccessDeniedException` (on a model) | Model access not enabled in Bedrock | Guide user: Bedrock console → **Model access** → enable Claude → retry |
+| `hasReadyProvider:false`, source `none` | Walnut didn't resolve the credential | Re-check `providers.bedrock` exists + valid YAML + region set; re-test |
+| `ExpiredTokenException` / `UnrecognizedClientException` | Short-term/SSO token expired, or wrong key | Refresh SSO (`aws sso login`) / regenerate the key; re-test |
+| `ValidationException` / model not found | Model not available in that region | Switch `region` (e.g. `us-east-1`/`us-west-2`) where the model is enabled; re-test |
+| profile not found / `CredentialsProviderError` | Wrong `aws_profile` name | Re-list `~/.aws/config` profiles, correct the name; re-test |
+| Server won't start / build fails | Node version or deps | Node ≥ 22; re-run `npm install`; read and fix the named build error |
+
+Only when a fix needs a value/action solely the user controls (which profile, which region,
+enabling model access, refreshing SSO) do you ask **one targeted question** — then apply the
+answer and re-test yourself.
+
+---
+
+## Done — report back
+
+- the credential **method + source** you mirrored (by name, never the secret),
 - the resolved region,
 - that the server is running at http://localhost:3456,
-- and the `hasReadyProvider`/`credentialSource` health result as proof it works.
+- the `test-connection` `ok:true` + `hasReadyProvider:true` results as proof, and
+- the reminder that coding sessions also work (they use their own logged-in `claude`).
 
 Remind them: `~/.open-walnut/config.yaml` may contain a secret — keep it private, never commit it.
