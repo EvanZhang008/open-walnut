@@ -18,14 +18,21 @@ import {
 import type { SkillMeta } from '../../src/core/skill-loader.js';
 import { GLOBAL_SKILLS_DIR, CLAUDE_SKILLS_DIR, WALNUT_HOME } from '../../src/constants.js';
 
+let originalCwd: string;
+
 beforeEach(async () => {
   tmpDir = WALNUT_HOME;
   await fsp.rm(tmpDir, { recursive: true, force: true });
   await fsp.mkdir(tmpDir, { recursive: true });
+  // getSearchDirs() includes path.resolve('skills') — chdir into the tmp dir so
+  // the repo's real workspace skills/ can't leak into these tests.
+  originalCwd = process.cwd();
+  process.chdir(tmpDir);
   clearSkillsCache();
 });
 
 afterEach(async () => {
+  process.chdir(originalCwd);
   await fsp.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -173,25 +180,32 @@ describe('formatSkillsPrompt', () => {
     expect(formatSkillsPrompt([])).toBe('');
   });
 
-  it('produces correct XML structure', () => {
+  it('produces correct XML structure grouped by category', () => {
     const skills: SkillMeta[] = [
-      { name: 'weather', description: 'Get weather', location: './skills/weather/SKILL.md' },
-      { name: 'github', description: 'GitHub CLI', location: '~/.open-walnut/skills/github/SKILL.md' },
+      { name: 'weather', description: 'Get weather', location: './skills/weather/SKILL.md', category: 'general', type: 'action' },
+      { name: 'github', description: 'GitHub CLI', location: '~/.open-walnut/skills/github/SKILL.md', category: 'dev', type: 'knowledge' },
     ];
     const result = formatSkillsPrompt(skills);
 
     expect(result).toContain('## Skills (mandatory)');
     expect(result).toContain('<available_skills>');
     expect(result).toContain('</available_skills>');
+    expect(result).toContain('<category name="general">');
+    expect(result).toContain('<category name="dev">');
     expect(result).toContain('<name>weather</name>');
+    expect(result).toContain('<type>action</type>');
+    expect(result).toContain('<type>knowledge</type>');
     expect(result).toContain('<description>Get weather</description>');
     expect(result).toContain('<location>./skills/weather/SKILL.md</location>');
     expect(result).toContain('<name>github</name>');
+    // Instruction is reversed to favor loading (Hermes-style routing)
+    expect(result).toContain('ERR ON THE SIDE OF LOADING');
+    expect(result).not.toContain('never read more than one');
   });
 
   it('escapes XML in values', () => {
     const skills: SkillMeta[] = [
-      { name: 'test & dev', description: 'A <special> skill', location: '/path/to/"SKILL".md' },
+      { name: 'test & dev', description: 'A <special> skill', location: '/path/to/"SKILL".md', category: 'general', type: 'action' },
     ];
     const result = formatSkillsPrompt(skills);
     expect(result).toContain('test &amp; dev');
@@ -342,5 +356,61 @@ description: Cached skill
 
     const result = await buildSkillsPrompt();
     expect(result).toBe('');
+  });
+
+  it('discovers categorized skills: skills/<category>/<name>/SKILL.md', async () => {
+    const skillDir = path.join(GLOBAL_SKILLS_DIR, 'finance', 'tax-filing');
+    await fsp.mkdir(skillDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(skillDir, 'SKILL.md'),
+      `---
+name: tax-filing
+description: Tax filing knowledge
+type: knowledge
+---
+Tax stuff.`,
+    );
+
+    const result = await buildSkillsPrompt();
+    expect(result).toContain('<category name="finance">');
+    expect(result).toContain('<name>tax-filing</name>');
+    expect(result).toContain('<type>knowledge</type>');
+  });
+
+  it('flat and categorized skills coexist; frontmatter category overrides dir', async () => {
+    const flat = path.join(GLOBAL_SKILLS_DIR, 'flat-skill');
+    await fsp.mkdir(flat, { recursive: true });
+    await fsp.writeFile(path.join(flat, 'SKILL.md'), `---
+name: flat-skill
+description: Flat one
+---
+x`);
+    const cat = path.join(GLOBAL_SKILLS_DIR, 'dir-cat', 'override-skill');
+    await fsp.mkdir(cat, { recursive: true });
+    await fsp.writeFile(path.join(cat, 'SKILL.md'), `---
+name: override-skill
+description: Uses frontmatter category
+category: fm-cat
+---
+x`);
+
+    const result = await buildSkillsPrompt();
+    expect(result).toContain('<category name="general">');
+    expect(result).toContain('<name>flat-skill</name>');
+    expect(result).toContain('<category name="fm-cat">');
+    expect(result).not.toContain('<category name="dir-cat">');
+  });
+
+  it('defaults type to action when frontmatter type is missing or invalid', async () => {
+    const skillDir = path.join(GLOBAL_SKILLS_DIR, 'typeless');
+    await fsp.mkdir(skillDir, { recursive: true });
+    await fsp.writeFile(path.join(skillDir, 'SKILL.md'), `---
+name: typeless
+description: No type field
+type: bogus
+---
+x`);
+    const result = await buildSkillsPrompt();
+    expect(result).toContain('<type>action</type>');
   });
 });

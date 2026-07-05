@@ -14,6 +14,8 @@ import {
   parseFrontmatter,
   isEligible,
   clearSkillsCache,
+  normalizeSkillType,
+  type SkillType,
 } from './skill-loader.js';
 
 export interface SkillInfo {
@@ -23,6 +25,10 @@ export interface SkillInfo {
   source: 'workspace' | 'walnut' | 'claude';
   location: string;
   content: string;
+  /** Grouping category (directory under the skills root, or frontmatter override). */
+  category: string;
+  /** action = procedure/how-to; knowledge = curated domain facts. */
+  type: SkillType;
   metadata?: Record<string, unknown>;
   eligible: boolean;
   enabled: boolean;
@@ -53,11 +59,23 @@ async function writeSettings(settings: SkillSettings): Promise<void> {
 
 // ─── source resolution ─────────────────────────────────────────────
 
+/** Canonicalize a path for comparison (resolves symlinks, e.g. /var → /private/var on macOS). */
+function canonical(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
 function resolveSource(skillDir: string): 'workspace' | 'walnut' | 'claude' {
-  const workspaceSkills = path.resolve('skills');
-  if (skillDir.startsWith(workspaceSkills)) return 'workspace';
-  if (skillDir.startsWith(GLOBAL_SKILLS_DIR)) return 'walnut';
-  if (skillDir.startsWith(BUILTIN_SKILLS_DIR)) return 'walnut';
+  const dir = canonical(skillDir);
+  // Specific roots first — path.resolve('skills') is cwd-relative and can
+  // coincide with the walnut global dir, so the workspace check goes LAST.
+  if (dir.startsWith(canonical(GLOBAL_SKILLS_DIR) + path.sep)) return 'walnut';
+  if (dir.startsWith(canonical(BUILTIN_SKILLS_DIR) + path.sep)) return 'walnut';
+  if (dir.startsWith(canonical(CLAUDE_SKILLS_DIR) + path.sep)) return 'claude';
+  if (dir.startsWith(canonical(path.resolve('skills')) + path.sep)) return 'workspace';
   return 'claude';
 }
 
@@ -70,7 +88,7 @@ export async function listAllSkills(): Promise<SkillInfo[]> {
   const disabledSet = new Set(settings.disabled);
   const skills: SkillInfo[] = [];
 
-  for (const [dirName, { dir, file }] of discovered) {
+  for (const [dirName, { dir, file, category }] of discovered) {
     let raw: string;
     try {
       raw = await fsp.readFile(file, 'utf-8');
@@ -89,6 +107,8 @@ export async function listAllSkills(): Promise<SkillInfo[]> {
       source,
       location: file,
       content: raw,
+      category: frontmatter.category ?? category,
+      type: normalizeSkillType(frontmatter.type),
       metadata: frontmatter.metadata,
       eligible,
       enabled: !disabledSet.has(dirName),
@@ -123,6 +143,8 @@ export async function getSkill(dirName: string): Promise<SkillInfo | null> {
     source,
     location: entry.file,
     content: raw,
+    category: frontmatter.category ?? entry.category,
+    type: normalizeSkillType(frontmatter.type),
     metadata: frontmatter.metadata,
     eligible: isEligible(frontmatter),
     enabled: !settings.disabled.includes(dirName),
@@ -136,10 +158,14 @@ export async function createSkill(
   dirName: string,
   content: string,
   target: 'claude' | 'walnut' = 'claude',
+  category?: string,
 ): Promise<SkillInfo> {
   // Validate dirName
   if (!dirName || !/^[a-zA-Z0-9_-]+$/.test(dirName)) {
     throw new Error('Invalid skill name: must be alphanumeric, hyphens, or underscores');
+  }
+  if (category && !/^[a-zA-Z0-9_-]+$/.test(category)) {
+    throw new Error('Invalid category: must be alphanumeric, hyphens, or underscores');
   }
 
   // Check for conflicts across all directories
@@ -150,7 +176,10 @@ export async function createSkill(
   }
 
   const baseDir = target === 'walnut' ? GLOBAL_SKILLS_DIR : CLAUDE_SKILLS_DIR;
-  const skillDir = path.join(baseDir, dirName);
+  // Categorized layout: skills/<category>/<name>/SKILL.md; flat when no category.
+  const skillDir = category
+    ? path.join(baseDir, category, dirName)
+    : path.join(baseDir, dirName);
   await fsp.mkdir(skillDir, { recursive: true });
   await fsp.writeFile(path.join(skillDir, 'SKILL.md'), content);
 

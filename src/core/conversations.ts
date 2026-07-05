@@ -508,15 +508,3 @@ export async function touchConversation(
   }
 }
 
-/** Record a distill: set lastDistilledAt + lastDistilledMessageCount. */
-export async function markDistilled(agentId: string, conversationId: string, messageCount: number): Promise<void> {
-  validateConversationId(conversationId);
-  await withIndexLock(agentId, async () => {
-    const index = await readIndex(agentId);
-    const meta = index.conversations.find((c) => c.id === conversationId);
-    if (!meta) return;
-    meta.lastDistilledAt = new Date().toISOString();
-    meta.lastDistilledMessageCount = messageCount;
-    await writeIndex(agentId, index);
-  });
-}

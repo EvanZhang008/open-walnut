@@ -18,6 +18,8 @@ import { log } from '../logging/index.js';
 import { estimateMessagesTokens, estimateFullPayload } from '../core/daily-log.js';
 import { hydrateImagePaths } from '../core/chat-history.js';
 import { guardBudget, emergencyTrim, type ToolSchema } from './token-budget.js';
+import { getBoundedMemory } from '../core/bounded-memory.js';
+import { buildSkillPrefetchHint } from './skill-prefetch.js';
 import { getContextWindowSize } from './model.js';
 import { CONTEXT_WINDOW_DEFAULT } from './providers/defaults.js';
 
@@ -157,6 +159,16 @@ export async function runAgentLoop(
 ): Promise<{ messages: MessageParam[]; newMessages: MessageParam[]; response: string; aborted?: boolean; tokenBreakdown?: { system: number; tools: number; messages: number; total: number } }> {
   const config = await getConfig();
 
+  // Turn boundary: the memory_manage consolidation breaker counts consecutive
+  // failures WITHIN a turn (Hermes #42405); a new user turn resets it.
+  // Main-butler turns only: subagent/cron/dream loops (options.system set) run
+  // interleaved with a live main turn — resetting from them would clear the
+  // breaker mid-consolidation and re-open the infinite retry loop. The global
+  // memory_manage tool always operates on the general store, so reset that one.
+  if (options?.system === undefined) {
+    getBoundedMemory().resetConsolidationFailures();
+  }
+
   // Use custom system/tools/model if provided (subagent mode), else defaults.
   // buildSystemPromptSplit is conversation-scoped so the injected "Earlier conversation
   // context" comes from THIS conversation, not the legacy ghost file.
@@ -173,9 +185,24 @@ export async function runAgentLoop(
   if (options?.system !== undefined) {
     system = options.system;
   } else {
+    // Skill prefetch runs CONCURRENTLY with prompt building and is capped at
+    // 300ms — it sits on the send hot path, and an unbounded QMD search (cold
+    // model load) here would stall first-token latency. Timeout/error → no hint.
+    const hintPromise: Promise<string | null> = typeof userMessage === 'string'
+      ? Promise.race([
+          buildSkillPrefetchHint(userMessage),
+          new Promise<null>((resolve) => setTimeout(resolve, 300, null)),
+        ]).catch(() => null)
+      : Promise.resolve(null);
+
     const split = await buildSystemPromptSplit(options?.agentId, options?.conversationId);
     system = split.stable;
     dynamicContext = split.dynamic || undefined;
+
+    // Volatile injection ONLY — the stable prefix above must stay byte-identical
+    // across turns or the prompt cache busts.
+    const hint = await hintPromise;
+    if (hint) dynamicContext = dynamicContext ? `${dynamicContext}\n\n${hint}` : hint;
   }
   const customTools = options?.tools;
   const toolSchemas = customTools

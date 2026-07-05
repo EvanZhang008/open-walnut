@@ -62,7 +62,8 @@ sessions-list-*.md
 playwright-responses/
 docs/plan/
 tests/MEMORY_V2_*_PLAN.md
-tools/
+# repo-root scratch dir ONLY — a bare `tools/` would swallow src/agent/tools/ additions
+/tools/
 
 # Local demo assets (4K video, clips, thumbnails, launch kit) — large + local-only, never committed
 demo/

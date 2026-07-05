@@ -9,7 +9,7 @@
  *   POST   /api/agents/:agentId/conversations         {title?} -> 201 { conversation }
  *   PUT    /api/agents/:agentId/conversations/active   {conversationId} -> { activeConversationId }
  *   PATCH  /api/agents/:agentId/conversations/:cid     {title?, pinned?} -> { conversation }
- *   DELETE /api/agents/:agentId/conversations/:cid     -> 204 (distills before delete)
+ *   DELETE /api/agents/:agentId/conversations/:cid     -> 204
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
@@ -24,7 +24,6 @@ import {
   renameConversation,
   setPinned,
 } from '../../core/conversations.js'
-import { triggerConversationDistill } from '../../core/conversation-distill.js'
 import { broadcastEvent } from '../ws/handler.js'
 import { EventNames } from '../../core/event-bus.js'
 import { log } from '../../logging/index.js'
@@ -107,15 +106,13 @@ export function createConversationsRouter(): Router {
     }
   })
 
-  // DELETE /api/agents/:agentId/conversations/:cid — distill before delete
+  // DELETE /api/agents/:agentId/conversations/:cid
+  // (The pre-delete distill step was removed with the unified memory redesign —
+  //  durable knowledge is saved in-conversation via memory_manage/skill_manage.)
   router.delete('/:agentId/conversations/:cid', async (req: Request, res: Response, next: NextFunction) => {
     try {
       const agentId = validateAgentId(req.params.agentId as string)
       const cid = validateConversationId(req.params.cid as string)
-
-      // Distill the conversation into MEMORY.md BEFORE deleting it (best-effort,
-      // awaited so durable knowledge isn't lost). Errors are swallowed inside.
-      await triggerConversationDistill(agentId, cid, { reason: 'delete', awaitIt: true })
 
       await deleteConversation(agentId, cid)
       // The active id may have changed (if we deleted the active conversation).

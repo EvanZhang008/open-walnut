@@ -69,6 +69,9 @@ import { askQuestionTool } from './tools/ask-question-tool.js';
 import { createSubagentTool } from './tools/create-subagent.js';
 import { filesTools } from './tools/files-tools.js';
 import { memoryNotesSearchTool } from './tools/memory-notes-search-tool.js';
+import { memoryManageTool } from './tools/memory-manage-tool.js';
+import { skillManageTool } from './tools/skill-manage-tool.js';
+import { skillViewTool } from './tools/skill-view-tool.js';
 
 
 
@@ -1075,6 +1078,9 @@ queries: ["pipeline API allowlisting", "PAPINS SigV4", "pipeline allowlist"]  �
   },
 
   memoryNotesSearchTool,
+  memoryManageTool,
+  skillManageTool,
+  skillViewTool,
 
   // ── Unified Files Tools ──
   ...filesTools,

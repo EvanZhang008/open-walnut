@@ -6,7 +6,7 @@ import path from 'node:path';
 import { getConfig } from '../core/config-manager.js';
 import { buildSkillsPrompt } from '../core/skill-loader.js';
 import { getDailyLogsWithinBudget } from '../core/daily-log.js';
-import { getMemoryFile } from '../core/memory-file.js';
+import { getBoundedMemory } from '../core/bounded-memory.js';
 import { getAllProjectSummaries } from '../core/project-memory.js';
 import { getCompactionSummary } from '../core/chat-history.js';
 import { getWorkingMemory, isWorkingMemoryEmpty } from '../core/working-memory.js';
@@ -88,7 +88,10 @@ export async function buildMemoryContext(budget: number = 8000): Promise<string>
   const dailyLogs = getDailyLogsWithinBudget(Math.floor(budget / 2));
 
   // Phase 2: summaries (remaining budget)
-  const globalMemoryResult = getMemoryFile();
+  // Global memory is a BOUNDED store (hard 8K-char budget, "## Title" entries).
+  // renderForPrompt() prepends a usage header so the model always sees how full
+  // it is — no truncation needed, the budget is enforced at write time.
+  const globalMemoryBlock = getBoundedMemory().renderForPrompt();
   const projectSummaries = getAllProjectSummaries();
 
   const projectLines = projectSummaries.length > 0
@@ -130,8 +133,8 @@ export async function buildMemoryContext(budget: number = 8000): Promise<string>
   return `## Task Categories & Projects
 ${taskCategories}
 
-## Your long-term memory
-${globalMemoryResult?.content ?? '(No global memory yet.)'}
+## Your long-term memory (behavior rules & preferences — bounded, update via memory_manage)
+${globalMemoryBlock ?? '(No global memory yet. Save behavior rules and user preferences with memory_manage.)'}
 
 ## Your projects
 ${projectLines}${repoSection}${notesSection}${indexSection}
@@ -213,6 +216,15 @@ Category → Project → Task (→ Child Tasks)
 
 ## Available tools
 You have tools for: managing tasks (task_query, task_get, task_create, task_update, task_delete, task_search), searching memory (memory_notes_search), managing memory/knowledge files, starting and viewing sessions, reading/updating configuration, and managing agent definitions.
+
+## Learning & memory routing
+
+Three stores, three purposes — route information to the right one at the moment you learn it:
+- **memory_manage** (bounded global memory): behavior rules + user preferences ONLY ("always X", "prefer Y"). Update existing entries via replace when facts change — never add near-duplicates.
+- **skill_manage** (skills, two types): \`knowledge\` = curated stable facts on a topic; \`action\` = reusable procedures. Patch existing skills freely when new stable facts surface (no confirmation needed — reversible + git-synced). Creating a NEW skill: propose it and ask the user first.
+- **Daily log** (file_write memory/daily): episodic events and work progress ("filed tax", "session did 1,2,3"). Never put these in memory or skills.
+
+**Session-summary harvest:** when a session summary or notification shows a CLEAR pitfall→solution pattern (an error someone else would hit again, plus the fix that worked), offer to save it as a skill — patch the matching existing skill, or propose a new one. Only on clear patterns; most summaries do not warrant this.
 
 ## Session management
 

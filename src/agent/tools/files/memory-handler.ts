@@ -10,7 +10,35 @@ import { appendProjectMemory, ensureProjectDir, getAllProjectSummaries } from '.
 import { appendRepoMemory, ensureRepoMemoryDir, getAllRepoMemorySummaries } from '../../../core/repo-memory.js';
 import { appendDailyLog, formatDateKey } from '../../../core/daily-log.js';
 import { ensureMemoryFile } from '../../../core/memory-file.js';
+import { parseMemoryContent, MEMORY_CHAR_BUDGET } from '../../../core/bounded-memory.js';
 import type { FileHandler, ResolvedSource, FilesReadResult, FilesWriteResult, FilesEditResult, FilesListItem } from './types.js';
+
+/**
+ * Enforce the bounded-memory budget on direct memory/global writes.
+ * memory_manage is the preferred write path (consolidation guidance, batch,
+ * circuit breaker); this guard just keeps file_write/file_edit from silently
+ * bypassing the budget and re-rotting MEMORY.md.
+ */
+/** Preamble (frontmatter + title, before the first `## `) is not entry content — cap it so it can't become a budget bypass. */
+const MEMORY_PREAMBLE_CAP = 1_000;
+
+function assertGlobalMemoryBudget(content: string): void {
+  const { preamble, entries } = parseMemoryContent(content);
+  const used = entries.length === 0 ? 0 : entries.join('\n\n').length;
+  if (used > MEMORY_CHAR_BUDGET) {
+    throw new Error(
+      `Global memory would be at ${used.toLocaleString('en-US')}/${MEMORY_CHAR_BUDGET.toLocaleString('en-US')} chars — over the hard budget. ` +
+      `Use memory_manage (action: batch) to consolidate: merge/shorten/remove entries. ` +
+      `Domain knowledge belongs in a knowledge skill (skill_manage), not in global memory.`,
+    );
+  }
+  if (preamble.length > MEMORY_PREAMBLE_CAP) {
+    throw new Error(
+      `Global memory preamble (content before the first "## " heading) would be ${preamble.length.toLocaleString('en-US')} chars — ` +
+      `max ${MEMORY_PREAMBLE_CAP.toLocaleString('en-US')}. Keep the preamble to frontmatter + title; all content belongs in "## Title" entries.`,
+    );
+  }
+}
 
 export const memoryHandler: FileHandler = {
   async read(resolved, opts) {
@@ -54,6 +82,7 @@ export const memoryHandler: FileHandler = {
     }
     if (resolved.variant === 'global') {
       ensureMemoryFile(resolved.agentId);
+      assertGlobalMemoryBudget(content);
     }
 
     const result = await writeFileChecked(resolved.filePath, content, {
@@ -72,6 +101,23 @@ export const memoryHandler: FileHandler = {
     }
     if (!oldContent) {
       throw new Error('old_content cannot be empty.');
+    }
+
+    // Pre-validate the post-edit budget for global memory (best-effort preview;
+    // the authoritative hash check still happens inside editFileContent).
+    if (resolved.variant === 'global') {
+      try {
+        const raw = fs.readFileSync(resolved.filePath, 'utf-8');
+        if (raw.includes(oldContent)) {
+          const preview = opts?.replaceAll
+            ? raw.split(oldContent).join(newContent)
+            : raw.replace(oldContent, newContent);
+          assertGlobalMemoryBudget(preview);
+        }
+      } catch (err) {
+        if (err instanceof Error && err.message.includes('hard budget')) throw err;
+        // file missing/unreadable — let editFileContent produce the real error
+      }
     }
 
     const result = await editFileContent(resolved.filePath, oldContent, newContent, {

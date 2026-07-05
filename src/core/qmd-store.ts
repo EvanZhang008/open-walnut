@@ -13,7 +13,7 @@
  * - sessionStore: claude code sessions (programmatic insertion from sessions.json)
  */
 import { createStore, type QMDStore } from '@tobilu/qmd';
-import { WALNUT_HOME, MEMORY_DIR, NOTES_DIR } from '../constants.js';
+import { WALNUT_HOME, MEMORY_DIR, NOTES_DIR, GLOBAL_SKILLS_DIR } from '../constants.js';
 import path from 'node:path';
 import { log } from '../logging/index.js';
 
@@ -43,6 +43,9 @@ export async function getMemoryStore(): Promise<QMDStore> {
           compaction: { path: path.join(MEMORY_DIR, 'compaction'),  pattern: '**/*.md' },
           global:     { path: WALNUT_HOME,                          pattern: 'MEMORY.md' },
           session:    { path: path.join(MEMORY_DIR, 'sessions'),    pattern: '**/*.md' },
+          // Skills index (flat + categorized layouts). Feeds the per-turn
+          // "Possibly relevant skills" prefetch hint (memory-search.ts).
+          skill:      { path: GLOBAL_SKILLS_DIR,                     pattern: '**/SKILL.md' },
         },
       },
     }).then(store => {

@@ -18,6 +18,7 @@ export const memoryNotesSearchTool: ToolDefinition = {
     project — per-project working notes tied to specific tasks
     global — top-level MEMORY.md with critical rules and user preferences
     repo — per-repository environment knowledge
+    skill — skill library (action procedures + knowledge topics)
     compaction — archived conversation summaries from context compaction
     session — per-session notes
 
@@ -66,7 +67,7 @@ The search uses keyword matching (BM25, AND logic) + vector similarity (semantic
         items: {
           type: 'string',
           enum: [
-            'memory_daily', 'memory_topic', 'memory_project', 'memory_repo', 'memory_compaction', 'memory_global', 'memory_session',
+            'memory_daily', 'memory_topic', 'memory_project', 'memory_repo', 'memory_compaction', 'memory_global', 'memory_session', 'memory_skill',
             'note_vault',
             'task', 'session',
           ],

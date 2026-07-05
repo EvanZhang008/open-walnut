@@ -14,16 +14,24 @@ import yaml from 'js-yaml';
 import { log } from '../logging/index.js';
 import { GLOBAL_SKILLS_DIR, CLAUDE_SKILLS_DIR, BUILTIN_SKILLS_DIR, SKILL_SETTINGS_FILE } from '../constants.js';
 
+export type SkillType = 'action' | 'knowledge';
+
 export interface SkillMeta {
   name: string;
   description: string;
   location: string;
+  /** Grouping category (subdirectory under the skills root). 'general' for flat skills. */
+  category: string;
+  /** action = reusable procedure/how-to; knowledge = curated domain facts. Default: action. */
+  type: SkillType;
   metadata?: Record<string, unknown>;
 }
 
 interface SkillFrontmatter {
   name?: string;
   description?: string;
+  category?: string;
+  type?: string;
   metadata?: {
     openclaw?: {
       emoji?: string;
@@ -49,8 +57,15 @@ function getSearchDirs(): string[] {
   ];
 }
 
-async function discoverSkills(dirs: string[]): Promise<Map<string, { dir: string; file: string }>> {
-  const found = new Map<string, { dir: string; file: string }>();
+export interface DiscoveredSkill {
+  dir: string;
+  file: string;
+  /** Category from the directory layout: skills/<category>/<name>/SKILL.md. 'general' for flat skills. */
+  category: string;
+}
+
+async function discoverSkills(dirs: string[]): Promise<Map<string, DiscoveredSkill>> {
+  const found = new Map<string, DiscoveredSkill>();
   for (const base of dirs) {
     let entries: string[];
     try {
@@ -63,15 +78,40 @@ async function discoverSkills(dirs: string[]): Promise<Map<string, { dir: string
       continue;
     }
     for (const entry of entries) {
-      if (found.has(entry)) continue; // higher-priority source already registered
-      const skillFile = path.join(base, entry, 'SKILL.md');
+      const entryDir = path.join(base, entry);
+      const skillFile = path.join(entryDir, 'SKILL.md');
+      let isFlatSkill = false;
       try {
-        const stat = await fsp.stat(skillFile);
-        if (stat.isFile()) {
-          found.set(entry, { dir: path.join(base, entry), file: skillFile });
-        }
+        isFlatSkill = (await fsp.stat(skillFile)).isFile();
       } catch {
-        // no SKILL.md in this subdir — expected, not all subdirs are skills
+        // no SKILL.md directly — may be a category directory (checked below)
+      }
+
+      if (isFlatSkill) {
+        // Flat layout: skills/<name>/SKILL.md (back-compat)
+        if (!found.has(entry)) {
+          found.set(entry, { dir: entryDir, file: skillFile, category: 'general' });
+        }
+        continue;
+      }
+
+      // Category layout: skills/<category>/<name>/SKILL.md
+      let subEntries: string[];
+      try {
+        subEntries = await fsp.readdir(entryDir);
+      } catch {
+        continue; // not a directory — skip
+      }
+      for (const sub of subEntries) {
+        if (found.has(sub)) continue; // higher-priority source already registered
+        const subFile = path.join(entryDir, sub, 'SKILL.md');
+        try {
+          if ((await fsp.stat(subFile)).isFile()) {
+            found.set(sub, { dir: path.join(entryDir, sub), file: subFile, category: entry });
+          }
+        } catch {
+          // no SKILL.md in this subdir — expected
+        }
       }
     }
   }
@@ -134,6 +174,11 @@ function isEligible(fm: SkillFrontmatter): boolean {
   return true;
 }
 
+/** Normalize the frontmatter `type` field. Anything but 'knowledge' → 'action'. */
+export function normalizeSkillType(raw?: string): SkillType {
+  return raw === 'knowledge' ? 'knowledge' : 'action';
+}
+
 // ─── prompt formatting ──────────────────────────────────────────────
 
 function escapeXml(s: string): string {
@@ -149,23 +194,38 @@ function formatSkillsPrompt(skills: SkillMeta[]): string {
   if (skills.length === 0) return '';
 
   const preamble = `## Skills (mandatory)
-Before replying: scan <available_skills> <description> entries.
-- If exactly one skill clearly applies: read its SKILL.md at <location> with \`read\`, then follow it.
-- If multiple could apply: choose the most specific one, then read/follow it.
-- If none clearly apply: do not read any SKILL.md.
-Constraints: never read more than one skill up front; only read after selecting.
+Before replying: scan ALL <available_skills> <description> entries — this scan is not optional.
+- Skills come in two types: **action** (procedures/how-tos to follow) and **knowledge** (curated domain facts to consult).
+- If any skill might apply, ERR ON THE SIDE OF LOADING IT: read its SKILL.md at <location> (skill_view or read). Loading an unneeded skill is cheap; missing a needed one causes wrong answers.
+- Multiple relevant skills? Load each relevant one — knowledge skills especially are meant to be consulted together.
+- Only skip loading when you are confident none apply.`;
 
-The following skills provide specialized instructions for specific tasks.
-Use the read tool to load a skill's file when the task matches its description.`;
+  // Group by category so the index stays scannable as the skill count grows.
+  const byCategory = new Map<string, SkillMeta[]>();
+  for (const s of skills) {
+    const cat = s.category || 'general';
+    let bucket = byCategory.get(cat);
+    if (!bucket) {
+      bucket = [];
+      byCategory.set(cat, bucket);
+    }
+    bucket.push(s);
+  }
 
-  const entries = skills
-    .map(
-      (s) =>
-        `  <skill>\n    <name>${escapeXml(s.name)}</name>\n    <description>${escapeXml(s.description)}</description>\n    <location>${escapeXml(s.location)}</location>\n  </skill>`,
-    )
+  const groups = [...byCategory.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([category, group]) => {
+      const entries = group
+        .map(
+          (s) =>
+            `    <skill>\n      <name>${escapeXml(s.name)}</name>\n      <type>${escapeXml(s.type)}</type>\n      <description>${escapeXml(s.description)}</description>\n      <location>${escapeXml(s.location)}</location>\n    </skill>`,
+        )
+        .join('\n');
+      return `  <category name="${escapeXml(category)}">\n${entries}\n  </category>`;
+    })
     .join('\n');
 
-  return `${preamble}\n\n<available_skills>\n${entries}\n</available_skills>`;
+  return `${preamble}\n\n<available_skills>\n${groups}\n</available_skills>`;
 }
 
 // ─── cache + public API ─────────────────────────────────────────────
@@ -199,7 +259,7 @@ async function getEligibleSkills(): Promise<(SkillMeta & { dirName: string })[]>
   const disabledSet = await getDisabledSkillSet();
   const skills: (SkillMeta & { dirName: string })[] = [];
 
-  for (const [dirName, { file }] of discovered) {
+  for (const [dirName, { file, category }] of discovered) {
     let raw: string;
     try {
       raw = await fsp.readFile(file, 'utf-8');
@@ -219,6 +279,8 @@ async function getEligibleSkills(): Promise<(SkillMeta & { dirName: string })[]>
       name: frontmatter.name ?? dirName,
       description: frontmatter.description ?? '',
       location: file,
+      category: frontmatter.category ?? category,
+      type: normalizeSkillType(frontmatter.type),
       metadata: frontmatter.metadata,
     });
   }

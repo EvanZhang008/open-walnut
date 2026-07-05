@@ -128,7 +128,6 @@ let qmdWatcherHandle: { stop: () => void } | null = null
 let gitAutoCommitHandle: { stop: () => void; health: GitAutoCommitHealth } | null = null
 let dreamTimerHandle: ReturnType<typeof setInterval> | null = null
 let dreamInitialHandle: ReturnType<typeof setTimeout> | null = null
-let distillTimerHandle: ReturnType<typeof setInterval> | null = null
 // Pending deferred-markDone timers from the session:status-changed handler.
 // Hoisted to module scope so stopServer() can cancel them before teardown,
 // otherwise a late-firing timer could mutate sessionStreamBuffer after the
@@ -2109,16 +2108,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     } catch { /* best-effort */ }
   }, 5 * 60 * 1000)
 
-  // -- Conversation distill sweep — at most one conversation distilled per tick --
-  // (cost guard; the sweep itself only distills the first eligible conversation).
-  // Gated behind !isEphemeral so ephemeral servers don't spend Opus tokens.
-  if (!isEphemeral) {
-    distillTimerHandle = setInterval(() => {
-      import('../core/conversation-distill.js')
-        .then(m => m.distillSweep())
-        .catch(() => { /* best-effort */ })
-    }, 30 * 60_000)
-  }
+  // Conversation distill sweep REMOVED (unified memory redesign): the append-only
+  // background distiller was the main source of MEMORY.md rot. Condensation now
+  // happens in-conversation via memory_manage / skill_manage triggers.
 
   startupPhase('ALL DONE — server fully initialized')
   return httpServer!
@@ -2652,10 +2644,6 @@ export async function stopServer(): Promise<void> {
   if (dreamInitialHandle) {
     clearTimeout(dreamInitialHandle)
     dreamInitialHandle = null
-  }
-  if (distillTimerHandle) {
-    clearInterval(distillTimerHandle)
-    distillTimerHandle = null
   }
   // Cancel pending deferred-markDone callbacks so they don't mutate
   // sessionStreamBuffer after shutdown.

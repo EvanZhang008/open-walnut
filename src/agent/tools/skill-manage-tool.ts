@@ -1,0 +1,228 @@
+/**
+ * Agent tool: skill_manage
+ * Create/patch/edit/delete skills — the butler's write path into the unified
+ * skill system (type: action = procedures, knowledge = curated domain facts).
+ *
+ * The schema embeds the update triggers so condensation happens IN conversation
+ * (no background extractor). Description ≤60 chars is HARD-validated: the
+ * description is the routing signal in the skill index — long descriptions
+ * get truncated and silently break routing.
+ */
+import type { ToolDefinition } from '../tools.js';
+import yaml from 'js-yaml';
+import {
+  createSkill,
+  updateSkill,
+  deleteSkill,
+  getSkill,
+} from '../../core/skill-store.js';
+import { clearSkillsCache } from '../../core/skill-loader.js';
+import { recordSkillCreated, recordSkillPatched, removeSkillUsage } from '../../core/skill-usage.js';
+import { getMemoryStore } from '../../core/qmd-store.js';
+import { log } from '../../logging/index.js';
+
+export const MAX_SKILL_DESC_CHARS = 60;
+
+/** Refresh the QMD skill collection in the background (best-effort). */
+function refreshSkillIndex(): void {
+  void (async () => {
+    try {
+      const store = await getMemoryStore();
+      await store.update();
+      await store.embed({ model: process.env.QMD_EMBED_MODEL });
+    } catch (err) {
+      log.agent.debug('skill_manage: QMD skill index refresh failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  })();
+}
+
+function validateDescription(description: string): string | null {
+  const d = (description ?? '').trim();
+  if (!d) return 'description is required.';
+  if (d.length > MAX_SKILL_DESC_CHARS) {
+    return `description is ${d.length} chars — must be ≤${MAX_SKILL_DESC_CHARS}. It is the ROUTING signal in the skill index; write ONE short sentence stating when to use this skill.`;
+  }
+  return null;
+}
+
+function buildSkillMd(opts: {
+  name: string;
+  description: string;
+  type: 'action' | 'knowledge';
+  content: string;
+  /** Existing frontmatter to merge (preserves category override, metadata.openclaw gating, custom keys). */
+  base?: Record<string, unknown>;
+}): string {
+  const fm = yaml.dump(
+    { ...(opts.base ?? {}), name: opts.name, description: opts.description, type: opts.type },
+    { lineWidth: 120 },
+  );
+  return `---\n${fm}---\n\n${opts.content.trim()}\n`;
+}
+
+/** Extract raw frontmatter object from a SKILL.md (empty object when absent/invalid). */
+function parseRawFrontmatter(raw: string): Record<string, unknown> {
+  const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!match) return {};
+  try {
+    const parsed = yaml.load(match[1]);
+    return typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+export const skillManageTool: ToolDefinition = {
+  name: 'skill_manage',
+  description: `Create, patch, edit, or delete skills. Skills are the ONE container for distilled learning, in two types:
+- **action**: a reusable procedure/how-to (steps to accomplish something).
+- **knowledge**: curated stable facts about a topic/domain (a living wiki page).
+
+## Update triggers — act on these DURING the conversation, don't wait
+1. You used a skill and hit an issue it didn't cover → **patch it immediately, BEFORE finishing the task**.
+2. You completed a complex task (multi-step, errors overcome, or user corrected you) → **offer to save it as an action skill**.
+3. A new stable fact about an existing knowledge skill's topic surfaced → **patch that skill now** (no need to ask).
+4. A topic keeps recurring across conversations with no knowledge skill → **create one** (ask the user first).
+5. A fact in a skill is corrected or outdated → **replace it in place — never append a duplicate**.
+
+## Rules
+- description ≤${MAX_SKILL_DESC_CHARS} chars, HARD limit — it's the routing signal. One sentence: when to use this skill.
+- category groups skills (e.g. finance, career, projects, walnut). Reuse existing categories when one fits.
+- Episodic events ("did X last week") do NOT belong in skills — they go to the daily log. Only distilled, stable knowledge/procedures.
+- Creating a NEW skill: confirm with the user first. Patching an existing one: just do it (reversible, git-synced).
+
+## Actions
+- create: new skill (name, category, type, description, content).
+- patch: exact string replacement inside an existing skill (old_string → new_string).
+- edit: full content replacement of an existing skill's SKILL.md body (keeps or updates frontmatter via description/type params).
+- delete: remove a skill entirely.`,
+  input_schema: {
+    type: 'object',
+    properties: {
+      action: {
+        type: 'string',
+        enum: ['create', 'patch', 'edit', 'delete'],
+        description: 'The skill operation to perform.',
+      },
+      name: {
+        type: 'string',
+        description: 'Skill name (kebab-case, alphanumeric/hyphens/underscores).',
+      },
+      category: {
+        type: 'string',
+        description: 'For create: grouping category (e.g. finance, career, projects). Reuse existing ones when possible.',
+      },
+      type: {
+        type: 'string',
+        enum: ['action', 'knowledge'],
+        description: 'For create/edit: action = procedure, knowledge = curated domain facts.',
+      },
+      description: {
+        type: 'string',
+        description: `For create/edit: ONE sentence, ≤${MAX_SKILL_DESC_CHARS} chars — when to use this skill (hard-validated).`,
+      },
+      content: {
+        type: 'string',
+        description: 'For create/edit: the skill body markdown (without frontmatter — it is generated).',
+      },
+      old_string: {
+        type: 'string',
+        description: 'For patch: exact text to find in the SKILL.md.',
+      },
+      new_string: {
+        type: 'string',
+        description: 'For patch: replacement text.',
+      },
+    },
+    required: ['action', 'name'],
+  },
+  async execute(params) {
+    const action = params.action as string;
+    const name = params.name as string;
+
+    try {
+      if (action === 'create') {
+        const description = (params.description as string) ?? '';
+        const descError = validateDescription(description);
+        if (descError) return `Error: ${descError}`;
+        const content = (params.content as string) ?? '';
+        if (!content.trim()) return 'Error: content is required for create.';
+        const type = params.type === 'knowledge' ? 'knowledge' : 'action';
+        const category = (params.category as string) ?? undefined;
+
+        const md = buildSkillMd({ name, description: description.trim(), type, content });
+        const skill = await createSkill(name, md, 'walnut', category);
+        await recordSkillCreated(name);
+        clearSkillsCache();
+        refreshSkillIndex();
+        log.agent.info('skill_manage: created skill', { name, category: skill.category, type });
+        return `Skill '${name}' created (category: ${skill.category}, type: ${type}). It is now in the skill index.`;
+      }
+
+      if (action === 'patch') {
+        const oldString = params.old_string as string | undefined;
+        const newString = params.new_string as string | undefined;
+        if (!oldString) return 'Error: old_string is required for patch.';
+        if (newString === undefined) return 'Error: new_string is required for patch.';
+
+        const skill = await getSkill(name);
+        if (!skill) return `Error: skill not found: ${name}`;
+        const occurrences = skill.content.split(oldString).length - 1;
+        if (occurrences === 0) {
+          return `Error: old_string not found in '${name}'. Use skill_view to read the current content, then retry with exact text.`;
+        }
+        if (occurrences > 1) {
+          return `Error: old_string matches ${occurrences} locations in '${name}'. Provide more surrounding context to make it unique.`;
+        }
+        const updated = skill.content.replace(oldString, newString);
+        await updateSkill(name, updated);
+        await recordSkillPatched(name);
+        clearSkillsCache();
+        refreshSkillIndex();
+        log.agent.info('skill_manage: patched skill', { name });
+        return `Skill '${name}' patched. This update is complete — do not repeat it.`;
+      }
+
+      if (action === 'edit') {
+        const content = (params.content as string) ?? '';
+        if (!content.trim()) return 'Error: content is required for edit.';
+        const skill = await getSkill(name);
+        if (!skill) return `Error: skill not found: ${name}`;
+
+        // Rebuild frontmatter: keep existing values unless new ones are provided.
+        const description = ((params.description as string) ?? skill.description).trim();
+        const descError = validateDescription(description);
+        if (descError) return `Error: ${descError}`;
+        const type = params.type === 'knowledge' || params.type === 'action'
+          ? (params.type as 'action' | 'knowledge')
+          : skill.type;
+
+        // Merge onto the EXISTING frontmatter — a rebuild from just name/desc/type
+        // would silently drop category overrides and metadata.openclaw gating.
+        const base = parseRawFrontmatter(skill.content);
+        const md = buildSkillMd({ name: skill.name, description, type, content, base });
+        await updateSkill(name, md);
+        await recordSkillPatched(name);
+        clearSkillsCache();
+        refreshSkillIndex();
+        log.agent.info('skill_manage: edited skill', { name, type });
+        return `Skill '${name}' rewritten. This update is complete — do not repeat it.`;
+      }
+
+      if (action === 'delete') {
+        await deleteSkill(name);
+        await removeSkillUsage(name);
+        clearSkillsCache();
+        refreshSkillIndex();
+        log.agent.info('skill_manage: deleted skill', { name });
+        return `Skill '${name}' deleted.`;
+      }
+
+      return `Unknown action '${action}'. Use create, patch, edit, or delete.`;
+    } catch (err) {
+      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  },
+};
