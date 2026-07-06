@@ -467,7 +467,7 @@ Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines
 
 If you find Open Walnut useful, consider giving it a star — it helps others discover the project.
 
-[![Star History Chart](https://api.star-history.com/svg?repos=EvanZhang008/open-walnut&type=Date)](https://star-history.com/#EvanZhang008/open-walnut&Date)
+[![Star chart](https://starchart.cc/EvanZhang008/open-walnut.svg?variant=adaptive)](https://starchart.cc/EvanZhang008/open-walnut)
 
 ## License
 
