@@ -18,7 +18,7 @@ export const memoryNotesSearchTool: ToolDefinition = {
     project — per-project working notes tied to specific tasks
     global — top-level MEMORY.md with critical rules and user preferences
     repo — per-repository environment knowledge
-    skill — skill library (action procedures + knowledge topics)
+    skill — skill library: SKILL.md bodies AND support files (references/*.md, per-category overview history logs)
     compaction — archived conversation summaries from context compaction
     session — per-session notes
 
@@ -36,6 +36,14 @@ export const memoryNotesSearchTool: ToolDefinition = {
   "search notes" → sources: [note_vault]
   "search memory" / no qualifier → omit sources
   "search everything" → sources: [memory_daily, ..., note_vault, task, session]
+
+## Path scoping (optional "path" param)
+
+Narrow results to files whose collection-relative path starts with the prefix:
+  "search walnut project history" → sources: [memory_skill], path: "walnut/overview/history/"
+  "anything about tax in finance skills" → sources: [memory_skill], path: "finance/"
+  "daily logs from June 2026" → sources: [memory_daily], path: "2026-06"
+  "notes under Areas/Health" → sources: [note_vault], path: "Areas/Health/"
 
 ## How to write good queries
 
@@ -74,6 +82,10 @@ The search uses keyword matching (BM25, AND logic) + vector similarity (semantic
         },
         description: 'Which sources to search. Omit = all memory. Pass ONLY note_* for notes-only. Pass ONLY memory_* for specific memory collections. Pass "task" for tasks. Pass "session" for sessions. Pass multiple for combined search.',
       },
+      path: {
+        type: 'string',
+        description: 'Optional collection-relative path prefix filter, e.g. "walnut/overview/history/" with memory_skill, or "2026-06" with memory_daily (time filter). See "Path scoping" in the tool description.',
+      },
     },
     required: ['queries'],
   },
@@ -81,7 +93,8 @@ The search uses keyword matching (BM25, AND logic) + vector similarity (semantic
     const queries = params.queries as string[];
     const limit = (params.limit as number) ?? 15;
     const sources = params.sources as string[] | undefined;
-    const results = await memoryNotesSearch(queries, sources, limit);
+    const pathPrefix = params.path as string | undefined;
+    const results = await memoryNotesSearch(queries, sources, limit, pathPrefix);
     if (results.length === 0) return 'No results found.';
     return JSON.stringify(results.map(r => ({
       source: r.source,

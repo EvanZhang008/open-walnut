@@ -13,8 +13,15 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import type { Server as HttpServer } from 'node:http';
 import { createMockConstants } from '../helpers/mock-constants.js';
+import { mockLocalDaemonReader } from '../helpers/mock-local-daemon-reader.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
+
+// Daemon-uniform: import_session reads the JSONL through DaemonFileReader('__local__').
+// A unit/e2e run has no local daemon and writes fixtures under a mocked CLAUDE_HOME, so
+// we swap the transport for a real-fs-backed double that honors the mocked CLAUDE_HOME.
+// The rest of the flow (tool → resolveSessionContext → DaemonFileReader → parse) is real.
+vi.mock('../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader());
 
 import { WALNUT_HOME, CLAUDE_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';

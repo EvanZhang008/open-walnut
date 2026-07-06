@@ -105,6 +105,10 @@ export function MemoryTreePanel({ tree, selectedPath, onSelect }: MemoryTreePane
     () => tree?.global && (!filter || matchesFilter('Global Memory', 'MEMORY.md', filter)),
     [tree?.global, filter],
   );
+  const showUser = useMemo(
+    () => tree?.user && (!filter || matchesFilter('User Profile', 'USER.md', filter)),
+    [tree?.user, filter],
+  );
 
   const toggleSection = (section: string) => {
     setCollapsed((prev) => {
@@ -163,14 +167,24 @@ export function MemoryTreePanel({ tree, selectedPath, onSelect }: MemoryTreePane
         )}
 
         {/* Global */}
-        {showGlobal && (
+        {(showGlobal || showUser) && (
           <Section title="Global" id="global" collapsed={collapsed} onToggle={toggleSection}>
-            <TreeItem
-              label="MEMORY.md"
-              path="MEMORY.md"
-              selected={selectedPath === 'MEMORY.md'}
-              onClick={() => onSelect('MEMORY.md')}
-            />
+            {showUser && (
+              <TreeItem
+                label="USER.md"
+                path="USER.md"
+                selected={selectedPath === 'USER.md'}
+                onClick={() => onSelect('USER.md')}
+              />
+            )}
+            {showGlobal && (
+              <TreeItem
+                label="MEMORY.md"
+                path="MEMORY.md"
+                selected={selectedPath === 'MEMORY.md'}
+                onClick={() => onSelect('MEMORY.md')}
+              />
+            )}
           </Section>
         )}
 

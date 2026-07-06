@@ -21,6 +21,7 @@ import type {
 } from '@/hooks/useSessionStream';
 import type { SessionHistoryMessage } from '@/types/session';
 import { fetchSessionHistory } from '@/api/sessions';
+import { promoteCompletedBlocks } from './promote-blocks';
 import { log } from '@/utils/log';
 
 const MAX_CACHED = 20;
@@ -59,6 +60,18 @@ export interface StreamState {
   blocks: StreamingBlock[];
   textBuffer: string;
   isStreaming: boolean;
+  /** blocks[0..completedLen) belong to turns that already ended (session:result/
+   *  session:error). Blocks past this index are a live next turn and must survive
+   *  the turn-boundary cleanup (batch-completed / history refresh). */
+  completedLen: number;
+  /** Race guard: batch-completed can arrive ~50ms BEFORE session:result (observed
+   *  in prod logs). If the turn-boundary cleanup ran while completedLen was still 0,
+   *  this flag defers the clear to the result handler (which knows the boundary). */
+  pendingTurnClear?: boolean;
+  /** Delta evidence captured when a clear was deferred (batch-completed raced ahead
+   *  of session:result). The result handler replays it so the deferred clear stays
+   *  evidence-based instead of degrading to a blind position clear. */
+  pendingDelta?: SessionHistoryMessage[];
 }
 
 const streamStates = new Map<string, StreamState>();
@@ -91,6 +104,7 @@ export function initStreamState(
   sid: string,
   blocks: StreamingBlock[],
   isStreaming: boolean,
+  completedLen?: number,
 ): void {
   // Reconstruct textBuffer from the last text block so future text-delta events
   // append correctly (textBuffer must equal lastTextBlock.content for continuity).
@@ -101,16 +115,88 @@ export function initStreamState(
     blocks: blocks.map((b) => ({ ...b })),
     textBuffer: lastText ? lastText.content : '',
     isStreaming,
+    // Prefer the server-authoritative boundary (snapshot.completedLen): a
+    // snapshot taken between the next turn's markStreaming and its first delta
+    // holds the PREVIOUS turn's blocks with isStreaming=true — deriving from
+    // isStreaming would mislabel them "live". Legacy fallback keeps the old rule.
+    completedLen: completedLen ?? (isStreaming ? 0 : blocks.length),
   });
+}
+
+/**
+ * Turn-aware clear: drop the completed turn's blocks, keep any blocks streamed
+ * after the last session:result (the next, live turn).
+ *
+ * Two modes, keyed strictly on whether `delta` was PROVIDED (not on its length):
+ *  · `delta` provided (INCLUDING an empty array) → EVIDENCE-BASED: only remove a
+ *    block if a twin exists in the just-arrived persisted messages. An empty
+ *    delta proves nothing arrived yet (archive lagging / turn not flushed), so
+ *    it removes NOTHING — every block is kept and re-attempted on the next
+ *    delta. A block without a twin is always kept (worst case: shown twice
+ *    briefly; never vanishes). This is the primary path.
+ *  · `delta` omitted (`undefined`) → position fallback (bounded by completedLen),
+ *    for callers with no delta at hand (e.g. WS reconnect refresh). Still never
+ *    touches the live turn.
+ *
+ * CRITICAL: an empty array must NOT fall through to the position fallback — that
+ * would blindly slice off completed blocks with zero proof, the exact "vanish"
+ * bug this design eliminates.
+ */
+export function clearCompletedTurn(sid: string, delta?: SessionHistoryMessage[]): void {
+  const state = streamStates.get(sid);
+  if (!state) return;
+  if (state.completedLen === 0 && state.isStreaming && state.blocks.length > 0) {
+    // batch-completed raced ahead of session:result (observed ~50ms in prod):
+    // the boundary isn't known yet. Defer — the result handler applies the
+    // clear once it stamps completedLen. Wiping now would kill a live turn;
+    // keeping forever would duplicate against history on the next cache hit.
+    state.pendingTurnClear = true;
+    if (delta !== undefined) state.pendingDelta = delta; // stash evidence (even empty) to replay when result lands
+    return;
+  }
+
+  if (delta !== undefined) {
+    // Evidence-based: prove each removed block against the delta. An empty delta
+    // promotes nothing (removed=0, kept=all) — never a blind slice.
+    const { kept, removed } = promoteCompletedBlocks(state.blocks, delta, state.completedLen);
+    if (kept.length === 0 && !state.isStreaming) {
+      streamStates.delete(sid);
+      return;
+    }
+    state.blocks = kept;
+    // Anything left in the completed window failed to match (kept without twin);
+    // reset the boundary so the next delta re-attempts promotion from the front.
+    state.completedLen = Math.max(0, state.completedLen - removed);
+    // Only resolve the deferred-clear flag once we actually promoted something;
+    // an empty/incomplete delta leaves the turn pending so a later non-empty
+    // delta (next batch-completed) still fires the promotion.
+    if (removed > 0) {
+      state.pendingTurnClear = false;
+      state.pendingDelta = undefined;
+    }
+    return;
+  }
+
+  // Position fallback (delta === undefined → no evidence available at all).
+  const removed = Math.min(state.completedLen, state.blocks.length);
+  if (state.blocks.length - removed <= 0 && !state.isStreaming) {
+    streamStates.delete(sid);
+    return;
+  }
+  state.blocks = state.blocks.slice(removed);
+  state.completedLen = 0;
+  state.pendingTurnClear = false;
+  state.pendingDelta = undefined;
 }
 
 // ── Global WS listeners (registered once at module load) ─────────────────────
 
-/** Flush accumulated text into the last text block (or create one). */
+/** Flush accumulated text into the last LIVE text block (or create one).
+ *  Never merges into a block at/before the completed-turn boundary. */
 function flushText(state: StreamState): void {
   if (!state.textBuffer) return;
   const last = state.blocks[state.blocks.length - 1];
-  if (last && last.type === 'text') {
+  if (last && last.type === 'text' && state.blocks.length > state.completedLen) {
     state.blocks[state.blocks.length - 1] = {
       type: 'text',
       content: state.textBuffer,
@@ -123,7 +209,7 @@ function flushText(state: StreamState): void {
 function ensureState(sid: string): StreamState {
   let s = streamStates.get(sid);
   if (!s) {
-    s = { blocks: [], textBuffer: '', isStreaming: false };
+    s = { blocks: [], textBuffer: '', isStreaming: false, completedLen: 0 };
     streamStates.set(sid, s);
   }
   return s;
@@ -147,9 +233,11 @@ function registerGlobalListeners(): void {
     // "flush-before-context-switch" (tool-use, result, etc.) where textBuffer is
     // reset afterward. Here we append delta first, then write the accumulated
     // buffer — calling flushText would lose the newly appended delta.
-    // Update the last text block in-place (or push a new one)
+    // Update the last text block in-place (or push a new one). Merge only into a
+    // LIVE block (past the completed-turn boundary) — a finished turn's final text
+    // must not be overwritten by the next turn's deltas.
     const last = state.blocks[state.blocks.length - 1];
-    if (last && last.type === 'text') {
+    if (last && last.type === 'text' && state.blocks.length > state.completedLen) {
       state.blocks[state.blocks.length - 1] = {
         type: 'text',
         content: state.textBuffer,
@@ -239,7 +327,7 @@ function registerGlobalListeners(): void {
     const state = ensureState(sid);
     state.isStreaming = true;
     const last = state.blocks[state.blocks.length - 1];
-    if (last && last.type === 'thinking') {
+    if (last && last.type === 'thinking' && state.blocks.length > state.completedLen) {
       state.blocks[state.blocks.length - 1] = {
         type: 'thinking',
         content: last.content + delta,
@@ -274,6 +362,14 @@ function registerGlobalListeners(): void {
     // batch-completed fires (turn written to JSONL) and history replaces them.
     state.isStreaming = false;
     state.textBuffer = '';
+    // Turn boundary: everything present now belongs to the completed turn.
+    state.completedLen = state.blocks.length;
+    // batch-completed raced ahead of us — apply the deferred turn clear now.
+    if (state.pendingTurnClear) {
+      const replay = state.pendingDelta;
+      state.pendingDelta = undefined;
+      clearCompletedTurn(sid, replay);
+    }
   });
 
   // ── error (streaming done with error) ──
@@ -297,37 +393,71 @@ function registerGlobalListeners(): void {
         detail,
       } as StreamingSystemBlock);
     }
+    state.completedLen = state.blocks.length; // error ends the turn
+    if (state.pendingTurnClear) {
+      const replay = state.pendingDelta;
+      state.pendingDelta = undefined;
+      clearCompletedTurn(sid, replay);
+    }
   });
 
   // ── batch-completed (turn wrote to JSONL, streaming blocks are now history) ──
   wsClient.onEvent('session:batch-completed', (data: unknown) => {
     const sid = (data as { sessionId?: string })?.sessionId;
     if (!sid || !trackedSessions.has(sid)) return;
-    log.info(
-      'session-cache',
-      `batch-completed for ${sid.substring(0, 8)}, clearing stream state`,
-    );
-    // Stream blocks are now persisted in JSONL — discard cached streaming state.
-    // The bg fetch below will update historyCache with the completed turn.
-    streamStates.delete(sid);
 
-    // Background-fetch the updated history so cache is fresh when user switches back
-    if (!inflightBgFetches.has(sid)) {
-      inflightBgFetches.add(sid);
-      fetchSessionHistory(sid)
-        .then((r) => {
+    // Delta fetch: ask only for messages after what we've cached. The response is
+    // the promotion evidence — a few KB, not the full 6.4MB payload. If the archive
+    // hasn't flushed yet the delta is empty and clearCompletedTurn is a safe no-op
+    // (blocks stay, retried on the next batch-completed / when the column opens).
+    if (inflightBgFetches.has(sid)) return;
+    inflightBgFetches.add(sid);
+    const cached = historyCache.get(sid);
+    const since = cached?.msgCount ?? 0;
+    fetchSessionHistory(sid, { since })
+      .then((r) => {
+        // Evidence-based turn clear: remove only streaming blocks proven present
+        // in this delta (keeps a next turn already streaming; keeps anything the
+        // archive hasn't caught up on). Replaces the old blind full-delete.
+        clearCompletedTurn(sid, r.messages);
+
+        if (r.delta && cached) {
+          // Append the increment to the cached history.
+          const merged = [...cached.messages, ...r.messages];
+          // Consistency guard (same as useSessionHistory): a correct delta append yields
+          // exactly `cursor` messages. A mismatch means the cached prefix diverged from the
+          // server's current parse (e.g. compaction rewrote history), so appending would
+          // DUPLICATE the overlap. Rebuild the cache from a full fetch instead of appending.
+          const expected = r.cursor ?? merged.length;
+          if (r.cursor != null && merged.length !== expected) {
+            log.warn('session-cache', `bg delta length mismatch for ${sid.substring(0, 8)} — rebuilding (had=${cached.messages.length} +${r.messages.length} → ${merged.length}, cursor=${expected})`);
+            fetchSessionHistory(sid)
+              .then((full) => historyCacheSet(sid, {
+                messages: full.messages,
+                forkBoundaryIndex: full.forkBoundaryIndex,
+                msgCount: full.cursor ?? full.messages.length,
+              }))
+              .catch(() => { /* keep current cache; next turn retries */ });
+          } else {
+            historyCacheSet(sid, {
+              messages: merged,
+              forkBoundaryIndex: r.forkBoundaryIndex ?? cached.forkBoundaryIndex,
+              msgCount: r.cursor ?? merged.length,
+            });
+            log.info('session-cache', `bg delta for ${sid.substring(0, 8)}: +${r.messages.length} → ${merged.length}`);
+          }
+        } else {
+          // Full payload (no cache yet, or since out of range → rebuild).
           historyCacheSet(sid, {
             messages: r.messages,
             forkBoundaryIndex: r.forkBoundaryIndex,
-            msgCount: r.messages.length,
+            msgCount: r.cursor ?? r.messages.length,
           });
-          log.info('session-cache', `bg-updated history for ${sid.substring(0, 8)}`, {
-            msgCount: r.messages.length,
-          });
-        })
-        .catch((err) => log.warn('session-cache', 'bg history fetch failed', { sid, error: String(err) }))
-        .finally(() => inflightBgFetches.delete(sid));
-    }
+          log.info('session-cache', `bg-updated history for ${sid.substring(0, 8)}`, { msgCount: r.messages.length });
+        }
+      })
+      .catch((err) => log.warn('session-cache', 'bg history fetch failed', { sid, error: String(err) }))
+      .finally(() => inflightBgFetches.delete(sid));
   });
 
   // ── WS reconnect — refresh all tracked sessions ──
@@ -344,8 +474,9 @@ function registerGlobalListeners(): void {
           const snap = snapshot as {
             blocks: StreamingBlock[];
             isStreaming: boolean;
+            completedLen?: number;
           } | null;
-          if (snap) initStreamState(sid, snap.blocks, snap.isStreaming);
+          if (snap) initStreamState(sid, snap.blocks, snap.isStreaming, snap.completedLen);
         })
         .catch(() => {});
 

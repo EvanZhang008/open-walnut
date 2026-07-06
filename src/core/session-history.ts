@@ -10,7 +10,6 @@
  * SessionFileReader (session-file-reader.ts).
  */
 
-import fsp from 'node:fs/promises';
 import { log } from '../logging/index.js';
 import {
   encodeProjectPath,
@@ -238,7 +237,7 @@ function groupInlineChildren(
  * Core parsing logic: parse raw JSONL content string into SessionHistoryMessage[].
  * Deduplicates by message.id, handles queue-operations.
  */
-function parseSessionMessages(content: string): SessionHistoryMessage[] {
+export function parseSessionMessages(content: string): SessionHistoryMessage[] {
   const lines = content.split('\n').filter(Boolean);
 
   // Parse all lines
@@ -274,25 +273,71 @@ function parseSessionMessages(content: string): SessionHistoryMessage[] {
     }>;
   }>();
 
-  // First pass: identify Pattern A enqueue entries (those followed by a 'dequeue').
-  // Pattern A: enqueue → dequeue → user STRING (FIFO order, user STRING follows)
-  // Pattern B: enqueue → remove (or unmatched) — no user STRING, must be parsed here.
-  // We use FIFO matching: dequeue consumes the oldest enqueue and marks it to skip.
-  // remove consumes the oldest enqueue without marking (it's a Pattern B cleanup).
-  const enqueueFifo: number[] = [];
+  // First pass: identify Pattern A enqueue entries — a mid-turn FIFO send that the CLI
+  // ALSO re-logged as a normal user STRING line, so the enqueue is a duplicate to skip.
+  //
+  //   Pattern A: enqueue → (soon) user STRING with identical content  ⇒ skip the enqueue
+  //   Pattern B: enqueue with NO nearby matching user STRING           ⇒ emit as synthetic user msg
+  //              (message was consumed mid-stream / cancelled — never re-logged as a real line)
+  //
+  // WHY CONTENT-MATCHING WITH A WINDOW (not dequeue/remove counting):
+  //   The old approach paired each `dequeue` with the OLDEST pending `enqueue` (a global
+  //   FIFO). That silently corrupts across resume/compact boundaries: a `--resume`d session
+  //   accumulates ORPHAN dequeues/removes (their enqueue lived in a prior process' buffer)
+  //   plus orphan enqueues, so enqueue/dequeue/remove counts don't balance (measured on a
+  //   real 1424-session corpus: 3353 enqueue / 2859 dequeue / 483 remove). A stray dequeue
+  //   then claims the wrong enqueue, leaving a LATER enqueue falsely unmatched → it re-emits
+  //   as Pattern B even though its real user twin sits a couple lines below → the message
+  //   renders TWICE (the "compact still shows old messages below" bug). The inverse also
+  //   happened: a `remove` wrongly claimed a real Pattern B enqueue → that message was
+  //   silently DROPPED. Content-matching is the true invariant and is immune to how many
+  //   resume boundaries chopped the queue ops.
+  //
+  //   THE WINDOW matters: the real user twin always follows the enqueue closely (corpus
+  //   p50=2, p90=4, p99=144 lines). But identical short text ("continue", "summary") recurs
+  //   across DIFFERENT turns, so an unbounded forward search could claim a same-text user
+  //   line hundreds of lines later — wrongly skipping THIS enqueue AND stealing the twin of
+  //   a genuinely-Pattern-B enqueue (double corruption). Bounding the forward search to
+  //   PATTERN_A_LOOKAHEAD lines cuts true duplicates from 11→3 across the corpus vs. the
+  //   unbounded claim, with no observed message loss. Each real user STRING line is claimed
+  //   at most once (multiset) so N identical mid-turn sends still map 1:1 to N enqueues.
+  const PATTERN_A_LOOKAHEAD = 50;
+  // Collect the comparable text of every real user line so an enqueue can find its twin.
+  // The CLI re-logs a mid-turn send either as a STRING content OR as an ARRAY content whose
+  // first text block holds the message (measured on the real corpus: of 2517 enqueues, 1952
+  // twins were string, 7 were array — the array ones carry image refs / long text like
+  // "[Image #2] looks the side…"). Missing the array shape leaves those 7 enqueues un-skipped,
+  // so the message renders twice. Extract the first text block for the array case.
+  const userTwinTexts: Array<{ index: number; content: string; claimed: boolean }> = [];
+  for (let i = 0; i < rawMessages.length; i++) {
+    const raw = rawMessages[i];
+    if (raw.type !== 'user') continue;
+    const c = raw.message?.content;
+    let text: string | undefined;
+    if (typeof c === 'string') {
+      text = c;
+    } else if (Array.isArray(c)) {
+      const tb = c.find((b): b is { type: 'text'; text: string } =>
+        (b as { type?: string })?.type === 'text' && typeof (b as { text?: unknown }).text === 'string');
+      if (tb) text = tb.text;
+    }
+    if (typeof text === 'string') {
+      userTwinTexts.push({ index: i, content: text, claimed: false });
+    }
+  }
   const skipEnqueueIndices = new Set<number>();
   for (let i = 0; i < rawMessages.length; i++) {
     const raw = rawMessages[i];
-    if (raw.type !== 'queue-operation') continue;
-    if (raw.operation === 'enqueue') {
-      enqueueFifo.push(i);
-    } else if (raw.operation === 'dequeue') {
-      // Pattern A: a user STRING will follow — skip this enqueue
-      const oldest = enqueueFifo.shift();
-      if (oldest !== undefined) skipEnqueueIndices.add(oldest);
-    } else if (raw.operation === 'remove') {
-      // Pattern B cleanup: consumed mid-stream, no user STRING — pop but don't skip
-      enqueueFifo.shift();
+    if (raw.type !== 'queue-operation' || raw.operation !== 'enqueue' || !raw.content) continue;
+    // Claim the earliest not-yet-claimed real user line within the lookahead window whose
+    // text matches. Found → Pattern A (skip enqueue). None → Pattern B (emit synthetic msg).
+    const wanted = raw.content.trim();
+    const twin = userTwinTexts.find(
+      u => !u.claimed && u.index > i && u.index - i <= PATTERN_A_LOOKAHEAD && u.content.trim() === wanted,
+    );
+    if (twin) {
+      twin.claimed = true;
+      skipEnqueueIndices.add(i);
     }
   }
 
@@ -302,8 +347,9 @@ function parseSessionMessages(content: string): SessionHistoryMessage[] {
     // Handle queue-operation entries (FIFO-injected user messages from mid-stream send).
     // These are interleaved at the correct chronological position in the JSONL.
     if (raw.type === 'queue-operation') {
-      // Only parse Pattern B enqueues (no corresponding dequeue — no user STRING follows).
-      // Pattern A enqueues are in skipEnqueueIndices and will have a proper user STRING.
+      // Only parse Pattern B enqueues (no matching later user STRING — the message was
+      // consumed mid-stream and never re-logged as a real user line). Pattern A enqueues
+      // are in skipEnqueueIndices (their identical user STRING twin is emitted below).
       if (raw.operation === 'enqueue' && raw.content && !skipEnqueueIndices.has(i)) {
         const syntheticId = `queue-${raw.timestamp ?? i}`;
         messageMap.set(syntheticId, {
@@ -680,53 +726,42 @@ export async function readSessionHistory(sessionId: string, cwd?: string, host?:
   // Local: fs.stat on the canonical path (cheap).
   // Remote: one fs.stat RPC to the daemon — ~50ms and avoids re-fetching the
   //   whole JSONL over the tunnel (seconds for large sessions).
+  // UNIFIED mtime-cache stat: both local (__local__) and remote go through the
+  // daemon's fs.stat (DaemonFileReader → localDaemon for __local__). One path,
+  // and the byte size it returns is what a future incremental byte-read needs.
+  // Path resolution (identical for local & remote):
+  //   1. cwd safe for our encoding (<=200 chars) → build the exact tilde path.
+  //   2. Otherwise (cwd missing or hashed by Claude Code) → a previously resolved
+  //      full path discovered via a prior full read.
   let mtimeMs: number | undefined;
-  if (!host) {
-    const localPath = await findLocalJsonlPath(sessionId, cwd);
-    if (localPath) {
-      try {
-        const stat = await fsp.stat(localPath);
-        mtimeMs = stat.mtimeMs;
-        const cached = cacheGet(sessionId);
-        if (cached && cached.mtimeMs === mtimeMs) {
-          // Cache hit — return cached messages (skipSubagents is the common path now,
-          // so cached messages don't include childMessages and no mutation concern)
-          return cached.messages;
-        }
-      } catch {
-        // stat failed — proceed with full read
-      }
-    }
-  } else {
-    // Remote session: stat the JSONL path and compare mtime against the cache.
-    // Path resolution:
-    //   1. If cwd is safe for our encoding (<=200 chars encoded), build the
-    //      exact canonical path from cwd.
-    //   2. Otherwise (cwd missing or hashed by Claude Code), use a previously
-    //      resolved full path if we've discovered one via a prior full read.
+  {
+    const daemonHost = host ?? '__local__';
     let statPath: string | undefined;
     if (cwd && isSafeForProjectEncoding(cwd)) {
       statPath = remoteJsonlPath(sessionId, cwd);
     } else {
-      statPath = getResolvedRemotePath(sessionId, host);
+      statPath = getResolvedRemotePath(sessionId, daemonHost);
     }
     if (statPath) {
       try {
         const { DaemonFileReader } = await import('./daemon-file-reader.js');
-        const reader = new DaemonFileReader(host);
+        const reader = new DaemonFileReader(daemonHost);
         const statResult = await reader.stat(statPath);
         if (statResult) {
           mtimeMs = statResult.mtimeMs;
           const cached = cacheGet(sessionId, host);
           if (cached && cached.mtimeMs === mtimeMs) {
+            // Cache hit — return cached messages (skipSubagents is the common path
+            // now, so cached messages don't include childMessages; no mutation concern).
             return cached.messages;
           }
         }
       } catch (err) {
-        // stat failed (old daemon without fs.stat, or transport error) — skip
-        // the cache and fall through to a full read. Not fatal.
-        log.session.debug('remote fs.stat failed, skipping history cache', {
-          sessionId, host,
+        // stat failed (old daemon without fs.stat, transport error, or local
+        // daemon mid-restart) — skip the cache and fall through to a full read.
+        // Not fatal.
+        log.session.debug('fs.stat via daemon failed, skipping history cache', {
+          sessionId, host: daemonHost,
           error: err instanceof Error ? err.message : String(err),
         });
       }
@@ -735,10 +770,11 @@ export async function readSessionHistory(sessionId: string, cwd?: string, host?:
 
   const result = await readSessionJsonlContent(sessionId, cwd, host, outputFile);
   if (result) {
-    // Remember the resolved remote path so the next read can use the mtime
-    // fast-path even when cwd is unsafe for our canonical path encoding.
-    if (host && result.resolvedRemotePath) {
-      setResolvedRemotePath(sessionId, host, result.resolvedRemotePath);
+    // Remember the resolved path so the next read can use the mtime fast-path
+    // even when cwd is unsafe for our canonical path encoding. Keyed by the
+    // daemon host (__local__ for local) so local reads get the same fast-path.
+    if (result.resolvedRemotePath) {
+      setResolvedRemotePath(sessionId, host ?? '__local__', result.resolvedRemotePath);
     }
     try {
       messages = parseSessionMessages(result.content);
@@ -785,11 +821,16 @@ export async function readSessionHistory(sessionId: string, cwd?: string, host?:
     }
   }
 
-  // Refresh plan content from disk (local sessions only).
-  // The plan file may have been updated after the initial Write captured in the JSONL
-  // (e.g., agent continued editing the plan). Replace ExitPlanMode planContent
-  // with the latest disk version so the PlanCard shows current content on first load.
-  if (!host) {
+  // Refresh plan content from disk. The plan file may have been updated after the
+  // initial Write captured in the JSONL (e.g., agent continued editing the plan).
+  // Replace ExitPlanMode planContent with the latest disk version so the PlanCard
+  // shows current content on first load.
+  //
+  // Daemon-uniform: read through DaemonFileReader(host ?? '__local__') so this works
+  // for BOTH local and remote sessions (previously local-only via direct fs — remote
+  // plans were never refreshed). The plan path is absolute; the daemon reads it as-is.
+  // Any failure (missing file, transport) is non-fatal — we keep the JSONL version.
+  {
     let planFilePath: string | undefined;
     for (const msg of messages) {
       if (!msg.tools) continue;
@@ -802,7 +843,9 @@ export async function readSessionHistory(sessionId: string, cwd?: string, host?:
     }
     if (planFilePath) {
       try {
-        const diskContent = await fsp.readFile(planFilePath, 'utf-8');
+        const { DaemonFileReader } = await import('./daemon-file-reader.js');
+        const reader = new DaemonFileReader(host ?? '__local__');
+        const diskContent = await reader.readFile(planFilePath);
         if (diskContent) {
           for (const msg of messages) {
             if (!msg.tools) continue;
@@ -814,8 +857,8 @@ export async function readSessionHistory(sessionId: string, cwd?: string, host?:
           }
         }
       } catch (err) {
-        log.session.debug('failed to read plan file from disk', {
-          planFilePath,
+        log.session.debug('failed to read plan file via daemon', {
+          planFilePath, host: host ?? '__local__',
           error: err instanceof Error ? err.message : String(err),
         });
       }
@@ -876,27 +919,10 @@ export function formatForkHistory(messages: SessionHistoryMessage[], tokenBudget
  * Supports both local and remote sessions via readSessionJsonlContent().
  */
 export async function extractPlanContent(sessionId: string, cwd?: string, host?: string): Promise<string | null> {
-  // Try local first (fast path)
-  const localPath = await findLocalJsonlPath(sessionId, cwd);
-  let content: string | undefined;
-
-  if (localPath) {
-    try {
-      content = await fsp.readFile(localPath, 'utf-8');
-    } catch (err) {
-      log.session.debug('failed to read local JSONL for plan extraction', {
-        localPath,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  // If no local content and host provided, try remote
-  if (!content && host) {
-    const result = await readSessionJsonlContent(sessionId, cwd, host);
-    if (result) content = result.content;
-  }
-
+  // DAEMON-UNIFORM: read through readSessionJsonlContent (daemon for both local &
+  // remote) — no findLocalJsonlPath + fsp.readFile bypass.
+  const result = await readSessionJsonlContent(sessionId, cwd, host);
+  const content = result?.content;
   if (!content) return null;
 
   try {
@@ -1021,27 +1047,12 @@ function runningBgCount(bgTasks: Map<string, string>, terminal: Set<string>): nu
 }
 
 export async function recoverStateFromJsonl(sessionId: string, cwd?: string, host?: string): Promise<RecoveredSessionState | null> {
-  // Try local first (fast path — most common case for crash recovery)
-  const localPath = await findLocalJsonlPath(sessionId, cwd);
-  let content: string | undefined;
-
-  if (localPath) {
-    try {
-      content = await fsp.readFile(localPath, 'utf-8');
-    } catch (err) {
-      log.session.debug('failed to read local JSONL for state recovery', {
-        localPath,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  // If no local content and host provided, try remote
-  if (!content && host) {
-    const result = await readSessionJsonlContent(sessionId, cwd, host);
-    if (result) content = result.content;
-  }
-
+  // DAEMON-UNIFORM: read through readSessionJsonlContent (daemon for both local &
+  // remote). This runs during crash recovery (attachToExisting); the local daemon
+  // is auto-started by ensureRunning() inside the daemon connection, so no local
+  // fs bypass is needed even on the bootstrap path.
+  const result = await readSessionJsonlContent(sessionId, cwd, host);
+  const content = result?.content;
   if (!content) return null;
 
   try {

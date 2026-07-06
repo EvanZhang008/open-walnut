@@ -117,7 +117,12 @@ export const SESSIONS_FILE = path.join(WALNUT_HOME, 'sessions.json');
 export const CLAUDE_HOME = path.join(os.homedir(), '.claude');
 export const HOOK_LOG_FILE = path.join(WALNUT_HOME, 'hook-errors.log');
 export const DAILY_DIR = path.join(MEMORY_DIR, 'daily');
-export const MEMORY_FILE = path.join(WALNUT_HOME, 'MEMORY.md');
+/** Pinned global memory. Lives INSIDE memory/ (three-word model: memory / skill / history). */
+export const MEMORY_FILE = path.join(MEMORY_DIR, 'MEMORY.md');
+/** User profile — who the user is (identity, work, durable preferences). Injected every turn alongside MEMORY.md. */
+export const USER_FILE = path.join(MEMORY_DIR, 'USER.md');
+/** Pre-2026-07 location (WALNUT_HOME root) — read-migrated on startup by initDirectories. */
+export const LEGACY_MEMORY_FILE = path.join(WALNUT_HOME, 'MEMORY.md');
 export const PROJECTS_MEMORY_DIR = path.join(MEMORY_DIR, 'projects');
 export const CHAT_HISTORY_FILE = path.join(WALNUT_HOME, 'chat-history.json');
 
@@ -247,7 +252,10 @@ export const NOTES_AGENTS_FILE = path.join(NOTES_DIR, 'AGENTS.md');
 /** Mirror of AGENTS.md — Claude Code discovers this natively when CWD is NOTES_DIR */
 export const NOTES_CLAUDE_FILE = path.join(NOTES_DIR, 'CLAUDE.md');
 export const REPOSITORIES_DIR = path.join(WALNUT_HOME, 'repositories');
-export const REPOS_MEMORY_DIR = path.join(MEMORY_DIR, 'repos');
+/** Repo environment knowledge — now lives in the skill system as the `repos`
+ *  category (skills/repos/<slug>/SKILL.md). memory/repos was merged into skills
+ *  in the 2026-07 memory/skill/history unification (the old dir was empty). */
+export const REPOS_MEMORY_DIR = path.join(GLOBAL_SKILLS_DIR, 'repos');
 export const TOPICS_DIR = path.join(MEMORY_DIR, 'topics');
 export const COMPACTION_DIR = path.join(MEMORY_DIR, 'compaction');
 export const MEMORY_INDEX_FILE = path.join(MEMORY_DIR, 'index.md');

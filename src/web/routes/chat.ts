@@ -7,6 +7,8 @@
  */
 
 import crypto from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
 import type { WebSocket } from 'ws'
 import type { MessageParam } from '../../agent/model.js'
 import type { DisplayMessageBlock } from '../../core/types.js'
@@ -25,7 +27,7 @@ import { processAndSaveImages, buildImageAnnotation } from './images.js'
 import type { ImagePayload } from './images.js'
 import { truncateToTokenBudget } from '../../utils/token-truncate.js'
 import { log } from '../../logging/index.js'
-import { validateAgentId, validateConversationId } from '../../constants.js'
+import { validateAgentId, validateConversationId, GLOBAL_SKILLS_DIR } from '../../constants.js'
 import { enqueueAgentTurn, recordLastTurnTokens } from '../agent-turn-queue.js'
 import { triggerBackgroundCompaction } from '../background-compaction.js'
 import {
@@ -246,6 +248,28 @@ function contentHash(text: string | null | undefined): string {
  * Load hierarchical project memory: parent (category) + self (project).
  * Returns { parentPath, parentContent, selfPath, selfContent }.
  */
+/** Read a skill's curated body + recent history tail as the project context.
+ *  Skill system first (memory/projects/ retired 2026-07); legacy project
+ *  MEMORY.md as fallback for anything not yet migrated. */
+function readSkillProjectContext(category: string, name: string): string | null {
+  try {
+    const dir = path.join(GLOBAL_SKILLS_DIR, category, name);
+    const skillFile = path.join(dir, 'SKILL.md');
+    if (!fs.existsSync(skillFile)) return null;
+    let content = fs.readFileSync(skillFile, 'utf-8');
+    const logFile = path.join(dir, 'history', 'log.md');
+    if (fs.existsSync(logFile)) {
+      // Recent history tail only — the curated body is the main signal.
+      const raw = fs.readFileSync(logFile, 'utf-8');
+      const tail = raw.length > 4000 ? `[older entries omitted]\n${raw.slice(-4000)}` : raw;
+      content += `\n\n## Recent progress (history/log.md)\n${tail}`;
+    }
+    return content;
+  } catch {
+    return null;
+  }
+}
+
 function loadHierarchicalMemory(category: string, project: string): {
   parentPath: string | null; parentContent: string | null;
   selfPath: string; selfContent: string | null;
@@ -254,17 +278,20 @@ function loadHierarchicalMemory(category: string, project: string): {
   const projLower = project.toLowerCase();
   const selfPath = `${catLower}/${projLower}`;
 
-  // Self = project-level memory
-  const selfResult = getProjectMemory(selfPath);
-  const selfContent = selfResult?.content ?? null;
+  // Self = the project's skill (skills/<cat>/<proj>/), legacy MEMORY.md fallback
+  const selfContent = readSkillProjectContext(catLower, projLower)
+    ?? getProjectMemory(selfPath)?.content
+    ?? null;
 
-  // Parent = category-level memory (only if project !== category, i.e. 2 levels)
+  // Parent = category-level context (only if project !== category, i.e. 2 levels):
+  // the category's overview skill, legacy category MEMORY.md fallback.
   let parentPath: string | null = null;
   let parentContent: string | null = null;
   if (projLower !== catLower) {
     parentPath = catLower;
-    const parentResult = getProjectMemory(catLower);
-    parentContent = parentResult?.content ?? null;
+    parentContent = readSkillProjectContext(catLower, 'overview')
+      ?? getProjectMemory(catLower)?.content
+      ?? null;
   }
 
   return { parentPath, parentContent, selfPath, selfContent };
@@ -1024,6 +1051,22 @@ export function registerChatRpc(): void {
               conversationId,
             ).catch(() => { /* non-critical */ })
           }
+        }
+
+        // Background self-review: count this clean main-butler turn; every N turns
+        // fork the conversation (same cache prefix) for a skill/memory review pass.
+        // Fire-and-forget — persistence-isolated, never touches this conversation.
+        if (agentId === 'general') {
+          import('../../agent/background-review.js')
+            .then(({ noteTurnCompleteAndMaybeReview }) => noteTurnCompleteAndMaybeReview({
+              agentId,
+              conversationId,
+              toolsUsed: toolsUsedInTurn,
+              getHistory: () => chatHistory.getApiMessages(agentId, conversationId),
+            }))
+            .catch((err) => {
+              log.web.warn('background review trigger failed', { error: err instanceof Error ? err.message : String(err) })
+            })
         }
 
         // Trigger background compaction outside the turn queue.

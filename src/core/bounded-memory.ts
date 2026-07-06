@@ -26,12 +26,18 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { MEMORY_FILE, agentMemoryDir } from '../constants.js';
+import { MEMORY_FILE, USER_FILE, agentMemoryDir } from '../constants.js';
 import { computeContentHash } from '../utils/file-ops.js';
 import { withFileLock } from '../utils/file-lock.js';
 
 /** Hard budget for the entries block (chars of all entries joined by "\n\n"). */
 export const MEMORY_CHAR_BUDGET = 8_000;
+
+/** Hard budget for USER.md — who the user is. Smaller: identity/preferences, not rules. */
+export const USER_CHAR_BUDGET = 4_000;
+
+/** Which bounded store a write targets (Hermes memory-tool parity). */
+export type MemoryTarget = 'memory' | 'user';
 
 /** Consecutive same-turn failures before the breaker trips. */
 const MAX_CONSOLIDATION_FAILURES_PER_TURN = 3;
@@ -41,11 +47,21 @@ const ENTRY_JOIN = '\n\n';
 const DEFAULT_PREAMBLE = `---
 name: Global Memory
 description: >
-  Bounded behavior rules and user preferences. Updated by the agent via
-  memory_manage. Hard budget: ${MEMORY_CHAR_BUDGET} chars.
+  Bounded behavior rules. Updated by the agent via the memory_manage tool
+  (target: memory). Hard budget: ${MEMORY_CHAR_BUDGET} chars.
 ---
 
 # MEMORY.md — Global
+`;
+
+const DEFAULT_USER_PREAMBLE = `---
+name: User Profile
+description: >
+  Who the user is — identity, work, durable preferences. Updated by the agent
+  via the memory_manage tool (target: user). Hard budget: ${USER_CHAR_BUDGET} chars.
+---
+
+# USER.md — User Profile
 `;
 
 // ── Result types ──
@@ -121,8 +137,8 @@ export function parseMemoryContent(content: string): { preamble: string; entries
   };
 }
 
-function renderMemoryContent(preamble: string, entries: string[]): string {
-  const head = (preamble || DEFAULT_PREAMBLE.trimEnd()).trimEnd();
+function renderMemoryContent(preamble: string, entries: string[], fallbackPreamble = DEFAULT_PREAMBLE): string {
+  const head = (preamble || fallbackPreamble.trimEnd()).trimEnd();
   if (entries.length === 0) return head + '\n';
   return head + '\n\n' + entries.join(ENTRY_JOIN) + '\n';
 }
@@ -154,22 +170,31 @@ function validateEntryShape(content: string): string | null {
 
 // ── Store ──
 
-function resolveMemoryPath(agentId?: string): string {
-  if (!agentId || agentId === 'general') return MEMORY_FILE;
-  return path.join(agentMemoryDir(agentId), 'MEMORY.md');
+function resolveMemoryPath(agentId?: string, target: MemoryTarget = 'memory'): string {
+  if (!agentId || agentId === 'general') return target === 'user' ? USER_FILE : MEMORY_FILE;
+  return path.join(agentMemoryDir(agentId), target === 'user' ? 'USER.md' : 'MEMORY.md');
 }
 
 export class BoundedMemoryStore {
   private readonly filePath: string;
+  private readonly budget: number;
+  private readonly defaultPreamble: string;
   private consolidationFailures = 0;
 
-  constructor(agentId?: string) {
-    this.filePath = resolveMemoryPath(agentId);
+  constructor(agentId?: string, target: MemoryTarget = 'memory') {
+    this.filePath = resolveMemoryPath(agentId, target);
+    this.budget = target === 'user' ? USER_CHAR_BUDGET : MEMORY_CHAR_BUDGET;
+    this.defaultPreamble = target === 'user' ? DEFAULT_USER_PREAMBLE : DEFAULT_PREAMBLE;
   }
 
   /** Call at each turn boundary — the breaker counts consecutive failures within one turn. */
   resetConsolidationFailures(): void {
     this.consolidationFailures = 0;
+  }
+
+  /** The hard char budget this store enforces (target-dependent). */
+  get charBudget(): number {
+    return this.budget;
   }
 
   /** Read current state from disk (no lock — point-in-time snapshot). */
@@ -213,7 +238,7 @@ export class BoundedMemoryStore {
   renderForPrompt(): string | null {
     const snap = this.readSync();
     if (snap.entries.length === 0) return null;
-    const header = `[Memory usage: ${formatUsage(snap.usedChars)}]`;
+    const header = `[Memory usage: ${formatUsage(snap.usedChars, this.budget)}]`;
     return `${header}\n\n${snap.entries.join(ENTRY_JOIN)}`;
   }
 
@@ -229,12 +254,12 @@ export class BoundedMemoryStore {
       }
       const next = [...entries, trimmed];
       const newTotal = entriesChars(next);
-      if (newTotal > MEMORY_CHAR_BUDGET) {
+      if (newTotal > this.budget) {
         return {
           kind: 'over-budget',
           error:
-            `Memory at ${formatUsage(entriesChars(entries))}. Adding this entry ` +
-            `(${trimmed.length} chars) would exceed the ${MEMORY_CHAR_BUDGET.toLocaleString('en-US')}-char limit. ` +
+            `Memory at ${formatUsage(entriesChars(entries), this.budget)}. Adding this entry ` +
+            `(${trimmed.length} chars) would exceed the ${this.budget.toLocaleString('en-US')}-char limit. ` +
             `Consolidate now: 'replace' to merge overlapping entries into shorter ones, or 'remove' stale ` +
             `or less important entries (see currentEntries), then retry this add — all in this turn. ` +
             `Prefer a single 'batch' call that frees space AND adds in one step.`,
@@ -261,11 +286,11 @@ export class BoundedMemoryStore {
       const next = [...entries];
       next[match.index] = trimmed;
       const newTotal = entriesChars(next);
-      if (newTotal > MEMORY_CHAR_BUDGET) {
+      if (newTotal > this.budget) {
         return {
           kind: 'over-budget',
           error:
-            `Replacement would put memory at ${formatUsage(newTotal)} — over the limit. ` +
+            `Replacement would put memory at ${formatUsage(newTotal, this.budget)} — over the limit. ` +
             `Shorten the new content, or 'remove' other stale entries to make room ` +
             `(see currentEntries), then retry — all in this turn.`,
         };
@@ -335,12 +360,12 @@ export class BoundedMemoryStore {
       }
 
       const newTotal = entriesChars(working);
-      if (newTotal > MEMORY_CHAR_BUDGET) {
+      if (newTotal > this.budget) {
         return {
           kind: 'over-budget',
           error:
             `After applying all ${operations.length} operation(s), memory would be at ` +
-            `${formatUsage(newTotal)} — over the limit. Remove or shorten more entries in the ` +
+            `${formatUsage(newTotal, this.budget)} — over the limit. Remove or shorten more entries in the ` +
             `same batch (see currentEntries), then retry.`,
         };
       }
@@ -421,7 +446,7 @@ export class BoundedMemoryStore {
       const outcome = fn(entries);
 
       if (outcome.kind === 'success') {
-        const rendered = renderMemoryContent(preamble, outcome.entries);
+        const rendered = renderMemoryContent(preamble, outcome.entries, this.defaultPreamble);
         await fsp.mkdir(path.dirname(this.filePath), { recursive: true });
         await fsp.writeFile(this.filePath, rendered, 'utf-8');
         return this.successResponse(outcome.entries, outcome.message);
@@ -442,7 +467,7 @@ export class BoundedMemoryStore {
             ? outcome.error + ' No operations were applied (batch is all-or-nothing).'
             : outcome.error,
         currentEntries: entries,
-        usage: formatUsage(entriesChars(entries)),
+        usage: formatUsage(entriesChars(entries), this.budget),
       });
     });
   }
@@ -454,7 +479,7 @@ export class BoundedMemoryStore {
       success: true,
       done: true,
       message,
-      usage: formatUsage(entriesChars(entries)),
+      usage: formatUsage(entriesChars(entries), this.budget),
       entryCount: entries.length,
       note: 'Write saved. This update is complete — do not repeat it.',
     };
@@ -478,15 +503,15 @@ export class BoundedMemoryStore {
   }
 }
 
-// ── Module-level store cache (one instance per agent, breaker state lives here) ──
+// ── Module-level store cache (one instance per agent+target, breaker state lives here) ──
 
 const stores = new Map<string, BoundedMemoryStore>();
 
-export function getBoundedMemory(agentId?: string): BoundedMemoryStore {
-  const key = resolveMemoryPath(agentId);
+export function getBoundedMemory(agentId?: string, target: MemoryTarget = 'memory'): BoundedMemoryStore {
+  const key = resolveMemoryPath(agentId, target);
   let store = stores.get(key);
   if (!store) {
-    store = new BoundedMemoryStore(agentId);
+    store = new BoundedMemoryStore(agentId, target);
     stores.set(key, store);
   }
   return store;

@@ -53,6 +53,28 @@ describe('buildSkillPrefetchHint', () => {
     expect(hint).toContain('skills: x, y, z —');
   });
 
+  it('ignores support-file hits (references/, overview history) — SKILL.md only', async () => {
+    // The widened skill glob (**/*.md) also indexes support files. Their
+    // dirname would produce junk names ("references", "history") in the hint.
+    mockSearch.mockResolvedValue([
+      result('/s/walnut/overview/history/log.md'),
+      result('/s/finance/tax-filing/references/deadlines.md'),
+      result('/s/finance/tax-filing/SKILL.md'),
+    ]);
+    const hint = await buildSkillPrefetchHint('a long enough user message');
+    expect(hint).toBe(
+      'Possibly relevant skills: tax-filing — load with skill_view if applicable.',
+    );
+  });
+
+  it('returns null when ALL hits are support files', async () => {
+    mockSearch.mockResolvedValue([
+      result('/s/walnut/overview/history/log.md'),
+      result('/s/walnut/overview/history/log.20260701-1.md'),
+    ]);
+    expect(await buildSkillPrefetchHint('a long enough user message')).toBeNull();
+  });
+
   it('returns null on empty results, trivial messages, and errors (silent)', async () => {
     mockSearch.mockResolvedValue([]);
     expect(await buildSkillPrefetchHint('a long enough user message')).toBeNull();

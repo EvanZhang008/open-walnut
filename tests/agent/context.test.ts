@@ -22,34 +22,37 @@ afterEach(async () => {
   await fsp.rm(tmpDir, { recursive: true, force: true });
 });
 
+// Global memory is the BOUNDED store (memory/MEMORY.md, "## Title" entries) —
+// renderForPrompt() only emits "## " entry content, so seeds must use that shape.
+
 describe('buildMemoryContext', () => {
-  it('returns placeholder text when no memory exists', () => {
-    const result = buildMemoryContext();
-    expect(result).toContain('(No global memory yet.)');
+  it('returns placeholder text when no memory exists', async () => {
+    const result = await buildMemoryContext();
+    expect(result).toContain('(No global memory yet.');
     expect(result).toContain('(No projects yet.)');
     expect(result).toContain('(No recent activity.)');
   });
 
-  it('contains all section headers', () => {
-    const result = buildMemoryContext();
+  it('contains all section headers', async () => {
+    const result = await buildMemoryContext();
     expect(result).toContain('## Task Categories & Projects');
     expect(result).toContain('## Your long-term memory');
     expect(result).toContain('## Your projects');
     expect(result).toContain('## Recent activity');
   });
 
-  it('includes global MEMORY.md content when file exists', () => {
+  it('includes global MEMORY.md content when file exists', async () => {
     fs.mkdirSync(path.dirname(MEMORY_FILE), { recursive: true });
-    fs.writeFileSync(MEMORY_FILE, '# My Preferences\n\nI prefer dark mode and TypeScript.', 'utf-8');
+    fs.writeFileSync(MEMORY_FILE, '## My Preferences\nI prefer dark mode and TypeScript.', 'utf-8');
 
-    const result = buildMemoryContext();
-    expect(result).toContain('# My Preferences');
+    const result = await buildMemoryContext();
+    expect(result).toContain('## My Preferences');
     expect(result).toContain('I prefer dark mode and TypeScript.');
-    expect(result).not.toContain('(No global memory yet.)');
+    expect(result).not.toContain('(No global memory yet.');
   });
 
-  it('includes project summaries from all projects', () => {
-    // Create two project MEMORY.md files
+  it('includes project summaries from all projects', async () => {
+    // Create two project MEMORY.md files (legacy read path — kept until archived)
     const proj1Dir = path.join(PROJECTS_MEMORY_DIR, 'work', 'api');
     fs.mkdirSync(proj1Dir, { recursive: true });
     fs.writeFileSync(path.join(proj1Dir, 'MEMORY.md'), `---
@@ -66,7 +69,7 @@ description: Personal blog project
 ---
 `, 'utf-8');
 
-    const result = buildMemoryContext();
+    const result = await buildMemoryContext();
     expect(result).toContain('**API Service**');
     expect(result).toContain('work/api');
     expect(result).toContain('REST API for the platform');
@@ -76,18 +79,18 @@ description: Personal blog project
     expect(result).not.toContain('(No projects yet.)');
   });
 
-  it('includes recent daily log content', () => {
+  it('includes recent daily log content', async () => {
     fs.mkdirSync(DAILY_DIR, { recursive: true });
     const dateKey = formatDateKey();
     const logContent = `# Daily Log: ${dateKey}\n\n## 10:30 — agent\nWorked on API endpoints.\n\n`;
     fs.writeFileSync(path.join(DAILY_DIR, `${dateKey}.md`), logContent, 'utf-8');
 
-    const result = buildMemoryContext();
+    const result = await buildMemoryContext();
     expect(result).toContain('Worked on API endpoints.');
     expect(result).not.toContain('(No recent activity.)');
   });
 
-  it('respects token budget - large daily logs get truncated', () => {
+  it('respects token budget - large daily logs get truncated', async () => {
     fs.mkdirSync(DAILY_DIR, { recursive: true });
 
     // Create daily logs for several days with large content
@@ -102,8 +105,8 @@ description: Personal blog project
     }
 
     // With a small budget, only some logs should be included
-    const smallBudget = buildMemoryContext(2000);
-    const largeBudget = buildMemoryContext(50000);
+    const smallBudget = await buildMemoryContext(2000);
+    const largeBudget = await buildMemoryContext(50000);
 
     // Small budget should have fewer logs than large budget
     const smallLogCount = (smallBudget.match(/Daily Log:/g) || []).length;
@@ -111,10 +114,10 @@ description: Personal blog project
     expect(largeLogCount).toBeGreaterThan(smallLogCount);
   });
 
-  it('combines all sections correctly', () => {
+  it('combines all sections correctly', async () => {
     // Set up all three types of data
     fs.mkdirSync(path.dirname(MEMORY_FILE), { recursive: true });
-    fs.writeFileSync(MEMORY_FILE, 'Global knowledge here.', 'utf-8');
+    fs.writeFileSync(MEMORY_FILE, '## Knowledge\nGlobal knowledge here.', 'utf-8');
 
     const projDir = path.join(PROJECTS_MEMORY_DIR, 'myproject');
     fs.mkdirSync(projDir, { recursive: true });
@@ -132,7 +135,7 @@ description: Test project
       'utf-8',
     );
 
-    const result = buildMemoryContext();
+    const result = await buildMemoryContext();
 
     // All three sections should have real content
     expect(result).toContain('Global knowledge here.');
@@ -140,7 +143,7 @@ description: Test project
     expect(result).toContain('Did some work.');
 
     // No placeholders should appear
-    expect(result).not.toContain('(No global memory yet.)');
+    expect(result).not.toContain('(No global memory yet.');
     expect(result).not.toContain('(No projects yet.)');
     expect(result).not.toContain('(No recent activity.)');
   });

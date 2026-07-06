@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
@@ -7,196 +7,189 @@ vi.mock('../../src/constants.js', () => createMockConstants());
  * Suite 4: Memory Search Core (Unit)
  *
  * QMD models (~2GB) may not be available. We mock the QMD store layer
- * and test the pure search logic: SOURCE_CONFIG weights, guaranteed slots,
- * temporal decay integration, and the 60/40 memory/notes split.
+ * and test the pure post-processing logic: source weights, temporal decay,
+ * the 60/40 memory/notes split, collection filtering, and path-prefix scoping.
+ *
+ * Mock mirrors the REAL QMD store API used by memory-search.ts:
+ *  - store.search({ queries, limit, rerank }) → flat ranked list across ALL
+ *    collections, `file` is a virtual path `qmd://<collection>/<rel-path>`
+ *  - store.internal.resolveVirtualPath(virtualPath) → absolute path
  */
 
-// Mock the qmd-store module to avoid real QMD initialization
+type MockResult = { file: string; title: string; bestChunk: string; score: number };
+
 vi.mock('../../src/core/qmd-store.js', () => {
-  // Configurable mock results per collection
-  let mockMemoryResults: Record<string, Array<{ file: string; title: string; bestChunk: string; score: number }>> = {};
-  let mockNotesResults: Record<string, Array<{ file: string; title: string; bestChunk: string; score: number }>> = {};
+  let mockMemoryResults: MockResult[] = [];
+  let mockNotesResults: MockResult[] = [];
 
-  const mockStore = {
-    search: vi.fn(async ({ collection, limit }: { query: string; collection: string; limit: number }) => {
-      const results = mockMemoryResults[collection] ?? [];
-      return results.slice(0, limit);
-    }),
-  };
+  const makeStore = (getResults: () => MockResult[], root: string) => ({
+    search: vi.fn(async ({ limit }: { limit: number }) => getResults().slice(0, limit)),
+    internal: {
+      // qmd://daily/2026-07-01.md → /abs/<root>/daily/2026-07-01.md
+      resolveVirtualPath: (vp: string) => vp.replace(/^qmd:\/\//, `${root}/`),
+    },
+  });
 
-  const mockNotesStore = {
-    search: vi.fn(async ({ collection, limit }: { query: string; collection: string; limit: number }) => {
-      const results = mockNotesResults[collection] ?? [];
-      return results.slice(0, limit);
-    }),
-  };
+  const mockStore = makeStore(() => mockMemoryResults, '/abs/memory');
+  const mockNotesStore = makeStore(() => mockNotesResults, '/abs/notes');
 
   return {
     getMemoryStore: vi.fn(async () => mockStore),
     getNotesStore: vi.fn(async () => mockNotesStore),
+    getTaskStore: vi.fn(async () => makeStore(() => [], '/abs/task')),
+    getSessionStore: vi.fn(async () => makeStore(() => [], '/abs/session')),
     closeQmdStores: vi.fn(),
-    // Test helpers to configure mock results
-    __setMockMemoryResults: (results: Record<string, Array<{ file: string; title: string; bestChunk: string; score: number }>>) => {
-      mockMemoryResults = results;
-    },
-    __setMockNotesResults: (results: Record<string, Array<{ file: string; title: string; bestChunk: string; score: number }>>) => {
-      mockNotesResults = results;
-    },
+    __setMockMemoryResults: (r: MockResult[]) => { mockMemoryResults = r; },
+    __setMockNotesResults: (r: MockResult[]) => { mockNotesResults = r; },
     __getMockStore: () => mockStore,
     __getMockNotesStore: () => mockNotesStore,
   };
 });
 
-import { memoryNotesSearch, type MemorySearchResult } from '../../src/core/memory-search.js';
+import { memoryNotesSearch } from '../../src/core/memory-search.js';
 
-// Access mock helpers
 const qmdStore = await import('../../src/core/qmd-store.js') as unknown as {
-  __setMockMemoryResults: (r: Record<string, Array<{ file: string; title: string; bestChunk: string; score: number }>>) => void;
-  __setMockNotesResults: (r: Record<string, Array<{ file: string; title: string; bestChunk: string; score: number }>>) => void;
+  __setMockMemoryResults: (r: MockResult[]) => void;
+  __setMockNotesResults: (r: MockResult[]) => void;
   __getMockStore: () => { search: ReturnType<typeof vi.fn> };
   __getMockNotesStore: () => { search: ReturnType<typeof vi.fn> };
 };
 
 beforeEach(() => {
-  qmdStore.__setMockMemoryResults({});
-  qmdStore.__setMockNotesResults({});
+  qmdStore.__setMockMemoryResults([]);
+  qmdStore.__setMockNotesResults([]);
   qmdStore.__getMockStore().search.mockClear();
   qmdStore.__getMockNotesStore().search.mockClear();
 });
 
-/** Helper: build a filepath with a date N days ago from today. */
-function dateFilepath(daysAgo: number, prefix = '/memory/daily/'): string {
+/** Helper: virtual path in the daily collection dated N days ago. */
+function dailyVPath(daysAgo: number): string {
   const d = new Date();
   d.setDate(d.getDate() - daysAgo);
   const key = d.toISOString().slice(0, 10);
-  return `${prefix}${key}.md`;
+  return `qmd://daily/${key}.md`;
 }
 
 describe('memoryNotesSearch', () => {
-  it('4.2: default search returns only memory sources (no notes)', async () => {
-    qmdStore.__setMockMemoryResults({
-      daily: [{ file: dateFilepath(0), title: 'Today', bestChunk: 'Memory v2 search', score: 0.8 }],
-    });
-    qmdStore.__setMockNotesResults({
-      areas: [{ file: '/notes/Areas/Finance/tax.md', title: 'Tax', bestChunk: 'Tax filing 2025', score: 0.9 }],
-    });
+  it('4.1: results carry resolved absolute paths + source/collection from virtual path', async () => {
+    qmdStore.__setMockMemoryResults([
+      { file: dailyVPath(0), title: 'Today', bestChunk: 'some content', score: 0.8 },
+    ]);
+
+    const results = await memoryNotesSearch('some query', ['memory_daily']);
+    expect(results).toHaveLength(1);
+    expect(results[0].filepath).toMatch(/^\/abs\/memory\/daily\//);
+    expect(results[0].source).toBe('memory_daily');
+    expect(results[0].collection).toBe('daily');
+  });
+
+  it('4.2: default search hits memory store only (no notes)', async () => {
+    qmdStore.__setMockMemoryResults([
+      { file: dailyVPath(0), title: 'Today', bestChunk: 'Memory v2 search', score: 0.8 },
+    ]);
+    qmdStore.__setMockNotesResults([
+      { file: 'qmd://vault/Areas/Finance/tax.md', title: 'Tax', bestChunk: 'Tax filing 2025', score: 0.9 },
+    ]);
 
     const results = await memoryNotesSearch('tax');
-    // Should NOT contain any note_ sources (default = memory only)
+    expect(results.length).toBeGreaterThan(0);
     for (const r of results) {
       expect(r.source).not.toMatch(/^note_/);
     }
+    expect(qmdStore.__getMockNotesStore().search).not.toHaveBeenCalled();
   });
 
   it('4.3: explicit notes search works', async () => {
-    qmdStore.__setMockNotesResults({
-      areas: [{ file: '/notes/Areas/Finance/tax.md', title: 'Tax', bestChunk: 'Tax filing 2025', score: 0.9 }],
-    });
+    qmdStore.__setMockNotesResults([
+      { file: 'qmd://vault/Areas/Finance/tax.md', title: 'Tax', bestChunk: 'Tax filing 2025', score: 0.9 },
+    ]);
 
-    const results = await memoryNotesSearch('tax', ['note_areas']);
-    expect(results.length).toBeGreaterThanOrEqual(1);
-    expect(results.some(r => r.source === 'note_areas')).toBe(true);
-    expect(results.some(r => r.filepath.includes('tax.md'))).toBe(true);
+    const results = await memoryNotesSearch('tax', ['note_vault']);
+    expect(results.length).toBe(1);
+    expect(results[0].source).toBe('note_vault');
+    expect(results[0].filepath).toContain('tax.md');
   });
 
   it('4.4: mixed memory+notes search uses 60/40 split', async () => {
-    // Create 10 daily results and 10 notes results
-    const dailyResults = Array.from({ length: 10 }, (_, i) => ({
-      file: dateFilepath(i),
+    qmdStore.__setMockMemoryResults(Array.from({ length: 10 }, (_, i) => ({
+      file: dailyVPath(i),
       title: `Daily ${i}`,
       bestChunk: 'infrastructure setup',
       score: 0.8 - i * 0.01,
-    }));
-    const notesResults = Array.from({ length: 10 }, (_, i) => ({
-      file: `/notes/Areas/notes-${i}.md`,
+    })));
+    qmdStore.__setMockNotesResults(Array.from({ length: 10 }, (_, i) => ({
+      file: `qmd://vault/Areas/notes-${i}.md`,
       title: `Note ${i}`,
       bestChunk: 'infrastructure design',
       score: 0.8 - i * 0.01,
-    }));
+    })));
 
-    qmdStore.__setMockMemoryResults({ daily: dailyResults });
-    qmdStore.__setMockNotesResults({ areas: notesResults });
-
-    const results = await memoryNotesSearch('infrastructure', ['daily', 'note_areas'], 10);
-    const memCount = results.filter(r => !r.source.startsWith('note_')).length;
+    const results = await memoryNotesSearch('infrastructure', ['memory_daily', 'note_vault'], 10);
+    const memCount = results.filter(r => r.source.startsWith('memory_')).length;
     const noteCount = results.filter(r => r.source.startsWith('note_')).length;
 
-    expect(memCount).toBeLessThanOrEqual(Math.ceil(10 * 0.6)); // <= 6
-    expect(noteCount).toBeLessThanOrEqual(Math.max(1, 10 - Math.ceil(10 * 0.6))); // <= 4
+    expect(memCount).toBeLessThanOrEqual(6);
+    expect(noteCount).toBeLessThanOrEqual(4);
     expect(results.length).toBeLessThanOrEqual(10);
   });
 
-  it('4.5: per-source weights affect ranking (topic > daily)', async () => {
-    const todayPath = dateFilepath(0);
-    qmdStore.__setMockMemoryResults({
-      topic: [{ file: '/memory/topics/devops.md', title: 'DevOps', bestChunk: 'Kubernetes deployment pipeline', score: 0.8 }],
-      daily: [{ file: todayPath, title: 'Today', bestChunk: 'Kubernetes deployment pipeline', score: 0.8 }],
-    });
+  it('4.5: per-source weights affect ranking (skill 1.2 > daily 1.0)', async () => {
+    qmdStore.__setMockMemoryResults([
+      { file: 'qmd://skill/finance/tax-filing/SKILL.md', title: 'Tax filing', bestChunk: 'Kubernetes deployment pipeline', score: 0.8 },
+      { file: dailyVPath(0), title: 'Today', bestChunk: 'Kubernetes deployment pipeline', score: 0.8 },
+    ]);
 
-    const results = await memoryNotesSearch('Kubernetes deployment pipeline', ['topic', 'daily']);
-    const topicResult = results.find(r => r.source === 'topic');
-    const dailyResult = results.find(r => r.source === 'daily');
+    const results = await memoryNotesSearch('Kubernetes deployment pipeline', ['memory_skill', 'memory_daily']);
+    const skillResult = results.find(r => r.source === 'memory_skill');
+    const dailyResult = results.find(r => r.source === 'memory_daily');
 
-    expect(topicResult).toBeDefined();
+    expect(skillResult).toBeDefined();
     expect(dailyResult).toBeDefined();
-    // topic weight 1.5 vs daily weight 1.0 — topic should score higher
-    expect(topicResult!.finalScore).toBeGreaterThan(dailyResult!.finalScore);
+    expect(skillResult!.finalScore).toBeGreaterThan(dailyResult!.finalScore);
   });
 
-  it('4.6: temporal decay: recent daily log scores higher than old one', async () => {
-    const recentPath = dateFilepath(0);
-    const oldPath = dateFilepath(60);
-    qmdStore.__setMockMemoryResults({
-      daily: [
-        { file: recentPath, title: 'Recent', bestChunk: 'Refactored search module', score: 0.8 },
-        { file: oldPath, title: 'Old', bestChunk: 'Refactored search module', score: 0.8 },
-      ],
-    });
+  it('4.6: temporal decay: recent daily log outranks old one', async () => {
+    qmdStore.__setMockMemoryResults([
+      { file: dailyVPath(0), title: 'Recent', bestChunk: 'Refactored search module', score: 0.8 },
+      { file: dailyVPath(60), title: 'Old', bestChunk: 'Refactored search module', score: 0.8 },
+    ]);
 
-    const results = await memoryNotesSearch('Refactored search module', ['daily']);
-    const recent = results.find(r => r.filepath === recentPath);
-    const old = results.find(r => r.filepath === oldPath);
-
-    expect(recent).toBeDefined();
-    expect(old).toBeDefined();
-    expect(recent!.finalScore).toBeGreaterThan(old!.finalScore);
+    const results = await memoryNotesSearch('Refactored search module', ['memory_daily']);
+    expect(results).toHaveLength(2);
+    expect(results[0].title).toBe('Recent');
+    expect(results[0].finalScore).toBeGreaterThan(results[1].finalScore);
   });
 
-  it('4.7: guaranteed minimum slots (topic always gets 2)', async () => {
-    // 20 daily results with high scores
-    const dailyResults = Array.from({ length: 20 }, (_, i) => ({
-      file: dateFilepath(i),
-      title: `Daily ${i}`,
-      bestChunk: 'deployment',
-      score: 0.9 - i * 0.005,
-    }));
-    // 2 topic results with very low scores
-    const topicResults = [
-      { file: '/memory/topics/deploy-1.md', title: 'Deploy 1', bestChunk: 'deployment', score: 0.1 },
-      { file: '/memory/topics/deploy-2.md', title: 'Deploy 2', bestChunk: 'deployment', score: 0.1 },
-    ];
+  it('4.7: collection post-filter drops results outside requested collections', async () => {
+    qmdStore.__setMockMemoryResults([
+      { file: 'qmd://skill/walnut/overview/SKILL.md', title: 'Walnut overview', bestChunk: 'deployment', score: 0.9 },
+      { file: dailyVPath(0), title: 'Daily', bestChunk: 'deployment', score: 0.9 },
+    ]);
 
-    qmdStore.__setMockMemoryResults({ daily: dailyResults, topic: topicResults });
-
-    const results = await memoryNotesSearch('deployment', ['topic', 'daily'], 8);
-    const topicCount = results.filter(r => r.source === 'topic').length;
-    // topic minSlots=2, so at least 2 topic results should be guaranteed
-    expect(topicCount).toBeGreaterThanOrEqual(2);
+    const results = await memoryNotesSearch('deployment', ['memory_skill']);
+    expect(results).toHaveLength(1);
+    expect(results[0].source).toBe('memory_skill');
   });
 
   it('4.8: search with no results returns empty array', async () => {
-    // All stores return empty
-    qmdStore.__setMockMemoryResults({});
     const results = await memoryNotesSearch('xyznonexistenttermzzz');
     expect(results).toEqual([]);
   });
 
-  it('4.11: result shape has all expected fields', async () => {
-    qmdStore.__setMockMemoryResults({
-      daily: [{ file: dateFilepath(0), title: 'Today', bestChunk: 'some content', score: 0.8 }],
-    });
+  it('4.9: low-score results are filtered (MIN_SCORE)', async () => {
+    qmdStore.__setMockMemoryResults([
+      { file: dailyVPath(0), title: 'Noise', bestChunk: 'barely related', score: 0.05 },
+    ]);
+    const results = await memoryNotesSearch('some query', ['memory_daily']);
+    expect(results).toEqual([]);
+  });
 
-    const results = await memoryNotesSearch('some query', ['daily']);
+  it('4.11: result shape has all expected fields', async () => {
+    qmdStore.__setMockMemoryResults([
+      { file: dailyVPath(0), title: 'Today', bestChunk: 'some content', score: 0.8 },
+    ]);
+
+    const results = await memoryNotesSearch('some query', ['memory_daily']);
     expect(results.length).toBeGreaterThan(0);
 
     for (const r of results) {
@@ -208,5 +201,78 @@ describe('memoryNotesSearch', () => {
       expect(typeof r.source).toBe('string');
       expect(typeof r.collection).toBe('string');
     }
+  });
+});
+
+describe('memoryNotesSearch path prefix filter', () => {
+  const skillResults: MockResult[] = [
+    { file: 'qmd://skill/walnut/overview/SKILL.md', title: 'Walnut overview', bestChunk: 'project direction', score: 0.9 },
+    { file: 'qmd://skill/walnut/overview/history/log.md', title: 'Walnut history', bestChunk: 'migration abandoned plan A', score: 0.85 },
+    { file: 'qmd://skill/finance/tax-filing/SKILL.md', title: 'Tax filing', bestChunk: 'tax deadlines', score: 0.8 },
+  ];
+
+  it('path narrows to a category subtree (collection-relative)', async () => {
+    qmdStore.__setMockMemoryResults(skillResults);
+
+    const results = await memoryNotesSearch('anything', ['memory_skill'], 15, 'walnut/');
+    expect(results).toHaveLength(2);
+    for (const r of results) {
+      expect(r.filepath).toContain('/walnut/');
+    }
+  });
+
+  it('path narrows to overview history only', async () => {
+    qmdStore.__setMockMemoryResults(skillResults);
+
+    const results = await memoryNotesSearch('anything', ['memory_skill'], 15, 'walnut/overview/history/');
+    expect(results).toHaveLength(1);
+    expect(results[0].filepath).toContain('history/log.md');
+  });
+
+  it('leading ./ and / are normalized off the prefix', async () => {
+    qmdStore.__setMockMemoryResults(skillResults);
+
+    const a = await memoryNotesSearch('anything', ['memory_skill'], 15, './walnut/');
+    const b = await memoryNotesSearch('anything', ['memory_skill'], 15, '/walnut/');
+    expect(a).toHaveLength(2);
+    expect(b).toHaveLength(2);
+  });
+
+  it('date prefix on daily acts as a time filter', async () => {
+    qmdStore.__setMockMemoryResults([
+      { file: 'qmd://daily/2026-06-15.md', title: 'June', bestChunk: 'x', score: 0.8 },
+      { file: 'qmd://daily/2026-07-01.md', title: 'July', bestChunk: 'x', score: 0.8 },
+    ]);
+
+    const results = await memoryNotesSearch('x', ['memory_daily'], 15, '2026-06');
+    expect(results).toHaveLength(1);
+    expect(results[0].title).toBe('June');
+  });
+
+  it('empty/undefined path is a no-op', async () => {
+    qmdStore.__setMockMemoryResults(skillResults);
+
+    const none = await memoryNotesSearch('anything', ['memory_skill'], 15, undefined);
+    const blank = await memoryNotesSearch('anything', ['memory_skill'], 15, '');
+    expect(none).toHaveLength(3);
+    expect(blank).toHaveLength(3);
+  });
+
+  it('non-matching prefix returns empty, not an error', async () => {
+    qmdStore.__setMockMemoryResults(skillResults);
+
+    const results = await memoryNotesSearch('anything', ['memory_skill'], 15, 'gaming/');
+    expect(results).toEqual([]);
+  });
+
+  it('applies to notes store too', async () => {
+    qmdStore.__setMockNotesResults([
+      { file: 'qmd://vault/Areas/Health/sleep.md', title: 'Sleep', bestChunk: 'x', score: 0.8 },
+      { file: 'qmd://vault/Projects/walnut.md', title: 'Walnut', bestChunk: 'x', score: 0.8 },
+    ]);
+
+    const results = await memoryNotesSearch('x', ['note_vault'], 15, 'Areas/Health/');
+    expect(results).toHaveLength(1);
+    expect(results[0].title).toBe('Sleep');
   });
 });

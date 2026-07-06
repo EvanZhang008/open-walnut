@@ -31,20 +31,20 @@ afterEach(async () => {
 });
 
 describe('ensureRepoMemoryDir', () => {
-  it('creates directory and MEMORY.md template', () => {
+  it('creates directory and SKILL.md template', () => {
     ensureRepoMemoryDir('walnut');
     const dirPath = path.join(REPOS_MEMORY_DIR, 'walnut');
     expect(fs.existsSync(dirPath)).toBe(true);
-    const memFile = path.join(dirPath, 'MEMORY.md');
+    const memFile = path.join(dirPath, 'SKILL.md');
     expect(fs.existsSync(memFile)).toBe(true);
     const content = fs.readFileSync(memFile, 'utf-8');
     expect(content).toContain('name: walnut');
     expect(content).toContain('Environment knowledge for walnut');
   });
 
-  it('does not overwrite existing MEMORY.md', () => {
+  it('does not overwrite existing SKILL.md', () => {
     ensureRepoMemoryDir('walnut');
-    const memFile = path.join(REPOS_MEMORY_DIR, 'walnut', 'MEMORY.md');
+    const memFile = path.join(REPOS_MEMORY_DIR, 'walnut', 'SKILL.md');
     fs.writeFileSync(memFile, 'Custom content', 'utf-8');
     ensureRepoMemoryDir('walnut');
     const content = fs.readFileSync(memFile, 'utf-8');
@@ -175,7 +175,7 @@ describe('getAllRepoMemorySummaries', () => {
 
   it('reads custom YAML frontmatter', () => {
     ensureRepoMemoryDir('walnut');
-    const memFile = path.join(REPOS_MEMORY_DIR, 'walnut', 'MEMORY.md');
+    const memFile = path.join(REPOS_MEMORY_DIR, 'walnut', 'SKILL.md');
     fs.writeFileSync(memFile, `---\nname: Open Walnut\ndescription: Personal butler codebase\n---\n`, 'utf-8');
 
     const summaries = getAllRepoMemorySummaries();
@@ -186,9 +186,9 @@ describe('getAllRepoMemorySummaries', () => {
 });
 
 describe('resolveRepoMemoryPath', () => {
-  it('returns absolute path to MEMORY.md', () => {
+  it('returns absolute path to SKILL.md', () => {
     const p = resolveRepoMemoryPath('walnut');
-    expect(p).toBe(path.join(REPOS_MEMORY_DIR, 'walnut', 'MEMORY.md'));
+    expect(p).toBe(path.join(REPOS_MEMORY_DIR, 'walnut', 'SKILL.md'));
   });
 
   it('rejects invalid slugs', () => {

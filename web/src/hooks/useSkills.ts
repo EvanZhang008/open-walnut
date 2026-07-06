@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import * as skillsApi from '@/api/skills';
 import type { SkillInfo } from '@/api/skills';
+import { refreshSkillCommands } from '@/commands/skill-bridge';
 
 interface UseSkillsReturn {
   skills: SkillInfo[];
@@ -25,6 +26,8 @@ export function useSkills(): UseSkillsReturn {
       .then(setSkills)
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false));
+    // Keep the "/" palette in sync with skill CRUD/toggles
+    refreshSkillCommands();
   }, []);
 
   useEffect(() => { refetch(); }, [refetch]);

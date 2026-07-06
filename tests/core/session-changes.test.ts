@@ -3,8 +3,10 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { createMockConstants } from '../helpers/mock-constants.js';
+import { mockLocalDaemonReader } from '../helpers/mock-local-daemon-reader.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
+vi.mock('../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader());
 
 import { CLAUDE_HOME } from '../../src/constants.js';
 import { encodeProjectPath } from '../../src/core/session-file-reader.js';

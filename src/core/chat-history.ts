@@ -20,6 +20,7 @@ import { effectiveTotalTokens, getLastTurnTokens, clearLastTurnTokens } from './
 import { log } from '../logging/index.js';
 import fsp from 'node:fs/promises';
 import { compressForApi, MAX_BASE64_BYTES } from '../utils/image-compress.js';
+import { indexChatEntries } from './history-db.js';
 
 /** Compaction triggers at 80% of the model's context window. */
 const COMPACTION_PERCENT = 0.80;
@@ -642,6 +643,12 @@ export async function addAIMessages(
     }
     await writeStore(store, aid, cid);
     await touchConversationBestEffort(store, aid, cid);
+    // Mirror into the conversation FTS index (history.db) — best-effort,
+    // derived data; a failure must never break chat persistence.
+    const appendedCount = msgs.length - (skipFirstUser ? 1 : 0);
+    if (appendedCount > 0) {
+      indexChatEntries(store.entries!.slice(-appendedCount), aid, cid);
+    }
     log.agent.info('AI messages persisted', { count: msgs.length, agentId: aid });
   }, aid, cid);
 }
@@ -682,6 +689,8 @@ export async function addUserMessage(
     store.entries!.push(entry);
     await writeStore(store, aid, cid);
     await touchConversationBestEffort(store, aid, cid);
+    // Mirror into the conversation FTS index — best-effort (see addAIMessages).
+    indexChatEntries([entry], aid, cid);
     log.agent.info('User message eagerly persisted', { turnId: options?.turnId, agentId: aid });
   }, aid, cid);
 }
@@ -1154,10 +1163,10 @@ export interface CompactionResult {
  */
 export const MEMORY_FLUSH_MESSAGE = `Pre-compaction memory flush.
 
-Persist knowledge using the \`memory\` tool. Write as a butler's journal —
-record what matters for RECALL, not for git log.
+Older turns are about to be compacted away. Persist what matters for RECALL
+before it's gone — route each item to the right store (three words):
 
-## Daily log — what to write (append, max 800 chars)
+## Daily log (file_write memory/daily, append, max 800 chars)
 
 - **User requests**: their words, not paraphrased. Task names + IDs, not commits
 - **Decisions & why**: important choices and reasoning
@@ -1165,13 +1174,20 @@ record what matters for RECALL, not for git log.
 - **Events**: personal matters, noteworthy non-task events, new patterns
 - **Open threads**: unresolved questions, pending items
 
-DO NOT: commit SHAs, file line counts, bundle sizes, deploy status tables,
-implementation details (those → project memory).
-
+DO NOT: commit SHAs, file line counts, bundle sizes, deploy status tables.
 Think: "What would I need to recall 2 weeks from now?"
 
-## Project memory — update with technical decisions
-## Global memory — update with new user preferences
+## Memory (memory_manage)
+New durable facts ONLY — declarative ("User prefers X"), never task progress.
+target:user = who the user is; target:memory = behavior rules.
+Replace stale entries, don't duplicate.
+
+## Skills (skill_manage patch / log_append)
+- A technique, fix, or pitfall from this window that a future conversation
+  needs → patch the matching skill NOW (it will be forgotten after compaction).
+- Notable project progress ("shipped X", "decided Y because...") →
+  log_append to that category's overview history.
+
 If nothing new → "Nothing to persist."`;
 
 /**

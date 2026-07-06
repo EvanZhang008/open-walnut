@@ -89,10 +89,19 @@ describe('memory_notes_search tool', () => {
     expect(result).toBe('No results found.');
   });
 
-  it('9.3: passes sources parameter correctly', async () => {
+  it('9.3: passes queries/sources/limit/path parameters correctly', async () => {
     vi.mocked(memoryNotesSearch).mockResolvedValue([]);
-    await memoryNotesSearchTool.execute({ query: 'test', sources: ['daily', 'note_areas'] });
-    expect(memoryNotesSearch).toHaveBeenCalledWith('test', ['daily', 'note_areas'], 8);
+    await memoryNotesSearchTool.execute({
+      queries: ['test'],
+      sources: ['memory_daily', 'note_vault'],
+      path: 'walnut/overview/history/',
+    });
+    expect(memoryNotesSearch).toHaveBeenCalledWith(
+      ['test'],
+      ['memory_daily', 'note_vault'],
+      15,
+      'walnut/overview/history/',
+    );
   });
 });
 

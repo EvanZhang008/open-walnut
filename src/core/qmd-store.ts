@@ -41,11 +41,16 @@ export async function getMemoryStore(): Promise<QMDStore> {
           project:    { path: path.join(MEMORY_DIR, 'projects'),   pattern: '**/*.md' },
           repo:       { path: path.join(MEMORY_DIR, 'repos'),      pattern: '**/*.md' },
           compaction: { path: path.join(MEMORY_DIR, 'compaction'),  pattern: '**/*.md' },
-          global:     { path: WALNUT_HOME,                          pattern: 'MEMORY.md' },
+          // MEMORY.md moved into memory/ (2026-07 unification; init.ts migrates).
+          global:     { path: MEMORY_DIR,                           pattern: 'MEMORY.md' },
           session:    { path: path.join(MEMORY_DIR, 'sessions'),    pattern: '**/*.md' },
           // Skills index (flat + categorized layouts). Feeds the per-turn
           // "Possibly relevant skills" prefetch hint (memory-search.ts).
-          skill:      { path: GLOBAL_SKILLS_DIR,                     pattern: '**/SKILL.md' },
+          // Pattern covers ALL md under skills/ — SKILL.md bodies plus support
+          // files (references/*.md, overview history/ log volumes, templates).
+          // This IS the project-history search story: overview history logs
+          // are plain md, searched here — no separate FTS db for them.
+          skill:      { path: GLOBAL_SKILLS_DIR,                     pattern: '**/*.md' },
         },
       },
     }).then(store => {

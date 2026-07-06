@@ -105,6 +105,9 @@ export async function draftRoutine(
       system: buildSystemPrompt(context),
       messages: [{ role: 'user', content: text.trim() }],
       signal: controller.signal,
+      // A draft is a small JSON object; cap output so the SDK doesn't demand
+      // streaming (it rejects non-streaming calls with very large max_tokens).
+      config: { maxTokens: 4096 },
     });
     raw = result.content
       .filter((b) => b.type === 'text')

@@ -1,6 +1,7 @@
 import { apiGet, apiPatch, apiPost } from './client';
 import type { SessionSummary, SessionRecord, SessionEffort } from '@open-walnut/core';
 import type { ImageAttachment } from './chat';
+import type { SessionHistoryMessage } from '@/types/session';
 import { log } from '@/utils/log';
 
 export async function fetchSessions(): Promise<SessionSummary[]> {
@@ -26,18 +27,29 @@ export type { SessionHistoryMessage } from '@/types/session';
 export interface SessionHistoryResult {
   messages: SessionHistoryMessage[];
   forkBoundaryIndex?: number;
+  /** Combined-message count at the source of truth = the cursor for the NEXT delta fetch. */
+  cursor?: number;
+  /** True when `messages` is an incremental slice (since was honored); false/undefined = full payload. */
+  delta?: boolean;
 }
 
-export async function fetchSessionHistory(sessionId: string, opts?: { source?: 'streams'; signal?: AbortSignal }): Promise<SessionHistoryResult> {
+export async function fetchSessionHistory(
+  sessionId: string,
+  opts?: { source?: 'streams'; signal?: AbortSignal; since?: number },
+): Promise<SessionHistoryResult> {
   const params: Record<string, string> = {};
   if (opts?.source) params.source = opts.source;
+  // Delta mode: ask only for messages after the client's cursor. Server returns a
+  // small slice (usually 1-5 messages) + the new cursor. Empty slice = archive
+  // hasn't caught up yet (turn not flushed); caller keeps streaming blocks & retries.
+  if (opts?.since !== undefined) params.since = String(opts.since);
   // Remote sessions + fork chains can take 20-30s on first load (SSH pulls 3+ MB JSONL
   // serially through corp proxy). Streams path is local-only and fast; full path may be slow.
   const timeoutMs = opts?.source === 'streams' ? 15_000 : 60_000;
-  const res = await apiGet<{ messages: SessionHistoryMessage[]; forkBoundaryIndex?: number }>(
+  const res = await apiGet<{ messages: SessionHistoryMessage[]; forkBoundaryIndex?: number; cursor?: number; delta?: boolean }>(
     `/api/sessions/${sessionId}/history`, params, { signal: opts?.signal, timeoutMs },
   );
-  return { messages: res.messages, forkBoundaryIndex: res.forkBoundaryIndex };
+  return { messages: res.messages, forkBoundaryIndex: res.forkBoundaryIndex, cursor: res.cursor, delta: res.delta };
 }
 
 export async function fetchSubagentHistory(

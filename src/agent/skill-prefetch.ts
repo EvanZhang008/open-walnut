@@ -32,8 +32,16 @@ export async function buildSkillPrefetchHint(userMessage: string): Promise<strin
     const results = await memoryNotesSearch([query.slice(0, 500)], ['memory_skill'], 12);
     if (results.length === 0) return null;
 
+    // The skill collection indexes ALL md under skills/ (SKILL.md + support
+    // files like references/*.md and overview history logs). The hint routes
+    // to skill NAMES, and name = parent dir of SKILL.md — a support-file hit
+    // would yield a junk name ("references", "history"), so only SKILL.md
+    // results feed the hint. Support files still surface via memory_notes_search.
     const names = [...new Set(
-      results.map((r) => path.basename(path.dirname(r.filepath))).filter(Boolean),
+      results
+        .filter((r) => path.basename(r.filepath) === 'SKILL.md')
+        .map((r) => path.basename(path.dirname(r.filepath)))
+        .filter(Boolean),
     )].slice(0, MAX_HINTS);
     if (names.length === 0) return null;
 

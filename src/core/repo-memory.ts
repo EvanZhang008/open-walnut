@@ -4,7 +4,10 @@
  * Pairs with repos/{slug}.yaml (static profile) to store dynamic learnings:
  * monorepo structure, SSH host details, build command quirks, environment issues, conventions.
  *
- * Storage: ~/.open-walnut/memory/repos/{slug}/MEMORY.md
+ * Storage: skills/repos/{slug}/SKILL.md — repo knowledge IS a knowledge skill
+ * (repos category) since the 2026-07 memory/skill/history unification. This
+ * module keeps the append/edit ergonomics; the skill system provides
+ * discovery, indexing, and search for free.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -41,16 +44,16 @@ function validateSlug(slug: string): void {
 }
 
 /**
- * Ensure the repo memory directory and MEMORY.md template exist.
+ * Ensure the repo skill directory and SKILL.md template exist.
  */
 export function ensureRepoMemoryDir(slug: string): string {
   validateSlug(slug);
   const dirPath = path.join(REPOS_MEMORY_DIR, slug);
   fs.mkdirSync(dirPath, { recursive: true });
 
-  const memFile = path.join(dirPath, 'MEMORY.md');
+  const memFile = path.join(dirPath, 'SKILL.md');
   if (!fs.existsSync(memFile)) {
-    const template = `---\nname: ${slug}\ndescription: 'Environment knowledge for ${slug}'\n---\n`;
+    const template = `---\nname: ${slug}\ndescription: 'Environment knowledge for ${slug} repo'\ntype: knowledge\n---\n`;
     fs.writeFileSync(memFile, template, 'utf-8');
   }
   return memFile;
@@ -62,7 +65,7 @@ export function ensureRepoMemoryDir(slug: string): string {
  */
 export function getRepoMemory(slug: string): RepoMemoryResult | null {
   validateSlug(slug);
-  const memFile = path.join(REPOS_MEMORY_DIR, slug, 'MEMORY.md');
+  const memFile = path.join(REPOS_MEMORY_DIR, slug, 'SKILL.md');
   try {
     const content = fs.readFileSync(memFile, 'utf-8');
     return { content, contentHash: computeContentHash(content) };
@@ -99,7 +102,7 @@ export async function editRepoMemory(
   replaceAll?: boolean,
 ): Promise<{ replacements: number; contentHash: string }> {
   validateSlug(slug);
-  const memFile = path.join(REPOS_MEMORY_DIR, slug, 'MEMORY.md');
+  const memFile = path.join(REPOS_MEMORY_DIR, slug, 'SKILL.md');
   if (!oldContent) throw new Error('old_content cannot be empty.');
   return editFileContent(memFile, oldContent, newContent, { expectedHash, replaceAll });
 }
@@ -113,7 +116,7 @@ export async function writeRepoMemory(
   expectedHash: string,
 ): Promise<{ contentHash: string }> {
   ensureRepoMemoryDir(slug);
-  const memFile = path.join(REPOS_MEMORY_DIR, slug, 'MEMORY.md');
+  const memFile = path.join(REPOS_MEMORY_DIR, slug, 'SKILL.md');
   return writeFileChecked(memFile, content, { expectedHash });
 }
 
@@ -126,7 +129,7 @@ export function getAllRepoMemorySummaries(): RepoMemorySummary[] {
     const entries = fs.readdirSync(REPOS_MEMORY_DIR, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
-      const memFile = path.join(REPOS_MEMORY_DIR, entry.name, 'MEMORY.md');
+      const memFile = path.join(REPOS_MEMORY_DIR, entry.name, 'SKILL.md');
       try {
         const content = fs.readFileSync(memFile, 'utf-8');
         const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
@@ -153,5 +156,5 @@ export function getAllRepoMemorySummaries(): RepoMemorySummary[] {
  */
 export function resolveRepoMemoryPath(slug: string): string {
   validateSlug(slug);
-  return path.join(REPOS_MEMORY_DIR, slug, 'MEMORY.md');
+  return path.join(REPOS_MEMORY_DIR, slug, 'SKILL.md');
 }

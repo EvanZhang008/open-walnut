@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
 import { useAudioCapture } from '@/hooks/useAudioCapture';
 import { useNotifications } from '@/contexts/notifications';
@@ -7,7 +7,10 @@ import { NotificationPanel } from '@/components/common/NotificationPanel';
 
 const SS_CHAT_VISIBLE_KEY = 'open-walnut-home-chat-visible';
 const SS_TODO_VISIBLE_KEY = 'open-walnut-home-todo-visible';
-const SS_ROUTINES_VISIBLE_KEY = 'open-walnut-home-routines-visible';
+const LS_OTHER_OPEN_KEY = 'open-walnut-sidebar-other-open';
+
+/** Secondary pages tucked into the collapsible "Other" group. */
+const OTHER_ROUTES = ['/tasks', '/sessions', '/memory', '/commands'];
 
 interface SidebarProps {
   open: boolean;
@@ -21,6 +24,23 @@ export function Sidebar({ open, collapsed, onToggleCollapse }: SidebarProps) {
   const audio = useAudioCapture();
   const { notify, unreadCount } = useNotifications();
   const [notifOpen, setNotifOpen] = useState(false);
+  const location = useLocation();
+
+  // "Other" group — collapsed by default; remembered across reloads and
+  // auto-expanded when the current route lives inside it (so the active
+  // link is never hidden).
+  const [otherOpen, setOtherOpen] = useState<boolean>(
+    () => localStorage.getItem(LS_OTHER_OPEN_KEY) === 'true'
+  );
+  const routeInOther = OTHER_ROUTES.some((r) => location.pathname.startsWith(r));
+  const otherExpanded = otherOpen || routeInOther;
+  const toggleOther = () => {
+    setOtherOpen((prev) => {
+      const next = !(prev || routeInOther);
+      localStorage.setItem(LS_OTHER_OPEN_KEY, String(next));
+      return next;
+    });
+  };
 
   // Bridge audio capture errors into the unified toaster. useAudioCapture still
   // owns lastError (it resets recording state + handles the no-WS local failure);
@@ -43,9 +63,6 @@ export function Sidebar({ open, collapsed, onToggleCollapse }: SidebarProps) {
   const [todoVisible, setTodoVisible] = useState<boolean>(
     () => sessionStorage.getItem(SS_TODO_VISIBLE_KEY) !== 'false'
   );
-  const [routinesVisible, setRoutinesVisible] = useState<boolean>(
-    () => sessionStorage.getItem(SS_ROUTINES_VISIBLE_KEY) === 'true'
-  );
 
   useEffect(() => {
     const handleChatVisible = (e: Event) => {
@@ -54,19 +71,14 @@ export function Sidebar({ open, collapsed, onToggleCollapse }: SidebarProps) {
     const handleTodoVisible = (e: Event) => {
       setTodoVisible((e as CustomEvent).detail?.visible ?? true);
     };
-    const handleRoutinesVisible = (e: Event) => {
-      setRoutinesVisible((e as CustomEvent).detail?.visible ?? false);
-    };
     // Clicking a persistent toast's body opens the notification center.
     const handleOpenCenter = () => setNotifOpen(true);
     window.addEventListener('main:chat-visible', handleChatVisible);
     window.addEventListener('main:todo-visible', handleTodoVisible);
-    window.addEventListener('main:routines-visible', handleRoutinesVisible);
     window.addEventListener('notification:open-center', handleOpenCenter);
     return () => {
       window.removeEventListener('main:chat-visible', handleChatVisible);
       window.removeEventListener('main:todo-visible', handleTodoVisible);
-      window.removeEventListener('main:routines-visible', handleRoutinesVisible);
       window.removeEventListener('notification:open-center', handleOpenCenter);
     };
   }, []);
@@ -76,9 +88,6 @@ export function Sidebar({ open, collapsed, onToggleCollapse }: SidebarProps) {
   };
   const handleToggleTodo = () => {
     window.dispatchEvent(new CustomEvent('sidebar:toggle-todo'));
-  };
-  const handleToggleRoutines = () => {
-    window.dispatchEvent(new CustomEvent('sidebar:toggle-routines'));
   };
 
   return (
@@ -114,31 +123,10 @@ export function Sidebar({ open, collapsed, onToggleCollapse }: SidebarProps) {
           <TodoListIcon />
           <span className="sidebar-label">Todo</span>
         </button>
-        <button
-          className={`sidebar-link sidebar-panel-toggle${routinesVisible ? ' active' : ''}`}
-          onClick={handleToggleRoutines}
-          title={collapsed ? 'Routines' : undefined}
-        >
-          <ScheduleIcon />
-          <span className="sidebar-label">Routines</span>
-        </button>
         <div className="sidebar-nav-divider" />
         <NavLink to="/" end className={navLinkClass} title={collapsed ? 'Home' : undefined}>
           <HomeIcon />
           <span className="sidebar-label">Home</span>
-        </NavLink>
-        <NavLink to="/tasks" className={navLinkClass} title={collapsed ? 'Tasks' : undefined}>
-          <TasksIcon />
-          <span className="sidebar-label">Tasks</span>
-        </NavLink>
-
-        <NavLink to="/sessions" className={navLinkClass} title={collapsed ? 'Sessions' : undefined}>
-          <SessionsIcon />
-          <span className="sidebar-label">Sessions</span>
-        </NavLink>
-        <NavLink to="/memory" className={navLinkClass} title={collapsed ? 'Memory' : undefined}>
-          <MemoryIcon />
-          <span className="sidebar-label">Memory</span>
         </NavLink>
         <NavLink to="/notes" className={navLinkClass} title={collapsed ? 'Notes' : undefined}>
           <NotesIcon />
@@ -158,11 +146,54 @@ export function Sidebar({ open, collapsed, onToggleCollapse }: SidebarProps) {
           <SkillsIcon />
           <span className="sidebar-label">Skills</span>
         </NavLink>
-        <NavLink to="/commands" className={navLinkClass} title={collapsed ? 'Commands' : undefined}>
-          <CommandsIcon />
-          <span className="sidebar-label">Commands</span>
-        </NavLink>
 
+        {/* Other — collapsed group for secondary pages */}
+        <button
+          className={`sidebar-link sidebar-group-toggle${otherExpanded ? ' expanded' : ''}`}
+          onClick={toggleOther}
+          title={collapsed ? 'Other' : undefined}
+          aria-expanded={otherExpanded}
+        >
+          <MoreIcon />
+          <span className="sidebar-label">Other</span>
+          <ChevronIcon expanded={otherExpanded} />
+        </button>
+        {otherExpanded && (
+          <div className="sidebar-group-items">
+            <NavLink to="/tasks" className={navLinkClass} title={collapsed ? 'Tasks' : undefined}>
+              <TasksIcon />
+              <span className="sidebar-label">Tasks</span>
+            </NavLink>
+            <NavLink to="/sessions" className={navLinkClass} title={collapsed ? 'Sessions' : undefined}>
+              <SessionsIcon />
+              <span className="sidebar-label">Sessions</span>
+            </NavLink>
+            <NavLink to="/memory" className={navLinkClass} title={collapsed ? 'Memory' : undefined}>
+              <MemoryIcon />
+              <span className="sidebar-label">Memory</span>
+            </NavLink>
+            <NavLink to="/commands" className={navLinkClass} title={collapsed ? 'Commands' : undefined}>
+              <CommandsIcon />
+              <span className="sidebar-label">Commands</span>
+            </NavLink>
+            {audio.available && (
+              <button
+                className={`sidebar-link sidebar-recording-btn${audio.recording ? ' recording-active' : ''}${audio.loading ? ' recording-loading' : ''}`}
+                onClick={audio.toggleRecording}
+                disabled={audio.loading}
+                title={collapsed
+                  ? (audio.loading ? 'Starting...' : audio.recording ? `Recording ${formatDuration(audio.totalDuration)}` : 'Start recording')
+                  : undefined}
+                aria-label={audio.loading ? 'Starting...' : audio.recording ? 'Stop recording' : 'Start recording'}
+              >
+                <RecordingIcon recording={audio.recording} loading={audio.loading} />
+                <span className="sidebar-label">
+                  {audio.loading ? 'Starting...' : audio.recording ? formatDuration(audio.totalDuration) : 'Record'}
+                </span>
+              </button>
+            )}
+          </div>
+        )}
 
         <NavLink to="/settings" className={navLinkClass} title={collapsed ? 'Settings' : undefined}>
           <SettingsIcon />
@@ -170,22 +201,18 @@ export function Sidebar({ open, collapsed, onToggleCollapse }: SidebarProps) {
         </NavLink>
       </nav>
 
-      {/* Recording + Notification — bottom area */}
+      {/* Notification — bottom area (recording lives in the Other group; while
+          recording it surfaces here too so the live timer is never hidden) */}
       <div className="sidebar-notification-area">
-        {audio.available && (
+        {audio.available && audio.recording && !otherExpanded && (
           <button
-            className={`sidebar-link sidebar-recording-btn${audio.recording ? ' recording-active' : ''}${audio.loading ? ' recording-loading' : ''}`}
+            className="sidebar-link sidebar-recording-btn recording-active"
             onClick={audio.toggleRecording}
-            disabled={audio.loading}
-            title={collapsed
-              ? (audio.loading ? 'Starting...' : audio.recording ? `Recording ${formatDuration(audio.totalDuration)}` : 'Start recording')
-              : undefined}
-            aria-label={audio.loading ? 'Starting...' : audio.recording ? 'Stop recording' : 'Start recording'}
+            title={collapsed ? `Recording ${formatDuration(audio.totalDuration)}` : undefined}
+            aria-label="Stop recording"
           >
-            <RecordingIcon recording={audio.recording} loading={audio.loading} />
-            <span className="sidebar-label">
-              {audio.loading ? 'Starting...' : audio.recording ? formatDuration(audio.totalDuration) : 'Record'}
-            </span>
+            <RecordingIcon recording loading={false} />
+            <span className="sidebar-label">{formatDuration(audio.totalDuration)}</span>
           </button>
         )}
         <button
@@ -279,9 +306,13 @@ function AgentsIcon() {
 }
 
 function SkillsIcon() {
+  // Scroll/parchment — skills are the butler's learned scrolls.
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+      <path d="M19 17V5a2 2 0 0 0-2-2H4" />
+      <path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3" />
+      <path d="M15 8h-5" />
+      <path d="M15 12h-5" />
     </svg>
   );
 }
@@ -342,6 +373,32 @@ function HamburgerIcon() {
       <line x1="3" y1="6" x2="21" y2="6" />
       <line x1="3" y1="12" x2="21" y2="12" />
       <line x1="3" y1="18" x2="21" y2="18" />
+    </svg>
+  );
+}
+
+function MoreIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="5" cy="12" r="1.5" />
+      <circle cx="12" cy="12" r="1.5" />
+      <circle cx="19" cy="12" r="1.5" />
+    </svg>
+  );
+}
+
+function ChevronIcon({ expanded }: { expanded: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={`sidebar-group-chevron${expanded ? ' expanded' : ''}`}
+    >
+      <polyline points="9 18 15 12 9 6" />
     </svg>
   );
 }

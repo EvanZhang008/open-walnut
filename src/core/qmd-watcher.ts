@@ -56,14 +56,8 @@ export function startQmdWatcher(): { stop: () => void } {
         }
       }));
     }
-    if (fs.existsSync(WALNUT_HOME)) {
-      watchers.push(fs.watch(WALNUT_HOME, (_event, filename) => {
-        if (filename === 'MEMORY.md') {
-          scheduleMemoryUpdate.call();
-          notifyGitVersioning(filename);
-        }
-      }));
-    }
+    // (MEMORY.md moved into memory/ — the recursive MEMORY_DIR watcher above
+    // covers it now; the old WALNUT_HOME root watcher was removed.)
     if (fs.existsSync(NOTES_DIR)) {
       // ONE inotify registration → the structural sidecar reconciler, which ALSO
       // drives the semantic store per changed file (no second fs.watch, no

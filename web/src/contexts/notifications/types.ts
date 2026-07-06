@@ -8,7 +8,7 @@
  */
 
 /** Persistent kinds land in the feed + unread count; ephemeral kinds only toast. */
-export type NotificationKind = 'permission' | 'cron' | 'operation-error' | 'sort' | 'audio-error';
+export type NotificationKind = 'permission' | 'cron' | 'operation-error' | 'sort' | 'audio-error' | 'skill';
 export type NotificationSeverity = 'info' | 'success' | 'warning' | 'error';
 
 /** A deep-link or callback the toast/feed entry can offer (e.g. "Go to Session"). */
@@ -50,6 +50,7 @@ export const TOAST_DURATION_MS: Record<NotificationKind, number> = {
   'operation-error': 6000,
   sort: 3000,
   'audio-error': 8000,
+  skill: 10000,
 };
 
 /** Whether a kind persists to the durable feed (vs toast-only). */
@@ -59,4 +60,5 @@ export const IS_PERSISTENT: Record<NotificationKind, boolean> = {
   'operation-error': true,
   sort: false,
   'audio-error': false,
+  skill: true,
 };

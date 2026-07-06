@@ -320,6 +320,38 @@ export class DaemonConnection {
     this._destroyed = false
 
     try {
+      // Local daemon fast-path: no SSH deploy/tunnel. Ensure the in-process
+      // local daemon is running and connect its WebSocket directly. Mirrors
+      // reconnect()'s __local__ branch. WITHOUT this, DaemonFileReader('__local__')
+      // — used for ALL local session-data reads under the daemon-uniform model —
+      // would fall into the SSH path below and try to `ssh __local__` (a literal,
+      // unresolvable hostname), failing every local history read whenever the
+      // connection pool hadn't already been warmed by an attached session. The
+      // pool is only warmed lazily by RemoteSessionManager.connectDirect(), so a
+      // history fetch that raced ahead of any session attach (e.g. right after a
+      // server restart) returned 0 messages. Self-warming here removes that
+      // ordering dependency entirely.
+      if (this.hostKey === '__local__') {
+        const { localDaemon } = await import('./local-daemon.js')
+        await localDaemon.ensureRunning()
+        const wsUrl = localDaemon.wsUrl
+        if (!wsUrl) throw new Error('Local daemon has no wsUrl after ensureRunning')
+        await this.connectWebSocket(wsUrl)
+        const ok = await this.verifyCapabilities()
+        if (!ok) {
+          log.session.warn('DaemonConnection: local connect hello failed — proceeding anyway', {
+            host: this.hostKey,
+          })
+        }
+        this.setConnected(true)
+        this.startPing()
+        this._connecting = false
+        log.session.info('DaemonConnection: local connected (direct)', {
+          host: this.hostKey, wsUrl, instanceId: this._daemonInstanceId,
+        })
+        return
+      }
+
       // Step 0: Establish SSH ControlMaster (one connection for all subsequent commands)
       await this.ensureControlMaster()
 

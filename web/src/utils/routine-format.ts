@@ -19,9 +19,13 @@ function describeCronExpr(expr: string): string | null {
   const parts = expr.trim().split(/\s+/);
   if (parts.length !== 5) return null;
   const [min, hour, dom, mon, dow] = parts;
-  // Only handle fixed-time patterns; anything fancier falls back to the raw expr
-  if (!/^\d{1,2}$/.test(min) || !/^\d{1,2}$/.test(hour)) return null;
+  if (!/^\d{1,2}$/.test(min)) return null;
   if (dom !== '*' || mon !== '*') return null;
+  // Hourly pattern: fixed minute, any hour
+  if (hour === '*') {
+    return dow === '*' ? `Hourly at :${min.padStart(2, '0')}` : null;
+  }
+  if (!/^\d{1,2}$/.test(hour)) return null;
   const time = formatTime(Number(hour), Number(min));
 
   if (dow === '*') return `Every day at ${time}`;

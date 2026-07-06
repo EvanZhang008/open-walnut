@@ -13,7 +13,9 @@ export type UsageSource =
   | 'glm'          // Zhipu GLM-4 API calls
   | 'heartbeat'    // periodic health checks
   | 'cron'         // cron-triggered agent turns
-  | 'triage';      // session/subagent triage
+  | 'triage'       // session/subagent triage
+  | 'background-review' // every-N-turn butler self-review fork
+  | 'task-hook';   // task lifecycle → overview maintainer agent
 
 export interface UsageRecord {
   id: string;

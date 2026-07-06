@@ -87,12 +87,19 @@ beforeAll(async () => {
   const addr = server.address();
   port = typeof addr === 'object' && addr ? addr.port : 0;
 
-  // Wait for QMD indexing
+  // Wait for QMD indexing — memory store AND the notes vault. The notes
+  // index bootstraps LAZILY on first notes-v2 API hit (see notes-v2.ts
+  // ensureIndexBootstrap), so touch the route once before waiting.
   await waitForSearchResults(
     () => memoryNotesSearch('API design'),
     { maxWaitMs: 60000, pollIntervalMs: 2000 },
   );
-}, 120000);
+  await fetch(`http://localhost:${port}/api/notes-v2/list`);
+  await waitForSearchResults(
+    () => memoryNotesSearch('engineering work', ['note_vault']),
+    { maxWaitMs: 60000, pollIntervalMs: 2000 },
+  );
+}, 150000);
 
 afterAll(async () => {
   await stopServer();
@@ -103,7 +110,7 @@ afterAll(async () => {
 
 describe('memory_notes_search Tool', () => {
   it('5.1: basic search returns JSON with correct fields', async () => {
-    const result = await memoryNotesSearchTool.execute({ query: 'PostgreSQL connection' });
+    const result = await memoryNotesSearchTool.execute({ queries: ['PostgreSQL connection'] });
 
     expect(result).not.toBe('No results found.');
     const parsed = JSON.parse(result as string);
@@ -142,7 +149,7 @@ describe('memory_notes_search Tool', () => {
 
   it('5.2: source filtering limits results to specified sources', async () => {
     const result = await memoryNotesSearchTool.execute({
-      query: 'design',
+      queries: ['design'],
       sources: ['memory_topic'],
     });
 
@@ -150,28 +157,24 @@ describe('memory_notes_search Tool', () => {
 
     const parsed = JSON.parse(result as string);
     for (const r of parsed) {
-      expect(r.source).toBe('topic');
+      expect(r.source).toBe('memory_topic');
     }
   });
 
   // ── 5.3 Notes Sources ──
 
   it('5.3: notes source filtering works', async () => {
+    // Notes are a single flattened `note_vault` collection (PARA folders merged).
     const result = await memoryNotesSearchTool.execute({
-      query: 'engineering work',
-      sources: ['note_areas', 'note_projects'],
+      queries: ['engineering work'],
+      sources: ['note_vault'],
     });
 
     expect(result).not.toBe('No results found.');
 
     const parsed = JSON.parse(result as string);
     for (const r of parsed) {
-      expect(['note_areas', 'note_projects']).toContain(r.source);
-    }
-    // Should NOT contain note_resources or note_archive
-    for (const r of parsed) {
-      expect(r.source).not.toBe('note_resources');
-      expect(r.source).not.toBe('note_archive');
+      expect(r.source).toBe('note_vault');
     }
   });
 
@@ -179,7 +182,7 @@ describe('memory_notes_search Tool', () => {
 
   it('5.4: respects limit parameter', async () => {
     const result = await memoryNotesSearchTool.execute({
-      query: 'design deployment',
+      queries: ['design deployment'],
       limit: 3,
     });
 
@@ -193,7 +196,7 @@ describe('memory_notes_search Tool', () => {
 
   it('5.5: returns valid response for nonexistent term', async () => {
     const result = await memoryNotesSearchTool.execute({
-      query: 'xylophone_nonexistent_term_12345_zzz',
+      queries: ['xylophone_nonexistent_term_12345_zzz'],
     });
 
     // QMD BM25 may return fuzzy partial matches — verify either "No results found."

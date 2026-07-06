@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { fetchMemoryBrowse, fetchMemory, fetchGlobalMemory } from '@/api/memory';
+import { fetchMemoryBrowse, fetchMemory, fetchGlobalMemory, fetchUserMemory } from '@/api/memory';
 import { MemoryTreePanel } from '@/components/memory/MemoryTreePanel';
 import { MemoryContentPanel } from '@/components/memory/MemoryContentPanel';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
@@ -100,7 +100,9 @@ export function MemoryPage() {
       const fetchContent =
         path === 'MEMORY.md'
           ? fetchGlobalMemory().then((m) => ({ content: m.content, updatedAt: m.updatedAt }))
-          : fetchMemory(path).then((m) => ({ content: m.content, updatedAt: m.updated_at }));
+          : path === 'USER.md'
+            ? fetchUserMemory().then((m) => ({ content: m.content, updatedAt: m.updatedAt }))
+            : fetchMemory(path).then((m) => ({ content: m.content, updatedAt: m.updated_at }));
 
       fetchContent
         .then(({ content: c, updatedAt: u }) => {
@@ -125,7 +127,9 @@ export function MemoryPage() {
         const fetchContent =
           selectedPath === 'MEMORY.md'
             ? fetchGlobalMemory().then((m) => ({ content: m.content, updatedAt: m.updatedAt }))
-            : fetchMemory(selectedPath).then((m) => ({ content: m.content, updatedAt: m.updated_at }));
+            : selectedPath === 'USER.md'
+              ? fetchUserMemory().then((m) => ({ content: m.content, updatedAt: m.updatedAt }))
+              : fetchMemory(selectedPath).then((m) => ({ content: m.content, updatedAt: m.updated_at }));
         fetchContent
           .then(({ content: c, updatedAt: u }) => {
             setContent(c);

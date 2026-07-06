@@ -123,28 +123,34 @@ test.beforeEach(async ({ page }) => {
 
 test.describe('Mid-stream user message persistence', () => {
   test('user message sent during streaming survives turn boundary (batch-completed)', async ({ page }) => {
-    // ── Mock session history API ──
-    // First fetches return 2 initial messages. After batch-completed triggers
-    // a re-fetch, return 3 messages (assistant response added — simulating
-    // the JSONL growing, but WITHOUT the user's FIFO-injected message).
-    let historyFetchCount = 0;
+    // ── Mock session history API (delta contract) ──
+    // Base = 2 initial messages (cursor 2). After batch-completed, the version-bump
+    // refetch sends `?since=2` and we return the DELTA. The delta includes the
+    // user's FIFO-injected message because the server-side parser ALWAYS lands it
+    // in the JSONL (Pattern A enqueue→dequeue, or Pattern B synthesized from a
+    // lone enqueue) — see SessionChatHistory.tsx header. Survival is therefore via
+    // persisted history; the count-based handleBatchCompleted removes the now-
+    // redundant optimistic copy. The glob MUST end in `**` so it matches
+    // `history?source=streams` and `history?since=2`.
+    const midStreamText = 'Hey, also check the test files please';
     const baseMessages = [
       { role: 'user', text: 'Start working on the task', timestamp: '2026-01-01T00:00:00.000Z' },
       { role: 'assistant', text: 'Sure, let me work on that.', timestamp: '2026-01-01T00:00:01.000Z' },
     ];
-    const afterTurnMessages = [
-      ...baseMessages,
+    const turnDelta = [
+      { role: 'user', text: midStreamText, timestamp: '2026-01-01T00:00:30.000Z' },
       { role: 'assistant', text: 'I have completed the task.', timestamp: '2026-01-01T00:01:00.000Z' },
     ];
 
-    await page.route(`**/api/sessions/${SESSION_ID}/history`, async (route) => {
-      historyFetchCount++;
-      if (historyFetchCount <= 1) {
-        await route.fulfill({ json: { messages: baseMessages } });
+    await page.route(`**/api/sessions/${SESSION_ID}/history**`, async (route) => {
+      const url = new URL(route.request().url());
+      const since = url.searchParams.get('since');
+      if (since !== null) {
+        // Delta refetch after batch-completed: the new assistant message only.
+        await route.fulfill({ json: { messages: turnDelta, cursor: baseMessages.length + turnDelta.length, delta: true } });
       } else {
-        // After batch-completed re-fetch: JSONL has grown (assistant response added)
-        // but user's FIFO message is NOT in the JSONL
-        await route.fulfill({ json: { messages: afterTurnMessages } });
+        // Phase 1 (streams) + Phase 2 (full): the base exchange.
+        await route.fulfill({ json: { messages: baseMessages, cursor: baseMessages.length, delta: false } });
       }
     });
 
@@ -178,9 +184,12 @@ test.describe('Mid-stream user message persistence', () => {
     // Wait for session history to load
     await page.waitForSelector('.session-msg', { timeout: 5000 });
 
-    // Verify initial state: 2 persisted messages
-    const initialMsgCount = await page.locator('.session-msg').count();
-    expect(initialMsgCount).toBe(2);
+    // Verify initial state: the 2 persisted messages rendered. (Assert on content,
+    // not a raw .session-msg count — the parent also renders a `session-initial-prompt`
+    // banner that shares the .session-msg class, so the count includes it.)
+    const initialHistory = page.locator('.session-history');
+    await expect(initialHistory).toContainText('Start working on the task');
+    await expect(initialHistory).toContainText('Sure, let me work on that.');
 
     // ── Step 1: Inject streaming blocks (simulate Claude working) ──
     await injectEvent(page, 'session:text-delta', {
@@ -229,7 +238,7 @@ test.describe('Mid-stream user message persistence', () => {
 
     // ── Step 2: User sends a message mid-stream ──
     const chatInput = page.getByPlaceholder('Send a message to this session...');
-    await chatInput.fill('Hey, also check the test files please');
+    await chatInput.fill(midStreamText);
     const sendBtn = page.locator('.session-chat-input-wrapper .chat-send-btn');
     await sendBtn.click();
 
@@ -246,7 +255,7 @@ test.describe('Mid-stream user message persistence', () => {
 
     // ── Step 3: Verify the user message is visible mid-stream ──
     // The user message should be in the streaming panel timeline
-    const userMsgText = 'Hey, also check the test files please';
+    const userMsgText = midStreamText;
     const userMsgLocator = page.locator('.session-streaming-panel').getByText(userMsgText);
     await expect(userMsgLocator).toBeVisible({ timeout: 2000 });
 
@@ -277,12 +286,11 @@ test.describe('Mid-stream user message persistence', () => {
     await page.screenshot({ path: 'test-results/mid-stream-after.png' });
 
     // ── Step 5: THE CRITICAL ASSERTION ──
-    // The user's mid-stream message MUST still be visible after the turn completes.
-    // BUG: Without the fix, the message vanishes here because:
-    //   1. onBatchCompleted promotes to 'committed'
-    //   2. onClearCommitted immediately removes committed messages
-    //   3. JSONL doesn't contain the FIFO-injected user message
-    //   4. Message is gone from both optimistic state and persisted history
+    // The user's mid-stream message MUST still be visible after the turn completes,
+    // and must appear EXACTLY ONCE. The turn's delta re-fetch (?since=2) lands the
+    // FIFO message in persisted history (the real parser always does); the count-
+    // based handleBatchCompleted removes the now-redundant optimistic copy. So the
+    // message survives via history, with no duplicate streaming copy.
 
     // Check the full session history area (includes both persisted and optimistic)
     const sessionHistory = page.locator('.session-history');
@@ -293,7 +301,11 @@ test.describe('Mid-stream user message persistence', () => {
 
     // More specific: find the exact user message element
     const userMsgAfter = sessionHistory.getByText(userMsgText);
-    await expect(userMsgAfter).toBeVisible();
+    await expect(userMsgAfter.first()).toBeVisible();
+
+    // No duplication — appears once (persisted), not twice (persisted + optimistic).
+    expect((fullText?.match(/Hey, also check the test files please/g) || []).length,
+      'mid-stream message must appear exactly once after the turn').toBe(1);
 
     // Also verify the persisted messages are still there
     expect(fullText).toContain('Start working on the task');
@@ -301,26 +313,26 @@ test.describe('Mid-stream user message persistence', () => {
   });
 
   test('multiple mid-stream messages all survive turn boundary', async ({ page }) => {
-    // Same setup but with 2 messages sent during streaming
-    let historyFetchCount = 0;
+    // Same setup but with 2 messages sent during streaming (delta contract).
     const baseMessages = [
       { role: 'user', text: 'Begin', timestamp: '2026-01-01T00:00:00.000Z' },
       { role: 'assistant', text: 'Starting.', timestamp: '2026-01-01T00:00:01.000Z' },
     ];
+    // Both mid-stream messages land in the JSONL (parser Pattern A/B) → they're in
+    // the delta re-fetch; survival is via persisted history, no duplicate copies.
+    const turnDelta = [
+      { role: 'user', text: 'First mid-stream message', timestamp: '2026-01-01T00:01:30.000Z' },
+      { role: 'user', text: 'Second mid-stream message', timestamp: '2026-01-01T00:01:40.000Z' },
+      { role: 'assistant', text: 'Done with everything.', timestamp: '2026-01-01T00:02:00.000Z' },
+    ];
 
-    await page.route(`**/api/sessions/${SESSION_ID}/history`, async (route) => {
-      historyFetchCount++;
-      if (historyFetchCount <= 1) {
-        await route.fulfill({ json: { messages: baseMessages } });
+    await page.route(`**/api/sessions/${SESSION_ID}/history**`, async (route) => {
+      const url = new URL(route.request().url());
+      const since = url.searchParams.get('since');
+      if (since !== null) {
+        await route.fulfill({ json: { messages: turnDelta, cursor: baseMessages.length + turnDelta.length, delta: true } });
       } else {
-        await route.fulfill({
-          json: {
-            messages: [
-              ...baseMessages,
-              { role: 'assistant', text: 'Done with everything.', timestamp: '2026-01-01T00:02:00.000Z' },
-            ],
-          },
-        });
+        await route.fulfill({ json: { messages: baseMessages, cursor: baseMessages.length, delta: false } });
       }
     });
 
@@ -394,11 +406,13 @@ test.describe('Mid-stream user message persistence', () => {
     });
     await page.waitForTimeout(2000);
 
-    // BOTH messages must survive
+    // BOTH messages must survive — and each exactly once (persisted, not duplicated).
     const history = page.locator('.session-history');
     const fullText = await history.textContent();
     expect(fullText).toContain('First mid-stream message');
     expect(fullText).toContain('Second mid-stream message');
+    expect((fullText?.match(/First mid-stream message/g) || []).length, 'first msg appears once').toBe(1);
+    expect((fullText?.match(/Second mid-stream message/g) || []).length, 'second msg appears once').toBe(1);
   });
 
   test('mid-stream message appears BEFORE assistant final response (position, not just survival)', async ({ page }) => {
@@ -415,20 +429,17 @@ test.describe('Mid-stream user message persistence', () => {
     // messages include the user's mid-stream message at the correct position (before
     // the assistant's final response), and the DOM renders them in that order.
 
-    let historyFetchCount = 0;
-
-    // Initial history: just the opening exchange
+    // Initial history: just the opening exchange (cursor 2).
     const baseMessages = [
       { role: 'user', text: 'Read 3 files with 5s sleep', timestamp: '2026-01-01T00:00:00.000Z' },
       { role: 'assistant', text: 'Starting file reads.', timestamp: '2026-01-01T00:00:01.000Z',
         tools: [{ name: 'Read', input: { file: 'f1.ts' } }] },
     ];
 
-    // After turn completes: history includes the user's mid-stream message
-    // at the CORRECT position (between assistant segments) — this simulates
-    // what parseSessionMessages now produces from queue-operation entries.
-    const afterTurnMessages = [
-      ...baseMessages,
+    // The turn's DELTA (messages after cursor 2) includes the user's mid-stream
+    // message at the CORRECT position (between assistant segments) — this simulates
+    // what parseSessionMessages produces from queue-operation entries.
+    const turnDelta = [
       // Assistant segment 2 (more work)
       { role: 'assistant', text: 'File 2 read.', timestamp: '2026-01-01T00:00:10.000Z',
         tools: [{ name: 'Read', input: { file: 'f2.ts' } }] },
@@ -438,12 +449,13 @@ test.describe('Mid-stream user message persistence', () => {
       { role: 'assistant', text: 'Stopping. Got your messages.', timestamp: '2026-01-01T00:00:20.000Z' },
     ];
 
-    await page.route(`**/api/sessions/${SESSION_ID}/history`, async (route) => {
-      historyFetchCount++;
-      if (historyFetchCount <= 1) {
-        await route.fulfill({ json: { messages: baseMessages } });
+    await page.route(`**/api/sessions/${SESSION_ID}/history**`, async (route) => {
+      const url = new URL(route.request().url());
+      const since = url.searchParams.get('since');
+      if (since !== null) {
+        await route.fulfill({ json: { messages: turnDelta, cursor: baseMessages.length + turnDelta.length, delta: true } });
       } else {
-        await route.fulfill({ json: { messages: afterTurnMessages } });
+        await route.fulfill({ json: { messages: baseMessages, cursor: baseMessages.length, delta: false } });
       }
     });
 

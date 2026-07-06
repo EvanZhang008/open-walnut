@@ -317,6 +317,39 @@ input:focus, textarea:focus, select:focus {
   margin: 6px 12px;
 }
 
+/* Collapsible "Other" group */
+.sidebar-group-toggle {
+  background: none;
+  border: none;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+}
+
+.sidebar-group-toggle .sidebar-group-chevron {
+  width: 14px;
+  height: 14px;
+  margin-left: auto;
+  transition: transform 0.15s ease;
+}
+
+.sidebar-group-toggle .sidebar-group-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+.sidebar-group-items .sidebar-link {
+  padding-left: 32px;
+}
+
+.sidebar.collapsed .sidebar-group-items .sidebar-link {
+  padding-left: 0;
+}
+
+.sidebar.collapsed .sidebar-group-chevron {
+  display: none;
+}
+
 
 /* Sidebar collapse */
 
@@ -381,7 +414,6 @@ input:focus, textarea:focus, select:focus {
 
 .sidebar-notification-area {
   padding: 4px 8px;
-  border-top: 1px solid var(--border);
 }
 
 .sidebar-notification-area .sidebar-link {
@@ -13849,6 +13881,15 @@ a.task-kebab-info:hover {
   background: rgba(34, 211, 238, 0.12);
 }
 
+.command-palette-source-skill {
+  color: #6d28d9;
+  background: #ede9fe;
+}
+[data-theme="dark"] .command-palette-source-skill {
+  color: #a78bfa;
+  background: rgba(167, 139, 250, 0.15);
+}
+
 /* ===== "@" File Mention Popup (mini VS Code above chat input) ===== */
 .file-mention-popup {
   position: absolute;
@@ -21536,4 +21577,155 @@ a.file-link:hover {
 
 .routines-view-compact .routine-composer-templates {
   display: none;
+}
+
+/* ── Routine modal (Claude-cloud-app style edit dialog) ── */
+
+.routine-modal {
+  max-width: 560px;
+  padding: 20px;
+}
+
+.routine-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.routine-modal-header h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.routine-modal-close {
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted, inherit);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+
+.routine-modal-close:hover {
+  background: var(--color-bg-hover, rgba(128, 128, 128, 0.15));
+}
+
+/* Instructions textarea with the model picker footer inside the box */
+.routine-instructions-box {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--color-bg-secondary, var(--color-bg));
+}
+
+.routine-instructions-box textarea {
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 10px 12px;
+  color: inherit;
+  font: inherit;
+  resize: vertical;
+  display: block;
+}
+
+.routine-instructions-box textarea:focus {
+  outline: none;
+}
+
+.routine-instructions-box:focus-within {
+  border-color: var(--color-primary, #4a7dff);
+}
+
+.routine-instructions-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 6px 8px;
+  border-top: 1px solid var(--color-border);
+}
+
+.routine-model-select {
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted, inherit);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* Trigger box: header line + segmented presets + per-preset controls */
+.routine-trigger-box {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--color-bg-secondary, var(--color-bg));
+}
+
+.routine-trigger-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--color-text-muted, inherit);
+}
+
+.routine-trigger-clock {
+  font-size: 13px;
+}
+
+.routine-trigger-presets {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow: hidden;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.routine-trigger-preset {
+  padding: 5px 12px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted, inherit);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.routine-trigger-preset + .routine-trigger-preset {
+  border-left: 1px solid var(--color-border);
+}
+
+.routine-trigger-preset.active {
+  background: var(--color-bg-tertiary, rgba(128, 128, 128, 0.18));
+  color: inherit;
+  font-weight: 600;
+}
+
+.routine-trigger-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.routine-trigger-at {
+  font-size: 12px;
+  color: var(--color-text-muted, inherit);
+}
+
+.routine-trigger-custom {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* In the narrow home panel the preset strip can wrap */
+.routines-view-compact .routine-trigger-presets {
+  flex-wrap: wrap;
 }

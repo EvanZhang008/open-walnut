@@ -82,11 +82,19 @@ export async function isSessionProcessAlive(session: SessionRecord): Promise<boo
 
   // Fallback: no active manager (e.g. server just restarted, transport not yet attached)
   // Remote daemon sessions: the PID lives on the remote host.
-  // We can't check it locally — instead check if the daemon connection is up.
   // Short disconnects (< 5min) → assume alive (tunnel may be reconnecting).
   if (session.host) {
-    const { isDaemonConnected, getDaemonDisconnectedSince } = await import('../providers/daemon-connection.js')
-    if (isDaemonConnected(session.host)) return true
+    const { isDaemonConnected, getDaemonDisconnectedSince, probeDaemonSession } = await import('../providers/daemon-connection.js')
+    if (isDaemonConnected(session.host)) {
+      // Connection up ≠ session alive. The daemon holds per-session truth (its
+      // status RPC checks the actual OS process), so ask it. Returning `true`
+      // just because the tunnel is up left dead remote CLIs badged "running"
+      // forever whenever no manager was registered (classic after a Walnut
+      // restart before any attach). Probe failure (null) → connection flapped
+      // mid-probe; fall through to the grace-period logic below.
+      const probe = await probeDaemonSession(session.host, session.claudeSessionId)
+      if (probe !== null) return probe.alive
+    }
     // Disconnected — check grace period
     const since = getDaemonDisconnectedSince(session.host)
     if (since && (Date.now() - since) > 5 * 60 * 1000) return false // > 5min

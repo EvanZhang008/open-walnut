@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { MarkdownEditorPanel } from '@/components/notes/MarkdownEditorPanel';
 import { useFieldContent } from '@/hooks/useFieldContent';
-import { saveGlobalMemory, saveMemory } from '@/api/memory';
+import { saveGlobalMemory, saveUserMemory, saveMemory } from '@/api/memory';
 
 interface MemoryContentPanelProps {
   content: string | null;
@@ -12,6 +12,7 @@ interface MemoryContentPanelProps {
 
 function formatPath(p: string): string {
   if (p === 'MEMORY.md') return 'Global / MEMORY.md';
+  if (p === 'USER.md') return 'Global / USER.md';
   return p.split('/').join(' / ');
 }
 
@@ -40,7 +41,9 @@ export function MemoryContentPanel({ content, path, updatedAt, onSaved }: Memory
     if (!path) return;
     const result = path === 'MEMORY.md'
       ? await saveGlobalMemory(body)
-      : await saveMemory(path, body);
+      : path === 'USER.md'
+        ? await saveUserMemory(body)
+        : await saveMemory(path, body);
     onSaved?.(result.updatedAt);
   }, [path, onSaved]);
 

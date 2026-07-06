@@ -8,7 +8,7 @@ import {
   logHookError,
 } from './shared.js';
 import { appendDailyLog } from '../core/daily-log.js';
-import { appendProjectMemory } from '../core/project-memory.js';
+import { appendSkillHistoryForProject } from '../core/overview-log.js';
 import { WALNUT_HOME } from '../constants.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -56,10 +56,14 @@ function main(): void {
       const entry = formatDailyLogEntry(summary, filesChanged);
       appendDailyLog(entry, 'session-end', projectPath ?? undefined);
       if (projectPath) {
-        appendProjectMemory(projectPath, summary.summary, 'session');
+        // memory/projects/ retired (2026-07 unification): session summaries land
+        // in skills/<category>/<project>/history/ (or the category overview log).
+        // No matching skill → skip; the daily log has the entry regardless.
+        const [category, ...rest] = projectPath.split('/');
+        appendSkillHistoryForProject(category, rest.join('-') || category, summary.summary, 'session');
       }
     } catch (err) {
-      log.hook.warn('on-stop: failed to write daily/project memory', {
+      log.hook.warn('on-stop: failed to write daily/skill-history memory', {
         error: err instanceof Error ? err.message : String(err),
       })
     }

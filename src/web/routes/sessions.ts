@@ -802,6 +802,7 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
     // Follows the fork chain (A forked from B forked from C) with cycle detection.
     let forkedFromSessionId: string | undefined
     let forkBoundaryIndex: number | undefined
+    let forkLoadFailed = false
     if (record?.forkedFromSessionId) {
       forkedFromSessionId = record.forkedFromSessionId
       try {
@@ -847,6 +848,7 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
           forkBoundaryIndex = allSourceMessages.length
         }
       } catch (err) {
+        forkLoadFailed = true
         log.web.warn('failed to load fork source history', {
           sessionId, forkedFrom: record.forkedFromSessionId,
           error: err instanceof Error ? err.message : String(err),
@@ -855,6 +857,50 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
     }
 
     const total = messages.length
+
+    // ── Delta mode (?since=<N>) — the turn-boundary incremental path ──
+    // N = count of combined messages the client has already rendered. Because a
+    // completed turn's messages never mutate afterwards (tool_result always
+    // back-fills within the same turn, fork ancestors are immutable), slicing
+    // messages[N..] is a lossless "what's new since you last synced" and avoids
+    // re-serializing/re-transmitting the full 6.4MB payload every turn.
+    //
+    // Contract:
+    //   since valid (0 <= since <= total) → { messages: slice(since), cursor: total, delta: true }
+    //     · slice is empty when nothing new yet (archive hasn't flushed the turn) —
+    //       client treats empty delta as "not caught up", keeps streaming blocks, retries.
+    //   since > total (file rewritten/rotated, or client ahead) → full payload + delta:false
+    //     so the client rebuilds from scratch. Never silently drop.
+    const sinceRaw = req.query.since as string | undefined
+    if (sinceRaw !== undefined) {
+      const since = parseInt(sinceRaw, 10)
+      // forkLoadFailed guard: the client's cursor was minted against
+      // (ancestorLen + ownLen). If the ancestor read failed transiently (SSH
+      // flap), `total` here is just ownLen — a since computed in the combined
+      // space would slice at a bogus offset (or read as "client ahead" and
+      // full-replace with a history missing its fork prefix, wiping the
+      // ancestor messages from the UI until the next full reload). Serve a
+      // full rebuild only when the payload is complete; otherwise 503 so the
+      // client keeps its current view and retries next turn.
+      if (forkLoadFailed) {
+        res.status(503).json({ error: 'fork ancestor history unavailable (transient) — retry' })
+        return
+      }
+      if (Number.isFinite(since) && since >= 0 && since <= total) {
+        res.json({
+          messages: messages.slice(since),
+          cursor: total,
+          total,
+          delta: true,
+          // Fork fields are static after first load; client already has them.
+          ...(forkedFromSessionId ? { forkedFromSessionId } : {}),
+          ...(forkBoundaryIndex != null ? { forkBoundaryIndex } : {}),
+        })
+        return
+      }
+      // Fall through to full payload (since out of range → rebuild).
+    }
+
     const sliced = tail && tail > 0 ? messages.slice(-tail) : messages
     // Adjust forkBoundaryIndex for the sliced window
     const adjustedForkBoundary = forkBoundaryIndex != null && tail && tail > 0
@@ -863,6 +909,8 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
     res.json({
       messages: sliced,
       total,
+      cursor: total,
+      delta: false,
       ...(forkedFromSessionId ? { forkedFromSessionId } : {}),
       ...(adjustedForkBoundary != null ? { forkBoundaryIndex: adjustedForkBoundary } : {}),
     })

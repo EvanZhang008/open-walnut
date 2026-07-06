@@ -394,6 +394,11 @@ export async function deleteConversation(agentId: string, conversationId: string
     // Remove the conversation file (best-effort).
     await fsp.unlink(conversationFile(agentId, conversationId)).catch(() => {});
 
+    // Purge the conversation's rows from the history FTS index too —
+    // delete means delete (best-effort, module handles its own errors).
+    const { deleteConversationHistory } = await import('./history-db.js');
+    deleteConversationHistory(agentId, conversationId);
+
     // Reassign active if we just deleted it.
     if (index.activeConversationId === conversationId) {
       const remaining = sortConversations(index.conversations)[0];

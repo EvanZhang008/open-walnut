@@ -12,8 +12,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import { createMockConstants } from '../../helpers/mock-constants.js';
+import { mockLocalDaemonReader } from '../../helpers/mock-local-daemon-reader.js';
 
 vi.mock('../../../src/constants.js', () => createMockConstants());
+vi.mock('../../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader());
 
 // Mock process liveness to avoid real PID checks
 vi.mock('../../../src/utils/session-liveness.js', () => ({

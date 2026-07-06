@@ -6,7 +6,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DAILY_DIR, agentDailyDir } from '../../../constants.js';
 import { readFileWithMeta, writeFileChecked, editFileContent } from '../../../utils/file-ops.js';
-import { appendProjectMemory, ensureProjectDir, getAllProjectSummaries } from '../../../core/project-memory.js';
+import { ensureProjectDir, getAllProjectSummaries } from '../../../core/project-memory.js';
+import { appendSkillHistoryForProject } from '../../../core/overview-log.js';
 import { appendRepoMemory, ensureRepoMemoryDir, getAllRepoMemorySummaries } from '../../../core/repo-memory.js';
 import { appendDailyLog, formatDateKey } from '../../../core/daily-log.js';
 import { ensureMemoryFile } from '../../../core/memory-file.js';
@@ -178,6 +179,15 @@ export const memoryHandler: FileHandler = {
   },
 };
 
+/** Route "category/project[/…]" to the skill-history system. Returns the
+ *  written_to label, or null when no skill/overview target exists. */
+function routeProjectEntryToSkillHistory(projectPath: string, content: string): string | null {
+  const [category, ...rest] = projectPath.split('/').filter(Boolean);
+  const project = rest.join('-') || category;
+  const result = appendSkillHistoryForProject(category ?? '', project, content, 'agent');
+  return result ? 'skill-history' : null;
+}
+
 function handleMemoryAppend(resolved: ResolvedSource, content: string): FilesWriteResult {
   if (resolved.variant === 'global') {
     throw new Error('Global memory does not support append. Use overwrite mode.');
@@ -191,14 +201,10 @@ function handleMemoryAppend(resolved: ResolvedSource, content: string): FilesWri
     writtenTo.push('daily');
 
     if (projectPath) {
-      const result = appendProjectMemory(projectPath, content, 'agent');
-      writtenTo.push('project');
-      return {
-        status: 'saved',
-        content_hash: '',
-        written_to: writtenTo,
-        summary: result.summary,
-      };
+      // Project-scoped entries land in the SKILL system's history (three-word
+      // model: episodic → history), not the retired memory/projects/ tree.
+      const routed = routeProjectEntryToSkillHistory(projectPath, content);
+      if (routed) writtenTo.push(routed);
     }
     return { status: 'saved', content_hash: '', written_to: writtenTo };
   }
@@ -209,19 +215,25 @@ function handleMemoryAppend(resolved: ResolvedSource, content: string): FilesWri
       throw new Error('project_path is required for project memory append.');
     }
 
-    // Write to both project memory and daily log
+    // Write to both the skill-history log and the daily log. memory/projects/
+    // is retired as a write target (2026-07 unification) — entries route to
+    // skills/<category>/<project>/history/ (or the category overview log).
     appendDailyLog(content, 'agent', projectPath, resolved.agentId);
     writtenTo.push('daily');
 
-    const result = appendProjectMemory(projectPath, content, 'agent');
-    writtenTo.push('project');
+    const routed = routeProjectEntryToSkillHistory(projectPath, content);
+    if (routed) {
+      writtenTo.push(routed);
+    } else {
+      const [cat] = projectPath.split('/');
+      throw new Error(
+        `No skill history target for project "${projectPath}". Create the skill first ` +
+        `(skill_manage action=create, category "${cat}") or use skill_manage log_append ` +
+        `against an existing category overview. (Entry was still saved to the daily log.)`,
+      );
+    }
 
-    return {
-      status: 'saved',
-      content_hash: '',
-      written_to: writtenTo,
-      summary: result.summary,
-    };
+    return { status: 'saved', content_hash: '', written_to: writtenTo };
   }
 
   if (resolved.variant === 'repo') {

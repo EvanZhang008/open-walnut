@@ -115,27 +115,23 @@ describe('Category 6: Server Lifecycle', () => {
     expect(hasImage).toBe(false);
   }, 15000);
 
-  // ── 6.5 Working Memory Ensured on Startup ──
+  // ── 6.5 Working Memory Is Lazy (per-conversation) ──
 
-  it('6.5: working-memory.md exists after server start', () => {
-    expect(fs.existsSync(WORKING_MEMORY_FILE)).toBe(true);
-
-    const content = fs.readFileSync(WORKING_MEMORY_FILE, 'utf-8');
-    // Should contain the template headers
-    expect(content).toContain('# Active Focus');
-    expect(content).toContain('# User Requests');
-    expect(content).toContain('# Learnings');
+  it('6.5: global working-memory.md is NOT pre-created at startup', () => {
+    // Working memory is per-conversation and created lazily on first use;
+    // pre-creating the global file would resurrect the deprecated layout.
+    expect(fs.existsSync(WORKING_MEMORY_FILE)).toBe(false);
   });
 
-  // ── 6.6 Dream Directories Ensured on Startup ──
+  // ── 6.6 Retired Dream Dirs Are NOT Recreated on Startup ──
 
-  it('6.6: dream directories exist after server start', () => {
-    expect(fs.existsSync(TOPICS_DIR)).toBe(true);
+  it('6.6: retired dream index is not created at startup', () => {
+    // The dream loop is retired (2026-07 unification): index.md belongs to
+    // the old layout and must not be regrown by server start. (TOPICS_DIR
+    // exists here only because this suite seeds topic files for QMD tests.)
+    expect(fs.existsSync(MEMORY_INDEX_FILE)).toBe(false);
+    // compaction/ is still a live directory (background compaction output).
     expect(fs.existsSync(COMPACTION_DIR)).toBe(true);
-    expect(fs.existsSync(MEMORY_INDEX_FILE)).toBe(true);
-
-    const indexContent = fs.readFileSync(MEMORY_INDEX_FILE, 'utf-8');
-    expect(indexContent).toContain('# Memory Index');
   });
 
   // ── 6.8 Working Memory Updater Reset on Startup ──

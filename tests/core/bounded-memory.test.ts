@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import path from 'node:path';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
@@ -17,7 +18,8 @@ let store: BoundedMemoryStore;
 
 beforeEach(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
-  await fsp.mkdir(WALNUT_HOME, { recursive: true });
+  // MEMORY_FILE lives at memory/MEMORY.md — create its parent dir
+  await fsp.mkdir(path.dirname(MEMORY_FILE), { recursive: true });
   store = new BoundedMemoryStore();
 });
 

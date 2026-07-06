@@ -40,7 +40,8 @@ import path from 'node:path';
 import {
   readSessionJsonlContent,
   readSubagentContents,
-  findLocalJsonlPath,
+  isSafeForProjectEncoding,
+  remoteJsonlPath,
   createFileReader,
 } from './session-file-reader.js';
 import { log } from '../logging/index.js';
@@ -397,20 +398,24 @@ export async function computeSessionChanges(
   // on mtime, but always re-read file contents. For simplicity + correctness we
   // cache the full result and invalidate on JSONL mtime change; an explicit
   // refresh (no-cache) is available via the route's ?refresh=1.
+  // DAEMON-UNIFORM mtime-cache stat: both local (__local__) and remote go through
+  // the daemon's fs.stat. cwd known + safe → exact tilde path; else skip the cache
+  // (a find just to stat isn't worth it — the full read below still runs).
   let mtimeMs: number | undefined;
-  if (!host) {
-    const localPath = await findLocalJsonlPath(sessionId, cwd);
-    if (localPath) {
-      try {
-        const stat = await fsp.stat(localPath);
-        mtimeMs = stat.mtimeMs;
+  if (cwd && isSafeForProjectEncoding(cwd)) {
+    try {
+      const { DaemonFileReader } = await import('./daemon-file-reader.js');
+      const reader = new DaemonFileReader(host ?? '__local__');
+      const statResult = await reader.stat(remoteJsonlPath(sessionId, cwd));
+      if (statResult) {
+        mtimeMs = statResult.mtimeMs;
         if (!opts?.noCache) {
           const cached = cacheGet(key);
           if (cached && cached.mtimeMs === mtimeMs) return cached.result;
         }
-      } catch {
-        // stat failed — proceed with full read
       }
+    } catch {
+      // stat failed (transport / old daemon) — proceed with full read.
     }
   }
 

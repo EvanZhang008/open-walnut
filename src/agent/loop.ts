@@ -58,6 +58,11 @@ export interface AgentLoopOptions {
    *  summary + working memory. Omit only when `system` is supplied explicitly. */
   agentId?: string;
   conversationId?: string;
+  /** RUNTIME tool dispatch whitelist (background review fork). The full tool
+   *  schema is still sent to the API — shrinking tools[] would change the
+   *  prompt-cache key and bust the warm prefix — but any call to a tool not
+   *  in this list is denied at execution time. */
+  toolWhitelist?: string[];
 }
 
 const MAX_TOOL_ROUNDS = 300;
@@ -159,14 +164,17 @@ export async function runAgentLoop(
 ): Promise<{ messages: MessageParam[]; newMessages: MessageParam[]; response: string; aborted?: boolean; tokenBreakdown?: { system: number; tools: number; messages: number; total: number } }> {
   const config = await getConfig();
 
-  // Turn boundary: the memory_manage consolidation breaker counts consecutive
+  // Turn boundary: the memory consolidation breaker (memory_manage writes) counts consecutive
   // failures WITHIN a turn (Hermes #42405); a new user turn resets it.
   // Main-butler turns only: subagent/cron/dream loops (options.system set) run
   // interleaved with a live main turn — resetting from them would clear the
   // breaker mid-consolidation and re-open the infinite retry loop. The global
-  // memory_manage tool always operates on the general store, so reset that one.
-  if (options?.system === undefined) {
+  // memory actions always operate on the general store, so reset that one.
+  // The background-review fork also runs the default-system path but is a
+  // background turn interleaved with real ones — same hazard, so exclude it.
+  if (options?.system === undefined && options?.source !== 'background-review') {
     getBoundedMemory().resetConsolidationFailures();
+    getBoundedMemory(undefined, 'user').resetConsolidationFailures();
   }
 
   // Use custom system/tools/model if provided (subagent mode), else defaults.
@@ -292,6 +300,12 @@ export async function runAgentLoop(
   /** Execute a tool by name — uses custom tool set if provided. */
   async function executeToolLocal(name: string, params: Record<string, unknown>, toolUseId?: string): Promise<ToolResultContent> {
     const meta = toolUseId ? { toolUseId } : undefined;
+    // Runtime dispatch whitelist (background review fork): full schemas were sent
+    // to the API to keep the prompt-cache prefix byte-identical, but only the
+    // whitelisted tools may actually run.
+    if (options?.toolWhitelist && !options.toolWhitelist.includes(name)) {
+      return `Error: Tool "${name}" is not available in this review pass. Allowed tools: ${options.toolWhitelist.join(', ')}. Use ONLY the allowed tools; do not retry others.`;
+    }
     if (customTools) {
       const tool = customTools.find((t) => t.name === name);
       if (!tool) return `Error: Unknown tool "${name}"`;

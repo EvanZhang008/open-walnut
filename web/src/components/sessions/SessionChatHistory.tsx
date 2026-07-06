@@ -96,7 +96,12 @@ import { log } from '@/utils/log';
  * When session:batch-completed fires → setHistoryVersion(+1) → history re-fetched:
  *
  * Render 1 (messages grow):
- *   useLayoutEffect fires → clear() (blocks=[]), blockIndexMap.clear().
+ *   useLayoutEffect fires → clearCompleted() — TURN-AWARE: drops only blocks
+ *   before the last session:result boundary. Blocks of a next turn that started
+ *   streaming during the (possibly multi-second) history refetch survive, and
+ *   blockIndexMap anchors are shifted down by the removed count. (A full clear()
+ *   here caused the "previous messages vanish while a new one is generating,
+ *   then flash back" bug.)
  *   prevMsgLen NOT updated here (stays at old value).
  *
  * Render 2 (batched state updates from Render 1):
@@ -595,9 +600,29 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   }, [openLightbox]);
 
-  const { messages, loading, phase2Pending, error, forkBoundaryIndex } = useSessionHistory(sessionId, historyVersion);
-  const { blocks, isStreaming, clear } = useSessionStream(sessionId);
+  const { messages, loading, phase2Pending, error, forkBoundaryIndex, lastDelta } = useSessionHistory(sessionId, historyVersion);
+  const { blocks, isStreaming, clearCompleted } = useSessionStream(sessionId);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Keep the freshest delta in a ref so clearCompletedAndShift (invoked from a
+  // layout effect / timeout that may run a tick after the delta arrives) always
+  // hands the current evidence to the promotion.
+  const lastDeltaRef = useRef(lastDelta);
+  lastDeltaRef.current = lastDelta;
+
+  // Turn-boundary cleanup: EVIDENCE-BASED — remove only completed-turn blocks that
+  // have a twin in the just-arrived history delta; a next turn already streaming
+  // (and anything the archive hasn't caught up on) is kept (fixes "messages 1-4
+  // vanish while 5 is generating, then flash back"). blockIndexMap anchors
+  // optimistic messages to absolute block indices → shift down by removed count.
+  const clearCompletedAndShift = useCallback(() => {
+    const removed = clearCompleted(lastDeltaRef.current);
+    if (removed > 0) {
+      for (const [k, v] of blockIndexMap.current) {
+        blockIndexMap.current.set(k, Math.max(0, v - removed));
+      }
+    }
+  }, [clearCompleted]);
 
   // Propagate the single useSessionStream instance's isStreaming to parents
   // (e.g. SessionPanel) so they can drive the ChatInput's send/interrupt state
@@ -683,10 +708,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       if (batchTimeoutRef.current) clearTimeout(batchTimeoutRef.current);
       batchTimeoutRef.current = setTimeout(() => {
         if (awaitingRefresh.current && pendingBatchTotal.current > 0) {
-          log.info('stream', `batch fallback timeout: clearing blocks+awaitingRefresh`, { sessionId });
+          log.info('stream', `batch fallback timeout: clearing completed blocks+awaitingRefresh`, { sessionId });
           awaitingRefresh.current = false;
-          clear(); // CRITICAL: also clear streaming blocks to prevent 2x duplication
-          blockIndexMap.current.clear();
+          // Turn-aware: clear only the completed turn's blocks (prevents 2x
+          // duplication) while preserving a next turn already streaming.
+          clearCompletedAndShift();
           onBatchCompleted?.(pendingBatchTotal.current);
           pendingBatchTotal.current = 0;
         }
@@ -746,15 +772,19 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // their interleaved positions during the transition.
   useLayoutEffect(() => {
     if (awaitingRefresh.current) {
-      log.info('stream', `useLayoutEffect: awaitingRefresh=true → clear() msgs=${messages.length} prevMsgLen=${prevMsgLen.current} batchTotal=${pendingBatchTotal.current}`, { sessionId });
+      log.info('stream', `useLayoutEffect: awaitingRefresh=true → clearCompleted() msgs=${messages.length} prevMsgLen=${prevMsgLen.current} batchTotal=${pendingBatchTotal.current}`, { sessionId });
       awaitingRefresh.current = false;
       // Cancel the fallback timeout — the history refresh completed normally
       if (batchTimeoutRef.current) {
         clearTimeout(batchTimeoutRef.current);
         batchTimeoutRef.current = null;
       }
-      clear();
-      blockIndexMap.current.clear(); // Reset for next turn
+      // Turn-aware clear: only the completed turn's blocks are now in persisted
+      // history. If turn N+1 started streaming during the (possibly 7s+) history
+      // refetch, its blocks + optimistic anchors survive — previously a full
+      // clear() here made the live turn vanish until the next snapshot restored
+      // it (the "flash" the user sees).
+      clearCompletedAndShift();
       onBatchCompleted?.(pendingBatchTotal.current);
       pendingBatchTotal.current = 0;
       // Do NOT update prevMsgLen here. The batch completion triggers re-renders
@@ -771,7 +801,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       // is now handled by the hook's own lifecycle (session:result + clear()).
       prevMsgLen.current = messages.length;
     }
-  }, [messages, clear, onBatchCompleted]);
+  }, [messages, clearCompletedAndShift, onBatchCompleted]);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // AUTO-SCROLL — Dead simple. Standard chat pattern.

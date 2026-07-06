@@ -1,12 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { fetchSessionHistory } from '@/api/sessions';
 import { perf } from '@/utils/perf-logger';
+import { log } from '@/utils/log';
 import type { SessionHistoryMessage } from '@/types/session';
 import {
   trackSession,
   getHistoryCache,
   setHistoryCache,
-  clearStreamState,
 } from '@/cache/session-cache';
 
 interface UseSessionHistoryReturn {
@@ -17,6 +17,12 @@ interface UseSessionHistoryReturn {
   error: string | null;
   /** Index in messages[] where the fork boundary is (source messages end, forked messages start) */
   forkBoundaryIndex?: number;
+  /** The most recent turn's delta (messages appended by the last refetch). Consumers
+   *  use it as evidence to promote (remove) the matching streaming blocks — deletion
+   *  is proven, never blind. Monotonic token `deltaSeq` lets consumers react to each
+   *  new delta even when its contents repeat. */
+  lastDelta: SessionHistoryMessage[];
+  deltaSeq: number;
 }
 
 /** Diagnostic: count user text messages and check if they're interleaved or bunched */
@@ -61,6 +67,17 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
   const [phase2Pending, setPhase2Pending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [forkBoundaryIndex, setForkBoundaryIndex] = useState<number | undefined>(undefined);
+  const [lastDelta, setLastDelta] = useState<SessionHistoryMessage[]>([]);
+  const [deltaSeq, setDeltaSeq] = useState(0);
+
+  // Cursor = combined-message count the client has synced to. Advances on every
+  // successful full/delta fetch; reset on session switch. Held in a ref so a
+  // `version` bump (turn boundary) reuses it without re-running the initial load.
+  const cursorRef = useRef(0);
+  // messages[] mirror so the delta-append updater has the current base without a
+  // stale closure (version-effect reads it synchronously).
+  const messagesRef = useRef<SessionHistoryMessage[]>([]);
+  messagesRef.current = messages;
 
   useEffect(() => {
     if (!sessionId) {
@@ -69,6 +86,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       setPhase2Pending(false);
       setError(null);
       setForkBoundaryIndex(undefined);
+      cursorRef.current = 0;
       return;
     }
 
@@ -81,29 +99,77 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     // Track session so global cache accumulates its events in background
     trackSession(sessionId);
 
-    // Re-fetch (version > 0): skip Phase 1, go directly to Phase 2.
-    // When disabled (offscreen column), there's nothing to do — Phase 2 is the
-    // only work here and we don't want its SSH cost until visible.
+    // Re-fetch (version > 0): turn boundary. DELTA path — fetch only messages after
+    // our cursor (a few KB, not the full 6.4MB), APPEND them (don't replace), and
+    // publish the delta so the consumer promotes matching streaming blocks by
+    // evidence. Skip Phase 1 (already have content). Offscreen columns skip entirely.
     if (version > 0) {
       if (!enabled) return () => { cancelled = true; controller.abort(); };
       setLoading(true);
       setPhase2Pending(true);
-      const endP2 = perf.start(`session:full:${sid}`);
-      fetchSessionHistory(sessionId, { signal: controller.signal })
+      const endP2 = perf.start(`session:delta:${sid}`);
+      const since = cursorRef.current;
+      fetchSessionHistory(sessionId, { since, signal: controller.signal })
         .then((result) => {
-          if (!cancelled) {
-            endP2(`${result.messages.length} msgs`);
-            diagnoseOrdering('refetch', sid, result.messages);
+          if (cancelled) return;
+          endP2(`+${result.messages.length} msgs (delta=${result.delta})`);
+          if (result.delta) {
+            // Incremental: append the new turn's messages.
+            if (result.messages.length > 0) {
+              const base = messagesRef.current;
+              const merged = [...base, ...result.messages];
+              // Consistency guard against duplication: the delta is server.messages.slice(since),
+              // so a correct append yields exactly `cursor` messages. If it doesn't, our cached
+              // prefix diverged from the server's current parse — this happens when a COMPACTION
+              // rewrote history (the JSONL gains summary lines and the parse shifts), so `since`
+              // no longer lines up with the same message boundary. Blindly appending then renders
+              // the overlap TWICE (the "compact still shows old messages below" bug, client side).
+              // On mismatch, re-fetch the FULL history to rebuild from a clean base instead.
+              const expected = result.cursor ?? merged.length;
+              if (result.cursor != null && merged.length !== expected) {
+                log.warn('session-history', `delta merge length mismatch — rebuilding (had=${base.length} +delta=${result.messages.length} → ${merged.length}, server cursor=${expected})`, { sessionId });
+                fetchSessionHistory(sessionId, { signal: controller.signal })
+                  .then((full) => {
+                    if (cancelled) return;
+                    setMessages(full.messages);
+                    setForkBoundaryIndex(full.forkBoundaryIndex);
+                    cursorRef.current = full.cursor ?? full.messages.length;
+                    setHistoryCache(sessionId, {
+                      messages: full.messages,
+                      forkBoundaryIndex: full.forkBoundaryIndex,
+                      msgCount: full.cursor ?? full.messages.length,
+                    });
+                    setLastDelta(full.messages);
+                    setDeltaSeq((s) => s + 1);
+                  })
+                  .catch(() => { /* keep current view; next turn retries */ });
+                return;
+              }
+              setMessages(merged);
+              setHistoryCache(sessionId, {
+                messages: merged,
+                forkBoundaryIndex: result.forkBoundaryIndex ?? forkBoundaryIndex,
+                msgCount: result.cursor ?? merged.length,
+              });
+            }
+            // Advance cursor even on an empty delta (nothing new yet — archive lagging).
+            cursorRef.current = result.cursor ?? cursorRef.current;
+            // Publish the delta (possibly empty) as promotion evidence for the consumer.
+            setLastDelta(result.messages);
+            setDeltaSeq((s) => s + 1);
+          } else {
+            // Server rebuilt (since out of range) → full replace.
+            diagnoseOrdering('refetch-full', sid, result.messages);
             setMessages(result.messages);
             setForkBoundaryIndex(result.forkBoundaryIndex);
-            // Update cache
+            cursorRef.current = result.cursor ?? result.messages.length;
             setHistoryCache(sessionId, {
               messages: result.messages,
               forkBoundaryIndex: result.forkBoundaryIndex,
-              msgCount: result.messages.length,
+              msgCount: result.cursor ?? result.messages.length,
             });
-            // version > 0 IS the authoritative signal that the turn completed — always clear
-            clearStreamState(sessionId);
+            setLastDelta(result.messages);
+            setDeltaSeq((s) => s + 1);
           }
         })
         .catch((e: Error) => {
@@ -121,6 +187,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       // Cache hit → 0ms instant display, then background Phase 2 verification.
       setMessages(cached.messages);
       setForkBoundaryIndex(cached.forkBoundaryIndex);
+      cursorRef.current = cached.msgCount;
       setLoading(false);
       // Offscreen column: show cache, skip the background SSH re-verify until visible.
       if (!enabled) return () => { cancelled = true; controller.abort(); };
@@ -132,17 +199,18 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           if (cancelled) return;
           endP2(`${result.messages.length} msgs`);
           diagnoseOrdering('cache-verify', sid, result.messages);
-          // Detect if a new turn completed while we were away: if message count grew,
-          // clear stale streaming blocks so they don't display alongside the new history.
-          const turnCompleted = result.messages.length > cached.msgCount;
           setHistoryCache(sessionId, {
             messages: result.messages,
             forkBoundaryIndex: result.forkBoundaryIndex,
-            msgCount: result.messages.length,
+            msgCount: result.cursor ?? result.messages.length,
           });
-          if (turnCompleted) clearStreamState(sessionId);
+          cursorRef.current = result.cursor ?? result.messages.length;
           setMessages(result.messages);
           setForkBoundaryIndex(result.forkBoundaryIndex);
+          // NOTE: turn-boundary block cleanup is driven by the version-bump delta
+          // path (evidence-based), not here. A plain cache re-verify only refreshes
+          // persisted content; streaming blocks are governed by session:result +
+          // the next delta's promotion.
         })
         .catch((e: Error) => {
           if (!cancelled) { endP2('error'); setError(e.message); }
@@ -188,11 +256,12 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
               diagnoseOrdering('P2:full', sid, result.messages);
               setMessages(result.messages);
               setForkBoundaryIndex(result.forkBoundaryIndex);
+              cursorRef.current = result.cursor ?? result.messages.length;
               // Write to cache for next visit
               setHistoryCache(sessionId, {
                 messages: result.messages,
                 forkBoundaryIndex: result.forkBoundaryIndex,
-                msgCount: result.messages.length,
+                msgCount: result.cursor ?? result.messages.length,
               });
             }
           })
@@ -207,5 +276,5 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     return () => { cancelled = true; controller.abort(); };
   }, [sessionId, version, enabled]);
 
-  return { messages, loading, phase2Pending, error, forkBoundaryIndex };
+  return { messages, loading, phase2Pending, error, forkBoundaryIndex, lastDelta, deltaSeq };
 }

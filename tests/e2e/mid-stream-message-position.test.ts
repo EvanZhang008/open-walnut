@@ -20,8 +20,18 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { Server as HttpServer } from 'node:http'
 import { createMockConstants } from '../helpers/mock-constants.js'
+import { mockLocalDaemonReader } from '../helpers/mock-local-daemon-reader.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants())
+
+// Daemon-uniform model: history reads go through DaemonFileReader('__local__'),
+// which in prod connects to the in-process daemon binary (reads its own $HOME).
+// A unit/e2e run has no such daemon and its fixtures live under a MOCKED
+// CLAUDE_HOME, so we swap the transport for a real-fs-backed double that honors
+// the mocked CLAUDE_HOME. The rest of the route (REST → readSessionHistory →
+// readSessionJsonlContent → tilde paths → glob/find → parseSessionMessages) is
+// still the real production code — this is the "real test with a mock transport".
+vi.mock('../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader())
 
 import { WALNUT_HOME, CLAUDE_HOME, SESSIONS_FILE } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
@@ -331,6 +341,30 @@ beforeAll(async () => {
     },
   ])
 
+  // ── Seed a fifth session: unbalanced FIFO across a --resume/compact boundary ──
+  // REGRESSION for the "compact still shows old messages below" bug. A --resume'd session
+  // accumulates ORPHAN dequeues/removes (their enqueue lived in a prior process' buffer).
+  // The OLD global-FIFO dedup paired those orphans with the wrong enqueue, leaving a LATER
+  // Pattern A enqueue falsely "unmatched" → it emitted a synthetic user msg AND the real
+  // user STRING rendered → the message appeared TWICE. The content-match fix is immune to
+  // the imbalance. Layout mirrors real captures: leading orphan dequeue, an orphan remove,
+  // then a normal enqueue→dequeue→user.
+  await seedSessionRecord('mid-pos-005')
+  await writeSessionJsonl('mid-pos-005', [
+    // Orphan dequeue (enqueue was in a prior --resume'd process buffer)
+    { type: 'queue-operation', operation: 'dequeue', timestamp: '2026-02-20T04:00:00.000Z' },
+    // First real prompt
+    { type: 'user', timestamp: '2026-02-20T04:00:01.000Z', message: { id: 'u1', role: 'user', content: [{ type: 'text', text: 'first prompt' }] } },
+    { type: 'assistant', timestamp: '2026-02-20T04:00:02.000Z', message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'a1' }] } },
+    // Orphan remove (unbalances the global FIFO count)
+    { type: 'queue-operation', operation: 'remove', timestamp: '2026-02-20T04:00:03.000Z' },
+    // Pattern A mid-turn message: enqueue → dequeue → real user STRING (identical content)
+    { type: 'queue-operation', operation: 'enqueue', content: "Let's design", timestamp: '2026-02-20T04:00:04.000Z' },
+    { type: 'queue-operation', operation: 'dequeue', timestamp: '2026-02-20T04:00:05.000Z' },
+    { type: 'user', timestamp: '2026-02-20T04:00:06.000Z', message: { id: 'u2', role: 'user', content: [{ type: 'text', text: "Let's design" }] } },
+    { type: 'assistant', timestamp: '2026-02-20T04:00:07.000Z', message: { id: 'a2', role: 'assistant', content: [{ type: 'text', text: 'a2' }] } },
+  ])
+
   server = await startServer({ port: 0, dev: true })
   const addr = server.address()
   port = typeof addr === 'object' && addr ? addr.port : 0
@@ -453,5 +487,23 @@ describe('Mid-stream message position in API history', () => {
     expect(msgs[1]).toMatchObject({ role: 'assistant', text: 'working' })
     expect(msgs[2]).toMatchObject({ role: 'user', text: 'midstream' })
     expect(msgs[3]).toMatchObject({ role: 'assistant', text: 'done' })
+  })
+
+  it('REGRESSION: unbalanced FIFO (orphan dequeue/remove from --resume) does NOT duplicate a Pattern A message', async () => {
+    // The "compact still shows old messages below" bug: orphan queue-ops from a resume
+    // boundary made the old global-FIFO mis-pair, so "Let's design" rendered twice.
+    const res = await fetch(apiUrl('/api/sessions/mid-pos-005/history'))
+    expect(res.status).toBe(200)
+    const body = await res.json() as { messages: Array<{ role: string; text: string }> }
+    const msgs = body.messages
+
+    // Exactly 4 messages — "Let's design" appears ONCE (from the real user STRING), not twice.
+    expect(msgs).toHaveLength(4)
+    expect(msgs[0]).toMatchObject({ role: 'user', text: 'first prompt' })
+    expect(msgs[1]).toMatchObject({ role: 'assistant', text: 'a1' })
+    expect(msgs[2]).toMatchObject({ role: 'user', text: "Let's design" })
+    expect(msgs[3]).toMatchObject({ role: 'assistant', text: 'a2' })
+    // Belt-and-suspenders: the duplicated text appears exactly once across all messages.
+    expect(msgs.filter(m => m.text === "Let's design")).toHaveLength(1)
   })
 })

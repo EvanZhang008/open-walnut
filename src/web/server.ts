@@ -46,7 +46,8 @@ import { createSkillsRouter } from './routes/skills.js'
 import { createSlashCommandsRouter } from './routes/slash-commands.js'
 import { timelineRouter } from './routes/timeline.js'
 import { CronService } from '../core/cron/index.js'
-import { CRON_FILE, IS_EPHEMERAL } from '../constants.js'
+import os from 'node:os'
+import { CRON_FILE, IS_EPHEMERAL, WALNUT_HOME } from '../constants.js'
 import { sessionRunner } from '../providers/claude-code-session.js'
 import { SessionHealthMonitor } from '../core/session-health-monitor.js'
 import { SessionReaper } from '../core/session-reaper.js'
@@ -126,8 +127,6 @@ let recordingReaperHandle: { stop: () => void } | null = null
 let terminalReaperHandle: { stop: () => void } | null = null
 let qmdWatcherHandle: { stop: () => void } | null = null
 let gitAutoCommitHandle: { stop: () => void; health: GitAutoCommitHealth } | null = null
-let dreamTimerHandle: ReturnType<typeof setInterval> | null = null
-let dreamInitialHandle: ReturnType<typeof setTimeout> | null = null
 // Pending deferred-markDone timers from the session:status-changed handler.
 // Hoisted to module scope so stopServer() can cancel them before teardown,
 // otherwise a late-firing timer could mutate sessionStreamBuffer after the
@@ -308,6 +307,24 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   const port = options.port ?? DEFAULT_PORT
   const dev = options.dev ?? false
   const isEphemeral = IS_EPHEMERAL
+
+  // Tripwire: never serve the PRODUCTION port from a test/temp home. A shell with
+  // leaked vitest env (VITEST / NODE_ENV=test / OPEN_WALNUT_HOME=…test-global) makes
+  // constants.ts silently redirect WALNUT_HOME to an empty temp dir; if that process
+  // then binds 3456 it "successfully" serves zero tasks and 404s every session —
+  // production data looks wiped until the next clean restart (incident
+  // inc-1783280584117, 2026-07-05). Fail fast with an actionable message instead.
+  if (port === DEFAULT_PORT && !dev && !isEphemeral) {
+    const home = WALNUT_HOME
+    const looksLikeTestHome = /open-walnut-test|walnut-test/.test(home) || home.startsWith(os.tmpdir())
+    if (looksLikeTestHome) {
+      throw new Error(
+        `Refusing to bind production port ${DEFAULT_PORT} with WALNUT_HOME=${home} (a test/temp dir).\n` +
+        `  Your shell likely has leaked test env vars. Fix with:\n` +
+        `    env -u VITEST -u VITEST_MODE -u VITEST_WORKER_ID -u NODE_ENV -u OPEN_WALNUT_HOME npm run dev:prod`,
+      )
+    }
+  }
 
   const app = express()
 
@@ -814,15 +831,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // (see resolveWorkingMemoryPath). No global file is pre-created at startup —
   // doing so would resurrect the deprecated global file that migration retires.
 
-  // -- Ensure dream directories + memory index exist --
-  try {
-    const { ensureDreamDirectories } = await import('../core/dream.js')
-    ensureDreamDirectories()
-  } catch (err) {
-    log.memory.warn('dream directory init failed', {
-      error: err instanceof Error ? err.message : String(err),
-    })
-  }
+  // (Dream directory init removed with the retired dream loop — topics/ and
+  // index.md are legacy; the skills/ tree is the knowledge store now.)
 
   // -- QMD hybrid search stores --
   // Opt-out for lean/clean-room deployments (Docker onboarding test, CI) where the
@@ -1030,6 +1040,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           port,
           error: err instanceof Error ? err.message : String(err),
         })
+        // The fallback decision is FINAL for this server run: setSdkClient() was
+        // never called, so even a later successful reconnect would connect an
+        // orphaned client nobody uses. Without destroy() the ws 'close' handler
+        // (wired inside connect()) keeps exponential-backoff reconnecting for 10
+        // attempts against a port nothing listens on — ~50 warn/info log lines
+        // per boot of pure noise (observed live with session_server.enabled=true
+        // but no server on the port).
+        sdkClient.destroy()
       }
     }
   } catch (err) {
@@ -1052,6 +1070,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const { recordingReaper } = await import('../core/recording-reaper.js')
     recordingReaper.start()
     recordingReaperHandle = recordingReaper
+  }
+
+  // -- Start overview maintainer (task lifecycle → category overview upkeep) --
+  {
+    const { startOverviewMaintainer } = await import('../agent/overview-maintainer.js')
+    startOverviewMaintainer()
   }
 
   // -- Wire bus subscriber to push events to WS clients --
@@ -1374,7 +1398,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           lastMarkStreamingAt.delete(sid)
           // Turn ended → re-arm the streaming-phase check for the NEXT turn.
           streamingPhaseChecked.delete(sid)
-          setTimeout(() => sessionStreamBuffer.clear(sid), 2000)
+          // clearSoon (NOT a bare setTimeout): a new turn starting inside the
+          // 2s window cancels this via markStreaming — a bare timer wiped the
+          // NEW turn's blocks + streaming flag (blank snapshot on mid-turn reload).
+          sessionStreamBuffer.clearSoon(sid, 2000)
           // Cleanup team poller for this session
           import('./routes/session-chat.js').then(({ cleanupTeamPoller }) => {
             cleanupTeamPoller(sid)
@@ -2090,27 +2117,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     log.heartbeat.error('failed to start heartbeat', { error: err instanceof Error ? err.message : String(err) })
   })
 
-  // -- Dream consolidation — check periodically (every 2 hours) --
-  dreamTimerHandle = setInterval(async () => {
-    try {
-      const { executeDream } = await import('../core/dream.js')
-      await executeDream()
-    } catch (err) {
-      log.memory.debug('dream check failed', { error: String(err) })
-    }
-  }, 2 * 60 * 60 * 1000)
-
-  // Initial dream check after a delay (avoid running during startup)
-  dreamInitialHandle = setTimeout(async () => {
-    try {
-      const { executeDream } = await import('../core/dream.js')
-      await executeDream()
-    } catch { /* best-effort */ }
-  }, 5 * 60 * 1000)
+  // Dream consolidation RETIRED (2026-07 memory/skill/history unification): it
+  // wrote to the retired memory/topics/ + index.md wiki and kept regrowing the
+  // old structure after migration. Its job (periodic knowledge consolidation)
+  // is covered by the in-conversation skill_manage triggers + the every-N-turn
+  // background self-review fork. src/core/dream.ts remains for manual runs.
 
   // Conversation distill sweep REMOVED (unified memory redesign): the append-only
   // background distiller was the main source of MEMORY.md rot. Condensation now
-  // happens in-conversation via memory_manage / skill_manage triggers.
+  // happens in-conversation via skill_manage triggers.
 
   startupPhase('ALL DONE — server fully initialized')
   return httpServer!
@@ -2637,14 +2652,6 @@ export async function stopServer(): Promise<void> {
     heartbeatHandle.stop()
     heartbeatHandle = null
   }
-  if (dreamTimerHandle) {
-    clearInterval(dreamTimerHandle)
-    dreamTimerHandle = null
-  }
-  if (dreamInitialHandle) {
-    clearTimeout(dreamInitialHandle)
-    dreamInitialHandle = null
-  }
   // Cancel pending deferred-markDone callbacks so they don't mutate
   // sessionStreamBuffer after shutdown.
   for (const timer of deferredMarkDoneTimers) {
@@ -2723,6 +2730,9 @@ export async function stopServer(): Promise<void> {
   bus.unsubscribe('setup-health')
   bus.unsubscribe('qmd-task-sync')
   bus.unsubscribe('qmd-session-sync')
+  import('../agent/overview-maintainer.js')
+    .then(({ stopOverviewMaintainer }) => stopOverviewMaintainer())
+    .catch(() => {})
   // Release local terminal ptys (dtach sessions on targets survive).
   try {
     const { terminalManager } = await import('./terminal/terminal-manager.js')

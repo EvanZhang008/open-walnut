@@ -24,7 +24,7 @@ export async function readPlanFromSession(planSessionId: string): Promise<{ cont
   if (!record) return { error: `Plan session not found: ${planSessionId}` };
   if (!record.planCompleted) return { error: `Session ${planSessionId} has not completed a plan (planCompleted is false). Wait for the session to finish and call ExitPlanMode.` };
 
-  // Transparent reader: LocalFileReader for local sessions, DaemonFileReader for remote
+  // Daemon-uniform reader: DaemonFileReader for both local (__local__) and remote.
   const reader = await createFileReader(record.host);
 
   // Strategy 1: planFile from session record

@@ -341,3 +341,15 @@ qmdRouter.post('/reindex', async (_req: Request, res: Response, next: NextFuncti
     next(err)
   }
 })
+
+// Rebuild the conversation history FTS index (history.db) from
+// conversations/*.json. Synchronous (no embeddings — FTS only, fast).
+qmdRouter.post('/rebuild-history', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { rebuildHistoryDb } = await import('../../core/history-db.js')
+    const result = await rebuildHistoryDb()
+    res.json({ status: 'ok', ...result })
+  } catch (err) {
+    next(err)
+  }
+})

@@ -19,6 +19,7 @@ export interface BrowseDailyItem extends BrowseItem {
 
 export interface MemoryBrowseTree {
   global: BrowseItem | null;
+  user?: BrowseItem | null;
   daily: BrowseDailyItem[];
   projects: BrowseItem[];
   sessions: BrowseItem[];
@@ -69,6 +70,15 @@ export async function fetchGlobalMemory(): Promise<MemoryContentResponse['memory
 
 export async function saveGlobalMemory(content: string): Promise<{ ok: boolean; updatedAt: string }> {
   return apiPut<{ ok: boolean; updatedAt: string }>('/api/memory/global', { content });
+}
+
+export async function fetchUserMemory(): Promise<MemoryContentResponse['memory']> {
+  const res = await apiGet<MemoryContentResponse>('/api/memory/user');
+  return res.memory;
+}
+
+export async function saveUserMemory(content: string): Promise<{ ok: boolean; updatedAt: string }> {
+  return apiPut<{ ok: boolean; updatedAt: string }>('/api/memory/user', { content });
 }
 
 export async function saveMemory(path: string, content: string): Promise<{ ok: boolean; updatedAt: string }> {

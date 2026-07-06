@@ -8,7 +8,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { listMemories, getMemory } from '../../core/memory.js'
 import { compactDailyLog, formatDateKey, getDailyLog, estimateTokens } from '../../core/daily-log.js'
 import { getMemoryFile } from '../../core/memory-file.js'
-import { MEMORY_FILE, DAILY_DIR, MEMORY_DIR, REPOS_MEMORY_DIR } from '../../constants.js'
+import { MEMORY_FILE, USER_FILE, DAILY_DIR, MEMORY_DIR, REPOS_MEMORY_DIR } from '../../constants.js'
 import { log } from '../../logging/index.js'
 
 export const memoryRouter = Router()
@@ -36,6 +36,13 @@ memoryRouter.get('/browse', async (_req: Request, res: Response, next: NextFunct
         global = { path: 'MEMORY.md', title: 'Global Memory', updatedAt: stat.mtime.toISOString() }
       }
     } catch { /* no global memory file */ }
+
+    // USER.md — user profile (sits next to MEMORY.md in the Global section)
+    let user: BrowseItem | null = null
+    try {
+      const stat = await fsp.stat(USER_FILE)
+      user = { path: 'USER.md', title: 'User Profile', updatedAt: stat.mtime.toISOString() }
+    } catch { /* no user profile file */ }
 
     // Daily logs — reverse chronological
     const daily: BrowseDailyItem[] = []
@@ -70,10 +77,10 @@ memoryRouter.get('/browse', async (_req: Request, res: Response, next: NextFunct
       const dirs = await fsp.readdir(REPOS_MEMORY_DIR, { withFileTypes: true })
       for (const d of dirs) {
         if (!d.isDirectory()) continue
-        const memFile = path.join(REPOS_MEMORY_DIR, d.name, 'MEMORY.md')
+        const memFile = path.join(REPOS_MEMORY_DIR, d.name, 'SKILL.md')
         try {
           const stat = await fsp.stat(memFile)
-          repos.push({ path: `repos/${d.name}/MEMORY.md`, title: d.name, updatedAt: stat.mtime.toISOString() })
+          repos.push({ path: `repos/${d.name}/SKILL.md`, title: d.name, updatedAt: stat.mtime.toISOString() })
         } catch { /* no MEMORY.md */ }
       }
     } catch { /* REPOS_MEMORY_DIR doesn't exist yet */ }
@@ -111,7 +118,7 @@ memoryRouter.get('/browse', async (_req: Request, res: Response, next: NextFunct
       } catch { /* file not present */ }
     }
 
-    res.json({ tree: { global, daily, projects, sessions, knowledge, repos, topics, compaction, special } })
+    res.json({ tree: { global, user, daily, projects, sessions, knowledge, repos, topics, compaction, special } })
   } catch (err) {
     next(err)
   }
@@ -162,6 +169,50 @@ memoryRouter.put('/global', async (req: Request, res: Response, next: NextFuncti
 })
 
 // GET /api/memory?category=session
+// ── USER.md dedicated endpoints (user profile — mirrors /global) ──
+
+memoryRouter.get('/user', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    let content: string
+    try {
+      content = await fsp.readFile(USER_FILE, 'utf-8')
+    } catch {
+      res.status(404).json({ error: 'USER.md not found' })
+      return
+    }
+    const stat = await fsp.stat(USER_FILE)
+    res.json({
+      memory: {
+        path: 'USER.md',
+        title: 'User Profile',
+        category: 'global',
+        content,
+        createdAt: stat.birthtime.toISOString(),
+        updatedAt: stat.mtime.toISOString(),
+      },
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+memoryRouter.put('/user', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { content } = req.body
+    if (typeof content !== 'string') {
+      res.status(400).json({ error: 'content (string) is required' })
+      return
+    }
+    await fsp.mkdir(path.dirname(USER_FILE), { recursive: true })
+    await fsp.writeFile(USER_FILE, content, 'utf-8')
+    const stat = await fsp.stat(USER_FILE)
+    log.memory.info('USER.md updated via browser', { size: content.length })
+    res.json({ ok: true, updatedAt: stat.mtime.toISOString() })
+  } catch (err) {
+    next(err)
+  }
+})
+
 memoryRouter.get('/', (_req: Request, res: Response, next: NextFunction) => {
   try {
     const category = _req.query.category as string | undefined

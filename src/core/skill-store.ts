@@ -168,11 +168,13 @@ export async function createSkill(
     throw new Error('Invalid category: must be alphanumeric, hyphens, or underscores');
   }
 
-  // Check for conflicts across all directories
+  // Check for conflicts across all directories (overview skills are keyed
+  // <category>/overview in discovery — check under the same key).
+  const conflictKey = dirName === 'overview' && category ? `${category}/overview` : dirName;
   const dirs = getSearchDirs();
   const discovered = await discoverSkills(dirs);
-  if (discovered.has(dirName)) {
-    throw new Error(`Skill already exists: ${dirName}`);
+  if (discovered.has(conflictKey)) {
+    throw new Error(`Skill already exists: ${conflictKey}`);
   }
 
   const baseDir = target === 'walnut' ? GLOBAL_SKILLS_DIR : CLAUDE_SKILLS_DIR;
@@ -184,7 +186,10 @@ export async function createSkill(
   await fsp.writeFile(path.join(skillDir, 'SKILL.md'), content);
 
   clearSkillsCache();
-  const skill = await getSkill(dirName);
+  // Overview skills are keyed <category>/overview in discovery (the bare name
+  // would collide across categories) — read back under the same key.
+  const lookupKey = dirName === 'overview' && category ? `${category}/overview` : dirName;
+  const skill = await getSkill(lookupKey);
   if (!skill) throw new Error('Failed to read created skill');
   return skill;
 }

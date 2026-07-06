@@ -175,6 +175,9 @@ const DAEMON_DIR = process.env.WALNUT_DAEMON_DIR || '/tmp/open-walnut';
 // NOTE: string concat (not template literal) because this code lives inside a
 // template literal string in the outer TypeScript file.
 const STREAMS_DIR = process.env.WALNUT_STREAMS_DIR || (DAEMON_DIR + '-streams');
+// Home for ~/... expansion. WALNUT_HOME_OVERRIDE lets tests align the daemon's ~/.claude
+// with their mocked CLAUDE_HOME. Mirrors daemon-standalone.ts.
+const HOME_DIR = process.env.WALNUT_HOME_OVERRIDE || process.env.HOME || '/root';
 const PORT_FILE = path.join(DAEMON_DIR, 'daemon.port');
 const PID_FILE = path.join(DAEMON_DIR, 'daemon.pid');
 const INSTANCE_ID_FILE = path.join(DAEMON_DIR, 'daemon.instance');
@@ -874,6 +877,11 @@ function cmdStart(ws, id, cmd) {
       try { clearInterval(existing.orphanPollTimer); } catch {}
       existing.orphanPollTimer = null;
     }
+    // Stop the old watcher BEFORE sessions.set() replaces the entry — the poll
+    // timer re-resolves sessions.get(sid) each tick, so with the new session in
+    // place the old timer would tail the same jsonl at its own offset (doubled
+    // fan-out) and leak forever. Keep in sync with daemon-standalone.ts.
+    stopSessionWatcher(sid);
     if (existing.state === 'running' && existing.pid) {
       let oldAlive = false;
       try { process.kill(existing.pid, 0); oldAlive = true; } catch {}
@@ -995,6 +1003,10 @@ function cmdStart(ws, id, cmd) {
   };
 
   proc.on('exit', (code) => {
+    // Generation guard: if cmdStart replaced this sid (killing this process),
+    // the map holds the replacement — the OLD process's death must not reap
+    // the NEW session. Keep in sync with daemon-standalone.ts.
+    if (sessions.get(sid) !== sessionData) return;
     reapSession(sid, code == null ? 1 : code, 'proc-exit');
   });
 
@@ -1669,8 +1681,7 @@ function cmdSubscribeAgent(ws, id, cmd) {
       } catch {}
 
       // Also look in Claude canonical dir for the agent
-      const homeDir = process.env.HOME || '/root';
-      const claudeDir = path.join(homeDir, '.claude', 'projects');
+      const claudeDir = path.join(HOME_DIR, '.claude', 'projects');
       // We'd need the encoded CWD path — this is complex. For now, scan streams dir.
     } catch {}
   }
@@ -1732,8 +1743,7 @@ function cmdWriteInbox(ws, id, cmd) {
   const { team, agent, from, text, summary } = cmd;
   if (!team || !agent || !text) return sendError(ws, id, 'write-inbox: missing fields');
 
-  const homeDir = process.env.HOME || '/root';
-  const inboxPath = path.join(homeDir, '.claude', 'teams', team, 'inboxes', agent + '.json');
+  const inboxPath = path.join(HOME_DIR, '.claude', 'teams', team, 'inboxes', agent + '.json');
 
   try {
     fs.mkdirSync(path.dirname(inboxPath), { recursive: true });
@@ -1768,7 +1778,7 @@ async function cmdFsRead(ws, id, cmd) {
 
   // Expand ~ to home directory (Node fs doesn't do shell expansion)
   if (filePath === '~' || filePath.startsWith('~/')) {
-    filePath = (process.env.HOME || '/root') + filePath.slice(1);
+    filePath = HOME_DIR + filePath.slice(1);
   }
 
   try {
@@ -1807,7 +1817,7 @@ async function cmdFsLs(ws, id, cmd) {
 
   // Expand ~ to home directory (Node fs doesn't do shell expansion)
   if (dirPath === '~' || dirPath.startsWith('~/')) {
-    dirPath = (process.env.HOME || '/root') + dirPath.slice(1);
+    dirPath = HOME_DIR + dirPath.slice(1);
   }
 
   try {
@@ -1830,7 +1840,7 @@ async function cmdFsFind(ws, id, cmd) {
 
   // Expand ~ to home directory
   if (basePath === '~' || basePath.startsWith('~/')) {
-    basePath = (process.env.HOME || '/root') + basePath.slice(1);
+    basePath = HOME_DIR + basePath.slice(1);
   }
 
   try {
@@ -1866,7 +1876,7 @@ async function cmdFsStat(ws, id, cmd) {
   if (!filePath) return sendError(ws, id, 'fs.stat: missing path');
 
   if (filePath === '~' || filePath.startsWith('~/')) {
-    filePath = (process.env.HOME || '/root') + filePath.slice(1);
+    filePath = HOME_DIR + filePath.slice(1);
   }
 
   try {
@@ -1892,7 +1902,7 @@ async function cmdGitDiff(ws, id, cmd) {
   if (base !== 'uncommitted' && base !== 'previous' && base !== 'remote') {
     return sendError(ws, id, 'git.diff: invalid base');
   }
-  if (cwd === '~' || cwd.startsWith('~/')) cwd = (process.env.HOME || '/root') + cwd.slice(1);
+  if (cwd === '~' || cwd.startsWith('~/')) cwd = HOME_DIR + cwd.slice(1);
 
   const cp = require('child_process');
   const exec = (argv, runCwd) => new Promise((resolve) => {
@@ -2024,6 +2034,13 @@ function cmdList(ws, id) {
 }
 
 // ── Protocol helpers ──
+// PARITY NOTE (vs daemon-standalone.ts safeSend): the Bun binary needs a
+// drain-queue because Bun's ServerWebSocket.send() silently DROPS messages
+// (returns 0) under backpressure. This file runs on plain Node where the ws
+// package (and the manual socket.write wrapper) buffer internally and never
+// drop — so raw send() here is equivalent to safeSend there. Do not "fix"
+// this asymmetry by porting the queue; do keep it in mind if the transport
+// ever changes.
 function sendOk(ws, id, data) {
   try { ws.send(JSON.stringify({ id, ok: true, ...data })); } catch {}
 }
@@ -2117,13 +2134,19 @@ function cleanupOrphanedProcessGroups() {
           const jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl');
           const pipePath = path.join(STREAMS_DIR, sid + '.pipe');
           const pgidPath = path.join(STREAMS_DIR, f);
+          // Watcher starts at the CURRENT end of the jsonl — same rule as
+          // registry adopt and attach-discover. 0 would live-fan the whole
+          // history and poison the client cursor. Keep in sync with
+          // daemon-standalone.ts.
+          let adoptOffset = 0;
+          try { adoptOffset = fs.statSync(jsonlPath).size; } catch {}
           sessions.set(sid, {
             proc: null,  // no handle — process was started by old daemon.
             pipePath,
             jsonlPath,
             pgidPath,
             pid,
-            offset: 0,
+            offset: adoptOffset,
             taskState: rebuildTaskStateFromJsonl(jsonlPath, Date.now()),
             watcher: null,
       subscribers: new Set(),

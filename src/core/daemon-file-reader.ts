@@ -21,6 +21,14 @@ export class DaemonFileReader implements SessionFileReader {
 
   private async resolve(): Promise<void> {
     if (this.sshTarget) return
+    // Local daemon: no SSH target needed. getDaemonConnection('__local__', …)
+    // routes through the in-process localDaemon and ignores sshTarget entirely
+    // (see DaemonConnection connect()'s __local__ branch). We still pass a dummy
+    // target so the shared signature holds; it is never dereferenced for local.
+    if (this.host === '__local__') {
+      this.sshTarget = { hostname: '__local__' }
+      return
+    }
     const config = await getConfig()
     const hostDef = config.hosts?.[this.host]
     if (!hostDef) throw new Error(`Unknown host: ${this.host}`)

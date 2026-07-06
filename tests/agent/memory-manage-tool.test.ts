@@ -6,13 +6,15 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 vi.mock('../../src/constants.js', () => createMockConstants());
 
 import { memoryManageTool } from '../../src/agent/tools/memory-manage-tool.js';
-import { getBoundedMemory, MEMORY_CHAR_BUDGET } from '../../src/core/bounded-memory.js';
-import { WALNUT_HOME, MEMORY_FILE } from '../../src/constants.js';
+import { skillManageTool } from '../../src/agent/tools/skill-manage-tool.js';
+import { getBoundedMemory, MEMORY_CHAR_BUDGET, USER_CHAR_BUDGET } from '../../src/core/bounded-memory.js';
+import { WALNUT_HOME, MEMORY_FILE, USER_FILE } from '../../src/constants.js';
 
 beforeEach(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
   await fsp.mkdir(WALNUT_HOME, { recursive: true });
   getBoundedMemory().resetConsolidationFailures();
+  getBoundedMemory(undefined, 'user').resetConsolidationFailures();
 });
 
 afterEach(async () => {
@@ -22,23 +24,45 @@ afterEach(async () => {
 const exec = async (params: Record<string, unknown>) =>
   JSON.parse((await memoryManageTool.execute(params)) as string);
 
+/**
+ * memory_manage — the standalone bounded-memory tool (split back out of
+ * skill_manage in the 2026-07 un-merge; Hermes memory-tool parity incl.
+ * the target param: 'memory' = behavior rules, 'user' = user profile).
+ */
 describe('memory_manage tool', () => {
-  it('schema embeds triage guidance (WHEN / SKIP / batch-preferred)', () => {
+  it('schema embeds routing guidance (user vs memory vs skill vs history)', () => {
     expect(memoryManageTool.name).toBe('memory_manage');
     const desc = memoryManageTool.description;
-    expect(desc).toContain('WHEN to save');
-    expect(desc).toContain('SKIP');
+    expect(desc).toContain('who the user IS');
+    expect(desc).toContain('behave');
     expect(desc).toContain('daily log');
-    expect(desc).toContain('knowledge skill');
-    expect(desc).toContain('action skill');
+    expect(desc).toContain('history_search');
     expect(desc).toContain('all-or-nothing');
+    expect(desc).toContain('skill_manage');
+    const targetSchema = (memoryManageTool.input_schema as { properties: Record<string, { enum?: string[] }> })
+      .properties.target;
+    expect(targetSchema.enum).toEqual(['memory', 'user']);
   });
 
-  it('add writes an entry to MEMORY.md', async () => {
+  it('add writes an entry to memory/MEMORY.md by default', async () => {
     const res = await exec({ action: 'add', content: '## Always reply in Chinese\n\nUser preference.' });
     expect(res.success).toBe(true);
     expect(res.note).toContain('do not repeat');
     expect(fs.readFileSync(MEMORY_FILE, 'utf-8')).toContain('## Always reply in Chinese');
+    expect(fs.existsSync(USER_FILE)).toBe(false);
+  });
+
+  it("target 'user' writes to memory/USER.md, isolated from MEMORY.md", async () => {
+    const res = await exec({ action: 'add', target: 'user', content: '## Identity\n\nEvan, software engineer.' });
+    expect(res.success).toBe(true);
+    expect(fs.readFileSync(USER_FILE, 'utf-8')).toContain('## Identity');
+    expect(fs.existsSync(MEMORY_FILE)).toBe(false);
+
+    // replace/remove on user target never touch the memory target
+    await exec({ action: 'add', content: '## Rule\n\nbehavior rule body' });
+    const rem = await exec({ action: 'remove', target: 'user', old_text: 'software engineer' });
+    expect(rem.success).toBe(true);
+    expect(fs.readFileSync(MEMORY_FILE, 'utf-8')).toContain('behavior rule body');
   });
 
   it('replace and remove work via old_text substring', async () => {
@@ -56,7 +80,7 @@ describe('memory_manage tool', () => {
     expect(raw).not.toContain('beta body');
   });
 
-  it('batch maps snake_case old_text into atomic operations', async () => {
+  it('batch applies operations atomically', async () => {
     await exec({ action: 'add', content: '## Old\n\nstale content' });
     const res = await exec({
       action: 'batch',
@@ -80,8 +104,35 @@ describe('memory_manage tool', () => {
     expect(res.currentEntries).toHaveLength(1);
   });
 
+  it('user target enforces its own (smaller) budget', async () => {
+    await exec({ action: 'add', target: 'user', content: `## Big\n\n${'x'.repeat(USER_CHAR_BUDGET - 200)}` });
+    const res = await exec({ action: 'add', target: 'user', content: `## Overflow\n\n${'y'.repeat(500)}` });
+    expect(res.success).toBe(false);
+    expect(res.usage).toContain(`${USER_CHAR_BUDGET.toLocaleString('en-US')}`);
+  });
+
   it('rejects unknown actions gracefully', async () => {
     const out = (await memoryManageTool.execute({ action: 'nuke' })) as string;
     expect(out).toContain('Unknown action');
+  });
+});
+
+describe('skill_manage no longer carries memory actions', () => {
+  it('memory_* actions are rejected', async () => {
+    const out = (await skillManageTool.execute({ action: 'memory_add', content: '## X\n\ny' })) as string;
+    expect(out).toContain('Unknown action');
+    expect(out).toContain('memory_manage');
+  });
+
+  it('schema enum excludes memory ops and points memory routing at memory_manage', () => {
+    const actionSchema = (skillManageTool.input_schema as { properties: Record<string, { enum?: string[] }> })
+      .properties.action;
+    expect(actionSchema.enum).toEqual(['create', 'patch', 'edit', 'delete', 'log_append']);
+    expect(skillManageTool.description).toContain('memory_manage');
+  });
+
+  it('skill actions still require a name', async () => {
+    const out = (await skillManageTool.execute({ action: 'create' })) as string;
+    expect(out).toContain('name is required');
   });
 });

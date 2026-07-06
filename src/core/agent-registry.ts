@@ -238,11 +238,13 @@ Do NOT call notify_main_agent for:
     { id: 'project_task_list', enabled: true },
     { id: 'session_history', enabled: true },
   ],
-  stateful: {
-    memory_project: '{auto}/triage',
-    memory_budget_tokens: 3000,
-    memory_source: 'triage',
-  },
+  // No `stateful` memory: triage is a pure RECORDER (writes task.summary/note from the
+  // session self-report), not a driver. Its old {auto}/triage/MEMORY.md scratch store
+  // was retired in the 2026-07 memory/skill/history unification — the write-back path
+  // (<memory_update>) is already dead (extractMemoryUpdate has no callers) and the durable
+  // knowledge was migrated into skills/. Keeping a stateful block would make registerAgent
+  // ensureProjectDir() recreate memory/projects/{auto}/triage/ on every boot, resurrecting
+  // the very legacy tree the migration removed.
   source: 'builtin',
 };
 

@@ -172,6 +172,44 @@ describe('GET /api/sessions/:sessionId/history', () => {
     expect(res.status).toBe(200);
     expect(res.body.messages).toEqual([]);
   });
+
+  // ── Delta mode (?since=<N>) — the turn-boundary incremental path ──
+  it('full (no since) response carries a cursor + delta:false', async () => {
+    await createSessionRecord('hist-delta-1', 'task-1', 'project-a');
+    const app = createApp();
+    const res = await request(app).get('/api/sessions/hist-delta-1/history');
+    expect(res.status).toBe(200);
+    // No JSONL → 0 messages, but the cursor contract must still be present.
+    expect(res.body.cursor).toBe(0);
+    expect(res.body.delta).toBe(false);
+    expect(res.body.total).toBe(0);
+  });
+
+  it('?since=0 on an empty session returns an empty delta (delta:true, cursor:0)', async () => {
+    // Empty archive: nothing flushed yet. A client that already synced 0 messages
+    // asks "what's new since 0?" — the answer is an empty slice, delta:true. The
+    // client must treat this as "archive lagging, keep streaming blocks", NOT as a
+    // signal to clear. (This is the exact no-op the anti-vanish fix relies on.)
+    await createSessionRecord('hist-delta-2', 'task-1', 'project-a');
+    const app = createApp();
+    const res = await request(app).get('/api/sessions/hist-delta-2/history?since=0');
+    expect(res.status).toBe(200);
+    expect(res.body.delta).toBe(true);
+    expect(res.body.messages).toEqual([]);
+    expect(res.body.cursor).toBe(0);
+  });
+
+  it('?since greater than total falls back to a full payload (delta:false) — never a silent drop', async () => {
+    // Client cursor ahead of the archive (file rotated / rebuilt). The server must
+    // NOT return an empty delta (which would strand the client); it rebuilds from
+    // scratch with delta:false so the client does a full replace.
+    await createSessionRecord('hist-delta-3', 'task-1', 'project-a');
+    const app = createApp();
+    const res = await request(app).get('/api/sessions/hist-delta-3/history?since=999');
+    expect(res.status).toBe(200);
+    expect(res.body.delta).toBe(false);
+    expect(res.body.cursor).toBe(0); // total messages (0 without JSONL)
+  });
 });
 
 describe('POST /api/sessions/:sessionId/execute', () => {

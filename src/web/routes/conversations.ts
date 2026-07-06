@@ -108,7 +108,7 @@ export function createConversationsRouter(): Router {
 
   // DELETE /api/agents/:agentId/conversations/:cid
   // (The pre-delete distill step was removed with the unified memory redesign —
-  //  durable knowledge is saved in-conversation via memory_manage/skill_manage.)
+  //  durable knowledge is saved in-conversation via skill_manage.)
   router.delete('/:agentId/conversations/:cid', async (req: Request, res: Response, next: NextFunction) => {
     try {
       const agentId = validateAgentId(req.params.agentId as string)

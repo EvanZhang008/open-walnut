@@ -2,8 +2,14 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { createMockConstants } from '../helpers/mock-constants.js';
+import { mockLocalDaemonReader } from '../helpers/mock-local-daemon-reader.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
+// Daemon-uniform: createFileReader / readSessionJsonlContent / readSubagentContents route
+// local reads through DaemonFileReader('__local__'). No daemon runs in unit tests, so serve
+// __local__ from the real fs, honoring the mocked CLAUDE_HOME. (LocalFileReader was deleted —
+// the daemon path is now the single reader for both local and remote.)
+vi.mock('../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader());
 
 import { CLAUDE_HOME, SESSION_STREAMS_DIR } from '../../src/constants.js';
 import {
@@ -12,7 +18,6 @@ import {
   remoteJsonlPath,
   subagentDirPath,
   remoteSubagentDirPath,
-  LocalFileReader,
   findLocalJsonlPath,
   readSessionJsonlContent,
   readSubagentContents,
@@ -85,34 +90,42 @@ describe('remoteSubagentDirPath', () => {
   });
 });
 
-// ── LocalFileReader ──
+// ── createFileReader('__local__') — the daemon-uniform reader (LocalFileReader deleted) ──
+// The local reader now goes through DaemonFileReader('__local__'); in unit tests that is the
+// real-fs-backed double (mockLocalDaemonReader) resolving ~/.claude → the mocked CLAUDE_HOME.
 
-describe('LocalFileReader', () => {
-  const reader = new LocalFileReader();
-
-  it('reads an existing file', async () => {
-    const filePath = path.join(tmpBase, 'test.txt');
-    await fsp.writeFile(filePath, 'hello world');
-    const content = await reader.readFile(filePath);
+describe('createFileReader (__local__ via daemon)', () => {
+  it('reads an existing file under ~/.claude', async () => {
+    const { createFileReader } = await import('../../src/core/session-file-reader.js');
+    const reader = await createFileReader(); // undefined host → __local__
+    // CLAUDE_HOME is <tmpBase>/.claude; the double maps ~/.claude → CLAUDE_HOME.
+    await fsp.writeFile(path.join(CLAUDE_HOME, 'test.txt'), 'hello world');
+    const content = await reader.readFile('~/.claude/test.txt');
     expect(content).toBe('hello world');
   });
 
   it('returns null for missing file', async () => {
-    const content = await reader.readFile(path.join(tmpBase, 'nonexistent.txt'));
+    const { createFileReader } = await import('../../src/core/session-file-reader.js');
+    const reader = await createFileReader();
+    const content = await reader.readFile('~/.claude/nonexistent.txt');
     expect(content).toBeNull();
   });
 
   it('lists directory contents', async () => {
-    const dir = path.join(tmpBase, 'testdir');
+    const { createFileReader } = await import('../../src/core/session-file-reader.js');
+    const reader = await createFileReader();
+    const dir = path.join(CLAUDE_HOME, 'testdir');
     await fsp.mkdir(dir, { recursive: true });
     await fsp.writeFile(path.join(dir, 'a.txt'), '');
     await fsp.writeFile(path.join(dir, 'b.txt'), '');
-    const files = await reader.listDir(dir);
+    const files = await reader.listDir('~/.claude/testdir');
     expect(files.sort()).toEqual(['a.txt', 'b.txt']);
   });
 
   it('returns empty array for missing directory', async () => {
-    const files = await reader.listDir(path.join(tmpBase, 'nope'));
+    const { createFileReader } = await import('../../src/core/session-file-reader.js');
+    const reader = await createFileReader();
+    const files = await reader.listDir('~/.claude/nope');
     expect(files).toEqual([]);
   });
 });

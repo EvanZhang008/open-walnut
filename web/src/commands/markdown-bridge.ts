@@ -53,10 +53,11 @@ export async function loadMarkdownCommands(): Promise<void> {
  * Called after CRUD mutations from the useCommands hook.
  */
 export async function refreshMarkdownCommands(): Promise<void> {
-  // Remove all non-hardcoded commands
+  // Remove all non-hardcoded commands (skills are refreshed separately
+  // by refreshSkillCommands — don't nuke them here)
   const current = listCommands();
   for (const cmd of current) {
-    if (cmd.source !== 'hardcoded') {
+    if (cmd.source !== 'hardcoded' && cmd.source !== 'skill') {
       unregister(cmd.name);
     }
   }

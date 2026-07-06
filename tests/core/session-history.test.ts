@@ -2,8 +2,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { createMockConstants } from '../helpers/mock-constants.js';
+import { mockLocalDaemonReader } from '../helpers/mock-local-daemon-reader.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
+// Daemon-uniform: local reads go through DaemonFileReader('__local__'). No daemon runs
+// in unit tests, so serve __local__ from the real fs, honoring the mocked CLAUDE_HOME.
+vi.mock('../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader());
 
 import { CLAUDE_HOME } from '../../src/constants.js';
 import {

@@ -144,6 +144,31 @@ Each session has two JSONL files:
 - **Canonical JSONL** (`~/.claude/projects/<cwd>/<id>.jsonl`): owned by Claude Code, source of truth for `--resume` (uuid/parentUuid chain) — Walnut must never write to it.
 - **Output-stream JSONL** (`~/.open-walnut/sessions/streams/<id>.jsonl`): owned by Walnut (`_outputFile`), used for real-time tailing and `writeSyntheticUserEvent()`. **Local sessions only** — remote sessions have no local output file (`RemoteSessionManager.outputFile` returns null).
 
+## Daemon-Uniform File Access (the ONE rule for reading session data)
+
+**Every read of a Claude Code session-data file goes through `DaemonFileReader(host ?? '__local__')` — local AND remote, no exceptions.** There is no separate "local" transport: `__local__` connects to the in-process local daemon over WebSocket exactly like a remote host connects over an SSH-tunneled one. This is the single most important invariant in the session layer — it makes local and remote one code path, so a bug fixed for one is fixed for both, and the whole surface is trivially decoupled from where the files physically live.
+
+**Session-data files** = Claude Code's per-session artifacts (NOT Walnut's own tasks.json/sessions.json/memory/):
+- main transcript `~/.claude/projects/<enc-cwd>/<sid>.jsonl`
+- subagent transcripts `…/<sid>/subagents/agent-*.jsonl`
+- dynamic-workflow manifests `…/<sid>/workflows/*.json`
+- plan files `~/.claude/plans/*.md`
+- the Walnut stream copy `<streams-dir>/<sid>.jsonl`
+
+**Reader API** (`src/core/daemon-file-reader.ts`): `readFile(path)` (ENOENT→null, transport-fail→throw), `stat(path)` → `{mtimeMs,size}`, `listDir(path)`, `findSession(sid)` (daemon `fs.find` over `~/.claude/projects`, returns `{content,path}`), `batchReadSubagents(dir)`. Paths may be tilde-prefixed (`~/.claude/...`) — the daemon expands `~` against **its own** `process.env.HOME` (override with `WALNUT_HOME_OVERRIDE`, used only by tests to align the daemon with a mocked `CLAUDE_HOME`).
+
+**Conventions:**
+- The sanctioned read helpers live in `session-file-reader.ts` (`readSessionJsonlContent`, `readSubagentContents`, `readSingleSubagentContent`, `readWorkflowManifest`) and `session-history.ts` / `session-changes.ts`. New code reads through these, not raw `fs`.
+- Path **builders** (`canonicalJsonlPath`, `remoteJsonlPath`, `encodeProjectPath`) only construct strings — building a path is fine; only direct `fs`/`ssh` **reads** of the files above are violations.
+- mtime cache: `stat()` via the daemon before a full read; a `{mtimeMs}` match returns cached parse (`session-history.ts`). `host ?? '__local__'` is the cache key.
+- Anti-pattern that WILL break: a `DaemonFileReader('__local__')` read racing ahead of any session `attach()` on a **cold server start** — `connect()` must self-warm the `__local__` pool (it does; mirrors `reconnect()`). Do not assume the pool is warmed by session creation order.
+
+**Known remaining bypasses (local-only fast paths, migrate when touched):** `team-reader.ts`, `subagent-poller.ts`, and `claude-code-session.ts:_areTeammatesStillActive()` still hit the fs directly. They use *partial* reads — `readFileHead` (first N bytes) and byte-offset tailing — which the daemon has no command for yet. Routing them to the daemon requires adding an `fs.readRange`/`fs.head` command first (else every poll full-reads a large JSONL — a perf regression). Until then they are the documented exception, not a template to copy.
+
+**Daemon socket writes (the OTHER one rule):** every daemon→client WebSocket write in `daemon-standalone.ts` MUST go through `safeSend` (never raw `ws.send`). Bun's `ServerWebSocket.send()` returns `0` and **silently drops the message forever** when the socket's backpressure buffer is saturated — one ~28MB `fs.read` response is enough, and everything sent while saturated (concurrent RPC replies, other sessions' `jsonl` stream events on the shared per-host connection) vanishes. `safeSend` queues dropped payloads per-socket and flushes them on Bun's `drain` callback, preserving FIFO order. The plain-Node `daemon-source.ts` does NOT need this (the `ws` package buffers internally and never drops) — see the PARITY NOTE there. Regression: `tests/providers/daemon-ws-backpressure.test.ts` (real binary, 6 concurrent large reads).
+
+**Parser dedup edge case (mid-turn sends):** `parseSessionMessages` skips an `enqueue` when a real `type:"user"` twin with identical text follows within 50 lines (Pattern A). The twin's `content` is USUALLY a string but ~0.3% of the time an **array** of blocks (image refs / long text) — the matcher must extract the first `text` block for the array case, or those enqueues render twice. Content-matching (not enqueue/dequeue/remove counting) is the true invariant: counts don't balance across `--resume`/compact boundaries. Validated on a 2517-enqueue real corpus. Tests: `tests/core/session-parser-dedup.test.ts` (unit), `tests/e2e/mid-stream-message-position.test.ts` (e2e through the real server with a mocked daemon transport).
+
 ## Chat History & Compaction Details
 
 The main agent chat persists via `~/.open-walnut/chat-history.json`. Unified `entries[]` array (v2 schema):

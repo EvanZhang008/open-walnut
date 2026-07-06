@@ -103,11 +103,15 @@ async function discoverSkills(dirs: string[]): Promise<Map<string, DiscoveredSki
         continue; // not a directory — skip
       }
       for (const sub of subEntries) {
-        if (found.has(sub)) continue; // higher-priority source already registered
+        // Every category may have an `overview` skill (per-category living
+        // project doc) — the bare name would collide across categories, so
+        // overview skills are keyed `<category>/overview`.
+        const key = sub === 'overview' ? `${entry}/${sub}` : sub;
+        if (found.has(key)) continue; // higher-priority source already registered
         const subFile = path.join(entryDir, sub, 'SKILL.md');
         try {
           if ((await fsp.stat(subFile)).isFile()) {
-            found.set(sub, { dir: path.join(entryDir, sub), file: subFile, category: entry });
+            found.set(key, { dir: path.join(entryDir, sub), file: subFile, category: entry });
           }
         } catch {
           // no SKILL.md in this subdir — expected
@@ -197,7 +201,9 @@ function formatSkillsPrompt(skills: SkillMeta[]): string {
 Before replying: scan ALL <available_skills> <description> entries — this scan is not optional.
 - Skills come in two types: **action** (procedures/how-tos to follow) and **knowledge** (curated domain facts to consult).
 - If any skill might apply, ERR ON THE SIDE OF LOADING IT: read its SKILL.md at <location> (skill_view or read). Loading an unneeded skill is cheap; missing a needed one causes wrong answers.
+- Skills encode the user's preferred approach, conventions, and quality standards — load them even for tasks you already know how to do, because the skill defines how it should be done HERE.
 - Multiple relevant skills? Load each relevant one — knowledge skills especially are meant to be consulted together.
+- If a skill you loaded is outdated, missing a step, or wrong, patch it with skill_manage(action='patch') before finishing the task.
 - Only skip loading when you are confident none apply.`;
 
   // Group by category so the index stays scannable as the skill count grows.

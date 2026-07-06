@@ -33,6 +33,10 @@ import { DAEMON_BINARIES_DIR } from '../constants.js'
 // unaffected. Production sets nothing → /tmp/open-walnut.
 const DEFAULT_DAEMON_DIR = process.env.WALNUT_DAEMON_DIR || '/tmp/open-walnut'
 
+// True when running under vitest (or any test runner that sets NODE_ENV=test).
+// Used by ensureRunning() to refuse touching the production daemon dir.
+const IS_TEST_ENV = !!(process.env.VITEST || process.env.VITEST_WORKER_ID || process.env.NODE_ENV === 'test')
+
 // ESM-safe __dirname equivalent
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -72,6 +76,22 @@ export class LocalDaemon {
   get instanceId(): string | null { return this._instanceId ?? this.readInstanceIdFile() }
 
   async ensureRunning(): Promise<number> {
+    // Test guard: a vitest-spawned server (e.g. an e2e's startServer()) must NEVER
+    // touch the production daemon at /tmp/open-walnut — it would (a) restart it on
+    // any version mismatch, killing live session plumbing, and (b) warm a daemon
+    // that inherits the test env (VITEST / OPEN_WALNUT_HOME), poisoning every
+    // Claude CLI it later spawns (incident inc-1783280584117: a dev:prod run inside
+    // such a CLI booted a "production" 3456 against the empty test-global home —
+    // every session 404'd). Tests that intentionally exercise a real daemon must
+    // opt in via WALNUT_DAEMON_DIR or an explicit `daemonDir`. startServer() catches
+    // this throw and logs "local sessions will fail" — the right outcome for tests
+    // that mock the daemon transport anyway.
+    if (IS_TEST_ENV && path.resolve(this.daemonDir) === '/tmp/open-walnut') {
+      throw new Error(
+        'Refusing to touch the production daemon dir /tmp/open-walnut from a test process. ' +
+        'Set WALNUT_DAEMON_DIR to an isolated temp dir (or pass daemonDir explicitly).',
+      )
+    }
     // In-flight guard: server startup, session-manager lazy init, and
     // reconnect callbacks all call this concurrently. Without it each caller
     // independently saw "no daemon" and spawned its own (observed: ~20 spawns
@@ -240,6 +260,23 @@ export class LocalDaemon {
 
     log.session.info('spawning local daemon', { binary: binaryPath })
 
+    // Scrub test-runner identity before spawning. The daemon is long-lived shared
+    // infrastructure: if a vitest-spawned process warms it, the inherited VITEST /
+    // NODE_ENV=test / OPEN_WALNUT_HOME would flow daemon → every Claude CLI it
+    // spawns → any `npm run dev:prod` executed inside such a CLI, and constants.ts'
+    // test-guard then silently boots that "production" server against the empty
+    // test-global temp dir (all sessions 404, tasks gone until the next restart).
+    // Seen live 2026-07-05 (incident inc-1783280584117). The daemon itself never
+    // needs these vars (it uses WALNUT_DAEMON_DIR / WALNUT_STREAMS_DIR /
+    // WALNUT_HOME_OVERRIDE / HOME), so dropping them is always safe.
+    const env: NodeJS.ProcessEnv = { ...process.env, WALNUT_DAEMON_DIR: this.daemonDir }
+    delete env.VITEST
+    delete env.VITEST_MODE
+    delete env.VITEST_WORKER_ID
+    delete env.VITEST_POOL_ID
+    delete env.OPEN_WALNUT_HOME
+    if (env.NODE_ENV === 'test') delete env.NODE_ENV
+
     const proc = spawn(binaryPath, ['--start'], {
       detached: true,
       stdio: 'ignore',
@@ -247,7 +284,7 @@ export class LocalDaemon {
       // into the SAME dir this LocalDaemon instance watches. Without this the
       // daemonDir override is inert (binary defaults to /tmp/open-walnut). For
       // production daemonDir === '/tmp/open-walnut' so this is a no-op.
-      env: { ...process.env, WALNUT_DAEMON_DIR: this.daemonDir },
+      env,
     })
     this._spawnedPid = proc.pid ?? null
     proc.unref()

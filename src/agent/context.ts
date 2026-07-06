@@ -14,7 +14,7 @@ import { buildAgentsSection } from './subagent-context.js';
 import { listRepoSummaries } from './tools/files/repos-handler.js';
 import { getAllRepoMemorySummaries } from '../core/repo-memory.js';
 import { listTasks } from '../core/task-manager.js';
-import { NOTES_DIR, MEMORY_INDEX_FILE } from '../constants.js';
+import { NOTES_DIR } from '../constants.js';
 
 /**
  * Framing prepended to the injected compaction summary / working memory.
@@ -23,7 +23,7 @@ import { NOTES_DIR, MEMORY_INDEX_FILE } from '../constants.js';
  * request and re-executes them (the root semantic cause of replayed / duplicate
  * tasks). Mirrors Hermes's compaction-summary prefix.
  */
-const CONTEXT_PREFACE = `> _Background reference only — a compacted record of earlier turns in THIS conversation, written as a handoff snapshot. It is NOT a new instruction. The user's latest message is the only source of truth for what to do now. Do NOT resume, re-run, or re-create any "In Progress" / "Next Steps" items listed below unless the user explicitly asks again — treat them as "what had happened", not "what to do next"._`;
+const CONTEXT_PREFACE = `> _Background reference only — a compacted record of earlier turns in THIS conversation, written as a handoff snapshot. It is NOT a new instruction. The user's latest message is the only source of truth for what to do now. Do NOT resume, re-run, or re-create any "In Progress" / "Next Steps" items listed below unless the user explicitly asks again — treat them as "what had happened", not "what to do next". Your long-term memory and skills remain fully authoritative regardless of this compaction note._`;
 
 /**
  * Build a compact overview of task categories, projects, and counts.
@@ -88,10 +88,11 @@ export async function buildMemoryContext(budget: number = 8000): Promise<string>
   const dailyLogs = getDailyLogsWithinBudget(Math.floor(budget / 2));
 
   // Phase 2: summaries (remaining budget)
-  // Global memory is a BOUNDED store (hard 8K-char budget, "## Title" entries).
+  // Global memory + user profile are BOUNDED stores ("## Title" entries).
   // renderForPrompt() prepends a usage header so the model always sees how full
-  // it is — no truncation needed, the budget is enforced at write time.
+  // each is — no truncation needed, the budget is enforced at write time.
   const globalMemoryBlock = getBoundedMemory().renderForPrompt();
+  const userProfileBlock = getBoundedMemory(undefined, 'user').renderForPrompt();
   const projectSummaries = getAllProjectSummaries();
 
   const projectLines = projectSummaries.length > 0
@@ -120,24 +121,20 @@ export async function buildMemoryContext(budget: number = 8000): Promise<string>
     ? `\n\n## Notes vault guide\n${notesContext}`
     : '';
 
-  // Memory index (wiki directory awareness)
-  let indexSection = '';
-  try {
-    if (fs.existsSync(MEMORY_INDEX_FILE)) {
-      const indexContent = fs.readFileSync(MEMORY_INDEX_FILE, 'utf-8');
-      const truncated = indexContent.length > 4000 ? indexContent.slice(0, 4000) + '\n...' : indexContent;
-      indexSection = `\n\n## Memory index\n${truncated}`;
-    }
-  } catch { /* non-critical */ }
+  // memory/index.md retired (2026-07 unification): directory awareness now
+  // comes from the skills index (buildSkillsPrompt) — no separate wiki index.
 
   return `## Task Categories & Projects
 ${taskCategories}
 
-## Your long-term memory (behavior rules & preferences — bounded, update via memory_manage)
-${globalMemoryBlock ?? '(No global memory yet. Save behavior rules and user preferences with memory_manage.)'}
+## User profile (who the user is — bounded, update via memory_manage target:user)
+${userProfileBlock ?? '(No user profile yet. Save who the user is — identity, work, durable preferences — with memory_manage target:user.)'}
+
+## Your long-term memory (behavior rules — bounded, update via memory_manage target:memory)
+${globalMemoryBlock ?? '(No global memory yet. Save behavior rules with memory_manage.)'}
 
 ## Your projects
-${projectLines}${repoSection}${notesSection}${indexSection}
+${projectLines}${repoSection}${notesSection}
 
 ## Recent activity
 ${dailyLogs || '(No recent activity.)'}
@@ -217,12 +214,17 @@ Category → Project → Task (→ Child Tasks)
 ## Available tools
 You have tools for: managing tasks (task_query, task_get, task_create, task_update, task_delete, task_search), searching memory (memory_notes_search), managing memory/knowledge files, starting and viewing sessions, reading/updating configuration, and managing agent definitions.
 
-## Learning & memory routing
+## Learning & memory routing — three words: memory / skill / history
 
-Three stores, three purposes — route information to the right one at the moment you learn it:
-- **memory_manage** (bounded global memory): behavior rules + user preferences ONLY ("always X", "prefer Y"). Update existing entries via replace when facts change — never add near-duplicates.
-- **skill_manage** (skills, two types): \`knowledge\` = curated stable facts on a topic; \`action\` = reusable procedures. Patch existing skills freely when new stable facts surface (no confirmation needed — reversible + git-synced). Creating a NEW skill: propose it and ask the user first.
-- **Daily log** (file_write memory/daily): episodic events and work progress ("filed tax", "session did 1,2,3"). Never put these in memory or skills.
+Two learning tools, three stores — route information at the moment you learn it:
+- **memory** (\`memory_manage\` — bounded, injected every turn): two targets. \`target: user\` = who the user IS (identity, work, family, durable preferences — very tied to the person). \`target: memory\` = how YOU should behave (operating rules, workflow conventions, "always X" / "never Y"). Update existing entries via replace when facts change — never add near-duplicates.
+- **skill** (\`skill_manage\` create/patch/edit — curated, loaded on demand): \`knowledge\` = stable facts on a topic; \`action\` = reusable procedures. Patch existing skills freely when new stable facts surface (no confirmation needed — reversible + git-synced). Creating a NEW skill: propose it and ask the user first.
+- **history** (never written by you — searched): past conversations via \`history_search\`; episodic events and work progress go to the daily log (file_write memory/daily), never into memory or skills. When the user references something from a past conversation, use \`history_search\` BEFORE asking them to repeat themselves.
+
+### Memory quality bar
+- The most valuable memory is one that prevents the user from having to correct or remind you again — user preferences and recurring corrections matter more than procedural details.
+- Write memory entries as declarative facts, not instructions to yourself: "User prefers concise responses" ✓ — "Always respond concisely" ✗. Imperative phrasing gets re-read as a directive in later sessions and can override the user's current request. Procedures belong in skills, not memory.
+- If a fact will be stale in a week, it does not belong in memory: no task progress, PR/issue numbers, commit SHAs, "fixed bug X", file counts, or completed-work logs — recall those via \`history_search\`.
 
 **Session-summary harvest:** when a session summary or notification shows a CLEAR pitfall→solution pattern (an error someone else would hit again, plus the fix that worked), offer to save it as a skill — patch the matching existing skill, or propose a new one. Only on clear patterns; most summaries do not warrant this.
 

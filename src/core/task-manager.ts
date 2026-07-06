@@ -2997,7 +2997,9 @@ export async function getDashboardData(): Promise<DashboardData> {
 
   const doneTasks = tasks
     .filter((t) => t.status === 'done')
-    .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+    // Null-safe: legacy rows (JSON→SQLite migration) can have an undefined
+    // updated_at; coalesce so the sort never throws on a missing field.
+    .sort((a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''))
     .slice(0, 5);
 
   const stats = {

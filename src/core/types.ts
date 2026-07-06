@@ -440,6 +440,15 @@ export interface AgentConfig {
   main_model?: string;
   /** Default provider name for the main agent. Maps to config.providers[name]. */
   main_provider?: string;
+  /**
+   * Background self-review: every N clean main-butler turns, fork the conversation
+   * (same cache prefix) and let the butler review the window for skill/memory updates.
+   * The counter resets when the butler used skill_manage itself during the window.
+   */
+  background_review?: {
+    enabled?: boolean;   // default: true
+    interval?: number;   // default: 10 turns
+  };
 }
 
 export interface Config {

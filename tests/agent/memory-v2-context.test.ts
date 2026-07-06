@@ -62,7 +62,9 @@ describe('buildMemoryContext', () => {
     expect(result).toContain('memory_notes_search');
   });
 
-  it('8.2: injects memory index when present', async () => {
+  it('8.2: never injects the retired memory index (even when the file exists)', async () => {
+    // memory/index.md is retired (2026-07 unification): directory awareness
+    // comes from the skills index. A leftover file must NOT be injected.
     fs.mkdirSync(path.dirname(MEMORY_INDEX_FILE), { recursive: true });
     fs.writeFileSync(
       MEMORY_INDEX_FILE,
@@ -71,8 +73,7 @@ describe('buildMemoryContext', () => {
     );
 
     const result = await buildMemoryContext();
-    expect(result).toContain('## Memory index');
-    expect(result).toContain('[Walnut](topics/walnut.md)');
+    expect(result).not.toContain('## Memory index');
   });
 
   it('8.3: omits memory index when absent', async () => {

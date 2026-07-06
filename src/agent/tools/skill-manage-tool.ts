@@ -19,6 +19,7 @@ import {
 import { clearSkillsCache } from '../../core/skill-loader.js';
 import { recordSkillCreated, recordSkillPatched, removeSkillUsage } from '../../core/skill-usage.js';
 import { getMemoryStore } from '../../core/qmd-store.js';
+import { appendOverviewLog, appendSkillHistoryLog } from '../../core/overview-log.js';
 import { log } from '../../logging/index.js';
 
 export const MAX_SKILL_DESC_CHARS = 60;
@@ -76,9 +77,11 @@ function parseRawFrontmatter(raw: string): Record<string, unknown> {
 
 export const skillManageTool: ToolDefinition = {
   name: 'skill_manage',
-  description: `Create, patch, edit, or delete skills. Skills are the ONE container for distilled learning, in two types:
-- **action**: a reusable procedure/how-to (steps to accomplish something).
-- **knowledge**: curated stable facts about a topic/domain (a living wiki page).
+  description: `The skill-learning tool — curated knowledge + reusable procedures, loaded on demand via the skill index. Route what you learned to the right store:
+- **skill, type action**: a reusable procedure/how-to (steps to accomplish something).
+- **skill, type knowledge**: curated stable facts about a topic/domain (a living wiki page).
+- Behavior rules + who-the-user-is → NOT here: use memory_manage (target memory / user).
+- Episodic events ("did X last week") → the daily log (file_write memory/daily). Past conversations are searchable via history_search; never saved here.
 
 ## Update triggers — act on these DURING the conversation, don't wait
 1. You used a skill and hit an issue it didn't cover → **patch it immediately, BEFORE finishing the task**.
@@ -89,30 +92,33 @@ export const skillManageTool: ToolDefinition = {
 
 ## Rules
 - description ≤${MAX_SKILL_DESC_CHARS} chars, HARD limit — it's the routing signal. One sentence: when to use this skill.
-- category groups skills (e.g. finance, career, projects, walnut). Reuse existing categories when one fits.
-- Episodic events ("did X last week") do NOT belong in skills — they go to the daily log. Only distilled, stable knowledge/procedures.
+- category groups skills (e.g. finance, career, walnut, repos). Reuse existing categories when one fits.
 - Creating a NEW skill: confirm with the user first. Patching an existing one: just do it (reversible, git-synced).
+
+## Overview skills (per-category living project doc)
+Each category MAY have an \`overview\` skill (skills/<category>/overview/SKILL.md): what the project is, current direction, big decisions/milestones. Keep it organized — edit/patch it when direction changes. Its progress trail lives in history/log.md, written ONLY via log_append (rotation and file naming are automatic — never write history files directly).
 
 ## Actions
 - create: new skill (name, category, type, description, content).
 - patch: exact string replacement inside an existing skill (old_string → new_string).
 - edit: full content replacement of an existing skill's SKILL.md body (keeps or updates frontmatter via description/type params).
-- delete: remove a skill entirely.`,
+- delete: remove a skill entirely.
+- log_append: append ONE timestamped progress entry to a skill's history log (category, content; optional name — default: the category's overview). Use for notable project progress ("shipped X", "decided Y over Z because..."). Episodic detail belongs here, NEVER in the curated SKILL.md body.`,
   input_schema: {
     type: 'object',
     properties: {
       action: {
         type: 'string',
-        enum: ['create', 'patch', 'edit', 'delete'],
-        description: 'The skill operation to perform.',
+        enum: ['create', 'patch', 'edit', 'delete', 'log_append'],
+        description: 'The operation to perform. skill ops: create/patch/edit/delete. overview log: log_append.',
       },
       name: {
         type: 'string',
-        description: 'Skill name (kebab-case, alphanumeric/hyphens/underscores).',
+        description: 'Skill name (kebab-case, alphanumeric/hyphens/underscores). Required for skill actions.',
       },
       category: {
         type: 'string',
-        description: 'For create: grouping category (e.g. finance, career, projects). Reuse existing ones when possible.',
+        description: 'For create: grouping category (e.g. finance, career, walnut). Reuse existing ones when possible. For log_append: the category whose overview history log to append to (required).',
       },
       type: {
         type: 'string',
@@ -125,7 +131,7 @@ export const skillManageTool: ToolDefinition = {
       },
       content: {
         type: 'string',
-        description: 'For create/edit: the skill body markdown (without frontmatter — it is generated).',
+        description: 'For create/edit: the skill body markdown (without frontmatter — it is generated). For log_append: the progress entry text.',
       },
       old_string: {
         type: 'string',
@@ -136,13 +142,40 @@ export const skillManageTool: ToolDefinition = {
         description: 'For patch: replacement text.',
       },
     },
-    required: ['action', 'name'],
+    required: ['action'],
   },
   async execute(params) {
     const action = params.action as string;
     const name = params.name as string;
 
     try {
+      // Migration guard: memory_* lived here pre-split (2026-07). Redirect
+      // stale calls explicitly instead of a misleading "name is required".
+      if (action.startsWith('memory_')) {
+        return `Unknown action '${action}'. Memory writes moved to the memory_manage tool (actions: add/replace/remove/batch; target: memory | user).`;
+      }
+
+      if (action === 'log_append') {
+        const category = (params.category as string) ?? '';
+        const content = (params.content as string) ?? '';
+        if (!category) return 'Error: category is required for log_append.';
+        if (!content.trim()) return 'Error: content is required for log_append.';
+        // Optional name targets a specific skill's history (skills/<cat>/<name>/history/);
+        // default is the category's overview log.
+        const targetName = (params.name as string | undefined)?.trim() || 'overview';
+        const result = targetName === 'overview'
+          ? appendOverviewLog(category, content, 'butler')
+          : appendSkillHistoryLog(category, targetName, content, 'butler');
+        refreshSkillIndex();
+        log.agent.info('skill_manage: history log appended', {
+          category, name: targetName, rotated: result.rotated, archivedVolume: result.archivedVolume,
+        });
+        const target = targetName === 'overview' ? `${category}'s overview` : `${category}/${targetName}'s`;
+        return `Progress entry appended to ${target} history log${result.rotated ? ` (volume rotated: previous archived as ${result.archivedVolume})` : ''}. This update is complete — do not repeat it.`;
+      }
+
+      if (!name) return `Error: name is required for skill action '${action}'.`;
+
       if (action === 'create') {
         const description = (params.description as string) ?? '';
         const descError = validateDescription(description);
@@ -220,7 +253,7 @@ export const skillManageTool: ToolDefinition = {
         return `Skill '${name}' deleted.`;
       }
 
-      return `Unknown action '${action}'. Use create, patch, edit, or delete.`;
+      return `Unknown action '${action}'. Skill actions: create, patch, edit, delete, log_append. (Memory writes moved to the memory_manage tool.)`;
     } catch (err) {
       return `Error: ${err instanceof Error ? err.message : String(err)}`;
     }

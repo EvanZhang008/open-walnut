@@ -56,6 +56,13 @@ const DAEMON_DIR = process.env.WALNUT_DAEMON_DIR || '/tmp/open-walnut'
 // /tmp/open-walnut-demo) gets /tmp/open-walnut-demo-streams automatically, while
 // production stays at /tmp/open-walnut-streams (byte-identical default).
 const STREAMS_DIR = process.env.WALNUT_STREAMS_DIR || `${DAEMON_DIR}-streams`
+// Home dir used to expand `~/...` paths from the app (e.g. ~/.claude/projects/...).
+// In production this is the real HOME (daemon runs as the same user as walnut, so both
+// resolve `~` identically). WALNUT_HOME_OVERRIDE lets a test point the daemon at the same
+// throwaway home its mocked CLAUDE_HOME lives under, so `~/.claude` on both sides agree —
+// without it, the daemon (a separate process) would read the real ~/.claude and never see
+// the test fixtures. Same env-override pattern as WALNUT_DAEMON_DIR / WALNUT_STREAMS_DIR.
+const HOME_DIR = process.env.WALNUT_HOME_OVERRIDE || process.env.HOME || '/root'
 const PORT_FILE = path.join(DAEMON_DIR, 'daemon.port')
 const PID_FILE = path.join(DAEMON_DIR, 'daemon.pid')
 const INSTANCE_ID_FILE = path.join(DAEMON_DIR, 'daemon.instance')
@@ -215,7 +222,12 @@ interface AgentSub {
   team?: string
 }
 
-interface WsData {}
+interface WsData {
+  /** Per-socket FIFO of payloads Bun refused to send (backpressure). Flushed on drain. */
+  sendQueue?: string[]
+  /** Total bytes currently held in sendQueue (for the overflow guard). */
+  sendQueueBytes?: number
+}
 
 // DUP-DEBUG: per-process counter and lookup map for stable ws ids.
 // Lets logs distinguish "same ws received twice" from "two different ws each
@@ -536,13 +548,13 @@ const core = createDaemonCore<SessionData>({
   logger: logMsg,
   broadcastSessionStateFn: (payload) => {
     for (const client of wsClients) {
-      try { client.send(JSON.stringify({ ev: 'session_state', ...payload })) } catch {}
+      sendEvent(client, 'session_state', payload)
     }
   },
   broadcastExitToWatchersFn: (session, code, stderrTail) => {
     // Fan exit to all current subscribers, then close watcher + clear set.
     for (const client of session.subscribers) {
-      try { client.send(JSON.stringify({ ev: 'exit', sid: sessionSidOf(session), code, stderr: stderrTail })) } catch {}
+      sendEvent(client, 'exit', { sid: sessionSidOf(session), code, stderr: stderrTail })
     }
     stopSessionWatcher(sessionSidOf(session))
     session.subscribers.clear()
@@ -684,6 +696,13 @@ function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, u
       try { clearInterval(existing.orphanPollTimer) } catch {}
       existing.orphanPollTimer = null
     }
+    // Stop the old session's watcher BEFORE sessions.set() replaces the entry.
+    // The poll timer looks up sessions.get(sid) fresh each tick — once the new
+    // session lands under the same sid (state='running'), the old timer passes
+    // the state guard and tails the same jsonl at its own closure offset:
+    // TWO watchers fanning every line twice (doubled blocks after respawn),
+    // and the old timer leaks forever because nothing else clears it.
+    stopSessionWatcher(sid)
     // If the old pid is still alive, kill its process group. This is the old
     // adopted orphan; we must not leave it running while we point `sessions`
     // at a different pid, or the orphan becomes permanently un-reapable.
@@ -851,6 +870,13 @@ function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, u
     // SIGCHLD is the fastest (near-0ms) death signal for parented sessions.
     // All cleanup funnels through reapSession so the exit path, missed-exit
     // fallback, and cmdSend-ENXIO path all produce the same side effects.
+    //
+    // Generation guard: if cmdStart REPLACED this sid (killing this process),
+    // the map now holds the replacement session. reapSession(sid) re-resolves
+    // by sid, so without this check the OLD process's death reaps the NEW
+    // session ~100ms after its spawn (observed live: respawn under the same
+    // sid died instantly with "proc-exit code 1").
+    if (sessions.get(sid) !== sessionData) return
     reapSession(sid, code ?? 1, 'proc-exit')
   })
 
@@ -980,7 +1006,11 @@ function ensureWatcher(sid: string) {
         for (const ws of s.subscribers) {
           if (ws.readyState === 1) {
             if (isToolUseLine) recipientWsIds.push(wsId(ws))
-            try { sendEvent(ws, 'jsonl', { sid, line }) } catch {}
+            // `v` MUST ride every live line (same as the replay path below and
+            // daemon-source.ts): without it the client falls back to relative
+            // byte accounting, which drifts on skipped control lines → replay
+            // windows + duplicate blocks on reattach.
+            try { sendEvent(ws, 'jsonl', { sid, line, v }) } catch {}
           } else {
             logMsg('info', 'GC dead subscriber from watcher fan-out', {
               sid, wsId: wsId(ws), readyState: ws.readyState,
@@ -1540,8 +1570,7 @@ function cmdWriteInbox(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
   }
   if (!team || !agent || !text) return sendError(ws, id, 'write-inbox: missing fields')
 
-  const homeDir = process.env.HOME || '/root'
-  const inboxPath = path.join(homeDir, '.claude', 'teams', team, 'inboxes', agent + '.json')
+  const inboxPath = path.join(HOME_DIR, '.claude', 'teams', team, 'inboxes', agent + '.json')
 
   try {
     fs.mkdirSync(path.dirname(inboxPath), { recursive: true })
@@ -1576,7 +1605,7 @@ async function cmdFsRead(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
 
   // Expand ~ to home directory (Node fs doesn't do shell expansion)
   if (filePath === '~' || filePath.startsWith('~/')) {
-    filePath = (process.env.HOME || '/root') + filePath.slice(1)
+    filePath = HOME_DIR + filePath.slice(1)
   }
 
   try {
@@ -1616,7 +1645,7 @@ async function cmdFsLs(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
 
   // Expand ~ to home directory (Node fs doesn't do shell expansion)
   if (dirPath === '~' || dirPath.startsWith('~/')) {
-    dirPath = (process.env.HOME || '/root') + dirPath.slice(1)
+    dirPath = HOME_DIR + dirPath.slice(1)
   }
 
   try {
@@ -1639,7 +1668,7 @@ async function cmdFsFind(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
 
   // Expand ~ to home directory
   if (basePath === '~' || basePath.startsWith('~/')) {
-    basePath = (process.env.HOME || '/root') + basePath.slice(1)
+    basePath = HOME_DIR + basePath.slice(1)
   }
 
   try {
@@ -1675,7 +1704,7 @@ async function cmdFsStat(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
   if (!filePath) return sendError(ws, id, 'fs.stat: missing path')
 
   if (filePath === '~' || filePath.startsWith('~/')) {
-    filePath = (process.env.HOME || '/root') + filePath.slice(1)
+    filePath = HOME_DIR + filePath.slice(1)
   }
 
   try {
@@ -1702,7 +1731,7 @@ async function cmdGitDiff(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
   if (base !== 'uncommitted' && base !== 'previous' && base !== 'remote') {
     return sendError(ws, id, 'git.diff: invalid base')
   }
-  if (cwd === '~' || cwd.startsWith('~/')) cwd = (process.env.HOME || '/root') + cwd.slice(1)
+  if (cwd === '~' || cwd.startsWith('~/')) cwd = HOME_DIR + cwd.slice(1)
 
   const exec = (argv: string[], runCwd: string) => new Promise<{ stdout: string; stderr: string; code: number }>((resolve) => {
     execFileCb(argv[0], argv.slice(1), { cwd: runCwd, timeout: 25_000, maxBuffer: 64 * 1024 * 1024, encoding: 'utf-8' },
@@ -1777,17 +1806,69 @@ function cmdList(ws: ServerWebSocket<WsData>, id: number) {
 }
 
 // ── Protocol helpers ──
+// ALL socket writes MUST go through safeSend. Bun's ServerWebSocket.send()
+// SILENTLY DROPS the message (returns 0) once the socket's backpressure buffer
+// is saturated — a single ~28MB fs.read response is enough. Raw `try {
+// ws.send() } catch {}` therefore lost concurrent RPC replies (walnut → 30s
+// "Session file read timeout") and live `jsonl` events for other sessions on
+// the same shared connection (UI: frozen streaming until refresh). safeSend
+// queues on drop and flushes in FIFO order when Bun fires `drain`.
+// Regression: tests/providers/daemon-ws-backpressure.test.ts (real binary).
+const SEND_QUEUE_MAX_BYTES = 256 * 1024 * 1024
+
+function enqueueForDrain(ws: ServerWebSocket<WsData>, payload: string) {
+  const data = ws.data
+  data.sendQueue ??= []
+  data.sendQueueBytes ??= 0
+  data.sendQueue.push(payload)
+  data.sendQueueBytes += payload.length
+  if (data.sendQueueBytes > SEND_QUEUE_MAX_BYTES) {
+    // A client that stops reading would pin unbounded memory. Closing is safe:
+    // the walnut side auto-reconnects and re-attaches (future-only offsets),
+    // and an explicit close is honest where a silent drop was the original bug.
+    logMsg('error', 'send queue overflow — closing slow client', {
+      wsId: wsId(ws), queuedBytes: data.sendQueueBytes, queuedMsgs: data.sendQueue.length,
+    })
+    data.sendQueue = []
+    data.sendQueueBytes = 0
+    try { ws.close() } catch {}
+  }
+}
+
+function safeSend(ws: ServerWebSocket<WsData>, payload: string) {
+  // FIFO ordering: once anything is queued, later sends must queue behind it.
+  if (ws.data.sendQueue?.length) return enqueueForDrain(ws, payload)
+  let result: number
+  try { result = ws.send(payload) } catch { return }
+  // Bun send(): >0 = sent, -1 = buffered internally (delivered later, drain
+  // will fire), 0 = DROPPED because the buffer is full → queue for drain.
+  if (result === 0) enqueueForDrain(ws, payload)
+}
+
+function flushSendQueue(ws: ServerWebSocket<WsData>) {
+  const data = ws.data
+  const q = data.sendQueue
+  if (!q?.length) return
+  while (q.length) {
+    let result: number
+    try { result = ws.send(q[0]) } catch { return }
+    if (result === 0) return // still saturated — next drain resumes here
+    data.sendQueueBytes! -= q[0].length
+    q.shift()
+  }
+}
+
 function sendOk(ws: ServerWebSocket<WsData>, id: number | null, data: Record<string, unknown>) {
-  try { ws.send(JSON.stringify({ id, ok: true, ...data })) } catch {}
+  safeSend(ws, JSON.stringify({ id, ok: true, ...data }))
 }
 
 function sendError(ws: ServerWebSocket<WsData>, id: number | null, error: string) {
   logMsg('error', 'command error', { id, error })
-  try { ws.send(JSON.stringify({ id, ok: false, error })) } catch {}
+  safeSend(ws, JSON.stringify({ id, ok: false, error }))
 }
 
 function sendEvent(ws: ServerWebSocket<WsData>, ev: string, data: Record<string, unknown>) {
-  try { ws.send(JSON.stringify({ ev, ...data })) } catch {}
+  safeSend(ws, JSON.stringify({ ev, ...data }))
 }
 
 // ── FIFO write logger ──
@@ -1931,7 +2012,11 @@ function cleanupOrphanedProcessGroups() {
             jsonlPath,
             pgidPath,
             pid,
-            offset: 0,
+            // Watcher starts at the CURRENT end of the jsonl — same rule as
+            // registry adopt and attach-discover. 0 here would live-fan the
+            // entire multi-MB history to the first subscriber AND poison the
+            // client cursor (attach reply currentOffset=0 adopted as valid).
+            offset: statSizeOrZero(jsonlPath),
             taskState: rebuildTaskStateFromJsonl(jsonlPath, Date.now()),
             watcher: null,
             subscribers: new Set(),
@@ -1944,6 +2029,8 @@ function cleanupOrphanedProcessGroups() {
             cwd: '',
             args: [],
             orphanPollTimer: null,
+            mode: 'default',
+            pendingCtrl: null,
           })
           startOrphanPoll(sid)
           adoptedLegacy++
@@ -2141,6 +2228,12 @@ if (action === '--start') {
 
       message(ws, msg) {
         handleCommand(ws, typeof msg === 'string' ? msg : Buffer.from(msg).toString())
+      },
+
+      // Socket buffer drained — flush messages that Bun dropped (send() === 0)
+      // while it was saturated. See safeSend/enqueueForDrain.
+      drain(ws) {
+        flushSendQueue(ws)
       },
 
       close(ws) {

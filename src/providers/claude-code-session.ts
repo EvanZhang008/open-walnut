@@ -1052,6 +1052,14 @@ export class ClaudeCodeSession {
     this._lastEmittedText.clear()
     this._currentStreamMsgId = null
     this._warnedUnknownTypes.clear()
+    // Fresh process ⇒ the OLD process's background tasks/teams are dead (they
+    // were its children). Stale 'running' entries here make
+    // hasActiveBackgroundWork() true forever → the new turn's completion is
+    // withheld at the idle handler ("Background tasks running" stuck state).
+    this._bgTasks.clear()
+    this._resetWorkflowState()
+    this._teamActive = false
+    this._cliSessionState = undefined
     this._cwd = cwd ?? null
 
     const isResume = !!resumeSessionId && !forkSession
@@ -1684,17 +1692,31 @@ export class ClaudeCodeSession {
     if (!this._transport) return false
     const ok = await this._transport.writeMessage(message)
     if (!ok) return false
-    this._processStatus = 'running'  // Back to running from idle
-    this._activity = undefined
-    this.resultEmitted = false
-    this._turnResultEmitted = false  // New turn starting — allow result emission
-    this._turnStartOffset = this._transport?.fileSize ?? 0  // Track where this turn's data begins
-    this._askUserIntercepted = false
-    this._toolInputFilePaths.clear()  // Fresh turn — clear stale cached tool input paths
-    this._emittedStreamKeys.clear()   // Fresh turn — allow new events through dedup
-    this._lastEmittedText.clear()     // Fresh turn — reset progressive delta tracking
-    this._currentStreamMsgId = null   // Fresh turn — stream_event message tracking
-    this._warnedUnknownTypes.clear()  // Fresh turn — reset unknown-event warn set
+    // Fresh-turn reset ONLY on idle→running (a new turn actually starts).
+    //
+    // A MID-TURN injection (injectMidTurn → writeMessage while _processStatus is
+    // already 'running') must NOT reset stream-dedup state: the current assistant
+    // message is still streaming, and its final `assistant` JSONL line dedups
+    // against the text the SSE path accumulated in _lastEmittedText. Wiping that
+    // map mid-message makes the handler see previousText='' and re-emit the FULL
+    // text — the "same paragraph rendered twice" bug (incident inc-1783315267620:
+    // three injections at :07/:24/:35 each duplicated the assistant message that
+    // completed seconds later). Keys are per-msgId (unique across turns), so
+    // keeping them until the next idle→running reset is harmless.
+    const isMidTurnInjection = this._processStatus === 'running'
+    if (!isMidTurnInjection) {
+      this._processStatus = 'running'  // Back to running from idle
+      this._activity = undefined
+      this.resultEmitted = false
+      this._turnResultEmitted = false  // New turn starting — allow result emission
+      this._turnStartOffset = this._transport?.fileSize ?? 0  // Track where this turn's data begins
+      this._askUserIntercepted = false
+      this._toolInputFilePaths.clear()  // Fresh turn — clear stale cached tool input paths
+      this._emittedStreamKeys.clear()   // Fresh turn — allow new events through dedup
+      this._lastEmittedText.clear()     // Fresh turn — reset progressive delta tracking
+      this._currentStreamMsgId = null   // Fresh turn — stream_event message tracking
+      this._warnedUnknownTypes.clear()  // Fresh turn — reset unknown-event warn set
+    }
     this.emitStatusChanged('IN_PROGRESS')
     // Persist running state to session tracker so API consumers (frontend tree, etc.)
     // see the updated status immediately — not just WebSocket subscribers.

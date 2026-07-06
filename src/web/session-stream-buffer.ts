@@ -55,6 +55,12 @@ export type StreamingBlock = StreamingTextBlock | StreamingToolCallBlock | Strea
 export interface StreamSnapshot {
   blocks: StreamingBlock[]
   isStreaming: boolean
+  /** How many leading blocks belong to already-finished turns. Clients that
+   *  stamp turn boundaries must use this rather than deriving it from
+   *  isStreaming — a snapshot taken after the NEXT turn's markStreaming but
+   *  before its first delta carries the previous turn's blocks with
+   *  isStreaming=true (deriving would mislabel them "live"). */
+  completedLen: number
 }
 
 // ── Buffer implementation ──
@@ -69,15 +75,39 @@ interface BufferEntry {
   /** Current thinking block's full accumulated text (mirrors textAccumulator's role). */
   thinkingAccumulator: string
   lastActivity: number
+  /** Set by markDone: the held blocks belong to a FINISHED turn (kept for
+   *  cross-turn viewing). The first data append of the NEXT turn resets the
+   *  entry, and getSnapshot never serves finished-turn blocks as a live turn.
+   *  Without this, a snapshot taken after the next turn's markStreaming but
+   *  before its first delta returned old blocks with isStreaming=true — the
+   *  client stamped them completedLen=0 ("live"), evidence-promotion never
+   *  touched them, and they duplicated persisted history until a reload. */
+  turnEnded?: boolean
 }
 
 class SessionStreamBuffer {
   private buffers = new Map<string, BufferEntry>()
   private streaming = new Set<string>()
   private pruneTimer: ReturnType<typeof setInterval> | null = null
+  /** Pending deferred clears (clearSoon) — cancelled when a new turn starts. */
+  private pendingClears = new Map<string, ReturnType<typeof setTimeout>>()
 
   constructor() {
     this.pruneTimer = setInterval(() => this.pruneStale(), PRUNE_INTERVAL_MS)
+  }
+
+  /** First block-creating append of a NEW turn drops the finished turn's blocks
+   *  (they live in persisted history now). Not called from appendToolResult /
+   *  resolvePermission — those mutate blocks of the turn they belong to. */
+  private resetIfTurnEnded(entry: BufferEntry, sessionId: string): void {
+    if (!entry.turnEnded) return
+    log.ws.info('stream buffer: new turn data — dropping finished-turn blocks', {
+      sessionId, dropped: entry.blocks.length,
+    })
+    entry.blocks = []
+    entry.textAccumulator = ''
+    entry.thinkingAccumulator = ''
+    entry.turnEnded = false
   }
 
   appendTextDelta(sessionId: string, delta: string): void {
@@ -89,6 +119,7 @@ class SessionStreamBuffer {
     // subscribe backstop, daemon recovery) all fought the symptom — the architectural
     // fix is to keep data events out of the streaming flag entirely. The flag is
     // driven exclusively by lifecycle events via markStreaming/markDone.
+    this.resetIfTurnEnded(entry, sessionId)
     entry.textAccumulator += delta
     entry.lastActivity = Date.now()
 
@@ -104,6 +135,7 @@ class SessionStreamBuffer {
     const entry = this.getOrCreate(sessionId)
     // ⚠️  DO NOT add `this.streaming.add(sessionId)` here — see appendTextDelta
     // for the Root Cause 5 explanation. Data events must never flip the lifecycle flag.
+    this.resetIfTurnEnded(entry, sessionId)
     // Tool call interrupts text flow — reset text accumulator
     entry.textAccumulator = ''
     entry.lastActivity = Date.now()
@@ -141,6 +173,7 @@ class SessionStreamBuffer {
     // Idempotent: don't add duplicate permission blocks (re-emit timer may fire multiple times)
     const existing = entry.blocks.find(b => b.type === 'permission' && b.requestId === requestId) as StreamingPermissionBlock | undefined
     if (existing) return
+    this.resetIfTurnEnded(entry, sessionId)
     entry.textAccumulator = ''  // permission event breaks text flow
     entry.lastActivity = Date.now()
     entry.blocks.push({ type: 'permission', requestId, toolName, input, reason, status: 'pending' })
@@ -161,6 +194,7 @@ class SessionStreamBuffer {
 
   appendSystem(sessionId: string, variant: 'compact' | 'error' | 'info', message: string, detail?: string): void {
     const entry = this.getOrCreate(sessionId)
+    this.resetIfTurnEnded(entry, sessionId)
     entry.textAccumulator = ''  // system event breaks text flow
     entry.thinkingAccumulator = ''
     entry.lastActivity = Date.now()
@@ -170,6 +204,7 @@ class SessionStreamBuffer {
   /** Accumulate thinking text deltas (model's reasoning, gated behind thinking mode). */
   appendThinkingDelta(sessionId: string, delta: string): void {
     const entry = this.getOrCreate(sessionId)
+    this.resetIfTurnEnded(entry, sessionId)
     entry.thinkingAccumulator += delta
     entry.lastActivity = Date.now()
     const last = entry.blocks[entry.blocks.length - 1]
@@ -196,14 +231,41 @@ class SessionStreamBuffer {
   markStreaming(sessionId: string): void {
     const had = this.streaming.has(sessionId)
     this.streaming.add(sessionId)
+    // A new turn is starting — a deferred clear scheduled by the PREVIOUS
+    // turn's result must not fire mid-turn (it would wipe the new turn's
+    // blocks AND delete the streaming flag → blank snapshot on reload).
+    const pending = this.pendingClears.get(sessionId)
+    if (pending) {
+      clearTimeout(pending)
+      this.pendingClears.delete(sessionId)
+      log.ws.info('stream buffer: cancelled deferred clear (new turn started)', { sessionId })
+    }
     if (!had) log.ws.info('stream buffer markStreaming', { sessionId })
   }
 
   markDone(sessionId: string): void {
     const had = this.streaming.has(sessionId)
     this.streaming.delete(sessionId)
-    const blocks = this.buffers.get(sessionId)?.blocks.length ?? 0
-    log.ws.info('stream buffer markDone', { sessionId, wasStreaming: had, blocksRetained: blocks })
+    const entry = this.buffers.get(sessionId)
+    // Blocks are retained for cross-turn viewing but stamped as finished — the
+    // next turn's first data append drops them, and getSnapshot never serves
+    // them as a live turn (see BufferEntry.turnEnded).
+    if (entry) entry.turnEnded = true
+    log.ws.info('stream buffer markDone', { sessionId, wasStreaming: had, blocksRetained: entry?.blocks.length ?? 0 })
+  }
+
+  /** Deferred clear that a new turn's markStreaming can cancel. Use this
+   *  instead of a bare setTimeout(clear) — a turn started inside the delay
+   *  window must not have its buffer wiped mid-stream. */
+  clearSoon(sessionId: string, delayMs: number): void {
+    const prev = this.pendingClears.get(sessionId)
+    if (prev) clearTimeout(prev)
+    const timer = setTimeout(() => {
+      this.pendingClears.delete(sessionId)
+      this.clear(sessionId)
+    }, delayMs)
+    timer.unref?.()
+    this.pendingClears.set(sessionId, timer)
   }
 
   clear(sessionId: string): void {
@@ -211,6 +273,11 @@ class SessionStreamBuffer {
     log.ws.debug('stream buffer cleared', { sessionId, eventsDropped: entry?.blocks.length ?? 0 })
     this.buffers.delete(sessionId)
     this.streaming.delete(sessionId)
+    const pending = this.pendingClears.get(sessionId)
+    if (pending) {
+      clearTimeout(pending)
+      this.pendingClears.delete(sessionId)
+    }
   }
 
   getSnapshot(sessionId: string): StreamSnapshot {
@@ -218,14 +285,19 @@ class SessionStreamBuffer {
     if (!entry) {
       const isStr = this.streaming.has(sessionId)
       log.ws.info('getSnapshot (no buffer)', { sessionId, isStreaming: isStr })
-      return { blocks: [], isStreaming: isStr }
+      return { blocks: [], isStreaming: isStr, completedLen: 0 }
     }
     const isStr = this.streaming.has(sessionId)
-    log.ws.info('getSnapshot', { sessionId, blocks: entry.blocks.length, isStreaming: isStr })
+    // turnEnded ⇒ every held block belongs to a finished turn, even when the
+    // streaming flag is already true for the NEXT turn (markStreaming fired,
+    // first delta hasn't). Otherwise the buffer holds only the live turn.
+    const completedLen = entry.turnEnded ? entry.blocks.length : 0
+    log.ws.info('getSnapshot', { sessionId, blocks: entry.blocks.length, isStreaming: isStr, completedLen })
     // Return a deep-enough copy so mutations don't leak
     return {
       blocks: entry.blocks.map((b) => ({ ...b })),
       isStreaming: isStr,
+      completedLen,
     }
   }
 
@@ -256,6 +328,8 @@ class SessionStreamBuffer {
       clearInterval(this.pruneTimer)
       this.pruneTimer = null
     }
+    for (const timer of this.pendingClears.values()) clearTimeout(timer)
+    this.pendingClears.clear()
     this.buffers.clear()
     this.streaming.clear()
   }

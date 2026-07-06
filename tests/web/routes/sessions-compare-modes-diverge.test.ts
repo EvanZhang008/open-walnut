@@ -41,8 +41,10 @@ import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createMockConstants } from '../../helpers/mock-constants.js';
+import { mockLocalDaemonReader } from '../../helpers/mock-local-daemon-reader.js';
 
 vi.mock('../../../src/constants.js', () => createMockConstants());
+vi.mock('../../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader());
 
 import express from 'express';
 import request from 'supertest';

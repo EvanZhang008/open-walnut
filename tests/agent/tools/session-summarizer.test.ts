@@ -2,8 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { createMockConstants } from '../../helpers/mock-constants.js';
+import { mockLocalDaemonReader } from '../../helpers/mock-local-daemon-reader.js';
 
 vi.mock('../../../src/constants.js', () => createMockConstants());
+vi.mock('../../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader());
 
 // Mock sendMessageStream to avoid real Bedrock calls — use vi.hoisted to avoid TDZ
 const { mockSendMessageStream } = vi.hoisted(() => ({

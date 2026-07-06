@@ -9,7 +9,7 @@ let tmpDir: string;
 // Mock constants module to redirect file paths to temp directory
 vi.mock('../../src/constants.js', () => createMockConstants());
 
-import { WALNUT_HOME, DAILY_DIR, MEMORY_FILE, PROJECTS_MEMORY_DIR } from '../../src/constants.js';
+import { WALNUT_HOME, DAILY_DIR, MEMORY_FILE, PROJECTS_MEMORY_DIR, GLOBAL_SKILLS_DIR } from '../../src/constants.js';
 import { executeTool } from '../../src/agent/tools.js';
 import { formatDateKey } from '../../src/core/daily-log.js';
 import { computeContentHash } from '../../src/utils/file-ops.js';
@@ -306,8 +306,18 @@ describe('files_write overwrite memory sources', () => {
 // files_write append (memory sources)
 // ═══════════════════════════════════════════════════════════════════
 
+// memory/projects/ is retired as a write target (2026-07 unification):
+// project appends route to skills/<category>/<project>/history/log.md
+// (or the category overview log). Tests create the target skill first.
+function seedSkill(category: string, name: string): void {
+  const dir = path.join(GLOBAL_SKILLS_DIR, category, name);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'SKILL.md'), `---\nname: ${name}\n---\n\n# ${name}\n`, 'utf-8');
+}
+
 describe('files_write append memory sources', () => {
-  it('appends to project memory + daily log', async () => {
+  it('appends to skill history + daily log', async () => {
+    seedSkill('work', 'api');
     const result = parseResult(await executeTool('file_write', {
       source: 'memory/project/work/api',
       mode: 'append',
@@ -315,19 +325,50 @@ describe('files_write append memory sources', () => {
     }));
 
     expect(result.status).toBe('saved');
-    expect(result.written_to).toContain('project');
+    expect(result.written_to).toContain('skill-history');
     expect(result.written_to).toContain('daily');
 
-    // Verify project memory file
-    const projectMemPath = path.join(PROJECTS_MEMORY_DIR, 'work', 'api', 'MEMORY.md');
-    expect(fs.existsSync(projectMemPath)).toBe(true);
-    expect(fs.readFileSync(projectMemPath, 'utf-8')).toContain('Added new API endpoint');
+    // Verify skill history log
+    const historyLog = path.join(GLOBAL_SKILLS_DIR, 'work', 'api', 'history', 'log.md');
+    expect(fs.existsSync(historyLog)).toBe(true);
+    expect(fs.readFileSync(historyLog, 'utf-8')).toContain('Added new API endpoint');
+
+    // Legacy memory/projects/ must NOT be written
+    expect(fs.existsSync(path.join(PROJECTS_MEMORY_DIR, 'work', 'api', 'MEMORY.md'))).toBe(false);
 
     // Verify daily log
     const dateKey = formatDateKey();
     const dailyLogPath = path.join(DAILY_DIR, `${dateKey}.md`);
     expect(fs.existsSync(dailyLogPath)).toBe(true);
     expect(fs.readFileSync(dailyLogPath, 'utf-8')).toContain('Added new API endpoint');
+  });
+
+  it('project append without a matching skill errors (daily still written)', async () => {
+    const result = await executeTool('file_write', {
+      source: 'memory/project/work/ghost',
+      mode: 'append',
+      content: 'Orphan entry',
+    });
+    expect(result).toContain('Error');
+    expect(result).toContain('No skill history target');
+
+    // Daily log got the entry regardless
+    const dailyLogPath = path.join(DAILY_DIR, `${formatDateKey()}.md`);
+    expect(fs.readFileSync(dailyLogPath, 'utf-8')).toContain('Orphan entry');
+  });
+
+  it('project append falls back to the category overview skill', async () => {
+    seedSkill('work', 'overview');
+    const result = parseResult(await executeTool('file_write', {
+      source: 'memory/project/work/side-quest',
+      mode: 'append',
+      content: 'Overview-routed entry',
+    }));
+    expect(result.status).toBe('saved');
+    expect(result.written_to).toContain('skill-history');
+
+    const overviewLog = path.join(GLOBAL_SKILLS_DIR, 'work', 'overview', 'history', 'log.md');
+    expect(fs.readFileSync(overviewLog, 'utf-8')).toContain('Overview-routed entry');
   });
 
   it('appends to daily log only (source=memory/daily)', async () => {
@@ -357,6 +398,7 @@ describe('files_write append memory sources', () => {
   });
 
   it('does not require content_hash for append', async () => {
+    seedSkill('work', 'test');
     const result = parseResult(await executeTool('file_write', {
       source: 'memory/project/work/test',
       mode: 'append',
@@ -366,6 +408,7 @@ describe('files_write append memory sources', () => {
   });
 
   it('multiple appends accumulate', async () => {
+    seedSkill('myproject', 'myproject');
     await executeTool('file_write', {
       source: 'memory/project/myproject',
       mode: 'append',
@@ -378,12 +421,10 @@ describe('files_write append memory sources', () => {
       content: 'Second entry: added tests',
     });
 
-    const result = parseResult(await executeTool('file_read', {
-      source: 'memory/project/myproject',
-    }));
-
-    expect(result.content).toContain('First entry: project setup');
-    expect(result.content).toContain('Second entry: added tests');
+    const historyLog = path.join(GLOBAL_SKILLS_DIR, 'myproject', 'myproject', 'history', 'log.md');
+    const content = fs.readFileSync(historyLog, 'utf-8');
+    expect(content).toContain('First entry: project setup');
+    expect(content).toContain('Second entry: added tests');
   });
 });
 

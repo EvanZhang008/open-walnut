@@ -16,7 +16,20 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants())
 
-import { isLocalJsonlFresh } from '../../src/utils/session-liveness.js'
+// Controllable daemon-connection surface for the remote-fallback tests below.
+const daemonMock = {
+  connected: false,
+  probeResult: null as { alive: boolean } | null,
+  disconnectedSince: null as number | null,
+  probeCalls: 0,
+}
+vi.mock('../../src/providers/daemon-connection.js', () => ({
+  isDaemonConnected: () => daemonMock.connected,
+  getDaemonDisconnectedSince: () => daemonMock.disconnectedSince,
+  probeDaemonSession: async () => { daemonMock.probeCalls++; return daemonMock.probeResult },
+}))
+
+import { isLocalJsonlFresh, isSessionProcessAlive } from '../../src/utils/session-liveness.js'
 import { SESSION_STREAMS_DIR } from '../../src/constants.js'
 import type { SessionRecord } from '../../src/core/types.js'
 
@@ -83,5 +96,65 @@ describe('isLocalJsonlFresh', () => {
     const unknownVerdict = isLocalJsonlFresh(localSession('absent'), WINDOW_MS)
     expect(aliveVerdict === true).toBe(true)    // vetoes the kill (process alive)
     expect(unknownVerdict === true).toBe(false) // does NOT veto (no proof of life → kill proceeds)
+  })
+})
+
+/**
+ * REGRESSION (2026-07-06 audit): the remote fallback of isSessionProcessAlive
+ * used to return `true` on the mere fact the daemon CONNECTION was up —
+ * connection-liveness ≠ session-liveness. A remote CLI that died while no
+ * SessionManager was registered (typical right after a Walnut restart) was
+ * badged "running" forever. The daemon's status RPC knows the truth; ask it.
+ */
+describe('isSessionProcessAlive — remote fallback probes the daemon', () => {
+  function remoteSession(): SessionRecord {
+    return {
+      claudeSessionId: 'remote-fallback-sid',
+      host: 'clouddev',
+      provider: 'cli',
+      process_status: 'running',
+      pid: null,
+    } as unknown as SessionRecord
+  }
+
+  beforeEach(() => {
+    daemonMock.connected = false
+    daemonMock.probeResult = null
+    daemonMock.disconnectedSince = null
+    daemonMock.probeCalls = 0
+  })
+
+  it('daemon connected + probe says dead → NOT alive (the regression)', async () => {
+    daemonMock.connected = true
+    daemonMock.probeResult = { alive: false }
+    expect(await isSessionProcessAlive(remoteSession())).toBe(false)
+    expect(daemonMock.probeCalls).toBe(1)
+  })
+
+  it('daemon connected + probe says alive → alive', async () => {
+    daemonMock.connected = true
+    daemonMock.probeResult = { alive: true }
+    expect(await isSessionProcessAlive(remoteSession())).toBe(true)
+  })
+
+  it('daemon connected + probe fails (null) → grace-period path, assume alive', async () => {
+    // Connection flapped mid-probe: no verdict either way — same treatment as a
+    // short disconnect (never flip a session dead on a transient RPC failure).
+    daemonMock.connected = true
+    daemonMock.probeResult = null
+    expect(await isSessionProcessAlive(remoteSession())).toBe(true)
+  })
+
+  it('daemon disconnected beyond the 5min grace → NOT alive', async () => {
+    daemonMock.connected = false
+    daemonMock.disconnectedSince = Date.now() - 6 * 60 * 1000
+    expect(await isSessionProcessAlive(remoteSession())).toBe(false)
+    expect(daemonMock.probeCalls).toBe(0) // no probe without a connection
+  })
+
+  it('daemon disconnected within the grace window → assume alive', async () => {
+    daemonMock.connected = false
+    daemonMock.disconnectedSince = Date.now() - 60 * 1000
+    expect(await isSessionProcessAlive(remoteSession())).toBe(true)
   })
 })

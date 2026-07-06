@@ -16,6 +16,9 @@ beforeEach(async () => {
   tmpDir = WALNUT_HOME;
   await fs.rm(tmpDir, { recursive: true, force: true });
   await fs.mkdir(tmpDir, { recursive: true });
+  // MEMORY_FILE moved into memory/ (bounded-memory redesign) — direct
+  // fs.writeFile fixtures need the parent dir.
+  await fs.mkdir(path.dirname(MEMORY_FILE), { recursive: true });
   getReadFileState().clear();
 });
 

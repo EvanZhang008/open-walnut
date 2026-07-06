@@ -73,12 +73,15 @@ export function seedMemoryIndex(baseDir: string, content: string): string {
 }
 
 /**
- * Seed the global memory file at MEMORY.md (root of WALNUT_HOME)
+ * Seed the global memory file at memory/MEMORY.md (2026-07 unification).
+ * Global memory is a bounded "## Title" entry store — renderForPrompt() only
+ * emits entry content, so plain text is wrapped in an entry heading.
  */
 export function seedGlobalMemory(baseDir: string, content: string): string {
-  const filepath = path.join(baseDir, 'MEMORY.md');
+  const filepath = path.join(baseDir, 'memory', 'MEMORY.md');
   fs.mkdirSync(path.dirname(filepath), { recursive: true });
-  fs.writeFileSync(filepath, content, 'utf-8');
+  const body = content.trimStart().startsWith('## ') ? content : `## Seeded entry\n${content}`;
+  fs.writeFileSync(filepath, body, 'utf-8');
   return filepath;
 }
 

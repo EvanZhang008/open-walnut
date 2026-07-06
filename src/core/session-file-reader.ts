@@ -128,45 +128,29 @@ export interface SessionFileReader {
   readFile(filePath: string): Promise<string | null>;
   /** List directory entries. Returns empty array if dir doesn't exist or on error. */
   listDir(dirPath: string): Promise<string[]>;
-}
-
-// ── Local implementation ──
-
-export class LocalFileReader implements SessionFileReader {
-  async readFile(filePath: string): Promise<string | null> {
-    try {
-      return await fsp.readFile(filePath, 'utf-8');
-    } catch (err) {
-      log.session.debug('local file read failed', {
-        filePath,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return null;
-    }
-  }
-
-  async listDir(dirPath: string): Promise<string[]> {
-    try {
-      return await fsp.readdir(dirPath);
-    } catch (err) {
-      log.session.debug('local dir read failed', {
-        dirPath,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return [];
-    }
-  }
+  /** Locate a session's canonical JSONL under ~/.claude/projects (recursive find).
+   *  Returns { content, path } or null. Used to resolve the project dir when cwd
+   *  is unknown/unsafe, without a caller-side fs scan. */
+  findSession(sessionId: string): Promise<{ content: string; path: string } | null>;
 }
 
 // ── Factory ──
 
-/** Create the appropriate file reader for local or remote sessions. */
+/**
+ * Create the file reader for a session's host.
+ *
+ * DAEMON-UNIFORM: local (__local__) and remote both go through DaemonFileReader.
+ * For local, the reader connects to the in-process localDaemon (auto-started via
+ * ensureRunning) instead of touching fs directly. This is the single file-access
+ * pass — no local fs bypass — so there is exactly one place to add features like
+ * incremental byte reads, and local/remote can never diverge. See src/core/AGENTS.md.
+ *
+ * NOTE: paths passed to the returned reader should be tilde-based (~/.claude/...)
+ * or absolute; the daemon expands ~ via $HOME and reads absolute paths as-is.
+ */
 export async function createFileReader(host?: string): Promise<SessionFileReader> {
-  if (host) {
-    const { DaemonFileReader } = await import('./daemon-file-reader.js');
-    return new DaemonFileReader(host);
-  }
-  return new LocalFileReader();
+  const { DaemonFileReader } = await import('./daemon-file-reader.js');
+  return new DaemonFileReader(host ?? '__local__');
 }
 
 // ── High-level helpers ──
@@ -277,21 +261,31 @@ export async function readSessionJsonlContent(
   };
 
   // 1. Canonical JSONL — source of truth.
-  //    Dispatch on host (like readSubagentContents): remote daemon first, else local fs.
-  //    Remote sessions have no local canonical file, so we must use daemon first.
-  if (host) {
+  //    UNIFIED PASS: both local (__local__) and remote sessions read through the
+  //    daemon (DaemonFileReader → localDaemon for __local__, SSH daemon for remote).
+  //    There is no separate "local fs" bypass — one code path, one place to add
+  //    incremental byte reads, trivially decoupled. See src/core/AGENTS.md
+  //    "Daemon-uniform file access". The daemon uses tilde paths (~/.claude/...),
+  //    expanded server-side via $HOME (localDaemon runs as the same user, so ~
+  //    resolves to the same ~/.claude the old local path used).
+  {
+    const daemonHost = host ?? '__local__';
     // Timeout: 30s covers cold-start daemon connect (ControlMaster ~15s + tunnel + WS) + file reads.
     // Individual operations have their own timeouts, but getDaemonConnection() may wait in
     // connectingPromises with no timeout — this outer race is the safety net for the API request.
-    const REMOTE_READ_TIMEOUT = 30_000;
+    // Local daemon connects in-process (no SSH), so this ceiling is only ever hit for remote.
+    const READ_TIMEOUT = 30_000;
     const { DaemonFileReader } = await import('./daemon-file-reader.js');
-    const reader = new DaemonFileReader(host);
+    const reader = new DaemonFileReader(daemonHost);
     // Claude Code hashes cwds whose encoded form exceeds 200 chars; we don't
     // replicate that hashing, so the computed exactPath will be wrong. In that
     // case, skip the exact-path attempt and fall through to glob/find.
     const cwdSafeForExactPath = cwd ? isSafeForProjectEncoding(cwd) : false;
     const exactPath = cwdSafeForExactPath ? remoteJsonlPath(sessionId, cwd!) : null;
     const globPath = remoteJsonlPath(sessionId); // ~/.claude/projects/*/${sessionId}.jsonl
+    // Truthful source label: the transport is always the daemon now, but 'local'
+    // vs 'remote' still tells diagnostics which machine the file lived on.
+    const srcLabel: ReadSessionResult['source'] = host ? 'remote' : 'local';
 
     try {
       const result = await Promise.race([
@@ -303,44 +297,33 @@ export async function readSessionJsonlContent(
           // doesn't exist — no amount of globbing will conjure it.
           if (exactPath) {
             const content = await reader.readFile(exactPath);
-            if (content) return withFoundCwd(await mergeSyntheticFromLocalStreams(content), 'remote', exactPath);
+            if (content) return withFoundCwd(await mergeSyntheticFromLocalStreams(content), srcLabel, exactPath);
             return null;
           }
           // cwd unknown OR unsafe-for-encoding (>200 chars, hashed by Claude Code):
           // fall back to glob, then find.
           const content = await reader.readFile(globPath);
-          if (content) return withFoundCwd(await mergeSyntheticFromLocalStreams(content), 'remote');
+          if (content) return withFoundCwd(await mergeSyntheticFromLocalStreams(content), srcLabel);
           const findResult = await reader.findSession(sessionId);
-          if (findResult) return withFoundCwd(await mergeSyntheticFromLocalStreams(findResult.content), 'remote', findResult.path);
+          if (findResult) return withFoundCwd(await mergeSyntheticFromLocalStreams(findResult.content), srcLabel, findResult.path);
           return null;
         })(),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Remote read timeout (30s)')), REMOTE_READ_TIMEOUT),
+          setTimeout(() => reject(new Error('Session file read timeout (30s)')), READ_TIMEOUT),
         ),
       ]);
       if (result) return result;
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      log.session.warn('remote JSONL read failed', {
-        host, sessionId,
+      log.session.warn('JSONL read via daemon failed', {
+        host: daemonHost, sessionId,
         error: errMsg,
       });
-      throw new Error(`Remote read failed (${host}): ${errMsg}`);
-    }
-  } else {
-    // Local session: read canonical JSONL (source of truth).
-    // Streams file is only used as a fallback (step 2 below).
-    const localPath = await findLocalJsonlPath(sessionId, cwd);
-    if (localPath) {
-      try {
-        const content = await fsp.readFile(localPath, 'utf-8');
-        if (content) return withFoundCwd(content, 'local');
-      } catch (err) {
-        log.session.debug('failed to read local JSONL file', {
-          localPath,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
+      // For remote this is fatal (no local fallback exists). For local, fall
+      // through to the streams-capture fallback below (steps 2-3) rather than
+      // throwing — the local daemon may be mid-restart while the streams file
+      // (written directly by LocalIO) is still readable.
+      if (host) throw new Error(`Remote read failed (${host}): ${errMsg}`);
     }
   }
 
@@ -385,60 +368,8 @@ export async function readSubagentContents(
   cwd?: string,
   host?: string,
 ): Promise<Map<string, string>> {
-  if (host) {
-    return readRemoteSubagentContents(sessionId, cwd, host);
-  }
-  return readLocalSubagentContents(sessionId, cwd);
-}
-
-async function readLocalSubagentContents(sessionId: string, cwd?: string): Promise<Map<string, string>> {
-  const result = new Map<string, string>();
-  const projectsDir = path.join(CLAUDE_HOME, 'projects');
-
-  const candidates: string[] = [];
-  if (cwd) {
-    candidates.push(subagentDirPath(sessionId, cwd));
-  }
-  // Fallback: search all project directories
-  try {
-    for (const dir of await fsp.readdir(projectsDir)) {
-      const candidate = path.join(projectsDir, dir, sessionId, 'subagents');
-      if (!candidates.includes(candidate)) candidates.push(candidate);
-    }
-  } catch (err) {
-    log.session.debug('failed to scan projects dir for subagents', {
-      projectsDir,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-
-  for (const subDir of candidates) {
-    if (!(await fileExists(subDir))) continue;
-    try {
-      const files = await fsp.readdir(subDir);
-      for (const file of files) {
-        if (!file.startsWith('agent-') || !file.endsWith('.jsonl')) continue;
-        const agentId = file.slice('agent-'.length, -'.jsonl'.length);
-        try {
-          const content = await fsp.readFile(path.join(subDir, file), 'utf-8');
-          if (content) result.set(agentId, content);
-        } catch (err) {
-          log.session.debug('failed to read subagent file', {
-            file,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-    } catch (err) {
-      log.session.debug('failed to read subagent directory', {
-        subDir,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-    if (result.size > 0) break;
-  }
-
-  return result;
+  // DAEMON-UNIFORM: local and remote both batch-read subagents through the daemon.
+  return readSubagentContentsViaDaemon(sessionId, cwd, host ?? '__local__');
 }
 
 /**
@@ -451,64 +382,54 @@ export async function readSingleSubagentContent(
   cwd?: string,
   host?: string,
 ): Promise<string | null> {
+  // DAEMON-UNIFORM: local and remote both read the single subagent file via the
+  // daemon. cwd known + safe → exact tilde path; else a glob the daemon's
+  // fs.find expands. (__local__ resolves ~ to the same ~/.claude the fs bypass used.)
   const filename = `agent-${agentId}.jsonl`;
-
-  if (host) {
-    const { DaemonFileReader } = await import('./daemon-file-reader.js');
-    const reader = new DaemonFileReader(host);
-    const remotePath = cwd
-      ? `${remoteSubagentDirPath(sessionId, cwd)}/${filename}`
-      : `~/.claude/projects/*/${sessionId}/subagents/${filename}`;
-    try {
-      return await reader.readFile(remotePath);
-    } catch (err) {
-      log.session.debug('remote single subagent read failed', {
-        host, sessionId, agentId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return null;
-    }
-  }
-
-  // Local: check cwd-based path first, then fallback search
-  const projectsDir = path.join(CLAUDE_HOME, 'projects');
-  const candidates: string[] = [];
-  if (cwd) {
-    candidates.push(path.join(subagentDirPath(sessionId, cwd), filename));
-  }
+  const { DaemonFileReader } = await import('./daemon-file-reader.js');
+  const reader = new DaemonFileReader(host ?? '__local__');
+  const readerPath = cwd && isSafeForProjectEncoding(cwd)
+    ? `${remoteSubagentDirPath(sessionId, cwd)}/${filename}`
+    : `~/.claude/projects/*/${sessionId}/subagents/${filename}`;
   try {
-    for (const dir of await fsp.readdir(projectsDir)) {
-      const candidate = path.join(projectsDir, dir, sessionId, 'subagents', filename);
-      if (!candidates.includes(candidate)) candidates.push(candidate);
-    }
-  } catch {
-    // projects dir scan failed — continue with what we have
+    return await reader.readFile(readerPath);
+  } catch (err) {
+    log.session.debug('single subagent read via daemon failed', {
+      host: host ?? '__local__', sessionId, agentId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
   }
-
-  for (const filePath of candidates) {
-    try {
-      const content = await fsp.readFile(filePath, 'utf-8');
-      if (content) return content;
-    } catch {
-      // file doesn't exist at this path — try next
-    }
-  }
-  return null;
 }
 
-async function readRemoteSubagentContents(
+async function readSubagentContentsViaDaemon(
   sessionId: string,
-  cwd?: string,
-  host?: string,
+  cwd: string | undefined,
+  host: string,
 ): Promise<Map<string, string>> {
-  if (!host) return new Map();
-
   const { DaemonFileReader } = await import('./daemon-file-reader.js');
   const reader = new DaemonFileReader(host);
-  const remotePath = remoteSubagentDirPath(sessionId, cwd);
+
+  // Resolve the subagents dir. When cwd is known + safe, the tilde path is exact.
+  // Otherwise resolve the session's canonical JSONL location via fs.find and derive
+  // the sibling subagents/ dir — batchReadSubagents' fs.ls does NOT expand globs.
+  let subDir: string | null = null;
+  if (cwd && isSafeForProjectEncoding(cwd)) {
+    subDir = remoteSubagentDirPath(sessionId, cwd);
+  } else {
+    try {
+      const found = await reader.findSession(sessionId); // ~/.claude/projects/<enc>/<sid>.jsonl
+      if (found) subDir = found.path.replace(/\.jsonl$/, '') + '/subagents';
+    } catch (err) {
+      log.session.debug('subagent dir resolve via fs.find failed', {
+        host, sessionId, error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  if (!subDir) return new Map();
 
   try {
-    const fileMap = await reader.batchReadSubagents(remotePath);
+    const fileMap = await reader.batchReadSubagents(subDir);
     // Convert filename → agentId
     const result = new Map<string, string>();
     for (const [filename, content] of fileMap) {
@@ -518,7 +439,7 @@ async function readRemoteSubagentContents(
     }
     return result;
   } catch (err) {
-    log.session.debug('remote subagent read failed', {
+    log.session.debug('subagent batch read via daemon failed', {
       host, sessionId,
       error: err instanceof Error ? err.message : String(err),
     });
@@ -559,26 +480,23 @@ export async function readWorkflowManifest(
   cwd?: string,
   host?: string,
 ): Promise<WorkflowManifest | null> {
-  // Resolve the candidate workflows dirs. When cwd is known, the cwd-encoded path
-  // is authoritative — do NOT scan every project dir, because this is called on
-  // EVERY session mount (the panel hook fetches /workflow unconditionally) and the
-  // common case is "session never ran a workflow"; a full ~/.claude/projects scan
-  // per page-load is the exact O(N)-syscall regression the project keeps fixing.
-  // Only fall back to the broad scan when cwd is genuinely unknown.
+  // DAEMON-UNIFORM: local and remote both list/read through the daemon (tilde
+  // paths). When cwd is known + safe, the cwd-encoded path is authoritative — do
+  // NOT scan every project dir, because this is called on EVERY session mount (the
+  // panel hook fetches /workflow unconditionally) and the common case is "session
+  // never ran a workflow"; a full ~/.claude/projects scan per page-load is the
+  // exact O(N)-syscall regression the project keeps fixing. Only fall back to a
+  // find-based resolve when cwd is genuinely unknown.
   const reader = await createFileReader(host);
   const dirs: string[] = [];
-  if (host) {
+  if (cwd && isSafeForProjectEncoding(cwd)) {
     dirs.push(remoteWorkflowManifestDirPath(sessionId, cwd));
-  } else if (cwd) {
-    dirs.push(workflowManifestDirPath(sessionId, cwd));
   } else {
-    const projectsDir = path.join(CLAUDE_HOME, 'projects');
     try {
-      for (const dir of await fsp.readdir(projectsDir)) {
-        dirs.push(path.join(projectsDir, dir, sessionId, 'workflows'));
-      }
+      const found = await reader.findSession?.(sessionId);
+      if (found) dirs.push(found.path.replace(/\.jsonl$/, '') + '/workflows');
     } catch {
-      // projects dir scan failed — nothing to read
+      // find failed — nothing to read
     }
   }
 
@@ -595,7 +513,7 @@ export async function readWorkflowManifest(
     // Parse every manifest in this dir, keep the one with the latest startTime.
     let best: WorkflowManifest | null = null;
     for (const name of names) {
-      const filePath = host ? `${dir}/${name}` : path.join(dir, name);
+      const filePath = `${dir}/${name}`;
       const content = await reader.readFile(filePath);
       if (!content) continue;
       try {
@@ -648,22 +566,19 @@ export async function readWorkflowSubagentContent(
   const filename = `agent-${agentId}.jsonl`;
   const reader = await createFileReader(host);
 
-  // Resolve candidate `subagents/workflows` parent dirs (each holds wf_<runId>/ dirs).
-  // cwd-encoded path is authoritative when known; only scan all project dirs as a
-  // last resort (cwd unknown) — same O(N)-syscall avoidance as readWorkflowManifest.
+  // DAEMON-UNIFORM: resolve `subagents/workflows` parent dirs (each holds wf_<runId>/
+  // dirs) through the daemon. cwd-encoded path is authoritative when known; else
+  // resolve via fs.find — same O(N)-syscall avoidance as readWorkflowManifest, no
+  // caller-side fs scan.
   const parents: string[] = [];
-  if (host) {
+  if (cwd && isSafeForProjectEncoding(cwd)) {
     parents.push(`${remoteSubagentDirPath(sessionId, cwd)}/workflows`);
-  } else if (cwd) {
-    parents.push(path.join(subagentDirPath(sessionId, cwd), 'workflows'));
   } else {
-    const projectsDir = path.join(CLAUDE_HOME, 'projects');
     try {
-      for (const dir of await fsp.readdir(projectsDir)) {
-        parents.push(path.join(projectsDir, dir, sessionId, 'subagents', 'workflows'));
-      }
+      const found = await reader.findSession(sessionId);
+      if (found) parents.push(found.path.replace(/\.jsonl$/, '') + '/subagents/workflows');
     } catch {
-      // projects dir scan failed — nothing to read
+      // find failed — nothing to read
     }
   }
 
@@ -676,9 +591,7 @@ export async function readWorkflowSubagentContent(
     }
     for (const runDir of runDirs) {
       if (!runDir.startsWith('wf_')) continue;
-      const filePath = host
-        ? `${parent}/${runDir}/${filename}`
-        : path.join(parent, runDir, filename);
+      const filePath = `${parent}/${runDir}/${filename}`;
       const content = await reader.readFile(filePath);
       if (content) return content;
     }

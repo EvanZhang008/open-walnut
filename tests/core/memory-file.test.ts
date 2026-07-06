@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import path from 'node:path';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
 let tmpDir: string;
@@ -19,6 +20,9 @@ beforeEach(async () => {
   tmpDir = WALNUT_HOME;
   await fsp.rm(tmpDir, { recursive: true, force: true });
   await fsp.mkdir(tmpDir, { recursive: true });
+  // MEMORY_FILE now lives in memory/ (bounded-memory redesign) — the direct
+  // fs.writeFileSync fixtures below need the parent dir to exist.
+  await fsp.mkdir(path.dirname(MEMORY_FILE), { recursive: true });
 });
 
 afterEach(async () => {

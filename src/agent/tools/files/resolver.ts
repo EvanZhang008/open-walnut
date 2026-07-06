@@ -169,7 +169,7 @@ export function resolveSource(source: string, agentId?: string): ResolvedSource 
     }
     return {
       type: 'memory',
-      filePath: path.join(REPOS_MEMORY_DIR, slug, 'MEMORY.md'),
+      filePath: path.join(REPOS_MEMORY_DIR, slug, 'SKILL.md'),
       source,
       variant: 'repo',
       meta: { slug },

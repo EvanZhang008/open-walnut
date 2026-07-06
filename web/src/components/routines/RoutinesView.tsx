@@ -59,9 +59,7 @@ export function RoutinesView({ compact = false }: { compact?: boolean }) {
 
   return (
     <div className={`routines-view${compact ? ' routines-view-compact' : ''}`}>
-      {!showForm && (
-        <RoutineComposer onDraft={handleDraft} onDraftFailed={handleDraftFailed} />
-      )}
+      <RoutineComposer onDraft={handleDraft} onDraftFailed={handleDraftFailed} />
 
       {showForm && (
         <RoutineForm
@@ -76,7 +74,7 @@ export function RoutinesView({ compact = false }: { compact?: boolean }) {
 
       {error && <div className="cron-form-error">{error}</div>}
 
-      {routines.length === 0 && !showForm ? (
+      {routines.length === 0 ? (
         <div className="empty-state">
           <div className="empty-state-icon">&#9889;</div>
           <p>No routines yet</p>

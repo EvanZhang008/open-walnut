@@ -50,7 +50,6 @@ import type { SessionLimitResult } from '../core/session-tracker.js';
 import { bus, EventNames } from '../core/event-bus.js';
 import { getConfig, updateConfig } from '../core/config-manager.js';
 import type { Config, SessionRecord, Task, TaskPhase, TaskPriority, TaskSource } from '../core/types.js';
-import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { log } from '../logging/index.js';
 import { CLAUDE_HOME } from '../constants.js';
@@ -70,6 +69,7 @@ import { createSubagentTool } from './tools/create-subagent.js';
 import { filesTools } from './tools/files-tools.js';
 import { memoryNotesSearchTool } from './tools/memory-notes-search-tool.js';
 import { memoryManageTool } from './tools/memory-manage-tool.js';
+import { historySearchTool } from './tools/history-search-tool.js';
 import { skillManageTool } from './tools/skill-manage-tool.js';
 import { skillViewTool } from './tools/skill-view-tool.js';
 
@@ -1079,6 +1079,7 @@ queries: ["pipeline API allowlisting", "PAPINS SigV4", "pipeline allowlist"]  �
 
   memoryNotesSearchTool,
   memoryManageTool,
+  historySearchTool,
   skillManageTool,
   skillViewTool,
 
@@ -1598,7 +1599,7 @@ defaults (same resolution chain as session_start).`,
         //    resolvedCwd is used to compute the canonical path, but may be wrong.
         //    After finding the JSONL, we extract the actual CWD from it (source of truth)
         //    and reconcile against resolvedCwd / task.cwd.
-        const { canonicalJsonlPath, remoteJsonlPath, encodeProjectPath, findLocalJsonlPath } = await import('../core/session-file-reader.js');
+        const { remoteJsonlPath, encodeProjectPath } = await import('../core/session-file-reader.js');
 
         if (!resolvedCwd) {
           return `Error: No working directory resolved for session ${sessionId}. Provide working_directory explicitly.`;
@@ -1606,59 +1607,34 @@ defaults (same resolution chain as session_start).`,
 
         let jsonlContent: string | null = null;
 
-        if (resolvedHost) {
-          // Remote: daemon — try canonical path first, then `find` fallback
+        // Daemon-uniform: local (__local__) and remote both go through DaemonFileReader.
+        // Try the canonical tilde path first, then fall back to findSession (daemon fs.find
+        // over ~/.claude/projects). One code path — no separate local fs branch.
+        {
           const { DaemonFileReader } = await import('../core/daemon-file-reader.js');
-          const reader = new DaemonFileReader(resolvedHost);
+          const daemonHost = resolvedHost ?? '__local__';
+          const reader = new DaemonFileReader(daemonHost);
           const exactPath = remoteJsonlPath(sessionId, resolvedCwd);
           jsonlContent = await reader.readFile(exactPath);
           if (!jsonlContent) {
-            // Canonical path missed — try `find` on the remote host.
+            // Canonical path missed — try `find` via the daemon.
             // findSession returns { content, path } (or null), not a raw string.
             const found = await reader.findSession(sessionId);
             if (found) {
               jsonlContent = found.content;
-              log.session.info('import_session: JSONL found via remote find fallback', {
-                sessionId, host: resolvedHost, triedPath: exactPath, foundPath: found.path,
+              log.session.info('import_session: JSONL found via daemon find fallback', {
+                sessionId, host: daemonHost, triedPath: exactPath, foundPath: found.path,
               });
-            }
-          }
-          if (!jsonlContent) {
-            return `Error: JSONL not found for session ${sessionId}.\n` +
-              `  Searched on: ${resolvedHost}\n` +
-              `  Tried canonical: ${exactPath}\n` +
-              `  Also ran: find ~/.claude/projects -name '${sessionId}.jsonl'\n` +
-              `  CWD used: ${resolvedCwd}\n` +
-              `The session JSONL may be on a different host, or the CWD may be wrong.`;
-          }
-        } else {
-          // Local: check canonical path first, then search all project dirs
-          const expectedPath = canonicalJsonlPath(sessionId, resolvedCwd);
-          try {
-            jsonlContent = await fsp.readFile(expectedPath, 'utf-8');
-          } catch {
-            // File not found at canonical path
-          }
-          if (!jsonlContent) {
-            // Canonical path missed — search all project directories
-            const foundPath = await findLocalJsonlPath(sessionId);
-            if (foundPath) {
-              try {
-                jsonlContent = await fsp.readFile(foundPath, 'utf-8');
-                log.session.info('import_session: JSONL found via local fallback search', {
-                  sessionId, triedPath: expectedPath, foundPath,
-                });
-              } catch { /* still not readable */ }
             }
           }
           if (!jsonlContent) {
             const encoded = encodeProjectPath(resolvedCwd);
             return `Error: JSONL not found for session ${sessionId}.\n` +
-              `  Searched on: local machine\n` +
+              `  Searched on: ${resolvedHost ?? 'local machine'}\n` +
               `  Tried canonical: ~/.claude/projects/${encoded}/${sessionId}.jsonl\n` +
-              `  Also searched all directories under ~/.claude/projects/\n` +
+              `  Also ran: find ~/.claude/projects -name '${sessionId}.jsonl'\n` +
               `  CWD used: ${resolvedCwd}\n` +
-              `The session JSONL may be on a remote host (specify host parameter), or the CWD may be wrong.`;
+              `The session JSONL may be on a different host, or the CWD may be wrong.`;
           }
         }
 

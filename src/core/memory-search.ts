@@ -62,9 +62,22 @@ export async function memoryNotesSearch(
   queries: string | string[],
   sources?: string[],
   limit: number = 15,
+  pathPrefix?: string,
 ): Promise<MemorySearchResult[]> {
   const queryList = Array.isArray(queries) ? queries : [queries];
   if (queryList.length === 0) return [];
+
+  // Optional path scoping: keep only results whose path WITHIN its collection
+  // starts with this prefix (e.g. 'walnut/overview/history/' on memory_skill,
+  // or '2026-06' on memory_daily as a cheap time filter). QMD virtual paths
+  // are qmd://<collection>/<relative-path>, so matching the segment after the
+  // collection is collection-root-relative and store-location independent.
+  const normalizedPrefix = pathPrefix?.replace(/^\.?\//, '').trim() || undefined;
+  const matchesPathPrefix = (virtualFile: string): boolean => {
+    if (!normalizedPrefix) return true;
+    const rel = virtualFile.replace(/^qmd:\/\/[^/]+\//, '');
+    return rel.startsWith(normalizedPrefix);
+  };
 
   // Determine which stores to search
   const activeSources = sources ?? Object.keys(SOURCE_WEIGHTS).filter(s => s.startsWith('memory_'));
@@ -116,7 +129,9 @@ export async function memoryNotesSearch(
       const store = await storeFn();
       const raw: HybridQueryResult[] = await store.search({
         queries: expandedQueries,
-        limit: storeLimit * 3, // over-fetch to allow filtering
+        // Over-fetch to allow post-filtering; a narrow path prefix discards
+        // most hits, so fetch deeper when one is set.
+        limit: storeLimit * (normalizedPrefix ? 8 : 3),
         rerank: true,
       });
       log.agent.info(`memory search ${storeLabel}: ${raw.length} results, queries=${queryList.length}`, {
@@ -132,6 +147,7 @@ export async function memoryNotesSearch(
           const m = r.file?.match(/^qmd:\/\/([^/]+)\//);
           return !m || collectionSet.size === 0 || collectionSet.has(m[1]);
         })
+        .filter(r => matchesPathPrefix(r.file ?? ''))
         .map((r) => {
           const virtualFile = r.file ?? '';
           const absPath = store.internal.resolveVirtualPath(virtualFile) ?? virtualFile;
@@ -193,6 +209,7 @@ export async function memoryNotesSearch(
 
       return raw
         .filter(r => r.score >= MIN_SCORE)
+        .filter(r => matchesPathPrefix(r.file ?? ''))
         .map((r) => {
           const virtualFile = r.file ?? '';
           const decay = config?.decays ? temporalDecay(virtualFile, config.halfLife ?? 30) : 1.0;

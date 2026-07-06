@@ -67,44 +67,21 @@ afterEach(async () => {
 
 // ── 4.1 System Prompt Includes Memory Index ──
 
-describe('System Prompt Memory Index', () => {
-  it('4.1: buildMemoryContext includes memory index content', async () => {
+describe('System Prompt Memory Index (retired)', () => {
+  it('4.1: buildMemoryContext never injects the retired memory index', async () => {
+    // memory/index.md is retired (2026-07 unification): directory awareness
+    // comes from the skills index. Even a leftover file must NOT be injected.
     const indexContent = `# Memory Index
 
 ## Topics
 - [Database Architecture](topics/database-architecture.md) -- PostgreSQL + pgBouncer setup
-- [API Design](topics/api-design.md) -- REST conventions and versioning
-
-## Active Projects
-- work/walnut -- Personal AI butler
 `;
     seedMemoryIndex(WALNUT_HOME, indexContent);
 
     const context = await buildMemoryContext(8000);
 
-    expect(context).toContain('## Memory index');
-    expect(context).toContain('Database Architecture');
-    expect(context).toContain('API Design');
-  });
-
-  it('4.1b: memory index is truncated to 4000 chars', async () => {
-    // Create a large index > 4000 chars
-    const lines = Array.from(
-      { length: 200 },
-      (_, i) => `- [Topic ${i}](topics/topic-${i}.md) -- Description of topic ${i} that adds some extra length`,
-    );
-    const bigIndex = `# Memory Index\n\n## Topics\n${lines.join('\n')}`;
-    seedMemoryIndex(WALNUT_HOME, bigIndex);
-
-    const context = await buildMemoryContext(8000);
-
-    // The index section in context should have the truncation marker
-    const indexStart = context.indexOf('## Memory index');
-    if (indexStart >= 0) {
-      const indexSection = context.slice(indexStart);
-      // Either truncated with "..." or full — actual limit is 4000 chars, allow small buffer for overhead
-      expect(indexSection.length).toBeLessThan(4200);
-    }
+    expect(context).not.toContain('## Memory index');
+    expect(context).not.toContain('Database Architecture');
   });
 });
 

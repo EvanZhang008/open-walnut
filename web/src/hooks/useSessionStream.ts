@@ -1,14 +1,17 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useLayoutEffect } from 'react';
 import { useEvent } from './useWebSocket';
 import { wsClient, type ConnectionState } from '@/api/ws';
 import { isToolResultError } from '@/api/chat';
 import { log } from '@/utils/log';
+import type { SessionHistoryMessage } from '@/types/session';
 import {
   trackSession,
   getStreamState,
   clearStreamState,
+  clearCompletedTurn,
   initStreamState,
 } from '@/cache/session-cache';
+import { promoteCompletedBlocks } from '@/cache/promote-blocks';
 
 /** A streaming block — text, tool call, or tool result */
 export interface StreamingTextBlock {
@@ -56,6 +59,12 @@ export type StreamingBlock = StreamingTextBlock | StreamingToolCallBlock | Strea
 interface StreamSnapshot {
   blocks: StreamingBlock[];
   isStreaming: boolean;
+  /** Server-authoritative count of leading blocks that belong to finished turns.
+   *  MUST be preferred over deriving from isStreaming: a snapshot taken between
+   *  the next turn's markStreaming and its first delta carries the PREVIOUS
+   *  turn's blocks with isStreaming=true — deriving mislabels them "live" and
+   *  evidence-promotion then never removes them (permanent duplicates). */
+  completedLen?: number;
 }
 
 interface UseSessionStreamReturn {
@@ -63,8 +72,14 @@ interface UseSessionStreamReturn {
   blocks: StreamingBlock[];
   /** Whether there's an active stream running */
   isStreaming: boolean;
-  /** Clear accumulated blocks (e.g., when batch completes) */
+  /** Clear ALL accumulated blocks (session switch / hard reset) */
   clear: () => void;
+  /** Turn-aware, EVIDENCE-BASED clear: remove a completed-turn block only if a
+   *  twin is present in `delta` (the just-arrived persisted messages). Blocks of a
+   *  turn that started streaming after the last session:result — and anything the
+   *  archive hasn't caught up on — are preserved. Returns the removed count so
+   *  callers can shift position anchors (blockIndexMap). */
+  clearCompleted: (delta?: SessionHistoryMessage[]) => number;
 }
 
 /**
@@ -83,6 +98,51 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
   const seenPermissionIds = useRef(new Set<string>());
   const resubscribePending = useRef(false);
   const safetyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Turn boundary: blocks[0..completedLen) belong to turns that already emitted
+  // session:result/session:error. Blocks past this index belong to a NEW turn that
+  // started streaming while the post-turn history refresh was still in flight —
+  // clearCompleted() must never wipe those (they'd vanish mid-generation).
+  const completedLen = useRef(0);
+  // Race guard: clearCompleted() may run before session:result stamps the
+  // boundary (batch-completed precedes result by ~20-50ms in prod; a fast 304
+  // history refetch could land in between). Removing 0 blocks then would leave
+  // the whole turn duplicated against persisted history — instead defer the
+  // clear to the session:result handler.
+  const pendingClearRef = useRef(false);
+  // Ref mirrors so clearCompleted (a stable callback) can read current state
+  // synchronously. useLayoutEffect (not useEffect): callers invoke clearCompleted
+  // from their own useLayoutEffect, and this hook's effects flush first within
+  // the same commit — useEffect would be one paint stale.
+  const isStreamingRef = useRef(false);
+  useLayoutEffect(() => { isStreamingRef.current = isStreaming; }, [isStreaming]);
+  const blocksLenRef = useRef(0);
+  useLayoutEffect(() => { blocksLenRef.current = blocks.length; }, [blocks]);
+  // Full current blocks[] mirror — clearCompleted needs the array (not just the
+  // length) to run evidence-based promotion synchronously and return the removed
+  // count for anchor-shifting. Kept in sync in the same layout phase as the length.
+  const blocksRef = useRef<StreamingBlock[]>(blocks);
+  useLayoutEffect(() => { blocksRef.current = blocks; }, [blocks]);
+  // Delta captured when a clearCompleted() was deferred (batch-completed raced
+  // ahead of session:result). Replayed as evidence once the boundary is stamped.
+  const pendingDeltaRef = useRef<SessionHistoryMessage[] | null>(null);
+
+  // Apply a deferred turn-clear once the boundary lands (session:result/error/
+  // status-backstop). EVIDENCE-BASED: promote against the stashed delta rather
+  // than blind-wiping. `prev` is the current blocks[]; returns the kept array.
+  // Assumes the boundary = prev.length (the whole present buffer is the finished
+  // turn — deferral only happens when nothing newer had streamed yet).
+  const applyDeferredClear = useCallback((prev: StreamingBlock[]): StreamingBlock[] => {
+    pendingClearRef.current = false;
+    const delta = pendingDeltaRef.current ?? [];
+    pendingDeltaRef.current = null;
+    const { kept, removed } = promoteCompletedBlocks(prev, delta, prev.length);
+    log.info('stream', `deferred clear applied: blocks=${prev.length}→${kept.length} (removed ${removed}, evidence)`, { sessionId: activeSessionId.current });
+    completedLen.current = kept.length; // whatever survived is still "completed" (unflushed), retried next delta
+    blocksLenRef.current = kept.length;
+    blocksRef.current = kept;
+    if (kept.length === 0 && activeSessionId.current) clearStreamState(activeSessionId.current);
+    return kept;
+  }, []);
 
   // Track WS connection state to re-subscribe on reconnect
   const [wsConnected, setWsConnected] = useState(wsClient.state === 'connected');
@@ -117,11 +177,14 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
       setBlocks([...cached.blocks]);
       setIsStreaming(cached.isStreaming);
       streamBuffer.current = cached.textBuffer;
+      completedLen.current = cached.completedLen ?? (cached.isStreaming ? 0 : cached.blocks.length);
     } else {
       setBlocks([]);
       setIsStreaming(false);
       streamBuffer.current = '';
+      completedLen.current = 0;
     }
+    pendingClearRef.current = false;
 
     // Always subscribe to get server snapshot for correction (background).
     //
@@ -144,8 +207,21 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
         log.info('stream', `subscribe snapshot: blocks=${snapshot.blocks.length} isStreaming=${snapshot.isStreaming}`, { sessionId });
         let appliedBlocks = false;
         setBlocks((prev) => {
-          if (prev.length > 0) return prev;
+          // Stale-cache correction: when NEITHER side is live (local not
+          // streaming, server not streaming), the server buffer is authoritative
+          // — adopt it even over non-empty cached blocks. A cache seeded from a
+          // finished turn otherwise renders next to the same content in history
+          // FOREVER (no new delta ever arrives to evidence-promote it away).
+          // A live turn on either side keeps the old non-clobber rule.
+          const bothIdle = !snapshot.isStreaming && !isStreamingRef.current;
+          if (prev.length > 0 && !bothIdle) return prev;
+          if (prev.length > 0 && bothIdle
+            && prev.length === snapshot.blocks.length) return prev; // identical-ish — avoid churn
           appliedBlocks = true;
+          // Server-authoritative boundary when present (see StreamSnapshot doc);
+          // legacy fallback: finished turn → all completed, live turn → none.
+          completedLen.current = snapshot.completedLen
+            ?? (snapshot.isStreaming ? 0 : snapshot.blocks.length);
           return snapshot.blocks;
         });
         setIsStreaming((prev) => (snapshot.isStreaming && !prev) ? true : prev);
@@ -153,7 +229,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
           const lastText = [...snapshot.blocks].reverse().find((b): b is StreamingTextBlock => b.type === 'text');
           streamBuffer.current = lastText ? lastText.content : '';
           // Seed global cache with server snapshot for correction
-          initStreamState(sessionId, snapshot.blocks, snapshot.isStreaming);
+          initStreamState(sessionId, snapshot.blocks, snapshot.isStreaming, snapshot.completedLen);
           // Seed seenPermissionIds from snapshot (prevent duplicate blocks on re-emit)
           for (const b of snapshot.blocks) {
             if (b.type === 'permission') seenPermissionIds.current.add(b.requestId);
@@ -200,7 +276,12 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
         if (snapshot) {
           // Only apply snapshot if we don't already have streaming data
           // (avoid clobbering blocks from incremental events that arrived in between)
-          setBlocks((prev) => prev.length > 0 ? prev : snapshot.blocks);
+          setBlocks((prev) => {
+            if (prev.length > 0) return prev;
+            completedLen.current = snapshot.completedLen
+              ?? (snapshot.isStreaming ? 0 : snapshot.blocks.length);
+            return snapshot.blocks;
+          });
           // Non-regressive sync: snapshot only allowed to promote isStreaming false→true.
           // Rationale: a stale server-side buffer (cleared 2s after previous session:result)
           // returns isStreaming=false even while a new turn is live; unconditional sync
@@ -251,6 +332,16 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
         setIsStreaming((prev) => {
           if (prev) log.info('stream', `status-changed ps=${process_status} → isStreaming true→false`, { sessionId: sid });
           return false;
+        });
+        // Backstop turn boundary: if session:result was missed (WS drop), stamp
+        // the boundary here so the next clearCompleted() still drops this turn.
+        setBlocks((prev) => {
+          completedLen.current = Math.max(completedLen.current, prev.length);
+          if (pendingClearRef.current) {
+            // Deferred turn clear (batch-completed raced ahead) — apply with evidence.
+            return applyDeferredClear(prev);
+          }
+          return prev;
         });
       } else {
         log.info('stream', `status-changed → phase=${phase} ps=${process_status} (not active, skipping)`, { sessionId: sid });
@@ -315,7 +406,10 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
       if (accumulated) {
         setBlocks((prev) => {
           const last = prev[prev.length - 1];
-          if (last && last.type === 'text') {
+          // Merge only into a LIVE text block (past the completed-turn boundary);
+          // a completed turn's final text block must never be overwritten by the
+          // next turn's deltas.
+          if (last && last.type === 'text' && prev.length > completedLen.current) {
             return [...prev.slice(0, -1), { type: 'text', content: accumulated }];
           }
           return [...prev, { type: 'text', content: accumulated }];
@@ -351,7 +445,8 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
 
         setBlocks((prev) => {
           const last = prev[prev.length - 1];
-          if (last && last.type === 'text') {
+          // Merge only into a LIVE text block — see flushPendingTextRaf.
+          if (last && last.type === 'text' && prev.length > completedLen.current) {
             return [...prev.slice(0, -1), { type: 'text', content: accumulated }];
           }
           return [...prev, { type: 'text', content: accumulated }];
@@ -437,7 +532,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
         if (!incoming) return;
         setBlocks((prev) => {
           const last = prev[prev.length - 1];
-          if (last && last.type === 'thinking') {
+          if (last && last.type === 'thinking' && prev.length > completedLen.current) {
             return [...prev.slice(0, -1), { type: 'thinking', content: last.content + incoming }];
           }
           return [...prev, { type: 'thinking', content: incoming }];
@@ -514,6 +609,14 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
       return false;
     });
     setBlocks((prev) => {
+      // Turn boundary: everything present now belongs to the completed turn.
+      // Deltas arriving after this point are the NEXT turn and must survive
+      // the upcoming clearCompleted() from batch-completed/history-refresh.
+      completedLen.current = prev.length;
+      if (pendingClearRef.current) {
+        // A clearCompleted() ran before this boundary was known — apply with evidence.
+        return applyDeferredClear(prev);
+      }
       log.info('stream', `session:result blocks=${prev.length} (kept, cleared by batch-completed)`, { sessionId: sid });
       return prev;
     });
@@ -532,7 +635,17 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     // Show the error inline in the session chat timeline
     if (error) {
       const detail = error.length > 500 ? error.slice(0, 500) + '…' : error;
-      setBlocks((prev) => [...prev, { type: 'system', variant: 'error', message: 'Session error', detail } as StreamingSystemBlock]);
+      setBlocks((prev) => {
+        const next = [...prev, { type: 'system', variant: 'error', message: 'Session error', detail } as StreamingSystemBlock];
+        completedLen.current = next.length; // error ends the turn
+        return next;
+      });
+    } else {
+      setBlocks((prev) => {
+        completedLen.current = prev.length;
+        if (pendingClearRef.current) return applyDeferredClear(prev);
+        return prev;
+      });
     }
   });
 
@@ -547,10 +660,62 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
       return false;
     });
     streamBuffer.current = '';
+    completedLen.current = 0;
+    pendingClearRef.current = false;
     seenPermissionIds.current.clear();
     // Sync-clear global cache so switching away and back doesn't restore stale blocks
     if (activeSessionId.current) clearStreamState(activeSessionId.current);
   }, [flushPendingTextRaf]);
 
-  return { blocks, isStreaming, clear };
+  // Turn-aware clear (batch-completed / history-refresh path): EVIDENCE-BASED —
+  // remove a completed-turn block ONLY if a twin is proven present in the
+  // just-arrived persisted `delta`. A block without a twin is kept (worst case:
+  // shown twice briefly; never vanishes). Blocks of a NEXT turn already streaming
+  // are structurally excluded by completedLen. Fixes the "messages 1-4 vanish
+  // while 5 is generating, then flash back" bug — the old full/position clear
+  // deleted live/unflushed content on faith; now deletion needs proof.
+  //
+  // `delta` = the persisted messages that just arrived (the increment since the
+  // last cursor). Returns the removed block count so callers shift position
+  // anchors (blockIndexMap).
+  const clearCompleted = useCallback((delta: SessionHistoryMessage[] = []): number => {
+    flushPendingTextRaf();
+    if (completedLen.current === 0 && isStreamingRef.current && blocksLenRef.current > 0) {
+      // Boundary not stamped yet (batch-completed/refetch raced ahead of
+      // session:result) — defer to the result handler, stashing the evidence.
+      pendingClearRef.current = true;
+      if (delta.length > 0) pendingDeltaRef.current = delta;
+      return 0;
+    }
+    // Compute synchronously from the blocks mirror — the setState updater runs
+    // later (at render), too late to produce this function's return value.
+    const { kept, removed, unmatched } = promoteCompletedBlocks(
+      blocksRef.current, delta, completedLen.current,
+    );
+    if (unmatched.length > 0) {
+      // Content diverged / missing twin: we KEPT these (safe), but surface it —
+      // a persistent occurrence means the archive & stream disagree (a real bug).
+      log.warn('stream', `clearCompleted: ${unmatched.length} completed block(s) had no delta twin — kept, not deleted`, {
+        sessionId: activeSessionId.current, unmatched: unmatched.slice(0, 5),
+      });
+    }
+    if (removed > 0) {
+      log.info('stream', `clearCompleted() blocks=${blocksRef.current.length}→${kept.length} (removed ${removed}, evidence)`, { sessionId: activeSessionId.current });
+      setBlocks(kept);
+      blocksLenRef.current = kept.length;
+      blocksRef.current = kept;
+      completedLen.current = Math.max(0, completedLen.current - removed);
+    }
+    // Nothing left and turn ended → full reset; clear permission dedup so a
+    // re-emitted request next turn isn't swallowed.
+    if (kept.length === 0 && !isStreamingRef.current) {
+      seenPermissionIds.current.clear();
+    }
+    // Mirror into the global cache (same evidence) so switching away/back doesn't
+    // restore the already-persisted turn.
+    if (activeSessionId.current) clearCompletedTurn(activeSessionId.current, delta);
+    return removed;
+  }, [flushPendingTextRaf]);
+
+  return { blocks, isStreaming, clear, clearCompleted };
 }

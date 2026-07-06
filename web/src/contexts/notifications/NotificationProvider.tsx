@@ -190,6 +190,21 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     });
   });
 
+  // ── WS source: maintainer-created skills (task-hook, no confirmation gate) ──
+  useEvent('skill:notification', (data) => {
+    const { name, title, body, timestamp } = data as {
+      name?: string; title?: string; body?: string; timestamp?: number;
+    };
+    if (!name) return;
+    notify({
+      kind: 'skill', severity: 'success', title: title ?? `New skill: ${name}`, body,
+      dedupKey: `skill:${name}:${timestamp ?? 0}`,
+      persistent: true,
+      ...(timestamp ? { timestamp } : {}),
+      action: { label: 'Review Skill', kind: 'navigate', to: '/skills' },
+    });
+  });
+
   // ── WS source: permission requests ──
   useEvent('session:permission-request', (data) => {
     const { sessionId, requestId, toolName } = data as {

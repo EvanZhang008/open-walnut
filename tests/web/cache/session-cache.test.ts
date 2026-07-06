@@ -484,24 +484,103 @@ describe('WS: session:error', () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('WS: session:batch-completed', () => {
-  it('clears stream state', () => {
+  it('clears stream state after the turn ended, once the delta PROVES the block (evidence)', async () => {
     trackSession('sid');
     fireEvent('session:text-delta', { sessionId: 'sid', delta: 'text' });
+    fireEvent('session:result', { sessionId: 'sid' });
     expect(getStreamState('sid')).toBeDefined();
 
+    // Delta carries a twin for the streamed block → evidence-based promotion removes it.
+    mockFetchHistory.mockResolvedValue({
+      messages: [{ role: 'assistant', text: 'text', timestamp: '' }], delta: true, cursor: 1,
+    });
     fireEvent('session:batch-completed', { sessionId: 'sid' });
-    expect(getStreamState('sid')).toBeUndefined();
+    await vi.waitFor(() => expect(getStreamState('sid')).toBeUndefined());
   });
 
-  it('triggers background history fetch', async () => {
+  it('archive lagging (empty delta) → does NOT delete the completed block (kept, retried)', async () => {
     trackSession('sid');
+    fireEvent('session:text-delta', { sessionId: 'sid', delta: 'text' });
+    fireEvent('session:result', { sessionId: 'sid' });
+
+    // Delta empty (turn not flushed to JSONL yet) → nothing proven → nothing removed.
+    mockFetchHistory.mockResolvedValue({ messages: [], delta: true, cursor: 0 });
+    fireEvent('session:batch-completed', { sessionId: 'sid' });
+    await vi.waitFor(() => expect(mockFetchHistory).toHaveBeenCalled());
+    // Block survives — the failure mode is "shown until proven", never "vanishes".
+    const state = getStreamState('sid');
+    expect(state).toBeDefined();
+    expect(state!.blocks).toHaveLength(1);
+  });
+
+  it('preserves blocks of a NEXT turn that started streaming before batch-completed', async () => {
+    // Turn N: text → result (turn boundary recorded)
+    trackSession('sid');
+    fireEvent('session:text-delta', { sessionId: 'sid', delta: 'turn N answer' });
+    fireEvent('session:result', { sessionId: 'sid' });
+    // Turn N+1 starts streaming BEFORE batch-completed/history-refresh lands
+    fireEvent('session:text-delta', { sessionId: 'sid', delta: 'turn N+1 in progress' });
+
+    // Delta only proves turn N's block; the live turn's block has no twin.
+    mockFetchHistory.mockResolvedValue({
+      messages: [{ role: 'assistant', text: 'turn N answer', timestamp: '' }], delta: true, cursor: 1,
+    });
+    fireEvent('session:batch-completed', { sessionId: 'sid' });
+
+    // Completed turn's block is gone; live turn's block survives
+    await vi.waitFor(() => {
+      const state = getStreamState('sid');
+      expect(state).toBeDefined();
+      expect(state!.blocks).toHaveLength(1);
+      expect(state!.blocks[0]).toEqual({ type: 'text', content: 'turn N+1 in progress' });
+      expect(state!.isStreaming).toBe(true);
+    });
+  });
+
+  it('batch-completed BEFORE result (race): defers the clear until result replays the delta evidence', async () => {
+    trackSession('sid');
+    fireEvent('session:text-delta', { sessionId: 'sid', delta: 'still streaming' });
+    // batch-completed arrives ~50ms before session:result (observed in prod).
+    // Delta carries the block's twin, but the boundary isn't stamped yet → defer.
+    mockFetchHistory.mockResolvedValue({
+      messages: [{ role: 'assistant', text: 'still streaming', timestamp: '' }], delta: true, cursor: 1,
+    });
+    fireEvent('session:batch-completed', { sessionId: 'sid' });
+
+    // Live blocks must NOT be wiped mid-turn (boundary unknown → deferred).
+    await vi.waitFor(() => expect(mockFetchHistory).toHaveBeenCalled());
+    let state = getStreamState('sid');
+    expect(state).toBeDefined();
+    expect(state!.blocks).toHaveLength(1);
+
+    // result lands → deferred clear replays the stashed delta as evidence → block removed.
+    fireEvent('session:result', { sessionId: 'sid' });
+    state = getStreamState('sid');
+    expect(state).toBeUndefined();
+  });
+
+  it('next-turn text-delta after result starts a NEW block (never merges into completed text)', () => {
+    trackSession('sid');
+    fireEvent('session:text-delta', { sessionId: 'sid', delta: 'turn N answer' });
+    fireEvent('session:result', { sessionId: 'sid' });
+    fireEvent('session:text-delta', { sessionId: 'sid', delta: 'turn N+1' });
+
+    const state = getStreamState('sid')!;
+    expect(state.blocks).toHaveLength(2);
+    expect(state.blocks[0]).toEqual({ type: 'text', content: 'turn N answer' });
+    expect(state.blocks[1]).toEqual({ type: 'text', content: 'turn N+1' });
+  });
+
+  it('triggers a background DELTA history fetch (since = cached cursor)', async () => {
+    trackSession('sid');
+    // No cache yet → since = 0, server returns a full payload (delta:false).
     mockFetchHistory.mockResolvedValue({
       messages: [{ role: 'human', content: 'hi' }, { role: 'assistant', content: 'hello' }],
-      forkBoundaryIndex: undefined,
+      forkBoundaryIndex: undefined, delta: false, cursor: 2,
     });
 
     fireEvent('session:batch-completed', { sessionId: 'sid' });
-    expect(mockFetchHistory).toHaveBeenCalledWith('sid');
+    expect(mockFetchHistory).toHaveBeenCalledWith('sid', { since: 0 });
 
     // Wait for async fetch to complete
     await vi.waitFor(() => {
@@ -509,6 +588,65 @@ describe('WS: session:batch-completed', () => {
       expect(cached).toBeDefined();
       expect(cached!.msgCount).toBe(2);
     });
+  });
+
+  it('background fetch APPENDS a delta onto cached history (since = prior msgCount)', async () => {
+    trackSession('sid');
+    setHistoryCache('sid', {
+      messages: [{ role: 'human', content: 'q1' }, { role: 'assistant', content: 'a1' }],
+      msgCount: 2,
+    });
+    // Delta = one new turn (2 msgs) since cursor 2.
+    mockFetchHistory.mockResolvedValue({
+      messages: [{ role: 'human', content: 'q2' }, { role: 'assistant', content: 'a2' }],
+      delta: true, cursor: 4,
+    });
+
+    fireEvent('session:batch-completed', { sessionId: 'sid' });
+    expect(mockFetchHistory).toHaveBeenCalledWith('sid', { since: 2 });
+
+    await vi.waitFor(() => {
+      const cached = getHistoryCache('sid');
+      expect(cached!.msgCount).toBe(4);
+      expect(cached!.messages).toHaveLength(4); // appended, not replaced
+    });
+  });
+
+  it('delta length mismatch (compaction rewrote history) → REBUILDS via full fetch, no duplication', async () => {
+    // Repro of the "compact still shows old messages below" bug on the client side:
+    // cached prefix diverged from the server's current parse, so `since` no longer lines
+    // up with the same boundary. The delta's cursor (5) disagrees with cached(2)+delta(1)=3.
+    // Blindly appending would render the overlap twice; the guard must rebuild instead.
+    trackSession('sid');
+    setHistoryCache('sid', {
+      messages: [{ role: 'human', content: 'q1' }, { role: 'assistant', content: 'a1' }],
+      msgCount: 2,
+    });
+    mockFetchHistory
+      // 1st call: the delta — cursor says 5 but only 1 msg returned → merged=3 ≠ 5 (mismatch).
+      .mockResolvedValueOnce({
+        messages: [{ role: 'assistant', content: 'a2' }], delta: true, cursor: 5,
+      })
+      // 2nd call: the rebuild full fetch (no `since`) — authoritative 5-message history.
+      .mockResolvedValueOnce({
+        messages: [
+          { role: 'human', content: 'q1' }, { role: 'assistant', content: 'a1' },
+          { role: 'human', content: 'q2' }, { role: 'assistant', content: 'a2' },
+          { role: 'assistant', content: 'a3' },
+        ], delta: false, cursor: 5,
+      });
+
+    fireEvent('session:batch-completed', { sessionId: 'sid' });
+    expect(mockFetchHistory).toHaveBeenNthCalledWith(1, 'sid', { since: 2 });
+
+    await vi.waitFor(() => {
+      // Rebuilt from the full fetch (5 msgs), NOT the blind append (which would be 3 with a dup).
+      const cached = getHistoryCache('sid');
+      expect(cached!.msgCount).toBe(5);
+      expect(cached!.messages).toHaveLength(5);
+    });
+    // The 2nd (rebuild) fetch was issued with no `since`.
+    expect(mockFetchHistory).toHaveBeenNthCalledWith(2, 'sid');
   });
 
   it('ignores untracked sessions', () => {
@@ -587,12 +725,15 @@ describe('full streaming turn integration', () => {
   it('text → tool-use → tool-result → text → result → batch-completed', async () => {
     const sid = 'session-full-turn';
     trackSession(sid);
+    // Delta proves every streamed block: the text ('Let me read the file.' +
+    // 'I found the bug.') and the tool (tu-abc). Evidence-based clear removes them all.
     mockFetchHistory.mockResolvedValue({
       messages: [
-        { role: 'human', content: 'fix the bug' },
-        { role: 'assistant', content: 'I will read the file.' },
+        { role: 'assistant', text: 'Let me read the file.', timestamp: '' },
+        { role: 'assistant', text: '', timestamp: '', tools: [{ name: 'Read', input: {}, toolUseId: 'tu-abc' }] },
+        { role: 'assistant', text: 'I found the bug.', timestamp: '' },
       ],
-      forkBoundaryIndex: undefined,
+      delta: true, cursor: 3,
     });
 
     // Step 1: Text delta
@@ -629,33 +770,31 @@ describe('full streaming turn integration', () => {
     fireEvent('session:result', { sessionId: sid });
     state = getStreamState(sid)!;
     expect(state.isStreaming).toBe(false);
-    expect(state.blocks).toHaveLength(3); // blocks preserved
+    expect(state.blocks).toHaveLength(3); // blocks preserved until proven by delta
 
-    // Step 6: Batch completed (turn written to JSONL)
+    // Step 6: Batch completed → delta fetch proves all 3 blocks → cleared
     fireEvent('session:batch-completed', { sessionId: sid });
-    expect(getStreamState(sid)).toBeUndefined(); // stream state cleared
+    await vi.waitFor(() => expect(getStreamState(sid)).toBeUndefined());
 
-    // Wait for background history fetch
-    await vi.waitFor(() => {
-      const cached = getHistoryCache(sid);
-      expect(cached).toBeDefined();
-      expect(cached!.msgCount).toBe(2);
-    });
+    // History cache updated with the delta
+    const cached = getHistoryCache(sid);
+    expect(cached).toBeDefined();
+    expect(cached!.msgCount).toBe(3);
   });
 
-  it('multiple turns in sequence', async () => {
+  it('multiple turns in sequence (each delta proves its own turn)', async () => {
     const sid = 'session-multi-turn';
     trackSession(sid);
+    // Seed a cache so the first delta has a cursor to advance from.
+    setHistoryCache(sid, { messages: [], msgCount: 0 });
 
     let turnCount = 0;
     mockFetchHistory.mockImplementation(() => {
       turnCount++;
+      // Each turn's delta is exactly one assistant message proving that turn's block.
       return Promise.resolve({
-        messages: Array.from({ length: turnCount * 2 }, (_, i) => ({
-          role: i % 2 === 0 ? 'human' : 'assistant',
-          content: `msg-${i}`,
-        })),
-        forkBoundaryIndex: undefined,
+        messages: [{ role: 'assistant', text: `turn ${turnCount}`, timestamp: '' }],
+        delta: true, cursor: turnCount,
       });
     });
 
@@ -665,10 +804,11 @@ describe('full streaming turn integration', () => {
     fireEvent('session:batch-completed', { sessionId: sid });
 
     await vi.waitFor(() => {
-      expect(getHistoryCache(sid)?.msgCount).toBe(2);
+      expect(getHistoryCache(sid)?.msgCount).toBe(1);
+      expect(getStreamState(sid)).toBeUndefined(); // turn 1 block proven+cleared
     });
 
-    // Turn 2 — stream state was cleared, new one created
+    // Turn 2 — fresh stream state
     fireEvent('session:text-delta', { sessionId: sid, delta: 'turn 2' });
     expect(getStreamState(sid)!.blocks[0]).toEqual({ type: 'text', content: 'turn 2' });
 
@@ -676,7 +816,8 @@ describe('full streaming turn integration', () => {
     fireEvent('session:batch-completed', { sessionId: sid });
 
     await vi.waitFor(() => {
-      expect(getHistoryCache(sid)?.msgCount).toBe(4); // 2 turns * 2 messages
+      expect(getHistoryCache(sid)?.msgCount).toBe(2); // cursor advanced by the 2nd delta
+      expect(getHistoryCache(sid)?.messages).toHaveLength(2); // appended
     });
   });
 });
@@ -710,12 +851,16 @@ describe('multiple session isolation', () => {
     fireEvent('session:text-delta', { sessionId: 'sid-a', delta: 'A streaming' });
     fireEvent('session:text-delta', { sessionId: 'sid-b', delta: 'B streaming' });
 
-    mockFetchHistory.mockResolvedValue({ messages: [{ role: 'assistant', content: 'done' }] });
+    // Delta proves A's block only.
+    mockFetchHistory.mockResolvedValue({
+      messages: [{ role: 'assistant', text: 'A streaming', timestamp: '' }], delta: true, cursor: 1,
+    });
 
-    // Only A completes
+    // Only A completes (result marks the turn boundary, then batch-completed)
+    fireEvent('session:result', { sessionId: 'sid-a' });
     fireEvent('session:batch-completed', { sessionId: 'sid-a' });
 
-    expect(getStreamState('sid-a')).toBeUndefined(); // cleared
+    await vi.waitFor(() => expect(getStreamState('sid-a')).toBeUndefined()); // cleared
     expect(getStreamState('sid-b')).toBeDefined();    // untouched
     expect(getStreamState('sid-b')!.blocks[0]).toEqual({ type: 'text', content: 'B streaming' });
   });
@@ -770,11 +915,11 @@ describe('edge cases', () => {
 
   it('batch-completed without prior streaming is handled', async () => {
     trackSession('sid');
-    mockFetchHistory.mockResolvedValue({ messages: [], forkBoundaryIndex: undefined });
+    mockFetchHistory.mockResolvedValue({ messages: [], forkBoundaryIndex: undefined, delta: false, cursor: 0 });
 
     fireEvent('session:batch-completed', { sessionId: 'sid' });
-    // No stream state to clear — just fires fetch
-    expect(mockFetchHistory).toHaveBeenCalledWith('sid');
+    // No stream state to clear — just fires the delta fetch (since=0, no cache).
+    expect(mockFetchHistory).toHaveBeenCalledWith('sid', { since: 0 });
   });
 
   it('rapid tool-use back-to-back (concurrent tools)', () => {
