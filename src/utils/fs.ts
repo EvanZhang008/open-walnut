@@ -11,12 +11,19 @@ export async function writeJsonFile(filePath: string, data: unknown): Promise<vo
   const dir = path.dirname(filePath);
   await fs.mkdir(dir, { recursive: true });
 
+  // tmp file must live in the SAME directory as the target: rename() across
+  // filesystems fails with EXDEV (e.g. tmpfs /tmp → EBS data dir on Linux).
   const tmpFile = path.join(
-    os.tmpdir(),
-    `open-walnut-${crypto.randomBytes(8).toString('hex')}.tmp`,
+    dir,
+    `.open-walnut-${crypto.randomBytes(8).toString('hex')}.tmp`,
   );
-  await fs.writeFile(tmpFile, JSON.stringify(data, null, 2) + '\n', 'utf-8');
-  await fs.rename(tmpFile, filePath);
+  try {
+    await fs.writeFile(tmpFile, JSON.stringify(data, null, 2) + '\n', 'utf-8');
+    await fs.rename(tmpFile, filePath);
+  } catch (err) {
+    await fs.rm(tmpFile, { force: true }).catch(() => {});
+    throw err;
+  }
 }
 
 /**
