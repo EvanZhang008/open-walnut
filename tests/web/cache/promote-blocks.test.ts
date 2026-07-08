@@ -271,3 +271,73 @@ describe('promoteCompletedBlocks — join-run matching', () => {
     expect(r.kept).toEqual([text('gamma')]);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase 1 (ACP dialect): msgId-first matching
+// ═══════════════════════════════════════════════════════════════════════════
+
+const textId = (content: string, msgId: string): StreamingBlock => ({ type: 'text', content, msgId });
+const thinkingId = (content: string, msgId: string): StreamingBlock => ({ type: 'thinking', content, msgId });
+const asstTextId = (t: string, msgId: string): SessionHistoryMessage => ({ role: 'assistant', text: t, timestamp: '', msgId });
+const asstThinkingId = (t: string, msgId: string): SessionHistoryMessage => ({ role: 'assistant', text: '', timestamp: '', thinking: t, msgId });
+
+describe('promoteCompletedBlocks — msgId-first matching', () => {
+  it('removes a text block by msgId even when content DIVERGED', () => {
+    // The exact scenario content-matching cannot solve: history rewrote the
+    // text ('\n'-join, truncation, image-path rewrite) so verbatim match fails,
+    // but the id proves the persisted message replaced this block.
+    const blocks = [textId('streamed version of the text', 'msg_A')];
+    const delta = [asstTextId('persisted DIFFERENT version', 'msg_A')];
+    const r = promoteCompletedBlocks(blocks, delta, blocks.length);
+    expect(r.removed).toBe(1);
+    expect(r.kept).toHaveLength(0);
+    expect(r.unmatched).toHaveLength(0);
+  });
+
+  it('one persisted message id claims ALL streaming blocks of that message', () => {
+    // Text split across a tool call streams as two blocks of the same msgId;
+    // history collapses them into one message. Set semantics (not multiset)
+    // must remove both.
+    const blocks = [textId('part one', 'msg_A'), tool('toolu_x'), textId('part two', 'msg_A')];
+    const delta = [asstTextId('part one\npart two', 'msg_A'), asstTool('toolu_x')];
+    const r = promoteCompletedBlocks(blocks, delta, blocks.length);
+    expect(r.removed).toBe(3);
+    expect(r.kept).toHaveLength(0);
+  });
+
+  it('does NOT remove a block whose msgId is absent from the delta', () => {
+    const blocks = [textId('not yet archived', 'msg_B')];
+    const delta = [asstTextId('some other message', 'msg_A')];
+    const r = promoteCompletedBlocks(blocks, delta, blocks.length);
+    expect(r.removed).toBe(0);
+    expect(r.kept).toEqual(blocks);
+  });
+
+  it('thinking block is id-removed ONLY when the persisted message kept thinking', () => {
+    // msg_A persisted WITH thinking → id-removable. msg_B persisted with text
+    // only (thinking redacted) → its streamed thinking must survive.
+    const blocks = [thinkingId('reasoning A', 'msg_A'), thinkingId('reasoning B', 'msg_B')];
+    const delta = [asstThinkingId('reasoning A REWRITTEN', 'msg_A'), asstTextId('answer B', 'msg_B')];
+    const r = promoteCompletedBlocks(blocks, delta, blocks.length);
+    expect(r.removed).toBe(1);
+    expect(r.kept).toEqual([thinkingId('reasoning B', 'msg_B')]);
+  });
+
+  it('id-less blocks still promote via content fallback alongside id blocks', () => {
+    const blocks = [text('legacy block'), textId('modern block', 'msg_A')];
+    const delta = [asstText('legacy block'), asstTextId('modern block', 'msg_A')];
+    const r = promoteCompletedBlocks(blocks, delta, blocks.length);
+    expect(r.removed).toBe(2);
+    expect(r.kept).toHaveLength(0);
+  });
+
+  it('live-turn blocks stay untouchable even with a matching msgId in delta', () => {
+    const blocks = [textId('done text', 'msg_A'), textId('live text', 'msg_B')];
+    // msg_B evidence arrives (e.g. stale-cursor over-wide delta) but the block
+    // is past the completedLen boundary — structurally excluded.
+    const delta = [asstTextId('done text', 'msg_A'), asstTextId('live text', 'msg_B')];
+    const r = promoteCompletedBlocks(blocks, delta, 1);
+    expect(r.removed).toBe(1);
+    expect(r.kept).toEqual([textId('live text', 'msg_B')]);
+  });
+});

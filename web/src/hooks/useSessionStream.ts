@@ -12,11 +12,17 @@ import {
   initStreamState,
 } from '@/cache/session-cache';
 import { promoteCompletedBlocks } from '@/cache/promote-blocks';
+import { shouldAdoptSnapshot } from '@/cache/snapshot-adoption';
 
 /** A streaming block — text, tool call, or tool result */
 export interface StreamingTextBlock {
   type: 'text';
   content: string;
+  /** API message id (`msg_…`) this block belongs to — same id as the persisted
+   *  history message, enabling id-based promotion instead of content matching.
+   *  ACP-dialect rule: a CHANGE in msgId = a new message = a new block.
+   *  Optional (absent on legacy events/snapshots). */
+  msgId?: string;
 }
 
 export interface StreamingToolCallBlock {
@@ -52,6 +58,8 @@ export interface StreamingPermissionBlock {
 export interface StreamingThinkingBlock {
   type: 'thinking';
   content: string;
+  /** See StreamingTextBlock.msgId. */
+  msgId?: string;
 }
 
 export type StreamingBlock = StreamingTextBlock | StreamingToolCallBlock | StreamingSystemBlock | StreamingPermissionBlock | StreamingThinkingBlock;
@@ -65,6 +73,10 @@ interface StreamSnapshot {
    *  turn's blocks with isStreaming=true — deriving mislabels them "live" and
    *  evidence-promotion then never removes them (permanent duplicates). */
   completedLen?: number;
+  /** Monotonic server-side mutation counter for this session's buffer
+   *  (0 = no buffer). Future id-based adoption compares this against the
+   *  last-applied seq instead of guessing freshness from block lengths. */
+  seq?: number;
 }
 
 interface UseSessionStreamReturn {
@@ -103,6 +115,9 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
   // started streaming while the post-turn history refresh was still in flight —
   // clearCompleted() must never wipe those (they'd vanish mid-generation).
   const completedLen = useRef(0);
+  // Server buffer seq recorded at the last adopted snapshot (Phase 1 seq-based
+  // adoption). null = never adopted for this session / pre-seq server.
+  const lastAdoptedSeq = useRef<number | null>(null);
   // Race guard: clearCompleted() may run before session:result stamps the
   // boundary (batch-completed precedes result by ~20-50ms in prod; a fast 304
   // history refetch could land in between). Removing 0 blocks then would leave
@@ -161,6 +176,8 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
         setBlocks([]);
         setIsStreaming(false);
         streamBuffer.current = '';
+        currentTextMsgId.current = undefined;
+        lastAdoptedSeq.current = null;
       }
       return;
     }
@@ -184,6 +201,10 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
       streamBuffer.current = '';
       completedLen.current = 0;
     }
+    currentTextMsgId.current = undefined;
+    // Session switch OR reconnect: the server buffer may be a new generation —
+    // forget the adopted seq so the next snapshot falls back to legacy rules.
+    lastAdoptedSeq.current = null;
     pendingClearRef.current = false;
 
     // Always subscribe to get server snapshot for correction (background).
@@ -207,17 +228,21 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
         log.info('stream', `subscribe snapshot: blocks=${snapshot.blocks.length} isStreaming=${snapshot.isStreaming}`, { sessionId });
         let appliedBlocks = false;
         setBlocks((prev) => {
-          // Stale-cache correction: when NEITHER side is live (local not
-          // streaming, server not streaming), the server buffer is authoritative
-          // — adopt it even over non-empty cached blocks. A cache seeded from a
-          // finished turn otherwise renders next to the same content in history
-          // FOREVER (no new delta ever arrives to evidence-promote it away).
-          // A live turn on either side keeps the old non-clobber rule.
-          const bothIdle = !snapshot.isStreaming && !isStreamingRef.current;
-          if (prev.length > 0 && !bothIdle) return prev;
-          if (prev.length > 0 && bothIdle
-            && prev.length === snapshot.blocks.length) return prev; // identical-ish — avoid churn
+          // Adoption rules live in shouldAdoptSnapshot (pure, unit-tested) —
+          // both failure directions have shipped as production bugs: adopting
+          // an EMPTY snapshot wiped evidence-kept blocks ("reply visible while
+          // streaming, gone when done", inc-1783357192826); never adopting
+          // left stale finished-turn duplicates next to history forever.
+          if (!shouldAdoptSnapshot({
+            prevLen: prev.length,
+            snapshotLen: snapshot.blocks.length,
+            snapshotIsStreaming: snapshot.isStreaming,
+            localIsStreaming: isStreamingRef.current,
+            snapshotSeq: snapshot.seq,
+            lastAdoptedSeq: lastAdoptedSeq.current ?? undefined,
+          })) return prev;
           appliedBlocks = true;
+          if (snapshot.seq != null) lastAdoptedSeq.current = snapshot.seq;
           // Server-authoritative boundary when present (see StreamSnapshot doc);
           // legacy fallback: finished turn → all completed, live turn → none.
           completedLen.current = snapshot.completedLen
@@ -280,6 +305,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
             if (prev.length > 0) return prev;
             completedLen.current = snapshot.completedLen
               ?? (snapshot.isStreaming ? 0 : snapshot.blocks.length);
+            if (snapshot.seq != null) lastAdoptedSeq.current = snapshot.seq;
             return snapshot.blocks;
           });
           // Non-regressive sync: snapshot only allowed to promote isStreaming false→true.
@@ -392,6 +418,11 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
 
   // Handle text deltas — batch via rAF to coalesce rapid tokens into ~60 renders/sec
   const textDeltaRaf = useRef<number | null>(null);
+  // msgId of the message currently accumulating in streamBuffer. ACP-dialect
+  // boundary rule: when an incoming delta carries a DIFFERENT msgId, the
+  // previous message is complete — flush it and start a fresh block. Stamped
+  // onto the block so promotion can match it against history by id.
+  const currentTextMsgId = useRef<string | undefined>(undefined);
 
   /** Flush any pending rAF text update synchronously, then cancel the frame.
    *  Called before streamBuffer is cleared (tool-use, result, error, session switch)
@@ -403,16 +434,19 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
 
       // Apply buffered text synchronously
       const accumulated = streamBuffer.current;
+      const msgId = currentTextMsgId.current;
       if (accumulated) {
         setBlocks((prev) => {
           const last = prev[prev.length - 1];
-          // Merge only into a LIVE text block (past the completed-turn boundary);
-          // a completed turn's final text block must never be overwritten by the
-          // next turn's deltas.
-          if (last && last.type === 'text' && prev.length > completedLen.current) {
-            return [...prev.slice(0, -1), { type: 'text', content: accumulated }];
+          // Merge only into a LIVE text block (past the completed-turn boundary)
+          // of the SAME message; a completed turn's final text block must never
+          // be overwritten by the next turn's deltas, and a different msgId
+          // means a new message (new block).
+          const sameMessage = last && last.type === 'text' && (!msgId || !last.msgId || last.msgId === msgId);
+          if (sameMessage && prev.length > completedLen.current) {
+            return [...prev.slice(0, -1), { type: 'text', content: accumulated, ...(msgId ? { msgId } : {}) }];
           }
-          return [...prev, { type: 'text', content: accumulated }];
+          return [...prev, { type: 'text', content: accumulated, ...(msgId ? { msgId } : {}) }];
         });
       }
     }
@@ -429,27 +463,36 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
   }, []);
 
   useEvent('session:text-delta', (data) => {
-    const { sessionId: sid, delta } = data as { sessionId: string; delta: string; taskId: string };
+    const { sessionId: sid, delta, msgId } = data as { sessionId: string; delta: string; taskId: string; msgId?: string };
     if (!sessionId || sid !== sessionId) return; // defensive client-side check
 
     setIsStreaming((prev) => {
       if (!prev) log.info('stream', 'text-delta → isStreaming false→true', { sessionId: sid });
       return true;
     });
+    // Message boundary: a different msgId means the previous message finished —
+    // flush its pending rAF content, then restart the accumulator for the new one.
+    if (msgId && currentTextMsgId.current && msgId !== currentTextMsgId.current) {
+      flushPendingTextRaf();
+      streamBuffer.current = '';
+    }
+    if (msgId) currentTextMsgId.current = msgId;
     streamBuffer.current += delta;
 
     if (textDeltaRaf.current === null) {
       textDeltaRaf.current = requestAnimationFrame(() => {
         textDeltaRaf.current = null;
         const accumulated = streamBuffer.current;
+        const accMsgId = currentTextMsgId.current;
 
         setBlocks((prev) => {
           const last = prev[prev.length - 1];
-          // Merge only into a LIVE text block — see flushPendingTextRaf.
-          if (last && last.type === 'text' && prev.length > completedLen.current) {
-            return [...prev.slice(0, -1), { type: 'text', content: accumulated }];
+          // Merge only into a LIVE text block of the SAME message — see flushPendingTextRaf.
+          const sameMessage = last && last.type === 'text' && (!accMsgId || !last.msgId || last.msgId === accMsgId);
+          if (sameMessage && prev.length > completedLen.current) {
+            return [...prev.slice(0, -1), { type: 'text', content: accumulated, ...(accMsgId ? { msgId: accMsgId } : {}) }];
           }
-          return [...prev, { type: 'text', content: accumulated }];
+          return [...prev, { type: 'text', content: accumulated, ...(accMsgId ? { msgId: accMsgId } : {}) }];
         });
       });
     }
@@ -516,26 +559,33 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
   // never carry forward text from an earlier segment.
   const pendingThinking = useRef('');
   const thinkingDeltaRaf = useRef<number | null>(null);
+  // msgId of the thinking segment currently accumulating (see currentTextMsgId).
+  const currentThinkingMsgId = useRef<string | undefined>(undefined);
 
   useEvent('session:thinking-delta', (data) => {
-    const { sessionId: sid, delta } = data as { sessionId: string; delta: string };
+    const { sessionId: sid, delta, msgId } = data as { sessionId: string; delta: string; msgId?: string };
     if (!sessionId || sid !== sessionId) return;
 
     setIsStreaming(true);
+    if (msgId) currentThinkingMsgId.current = msgId;
     pendingThinking.current += delta;
 
     if (thinkingDeltaRaf.current === null) {
       thinkingDeltaRaf.current = requestAnimationFrame(() => {
         thinkingDeltaRaf.current = null;
         const incoming = pendingThinking.current;
+        const accMsgId = currentThinkingMsgId.current;
         pendingThinking.current = '';
         if (!incoming) return;
         setBlocks((prev) => {
           const last = prev[prev.length - 1];
-          if (last && last.type === 'thinking' && prev.length > completedLen.current) {
-            return [...prev.slice(0, -1), { type: 'thinking', content: last.content + incoming }];
+          // Merge only into a LIVE thinking block of the SAME message —
+          // a different msgId means a new message (new block).
+          const sameMessage = last && last.type === 'thinking' && (!accMsgId || !last.msgId || last.msgId === accMsgId);
+          if (sameMessage && prev.length > completedLen.current) {
+            return [...prev.slice(0, -1), { type: 'thinking', content: last.content + incoming, ...(accMsgId ? { msgId: accMsgId } : {}) }];
           }
-          return [...prev, { type: 'thinking', content: incoming }];
+          return [...prev, { type: 'thinking', content: incoming, ...(accMsgId ? { msgId: accMsgId } : {}) }];
         });
       });
     }

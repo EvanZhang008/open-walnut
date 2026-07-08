@@ -3,6 +3,7 @@ import { wsClient } from '@/api/ws';
 import { log } from '@/utils/log';
 import type { OptimisticMessage } from '@/components/sessions/SessionChatHistory';
 import type { ImageAttachment } from '@/api/chat';
+import { removeBatchMessages, markDeliveredMessages } from '@/components/sessions/optimistic-dedup';
 
 interface UseSessionSendReturn {
   optimisticMsgs: OptimisticMessage[];
@@ -12,8 +13,8 @@ interface UseSessionSendReturn {
   interruptSend: (sessionId: string, message: string, images?: ImageAttachment[]) => Promise<boolean>;
   retryFailed: (queueId: string, sessionId: string) => void;
   dismissFailed: (queueId: string) => void;
-  handleMessagesDelivered: (count: number) => void;
-  handleBatchCompleted: (count: number) => void;
+  handleMessagesDelivered: (count: number, messageIds?: string[]) => void;
+  handleBatchCompleted: (count: number, messageIds?: string[]) => void;
   handleBatchFailed: (messageIds: string[], error: string) => void;
   handleEditQueued: (sessionId: string, queueId: string, newText: string) => void;
   handleDeleteQueued: (sessionId: string, queueId: string) => void;
@@ -31,15 +32,19 @@ interface UseSessionSendReturn {
  *   pending → received → delivered → (removed by handleBatchCompleted)
  *
  *   - send()                   → appends as 'pending', then RPC resolves → 'received'
- *   - handleMessagesDelivered  → first N pending/received → 'delivered'
- *   - handleBatchCompleted     → removes first N messages (count-based, authoritative)
+ *   - handleMessagesDelivered  → matching (id-first) pending/received → 'delivered'
+ *   - handleBatchCompleted     → removes the batch's messages (id-first, authoritative)
  *
- * ## handleBatchCompleted — count-based removal
+ * ## handleBatchCompleted — id-first removal, count fallback
  *
- * The backend's batch count is authoritative. When a turn completes, the first
- * `count` optimistic messages are removed outright — the re-fetched persisted
- * history already contains them (possibly combined with \n\n when multiple
- * messages are delivered together; see claude-code-session.ts processNext).
+ * The backend's SESSION_BATCH_COMPLETED carries the batch's `qm-…` messageIds
+ * (Phase 1 of the ACP-dialect alignment) — remove EXACTLY those bubbles, so a
+ * stale/raced event can never delete an unrelated newer message. Events without
+ * ids (older server, interrupt path edge cases) fall back to the historical
+ * "remove first N delivered" count semantics. A bubble whose queueId is still
+ * the client tempId (send RPC response not yet applied) won't id-match; the
+ * count fallback + text-dedup absorb it — worst case a brief duplicate, never
+ * a silent loss.
  *
  * See SessionChatHistory.tsx top-of-file doc block for the full lifecycle.
  */
@@ -203,44 +208,19 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     setOptimisticMsgs((prev) => prev.filter((m) => m.queueId !== queueId));
   }, []);
 
-  const handleMessagesDelivered = useCallback((count: number) => {
-    log.info('send', 'delivered', { count });
-    setOptimisticMsgs((prev) => {
-      let remaining = count;
-      return prev.map((m) => {
-        if (remaining > 0 && (m.status === 'pending' || m.status === 'received')) {
-          remaining--;
-          return { ...m, status: 'delivered' as const };
-        }
-        return m;
-      });
-    });
+  const handleMessagesDelivered = useCallback((count: number, messageIds?: string[]) => {
+    log.info('send', 'delivered', { count, messageIds });
+    // Id-first (exactly the batch's bubbles), count fallback for tempId races /
+    // id-less events — rules live in optimistic-dedup.ts (unit-tested).
+    setOptimisticMsgs((prev) => markDeliveredMessages(prev, count, messageIds) as OptimisticMessage[]);
   }, []);
 
-  const handleBatchCompleted = useCallback((count: number) => {
-    log.info('send', 'batch completed', { count });
-    setOptimisticMsgs((prev) => {
-      // Remove the first `count` DELIVERED messages — the backend's batch count is
-      // authoritative and the re-fetched persisted history already contains them.
-      //
-      // NO-LOSS GUARD: only 'delivered' messages are removable. A spurious or
-      // mismatched batch-completed (stale event after WS reconnect, interrupt
-      // cleanup, count fallback) must never delete a message the CLI never
-      // received — those are still 'pending'/'received' and live in the server
-      // disk queue. If a legit batch-completed arrives while messages are still
-      // 'received' (missed messages-delivered event), they stay visible and the
-      // text-dedup pass absorbs them when the refreshed history contains them —
-      // worst case a brief duplicate, never a silent loss.
-      let remaining = count;
-      return prev.filter(m => {
-        if (m.status !== 'delivered') return true; // keep failed/pending/received
-        if (remaining > 0) {
-          remaining--;
-          return false; // remove this message
-        }
-        return true; // keep
-      });
-    });
+  const handleBatchCompleted = useCallback((count: number, messageIds?: string[]) => {
+    log.info('send', 'batch completed', { count, messageIds });
+    // Id-first removal (exactly the batch's bubbles — a stale/raced event can
+    // never take out an unrelated newer message), count fallback with the
+    // delivered-only NO-LOSS guard — rules live in optimistic-dedup.ts.
+    setOptimisticMsgs((prev) => removeBatchMessages(prev, count, messageIds));
   }, []);
 
   // Backend processNext failed to deliver the batch (e.g. SSH/daemon down). Mark the

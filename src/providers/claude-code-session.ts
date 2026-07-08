@@ -35,6 +35,7 @@ import { SESSION_STREAMS_DIR, CLAUDE_HOME } from '../constants.js'
 import { log } from '../logging/index.js'
 import { markProcessing, removeProcessed, revertToPending, loadQueue, getAllSessionsWithPending } from '../core/session-message-queue.js'
 import type { QueuedMessage } from '../core/session-message-queue.js'
+import { registerEchoClaims } from '../core/echo-claims.js'
 // Image transfer for remote sessions: RemoteSessionManager.prepareOutbound() uploads
 // local images via daemon and rewrites paths inside start() and writeMessage().
 import type { SshTarget } from './session-io.js'
@@ -2807,6 +2808,7 @@ export class ClaudeCodeSession {
               sessionId: this.claudeSessionId,
               taskId: this.taskId,
               delta: rewrittenDelta,
+              ...(msgId ? { msgId } : {}),
             }, ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
           } else if (block.type === 'tool_use') {
             // Dedup: skip tool_use blocks already emitted (daemon replay protection)
@@ -3720,6 +3722,7 @@ export class ClaudeCodeSession {
               sessionId: this.claudeSessionId,
               taskId: this.taskId,
               delta: rewritten,
+              ...(msgId ? { msgId } : {}),
             }, ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
           } else if (deltaType === 'thinking_delta') {
             const text = delta?.thinking ?? ''
@@ -3728,6 +3731,7 @@ export class ClaudeCodeSession {
               sessionId: this.claudeSessionId,
               taskId: this.taskId,
               delta: text,
+              ...(msgId ? { msgId } : {}),
             }, ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
           } else if (deltaType === 'citations_delta') {
             // Surface citation as a text_delta with the reference mark so it
@@ -3737,6 +3741,7 @@ export class ClaudeCodeSession {
               sessionId: this.claudeSessionId,
               taskId: this.taskId,
               delta: ` ※${citation} `,
+              ...(msgId ? { msgId } : {}),
             }, ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
           }
           break
@@ -4416,6 +4421,10 @@ export class SessionRunner {
   private cliCommand: string
   private activeProcessing = new Set<string>()
   private batchCounts = new Map<string, number>()
+  /** Queue message ids (`qm-…`) of the in-flight batch, parallel to batchCounts.
+   *  Lets SESSION_BATCH_COMPLETED carry exact ids (frontend removes exactly
+   *  these optimistic bubbles) instead of a bare count ("remove first N"). */
+  private batchMessageIds = new Map<string, string[]>()
   /** Safety timers that auto-clear stuck activeProcessing entries */
   private activeProcessingTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
@@ -4454,6 +4463,7 @@ export class SessionRunner {
   private clearActiveProcessing(sessionId: string): void {
     this.activeProcessing.delete(sessionId)
     this.batchCounts.delete(sessionId)
+    this.batchMessageIds.delete(sessionId)
     const timer = this.activeProcessingTimers.get(sessionId)
     if (timer) {
       clearTimeout(timer)
@@ -4466,9 +4476,10 @@ export class SessionRunner {
    * The timeout auto-clears the entry after 60s to prevent permanent stuck state
    * (e.g., if SESSION_RESULT arrives with a mismatched session ID).
    */
-  private setActiveProcessing(sessionId: string, batchCount: number): void {
+  private setActiveProcessing(sessionId: string, batchCount: number, messageIds?: string[]): void {
     this.activeProcessing.add(sessionId)
     this.batchCounts.set(sessionId, batchCount)
+    if (messageIds) this.batchMessageIds.set(sessionId, [...messageIds])
 
     // Cancel any existing safety timer for this sessionId
     const existingTimer = this.activeProcessingTimers.get(sessionId)
@@ -4480,6 +4491,7 @@ export class SessionRunner {
         log.session.warn('activeProcessing safety timeout (60s): force-clearing stuck entry', { sessionId })
         this.activeProcessing.delete(sessionId)
         this.batchCounts.delete(sessionId)
+        this.batchMessageIds.delete(sessionId)
         this.activeProcessingTimers.delete(sessionId)
         // Try to process next messages if any accumulated while stuck
         this.processNext(sessionId).catch(() => {})
@@ -4698,6 +4710,7 @@ export class SessionRunner {
           }
 
           const batchCount = this.batchCounts.get(resolvedSessionId) ?? 1
+          const batchIds = this.batchMessageIds.get(resolvedSessionId)
           this.clearActiveProcessing(resolvedSessionId)
 
           // NO un-scoped removeProcessed here. Every delivery point already removes
@@ -4708,10 +4721,11 @@ export class SessionRunner {
           // user's message. Worst case of not sweeping: a stuck 'processing' message
           // survives until restart and gets redelivered (duplicate > loss).
 
-          // Tell frontend how many optimistic messages to clear
+          // Tell frontend which optimistic messages to clear (ids when known)
           bus.emit(EventNames.SESSION_BATCH_COMPLETED, {
             sessionId,
             count: batchCount,
+            ...(batchIds && batchIds.length > 0 ? { messageIds: batchIds } : {}),
           }, ['main-ai'], { source: 'session-runner' })
 
           // Process next batch if any new messages arrived during processing
@@ -4735,6 +4749,7 @@ export class SessionRunner {
     this.sessions.clear()
     this.activeProcessing.clear()
     this.batchCounts.clear()
+    this.batchMessageIds.clear()
     for (const timer of this.activeProcessingTimers.values()) clearTimeout(timer)
     this.activeProcessingTimers.clear()
     this.sdkSessionMap.clear()
@@ -4766,6 +4781,7 @@ export class SessionRunner {
     this.sessions.clear()
     this.activeProcessing.clear()
     this.batchCounts.clear()
+    this.batchMessageIds.clear()
     for (const timer of this.activeProcessingTimers.values()) clearTimeout(timer)
     this.activeProcessingTimers.clear()
     this.sdkSessionMap.clear()
@@ -5602,11 +5618,13 @@ export class SessionRunner {
       // batch that must survive (sweeping it = silent message loss).
       if (this.activeProcessing.has(sessionId)) {
         const oldBatchCount = this.batchCounts.get(sessionId) ?? 1
+        const oldBatchIds = this.batchMessageIds.get(sessionId)
         this.clearActiveProcessing(sessionId)
 
         bus.emit(EventNames.SESSION_BATCH_COMPLETED, {
           sessionId,
           count: oldBatchCount,
+          ...(oldBatchIds && oldBatchIds.length > 0 ? { messageIds: oldBatchIds } : {}),
         }, ['main-ai'], { source: 'session-runner' })
       }
     }
@@ -5760,6 +5778,10 @@ export class SessionRunner {
       // Injection succeeded — increment batch count so SESSION_BATCH_COMPLETED
       // includes these messages when the turn eventually completes
       this.batchCounts.set(sessionId, (this.batchCounts.get(sessionId) ?? 0) + newMsgs.length)
+      this.batchMessageIds.set(sessionId, [...(this.batchMessageIds.get(sessionId) ?? []), ...newMsgs.map((m) => m.id)])
+      // Echo-claim: the CLI re-logs this send as a canonical user line; bind its
+      // uuid to these qm ids at the next history parse (exact-id dedup upstream).
+      registerEchoClaims(sessionId, newMsgs.map((m) => m.id), combined)
       log.session.info('handleSend: message injected mid-turn via stdin', { sessionId, count: newMsgs.length })
       this.logDeliveryLatency(sessionId, 'mid-turn', newMsgs, targetSession)
 
@@ -5780,6 +5802,7 @@ export class SessionRunner {
       bus.emit(EventNames.SESSION_MESSAGES_DELIVERED, {
         sessionId,
         count: newMsgs.length,
+        messageIds: newMsgs.map((m) => m.id),
       }, ['main-ai'], { source: 'session-runner' })
     } else {
       // stdin write failed — the daemon's FIFO probe says the CLI isn't reading
@@ -5844,12 +5867,16 @@ export class SessionRunner {
     for (const m of msgs) {
       if (m.id) session.writeSyntheticUserEvent(m.message, m.id)
     }
+    // Echo-claim: --resume delivers the same combined payload via stdin — the
+    // CLI echoes it as one canonical user line; bind at the next history parse.
+    registerEchoClaims(sessionId, msgs.map((m) => m.id), msgs.map((m) => m.message).join('\n\n'))
     removeProcessed(sessionId, msgs.map((m) => m.id)).catch((err) => {
       log.session.warn('eager removeProcessed failed after --resume spawn', { sessionId, error: err instanceof Error ? err.message : String(err) })
     })
     bus.emit(EventNames.SESSION_MESSAGES_DELIVERED, {
       sessionId,
       count: msgs.length,
+      messageIds: msgs.map((m) => m.id),
     }, ['main-ai'], { source: 'session-runner' })
     this.logDeliveryLatency(sessionId, 'resume', msgs, session)
   }
@@ -5924,7 +5951,7 @@ export class SessionRunner {
     const msgs = await markProcessing(sessionId)
     if (msgs.length === 0) return
 
-    this.setActiveProcessing(sessionId, msgs.length)
+    this.setActiveProcessing(sessionId, msgs.length, msgs.map((m) => m.id))
 
     let combined = msgs.map((m) => m.message).join('\n\n')
 
@@ -6062,6 +6089,9 @@ export class SessionRunner {
         if (await targetSession.writeMessage(combined)) {
           log.session.info('processNext: message sent via stdin (no new process)', { sessionId })
           this.logDeliveryLatency(sessionId, 'stdin', msgs, targetSession)
+          // Echo-claim: bind the canonical user-echo uuid to these qm ids at the
+          // next history parse (exact-id optimistic dedup upstream of text match).
+          registerEchoClaims(sessionId, msgs.map((m) => m.id), combined)
 
           // Write synthetic user events to streams file so Phase 1 has user messages.
           // One event per queued message so each optimistic copy can dedup by ID.
@@ -6084,6 +6114,7 @@ export class SessionRunner {
           bus.emit(EventNames.SESSION_MESSAGES_DELIVERED, {
             sessionId,
             count: msgs.length,
+            messageIds: msgs.map((m) => m.id),
           }, ['main-ai'], { source: 'session-runner' })
 
           // FIFO stall detection removed — the 120s timer was killing legitimate

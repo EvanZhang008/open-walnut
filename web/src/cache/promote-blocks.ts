@@ -20,7 +20,12 @@
  *
  * Matching keys (cheap, in priority order):
  *   · tool_call    → toolUseId (both sides carry Claude's `toolu_…`; exact)
- *   · text/thinking→ verbatim content equality (same model output, byte-identical)
+ *   · text/thinking→ msgId (ACP dialect: both sides carry the API `msg_…` id —
+ *                    the persisted message with that id SUPERSEDES every
+ *                    streaming block stamped with it, regardless of content
+ *                    divergence from truncation / '\n'-joins / path rewriting)
+ *   · text/thinking→ verbatim content equality — fallback for id-less blocks
+ *                    (legacy events, snapshots taken before id threading)
  * Pure-UI blocks that never appear in JSONL (permission cards, system notices)
  * have no possible twin — they are collected separately, and only for turns whose
  * matchable content fully matched (so we never GC a UI block of a live turn).
@@ -39,11 +44,22 @@ export interface DeltaEvidence {
   toolUseIds: Set<string>;
   /** Multiset of text/thinking contents (a value = remaining count still claimable). */
   texts: Map<string, number>;
+  /** msgIds of delta messages carrying text. A SET, not a multiset: one message
+   *  id may claim MANY streaming blocks (text split across tool calls streams as
+   *  several blocks of the same msgId; history collapses them into one message). */
+  textMsgIds: Set<string>;
+  /** msgIds of delta messages carrying thinking. Separate from textMsgIds so a
+   *  thinking block is only id-removed when history actually PRESERVED thinking
+   *  (it is frequently redacted) — otherwise id-removal would vanish the
+   *  streamed reasoning with no persisted replacement to render. */
+  thinkingMsgIds: Set<string>;
 }
 
 export function buildDeltaEvidence(delta: SessionHistoryMessage[]): DeltaEvidence {
   const toolUseIds = new Set<string>();
   const texts = new Map<string, number>();
+  const textMsgIds = new Set<string>();
+  const thinkingMsgIds = new Set<string>();
   const bump = (s: string | undefined) => {
     if (!s) return;
     texts.set(s, (texts.get(s) ?? 0) + 1);
@@ -51,13 +67,15 @@ export function buildDeltaEvidence(delta: SessionHistoryMessage[]): DeltaEvidenc
   for (const m of delta) {
     if (m.text) bump(m.text);
     if (m.thinking) bump(m.thinking);
+    if (m.msgId && m.text) textMsgIds.add(m.msgId);
+    if (m.msgId && m.thinking) thinkingMsgIds.add(m.msgId);
     if (m.tools) {
       for (const t of m.tools) {
         if (t.toolUseId) toolUseIds.add(t.toolUseId);
       }
     }
   }
-  return { toolUseIds, texts };
+  return { toolUseIds, texts, textMsgIds, thinkingMsgIds };
 }
 
 /** Try to claim a text/thinking block's content from the multiset (consumes one). */
@@ -120,6 +138,11 @@ export function promoteCompletedBlocks(
       continue;
     }
     if (b.type === 'text') {
+      // Id match first (ACP dialect): the persisted message with this msgId has
+      // landed — it supersedes every streaming block stamped with the same id.
+      // Content equality is irrelevant here; divergence (truncation, '\n'-joins,
+      // image-path rewriting) is exactly what the id was introduced to bypass.
+      if (b.msgId && ev.textMsgIds.has(b.msgId)) { removed++; continue; }
       if (claimText(ev, b.content)) { removed++; continue; }
       // Join-run fallback: the history producer (session-history.ts) collapses a
       // message's multiple text parts into ONE string joined by '\n' — even when
@@ -154,6 +177,10 @@ export function promoteCompletedBlocks(
       continue;
     }
     if (b.type === 'thinking') {
+      // Id match only against messages whose persisted form KEPT thinking —
+      // an id in textMsgIds alone means the thinking was redacted, and removing
+      // the streamed copy would vanish it with nothing to replace it.
+      if (b.msgId && ev.thinkingMsgIds.has(b.msgId)) { removed++; continue; }
       if (claimText(ev, b.content)) { removed++; continue; }
       kept.push(b);
       // Thinking is frequently absent from persisted history (redacted); don't

@@ -117,6 +117,24 @@ describe('readSessionHistory', () => {
     expect(messages[1].model).toBe('claude-3');
   });
 
+  it('exports the stable msgId (API message.id for assistant, uuid fallback)', async () => {
+    // Phase 0 of the ACP-dialect alignment: the messageMap key (message.id ??
+    // uuid ?? synthetic) must be exported so streaming blocks and history
+    // messages share a natural key (id-based promotion instead of content match).
+    await writeJsonl('s-msgid', '/test', [
+      { type: 'user', timestamp: '2025-01-01T00:00:00Z', uuid: 'uuid-u1', message: { role: 'user', content: 'Hello' } },
+      msg('msg_bdrk_abc123', 'assistant', 'Hi there!'),
+    ]);
+
+    const messages = await readSessionHistory('s-msgid', '/test');
+    expect(messages).toHaveLength(2);
+    // user line has no message.id → falls back to the JSONL line uuid
+    expect(messages[0].msgId).toBe('uuid-u1');
+    // assistant line exports the API message id — the SAME id the live stream
+    // carries in message_start → SESSION_TEXT_DELTA.msgId
+    expect(messages[1].msgId).toBe('msg_bdrk_abc123');
+  });
+
   it('deduplicates assistant messages by id', async () => {
     await writeJsonl('s2', '/test', [
       { type: 'assistant', timestamp: '2025-01-01T00:00:00Z', message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'Part 1' }] } },

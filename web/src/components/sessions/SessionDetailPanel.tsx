@@ -42,8 +42,8 @@ interface SessionDetailPanelProps {
   /** Called when "Clear Context & Execute" creates a new session — parent should update selectedId. */
   onSessionReplaced?: (newSessionId: string) => void;
   optimisticMessages?: import('./SessionChatHistory').OptimisticMessage[];
-  onMessagesDelivered?: (count: number) => void;
-  onBatchCompleted?: (count: number) => void;
+  onMessagesDelivered?: (count: number, messageIds?: string[]) => void;
+  onBatchCompleted?: (count: number, messageIds?: string[]) => void;
   onBatchFailed?: (messageIds: string[], error: string) => void;
   onEditQueued?: (queueId: string, newText: string) => void;
   onDeleteQueued?: (queueId: string) => void;

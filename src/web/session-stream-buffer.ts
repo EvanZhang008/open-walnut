@@ -15,6 +15,11 @@ import { log } from '../logging/index.js'
 export interface StreamingTextBlock {
   type: 'text'
   content: string
+  /** API message id (`msg_…`) of the assistant message this block belongs to.
+   *  Same id appears on the persisted JSONL line, so promotion/dedup can match
+   *  by id instead of content. ACP-dialect: a CHANGE in msgId = a new message
+   *  (and therefore a new block). Optional: absent for legacy events. */
+  msgId?: string
 }
 
 export interface StreamingToolCallBlock {
@@ -48,6 +53,8 @@ export interface StreamingPermissionBlock {
 export interface StreamingThinkingBlock {
   type: 'thinking'
   content: string
+  /** See StreamingTextBlock.msgId. */
+  msgId?: string
 }
 
 export type StreamingBlock = StreamingTextBlock | StreamingToolCallBlock | StreamingSystemBlock | StreamingPermissionBlock | StreamingThinkingBlock
@@ -61,6 +68,12 @@ export interface StreamSnapshot {
    *  before its first delta carries the previous turn's blocks with
    *  isStreaming=true (deriving would mislabel them "live"). */
   completedLen: number
+  /** Monotonic mutation counter for this session's buffer. Bumps on every
+   *  append/clear/markDone, so clients can compare "which side is newer"
+   *  by sequence instead of guessing from block-array lengths
+   *  (snapshot-adoption heuristics). Resets only when the entry is pruned;
+   *  a fresh entry restarts at 1, and `seq === 0` means "no buffer". */
+  seq: number
 }
 
 // ── Buffer implementation ──
@@ -83,6 +96,8 @@ interface BufferEntry {
    *  client stamped them completedLen=0 ("live"), evidence-promotion never
    *  touched them, and they duplicated persisted history until a reload. */
   turnEnded?: boolean
+  /** Monotonic mutation counter — see StreamSnapshot.seq. */
+  seq: number
 }
 
 class SessionStreamBuffer {
@@ -94,6 +109,15 @@ class SessionStreamBuffer {
 
   constructor() {
     this.pruneTimer = setInterval(() => this.pruneStale(), PRUNE_INTERVAL_MS)
+  }
+
+  /** Stamp activity time and bump the monotonic mutation counter. Every
+   *  buffer mutation goes through here so `seq` is a total order on this
+   *  session's buffer states (the id snapshot-adoption compares instead of
+   *  block-array lengths). */
+  private touch(entry: BufferEntry): void {
+    entry.lastActivity = Date.now()
+    entry.seq++
   }
 
   /** First block-creating append of a NEW turn drops the finished turn's blocks
@@ -110,7 +134,7 @@ class SessionStreamBuffer {
     entry.turnEnded = false
   }
 
-  appendTextDelta(sessionId: string, delta: string): void {
+  appendTextDelta(sessionId: string, delta: string, msgId?: string): void {
     const entry = this.getOrCreate(sessionId)
     // ⚠️  DO NOT add `this.streaming.add(sessionId)` here. This is "Root Cause 5"
     // of the stuck-Streaming-badge bug: JSONL replay / late events re-populated the
@@ -120,14 +144,22 @@ class SessionStreamBuffer {
     // fix is to keep data events out of the streaming flag entirely. The flag is
     // driven exclusively by lifecycle events via markStreaming/markDone.
     this.resetIfTurnEnded(entry, sessionId)
-    entry.textAccumulator += delta
-    entry.lastActivity = Date.now()
+    this.touch(entry)
 
     const last = entry.blocks[entry.blocks.length - 1]
-    if (last && last.type === 'text') {
+    // ACP message boundary: a CHANGE in msgId means a new assistant message —
+    // start a new block so stream blocks match history messages 1:1 instead of
+    // gluing consecutive messages' text into one block. When either side lacks
+    // an id (legacy events), fall back to the historical "last block is text"
+    // accumulation.
+    const sameMessage = last && last.type === 'text' && (!msgId || !last.msgId || last.msgId === msgId)
+    if (sameMessage) {
+      entry.textAccumulator += delta
       last.content = entry.textAccumulator
+      if (msgId && !last.msgId) last.msgId = msgId
     } else {
-      entry.blocks.push({ type: 'text', content: entry.textAccumulator })
+      entry.textAccumulator = delta
+      entry.blocks.push({ type: 'text', content: delta, ...(msgId ? { msgId } : {}) })
     }
   }
 
@@ -138,7 +170,7 @@ class SessionStreamBuffer {
     this.resetIfTurnEnded(entry, sessionId)
     // Tool call interrupts text flow — reset text accumulator
     entry.textAccumulator = ''
-    entry.lastActivity = Date.now()
+    this.touch(entry)
     // DUP-DEBUG: detect if the same toolUseId is appended twice — that means
     // two SESSION_TOOL_USE events reached the buffer for the same logical
     // tool call, which is what causes the duplicate panel in the chat UI.
@@ -155,7 +187,7 @@ class SessionStreamBuffer {
 
   appendToolResult(sessionId: string, toolUseId: string, result: string): void {
     const entry = this.getOrCreate(sessionId)
-    entry.lastActivity = Date.now()
+    this.touch(entry)
     // Find matching tool_call and mark done
     for (let i = entry.blocks.length - 1; i >= 0; i--) {
       const b = entry.blocks[i]
@@ -175,7 +207,7 @@ class SessionStreamBuffer {
     if (existing) return
     this.resetIfTurnEnded(entry, sessionId)
     entry.textAccumulator = ''  // permission event breaks text flow
-    entry.lastActivity = Date.now()
+    this.touch(entry)
     entry.blocks.push({ type: 'permission', requestId, toolName, input, reason, status: 'pending' })
   }
 
@@ -186,7 +218,7 @@ class SessionStreamBuffer {
     for (const b of entry.blocks) {
       if (b.type === 'permission' && (b as StreamingPermissionBlock).requestId === requestId) {
         (b as StreamingPermissionBlock).status = status
-        entry.lastActivity = Date.now()
+        this.touch(entry)
         break
       }
     }
@@ -197,21 +229,25 @@ class SessionStreamBuffer {
     this.resetIfTurnEnded(entry, sessionId)
     entry.textAccumulator = ''  // system event breaks text flow
     entry.thinkingAccumulator = ''
-    entry.lastActivity = Date.now()
+    this.touch(entry)
     entry.blocks.push({ type: 'system', variant, message, ...(detail ? { detail } : {}) } as StreamingSystemBlock)
   }
 
   /** Accumulate thinking text deltas (model's reasoning, gated behind thinking mode). */
-  appendThinkingDelta(sessionId: string, delta: string): void {
+  appendThinkingDelta(sessionId: string, delta: string, msgId?: string): void {
     const entry = this.getOrCreate(sessionId)
     this.resetIfTurnEnded(entry, sessionId)
-    entry.thinkingAccumulator += delta
-    entry.lastActivity = Date.now()
+    this.touch(entry)
     const last = entry.blocks[entry.blocks.length - 1]
-    if (last && last.type === 'thinking') {
+    // Same ACP message-boundary rule as appendTextDelta.
+    const sameMessage = last && last.type === 'thinking' && (!msgId || !last.msgId || last.msgId === msgId)
+    if (sameMessage) {
+      entry.thinkingAccumulator += delta
       last.content = entry.thinkingAccumulator
+      if (msgId && !last.msgId) last.msgId = msgId
     } else {
-      entry.blocks.push({ type: 'thinking', content: entry.thinkingAccumulator })
+      entry.thinkingAccumulator = delta
+      entry.blocks.push({ type: 'thinking', content: delta, ...(msgId ? { msgId } : {}) })
     }
   }
 
@@ -250,7 +286,10 @@ class SessionStreamBuffer {
     // Blocks are retained for cross-turn viewing but stamped as finished — the
     // next turn's first data append drops them, and getSnapshot never serves
     // them as a live turn (see BufferEntry.turnEnded).
-    if (entry) entry.turnEnded = true
+    if (entry) {
+      entry.turnEnded = true
+      entry.seq++
+    }
     log.ws.info('stream buffer markDone', { sessionId, wasStreaming: had, blocksRetained: entry?.blocks.length ?? 0 })
   }
 
@@ -285,19 +324,20 @@ class SessionStreamBuffer {
     if (!entry) {
       const isStr = this.streaming.has(sessionId)
       log.ws.info('getSnapshot (no buffer)', { sessionId, isStreaming: isStr })
-      return { blocks: [], isStreaming: isStr, completedLen: 0 }
+      return { blocks: [], isStreaming: isStr, completedLen: 0, seq: 0 }
     }
     const isStr = this.streaming.has(sessionId)
     // turnEnded ⇒ every held block belongs to a finished turn, even when the
     // streaming flag is already true for the NEXT turn (markStreaming fired,
     // first delta hasn't). Otherwise the buffer holds only the live turn.
     const completedLen = entry.turnEnded ? entry.blocks.length : 0
-    log.ws.info('getSnapshot', { sessionId, blocks: entry.blocks.length, isStreaming: isStr, completedLen })
+    log.ws.info('getSnapshot', { sessionId, blocks: entry.blocks.length, isStreaming: isStr, completedLen, seq: entry.seq })
     // Return a deep-enough copy so mutations don't leak
     return {
       blocks: entry.blocks.map((b) => ({ ...b })),
       isStreaming: isStr,
       completedLen,
+      seq: entry.seq,
     }
   }
 
@@ -315,7 +355,7 @@ class SessionStreamBuffer {
   private getOrCreate(sessionId: string): BufferEntry {
     let entry = this.buffers.get(sessionId)
     if (!entry) {
-      entry = { blocks: [], textAccumulator: '', thinkingAccumulator: '', lastActivity: Date.now() }
+      entry = { blocks: [], textAccumulator: '', thinkingAccumulator: '', lastActivity: Date.now(), seq: 1 }
       this.buffers.set(sessionId, entry)
       log.ws.debug('stream buffer created', { sessionId })
     }

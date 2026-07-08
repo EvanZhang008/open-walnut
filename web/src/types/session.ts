@@ -100,6 +100,10 @@ export interface SessionHistoryMessage {
   thinking?: string;
   model?: string;
   usage?: { input_tokens: number; output_tokens: number };
+  /** Stable message id: API `message.id` (`msg_…`) for assistant messages, else
+   *  JSONL line uuid. Same id rides live-stream deltas (StreamingTextBlock.msgId),
+   *  so streaming blocks and history messages match by id, not content. */
+  msgId?: string;
   /** Walnut-generated message ID for deterministic dedup of optimistic user messages. */
   walnutMessageId?: string;
 }

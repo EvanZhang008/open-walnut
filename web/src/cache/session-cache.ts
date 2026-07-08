@@ -192,7 +192,9 @@ export function clearCompletedTurn(sid: string, delta?: SessionHistoryMessage[])
 // ── Global WS listeners (registered once at module load) ─────────────────────
 
 /** Flush accumulated text into the last LIVE text block (or create one).
- *  Never merges into a block at/before the completed-turn boundary. */
+ *  Never merges into a block at/before the completed-turn boundary.
+ *  Preserves the block's msgId (the buffer only ever accumulates a single
+ *  message's text — the delta handler starts a new block on msgId change). */
 function flushText(state: StreamState): void {
   if (!state.textBuffer) return;
   const last = state.blocks[state.blocks.length - 1];
@@ -200,6 +202,7 @@ function flushText(state: StreamState): void {
     state.blocks[state.blocks.length - 1] = {
       type: 'text',
       content: state.textBuffer,
+      ...(last.msgId ? { msgId: last.msgId } : {}),
     };
   } else {
     state.blocks.push({ type: 'text', content: state.textBuffer });
@@ -221,29 +224,34 @@ const inflightBgFetches = new Set<string>();
 function registerGlobalListeners(): void {
   // ── text-delta ──
   wsClient.onEvent('session:text-delta', (data: unknown) => {
-    const { sessionId: sid, delta } = data as {
+    const { sessionId: sid, delta, msgId } = data as {
       sessionId: string;
       delta: string;
+      msgId?: string;
     };
     if (!sid || !trackedSessions.has(sid)) return;
     const state = ensureState(sid);
     state.isStreaming = true;
-    state.textBuffer += delta;
     // Note: This intentionally duplicates flushText's logic. flushText is for
     // "flush-before-context-switch" (tool-use, result, etc.) where textBuffer is
     // reset afterward. Here we append delta first, then write the accumulated
     // buffer — calling flushText would lose the newly appended delta.
     // Update the last text block in-place (or push a new one). Merge only into a
-    // LIVE block (past the completed-turn boundary) — a finished turn's final text
-    // must not be overwritten by the next turn's deltas.
+    // LIVE block (past the completed-turn boundary) of the SAME message — a
+    // finished turn's final text must not be overwritten by the next turn's
+    // deltas, and a msgId change means a new message (new block).
     const last = state.blocks[state.blocks.length - 1];
-    if (last && last.type === 'text' && state.blocks.length > state.completedLen) {
+    const sameMessage = last && last.type === 'text' && (!msgId || !last.msgId || last.msgId === msgId);
+    if (sameMessage && state.blocks.length > state.completedLen) {
+      state.textBuffer += delta;
       state.blocks[state.blocks.length - 1] = {
         type: 'text',
         content: state.textBuffer,
+        ...(msgId ? { msgId } : {}),
       };
     } else {
-      state.blocks.push({ type: 'text', content: state.textBuffer });
+      state.textBuffer = delta;
+      state.blocks.push({ type: 'text', content: delta, ...(msgId ? { msgId } : {}) });
     }
   });
 
@@ -322,18 +330,21 @@ function registerGlobalListeners(): void {
 
   // ── thinking-delta ──
   wsClient.onEvent('session:thinking-delta', (data: unknown) => {
-    const { sessionId: sid, delta } = data as { sessionId: string; delta: string };
+    const { sessionId: sid, delta, msgId } = data as { sessionId: string; delta: string; msgId?: string };
     if (!sid || !trackedSessions.has(sid)) return;
     const state = ensureState(sid);
     state.isStreaming = true;
     const last = state.blocks[state.blocks.length - 1];
-    if (last && last.type === 'thinking' && state.blocks.length > state.completedLen) {
+    // Same ACP message-boundary rule as text-delta above.
+    const sameMessage = last && last.type === 'thinking' && (!msgId || !last.msgId || last.msgId === msgId);
+    if (sameMessage && state.blocks.length > state.completedLen) {
       state.blocks[state.blocks.length - 1] = {
         type: 'thinking',
         content: last.content + delta,
+        ...(msgId ? { msgId } : {}),
       };
     } else {
-      state.blocks.push({ type: 'thinking', content: delta });
+      state.blocks.push({ type: 'thinking', content: delta, ...(msgId ? { msgId } : {}) });
     }
   });
 
