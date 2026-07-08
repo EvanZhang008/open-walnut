@@ -2572,7 +2572,7 @@ export class ClaudeCodeSession {
             this._cliSessionState = newState
             log.session.info('session_state_changed', {
               sessionId: sid, taskId: this.taskId, state: newState,
-              runningBgTasks: this._runningBgCount(),
+              runningBgTasks: this._runningBgCount(), idleDebt: this._idleDebt,
             })
             if (newState === 'running') {
               if (this._processStatus !== 'running') {
@@ -2580,6 +2580,14 @@ export class ClaudeCodeSession {
                 this.emitStatusChanged('IN_PROGRESS')
               }
             } else if (newState === 'idle') {
+              // Idle-debt consumption: every idle settles an owed companion first
+              // (FIFO stream order guarantees a result's companion idle arrives
+              // before any later turn's events, so this accounting is exact within
+              // one instance's continuous stream — see _idleDebt doc). Whether this
+              // idle may COMPLETE a turn is decided below; a debt-consuming idle
+              // never may (it belongs to the already-completed previous turn).
+              const wasCompanionIdle = this._idleDebt > 0
+              if (wasCompanionIdle) this._idleDebt--
               // The idle handler only withholds completion while the derived count says
               // background work is in flight. A genuinely lost terminal event is backstopped by
               // process-death turn completion + the daemon idle-kill, not by an inline reconcile
@@ -2598,6 +2606,16 @@ export class ClaudeCodeSession {
                 }
               } else if (!this.resultEmitted && this._turnResultEmitted) {
                 // result already processed this turn (normal single-turn path) — nothing to do.
+              } else if (wasCompanionIdle) {
+                // The PREVIOUS turn's companion idle (its result already completed
+                // that turn and banked this debt). Never a turn-over for the
+                // CURRENT turn — even though writeMessage() has since reset
+                // _turnResultEmitted. Pre-debt, this exact race completed a brand-new
+                // turn with zero output (premature-idle family). Status untouched:
+                // if a new turn is already running, it stays running.
+                log.session.info('companion idle consumed by idle-debt — not a turn-over', {
+                  sessionId: sid, taskId: this.taskId, idleDebtRemaining: this._idleDebt,
+                })
               } else if (!this.resultEmitted) {
                 // Authoritative turn-over: idle AND no background work in flight.
                 this._completeTurnOnIdle()
@@ -3322,6 +3340,13 @@ export class ClaudeCodeSession {
             this._activity = undefined
           }
           this.resultEmitted = false  // Ready for next turn
+          // Idle-debt: the alive CLI emits this turn's companion
+          // session_state_changed{idle} shortly after this result. If the next
+          // user message lands first (writeMessage resets _turnResultEmitted),
+          // that companion must not read as the NEW turn's turn-over. Capped so
+          // a companion lost to a daemon-replay gap can only eat a bounded
+          // number of future idles (see _idleDebt doc).
+          this._idleDebt = Math.min(this._idleDebt + 1, 4)
         } else if (this._transport?.isRemote && !effectiveIsError) {
           // Remote daemon session: process exited (hasPipe was cleared by daemon exit
           // event or FIFO write failure), but daemon connection is still alive.
