@@ -135,6 +135,33 @@ describe('readSessionHistory', () => {
     expect(messages[1].msgId).toBe('msg_bdrk_abc123');
   });
 
+  it('hides CLI-injected task-notification echoes (background-agent completion plumbing)', async () => {
+    // When an async background agent finishes, the CLI injects a
+    // <task-notification>…<result>full report</result> user message into the
+    // main session (FIFO) and re-logs it as a normal user STRING line, plus a
+    // queue-operation enqueue with the same content. Neither is something the
+    // human typed — rendered raw, the whole agent report shows up as a giant
+    // "You" bubble in main chat (inc-1783552157700). Both the echo line and
+    // the Pattern-B synthetic must be hidden; real user messages stay.
+    const notification = '<task-notification>\n<task-id>a96085a7cdf51037f</task-id>\n<status>completed</status>\n<summary>Agent "Extended cluster research" finished</summary>\n<result>Here is the full 5000-word report…</result>\n</task-notification>';
+    await writeJsonl('s-tasknotif', '/test', [
+      msg('u1', 'user', 'run the research'),
+      msg('a1', 'assistant', 'Launched the agent.'),
+      // Pattern-B shape: enqueue with no nearby matching user STRING twin
+      { type: 'queue-operation', operation: 'enqueue', timestamp: '2025-01-01T00:01:00Z', content: notification },
+      // Pattern-A shape: the CLI's re-logged user STRING echo
+      { type: 'user', timestamp: '2025-01-01T00:01:30Z', uuid: 'uuid-notif', message: { role: 'user', content: notification } },
+      msg('a2', 'assistant', 'The agent found the answer: …'),
+    ]);
+
+    const messages = await readSessionHistory('s-tasknotif', '/test');
+    expect(messages.map(m => m.text)).toEqual([
+      'run the research',
+      'Launched the agent.',
+      'The agent found the answer: …',
+    ]);
+  });
+
   it('deduplicates assistant messages by id', async () => {
     await writeJsonl('s2', '/test', [
       { type: 'assistant', timestamp: '2025-01-01T00:00:00Z', message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'Part 1' }] } },

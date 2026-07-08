@@ -583,6 +583,17 @@ export function parseSessionMessages(content: string): SessionHistoryMessage[] {
     // empty heartbeat lines). These produce ghost "You" bubbles in the UI.
     if (!text && tools.length === 0 && !thinking) continue;
 
+    // Skip CLI-injected task-notification echoes. When an async background agent
+    // (Task tool) finishes, the CLI injects a `<task-notification>…<result>full
+    // report</result>` message into the main session's FIFO and re-logs it as a
+    // normal user STRING line — internal plumbing, not something the human said.
+    // Rendered raw it shows the whole agent report as a giant "You" bubble in
+    // main chat (mis-attributed AND duplicated: the report already renders
+    // inside the Task tool's agent box via the subagent transcript, and the
+    // assistant's next message responds to it). Single choke point: catches the
+    // real user echo line AND the Pattern-B synthetic from its queue-operation.
+    if (msg.role === 'user' && text.startsWith('<task-notification>')) continue;
+
     // Skip assistant messages with no visible text and no tools.
     // These are typically abandoned API calls where Claude thought but never
     // produced a response before the call was retried with a new message ID.
