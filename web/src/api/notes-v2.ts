@@ -22,6 +22,23 @@ export function attachmentUrl(path: string): string {
   return `/api/notes-v2/attachment?${new URLSearchParams({ path })}`;
 }
 
+/**
+ * Upload a pasted image INTO THE VAULT (an `_attachment/` folder beside the
+ * note). Returns the vault-relative path — the `![[...]]` embed target — so the
+ * markdown on disk stays Obsidian-portable (vs. the chat-only /api/images store).
+ */
+export async function uploadNoteAttachment(
+  notePath: string,
+  data: string,
+  mediaType: string,
+): Promise<{ path: string; name: string }> {
+  return apiPost<{ ok: boolean; path: string; name: string }>('/api/notes-v2/attachment', {
+    notePath,
+    data,
+    mediaType,
+  });
+}
+
 export interface NoteListItem {
   path: string;
   name: string;

@@ -12,7 +12,7 @@ import { buildRoleSection, buildSystemPrompt, buildTaskCategoriesSection, getNot
 import { buildSkillsPrompt } from '../../core/skill-loader.js'
 import { getCompactionSummary, getModelContext } from '../../core/chat-history.js'
 import { getMemoryFile } from '../../core/memory-file.js'
-import { getAllProjectSummaries } from '../../core/project-memory.js'
+import { getBoundedMemory } from '../../core/bounded-memory.js'
 import { getDailyLogsWithinBudget, estimateTokens, estimateMessagesTokens, estimateFullPayload } from '../../core/daily-log.js'
 import { getToolSchemas } from '../../agent/tools.js'
 
@@ -86,8 +86,8 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
           mainAgentMemory: { content: mainMemory || '(no main memory)', tokens: mainMemoryTokens },
           agentDailyLogs: { content: ownDaily || '(no agent daily logs)', tokens: ownDailyTokens },
           mainAgentDailyLogs: { content: mainDaily || '(no main daily logs)', tokens: mainDailyTokens },
+          userProfile: { content: '', tokens: 0 },
           globalMemory: { content: '', tokens: 0 },
-          projectSummaries: { content: '', tokens: 0, count: 0 },
           notesContext: { content: '', tokens: 0 },
           dailyLogs: { content: '', tokens: 0 },
           tools: { content: agentTools, tokens: toolsTokens, count: agentTools.length },
@@ -101,12 +101,13 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
     // General agent — full context view
     const name = config.user.name ?? 'the user'
 
-    // Gather each section independently
+    // Gather each section independently — memory sections use the SAME bounded
+    // renderers as buildMemoryContext() so the inspector mirrors the real prompt.
     const roleContent = buildRoleSection(name)
     const skillsContent = await buildSkillsPrompt() ?? ''
     const compactionContent = await getCompactionSummary(undefined, conversationId).catch(() => null) ?? ''
-    const globalMemory = getMemoryFile()?.content ?? ''
-    const projectSummaries = getAllProjectSummaries()
+    const globalMemory = getBoundedMemory().renderForPrompt() ?? ''
+    const userProfile = getBoundedMemory(undefined, 'user').renderForPrompt() ?? ''
     const dailyLogs = getDailyLogsWithinBudget(Math.floor(20000 / 2))
     const toolSchemas = getToolSchemas()
     const apiMessages = await getModelContext(undefined, conversationId)
@@ -114,18 +115,13 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
     // Task categories & projects overview
     const taskCategoriesText = await buildTaskCategoriesSection()
 
-    // Format project summaries as text (same as buildMemoryContext)
-    const projectSummariesText = projectSummaries.length > 0
-      ? projectSummaries.map((s) => `- **${s.name}** (${s.path}): ${s.description}`).join('\n')
-      : '(No projects yet.)'
-
     // Token estimates per section
     const roleTokens = estimateTokens(roleContent)
     const skillsTokens = estimateTokens(skillsContent)
     const compactionTokens = estimateTokens(compactionContent)
     const taskCategoriesTokens = estimateTokens(taskCategoriesText)
     const globalMemoryTokens = estimateTokens(globalMemory)
-    const projectSummariesTokens = estimateTokens(projectSummariesText)
+    const userProfileTokens = estimateTokens(userProfile)
     const dailyLogsTokens = estimateTokens(dailyLogs)
     const toolsText = JSON.stringify(toolSchemas)
     const toolsTokens = estimateTokens(toolsText)
@@ -134,29 +130,26 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
     // (by pixel dimensions, not base64 size which can inflate by 500x)
     const messagesTokens = estimateMessagesTokens(apiMessages)
 
-    // Model config — mirror what the agent loop actually uses (loop.ts lines 146-150)
+    // Model config — API call parameters (model/max_tokens/region), shown for
+    // debugging only. It is NOT part of the prompt, so it costs 0 tokens.
     const modelConfig = {
       model: config.agent?.main_model ?? config.agent?.model ?? DEFAULT_MODEL,
       max_tokens: config.agent?.maxTokens ?? DEFAULT_MAX_TOKENS,
       region: config.agent?.region ?? config.provider?.bedrock_region ?? 'us-west-2',
     }
-    const modelConfigText = JSON.stringify(modelConfig)
-    const modelConfigTokens = estimateTokens(modelConfigText)
 
     // Use the actual buildSystemPrompt() for the total, consistent with
     // needsCompaction() and /api/chat/stats. The per-section breakdowns above
     // are informational for the UI; the total must match the real payload.
     const actualSystemPrompt = await buildSystemPrompt(undefined, conversationId)
     const payloadEstimate = estimateFullPayload({ system: actualSystemPrompt, tools: toolSchemas, messages: apiMessages })
-
-    // totalTokens uses the payload estimate for consistency, plus model config overhead
-    const totalTokens = payloadEstimate.total + modelConfigTokens
+    const totalTokens = payloadEstimate.total
 
     res.json({
       sections: {
         modelConfig: {
           content: modelConfig,
-          tokens: modelConfigTokens,
+          tokens: 0,
         },
         roleAndRules: {
           content: roleContent,
@@ -174,14 +167,13 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
           content: taskCategoriesText,
           tokens: taskCategoriesTokens,
         },
+        userProfile: {
+          content: userProfile,
+          tokens: userProfileTokens,
+        },
         globalMemory: {
           content: globalMemory,
           tokens: globalMemoryTokens,
-        },
-        projectSummaries: {
-          content: projectSummariesText,
-          tokens: projectSummariesTokens,
-          count: projectSummaries.length,
         },
         notesContext: {
           content: getNotesContext(),

@@ -59,15 +59,17 @@ test('clicking Context button again closes the panel', async ({ page }) => {
 
 // ── Sections ──
 
-test('inspector shows all 9 sections', async ({ page }) => {
+test('inspector shows all 11 sections', async ({ page }) => {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
 
   await page.locator('button', { hasText: 'Context' }).click()
   await expect(page.locator('.context-inspector')).toBeVisible({ timeout: 5000 })
 
+  // modelConfig, roleAndRules, skills, compactionSummary, taskCategories,
+  // userProfile, globalMemory, notesContext, dailyLogs, tools, apiMessages
   const sections = page.locator('.context-section')
-  await expect(sections).toHaveCount(9)
+  await expect(sections).toHaveCount(11)
 })
 
 test('sections show token badges', async ({ page }) => {
@@ -80,8 +82,8 @@ test('sections show token badges', async ({ page }) => {
   // Every section header should have a token badge
   const badges = page.locator('.context-token-badge')
   const count = await badges.count()
-  // 9 section badges + 1 total badge in the header = at least 10
-  expect(count).toBeGreaterThanOrEqual(10)
+  // 11 section badges + 1 total badge in the header = at least 12
+  expect(count).toBeGreaterThanOrEqual(12)
 
   // Total token badge should be visible
   const totalBadge = page.locator('.context-token-badge-total')
@@ -174,8 +176,8 @@ test('model config section shows model name', async ({ page }) => {
   // Expand Model Config
   await page.locator('.context-section-header', { hasText: 'Model Config' }).click()
 
-  // Should show the model name
-  await expect(page.locator('.context-section-content').first()).toContainText('claude-opus-4-6')
+  // Should show a model name (exact model depends on config)
+  await expect(page.locator('.context-section-content').first()).toContainText('model:')
 })
 
 // ── Chat remains usable ──
@@ -229,11 +231,13 @@ test('GET /api/context returns valid data', async ({ request }) => {
   expect(body).toHaveProperty('totalTokens')
   expect(body.totalTokens).toBeGreaterThan(0)
 
-  // Verify all 9 sections
+  // Verify all 11 sections
   const sectionNames = Object.keys(body.sections)
-  expect(sectionNames).toHaveLength(9)
+  expect(sectionNames).toHaveLength(11)
   expect(sectionNames).toContain('modelConfig')
   expect(sectionNames).toContain('roleAndRules')
+  expect(sectionNames).toContain('userProfile')
+  expect(sectionNames).toContain('globalMemory')
   expect(sectionNames).toContain('tools')
   expect(sectionNames).toContain('apiMessages')
 })

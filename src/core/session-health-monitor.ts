@@ -63,6 +63,14 @@ export class SessionHealthMonitor {
     const checkT0 = Date.now()
     const { listSessions, isTerminalSession, updateSessionRecord } = await import('./session-tracker.js')
 
+    // Process fd tripwire — a leaked fd table (~16k) once made every ssh spawn
+    // fail EBADF, wedging all remote reconnects/reads (inc-1783406628291).
+    // Self-throttled inside; failure must never affect the session checks.
+    try {
+      const { checkProcessFdHealth } = await import('./observability/process-health.js')
+      checkProcessFdHealth()
+    } catch { /* observability is best-effort */ }
+
     // ── Single snapshot per cycle ────────────────────────────────────────────
     // Previously each helper re-called listSessions() / listNonTerminalSessions(),
     // causing 3× full parse + migration of ~1000 records per 30s tick. Now we read

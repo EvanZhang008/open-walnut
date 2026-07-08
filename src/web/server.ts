@@ -47,7 +47,7 @@ import { createSlashCommandsRouter } from './routes/slash-commands.js'
 import { timelineRouter } from './routes/timeline.js'
 import { CronService } from '../core/cron/index.js'
 import os from 'node:os'
-import { CRON_FILE, IS_EPHEMERAL, WALNUT_HOME } from '../constants.js'
+import { CLOUD_MODE, CRON_FILE, IS_EPHEMERAL, WALNUT_HOME } from '../constants.js'
 import { sessionRunner } from '../providers/claude-code-session.js'
 import { SessionHealthMonitor } from '../core/session-health-monitor.js'
 import { SessionReaper } from '../core/session-reaper.js'
@@ -57,7 +57,7 @@ import type { Task } from '../core/types.js'
 import { log } from '../logging/index.js'
 import { usageTracker } from '../core/usage/index.js'
 import * as chatHistory from '../core/chat-history.js'
-import { gitPullWalnut, ensureRepo, commitIfDirty, isGitAvailable, isLockContention } from '../integrations/git-sync.js'
+import { gitPullWalnut, ensureRepo, commitIfDirty, autoSync, isGitAvailable, isLockContention } from '../integrations/git-sync.js'
 import { registry } from '../core/integration-registry.js'
 import { loadPlugins, migrateConfigToPlugins, runPluginMigrations } from '../core/integration-loader.js'
 import type { SyncPollContext } from '../core/integration-types.js'
@@ -74,6 +74,8 @@ import { migrateGlobalNotes } from '../core/notes-migration.js'
 import { authMiddleware } from './middleware/auth.js'
 import { pushRouter } from './routes/push.js'
 import { authRouter } from './routes/auth.js'
+import { setupRouter } from './routes/setup.js'
+import { apiV1Router, closeApiV1Streams } from './routes/api-v1.js'
 import { incidentsRouter } from './routes/incidents.js'
 import { notificationsRouter } from './routes/notifications.js'
 import { addNotification as addFeedNotification } from '../core/notifications/store.js'
@@ -293,7 +295,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Start local daemon for session management. All sessions (local + remote)
   // go through a daemon — local uses the daemon on this machine, remote uses
   // a daemon on the SSH target. Must be running before any createSessionManager().
-  try {
+  // Cloud companion boxes have no Claude Code CLI — no daemon to run.
+  if (CLOUD_MODE) {
+    log.web.info('cloud mode: skipping local session daemon startup')
+  } else try {
     const { localDaemon } = await import('../providers/local-daemon.js')
     await localDaemon.ensureRunning()
     log.web.info('local daemon ready', { port: localDaemon.port })
@@ -327,6 +332,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   }
 
   const app = express()
+
+  // Cloud mode sits behind a local reverse proxy (Caddy) — trust loopback so
+  // req.ip reflects the real client (X-Forwarded-For) for auth rate limiting.
+  // NOT set in trusted-LAN mode: there, honoring X-Forwarded-For would let a
+  // remote caller spoof a private IP and ride the LAN bypass.
+  if (CLOUD_MODE) {
+    app.set('trust proxy', 'loopback')
+  }
 
   // -- Middleware --
   app.use(cors())
@@ -625,6 +638,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/qmd', qmdRouter)
   app.use('/api/push', pushRouter)
   app.use('/api/auth', authRouter)
+  // First-boot claim flow (cloud mode) — publicly reachable by design; the
+  // auth middleware exempts /api/v1/setup/* (see CLOUD_EXEMPT_PREFIXES).
+  app.use('/api/v1/setup', setupRouter)
+  // Frozen REST+SSE facade for mobile clients (see docs/api-v1.md).
+  app.use('/api/v1', apiV1Router)
   app.use('/api/browser-logs', browserLogsRouter)
   app.use('/api/audio', audioRouter)
   app.use('/api/stt', sttRouter)
@@ -682,6 +700,26 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   const label = dev ? 'dev' : 'production'
   log.web.info(`server listening on http://localhost:${port}`, { mode: label, port })
 
+  // -- Cloud mode: first-boot claim banner --
+  // While zero devices are paired, print the one-time setup token so the
+  // operator can claim the instance (POST /api/v1/setup/claim). The plain
+  // multiline banner is intentional — greppable via journalctl on the box.
+  if (CLOUD_MODE) {
+    try {
+      const { getSetupTokenIfUnclaimed, printSetupTokenBanner } = await import('../core/device-auth.js')
+      const setup = await getSetupTokenIfUnclaimed()
+      if (setup) {
+        printSetupTokenBanner(setup.token, setup.expiresAt)
+      } else {
+        log.web.info('cloud mode: instance already claimed (device tokens active)')
+      }
+    } catch (err) {
+      log.web.error('cloud mode: failed to initialize device auth', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
   // -- Register RPC methods on the WebSocket handler --
   registerChatRpc()
   registerSessionChatRpc()
@@ -699,8 +737,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // letting them run the orphan sweep / periodic reaper would enumerate
       // PRODUCTION's sockets, find none in their own registry, and kill prod's
       // live terminals. Gate both behind !IS_EPHEMERAL (3457/ephemeral never
-      // touches 3456/production).
-      if (!IS_EPHEMERAL) {
+      // touches 3456/production). Cloud mode has no local terminals either.
+      if (!IS_EPHEMERAL && !CLOUD_MODE) {
         // Sweep leaked walnut-*.dsock dtach sessions whose backing session is gone.
         import('./terminal/dtach-lifecycle.js')
           .then(({ reapOrphanDtach }) => reapOrphanDtach())
@@ -746,18 +784,23 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     })
   }
 
-  // -- Audio transcription service (auto-transcribes recorded chunks via STT) --
-  {
-    const { initAudioTranscriber } = await import('../core/audio-transcriber.js')
-    initAudioTranscriber()
-  }
+  // -- Audio transcription + capture (macOS ScreenCaptureKit — not on cloud) --
+  if (CLOUD_MODE) {
+    log.web.info('cloud mode: skipping audio transcriber + capture resume')
+  } else {
+    // -- Audio transcription service (auto-transcribes recorded chunks via STT) --
+    {
+      const { initAudioTranscriber } = await import('../core/audio-transcriber.js')
+      initAudioTranscriber()
+    }
 
-  // -- Resume audio recording if it was active before restart --
-  {
-    const { audioCaptureService } = await import('../core/audio-capture.js')
-    audioCaptureService.resume().catch((err) => {
-      log.web.warn('audio recording resume failed', { error: err instanceof Error ? err.message : String(err) })
-    })
+    // -- Resume audio recording if it was active before restart --
+    {
+      const { audioCaptureService } = await import('../core/audio-capture.js')
+      audioCaptureService.resume().catch((err) => {
+        log.web.warn('audio recording resume failed', { error: err instanceof Error ? err.message : String(err) })
+      })
+    }
   }
 
   // -- Startup timing: track each phase to diagnose slow startups --
@@ -783,8 +826,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   }
 
   // -- Reconcile zombie sessions + identify reconnectable ones --
+  // Cloud mode: no daemon to reconcile against — sessions.json is read-only
+  // synced state from the Mac; touching it here would mark live Mac sessions dead.
   let reconnectable: import('../core/types.js').SessionRecord[] = []
-  try {
+  if (CLOUD_MODE) {
+    log.session.info('cloud mode: skipping session reconciliation')
+  } else try {
     const { reconcileSessions } = await import('../core/session-reconciler.js')
     const result = await reconcileSessions()
     reconnectable = result.reconnectable
@@ -839,6 +886,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // ~1.16GB embedding model download is unwanted and search isn't exercised.
   if (process.env.WALNUT_DISABLE_SEARCH === '1') {
     log.memory.info('QMD search disabled via WALNUT_DISABLE_SEARCH=1 — skipping embedding model init')
+  } else if (CLOUD_MODE) {
+    // Cloud companion: no semantic indexes (keyword/FTS search still works).
+    log.memory.info('cloud mode: skipping QMD semantic index init')
   } else try {
     const { initQmdStores } = await import('../core/qmd-store.js')
     const { startQmdWatcher } = await import('../core/qmd-watcher.js')
@@ -978,20 +1028,27 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   if (!isEphemeral) {
     gitAutoCommitHandle = startGitAutoCommit()
 
-    // Recover from any crashed compaction, then schedule if due
-    const { recoverFromCrashedCompaction, runScheduledCompaction } = await import('../integrations/git-compaction.js')
-    recoverFromCrashedCompaction()
-    // Run compaction 60s after startup (low priority, non-blocking)
-    setTimeout(() => {
-      try {
-        const result = runScheduledCompaction()
-        if (result && !result.skipped) {
-          log.git.info('git compaction complete', { before: result.before, after: result.after })
+    // Git history compaction rewrites local refs — running it on BOTH the Mac
+    // and the cloud companion would make their histories diverge. The Mac stays
+    // the sole compactor; the cloud box only commits/pulls/pushes.
+    if (CLOUD_MODE) {
+      log.git.info('cloud mode: skipping git history compaction (Mac is the sole compactor)')
+    } else {
+      // Recover from any crashed compaction, then schedule if due
+      const { recoverFromCrashedCompaction, runScheduledCompaction } = await import('../integrations/git-compaction.js')
+      recoverFromCrashedCompaction()
+      // Run compaction 60s after startup (low priority, non-blocking)
+      setTimeout(() => {
+        try {
+          const result = runScheduledCompaction()
+          if (result && !result.skipped) {
+            log.git.info('git compaction complete', { before: result.before, after: result.after })
+          }
+        } catch (err) {
+          log.git.warn('git compaction failed', { error: err instanceof Error ? err.message : String(err) })
         }
-      } catch (err) {
-        log.git.warn('git compaction failed', { error: err instanceof Error ? err.message : String(err) })
-      }
-    }, 60_000)
+      }, 60_000)
+    }
   }
 
   // -- Init SubagentRunner + SessionRunner --
@@ -1056,20 +1113,27 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     })
   }
 
-  // -- Start session health monitor --
-  healthMonitor = new SessionHealthMonitor()
-  healthMonitor.start()
-  startupPhase('health monitor started')
+  // Session health monitor / reapers probe local PIDs + daemons and mutate
+  // sessions.json — on the cloud box that state belongs to the Mac (git-synced),
+  // so running them would falsely mark live Mac sessions dead.
+  if (CLOUD_MODE) {
+    log.web.info('cloud mode: skipping session health monitor + session/recording reapers')
+  } else {
+    // -- Start session health monitor --
+    healthMonitor = new SessionHealthMonitor()
+    healthMonitor.start()
+    startupPhase('health monitor started')
 
-  // -- Start session reaper (periodic cleanup of high-volume triage session records) --
-  sessionReaper = new SessionReaper()
-  sessionReaper.start()
+    // -- Start session reaper (periodic cleanup of high-volume triage session records) --
+    sessionReaper = new SessionReaper()
+    sessionReaper.start()
 
-  // -- Start recording reaper (periodic cleanup of old audio recordings) --
-  {
-    const { recordingReaper } = await import('../core/recording-reaper.js')
-    recordingReaper.start()
-    recordingReaperHandle = recordingReaper
+    // -- Start recording reaper (periodic cleanup of old audio recordings) --
+    {
+      const { recordingReaper } = await import('../core/recording-reaper.js')
+      recordingReaper.start()
+      recordingReaperHandle = recordingReaper
+    }
   }
 
   // -- Start overview maintainer (task lifecycle → category overview upkeep) --
@@ -1252,9 +1316,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   bus.subscribe('main-ai', async (event) => {
     // ── Streaming events: buffer server-side + broadcast to all clients (filtered client-side) ──
     if (event.name === 'session:text-delta') {
-      const { sessionId, taskId, delta } = eventData<'session:text-delta'>(event)
+      const { sessionId, taskId, delta, msgId } = eventData<'session:text-delta'>(event)
       if (sessionId) {
-        sessionStreamBuffer.appendTextDelta(sessionId, delta)
+        sessionStreamBuffer.appendTextDelta(sessionId, delta, msgId)
         sendStreamEvent(sessionId, event.name, event.data)
         enforceStreamingPhase(sessionId, taskId)
       }
@@ -1297,9 +1361,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         sendStreamEvent(sessionId, event.name, event.data)
       }
     } else if (event.name === 'session:thinking-delta') {
-      const { sessionId, taskId, delta } = eventData<'session:thinking-delta'>(event)
+      const { sessionId, taskId, delta, msgId } = eventData<'session:thinking-delta'>(event)
       if (sessionId) {
-        sessionStreamBuffer.appendThinkingDelta(sessionId, delta)
+        sessionStreamBuffer.appendThinkingDelta(sessionId, delta, msgId)
         sendStreamEvent(sessionId, event.name, event.data)
         enforceStreamingPhase(sessionId, taskId)
       }
@@ -1451,8 +1515,17 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         //   flicker as the old transport flushes; applying markDone eagerly
         //   would clobber the fresh stream (the exact bug this handler fixes).
         if (ps === 'running') {
-          sessionStreamBuffer.markStreaming(sid)
-          lastMarkStreamingAt.set(sid, Date.now())
+          // daemon-reconnect's 'running' is a reconciliation artifact ("the CLI
+          // process is alive"), NOT "a turn is producing output". Marking the
+          // stream buffer streaming on it left a permanent Streaming badge +
+          // isStreaming=true snapshots (with hours-old blocks) during SSH-down
+          // windows — every reconnect flap re-armed it and no turn ever ended
+          // it (inc-1783406628291). Only session-runner knows a real turn
+          // started; it emits with source 'session-runner'.
+          if (event.source !== 'daemon-reconnect') {
+            sessionStreamBuffer.markStreaming(sid)
+            lastMarkStreamingAt.set(sid, Date.now())
+          }
           // Invariant: a streaming session can't be "awaiting human action".
           // Undo a stale AWAIT_HUMAN_ACTION left by a transient/late session:error
           // that lost the race against recovery (e.g. clean turn-end at send-time
@@ -2182,6 +2255,14 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
         log.git.debug('auto-committed')
         emitStatus()
       }
+      // Cloud companion: also pull Mac pushes + push our own commits each cycle.
+      // On the Mac, pulls ride session-result events and pushes are manual; the
+      // cloud box has neither, so the periodic loop is its only sync path.
+      // autoSync() never throws; commitIfDirty() above already committed, so its
+      // internal add/commit is a no-op and it just does pull --rebase + push.
+      if (CLOUD_MODE) {
+        autoSync()
+      }
     } catch (err) {
       if (isLockContention(err)) {
         // Lock contention is transient (e.g. orphaned server processes or concurrent git pull).
@@ -2250,6 +2331,12 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
  * and decide whether anything needs the user's attention.
  */
 async function startHeartbeatIfConfigured(): Promise<void> {
+  // config.yaml is git-synced from the primary box — if heartbeat is enabled
+  // there, running it here too would double-fire the same agent turns.
+  if (CLOUD_MODE) {
+    log.heartbeat.info('cloud mode: heartbeat skipped (primary box owns heartbeat turns)')
+    return
+  }
   const { getConfig } = await import('../core/config-manager.js')
   const config = await getConfig()
 
@@ -2395,6 +2482,13 @@ function yieldToEventLoop(): Promise<void> {
  * dozens of serial plugin.sync.createTask() Graph calls.
  */
 function startPluginSyncPolling(): void {
+  // External-sync plugins write tasks.json — polling from BOTH the primary box
+  // and the cloud companion would double-create synced tasks + churn git-sync.
+  // The primary box owns external sync; the cloud box only serves the API.
+  if (CLOUD_MODE) {
+    log.web.info('cloud mode: skipping plugin sync polling (primary box owns external sync)')
+    return
+  }
   const plugins = registry.getAll().filter(p => p.id !== 'local')
   const FIRST_TICK_DELAY_MS = 60_000 // boot grace — let startup quiet down first
   // Yield to the event loop every N sync iterations — a compromise between two
@@ -2652,6 +2746,9 @@ export async function stopServer(): Promise<void> {
     heartbeatHandle.stop()
     heartbeatHandle = null
   }
+  // Close /api/v1 SSE streams so open connections + ping timers don't keep
+  // the HTTP server alive (tests / graceful shutdown).
+  try { closeApiV1Streams() } catch { /* best-effort */ }
   // Cancel pending deferred-markDone callbacks so they don't mutate
   // sessionStreamBuffer after shutdown.
   for (const timer of deferredMarkDoneTimers) {

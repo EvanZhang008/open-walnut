@@ -78,6 +78,7 @@ export function NotesEditorPanel({
       enableWikiLinks
       enableBlockTools
       onWikiLinkClick={onNavigate}
+      attachmentNotePath={notePath}
       showWidthToggle
       showRawToggle
       showBookmark

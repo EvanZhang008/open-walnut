@@ -1,69 +1,91 @@
 /**
- * Connection state store — manages server URL, API key, and WebSocket state.
+ * Connection store — pairing state, server status (LIVE/REPLICA), reachability.
  */
 
 import { create } from 'zustand'
-import { wsClient } from '../api/ws'
-import { getServerUrl, getApiKey, setServerUrl, setApiKey, isConfigured } from '../utils/secure-store'
-import type { ConnectionState } from '../api/types'
+import { claimDevice, fetchStatus, testStatus } from '../api/client'
+import { clearConfig, hydrateConfig, saveConfig } from '../api/config'
+import { ApiError, type ServerStatus } from '../api/types'
 
 interface ConnectionStore {
+  hydrated: boolean
+  configured: boolean
   serverUrl: string
-  apiKey: string
-  connectionState: ConnectionState
-  isConfigured: boolean
-  isInitialized: boolean
+  deviceName: string
+  status: ServerStatus | null
+  /** false after a network-level failure — drives the offline banner. */
+  online: boolean
 
-  /** Load credentials from SecureStore on app start */
-  initialize: () => Promise<void>
-  /** Save credentials and connect */
-  configure: (url: string, key: string) => Promise<void>
-  /** Connect to the server */
-  connect: () => void
-  /** Disconnect */
-  disconnect: () => void
+  hydrate: () => Promise<void>
+  /** Save URL + token, then verify with a live /status round-trip. */
+  configure: (url: string, token: string, deviceName?: string) => Promise<ServerStatus>
+  /** First-boot claim: exchange setup token for a device token, then configure. */
+  claim: (url: string, setupToken: string, deviceName: string) => Promise<ServerStatus>
+  refreshStatus: () => Promise<void>
+  /** Report a network-level result from any API call (chat/notes stores). */
+  reportReachability: (ok: boolean) => void
+  reset: () => Promise<void>
 }
 
 export const useConnectionStore = create<ConnectionStore>((set, get) => ({
+  hydrated: false,
+  configured: false,
   serverUrl: '',
-  apiKey: '',
-  connectionState: 'disconnected',
-  isConfigured: false,
-  isInitialized: false,
+  deviceName: '',
+  status: null,
+  online: true,
 
-  initialize: async () => {
-    const url = await getServerUrl()
-    const key = await getApiKey()
-    const configured = !!(url && key)
-
-    set({ serverUrl: url ?? '', apiKey: key ?? '', isConfigured: configured, isInitialized: true })
-
-    // Listen for connection state changes
-    wsClient.onConnectionChange((state) => {
-      set({ connectionState: state })
+  hydrate: async () => {
+    const { serverUrl, token, deviceName } = await hydrateConfig()
+    set({
+      hydrated: true,
+      configured: !!serverUrl && !!token,
+      serverUrl: serverUrl ?? '',
+      deviceName: deviceName ?? '',
     })
+    if (serverUrl && token) void get().refreshStatus()
+  },
 
-    // Auto-connect if configured
-    if (configured) {
-      wsClient.connect(url!, key!)
+  configure: async (url, token, deviceName) => {
+    await saveConfig(url, token, deviceName)
+    try {
+      const status = await fetchStatus()
+      set({ configured: true, serverUrl: url, deviceName: deviceName ?? get().deviceName, status, online: true })
+      return status
+    } catch (err) {
+      // Verification failed — roll back so the app doesn't get stuck half-paired.
+      await clearConfig()
+      set({ configured: false })
+      throw err
     }
   },
 
-  configure: async (url: string, key: string) => {
-    await setServerUrl(url)
-    await setApiKey(key)
-    set({ serverUrl: url, apiKey: key, isConfigured: true })
-    wsClient.connect(url, key)
+  claim: async (url, setupToken, deviceName) => {
+    const { token, deviceName: name } = await claimDevice(url, setupToken, deviceName)
+    return get().configure(url, token, name)
   },
 
-  connect: () => {
-    const { serverUrl, apiKey } = get()
-    if (serverUrl && apiKey) {
-      wsClient.connect(serverUrl, apiKey)
+  refreshStatus: async () => {
+    if (!get().configured) return
+    try {
+      const status = await fetchStatus()
+      set({ status, online: true })
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 0) set({ online: false })
     }
   },
 
-  disconnect: () => {
-    wsClient.disconnect()
+  reportReachability: (ok) => {
+    if (get().online !== ok) set({ online: ok })
+  },
+
+  reset: async () => {
+    await clearConfig()
+    set({ configured: false, serverUrl: '', deviceName: '', status: null, online: true })
   },
 }))
+
+/** Setup-screen helper: probe a server before saving anything. */
+export async function probeServer(url: string, token?: string): Promise<ServerStatus> {
+  return testStatus(url, token)
+}

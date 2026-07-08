@@ -1,7 +1,10 @@
 import { execSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { WALNUT_HOME } from '../constants.js';
+import { bus, EventNames } from '../core/event-bus.js';
+import { log } from '../logging/index.js';
 
 export interface SyncStatus {
   initialized: boolean;
@@ -74,6 +77,7 @@ sessions/streams/
 
 # Auth tokens (sensitive)
 sync/ms-todo-tokens.json
+auth.json
 
 # Sync state (ephemeral)
 sync/ms-todo-delta.json
@@ -96,6 +100,34 @@ hook-errors.log
 node_modules/
 `;
 
+/**
+ * Ignore entries that MUST be present even in pre-existing repos whose
+ * .gitignore predates them. auth.json holds device-token hashes — it must
+ * never ride the sync repo between machines (each box pairs its own devices).
+ */
+const CRITICAL_IGNORES = ['auth.json'];
+
+/**
+ * Append missing CRITICAL_IGNORES to an existing .gitignore (idempotent).
+ * Called from ensureRepo() so every boot self-heals older installations.
+ */
+export function ensureCriticalIgnores(): void {
+  const gitignorePath = path.join(WALNUT_HOME, '.gitignore');
+  let content: string;
+  try {
+    content = fs.readFileSync(gitignorePath, 'utf-8');
+  } catch {
+    return; // no .gitignore yet — initSync writes the full template
+  }
+  const lines = new Set(content.split('\n').map((l) => l.trim()));
+  const missing = CRITICAL_IGNORES.filter((entry) => !lines.has(entry));
+  if (missing.length === 0) return;
+  const suffix = (content.endsWith('\n') ? '' : '\n')
+    + '\n# Device-token auth (sensitive — never synced)\n'
+    + missing.join('\n') + '\n';
+  fs.writeFileSync(gitignorePath, content + suffix, 'utf-8');
+}
+
 export function initSync(remoteUrl?: string): void {
   if (!isRepo()) {
     git('init');
@@ -106,6 +138,8 @@ export function initSync(remoteUrl?: string): void {
   const gitignorePath = path.join(WALNUT_HOME, '.gitignore');
   if (!fs.existsSync(gitignorePath)) {
     fs.writeFileSync(gitignorePath, GITIGNORE_CONTENT, 'utf-8');
+  } else {
+    ensureCriticalIgnores();
   }
 
   if (remoteUrl) {
@@ -133,7 +167,8 @@ export function sync(): { pulled: number; pushed: number; conflicts: number } {
   let pushed = 0;
   let conflicts = 0;
 
-  // Stage all changes
+  // Commit everything BEFORE pulling/merging so no local edit is ever
+  // unrecorded — even if it loses an LWW conflict it stays in history.
   git('add -A');
 
   // Check for staged changes
@@ -144,19 +179,21 @@ export function sync(): { pulled: number; pushed: number; conflicts: number } {
     pushed = 1;
   }
 
-  // Pull with rebase if remote is configured
+  // Pull if remote is configured. Clean case: rebase (keeps history linear).
+  // Conflict case: abort the rebase and do a TRUE MERGE with per-file LWW
+  // resolution — a merge commit preserves BOTH parents, so the losing side
+  // of every conflict remains recoverable from git history (rebase would
+  // rewrite the local commits and destroy that guarantee).
   if (hasRemote()) {
     const branch = getBranch();
     const pullResult = gitSafe(`pull --rebase origin ${branch}`, { timeout: NETWORK_TIMEOUT });
     if (pullResult === null) {
-      // Check for rebase conflict
-      const status = gitSafe('status --porcelain');
-      if (status && status.includes('UU')) {
-        conflicts = 1;
-        // Abort rebase and accept theirs for tasks.json
-        gitSafe('rebase --abort');
-        gitSafe(`pull -X theirs origin ${branch}`, { timeout: NETWORK_TIMEOUT });
-      }
+      // Rebase failed — could be a content conflict or a network error.
+      // Abort any half-applied rebase (no-op if none), then take the merge path.
+      gitSafe('rebase --abort');
+      const merge = lwwMerge(branch);
+      conflicts = merge.conflicts;
+      if (merge.merged) pulled = 1;
     } else if (pullResult.includes('Updating') || pullResult.includes('Fast-forward')) {
       pulled = 1;
     }
@@ -169,6 +206,136 @@ export function sync(): { pulled: number; pushed: number; conflicts: number } {
   }
 
   return { pulled, pushed, conflicts };
+}
+
+/**
+ * Merge origin/<branch> into the local branch with last-writer-wins conflict
+ * resolution at FILE granularity:
+ *
+ *  - Different hunks in the same file → git auto-merges, both kept, silent.
+ *  - Same-hunk conflict → the side whose latest commit touching that file is
+ *    NEWER (committer time) wins. Tie or unknown → remote wins (deterministic;
+ *    matches the companion-box-pulls-the-Mac common case).
+ *  - The losing version is NEVER lost: the merge commit keeps both parents.
+ *    RECOVERY:  git log --all --full-history -- <file>  → find the losing commit
+ *               git show <losingCommit>:<file>          → read the losing content
+ *    (--full-history matters: plain `git log -- <file>` simplifies away the
+ *    losing parent of a merge.)
+ *  - A sync:conflict-resolved event is emitted so the UI can surface
+ *    "conflict auto-resolved — the other version is in history".
+ *
+ * If the merge fails for a NON-conflict reason (unrelated histories, etc.)
+ * we abort and fall back to the legacy `pull -X theirs`, logging loudly.
+ */
+function lwwMerge(branch: string): { merged: boolean; conflicts: number } {
+  const remoteRef = `origin/${branch}`;
+
+  if (gitSafe(`fetch origin ${branch}`, { timeout: NETWORK_TIMEOUT }) === null) {
+    // Network/transport failure — nothing to merge; push below will fail too.
+    log.git.warn('git-sync fetch failed — skipping merge this cycle', { branch });
+    return { merged: false, conflicts: 0 };
+  }
+
+  const localHead = gitSafe('rev-parse HEAD');
+  const remoteHead = gitSafe(`rev-parse ${remoteRef}`);
+  if (!localHead || !remoteHead || localHead === remoteHead) {
+    return { merged: false, conflicts: 0 };
+  }
+
+  // True merge WITHOUT -X: non-overlapping edits auto-merge; overlapping
+  // edits leave unmerged paths we resolve per-file below.
+  if (gitSafe(`merge --no-edit ${remoteRef}`) !== null) {
+    return { merged: true, conflicts: 0 }; // clean auto-merge or fast-forward
+  }
+
+  const unmerged = gitSafe('diff --name-only --diff-filter=U');
+  const files = (unmerged ?? '').split('\n').map((f) => f.trim()).filter(Boolean);
+  if (files.length === 0) {
+    // Merge failed but not from content conflicts (unrelated histories,
+    // dirty tree, lock…). Fall back to legacy behavior — but LOUDLY: this
+    // path silently prefers remote and should be investigated.
+    gitSafe('merge --abort');
+    log.git.error(
+      'git-sync merge failed with a NON-conflict error — falling back to `pull -X theirs` (REMOTE WINS unconditionally). Investigate!',
+      { branch, localHead, remoteHead },
+    );
+    const fallback = gitSafe(`pull -X theirs origin ${branch}`, { timeout: NETWORK_TIMEOUT });
+    return { merged: fallback !== null, conflicts: fallback !== null ? 1 : 0 };
+  }
+
+  // Per-file LWW: compare the newest commit touching each file on each side.
+  const localWins: string[] = [];
+  const remoteWins: string[] = [];
+  for (const file of files) {
+    const localTime = Number(gitSafe(`log -1 --format=%ct HEAD -- "${file}"`) || '0');
+    const remoteTime = Number(gitSafe(`log -1 --format=%ct ${remoteRef} -- "${file}"`) || '0');
+    const side = localTime > remoteTime ? '--ours' : '--theirs';
+    if (gitSafe(`checkout ${side} -- "${file}"`) !== null) {
+      gitSafe(`add -- "${file}"`);
+    } else {
+      // Delete/modify conflict: the winning side deleted the file, so
+      // `checkout --ours/--theirs` has no blob to restore — honor the delete.
+      // TODO(edge): rename/rename conflicts land here too and resolve as
+      // delete; acceptable for a data repo of flat JSON/MD files.
+      gitSafe(`rm -f -- "${file}"`);
+    }
+    (side === '--ours' ? localWins : remoteWins).push(file);
+  }
+
+  // Anything still unmerged means resolution failed — don't commit a broken tree.
+  const stillUnmerged = gitSafe('diff --name-only --diff-filter=U');
+  if (stillUnmerged && stillUnmerged.trim().length > 0) {
+    gitSafe('merge --abort');
+    log.git.error(
+      'git-sync LWW resolution left unmerged paths — aborted merge, falling back to `pull -X theirs` (REMOTE WINS). Investigate!',
+      { branch, unresolved: stillUnmerged.split('\n') },
+    );
+    gitSafe(`pull -X theirs origin ${branch}`, { timeout: NETWORK_TIMEOUT });
+    return { merged: true, conflicts: files.length };
+  }
+
+  // Commit the merge. Parent 1 = local HEAD, parent 2 = remote head — the
+  // losing content of every conflicted file survives under one of them.
+  // Message body lists each file + winning side for auditability.
+  const detail = [
+    ...localWins.map((f) => `local  wins: ${f}`),
+    ...remoteWins.map((f) => `remote wins: ${f}`),
+  ].join('\n');
+  const msgFile = path.join(os.tmpdir(), `walnut-merge-msg-${process.pid}-${Date.now()}.txt`);
+  fs.writeFileSync(
+    msgFile,
+    `merge: LWW conflict resolution (${files.length} files)\n\n${detail}\n\n`
+    + 'Losing versions remain in history: git log --all --full-history -- <file>\n',
+    'utf-8',
+  );
+  let committed: string | null;
+  try {
+    committed = gitSafe(`commit -F "${msgFile}"`);
+  } finally {
+    try { fs.unlinkSync(msgFile); } catch { /* best-effort */ }
+  }
+  if (committed === null) {
+    // Never leave the repo mid-merge — abort and retry on the next cycle.
+    gitSafe('merge --abort');
+    log.git.error('git-sync LWW merge commit failed — merge aborted, will retry next cycle', {
+      branch, files,
+    });
+    return { merged: false, conflicts: files.length };
+  }
+
+  // Notify the UI: worst case of a conflict is ONE notification, never a dialog.
+  // `winner` is the majority side (per-file detail is in the merge commit);
+  // `losingCommit` points at the losing side's head for recovery.
+  const winner: 'local' | 'remote' = localWins.length > remoteWins.length ? 'local' : 'remote';
+  const losingCommit = winner === 'local' ? remoteHead : localHead;
+  log.git.warn('git-sync auto-resolved same-hunk conflict (LWW)', {
+    files, winner, losingCommit, localWins, remoteWins,
+  });
+  bus.emit(EventNames.SYNC_CONFLICT_RESOLVED, { files, winner, losingCommit }, ['web-ui'], {
+    source: 'git-sync',
+  });
+
+  return { merged: true, conflicts: files.length };
 }
 
 export function autoSync(): void {
@@ -271,8 +438,29 @@ export function ensureRepo(): { available: boolean; error?: string } {
     } catch (err) {
       return { available: false, error: `git init failed: ${err instanceof Error ? err.message : String(err)}` };
     }
+  } else {
+    // Pre-existing repo: self-heal the .gitignore so sensitive files added
+    // after the repo was initialized (auth.json) never enter the sync history.
+    try { ensureCriticalIgnores(); } catch { /* best-effort */ }
   }
   return { available: true };
+}
+
+// ── Cheap last-sync getter for /api/v1/status ──
+// Caches the last-commit timestamp for 30s so a polling mobile client never
+// pays two execSync calls per status request.
+let lastSyncCache: { value: string | null; at: number } | null = null;
+const LAST_SYNC_CACHE_MS = 30_000;
+
+/** ISO timestamp of the most recent sync commit, or null if no repo/commits. */
+export function getLastSyncAt(): string | null {
+  const now = Date.now();
+  if (lastSyncCache && now - lastSyncCache.at < LAST_SYNC_CACHE_MS) {
+    return lastSyncCache.value;
+  }
+  const value = isRepo() ? gitSafe('log -1 --format=%aI') : null;
+  lastSyncCache = { value, at: now };
+  return value;
 }
 
 export function getSyncStatus(): SyncStatus {

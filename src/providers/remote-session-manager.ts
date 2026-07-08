@@ -338,6 +338,19 @@ export class RemoteSessionManager implements SessionManager {
     this._pid = (result.pid as number) ?? null
     const alive = (result.alive as boolean) ?? false
 
+    // hasPipe must track daemon-authoritative liveness, NOT spawn-vs-attach.
+    // Only start() ever set _hasPipe=true; an attach()ed session (walnut
+    // restarted under a live CLI — the normal dev:prod redeploy path) kept
+    // hasPipe=false forever. Downstream, the turn-end result handler keys
+    // "FIFO alive between turns" off hasPipe (claude-code-session.ts): false
+    // misclassified every healthy idle FIFO session as EXITING → status
+    // 'stopped' → server wiped the stream buffer instantly at each turn end
+    // (no cross-turn retention), wrong badge, AGENT_COMPLETE churn, and the
+    // 60s activeProcessing force-clear noise. Same class as Bug D
+    // (injectMidTurn stale hasPipe) — this is its turn-end sibling.
+    // Incident: inc-1783357192826 ("chat vanishes when the turn completes").
+    this._hasPipe = alive
+
     // Adopt the daemon's ABSOLUTE stream-file cursor. _fileSize previously
     // started at 0 on every fresh RSM and only grew via `+=` on received
     // events — a RELATIVE count. Any later attach that sent it as fromOffset

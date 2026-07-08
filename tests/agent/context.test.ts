@@ -9,7 +9,7 @@ let tmpDir: string;
 // Mock constants module to redirect file paths to temp directory
 vi.mock('../../src/constants.js', () => createMockConstants());
 
-import { WALNUT_HOME, DAILY_DIR, MEMORY_FILE, PROJECTS_MEMORY_DIR } from '../../src/constants.js';
+import { WALNUT_HOME, DAILY_DIR, MEMORY_FILE } from '../../src/constants.js';
 import { buildMemoryContext } from '../../src/agent/context.js';
 import { formatDateKey } from '../../src/core/daily-log.js';
 
@@ -29,15 +29,14 @@ describe('buildMemoryContext', () => {
   it('returns placeholder text when no memory exists', async () => {
     const result = await buildMemoryContext();
     expect(result).toContain('(No global memory yet.');
-    expect(result).toContain('(No projects yet.)');
     expect(result).toContain('(No recent activity.)');
   });
 
   it('contains all section headers', async () => {
     const result = await buildMemoryContext();
     expect(result).toContain('## Task Categories & Projects');
+    expect(result).toContain('## User profile');
     expect(result).toContain('## Your long-term memory');
-    expect(result).toContain('## Your projects');
     expect(result).toContain('## Recent activity');
   });
 
@@ -49,34 +48,6 @@ describe('buildMemoryContext', () => {
     expect(result).toContain('## My Preferences');
     expect(result).toContain('I prefer dark mode and TypeScript.');
     expect(result).not.toContain('(No global memory yet.');
-  });
-
-  it('includes project summaries from all projects', async () => {
-    // Create two project MEMORY.md files (legacy read path — kept until archived)
-    const proj1Dir = path.join(PROJECTS_MEMORY_DIR, 'work', 'api');
-    fs.mkdirSync(proj1Dir, { recursive: true });
-    fs.writeFileSync(path.join(proj1Dir, 'MEMORY.md'), `---
-name: API Service
-description: REST API for the platform
----
-`, 'utf-8');
-
-    const proj2Dir = path.join(PROJECTS_MEMORY_DIR, 'personal', 'blog');
-    fs.mkdirSync(proj2Dir, { recursive: true });
-    fs.writeFileSync(path.join(proj2Dir, 'MEMORY.md'), `---
-name: Blog
-description: Personal blog project
----
-`, 'utf-8');
-
-    const result = await buildMemoryContext();
-    expect(result).toContain('**API Service**');
-    expect(result).toContain('work/api');
-    expect(result).toContain('REST API for the platform');
-    expect(result).toContain('**Blog**');
-    expect(result).toContain('personal/blog');
-    expect(result).toContain('Personal blog project');
-    expect(result).not.toContain('(No projects yet.)');
   });
 
   it('includes recent daily log content', async () => {
@@ -115,17 +86,8 @@ description: Personal blog project
   });
 
   it('combines all sections correctly', async () => {
-    // Set up all three types of data
     fs.mkdirSync(path.dirname(MEMORY_FILE), { recursive: true });
     fs.writeFileSync(MEMORY_FILE, '## Knowledge\nGlobal knowledge here.', 'utf-8');
-
-    const projDir = path.join(PROJECTS_MEMORY_DIR, 'myproject');
-    fs.mkdirSync(projDir, { recursive: true });
-    fs.writeFileSync(path.join(projDir, 'MEMORY.md'), `---
-name: My Project
-description: Test project
----
-`, 'utf-8');
 
     fs.mkdirSync(DAILY_DIR, { recursive: true });
     const dateKey = formatDateKey();
@@ -137,14 +99,11 @@ description: Test project
 
     const result = await buildMemoryContext();
 
-    // All three sections should have real content
     expect(result).toContain('Global knowledge here.');
-    expect(result).toContain('**My Project**');
     expect(result).toContain('Did some work.');
 
     // No placeholders should appear
     expect(result).not.toContain('(No global memory yet.');
-    expect(result).not.toContain('(No projects yet.)');
     expect(result).not.toContain('(No recent activity.)');
   });
 });

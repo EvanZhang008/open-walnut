@@ -98,6 +98,7 @@ export const EventNames = {
 
   // Sync events
   SYNC_PULLED: 'sync:pulled',
+  SYNC_CONFLICT_RESOLVED: 'sync:conflict-resolved',
 
   // Category events
   CATEGORY_CREATED: 'category:created',

@@ -8,6 +8,12 @@ import type { NoteListItem, TagCount } from '@/api/notes-v2';
 import type { PendingExternalChange } from '@/hooks/useNoteContent';
 import { splitFrontmatter, joinFrontmatter } from './frontmatter';
 import { normalizeForEditor } from './notes-content-preprocess';
+import {
+  rememberScrollFraction,
+  recallScrollFraction,
+  scrollFraction,
+  applyScrollFraction,
+} from './scroll-memory';
 import './notes-width.css';
 
 /**
@@ -76,6 +82,12 @@ export interface MarkdownEditorPanelProps {
   /** #tag autocomplete corpus. If enableWikiLinks and omitted, the shell fetches it. */
   tagSuggestions?: TagCount[];
   onWikiLinkClick?: (path: string) => void;
+  /**
+   * Vault-relative note path — set ONLY by vault surfaces (/notes, note pop-outs).
+   * Routes pasted images into the note's `_attachment/` folder as `![[...]]`
+   * embeds instead of the chat image store (see NotesEditor.attachmentNotePath).
+   */
+  attachmentNotePath?: string | null;
   tasks?: React.ComponentProps<typeof NotesEditor>['tasks'];
   focusedTaskId?: string | null;
   onTaskClick?: (taskId: string) => void;
@@ -129,6 +141,7 @@ export function MarkdownEditorPanel({
   wikiLinkNotes,
   tagSuggestions,
   onWikiLinkClick,
+  attachmentNotePath,
   tasks,
   focusedTaskId,
   onTaskClick,
@@ -162,6 +175,29 @@ export function MarkdownEditorPanel({
   // The doc key used for the editor remount + raw buffer ownership.
   const key = docId ?? breadcrumbPath ?? null;
 
+  // ── Per-doc scroll memory (Obsidian parity) ──
+  // One capture-phase listener on .notes-editor-content records the scroll
+  // FRACTION for the current doc — capture catches both the rendered surface
+  // (the content div itself) and the raw CodeMirror .cm-scroller inside it
+  // (scroll events don't bubble but do propagate in capture). Restores on doc
+  // switch, on raw↔rendered toggle, and across route changes / refresh.
+  const contentElRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = contentElRef.current;
+    if (!el || !key) return;
+    const onScroll = (e: Event) => {
+      const t = e.target as HTMLElement;
+      if (!t || t !== el && !t.classList?.contains('cm-scroller')) return;
+      // Ignore clamp events from a collapsed container (entering raw mode
+      // shrinks the content div → scrollTop clamps to 0 → would clobber memory).
+      if (t.scrollHeight - t.clientHeight <= 0) return;
+      rememberScrollFraction(key, scrollFraction(t));
+    };
+    el.addEventListener('scroll', onScroll, { capture: true, passive: true });
+    return () => el.removeEventListener('scroll', onScroll, { capture: true });
+  }, [key]);
+
   // ── Feature 1: editor width control (global, persisted) ──
   const [width, setWidth] = useState<EditorWidth>(readEditorWidth);
   useEffect(() => {
@@ -183,10 +219,50 @@ export function MarkdownEditorPanel({
   // ALWAYS-current mirror of rawText — flushRaw reads from here, not a stale closure.
   const rawTextRef = useRef('');
 
+  // Always-current key mirror + which doc the captured editor instance belongs
+  // to. NotesEditor remounts per key but editorRef is only (re)captured on the
+  // first edit in a doc — without this tag, a doc switch followed by a raw
+  // toggle could read the PREVIOUS doc's editor.
+  const keyRef = useRef(key);
+  keyRef.current = key;
+  const editorKeyRef = useRef<string | null>(null);
+  const rawModeRef = useRef(rawMode);
+  rawModeRef.current = rawMode;
+
   const handleEditorUpdate = useCallback((editor: Editor) => {
     editorRef.current = editor;
+    editorKeyRef.current = keyRef.current;
+    // Raw view open with no local raw edits → mirror editor-side changes into
+    // the buffer. Covers async edits landing AFTER the raw seed (e.g. an image
+    // paste whose upload+insert completes right as the user toggles to source).
+    if (rawModeRef.current && !rawDirtyRef.current) {
+      const md = editor.storage.markdown.getMarkdown() as string;
+      setRawText(md);
+      rawTextRef.current = md;
+    }
     onEditorUpdate(editor);
   }, [onEditorUpdate]);
+
+  const hasContent = content !== null;
+  // Restore the remembered position on doc open AND on raw↔rendered toggle
+  // (the fraction is mode-agnostic, so the location carries across surfaces).
+  // Staggered retries because TipTap/CodeMirror paint async — scrollHeight isn't
+  // final on the first frame; re-applying the same fraction is idempotent.
+  useEffect(() => {
+    if (!key || !hasContent) return;
+    const frac = recallScrollFraction(key);
+    if (frac === undefined) return;
+    const apply = () => {
+      const el = contentElRef.current;
+      if (!el) return;
+      const target = rawMode ? el.querySelector<HTMLElement>('.cm-scroller') : el;
+      if (target) applyScrollFraction(target, frac);
+    };
+    const raf = requestAnimationFrame(apply);
+    const t1 = setTimeout(apply, 60);
+    const t2 = setTimeout(apply, 200);
+    return () => { cancelAnimationFrame(raf); clearTimeout(t1); clearTimeout(t2); };
+  }, [key, rawMode, hasContent]);
 
   /**
    * Flush the current raw buffer into the rendered editor (happy path), or — as a
@@ -200,7 +276,7 @@ export function MarkdownEditorPanel({
     const body = rawTextRef.current; // ref, not state — avoid stale closure
 
     const editor = editorRef.current;
-    if (editor && rawPathRef.current === path) {
+    if (editor && !editor.isDestroyed && editorKeyRef.current === path && rawPathRef.current === path) {
       // Happy path: only setContent if the body changed, so we don't emit a
       // spurious save. emitUpdate:true → onDirty → caller's hook save.
       // normalizeForEditor: same parse-side normalization the rendered editor
@@ -231,11 +307,24 @@ export function MarkdownEditorPanel({
 
   // Seed / re-seed the raw buffer when entering raw mode or the body changes while
   // in raw mode (and we have no pending local raw edits to lose).
+  //
+  // Seed from the LIVE TipTap doc when it belongs to this key — the `content`
+  // prop is only the last LOADED body: editor-first edits (typing, image paste)
+  // are saved by the caller's hook WITHOUT flowing back into that prop (the WS
+  // self-echo is deliberately suppressed). Seeding from the prop showed a STALE
+  // source (user-reported: a pasted image's `![[...]]` missing in raw view) and,
+  // worse, editing that stale raw then flushed it back over the live doc —
+  // wiping the embed from disk.
   useEffect(() => {
     if (!rawMode) return;
     if (rawDirtyRef.current && rawPathRef.current === key) return;
-    setRawText(content ?? '');
-    rawTextRef.current = content ?? '';
+    const editor = editorRef.current;
+    const live = editor && !editor.isDestroyed && editorKeyRef.current === key
+      ? (editor.storage.markdown.getMarkdown() as string)
+      : null;
+    const body = live ?? content ?? '';
+    setRawText(body);
+    rawTextRef.current = body;
     rawPathRef.current = key;
     rawDirtyRef.current = false;
   }, [rawMode, content, key]);
@@ -396,7 +485,7 @@ export function MarkdownEditorPanel({
           onDismiss={onDismissExternal}
         />
       )}
-      <div className="notes-editor-content">
+      <div className="notes-editor-content" ref={contentElRef}>
         {/* Both surfaces stay mounted; raw mode hides the rendered editor so the
             TipTap instance survives a flush. */}
         <div style={rawMode ? { display: 'none' } : undefined} className="notes-rendered-wrap">
@@ -411,6 +500,7 @@ export function MarkdownEditorPanel({
             wikiLinkNotes={notesList}
             tagSuggestions={tagList}
             onWikiLinkClick={onWikiLinkClick}
+            attachmentNotePath={attachmentNotePath ?? undefined}
             tasks={tasks}
             focusedTaskId={focusedTaskId ?? undefined}
             onTaskClick={onTaskClick}

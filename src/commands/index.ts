@@ -169,6 +169,35 @@ export function registerCommands(program: Command): void {
       await runListsDelete(idOrName, cmd.optsWithGlobals());
     });
 
+  // -- Device token commands (cloud-mode authentication) --
+  const deviceCmd = program
+    .command('device')
+    .description('Manage device tokens for cloud-mode authentication');
+
+  deviceCmd
+    .command('add <name>')
+    .description('Pair a new device — prints its Bearer token ONCE')
+    .action(async (name: string, _options: Record<string, unknown>, cmd: Command) => {
+      const { runDeviceAdd } = await import('./device.js');
+      await runDeviceAdd(name, cmd.optsWithGlobals());
+    });
+
+  deviceCmd
+    .command('revoke <name>')
+    .description('Revoke a paired device')
+    .action(async (name: string, _options: Record<string, unknown>, cmd: Command) => {
+      const { runDeviceRevoke } = await import('./device.js');
+      await runDeviceRevoke(name, cmd.optsWithGlobals());
+    });
+
+  deviceCmd
+    .command('list')
+    .description('List paired devices (no secrets shown)')
+    .action(async (_options: Record<string, unknown>, cmd: Command) => {
+      const { runDeviceList } = await import('./device.js');
+      await runDeviceList(cmd.optsWithGlobals());
+    });
+
   program
     .command('web')
     .description('Start the web server')

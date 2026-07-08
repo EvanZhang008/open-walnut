@@ -57,6 +57,7 @@ export function PopoutNote() {
         enableWikiLinks
         enableBlockTools
         onWikiLinkClick={handleWikiLinkClick}
+        attachmentNotePath={notePath}
         showWidthToggle
         showRawToggle
         showBreadcrumb

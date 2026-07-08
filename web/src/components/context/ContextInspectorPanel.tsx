@@ -24,6 +24,69 @@ function ContextMarkdown({ content, fallback }: { content: string; fallback?: st
   );
 }
 
+interface ParsedSkill {
+  name: string;
+  type: string;
+  description: string;
+  location: string;
+}
+
+/**
+ * Skills section renderer — the prompt is a markdown preamble followed by an
+ * <available_skills> XML index. Rendered as raw markdown the XML collapses into
+ * an unreadable wall of text, so parse it and show a grouped, scannable list.
+ */
+function SkillsIndexView({ content }: { content: string }) {
+  const parsed = useMemo(() => {
+    // lastIndexOf: the preamble TEXT mentions "<available_skills>" — the real
+    // XML block is the final occurrence, at the end of the prompt.
+    const xmlStart = content.lastIndexOf('<available_skills>');
+    if (xmlStart === -1) return null;
+    const preamble = content.slice(0, xmlStart).trim();
+    try {
+      const doc = new DOMParser().parseFromString(content.slice(xmlStart), 'text/xml');
+      if (doc.querySelector('parsererror')) return null;
+      const categories = [...doc.querySelectorAll('category')].map((cat) => ({
+        name: cat.getAttribute('name') ?? 'general',
+        skills: [...cat.querySelectorAll('skill')].map((s): ParsedSkill => ({
+          name: s.querySelector('name')?.textContent ?? '',
+          type: s.querySelector('type')?.textContent ?? '',
+          description: s.querySelector('description')?.textContent ?? '',
+          location: s.querySelector('location')?.textContent ?? '',
+        })),
+      }));
+      return { preamble, categories };
+    } catch {
+      return null;
+    }
+  }, [content]);
+
+  if (!parsed) return <ContextMarkdown content={content} fallback="(No skills loaded)" />;
+
+  return (
+    <div className="context-skills-index">
+      <ContextMarkdown content={parsed.preamble} />
+      {parsed.categories.map((cat) => (
+        <div key={cat.name} className="context-skills-category">
+          <div className="context-skills-category-name">
+            {cat.name} <span className="context-skills-count">({cat.skills.length})</span>
+          </div>
+          {cat.skills.map((s) => (
+            <div key={s.location || s.name} className="context-skill-row">
+              <div className="context-skill-head">
+                <span className="context-skill-name">{s.name}</span>
+                <span className={`context-skill-type context-skill-type-${s.type}`}>{s.type}</span>
+              </div>
+              <div className="context-skill-desc">{s.description}</div>
+              <div className="context-skill-location">{s.location}</div>
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function ContextInspectorPanel({ data, loading, error, onRefresh }: ContextInspectorPanelProps) {
   if (error) {
     return (
@@ -85,7 +148,7 @@ export function ContextInspectorPanel({ data, loading, error, onRefresh }: Conte
         </ContextSection>
 
         <ContextSection title="Skills" tokens={sections.skills.tokens}>
-          <ContextMarkdown content={sections.skills.content} fallback="(No skills loaded)" />
+          <SkillsIndexView content={sections.skills.content} />
         </ContextSection>
 
         <ContextSection title="Compaction Summary" tokens={sections.compactionSummary.tokens}>
@@ -107,20 +170,17 @@ export function ContextInspectorPanel({ data, loading, error, onRefresh }: Conte
             <ContextMarkdown content={sections.mainAgentMemory.content} fallback="(Empty)" />
           </ContextSection>
         )}
-        {/* General agent: single global memory section */}
+        {/* General agent: user profile (USER.md) + global memory (MEMORY.md) */}
         {!sections.agentMemory && (
-          <ContextSection title="Global Memory" tokens={sections.globalMemory.tokens}>
-            <ContextMarkdown content={sections.globalMemory.content} fallback="(Empty)" />
-          </ContextSection>
+          <>
+            <ContextSection title="User Profile (USER.md)" tokens={sections.userProfile.tokens}>
+              <ContextMarkdown content={sections.userProfile.content} fallback="(No user profile yet)" />
+            </ContextSection>
+            <ContextSection title="Global Memory (MEMORY.md)" tokens={sections.globalMemory.tokens}>
+              <ContextMarkdown content={sections.globalMemory.content} fallback="(Empty)" />
+            </ContextSection>
+          </>
         )}
-
-        <ContextSection
-          title="Project Summaries"
-          tokens={sections.projectSummaries.tokens}
-          count={sections.projectSummaries.count}
-        >
-          <ContextMarkdown content={sections.projectSummaries.content} fallback="(No projects)" />
-        </ContextSection>
 
         <ContextSection title="Notes Context" tokens={sections.notesContext.tokens}>
           <ContextMarkdown content={sections.notesContext.content} fallback="(No notes/AGENTS.md)" />

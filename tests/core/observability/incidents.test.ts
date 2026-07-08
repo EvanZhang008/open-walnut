@@ -19,7 +19,7 @@ import { createMockConstants } from '../../helpers/mock-constants.js';
 
 vi.mock('../../../src/constants.js', () => createMockConstants());
 
-import { WALNUT_HOME } from '../../../src/constants.js';
+import { WALNUT_HOME, LOG_DIR } from '../../../src/constants.js';
 import {
   listIncidents,
   getIncident,
@@ -30,7 +30,9 @@ import {
 import { recordTurn, registerIncidentSink } from '../../../src/core/observability/recorder.js';
 import type { TurnEvent } from '../../../src/core/observability/types.js';
 
-const INCIDENTS_FILE = path.join(WALNUT_HOME, 'incidents.json');
+// incidents.json moved to LOG_DIR (commit 958236a: bundles/index are ephemeral
+// forensic state and must stay out of the git-synced WALNUT_HOME).
+const INCIDENTS_FILE = path.join(LOG_DIR, 'incidents.json');
 
 /** Poll listIncidents() until `pred` holds or we time out (the sink is async). */
 async function pollIncidents(
@@ -62,6 +64,7 @@ function truncatedTurn(sessionId: string): Omit<TurnEvent, 'ts'> {
 beforeEach(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
   await fsp.mkdir(WALNUT_HOME, { recursive: true });
+  await fsp.rm(INCIDENTS_FILE, { force: true });
   // Reset the recorder's module-level sink so cross-test leakage can't fire incidents.
   registerIncidentSink(() => {});
 });
@@ -69,6 +72,7 @@ beforeEach(async () => {
 afterEach(async () => {
   registerIncidentSink(() => {});
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
+  await fsp.rm(INCIDENTS_FILE, { force: true });
 });
 
 describe('incident CRUD', () => {

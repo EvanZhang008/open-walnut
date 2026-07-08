@@ -104,6 +104,21 @@ export async function captureBundle(
       grepDatedLogs(recent, sessionId, cutoffMs, isObsTurnLine),
       `turn-events.txt: no obs turn events for ${sessionId} in the last ${windowMins}min`,
     );
+
+    // 6. host-connectivity.txt — daemon-connection lifecycle lines for the
+    //    session's host + live pool state. These lines carry the HOST but not
+    //    the sid, so the sid-grep above misses them — which is exactly the
+    //    evidence that was absent when an SSH-down window (reconnect stuck on
+    //    spawn EBADF) made history reads time out (inc-1783406628291).
+    writeArtifact(
+      'host-connectivity.txt',
+      await captureHostConnectivity(sessionId, recent, cutoffMs),
+      'host-connectivity.txt: local session on a healthy pool (no connection lines in window)',
+    );
+
+    // 7. process-health.txt — fd count / memory / uptime of THIS process at
+    //    capture time. An exhausted fd table explains EBADF-class failures.
+    writeArtifact('process-health.txt', await captureProcessHealth(), 'process-health.txt: unavailable');
   } catch (err) {
     // Even the mkdir/orchestration failing must not throw on the incident path.
     meta.notesIfMissing.push(`bundle capture error: ${errMsg(err)}`);
@@ -262,6 +277,53 @@ function captureDaemonLogs(sessionId: string): string {
     if (hits.length > 0) blocks.push(`### ${file}`, hits.join('\n'));
   }
   return blocks.join('\n');
+}
+
+/**
+ * Host-connectivity evidence: current daemon pool state + the DaemonConnection
+ * lifecycle lines (connect/reconnect/lost/deploy/EBADF…) for the session's
+ * host within the window. Lazy imports so bundle capture never hard-depends
+ * on provider modules being loadable.
+ */
+async function captureHostConnectivity(sessionId: string, recent: string[], cutoffMs: number): Promise<string> {
+  const parts: string[] = [];
+
+  let host: string | undefined;
+  try {
+    const { getSessionByClaudeId } = await import('../session-tracker.js');
+    host = (await getSessionByClaudeId(sessionId))?.host;
+  } catch { /* record lookup is best-effort */ }
+
+  try {
+    const { getDaemonPoolStatus, getDaemonDisconnectedSince } = await import('../../providers/daemon-connection.js');
+    const pool = getDaemonPoolStatus().map(s => ({
+      ...s,
+      disconnectedSince: getDaemonDisconnectedSince(s.host)
+        ? new Date(getDaemonDisconnectedSince(s.host)!).toISOString()
+        : null,
+    }));
+    parts.push('### daemon pool state at capture', JSON.stringify({ sessionHost: host ?? '__local__', pool }, null, 2));
+  } catch { /* pool state is best-effort */ }
+
+  // Connection lifecycle lines mention the host, not the sid — grep by host.
+  if (host) {
+    const needle = `"host":"${host}"`;
+    const hits = grepDatedLogs(recent, needle, cutoffMs, l =>
+      l.includes('DaemonConnection') || l.includes('EBADF') || l.includes('EMFILE'));
+    if (hits.trim().length > 0) parts.push(`### DaemonConnection lines for host=${host} (window)`, hits);
+  }
+
+  return parts.join('\n');
+}
+
+/** Process resource snapshot (fd count, memory, uptime). */
+async function captureProcessHealth(): Promise<string> {
+  try {
+    const { processHealthSnapshot } = await import('./process-health.js');
+    return processHealthSnapshot();
+  } catch {
+    return '';
+  }
 }
 
 function fileExists(p: string): boolean {

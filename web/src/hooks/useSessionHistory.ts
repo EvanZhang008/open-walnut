@@ -15,6 +15,10 @@ interface UseSessionHistoryReturn {
   /** Phase 2 (SSH/full fetch) still in progress — true between Phase 1 completion and Phase 2 completion */
   phase2Pending: boolean;
   error: string | null;
+  /** Non-null when the rendered history is the server's LAST-GOOD parse (live
+   *  read failed — SSH down / daemon timeout). Value = underlying reason.
+   *  Content is shown; caller renders a degraded-connectivity banner. */
+  stale: string | null;
   /** Index in messages[] where the fork boundary is (source messages end, forked messages start) */
   forkBoundaryIndex?: number;
   /** The most recent turn's delta (messages appended by the last refetch). Consumers
@@ -66,6 +70,10 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
   const [loading, setLoading] = useState(false);
   const [phase2Pending, setPhase2Pending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Server served its last-good parse because the live read failed (SSH down /
+  // daemon timeout). Content renders; caller shows a degraded banner. Distinct
+  // from `error` (which blanks the view when there's nothing to show).
+  const [stale, setStale] = useState<string | null>(null);
   const [forkBoundaryIndex, setForkBoundaryIndex] = useState<number | undefined>(undefined);
   const [lastDelta, setLastDelta] = useState<SessionHistoryMessage[]>([]);
   const [deltaSeq, setDeltaSeq] = useState(0);
@@ -85,6 +93,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       setLoading(false);
       setPhase2Pending(false);
       setError(null);
+      setStale(null);
       setForkBoundaryIndex(undefined);
       cursorRef.current = 0;
       return;
@@ -93,6 +102,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     let cancelled = false;
     const controller = new AbortController();
     setError(null);
+    setStale(null);
     setForkBoundaryIndex(undefined);
     const sid = sessionId.substring(0, 8);
 
@@ -131,6 +141,11 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                 fetchSessionHistory(sessionId, { signal: controller.signal })
                   .then((full) => {
                     if (cancelled) return;
+                    // Stale rebuild would replace a fresher local view with the
+                    // server's old parse AND corrupt the cursor — skip; the next
+                    // healthy turn retries the rebuild.
+                    if (full.stale) { setStale(full.staleReason ?? 'live read failed'); return; }
+                    setStale(null);
                     setMessages(full.messages);
                     setForkBoundaryIndex(full.forkBoundaryIndex);
                     cursorRef.current = full.cursor ?? full.messages.length;
@@ -198,6 +213,15 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
         .then((result) => {
           if (cancelled) return;
           endP2(`${result.messages.length} msgs`);
+          // Degraded payload (live read failed, server sent its last-good
+          // parse): our local cache is at least as fresh — keep it, surface
+          // the banner, and leave cursor/cache untouched so recovery comes
+          // from the next healthy fetch, not from stale data.
+          if (result.stale) {
+            setStale(result.staleReason ?? 'live read failed');
+            return;
+          }
+          setStale(null);
           diagnoseOrdering('cache-verify', sid, result.messages);
           setHistoryCache(sessionId, {
             messages: result.messages,
@@ -256,6 +280,14 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
               diagnoseOrdering('P2:full', sid, result.messages);
               setMessages(result.messages);
               setForkBoundaryIndex(result.forkBoundaryIndex);
+              // Degraded payload: render it (beats a blank screen) but do NOT
+              // seed cursor/cache from it — its total is the server's stale
+              // count and would corrupt the next ?since= delta.
+              if (result.stale) {
+                setStale(result.staleReason ?? 'live read failed');
+                return;
+              }
+              setStale(null);
               cursorRef.current = result.cursor ?? result.messages.length;
               // Write to cache for next visit
               setHistoryCache(sessionId, {
@@ -276,5 +308,47 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     return () => { cancelled = true; controller.abort(); };
   }, [sessionId, version, enabled]);
 
-  return { messages, loading, phase2Pending, error, forkBoundaryIndex, lastDelta, deltaSeq };
+  // Self-heal the "Showing cached history — Reconnecting…" banner.
+  //
+  // `stale` is set when a full fetch failed the live read (SSH/daemon down) and
+  // the server served its last-good parse. It is otherwise ONLY cleared by the
+  // next successful full fetch — but nothing triggers one for an IDLE remote
+  // session: no turn boundary (no batch-completed), the browser WS never dropped
+  // (so no `_ws:reconnected`), and the user hasn't switched sessions. So once the
+  // host recovered in the background, the banner froze forever (it even keeps
+  // showing the stale "Ns ago" from the last failed read).
+  //
+  // The banner literally says "Reconnecting…", so make it true: while stale,
+  // retry a FULL fetch (never `?since=` — a delta read failure 502s and would
+  // corrupt the cursor) on an interval. A healthy fetch adopts the fresh history
+  // and clears the banner; a still-failing fetch degrades to stale again and we
+  // keep waiting. Effect re-arms only when `stale` flips non-null → null → …,
+  // so a persistent failure (e.g. bad SSH key) simply keeps polling every 10s.
+  useEffect(() => {
+    if (!sessionId || !stale || !enabled) return;
+    let cancelled = false;
+    const controller = new AbortController();
+    // 10s in prod; tests may shorten via window.__staleRetryMs to avoid a 10s wait.
+    const retryMs = (typeof window !== 'undefined' && (window as unknown as { __staleRetryMs?: number }).__staleRetryMs) || 10_000;
+    const timer = setInterval(() => {
+      fetchSessionHistory(sessionId, { signal: controller.signal })
+        .then((result) => {
+          if (cancelled || result.stale) return; // still down — keep the banner, retry next tick
+          // Live read recovered → adopt the fresh parse and drop the banner.
+          setStale(null);
+          setMessages(result.messages);
+          setForkBoundaryIndex(result.forkBoundaryIndex);
+          cursorRef.current = result.cursor ?? result.messages.length;
+          setHistoryCache(sessionId, {
+            messages: result.messages,
+            forkBoundaryIndex: result.forkBoundaryIndex,
+            msgCount: result.cursor ?? result.messages.length,
+          });
+        })
+        .catch(() => { /* transient — keep the banner, retry next tick */ });
+    }, retryMs);
+    return () => { cancelled = true; controller.abort(); clearInterval(timer); };
+  }, [sessionId, stale, enabled]);
+
+  return { messages, loading, phase2Pending, error, stale, forkBoundaryIndex, lastDelta, deltaSeq };
 }

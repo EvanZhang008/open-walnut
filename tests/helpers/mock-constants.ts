@@ -24,6 +24,7 @@ export function createMockConstants(prefix = 'walnut-test', overrides: Record<st
   const tasksDir = path.join(tmpBase, 'tasks');
   return {
     IS_EPHEMERAL: false,
+    CLOUD_MODE: false,
     WALNUT_HOME: tmpBase,
     TASKS_DIR: tasksDir,
     TASKS_FILE: path.join(tasksDir, 'tasks.json'),

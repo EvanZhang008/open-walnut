@@ -70,3 +70,7 @@ demo/
 
 # Local-only maintainer scripts (sensitive-content scanners — contain private grep patterns, never commit)
 scripts/local/
+
+# personal one-off migration scripts (contain private terms)
+scripts/migrate-projects-to-skills.mjs
+scripts/verify-and-purge-migrated.mjs

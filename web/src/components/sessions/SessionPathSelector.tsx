@@ -71,6 +71,14 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onSelect: (path: QuickStartPath, taskMeta: QuickStartTaskMeta) => void;
+  /** Meta to seed the footer with on open (e.g. re-opening to edit an already
+   *  confirmed Quick Start). undefined → DEFAULT_META. Lets a prior model/priority
+   *  choice survive a reopen instead of silently resetting to Auto/defaults. */
+  initialMeta?: QuickStartTaskMeta;
+  /** Path to seed on open (e.g. re-opening to edit an already-confirmed Quick Start).
+   *  When set, the picker opens directly in edit mode with this cwd pre-filled and the
+   *  host tab selected — an "edit this selection" view, not a blank search. */
+  initialPath?: { cwd: string; host: string | null };
 }
 
 const DEFAULT_META: QuickStartTaskMeta = {
@@ -81,7 +89,7 @@ const DEFAULT_META: QuickStartTaskMeta = {
   model: undefined,      // Auto — Claude/config default picks the model unless user overrides
 };
 
-export function SessionPathSelector({ open, onClose, onSelect }: Props) {
+export function SessionPathSelector({ open, onClose, onSelect, initialMeta, initialPath }: Props) {
   const [dirs, setDirs] = useState<WorkingDirEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -97,7 +105,14 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
   const [liveTaggedDirs, setLiveTaggedDirs] = useState<Array<{ cwd: string; host: string | null; hostLabel?: string }>>([]);
 
   // Task metadata the user picks in the footer — applied to the new task when the session starts.
-  const [meta, setMeta] = useState<QuickStartTaskMeta>(DEFAULT_META);
+  const [meta, setMeta] = useState<QuickStartTaskMeta>(initialMeta ?? DEFAULT_META);
+  // Read latest initialMeta inside the open effect without adding it to that effect's
+  // deps (which would re-trigger the history fetch/pre-warm on every parent re-render).
+  const initialMetaRef = useRef(initialMeta);
+  initialMetaRef.current = initialMeta;
+  // Same ref pattern for initialPath — read in the open effect, kept out of its deps.
+  const initialPathRef = useRef(initialPath);
+  initialPathRef.current = initialPath;
 
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -111,12 +126,22 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
     setError(null);
     setQuery('');
     setSelectedIdx(0);
-    setHostFilter('all');
-    setEditMode(false);
-    setEditingPath('');
     setLiveDirs([]);
     setLiveTaggedDirs([]);
-    setMeta(DEFAULT_META);
+    setMeta(initialMetaRef.current ?? DEFAULT_META);
+    // Re-opening to edit a confirmed selection: open straight into edit mode with the
+    // path pre-filled and its host tab active — an "edit this selection" view. Without
+    // a seed path, fall back to the blank browse view (fresh /session invocation).
+    const seed = initialPathRef.current;
+    if (seed?.cwd) {
+      setEditMode(true);
+      setEditingPath(seed.cwd);
+      setHostFilter(seed.host ?? '__local__');
+    } else {
+      setHostFilter('all');
+      setEditMode(false);
+      setEditingPath('');
+    }
     // Pre-warm per-host SSH connections now that the picker is actually opening
     // (moved off the unconditional module-import side effect that used to fire
     // on every page load and contend with the home critical path).
@@ -318,6 +343,20 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
     setSelectedIdx(0);
   }, []);
 
+  // Dismiss by clicking outside / Esc. When editing an already-confirmed selection
+  // (opened via initialPath), dismissing SAVES the current edits (path + meta) instead
+  // of discarding them — the user is editing an existing pick, not cancelling, so a
+  // model change must persist even without pressing Go. A fresh /session (no
+  // initialPath) keeps cancel-on-dismiss so an outside click doesn't conjure a
+  // quick-start bar out of nothing.
+  const handleDismiss = useCallback(() => {
+    if (initialPathRef.current?.cwd && editingPath) {
+      handleConfirm();
+    } else {
+      onClose();
+    }
+  }, [editingPath, handleConfirm, onClose]);
+
   // Keyboard navigation
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     // Shift+Tab: cycle host tabs (works in both modes)
@@ -401,22 +440,22 @@ export function SessionPathSelector({ open, onClose, onSelect }: Props) {
           }
         }
       } else if (e.key === 'Escape') {
-        onClose();
+        handleDismiss();
       }
     }
-  }, [editMode, filtered, selectedIdx, onClose, enterEditMode, handleConfirm, handleSelect, hostFilter, hostTabs]);
+  }, [editMode, filtered, selectedIdx, handleDismiss, enterEditMode, handleConfirm, handleSelect, hostFilter, hostTabs]);
 
-  // Close on outside click
+  // Close on outside click — saves edits when editing an existing selection (see handleDismiss).
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
       if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
-        onClose();
+        handleDismiss();
       }
     };
     const timer = setTimeout(() => document.addEventListener('mousedown', handler), 100);
     return () => { clearTimeout(timer); document.removeEventListener('mousedown', handler); };
-  }, [open, onClose]);
+  }, [open, handleDismiss]);
 
   if (!open) return null;
 

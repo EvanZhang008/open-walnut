@@ -74,6 +74,16 @@ function cacheGet(sessionId: string, host?: string): ParsedHistoryCacheEntry | u
   return parsedHistoryCache.get(cacheKey(sessionId, host));
 }
 
+/**
+ * Last successfully parsed history for a session, if any — degraded-mode
+ * fallback for when the live read fails (SSH down, daemon read timeout).
+ * Serving yesterday's conversation beats a blank "Failed to load history"
+ * screen (inc-1783406628291). Returns undefined when never read this process.
+ */
+export function getCachedSessionHistory(sessionId: string, host?: string): SessionHistoryMessage[] | undefined {
+  return cacheGet(sessionId, host)?.messages;
+}
+
 function cacheSet(sessionId: string, entry: ParsedHistoryCacheEntry, host?: string): void {
   const key = cacheKey(sessionId, host);
   parsedHistoryCache.delete(key);
@@ -134,6 +144,13 @@ export interface SessionHistoryMessage {
   thinking?: string;
   model?: string;
   usage?: { input_tokens: number; output_tokens: number };
+  /** Stable message id: the API `message.id` (`msg_…`) for assistant messages,
+   *  else the JSONL line `uuid`. The SAME id rides the live stream (SSE
+   *  message_start → SESSION_TEXT_DELTA.msgId), so streaming blocks and history
+   *  messages share a natural key — consumers match by id, not content.
+   *  Synthetic fallback (`<timestamp>-<index>` / `queue-<ts>`) for lines with
+   *  neither; ACP dialect: ≈ ContentChunk.messageId. */
+  msgId?: string;
   /** Walnut-generated message ID for deterministic dedup of optimistic user messages.
    *  Present on synthetic user events written by writeSyntheticUserEvent(). */
   walnutMessageId?: string;
@@ -481,7 +498,7 @@ export function parseSessionMessages(content: string): SessionHistoryMessage[] {
   const resultParentIds: (string | undefined)[] = [];
 
   const result: SessionHistoryMessage[] = [];
-  for (const [, msg] of messageMap) {
+  for (const [mapMsgId, msg] of messageMap) {
     const textParts: string[] = [];
     const tools: SessionHistoryTool[] = [];
     let thinking: string | undefined;
@@ -575,6 +592,7 @@ export function parseSessionMessages(content: string): SessionHistoryMessage[] {
       role: msg.role as 'user' | 'assistant',
       text,
       timestamp: msg.timestamp,
+      msgId: mapMsgId,
       ...(tools.length > 0 ? { tools } : {}),
       ...(thinking ? { thinking } : {}),
       ...(msg.model ? { model: msg.model } : {}),
@@ -778,6 +796,15 @@ export async function readSessionHistory(sessionId: string, cwd?: string, host?:
     }
     try {
       messages = parseSessionMessages(result.content);
+
+      // Echo-claim binding (Phase 1, ACP dialect): stamp walnutMessageId onto
+      // the canonical user-echo lines of recently delivered batches, so the
+      // frontend's optimistic dedup can match by EXACT id instead of text.
+      // In-memory registry; no-op for sessions with no pending claims.
+      try {
+        const { bindEchoClaims } = await import('./echo-claims.js');
+        bindEchoClaims(sessionId, messages);
+      } catch { /* binding is best-effort — text dedup remains the fallback */ }
 
       // Diagnostic: detect user message ordering issues
       const userTextIndices: number[] = [];

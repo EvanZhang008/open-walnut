@@ -47,32 +47,40 @@ function isValidTab(t: unknown): t is OpenTab {
 }
 
 /**
- * Hydrate the open-tabs workspace on first mount (§1.4 precedence, first match wins):
- *   1. A `?path=` / `?attachment=` URL param (deep link / pop-out) → sole active tab.
- *   2. Else persisted `{tabs, activePath}` from localStorage → restore workspace.
- *   3. Else empty (no tabs → empty state).
- * Deep links win so a shared/bookmarked URL always lands on the intended note.
+ * Hydrate the open-tabs workspace on first mount (§1.4):
+ *   - Always restore the persisted `{tabs, activePath}` workspace from localStorage.
+ *   - A `?path=` / `?attachment=` URL param (deep link / refresh / pop-out) then
+ *     wins the ACTIVE slot — appended as a tab if not already open.
+ * The URL must NOT replace the whole workspace: the page itself mirrors the
+ * active tab into `?path=`, so a plain refresh always carries one — treating it
+ * as a sole-tab deep link silently dropped every other open tab on reload.
  */
 function hydrateTabs(searchParams: URLSearchParams): PersistedTabs {
   const urlAttachment = searchParams.get('attachment');
-  if (urlAttachment) return { tabs: [{ path: urlAttachment, kind: 'attachment' }], activePath: urlAttachment };
   const urlPath = searchParams.get('path');
-  if (urlPath) return { tabs: [{ path: urlPath, kind: 'note' }], activePath: urlPath };
+  const urlTab: OpenTab | null = urlAttachment
+    ? { path: urlAttachment, kind: 'attachment' }
+    : urlPath
+      ? { path: urlPath, kind: 'note' }
+      : null;
 
+  let tabs: OpenTab[] = [];
+  let activePath: string | null = null;
   try {
     const raw = localStorage.getItem(LS_TABS_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<PersistedTabs>;
-      const tabs = Array.isArray(parsed.tabs) ? parsed.tabs.filter(isValidTab) : [];
-      if (tabs.length > 0) {
-        const wanted = typeof parsed.activePath === 'string' ? parsed.activePath : null;
-        const activePath = tabs.some((t) => t.path === wanted) ? wanted : tabs[0].path;
-        return { tabs, activePath };
-      }
+      tabs = Array.isArray(parsed.tabs) ? parsed.tabs.filter(isValidTab) : [];
+      const wanted = typeof parsed.activePath === 'string' ? parsed.activePath : null;
+      activePath = tabs.some((t) => t.path === wanted) ? wanted : (tabs[0]?.path ?? null);
     }
-  } catch { /* malformed / disabled storage — fall through to empty */ }
+  } catch { /* malformed / disabled storage — start from the URL tab alone */ }
 
-  return { tabs: [], activePath: null };
+  if (urlTab) {
+    if (!tabs.some((t) => t.path === urlTab.path)) tabs = [...tabs, urlTab];
+    activePath = urlTab.path;
+  }
+  return { tabs, activePath };
 }
 
 export function NotesPage() {

@@ -27,7 +27,7 @@ vi.mock('../../src/agent/model.js', () => ({
 import { WALNUT_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
 import { addTask } from '../../src/core/task-manager.js';
-import { createSessionRecord } from '../../src/core/session-tracker.js';
+import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
 
 let server: HttpServer;
@@ -38,19 +38,25 @@ function apiUrl(p: string): string {
 }
 
 // SESSION_START fires synchronously inside the fork request, so we must already be
-// subscribed before issuing the fetch. We buffer every SESSION_START message keyed by
+// subscribed before issuing the fetch. We buffer every SESSION_START event keyed by
 // taskId for the whole suite and look it up by the taskId the fork route returns.
-const sessionStartMessages = new Map<string, string>();
+interface CapturedStart { message: string; model?: string }
+const sessionStartEvents = new Map<string, CapturedStart>();
 
-/** Wait for (or read the already-buffered) SESSION_START message for a task id. */
-async function getSessionStartMessage(taskId: string, timeoutMs = 4000): Promise<string> {
+/** Wait for (or read the already-buffered) SESSION_START event for a task id. */
+async function getSessionStartEvent(taskId: string, timeoutMs = 4000): Promise<CapturedStart> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    const m = sessionStartMessages.get(taskId);
+    const m = sessionStartEvents.get(taskId);
     if (m !== undefined) return m;
     await new Promise((r) => setTimeout(r, 25));
   }
   throw new Error('SESSION_START not observed in time');
+}
+
+/** Convenience: just the message (most tests only assert on the shaped prompt). */
+async function getSessionStartMessage(taskId: string, timeoutMs = 4000): Promise<string> {
+  return (await getSessionStartEvent(taskId, timeoutMs)).message;
 }
 
 beforeAll(async () => {
@@ -63,8 +69,8 @@ beforeAll(async () => {
   // Buffer every fork's SESSION_START message (emitted synchronously to 'session-runner').
   bus.subscribe('test-capture-fork', (event) => {
     if (event.name !== EventNames.SESSION_START) return;
-    const data = event.data as { taskId?: string; message?: string };
-    if (data.taskId) sessionStartMessages.set(data.taskId, data.message ?? '');
+    const data = event.data as { taskId?: string; message?: string; model?: string };
+    if (data.taskId) sessionStartEvents.set(data.taskId, { message: data.message ?? '', model: data.model });
   }, { global: true, interest: [EventNames.SESSION_START] });
 });
 
@@ -192,5 +198,72 @@ describe('fork focus prompt + image attachment', () => {
       const stat = await fs.stat(m[1]);
       expect(stat.isFile()).toBe(true);
     }
+  });
+
+  it('inherits the EXACT parent cliModel so the fork resumes on the same model (prompt-cache safe)', async () => {
+    // Regression: the fork route used to only forward a request-body `model` (which the
+    // UI never sends), so the fork always spawned on the default model instead of the
+    // parent's — mismatching the model and invalidating the prompt cache the fork
+    // resumes into. It must seed SESSION_START.model from the source record's cliModel,
+    // which is the parent's original --model arg VERBATIM (incl. the [1m] marker).
+    const parent = await addTask({ title: 'Model Inheritance Parent', category: 'Inbox' });
+    const sid = 'fork-model-src';
+    await createSessionRecord(sid, parent.task.id, 'proj', '/tmp/fork-model-cwd', { cliModel: 'sonnet[1m]' });
+
+    const res = await fetch(apiUrl(`/api/sessions/${sid}/fork`), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ create_child_task: true, message: 'Same model please' }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { taskId: string };
+
+    const evt = await getSessionStartEvent(body.taskId);
+    // Exact match — same string, [1m] marker preserved.
+    expect(evt.model).toBe('sonnet[1m]');
+  });
+
+  it('does NOT fall back to the reported model (no [1m]) on a legacy record with no cliModel', async () => {
+    // A pre-cliModel legacy session only has the reported `model` (a resolved id like
+    // "…claude-opus-4-6-v1" that has LOST the [1m] marker). Forwarding it would silently
+    // resume the fork at 200K context — a DIFFERENT model than the parent. The fork must
+    // instead leave model undefined and let send() apply the default, rather than send a
+    // mismatched id.
+    const parent = await addTask({ title: 'Legacy Model Parent', category: 'Inbox' });
+    const sid = 'fork-model-legacy-src';
+    await createSessionRecord(sid, parent.task.id, 'proj', '/tmp/fork-model-legacy-cwd');
+    // Simulate a legacy record: reported model set, but no cliModel persisted.
+    await updateSessionRecord(sid, { model: 'global.anthropic.claude-opus-4-6-v1' });
+
+    const res = await fetch(apiUrl(`/api/sessions/${sid}/fork`), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ create_child_task: true, message: 'Legacy fork' }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { taskId: string };
+
+    const evt = await getSessionStartEvent(body.taskId);
+    // Not the reported id — undefined so send() applies the default.
+    expect(evt.model).toBeUndefined();
+  });
+
+  it('lets an explicit request-body model override the inherited parent model', async () => {
+    // A caller that DOES pass a model (e.g. a future "fork on a different model" UI)
+    // must win over the inherited parent model.
+    const parent = await addTask({ title: 'Model Override Parent', category: 'Inbox' });
+    const sid = 'fork-model-override-src';
+    await createSessionRecord(sid, parent.task.id, 'proj', '/tmp/fork-model-override-cwd', { cliModel: 'sonnet[1m]' });
+
+    const res = await fetch(apiUrl(`/api/sessions/${sid}/fork`), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ create_child_task: true, message: 'Different model', model: 'opus-1m' }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { taskId: string };
+
+    const evt = await getSessionStartEvent(body.taskId);
+    expect(evt.model).toBe('opus-1m');
   });
 });

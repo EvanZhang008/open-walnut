@@ -784,6 +784,23 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       // Surface remote read errors (SSH auth, daemon connection, etc.) to the frontend
       const msg = err instanceof Error ? err.message : String(err)
       log.web.warn('session history read failed', { sessionId, host: record?.host, error: msg })
+      // Degraded mode: an SSH-down window shouldn't blank the whole
+      // conversation ("Failed to load history" over hours-old streaming
+      // blocks — inc-1783406628291). Serve the last successfully parsed
+      // history with a `stale` marker so the UI can render content + a
+      // reconnecting banner. Delta requests (?since=) must NOT get this —
+      // a stale total would corrupt the client cursor; they fail as before.
+      if (req.query.since === undefined) {
+        const { getCachedSessionHistory } = await import('../../core/session-history.js')
+        const cached = getCachedSessionHistory(sessionId, record?.host)
+        if (cached && cached.length > 0) {
+          log.web.info('serving stale history cache (live read failed)', {
+            sessionId, host: record?.host, messages: cached.length,
+          })
+          res.json({ messages: cached, total: cached.length, stale: true, staleReason: msg })
+          return
+        }
+      }
       res.status(502).json({ error: msg })
       return
     }
@@ -2156,7 +2173,19 @@ sessionsRouter.post('/:sessionId/fork', async (req: Request, res: Response, next
       cwd: sourceRecord.cwd,
       project: task.project ?? '',
       mode: sourceRecord.mode !== 'default' ? sourceRecord.mode : undefined,
-      model,
+      // Fork must resume on the EXACT same model as the parent — the CLI does NOT
+      // inherit a session's model on --resume/--fork-session (it falls back to the
+      // account/config default), so an unspecified model would mismatch the parent
+      // and invalidate the prompt cache the fork is reusing. `cliModel` is the parent's
+      // original --model arg verbatim (e.g. "opus[1m]", incl. the 1M context marker) —
+      // persisted on every session start (persistSessionRecord), so this is the exact
+      // string, not an approximation. We deliberately do NOT fall back to the reported
+      // `model` (a resolved id like "…claude-opus-4-6-v1" that has LOST the [1m] marker)
+      // — using it would silently drop to 200K context, i.e. a DIFFERENT model than the
+      // parent. On the rare pre-cliModel legacy record, leave model undefined and let
+      // send() apply the default (same as quick-start) rather than send a mismatched id.
+      // An explicit request-body `model` still wins as an override.
+      model: model ?? sourceRecord.cliModel,
       title: title ?? `Fork of ${sourceRecord.title ?? sourceSessionId.slice(0, 16)}`,
       host: sourceRecord.host,
       forkedFromSessionId: sourceSessionId,

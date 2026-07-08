@@ -6,6 +6,7 @@
  */
 
 import { log } from '@/utils/log';
+import { getDeviceToken } from './device-token';
 
 /** WebSocket frame types matching the server protocol. */
 export interface WsEventFrame {
@@ -99,8 +100,12 @@ class WsClient {
     this.setState('connecting');
 
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const url = `${proto}://${window.location.host}/ws`;
-    log.info('ws', 'connecting', { url });
+    // Cloud-mode auth: browsers can't set an Authorization header on a
+    // WebSocket, so the device token (when stored) rides a query param.
+    // Trusted LAN → no token stored → bare /ws, unchanged.
+    const deviceToken = getDeviceToken();
+    const url = `${proto}://${window.location.host}/ws${deviceToken ? `?token=${encodeURIComponent(deviceToken)}` : ''}`;
+    log.info('ws', 'connecting', { url: `${proto}://${window.location.host}/ws` });
     const ws = new WebSocket(url);
 
     ws.onopen = () => {

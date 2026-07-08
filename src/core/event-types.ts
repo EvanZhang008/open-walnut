@@ -124,11 +124,29 @@ export interface SessionErrorEvent {
 }
 
 // ── Session streaming events ──
+//
+// ACP dialect: these events mirror the Agent Client Protocol's `session/update`
+// vocabulary (agentclientprotocol/claude-agent-acp) so upstream fix patterns
+// port 1:1. Mapping:
+//   SESSION_TEXT_DELTA + msgId      ≈ agent_message_chunk { content, messageId }
+//   SESSION_THINKING_DELTA + msgId  ≈ agent_thought_chunk { content, messageId }
+//   SESSION_TOOL_USE                ≈ tool_call { toolCallId, status: pending }
+//   SESSION_TOOL_RESULT             ≈ tool_call_update { toolCallId, status: completed/failed }
+//   SESSION_RESULT                  ≈ turn end (prompt response { stopReason })
+//   SESSION_USAGE_UPDATE            ≈ usage_update { used, size }
+// The invariant that makes IDs useful: a CHANGE in msgId marks a new message —
+// consumers group chunks by msgId instead of guessing by position/content.
 
 export interface SessionTextDeltaEvent {
   sessionId: string;
   taskId?: string;
   delta: string;
+  /** Anthropic API message id (`msg_…`) of the assistant message this delta
+   *  belongs to, captured from SSE `message_start`. The SAME id appears on the
+   *  persisted JSONL line (`message.id`), so live blocks and history messages
+   *  share a natural key — no content matching needed. Optional: absent on
+   *  legacy paths that predate id threading. */
+  msgId?: string;
 }
 
 export interface SessionToolUseEvent {
@@ -155,6 +173,8 @@ export interface SessionThinkingDeltaEvent {
   sessionId: string;
   taskId?: string;
   delta: string;
+  /** See SessionTextDeltaEvent.msgId — same semantics for thinking chunks. */
+  msgId?: string;
 }
 
 /** Catch-all for Claude CLI event types we don't know how to parse.
@@ -186,11 +206,18 @@ export interface SessionStatusChangedEvent {
 export interface SessionMessagesDeliveredEvent {
   sessionId: string;
   count: number;
+  /** The delivered batch's queue message ids (`qm-…`). Lets the frontend
+   *  remove exactly these optimistic bubbles instead of "the first N".
+   *  Optional during rollout; the failure path (SessionBatchFailedEvent)
+   *  always carried ids — this closes the success/failure asymmetry. */
+  messageIds?: string[];
 }
 
 export interface SessionBatchCompletedEvent {
   sessionId: string;
   count: number;
+  /** See SessionMessagesDeliveredEvent.messageIds. */
+  messageIds?: string[];
 }
 
 export interface SessionBatchFailedEvent {
@@ -202,6 +229,24 @@ export interface SessionBatchFailedEvent {
 export interface SessionMessageQueuedEvent {
   sessionId: string;
   messageId: string;
+}
+
+/** ACP dialect: ≈ session/request_permission (request side). Previously emitted
+ *  as an anonymous cast — typed here so the vocabulary is complete. */
+export interface SessionPermissionRequestEvent {
+  sessionId: string;
+  taskId?: string;
+  requestId: string;
+  toolName: string;
+  input?: Record<string, unknown>;
+  reason?: string;
+}
+
+/** ACP dialect: ≈ session/request_permission outcome. */
+export interface SessionPermissionResolvedEvent {
+  sessionId: string;
+  requestId: string;
+  allowed: boolean;
 }
 
 export interface SessionSystemEventPayload {
@@ -455,6 +500,25 @@ export interface CronJobEvent {
   [key: string]: unknown;
 }
 
+// ── Git sync events ──
+
+/**
+ * Emitted when the git-sync LWW merge auto-resolves a same-hunk conflict
+ * between the local box and the remote (both sides edit the same lines).
+ * The losing version is NEVER lost: the merge commit keeps both parents,
+ * so `git log --all -- <file>` / `git show <losingCommit>:<file>` recovers it.
+ */
+export interface SyncConflictResolvedEvent {
+  /** Conflicted file paths (repo-relative) that were auto-resolved. */
+  files: string[];
+  /** Which side won, by newest commit time per file (LWW). When files split
+   *  between winners this reports the majority side; per-file detail is in
+   *  the merge commit message. */
+  winner: 'local' | 'remote';
+  /** Commit hash of the losing side's head — the losing content lives here. */
+  losingCommit: string;
+}
+
 // ── Notes events ──
 
 export interface NotesUpdatedEvent {
@@ -565,6 +629,8 @@ export interface EventPayloadMap {
   'conversation:updated': ConversationUpdatedEvent;
 
   'notes:updated': NotesUpdatedEvent;
+
+  'sync:conflict-resolved': SyncConflictResolvedEvent;
 
   'config:changed': ConfigChangedEvent;
 

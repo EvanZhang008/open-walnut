@@ -31,6 +31,12 @@ export interface SessionHistoryResult {
   cursor?: number;
   /** True when `messages` is an incremental slice (since was honored); false/undefined = full payload. */
   delta?: boolean;
+  /** True when the live read failed and the server served its last good parse
+   *  (SSH down / daemon timeout). Render it, but show a degraded banner and do
+   *  NOT advance the delta cursor off it. */
+  stale?: boolean;
+  /** Human-readable reason for `stale` (the underlying read error). */
+  staleReason?: string;
 }
 
 export async function fetchSessionHistory(
@@ -46,10 +52,10 @@ export async function fetchSessionHistory(
   // Remote sessions + fork chains can take 20-30s on first load (SSH pulls 3+ MB JSONL
   // serially through corp proxy). Streams path is local-only and fast; full path may be slow.
   const timeoutMs = opts?.source === 'streams' ? 15_000 : 60_000;
-  const res = await apiGet<{ messages: SessionHistoryMessage[]; forkBoundaryIndex?: number; cursor?: number; delta?: boolean }>(
+  const res = await apiGet<{ messages: SessionHistoryMessage[]; forkBoundaryIndex?: number; cursor?: number; delta?: boolean; stale?: boolean; staleReason?: string }>(
     `/api/sessions/${sessionId}/history`, params, { signal: opts?.signal, timeoutMs },
   );
-  return { messages: res.messages, forkBoundaryIndex: res.forkBoundaryIndex, cursor: res.cursor, delta: res.delta };
+  return { messages: res.messages, forkBoundaryIndex: res.forkBoundaryIndex, cursor: res.cursor, delta: res.delta, stale: res.stale, staleReason: res.staleReason };
 }
 
 export async function fetchSubagentHistory(

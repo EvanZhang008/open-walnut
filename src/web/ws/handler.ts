@@ -9,6 +9,7 @@ import { WebSocketServer, WebSocket } from 'ws'
 import type { IncomingMessage } from 'node:http'
 import type { Server as HttpServer } from 'node:http'
 import type { WsFrame } from './protocol.js'
+import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 
 export type RpcHandler = (payload: unknown, client: WebSocket) => unknown | Promise<unknown>
@@ -214,6 +215,45 @@ function registerSetInterest(): void {
 }
 
 /**
+ * Cloud-mode WS upgrade gate: accept a device token (or legacy API key) from
+ * the `?token=` query param, or an Authorization: Bearer header for
+ * non-browser clients. Failures count toward the per-IP auth rate limit.
+ */
+async function verifyCloudUpgrade(url: URL, request: IncomingMessage): Promise<boolean> {
+  // Rate-limit key: behind the local reverse proxy every socket peer is
+  // loopback — use X-Forwarded-For (first hop) so one abusive client can't
+  // exhaust the shared budget for everyone. Only trusted when the actual
+  // peer IS loopback (mirrors Express `trust proxy: 'loopback'`).
+  const peer = request.socket.remoteAddress ?? 'unknown'
+  const isLoopbackPeer = peer === '127.0.0.1' || peer === '::1' || peer === '::ffff:127.0.0.1'
+  const fwd = request.headers['x-forwarded-for']
+  const fwdIp = typeof fwd === 'string' ? fwd.split(',')[0]?.trim() : undefined
+  const ip = (isLoopbackPeer && fwdIp) ? fwdIp : peer
+  const { isAuthRateLimited, recordAuthFailure } = await import('../middleware/auth-rate-limit.js')
+  if (isAuthRateLimited(ip)) {
+    log.ws.warn('cloud ws upgrade: rate limited', { ip })
+    return false
+  }
+  const header = request.headers.authorization
+  const token = url.searchParams.get('token')
+    ?? (header?.startsWith('Bearer ') ? header.slice(7) : null)
+  if (!token) {
+    recordAuthFailure(ip)
+    log.ws.warn('cloud ws upgrade: missing token', { ip })
+    return false
+  }
+  const { validateBearerCredential } = await import('../middleware/auth.js')
+  const cred = await validateBearerCredential(token)
+  if (!cred) {
+    recordAuthFailure(ip)
+    log.ws.warn('cloud ws upgrade: invalid token', { ip })
+    return false
+  }
+  log.ws.info('cloud ws upgrade authenticated', { name: cred.name, kind: cred.kind })
+  return true
+}
+
+/**
  * Attach the WebSocket server to an existing HTTP server via upgrade.
  */
 export function attachWss(server: HttpServer): WebSocketServer {
@@ -225,6 +265,27 @@ export function attachWss(server: HttpServer): WebSocketServer {
     const url = new URL(request.url ?? '/', `http://${request.headers.host}`)
     if (url.pathname !== '/ws') {
       socket.destroy()
+      return
+    }
+
+    // Cloud mode: WS upgrades must carry a valid device token. The browser
+    // WebSocket API can't set an Authorization header, so the token rides a
+    // `?token=` query param (chosen over Sec-WebSocket-Protocol — the SPA's
+    // WsClient only needs to append one query param; a subprotocol would also
+    // change the server's protocol negotiation). Trusted-LAN mode: unchanged,
+    // no gate (the WS `auth` RPC remains available for remote API-key clients).
+    if (CLOUD_MODE) {
+      verifyCloudUpgrade(url, request).then((ok) => {
+        if (!ok) {
+          // Minimal raw HTTP response — the socket isn't an Express res.
+          socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
+          socket.destroy()
+          return
+        }
+        wss!.handleUpgrade(request, socket, head, (ws) => {
+          wss!.emit('connection', ws, request)
+        })
+      }).catch(() => socket.destroy())
       return
     }
 

@@ -233,6 +233,94 @@ describe('GET /api/notes-v2/attachment', () => {
   });
 });
 
+// ─── POST /attachment — Pasted-image upload into the vault ───────────
+
+describe('POST /api/notes-v2/attachment (upload)', () => {
+  // 1x1 transparent PNG
+  const PNG_B64 =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
+  it('saves the image into _attachment/ beside the note and returns the vault-relative path', async () => {
+    await writeNote('Areas/proj/My Note.md', '# Note');
+
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/notes-v2/attachment')
+      .send({ notePath: 'Areas/proj/My Note.md', data: PNG_B64, mediaType: 'image/png' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.path).toMatch(/^Areas\/proj\/_attachment\/pasted-image-\d{14}-[0-9a-f]{6}\.png$/);
+
+    // Bytes on disk match the upload
+    const onDisk = await fs.readFile(path.join(NOTES_DIR, res.body.path));
+    expect(onDisk.equals(Buffer.from(PNG_B64, 'base64'))).toBe(true);
+
+    // The returned path round-trips through the GET /attachment streamer
+    const served = await request(app)
+      .get('/api/notes-v2/attachment')
+      .query({ path: res.body.path });
+    expect(served.status).toBe(200);
+    expect(served.headers['content-type']).toContain('image/png');
+  });
+
+  it('handles a note path without the .md suffix (vault root)', async () => {
+    await writeNote('Root.md', '# Root');
+
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/notes-v2/attachment')
+      .send({ notePath: 'Root', data: PNG_B64, mediaType: 'image/jpeg' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.path).toMatch(/^_attachment\/pasted-image-\d{14}-[0-9a-f]{6}\.jpg$/);
+  });
+
+  it('two DIFFERENT images pasted in the same second get distinct filenames (content hash)', async () => {
+    await writeNote('n.md', '');
+    // Second image: same 1x1 PNG with one byte flipped in the IDAT payload region
+    const other = Buffer.from(PNG_B64, 'base64');
+    other[other.length - 20] ^= 0xff;
+    const app = createApp();
+    const r1 = await request(app)
+      .post('/api/notes-v2/attachment')
+      .send({ notePath: 'n.md', data: PNG_B64, mediaType: 'image/png' });
+    const r2 = await request(app)
+      .post('/api/notes-v2/attachment')
+      .send({ notePath: 'n.md', data: other.toString('base64'), mediaType: 'image/png' });
+    expect(r1.status).toBe(200);
+    expect(r2.status).toBe(200);
+    // Even within the same wall-clock second, the 6-hex content hash differs.
+    expect(r1.body.path).not.toBe(r2.body.path);
+    const dir = await fs.readdir(path.join(NOTES_DIR, '_attachment'));
+    expect(dir.length).toBe(2);
+  });
+
+  it('rejects a disallowed media type', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/notes-v2/attachment')
+      .send({ notePath: 'n.md', data: PNG_B64, mediaType: 'image/svg+xml' });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects traversal in notePath', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/notes-v2/attachment')
+      .send({ notePath: '../../outside/n.md', data: PNG_B64, mediaType: 'image/png' });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects missing fields', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/notes-v2/attachment')
+      .send({ notePath: 'n.md' });
+    expect(res.status).toBe(400);
+  });
+});
+
 // ─── GET /content/*path — Read Note ──────────────────────────────────
 
 describe('GET /api/notes-v2/content/*path', () => {

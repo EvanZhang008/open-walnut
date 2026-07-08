@@ -1,3 +1,5 @@
+import { getDeviceToken } from './device-token';
+
 class ApiError extends Error {
   constructor(
     public status: number,
@@ -14,9 +16,14 @@ async function request<T>(method: string, path: string, body?: unknown, extra?: 
   const signal = extra?.signal
     ? AbortSignal.any([extra.signal, timeoutSignal])
     : timeoutSignal;
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  // Cloud-mode auth: attach the stored device token when one exists.
+  // On a trusted LAN no token is stored → header omitted → behavior unchanged.
+  const deviceToken = getDeviceToken();
+  if (deviceToken) headers['Authorization'] = `Bearer ${deviceToken}`;
   const opts: RequestInit = {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     signal,
   };
   if (body !== undefined) {

@@ -1,355 +1,286 @@
 /**
- * Chat store — manages messages, streaming, and chat history.
- * Core logic ported from web/src/hooks/useChat.ts.
+ * Chat store — conversation list, per-conversation messages, one live SSE
+ * stream for the active conversation.
+ *
+ * Caching: conversations + message tails persist to AsyncStorage so the app
+ * renders instantly (stale-while-revalidate); network refresh follows.
  */
 
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { create } from 'zustand'
-import { wsClient } from '../api/ws'
-import { fetchChatHistory } from '../api/client'
-import type { ChatMessage, ChatEntry, TaskContext, MessageBlock } from '../api/types'
+import { createJSONStorage, persist } from 'zustand/middleware'
+import { createConversation, fetchConversations, fetchMessages, sendMessage } from '../api/client'
+import { ConversationStream } from '../api/stream'
+import { ApiError, type ApiMessage, type ConversationSummary } from '../api/types'
+import { useConnectionStore } from './connection'
 
-interface ChatStore {
-  messages: ChatMessage[]
-  isStreaming: boolean
+const PAGE = 50
+const CACHE_TAIL = 60
+
+interface ChatState {
+  conversations: ConversationSummary[]
+  activeId: string | null
+  messages: Record<string, ApiMessage[]>
+  hasMore: Record<string, boolean>
+
+  loadingList: boolean
+  loadingMessages: boolean
+  sending: boolean
+  /** A turn is running on the active conversation (send disabled). */
+  streaming: boolean
+  /** Accumulated live assistant text for the in-flight turn. */
+  streamText: string
+  /** Latest tool/thinking status line, e.g. "Read". */
+  activity: string | null
   error: string | null
-  isLoading: boolean
-  hasMore: boolean
-  currentPage: number
-  taskContext: TaskContext | null
-  streamBuffer: string
 
-  // Actions
-  initialize: () => void
-  cleanup: () => void
-  sendMessage: (text: string) => void
-  stopGeneration: () => void
-  loadHistory: () => Promise<void>
-  loadOlderMessages: () => Promise<void>
-  setTaskContext: (ctx: TaskContext | null) => void
-  clearMessages: () => void
+  initialize: () => Promise<void>
+  refreshConversations: () => Promise<void>
+  select: (id: string | null) => void
+  startNewConversation: () => void
+  loadMessages: (id: string) => Promise<void>
+  loadOlder: () => Promise<void>
+  send: (text: string) => Promise<boolean>
+  clearError: () => void
+  connectStream: () => void
+  closeStream: () => void
 }
 
+// Stream + delta buffer live outside React state (high-frequency writes).
+let stream: ConversationStream | null = null
+let deltaBuffer = ''
 let flushTimer: ReturnType<typeof setTimeout> | null = null
-let streamingMessageId: string | null = null
 
-// Monotonic counter + random nonce — survives Expo Fast Refresh without collisions.
-// Fast Refresh re-evaluates module-level code (resetting msgIdSeq to 0) but preserves
-// Zustand store state. The nonce ensures new IDs never collide with pre-reload messages.
-let msgIdSeq = 0
-const idNonce = Math.random().toString(36).slice(2, 8)
-function nextMsgId(prefix: string): string {
-  return `${prefix}-${idNonce}-${++msgIdSeq}`
-}
-
-// Track initialization to prevent duplicate WebSocket subscriptions
-let initialized = false
-
-/**
- * Transform entity refs (<task-ref>, <session-ref>) to readable markdown.
- * The server stores these as XML tags with labels; iOS renders them as bold text.
- */
-function transformEntityRefs(text: string): string {
-  // <task-ref id="abc" label="Project / Title" /> → **Project / Title**
-  // Also handles self-closing without space: <task-ref ... />
-  text = text.replace(
-    /<task-ref\s+id="[^"]*"\s+label="([^"]*)"\s*\/>/g,
-    '**$1**'
-  )
-  // Handle task-ref without label (just show shortened ID)
-  text = text.replace(
-    /<task-ref\s+id="([^"]*)"\s*\/>/g,
-    '`$1`'
-  )
-  // <session-ref id="abc" label="Session Name" /> → *Session Name*
-  text = text.replace(
-    /<session-ref\s+id="[^"]*"\s+label="([^"]*)"\s*\/>/g,
-    '*$1*'
-  )
-  text = text.replace(
-    /<session-ref\s+id="([^"]*)"\s*\/>/g,
-    '`$1`'
-  )
-  return text
-}
-
-function entryToMessage(entry: ChatEntry): ChatMessage {
-  let blocks: MessageBlock[] | undefined
-  let text = ''
-
-  if (Array.isArray(entry.content)) {
-    blocks = entry.content as MessageBlock[]
-    text = blocks
-      .filter((b): b is { type: 'text'; text: string } => b.type === 'text' && typeof b.text === 'string')
-      .map((b) => b.text)
-      .join('')
-  } else if (typeof entry.content === 'string') {
-    text = entry.content
-  } else {
-    text = String(entry.content ?? '')
-  }
-
-  // Prefer displayText if available and text is empty
-  if (!text && entry.displayText) text = entry.displayText
-
-  // Transform entity refs to readable markdown
-  text = transformEntityRefs(text)
-
-  return {
-    id: nextMsgId('entry'),
-    role: entry.role,
-    text,
-    timestamp: entry.timestamp,
-    source: entry.source,
-    notification: entry.notification,
-    blocks,
+function reportNet(err: unknown): void {
+  if (err instanceof ApiError && err.status === 0) {
+    useConnectionStore.getState().reportReachability(false)
   }
 }
 
-export const useChatStore = create<ChatStore>((set, get) => ({
-  messages: [],
-  isStreaming: false,
-  error: null,
-  isLoading: false,
-  hasMore: true,
-  currentPage: 1,
-  taskContext: null,
-  streamBuffer: '',
-
-  initialize: () => {
-    // Prevent duplicate WebSocket subscriptions on re-mount
-    if (initialized) {
-      // Already subscribed — just refresh history
-      get().loadHistory()
-      return
-    }
-    initialized = true
-
-    // Load initial history
-    get().loadHistory()
-
-    // Clear stale errors on reconnect (e.g. after credentials change)
-    wsClient.onConnectionChange((state) => {
-      if (state === 'connected' && get().error) {
-        set({ error: null })
-        // Refresh history with new credentials
-        get().loadHistory()
-      }
-    })
-
-    // Subscribe to streaming events
-    wsClient.onEvent('agent:text-delta', (data) => {
-      const d = data as { text?: string; delta?: string }
-      const delta = d.text ?? d.delta ?? ''
-      if (!delta) return
-
-      // Auto-create streaming placeholder if we receive deltas without an active session
-      // (happens when another client — web browser — initiated the chat)
-      if (!streamingMessageId) {
-        const id = nextMsgId('ext-stream')
-        streamingMessageId = id
-        set((s) => ({
-          messages: [...s.messages, {
-            id,
-            role: 'assistant' as const,
-            text: '',
-            timestamp: new Date().toISOString(),
-            isStreaming: true,
-          }],
-          isStreaming: true,
-          error: null,
-        }))
-      }
-
-      set((s) => ({ streamBuffer: s.streamBuffer + delta }))
-
-      // Debounce flush to 50ms for smooth streaming
-      if (!flushTimer) {
-        flushTimer = setTimeout(() => {
-          flushTimer = null
-          const { streamBuffer, messages } = get()
-          if (!streamBuffer || !streamingMessageId) return
-
-          const updated = messages.map((m) =>
-            m.id === streamingMessageId ? { ...m, text: m.text + streamBuffer, isStreaming: true } : m
-          )
-          set({ messages: updated, streamBuffer: '' })
-        }, 50)
-      }
-    })
-
-    wsClient.onEvent('agent:response', (data) => {
-      // Flush any remaining buffer
-      if (flushTimer) {
-        clearTimeout(flushTimer)
+export const useChatStore = create<ChatState>()(
+  persist(
+    (set, get) => {
+      const flushDeltas = () => {
         flushTimer = null
+        if (!deltaBuffer) return
+        const chunk = deltaBuffer
+        deltaBuffer = ''
+        set((s) => ({ streamText: s.streamText + chunk }))
       }
 
-      const { streamBuffer, messages } = get()
-      const d = data as { text?: string; content?: MessageBlock[] }
-      const finalText = d.text ?? ''
-
-      // If we have a streaming message, finalize it
-      if (streamingMessageId) {
-        const updated = messages.map((m) => {
-          if (m.id === streamingMessageId) {
-            const raw = finalText || (m.text + streamBuffer)
-            return { ...m, text: transformEntityRefs(raw), isStreaming: false }
+      const finalizeTurn = (convId: string, turnId: string, fullText: string) => {
+        if (flushTimer) clearTimeout(flushTimer)
+        flushTimer = null
+        deltaBuffer = ''
+        set((s) => {
+          const msgs = s.messages[convId] ?? []
+          const id = `turn-${turnId}`
+          const last = [...msgs].reverse().find((m) => m.role === 'assistant' && !m.kind)
+          // Skip append when replayed history already contains this reply.
+          const dup = msgs.some((m) => m.id === id) || (fullText !== '' && last?.text === fullText)
+          const next = dup || !fullText
+            ? msgs
+            : [...msgs, { id, role: 'assistant' as const, text: fullText, createdAt: new Date().toISOString() }]
+          return {
+            messages: { ...s.messages, [convId]: next },
+            streaming: false,
+            streamText: '',
+            activity: null,
           }
-          return m
         })
-        set({ messages: updated, isStreaming: false, streamBuffer: '', error: null })
-      } else {
-        // No streaming message — add the response directly
-        if (finalText) {
-          set((s) => ({
-            messages: [...s.messages, {
-              id: nextMsgId('resp'),
-              role: 'assistant' as const,
-              text: transformEntityRefs(finalText),
-              timestamp: new Date().toISOString(),
-            }],
-            isStreaming: false,
-            streamBuffer: '',
-            error: null,
-          }))
-        } else {
-          set({ isStreaming: false, streamBuffer: '' })
-        }
-      }
-      streamingMessageId = null
-    })
-
-    wsClient.onEvent('agent:error', (data) => {
-      const d = data as { error?: string; message?: string }
-      const errMsg = d.error ?? d.message ?? 'An error occurred'
-
-      // Finalize streaming message if active
-      if (streamingMessageId) {
-        const { messages, streamBuffer } = get()
-        const updated = messages.map((m) =>
-          m.id === streamingMessageId ? { ...m, text: m.text + streamBuffer, isStreaming: false } : m
-        )
-        set({ messages: updated })
+        // Reconcile with canonical server history (real ids, tool/thinking rows).
+        void get().loadMessages(convId)
+        void get().refreshConversations()
       }
 
-      set({ isStreaming: false, error: errMsg, streamBuffer: '' })
-      streamingMessageId = null
-    })
-
-    // Chat history updated (e.g. from triage, cron, heartbeat)
-    wsClient.onEvent('chat:history-updated', (data) => {
-      const d = data as { entry?: ChatEntry }
-      if (d.entry && !get().isStreaming) {
-        // Dedup: skip if we already have a message with this timestamp and role
-        const existing = get().messages
-        const isDup = existing.some(
-          (m) => m.timestamp === d.entry!.timestamp && m.role === d.entry!.role
-        )
-        if (!isDup) {
-          const msg = entryToMessage(d.entry)
-          set((s) => ({ messages: [...s.messages, msg] }))
-        }
-      }
-    })
-  },
-
-  cleanup: () => {
-    // Note: we keep WebSocket subscriptions alive across tab switches
-    // since Zustand store persists. Only clear timers.
-    if (flushTimer) {
-      clearTimeout(flushTimer)
-      flushTimer = null
-    }
-  },
-
-  sendMessage: (text: string) => {
-    const { taskContext } = get()
-
-    // Add user message to local list
-    const userMsg: ChatMessage = {
-      id: nextMsgId('user'),
-      role: 'user',
-      text,
-      timestamp: new Date().toISOString(),
-    }
-
-    // Create placeholder for assistant streaming
-    const assistantId = nextMsgId('stream')
-    streamingMessageId = assistantId
-    const assistantMsg: ChatMessage = {
-      id: assistantId,
-      role: 'assistant',
-      text: '',
-      timestamp: new Date().toISOString(),
-      isStreaming: true,
-    }
-
-    set((s) => ({
-      messages: [...s.messages, userMsg, assistantMsg],
-      isStreaming: true,
-      error: null,
-      streamBuffer: '',
-    }))
-
-    // Send via WebSocket RPC
-    const payload: Record<string, unknown> = { message: text }
-    if (taskContext) payload.taskContext = taskContext
-
-    wsClient.sendRpc('chat', payload).catch((err) => {
-      set({ error: err instanceof Error ? err.message : 'Failed to send message' })
-    })
-  },
-
-  stopGeneration: () => {
-    wsClient.sendRpc('chat:stop', {}).catch(() => {})
-  },
-
-  loadHistory: async () => {
-    set({ isLoading: true })
-    try {
-      const resp = await fetchChatHistory(1, 50)
-      const entries = resp.messages ?? []
-      const msgs = entries
-        .filter((e) => !e.compacted)
-        .map(entryToMessage)
-      set({
-        messages: msgs,
-        isLoading: false,
-        hasMore: resp.pagination?.hasMore ?? false,
-        currentPage: 1,
+      return {
+        conversations: [],
+        activeId: null,
+        messages: {},
+        hasMore: {},
+        loadingList: false,
+        loadingMessages: false,
+        sending: false,
+        streaming: false,
+        streamText: '',
+        activity: null,
         error: null,
-      })
-    } catch (err) {
-      set({ isLoading: false, error: err instanceof Error ? err.message : 'Failed to load history' })
+
+        initialize: async () => {
+          await get().refreshConversations()
+          const { activeId, conversations } = get()
+          const valid = activeId && conversations.some((c) => c.id === activeId)
+          const target = valid ? activeId : conversations[0]?.id ?? null
+          get().select(target)
+        },
+
+        refreshConversations: async () => {
+          set({ loadingList: true })
+          try {
+            const conversations = await fetchConversations()
+            useConnectionStore.getState().reportReachability(true)
+            set({ conversations, loadingList: false })
+          } catch (err) {
+            reportNet(err)
+            set({ loadingList: false })
+          }
+        },
+
+        select: (id) => {
+          const alreadyLive = id === get().activeId && stream != null
+          if (!alreadyLive) {
+            set({ activeId: id, streaming: false, streamText: '', activity: null, error: null })
+            get().connectStream()
+          }
+          // Always revalidate — cached messages render instantly meanwhile.
+          if (id) void get().loadMessages(id)
+        },
+
+        startNewConversation: () => {
+          // Lazy: the conversation is created server-side on first send.
+          get().select(null)
+        },
+
+        loadMessages: async (id) => {
+          set({ loadingMessages: true })
+          try {
+            const msgs = await fetchMessages(id, PAGE)
+            useConnectionStore.getState().reportReachability(true)
+            set((s) => ({
+              messages: { ...s.messages, [id]: msgs },
+              hasMore: { ...s.hasMore, [id]: msgs.length >= PAGE },
+              loadingMessages: false,
+            }))
+          } catch (err) {
+            reportNet(err)
+            set({ loadingMessages: false })
+          }
+        },
+
+        loadOlder: async () => {
+          const { activeId, messages, hasMore, loadingMessages } = get()
+          if (!activeId || loadingMessages || hasMore[activeId] === false) return
+          const current = messages[activeId] ?? []
+          const oldest = current.find((m) => !m.pending)
+          if (!oldest) return
+          set({ loadingMessages: true })
+          try {
+            const older = await fetchMessages(activeId, PAGE, oldest.id)
+            set((s) => ({
+              messages: { ...s.messages, [activeId]: [...older, ...(s.messages[activeId] ?? [])] },
+              hasMore: { ...s.hasMore, [activeId]: older.length >= PAGE },
+              loadingMessages: false,
+            }))
+          } catch (err) {
+            reportNet(err)
+            set({ loadingMessages: false })
+          }
+        },
+
+        send: async (text) => {
+          const state = get()
+          if (state.sending || state.streaming) return false
+          set({ sending: true, error: null })
+
+          let convId = state.activeId
+          try {
+            if (!convId) {
+              const created = await createConversation()
+              convId = created.id
+              set({ activeId: convId })
+              get().connectStream()
+            }
+            const localMsg: ApiMessage = {
+              id: `local-${Date.now()}`,
+              role: 'user',
+              text,
+              createdAt: new Date().toISOString(),
+              pending: true,
+            }
+            set((s) => ({
+              messages: { ...s.messages, [convId!]: [...(s.messages[convId!] ?? []), localMsg] },
+            }))
+            await sendMessage(convId, text)
+            useConnectionStore.getState().reportReachability(true)
+            // Turn accepted — solidify the optimistic bubble; SSE delivers
+            // message-start shortly.
+            set((s) => ({
+              messages: {
+                ...s.messages,
+                [convId!]: (s.messages[convId!] ?? []).map((m) =>
+                  m.id === localMsg.id ? { ...m, pending: false } : m
+                ),
+              },
+              sending: false,
+              streaming: true,
+              streamText: '',
+              activity: null,
+            }))
+            return true
+          } catch (err) {
+            reportNet(err)
+            // Roll back the optimistic user message.
+            if (convId) {
+              set((s) => ({
+                messages: { ...s.messages, [convId!]: (s.messages[convId!] ?? []).filter((m) => !m.pending) },
+              }))
+            }
+            const busy = err instanceof ApiError && err.code === 'turn_active'
+            set({
+              sending: false,
+              streaming: busy,
+              error: busy
+                ? 'The assistant is already replying — wait for it to finish.'
+                : err instanceof Error ? err.message : 'Failed to send',
+            })
+            return false
+          }
+        },
+
+        clearError: () => set({ error: null }),
+
+        connectStream: () => {
+          get().closeStream()
+          const convId = get().activeId
+          if (!convId) return
+          stream = new ConversationStream(convId, {
+            onStart: () => set({ streaming: true, streamText: '', activity: null, error: null }),
+            onDelta: ({ delta }) => {
+              deltaBuffer += delta
+              if (!flushTimer) flushTimer = setTimeout(flushDeltas, 60)
+            },
+            onTool: ({ name }) => set({ activity: name }),
+            onThinking: () => set({ activity: 'Thinking' }),
+            onEnd: ({ turnId, fullText }) => finalizeTurn(convId, turnId, fullText),
+            onTurnError: ({ message }) => {
+              flushDeltas()
+              set({ streaming: false, activity: null, error: message })
+            },
+            onConnectionChange: (ok) => useConnectionStore.getState().reportReachability(ok),
+          })
+          stream.open()
+        },
+
+        closeStream: () => {
+          stream?.close()
+          stream = null
+          if (flushTimer) clearTimeout(flushTimer)
+          flushTimer = null
+          deltaBuffer = ''
+        },
+      }
+    },
+    {
+      name: 'walnut.chat',
+      storage: createJSONStorage(() => AsyncStorage),
+      partialize: (s) => ({
+        conversations: s.conversations,
+        activeId: s.activeId,
+        // Cache only recent tails — full history refetches on demand.
+        messages: Object.fromEntries(
+          Object.entries(s.messages).map(([k, v]) => [k, v.slice(-CACHE_TAIL)])
+        ),
+      }),
     }
-  },
-
-  loadOlderMessages: async () => {
-    const { hasMore, currentPage, isLoading } = get()
-    if (!hasMore || isLoading) return
-
-    set({ isLoading: true })
-    try {
-      const nextPage = currentPage + 1
-      const resp = await fetchChatHistory(nextPage, 50)
-      const entries = resp.messages ?? []
-      const msgs = entries
-        .filter((e) => !e.compacted)
-        .map(entryToMessage)
-      set((s) => ({
-        messages: [...msgs, ...s.messages],
-        isLoading: false,
-        hasMore: resp.pagination?.hasMore ?? false,
-        currentPage: nextPage,
-      }))
-    } catch {
-      set({ isLoading: false })
-    }
-  },
-
-  setTaskContext: (ctx) => set({ taskContext: ctx }),
-
-  clearMessages: () => {
-    set({ messages: [], hasMore: true, currentPage: 1, error: null })
-  },
-}))
+  )
+)

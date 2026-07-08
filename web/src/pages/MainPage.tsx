@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef, Fragment } from 'react';
 import type { NavigateFunction } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
+import { SESSION_MODELS } from '@open-walnut/core';
 import { useChat, type TaskContext, type ImageAttachment } from '@/hooks/useChat';
 import { useAgentConsole } from '@/hooks/useAgentConsole';
 import { useConversations } from '@/hooks/useConversations';
@@ -342,6 +343,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   //   (2) Avoid stale-closure bugs in the async `handleSendMessage` — a ref always
   //       reads the latest value without needing to be in the effect's dep array.
   const quickStartMetaRef = useRef<QuickStartTaskMeta | null>(null);
+  // Display mirror of the chosen model so the collapsed Quick Start bar can show &
+  // edit it after the picker closes. The ref above stays the send-time source of
+  // truth (read in handleSendMessage); this state only drives the visible <select>.
+  const [quickStartModel, setQuickStartModel] = useState<string | undefined>(undefined);
 
   // Quick-start mode: the chat input behaves like a session (skills/commands for
   // the chosen cwd, and "@" file mentions rooted at that cwd + host).
@@ -708,6 +713,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const handlePathSelect = useCallback((path: QuickStartPath, taskMeta: QuickStartTaskMeta) => {
     setQuickStartPath(path);
     quickStartMetaRef.current = taskMeta;
+    setQuickStartModel(taskMeta.model);   // mirror for the collapsed bar's <select>
     setPathSelectorOpen(false);
   }, []);
 
@@ -999,6 +1005,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // Quick-start interception: when a path is selected, create task + start session
     if (qsp) {
       setQuickStartPath(null);
+      setQuickStartModel(undefined);   // clear the collapsed-bar model mirror
       // Local echo as a collapsible bubble — auto-collapses to "⚡ Quick Start on <cwd>"
       // with a chevron the user can click to see the full pasted prompt. The agent
       // reorganize message sent later (source: 'quick-start') is suppressed in the UI
@@ -1332,7 +1339,19 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               <div className="qsb-top">
                 <span className="qsb-label">Quick Start</span>
                 {quickStartPath.host && <span className="qsb-host">{quickStartPath.hostLabel ?? quickStartPath.host}</span>}
-                <button className="qsb-close" onClick={() => { setQuickStartPath(null); quickStartMetaRef.current = null; }} aria-label="Cancel quick start">&times;</button>
+                {/* Compact, read-only model chip. Click it (or /session) to re-open the
+                    picker and edit ALL launch settings (model / star / pin / priority) —
+                    the picker restores the prior choice via initialMeta. Keeping the
+                    collapsed bar chip-only (no inline <select>) fixes the narrow-view
+                    overflow and saves a row of controls. */}
+                <button
+                  className="qsb-model-chip"
+                  onClick={() => setPathSelectorOpen(true)}
+                  title="Edit launch settings (model, star, pin, priority)"
+                >
+                  {SESSION_MODELS.find(sm => sm.id === quickStartModel)?.label ?? 'Auto'}
+                </button>
+                <button className="qsb-close" onClick={() => { setQuickStartPath(null); quickStartMetaRef.current = null; setQuickStartModel(undefined); }} aria-label="Cancel quick start">&times;</button>
               </div>
               <span className="qsb-path" title={quickStartPath.cwd}>{quickStartPath.cwd}</span>
             </div>
@@ -1344,6 +1363,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               open={pathSelectorOpen && !pendingQuestion}
               onClose={() => setPathSelectorOpen(false)}
               onSelect={handlePathSelect}
+              // Re-opening to edit an already-confirmed Quick Start keeps the prior
+              // footer choices (incl. model) instead of resetting to Auto/defaults,
+              // and pre-fills the path so it opens as an "edit this selection" view.
+              initialMeta={quickStartPath ? quickStartMetaRef.current ?? undefined : undefined}
+              initialPath={quickStartPath ? { cwd: quickStartPath.cwd, host: quickStartPath.host } : undefined}
             />
 
             {/* Ask Question popover (above the input, mutually exclusive with path selector) */}

@@ -9,7 +9,7 @@
  */
 
 import type { CronJob, CronServiceState, CronEvent } from './types.js';
-import { computeJobNextRunAtMs, nextWakeAtMs, recomputeNextRuns } from './jobs.js';
+import { cloudModeSkipsJob, computeJobNextRunAtMs, nextWakeAtMs, recomputeNextRuns } from './jobs.js';
 import { ensureLoaded, persist } from './store.js';
 
 const MAX_TIMER_DELAY_MS = 60_000;
@@ -421,7 +421,12 @@ function findDueJobs(state: CronServiceState): CronJob[] {
     if (!j.enabled) return false;
     if (typeof j.state.runningAtMs === 'number') return false;
     const next = j.state.nextRunAtMs;
-    return typeof next === 'number' && now >= next;
+    if (!(typeof next === 'number' && now >= next)) return false;
+    if (cloudModeSkipsJob(j)) {
+      state.deps.log.info('cloud mode: skipping non-allowlisted cron job', { jobId: j.id, jobName: j.name });
+      return false;
+    }
+    return true;
   });
 }
 
@@ -566,6 +571,11 @@ export function findMissedJobs(state: CronServiceState): CronJob[] {
     if (typeof j.state.runningAtMs === 'number') return false;
     if (j.schedule.kind === 'at' && j.state.lastStatus === 'ok') return false;
     const next = j.state.nextRunAtMs;
-    return typeof next === 'number' && now >= next;
+    if (!(typeof next === 'number' && now >= next)) return false;
+    if (cloudModeSkipsJob(j)) {
+      state.deps.log.info('cloud mode: skipping non-allowlisted missed cron job', { jobId: j.id, jobName: j.name });
+      return false;
+    }
+    return true;
   });
 }

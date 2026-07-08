@@ -1,64 +1,81 @@
 /**
- * Root layout — initializes app, checks auth, routes to Setup or Tabs.
+ * Root layout — hydrates config, routes to Setup or Tabs, hosts the stack.
  */
 
-import React, { useEffect, useState } from 'react'
-import { View, ActivityIndicator, StyleSheet } from 'react-native'
 import { Stack, useRouter, useSegments } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
+import React, { useEffect } from 'react'
+import { ActivityIndicator, StyleSheet, View } from 'react-native'
+import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { useConnectionStore } from '../src/store/connection'
-import { usePush } from '../src/hooks/usePush'
+import { useTheme } from '../src/theme'
 
 export default function RootLayout() {
-  // Register for push notifications when connected
-  usePush()
+  const { c, isDark } = useTheme()
   const router = useRouter()
   const segments = useSegments()
-  const initialize = useConnectionStore((s) => s.initialize)
-  const isInitialized = useConnectionStore((s) => s.isInitialized)
-  const isConfigured = useConnectionStore((s) => s.isConfigured)
+  const hydrate = useConnectionStore((s) => s.hydrate)
+  const hydrated = useConnectionStore((s) => s.hydrated)
+  const configured = useConnectionStore((s) => s.configured)
 
   useEffect(() => {
-    initialize()
+    void hydrate()
   }, [])
 
   useEffect(() => {
-    if (!isInitialized) return
-
+    if (!hydrated) return
     const inSetup = segments[0] === 'setup'
-
-    if (!isConfigured && !inSetup) {
+    if (!configured && !inSetup) {
       router.replace('/setup')
-    } else if (isConfigured && inSetup) {
+    } else if (configured && inSetup) {
       router.replace('/(tabs)')
     }
-  }, [isInitialized, isConfigured, segments])
+  }, [hydrated, configured, segments])
 
-  if (!isInitialized) {
+  if (!hydrated) {
     return (
-      <View style={styles.loading}>
-        <ActivityIndicator size="large" color="#007AFF" />
-        <StatusBar style="auto" />
+      <View style={[styles.loading, { backgroundColor: c.bg }]}>
+        <ActivityIndicator size="large" color={c.tint} />
+        <StatusBar style={isDark ? 'light' : 'dark'} />
       </View>
     )
   }
 
   return (
-    <>
-      <StatusBar style="auto" />
-      <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="setup" options={{ headerShown: false }} />
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+    <GestureHandlerRootView style={styles.flex}>
+      <StatusBar style={isDark ? 'light' : 'dark'} />
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          headerTintColor: c.tint,
+          headerStyle: { backgroundColor: c.bg },
+          headerTitleStyle: { color: c.label, fontWeight: '600' },
+          contentStyle: { backgroundColor: c.bg },
+        }}
+      >
+        <Stack.Screen name="setup" />
+        <Stack.Screen name="(tabs)" />
+        <Stack.Screen
+          name="conversations"
+          options={{
+            headerShown: true,
+            title: 'Conversations',
+            presentation: 'modal',
+          }}
+        />
+        <Stack.Screen
+          name="note/[...path]"
+          options={{
+            headerShown: true,
+            headerBackTitle: 'Notes',
+          }}
+        />
       </Stack>
-    </>
+    </GestureHandlerRootView>
   )
 }
 
 const styles = StyleSheet.create({
-  loading: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-  },
+  flex: { flex: 1 },
+  loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 })

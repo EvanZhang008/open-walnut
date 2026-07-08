@@ -1,0 +1,10 @@
+# Dependencies
+node_modules/
+
+# CDK output + per-account context cache (contains the AWS account id — never commit)
+cdk.out/
+cdk.context.json
+
+# TypeScript build artifacts (we run via ts-node; nothing should be emitted)
+*.js
+*.d.ts

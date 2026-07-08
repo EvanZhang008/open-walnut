@@ -30,8 +30,8 @@ export interface ContextInspectorResponse {
     skills: ContextSection;
     compactionSummary: ContextSection;
     taskCategories: ContextSection;
+    userProfile: ContextSection;
     globalMemory: ContextSection;
-    projectSummaries: ContextSection;
     notesContext: ContextSection;
     dailyLogs: ContextSection;
     tools: ContextSection<ToolSchema[]>;

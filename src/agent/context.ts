@@ -7,7 +7,6 @@ import { getConfig } from '../core/config-manager.js';
 import { buildSkillsPrompt } from '../core/skill-loader.js';
 import { getDailyLogsWithinBudget } from '../core/daily-log.js';
 import { getBoundedMemory } from '../core/bounded-memory.js';
-import { getAllProjectSummaries } from '../core/project-memory.js';
 import { getCompactionSummary } from '../core/chat-history.js';
 import { getWorkingMemory, isWorkingMemoryEmpty } from '../core/working-memory.js';
 import { buildAgentsSection } from './subagent-context.js';
@@ -93,11 +92,6 @@ export async function buildMemoryContext(budget: number = 8000): Promise<string>
   // each is — no truncation needed, the budget is enforced at write time.
   const globalMemoryBlock = getBoundedMemory().renderForPrompt();
   const userProfileBlock = getBoundedMemory(undefined, 'user').renderForPrompt();
-  const projectSummaries = getAllProjectSummaries();
-
-  const projectLines = projectSummaries.length > 0
-    ? projectSummaries.map((s) => `- **${s.name}** (${s.path}): ${s.description}`).join('\n')
-    : '(No projects yet.)';
 
   // Repo summaries for context
   const repoSummaries = listRepoSummaries();
@@ -131,10 +125,7 @@ ${taskCategories}
 ${userProfileBlock ?? '(No user profile yet. Save who the user is — identity, work, durable preferences — with memory_manage target:user.)'}
 
 ## Your long-term memory (behavior rules — bounded, update via memory_manage target:memory)
-${globalMemoryBlock ?? '(No global memory yet. Save behavior rules with memory_manage.)'}
-
-## Your projects
-${projectLines}${repoSection}${notesSection}
+${globalMemoryBlock ?? '(No global memory yet. Save behavior rules with memory_manage.)'}${repoSection}${notesSection}
 
 ## Recent activity
 ${dailyLogs || '(No recent activity.)'}

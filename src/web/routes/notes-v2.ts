@@ -10,6 +10,7 @@
 
 import fsp from 'node:fs/promises'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { NOTES_DIR } from '../../constants.js'
 import { computeContentHash } from '../../utils/file-ops.js'
@@ -50,7 +51,7 @@ import {
   type LinkStatus,
 } from '../../core/notes-index.js'
 
-const MAX_NOTE_SIZE = 2_000_000 // 2 MB
+export const MAX_NOTE_SIZE = 2_000_000 // 2 MB
 
 export const notesV2Router = Router()
 
@@ -60,7 +61,7 @@ export const notesV2Router = Router()
 // via the existing NOTES_UPDATED bus event (the fs.watch catch-all lives in
 // qmd-watcher.ts). interest-filtered so we don't wake on unrelated events.
 let indexBootstrapped = false
-function ensureIndexBootstrap(): void {
+export function ensureIndexBootstrap(): void {
   if (indexBootstrapped) return
   indexBootstrapped = true
   resetNotesIndexer() // re-arm if a prior lifecycle stopped the reconciler
@@ -98,12 +99,12 @@ export function resetIndexBootstrap(): void {
 }
 
 /** Ensure notes dir exists */
-async function ensureNotesDir(): Promise<void> {
+export async function ensureNotesDir(): Promise<void> {
   await fsp.mkdir(NOTES_DIR, { recursive: true })
 }
 
 /** Resolve and validate a note path — prevent directory traversal */
-function resolveSafePath(relativePath: string): string | null {
+export function resolveSafePath(relativePath: string): string | null {
   const cleaned = relativePath.replace(/\\/g, '/').replace(/^\/+/, '')
   if (!cleaned || cleaned === '.' || cleaned === '..') return null
   const resolved = path.resolve(NOTES_DIR, cleaned)
@@ -115,12 +116,12 @@ function resolveSafePath(relativePath: string): string | null {
 }
 
 /** Vault-relative, forward-slash, .md-suffixed path from an absolute path. */
-function toRelPath(absPath: string): string {
+export function toRelPath(absPath: string): string {
   return path.relative(NOTES_DIR, absPath).replace(/\\/g, '/')
 }
 
 /** Extract wildcard path param — Express 5 returns arrays for *name params */
-function getWildcardPath(req: Request): string | null {
+export function getWildcardPath(req: Request): string | null {
   const raw = (req.params as any).path
   if (typeof raw === 'string') return raw || null
   if (Array.isArray(raw)) return raw.join('/') || null
@@ -139,7 +140,7 @@ function isAttachmentFile(name: string): boolean {
   return name.includes('.') && ATTACHMENT_EXTS.has(ext)
 }
 
-interface TreeNode {
+export interface TreeNode {
   name: string
   path: string       // relative to NOTES_DIR, forward slashes
   type: 'file' | 'folder'
@@ -149,7 +150,7 @@ interface TreeNode {
   children?: TreeNode[]
 }
 
-async function scanDir(dirPath: string, relBase: string): Promise<TreeNode[]> {
+export async function scanDir(dirPath: string, relBase: string): Promise<TreeNode[]> {
   let entries: import('fs').Dirent[]
   try {
     entries = await fsp.readdir(dirPath, { withFileTypes: true })
@@ -275,6 +276,70 @@ notesV2Router.get('/attachment', async (req: Request, res: Response, next: NextF
     // Inline so the browser renders the PDF/image in-page instead of downloading.
     res.setHeader('Content-Disposition', 'inline')
     res.send(buffer)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ─── Attachment upload (image paste) ───────────────────────────────────────
+// POST /api/notes-v2/attachment — save a pasted image INTO THE VAULT beside the
+// note being edited (Obsidian convention: an `_attachment/` folder next to the
+// note), returning the vault-relative path used as the `![[...]]` embed target.
+// Deliberately NOT /api/images/upload: that's the chat image store OUTSIDE the
+// vault (~/.open-walnut/logs/images), so pasted note images stored there don't
+// sync/export with the vault and serialize as non-portable `![](/api/images/…)`.
+const PASTE_MIME_TO_EXT: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+}
+const MAX_UPLOAD_BASE64 = 10_000_000 // ~7.5 MB decoded (mirror images.ts)
+
+notesV2Router.post('/attachment', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { notePath, data, mediaType } = req.body ?? {}
+    if (typeof notePath !== 'string' || typeof data !== 'string' || typeof mediaType !== 'string') {
+      res.status(400).json({ error: 'notePath, data (base64) and mediaType are required' })
+      return
+    }
+    const ext = PASTE_MIME_TO_EXT[mediaType]
+    if (!ext) {
+      res.status(400).json({ error: `Unsupported media type: ${mediaType}` })
+      return
+    }
+    if (data.length > MAX_UPLOAD_BASE64) {
+      res.status(413).json({ error: 'Image too large (max 10MB base64)' })
+      return
+    }
+
+    const fullPath = resolveSafePath(notePath)
+    if (!fullPath) { res.status(400).json({ error: 'invalid path' }); return }
+    const noteFile = fullPath.endsWith('.md') ? fullPath : fullPath + '.md'
+
+    const buffer = Buffer.from(data, 'base64')
+    if (buffer.length === 0) { res.status(400).json({ error: 'empty image data' }); return }
+
+    // Timestamped name plus a short content hash so two pastes in the same
+    // second (or the same image twice) never collide/overwrite. NO SPACES —
+    // spaces %20-encode in obsidian:// deep links and shell one-liners, which
+    // breaks/uglifies them (user-reported).
+    const now = new Date()
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const ts =
+      `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
+      `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+    const hash = createHash('sha256').update(buffer).digest('hex').slice(0, 6)
+    const filename = `pasted-image-${ts}-${hash}.${ext}`
+
+    const attachmentDir = path.join(path.dirname(noteFile), '_attachment')
+    await fsp.mkdir(attachmentDir, { recursive: true })
+    const filePath = path.join(attachmentDir, filename)
+    await fsp.writeFile(filePath, buffer)
+
+    const relPath = toRelPath(filePath)
+    log.memory.info('Note attachment saved', { notePath, path: relPath, bytes: buffer.length })
+    res.json({ ok: true, path: relPath, name: filename })
   } catch (err) {
     next(err)
   }

@@ -17,6 +17,7 @@ import Image from '@tiptap/extension-image';
 import Link from '@tiptap/extension-link';
 import { Markdown } from 'tiptap-markdown';
 import { uploadNoteImage } from '@/api/notes';
+import { uploadNoteAttachment } from '@/api/notes-v2';
 import { entityRefsToMarkdownLinks } from '@/utils/markdown';
 import { log } from '@/utils/log';
 import { SlashCommandExtension } from './slash-commands/SlashCommandExtension';
@@ -71,6 +72,14 @@ interface NotesEditorProps {
   enableBlockTools?: boolean;
   /** Frequency-ranked vault tags for #tag autocomplete (from GET /tags; empty = manual typing). */
   tagSuggestions?: TagSuggestion[];
+  /**
+   * Vault-relative path of the note being edited (e.g. `Areas/x/Foo.md`). When
+   * set, pasted/dropped images are saved INTO THE VAULT (an `_attachment/`
+   * folder beside the note) and inserted as Obsidian `![[...]]` embeds — so the
+   * markdown on disk stays portable. Absent (task/memory/global surfaces) →
+   * images fall back to the chat image store (`/api/images`) as before.
+   */
+  attachmentNotePath?: string;
 }
 
 /**
@@ -292,7 +301,7 @@ function detachListItemChildren(editor: Editor): boolean {
   }
 }
 
-export function NotesEditor({ content, onDirty, placeholder, className, autoFocus, tasks, focusedTaskId, onTaskClick, enableWikiLinks, wikiLinkNotes, onWikiLinkClick, enableBlockTools, tagSuggestions }: NotesEditorProps) {
+export function NotesEditor({ content, onDirty, placeholder, className, autoFocus, tasks, focusedTaskId, onTaskClick, enableWikiLinks, wikiLinkNotes, onWikiLinkClick, enableBlockTools, tagSuggestions, attachmentNotePath }: NotesEditorProps) {
   const isExternalUpdate = useRef(false);
   const editorRef = useRef<Editor | null>(null);
   /**
@@ -341,7 +350,16 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
     }
   }, []);
 
-  /** Upload a File (image blob) to server, insert into editor */
+  // Ref so the paste/drop closures (built once) always see the current path.
+  const attachmentNotePathRef = useRef(attachmentNotePath);
+  attachmentNotePathRef.current = attachmentNotePath;
+
+  /**
+   * Upload a File (image blob), insert into editor.
+   * Vault surface (attachmentNotePath set): save into `_attachment/` beside the
+   * note and insert an Obsidian `![[...]]` embed — portable markdown on disk.
+   * Non-vault surface: chat image store + `![](/api/images/…)` (legacy path).
+   */
   const handleImageUpload = useCallback(async (file: File, editor: Editor) => {
     const reader = new FileReader();
     reader.onload = async () => {
@@ -351,8 +369,18 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
         const [header, base64] = dataUrl.split(',');
         if (!base64) return;
         const mediaType = header.match(/data:(.*?);/)?.[1] || 'image/png';
-        const url = await uploadNoteImage(base64, mediaType);
-        editor.chain().focus().setImage({ src: url }).run();
+        // wikiEmbed is only in the schema when enableWikiLinks is on — guard so
+        // a misconfigured surface degrades to the legacy path instead of throwing.
+        const notePath = attachmentNotePathRef.current;
+        if (notePath && editor.schema.nodes.wikiEmbed) {
+          const { path } = await uploadNoteAttachment(notePath, base64, mediaType);
+          editor.chain().focus()
+            .insertContent({ type: 'wikiEmbed', attrs: { target: path } })
+            .run();
+        } else {
+          const url = await uploadNoteImage(base64, mediaType);
+          editor.chain().focus().setImage({ src: url }).run();
+        }
       } catch {
         // Upload failed — insert as inline data URL as fallback
         const dataUrl = reader.result as string;
@@ -425,7 +453,11 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
       ] : []),
     ],
     content: normalizeForEditor(entityRefsToMarkdownLinks(content)),
-    autofocus: autoFocus ? 'end' : false,
+    // 'start', NOT 'end' — focusing 'end' scrolls every opened note to the
+    // BOTTOM (user-reported). The shell restores the remembered per-doc scroll
+    // after mount (MarkdownEditorPanel scroll memory), so top is only the
+    // first-visit default.
+    autofocus: autoFocus ? 'start' : false,
     onUpdate: ({ editor }) => {
       if (isExternalUpdate.current) return;
       // Mark this editor as the source — prevents save-sync loop

@@ -1,0 +1,21 @@
+{
+  "name": "walnut-cloud-infra",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CDK app for the Open Walnut cloud companion EC2 stack",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "synth": "cdk synth",
+    "deploy": "cdk deploy"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.190.0",
+    "constructs": "^10.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "aws-cdk": "^2.1000.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.0"
+  }
+}

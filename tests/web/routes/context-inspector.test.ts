@@ -13,6 +13,8 @@ import request from 'supertest';
 import { WALNUT_HOME } from '../../../src/constants.js';
 import { contextInspectorRouter } from '../../../src/web/routes/context-inspector.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
+import { DEFAULT_MODEL } from '../../../src/agent/model.js';
+import { DEFAULT_MAX_TOKENS } from '../../../src/agent/providers/defaults.js';
 
 function createApp() {
   const app = express();
@@ -45,8 +47,8 @@ describe('GET /api/context', () => {
     expect(sections).toHaveProperty('roleAndRules');
     expect(sections).toHaveProperty('skills');
     expect(sections).toHaveProperty('compactionSummary');
+    expect(sections).toHaveProperty('userProfile');
     expect(sections).toHaveProperty('globalMemory');
-    expect(sections).toHaveProperty('projectSummaries');
     expect(sections).toHaveProperty('dailyLogs');
     expect(sections).toHaveProperty('tools');
     expect(sections).toHaveProperty('apiMessages');
@@ -114,8 +116,18 @@ describe('GET /api/context', () => {
     const config = res.body.sections.modelConfig.content;
     expect(config).toHaveProperty('model');
     expect(config).toHaveProperty('max_tokens');
-    expect(config.model).toBe('claude-opus-4-6');
-    expect(config.max_tokens).toBe(16384);
+    expect(config.model).toBe(DEFAULT_MODEL);
+    expect(config.max_tokens).toBe(DEFAULT_MAX_TOKENS);
+    // Model config is call parameters, not prompt content — must cost 0 tokens
+    expect(res.body.sections.modelConfig.tokens).toBe(0);
+  });
+
+  it('userProfile section reflects USER.md bounded store', async () => {
+    const app = createApp();
+    const res = await request(app).get('/api/context');
+
+    expect(res.body.sections).toHaveProperty('userProfile');
+    expect(res.body.sections).not.toHaveProperty('projectSummaries');
   });
 
   it('apiMessages section starts empty (no chat history)', async () => {

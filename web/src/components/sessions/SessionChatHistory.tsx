@@ -5,6 +5,7 @@ import { useEvent } from '@/hooks/useWebSocket';
 import { useLightbox } from '@/hooks/useLightbox';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { SessionMessage, PlanCard, CollapsedPlanWrite, GenericToolCall } from './SessionMessage';
+import { dedupeOptimisticMessages } from './optimistic-dedup';
 import { TeamCard } from './TeamCard';
 import { WorkflowProgress } from './WorkflowProgress';
 import { LoadingSpinner } from '../common/LoadingSpinner';
@@ -168,8 +169,8 @@ interface SessionChatHistoryProps {
   /** SSH host alias — used for remote file access */
   sessionHost?: string;
   optimisticMessages?: OptimisticMessage[];
-  onMessagesDelivered?: (count: number) => void;
-  onBatchCompleted?: (count: number) => void;
+  onMessagesDelivered?: (count: number, messageIds?: string[]) => void;
+  onBatchCompleted?: (count: number, messageIds?: string[]) => void;
   onBatchFailed?: (messageIds: string[], error: string) => void;
   onEditQueued?: (queueId: string, newText: string) => void;
   onDeleteQueued?: (queueId: string) => void;
@@ -573,8 +574,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const [historyVersion, setHistoryVersion] = useState(0);
   const awaitingRefresh = useRef(false);
   const pendingBatchTotal = useRef(0);
+  // Queue message ids accompanying pendingBatchTotal (Phase 1 id-first removal).
+  // Accumulated per batch-completed event, flushed together with the count.
+  const pendingBatchIds = useRef<string[]>([]);
   // Track persisted message count to detect history growth (used for dedup windowing).
   const prevMsgLen = useRef(0);
+  // queueIds already matched to a persisted twin — never re-render their bubble
+  // (see "Sticky consumption" at the dedup call site). Reset on session switch.
+  const consumedQueueIds = useRef<Set<string>>(new Set());
   const [editingId, setEditingId] = useState<string | null>(null);
 
   // ── Message truncation — render only the tail to keep DOM count low ──
@@ -600,7 +607,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   }, [openLightbox]);
 
-  const { messages, loading, phase2Pending, error, forkBoundaryIndex, lastDelta } = useSessionHistory(sessionId, historyVersion);
+  const { messages, loading, phase2Pending, error, stale, forkBoundaryIndex, lastDelta } = useSessionHistory(sessionId, historyVersion);
   const { blocks, isStreaming, clearCompleted } = useSessionStream(sessionId);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -684,19 +691,20 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
 
   // Messages delivered to CLI: transition from grey (pending) to normal (delivered).
   useEvent('session:messages-delivered', (data) => {
-    const d = data as { sessionId?: string; count?: number };
+    const d = data as { sessionId?: string; count?: number; messageIds?: string[] };
     if (d.sessionId === sessionId) {
-      onMessagesDelivered?.(d.count ?? 1);
+      onMessagesDelivered?.(d.count ?? 1, d.messageIds);
     }
   });
 
   // Turn completed: promote messages to committed and refresh history.
   const batchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEvent('session:batch-completed', (data) => {
-    const d = data as { sessionId?: string; count?: number };
+    const d = data as { sessionId?: string; count?: number; messageIds?: string[] };
     if (d.sessionId === sessionId) {
-      log.info('stream', `batch-completed count=${d.count ?? 1} blocks=${blocks.length} isStreaming=${isStreaming}`, { sessionId });
+      log.info('stream', `batch-completed count=${d.count ?? 1} ids=${d.messageIds?.length ?? 0} blocks=${blocks.length} isStreaming=${isStreaming}`, { sessionId });
       pendingBatchTotal.current += (d.count ?? 1);
+      if (d.messageIds) pendingBatchIds.current.push(...d.messageIds);
       awaitingRefresh.current = true;
       setHistoryVersion((v) => v + 1);
       // Fallback: if JSONL history doesn't grow (FIFO-injected messages not in output),
@@ -713,8 +721,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           // Turn-aware: clear only the completed turn's blocks (prevents 2x
           // duplication) while preserving a next turn already streaming.
           clearCompletedAndShift();
-          onBatchCompleted?.(pendingBatchTotal.current);
+          onBatchCompleted?.(pendingBatchTotal.current, pendingBatchIds.current.length > 0 ? [...pendingBatchIds.current] : undefined);
           pendingBatchTotal.current = 0;
+          pendingBatchIds.current = [];
         }
       }, 5000);
     }
@@ -785,8 +794,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       // clear() here made the live turn vanish until the next snapshot restored
       // it (the "flash" the user sees).
       clearCompletedAndShift();
-      onBatchCompleted?.(pendingBatchTotal.current);
+      onBatchCompleted?.(pendingBatchTotal.current, pendingBatchIds.current.length > 0 ? [...pendingBatchIds.current] : undefined);
       pendingBatchTotal.current = 0;
+      pendingBatchIds.current = [];
       // Do NOT update prevMsgLen here. The batch completion triggers re-renders
       // (from clear() and onBatchCompleted()). Those re-renders must still see
       // prevMsgLen = old value so the dedup scan covers the newly appeared messages
@@ -846,10 +856,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     setHistoryVersion(0);
     awaitingRefresh.current = false;
     pendingBatchTotal.current = 0;
+    pendingBatchIds.current = [];
     prevMsgLen.current = 0;
     setEditingId(null);
     setTruncationOffset(0);
     blockIndexMap.current.clear();
+    consumedQueueIds.current.clear();
     isAtBottom.current = true;
     firstScrollDone.current = false;
     initialLoadDone.current = false;
@@ -1098,31 +1110,27 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // so committed messages no longer exist here. The remaining dedup handles
   // edge cases where persisted history grows and matches a pending/delivered msg.
   //
-  // Text-based dedup uses newly-appeared persisted messages (prevMsgLen windowing)
-  // to avoid false matches against old history.
+  // Rules live in optimistic-dedup.ts (pure, unit-tested): newly-appeared
+  // window on growth; full-array scan when history SHRANK (/compact rewrote
+  // the JSONL — the old window pointed past the end forever, so delivered
+  // bubbles stayed pinned at the bottom below newer content,
+  // inc-1783472776601).
   const allOptimistic = optimisticMessages ?? [];
-
-  // Build text counts from newly-appeared persisted user messages.
-  const newUserTextCounts = new Map<string, number>();
-  const scanStart = Math.max(0, prevMsgLen.current);
-  for (let i = scanStart; i < messages.length; i++) {
-    if (messages[i].role === 'user') {
-      const t = messages[i].text;
-      newUserTextCounts.set(t, (newUserTextCounts.get(t) ?? 0) + 1);
+  // Sticky consumption: dedup is a per-render DISPLAY filter over optimistic
+  // state it doesn't own — durable removal normally comes from
+  // handleBatchCompleted (count-based). When that event never fires (history
+  // refresh 502'd during an SSH-down window), a match must still not
+  // resurface on a later render after prevMsgLen catches up and the scan
+  // window moves past the twin. Remember consumed queueIds for the lifetime
+  // of this session view (cleared on session switch).
+  const visibleOptimistic = allOptimistic.filter(m => !consumedQueueIds.current.has(m.queueId));
+  const deduped = dedupeOptimisticMessages(visibleOptimistic, messages, prevMsgLen.current);
+  if (deduped.length !== visibleOptimistic.length) {
+    const keptIds = new Set(deduped.map(m => m.queueId));
+    for (const m of visibleOptimistic) {
+      if (!keptIds.has(m.queueId)) consumedQueueIds.current.add(m.queueId);
     }
   }
-
-  const deduped = allOptimistic.filter(m => {
-    // Failed messages are never consumed by the backend — always keep them
-    if (m.status === 'failed') return true;
-    // Text-based: match against newly-appeared persisted user messages
-    const c = newUserTextCounts.get(m.text);
-    if (c && c > 0) {
-      newUserTextCounts.set(m.text, c - 1);
-      return false;
-    }
-    return true;
-  });
 
   // ── Assign blockIndex for non-deduped optimistic messages (set once, never updated) ──
   for (const msg of deduped) {
@@ -1198,6 +1206,13 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         {error && (
           <div className="session-history-empty">
             <p className="text-muted">Failed to load history: {error}</p>
+          </div>
+        )}
+        {/* Degraded connectivity: content below is the last-good parse; the
+            live read (SSH/daemon) is failing. Auto-clears on next healthy fetch. */}
+        {stale && !error && (
+          <div className="session-history-stale-banner" role="status">
+            ⚠ Showing cached history — live connection unavailable ({stale}). Reconnecting…
           </div>
         )}
         {!error && !hasContent && !loading && !phase2Pending && (
