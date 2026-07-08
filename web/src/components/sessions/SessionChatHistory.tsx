@@ -119,12 +119,12 @@ import { log } from '@/utils/log';
  *
  * ## handleBatchCompleted (useSessionSend)
  *
- * Removes the first `count` optimistic messages whose persisted counterparts
- * now appear in history.
+ * Removes exactly the batch's optimistic messages (id-first via messageIds,
+ * count fallback) — see optimistic-dedup.ts.
  *
  * ## Unified timeline (buildTimeline)
  *
- * All optimistic messages (active + committed) participate in the timeline via
+ * All optimistic messages participate in the timeline via
  * blockIndexMap — a Map<queueId, number> where the value is blocks.length at the
  * time the message was created. This preserves the message's visual position
  * relative to streaming blocks (interleaving). blockIndexMap is set once per
@@ -135,8 +135,7 @@ import { log } from '@/utils/log';
 
 export interface OptimisticMessage extends SessionHistoryMessage {
   queueId: string;
-  /** 'committed' is legacy — no longer assigned. Kept for type compat. */
-  status: 'pending' | 'received' | 'delivered' | 'committed' | 'failed';
+  status: 'pending' | 'received' | 'delivered' | 'failed';
   images?: ImageAttachment[];
   /** Error message when status is 'failed' */
   failedError?: string;
@@ -175,7 +174,6 @@ interface SessionChatHistoryProps {
   onEditQueued?: (queueId: string, newText: string) => void;
   onDeleteQueued?: (queueId: string) => void;
   onAgentQueued?: (msg: { queueId: string; text: string }) => void;
-  onClearCommitted?: () => void;
   onRetryFailed?: (queueId: string) => void;
   onDismissFailed?: (queueId: string) => void;
   onTaskClick?: (taskId: string) => void;
@@ -570,7 +568,7 @@ function buildTimeline(
 // ── Auto-scroll constant ──
 const NEAR_BOTTOM_PX = 80;  // px from bottom to consider "at bottom"
 
-export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onClearCommitted, onRetryFailed, onDismissFailed, onTaskClick, onSessionClick, onFileOpen, onStreamingChange }: SessionChatHistoryProps) {
+export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onTaskClick, onSessionClick, onFileOpen, onStreamingChange }: SessionChatHistoryProps) {
   const [historyVersion, setHistoryVersion] = useState(0);
   const awaitingRefresh = useRef(false);
   const pendingBatchTotal = useRef(0);
@@ -687,7 +685,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
 // ── Message delivery lifecycle ──
   // 1. User sends → optimistic msg added (status: 'pending', grey)
   // 2. Server delivers to CLI (FIFO/resume) → 'session:messages-delivered' → status: 'delivered' (normal)
-  // 3. Turn completes → 'session:batch-completed' → promote to committed, refresh history
+  // 3. Turn completes → 'session:batch-completed' → removed (id-first), refresh history
 
   // Messages delivered to CLI: transition from grey (pending) to normal (delivered).
   useEvent('session:messages-delivered', (data) => {
@@ -697,7 +695,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   });
 
-  // Turn completed: promote messages to committed and refresh history.
+  // Turn completed: remove the batch's optimistic messages and refresh history.
   const batchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEvent('session:batch-completed', (data) => {
     const d = data as { sessionId?: string; count?: number; messageIds?: string[] };
@@ -770,14 +768,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   });
 
   // Zero-flash cleanup (runs before browser paints).
-  // When session:batch-completed fires, the backend has authoritatively consumed N messages
-  // from the queue. Clear streaming blocks and promote optimistic messages to 'committed'
-  // once the re-fetched history grows.
+  // When session:batch-completed fires, the backend has authoritatively consumed the
+  // batch's messages from the queue. Clear streaming blocks and remove the matching
+  // optimistic messages once the re-fetched history grows.
   //
   // FIFO-injected user messages appear as queue-operation entries in the JSONL, so they're
   // now included in the persisted history at their correct chronological positions. The dedup
-  // logic (recentUserTexts) absorbs committed messages once the re-fetched history contains
-  // them. All optimistic messages live in the timeline (not a separate section) to maintain
+  // logic absorbs delivered messages once the re-fetched history contains them.
+  // All optimistic messages live in the timeline (not a separate section) to maintain
   // their interleaved positions during the transition.
   useLayoutEffect(() => {
     if (awaitingRefresh.current) {
@@ -800,7 +798,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       // Do NOT update prevMsgLen here. The batch completion triggers re-renders
       // (from clear() and onBatchCompleted()). Those re-renders must still see
       // prevMsgLen = old value so the dedup scan covers the newly appeared messages
-      // and removes the committed optimistic message (prevents Pattern A duplicate).
+      // and removes the consumed optimistic message (prevents Pattern A duplicate).
     } else {
       // Normal growth path — just track the new length. Previously we had a
       // "defensive clear" branch here to wipe stale blocks when messages grew
@@ -1106,9 +1104,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
 
   // ── Deduplicate optimistic messages against persisted history ──
   //
-  // handleBatchCompleted now removes consumed messages outright (count-based),
-  // so committed messages no longer exist here. The remaining dedup handles
-  // edge cases where persisted history grows and matches a pending/delivered msg.
+  // handleBatchCompleted removes consumed messages outright (id-first, count
+  // fallback). The remaining dedup handles edge cases where persisted history
+  // grows and matches a pending/delivered msg the events missed.
   //
   // Rules live in optimistic-dedup.ts (pure, unit-tested): newly-appeared
   // window on growth; full-array scan when history SHRANK (/compact rewrote
@@ -1276,9 +1274,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           );
         })()}
 
-        {/* Turn timeline — interleaved blocks + ALL optimistic messages by blockIndex.
-            Both active (pending/received/delivered) and committed messages stay in the timeline
-            to preserve their correct visual positions until deduped by persisted history. */}
+        {/* Turn timeline — interleaved blocks + ALL optimistic messages by blockIndex,
+            preserving their correct visual positions until deduped by persisted history. */}
         {timeline.length > 0 && (
           <div className="session-streaming-panel">
             {(() => {

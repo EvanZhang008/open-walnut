@@ -20,7 +20,6 @@ interface UseSessionSendReturn {
   handleDeleteQueued: (sessionId: string, queueId: string) => void;
   addExternalQueued: (msg: { queueId: string; text: string }) => void;
   clearOptimistic: () => void;
-  clearCommitted: () => void;
 }
 
 /**
@@ -273,12 +272,6 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     setSendError(null);
   }, []);
 
-  // No-op: 'committed' status is no longer assigned (handleBatchCompleted removes
-  // messages directly). Kept for interface compatibility with prop-threaded callers.
-  const clearCommitted = useCallback(() => {
-    setOptimisticMsgs((prev) => prev.filter((m) => m.status !== 'committed'));
-  }, []);
-
   return {
     optimisticMsgs,
     sendError,
@@ -293,6 +286,5 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     handleDeleteQueued,
     addExternalQueued,
     clearOptimistic,
-    clearCommitted,
   };
 }

@@ -86,7 +86,7 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
   }, [task.id, onUnpin]);
 
   // Reuse the same send hook as SessionPanel — optimistic messages + delivery tracking
-  const { optimisticMsgs, send, handleMessagesDelivered, handleBatchCompleted, clearCommitted } = useSessionSend(sessionId);
+  const { optimisticMsgs, send, handleMessagesDelivered, handleBatchCompleted } = useSessionSend(sessionId);
 
   // CSS-promotion fullscreen (same instance, no remount)
   const { isFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop } = useFullscreen();
@@ -157,7 +157,6 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
             optimisticMessages={optimisticMsgs}
             onMessagesDelivered={handleMessagesDelivered}
             onBatchCompleted={handleBatchCompleted}
-            onClearCommitted={clearCommitted}
           />
         ) : (
           <span className="dock-task-no-session">No active session</span>

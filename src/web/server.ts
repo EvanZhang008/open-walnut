@@ -1466,6 +1466,19 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       if ((event.name === 'session:result' || event.name === 'session:error') && !isDeliveryFailedEvt) {
         const sid = eventData<'session:result'>(event).sessionId
         if (sid) {
+          // Convergence sentinel: capture the streamed text msgIds BEFORE
+          // clearSoon wipes the buffer, then verify (T+15s) that every one of
+          // them exists in persisted history. A miss = the "visible while
+          // streaming, gone when done" class → auto-incident.
+          if (event.name === 'session:result') {
+            const streamedIds = sessionStreamBuffer.getSnapshot(sid).blocks
+              .flatMap((b) => (b.type === 'text' && b.msgId ? [b.msgId] : []))
+            if (streamedIds.length > 0) {
+              import('../core/observability/stream-convergence.js')
+                .then(({ armStreamConvergenceCheck }) => armStreamConvergenceCheck(sid, streamedIds))
+                .catch(() => {})
+            }
+          }
           sessionStreamBuffer.markDone(sid)
           // Release dedup-timestamp entry so lastMarkStreamingAt cannot grow
           // unbounded across long-lived servers. (Handled here, not only in the

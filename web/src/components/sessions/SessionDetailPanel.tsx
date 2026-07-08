@@ -48,7 +48,6 @@ interface SessionDetailPanelProps {
   onEditQueued?: (queueId: string, newText: string) => void;
   onDeleteQueued?: (queueId: string) => void;
   onAgentQueued?: (msg: { queueId: string; text: string }) => void;
-  onClearCommitted?: () => void;
   onRetryFailed?: (queueId: string) => void;
   onDismissFailed?: (queueId: string) => void;
   /** Bubbles the stream hook's isStreaming up to page-level so the page doesn't
@@ -145,7 +144,7 @@ function EditableTitle({ sessionId, taskId, title, onSaved }: { sessionId: strin
   );
 }
 
-export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged, onSessionReplaced, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onClearCommitted, onRetryFailed, onDismissFailed, onStreamingChange, activeView, onSelectView, onModelPillClick }: SessionDetailPanelProps) {
+export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged, onSessionReplaced, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onStreamingChange, activeView, onSelectView, onModelPillClick }: SessionDetailPanelProps) {
   const navigate = useNavigate();
   const enabledModes = useEnabledModes();
   const [executing, setExecuting] = useState(false);
@@ -913,7 +912,6 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
           onEditQueued={onEditQueued}
           onDeleteQueued={onDeleteQueued}
           onAgentQueued={onAgentQueued}
-          onClearCommitted={onClearCommitted}
           onRetryFailed={onRetryFailed}
           onDismissFailed={onDismissFailed}
           onFileOpen={handleFileOpen}

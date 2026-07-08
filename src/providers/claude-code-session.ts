@@ -2509,6 +2509,28 @@ export class ClaudeCodeSession {
               variant: 'compact' as const, message: 'Context compacted',
               detail: pre ? `${Math.round(pre / 1000)}K tokens` : undefined,
             }, ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
+            // Post-compact authoritative usage pull (ACP Phase 2): the badge's
+            // context% still shows the PRE-compact numerator until the next
+            // assistant usage arrives — which on an idle session is never. Ask
+            // the CLI directly (same source as /context) and push the corrected
+            // figure. Fire-and-forget: an unreadable CLI keeps the stale badge,
+            // strictly no worse than before.
+            void this.getContextUsage().then((cu) => {
+              if (!cu || cu.totalTokens == null || !this.claudeSessionId) return
+              if (cu.maxTokens && cu.maxTokens > 0) this._cliContextWindow = cu.maxTokens
+              const windowSize = this._cliContextWindow
+              if (!windowSize) return
+              bus.emit(EventNames.SESSION_USAGE_UPDATE, {
+                sessionId: this.claudeSessionId,
+                model: this._model,
+                contextPercent: Math.round(cu.totalTokens / windowSize * 100),
+                inputTokens: cu.totalTokens,
+              }, ['main-ai'], { source: 'session-runner' })
+              log.session.info('post-compact context usage re-seeded from CLI', {
+                sessionId: this.claudeSessionId, taskId: this.taskId,
+                totalTokens: cu.totalTokens, maxTokens: cu.maxTokens,
+              })
+            }).catch(() => {})
           } else if (sys.subtype === 'error_during_execution') {
             bus.emit(EventNames.SESSION_SYSTEM_EVENT, {
               sessionId: sid, taskId: this.taskId,

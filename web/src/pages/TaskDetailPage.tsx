@@ -608,7 +608,6 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
                 onEditQueued={(queueId, newText) => sessionSend.handleEditQueued(activeSessionId, queueId, newText)}
                 onDeleteQueued={(queueId) => sessionSend.handleDeleteQueued(activeSessionId, queueId)}
                 onAgentQueued={sessionSend.addExternalQueued}
-                onClearCommitted={sessionSend.clearCommitted}
               />
               <div className="session-chat-input-wrapper">
                 {sessionSend.sendError && (

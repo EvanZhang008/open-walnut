@@ -479,7 +479,6 @@ export function SessionsPage() {
           onEditQueued={handleEditQueued}
           onDeleteQueued={handleDeleteQueued}
           onAgentQueued={sessionSend.addExternalQueued}
-          onClearCommitted={sessionSend.clearCommitted}
           onRetryFailed={handleRetryFailed}
           onDismissFailed={sessionSend.dismissFailed}
           onStreamingChange={setIsStreaming}
