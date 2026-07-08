@@ -7,6 +7,8 @@ iPhone / browser ──HTTPS 443──▶ Caddy (auto Let's Encrypt) ──▶ W
 Mac (source of truth) ──git smart HTTP over 443──▶ bare hub repo ──post-receive──▶ working tree
 ```
 
+Data sync setup (Mac-side remote + credentials): see [docs/cloud-sync.md](../docs/cloud-sync.md).
+
 - **Ingress: 443 + 80 only.** No SSH, no port 22, no key pair. Port 80 exists solely
   for the Let's Encrypt ACME HTTP-01 challenge (Caddy answers it and redirects the rest).
 - **Ops access is SSM Session Manager**: `aws ssm start-session --target <instance-id>`.

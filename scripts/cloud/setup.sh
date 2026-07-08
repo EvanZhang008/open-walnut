@@ -147,6 +147,11 @@ install -d -o "$WALNUT_USER" -g "$WALNUT_USER" "$WALNUT_LIB/git"
 if [ ! -d "$HUB_REPO" ]; then
   as_walnut git init --bare --initial-branch=main "$HUB_REPO"
 fi
+# Allow pushes over git smart HTTP (`git http-backend` refuses receive-pack
+# without this, even for authenticated users on some git versions). The
+# endpoint itself (/git/data, src/web/routes/git-http.ts) enforces device-token
+# auth before any pack ever reaches the repo.
+as_walnut git -C "$HUB_REPO" config http.receivepack true
 
 # post-receive: a push from the Mac materializes into the working tree
 # near-realtime. flock serializes overlapping pushes.
@@ -208,6 +213,7 @@ Group=$WALNUT_USER
 WorkingDirectory=$REPO_DIR
 Environment=WALNUT_CLOUD_MODE=1
 Environment=OPEN_WALNUT_HOME=$DATA_HOME
+Environment=WALNUT_GIT_HUB_DIR=$WALNUT_LIB/git
 Environment=HOME=$WALNUT_LIB
 ExecStart=$NODE_BIN $REPO_DIR/dist/cli.js web --port 3456
 Restart=always

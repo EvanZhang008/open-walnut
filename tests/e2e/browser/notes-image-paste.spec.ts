@@ -95,6 +95,25 @@ test('pasting an image into a vault note → _attachment/ + ![[...]] embed (not 
   expect(res.headers.get('content-type')).toContain('image/png')
 })
 
+test('pasting an image auto-refreshes the sidebar tree — no manual refresh needed', async ({ page }) => {
+  const { folder, notePath } = notePaths('tree-refresh')
+  await seedNote(notePath)
+  const editor = await openSeededNote(page, folder)
+  await editor.click()
+
+  // Before paste: the note's folder has no _attachment/ child yet.
+  const folderNode = page.locator(`[data-drop-folder="${folder}"]`)
+  await expect(folderNode.locator('.notes-tree-item', { hasText: '_attachment' })).toHaveCount(0)
+
+  await pasteImage(page)
+
+  // No manual tree refresh — the notes:tree-changed WS event should reveal
+  // the new _attachment/ folder + pasted file on its own.
+  await expect(folderNode.locator('.notes-tree-item', { hasText: '_attachment' })).toBeVisible({ timeout: 5000 })
+  await folderNode.locator('.notes-tree-folder', { hasText: '_attachment' }).click()
+  await expect(page.locator('.notes-tree-file', { hasText: /^pasted-image-/ })).toBeVisible({ timeout: 5000 })
+})
+
 test('after pasting an image, the raw view shows the ![[...]] embed (live-doc seed)', async ({ page }) => {
   const { folder, notePath } = notePaths('raw')
   await seedNote(notePath)

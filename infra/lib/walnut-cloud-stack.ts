@@ -154,12 +154,13 @@ export class WalnutCloudStack extends cdk.Stack {
       assumedBy: new iam.ServicePrincipal('dlm.amazonaws.com'),
       managedPolicies: [
         iam.ManagedPolicy.fromAwsManagedPolicyName(
-          'service-role/AWSDataLifecycleManagerServiceRolePolicy',
+          'service-role/AWSDataLifecycleManagerServiceRole',
         ),
       ],
     })
     new dlm.CfnLifecyclePolicy(this, 'DailySnapshots', {
-      description: 'Walnut cloud companion: daily volume snapshots, retain 7',
+      // DLM descriptions only allow [0-9A-Za-z _-]
+      description: 'Walnut cloud companion daily volume snapshots retain 7',
       state: 'ENABLED',
       executionRoleArn: dlmRole.roleArn,
       policyDetails: {

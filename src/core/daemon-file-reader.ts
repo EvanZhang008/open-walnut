@@ -6,6 +6,7 @@
  */
 
 import path from 'node:path'
+import { log } from '../logging/index.js'
 import { getDaemonConnection } from '../providers/daemon-connection.js'
 import { getConfig } from './config-manager.js'
 import type { SshTarget } from '../providers/session-io.js'
@@ -37,6 +38,15 @@ export class DaemonFileReader implements SessionFileReader {
     this.sshTarget = { hostname, user: hostDef.user, port: hostDef.port }
   }
 
+  /** Above this size, whole-file fs.read is unsafe over the tunnel — one giant
+   *  WS frame gets killed by corp SSH proxies (WSSH) mid-transfer, showing up
+   *  only as a pong gap + read timeout (inc-1783532915925: 11.4MB JSONL never
+   *  loaded). Chunk instead. Remote-only; the in-process local daemon has no
+   *  proxy in the path. */
+  private static CHUNK_THRESHOLD = 2 * 1024 * 1024
+  /** Per-chunk request size for fs.readRange (well under any proxy limit). */
+  private static CHUNK_SIZE = 1024 * 1024
+
   async readFile(remotePath: string): Promise<string | null> {
     await this.resolve()
     const conn = await getDaemonConnection(this.host, this.sshTarget!)
@@ -50,6 +60,19 @@ export class DaemonFileReader implements SessionFileReader {
       remotePath = (findResult.files as string[])[0]
     }
 
+    // Remote big-file path: stat first, chunk when large. stat failures
+    // (old daemon without fs.stat / transient) fall through to plain fs.read —
+    // no behavior regression for small files or old daemons.
+    if (this.host !== '__local__') {
+      try {
+        const st = await this.stat(remotePath)
+        if (st === null) return null // definitive ENOENT
+        if (st.size > DaemonFileReader.CHUNK_THRESHOLD) {
+          return await this.readFileChunked(remotePath, st.size)
+        }
+      } catch { /* stat unavailable — plain read below */ }
+    }
+
     const result = await conn.send('fs.read', { path: remotePath, encoding: 'utf-8' })
     if (result.ok) return result.data as string
 
@@ -60,6 +83,48 @@ export class DaemonFileReader implements SessionFileReader {
     const errMsg = typeof result.error === 'string' ? result.error : ''
     if (/ENOENT|no such file/i.test(errMsg)) return null
     throw new Error('fs.read transport failure: ' + (errMsg || 'unknown'))
+  }
+
+  /**
+   * Read [start, EOF) of a remote file in CHUNK_SIZE fs.readRange calls.
+   * Byte-exact: chunks are reassembled as bytes THEN utf-8 decoded (a range
+   * boundary can split a multi-byte char). Old daemons without fs.readRange
+   * throw — callers see the same transport-failure contract as fs.read.
+   * `start` > 0 is the incremental turn-delta path (read only appended bytes).
+   */
+  async readFileRange(remotePath: string, start: number): Promise<{ content: string; fileSize: number } | null> {
+    await this.resolve()
+    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    const chunks: Buffer[] = []
+    let offset = start
+    let fileSize = 0
+    for (;;) {
+      const res = await conn.send('fs.readRange', {
+        path: remotePath, start: offset, length: DaemonFileReader.CHUNK_SIZE,
+      })
+      if (!res.ok) {
+        const errMsg = typeof res.error === 'string' ? res.error : ''
+        if (/ENOENT|no such file/i.test(errMsg)) return null
+        throw new Error('fs.readRange transport failure: ' + (errMsg || 'unknown'))
+      }
+      fileSize = (res.fileSize as number) ?? fileSize
+      const bytesRead = (res.bytesRead as number) ?? 0
+      if (bytesRead > 0) {
+        chunks.push(Buffer.from(res.data as string, 'base64'))
+        offset += bytesRead
+      }
+      if (res.eof || bytesRead === 0) break
+    }
+    return { content: Buffer.concat(chunks).toString('utf-8'), fileSize }
+  }
+
+  private async readFileChunked(remotePath: string, size: number): Promise<string | null> {
+    const result = await this.readFileRange(remotePath, 0)
+    if (result === null) return null
+    log.session.info('DaemonFileReader: chunked read complete', {
+      host: this.host, path: remotePath, fileSize: result.fileSize, chars: result.content.length, statSize: size,
+    })
+    return result.content
   }
 
   /**

@@ -332,6 +332,19 @@ export class ClaudeCodeSession {
   /** Per-turn flag: reset on writeMessage()/send(), prevents duplicate JSONL result
    *  events within a single turn (e.g., tailer emits result, then PID-death handler fires). */
   private _turnResultEmitted = false
+  /** ── Idle-debt conservation (ported from the ACP adapter's idle accounting) ──
+   *  The CLI emits one session_state_changed{idle} companion for every turn-over
+   *  it reports via a `result` line. When the RESULT handler completes the turn
+   *  (the normal path), that companion idle is still in flight — and if the user
+   *  sends the next message quickly, writeMessage() has already reset
+   *  _turnResultEmitted by the time it lands, so the naive idle handler read it
+   *  as "the NEW turn is over" and completed a turn that had produced zero output
+   *  (the premature-idle family, [[premature_idle_completes_running_workflow]]).
+   *  Every result-driven completion adds one owed idle; the idle handler consumes
+   *  debt FIRST — an owed idle is the previous turn's companion, never a turn-over
+   *  trigger. Deliberately NOT reset per turn (surviving the turn boundary is the
+   *  whole point); reset only on spawn (fresh CLI process = fresh event stream). */
+  private _idleDebt = 0
   /** Byte offset in the output file where the current turn started (for resume). */
   private _turnStartOffset = 0
   /** Cumulative cost from the last result event — used to detect stale/replayed results. */
@@ -1045,6 +1058,7 @@ export class ClaudeCodeSession {
     this._exitStderr = undefined
     this.resultEmitted = false
     this._turnResultEmitted = false
+    this._idleDebt = 0                // Fresh process — a dead process's owed idles never arrive
     this._lastResultCost = undefined  // Fresh session — no previous cost to compare
     this._costWatermark.reset()       // Fresh process — its total_cost_usd restarts at 0
     this._askUserIntercepted = false

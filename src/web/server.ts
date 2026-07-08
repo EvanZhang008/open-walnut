@@ -343,6 +343,19 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
   // -- Middleware --
   app.use(cors())
+
+  // Git smart HTTP for the cloud data hub (cloud mode only). MUST be mounted
+  // BEFORE compression() and express.json(): git POST bodies are raw binary
+  // streams the router pipes to `git http-backend` stdin (a body parser would
+  // consume them), and pack responses must reach the client byte-exact
+  // (compression() re-encoding them corrupts the pack protocol). The router
+  // carries its own device-token auth — the /api auth middleware below does
+  // not cover /git. See src/web/routes/git-http.ts.
+  if (CLOUD_MODE) {
+    const { gitHttpRouter } = await import('./routes/git-http.js')
+    app.use('/git/data', gitHttpRouter)
+  }
+
   // gzip JSON/text responses. The list payloads (/api/tasks, /api/sessions,
   // /api/sessions/:id/history) are 2-8MB of highly-repetitive JSON and dominate
   // how long each response holds one of the browser's ~5 HTTP/1.1 lanes — the

@@ -339,6 +339,11 @@ notesV2Router.post('/attachment', async (req: Request, res: Response, next: Next
 
     const relPath = toRelPath(filePath)
     log.memory.info('Note attachment saved', { notePath, path: relPath, bytes: buffer.length })
+    // The tree only refetches on explicit create/delete/move or this event —
+    // a new _attachment/ folder + file appeared outside that path, so without
+    // this the sidebar file explorer never shows the pasted image until the
+    // user manually does something that happens to trigger a refresh.
+    bus.emit(EventNames.NOTES_TREE_CHANGED, { path: relPath }, ['web-ui'])
     res.json({ ok: true, path: relPath, name: filename })
   } catch (err) {
     next(err)

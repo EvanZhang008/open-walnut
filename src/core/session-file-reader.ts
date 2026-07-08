@@ -270,11 +270,15 @@ export async function readSessionJsonlContent(
   //    resolves to the same ~/.claude the old local path used).
   {
     const daemonHost = host ?? '__local__';
-    // Timeout: 30s covers cold-start daemon connect (ControlMaster ~15s + tunnel + WS) + file reads.
+    // Timeout: covers cold-start daemon connect (ControlMaster ~15s + tunnel + WS) + file reads.
     // Individual operations have their own timeouts, but getDaemonConnection() may wait in
     // connectingPromises with no timeout — this outer race is the safety net for the API request.
-    // Local daemon connects in-process (no SSH), so this ceiling is only ever hit for remote.
-    const READ_TIMEOUT = 30_000;
+    // Remote gets 120s: a whale session JSONL (>10MB) is read in 1MB fs.readRange
+    // chunks (see DaemonFileReader), each a separate RPC — legitimate multi-MB
+    // transfers through a slow corp tunnel need more than the old 30s, which
+    // aborted them mid-chunking and made big remote histories unloadable
+    // (inc-1783532915925). Local daemon is in-process — 30s stays.
+    const READ_TIMEOUT = host ? 120_000 : 30_000;
     const { DaemonFileReader } = await import('./daemon-file-reader.js');
     const reader = new DaemonFileReader(daemonHost);
     // Claude Code hashes cwds whose encoded form exceeds 200 chars; we don't
@@ -309,7 +313,7 @@ export async function readSessionJsonlContent(
           return null;
         })(),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Session file read timeout (30s)')), READ_TIMEOUT),
+          setTimeout(() => reject(new Error(`Session file read timeout (${READ_TIMEOUT / 1000}s)`)), READ_TIMEOUT),
         ),
       ]);
       if (result) return result;

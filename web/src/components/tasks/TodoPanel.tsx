@@ -59,7 +59,6 @@ import { GlobalNotesSection } from '../notes/GlobalNotesSection';
 import { useGlobalNotes } from '@/hooks/useGlobalNotes';
 import { SortableTierCard, TierDropZone } from './FocusSatelliteCards';
 import type { FocusTier } from '@/api/focus';
-import { useFocusBarContext } from '@/contexts/FocusBarContext';
 
 const DATE_LABELS: Record<string, string> = { now: 'Now', overdue: 'Overdue', 'this-week': 'This Week', 'no-date': 'No Date' } as const;
 

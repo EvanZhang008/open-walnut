@@ -528,6 +528,18 @@ export interface NotesUpdatedEvent {
   contentHash: string;
 }
 
+/**
+ * A file/folder appeared, moved, or was removed OUTSIDE the normal
+ * PUT-content save path — e.g. a pasted image's `_attachment/` folder created
+ * on first upload. The tree only refreshes on explicit user actions (create/
+ * delete/move) or this event; a plain note body edit does NOT fire it (that
+ * would refetch the whole tree on every keystroke's debounced save).
+ */
+export interface NotesTreeChangedEvent {
+  /** Vault-relative path of the new/changed file (informational; FE just refetches). */
+  path: string;
+}
+
 // ── Audio capture events ──
 
 export interface AudioStartedEvent {
@@ -629,6 +641,7 @@ export interface EventPayloadMap {
   'conversation:updated': ConversationUpdatedEvent;
 
   'notes:updated': NotesUpdatedEvent;
+  'notes:tree-changed': NotesTreeChangedEvent;
 
   'sync:conflict-resolved': SyncConflictResolvedEvent;
 

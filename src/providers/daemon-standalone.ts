@@ -648,6 +648,7 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
     case 'fs.ls': return cmdFsLs(ws, id as number, cmd)
     case 'fs.find': return cmdFsFind(ws, id as number, cmd)
     case 'fs.stat': return cmdFsStat(ws, id as number, cmd)
+    case 'fs.readRange': return cmdFsReadRange(ws, id as number, cmd)
     case 'git.diff': return cmdGitDiff(ws, id as number, cmd)
     case 'list': return cmdList(ws, id as number)
     case 'ping': return sendOk(ws, id as number, { pong: true })
@@ -1717,6 +1718,51 @@ async function cmdFsStat(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       return
     }
     sendError(ws, id, 'fs.stat failed: ' + e.message)
+  }
+}
+
+// Byte-range read for LARGE files. A whole-file fs.read of a multi-MB session
+// JSONL serializes into ONE giant WS frame; corp SSH proxies (WSSH) kill the
+// tunnel mid-frame, the client sees only a pong gap, and the read times out
+// forever (inc-1783532915925: 11.4MB history → 30s timeout loop). Range reads
+// keep every frame small enough to survive the proxy, and double as the
+// incremental "only the appended bytes" path for turn deltas.
+// Returns base64 (byte-exact — a range can split a UTF-8 char; the CLIENT
+// reassembles bytes then decodes). eof lets the caller stop without a stat race.
+async function cmdFsReadRange(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  let filePath = cmd.path as string
+  const start = typeof cmd.start === 'number' && cmd.start >= 0 ? cmd.start : 0
+  const length = typeof cmd.length === 'number' && cmd.length > 0
+    ? Math.min(cmd.length as number, 4 * 1024 * 1024) : 1024 * 1024
+  if (!filePath) return sendError(ws, id, 'fs.readRange: missing path')
+
+  if (filePath === '~' || filePath.startsWith('~/')) {
+    filePath = HOME_DIR + filePath.slice(1)
+  }
+
+  let fh: fs.promises.FileHandle | null = null
+  try {
+    fh = await fs.promises.open(filePath, 'r')
+    const st = await fh.stat()
+    if (start >= st.size) {
+      sendOk(ws, id, { data: '', bytesRead: 0, fileSize: st.size, eof: true })
+      return
+    }
+    const toRead = Math.min(length, st.size - start)
+    const buf = Buffer.alloc(toRead)
+    const { bytesRead } = await fh.read(buf, 0, toRead, start)
+    sendOk(ws, id, {
+      data: buf.subarray(0, bytesRead).toString('base64'),
+      bytesRead,
+      fileSize: st.size,
+      eof: start + bytesRead >= st.size,
+    })
+  } catch (err: unknown) {
+    const e = err as NodeJS.ErrnoException
+    const code = e.code ?? ''
+    sendError(ws, id, 'fs.readRange failed: ' + e.message + (code ? ' (' + code + ')' : ''))
+  } finally {
+    try { await fh?.close() } catch { /* already closed */ }
   }
 }
 

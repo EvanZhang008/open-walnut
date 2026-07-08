@@ -106,6 +106,7 @@ export const EventNames = {
 
   // Notes events
   NOTES_UPDATED: 'notes:updated',
+  NOTES_TREE_CHANGED: 'notes:tree-changed',
 
   // Config events
   CONFIG_CHANGED: 'config:changed',

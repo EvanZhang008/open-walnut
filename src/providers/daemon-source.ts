@@ -841,6 +841,7 @@ function handleCommand(ws, msg) {
     case 'fs.ls': return cmdFsLs(ws, id, cmd);
     case 'fs.find': return cmdFsFind(ws, id, cmd);
     case 'fs.stat': return cmdFsStat(ws, id, cmd);
+    case 'fs.readRange': return cmdFsReadRange(ws, id, cmd);
     case 'git.diff': return cmdGitDiff(ws, id, cmd);
     case 'list': return cmdList(ws, id);
     case 'ping': return sendOk(ws, id, { pong: true });
@@ -1888,6 +1889,48 @@ async function cmdFsStat(ws, id, cmd) {
       return;
     }
     sendError(ws, id, 'fs.stat failed: ' + err.message);
+  }
+}
+
+// Byte-range read for LARGE files. A whole-file fs.read of a multi-MB session
+// JSONL serializes into ONE giant WS frame; corp SSH proxies (WSSH) kill the
+// tunnel mid-frame and the read times out forever (inc-1783532915925). Range
+// reads keep frames small and double as the incremental turn-delta path.
+// base64 (byte-exact; the CLIENT reassembles bytes then decodes UTF-8).
+// Keep in sync with daemon-standalone.ts cmdFsReadRange.
+async function cmdFsReadRange(ws, id, cmd) {
+  let filePath = cmd.path;
+  const start = typeof cmd.start === 'number' && cmd.start >= 0 ? cmd.start : 0;
+  const length = typeof cmd.length === 'number' && cmd.length > 0
+    ? Math.min(cmd.length, 4 * 1024 * 1024) : 1024 * 1024;
+  if (!filePath) return sendError(ws, id, 'fs.readRange: missing path');
+
+  if (filePath === '~' || filePath.startsWith('~/')) {
+    filePath = HOME_DIR + filePath.slice(1);
+  }
+
+  let fh = null;
+  try {
+    fh = await fs.promises.open(filePath, 'r');
+    const st = await fh.stat();
+    if (start >= st.size) {
+      sendOk(ws, id, { data: '', bytesRead: 0, fileSize: st.size, eof: true });
+      return;
+    }
+    const toRead = Math.min(length, st.size - start);
+    const buf = Buffer.alloc(toRead);
+    const readResult = await fh.read(buf, 0, toRead, start);
+    sendOk(ws, id, {
+      data: buf.subarray(0, readResult.bytesRead).toString('base64'),
+      bytesRead: readResult.bytesRead,
+      fileSize: st.size,
+      eof: start + readResult.bytesRead >= st.size,
+    });
+  } catch (err) {
+    const code = err.code || '';
+    sendError(ws, id, 'fs.readRange failed: ' + err.message + (code ? ' (' + code + ')' : ''));
+  } finally {
+    try { if (fh) await fh.close(); } catch { /* already closed */ }
   }
 }
 

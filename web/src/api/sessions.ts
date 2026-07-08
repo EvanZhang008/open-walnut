@@ -50,8 +50,11 @@ export async function fetchSessionHistory(
   // hasn't caught up yet (turn not flushed); caller keeps streaming blocks & retries.
   if (opts?.since !== undefined) params.since = String(opts.since);
   // Remote sessions + fork chains can take 20-30s on first load (SSH pulls 3+ MB JSONL
-  // serially through corp proxy). Streams path is local-only and fast; full path may be slow.
-  const timeoutMs = opts?.source === 'streams' ? 15_000 : 60_000;
+  // serially through corp proxy). Streams path is local-only and fast; full path may be
+  // slow — and a WHALE session (>10MB JSONL, chunked fs.readRange server-side, 120s
+  // server ceiling) legitimately exceeds the old 60s; aborting client-side just wasted
+  // the transfer and re-requested from zero (inc-1783532915925).
+  const timeoutMs = opts?.source === 'streams' ? 15_000 : 150_000;
   const res = await apiGet<{ messages: SessionHistoryMessage[]; forkBoundaryIndex?: number; cursor?: number; delta?: boolean; stale?: boolean; staleReason?: string }>(
     `/api/sessions/${sessionId}/history`, params, { signal: opts?.signal, timeoutMs },
   );

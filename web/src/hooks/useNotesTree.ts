@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { fetchNotesTree, createFolder, deleteNote, moveNote } from '@/api/notes-v2';
 import type { NoteTreeNode } from '@/api/notes-v2';
+import { useEvent } from '@/hooks/useWebSocket';
 
 export function useNotesTree() {
   const [tree, setTree] = useState<NoteTreeNode[]>([]);
@@ -20,6 +21,12 @@ export function useNotesTree() {
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  // A file/folder appeared outside the normal create/delete/move actions this
+  // hook already refreshes after — e.g. a pasted image's `_attachment/` folder,
+  // created lazily on first upload. Without this, the sidebar tree never shows
+  // it until the user happens to trigger some other refresh (new note, rename).
+  useEvent('notes:tree-changed', () => { refresh(); });
 
   const addFolder = useCallback(async (folderPath: string) => {
     await createFolder(folderPath);
