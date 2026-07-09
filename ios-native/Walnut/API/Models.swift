@@ -71,6 +71,28 @@ struct NoteWriteResult: Codable {
     let updatedAt: String
 }
 
+// MARK: - Notes search (/api/notes-v2/search)
+
+struct NoteSearchResult: Codable, Identifiable, Equatable {
+    let id: String
+    let path: String
+    let title: String
+    /// May contain `<mark>` tags around query matches.
+    let snippet: String
+    let matchType: String
+}
+
+struct NoteSearchResponse: Codable {
+    let results: [NoteSearchResult]
+    let degraded: String?
+}
+
+// MARK: - Favorites (/api/favorites — the bookmark store shared with the web UI)
+
+struct FavoritesResponse: Codable {
+    let notes: [String]
+}
+
 // MARK: - Error envelope
 
 /// Wire shape: `{ "error": { "code", "message" }, ...extras }`.

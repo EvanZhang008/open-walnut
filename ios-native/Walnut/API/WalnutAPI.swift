@@ -88,6 +88,46 @@ struct WalnutAPI {
         let _: OK = try await send("DELETE", "/notes/\(escapePath(path))", body: nil as [String: String]?)
     }
 
+    // MARK: - Notes search + favorites (non-v1 endpoints, same Bearer auth)
+
+    /// Hybrid string+semantic search. The semantic leg can stall on a cold
+    /// server, so callers pass a short timeout and fall back to string mode.
+    func searchNotes(query: String, limit: Int = 30, mode: String = "hybrid", timeout: TimeInterval? = nil) async throws -> NoteSearchResponse {
+        let q = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
+        return try await sendAbsolute(
+            "GET", "/api/notes-v2/search?q=\(q)&limit=\(limit)&mode=\(mode)",
+            body: nil as [String: String]?, timeout: timeout
+        )
+    }
+
+    func favoriteNotes() async throws -> [String] {
+        let response: FavoritesResponse = try await sendAbsolute("GET", "/api/favorites", body: nil as [String: String]?)
+        return response.notes
+    }
+
+    /// Returns the updated pinned list.
+    func addFavoriteNote(path: String) async throws -> [String] {
+        let response: FavoritesResponse = try await sendAbsolute("POST", "/api/favorites/notes", body: ["path": path])
+        return response.notes
+    }
+
+    /// Returns the updated pinned list.
+    func removeFavoriteNote(path: String) async throws -> [String] {
+        let response: FavoritesResponse = try await sendAbsolute("DELETE", "/api/favorites/notes", body: ["path": path])
+        return response.notes
+    }
+
+    /// Authenticated URL for a note attachment. `raw` is the inner text of an
+    /// Obsidian `![[...]]` embed or a relative markdown image path — the server
+    /// resolves either. Callers must attach the Bearer header themselves.
+    static func attachmentURL(rawPath: String) -> URL? {
+        guard let base = AppConfig.serverURL else { return nil }
+        var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        components?.path = "/api/notes-v2/attachment"
+        components?.queryItems = [URLQueryItem(name: "path", value: rawPath)]
+        return components?.url
+    }
+
     // MARK: - Plumbing
 
     private func get<T: Decodable>(_ path: String) async throws -> T {
@@ -95,14 +135,21 @@ struct WalnutAPI {
     }
 
     private func send<T: Decodable, B: Encodable>(_ method: String, _ path: String, body: B?) async throws -> T {
+        try await sendAbsolute(method, "/api/v1" + path, body: body)
+    }
+
+    private func sendAbsolute<T: Decodable, B: Encodable>(
+        _ method: String, _ path: String, body: B?, timeout: TimeInterval? = nil
+    ) async throws -> T {
         guard let base = AppConfig.serverURL, let token = AppConfig.token else {
             throw APIError.notConfigured
         }
-        guard let url = URL(string: base.absoluteString + "/api/v1" + path) else {
+        guard let url = URL(string: base.absoluteString + path) else {
             throw APIError.notConfigured
         }
         var request = URLRequest(url: url)
         request.httpMethod = method
+        if let timeout { request.timeoutInterval = timeout }
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
