@@ -12,7 +12,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { NOTES_DIR } from '../../constants.js'
+import { NOTES_DIR, CLOUD_MODE } from '../../constants.js'
 import { computeContentHash } from '../../utils/file-ops.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { log } from '../../logging/index.js'
@@ -678,8 +678,11 @@ notesV2Router.get('/search', async (req: Request, res: Response, next: NextFunct
     await ensureNotesDir()
 
     // Run both legs; allSettled so one failing never zeroes the other.
+    // Cloud companion has no QMD store — the semantic leg would lazily init
+    // the embedding model (1GB+ download, pins the small instance). String/FTS
+    // search is the cloud answer (same gate as initQmdStores in server.ts).
     const wantString = mode === 'hybrid' || mode === 'string'
-    const wantSemantic = mode === 'hybrid' || mode === 'semantic'
+    const wantSemantic = !CLOUD_MODE && (mode === 'hybrid' || mode === 'semantic')
 
     const [stringSettled, semanticSettled] = await Promise.allSettled([
       wantString ? Promise.resolve(stringSearch(q, limit * 2)) : Promise.resolve([]),
@@ -1014,7 +1017,10 @@ notesV2Router.get('/index/status', async (_req: Request, res: Response, next: Ne
     ensureIndexBootstrap()
     const lastRebuild = getIndexMeta('last_full_rebuild')
     let embedState: 'idle' | 'embedding' | 'unavailable' = 'idle'
-    try {
+    if (CLOUD_MODE) {
+      // No QMD store on the companion — don't lazy-init it just to report status.
+      embedState = 'unavailable'
+    } else try {
       const { getNotesStore } = await import('../../core/qmd-store.js')
       const store = await getNotesStore()
       const status = await store.getStatus()
