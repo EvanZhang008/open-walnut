@@ -64,17 +64,26 @@ export function buildDeltaEvidence(delta: SessionHistoryMessage[]): DeltaEvidenc
     if (!s) return;
     texts.set(s, (texts.get(s) ?? 0) + 1);
   };
-  for (const m of delta) {
-    if (m.text) bump(m.text);
-    if (m.thinking) bump(m.thinking);
-    if (m.msgId && m.text) textMsgIds.add(m.msgId);
-    if (m.msgId && m.thinking) thinkingMsgIds.add(m.msgId);
-    if (m.tools) {
-      for (const t of m.tools) {
-        if (t.toolUseId) toolUseIds.add(t.toolUseId);
+  // Recurses into tools[].childMessages: history grouping (groupInlineChildren)
+  // moves inline-subagent messages OUT of the flat list and under their parent
+  // Agent/Task tool. Without walking them, streamed subagent blocks never find
+  // a twin and are kept forever ("98 completed block(s) had no delta twin").
+  const walk = (msgs: SessionHistoryMessage[]) => {
+    for (const m of msgs) {
+      if (m.role === 'system') continue; // UI notices — never a streamed-block twin
+      if (m.text) bump(m.text);
+      if (m.thinking) bump(m.thinking);
+      if (m.msgId && m.text) textMsgIds.add(m.msgId);
+      if (m.msgId && m.thinking) thinkingMsgIds.add(m.msgId);
+      if (m.tools) {
+        for (const t of m.tools) {
+          if (t.toolUseId) toolUseIds.add(t.toolUseId);
+          if (t.childMessages?.length) walk(t.childMessages);
+        }
       }
     }
-  }
+  };
+  walk(delta);
   return { toolUseIds, texts, textMsgIds, thinkingMsgIds };
 }
 

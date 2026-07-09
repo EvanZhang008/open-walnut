@@ -255,10 +255,13 @@ interface GenericToolCallProps {
   onFileOpen?: (path: string) => void;
 }
 
-export function GenericToolCall({ tool, status = 'done', result: resultProp, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: GenericToolCallProps) {
+export function GenericToolCall({ tool, status: statusProp = 'done', result: resultProp, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: GenericToolCallProps) {
   const [open, setOpen] = useState(false);
   // Merge result from explicit prop (streaming path) and tool.result (persisted history path)
   const result = resultProp ?? (tool as { result?: string }).result;
+  // Persisted history carries isError (tool_result.is_error) — a failed tool must
+  // render ✗ after reload, matching what the streaming view showed live.
+  const status = (tool as { isError?: boolean }).isError ? 'error' : statusProp;
   const safeInput = (tool.input && typeof tool.input === 'object') ? tool.input : {};
   const rawDesc = typeof safeInput.description === 'string' ? safeInput.description.trim() : '';
   const description = rawDesc ? (rawDesc.length > 120 ? rawDesc.slice(0, 120) + '...' : rawDesc) : null;
@@ -559,7 +562,7 @@ function SessionToolCall({ tool, sessionId, sessionCwd, sessionHost, onTaskClick
         oldString={tool.input.old_string}
         newString={tool.input.new_string}
         replaceAll={tool.input.replace_all === true}
-        status={(tool as { status?: string }).status === 'error' ? 'error' : 'done'}
+        status={((tool as { status?: string }).status === 'error' || (tool as { isError?: boolean }).isError) ? 'error' : 'done'}
         result={(tool as { result?: string }).result}
         onViewFile={onFileOpen ? (p) => onFileOpen(p) : undefined}
       />
@@ -574,12 +577,29 @@ export const SessionMessage = memo(function SessionMessage({ message, sessionId,
   const time = formatTime(timestamp);
   const isUser = role === 'user';
 
+  // System lines from persisted history (compact boundary, API errors, model
+  // substitution notices) — same visual language as the streaming system blocks
+  // (session-system-line), never a chat bubble.
+  if (role === 'system') {
+    const variant = message.systemVariant ?? 'info';
+    const icon = variant === 'error' ? '⚠️' : variant === 'compact' ? '⚙️' : 'ℹ️';
+    return (
+      <div className={`session-system-line session-system-line--${variant}`}>
+        <span className="session-system-icon">{icon}</span>
+        <span className="session-system-text">{text}</span>
+        {time && <span className="session-system-detail">{time}</span>}
+      </div>
+    );
+  }
+
   // Interrupt marker — render as muted system banner, not a "You" bubble.
   // Claude CLI writes `[Request interrupted by user]` whenever its
   // AbortController fires without a reason — walnut's health-monitor idle
   // reap triggers it via SIGINT, but it's indistinguishable from a real
   // user-clicked Interrupt. Showing it as a blue "You" bubble is misleading.
-  if (isUser && text && text.trim() === '[Request interrupted by user]') {
+  // Both CLI variants: "[Request interrupted by user]" and
+  // "[Request interrupted by user for tool use]" (62 of the latter in corpus).
+  if (isUser && text && /^\[Request interrupted by user( for tool use)?\]$/.test(text.trim())) {
     return (
       <div className="chat-interrupt-banner">
         <span className="chat-interrupt-icon">{'⏹'}</span>

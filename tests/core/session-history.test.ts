@@ -197,6 +197,49 @@ describe('readSessionHistory', () => {
     ]);
   });
 
+  it('surfaces meaningful system lines (compact/api_error/informational); hides noise subtypes', async () => {
+    await writeJsonl('s-system', '/test', [
+      msg('u1', 'user', 'question'),
+      { type: 'system', subtype: 'compact_boundary', uuid: 'sys1', timestamp: '2025-01-01T00:01:00Z', content: 'Conversation compacted', compactMetadata: { trigger: 'auto', preTokens: 410918 } },
+      { type: 'system', subtype: 'api_error', uuid: 'sys2', timestamp: '2025-01-01T00:02:00Z', error: { formatted: 'Unable to connect to API (ECONNRESET)' } },
+      { type: 'system', subtype: 'informational', uuid: 'sys3', timestamp: '2025-01-01T00:03:00Z', content: 'Model "opus" is restricted. Using sonnet instead.' },
+      // noise subtypes stay hidden
+      { type: 'system', subtype: 'stop_hook_summary', uuid: 'sys4', timestamp: '2025-01-01T00:04:00Z', hookCount: 1 },
+      { type: 'system', subtype: 'turn_duration', uuid: 'sys5', timestamp: '2025-01-01T00:05:00Z', durationMs: 7117 },
+      { type: 'system', subtype: 'away_summary', uuid: 'sys6', timestamp: '2025-01-01T00:06:00Z', content: 'recap text' },
+      msg('a1', 'assistant', 'answer'),
+    ]);
+
+    const messages = await readSessionHistory('s-system', '/test');
+    const sys = messages.filter(m => m.role === 'system');
+    expect(sys.map(m => [m.systemVariant, m.text])).toEqual([
+      ['compact', 'Context compacted (411K tokens) · auto'],
+      ['error', 'API error: Unable to connect to API (ECONNRESET)'],
+      ['info', 'Model "opus" is restricted. Using sonnet instead.'],
+    ]);
+    // Conversation itself is intact around them
+    expect(messages[0].text).toBe('question');
+    expect(messages[messages.length - 1].text).toBe('answer');
+  });
+
+  it('marks tools whose tool_result carried is_error (failed ≠ ✓ after reload)', async () => {
+    await writeJsonl('s-toolerr', '/test', [
+      { type: 'assistant', timestamp: '2025-01-01T00:00:00Z', message: { id: 'a1', role: 'assistant', content: [
+        { type: 'tool_use', id: 'tu-ok', name: 'Bash', input: { command: 'ls' } },
+        { type: 'tool_use', id: 'tu-fail', name: 'Bash', input: { command: 'exit 1' } },
+      ] } },
+      { type: 'user', timestamp: '2025-01-01T00:00:01Z', uuid: 'r1', message: { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 'tu-ok', content: 'file.txt' },
+        { type: 'tool_result', tool_use_id: 'tu-fail', is_error: true, content: 'command failed' },
+      ] } },
+    ]);
+
+    const messages = await readSessionHistory('s-toolerr', '/test');
+    const tools = messages[0].tools!;
+    expect(tools.find(t => t.toolUseId === 'tu-ok')?.isError).toBeUndefined();
+    expect(tools.find(t => t.toolUseId === 'tu-fail')?.isError).toBe(true);
+  });
+
   it('deduplicates assistant messages by id', async () => {
     await writeJsonl('s2', '/test', [
       { type: 'assistant', timestamp: '2025-01-01T00:00:00Z', message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'Part 1' }] } },

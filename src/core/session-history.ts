@@ -125,6 +125,10 @@ export interface SessionHistoryTool {
   input: Record<string, unknown>;
   toolUseId?: string;
   result?: string;
+  /** True when the tool_result carried is_error — the tool FAILED. Without this
+   *  flag the UI renders failed tools with the same ✓ as successes after any
+   *  history reload (streaming had the error state; persisted history lost it). */
+  isError?: boolean;
   planContent?: string;
   /** agentId extracted from Task/Agent tool_result — links to subagent JSONL */
   agentId?: string;
@@ -137,9 +141,13 @@ export interface SessionHistoryTool {
 }
 
 export interface SessionHistoryMessage {
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   text: string;
   timestamp: string;
+  /** For role='system': display variant (matches the streaming system-block
+   *  palette). compact = context compaction, error = API failures, info = model
+   *  substitution / scheduled runs. */
+  systemVariant?: 'compact' | 'error' | 'info';
   tools?: SessionHistoryTool[];
   thinking?: string;
   model?: string;
@@ -190,6 +198,7 @@ interface RawJsonlLine {
       thinking?: string;
       // tool_result fields
       tool_use_id?: string;
+      is_error?: boolean;
       content?: string | Array<{ type: string; text?: string }>;
     }>;
   };
@@ -332,6 +341,7 @@ export function parseSessionMessages(content: string): SessionHistoryMessage[] {
     usage?: { input_tokens: number; output_tokens: number };
     parentToolUseId?: string;
     walnutMessageId?: string;
+    systemVariant?: 'compact' | 'error' | 'info';
     contentBlocks: Array<{
       type: string;
       text?: string;
@@ -340,6 +350,7 @@ export function parseSessionMessages(content: string): SessionHistoryMessage[] {
       input?: Record<string, unknown>;
       thinking?: string;
       tool_use_id?: string;
+      is_error?: boolean;
       content?: string | Array<{ type: string; text?: string }>;
     }>;
   }>();
@@ -414,6 +425,53 @@ export function parseSessionMessages(content: string): SessionHistoryMessage[] {
 
   for (let i = 0; i < rawMessages.length; i++) {
     const raw = rawMessages[i];
+
+    // ── System lines the user should SEE (corpus-audited 2026-07) ──
+    // The CLI logs meaningful conversation events as type='system' lines that
+    // were previously dropped entirely — the user saw an unexplained gap:
+    //   compact_boundary        "Context compacted (410K tokens)" — why history shrank
+    //   api_error               connection/API failures mid-turn — why a turn stalled
+    //   informational           e.g. "Model X restricted … using Y instead"
+    //   model_refusal_fallback  safeguard retry notices
+    //   scheduled_task_fire     why a turn started with no user message
+    // (Live streaming already surfaces compact via SESSION_SYSTEM_EVENT; history
+    // reloads lost it. Noise subtypes — stop_hook_summary, turn_duration,
+    // away_summary, local_command — stay hidden.)
+    if (raw.type === 'system' && raw.uuid) {
+      const sub = raw.subtype;
+      const rawContent = (raw as { content?: unknown }).content;
+      const content = typeof rawContent === 'string' ? rawContent : '';
+      let sysText: string | undefined;
+      let sysVariant: 'compact' | 'error' | 'info' = 'info';
+      if (sub === 'compact_boundary') {
+        // canonical JSONL uses compactMetadata/preTokens; the CLI's stream-json
+        // stdout (daemon stream files) uses compact_metadata/pre_tokens.
+        const r = raw as {
+          compactMetadata?: { trigger?: string; preTokens?: number };
+          compact_metadata?: { trigger?: string; pre_tokens?: number };
+        };
+        const trigger = r.compactMetadata?.trigger ?? r.compact_metadata?.trigger;
+        const pre = r.compactMetadata?.preTokens ?? r.compact_metadata?.pre_tokens;
+        sysText = `Context compacted${pre ? ` (${Math.round(pre / 1000)}K tokens)` : ''}${trigger === 'auto' ? ' · auto' : ''}`;
+        sysVariant = 'compact';
+      } else if (sub === 'api_error') {
+        const err = (raw as { error?: { formatted?: string; message?: string } }).error;
+        sysText = `API error: ${err?.formatted ?? err?.message ?? content ?? 'unknown'}`;
+        sysVariant = 'error';
+      } else if (sub === 'informational' || sub === 'model_refusal_fallback' || sub === 'scheduled_task_fire') {
+        sysText = content || undefined;
+        sysVariant = 'info';
+      }
+      if (sysText) {
+        messageMap.set(raw.uuid, {
+          role: 'system',
+          timestamp: raw.timestamp ?? new Date().toISOString(),
+          systemVariant: sysVariant,
+          contentBlocks: [{ type: 'text' as const, text: sysText }],
+        });
+      }
+      continue;
+    }
 
     // Handle queue-operation entries (FIFO-injected user messages from mid-stream send).
     // These are interleaved at the correct chronological position in the JSONL.
@@ -511,11 +569,18 @@ export function parseSessionMessages(content: string): SessionHistoryMessage[] {
   // Scan all user messages for tool_result blocks and extract their text content.
   // This lets us associate tool results with their corresponding tool_use blocks.
   const toolResultMap = new Map<string, string>();
+  // tool_use_ids whose result carried is_error — surfaces as tool.isError so the
+  // UI can render ✗ instead of ✓ (1926 error results in the corpus were silently
+  // shown as successes after any history reload).
+  const errorResultIds = new Set<string>();
   // Track which tool_result IDs contained image content blocks (base64 skipped)
   const imageResultIds = new Set<string>();
   for (const [, msg] of messageMap) {
     if (msg.role !== 'user') continue;
     for (const block of msg.contentBlocks) {
+      if (block.type === 'tool_result' && block.tool_use_id && block.is_error) {
+        errorResultIds.add(block.tool_use_id);
+      }
       if (block.type === 'tool_result' && block.tool_use_id) {
         // Extract text from nested content array or direct string
         const nested = (block as Record<string, unknown>).content;
@@ -621,6 +686,7 @@ export function parseSessionMessages(content: string): SessionHistoryMessage[] {
             input: block.input ?? {},
             toolUseId,
             ...(toolResult ? { result: toolResult.slice(0, 5000) } : {}),
+            ...(toolUseId && errorResultIds.has(toolUseId) ? { isError: true } : {}),
             ...(agentId ? { agentId } : {}),
             ...(teamName ? { teamName } : {}),
             ...(teamAgentName ? { teamAgentName } : {}),
@@ -653,7 +719,7 @@ export function parseSessionMessages(content: string): SessionHistoryMessage[] {
     if (msg.role === 'assistant' && !text && tools.length === 0) continue;
 
     result.push({
-      role: msg.role as 'user' | 'assistant',
+      role: msg.role as 'user' | 'assistant' | 'system',
       text,
       timestamp: msg.timestamp,
       msgId: mapMsgId,
@@ -662,6 +728,7 @@ export function parseSessionMessages(content: string): SessionHistoryMessage[] {
       ...(msg.model ? { model: msg.model } : {}),
       ...(msg.usage ? { usage: msg.usage } : {}),
       ...(msg.walnutMessageId ? { walnutMessageId: msg.walnutMessageId } : {}),
+      ...(msg.systemVariant ? { systemVariant: msg.systemVariant } : {}),
     });
     resultParentIds.push(msg.parentToolUseId);
   }
@@ -981,6 +1048,7 @@ export function formatForkHistory(messages: SessionHistoryMessage[], tokenBudget
   const lines: string[] = [];
   let turn = 0;
   for (const msg of messages) {
+    if (msg.role === 'system') continue; // UI notices (compact/api_error) — not conversation
     if (msg.role === 'user') turn++;
     const toolInfo = msg.tools?.length ? ` [${msg.tools.map(t => t.name).join(', ')}]` : '';
     const role = msg.role === 'user' ? 'User' : `Assistant${toolInfo}`;

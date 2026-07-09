@@ -81,6 +81,8 @@ export interface SessionHistoryTool {
   input: Record<string, unknown>;
   toolUseId?: string;
   result?: string;
+  /** True when the tool_result carried is_error — render ✗, not ✓. */
+  isError?: boolean;
   planContent?: string;
   /** agentId linking to subagent JSONL */
   agentId?: string;
@@ -93,9 +95,11 @@ export interface SessionHistoryTool {
 }
 
 export interface SessionHistoryMessage {
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   text: string;
   timestamp: string;
+  /** For role='system': display variant (compact boundary / API error / info). */
+  systemVariant?: 'compact' | 'error' | 'info';
   tools?: SessionHistoryTool[];
   thinking?: string;
   model?: string;
