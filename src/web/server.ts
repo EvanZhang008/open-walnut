@@ -2270,9 +2270,11 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
     log.git.warn('startup git pull failed', { error: String(err) })
   }
 
+  let syncTick = 0
   const timer = setInterval(() => {
     try {
-      if (commitIfDirty()) {
+      const committed = commitIfDirty()
+      if (committed) {
         health.lastCommitAt = new Date().toISOString()
         health.consecutiveFailures = 0
         health.error = undefined
@@ -2281,12 +2283,15 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
         log.git.debug('auto-committed')
         emitStatus()
       }
-      // Cloud companion: also pull Mac pushes + push our own commits each cycle.
-      // On the Mac, pulls ride session-result events and pushes are manual; the
-      // cloud box has neither, so the periodic loop is its only sync path.
-      // autoSync() never throws; commitIfDirty() above already committed, so its
-      // internal add/commit is a no-op and it just does pull --rebase + push.
-      if (CLOUD_MODE) {
+      // Pull remote changes + push our own commits, on BOTH sides: the cloud
+      // box has no other sync path, and the primary needs it so edits reach
+      // the hub (and cloud-side edits land back) without a manual push.
+      // autoSync() self-gates on hasRemote() and never throws. sync() is
+      // execSync (blocks the event loop ~1-2s of network round-trips), so on
+      // an idle tree only every other cycle syncs (60s); a fresh commit
+      // always pushes immediately.
+      syncTick++
+      if (committed || syncTick % 2 === 0) {
         autoSync()
       }
     } catch (err) {

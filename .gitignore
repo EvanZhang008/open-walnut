@@ -74,3 +74,8 @@ scripts/local/
 # personal one-off migration scripts (contain private terms)
 scripts/migrate-projects-to-skills.mjs
 scripts/verify-and-purge-migrated.mjs
+
+# ios-native (SwiftUI) — commit project.yml + sources; the .xcodeproj is xcodegen output
+ios-native/Walnut.xcodeproj/
+ios-native/DerivedData/
+ios-native/build/
