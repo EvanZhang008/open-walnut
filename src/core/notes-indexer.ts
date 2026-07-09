@@ -21,7 +21,7 @@ import fsp from 'node:fs/promises'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
-import { NOTES_DIR } from '../constants.js'
+import { NOTES_DIR, CLOUD_MODE } from '../constants.js'
 import { withFileLock } from '../utils/file-lock.js'
 import { getNotesStore, DEFAULT_QMD_MODEL } from './qmd-store.js'
 import {
@@ -170,6 +170,9 @@ function qmdBodyHash(body: string): string {
  * embed() is already incremental. NEVER calls store.update() here.
  */
 async function reconcileSemantic(relPath: string, title: string, body: string): Promise<void> {
+  // Cloud companion: no semantic index (same gate as server.ts initQmdStores).
+  // Without this, a full rebuild embeds every note and pins the 2-vCPU box.
+  if (CLOUD_MODE) return
   try {
     const store = await getNotesStore()
     const docPath = virtualPathFor(relPath)
@@ -195,6 +198,7 @@ async function reconcileSemantic(relPath: string, title: string, body: string): 
 }
 
 async function removeSemantic(relPath: string): Promise<void> {
+  if (CLOUD_MODE) return
   try {
     const store = await getNotesStore()
     store.internal.deactivateDocument(QMD_COLLECTION, virtualPathFor(relPath))
