@@ -1,7 +1,9 @@
 import SwiftUI
 
 /// Chat tab — drops straight into the most recent conversation. Toolbar:
-/// history (conversation switcher sheet) on the left, mode badge on the right.
+/// history (conversation switcher sheet) on the left, agent picker in the
+/// title (tap the agent name, like the console's agents dropdown), mode badge
+/// on the right.
 struct ChatView: View {
     @Environment(ConnectionStore.self) private var connection
     @Environment(ChatStore.self) private var chat
@@ -26,10 +28,12 @@ struct ChatView: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 ComposerView()
             }
-            .navigationTitle(chat.activeTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    agentTitleMenu
+                }
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
                         showConversations = true
@@ -48,6 +52,59 @@ struct ChatView: View {
                     .presentationDragIndicator(.visible)
             }
         }
+    }
+
+    /// Title = agent name (+ chevron when more agents exist). Tapping shows
+    /// the agent menu — the mobile mirror of the console's agents dropdown.
+    private var agentTitleMenu: some View {
+        Menu {
+            ForEach(chat.agents) { agent in
+                Button {
+                    chat.switchAgent(agent.id)
+                } label: {
+                    if agent.id == chat.activeAgentID {
+                        Label(agent.name, systemImage: "checkmark")
+                    } else {
+                        Text(agent.name)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                VStack(spacing: 0) {
+                    Text(chat.activeAgentName)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if let title = conversationSubtitle {
+                        Text(title)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                }
+                // Cap the label — a long conversation title must not overflow
+                // the principal toolbar slot into the side buttons.
+                .frame(maxWidth: 210)
+                if chat.agents.count > 1 {
+                    Image(systemName: "chevron.down")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .disabled(chat.agents.count <= 1)
+        .accessibilityIdentifier("chat.agentMenu")
+    }
+
+    /// The conversation's own title, when it differs from the agent name.
+    private var conversationSubtitle: String? {
+        guard let id = chat.activeID,
+              let title = chat.conversations.first(where: { $0.id == id })?.title,
+              !title.isEmpty
+        else { return nil }
+        return title
     }
 }
 

@@ -16,7 +16,7 @@ struct ComposerView: View {
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            TextField(busy ? "Waiting for reply…" : "Message Walnut", text: $draft, axis: .vertical)
+            TextField(busy ? "Waiting for reply…" : "Message \(chat.activeAgentName)", text: $draft, axis: .vertical)
                 .lineLimit(1...6)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 9)

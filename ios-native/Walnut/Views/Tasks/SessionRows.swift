@@ -90,14 +90,17 @@ struct SessionRowView: View {
     }
 }
 
-/// Read-only session detail — projection metadata + the exported transcript
-/// tail (the primary box exports tails for every session it can reach, local
-/// or SSH). Steering the session still needs the console (Phase 2 bridge).
+/// Read-only session detail — projection metadata + the transcript tail. For
+/// ALIVE sessions this is a LIVE view: it polls `?fresh=1` every few seconds,
+/// so new turns appear as the agent works (the primary reads local disk or SSH
+/// on demand). Steering the session still needs the console (Phase 2 bridge).
 struct SessionDetailSheet: View {
     let session: WalnutSession
 
     @State private var transcript: SessionTranscript?
     @State private var transcriptMissing = false
+
+    private static let livePollSeconds: UInt64 = 5
 
     var body: some View {
         NavigationStack {
@@ -163,16 +166,16 @@ struct SessionDetailSheet: View {
             .listStyle(.insetGrouped)
             .navigationTitle("Session")
             .navigationBarTitleDisplayMode(.inline)
-            .task { await loadTranscript() }
+            .task { await runTranscriptLoop() }
         }
     }
 
-    // MARK: - Transcript tail
+    // MARK: - Transcript tail (live-polling while the session is alive)
 
     @ViewBuilder
     private var transcriptSection: some View {
         if let transcript, !transcript.messages.isEmpty {
-            Section("Conversation") {
+            Section {
                 if transcript.truncated {
                     Text("Showing the last \(transcript.messages.count) entries")
                         .font(.caption)
@@ -180,6 +183,14 @@ struct SessionDetailSheet: View {
                 }
                 ForEach(Array(transcript.messages.enumerated()), id: \.offset) { _, message in
                     transcriptRow(message)
+                }
+            } header: {
+                HStack(spacing: 6) {
+                    Text("Conversation")
+                    if session.statusKind.isAlive {
+                        Circle().fill(Theme.success).frame(width: 6, height: 6)
+                        Text("Live").font(.caption2).foregroundStyle(Theme.success)
+                    }
                 }
             }
         } else if transcriptMissing {
@@ -224,11 +235,26 @@ struct SessionDetailSheet: View {
         }
     }
 
-    private func loadTranscript() async {
+    /// One-shot fetch for dead sessions; a fresh-polling loop for alive ones —
+    /// the sheet stays a live window into the running agent. `.task` cancels
+    /// the loop automatically when the sheet is dismissed.
+    private func runTranscriptLoop() async {
+        await loadTranscript(fresh: session.statusKind.isAlive)
+        guard session.statusKind.isAlive else { return }
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(Double(Self.livePollSeconds)))
+            guard !Task.isCancelled else { return }
+            await loadTranscript(fresh: true)
+        }
+    }
+
+    private func loadTranscript(fresh: Bool) async {
         do {
-            transcript = try await WalnutAPI().sessionTranscript(id: session.id)
+            let next = try await WalnutAPI().sessionTranscript(id: session.id, fresh: fresh)
+            transcript = next
+            transcriptMissing = false
         } catch {
-            transcriptMissing = true
+            if transcript == nil { transcriptMissing = true }
         }
     }
 

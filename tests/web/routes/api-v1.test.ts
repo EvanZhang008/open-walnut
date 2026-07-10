@@ -613,6 +613,85 @@ describe('tasks (read-only projection)', () => {
   })
 })
 
+describe('agents (additive)', () => {
+  it('lists console agents with the main flag', async () => {
+    const res = await fetch(apiUrl('/api/v1/agents'))
+    expect(res.status).toBe(200)
+    const agents = await res.json() as Array<{ id: string; name: string; isMain: boolean }>
+    const general = agents.find((a) => a.id === 'general')
+    expect(general).toBeDefined()
+    expect(general!.name).toBe('Walnut')
+    expect(general!.isMain).toBe(true)
+    expect(agents.filter((a) => a.isMain)).toHaveLength(1)
+  })
+
+  it('404s conversation endpoints for an unknown agentId', async () => {
+    const res = await fetch(apiUrl('/api/v1/conversations?agentId=nope'))
+    expect(res.status).toBe(404)
+    const body = await res.json() as { error: { code: string } }
+    expect(body.error.code).toBe('not_found')
+
+    const post = await fetch(apiUrl('/api/v1/conversations'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId: 'nope' }),
+    })
+    expect(post.status).toBe(404)
+  })
+
+  it('scopes conversations per agent (mentor list does not show general convs)', async () => {
+    const generalConv = await createConversation()
+    const mentorRes = await fetch(apiUrl('/api/v1/conversations'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId: 'mentor' }),
+    })
+    expect(mentorRes.status).toBe(201)
+    const { id: mentorConv } = await mentorRes.json() as { id: string }
+
+    const mentorList = await fetch(apiUrl('/api/v1/conversations?agentId=mentor'))
+    const mentorConvs = await mentorList.json() as Array<{ id: string }>
+    expect(mentorConvs.map((c) => c.id)).toContain(mentorConv)
+    expect(mentorConvs.map((c) => c.id)).not.toContain(generalConv)
+
+    // Cross-agent access is a 404, not a leak.
+    const cross = await fetch(apiUrl(`/api/v1/conversations/${generalConv}/messages?agentId=mentor`))
+    expect(cross.status).toBe(404)
+  })
+})
+
+describe('message normalization: notifications + entity refs', () => {
+  it('renders surviving ui entries as notification cards, hides dev noise, strips refs', async () => {
+    const { normalizeEntries } = await import('../../../src/web/routes/api-v1.js')
+    const entries = [
+      // Dev noise: hidden by default (mirrors web console defaults).
+      { tag: 'ui', role: 'assistant', content: '**Triage** (<task-ref id="t1" label="My Task"/>): analysis', timestamp: '2026-07-10T00:00:00Z', source: 'triage', notification: true },
+      { tag: 'ui', role: 'assistant', content: '**Session Result**: done', timestamp: '2026-07-10T00:00:01Z', source: 'session', notification: true },
+      { tag: 'ui', role: 'assistant', content: '**Subagent Result** (triage): …', timestamp: '2026-07-10T00:00:02Z', source: 'subagent', notification: true },
+      { tag: 'ui', role: 'assistant', content: 'All clear', timestamp: '2026-07-10T00:00:03Z', source: 'heartbeat', notification: true },
+      // Errors: surface as notification cards, refs resolved to labels
+      // (both the XML form and the legacy [id|label] bracket form).
+      { tag: 'ui', role: 'assistant', content: '**Session Error** (<task-ref id="t2" label="Deploy fix"/>): boom in [mr9i88ys-87a4|Quick Start / Website]', timestamp: '2026-07-10T00:00:04Z', source: 'session-error', notification: true },
+      // Plain quick-start echo stays an ordinary bubble.
+      { tag: 'ui', role: 'user', content: 'show today', timestamp: '2026-07-10T00:00:05Z', source: 'quick-start' },
+      // Normal AI turn with an inline session ref.
+      { tag: 'ai', role: 'assistant', content: [{ type: 'text', text: 'See <session-ref id="s1" label="Build session"/> for logs.' }], timestamp: '2026-07-10T00:00:06Z' },
+    ]
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const out = normalizeEntries(entries as any)
+    expect(out).toHaveLength(3)
+    expect(out[0].kind).toBe('notification')
+    expect(out[0].source).toBe('session-error')
+    expect(out[0].text).toContain('Deploy fix')
+    expect(out[0].text).not.toContain('<task-ref')
+    expect(out[0].text).toContain('boom in Quick Start / Website')
+    expect(out[0].text).not.toContain('mr9i88ys-87a4|')
+    expect(out[1].kind).toBeUndefined()
+    expect(out[1].text).toBe('show today')
+    expect(out[2].text).toBe('See Build session for logs.')
+  })
+})
+
 describe('client logs (additive)', () => {
   it('accepts a batch, writes JSON-lines under the device+day file, 400s on empty', async () => {
     const res = await fetch(apiUrl('/api/v1/client-logs'), {

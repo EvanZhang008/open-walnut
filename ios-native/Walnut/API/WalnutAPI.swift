@@ -32,19 +32,25 @@ struct WalnutAPI {
         return try Self.decode(ServerStatus.self, data: data, response: response)
     }
 
-    func conversations(limit: Int = 50) async throws -> [ConversationSummary] {
-        try await get("/conversations?limit=\(limit)")
+    /// Console agents available for chat (additive endpoint).
+    func agents() async throws -> [AgentSummary] {
+        try await get("/agents")
     }
 
-    func createConversation(title: String? = nil) async throws -> String {
+    func conversations(agentID: String = "general", limit: Int = 50) async throws -> [ConversationSummary] {
+        try await get("/conversations?limit=\(limit)&agentId=\(escape(agentID))")
+    }
+
+    func createConversation(agentID: String = "general", title: String? = nil) async throws -> String {
         struct Created: Codable { let id: String }
-        let body: [String: String] = title.map { ["title": $0] } ?? [:]
+        var body: [String: String] = ["agentId": agentID]
+        if let title { body["title"] = title }
         let created: Created = try await send("POST", "/conversations", body: body)
         return created.id
     }
 
-    func messages(conversationID: String, limit: Int = 50, before: String? = nil) async throws -> [ChatMessage] {
-        var path = "/conversations/\(escape(conversationID))/messages?limit=\(limit)"
+    func messages(conversationID: String, agentID: String = "general", limit: Int = 50, before: String? = nil) async throws -> [ChatMessage] {
+        var path = "/conversations/\(escape(conversationID))/messages?limit=\(limit)&agentId=\(escape(agentID))"
         if let before {
             path += "&before=\(escape(before))"
         }
@@ -53,10 +59,11 @@ struct WalnutAPI {
 
     /// POST a message; returns the turnId from the 202 response.
     /// Throws APIError.server(code: "turn_active") when a turn is already running.
-    func sendMessage(conversationID: String, text: String) async throws -> String {
+    func sendMessage(conversationID: String, agentID: String = "general", text: String) async throws -> String {
         struct Accepted: Codable { let turnId: String }
         let accepted: Accepted = try await send(
-            "POST", "/conversations/\(escape(conversationID))/messages", body: ["text": text]
+            "POST", "/conversations/\(escape(conversationID))/messages",
+            body: ["text": text, "agentId": agentID]
         )
         return accepted.turnId
     }
@@ -75,8 +82,10 @@ struct WalnutAPI {
     }
 
     /// Transcript tail for one session (404 = no tail exported yet).
-    func sessionTranscript(id: String) async throws -> SessionTranscript {
-        try await get("/sessions/\(escape(id))/transcript")
+    /// `fresh: true` asks the primary to read the session's history right now
+    /// (live view polling) instead of the 60s-throttled sweep file.
+    func sessionTranscript(id: String, fresh: Bool = false) async throws -> SessionTranscript {
+        try await get("/sessions/\(escape(id))/transcript\(fresh ? "?fresh=1" : "")")
     }
 
     func notesTree() async throws -> [NoteTreeNode] {

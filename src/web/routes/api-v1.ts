@@ -50,8 +50,27 @@ import { log } from '../../logging/index.js'
 
 export const apiV1Router = Router()
 
-/** The v1 facade only exposes the General butler agent. */
-const AGENT_ID = 'general'
+/** Default agent when the client doesn't pass ?agentId= (frozen v1 behavior). */
+const DEFAULT_AGENT_ID = 'general'
+
+/**
+ * Resolve the agentId for a request (additive: absent → 'general'). Returns
+ * null for a malformed id; existence is checked by the caller against the
+ * console-agent registry.
+ */
+function requestAgentId(req: Request): string | null {
+  const raw = (typeof req.query.agentId === 'string' && req.query.agentId)
+    || (typeof req.body?.agentId === 'string' && req.body.agentId)
+    || DEFAULT_AGENT_ID
+  return /^[a-z0-9][a-z0-9-]{0,63}$/.test(raw) ? raw : null
+}
+
+/** 404-checked console-agent lookup — non-console agents are invisible to v1. */
+async function consoleAgentExists(agentId: string): Promise<boolean> {
+  if (agentId === DEFAULT_AGENT_ID) return true
+  const { getConsoleAgent } = await import('../../core/agent-registry.js')
+  return !!(await getConsoleAgent(agentId))
+}
 
 // ── Error shape helper — frozen: { error: { code, message } } ──
 
@@ -110,13 +129,36 @@ apiV1Router.get('/status', (_req: Request, res: Response) => {
   })
 })
 
+// ─── Agents (additive) ─────────────────────────────────────────────────────
+
+// GET /api/v1/agents — console agents the mobile client can chat with.
+apiV1Router.get('/agents', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { getConsoleAgents } = await import('../../core/agent-registry.js')
+    const agents = await getConsoleAgents()
+    res.json(agents.map((a) => ({
+      id: a.id,
+      name: a.name,
+      ...(a.description ? { description: a.description } : {}),
+      isMain: a.id === DEFAULT_AGENT_ID,
+    })))
+  } catch (err) {
+    next(err)
+  }
+})
+
 // ─── Conversations ─────────────────────────────────────────────────────────
 
-// GET /api/v1/conversations?limit= — most-recent first
+// GET /api/v1/conversations?limit=&agentId= — most-recent first
 apiV1Router.get('/conversations', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const agentId = requestAgentId(req)
+    if (!agentId || !(await consoleAgentExists(agentId))) {
+      sendError(res, 404, 'not_found', `Agent not found: ${req.query.agentId}`)
+      return
+    }
     const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50))
-    const list = await listConversations(AGENT_ID)
+    const list = await listConversations(agentId)
     const sorted = [...list].sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt))
     res.json(sorted.slice(0, limit).map((c) => ({
       id: c.id,
@@ -129,11 +171,16 @@ apiV1Router.get('/conversations', async (req: Request, res: Response, next: Next
   }
 })
 
-// POST /api/v1/conversations — create a new conversation
+// POST /api/v1/conversations — create a new conversation { title?, agentId? }
 apiV1Router.post('/conversations', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const agentId = requestAgentId(req)
+    if (!agentId || !(await consoleAgentExists(agentId))) {
+      sendError(res, 404, 'not_found', `Agent not found: ${req.body?.agentId}`)
+      return
+    }
     const title = typeof req.body?.title === 'string' ? req.body.title : undefined
-    const meta = await createConversation(AGENT_ID, title)
+    const meta = await createConversation(agentId, title)
     res.status(201).json({ id: meta.id })
   } catch (err) {
     next(err)
@@ -141,9 +188,9 @@ apiV1Router.post('/conversations', async (req: Request, res: Response, next: Nex
 })
 
 /** 404-checked conversation lookup shared by the message/stream endpoints. */
-async function conversationExists(conversationId: string): Promise<boolean> {
+async function conversationExists(agentId: string, conversationId: string): Promise<boolean> {
   if (!/^conv-[A-Za-z0-9-]+$/.test(conversationId)) return false
-  const list = await listConversations(AGENT_ID)
+  const list = await listConversations(agentId)
   return list.some((c) => c.id === conversationId)
 }
 
@@ -156,7 +203,9 @@ interface ApiV1Message {
   role: 'user' | 'assistant'
   text: string
   createdAt?: string
-  kind?: 'tool' | 'thinking'
+  kind?: 'tool' | 'thinking' | 'notification'
+  /** notification provenance, e.g. 'session-error' | 'cron' — drives card styling. */
+  source?: string
 }
 
 function shortText(s: string): string {
@@ -164,10 +213,31 @@ function shortText(s: string): string {
 }
 
 /**
+ * UI-only notification categories hidden from the mobile feed by default —
+ * mirrors the web console's developer-settings defaults (only session/agent
+ * errors surface; triage/session-result/subagent/heartbeat are dev noise).
+ */
+const HIDDEN_NOTIFICATION_SOURCES = new Set(['triage', 'session', 'subagent', 'heartbeat'])
+
+/** <task-ref id label/> / <session-ref id label/> → plain label (mobile has no ref pills). */
+const ENTITY_REF_RE = /<(task|session)-ref\s+id="([^"]*)"(?:\s+label="([^"]*)")?\s*\/?>/g
+/** Legacy bracket ref: [mr9i88ys-87a4|Some Label] → Some Label. */
+const LEGACY_REF_RE = /\[([a-z0-9]{7,10}-[a-f0-9]{4})\|([^\]]+)\]/g
+
+function stripEntityRefs(text: string): string {
+  return text
+    .replace(ENTITY_REF_RE, (_m, _kind, id: string, label?: string) => label || id)
+    .replace(LEGACY_REF_RE, (_m, _id, label: string) => label)
+}
+
+/**
  * Flatten chat entries into simple mobile messages. Assistant entries expand
  * in block order: thinking → kind:'thinking', tool_use → kind:'tool', and all
  * text blocks of one entry join into a single plain assistant message.
  * Tool-result-only user entries are skipped (they ride with the tool call).
+ * UI-tagged notification entries become kind:'notification' + source (rendered
+ * as cards); noisy dev categories (triage/session/subagent/heartbeat with
+ * notification:true) are dropped entirely, matching the web console defaults.
  * ids are positional ("m<index>") — stable for a given read, used as the
  * `before` cursor. Compaction can rewrite history, so treat cursors as
  * ephemeral: on a cursor miss, re-fetch from the tail.
@@ -181,8 +251,17 @@ export function normalizeEntries(entries: ChatEntry[]): ApiV1Message[] {
   for (const entry of entries) {
     const createdAt = entry.timestamp
     if (entry.tag === 'ui') {
-      const text = typeof entry.content === 'string' ? entry.content : ''
-      if (text) push({ role: entry.role, text, createdAt })
+      if (entry.notification && entry.source && HIDDEN_NOTIFICATION_SOURCES.has(entry.source)) continue
+      const raw = typeof entry.content === 'string' ? entry.content : ''
+      const text = stripEntityRefs(raw)
+      if (!text) continue
+      // System-generated notifications render as cards; plain ui echoes (e.g.
+      // quick-start user lines) stay ordinary bubbles.
+      if (entry.notification || (entry.source && entry.source !== 'quick-start')) {
+        push({ role: entry.role, text, createdAt, kind: 'notification', source: entry.source ?? 'notification' })
+      } else {
+        push({ role: entry.role, text, createdAt })
+      }
       continue
     }
     if (entry.role === 'user') {
@@ -202,7 +281,7 @@ export function normalizeEntries(entries: ChatEntry[]): ApiV1Message[] {
     }
     // assistant
     if (typeof entry.content === 'string') {
-      if (entry.content) push({ role: 'assistant', text: entry.content, createdAt })
+      if (entry.content) push({ role: 'assistant', text: stripEntityRefs(entry.content), createdAt })
       continue
     }
     if (!Array.isArray(entry.content)) continue
@@ -216,22 +295,27 @@ export function normalizeEntries(entries: ChatEntry[]): ApiV1Message[] {
         textParts.push(block.text)
       }
     }
-    if (textParts.length > 0) push({ role: 'assistant', text: textParts.join(''), createdAt })
+    if (textParts.length > 0) push({ role: 'assistant', text: stripEntityRefs(textParts.join('')), createdAt })
   }
   return out
 }
 
-// GET /api/v1/conversations/:id/messages?limit=50&before=<cursor>
+// GET /api/v1/conversations/:id/messages?limit=50&before=<cursor>&agentId=
 apiV1Router.get('/conversations/:id/messages', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const agentId = requestAgentId(req)
+    if (!agentId || !(await consoleAgentExists(agentId))) {
+      sendError(res, 404, 'not_found', `Agent not found: ${req.query.agentId}`)
+      return
+    }
     const conversationId = paramStr(req.params.id)
-    if (!(await conversationExists(conversationId))) {
+    if (!(await conversationExists(agentId, conversationId))) {
       sendError(res, 404, 'not_found', `Conversation not found: ${conversationId}`)
       return
     }
     const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50))
     const { messages: entries } = await chatHistory.getDisplayEntries(
-      1, Number.MAX_SAFE_INTEGER, AGENT_ID, conversationId,
+      1, Number.MAX_SAFE_INTEGER, agentId, conversationId,
     )
     let all = normalizeEntries(entries)
     const before = typeof req.query.before === 'string' ? req.query.before : undefined
@@ -299,11 +383,16 @@ export function closeApiV1Streams(): void {
   }
 }
 
-// GET /api/v1/conversations/:id/stream
+// GET /api/v1/conversations/:id/stream?agentId=
 apiV1Router.get('/conversations/:id/stream', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const agentId = requestAgentId(req)
+    if (!agentId || !(await consoleAgentExists(agentId))) {
+      sendError(res, 404, 'not_found', `Agent not found: ${req.query.agentId}`)
+      return
+    }
     const conversationId = paramStr(req.params.id)
-    if (!(await conversationExists(conversationId))) {
+    if (!(await conversationExists(agentId, conversationId))) {
       sendError(res, 404, 'not_found', `Conversation not found: ${conversationId}`)
       return
     }
@@ -357,8 +446,13 @@ const activeTurns = new Map<string, string>()
 
 apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const agentId = requestAgentId(req)
+    if (!agentId || !(await consoleAgentExists(agentId))) {
+      sendError(res, 404, 'not_found', `Agent not found: ${req.body?.agentId}`)
+      return
+    }
     const conversationId = paramStr(req.params.id)
-    if (!(await conversationExists(conversationId))) {
+    if (!(await conversationExists(agentId, conversationId))) {
       sendError(res, 404, 'not_found', `Conversation not found: ${conversationId}`)
       return
     }
@@ -374,20 +468,20 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
 
     const turnId = crypto.randomUUID()
     activeTurns.set(conversationId, turnId)
-    log.web.info('api-v1 message accepted', { conversationId, turnId, messageLength: text.length })
+    log.web.info('api-v1 message accepted', { conversationId, turnId, agentId, messageLength: text.length })
 
     // Additive SSE event: if another turn currently holds the agent queue
     // (possibly a long one on a DIFFERENT conversation), this turn will wait.
     // Without a signal the client sees dead air between 202 and message-start
     // and reads it as a freeze. `queued` is fired only when a wait is certain.
-    const qs = getQueueStatus(AGENT_ID)
+    const qs = getQueueStatus(agentId)
     if (qs.active > 0 || qs.queued > 0) {
       emitSse(conversationId, 'queued', { turnId, position: qs.queued + 1 })
     }
 
     // Fire the turn through the SAME per-agent queue the WS chat uses — one
     // serialization path. The 202 returns immediately; progress streams on SSE.
-    void runApiV1Turn(conversationId, text, turnId)
+    void runApiV1Turn(agentId, conversationId, text, turnId)
       .catch((err) => {
         log.web.error('api-v1 turn failed', {
           conversationId, turnId,
@@ -411,18 +505,41 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
  * Emits SSE events AND the same WS broadcast events, so the web UI mirrors
  * turns fired from mobile.
  */
-async function runApiV1Turn(conversationId: string, text: string, turnId: string): Promise<void> {
-  await enqueueAgentTurn(AGENT_ID, 'api-v1', async () => {
+async function runApiV1Turn(agentId: string, conversationId: string, text: string, turnId: string): Promise<void> {
+  await enqueueAgentTurn(agentId, 'api-v1', async () => {
     // Lazy import to avoid loading the agent at server startup (same as chat.ts).
     const { runAgentLoop } = await import('../../agent/loop.js')
 
-    const history = await chatHistory.getApiMessages(AGENT_ID, conversationId)
+    // Non-General console agents get their own system prompt + filtered tool
+    // set — the same construction the WS chat performs (chat.ts).
+    let agentSystem: string | undefined
+    let agentTools: import('../../agent/tools.js').ToolDefinition[] | undefined
+    if (agentId !== DEFAULT_AGENT_ID) {
+      const { getConsoleAgent } = await import('../../core/agent-registry.js')
+      const { buildSubagentToolSet } = await import('../../agent/subagent-context.js')
+      const { loadContextSources } = await import('../../agent/context-sources.js')
+      const agentDef = await getConsoleAgent(agentId)
+      if (!agentDef) throw new Error(`Console agent '${agentId}' not found`)
+      const now = new Date()
+      const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+      const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+      const contextXml = await loadContextSources(agentDef, {})
+      const sections = [
+        agentDef.system_prompt ?? `You are ${agentDef.name}.`,
+        `\nCurrent date/time: ${dateStr}, ${timeStr}`,
+      ]
+      if (contextXml) sections.push('\n' + contextXml)
+      agentSystem = sections.join('\n')
+      agentTools = await buildSubagentToolSet(agentDef)
+    }
+
+    const history = await chatHistory.getApiMessages(agentId, conversationId)
 
     // Eager persist: the user message survives crashes mid-turn.
     await chatHistory.addUserMessage(text, {
       displayText: text,
       turnId,
-      agentId: AGENT_ID,
+      agentId,
       conversationId,
     })
 
@@ -432,15 +549,15 @@ async function runApiV1Turn(conversationId: string, text: string, turnId: string
       const result = await runAgentLoop(text, history, {
         onTextDelta: (delta) => {
           emitSse(conversationId, 'text-delta', { delta })
-          broadcastEvent(EventNames.AGENT_TEXT_DELTA, { delta, agentId: AGENT_ID, conversationId })
+          broadcastEvent(EventNames.AGENT_TEXT_DELTA, { delta, agentId, conversationId })
         },
         onThinking: (thinkingText) => {
           emitSse(conversationId, 'thinking', {})
-          broadcastEvent(EventNames.AGENT_THINKING, { text: thinkingText, agentId: AGENT_ID, conversationId })
+          broadcastEvent(EventNames.AGENT_THINKING, { text: thinkingText, agentId, conversationId })
         },
         onToolCall: (toolName, input, toolUseId) => {
           emitSse(conversationId, 'tool', { name: toolName })
-          broadcastEvent(EventNames.AGENT_TOOL_CALL, { toolName, input, toolUseId, agentId: AGENT_ID, conversationId })
+          broadcastEvent(EventNames.AGENT_TOOL_CALL, { toolName, input, toolUseId, agentId, conversationId })
         },
         onUsage: (usage) => {
           bus.emit('agent:usage', { usage }, ['web-ui'], { source: 'agent' })
@@ -452,7 +569,7 @@ async function runApiV1Turn(conversationId: string, text: string, turnId: string
               output_tokens: usage.output_tokens,
               cache_creation_input_tokens: usage.cache_creation_input_tokens,
               cache_read_input_tokens: usage.cache_read_input_tokens,
-              agentId: AGENT_ID,
+              agentId,
             })
           } catch { /* non-critical */ }
           // Feed the compaction/triage token-truth gate (see token-truth.ts).
@@ -462,7 +579,13 @@ async function runApiV1Turn(conversationId: string, text: string, turnId: string
               + (usage.cache_creation_input_tokens ?? 0))
           } catch { /* non-critical */ }
         },
-      }, { source: 'api-v1', agentId: AGENT_ID, conversationId })
+      }, {
+        source: agentId === DEFAULT_AGENT_ID ? 'api-v1' : `api-v1:${agentId}`,
+        agentId,
+        conversationId,
+        ...(agentSystem && { system: agentSystem }),
+        ...(agentTools && { tools: agentTools }),
+      })
 
       // newMessages = [userPrompt, ...ai]; the user prompt is already persisted.
       const allNew = result.newMessages as MessageParam[]
@@ -470,24 +593,24 @@ async function runApiV1Turn(conversationId: string, text: string, turnId: string
         ? allNew.slice(1)
         : allNew
       if (afterUser.length > 0) {
-        await chatHistory.addAIMessages(afterUser, { agentId: AGENT_ID, conversationId })
+        await chatHistory.addAIMessages(afterUser, { agentId, conversationId })
       }
 
       emitSse(conversationId, 'message-end', { turnId, fullText: result.response })
-      broadcastEvent(EventNames.AGENT_RESPONSE, { text: result.response, agentId: AGENT_ID, conversationId })
-      log.web.info('api-v1 turn completed', { conversationId, turnId })
+      broadcastEvent(EventNames.AGENT_RESPONSE, { text: result.response, agentId, conversationId })
+      log.web.info('api-v1 turn completed', { conversationId, turnId, agentId })
 
       // Same post-turn hygiene as WS chat — fire-and-forget.
-      triggerBackgroundCompaction('api-v1', { agentId: AGENT_ID, conversationId })
+      triggerBackgroundCompaction('api-v1', { agentId, conversationId })
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err)
-      log.web.error('api-v1 turn error', { conversationId, turnId, error: errMsg })
+      log.web.error('api-v1 turn error', { conversationId, turnId, agentId, error: errMsg })
       await chatHistory.addAIMessages(
         [{ role: 'assistant', content: [{ type: 'text', text: `[Error: ${errMsg}]` }] }] as MessageParam[],
-        { agentId: AGENT_ID, conversationId },
+        { agentId, conversationId },
       ).catch(() => { /* best-effort */ })
       emitSse(conversationId, 'error', { message: errMsg })
-      broadcastEvent(EventNames.AGENT_ERROR, { error: errMsg, agentId: AGENT_ID, conversationId })
+      broadcastEvent(EventNames.AGENT_ERROR, { error: errMsg, agentId, conversationId })
     }
   })
 }
@@ -543,13 +666,23 @@ apiV1Router.get('/sessions', async (req: Request, res: Response, next: NextFunct
   }
 })
 
-// GET /api/v1/sessions/:id/transcript — the "open session" payload: a slim
-// transcript tail exported by the primary (which owns local disk + SSH access
-// to every session) and synced as a file. 404 when no tail was exported yet.
+// GET /api/v1/sessions/:id/transcript?fresh=1 — the "open session" payload: a
+// slim transcript tail. Default: the sweep-exported file (synced to the cloud
+// companion). `fresh=1` (additive) makes the PRIMARY box read the session's
+// history right now — this powers the mobile live session view, which polls
+// with fresh=1 while open; sweeps alone are 60s-throttled. Cloud boxes have no
+// disk/SSH access to sessions and always serve the synced file.
 apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { readSessionTranscript, exportSessionTranscripts } = await import('../../core/session-projection.js')
+    const { readSessionTranscript, exportSessionTranscripts, buildSessionTranscript } = await import('../../core/session-projection.js')
     const sessionId = paramStr(req.params.id)
+    const wantFresh = req.query.fresh === '1'
+    if (wantFresh && !CLOUD_MODE && /^[A-Za-z0-9_-]+$/.test(sessionId)) {
+      try {
+        res.json(await buildSessionTranscript(sessionId))
+        return
+      } catch { /* unreachable session — fall back to the exported file */ }
+    }
     let transcript = await readSessionTranscript(sessionId)
     if (!transcript && !CLOUD_MODE) {
       // Primary box: the sweep may simply not have run yet — run one inline

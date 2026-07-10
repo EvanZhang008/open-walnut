@@ -157,6 +157,42 @@ let lastTranscriptSweep = 0
 let transcriptSweepRunning = false
 
 /**
+ * Build the slim transcript tail for one session by reading its history NOW
+ * (local disk or SSH). Throws when the session is unreachable. Used by the
+ * sweep below and by the api-v1 live view (?fresh=1), which needs sub-sweep
+ * freshness for a single session without paying for a full sweep.
+ */
+export async function buildSessionTranscript(sessionId: string): Promise<SessionTranscript> {
+  const { readSessionHistory } = await import('./session-history.js')
+  const { getSessionByClaudeId } = await import('./session-tracker.js')
+  const record = await getSessionByClaudeId(sessionId)
+  const history = await readSessionHistory(sessionId, record?.cwd, record?.host, record?.outputFile, { skipSubagents: true })
+  const tail = history.slice(-TRANSCRIPT_TAIL)
+  const messages: ProjectedTranscriptMessage[] = []
+  for (const m of tail) {
+    if (m.role === 'system') continue
+    for (const t of m.tools ?? []) {
+      messages.push({ role: 'assistant', text: t.name, timestamp: m.timestamp, kind: 'tool' })
+    }
+    const text = (m.text || '').trim()
+    if (text) {
+      messages.push({
+        role: m.role,
+        text: text.length > TEXT_MAX ? text.slice(0, TEXT_MAX) + '…' : text,
+        timestamp: m.timestamp,
+      })
+    }
+  }
+  return {
+    version: 1,
+    sessionId,
+    exportedAt: new Date().toISOString(),
+    truncated: history.length > TRANSCRIPT_TAIL,
+    messages,
+  }
+}
+
+/**
  * Export transcript tails for alive sessions (+ recently-stopped ones whose
  * file is missing). Throttled: remote session reads ride SSH, so sweeps are
  * at most one per TRANSCRIPT_THROTTLE_MS and never concurrent.
@@ -169,8 +205,6 @@ export async function exportSessionTranscripts(): Promise<number> {
   try {
     const projection = await readSessionProjection()
     if (!projection) return 0
-    const { readSessionHistory } = await import('./session-history.js')
-    const { getSessionByClaudeId } = await import('./session-tracker.js')
     await fsp.mkdir(SESSION_TRANSCRIPTS_DIR, { recursive: true })
 
     let exported = 0
@@ -182,31 +216,7 @@ export async function exportSessionTranscripts(): Promise<number> {
         try { await fsp.access(file); continue } catch { /* missing — export below */ }
       }
       try {
-        const record = await getSessionByClaudeId(s.id)
-        const history = await readSessionHistory(s.id, record?.cwd, record?.host, record?.outputFile, { skipSubagents: true })
-        const tail = history.slice(-TRANSCRIPT_TAIL)
-        const messages: ProjectedTranscriptMessage[] = []
-        for (const m of tail) {
-          if (m.role === 'system') continue
-          for (const t of m.tools ?? []) {
-            messages.push({ role: 'assistant', text: t.name, timestamp: m.timestamp, kind: 'tool' })
-          }
-          const text = (m.text || '').trim()
-          if (text) {
-            messages.push({
-              role: m.role,
-              text: text.length > TEXT_MAX ? text.slice(0, TEXT_MAX) + '…' : text,
-              timestamp: m.timestamp,
-            })
-          }
-        }
-        const transcript: SessionTranscript = {
-          version: 1,
-          sessionId: s.id,
-          exportedAt: new Date().toISOString(),
-          truncated: history.length > TRANSCRIPT_TAIL,
-          messages,
-        }
+        const transcript = await buildSessionTranscript(s.id)
         await writeJsonFile(file, transcript)
         exported++
       } catch (err) {

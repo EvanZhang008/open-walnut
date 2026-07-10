@@ -29,6 +29,19 @@ final class ChatStore {
     var messages: [ChatMessage] = []
     var hasOlder = false
 
+    /// Console agents (Walnut = main, Mentor, Note Assistant, …).
+    var agents: [AgentSummary] = []
+    var activeAgentID = "general"
+
+    var activeAgent: AgentSummary? {
+        agents.first(where: { $0.id == activeAgentID })
+    }
+
+    /// Nav-bar title: the agent's name ("Walnut" for the main butler).
+    var activeAgentName: String {
+        activeAgent?.name ?? (activeAgentID == "general" ? "Walnut" : activeAgentID)
+    }
+
     var loadingList = false
     var loadingMessages = false
     var sending = false
@@ -47,15 +60,65 @@ final class ChatStore {
 
     /// Load cache, pick the most recent conversation, refresh from network.
     func initialize() async {
-        if let cachedList: [ConversationSummary] = DiskCache.load([ConversationSummary].self, key: "conversations") {
+        if let savedAgent = UserDefaults.standard.string(forKey: "walnut.activeAgent") {
+            activeAgentID = savedAgent
+        }
+        if let cachedAgents: [AgentSummary] = DiskCache.load([AgentSummary].self, key: "agents") {
+            agents = cachedAgents
+        }
+        if let cachedList: [ConversationSummary] = DiskCache.load([ConversationSummary].self, key: conversationsCacheKey) {
             conversations = cachedList
         }
-        if let saved = UserDefaults.standard.string(forKey: "walnut.activeConversation") {
+        if let saved = UserDefaults.standard.string(forKey: activeConversationKey) {
             select(saved)
         }
+        await refreshAgents()
         await refreshConversations()
         if activeID == nil || !conversations.contains(where: { $0.id == activeID }) {
             select(conversations.first?.id)
+        }
+    }
+
+    /// Per-agent persistence keys — each agent remembers its own thread.
+    private var activeConversationKey: String { "walnut.activeConversation.\(activeAgentID)" }
+    private var conversationsCacheKey: String { "conversations-\(activeAgentID)" }
+
+    func refreshAgents() async {
+        do {
+            let fetched = try await api.agents()
+            if !fetched.isEmpty {
+                agents = fetched
+                DiskCache.save(agents, key: "agents")
+                // The active agent can vanish (deleted on the console) — fall home.
+                if !agents.contains(where: { $0.id == activeAgentID }) {
+                    switchAgent("general")
+                }
+            }
+        } catch {
+            // Older servers don't have /agents — chat still works on general.
+            reportIfNetwork(error)
+        }
+    }
+
+    /// Switch console agent: park the current stream, swap conversation scope.
+    func switchAgent(_ agentID: String) {
+        guard agentID != activeAgentID else { return }
+        activeAgentID = agentID
+        UserDefaults.standard.set(agentID, forKey: "walnut.activeAgent")
+        activeID = nil
+        conversations = DiskCache.load([ConversationSummary].self, key: conversationsCacheKey) ?? []
+        messages = []
+        hasOlder = false
+        if let saved = UserDefaults.standard.string(forKey: activeConversationKey) {
+            select(saved)
+        } else {
+            select(conversations.first?.id)
+        }
+        Task {
+            await refreshConversations()
+            if activeID == nil || !conversations.contains(where: { $0.id == activeID }) {
+                select(conversations.first?.id)
+            }
         }
     }
 
@@ -63,9 +126,12 @@ final class ChatStore {
         loadingList = true
         defer { loadingList = false }
         do {
-            conversations = try await api.conversations()
+            let agentID = activeAgentID
+            let fetched = try await api.conversations(agentID: agentID)
             connection?.reportReachability(true)
-            DiskCache.save(conversations, key: "conversations")
+            guard agentID == activeAgentID else { return }
+            conversations = fetched
+            DiskCache.save(conversations, key: conversationsCacheKey)
         } catch {
             reportIfNetwork(error)
         }
@@ -76,7 +142,7 @@ final class ChatStore {
     func select(_ id: String?) {
         guard id != activeID || sse == nil else { return }
         activeID = id
-        UserDefaults.standard.set(id, forKey: "walnut.activeConversation")
+        UserDefaults.standard.set(id, forKey: activeConversationKey)
         turnWatchdog?.cancel()
         turnWatchdog = nil
         streaming = false
@@ -95,9 +161,10 @@ final class ChatStore {
         select(nil)
     }
 
+    /// Nav-bar title — the agent's name; the conversation title rides subtitle-style.
     var activeTitle: String {
-        guard let activeID else { return "Walnut" }
-        return conversations.first(where: { $0.id == activeID })?.title ?? "Walnut"
+        guard let activeID else { return activeAgentName }
+        return conversations.first(where: { $0.id == activeID })?.title ?? activeAgentName
     }
 
     // MARK: - Messages
@@ -106,9 +173,10 @@ final class ChatStore {
         loadingMessages = true
         defer { loadingMessages = false }
         do {
-            let fetched = try await api.messages(conversationID: id, limit: Self.pageSize)
+            let agentID = activeAgentID
+            let fetched = try await api.messages(conversationID: id, agentID: agentID, limit: Self.pageSize)
             connection?.reportReachability(true)
-            guard id == activeID else { return }
+            guard id == activeID, agentID == activeAgentID else { return }
             messages = fetched
             hasOlder = fetched.count >= Self.pageSize
             DiskCache.save(Array(fetched.suffix(Self.cacheTail)), key: "messages-\(id)")
@@ -124,7 +192,7 @@ final class ChatStore {
         loadingMessages = true
         defer { loadingMessages = false }
         do {
-            let older = try await api.messages(conversationID: id, limit: Self.pageSize, before: oldest.id)
+            let older = try await api.messages(conversationID: id, agentID: activeAgentID, limit: Self.pageSize, before: oldest.id)
             guard id == activeID else { return }
             messages.insert(contentsOf: older, at: 0)
             hasOlder = older.count >= Self.pageSize
@@ -150,10 +218,10 @@ final class ChatStore {
 
         do {
             if convID == nil {
-                let created = try await api.createConversation()
+                let created = try await api.createConversation(agentID: activeAgentID)
                 convID = created
                 activeID = created
-                UserDefaults.standard.set(created, forKey: "walnut.activeConversation")
+                UserDefaults.standard.set(created, forKey: activeConversationKey)
                 connectStream()
             }
             guard let convID else {
@@ -161,7 +229,7 @@ final class ChatStore {
                 return false
             }
             messages.append(optimistic)
-            _ = try await api.sendMessage(conversationID: convID, text: text)
+            _ = try await api.sendMessage(conversationID: convID, agentID: activeAgentID, text: text)
             connection?.reportReachability(true)
             // Accepted — solidify the bubble; message-start arrives on SSE shortly.
             if let idx = messages.firstIndex(where: { $0.id == optimistic.id }) {
@@ -199,7 +267,7 @@ final class ChatStore {
         guard let convID = activeID,
               let base = AppConfig.serverURL,
               let token = AppConfig.token,
-              let url = URL(string: "\(base.absoluteString)/api/v1/conversations/\(convID)/stream")
+              let url = URL(string: "\(base.absoluteString)/api/v1/conversations/\(convID)/stream?agentId=\(activeAgentID)")
         else { return }
 
         sse = SSEClient(

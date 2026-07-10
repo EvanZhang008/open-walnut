@@ -22,10 +22,19 @@ struct ConversationSummary: Codable, Identifiable, Equatable {
     let messageCount: Int
 }
 
+/// One console agent from GET /api/v1/agents (additive endpoint).
+struct AgentSummary: Codable, Identifiable, Equatable {
+    let id: String
+    let name: String
+    let description: String?
+    let isMain: Bool
+}
+
 struct ChatMessage: Codable, Identifiable, Equatable {
     enum Kind: String, Codable {
         case tool
         case thinking
+        case notification
     }
 
     let id: String
@@ -33,12 +42,23 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     let text: String
     let createdAt: String
     let kind: Kind?
+    /// Notification provenance ("session-error", "cron", …) — drives card styling.
+    let source: String?
 
     // Client-only flag for optimistic user bubbles (not part of the wire format).
     var pending: Bool? = nil
 
     private enum CodingKeys: String, CodingKey {
-        case id, role, text, createdAt, kind
+        case id, role, text, createdAt, kind, source
+    }
+
+    init(id: String, role: String, text: String, createdAt: String, kind: Kind?, source: String? = nil) {
+        self.id = id
+        self.role = role
+        self.text = text
+        self.createdAt = createdAt
+        self.kind = kind
+        self.source = source
     }
 
     var isUser: Bool { role == "user" }

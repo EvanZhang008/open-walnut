@@ -44,11 +44,12 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/v1/status` | Server mode/version/time/sync info |
-| GET | `/api/v1/conversations?limit=` | List conversations, most-recent first |
+| GET | `/api/v1/agents` | Console agents available for chat |
+| GET | `/api/v1/conversations?limit=&agentId=` | List conversations, most-recent first |
 | POST | `/api/v1/conversations` | Create a conversation |
-| GET | `/api/v1/conversations/:id/messages?limit=&before=` | Read normalized messages |
+| GET | `/api/v1/conversations/:id/messages?limit=&before=&agentId=` | Read normalized messages |
 | POST | `/api/v1/conversations/:id/messages` | Send a message (starts an agent turn) |
-| GET | `/api/v1/conversations/:id/stream` | SSE stream of the current turn |
+| GET | `/api/v1/conversations/:id/stream?agentId=` | SSE stream of the current turn |
 | GET | `/api/v1/notes` | Notes file tree |
 | GET | `/api/v1/notes/content/*path` | Read a note |
 | PUT | `/api/v1/notes/content/*path` | Update a note (optimistic locking) |
@@ -70,7 +71,24 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 `mode` is `REPLICA` on a cloud box today; when the reverse-WS bridge to the
 primary lands (Phase 2), a bridged cloud box will report `LIVE`.
 
-### GET /api/v1/conversations?limit=50
+### GET /api/v1/agents
+
+Console agents the client can chat with (additive):
+
+```json
+[
+  { "id": "general",    "name": "Walnut",         "isMain": true },
+  { "id": "mentor",     "name": "Mentor",         "description": "…", "isMain": false },
+  { "id": "note-agent", "name": "Note Assistant", "description": "…", "isMain": false }
+]
+```
+
+`isMain: true` marks the primary butler (receives notifications & cron). All
+conversation endpoints accept an optional `agentId` (query param on GETs, body
+field on POSTs); **absent → `general`**, so pre-agent clients keep working
+unchanged. Unknown/non-console agent ids → `404 not_found`.
+
+### GET /api/v1/conversations?limit=50&agentId=general
 
 Array, most-recent first:
 
@@ -82,7 +100,7 @@ Array, most-recent first:
 
 ### POST /api/v1/conversations
 
-Body (optional): `{ "title": "My thread" }` → `201 { "id": "conv-…" }`
+Body (optional): `{ "title": "My thread", "agentId": "general" }` → `201 { "id": "conv-…" }`
 
 ### GET /api/v1/conversations/:id/messages?limit=50&before=<cursor>
 
@@ -99,6 +117,13 @@ Returns the most recent `limit` messages, **oldest-first**, normalized for mobil
 
 - `kind: "tool"` — a tool call; `text` is the tool name.
 - `kind: "thinking"` — a reasoning step; `text` is a short (≤160 char) excerpt.
+- `kind: "notification"` — a system-generated card (additive); `source` says
+  which system produced it (`"session-error"`, `"agent-error"`, `"cron"`,
+  `"compaction"`, …). Render as a distinct card, not a chat bubble. Noisy
+  developer categories (`triage`, `session` results, `subagent` results,
+  `heartbeat` all-clears) are **filtered out server-side**, matching the web
+  console's default visibility. `<task-ref/>`/`<session-ref/>` XML is resolved
+  to plain labels before text reaches this API.
 - No `kind` — a plain chat message.
 - Paging: pass the **first** (oldest) message's `id` of the current page as
   `before` to fetch the previous page. Cursors are positional and ephemeral —
@@ -108,7 +133,7 @@ Returns the most recent `limit` messages, **oldest-first**, normalized for mobil
 
 ### POST /api/v1/conversations/:id/messages
 
-Body: `{ "text": "your message" }`
+Body: `{ "text": "your message", "agentId": "general" }` (`agentId` optional)
 
 - `202 { "turnId": "…" }` — accepted; the turn runs asynchronously. Watch the
   SSE stream for progress and the final text.
@@ -192,7 +217,7 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   sessions are excluded.
 - Provenance/laggy-replica semantics identical to `/tasks` (`syncedAt`,
   `503 unavailable` on a fresh companion).
-- `GET /api/v1/sessions/:id/transcript` →
+- `GET /api/v1/sessions/:id/transcript?fresh=1` →
   `{ "sessionId", "exportedAt", "truncated", "messages": [ { role, text,
   timestamp, kind? } ] }` — a slim transcript tail (last ~100 entries; text
   capped at 4 KB/row; `kind: "tool"` rows carry the tool name). The primary
@@ -200,6 +225,11 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   over its SSH channel — so this works for sessions on ANY machine without
   the phone talking to that machine. `404 not_found` when no tail was
   exported yet.
+- `fresh=1` (additive): the PRIMARY box reads the session's history **right
+  now** instead of serving the (60s-throttled) sweep file — poll this every
+  few seconds for a live session view. On a cloud companion, or when the
+  session is unreachable, `fresh=1` gracefully falls back to the exported
+  file. `exportedAt` tells you which one you got.
 - Read-only: STEERING a session (sending messages) requires the primary
   box's web UI today; a future additive endpoint will proxy interaction
   through the primary (which owns the SSH channel to remote hosts).
