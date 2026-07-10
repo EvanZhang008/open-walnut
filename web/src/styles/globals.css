@@ -21854,3 +21854,27 @@ a.file-link:hover {
 .routines-view-compact .routine-trigger-presets {
   flex-wrap: wrap;
 }
+
+/* ── Devices section (Settings → Devices, QR pairing) ── */
+.devices-section { display: flex; flex-direction: column; gap: 14px; }
+.devices-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.devices-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
+}
+.devices-row-main { display: flex; flex-direction: column; gap: 2px; }
+.devices-name { font-weight: 600; }
+.devices-meta { font-size: 12px; color: var(--text-secondary); }
+.devices-add-row { display: flex; gap: 8px; }
+.devices-add-row input { flex: 1; }
+.devices-error { color: var(--danger, #d33); font-size: 13px; margin: 0; }
+.devices-qr-block {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  padding: 18px; border: 1px solid var(--border); border-radius: 12px;
+}
+.devices-qr-block img { border-radius: 8px; background: #fff; padding: 6px; }
+.devices-qr-hint { font-size: 13px; color: var(--text-secondary); text-align: center; max-width: 340px; margin: 0; }
+.devices-token {
+  display: block; word-break: break-all; font-size: 12px;
+  padding: 6px 8px; background: var(--bg-secondary); border-radius: 6px; margin-top: 6px;
+}

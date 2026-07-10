@@ -27,6 +27,7 @@ import { configRouter } from './routes/config.js'
 import { categoriesRouter } from './routes/categories.js'
 import { favoritesRouter } from './routes/favorites.js'
 import { uiPrefsRouter } from './routes/ui-prefs.js'
+import { devicesRouter } from './routes/devices.js'
 import { focusRouter } from './routes/focus.js'
 import { orderingRouter } from './routes/ordering.js'
 import { chatHistoryRouter } from './routes/chat-history.js'
@@ -622,6 +623,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/categories', categoriesRouter)
   app.use('/api/favorites', favoritesRouter)
   app.use('/api/ui-prefs', uiPrefsRouter)
+  app.use('/api/devices', devicesRouter)
   app.use('/api/focus', focusRouter)
   app.use('/api/ordering', orderingRouter)
   app.use('/api/chat', chatHistoryRouter)

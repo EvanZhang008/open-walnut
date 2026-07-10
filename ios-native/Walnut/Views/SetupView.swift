@@ -11,6 +11,7 @@ struct SetupView: View {
     @State private var busy = false
     @State private var testResult: TestResult?
     @State private var alertMessage: String?
+    @State private var showScanner = false
 
     private enum TestResult {
         case success(ServerStatus)
@@ -35,6 +36,11 @@ struct SetupView: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(alertMessage ?? "")
+            }
+            .sheet(isPresented: $showScanner) {
+                QRScannerSheet { payload in
+                    applyPairingText(payload, autoConnect: true)
+                }
             }
         }
     }
@@ -87,18 +93,30 @@ struct SetupView: View {
 
             testResultRow
 
+            Button {
+                showScanner = true
+            } label: {
+                Label("Scan QR from your console", systemImage: "qrcode.viewfinder")
+                    .fontWeight(.semibold)
+                    .frame(maxWidth: .infinity, minHeight: 48)
+            }
+            .background(Theme.tint, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .foregroundStyle(Theme.onTint)
+            .disabled(busy)
+            .accessibilityIdentifier("setup.scan")
+
             Button(action: connect) {
                 Group {
                     if busy {
-                        ProgressView().tint(Theme.onTint)
+                        ProgressView().tint(Theme.tint)
                     } else {
                         Text("Connect").fontWeight(.semibold)
                     }
                 }
                 .frame(maxWidth: .infinity, minHeight: 48)
             }
-            .background(Theme.tint, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .foregroundStyle(Theme.onTint)
+            .background(Theme.tintSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .foregroundStyle(Theme.tint)
             .disabled(busy)
             .accessibilityIdentifier("setup.connect")
 
@@ -203,7 +221,7 @@ struct SetupView: View {
         }
     }
 
-    private func applyPairingText(_ text: String?) {
+    private func applyPairingText(_ text: String?, autoConnect: Bool = false) {
         guard let text, let pair = AppConfig.parsePairingURI(text) else {
             alertMessage = "Copy a wn://pair link (from \"walnut device add\") and try again."
             return
@@ -213,7 +231,10 @@ struct SetupView: View {
         if let server = pair.server { serverURL = server }
         if serverURL.trimmingCharacters(in: .whitespaces).isEmpty {
             alertMessage = "Token filled in — enter the server address and connect."
+            return
         }
+        // A scanned console QR carries server+token — pairing is one tap: none.
+        if autoConnect { connect() }
     }
 }
 

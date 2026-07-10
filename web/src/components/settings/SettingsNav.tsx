@@ -14,6 +14,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'audio-capture', label: 'Audio Capture' },
   { id: 'heartbeat', label: 'Heartbeat' },
   { id: 'remote-hosts', label: 'Remote Hosts' },
+  { id: 'devices', label: 'Devices' },
   { id: 'advanced', label: 'Advanced' },
   { id: 'repositories', label: 'Repositories', divider: true },
   { id: 'hooks', label: 'Hooks' },
