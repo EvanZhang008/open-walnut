@@ -204,6 +204,20 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   box's web UI today; a future additive endpoint will proxy interaction
   through the primary (which owns the SSH channel to remote hosts).
 
+### POST /api/v1/client-logs
+
+Mobile apps push their structured log buffer for server-side debugging
+(TestFlight builds can't be attached to with a debugger). Additive endpoint.
+
+Body: `{ "device": "Evan's iPhone", "appVersion": "1.0.0", "os": "iOS 26",
+"lines": [ { "ts", "level", "subsystem", "message", …meta } ] }`
+
+- `200 { "ok": true, "received": N }` — lines appended as JSON-lines to
+  `/tmp/open-walnut/ios-client/<device>-<date>.log` on the receiving box.
+- `400 bad_request` — `lines` missing/empty. `413 too_large` — per-device/day
+  quota (20 MB) exhausted.
+- Max 5000 lines per call; each line is stamped with `device`/`appVersion`/`os`.
+
 ## curl examples
 
 ```bash

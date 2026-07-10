@@ -260,6 +260,7 @@ final class ChatStore {
             finalizeTurn(conversationID: conversationID, fullText: payload?.fullText ?? streamText)
         case "error":
             let payload = try? JSONDecoder().decode(ErrorPayload.self, from: data)
+            AppLog.error("chat", "turn failed", ["message": payload?.message ?? "?"])
             streaming = false
             activity = nil
             errorMessage = payload?.message ?? "The turn failed."
@@ -302,6 +303,10 @@ final class ChatStore {
                     turnOver = history.last?.role == "assistant" && history.last?.kind == nil
                 }
                 if turnOver {
+                    AppLog.error("chat", "turn watchdog reconciled a lost message-end", [
+                        "conversationID": conversationID,
+                        "silentFor": "\(Int(Date().timeIntervalSince(self.lastSSEEventAt)))s",
+                    ])
                     self.streaming = false
                     self.streamText = ""
                     self.activity = nil

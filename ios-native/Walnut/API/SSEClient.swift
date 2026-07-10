@@ -104,8 +104,10 @@ final class SSEClient: @unchecked Sendable {
                 // went silent. A watchdog trip is a dead connection, not a
                 // deliberate close: reconnect immediately.
                 if !consumeStallTripped() { return }
+                AppLog.error("sse", "stall watchdog tripped — reconnecting", ["lastEventID": lastEventID ?? "-"])
                 backoff = 1
             } catch {
+                AppLog.error("sse", "stream error — backing off", ["error": String(describing: error), "backoff": "\(backoff)s"])
                 onConnectionChange(false)
             }
             if Task.isCancelled { return }

@@ -612,3 +612,41 @@ describe('tasks (read-only projection)', () => {
     expect(projection!.tasks.map((t) => t.title)).not.toContain('Ancient chore')
   })
 })
+
+describe('client logs (additive)', () => {
+  it('accepts a batch, writes JSON-lines under the device+day file, 400s on empty', async () => {
+    const res = await fetch(apiUrl('/api/v1/client-logs'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        device: 'Test iPhone/1', appVersion: '1.0.0', os: 'iOS 26',
+        lines: [
+          { ts: '2026-07-10T00:00:00Z', level: 'error', subsystem: 'sse', message: 'stall tripped' },
+          'plain string line',
+        ],
+      }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json() as { ok: boolean; received: number }
+    expect(body.ok).toBe(true)
+    expect(body.received).toBe(2)
+
+    // Device name sanitized into the filename; content is JSON-lines.
+    const day = new Date().toISOString().slice(0, 10)
+    const file = `/tmp/open-walnut/ios-client/Test-iPhone-1-${day}.log`
+    const content = await fs.readFile(file, 'utf-8')
+    const lines = content.trim().split('\n').map((l) => JSON.parse(l) as Record<string, unknown>)
+    const mine = lines.filter((l) => l.device === 'Test iPhone/1')
+    expect(mine.length).toBeGreaterThanOrEqual(2)
+    expect(mine.some((l) => l.message === 'stall tripped' && l.subsystem === 'sse')).toBe(true)
+    expect(mine.some((l) => l.message === 'plain string line')).toBe(true)
+    expect(mine.every((l) => l.appVersion === '1.0.0')).toBe(true)
+
+    const empty = await fetch(apiUrl('/api/v1/client-logs'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device: 'x', lines: [] }),
+    })
+    expect(empty.status).toBe(400)
+  })
+})

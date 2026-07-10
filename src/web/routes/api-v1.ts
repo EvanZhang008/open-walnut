@@ -567,6 +567,56 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
   }
 })
 
+// ─── Client logs (additive) — mobile apps upload diagnostic logs ───────────
+//
+// TestFlight builds can't be attached to with a debugger; this lets the app
+// push its structured log buffer so issues can be diagnosed server-side.
+// Files land in /tmp/open-walnut/ios-client/<device>-<localdate>.log as
+// JSON-lines — same directory family the log toolkit already greps.
+
+const CLIENT_LOG_DIR = '/tmp/open-walnut/ios-client'
+const CLIENT_LOG_MAX_LINES = 5000
+const CLIENT_LOG_MAX_FILE_BYTES = 20 * 1024 * 1024 // rotate guard per device+day
+
+apiV1Router.post('/client-logs', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const device = typeof req.body?.device === 'string' ? req.body.device : 'unknown'
+    const appVersion = typeof req.body?.appVersion === 'string' ? req.body.appVersion : ''
+    const os = typeof req.body?.os === 'string' ? req.body.os : ''
+    const lines = Array.isArray(req.body?.lines) ? req.body.lines : null
+    if (!lines || lines.length === 0) {
+      sendError(res, 400, 'bad_request', 'lines (non-empty array) is required')
+      return
+    }
+    // Sanitize the device name into a safe filename fragment.
+    const safeDevice = device.replace(/[^A-Za-z0-9_-]+/g, '-').slice(0, 40) || 'unknown'
+    const day = new Date().toISOString().slice(0, 10)
+    const file = path.join(CLIENT_LOG_DIR, `${safeDevice}-${day}.log`)
+
+    await fsp.mkdir(CLIENT_LOG_DIR, { recursive: true })
+    try {
+      const stat = await fsp.stat(file)
+      if (stat.size > CLIENT_LOG_MAX_FILE_BYTES) {
+        sendError(res, 413, 'too_large', 'Log file quota for this device/day exhausted')
+        return
+      }
+    } catch { /* file doesn't exist yet — fine */ }
+
+    const accepted = lines.slice(0, CLIENT_LOG_MAX_LINES)
+    const out = accepted
+      .map((l: unknown) => JSON.stringify({
+        device, appVersion, os,
+        ...(typeof l === 'object' && l !== null ? l : { message: String(l) }),
+      }))
+      .join('\n') + '\n'
+    await fsp.appendFile(file, out, 'utf-8')
+    log.web.info('api-v1 client logs received', { device: safeDevice, count: accepted.length, appVersion })
+    res.json({ ok: true, received: accepted.length })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // ─── Notes (thin adapters over the notes-v2 vault semantics) ───────────────
 
 // GET /api/v1/notes — file tree

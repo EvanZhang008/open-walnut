@@ -1,0 +1,149 @@
+import Foundation
+import UIKit
+
+/// Structured in-app logger with auto-upload — the TestFlight debugging story.
+///
+/// `AppLog.log("sse", "stream stalled", ["gap": "52s"])` appends to a bounded
+/// in-memory buffer that persists to disk on background and uploads to the
+/// server (`POST /api/v1/client-logs`) opportunistically: on app background,
+/// on foreground, and whenever the buffer grows past a threshold. Uploads are
+/// best-effort — failures keep the lines for the next attempt.
+final class AppLog: @unchecked Sendable {
+    static let shared = AppLog()
+
+    private struct Entry: Codable {
+        let ts: String
+        let level: String
+        let subsystem: String
+        let message: String
+        var meta: [String: String]?
+    }
+
+    private let lock = NSLock()
+    private var buffer: [Entry] = []
+    private var uploading = false
+
+    private static let maxBuffered = 2000
+    private static let uploadThreshold = 200
+    private static let persistURL: URL = {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("walnut-applog.json")
+    }()
+
+    private init() {
+        // Recover lines that didn't make it out before the last termination.
+        if let data = try? Data(contentsOf: Self.persistURL),
+           let saved = try? JSONDecoder().decode([Entry].self, from: data) {
+            buffer = Array(saved.suffix(Self.maxBuffered))
+        }
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: nil
+        ) { [weak self] _ in
+            self?.persist()
+            self?.uploadIfNeeded(force: true)
+        }
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification, object: nil, queue: nil
+        ) { [weak self] _ in
+            self?.uploadIfNeeded(force: true)
+        }
+    }
+
+    // MARK: - Logging
+
+    static func info(_ subsystem: String, _ message: String, _ meta: [String: String]? = nil) {
+        shared.append(level: "info", subsystem: subsystem, message: message, meta: meta)
+    }
+
+    static func error(_ subsystem: String, _ message: String, _ meta: [String: String]? = nil) {
+        shared.append(level: "error", subsystem: subsystem, message: message, meta: meta)
+    }
+
+    private func append(level: String, subsystem: String, message: String, meta: [String: String]?) {
+        let entry = Entry(
+            ts: ISO8601DateFormatter().string(from: Date()),
+            level: level, subsystem: subsystem, message: message, meta: meta
+        )
+        #if DEBUG
+        print("[\(level)] \(subsystem): \(message) \(meta ?? [:])")
+        #endif
+        lock.lock()
+        buffer.append(entry)
+        if buffer.count > Self.maxBuffered {
+            buffer.removeFirst(buffer.count - Self.maxBuffered)
+        }
+        let count = buffer.count
+        lock.unlock()
+        if count >= Self.uploadThreshold {
+            uploadIfNeeded(force: false)
+        }
+    }
+
+    // MARK: - Persistence + upload
+
+    private func persist() {
+        lock.lock()
+        let snapshot = buffer
+        lock.unlock()
+        if let data = try? JSONEncoder().encode(snapshot) {
+            try? data.write(to: Self.persistURL, options: .atomic)
+        }
+    }
+
+    /// Push buffered lines to the server. Lines are only dropped after a 2xx —
+    /// any failure keeps them buffered for the next trigger.
+    func uploadIfNeeded(force: Bool) {
+        lock.lock()
+        guard !uploading, !buffer.isEmpty, force || buffer.count >= Self.uploadThreshold,
+              let base = AppConfig.serverURL, let token = AppConfig.token
+        else { lock.unlock(); return }
+        uploading = true
+        let batch = buffer
+        lock.unlock()
+
+        Task.detached(priority: .utility) { [weak self] in
+            guard let self else { return }
+            defer { self.finishUpload() }
+            guard let url = URL(string: base.absoluteString + "/api/v1/client-logs") else { return }
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.timeoutInterval = 15
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+            let lines = batch.map { entry -> [String: String] in
+                var line = ["ts": entry.ts, "level": entry.level, "subsystem": entry.subsystem, "message": entry.message]
+                entry.meta?.forEach { line["m_\($0.key)"] = $0.value }
+                return line
+            }
+            let payload: [String: Any] = [
+                "device": await MainActor.run { AppConfig.deviceName ?? UIDevice.current.name },
+                "appVersion": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?",
+                "os": await MainActor.run { "iOS \(UIDevice.current.systemVersion)" },
+                "lines": lines,
+            ]
+            guard let body = try? JSONSerialization.data(withJSONObject: payload) else { return }
+            request.httpBody = body
+
+            guard let (_, response) = try? await URLSession.shared.data(for: request),
+                  let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode)
+            else { return } // keep lines buffered; next trigger retries
+
+            // Drop exactly the lines that were uploaded (new appends survive).
+            self.dropUploaded(batch.count)
+            self.persist()
+        }
+    }
+
+    /// Sync helpers — NSLock lock/unlock are unavailable in async contexts.
+    private func finishUpload() {
+        lock.lock(); uploading = false; lock.unlock()
+    }
+
+    private func dropUploaded(_ count: Int) {
+        lock.lock()
+        buffer.removeFirst(min(count, buffer.count))
+        lock.unlock()
+    }
+}

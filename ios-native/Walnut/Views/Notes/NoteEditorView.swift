@@ -235,6 +235,7 @@ struct NoteDetailView: View {
             }
         } catch {
             // Keep dirty=true so the next edit or screen pop retries.
+            AppLog.error("notes", "save failed — will retry", ["path": path, "error": String(describing: error)])
         }
     }
 }
