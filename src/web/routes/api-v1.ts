@@ -28,7 +28,7 @@ import type { ChatEntry } from '../../core/types.js'
 import { CLOUD_MODE, NOTES_DIR } from '../../constants.js'
 import * as chatHistory from '../../core/chat-history.js'
 import { listConversations, createConversation } from '../../core/conversations.js'
-import { enqueueAgentTurn, recordLastTurnTokens } from '../agent-turn-queue.js'
+import { enqueueAgentTurn, recordLastTurnTokens, getQueueStatus } from '../agent-turn-queue.js'
 import { triggerBackgroundCompaction } from '../background-compaction.js'
 import { broadcastEvent } from '../ws/handler.js'
 import { bus, EventNames } from '../../core/event-bus.js'
@@ -375,6 +375,15 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
     const turnId = crypto.randomUUID()
     activeTurns.set(conversationId, turnId)
     log.web.info('api-v1 message accepted', { conversationId, turnId, messageLength: text.length })
+
+    // Additive SSE event: if another turn currently holds the agent queue
+    // (possibly a long one on a DIFFERENT conversation), this turn will wait.
+    // Without a signal the client sees dead air between 202 and message-start
+    // and reads it as a freeze. `queued` is fired only when a wait is certain.
+    const qs = getQueueStatus(AGENT_ID)
+    if (qs.active > 0 || qs.queued > 0) {
+      emitSse(conversationId, 'queued', { turnId, position: qs.queued + 1 })
+    }
 
     // Fire the turn through the SAME per-agent queue the WS chat uses — one
     // serialization path. The 202 returns immediately; progress streams on SSE.

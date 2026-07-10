@@ -126,6 +126,7 @@ conversation, and turns fired from mobile also stream into the web UI.
 | Event | Data | Meaning |
 |---|---|---|
 | `message-start` | `{ "turnId" }` | A turn began |
+| `queued` | `{ "turnId", "position" }` | Turn accepted but waiting behind another turn on the shared agent queue (additive, may precede `message-start` by minutes) |
 | `text-delta` | `{ "delta" }` | Streaming assistant text chunk |
 | `tool` | `{ "name" }` | The agent invoked a tool |
 | `thinking` | `{}` | The agent is reasoning (render a spinner) |

@@ -261,6 +261,51 @@ describe('conversations + messages + SSE', () => {
     }
   }, 20_000)
 
+  it('emits a queued SSE event when another turn holds the agent queue', async () => {
+    // Two DIFFERENT conversations share the 'general' agent queue — the
+    // second turn is accepted (202) but waits; the client must see `queued`
+    // on its stream so the pre-message-start silence doesn't read as a freeze.
+    const convA = await createConversation()
+    const convB = await createConversation()
+    let release!: () => void
+    mockState.gate = new Promise<void>((r) => { release = r })
+    const firstDelta = new Promise<void>((r) => { mockState.onFirstDelta = r })
+
+    const sseB = await connectSse(apiUrl(`/api/v1/conversations/${convB}/stream`))
+    try {
+      const first = await fetch(apiUrl(`/api/v1/conversations/${convA}/messages`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'long turn on A' }),
+      })
+      expect(first.status).toBe(202)
+      await firstDelta // A's turn is mid-flight, holding the queue
+
+      mockState.onFirstDelta = null
+      const second = await fetch(apiUrl(`/api/v1/conversations/${convB}/messages`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'queued turn on B' }),
+      })
+      expect(second.status).toBe(202)
+
+      const queued = await sseB.waitFor((e) => e.event === 'queued')
+      expect(typeof queued.data.turnId).toBe('string')
+      expect(typeof queued.data.position).toBe('number')
+      // B has NOT started yet — no message-start before A releases.
+      expect(sseB.events.some((e) => e.event === 'message-start')).toBe(false)
+
+      release()
+      mockState.gate = null
+      await sseB.waitFor((e) => e.event === 'message-end')
+      expect(sseB.events.some((e) => e.event === 'message-start')).toBe(true)
+    } finally {
+      mockState.gate = null
+      mockState.onFirstDelta = null
+      sseB.close()
+    }
+  }, 20_000)
+
   it('replays the current turn to a late joiner and honors Last-Event-ID', async () => {
     const convId = await createConversation()
     let release!: () => void

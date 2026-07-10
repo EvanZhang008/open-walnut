@@ -27,6 +27,29 @@ final class SSEClient: @unchecked Sendable {
     private var task: Task<Void, Never>?
     private var lastEventID: String?
 
+    /// Stall watchdog state. The server sends a `: ping` comment every 25s, so
+    /// a healthy stream is never silent for long. Cellular NAT rebinds (WiFi↔5G,
+    /// screen lock) kill idle TCP flows WITHOUT an error — URLSession would sit
+    /// on the dead stream for up to timeoutIntervalForRequest (1h). The watchdog
+    /// tears the connection down after `stallThreshold` of silence so the run
+    /// loop reconnects (with Last-Event-ID replay) within seconds.
+    private let stallLock = NSLock()
+    private var lastActivity = Date()
+    private var stallTripped = false
+    private static let stallThreshold: TimeInterval = 50
+
+    private func touchActivity() {
+        stallLock.lock()
+        lastActivity = Date()
+        stallLock.unlock()
+    }
+
+    private func silentFor() -> TimeInterval {
+        stallLock.lock()
+        defer { stallLock.unlock() }
+        return Date().timeIntervalSince(lastActivity)
+    }
+
     init(
         url: URL,
         token: String,
@@ -60,10 +83,16 @@ final class SSEClient: @unchecked Sendable {
             } catch is CancellationError {
                 return
             } catch let urlError as URLError where urlError.code == .cancelled {
-                // stop() cancels the in-flight byte stream — URLSession
-                // surfaces that as URLError.cancelled, not CancellationError.
-                // It's a deliberate close, NOT a connectivity failure.
-                return
+                // stop() cancels the byte stream — but the WATCHDOG also
+                // cancels it (session.invalidateAndCancel) when the stream
+                // went silent. A watchdog trip is a dead connection, not a
+                // deliberate close: reconnect immediately.
+                stallLock.lock()
+                let trippedByWatchdog = stallTripped
+                stallTripped = false
+                stallLock.unlock()
+                if !trippedByWatchdog { return }
+                backoff = 1
             } catch {
                 onConnectionChange(false)
             }
@@ -94,11 +123,31 @@ final class SSEClient: @unchecked Sendable {
             throw APIError.badResponse
         }
         onConnectionChange(true)
+        touchActivity()
+
+        // Watchdog: any byte (data OR ping comment) counts as activity. If the
+        // stream is silent past the threshold, the connection is dead — kill
+        // the session so the byte loop throws and the run loop reconnects.
+        let watchdog = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(10))
+                guard let self else { return }
+                if self.silentFor() > Self.stallThreshold {
+                    self.stallLock.lock()
+                    self.stallTripped = true
+                    self.stallLock.unlock()
+                    session.invalidateAndCancel()
+                    return
+                }
+            }
+        }
+        defer { watchdog.cancel() }
 
         var parser = FrameParser()
         var lineBuffer: [UInt8] = []
         for try await byte in bytes {
             try Task.checkCancellation()
+            touchActivity()
             if byte == UInt8(ascii: "\n") {
                 var line = lineBuffer
                 if line.last == UInt8(ascii: "\r") { line.removeLast() }
