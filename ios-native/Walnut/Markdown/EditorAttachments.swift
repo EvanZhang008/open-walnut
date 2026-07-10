@@ -29,15 +29,24 @@ final class CheckboxAttachment: NSTextAttachment {
         updateImage()
     }
 
+    /// Canvas is wider than the glyph: the extra trailing width IS the gap
+    /// between circle and text (Apple Notes spacing). Keep in sync with the
+    /// `.task` headIndent in MarkdownAttributed so wrapped lines align.
+    static let canvasWidth: CGFloat = 34
+
     private func updateImage() {
-        let config = UIImage.SymbolConfiguration(pointSize: 19, weight: .regular)
+        let config = UIImage.SymbolConfiguration(pointSize: 21, weight: .light)
         let name = checked ? "checkmark.circle.fill" : "circle"
         // Fixed mid-tone colors legible in both light and dark mode — attachment
         // images are baked, dynamic colors don't re-resolve on trait change.
-        let tint = checked ? UIColor(red: 0.66, green: 0.45, blue: 0.25, alpha: 1) : UIColor.systemGray
-        image = UIImage(systemName: name, withConfiguration: config)?
+        let tint = checked ? UIColor(red: 0.66, green: 0.45, blue: 0.25, alpha: 1) : UIColor(white: 0.68, alpha: 1)
+        let symbol = UIImage(systemName: name, withConfiguration: config)?
             .withTintColor(tint, renderingMode: .alwaysOriginal)
-        bounds = CGRect(x: 0, y: -4, width: 22, height: 22)
+        let size = CGSize(width: Self.canvasWidth, height: 24)
+        image = UIGraphicsImageRenderer(size: size).image { _ in
+            symbol?.draw(at: CGPoint(x: 0, y: (size.height - (symbol?.size.height ?? 0)) / 2))
+        }
+        bounds = CGRect(x: 0, y: -5, width: size.width, height: size.height)
     }
 }
 
@@ -48,16 +57,19 @@ final class BulletAttachment: NSTextAttachment {
     /// Exact matched marker text including leading whitespace, e.g. "  - ".
     let source: String
 
+    /// Wider-than-glyph canvas = built-in gap to the text (matches checkbox).
+    static let canvasWidth: CGFloat = 26
+
     init(source: String) {
         self.source = source
         super.init(data: nil, ofType: nil)
-        let size = CGSize(width: 20, height: 20)
+        let size = CGSize(width: Self.canvasWidth, height: 20)
         image = UIGraphicsImageRenderer(size: size).image { _ in
-            let dot = CGRect(x: 5, y: 7.5, width: 5.5, height: 5.5)
+            let dot = CGRect(x: 6, y: 7, width: 6, height: 6)
             UIColor.label.setFill()
             UIBezierPath(ovalIn: dot).fill()
         }
-        bounds = CGRect(x: 0, y: -2.5, width: 20, height: 20)
+        bounds = CGRect(x: 0, y: -2.5, width: size.width, height: size.height)
     }
 
     required init?(coder: NSCoder) { nil }

@@ -67,15 +67,25 @@ enum MarkdownAttributed {
         switch kind {
         case .bullet(let prefix), .numbered(let prefix):
             // Two leading spaces in the source = one visual indent level.
+            // headIndent must equal the marker's rendered width so wrapped
+            // lines align under the first line's text, not under the marker.
             let level = CGFloat(prefix.prefix(while: { $0 == " " }).count) / 2
             style.firstLineHeadIndent = level * 16
-            style.headIndent = 20 + level * 16
+            style.headIndent = BulletAttachment.canvasWidth + level * 16
+            style.paragraphSpacing = 6
+            style.minimumLineHeight = 24
         case .task:
-            style.headIndent = 26
+            style.headIndent = CheckboxAttachment.canvasWidth
             style.firstLineHeadIndent = 0
+            // Apple Notes checklist rows breathe — taller lines + row gap.
+            style.paragraphSpacing = 8
+            style.minimumLineHeight = 26
         case .quote:
             style.headIndent = 14
             style.firstLineHeadIndent = 14
+        case .heading:
+            style.paragraphSpacingBefore = 10
+            style.paragraphSpacing = 6
         default:
             break
         }
@@ -102,7 +112,7 @@ enum MarkdownAttributed {
         let style = NSMutableParagraphStyle()
         style.setParagraphStyle(attrs[.paragraphStyle] as! NSParagraphStyle)
         style.firstLineHeadIndent = level * 16
-        style.headIndent = 26 + level * 16
+        style.headIndent = CheckboxAttachment.canvasWidth + level * 16
         attrs[.paragraphStyle] = style
         return attrs
     }
