@@ -61,6 +61,13 @@ struct WalnutAPI {
         return accepted.turnId
     }
 
+    /// Read-only task projection. Fetches ALL tasks (no status query) so the
+    /// smart-list filters can slice client-side. Throws APIError.server with
+    /// code "unavailable" (503) when the companion hasn't synced yet.
+    func tasks() async throws -> TasksResponse {
+        try await get("/tasks")
+    }
+
     func notesTree() async throws -> [NoteTreeNode] {
         struct Tree: Codable { let tree: [NoteTreeNode] }
         let wrapper: Tree = try await get("/notes")

@@ -112,6 +112,126 @@ struct FlatErrorEnvelope: Codable {
     let error: String
 }
 
+// MARK: - Tasks (read-only /api/v1/tasks projection)
+
+/// One task from the frozen projection. All timestamps are ISO-8601 strings
+/// (decoded lazily to `Date` via the computed helpers below) to match the rest
+/// of this file, which keeps wire dates as strings and parses on demand.
+struct WalnutTask: Codable, Identifiable, Equatable {
+    let id: String
+    let title: String
+    let status: String   // "todo" | "in_progress" | "done"
+    let phase: String     // "TODO" | "IN_PROGRESS" | "AGENT_COMPLETE" | …
+    let priority: String  // "immediate" | "important" | "backlog" | "none"
+    let category: String
+    let project: String
+    let dueDate: String?
+    // Optional: pre-migration tasks in the projection can lack these stamps.
+    let createdAt: String?
+    let updatedAt: String?
+    let completedAt: String?
+    let starred: Bool?
+    let pinned: Bool?
+    let tags: [String]?
+    let summary: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, status, phase, priority, category, project
+        case dueDate = "due_date"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case completedAt = "completed_at"
+        case starred, pinned, tags, summary
+    }
+}
+
+struct TasksResponse: Codable {
+    let tasks: [WalnutTask]
+    let syncedAt: String
+}
+
+/// Coarse status used for the circle indicator and the smart-list filters.
+enum TaskStatus {
+    case todo, inProgress, done, unknown
+    init(_ raw: String) {
+        switch raw {
+        case "todo": self = .todo
+        case "in_progress": self = .inProgress
+        case "done": self = .done
+        default: self = .unknown
+        }
+    }
+}
+
+/// Priority, with a rank for section sorting (lower = higher priority).
+enum TaskPriority {
+    case immediate, important, backlog, none, unknown
+    init(_ raw: String) {
+        switch raw {
+        case "immediate": self = .immediate
+        case "important": self = .important
+        case "backlog": self = .backlog
+        case "none": self = .none
+        default: self = .unknown
+        }
+    }
+
+    var sortRank: Int {
+        switch self {
+        case .immediate: return 0
+        case .important: return 1
+        case .backlog: return 2
+        case .none, .unknown: return 3
+        }
+    }
+}
+
+extension WalnutTask {
+    /// ISO-8601 parse tolerant of fractional seconds (same shape as NotesStore).
+    static func parseISO(_ iso: String?) -> Date? {
+        guard let iso else { return nil }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: iso) ?? ISO8601DateFormatter().date(from: iso)
+    }
+
+    var statusKind: TaskStatus { TaskStatus(status) }
+    var priorityKind: TaskPriority { TaskPriority(priority) }
+    var isDone: Bool { statusKind == .done }
+
+    var dueDateValue: Date? { Self.parseISO(dueDate) }
+    var createdAtValue: Date? { Self.parseISO(createdAt) }
+    var updatedAtValue: Date? { Self.parseISO(updatedAt) }
+    var completedAtValue: Date? { Self.parseISO(completedAt) }
+
+    /// Due before the start of today (and still open).
+    var isOverdue: Bool {
+        guard !isDone, let due = dueDateValue else { return false }
+        return due < Calendar.current.startOfDay(for: Date())
+    }
+
+    var isDueToday: Bool {
+        guard let due = dueDateValue else { return false }
+        return Calendar.current.isDateInToday(due)
+    }
+
+    /// Open-task order: pinned first, then priority, then most-recently updated.
+    static func openSort(_ a: WalnutTask, _ b: WalnutTask) -> Bool {
+        let ap = a.pinned == true, bp = b.pinned == true
+        if ap != bp { return ap }
+        if a.priorityKind.sortRank != b.priorityKind.sortRank {
+            return a.priorityKind.sortRank < b.priorityKind.sortRank
+        }
+        return (a.updatedAtValue ?? .distantPast) > (b.updatedAtValue ?? .distantPast)
+    }
+
+    /// Done-task order: most-recently completed first.
+    static func doneSort(_ a: WalnutTask, _ b: WalnutTask) -> Bool {
+        (a.completedAtValue ?? a.updatedAtValue ?? .distantPast)
+            > (b.completedAtValue ?? b.updatedAtValue ?? .distantPast)
+    }
+}
+
 // MARK: - Error envelope
 
 /// Wire shape: `{ "error": { "code", "message" }, ...extras }`.
@@ -154,4 +274,6 @@ enum APIError: Error, LocalizedError {
 
     var isTurnActive: Bool { code == "turn_active" }
     var isConflict: Bool { code == "conflict" }
+    /// 503 — the task projection hasn't synced yet on a fresh companion.
+    var isUnavailable: Bool { code == "unavailable" }
 }
