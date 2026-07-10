@@ -1,7 +1,7 @@
 import UIKit
 import PhotosUI
 
-/// The editor's `inputAccessoryView` — a single restrained row (Apple Notes
+/// The editor's `inputAccessoryView` — a floating glass capsule (Apple Notes
 /// style): Aa format drawer, checklist, table skeleton, photo, keyboard-down.
 /// "Aa" swaps the text view's `inputView` to a Format drawer that REPLACES the
 /// keyboard (this bar stays visible above it), exactly like Apple Notes.
@@ -10,10 +10,12 @@ final class AccessoryBar: UIView {
     private unowned let hostTextView: UITextView
     private var formatDrawer: FormatDrawerView?
 
+    private static let capsuleHeight: CGFloat = 48
+
     init(coordinator: WysiwygEditor.Coordinator, textView: UITextView) {
         self.coordinator = coordinator
         self.hostTextView = textView
-        super.init(frame: CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: 44))
+        super.init(frame: CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: Self.capsuleHeight + 12))
         autoresizingMask = [.flexibleWidth]
         backgroundColor = .clear
         buildBar()
@@ -26,30 +28,53 @@ final class AccessoryBar: UIView {
         if #available(iOS 26.0, *) {
             return UIVisualEffectView(effect: UIGlassEffect())
         }
-        return UIVisualEffectView(effect: UIBlurEffect(style: .systemChromeMaterial))
+        return UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
     }
 
     private func buildBar() {
-        let glass = Self.glassView()
-        glass.frame = bounds
-        glass.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        addSubview(glass)
+        // Floating capsule: inset from the screen edges with continuous
+        // corners, hairline border and a soft shadow — the whole bar view
+        // itself stays transparent so the note shows through around it.
+        let capsule = UIView()
+        capsule.translatesAutoresizingMaskIntoConstraints = false
+        capsule.layer.cornerRadius = Self.capsuleHeight / 2
+        capsule.layer.cornerCurve = .continuous
+        capsule.layer.borderWidth = 0.5
+        capsule.layer.borderColor = UIColor.separator.withAlphaComponent(0.35).cgColor
+        capsule.layer.shadowColor = UIColor.black.cgColor
+        capsule.layer.shadowOpacity = 0.12
+        capsule.layer.shadowRadius = 12
+        capsule.layer.shadowOffset = CGSize(width: 0, height: 4)
+        addSubview(capsule)
+        NSLayoutConstraint.activate([
+            capsule.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            capsule.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            capsule.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+            capsule.heightAnchor.constraint(equalToConstant: Self.capsuleHeight),
+        ])
 
-        let hairline = UIView()
-        hairline.backgroundColor = .separator
-        hairline.frame = CGRect(x: 0, y: 0, width: bounds.width, height: 0.5)
-        hairline.autoresizingMask = [.flexibleWidth]
-        addSubview(hairline)
+        let glass = Self.glassView()
+        glass.translatesAutoresizingMaskIntoConstraints = false
+        glass.layer.cornerRadius = Self.capsuleHeight / 2
+        glass.layer.cornerCurve = .continuous
+        glass.clipsToBounds = true
+        capsule.addSubview(glass)
+        NSLayoutConstraint.activate([
+            glass.leadingAnchor.constraint(equalTo: capsule.leadingAnchor),
+            glass.trailingAnchor.constraint(equalTo: capsule.trailingAnchor),
+            glass.topAnchor.constraint(equalTo: capsule.topAnchor),
+            glass.bottomAnchor.constraint(equalTo: capsule.bottomAnchor),
+        ])
 
         let stack = UIStackView()
         stack.axis = .horizontal
         stack.alignment = .center
-        stack.spacing = 26
+        stack.spacing = 24
         stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
+        capsule.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
-            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
+            stack.leadingAnchor.constraint(equalTo: capsule.leadingAnchor, constant: 20),
+            stack.centerYAnchor.constraint(equalTo: capsule.centerYAnchor),
         ])
 
         let aaButton = UIButton(type: .system)
@@ -69,10 +94,10 @@ final class AccessoryBar: UIView {
         doneButton.tintColor = .secondaryLabel
         doneButton.addTarget(self, action: #selector(dismissKeyboard), for: .touchUpInside)
         doneButton.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(doneButton)
+        capsule.addSubview(doneButton)
         NSLayoutConstraint.activate([
-            doneButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -18),
-            doneButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            doneButton.trailingAnchor.constraint(equalTo: capsule.trailingAnchor, constant: -20),
+            doneButton.centerYAnchor.constraint(equalTo: capsule.centerYAnchor),
         ])
     }
 
