@@ -67,14 +67,20 @@ struct SessionRowView: View {
         .foregroundStyle(.secondary)
     }
 
-    /// "claude-opus-4-6" → "Opus 4.6"-style short display.
+    /// "global.anthropic.claude-opus-4-8[1m]" → "Opus 4.8". Full version
+    /// digits matter ("Opus 4.8", never a bare "Opus") — strip decorations
+    /// like "[1m]" or "-v1" BEFORE parsing so they can't eat a version part.
     private func shortModel(_ model: String) -> String {
-        let lower = model.lowercased()
+        var lower = model.lowercased()
+        while let bracket = lower.range(of: "[", options: .backwards) {
+            lower = String(lower[..<bracket.lowerBound])
+        }
         for family in ["opus", "sonnet", "haiku", "fable"] where lower.contains(family) {
-            // Version digits after the family name, e.g. "-4-6" → "4.6".
             if let range = lower.range(of: family) {
                 let tail = lower[range.upperBound...]
-                let digits = tail.split(separator: "-").prefix(2).filter { !$0.isEmpty && $0.allSatisfy(\.isNumber) }
+                let digits = tail.split(separator: "-")
+                    .prefix(while: { !$0.isEmpty && $0.allSatisfy(\.isNumber) })
+                    .prefix(2)
                 let version = digits.joined(separator: ".")
                 let name = family.prefix(1).uppercased() + family.dropFirst()
                 return version.isEmpty ? name : "\(name) \(version)"

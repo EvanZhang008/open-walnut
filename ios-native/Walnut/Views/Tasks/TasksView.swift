@@ -122,14 +122,17 @@ struct TasksView: View {
     // MARK: - Sessions tab
 
     /// PINNED on top, then ACTIVE (live process), then RECENT (stopped) —
-    /// mirrors the desktop Task panel's session tab structure.
+    /// mirrors the desktop Task panel's session tab structure. Pin state is
+    /// inherited from the owning task, so MANY old stopped sessions carry
+    /// pinned=true; the Pinned section only surfaces the ones still alive,
+    /// everything dead sorts into Recent by recency.
     @ViewBuilder
     private var sessionSections: some View {
-        let pinned = tasks.pinnedSessions
+        let pinned = tasks.pinnedSessions.filter { $0.statusKind.isAlive }
         let pinnedIds = Set(pinned.map(\.id))
         let active = tasks.activeSessions.filter { !pinnedIds.contains($0.id) }
         let recent = tasks.sessions
-            .filter { !$0.statusKind.isAlive && !pinnedIds.contains($0.id) }
+            .filter { !$0.statusKind.isAlive }
             .sorted(by: WalnutSession.recencySort)
 
         if tasks.sessionsNotSyncedYet && tasks.sessions.isEmpty {
