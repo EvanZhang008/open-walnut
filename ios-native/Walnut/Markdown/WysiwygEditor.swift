@@ -70,7 +70,12 @@ struct WysiwygEditor: UIViewRepresentable {
             textView.isEditable = false
             _ = textView.resignFirstResponder()
         }
-        if !context.coordinator.isInternalUpdate, textView.attributedText != attributedText {
+        // Identity check first: text the coordinator itself just pushed into
+        // the binding comes back as the SAME instance — skipping the O(n)
+        // isEqual walk that otherwise runs on EVERY keystroke of a big note.
+        if !context.coordinator.isInternalUpdate,
+           attributedText !== context.coordinator.lastPushedText,
+           textView.attributedText != attributedText {
             let selected = textView.selectedRange
             textView.attributedText = attributedText
             textView.selectedRange = selected
@@ -89,6 +94,16 @@ struct WysiwygEditor: UIViewRepresentable {
         /// True while we're pushing a programmatic edit into the text view, so
         /// `updateUIView` doesn't fight the cursor mid-keystroke.
         var isInternalUpdate = false
+        /// The exact instance last pushed INTO the SwiftUI binding — lets
+        /// updateUIView skip the full-content comparison for our own echo.
+        var lastPushedText: NSAttributedString?
+
+        /// Single funnel for textView → binding pushes (echo tracking).
+        func pushBinding(from textView: UITextView) {
+            let snapshot = textView.attributedText ?? NSAttributedString()
+            lastPushedText = snapshot
+            parent.attributedText = snapshot
+        }
         /// Trait attributes toggled at a collapsed caret ("type bold from
         /// here"). UIKit's typingAttributes get silently reset on several
         /// input paths (hardware-keyboard insertion among them), so while this
@@ -112,7 +127,7 @@ struct WysiwygEditor: UIViewRepresentable {
             ensureVisibleTextColor(textView)
             updateTypingAttributes(textView)
             isInternalUpdate = true
-            parent.attributedText = textView.attributedText
+            pushBinding(from: textView)
             isInternalUpdate = false
             parent.onChange()
         }
@@ -131,8 +146,13 @@ struct WysiwygEditor: UIViewRepresentable {
         private func ensureVisibleTextColor(_ textView: UITextView) {
             let storage = textView.textStorage
             guard storage.length > 0 else { return }
+            // Only the paragraph around the caret can have just gained new
+            // text — sweeping the whole storage would be O(note) per keystroke.
+            let caret = min(textView.selectedRange.location, storage.length)
+            let sweep = (storage.string as NSString).paragraphRange(for: NSRange(location: caret, length: 0))
+            guard sweep.length > 0 else { return }
             var fixes: [(NSRange, UIColor)] = []
-            storage.enumerateAttributes(in: NSRange(location: 0, length: storage.length), options: []) { attrs, range, _ in
+            storage.enumerateAttributes(in: sweep, options: []) { attrs, range, _ in
                 guard attrs[.foregroundColor] == nil, attrs[.attachment] == nil else { return }
                 let kind = (attrs[.walnutBlock] as? WalnutBlockKind) ?? .body
                 fixes.append((range, MarkdownAttributed.color(for: kind)))
@@ -187,7 +207,7 @@ struct WysiwygEditor: UIViewRepresentable {
                 textView.selectedRange = NSRange(location: range.location + (text as NSString).length, length: 0)
                 textView.typingAttributes = sticky
                 isInternalUpdate = false
-                parent.attributedText = textView.attributedText
+                pushBinding(from: textView)
                 parent.onChange()
                 return false
             }
@@ -248,7 +268,7 @@ struct WysiwygEditor: UIViewRepresentable {
             textView.typingAttributes = attrs
             textView.selectedRange = NSRange(location: lineStart, length: 0)
             isInternalUpdate = false
-            parent.attributedText = textView.attributedText
+            pushBinding(from: textView)
             parent.onChange()
         }
 
@@ -264,7 +284,7 @@ struct WysiwygEditor: UIViewRepresentable {
             textView.typingAttributes = attrs
             textView.selectedRange = NSRange(location: lineStart + 1, length: 0)
             isInternalUpdate = false
-            parent.attributedText = textView.attributedText
+            pushBinding(from: textView)
             parent.onChange()
         }
 
@@ -320,7 +340,7 @@ struct WysiwygEditor: UIViewRepresentable {
                 }
             }
             isInternalUpdate = false
-            parent.attributedText = textView.attributedText
+            pushBinding(from: textView)
             parent.onChange()
             return false
         }
@@ -402,7 +422,7 @@ struct WysiwygEditor: UIViewRepresentable {
                 isInternalUpdate = true
                 textView.textStorage.edited(.editedAttributes, range: NSRange(location: index, length: 1), changeInLength: 0)
                 isInternalUpdate = false
-                parent.attributedText = textView.attributedText
+                pushBinding(from: textView)
                 parent.onCheckboxToggle()
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 return true
@@ -461,7 +481,7 @@ struct WysiwygEditor: UIViewRepresentable {
                         textView.textStorage.deleteCharacters(in: range)
                     }
                     self.isInternalUpdate = false
-                    self.parent.attributedText = textView.attributedText
+                    self.pushBinding(from: textView)
                     self.parent.onChange()
                 }
             )
@@ -490,7 +510,7 @@ struct WysiwygEditor: UIViewRepresentable {
             textView.selectedRange = NSRange(location: loc + piece.length, length: 0)
             isInternalUpdate = false
             attachment.loadIfNeeded(maxWidth: width, in: textView)
-            parent.attributedText = textView.attributedText
+            pushBinding(from: textView)
             parent.onChange()
         }
 
@@ -544,7 +564,7 @@ struct WysiwygEditor: UIViewRepresentable {
             textView.typingAttributes = attrs
             textView.selectedRange = NSRange(location: lineRange.location + lineLen, length: 0)
             isInternalUpdate = false
-            parent.attributedText = textView.attributedText
+            pushBinding(from: textView)
             parent.onChange()
         }
 
@@ -603,7 +623,7 @@ struct WysiwygEditor: UIViewRepresentable {
             let newCaret = max(lineRange.location, min(caret + lengthDelta, storage.length))
             textView.selectedRange = NSRange(location: newCaret, length: 0)
             isInternalUpdate = false
-            parent.attributedText = textView.attributedText
+            pushBinding(from: textView)
             parent.onChange()
         }
 
@@ -655,7 +675,7 @@ struct WysiwygEditor: UIViewRepresentable {
                 }
             }
             isInternalUpdate = false
-            parent.attributedText = textView.attributedText
+            pushBinding(from: textView)
             parent.onChange()
         }
 
@@ -713,7 +733,7 @@ struct WysiwygEditor: UIViewRepresentable {
             textView.typingAttributes = attrs
             textView.selectedRange = NSRange(location: loc + piece.length, length: 0)
             isInternalUpdate = false
-            parent.attributedText = textView.attributedText
+            pushBinding(from: textView)
             parent.onChange()
         }
 
@@ -738,7 +758,7 @@ struct WysiwygEditor: UIViewRepresentable {
             textView.typingAttributes = MarkdownAttributed.typingAttributes(for: .body)
             textView.selectedRange = NSRange(location: loc + piece.length, length: 0)
             isInternalUpdate = false
-            parent.attributedText = textView.attributedText
+            pushBinding(from: textView)
             parent.onChange()
             let attachmentIndex = loc + (needsNewline ? 1 : 0)
             presentTableEditor(for: attachment, at: attachmentIndex, in: textView, tapPoint: nil)
