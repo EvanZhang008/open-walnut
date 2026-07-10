@@ -42,8 +42,8 @@ enum MarkdownAttributed {
         case .heading(let prefix):
             let level = prefix.trimmingCharacters(in: .whitespaces).count
             switch level {
-            case 1: return .systemFont(ofSize: 26, weight: .bold)
-            case 2: return .systemFont(ofSize: 21, weight: .semibold)
+            case 1: return .systemFont(ofSize: 28, weight: .bold)
+            case 2: return .systemFont(ofSize: 22, weight: .semibold)
             default: return .systemFont(ofSize: 18, weight: .semibold)
             }
         case .verbatim:
@@ -53,7 +53,7 @@ enum MarkdownAttributed {
         }
     }
 
-    private static func color(for kind: WalnutBlockKind) -> UIColor {
+    static func color(for kind: WalnutBlockKind) -> UIColor {
         switch kind {
         case .verbatim: return .secondaryLabel
         case .quote: return .secondaryLabel
@@ -64,6 +64,8 @@ enum MarkdownAttributed {
     private static func paragraphStyle(for kind: WalnutBlockKind) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
         style.paragraphSpacing = 4
+        // Apple Notes body rhythm: 17pt text on ~22pt lines.
+        style.minimumLineHeight = 22
         switch kind {
         case .bullet(let prefix), .numbered(let prefix):
             // Two leading spaces in the source = one visual indent level.
@@ -83,9 +85,13 @@ enum MarkdownAttributed {
         case .quote:
             style.headIndent = 14
             style.firstLineHeadIndent = 14
-        case .heading:
-            style.paragraphSpacingBefore = 10
+        case .heading(let prefix):
+            let level = prefix.trimmingCharacters(in: .whitespaces).count
+            style.paragraphSpacingBefore = level == 1 ? 14 : 10
             style.paragraphSpacing = 6
+            style.minimumLineHeight = 0
+        case .verbatim:
+            style.minimumLineHeight = 0
         default:
             break
         }

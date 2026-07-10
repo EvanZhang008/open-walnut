@@ -56,6 +56,7 @@ final class CheckboxAttachment: NSTextAttachment {
 final class BulletAttachment: NSTextAttachment {
     /// Exact matched marker text including leading whitespace, e.g. "  - ".
     let source: String
+    private var renderedStyle: UIUserInterfaceStyle = .unspecified
 
     /// Wider-than-glyph canvas = built-in gap to the text (matches checkbox).
     static let canvasWidth: CGFloat = 26
@@ -63,16 +64,26 @@ final class BulletAttachment: NSTextAttachment {
     init(source: String) {
         self.source = source
         super.init(data: nil, ofType: nil)
+        rerender(for: .current)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    /// Attachment images are baked bitmaps — dynamic colors do NOT re-resolve
+    /// on appearance change. The owning text view re-bakes for its actual
+    /// trait collection (WalnutTextView.refreshAttachmentAppearance).
+    func rerender(for traits: UITraitCollection) {
+        guard traits.userInterfaceStyle != renderedStyle else { return }
+        renderedStyle = traits.userInterfaceStyle
+        let dotColor = UIColor.label.resolvedColor(with: traits)
         let size = CGSize(width: Self.canvasWidth, height: 20)
         image = UIGraphicsImageRenderer(size: size).image { _ in
-            let dot = CGRect(x: 6, y: 7, width: 6, height: 6)
-            UIColor.label.setFill()
+            let dot = CGRect(x: 5.5, y: 6.5, width: 7, height: 7)
+            dotColor.setFill()
             UIBezierPath(ovalIn: dot).fill()
         }
         bounds = CGRect(x: 0, y: -2.5, width: size.width, height: size.height)
     }
-
-    required init?(coder: NSCoder) { nil }
 }
 
 /// Inline image for `![[name.png]]` / `![alt](path)` embeds. Shows a grey

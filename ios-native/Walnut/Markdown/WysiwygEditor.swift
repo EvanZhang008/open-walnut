@@ -18,11 +18,21 @@ struct WysiwygEditor: UIViewRepresentable {
     func makeUIView(context: Context) -> WalnutTextView {
         let textView = WalnutTextView()
         textView.delegate = context.coordinator
-        textView.isEditable = isEditable
+        // Apple Notes interaction model: the view is NOT editable while just
+        // reading/scrolling — a stationary touch (pausing mid-scroll) must
+        // never summon the keyboard. A deliberate quick tap flips into edit
+        // mode (see WalnutTextView.beginEditingSession); ending editing flips
+        // back. `allowsEditing` gates the whole mechanism (offline = read-only).
+        textView.allowsEditing = isEditable
+        textView.isEditable = false
         textView.isScrollEnabled = true
         textView.alwaysBounceVertical = true
+        textView.keyboardDismissMode = .interactive
         textView.backgroundColor = .clear
-        textView.textContainerInset = UIEdgeInsets(top: 8, left: 16, bottom: 40, right: 16)
+        // Fallback for any run that reaches storage without an explicit
+        // foreground color — .label keeps it visible in dark mode.
+        textView.textColor = .label
+        textView.textContainerInset = UIEdgeInsets(top: 14, left: 20, bottom: 40, right: 20)
         textView.textContainer.lineFragmentPadding = 0
         textView.attributedText = attributedText
         textView.typingAttributes = MarkdownAttributed.typingAttributes(for: .body)
@@ -40,9 +50,11 @@ struct WysiwygEditor: UIViewRepresentable {
             }
         }
         MarkdownAttributed.kickOffImageLoads(in: textView, maxWidth: context.coordinator.imageWidth(for: textView))
+        textView.refreshAttachmentAppearance()
         if autoFocus {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak textView] in
-                textView?.becomeFirstResponder()
+                guard let textView else { return }
+                textView.beginEditingSession(at: NSRange(location: textView.textStorage.length, length: 0))
             }
         }
         return textView
@@ -50,12 +62,20 @@ struct WysiwygEditor: UIViewRepresentable {
 
     func updateUIView(_ textView: WalnutTextView, context: Context) {
         context.coordinator.parent = self
-        textView.isEditable = isEditable
+        textView.allowsEditing = isEditable
+        // Don't clobber isEditable mid-session — the tap that entered edit
+        // mode owns it until textViewDidEndEditing hands it back. Going
+        // read-only (offline) does force the session closed.
+        if !isEditable, textView.isEditable {
+            textView.isEditable = false
+            _ = textView.resignFirstResponder()
+        }
         if !context.coordinator.isInternalUpdate, textView.attributedText != attributedText {
             let selected = textView.selectedRange
             textView.attributedText = attributedText
             textView.selectedRange = selected
             MarkdownAttributed.kickOffImageLoads(in: textView, maxWidth: context.coordinator.imageWidth(for: textView))
+            textView.refreshAttachmentAppearance()
         }
     }
 
@@ -89,11 +109,37 @@ struct WysiwygEditor: UIViewRepresentable {
 
         func textViewDidChange(_ textView: UITextView) {
             guard !isInternalUpdate else { return }
+            ensureVisibleTextColor(textView)
             updateTypingAttributes(textView)
             isInternalUpdate = true
             parent.attributedText = textView.attributedText
             isInternalUpdate = false
             parent.onChange()
+        }
+
+        func textViewDidEndEditing(_ textView: UITextView) {
+            // Back to read/scroll mode — a stationary touch (pausing
+            // mid-scroll) can't summon the keyboard until the next real tap.
+            textView.isEditable = false
+        }
+
+        /// UIKit silently resets typingAttributes on several input paths (IME
+        /// marked-text commit, hardware keyboards), dropping .foregroundColor —
+        /// that text then renders BLACK regardless of appearance (invisible in
+        /// dark mode). Re-add a dynamic color to any run that reaches storage
+        /// without one.
+        private func ensureVisibleTextColor(_ textView: UITextView) {
+            let storage = textView.textStorage
+            guard storage.length > 0 else { return }
+            var fixes: [(NSRange, UIColor)] = []
+            storage.enumerateAttributes(in: NSRange(location: 0, length: storage.length), options: []) { attrs, range, _ in
+                guard attrs[.foregroundColor] == nil, attrs[.attachment] == nil else { return }
+                let kind = (attrs[.walnutBlock] as? WalnutBlockKind) ?? .body
+                fixes.append((range, MarkdownAttributed.color(for: kind)))
+            }
+            for (range, color) in fixes {
+                storage.addAttribute(.foregroundColor, value: color, range: range)
+            }
         }
 
         func textViewDidChangeSelection(_ textView: UITextView) {
@@ -118,6 +164,10 @@ struct WysiwygEditor: UIViewRepresentable {
             typing.removeValue(forKey: .attachment)
             typing.removeValue(forKey: .walnutDelimOpen)
             typing.removeValue(forKey: .walnutDelimClose)
+            if typing[.foregroundColor] == nil {
+                let kind = (typing[.walnutBlock] as? WalnutBlockKind) ?? .body
+                typing[.foregroundColor] = MarkdownAttributed.color(for: kind)
+            }
             textView.typingAttributes = typing
         }
 
@@ -320,21 +370,32 @@ struct WysiwygEditor: UIViewRepresentable {
             defaultAction
         }
 
-        @objc func handleTap(_ gesture: UITapGestureRecognizer, in textView: UITextView) {
+        /// Attachment tap handling (checkbox toggle, table editor). Returns
+        /// true when the tap was consumed so WalnutTextView doesn't also
+        /// treat it as a begin-editing / caret-placement tap.
+        @discardableResult
+        @objc func handleTap(_ gesture: UITapGestureRecognizer, in textView: UITextView) -> Bool {
             let point = gesture.location(in: textView)
             // A live table editor owns taps inside itself (cells + pill);
             // any tap outside commits it — Apple Notes behavior.
             if let editor = activeTableEditor {
                 let local = editor.convert(point, from: textView)
-                if editor.point(inside: local, with: nil) { return }
+                if editor.point(inside: local, with: nil) { return true }
                 editor.commit()
-                return
+                return true
             }
             let adjusted = CGPoint(x: point.x - textView.textContainerInset.left, y: point.y - textView.textContainerInset.top)
             let index = textView.layoutManager.characterIndex(
                 for: adjusted, in: textView.textContainer, fractionOfDistanceBetweenInsertionPoints: nil
             )
-            guard index < textView.textStorage.length else { return }
+            guard index < textView.textStorage.length else { return false }
+            // The glyph the tap actually landed on — characterIndex clamps to
+            // the NEAREST glyph, which would toggle a checkbox from a tap in
+            // the blank area right of the row (where users tap to edit text).
+            let glyphRect = textView.layoutManager.boundingRect(
+                forGlyphRange: NSRange(location: index, length: 1), in: textView.textContainer
+            ).insetBy(dx: -8, dy: -8) // forgiving hit slop for small markers
+            guard glyphRect.contains(adjusted) else { return false }
             let value = textView.textStorage.attribute(.attachment, at: index, effectiveRange: nil)
             if let checkbox = value as? CheckboxAttachment {
                 checkbox.toggle()
@@ -344,9 +405,13 @@ struct WysiwygEditor: UIViewRepresentable {
                 parent.attributedText = textView.attributedText
                 parent.onCheckboxToggle()
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            } else if let table = value as? TableAttachment {
-                presentTableEditor(for: table, at: index, in: textView, tapPoint: point)
+                return true
             }
+            if let table = value as? TableAttachment {
+                presentTableEditor(for: table, at: index, in: textView, tapPoint: point)
+                return true
+            }
+            return false
         }
 
         // MARK: - Table editing (in-place overlay, Apple Notes style)
@@ -687,15 +752,31 @@ struct WysiwygEditor: UIViewRepresentable {
     }
 }
 
-/// UITextView subclass wired for single-tap checkbox toggling and image paste.
+/// UITextView subclass implementing Apple Notes' read-then-edit model:
+/// not editable while scrolling/reading, a deliberate quick TAP begins an
+/// edit session (caret at the tap point, keyboard up). Because the view is
+/// not editable at rest, UIKit's "stationary touch = intent to edit"
+/// heuristic never fires — pausing a finger mid-scroll does nothing.
+/// The same tap recognizer also toggles checkboxes and opens table editing.
 final class WalnutTextView: UITextView, UIGestureRecognizerDelegate {
+    weak var coordinator: WysiwygEditor.Coordinator?
+    /// Whether edit sessions may begin at all (false = offline/read-only).
+    var allowsEditing = true
+
+    /// The format bar belongs to EDITING only. Long-press text selection in
+    /// read mode also makes the view first responder — without this gate the
+    /// bar would float up over the tab bar with no keyboard.
+    override var inputAccessoryView: UIView? {
+        get { isEditable ? super.inputAccessoryView : nil }
+        set { super.inputAccessoryView = newValue }
+    }
+
     func gestureRecognizer(
         _ gestureRecognizer: UIGestureRecognizer,
         shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
     ) -> Bool {
         true // coexist with the text view's own tap/selection recognizers
     }
-    weak var coordinator: WysiwygEditor.Coordinator?
 
     override func awakeFromNib() {
         super.awakeFromNib()
@@ -714,16 +795,72 @@ final class WalnutTextView: UITextView, UIGestureRecognizerDelegate {
 
     private func setUpTap() {
         let tap = UITapGestureRecognizer(target: self, action: #selector(onTap(_:)))
-        // Must NOT swallow touches — the text view still needs every tap for
-        // caret placement / becoming first responder. This recognizer only
-        // OBSERVES taps to toggle checkboxes.
+        // Must NOT swallow touches — while editing, the text view still needs
+        // every tap for caret placement/selection. This recognizer OBSERVES
+        // taps: checkbox/table handling always, entering edit mode when idle.
         tap.cancelsTouchesInView = false
         tap.delegate = self
         addGestureRecognizer(tap)
+        // Attachment glyphs are baked bitmaps; re-bake them when light/dark
+        // changes so bullets/tables stay visible (dynamic colors don't
+        // re-resolve inside already-rendered images).
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: WalnutTextView, _) in
+            view.refreshAttachmentAppearance()
+        }
+    }
+
+    func refreshAttachmentAppearance() {
+        let storage = textStorage
+        guard storage.length > 0 else { return }
+        let full = NSRange(location: 0, length: storage.length)
+        storage.enumerateAttribute(.attachment, in: full) { value, range, _ in
+            switch value {
+            case let bullet as BulletAttachment:
+                bullet.rerender(for: traitCollection)
+            case let table as TableAttachment:
+                table.rerender(for: traitCollection)
+            default:
+                return
+            }
+            storage.edited(.editedAttributes, range: range, changeInLength: 0)
+            layoutManager.invalidateDisplay(forCharacterRange: range)
+        }
     }
 
     @objc private func onTap(_ gesture: UITapGestureRecognizer) {
-        coordinator?.handleTap(gesture, in: self)
+        // Attachment interactions (checkbox toggle, table editor) win over
+        // caret placement in BOTH modes — handleTap reports whether it acted.
+        if coordinator?.handleTap(gesture, in: self) == true { return }
+        guard allowsEditing, !isEditable else { return }
+        // A recognized TAP is already disambiguated from a scroll by UIKit —
+        // scrolls and long stationary holds never reach here.
+        let point = gesture.location(in: self)
+        let adjusted = CGPoint(x: point.x - textContainerInset.left, y: point.y - textContainerInset.top)
+        let index = layoutManager.characterIndex(
+            for: adjusted, in: textContainer, fractionOfDistanceBetweenInsertionPoints: nil
+        )
+        // Tapping past the last line targets the end of the note.
+        let location = index >= textStorage.length ? textStorage.length : caretIndex(near: adjusted, rawIndex: index)
+        beginEditingSession(at: NSRange(location: location, length: 0))
+    }
+
+    /// Flip into edit mode with the caret placed — the ONLY entry point to
+    /// editing (autoFocus for brand-new notes uses it too).
+    func beginEditingSession(at range: NSRange) {
+        guard allowsEditing else { return }
+        isEditable = true
+        selectedRange = range
+        becomeFirstResponder()
+    }
+
+    /// characterIndex(for:) clamps to the nearest glyph; when the tap lands in
+    /// the right half of a character the caret belongs AFTER it.
+    private func caretIndex(near point: CGPoint, rawIndex: Int) -> Int {
+        var fraction: CGFloat = 0
+        _ = layoutManager.characterIndex(
+            for: point, in: textContainer, fractionOfDistanceBetweenInsertionPoints: &fraction
+        )
+        return fraction > 0.5 ? min(rawIndex + 1, textStorage.length) : rawIndex
     }
 
     override func paste(_ sender: Any?) {

@@ -78,6 +78,12 @@ final class TableAttachment: NSTextAttachment {
         rerender()
     }
 
+    /// Baked-image attachments don't re-resolve dynamic colors on appearance
+    /// change — re-draw with the given traits current (dark-mode visibility).
+    func rerender(for traits: UITraitCollection) {
+        traits.performAsCurrent { rerender() }
+    }
+
     private func rerender() {
         let image = Self.render(table: table, width: renderWidth)
         self.image = image
