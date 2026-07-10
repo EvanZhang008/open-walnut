@@ -460,9 +460,16 @@ struct WysiwygEditor: UIViewRepresentable {
                 piece.addAttributes(attrs, range: NSRange(location: 0, length: 1))
                 storage.insert(piece, at: lineRange.location)
                 lineLen += 1
-            case .numbered(let prefix):
+            case .numbered(let prefix), .quote(let prefix):
+                // Literal-prefix blocks — the serializer re-emits the `1. ` /
+                // `> ` from the line text, so it must be inserted here.
                 storage.insert(NSAttributedString(string: prefix, attributes: attrs), at: lineRange.location)
                 lineLen += (prefix as NSString).length
+            case .task:
+                let piece = NSMutableAttributedString(attachment: CheckboxAttachment(source: "- [ ] ", checked: false))
+                piece.addAttributes(attrs, range: NSRange(location: 0, length: 1))
+                storage.insert(piece, at: lineRange.location)
+                lineLen += 1
             default:
                 break // body/heading are attribute-only
             }
@@ -474,6 +481,82 @@ struct WysiwygEditor: UIViewRepresentable {
             isInternalUpdate = false
             parent.attributedText = textView.attributedText
             parent.onChange()
+        }
+
+        /// Increase/decrease the leading indent (±2 spaces) of the current
+        /// bullet / numbered / task line; no-op on any other paragraph kind.
+        /// The indent lives in each marker's exact source (so it round-trips)
+        /// and in the paragraph style's headIndent (so it renders).
+        func adjustIndent(_ delta: Int, in textView: UITextView) {
+            let storage = textView.textStorage
+            let caret = textView.selectedRange.location
+            let lineRange = (storage.string as NSString).lineRange(for: NSRange(location: min(caret, storage.length), length: 0))
+            guard lineRange.length > 0, lineRange.location < storage.length else { return }
+            let attrs = storage.attributes(at: lineRange.location, effectiveRange: nil)
+            let kind = (attrs[.walnutBlock] as? WalnutBlockKind) ?? .body
+
+            var lengthDelta = 0
+            isInternalUpdate = true
+            switch kind {
+            case .bullet:
+                guard let dot = attrs[.attachment] as? BulletAttachment else { isInternalUpdate = false; return }
+                let newSource = reindentedSource(dot.source, delta: delta)
+                let lineAttrs = MarkdownAttributed.typingAttributes(for: .bullet(prefix: newSource))
+                let piece = NSMutableAttributedString(attachment: BulletAttachment(source: newSource))
+                piece.addAttributes(lineAttrs, range: NSRange(location: 0, length: 1))
+                storage.replaceCharacters(in: NSRange(location: lineRange.location, length: 1), with: piece)
+                applyLineAttributes(storage, lineStart: lineRange.location, attrs: lineAttrs)
+            case .task:
+                guard let box = attrs[.attachment] as? CheckboxAttachment else { isInternalUpdate = false; return }
+                let newSource = reindentedSource(box.source, delta: delta)
+                let lineAttrs = MarkdownAttributed.taskAttributes(
+                    leadingSpaces: newSource.prefix(while: { $0 == " " }).count
+                )
+                let piece = NSMutableAttributedString(attachment: CheckboxAttachment(source: newSource, checked: box.checked))
+                piece.addAttributes(lineAttrs, range: NSRange(location: 0, length: 1))
+                storage.replaceCharacters(in: NSRange(location: lineRange.location, length: 1), with: piece)
+                applyLineAttributes(storage, lineStart: lineRange.location, attrs: lineAttrs)
+            case .numbered(let prefix):
+                let newPrefix = reindentedSource(prefix, delta: delta)
+                guard newPrefix != prefix else { isInternalUpdate = false; return }
+                let lineAttrs = MarkdownAttributed.typingAttributes(for: .numbered(prefix: newPrefix))
+                let oldSpaces = prefix.prefix(while: { $0 == " " }).count
+                let newSpaces = newPrefix.prefix(while: { $0 == " " }).count
+                if newSpaces > oldSpaces {
+                    let pad = String(repeating: " ", count: newSpaces - oldSpaces)
+                    storage.insert(NSAttributedString(string: pad, attributes: lineAttrs), at: lineRange.location)
+                    lengthDelta = newSpaces - oldSpaces
+                } else {
+                    storage.deleteCharacters(in: NSRange(location: lineRange.location, length: oldSpaces - newSpaces))
+                    lengthDelta = -(oldSpaces - newSpaces)
+                }
+                applyLineAttributes(storage, lineStart: lineRange.location, attrs: lineAttrs)
+            default:
+                isInternalUpdate = false
+                return // no-op for non-list lines
+            }
+            let newCaret = max(lineRange.location, min(caret + lengthDelta, storage.length))
+            textView.selectedRange = NSRange(location: newCaret, length: 0)
+            isInternalUpdate = false
+            parent.attributedText = textView.attributedText
+            parent.onChange()
+        }
+
+        private func reindentedSource(_ source: String, delta: Int) -> String {
+            let leading = source.prefix(while: { $0 == " " }).count
+            let rest = String(source.dropFirst(leading))
+            let newLeading = max(0, leading + delta * 2)
+            return String(repeating: " ", count: newLeading) + rest
+        }
+
+        /// Re-apply block attributes across a whole line, excluding its trailing
+        /// newline so the next paragraph's identity is untouched.
+        private func applyLineAttributes(_ storage: NSTextStorage, lineStart: Int, attrs: [NSAttributedString.Key: Any]) {
+            let lineRange = (storage.string as NSString).lineRange(for: NSRange(location: min(lineStart, storage.length), length: 0))
+            var len = lineRange.length
+            if len > 0, (storage.string as NSString).character(at: lineRange.location + len - 1) == 10 { len -= 1 }
+            guard len > 0 else { return }
+            storage.addAttributes(attrs, range: NSRange(location: lineRange.location, length: len))
         }
 
         /// Toggle a character trait (bold/italic/underline/strike) over the

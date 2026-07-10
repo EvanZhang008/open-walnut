@@ -66,9 +66,10 @@ enum MarkdownAttributed {
         style.paragraphSpacing = 4
         switch kind {
         case .bullet(let prefix), .numbered(let prefix):
-            let indent = CGFloat(prefix.prefix(while: { $0 == " " }).count)
-            style.headIndent = 20 + indent
-            style.firstLineHeadIndent = 0
+            // Two leading spaces in the source = one visual indent level.
+            let level = CGFloat(prefix.prefix(while: { $0 == " " }).count) / 2
+            style.firstLineHeadIndent = level * 16
+            style.headIndent = 20 + level * 16
         case .task:
             style.headIndent = 26
             style.firstLineHeadIndent = 0
@@ -90,6 +91,20 @@ enum MarkdownAttributed {
             .paragraphStyle: paragraphStyle(for: kind),
             .walnutBlock: kind,
         ]
+    }
+
+    /// Task-line attributes with a visual indent level. `.task` carries no
+    /// prefix in the block enum (the checkbox attachment holds the source),
+    /// so indent must be derived from the marker's leading spaces here.
+    static func taskAttributes(leadingSpaces: Int) -> [NSAttributedString.Key: Any] {
+        var attrs = typingAttributes(for: .task)
+        let level = CGFloat(leadingSpaces) / 2
+        let style = NSMutableParagraphStyle()
+        style.setParagraphStyle(attrs[.paragraphStyle] as! NSParagraphStyle)
+        style.firstLineHeadIndent = level * 16
+        style.headIndent = 26 + level * 16
+        attrs[.paragraphStyle] = style
+        return attrs
     }
 
     // MARK: - Parse
@@ -288,7 +303,7 @@ enum MarkdownAttributed {
     private static func appendTaskLine(
         prefix: String, checked: Bool, content: String, to result: NSMutableAttributedString, maxImageWidth: CGFloat
     ) {
-        let attrs = typingAttributes(for: .task)
+        let attrs = taskAttributes(leadingSpaces: prefix.prefix(while: { $0 == " " }).count)
         let attachment = CheckboxAttachment(source: prefix, checked: checked)
         result.append(NSAttributedString(attachment: attachment))
         // Attachment run needs the block-kind attribute too, or the coordinator
