@@ -160,9 +160,13 @@ apiV1Router.get('/conversations', async (req: Request, res: Response, next: Next
     const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50))
     const list = await listConversations(agentId)
     const sorted = [...list].sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt))
+    // Legacy stored titles can be a machine banner ("[Current: Sun, Jun 7…]")
+    // derived before the title heuristic learned to skip them — treat those
+    // as untitled rather than serving garbage to the client.
+    const isBannerTitle = (t: string) => /^\[[^\]]*\]$/.test(t.trim())
     res.json(sorted.slice(0, limit).map((c) => ({
       id: c.id,
-      ...(c.title ? { title: c.title } : {}),
+      ...(c.title && !isBannerTitle(c.title) ? { title: c.title } : {}),
       updatedAt: c.lastMessageAt,
       messageCount: c.messageCount,
     })))
@@ -231,6 +235,30 @@ function stripEntityRefs(text: string): string {
 }
 
 /**
+ * Drop machine banners prefixed onto user turns before the real message:
+ * closed context blocks ("[Task Context]…[/Task Context]") and standalone
+ * bracketed lines ("[Current: Sun, Jun 7…]", "[Pending Cron Notifications]").
+ * Same policy as the console title derivation (src/core/conversations.ts).
+ */
+function stripLeadingBanners(text: string): string {
+  let t = text
+  const closeIdx = t.lastIndexOf('[/')
+  if (closeIdx !== -1) {
+    const after = t.slice(closeIdx)
+    const nl = after.indexOf('\n')
+    if (nl !== -1) t = after.slice(nl)
+  }
+  const lines = t.split('\n')
+  let start = 0
+  while (start < lines.length) {
+    const s = lines[start].trim()
+    if (s.length === 0 || /^\[[^\]]*\]$/.test(s)) { start++; continue }
+    break
+  }
+  return lines.slice(start).join('\n').trim()
+}
+
+/**
  * Flatten chat entries into simple mobile messages. Assistant entries expand
  * in block order: thinking → kind:'thinking', tool_use → kind:'tool', and all
  * text blocks of one entry join into a single plain assistant message.
@@ -250,14 +278,19 @@ export function normalizeEntries(entries: ChatEntry[]): ApiV1Message[] {
 
   for (const entry of entries) {
     const createdAt = entry.timestamp
+    // Machine-generated Quick Start banners ("[Quick Start] Session created…
+    // Please update the task…") are agent instructions, not conversation —
+    // the web console hides them entirely (ChatMessage.tsx); so do we. They
+    // appear BOTH as ui echoes and as ai-tagged user turns.
+    if (entry.role === 'user' && entry.source === 'quick-start') continue
     if (entry.tag === 'ui') {
       if (entry.notification && entry.source && HIDDEN_NOTIFICATION_SOURCES.has(entry.source)) continue
       const raw = typeof entry.content === 'string' ? entry.content : ''
       const text = stripEntityRefs(raw)
       if (!text) continue
-      // System-generated notifications render as cards; plain ui echoes (e.g.
-      // quick-start user lines) stay ordinary bubbles.
-      if (entry.notification || (entry.source && entry.source !== 'quick-start')) {
+      // System-generated notifications render as cards; plain ui echoes stay
+      // ordinary bubbles.
+      if (entry.notification || entry.source) {
         push({ role: entry.role, text, createdAt, kind: 'notification', source: entry.source ?? 'notification' })
       } else {
         push({ role: entry.role, text, createdAt })
@@ -276,7 +309,14 @@ export function normalizeEntries(entries: ChatEntry[]): ApiV1Message[] {
             .join('')
         }
       }
-      if (text) push({ role: 'user', text, createdAt })
+      // The CLI writes this marker on any AbortController fire (incl. idle
+      // reaps) — a user bubble would misattribute it. Card, like the web.
+      if (text.trim() === '[Request interrupted by user]') {
+        push({ role: 'user', text: 'Turn interrupted', createdAt, kind: 'notification', source: 'interrupt' })
+        continue
+      }
+      text = stripLeadingBanners(text)
+      if (text) push({ role: 'user', text: stripEntityRefs(text), createdAt })
       continue
     }
     // assistant

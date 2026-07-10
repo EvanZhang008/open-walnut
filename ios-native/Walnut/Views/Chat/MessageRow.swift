@@ -211,6 +211,7 @@ struct NotificationCard: View {
         case "cron": return "clock.badge.checkmark"
         case "compaction": return "arrow.down.right.and.arrow.up.left"
         case "session": return "checkmark.seal"
+        case "interrupt": return "stop.circle"
         default: return isError ? "exclamationmark.triangle.fill" : "bell"
         }
     }
@@ -223,6 +224,7 @@ struct NotificationCard: View {
         case "compaction": return "Compacted"
         case "session": return "Session result"
         case "subagent": return "Subagent"
+        case "interrupt": return "Interrupted"
         default: return "Notification"
         }
     }

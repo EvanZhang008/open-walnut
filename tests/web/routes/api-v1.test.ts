@@ -672,23 +672,33 @@ describe('message normalization: notifications + entity refs', () => {
       // Errors: surface as notification cards, refs resolved to labels
       // (both the XML form and the legacy [id|label] bracket form).
       { tag: 'ui', role: 'assistant', content: '**Session Error** (<task-ref id="t2" label="Deploy fix"/>): boom in [mr9i88ys-87a4|Quick Start / Website]', timestamp: '2026-07-10T00:00:04Z', source: 'session-error', notification: true },
-      // Plain quick-start echo stays an ordinary bubble.
-      { tag: 'ui', role: 'user', content: 'show today', timestamp: '2026-07-10T00:00:05Z', source: 'quick-start' },
+      // Quick Start machine banners (both shapes) are dropped entirely,
+      // like the web console.
+      { tag: 'ui', role: 'user', content: 'Quick Start on `~/repo`:\n> do the thing', timestamp: '2026-07-10T00:00:05Z', source: 'quick-start' },
+      { tag: 'ai', role: 'user', content: [{ type: 'text', text: '[Quick Start] Session created and running.\n- Task ID: t9\n\nPlease update the task:\n1. Set a descriptive title' }], displayText: '[Quick Start] Session created and running.\n- Task ID: t9\n\nPlease update the task:\n1. Set a descriptive title', timestamp: '2026-07-10T00:00:05Z', source: 'quick-start' },
+      // Leading machine banners on a real user turn are stripped.
+      { tag: 'ai', role: 'user', content: [{ type: 'text', text: '[Current: Sun, Jun 7, 2026, 05:26 PM]\n\nreal user question' }], timestamp: '2026-07-10T00:00:05Z' },
+      // CLI interrupt marker becomes a card, not a fake user bubble.
+      { tag: 'ai', role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }], timestamp: '2026-07-10T00:00:05Z' },
       // Normal AI turn with an inline session ref.
       { tag: 'ai', role: 'assistant', content: [{ type: 'text', text: 'See <session-ref id="s1" label="Build session"/> for logs.' }], timestamp: '2026-07-10T00:00:06Z' },
     ]
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const out = normalizeEntries(entries as any)
-    expect(out).toHaveLength(3)
+    expect(out).toHaveLength(4)
     expect(out[0].kind).toBe('notification')
     expect(out[0].source).toBe('session-error')
     expect(out[0].text).toContain('Deploy fix')
     expect(out[0].text).not.toContain('<task-ref')
     expect(out[0].text).toContain('boom in Quick Start / Website')
     expect(out[0].text).not.toContain('mr9i88ys-87a4|')
-    expect(out[1].kind).toBeUndefined()
-    expect(out[1].text).toBe('show today')
-    expect(out[2].text).toBe('See Build session for logs.')
+    expect(out[1].text).toBe('real user question')
+    expect(out[2].kind).toBe('notification')
+    expect(out[2].source).toBe('interrupt')
+    expect(out[3].text).toBe('See Build session for logs.')
+    const all = JSON.stringify(out)
+    expect(all).not.toContain('Please update the task')
+    expect(all).not.toContain('[Current:')
   })
 })
 
