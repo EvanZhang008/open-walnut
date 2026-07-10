@@ -10,10 +10,15 @@
  * Cloud box: readSessionProjection() serves GET /api/v1/sessions from the
  * synced file — the projection IS the replica.
  *
- * Read-only by design (Phase 1). Opening/steering a session from the
- * companion requires the reverse-WS bridge to the primary (Phase 2) — every
- * live session path routes through the primary box because corp remote hosts
- * are only reachable from there (SSH), and one relay = one audited path.
+ * "Open a session" from the companion (Phase 1): alongside the list, the
+ * primary exports a TRANSCRIPT TAIL per alive session to
+ * `sessions/transcripts/<sid>.json`. The primary is the machine that can
+ * reach every session's JSONL — local ones on disk, remote ones over its
+ * SSH channel — so the export IS the "proxy through the primary",
+ * materialized as files instead of a live connection. STEERING a session
+ * (sending messages) still requires the reverse-WS bridge (Phase 2); every
+ * live path routes through the primary because corp remote hosts are only
+ * reachable from there, and one relay = one audited path.
  *
  * Scope: all live sessions (running/idle/error) + sessions stopped within
  * STOPPED_RETENTION_DAYS. Environment sessions (triage/cron/hook/embedded
@@ -30,11 +35,16 @@ import { log } from '../logging/index.js'
 import type { SessionRecord, Task } from './types.js'
 
 export const SESSION_PROJECTION_FILE = path.join(WALNUT_HOME, 'sessions', 'projection.json')
+export const SESSION_TRANSCRIPTS_DIR = path.join(WALNUT_HOME, 'sessions', 'transcripts')
 
 const STOPPED_RETENTION_DAYS = 14
 const DEBOUNCE_MS = 3_000
 const DESCRIPTION_MAX = 300
 const MAX_SESSIONS = 500
+/** Transcript tail shipped per session (slim rows, not full JSONL). */
+const TRANSCRIPT_TAIL = 100
+/** Min gap between transcript export sweeps (remote reads go over SSH). */
+const TRANSCRIPT_THROTTLE_MS = 60_000
 
 /** Slim session shape shipped to the companion — frozen v1 contract (additive-only). */
 export interface ProjectedSession {
@@ -121,6 +131,109 @@ export async function exportSessionProjection(): Promise<number> {
   return sessions.length
 }
 
+// ── Transcript tails (the "open session" payload) ──────────────────────────
+
+/** Slim transcript row — mirrors the mobile chat message shape. */
+export interface ProjectedTranscriptMessage {
+  role: string
+  text: string
+  timestamp: string
+  /** "tool" rows carry the tool name in text; "thinking" a short excerpt. */
+  kind?: 'tool' | 'thinking'
+}
+
+export interface SessionTranscript {
+  version: 1
+  sessionId: string
+  exportedAt: string
+  /** True when the tail was truncated to TRANSCRIPT_TAIL rows. */
+  truncated: boolean
+  messages: ProjectedTranscriptMessage[]
+}
+
+const TEXT_MAX = 4_000
+
+let lastTranscriptSweep = 0
+let transcriptSweepRunning = false
+
+/**
+ * Export transcript tails for alive sessions (+ recently-stopped ones whose
+ * file is missing). Throttled: remote session reads ride SSH, so sweeps are
+ * at most one per TRANSCRIPT_THROTTLE_MS and never concurrent.
+ */
+export async function exportSessionTranscripts(): Promise<number> {
+  if (transcriptSweepRunning) return 0
+  if (Date.now() - lastTranscriptSweep < TRANSCRIPT_THROTTLE_MS) return 0
+  transcriptSweepRunning = true
+  lastTranscriptSweep = Date.now()
+  try {
+    const projection = await readSessionProjection()
+    if (!projection) return 0
+    const { readSessionHistory } = await import('./session-history.js')
+    const { getSessionByClaudeId } = await import('./session-tracker.js')
+    await fsp.mkdir(SESSION_TRANSCRIPTS_DIR, { recursive: true })
+
+    let exported = 0
+    for (const s of projection.sessions) {
+      const alive = s.process_status === 'running' || s.process_status === 'idle'
+      const file = path.join(SESSION_TRANSCRIPTS_DIR, `${s.id}.json`)
+      if (!alive) {
+        // Stopped sessions keep their last exported tail; export once if absent.
+        try { await fsp.access(file); continue } catch { /* missing — export below */ }
+      }
+      try {
+        const record = await getSessionByClaudeId(s.id)
+        const history = await readSessionHistory(s.id, record?.cwd, record?.host, record?.outputFile, { skipSubagents: true })
+        const tail = history.slice(-TRANSCRIPT_TAIL)
+        const messages: ProjectedTranscriptMessage[] = []
+        for (const m of tail) {
+          if (m.role === 'system') continue
+          for (const t of m.tools ?? []) {
+            messages.push({ role: 'assistant', text: t.name, timestamp: m.timestamp, kind: 'tool' })
+          }
+          const text = (m.text || '').trim()
+          if (text) {
+            messages.push({
+              role: m.role,
+              text: text.length > TEXT_MAX ? text.slice(0, TEXT_MAX) + '…' : text,
+              timestamp: m.timestamp,
+            })
+          }
+        }
+        const transcript: SessionTranscript = {
+          version: 1,
+          sessionId: s.id,
+          exportedAt: new Date().toISOString(),
+          truncated: history.length > TRANSCRIPT_TAIL,
+          messages,
+        }
+        await writeJsonFile(file, transcript)
+        exported++
+      } catch (err) {
+        // One unreachable session (SSH down, purged JSONL) must not kill the sweep.
+        log.session.debug('transcript export skipped', { sessionId: s.id, error: String(err) })
+      }
+    }
+    return exported
+  } finally {
+    transcriptSweepRunning = false
+  }
+}
+
+/** Read a synced transcript tail (cloud box). Null when absent/corrupt. */
+export async function readSessionTranscript(sessionId: string): Promise<SessionTranscript | null> {
+  // The id lands in a filename — refuse anything but the safe id alphabet.
+  if (!/^[A-Za-z0-9_-]+$/.test(sessionId)) return null
+  try {
+    const raw = await fsp.readFile(path.join(SESSION_TRANSCRIPTS_DIR, `${sessionId}.json`), 'utf-8')
+    const parsed = JSON.parse(raw) as SessionTranscript
+    if (parsed?.version !== 1 || !Array.isArray(parsed.messages)) return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
 /** Read the synced projection file (cloud box). Null when absent/corrupt. */
 export async function readSessionProjection(): Promise<SessionProjection | null> {
   try {
@@ -145,6 +258,8 @@ function scheduleExport(): void {
     exporting = true
     exportSessionProjection()
       .then((count) => log.session.debug('session projection exported', { count }))
+      .then(() => exportSessionTranscripts())
+      .then((count) => { if (count > 0) log.session.debug('session transcripts exported', { count }) })
       .catch((err) => log.session.warn('session projection export failed', { error: String(err) }))
       .finally(() => {
         exporting = false

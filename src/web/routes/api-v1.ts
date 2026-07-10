@@ -543,6 +543,30 @@ apiV1Router.get('/sessions', async (req: Request, res: Response, next: NextFunct
   }
 })
 
+// GET /api/v1/sessions/:id/transcript — the "open session" payload: a slim
+// transcript tail exported by the primary (which owns local disk + SSH access
+// to every session) and synced as a file. 404 when no tail was exported yet.
+apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { readSessionTranscript, exportSessionTranscripts } = await import('../../core/session-projection.js')
+    const sessionId = paramStr(req.params.id)
+    let transcript = await readSessionTranscript(sessionId)
+    if (!transcript && !CLOUD_MODE) {
+      // Primary box: the sweep may simply not have run yet — run one inline
+      // (throttled internally) and retry the read.
+      await exportSessionTranscripts().catch(() => { /* serve 404 below */ })
+      transcript = await readSessionTranscript(sessionId)
+    }
+    if (!transcript) {
+      sendError(res, 404, 'not_found', `No transcript for session: ${sessionId}`)
+      return
+    }
+    res.json(transcript)
+  } catch (err) {
+    next(err)
+  }
+})
+
 // ─── Notes (thin adapters over the notes-v2 vault semantics) ───────────────
 
 // GET /api/v1/notes — file tree

@@ -192,9 +192,17 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   sessions are excluded.
 - Provenance/laggy-replica semantics identical to `/tasks` (`syncedAt`,
   `503 unavailable` on a fresh companion).
-- Read-only: opening or steering a session requires the primary box's web UI
-  today; a future additive endpoint will proxy interaction through the
-  primary (which owns the SSH channel to remote hosts).
+- `GET /api/v1/sessions/:id/transcript` →
+  `{ "sessionId", "exportedAt", "truncated", "messages": [ { role, text,
+  timestamp, kind? } ] }` — a slim transcript tail (last ~100 entries; text
+  capped at 4 KB/row; `kind: "tool"` rows carry the tool name). The primary
+  box exports tails for every session it can reach — local from disk, remote
+  over its SSH channel — so this works for sessions on ANY machine without
+  the phone talking to that machine. `404 not_found` when no tail was
+  exported yet.
+- Read-only: STEERING a session (sending messages) requires the primary
+  box's web UI today; a future additive endpoint will proxy interaction
+  through the primary (which owns the SSH channel to remote hosts).
 
 ## curl examples
 

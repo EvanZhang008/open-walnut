@@ -273,6 +273,21 @@ struct SessionsResponse: Codable {
     let syncedAt: String
 }
 
+/// Slim transcript tail for one session (`/api/v1/sessions/:id/transcript`).
+struct SessionTranscript: Codable {
+    struct Message: Codable, Equatable {
+        let role: String
+        let text: String
+        let timestamp: String
+        let kind: String? // "tool" | "thinking" | nil
+    }
+
+    let sessionId: String
+    let exportedAt: String
+    let truncated: Bool
+    let messages: [Message]
+}
+
 /// Coarse session status for the indicator dot + grouping.
 enum SessionStatus {
     case running, idle, stopped, error, unknown

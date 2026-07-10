@@ -555,6 +555,43 @@ describe('tasks (read-only projection)', () => {
     expect(filteredBody.sessions.map((s) => s.id)).toContain('sess-proj-live')
   })
 
+  it('serves a synced session transcript tail and 404s for unknown/unsafe ids', async () => {
+    const { SESSION_TRANSCRIPTS_DIR } = await import('../../../src/core/session-projection.js')
+    // Simulate what the primary's export sweep writes (this box acts as the
+    // cloud reader: the file is the contract, not the exporter internals).
+    await fs.mkdir(SESSION_TRANSCRIPTS_DIR, { recursive: true })
+    await fs.writeFile(
+      `${SESSION_TRANSCRIPTS_DIR}/sess-transcript-1.json`,
+      JSON.stringify({
+        version: 1,
+        sessionId: 'sess-transcript-1',
+        exportedAt: new Date().toISOString(),
+        truncated: false,
+        messages: [
+          { role: 'user', text: 'fix the bug', timestamp: '2026-07-10T00:00:00.000Z' },
+          { role: 'assistant', text: 'Read', timestamp: '2026-07-10T00:00:01.000Z', kind: 'tool' },
+          { role: 'assistant', text: 'Done — the null guard was missing.', timestamp: '2026-07-10T00:00:02.000Z' },
+        ],
+      }),
+    )
+
+    const res = await fetch(apiUrl('/api/v1/sessions/sess-transcript-1/transcript'))
+    expect(res.status).toBe(200)
+    const body = await res.json() as { sessionId: string; messages: Array<{ role: string; text: string; kind?: string }> }
+    expect(body.sessionId).toBe('sess-transcript-1')
+    expect(body.messages).toHaveLength(3)
+    expect(body.messages[1].kind).toBe('tool')
+
+    const missing = await fetch(apiUrl('/api/v1/sessions/sess-nope/transcript'))
+    expect(missing.status).toBe(404)
+    const missingBody = await missing.json() as { error: { code: string } }
+    expect(missingBody.error.code).toBe('not_found')
+
+    // Path traversal in the id must not escape the transcripts dir.
+    const evil = await fetch(apiUrl('/api/v1/sessions/..%2F..%2Fconfig/transcript'))
+    expect([400, 404]).toContain(evil.status)
+  })
+
   it('exportTaskProjection drops done tasks older than the retention window', async () => {
     const { exportTaskProjection, readTaskProjection } = await import('../../../src/core/task-projection.js')
     const tm = await import('../../../src/core/task-manager.js')

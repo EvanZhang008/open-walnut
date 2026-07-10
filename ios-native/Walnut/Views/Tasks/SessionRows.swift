@@ -90,11 +90,14 @@ struct SessionRowView: View {
     }
 }
 
-/// Read-only session detail — everything the projection carries. Opening the
-/// live conversation requires the primary box (Phase 2 proxy); the sheet says
-/// so instead of pretending.
+/// Read-only session detail — projection metadata + the exported transcript
+/// tail (the primary box exports tails for every session it can reach, local
+/// or SSH). Steering the session still needs the console (Phase 2 bridge).
 struct SessionDetailSheet: View {
     let session: WalnutSession
+
+    @State private var transcript: SessionTranscript?
+    @State private var transcriptMissing = false
 
     var body: some View {
         NavigationStack {
@@ -106,6 +109,8 @@ struct SessionDetailSheet: View {
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
                 }
+
+                transcriptSection
 
                 Section("Details") {
                     row("Status", session.processStatus.capitalized)
@@ -147,7 +152,7 @@ struct SessionDetailSheet: View {
 
                 Section {
                     Label(
-                        "Live view and steering open on your Walnut console. Mobile control is coming with the primary-bridge phase.",
+                        "Read-only view. Steering opens on your Walnut console until the primary bridge ships.",
                         systemImage: "info.circle"
                     )
                     .font(.footnote)
@@ -158,6 +163,72 @@ struct SessionDetailSheet: View {
             .listStyle(.insetGrouped)
             .navigationTitle("Session")
             .navigationBarTitleDisplayMode(.inline)
+            .task { await loadTranscript() }
+        }
+    }
+
+    // MARK: - Transcript tail
+
+    @ViewBuilder
+    private var transcriptSection: some View {
+        if let transcript, !transcript.messages.isEmpty {
+            Section("Conversation") {
+                if transcript.truncated {
+                    Text("Showing the last \(transcript.messages.count) entries")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                ForEach(Array(transcript.messages.enumerated()), id: \.offset) { _, message in
+                    transcriptRow(message)
+                }
+            }
+        } else if transcriptMissing {
+            Section("Conversation") {
+                Text("Transcript not synced for this session yet.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        } else if transcript == nil {
+            Section("Conversation") {
+                HStack {
+                    ProgressView()
+                    Text("Loading transcript…")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func transcriptRow(_ message: SessionTranscript.Message) -> some View {
+        if message.kind == "tool" {
+            HStack(spacing: 5) {
+                Image(systemName: "wrench.and.screwdriver")
+                    .font(.caption2)
+                Text(message.text)
+                    .font(.caption)
+                    .lineLimit(1)
+            }
+            .foregroundStyle(.secondary)
+        } else {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(message.role == "user" ? "You" : "Agent")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(message.role == "user" ? Theme.tint : .secondary)
+                Text(message.text)
+                    .font(.subheadline)
+                    .lineLimit(12)
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
+    private func loadTranscript() async {
+        do {
+            transcript = try await WalnutAPI().sessionTranscript(id: session.id)
+        } catch {
+            transcriptMissing = true
         }
     }
 

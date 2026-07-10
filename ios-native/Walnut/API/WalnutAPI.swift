@@ -74,6 +74,11 @@ struct WalnutAPI {
         try await get("/sessions")
     }
 
+    /// Transcript tail for one session (404 = no tail exported yet).
+    func sessionTranscript(id: String) async throws -> SessionTranscript {
+        try await get("/sessions/\(escape(id))/transcript")
+    }
+
     func notesTree() async throws -> [NoteTreeNode] {
         struct Tree: Codable { let tree: [NoteTreeNode] }
         let wrapper: Tree = try await get("/notes")
