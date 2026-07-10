@@ -46,6 +46,15 @@ final class AttachmentLoader {
         if let image { memory.setObject(image, forKey: raw as NSString) }
         return image
     }
+
+    /// Seed the cache with an image the caller just uploaded, so the editor's
+    /// placeholder resolves instantly instead of round-tripping the fetch.
+    func seed(_ image: UIImage, for raw: String) {
+        memory.setObject(image, forKey: raw as NSString)
+        guard let data = image.jpegData(compressionQuality: 0.9) else { return }
+        try? FileManager.default.createDirectory(at: diskDirectory, withIntermediateDirectories: true)
+        try? data.write(to: diskURL(for: raw), options: .atomic)
+    }
 }
 
 /// Full-width rounded attachment image, Apple Notes style. Tap → zoomable

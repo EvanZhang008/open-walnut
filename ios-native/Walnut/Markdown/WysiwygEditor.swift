@@ -1,0 +1,606 @@
+import SwiftUI
+import UIKit
+import PhotosUI
+
+/// Apple Notes-style rich editor: UITextView bridged into SwiftUI. Live
+/// auto-formats `# `, `- `, `- [ ] ` as they're typed, Return continues/exits
+/// lists, checkbox taps toggle in place, images paste/insert inline. The
+/// source of truth while editing is the NSAttributedString itself — markdown
+/// is only produced on save via MarkdownSerializer.
+struct WysiwygEditor: UIViewRepresentable {
+    @Binding var attributedText: NSAttributedString
+    var isEditable: Bool
+    var notePath: String
+    var autoFocus: Bool = false
+    var onChange: () -> Void
+    var onCheckboxToggle: () -> Void
+
+    func makeUIView(context: Context) -> WalnutTextView {
+        let textView = WalnutTextView()
+        textView.delegate = context.coordinator
+        textView.isEditable = isEditable
+        textView.isScrollEnabled = true
+        textView.alwaysBounceVertical = true
+        textView.backgroundColor = .clear
+        textView.textContainerInset = UIEdgeInsets(top: 8, left: 16, bottom: 40, right: 16)
+        textView.textContainer.lineFragmentPadding = 0
+        textView.attributedText = attributedText
+        textView.typingAttributes = MarkdownAttributed.typingAttributes(for: .body)
+        textView.coordinator = context.coordinator
+        textView.inputAccessoryView = context.coordinator.makeAccessoryBar(for: textView)
+        MarkdownAttributed.kickOffImageLoads(in: textView, maxWidth: context.coordinator.imageWidth(for: textView))
+        if autoFocus {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak textView] in
+                textView?.becomeFirstResponder()
+            }
+        }
+        return textView
+    }
+
+    func updateUIView(_ textView: WalnutTextView, context: Context) {
+        context.coordinator.parent = self
+        textView.isEditable = isEditable
+        if !context.coordinator.isInternalUpdate, textView.attributedText != attributedText {
+            let selected = textView.selectedRange
+            textView.attributedText = attributedText
+            textView.selectedRange = selected
+            MarkdownAttributed.kickOffImageLoads(in: textView, maxWidth: context.coordinator.imageWidth(for: textView))
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, UITextViewDelegate {
+        var parent: WysiwygEditor
+        /// True while we're pushing a programmatic edit into the text view, so
+        /// `updateUIView` doesn't fight the cursor mid-keystroke.
+        var isInternalUpdate = false
+        /// Trait attributes toggled at a collapsed caret ("type bold from
+        /// here"). UIKit's typingAttributes get silently reset on several
+        /// input paths (hardware-keyboard insertion among them), so while this
+        /// is set the coordinator inserts typed text itself with these attrs.
+        /// Cleared on caret taps and Return.
+        var stickyTypingAttrs: [NSAttributedString.Key: Any]?
+
+        init(_ parent: WysiwygEditor) {
+            self.parent = parent
+        }
+
+        func imageWidth(for textView: UITextView) -> CGFloat {
+            let inset = textView.textContainerInset
+            let width = textView.bounds.width - inset.left - inset.right
+            return width > 0 ? width : UIScreen.main.bounds.width - 32
+        }
+
+        // MARK: - Typing
+
+        func textViewDidChange(_ textView: UITextView) {
+            guard !isInternalUpdate else { return }
+            updateTypingAttributes(textView)
+            isInternalUpdate = true
+            parent.attributedText = textView.attributedText
+            isInternalUpdate = false
+            parent.onChange()
+        }
+
+        func textViewDidChangeSelection(_ textView: UITextView) {
+            // A selection change NOT caused by our own insertion means the
+            // user moved the caret — drop the caret-toggled trait state.
+            guard !isInternalUpdate else { return }
+            stickyTypingAttrs = nil
+        }
+
+        /// Keep typingAttributes in sync with the paragraph the caret is in, so
+        /// e.g. typing right after a heading doesn't inherit heading styling
+        /// forever, and continuing a bullet keeps list attributes.
+        private func updateTypingAttributes(_ textView: UITextView) {
+            let loc = textView.selectedRange.location
+            guard loc > 0, textView.textStorage.length > 0 else {
+                textView.typingAttributes = MarkdownAttributed.typingAttributes(for: .body)
+                return
+            }
+            let probe = min(loc - 1, textView.textStorage.length - 1)
+            let attrs = textView.textStorage.attributes(at: probe, effectiveRange: nil)
+            var typing = attrs
+            typing.removeValue(forKey: .attachment)
+            typing.removeValue(forKey: .walnutDelimOpen)
+            typing.removeValue(forKey: .walnutDelimClose)
+            textView.typingAttributes = typing
+        }
+
+        func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+            if text == "\n" {
+                stickyTypingAttrs = nil
+                return handleReturn(textView, range: range)
+            }
+            // Caret-toggled trait active: insert the text ourselves with the
+            // sticky attributes (typingAttributes alone gets reset by UIKit
+            // on some input paths — hardware keyboard included).
+            if let sticky = stickyTypingAttrs, !text.isEmpty {
+                isInternalUpdate = true
+                textView.textStorage.replaceCharacters(
+                    in: range, with: NSAttributedString(string: text, attributes: sticky)
+                )
+                textView.selectedRange = NSRange(location: range.location + (text as NSString).length, length: 0)
+                textView.typingAttributes = sticky
+                isInternalUpdate = false
+                parent.attributedText = textView.attributedText
+                parent.onChange()
+                return false
+            }
+            if text.isEmpty, range.length == 1 {
+                if let attachment = textView.textStorage.attribute(.attachment, at: range.location, effectiveRange: nil),
+                   attachment is CheckboxAttachment {
+                    // Deleting a checkbox: fall through to default (removes the
+                    // attachment run), block kind reverts to body automatically.
+                    return true
+                }
+            }
+            if range.length == 0, text.count == 1, let scalar = text.unicodeScalars.first,
+               CharacterSet(charactersIn: " ").contains(scalar) {
+                maybeAutoFormat(textView, insertionPoint: range.location)
+            }
+            return true
+        }
+
+        /// Watches for `#`+space, `-`+space, `- [ ]`+space just typed, and
+        /// converts the run into a styled block / dot / checkbox in place.
+        /// The conversions run async because they fire from shouldChangeTextIn,
+        /// BEFORE the triggering space lands — `typedLen` counts include it.
+        private func maybeAutoFormat(_ textView: UITextView, insertionPoint: Int) {
+            let storage = textView.textStorage
+            let lineRange = (storage.string as NSString).lineRange(for: NSRange(location: insertionPoint, length: 0))
+            let lineText = (storage.string as NSString).substring(with: NSRange(location: lineRange.location, length: insertionPoint - lineRange.location))
+
+            if lineText == "#" || lineText == "##" || lineText == "###" {
+                let level = lineText.count
+                DispatchQueue.main.async { [weak self] in
+                    self?.convertToHeading(textView, lineStart: lineRange.location, typedLen: level + 1, level: level)
+                }
+                return
+            }
+            if lineText == "-" || lineText == "*" {
+                DispatchQueue.main.async { [weak self] in
+                    self?.convertShorthand(textView, lineStart: lineRange.location, typedLen: 2, attachment: BulletAttachment(source: "- "), kind: .bullet(prefix: "- "))
+                }
+                return
+            }
+            if lineText == "-[]" || lineText == "- []" {
+                let typedLen = (lineText as NSString).length + 1
+                DispatchQueue.main.async { [weak self] in
+                    self?.convertShorthand(textView, lineStart: lineRange.location, typedLen: typedLen, attachment: CheckboxAttachment(source: "- [ ] ", checked: false), kind: .task)
+                }
+                return
+            }
+        }
+
+        /// `# ` shorthand → delete it and switch the line to hidden-prefix
+        /// heading styling (the serializer re-emits the hashes on save).
+        private func convertToHeading(_ textView: UITextView, lineStart: Int, typedLen: Int, level: Int) {
+            let storage = textView.textStorage
+            guard lineStart + typedLen <= storage.length else { return }
+            isInternalUpdate = true
+            storage.deleteCharacters(in: NSRange(location: lineStart, length: typedLen))
+            let attrs = MarkdownAttributed.typingAttributes(for: .heading(prefix: String(repeating: "#", count: level) + " "))
+            textView.typingAttributes = attrs
+            textView.selectedRange = NSRange(location: lineStart, length: 0)
+            isInternalUpdate = false
+            parent.attributedText = textView.attributedText
+            parent.onChange()
+        }
+
+        /// `- ` / `- [ ] ` shorthand → replace with a dot / checkbox attachment.
+        private func convertShorthand(_ textView: UITextView, lineStart: Int, typedLen: Int, attachment: NSTextAttachment, kind: WalnutBlockKind) {
+            let storage = textView.textStorage
+            guard lineStart + typedLen <= storage.length else { return }
+            isInternalUpdate = true
+            let attrs = MarkdownAttributed.typingAttributes(for: kind)
+            let replacement = NSMutableAttributedString(attachment: attachment)
+            replacement.addAttributes(attrs, range: NSRange(location: 0, length: 1))
+            storage.replaceCharacters(in: NSRange(location: lineStart, length: typedLen), with: replacement)
+            textView.typingAttributes = attrs
+            textView.selectedRange = NSRange(location: lineStart + 1, length: 0)
+            isInternalUpdate = false
+            parent.attributedText = textView.attributedText
+            parent.onChange()
+        }
+
+        /// Return inside a list continues it (new bullet/task); Return on an
+        /// EMPTY list item exits the list (reverts that line to body).
+        private func handleReturn(_ textView: UITextView, range: NSRange) -> Bool {
+            let storage = textView.textStorage
+            let lineRange = (storage.string as NSString).lineRange(for: NSRange(location: range.location, length: 0))
+            let attrsAtLineStart = lineRange.location < storage.length
+                ? storage.attributes(at: lineRange.location, effectiveRange: nil)
+                : [:]
+            let kind = (attrsAtLineStart[.walnutBlock] as? WalnutBlockKind) ?? .body
+
+            let contentStart: Int
+            switch kind {
+            case .bullet, .numbered, .task, .heading, .quote:
+                contentStart = attachmentAwareContentStart(storage, lineRange: lineRange)
+            default:
+                contentStart = -1
+            }
+
+            guard contentStart >= 0 else { return true }
+            let isEmpty = range.location <= contentStart
+
+            isInternalUpdate = true
+            if isEmpty {
+                // Exit the list/heading: strip the prefix, revert to body.
+                let prefixRange = NSRange(location: lineRange.location, length: contentStart - lineRange.location)
+                if prefixRange.length > 0 { storage.deleteCharacters(in: prefixRange) }
+                if lineRange.location < storage.length {
+                    storage.addAttributes(
+                        MarkdownAttributed.typingAttributes(for: .body),
+                        range: NSRange(location: lineRange.location, length: 0)
+                    )
+                }
+                let bodyAttrs = MarkdownAttributed.typingAttributes(for: .body)
+                textView.typingAttributes = bodyAttrs
+                textView.selectedRange = NSRange(location: lineRange.location, length: 0)
+            } else {
+                switch kind {
+                case .bullet(let prefix):
+                    insertAttachmentContinuation(textView, at: range.location, attachment: BulletAttachment(source: prefix), kind: .bullet(prefix: prefix))
+                case .numbered(let prefix):
+                    let number = (prefix.trimmingCharacters(in: .whitespaces).dropLast()).description
+                    let next = (Int(number) ?? 0) + 1
+                    let suffix = prefix.hasSuffix(") ") ? ") " : ". "
+                    let newPrefix = "\(next)\(suffix)"
+                    insertContinuation(textView, at: range.location, literal: "\n" + newPrefix, kind: .numbered(prefix: newPrefix))
+                case .task:
+                    insertAttachmentContinuation(textView, at: range.location, attachment: CheckboxAttachment(source: "- [ ] ", checked: false), kind: .task)
+                default:
+                    insertContinuation(textView, at: range.location, literal: "\n", kind: .body)
+                }
+            }
+            isInternalUpdate = false
+            parent.attributedText = textView.attributedText
+            parent.onChange()
+            return false
+        }
+
+        private func insertContinuation(_ textView: UITextView, at location: Int, literal: String, kind: WalnutBlockKind) {
+            let attrs = MarkdownAttributed.typingAttributes(for: kind)
+            textView.textStorage.insert(NSAttributedString(string: literal, attributes: attrs), at: location)
+            textView.typingAttributes = attrs
+            textView.selectedRange = NSRange(location: location + (literal as NSString).length, length: 0)
+        }
+
+        /// Newline + a dot/checkbox attachment — bullet & task continuation.
+        private func insertAttachmentContinuation(_ textView: UITextView, at location: Int, attachment: NSTextAttachment, kind: WalnutBlockKind) {
+            let attrs = MarkdownAttributed.typingAttributes(for: kind)
+            let piece = NSMutableAttributedString(string: "\n")
+            piece.append(NSAttributedString(attachment: attachment))
+            piece.addAttributes(attrs, range: NSRange(location: 1, length: 1))
+            textView.textStorage.insert(piece, at: location)
+            textView.typingAttributes = attrs
+            textView.selectedRange = NSRange(location: location + piece.length, length: 0)
+        }
+
+        /// First content index on the line — past the dot/checkbox attachment
+        /// for bullet/task lines, or past the literal prefix string otherwise.
+        private func attachmentAwareContentStart(_ storage: NSTextStorage, lineRange: NSRange) -> Int {
+            guard lineRange.length > 0 else { return lineRange.location }
+            let attrs = storage.attributes(at: lineRange.location, effectiveRange: nil)
+            if attrs[.attachment] is CheckboxAttachment || attrs[.attachment] is BulletAttachment {
+                return lineRange.location + 1
+            }
+            if let kind = attrs[.walnutBlock] as? WalnutBlockKind {
+                switch kind {
+                case .quote(let p), .numbered(let p):
+                    return lineRange.location + (p as NSString).length
+                case .heading:
+                    return lineRange.location // prefix hidden — content starts at line start
+                default:
+                    break
+                }
+            }
+            return lineRange.location
+        }
+
+        // MARK: - Checkbox tap
+
+        func textView(_ textView: UITextView, primaryActionFor textItem: UITextItem, defaultAction: UIAction) -> UIAction? {
+            defaultAction
+        }
+
+        @objc func handleTap(_ gesture: UITapGestureRecognizer, in textView: UITextView) {
+            let point = gesture.location(in: textView)
+            let adjusted = CGPoint(x: point.x - textView.textContainerInset.left, y: point.y - textView.textContainerInset.top)
+            let index = textView.layoutManager.characterIndex(
+                for: adjusted, in: textView.textContainer, fractionOfDistanceBetweenInsertionPoints: nil
+            )
+            guard index < textView.textStorage.length,
+                  let attachment = textView.textStorage.attribute(.attachment, at: index, effectiveRange: nil) as? CheckboxAttachment else {
+                return
+            }
+            attachment.toggle()
+            isInternalUpdate = true
+            textView.textStorage.edited(.editedAttributes, range: NSRange(location: index, length: 1), changeInLength: 0)
+            isInternalUpdate = false
+            parent.attributedText = textView.attributedText
+            parent.onCheckboxToggle()
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        }
+
+        // MARK: - Image paste / insert
+
+        func insertImage(_ image: UIImage, into textView: UITextView, uploadedPath: String) {
+            // Seed BEFORE constructing the attachment — loadIfNeeded's async
+            // fetch checks the memory cache first, so seeding first means it
+            // resolves synchronously on the next run loop turn instead of
+            // racing a real network round-trip.
+            AttachmentLoader.shared.seed(image, for: uploadedPath)
+            let width = imageWidth(for: textView)
+            let attachment = RemoteImageAttachment(source: "![[\(uploadedPath)]]", rawPath: uploadedPath, maxWidth: width)
+            let piece = NSMutableAttributedString(string: "\n")
+            piece.append(NSAttributedString(attachment: attachment))
+            piece.append(NSAttributedString(string: "\n", attributes: MarkdownAttributed.typingAttributes(for: .body)))
+            let loc = textView.selectedRange.location
+            isInternalUpdate = true
+            textView.textStorage.insert(piece, at: loc)
+            textView.typingAttributes = MarkdownAttributed.typingAttributes(for: .body)
+            textView.selectedRange = NSRange(location: loc + piece.length, length: 0)
+            isInternalUpdate = false
+            attachment.loadIfNeeded(maxWidth: width, in: textView)
+            parent.attributedText = textView.attributedText
+            parent.onChange()
+        }
+
+        // MARK: - Format card actions
+
+        /// Rewrite the current line's block identity — strips whatever marker
+        /// (dot/checkbox attachment or literal numbered/quote prefix) is there
+        /// now, then applies the new one. Heading/body are pure attribute
+        /// changes; bullet inserts a dot attachment; numbered inserts "1. ".
+        func applyParagraphStyle(_ kind: WalnutBlockKind, to textView: UITextView) {
+            let storage = textView.textStorage
+            let caret = textView.selectedRange.location
+            let lineRange = (storage.string as NSString).lineRange(for: NSRange(location: min(caret, storage.length), length: 0))
+            let contentStart = attachmentAwareContentStart(storage, lineRange: lineRange)
+
+            isInternalUpdate = true
+            // 1) Strip the existing marker.
+            let markerLen = contentStart - lineRange.location
+            if markerLen > 0 {
+                storage.deleteCharacters(in: NSRange(location: lineRange.location, length: markerLen))
+            }
+            var lineLen = lineRange.length - markerLen
+            if lineLen > 0, (storage.string as NSString).character(at: lineRange.location + lineLen - 1) == 10 {
+                lineLen -= 1 // don't restyle the trailing newline into the block
+            }
+
+            // 2) Apply the new identity.
+            let attrs = MarkdownAttributed.typingAttributes(for: kind)
+            switch kind {
+            case .bullet(let prefix):
+                let piece = NSMutableAttributedString(attachment: BulletAttachment(source: prefix))
+                piece.addAttributes(attrs, range: NSRange(location: 0, length: 1))
+                storage.insert(piece, at: lineRange.location)
+                lineLen += 1
+            case .numbered(let prefix):
+                storage.insert(NSAttributedString(string: prefix, attributes: attrs), at: lineRange.location)
+                lineLen += (prefix as NSString).length
+            default:
+                break // body/heading are attribute-only
+            }
+            if lineLen > 0 {
+                storage.addAttributes(attrs, range: NSRange(location: lineRange.location, length: lineLen))
+            }
+            textView.typingAttributes = attrs
+            textView.selectedRange = NSRange(location: lineRange.location + lineLen, length: 0)
+            isInternalUpdate = false
+            parent.attributedText = textView.attributedText
+            parent.onChange()
+        }
+
+        /// Toggle a character trait (bold/italic/underline/strike) over the
+        /// selection, or fold it into typingAttributes for the next keystroke
+        /// when nothing is selected — same as Apple Notes.
+        func toggleTrait(_ trait: MarkdownAttributed.InlineTrait, in textView: UITextView) {
+            let range = textView.selectedRange
+            isInternalUpdate = true
+            if range.length == 0 {
+                var attrs = stickyTypingAttrs ?? textView.typingAttributes
+                let isOn = traitIsActive(trait, in: attrs)
+                if isOn {
+                    removeTrait(trait, from: &attrs)
+                } else {
+                    MarkdownAttributed.applyTrait(trait, to: &attrs)
+                }
+                textView.typingAttributes = attrs
+                stickyTypingAttrs = attrs
+            } else {
+                let storage = textView.textStorage
+                let currentAttrs = storage.attributes(at: range.location, effectiveRange: nil)
+                let isOn = traitIsActive(trait, in: currentAttrs)
+                storage.enumerateAttributes(in: range, options: []) { attrs, subrange, _ in
+                    var updated = attrs
+                    if isOn {
+                        removeTrait(trait, from: &updated)
+                    } else {
+                        MarkdownAttributed.applyTrait(trait, to: &updated)
+                    }
+                    storage.setAttributes(updated, range: subrange)
+                }
+            }
+            isInternalUpdate = false
+            parent.attributedText = textView.attributedText
+            parent.onChange()
+        }
+
+        private func traitIsActive(_ trait: MarkdownAttributed.InlineTrait, in attrs: [NSAttributedString.Key: Any]) -> Bool {
+            switch trait {
+            case .bold:
+                return ((attrs[.font] as? UIFont)?.fontDescriptor.symbolicTraits.contains(.traitBold)) ?? false
+            case .italic:
+                return ((attrs[.font] as? UIFont)?.fontDescriptor.symbolicTraits.contains(.traitItalic)) ?? false
+            case .underline:
+                return ((attrs[.underlineStyle] as? Int) ?? 0) != 0
+            case .strike:
+                return ((attrs[.strikethroughStyle] as? Int) ?? 0) != 0
+            }
+        }
+
+        private func removeTrait(_ trait: MarkdownAttributed.InlineTrait, from attrs: inout [NSAttributedString.Key: Any]) {
+            switch trait {
+            case .bold:
+                if let font = attrs[.font] as? UIFont {
+                    let stripped = font.fontDescriptor.symbolicTraits.subtracting(.traitBold)
+                    if let descriptor = font.fontDescriptor.withSymbolicTraits(stripped) {
+                        attrs[.font] = UIFont(descriptor: descriptor, size: font.pointSize)
+                    }
+                }
+            case .italic:
+                if let font = attrs[.font] as? UIFont {
+                    let stripped = font.fontDescriptor.symbolicTraits.subtracting(.traitItalic)
+                    if let descriptor = font.fontDescriptor.withSymbolicTraits(stripped) {
+                        attrs[.font] = UIFont(descriptor: descriptor, size: font.pointSize)
+                    }
+                }
+            case .underline:
+                attrs.removeValue(forKey: .underlineStyle)
+            case .strike:
+                attrs.removeValue(forKey: .strikethroughStyle)
+            }
+            attrs.removeValue(forKey: .walnutDelimOpen)
+            attrs.removeValue(forKey: .walnutDelimClose)
+        }
+
+        /// Insert a fresh checkbox line at the caret (new line if mid-paragraph).
+        func insertTaskLine(in textView: UITextView) {
+            let storage = textView.textStorage
+            let loc = textView.selectedRange.location
+            let needsNewline = loc > 0 && (storage.string as NSString).character(at: loc - 1) != 10
+            isInternalUpdate = true
+            let piece = NSMutableAttributedString(string: needsNewline ? "\n" : "")
+            let attachment = CheckboxAttachment(source: "- [ ] ", checked: false)
+            piece.append(NSAttributedString(attachment: attachment))
+            storage.insert(piece, at: loc)
+            let attrs = MarkdownAttributed.typingAttributes(for: .task)
+            let attachmentLoc = loc + (needsNewline ? 1 : 0)
+            storage.addAttributes(attrs, range: NSRange(location: attachmentLoc, length: piece.length - (needsNewline ? 1 : 0)))
+            textView.typingAttributes = attrs
+            textView.selectedRange = NSRange(location: loc + piece.length, length: 0)
+            isInternalUpdate = false
+            parent.attributedText = textView.attributedText
+            parent.onChange()
+        }
+
+        /// A 2x2 markdown table skeleton, inserted as a verbatim block (tables
+        /// aren't WYSIWYG-editable in this editor — same as MarkdownParser's
+        /// render-only treatment). User fills in the pipes as plain text.
+        func insertTableSkeleton(in textView: UITextView) {
+            let storage = textView.textStorage
+            let loc = textView.selectedRange.location
+            let needsNewline = loc > 0 && (storage.string as NSString).character(at: loc - 1) != 10
+            let table = "| Column 1 | Column 2 |\n| --- | --- |\n|  |  |\n|  |  |\n"
+            let text = (needsNewline ? "\n" : "") + table
+            isInternalUpdate = true
+            storage.insert(NSAttributedString(string: text, attributes: MarkdownAttributed.typingAttributes(for: .verbatim)), at: loc)
+            let bodyAttrs = MarkdownAttributed.typingAttributes(for: .body)
+            textView.typingAttributes = bodyAttrs
+            textView.selectedRange = NSRange(location: loc + (text as NSString).length, length: 0)
+            isInternalUpdate = false
+            parent.attributedText = textView.attributedText
+            parent.onChange()
+        }
+
+        // MARK: - Accessory bar
+
+        func makeAccessoryBar(for textView: UITextView) -> UIView {
+            AccessoryBar(coordinator: self, textView: textView)
+        }
+    }
+}
+
+/// UITextView subclass wired for single-tap checkbox toggling and image paste.
+final class WalnutTextView: UITextView, UIGestureRecognizerDelegate {
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+    ) -> Bool {
+        true // coexist with the text view's own tap/selection recognizers
+    }
+    weak var coordinator: WysiwygEditor.Coordinator?
+
+    override func awakeFromNib() {
+        super.awakeFromNib()
+        setUpTap()
+    }
+
+    override init(frame: CGRect, textContainer: NSTextContainer?) {
+        super.init(frame: frame, textContainer: textContainer)
+        setUpTap()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setUpTap()
+    }
+
+    private func setUpTap() {
+        let tap = UITapGestureRecognizer(target: self, action: #selector(onTap(_:)))
+        // Must NOT swallow touches — the text view still needs every tap for
+        // caret placement / becoming first responder. This recognizer only
+        // OBSERVES taps to toggle checkboxes.
+        tap.cancelsTouchesInView = false
+        tap.delegate = self
+        addGestureRecognizer(tap)
+    }
+
+    @objc private func onTap(_ gesture: UITapGestureRecognizer) {
+        coordinator?.handleTap(gesture, in: self)
+    }
+
+    override func paste(_ sender: Any?) {
+        let pasteboard = UIPasteboard.general
+        if pasteboard.hasImages, let image = pasteboard.image {
+            coordinator?.uploadAndInsert(image, into: self)
+            return
+        }
+        // Simulator pasteboard bridge quirk: image sometimes only lands as an
+        // itemProvider even though `.hasImages` reflects the real device path.
+        if let provider = pasteboard.itemProviders.first, provider.canLoadObject(ofClass: UIImage.self) {
+            provider.loadObject(ofClass: UIImage.self) { [weak self] object, _ in
+                guard let self, let image = object as? UIImage else { return }
+                DispatchQueue.main.async {
+                    self.coordinator?.uploadAndInsert(image, into: self)
+                }
+            }
+            return
+        }
+        super.paste(sender)
+    }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(paste(_:)) {
+            return UIPasteboard.general.hasImages || UIPasteboard.general.hasStrings
+        }
+        return super.canPerformAction(action, withSender: sender)
+    }
+}
+
+extension WysiwygEditor.Coordinator {
+    /// Upload to the vault then insert an attachment referencing the final
+    /// server path — mirrors the web UI's paste-to-attachment flow.
+    func uploadAndInsert(_ image: UIImage, into textView: UITextView) {
+        let notePath = parent.notePath
+        Task { @MainActor in
+            guard let data = image.jpegData(compressionQuality: 0.85) else { return }
+            do {
+                let result = try await WalnutAPI().uploadAttachment(notePath: notePath, data: data, mediaType: "image/jpeg")
+                insertImage(image, into: textView, uploadedPath: result.path)
+            } catch {
+                // Silent failure is acceptable here — paste is best-effort and
+                // the user still has the image on their pasteboard to retry.
+            }
+        }
+    }
+}

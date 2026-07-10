@@ -93,6 +93,25 @@ struct FavoritesResponse: Codable {
     let notes: [String]
 }
 
+// MARK: - Attachment upload (/api/notes-v2/attachment — flat error shape, not v1)
+
+struct AttachmentUploadBody: Codable {
+    let notePath: String
+    let data: String
+    let mediaType: String
+}
+
+struct AttachmentUploadResult: Codable {
+    let ok: Bool
+    let path: String
+    let name: String
+}
+
+/// This endpoint's error body is `{error: string}`, not the v1 `{error:{code,message}}` envelope.
+struct FlatErrorEnvelope: Codable {
+    let error: String
+}
+
 // MARK: - Error envelope
 
 /// Wire shape: `{ "error": { "code", "message" }, ...extras }`.

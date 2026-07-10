@@ -117,6 +117,43 @@ struct WalnutAPI {
         return response.notes
     }
 
+    /// Uploads pasted/picked image bytes into the vault's `_attachment/`
+    /// folder. Unlike every other endpoint here, errors come back as a FLAT
+    /// `{error: string}` — not the v1 envelope — so this bypasses `decode()`.
+    func uploadAttachment(notePath: String, data: Data, mediaType: String) async throws -> AttachmentUploadResult {
+        guard let base = AppConfig.serverURL, let token = AppConfig.token else {
+            throw APIError.notConfigured
+        }
+        guard let url = URL(string: base.absoluteString + "/api/notes-v2/attachment") else {
+            throw APIError.notConfigured
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body = AttachmentUploadBody(notePath: notePath, data: data.base64EncodedString(), mediaType: mediaType)
+        request.httpBody = try JSONEncoder().encode(body)
+
+        let (responseData, response) = try await perform(request)
+        guard let http = response as? HTTPURLResponse else { throw APIError.badResponse }
+        switch http.statusCode {
+        case 200...299:
+            guard let result = try? JSONDecoder().decode(AttachmentUploadResult.self, from: responseData) else {
+                throw APIError.badResponse
+            }
+            return result
+        case 401:
+            NotificationCenter.default.post(name: Self.unauthorizedNotification, object: nil)
+            throw APIError.unauthorized
+        case 429:
+            throw APIError.rateLimited
+        default:
+            let message = (try? JSONDecoder().decode(FlatErrorEnvelope.self, from: responseData))?.error
+                ?? "Upload failed (\(http.statusCode))"
+            throw APIError.server(status: http.statusCode, code: "upload_error", message: message, serverHash: nil, serverContent: nil)
+        }
+    }
+
     /// Authenticated URL for a note attachment. `raw` is the inner text of an
     /// Obsidian `![[...]]` embed or a relative markdown image path — the server
     /// resolves either. Callers must attach the Bearer header themselves.

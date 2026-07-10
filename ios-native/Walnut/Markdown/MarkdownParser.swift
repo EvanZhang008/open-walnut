@@ -215,13 +215,33 @@ enum MarkdownParser {
             let title = inner.components(separatedBy: "/").last ?? inner
             source.replaceSubrange(range, with: title)
         }
-        if let attributed = try? AttributedString(
+        // AttributedString(markdown:) doesn't know `<u>` — mark the ranges
+        // ourselves, then strip the tags before handing off to the parser.
+        var underlineRanges: [Range<String.Index>] = []
+        while let openRange = source.range(of: "<u>"),
+              let closeRange = source.range(of: "</u>", range: openRange.upperBound..<source.endIndex) {
+            let innerText = String(source[openRange.upperBound..<closeRange.lowerBound])
+            source.replaceSubrange(openRange.lowerBound..<closeRange.upperBound, with: innerText)
+            if let newRange = source.range(of: innerText, range: openRange.lowerBound..<source.endIndex) {
+                underlineRanges.append(newRange)
+            }
+        }
+        var attributed: AttributedString
+        if let parsed = try? AttributedString(
             markdown: source,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         ) {
-            return attributed
+            attributed = parsed
+        } else {
+            attributed = AttributedString(source)
         }
-        return AttributedString(source)
+        for stringRange in underlineRanges {
+            if let lower = AttributedString.Index(stringRange.lowerBound, within: attributed),
+               let upper = AttributedString.Index(stringRange.upperBound, within: attributed) {
+                attributed[lower..<upper].underlineStyle = .single
+            }
+        }
+        return attributed
     }
 
     // MARK: - Line classification helpers
