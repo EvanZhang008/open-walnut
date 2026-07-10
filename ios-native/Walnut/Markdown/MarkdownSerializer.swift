@@ -60,6 +60,10 @@ enum MarkdownSerializer {
                 result += bullet.source
                 return
             }
+            if let table = attrs[.attachment] as? TableAttachment {
+                result += table.markdown
+                return
+            }
             if let image = attrs[.attachment] as? RemoteImageAttachment {
                 result += image.source
                 return

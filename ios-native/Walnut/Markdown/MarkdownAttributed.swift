@@ -133,19 +133,33 @@ enum MarkdownAttributed {
                 appendNewlineIfNeeded(index, lines.count, to: result)
                 continue
             }
+            // Table → real grid attachment (tap to edit), not literal pipes.
             if trimmed.contains("|"), index + 1 < lines.count, isTableSeparator(lines[index + 1]) {
-                appendVerbatim(line, to: result)
-                appendNewlineIfNeeded(index + 1, lines.count, to: result)
-                appendVerbatim(lines[index + 1], to: result)
+                var tableLines = [lines[index], lines[index + 1]]
                 index += 2
-                appendNewlineIfNeeded(index, lines.count, to: result)
                 while index < lines.count {
                     let t = lines[index].trimmingCharacters(in: .whitespaces)
                     guard t.contains("|"), !t.isEmpty else { break }
-                    appendVerbatim(lines[index], to: result)
+                    tableLines.append(lines[index])
                     index += 1
-                    appendNewlineIfNeeded(index, lines.count, to: result)
                 }
+                if let table = EditableTable.parse(lines: tableLines) {
+                    let attachment = TableAttachment(
+                        table: table, maxWidth: maxImageWidth,
+                        originalSource: tableLines.joined(separator: "\n")
+                    )
+                    result.append(NSAttributedString(attachment: attachment))
+                    result.addAttributes(
+                        typingAttributes(for: .body),
+                        range: NSRange(location: result.length - 1, length: 1)
+                    )
+                } else {
+                    for (i, tl) in tableLines.enumerated() {
+                        if i > 0 { result.append(NSAttributedString(string: "\n", attributes: typingAttributes(for: .verbatim))) }
+                        appendVerbatim(tl, to: result)
+                    }
+                }
+                appendNewlineIfNeeded(index, lines.count, to: result)
                 continue
             }
             if trimmed.hasPrefix("<") || isRule(trimmed) {

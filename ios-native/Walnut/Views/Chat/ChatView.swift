@@ -18,6 +18,12 @@ struct ChatView: View {
                     ErrorBanner(text: error) { chat.errorMessage = nil }
                 }
                 MessageListView()
+            }
+            // safeAreaInset (not a VStack sibling) so the bar rides the
+            // keyboard: the keyboard grows the bottom safe area and the inset
+            // content stays above it. A plain VStack child does NOT get that
+            // treatment when the scroll view is bottom-anchored.
+            .safeAreaInset(edge: .bottom, spacing: 0) {
                 ComposerView()
             }
             .navigationTitle(chat.activeTitle)

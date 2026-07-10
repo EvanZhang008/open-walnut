@@ -28,6 +28,17 @@ struct WysiwygEditor: UIViewRepresentable {
         textView.typingAttributes = MarkdownAttributed.typingAttributes(for: .body)
         textView.coordinator = context.coordinator
         textView.inputAccessoryView = context.coordinator.makeAccessoryBar(for: textView)
+        // The accessory bar lives in the system keyboard window. If the app
+        // backgrounds while editing, that window can survive and float over
+        // the wallpaper — resign focus so it tears down with the keyboard.
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil, queue: .main
+        ) { [weak textView] _ in
+            MainActor.assumeIsolated {
+                _ = textView?.resignFirstResponder()
+            }
+        }
         MarkdownAttributed.kickOffImageLoads(in: textView, maxWidth: context.coordinator.imageWidth(for: textView))
         if autoFocus {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak textView] in
@@ -64,7 +75,6 @@ struct WysiwygEditor: UIViewRepresentable {
         /// is set the coordinator inserts typed text itself with these attrs.
         /// Cleared on caret taps and Return.
         var stickyTypingAttrs: [NSAttributedString.Key: Any]?
-
         init(_ parent: WysiwygEditor) {
             self.parent = parent
         }
@@ -312,21 +322,87 @@ struct WysiwygEditor: UIViewRepresentable {
 
         @objc func handleTap(_ gesture: UITapGestureRecognizer, in textView: UITextView) {
             let point = gesture.location(in: textView)
+            // A live table editor owns taps inside itself (cells + pill);
+            // any tap outside commits it — Apple Notes behavior.
+            if let editor = activeTableEditor {
+                let local = editor.convert(point, from: textView)
+                if editor.point(inside: local, with: nil) { return }
+                editor.commit()
+                return
+            }
             let adjusted = CGPoint(x: point.x - textView.textContainerInset.left, y: point.y - textView.textContainerInset.top)
             let index = textView.layoutManager.characterIndex(
                 for: adjusted, in: textView.textContainer, fractionOfDistanceBetweenInsertionPoints: nil
             )
-            guard index < textView.textStorage.length,
-                  let attachment = textView.textStorage.attribute(.attachment, at: index, effectiveRange: nil) as? CheckboxAttachment else {
-                return
+            guard index < textView.textStorage.length else { return }
+            let value = textView.textStorage.attribute(.attachment, at: index, effectiveRange: nil)
+            if let checkbox = value as? CheckboxAttachment {
+                checkbox.toggle()
+                isInternalUpdate = true
+                textView.textStorage.edited(.editedAttributes, range: NSRange(location: index, length: 1), changeInLength: 0)
+                isInternalUpdate = false
+                parent.attributedText = textView.attributedText
+                parent.onCheckboxToggle()
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            } else if let table = value as? TableAttachment {
+                presentTableEditor(for: table, at: index, in: textView, tapPoint: point)
             }
-            attachment.toggle()
-            isInternalUpdate = true
-            textView.textStorage.edited(.editedAttributes, range: NSRange(location: index, length: 1), changeInLength: 0)
-            isInternalUpdate = false
-            parent.attributedText = textView.attributedText
-            parent.onCheckboxToggle()
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        }
+
+        // MARK: - Table editing (in-place overlay, Apple Notes style)
+
+        weak var activeTableEditor: TableInlineEditor?
+
+        private func presentTableEditor(
+            for attachment: TableAttachment, at index: Int, in textView: UITextView, tapPoint: CGPoint?
+        ) {
+            guard activeTableEditor == nil else { return }
+            // Re-render the attachment glyph for a size change so the note
+            // reflows around the overlay live (add/remove row/column).
+            let liveResize: (EditableTable) -> Void = { [weak self, weak textView] updated in
+                guard let self, let textView else { return }
+                self.isInternalUpdate = true
+                attachment.update(table: updated)
+                textView.textStorage.edited(
+                    .editedAttributes, range: NSRange(location: index, length: 1), changeInLength: 0
+                )
+                textView.layoutManager.invalidateLayout(
+                    forCharacterRange: NSRange(location: index, length: 1), actualCharacterRange: nil
+                )
+                textView.layoutManager.ensureLayout(for: textView.textContainer)
+                self.isInternalUpdate = false
+            }
+            let editor = TableInlineEditor(
+                attachment: attachment, charIndex: index, in: textView,
+                onLiveResize: liveResize,
+                onCommit: { [weak self, weak textView] final in
+                    guard let self, let textView else { return }
+                    self.activeTableEditor?.removeFromSuperview()
+                    self.activeTableEditor = nil
+                    self.isInternalUpdate = true
+                    if let final {
+                        attachment.update(table: final)
+                        textView.textStorage.edited(
+                            .editedAttributes, range: NSRange(location: index, length: 1), changeInLength: 0
+                        )
+                        textView.layoutManager.invalidateLayout(
+                            forCharacterRange: NSRange(location: index, length: 1), actualCharacterRange: nil
+                        )
+                    } else {
+                        // Delete the attachment char + its trailing newline if present.
+                        var range = NSRange(location: index, length: 1)
+                        let ns = textView.textStorage.string as NSString
+                        if index + 1 < ns.length, ns.character(at: index + 1) == 10 { range.length = 2 }
+                        textView.textStorage.deleteCharacters(in: range)
+                    }
+                    self.isInternalUpdate = false
+                    self.parent.attributedText = textView.attributedText
+                    self.parent.onChange()
+                }
+            )
+            textView.addSubview(editor)
+            activeTableEditor = editor
+            editor.beginEditing(preferredPoint: tapPoint)
         }
 
         // MARK: - Image paste / insert
@@ -493,23 +569,31 @@ struct WysiwygEditor: UIViewRepresentable {
             parent.onChange()
         }
 
-        /// A 2x2 markdown table skeleton, inserted as a verbatim block (tables
-        /// aren't WYSIWYG-editable in this editor — same as MarkdownParser's
-        /// render-only treatment). User fills in the pipes as plain text.
+        /// Insert a real 2x2 grid attachment at the caret and immediately
+        /// open the cell editor — like Apple Notes' table button.
         func insertTableSkeleton(in textView: UITextView) {
             let storage = textView.textStorage
             let loc = textView.selectedRange.location
             let needsNewline = loc > 0 && (storage.string as NSString).character(at: loc - 1) != 10
-            let table = "| Column 1 | Column 2 |\n| --- | --- |\n|  |  |\n|  |  |\n"
-            let text = (needsNewline ? "\n" : "") + table
+            let attachment = TableAttachment(
+                table: .empty(), maxWidth: imageWidth(for: textView)
+            )
             isInternalUpdate = true
-            storage.insert(NSAttributedString(string: text, attributes: MarkdownAttributed.typingAttributes(for: .verbatim)), at: loc)
-            let bodyAttrs = MarkdownAttributed.typingAttributes(for: .body)
-            textView.typingAttributes = bodyAttrs
-            textView.selectedRange = NSRange(location: loc + (text as NSString).length, length: 0)
+            let piece = NSMutableAttributedString(string: needsNewline ? "\n" : "")
+            piece.append(NSAttributedString(attachment: attachment))
+            piece.append(NSAttributedString(string: "\n", attributes: MarkdownAttributed.typingAttributes(for: .body)))
+            piece.addAttributes(
+                MarkdownAttributed.typingAttributes(for: .body),
+                range: NSRange(location: needsNewline ? 1 : 0, length: 1)
+            )
+            storage.insert(piece, at: loc)
+            textView.typingAttributes = MarkdownAttributed.typingAttributes(for: .body)
+            textView.selectedRange = NSRange(location: loc + piece.length, length: 0)
             isInternalUpdate = false
             parent.attributedText = textView.attributedText
             parent.onChange()
+            let attachmentIndex = loc + (needsNewline ? 1 : 0)
+            presentTableEditor(for: attachment, at: attachmentIndex, in: textView, tapPoint: nil)
         }
 
         // MARK: - Accessory bar

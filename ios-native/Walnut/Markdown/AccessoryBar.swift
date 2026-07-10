@@ -25,11 +25,20 @@ final class AccessoryBar: UIView {
         dismissFormatCard()
     }
 
+    /// Liquid Glass on iOS 26+, chrome blur on earlier — one shared factory
+    /// so the bar and the format card always match.
+    static func glassView() -> UIVisualEffectView {
+        if #available(iOS 26.0, *) {
+            return UIVisualEffectView(effect: UIGlassEffect())
+        }
+        return UIVisualEffectView(effect: UIBlurEffect(style: .systemChromeMaterial))
+    }
+
     private func buildBar() {
-        let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemChromeMaterial))
-        blur.frame = bounds
-        blur.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        addSubview(blur)
+        let glass = Self.glassView()
+        glass.frame = bounds
+        glass.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        addSubview(glass)
 
         let hairline = UIView()
         hairline.backgroundColor = .separator
@@ -190,7 +199,7 @@ final class FormatCardView: UIView {
         layer.shadowRadius = 14
         layer.shadowOffset = CGSize(width: 0, height: 4)
 
-        let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
+        let blur = AccessoryBar.glassView()
         blur.layer.cornerRadius = 14
         blur.layer.cornerCurve = .continuous
         blur.clipsToBounds = true
