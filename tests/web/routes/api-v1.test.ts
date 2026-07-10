@@ -504,6 +504,57 @@ describe('tasks (read-only projection)', () => {
     expect(doneBody.tasks.map((t) => t.title)).not.toContain('Buy milk')
   })
 
+  it('serves the projected session list with status filter + slim shape', async () => {
+    const st = await import('../../../src/core/session-tracker.js')
+    const tm = await import('../../../src/core/task-manager.js')
+    await tm.createCategory('Inbox', 'local').catch(() => { /* pre-seeded */ })
+    await tm.createProject('Inbox', 'General').catch(() => { /* pre-seeded */ })
+    const { task } = await tm.addTask({
+      title: 'Session host task', category: 'Inbox', project: 'General',
+      priority: 'important', description: '', status: 'todo',
+    } as Parameters<typeof tm.addTask>[0])
+
+    await st.createSessionRecord('sess-proj-live', task.id, 'General', '/tmp/proj', {
+      title: 'Live remote session', host: 'devbox', description: 'working on the thing',
+    })
+    await st.createSessionRecord('sess-proj-old', task.id, 'General', '/tmp/proj', {
+      title: 'Ancient stopped session',
+    })
+    // Age the second one out: stopped long before the retention window.
+    await st.updateSessionRecord('sess-proj-old', { process_status: 'stopped' })
+    const { getDb } = await import('../../../src/core/session-db.js')
+    getDb()!.prepare(
+      "UPDATE sessions SET last_active_at = '2020-01-01T00:00:00.000Z', started_at = '2020-01-01T00:00:00.000Z' WHERE claude_session_id = 'sess-proj-old'",
+    ).run()
+
+    const res = await fetch(apiUrl('/api/v1/sessions'))
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      sessions: Array<Record<string, unknown>>
+      syncedAt: string
+    }
+    expect(typeof body.syncedAt).toBe('string')
+    const live = body.sessions.find((s) => s.id === 'sess-proj-live')!
+    expect(live).toBeDefined()
+    expect(live.title).toBe('Live remote session')
+    expect(live.host).toBe('devbox')
+    expect(live.task_id).toBe(task.id)
+    expect(live.task_title).toBe('Session host task')
+    expect(live.category).toBe('Inbox')
+    expect(typeof live.process_status).toBe('string')
+    // Slim contract: registry internals don't leak.
+    expect(live).not.toHaveProperty('pid')
+    expect(live).not.toHaveProperty('outputFile')
+    // Retention: the ancient stopped session is dropped.
+    expect(body.sessions.map((s) => s.id)).not.toContain('sess-proj-old')
+
+    // status filter round-trips.
+    const filtered = await fetch(apiUrl(`/api/v1/sessions?status=${live.process_status}`))
+    const filteredBody = await filtered.json() as { sessions: Array<{ id: string; process_status: string }> }
+    expect(filteredBody.sessions.every((s) => s.process_status === live.process_status)).toBe(true)
+    expect(filteredBody.sessions.map((s) => s.id)).toContain('sess-proj-live')
+  })
+
   it('exportTaskProjection drops done tasks older than the retention window', async () => {
     const { exportTaskProjection, readTaskProjection } = await import('../../../src/core/task-projection.js')
     const tm = await import('../../../src/core/task-manager.js')

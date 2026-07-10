@@ -10,6 +10,7 @@ struct TasksView: View {
 
     @State private var activeFilter: TaskFilter = .today
     @State private var selected: WalnutTask?
+    @State private var selectedSession: WalnutSession?
 
     var body: some View {
         NavigationStack {
@@ -26,6 +27,11 @@ struct TasksView: View {
             }
             .sheet(item: $selected) { task in
                 TaskDetailSheet(task: task)
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+            }
+            .sheet(item: $selectedSession) { session in
+                SessionDetailSheet(session: session)
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
             }
@@ -60,7 +66,9 @@ struct TasksView: View {
                     .listRowSeparator(.hidden)
             }
 
-            if sections.isEmpty {
+            if activeFilter == .sessions {
+                sessionSections
+            } else if sections.isEmpty {
                 Section {
                     Text(emptyText)
                         .foregroundStyle(.secondary)
@@ -105,9 +113,68 @@ struct TasksView: View {
         switch activeFilter {
         case .today: return "Nothing due today."
         case .inProgress: return "No tasks in progress."
+        case .sessions: return "No agent sessions."
         case .allOpen: return "No open tasks."
         case .done: return "No recent completions."
         }
+    }
+
+    // MARK: - Sessions tab
+
+    /// PINNED on top, then ACTIVE (live process), then RECENT (stopped) —
+    /// mirrors the desktop Task panel's session tab structure.
+    @ViewBuilder
+    private var sessionSections: some View {
+        let pinned = tasks.pinnedSessions
+        let pinnedIds = Set(pinned.map(\.id))
+        let active = tasks.activeSessions.filter { !pinnedIds.contains($0.id) }
+        let recent = tasks.sessions
+            .filter { !$0.statusKind.isAlive && !pinnedIds.contains($0.id) }
+            .sorted(by: WalnutSession.recencySort)
+
+        if tasks.sessionsNotSyncedYet && tasks.sessions.isEmpty {
+            Section {
+                Text("Sessions not synced yet.")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 24)
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+            }
+        } else if pinned.isEmpty && active.isEmpty && recent.isEmpty {
+            Section {
+                Text(emptyText)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 24)
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+            }
+        } else {
+            if !pinned.isEmpty {
+                Section("Pinned") {
+                    ForEach(pinned) { session in sessionRow(session) }
+                }
+            }
+            if !active.isEmpty {
+                Section("Active") {
+                    ForEach(active) { session in sessionRow(session) }
+                }
+            }
+            if !recent.isEmpty {
+                Section("Recent") {
+                    ForEach(recent) { session in sessionRow(session) }
+                }
+            }
+        }
+    }
+
+    private func sessionRow(_ session: WalnutSession) -> some View {
+        Button { selectedSession = session } label: {
+            SessionRowView(session: session)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("sessions.row.\(session.id)")
     }
 
     // MARK: - 503 not-synced state
@@ -163,6 +230,7 @@ struct SmartListCard: View {
         switch filter {
         case .today: return Theme.tint
         case .inProgress: return Theme.warning
+        case .sessions: return .indigo
         case .allOpen: return .secondary
         case .done: return Theme.success
         }

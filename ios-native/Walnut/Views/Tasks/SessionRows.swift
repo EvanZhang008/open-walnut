@@ -1,0 +1,168 @@
+import SwiftUI
+
+/// One session row in the Tasks panel's Sessions tab — status dot, title,
+/// host/model chips, relative activity time. Read-only (v1 projection).
+struct SessionRowView: View {
+    let session: WalnutSession
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            statusDot
+                .padding(.top, 5)
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 5) {
+                    if session.isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(.caption2)
+                            .foregroundStyle(Theme.tint)
+                    }
+                    Text(session.displayTitle)
+                        .font(.body)
+                        .lineLimit(2)
+                }
+                HStack(spacing: 6) {
+                    chip(session.isLocal ? "Mac" : session.host,
+                         icon: session.isLocal ? "laptopcomputer" : "server.rack")
+                    if let model = session.model {
+                        chip(shortModel(model), icon: nil)
+                    }
+                    if let when = session.lastActiveValue {
+                        Text(when.formatted(.relative(presentation: .named)))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
+    }
+
+    private var statusDot: some View {
+        Circle()
+            .fill(statusColor)
+            .frame(width: 9, height: 9)
+    }
+
+    private var statusColor: Color {
+        switch session.statusKind {
+        case .running: return Theme.success
+        case .idle: return Theme.warning
+        case .error: return Theme.danger
+        case .stopped, .unknown: return Color(.systemGray3)
+        }
+    }
+
+    private func chip(_ text: String, icon: String?) -> some View {
+        HStack(spacing: 3) {
+            if let icon {
+                Image(systemName: icon).font(.system(size: 9))
+            }
+            Text(text).font(.caption2)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(Color(.tertiarySystemFill), in: Capsule())
+        .foregroundStyle(.secondary)
+    }
+
+    /// "claude-opus-4-6" → "Opus 4.6"-style short display.
+    private func shortModel(_ model: String) -> String {
+        let lower = model.lowercased()
+        for family in ["opus", "sonnet", "haiku", "fable"] where lower.contains(family) {
+            // Version digits after the family name, e.g. "-4-6" → "4.6".
+            if let range = lower.range(of: family) {
+                let tail = lower[range.upperBound...]
+                let digits = tail.split(separator: "-").prefix(2).filter { !$0.isEmpty && $0.allSatisfy(\.isNumber) }
+                let version = digits.joined(separator: ".")
+                let name = family.prefix(1).uppercased() + family.dropFirst()
+                return version.isEmpty ? name : "\(name) \(version)"
+            }
+        }
+        return model
+    }
+}
+
+/// Read-only session detail — everything the projection carries. Opening the
+/// live conversation requires the primary box (Phase 2 proxy); the sheet says
+/// so instead of pretending.
+struct SessionDetailSheet: View {
+    let session: WalnutSession
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    HStack(spacing: 10) {
+                        SessionRowView(session: session)
+                    }
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                }
+
+                Section("Details") {
+                    row("Status", session.processStatus.capitalized)
+                    row("Machine", session.isLocal ? "Mac (primary)" : session.host)
+                    if let model = session.model { row("Model", model) }
+                    if let mode = session.mode { row("Mode", mode.capitalized) }
+                    row("Messages", "\(session.messageCount)")
+                    if let started = WalnutTask.parseISO(session.startedAt) {
+                        row("Started", started.formatted(date: .abbreviated, time: .shortened))
+                    }
+                    if let active = session.lastActiveValue {
+                        row("Last active", active.formatted(date: .abbreviated, time: .shortened))
+                    }
+                    if let cwd = session.cwd {
+                        row("Directory", cwd)
+                    }
+                }
+
+                if let taskTitle = session.taskTitle {
+                    Section("Task") {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(taskTitle)
+                            if let category = session.category {
+                                Text([category, session.project].compactMap { $0 }.joined(separator: " › "))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+
+                if let description = session.description, !description.isEmpty {
+                    Section("About") {
+                        Text(description)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Section {
+                    Label(
+                        "Live view and steering open on your Walnut console. Mobile control is coming with the primary-bridge phase.",
+                        systemImage: "info.circle"
+                    )
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .listRowBackground(Color.clear)
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Session")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
+    private func row(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(label).foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .multilineTextAlignment(.trailing)
+                .lineLimit(3)
+                .font(.callout)
+        }
+    }
+}

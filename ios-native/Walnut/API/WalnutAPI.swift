@@ -68,6 +68,12 @@ struct WalnutAPI {
         try await get("/tasks")
     }
 
+    /// Read-only session projection — same semantics as tasks() (503 =
+    /// projection not synced yet on a fresh companion).
+    func sessions() async throws -> SessionsResponse {
+        try await get("/sessions")
+    }
+
     func notesTree() async throws -> [NoteTreeNode] {
         struct Tree: Codable { let tree: [NoteTreeNode] }
         let wrapper: Tree = try await get("/notes")

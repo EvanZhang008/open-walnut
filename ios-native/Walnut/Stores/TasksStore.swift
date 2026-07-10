@@ -19,6 +19,11 @@ final class TasksStore {
     /// synced yet) — drives the friendly "Tasks not synced yet" state.
     var notSyncedYet = false
 
+    // Sessions ride the same panel as a smart-list tab (read-only projection).
+    var sessions: [WalnutSession] = []
+    var sessionsSyncedAt: Date?
+    var sessionsNotSyncedYet = false
+
     /// Instant render from cache, then a network refresh.
     func initialize() async {
         if let cached: [WalnutTask] = DiskCache.load([WalnutTask].self, key: "tasks-list") {
@@ -27,7 +32,12 @@ final class TasksStore {
         if let cachedSynced: String = DiskCache.load(String.self, key: "tasks-syncedAt") {
             syncedAt = WalnutTask.parseISO(cachedSynced)
         }
-        await loadTasks()
+        if let cachedSessions: [WalnutSession] = DiskCache.load([WalnutSession].self, key: "sessions-list") {
+            sessions = cachedSessions
+        }
+        async let t: Void = loadTasks()
+        async let s: Void = loadSessions()
+        _ = await (t, s)
     }
 
     func loadTasks() async {
@@ -52,6 +62,40 @@ final class TasksStore {
         }
     }
 
+    func loadSessions() async {
+        do {
+            let response = try await api.sessions()
+            sessions = response.sessions
+            sessionsSyncedAt = WalnutTask.parseISO(response.syncedAt)
+            sessionsNotSyncedYet = false
+            connection?.reportReachability(true)
+            DiskCache.save(response.sessions, key: "sessions-list")
+        } catch let error as APIError where error.isUnavailable {
+            sessionsNotSyncedYet = true
+        } catch {
+            reportIfNetwork(error)
+        }
+    }
+
+    // MARK: - Derived session slices
+
+    /// Sessions with a live CLI process (running or idle), pinned first.
+    var activeSessions: [WalnutSession] {
+        sessions.filter { $0.statusKind.isAlive }.sorted(by: sessionOrder)
+    }
+
+    var pinnedSessions: [WalnutSession] {
+        sessions.filter { $0.isPinned }.sorted(by: sessionOrder)
+    }
+
+    /// Pinned first (focus tier before the rest), then most recently active.
+    private func sessionOrder(_ a: WalnutSession, _ b: WalnutSession) -> Bool {
+        if a.isPinned != b.isPinned { return a.isPinned }
+        let af = a.focusTier == "focus", bf = b.focusTier == "focus"
+        if af != bf { return af }
+        return WalnutSession.recencySort(a, b)
+    }
+
     // MARK: - Derived slices (smart lists)
 
     var openTasks: [WalnutTask] {
@@ -71,10 +115,12 @@ final class TasksStore {
     }
 
     /// Tasks for a smart-list filter, already sorted for section rendering.
+    /// (.sessions renders its own list — returns [] here.)
     func tasks(for filter: TaskFilter) -> [WalnutTask] {
         switch filter {
         case .today: return todayTasks.sorted(by: WalnutTask.openSort)
         case .inProgress: return inProgressTasks.sorted(by: WalnutTask.openSort)
+        case .sessions: return []
         case .allOpen: return openTasks.sorted(by: WalnutTask.openSort)
         case .done: return doneTasks.sorted(by: WalnutTask.doneSort)
         }
@@ -84,6 +130,7 @@ final class TasksStore {
         switch filter {
         case .today: return todayTasks.count
         case .inProgress: return inProgressTasks.count
+        case .sessions: return activeSessions.count
         case .allOpen: return openTasks.count
         case .done: return doneTasks.count
         }
@@ -96,15 +143,16 @@ final class TasksStore {
     }
 }
 
-/// The four Reminders-style smart lists.
+/// The Reminders-style smart lists (+ the Sessions tab).
 enum TaskFilter: String, CaseIterable, Identifiable {
-    case today, inProgress, allOpen, done
+    case today, inProgress, sessions, allOpen, done
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .today: return "Today"
         case .inProgress: return "In Progress"
+        case .sessions: return "Sessions"
         case .allOpen: return "All Open"
         case .done: return "Done"
         }
@@ -114,16 +162,18 @@ enum TaskFilter: String, CaseIterable, Identifiable {
         switch self {
         case .today: return "calendar"
         case .inProgress: return "arrow.triangle.2.circlepath"
+        case .sessions: return "terminal"
         case .allOpen: return "tray.full"
         case .done: return "checkmark"
         }
     }
 
-    /// accessibilityIdentifier suffix ("today"/"inprogress"/"all"/"done").
+    /// accessibilityIdentifier suffix ("today"/"inprogress"/"sessions"/"all"/"done").
     var identifierKey: String {
         switch self {
         case .today: return "today"
         case .inProgress: return "inprogress"
+        case .sessions: return "sessions"
         case .allOpen: return "all"
         case .done: return "done"
         }

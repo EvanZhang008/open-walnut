@@ -177,6 +177,25 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
 - `503 { "error": { "code": "unavailable" } }` — projection not synced yet
   (fresh companion before its first git pull).
 
+### Sessions (read-only)
+
+- `GET /api/v1/sessions?status=running|idle|stopped|error` →
+  `{ "sessions": [ProjectedSession], "syncedAt": "<ISO>" }`
+- `ProjectedSession`: `{ id, title?, task_id?, task_title?, category?,
+  project?, host, process_status, model?, mode?, started_at, last_active_at,
+  message_count, cwd?, pinned?, focus_tier?, description? }` — `host` is `""`
+  for sessions on the primary box, otherwise the host alias; `pinned` /
+  `focus_tier` mirror the owning task's pin state at export time;
+  `description` is truncated to ~300 chars.
+- Scope: all live sessions + sessions stopped in the last 14 days, newest
+  first, capped at 500. System sessions (triage/cron/hooks) and archived
+  sessions are excluded.
+- Provenance/laggy-replica semantics identical to `/tasks` (`syncedAt`,
+  `503 unavailable` on a fresh companion).
+- Read-only: opening or steering a session requires the primary box's web UI
+  today; a future additive endpoint will proxy interaction through the
+  primary (which owns the SSH channel to remote hosts).
+
 ## curl examples
 
 ```bash

@@ -232,6 +232,82 @@ extension WalnutTask {
     }
 }
 
+// MARK: - Sessions (read-only /api/v1/sessions projection)
+
+/// One agent session from the frozen projection — same wire conventions as
+/// WalnutTask (snake_case keys, ISO strings parsed on demand).
+struct WalnutSession: Codable, Identifiable, Equatable {
+    let id: String
+    let title: String?
+    let taskId: String?
+    let taskTitle: String?
+    let category: String?
+    let project: String?
+    /// "" = the primary box (Mac); otherwise the remote host alias.
+    let host: String
+    let processStatus: String // "running" | "idle" | "stopped" | "error"
+    let model: String?
+    let mode: String?
+    let startedAt: String
+    let lastActiveAt: String
+    let messageCount: Int
+    let cwd: String?
+    let pinned: Bool?
+    let focusTier: String?
+    let description: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, category, project, host, model, mode, cwd, pinned, description
+        case taskId = "task_id"
+        case taskTitle = "task_title"
+        case processStatus = "process_status"
+        case startedAt = "started_at"
+        case lastActiveAt = "last_active_at"
+        case messageCount = "message_count"
+        case focusTier = "focus_tier"
+    }
+}
+
+struct SessionsResponse: Codable {
+    let sessions: [WalnutSession]
+    let syncedAt: String
+}
+
+/// Coarse session status for the indicator dot + grouping.
+enum SessionStatus {
+    case running, idle, stopped, error, unknown
+    init(_ raw: String) {
+        switch raw {
+        case "running": self = .running
+        case "idle": self = .idle
+        case "stopped": self = .stopped
+        case "error": self = .error
+        default: self = .unknown
+        }
+    }
+
+    /// Alive = a CLI process still exists for this session.
+    var isAlive: Bool { self == .running || self == .idle }
+}
+
+extension WalnutSession {
+    var statusKind: SessionStatus { SessionStatus(processStatus) }
+    var isPinned: Bool { pinned == true }
+    /// Display name: session title, else the owning task's title, else the id.
+    var displayTitle: String {
+        if let title, !title.isEmpty { return title }
+        if let taskTitle, !taskTitle.isEmpty { return taskTitle }
+        return id
+    }
+    var lastActiveValue: Date? { WalnutTask.parseISO(lastActiveAt) }
+    var isLocal: Bool { host.isEmpty }
+
+    /// Recency order — most recently active first.
+    static func recencySort(_ a: WalnutSession, _ b: WalnutSession) -> Bool {
+        (a.lastActiveValue ?? .distantPast) > (b.lastActiveValue ?? .distantPast)
+    }
+}
+
 // MARK: - Error envelope
 
 /// Wire shape: `{ "error": { "code", "message" }, ...extras }`.

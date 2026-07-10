@@ -26,6 +26,7 @@ import { memoryRouter } from './routes/memory.js'
 import { configRouter } from './routes/config.js'
 import { categoriesRouter } from './routes/categories.js'
 import { favoritesRouter } from './routes/favorites.js'
+import { uiPrefsRouter } from './routes/ui-prefs.js'
 import { focusRouter } from './routes/focus.js'
 import { orderingRouter } from './routes/ordering.js'
 import { chatHistoryRouter } from './routes/chat-history.js'
@@ -130,6 +131,7 @@ let terminalReaperHandle: { stop: () => void } | null = null
 let qmdWatcherHandle: { stop: () => void } | null = null
 let gitAutoCommitHandle: { stop: () => void; health: GitAutoCommitHealth } | null = null
 let taskProjectionHandle: { stop: () => void } | null = null
+let sessionProjectionHandle: { stop: () => void } | null = null
 // Pending deferred-markDone timers from the session:status-changed handler.
 // Hoisted to module scope so stopServer() can cancel them before teardown,
 // otherwise a late-firing timer could mutate sessionStreamBuffer after the
@@ -619,6 +621,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/config', configRouter)
   app.use('/api/categories', categoriesRouter)
   app.use('/api/favorites', favoritesRouter)
+  app.use('/api/ui-prefs', uiPrefsRouter)
   app.use('/api/focus', focusRouter)
   app.use('/api/ordering', orderingRouter)
   app.use('/api/chat', chatHistoryRouter)
@@ -1048,6 +1051,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     if (!CLOUD_MODE) {
       const { startTaskProjectionExport } = await import('../core/task-projection.js')
       taskProjectionHandle = startTaskProjectionExport()
+      // Session projection rides the same pipeline: sessions.json is
+      // machine-local, so a slim sessions/projection.json syncs to the
+      // companion for the read-only GET /api/v1/sessions.
+      const { startSessionProjectionExport } = await import('../core/session-projection.js')
+      sessionProjectionHandle = startSessionProjectionExport()
     }
 
     // Git history compaction rewrites local refs — running it on BOTH the Mac
@@ -1310,11 +1318,68 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // is deduped upstream via _emittedStreamKeys, so this only fires on live output).
   // sessionStreamingPhase() only touches AWAIT_HUMAN_ACTION → a genuinely
   // human-paused task is never disturbed unless output actually resumes.
-  const enforceStreamingPhase = (sessionId: string, taskId?: string): void => {
+  const enforceStreamingPhase = (sessionId: string, taskId?: string, replayed?: boolean): void => {
     if (!taskId || streamingPhaseChecked.has(sessionId)) return
+    // A positionally-replayed delta must not consume the once-per-run check —
+    // a LIVE delta arriving later in the same run still needs its chance to raise.
+    if (replayed === true) return
     streamingPhaseChecked.add(sessionId)
     void (async () => {
       try {
+        // Guard (incident 10e7df54): a daemon REPLAY delta must never raise the phase.
+        // After a server restart the fresh session object has an empty stream-dedup set,
+        // so replayed deltas pass upstream dedup and land here looking like live output —
+        // in that incident one raised AWAIT_HUMAN_ACTION back to IN_PROGRESS on a session
+        // whose turn had already ended, wedging the task.
+        //
+        // The verdict is POSITIONAL when available: `replayed` carries the emitter's
+        // v-vs-consumedOffset comparison (same yardstick as the live result/idle
+        // replay guards). replayed===false is ground truth that the CLI is producing
+        // positionally NEW output right now, so the raise may proceed even off a
+        // settled/error record — this is the self-heal for a record wrongly converged
+        // to error while the turn was still running (inc-1783644415695: a stale
+        // record-status check here kept the false error pinned forever).
+        // Only without positional info (legacy emit paths) fall back to the record
+        // check: live output normally rides a record flipped 'running' at send time
+        // (writeMessage persists it before the first delta can arrive).
+        // (replayed===true already returned above, before consuming the check.)
+        const { getSessionByClaudeId, updateSessionRecordConditionally } = await import('../core/session-tracker.js')
+        const record = await getSessionByClaudeId(sessionId)
+        if (replayed === undefined) {
+          if (record && record.process_status !== 'running') {
+            log.web.info('skipping streaming-phase raise: record not running (replayed delta)', {
+              taskId, sessionId, processStatus: record.process_status,
+            })
+            return
+          }
+        } else if (record?.process_status === 'error') {
+          // Record self-heal: positionally NEW output on an 'error' record means
+          // the error verdict was wrong (or is stale) — the CLI is demonstrably
+          // working right now. Flip it back to running and clear the pinned
+          // banner. Scoped to 'error' ONLY: an 'idle' record with new bytes is
+          // the normal background-subagent-after-turn-end shape and must stay
+          // idle. If the error was real, the (positionally new) error result
+          // will re-converge the record right back — self-correcting.
+          const healed = await updateSessionRecordConditionally(
+            sessionId,
+            {
+              process_status: 'running',
+              errorMessage: undefined,
+              last_status_change: new Date().toISOString(),
+              status_reason: 'streaming_evidence_self_heal',
+              status_changed_by: 'system',
+            },
+            (current) => current.process_status === 'error',
+          )
+          if (healed) {
+            log.web.warn('streaming-evidence self-heal: error record revived by positionally-new output', {
+              taskId, sessionId,
+            })
+            bus.emit(EventNames.SESSION_STATUS_CHANGED, {
+              sessionId, taskId, process_status: 'running' as const,
+            }, ['*'], { source: 'server:stream-delta', urgency: 'urgent' })
+          }
+        }
         const { applySessionPhase } = await import('../core/phase.js')
         await applySessionPhase(taskId, 'session:streaming', 'server.ts:stream-delta', { sessionId })
       } catch (err) {
@@ -1338,14 +1403,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   bus.subscribe('main-ai', async (event) => {
     // ── Streaming events: buffer server-side + broadcast to all clients (filtered client-side) ──
     if (event.name === 'session:text-delta') {
-      const { sessionId, taskId, delta, msgId } = eventData<'session:text-delta'>(event)
+      const { sessionId, taskId, delta, msgId, parentToolUseId, subagentType, taskDescription, replayed } = eventData<'session:text-delta'>(event)
       if (sessionId) {
-        sessionStreamBuffer.appendTextDelta(sessionId, delta, msgId)
+        sessionStreamBuffer.appendTextDelta(sessionId, delta, msgId, parentToolUseId, subagentType, taskDescription)
         sendStreamEvent(sessionId, event.name, event.data)
-        enforceStreamingPhase(sessionId, taskId)
+        enforceStreamingPhase(sessionId, taskId, replayed)
       }
     } else if (event.name === 'session:tool-use') {
-      const { sessionId, toolName, toolUseId, input, planContent, parentToolUseId } = eventData<'session:tool-use'>(event)
+      const { sessionId, toolName, toolUseId, input, planContent, parentToolUseId, subagentType, taskDescription } = eventData<'session:tool-use'>(event)
       if (sessionId) {
         // DUP-DEBUG: server.ts is the choke point between bus.emit and SSE
         // fan-out. If the same toolUseId reaches this branch twice, the
@@ -1355,9 +1420,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         log.ws.debug('server: session:tool-use received', {
           sessionId, toolUseId, toolName, parentToolUseId,
         })
-        sessionStreamBuffer.appendToolUse(sessionId, toolUseId, toolName, input, planContent, parentToolUseId)
+        sessionStreamBuffer.appendToolUse(sessionId, toolUseId, toolName, input, planContent, parentToolUseId, subagentType, taskDescription)
         sendStreamEvent(sessionId, event.name, event.data)
-        enforceStreamingPhase(sessionId, eventData<'session:tool-use'>(event).taskId)
+        enforceStreamingPhase(sessionId, eventData<'session:tool-use'>(event).taskId, eventData<'session:tool-use'>(event).replayed)
       }
     } else if (event.name === 'session:tool-result') {
       const { sessionId, toolUseId, result } = eventData<'session:tool-result'>(event)
@@ -1383,11 +1448,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         sendStreamEvent(sessionId, event.name, event.data)
       }
     } else if (event.name === 'session:thinking-delta') {
-      const { sessionId, taskId, delta, msgId } = eventData<'session:thinking-delta'>(event)
+      const { sessionId, taskId, delta, msgId, parentToolUseId, replayed } = eventData<'session:thinking-delta'>(event)
       if (sessionId) {
-        sessionStreamBuffer.appendThinkingDelta(sessionId, delta, msgId)
+        sessionStreamBuffer.appendThinkingDelta(sessionId, delta, msgId, parentToolUseId)
         sendStreamEvent(sessionId, event.name, event.data)
-        enforceStreamingPhase(sessionId, taskId)
+        enforceStreamingPhase(sessionId, taskId, replayed)
       }
     } else if (event.name === 'session:unknown-event') {
       const { sessionId, scope, eventType, snippet } = eventData<'session:unknown-event'>(event)
@@ -1479,9 +1544,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           // clearSoon wipes the buffer, then verify (T+15s) that every one of
           // them exists in persisted history. A miss = the "visible while
           // streaming, gone when done" class → auto-incident.
+          // Subagent-lane blocks (parentToolUseId set) are EXCLUDED: their
+          // transcript persists to a separate subagents/agent-<id>.jsonl, so
+          // they are never in THIS session's history — checking them produced
+          // 49-id false VIOLATIONs on every background-agent turn (0b253ffe).
           if (event.name === 'session:result') {
             const streamedIds = sessionStreamBuffer.getSnapshot(sid).blocks
-              .flatMap((b) => (b.type === 'text' && b.msgId ? [b.msgId] : []))
+              .flatMap((b) => (b.type === 'text' && b.msgId && !b.parentToolUseId ? [b.msgId] : []))
             if (streamedIds.length > 0) {
               import('../core/observability/stream-convergence.js')
                 .then(({ armStreamConvergenceCheck }) => armStreamConvergenceCheck(sid, streamedIds))
@@ -2863,6 +2932,10 @@ export async function stopServer(): Promise<void> {
   if (taskProjectionHandle) {
     taskProjectionHandle.stop()
     taskProjectionHandle = null
+  }
+  if (sessionProjectionHandle) {
+    sessionProjectionHandle.stop()
+    sessionProjectionHandle = null
   }
   bus.unsubscribe('web-ui')
   bus.unsubscribe('main-ai')

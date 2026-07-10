@@ -519,6 +519,30 @@ apiV1Router.get('/tasks', async (req: Request, res: Response, next: NextFunction
   }
 })
 
+// GET /api/v1/sessions — slim session list for mobile (read-only, additive).
+// Same projection pattern as /tasks: primary refreshes inline, cloud serves
+// the git-synced sessions/projection.json. Opening/steering a session from
+// the companion is Phase 2 (reverse-WS bridge to the primary).
+apiV1Router.get('/sessions', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { readSessionProjection, exportSessionProjection } = await import('../../core/session-projection.js')
+    if (!CLOUD_MODE) {
+      await exportSessionProjection().catch(() => { /* serve last good file below */ })
+    }
+    const projection = await readSessionProjection()
+    if (!projection) {
+      sendError(res, 503, 'unavailable', 'Session projection not synced yet')
+      return
+    }
+    let sessions = projection.sessions
+    const status = typeof req.query.status === 'string' ? req.query.status : undefined
+    if (status) sessions = sessions.filter((s) => s.process_status === status)
+    res.json({ sessions, syncedAt: projection.exportedAt })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // ─── Notes (thin adapters over the notes-v2 vault semantics) ───────────────
 
 // GET /api/v1/notes — file tree

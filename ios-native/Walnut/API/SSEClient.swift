@@ -50,6 +50,22 @@ final class SSEClient: @unchecked Sendable {
         return Date().timeIntervalSince(lastActivity)
     }
 
+    /// Synchronous helpers so async contexts never touch NSLock directly
+    /// (lock()/unlock() are unavailable-from-async in Swift 6 mode).
+    private func markStallTripped() {
+        stallLock.lock()
+        stallTripped = true
+        stallLock.unlock()
+    }
+
+    private func consumeStallTripped() -> Bool {
+        stallLock.lock()
+        defer { stallLock.unlock() }
+        let tripped = stallTripped
+        stallTripped = false
+        return tripped
+    }
+
     init(
         url: URL,
         token: String,
@@ -87,11 +103,7 @@ final class SSEClient: @unchecked Sendable {
                 // cancels it (session.invalidateAndCancel) when the stream
                 // went silent. A watchdog trip is a dead connection, not a
                 // deliberate close: reconnect immediately.
-                stallLock.lock()
-                let trippedByWatchdog = stallTripped
-                stallTripped = false
-                stallLock.unlock()
-                if !trippedByWatchdog { return }
+                if !consumeStallTripped() { return }
                 backoff = 1
             } catch {
                 onConnectionChange(false)
@@ -133,9 +145,7 @@ final class SSEClient: @unchecked Sendable {
                 try? await Task.sleep(for: .seconds(10))
                 guard let self else { return }
                 if self.silentFor() > Self.stallThreshold {
-                    self.stallLock.lock()
-                    self.stallTripped = true
-                    self.stallLock.unlock()
+                    self.markStallTripped()
                     session.invalidateAndCancel()
                     return
                 }
