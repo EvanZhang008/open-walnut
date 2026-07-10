@@ -417,3 +417,65 @@ describe('notes', () => {
     expect([400, 404]).toContain(res.status)
   })
 })
+
+describe('tasks (read-only projection)', () => {
+  it('serves the projected task list with status filter + syncedAt', async () => {
+    // Seed real tasks through the task manager (SQLite in the temp home).
+    const tm = await import('../../../src/core/task-manager.js')
+    await tm.createCategory('Inbox', 'local').catch(() => { /* pre-seeded */ })
+    await tm.createProject('Inbox', 'General').catch(() => { /* pre-seeded */ })
+    const { task: open } = await tm.addTask({
+      title: 'Buy milk', category: 'Inbox', project: 'General',
+      priority: 'important', description: '', status: 'todo',
+    } as Parameters<typeof tm.addTask>[0])
+    const { task: toFinish } = await tm.addTask({
+      title: 'Ship v1', category: 'Inbox', project: 'General',
+      priority: 'none', description: '', status: 'todo',
+    } as Parameters<typeof tm.addTask>[0])
+    await tm.completeTask(toFinish.id)
+
+    const res = await fetch(apiUrl('/api/v1/tasks'))
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      tasks: Array<{ id: string; title: string; status: string; phase: string }>
+      syncedAt: string
+    }
+    expect(typeof body.syncedAt).toBe('string')
+    const titles = body.tasks.map((t) => t.title)
+    expect(titles).toContain('Buy milk')
+    expect(titles).toContain('Ship v1') // completed recently → still in scope
+    const openTask = body.tasks.find((t) => t.id === open.id)!
+    expect(openTask.status).toBe('todo')
+    // Slim contract: no heavy fields leak through.
+    expect(openTask).not.toHaveProperty('note')
+    expect(openTask).not.toHaveProperty('conversation_log')
+    expect(openTask).not.toHaveProperty('description')
+
+    // status filter
+    const doneRes = await fetch(apiUrl('/api/v1/tasks?status=done'))
+    const doneBody = await doneRes.json() as { tasks: Array<{ title: string; status: string }> }
+    expect(doneBody.tasks.every((t) => t.status === 'done')).toBe(true)
+    expect(doneBody.tasks.map((t) => t.title)).toContain('Ship v1')
+    expect(doneBody.tasks.map((t) => t.title)).not.toContain('Buy milk')
+  })
+
+  it('exportTaskProjection drops done tasks older than the retention window', async () => {
+    const { exportTaskProjection, readTaskProjection } = await import('../../../src/core/task-projection.js')
+    const tm = await import('../../../src/core/task-manager.js')
+    // Seed a long-ago-completed task directly (updateTask strips completed_at).
+    await tm.addTaskFull({
+      title: 'Ancient chore', category: 'Inbox', project: 'General',
+      status: 'done', phase: 'COMPLETE', priority: 'none', source: 'local',
+      session_ids: [], description: '', summary: '', note: '',
+      created_at: '2020-01-01T00:00:00.000Z',
+      updated_at: '2020-01-02T00:00:00.000Z',
+      completed_at: '2020-01-02T00:00:00.000Z',
+    })
+
+    await exportTaskProjection()
+    const projection = await readTaskProjection()
+    expect(projection).not.toBeNull()
+    expect(projection!.version).toBe(1)
+    expect(projection!.tasks.map((t) => t.title)).not.toContain('Ancient chore')
+  })
+})

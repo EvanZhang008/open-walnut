@@ -483,6 +483,33 @@ async function runApiV1Turn(conversationId: string, text: string, turnId: string
   })
 }
 
+// ─── Tasks (read-only v1) ──────────────────────────────────────────────────
+
+// GET /api/v1/tasks — slim task list for mobile.
+// Cloud box: serves the git-synced tasks/projection.json (the replica).
+// Primary box: exports a fresh projection from SQLite and serves that, so
+// both modes return the identical shape (+ syncedAt provenance).
+apiV1Router.get('/tasks', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { readTaskProjection, exportTaskProjection } = await import('../../core/task-projection.js')
+    if (!CLOUD_MODE) {
+      // Live box — refresh the projection inline (cheap: one SELECT + write).
+      await exportTaskProjection().catch(() => { /* serve last good file below */ })
+    }
+    const projection = await readTaskProjection()
+    if (!projection) {
+      sendError(res, 503, 'unavailable', 'Task projection not synced yet')
+      return
+    }
+    let tasks = projection.tasks
+    const status = typeof req.query.status === 'string' ? req.query.status : undefined
+    if (status) tasks = tasks.filter((t) => t.status === status)
+    res.json({ tasks, syncedAt: projection.exportedAt })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // ─── Notes (thin adapters over the notes-v2 vault semantics) ───────────────
 
 // GET /api/v1/notes — file tree

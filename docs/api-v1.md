@@ -161,6 +161,21 @@ conversation, and turns fired from mobile also stream into the web UI.
 Notes v1 shares storage and semantics (path safety, id stamping, index
 reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
 
+### Tasks (read-only)
+
+- `GET /api/v1/tasks?status=todo|in_progress|done` →
+  `{ "tasks": [ProjectedTask], "syncedAt": "<ISO>" }`
+- `ProjectedTask`: `{ id, title, status, phase, priority, category, project,
+  due_date?, created_at, updated_at, completed_at?, starred?, pinned?, tags?,
+  summary? }` — `summary` is truncated to ~500 chars.
+- Scope: all open tasks + tasks completed in the last 14 days (older
+  completions are excluded from the projection).
+- Provenance: `syncedAt` is when the primary box exported the snapshot. On the
+  cloud companion the data rides the periodic git sync, so it can lag by up to
+  a sync cycle; treat it as read-only replica data.
+- `503 { "error": { "code": "unavailable" } }` — projection not synced yet
+  (fresh companion before its first git pull).
+
 ## curl examples
 
 ```bash
@@ -175,6 +190,8 @@ curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
   -d '{"text":"hello walnut"}' $BASE/conversations/$CONV/messages
 curl -sN -H "$AUTH" $BASE/conversations/$CONV/stream          # watch the turn stream
 curl -s -H "$AUTH" "$BASE/conversations/$CONV/messages?limit=50"
+
+curl -s -H "$AUTH" "$BASE/tasks?status=todo"
 
 curl -s -H "$AUTH" $BASE/notes
 curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \

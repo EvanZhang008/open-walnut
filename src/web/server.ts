@@ -129,6 +129,7 @@ let recordingReaperHandle: { stop: () => void } | null = null
 let terminalReaperHandle: { stop: () => void } | null = null
 let qmdWatcherHandle: { stop: () => void } | null = null
 let gitAutoCommitHandle: { stop: () => void; health: GitAutoCommitHealth } | null = null
+let taskProjectionHandle: { stop: () => void } | null = null
 // Pending deferred-markDone timers from the session:status-changed handler.
 // Hoisted to module scope so stopServer() can cancel them before teardown,
 // otherwise a late-firing timer could mutate sessionStreamBuffer after the
@@ -1040,6 +1041,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Skip for ephemeral servers — they use a temp copy of data, no need to backup
   if (!isEphemeral) {
     gitAutoCommitHandle = startGitAutoCommit()
+
+    // Task projection export (primary box only): tasks.sqlite is gitignored,
+    // so a slim tasks/projection.json rides git-sync to the cloud companion,
+    // which serves it at GET /api/v1/tasks. Cloud mode only reads the file.
+    if (!CLOUD_MODE) {
+      const { startTaskProjectionExport } = await import('../core/task-projection.js')
+      taskProjectionHandle = startTaskProjectionExport()
+    }
 
     // Git history compaction rewrites local refs — running it on BOTH the Mac
     // and the cloud companion would make their histories diverge. The Mac stays
@@ -2850,6 +2859,10 @@ export async function stopServer(): Promise<void> {
   if (gitAutoCommitHandle) {
     gitAutoCommitHandle.stop()
     gitAutoCommitHandle = null
+  }
+  if (taskProjectionHandle) {
+    taskProjectionHandle.stop()
+    taskProjectionHandle = null
   }
   bus.unsubscribe('web-ui')
   bus.unsubscribe('main-ai')
