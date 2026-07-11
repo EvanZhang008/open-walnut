@@ -23,6 +23,10 @@ final class SSEClient: @unchecked Sendable {
     private let token: String
     private let onEvent: @Sendable (SSEEvent) -> Void
     private let onConnectionChange: @Sendable (Bool) -> Void
+    /// Fired with the HTTP status when the stream endpoint answers non-200
+    /// (e.g. 404 on an older server that lacks the route). Lets the caller
+    /// abandon SSE and fall back to polling instead of retrying forever.
+    private let onHTTPError: (@Sendable (Int) -> Void)?
 
     private var task: Task<Void, Never>?
     private var lastEventID: String?
@@ -70,12 +74,14 @@ final class SSEClient: @unchecked Sendable {
         url: URL,
         token: String,
         onEvent: @escaping @Sendable (SSEEvent) -> Void,
-        onConnectionChange: @escaping @Sendable (Bool) -> Void
+        onConnectionChange: @escaping @Sendable (Bool) -> Void,
+        onHTTPError: (@Sendable (Int) -> Void)? = nil
     ) {
         self.url = url
         self.token = token
         self.onEvent = onEvent
         self.onConnectionChange = onConnectionChange
+        self.onHTTPError = onHTTPError
     }
 
     func start() {
@@ -134,6 +140,10 @@ final class SSEClient: @unchecked Sendable {
 
         let (bytes, response) = try await session.bytes(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+            onHTTPError?(status)
+            // 404 = route absent (older server) — terminal, don't retry.
+            if status == 404 { throw CancellationError() }
             throw APIError.badResponse
         }
         onConnectionChange(true)

@@ -88,6 +88,24 @@ struct WalnutAPI {
         try await get("/sessions/\(escape(id))/transcript\(fresh ? "?fresh=1" : "")")
     }
 
+    /// Send text INTO a live session; returns the queued messageId (202).
+    /// Distinct error codes callers act on: 404 not_found, 503 bridge_offline
+    /// (no live bridge to the session's host), 409 session_dead (CLI gone).
+    func sendSessionMessage(id: String, text: String) async throws -> String {
+        struct Accepted: Codable { let messageId: String }
+        let accepted: Accepted = try await send(
+            "POST", "/sessions/\(escape(id))/messages", body: ["text": text]
+        )
+        return accepted.messageId
+    }
+
+    /// Authenticated SSE URL for a session's live turn stream (nil if unpaired).
+    static func sessionStreamURL(id: String) -> URL? {
+        guard let base = AppConfig.serverURL else { return nil }
+        let escaped = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        return URL(string: "\(base.absoluteString)/api/v1/sessions/\(escaped)/stream")
+    }
+
     func notesTree() async throws -> [NoteTreeNode] {
         struct Tree: Codable { let tree: [NoteTreeNode] }
         let wrapper: Tree = try await get("/notes")

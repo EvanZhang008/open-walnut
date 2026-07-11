@@ -90,33 +90,26 @@ struct SessionRowView: View {
     }
 }
 
-/// Read-only session detail — projection metadata + the transcript tail. For
-/// ALIVE sessions this is a LIVE view: it polls `?fresh=1` every few seconds,
-/// so new turns appear as the agent works (the primary reads local disk or SSH
-/// on demand). Steering the session still needs the console (Phase 2 bridge).
-struct SessionDetailSheet: View {
+/// Session metadata — Details / Task / About, presented from the conversation
+/// page's info button. The live transcript now lives on SessionConversationView;
+/// this sheet is the "what is this session" reference. `processStatus` is passed
+/// in so the sheet reflects the conversation's live status, not the stale
+/// projection value the row was rendered with.
+struct SessionInfoSheet: View {
     let session: WalnutSession
-
-    @State private var transcript: SessionTranscript?
-    @State private var transcriptMissing = false
-
-    private static let livePollSeconds: UInt64 = 5
+    let processStatus: String
 
     var body: some View {
         NavigationStack {
             List {
                 Section {
-                    HStack(spacing: 10) {
-                        SessionRowView(session: session)
-                    }
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
+                    SessionRowView(session: session)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
                 }
 
-                transcriptSection
-
                 Section("Details") {
-                    row("Status", session.processStatus.capitalized)
+                    row("Status", processStatus.capitalized)
                     row("Machine", session.isLocal ? "Mac (primary)" : session.host)
                     if let model = session.model { row("Model", model) }
                     if let mode = session.mode { row("Mode", mode.capitalized) }
@@ -152,109 +145,10 @@ struct SessionDetailSheet: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-
-                Section {
-                    Label(
-                        "Read-only view. Steering opens on your Walnut console until the primary bridge ships.",
-                        systemImage: "info.circle"
-                    )
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .listRowBackground(Color.clear)
-                }
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Session")
             .navigationBarTitleDisplayMode(.inline)
-            .task { await runTranscriptLoop() }
-        }
-    }
-
-    // MARK: - Transcript tail (live-polling while the session is alive)
-
-    @ViewBuilder
-    private var transcriptSection: some View {
-        if let transcript, !transcript.messages.isEmpty {
-            Section {
-                if transcript.truncated {
-                    Text("Showing the last \(transcript.messages.count) entries")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-                ForEach(Array(transcript.messages.enumerated()), id: \.offset) { _, message in
-                    transcriptRow(message)
-                }
-            } header: {
-                HStack(spacing: 6) {
-                    Text("Conversation")
-                    if session.statusKind.isAlive {
-                        Circle().fill(Theme.success).frame(width: 6, height: 6)
-                        Text("Live").font(.caption2).foregroundStyle(Theme.success)
-                    }
-                }
-            }
-        } else if transcriptMissing {
-            Section("Conversation") {
-                Text("Transcript not synced for this session yet.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-        } else if transcript == nil {
-            Section("Conversation") {
-                HStack {
-                    ProgressView()
-                    Text("Loading transcript…")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func transcriptRow(_ message: SessionTranscript.Message) -> some View {
-        if message.kind == "tool" {
-            HStack(spacing: 5) {
-                Image(systemName: "wrench.and.screwdriver")
-                    .font(.caption2)
-                Text(message.text)
-                    .font(.caption)
-                    .lineLimit(1)
-            }
-            .foregroundStyle(.secondary)
-        } else {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(message.role == "user" ? "You" : "Agent")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(message.role == "user" ? Theme.tint : .secondary)
-                Text(message.text)
-                    .font(.subheadline)
-                    .lineLimit(12)
-            }
-            .padding(.vertical, 2)
-        }
-    }
-
-    /// One-shot fetch for dead sessions; a fresh-polling loop for alive ones —
-    /// the sheet stays a live window into the running agent. `.task` cancels
-    /// the loop automatically when the sheet is dismissed.
-    private func runTranscriptLoop() async {
-        await loadTranscript(fresh: session.statusKind.isAlive)
-        guard session.statusKind.isAlive else { return }
-        while !Task.isCancelled {
-            try? await Task.sleep(for: .seconds(Double(Self.livePollSeconds)))
-            guard !Task.isCancelled else { return }
-            await loadTranscript(fresh: true)
-        }
-    }
-
-    private func loadTranscript(fresh: Bool) async {
-        do {
-            let next = try await WalnutAPI().sessionTranscript(id: session.id, fresh: fresh)
-            transcript = next
-            transcriptMissing = false
-        } catch {
-            if transcript == nil { transcriptMissing = true }
         }
     }
 

@@ -10,7 +10,6 @@ struct TasksView: View {
 
     @State private var activeFilter: TaskFilter = .today
     @State private var selected: WalnutTask?
-    @State private var selectedSession: WalnutSession?
 
     var body: some View {
         NavigationStack {
@@ -30,10 +29,9 @@ struct TasksView: View {
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
             }
-            .sheet(item: $selectedSession) { session in
-                SessionDetailSheet(session: session)
-                    .presentationDetents([.medium, .large])
-                    .presentationDragIndicator(.visible)
+            // Session rows push a full-screen conversation page instead of a sheet.
+            .navigationDestination(for: WalnutSession.self) { session in
+                SessionConversationView(session: session)
             }
         }
     }
@@ -64,6 +62,12 @@ struct TasksView: View {
                     .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 8, trailing: 12))
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
+            }
+
+            // Live sessions ride the top of every task filter (except the
+            // Sessions filter, which shows the full Pinned/Active/Recent list).
+            if activeFilter != .sessions {
+                activeSessionsSection
             }
 
             if activeFilter == .sessions {
@@ -116,6 +120,23 @@ struct TasksView: View {
         case .sessions: return "No agent sessions."
         case .allOpen: return "No open tasks."
         case .done: return "No recent completions."
+        }
+    }
+
+    // MARK: - Active sessions (pinned on top of every non-Sessions filter)
+
+    /// Up to 5 alive sessions surfaced above the task list. Prefers pinned-and-
+    /// alive; falls back to the most-recently-active alive sessions when nothing
+    /// pinned is currently running. Hidden entirely when nothing is alive.
+    @ViewBuilder
+    private var activeSessionsSection: some View {
+        let pinnedAlive = tasks.pinnedSessions.filter { $0.statusKind.isAlive }
+        let source = pinnedAlive.isEmpty ? tasks.activeSessions : pinnedAlive
+        let rows = Array(source.prefix(5))
+        if !rows.isEmpty {
+            Section("Active Sessions") {
+                ForEach(rows) { session in sessionRow(session) }
+            }
         }
     }
 
@@ -173,10 +194,9 @@ struct TasksView: View {
     }
 
     private func sessionRow(_ session: WalnutSession) -> some View {
-        Button { selectedSession = session } label: {
+        NavigationLink(value: session) {
             SessionRowView(session: session)
         }
-        .buttonStyle(.plain)
         .accessibilityIdentifier("sessions.row.\(session.id)")
     }
 

@@ -343,6 +343,15 @@ extension WalnutSession {
     }
 }
 
+// NavigationLink(value:)/navigationDestination require Hashable. Hash by id only:
+// Equatable stays full-field (auto-synthesized), but session metadata churns
+// (processStatus, lastActiveAt, messageCount) — hashing by identity keeps a
+// pushed conversation from popping when its list-row snapshot updates.
+// (equal ⇒ same id ⇒ same hash still holds, so the Hashable contract is met.)
+extension WalnutSession: Hashable {
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+}
+
 // MARK: - Error envelope
 
 /// Wire shape: `{ "error": { "code", "message" }, ...extras }`.
@@ -387,4 +396,8 @@ enum APIError: Error, LocalizedError {
     var isConflict: Bool { code == "conflict" }
     /// 503 — the task projection hasn't synced yet on a fresh companion.
     var isUnavailable: Bool { code == "unavailable" }
+    /// 503 — the primary box (this session's host) has no live bridge right now.
+    var isBridgeOffline: Bool { code == "bridge_offline" }
+    /// 409 — the session's CLI process is gone; can't accept new messages.
+    var isSessionDead: Bool { code == "session_dead" }
 }

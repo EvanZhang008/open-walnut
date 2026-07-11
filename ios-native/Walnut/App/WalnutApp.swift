@@ -57,8 +57,6 @@ struct MainTabView: View {
         TabView {
             ChatView()
                 .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right.fill") }
-            SessionsView()
-                .tabItem { Label("Sessions", systemImage: "terminal") }
             NotesView()
                 .tabItem { Label("Notes", systemImage: "doc.text") }
             TasksView()
