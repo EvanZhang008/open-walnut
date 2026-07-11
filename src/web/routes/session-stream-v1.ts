@@ -193,6 +193,10 @@ async function cloudSend(res: Response, sessionId: string, text: string): Promis
 
 const TRANSCRIPT_TAIL_ROWS = 200
 const TRANSCRIPT_TEXT_MAX = 4_000
+// Tail-only read over the bridge: ~200 rendered rows fit comfortably in the
+// last 512KB even with tool-result noise. A whale session's full 10MB+ jsonl
+// as one bridge frame is exactly the WSSH-killing payload class (inc-…925).
+const TRANSCRIPT_TAIL_BYTES = 512 * 1024
 
 /**
  * Build a SessionTranscript-shaped payload by reading the session's live
@@ -205,7 +209,7 @@ export async function buildTranscriptViaBridge(sessionId: string): Promise<Recor
   if (!host) return null
   const { bridgeRequest, bridgeForHost } = await import('../ws/bridge-registry.js')
   if (!bridgeForHost(host).connected) return null
-  const res = await bridgeRequest(host, 'read-history', { sid: sessionId })
+  const res = await bridgeRequest(host, 'read-history', { sid: sessionId, tailBytes: TRANSCRIPT_TAIL_BYTES })
   if (res.ok !== true || typeof res.main !== 'string' || res.main === '') return null
 
   const messages: Array<{ role: string; text: string; timestamp: string; kind?: 'tool' | 'thinking' }> = []

@@ -15,7 +15,7 @@
  */
 
 import type { WebSocket } from 'ws'
-import { emitSse } from '../sse-channels.js'
+import { emitSse, sseConnCount } from '../sse-channels.js'
 import { log } from '../../logging/index.js'
 
 interface PendingRequest {
@@ -48,6 +48,13 @@ const SILENCE_SWEEP_MS = 30_000
 const bridges = new Map<string, BridgeConn>()
 /** Sockets that connected but haven't sent their hello yet. */
 const preHello = new Map<WebSocket, { deviceName: string; timer: NodeJS.Timeout }>()
+/**
+ * Durable phone interest per host. `attachSent` is per-SOCKET idempotence and
+ * dies with the conn — when a bridge redials, the new conn must re-attach
+ * every session that still has live SSE consumers, or those phones stay on
+ * "bridge-offline" forever (the bridge-online event went to an empty set).
+ */
+const hostInterest = new Map<string, Set<string>>()
 
 let silenceSweepTimer: NodeJS.Timeout | null = null
 
@@ -142,7 +149,15 @@ function handleFrame(conn: BridgeConn, raw: string): void {
   const ev = msg.ev as string | undefined
   if (!ev) return
 
-  if (ev === 'bridge-ping') return // lastInbound already stamped
+  if (ev === 'bridge-ping') {
+    // Answer with a real RPC ping. The daemon tears the link down after 75s
+    // of INBOUND silence — with no phone activity the only traffic was its
+    // own pings, which we silently ate, so every bridge flapped on a ~90s
+    // cycle (dial → 90s silence → teardown → redial). Any frame feeds its
+    // liveness clock; `ping` is a no-op command every daemon understands.
+    bridgeRequest(conn.hostAlias, 'ping').catch(() => { /* redial path handles it */ })
+    return
+  }
 
   if (ev === 'jsonl') {
     const sid = msg.sid as string | undefined
@@ -234,10 +249,28 @@ function registerBridge(ws: WebSocket, deviceName: string, hello: Record<string,
     hostAlias, deviceName, version: conn.version,
     sids: Array.isArray(hello.sids) ? hello.sids.length : 0,
   })
-  // Live SSE consumers from before a bridge drop re-attach on the daemon:
-  // channels with open conns are re-subscribed by session-stream-v1 when it
-  // sees bridge-online.
-  emitSseToAllAttachedChannels(conn, 'bridge-online')
+  // Re-attach sessions that still have live phone SSE consumers, THEN tell
+  // those phones the bridge is back. Interest survives the socket (see
+  // hostInterest) — without this, a redial left every open conversation on
+  // "offline" until the user backed out and reopened it.
+  void reattachInterestedSessions(conn)
+}
+
+async function reattachInterestedSessions(conn: BridgeConn): Promise<void> {
+  const interested = hostInterest.get(conn.hostAlias)
+  if (!interested) return
+  for (const sid of [...interested]) {
+    if (sseConnCount(channelKey(sid)) === 0) { interested.delete(sid); continue }
+    try {
+      await bridgeAttachSession(conn.hostAlias, sid)
+      emitSse(channelKey(sid), 'bridge-online', {})
+    } catch (err) {
+      log.ws.warn('bridge: re-attach after redial failed', {
+        hostAlias: conn.hostAlias, sessionId: sid,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
 }
 
 function emitSseToAllAttachedChannels(conn: BridgeConn, event: 'bridge-online' | 'bridge-offline'): void {
@@ -307,6 +340,9 @@ export function bridgeRequest(
  * from the transcript fetch, so no byte replay is needed here.
  */
 export async function bridgeAttachSession(hostAlias: string, sessionId: string): Promise<void> {
+  let interested = hostInterest.get(hostAlias)
+  if (!interested) { interested = new Set(); hostInterest.set(hostAlias, interested) }
+  interested.add(sessionId)
   const conn = bridges.get(hostAlias)
   if (!conn) throw new BridgeOfflineError(hostAlias)
   if (conn.attachSent.has(sessionId)) return
@@ -323,6 +359,7 @@ export function bridgeDetachSession(hostAlias: string, sessionId: string): void 
   // stops the SSE forwarding, and the daemon-side subscription dies with the
   // socket. Cheap and correct for a single-digit session count.
   bridges.get(hostAlias)?.attachSent.delete(sessionId)
+  hostInterest.get(hostAlias)?.delete(sessionId)
 }
 
 /** Tests / shutdown: close everything. */

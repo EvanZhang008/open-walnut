@@ -119,7 +119,7 @@ private struct MessageListView: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 6) {
+            LazyVStack(alignment: .leading, spacing: 10) {
                 if chat.hasOlder {
                     Button("Load earlier messages") {
                         Task { await chat.loadOlder() }

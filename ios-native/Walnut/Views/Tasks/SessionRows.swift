@@ -17,9 +17,29 @@ struct SessionRowView: View {
                             .font(.caption2)
                             .foregroundStyle(Theme.tint)
                     }
-                    Text(session.displayTitle)
-                        .font(.body)
-                        .lineLimit(2)
+                    Text(session.rowTitle)
+                        .font(.body.weight(.medium))
+                        .lineLimit(1)
+                    if session.forkDepth > 0 {
+                        HStack(spacing: 2) {
+                            Image(systemName: "arrow.triangle.branch")
+                                .font(.system(size: 9, weight: .semibold))
+                            if session.forkDepth > 1 {
+                                Text("\(session.forkDepth)")
+                                    .font(.caption2.weight(.semibold))
+                            }
+                        }
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(Color(.tertiarySystemFill), in: Capsule())
+                    }
+                }
+                if let preview = session.rowSubtitle {
+                    Text(preview)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
                 HStack(spacing: 6) {
                     chip(session.isLocal ? "Mac" : session.host,

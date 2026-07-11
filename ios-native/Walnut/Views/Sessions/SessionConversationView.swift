@@ -41,10 +41,16 @@ struct SessionConversationView: View {
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                Text(session.displayTitle)
-                    .font(.headline)
-                    .lineLimit(1)
-                    .frame(maxWidth: 240)
+                VStack(spacing: 0) {
+                    Text(session.rowTitle)
+                        .font(.headline)
+                        .lineLimit(1)
+                    Text(navSubtitle)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: 240)
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -64,9 +70,26 @@ struct SessionConversationView: View {
         .onDisappear { store.close() }
     }
 
+    /// Nav-bar subtitle: live status + where it runs ("Running · clouddev").
+    private var navSubtitle: String {
+        let status: String
+        switch SessionStatus(store.processStatus) {
+        case .running: status = "Running"
+        case .idle: status = "Idle"
+        case .error: status = "Error"
+        case .stopped: status = "Ended"
+        case .unknown: status = ""
+        }
+        let host = session.isLocal ? "Mac" : session.host
+        return status.isEmpty ? host : "\(status) · \(host)"
+    }
+
     private var messageList: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 6) {
+            LazyVStack(alignment: .leading, spacing: 10) {
+                if !store.loadedOnce && store.messages.isEmpty && !store.transcriptMissing {
+                    loadingState
+                }
                 if store.transcriptMissing && store.messages.isEmpty {
                     emptyState
                 }
@@ -82,6 +105,17 @@ struct SessionConversationView: View {
         .defaultScrollAnchor(.bottom)
         .scrollDismissesKeyboard(.interactively)
         .refreshable { await store.open() }
+    }
+
+    private var loadingState: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+            Text("Loading conversation…")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 120)
     }
 
     /// Live turn: streamed text so far + the current tool/thinking activity.

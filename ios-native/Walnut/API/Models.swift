@@ -334,6 +334,29 @@ extension WalnutSession {
         if let taskTitle, !taskTitle.isEmpty { return taskTitle }
         return id
     }
+
+    /// Server titles look like "Fork of Fork of Session: walnut — first message".
+    /// Decompose for mobile rows: the boilerplate ("Session: ", "Fork of " chains)
+    /// wastes the line — show the name as the headline, the message as a grey
+    /// preview (Mail/Messages pattern), fork-ness as a compact badge.
+    private var parsedTitle: (forkDepth: Int, name: String, preview: String?) {
+        var t = displayTitle
+        var forks = 0
+        while t.hasPrefix("Fork of ") { forks += 1; t.removeFirst("Fork of ".count) }
+        if t.hasPrefix("Session: ") { t.removeFirst("Session: ".count) }
+        if let sep = t.range(of: " — ") {
+            let name = String(t[..<sep.lowerBound]).trimmingCharacters(in: .whitespaces)
+            let preview = String(t[sep.upperBound...]).trimmingCharacters(in: .whitespaces)
+            if !name.isEmpty { return (forks, name, preview.isEmpty ? nil : preview) }
+        }
+        return (forks, t, nil)
+    }
+    var forkDepth: Int { parsedTitle.forkDepth }
+    /// Headline for list rows / the nav bar — no "Session: "/"Fork of " boilerplate.
+    var rowTitle: String { parsedTitle.name }
+    /// First-message preview (the part after " — "), when the title carries one.
+    var rowSubtitle: String? { parsedTitle.preview }
+
     var lastActiveValue: Date? { WalnutTask.parseISO(lastActiveAt) }
     var isLocal: Bool { host.isEmpty }
 

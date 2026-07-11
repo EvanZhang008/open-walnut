@@ -68,10 +68,15 @@ final class SessionConversationStore {
 
     // MARK: - Lifecycle
 
-    /// Fetch the transcript, then attach the live stream. Called from `.task`.
+    /// Two-phase open for instant paint. The exported/synced transcript file
+    /// is served from disk (fast); `fresh=1` re-reads the live history (slow:
+    /// whale JSONL, SSH, or the bridge) — so render the cached tail first,
+    /// attach the stream immediately, and reconcile with fresh in the
+    /// background. Called from `.task`.
     func open() async {
-        await loadTranscript(fresh: true)
         connectStream()
+        await loadTranscript(fresh: false)
+        await loadTranscript(fresh: true)
     }
 
     func close() {
@@ -240,9 +245,15 @@ final class SessionConversationStore {
             errorMessage = p?.message ?? "The session turn failed."
         case "bridge-offline":
             offline = true
-            startPolling()
+            // Keep the SSE socket: it reaches the CLOUD fine — it's the
+            // cloud→daemon bridge that dropped, and bridge-online arrives on
+            // THIS stream. Killing it here (the old behavior) meant the page
+            // stayed "offline" forever after a bridge blip.
+            startPolling(keepStream: true)
         case "bridge-online":
             offline = false
+            stopPolling()
+            Task { await loadTranscript(fresh: true) }
         default:
             break
         }
@@ -287,17 +298,25 @@ final class SessionConversationStore {
 
     // MARK: - Polling fallback
 
-    /// 5s `fresh=1` transcript polling — the SSE-less path (older server or
-    /// bridge offline). Idempotent: a second call is a no-op.
-    private func startPolling() {
+    /// 5s `fresh=1` transcript polling. Two callers: SSE 404 (older server —
+    /// drop the stream for good) and bridge-offline (keep the stream: it's the
+    /// carrier for bridge-online). Idempotent: a second call is a no-op.
+    private func startPolling(keepStream: Bool = false) {
         guard pollTask == nil else { return }
-        sse?.stop()
-        sse = nil
+        if !keepStream {
+            sse?.stop()
+            sse = nil
+        }
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.loadTranscript(fresh: true)
                 try? await Task.sleep(for: .seconds(Self.pollSeconds))
             }
         }
+    }
+
+    private func stopPolling() {
+        pollTask?.cancel()
+        pollTask = nil
     }
 }

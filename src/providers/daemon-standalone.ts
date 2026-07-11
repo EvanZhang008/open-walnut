@@ -1511,28 +1511,51 @@ function cmdRename(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, 
 
 // ── Read history ──
 function cmdReadHistory(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
-  const { sid, canonicalPath } = cmd as { sid: string; canonicalPath?: string }
+  const { sid, canonicalPath, tailBytes } = cmd as { sid: string; canonicalPath?: string; tailBytes?: number }
   if (!sid) return sendError(ws, id, 'read-history: missing sid')
 
   try {
-    // Read main JSONL
+    // Read main JSONL. tailBytes > 0 = tail-only read (mobile transcript):
+    // whale sessions (10MB+) must not ride the bridge as one frame when the
+    // caller only renders the last ~200 rows. The first (possibly partial)
+    // line after the cut is dropped. Keep in sync with daemon-source.ts.
     let mainContent = ''
     const jsonlPath = canonicalPath || path.join(STREAMS_DIR, sid + '.jsonl')
-    try { mainContent = fs.readFileSync(jsonlPath, 'utf-8') } catch {}
-
-    // Read subagents
-    const subagents: Record<string, string> = {}
-    const subagentDir = path.dirname(jsonlPath) + '/' + sid + '/subagents'
+    const wantTail = typeof tailBytes === 'number' && tailBytes > 0
     try {
-      const files = fs.readdirSync(subagentDir)
-      for (const f of files) {
-        if (f.endsWith('.jsonl')) {
-          try {
-            subagents[f] = fs.readFileSync(path.join(subagentDir, f), 'utf-8')
-          } catch {}
-        }
+      if (wantTail) {
+        const st = fs.statSync(jsonlPath)
+        const start = Math.max(0, st.size - (tailBytes as number))
+        const fd = fs.openSync(jsonlPath, 'r')
+        try {
+          const buf = Buffer.alloc(st.size - start)
+          fs.readSync(fd, buf, 0, buf.length, start)
+          mainContent = buf.toString('utf-8')
+          if (start > 0) {
+            const nl = mainContent.indexOf('\n')
+            mainContent = nl >= 0 ? mainContent.slice(nl + 1) : ''
+          }
+        } finally { fs.closeSync(fd) }
+      } else {
+        mainContent = fs.readFileSync(jsonlPath, 'utf-8')
       }
     } catch {}
+
+    // Read subagents (skipped on tail reads — transcripts are main-lane only)
+    const subagents: Record<string, string> = {}
+    if (!wantTail) {
+      const subagentDir = path.dirname(jsonlPath) + '/' + sid + '/subagents'
+      try {
+        const files = fs.readdirSync(subagentDir)
+        for (const f of files) {
+          if (f.endsWith('.jsonl')) {
+            try {
+              subagents[f] = fs.readFileSync(path.join(subagentDir, f), 'utf-8')
+            } catch {}
+          }
+        }
+      } catch {}
+    }
 
     sendOk(ws, id, { main: mainContent, subagents })
   } catch (err: unknown) {

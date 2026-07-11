@@ -23,18 +23,19 @@ struct MessageRow: View {
         }
     }
 
+    /// Soft-tint bubble with primary text (Claude-app style) — the old
+    /// saturated brown block read as a wall of color on long messages and
+    /// crushed CJK legibility in dark mode.
     private var userBubble: some View {
         HStack {
-            Spacer(minLength: 60)
+            Spacer(minLength: 48)
             Text(message.text)
-                .foregroundStyle(Theme.onTint)
+                .font(.body)
+                .lineSpacing(3)
+                .foregroundStyle(.primary)
                 .padding(.horizontal, 14)
-                .padding(.vertical, 9)
-                .background(Theme.tint, in: UnevenRoundedRectangle(
-                    topLeadingRadius: 18, bottomLeadingRadius: 18,
-                    bottomTrailingRadius: 5, topTrailingRadius: 18,
-                    style: .continuous
-                ))
+                .padding(.vertical, 10)
+                .background(Theme.tintSoft, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .opacity(message.pending == true ? 0.65 : 1)
                 .textSelection(.enabled)
         }
@@ -47,7 +48,7 @@ struct MessageRow: View {
     private var assistantText: some View {
         HStack {
             ChatMarkdownBody(text: message.text)
-            Spacer(minLength: 40)
+            Spacer(minLength: 32)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 2)
