@@ -173,6 +173,13 @@ export class SessionHealthMonitor {
     // Detect stale AWAIT_HUMAN_ACTION sessions (stuck sub-agents)
     await this.checkStaleAwaitingSessions(sessions, updateSessionRecord, taskMap)
 
+    // Authoritative reconcile for stuck sessions — the periodic safety net behind
+    // the event-driven paths. Any lost/swallowed result event (tailer freeze,
+    // restart window, WS drop, replay-guard swallow) previously wedged
+    // process_status at 'running' — or the task at IN_PROGRESS — forever because
+    // NOTHING re-checked them against the daemon stream file. This does.
+    await this.reconcileStuckRunningSessions(sessions, taskMap)
+
     // Detect hung Claude Code processes: message delivered but no Claude output for 5 minutes.
     // Root cause: Claude Code can hang internally (e.g. between autocompact and API call)
     // while the process stays alive. Idle timeout misses this because Walnut's own user
@@ -714,6 +721,90 @@ export class SessionHealthMonitor {
         phase: 'AWAIT_HUMAN_ACTION' as TaskPhase,
         activity: `Possibly stuck — no output for ${staleMinutes} min`,
       }, ['*'], { source: 'health-monitor' })
+    }
+  }
+
+  /**
+   * Periodic authoritative reconcile for sessions with status debt.
+   *
+   * The event-driven status paths can all be defeated by ONE lost result event
+   * (remote: daemon tailer freeze; local: server restart landing in the result
+   * window) or a swallowed one (replay guard fed by a wrong resultEmitted seed —
+   * incident 10e7df54). This check re-derives the truth from the daemon STREAM
+   * file tail via reconcileProcessStatus() and converges the record AND the
+   * task phase when the turn provably ended. It is deliberately conservative:
+   *   - only debt shapes: process_status==='running', OR a settled record whose
+   *     task is still IN_PROGRESS (the incident-C wedge)
+   *   - skipped while events are visibly flowing (genuinely-streaming turns never
+   *     pay the tail read)
+   *   - per-session retry backoff bounds the I/O for a session that stays
+   *     wedged-but-active (frozen tailer, turn still running) — one tail read
+   *     per RECONCILE_RETRY_MS, not per 30s tick
+   */
+  private reconcileAttemptAt = new Map<string, number>()
+
+  private async reconcileStuckRunningSessions(sessions: SessionRecord[], taskMap?: Map<string, Task>): Promise<void> {
+    const ACTIVITY_FRESH_MS = 3 * 60 * 1000   // events this recent = genuinely streaming
+    const RECONCILE_RETRY_MS = 5 * 60 * 1000  // min gap between tail reads per session
+    const MAX_PER_TICK = 5                    // bound worst-case I/O per 30s tick
+
+    const { getRegisteredSessionManager } = await import('../providers/session-manager.js')
+    const now = Date.now()
+    let attempted = 0
+
+    for (const session of sessions) {
+      if (attempted >= MAX_PER_TICK) break
+      const recordDebt = session.process_status === 'running'
+      // Phase debt (incident 10e7df54): record settled but the linked task never
+      // saw the (swallowed) result — stuck IN_PROGRESS with nothing to advance it.
+      const settled = session.process_status === 'idle' || session.process_status === 'stopped'
+        || session.process_status === 'error'
+      const phaseDebt = !recordDebt && settled && !!session.taskId
+        && taskMap?.get(session.taskId)?.phase === 'IN_PROGRESS'
+      if (!recordDebt && !phaseDebt) continue
+      // Embedded/SDK sessions have no CLI JSONL lifecycle — nothing to reconcile.
+      if (session.provider === 'embedded' || session.provider === 'sdk') continue
+
+      // Activity gate: events flowing (or local stream file fresh) = the turn is
+      // genuinely live; don't burn a JSONL read on it.
+      const mgr = getRegisteredSessionManager(session.claudeSessionId)
+      if (mgr && mgr.lastEventAt > 0 && now - mgr.lastEventAt < ACTIVITY_FRESH_MS) continue
+      if (isLocalJsonlFresh(session, ACTIVITY_FRESH_MS) === true) continue
+
+      // Per-session backoff — a wedged-but-still-running session (frozen tailer
+      // with a live CLI) would otherwise trigger a full JSONL read every tick.
+      const lastAttempt = this.reconcileAttemptAt.get(session.claudeSessionId) ?? 0
+      if (now - lastAttempt < RECONCILE_RETRY_MS) continue
+      this.reconcileAttemptAt.set(session.claudeSessionId, now)
+      attempted++
+
+      try {
+        const { reconcileProcessStatus } = await import('./session-reconcile.js')
+        const outcome = await reconcileProcessStatus(session, { minAgeMs: ACTIVITY_FRESH_MS })
+        if (outcome.converged) {
+          this.reconcileAttemptAt.delete(session.claudeSessionId)
+          log.session.info('health monitor: reconciled stuck session', {
+            sessionId: session.claudeSessionId,
+            taskId: session.taskId,
+            to: outcome.to,
+            phaseSynced: outcome.phaseSynced ?? false,
+            debt: recordDebt ? 'record' : 'phase',
+          })
+        }
+      } catch (err) {
+        log.session.warn('health monitor: reconcile attempt failed', {
+          sessionId: session.claudeSessionId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+
+    // Drop map entries for sessions no longer in the running set (bounded memory).
+    if (this.reconcileAttemptAt.size > 200) {
+      const runningIds = new Set(sessions.filter(s => s.process_status === 'running').map(s => s.claudeSessionId))
+      for (const sid of this.reconcileAttemptAt.keys()) {
+        if (!runningIds.has(sid)) this.reconcileAttemptAt.delete(sid)
+      }
     }
   }
 

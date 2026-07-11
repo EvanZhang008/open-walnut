@@ -166,6 +166,7 @@ export class MockDaemon {
       case 'start': return this.cmdStart(ws, id, cmd)
       case 'attach': return this.cmdAttach(ws, id, cmd)
       case 'send': return this.cmdSend(ws, id, cmd)
+      case 'appendUserMarker': return this.cmdAppendUserMarker(ws, id, cmd)
       case 'stop': return this.cmdStop(ws, id, cmd)
       case 'status': return this.cmdStatus(ws, id, cmd)
       case 'rename': return this.cmdRename(ws, id, cmd)
@@ -345,6 +346,31 @@ export class MockDaemon {
       this.sendOk(ws, id, { ok: true })
     } catch (err) {
       this.sendError(ws, id, `write failed: ${(err as Error).message}`)
+    }
+  }
+
+  /** Mirrors daemon-core.handleAppendUserMarker — appends the walnut-injected
+   *  turn-start marker line to the session's stream file. */
+  private cmdAppendUserMarker(ws: WebSocket, id: number, cmd: Record<string, unknown>): void {
+    const sid = cmd.sid as string
+    const message = cmd.message as string
+    const messageId = cmd.messageId as string
+    if (!sid || !message || !messageId) return this.sendError(ws, id, 'appendUserMarker: missing sid, message, or messageId')
+    const session = this.sessions.get(sid)
+    if (!session) return this.sendOk(ws, id, { ok: false, reason: 'not_found' })
+    try {
+      const line = JSON.stringify({
+        type: 'user',
+        subtype: 'walnut-injected',
+        message: { role: 'user', content: message },
+        walnutMessageId: messageId,
+        timestamp: new Date().toISOString(),
+      }) + '\n'
+      fs.appendFileSync(session.jsonlPath, line)
+      const size = fs.statSync(session.jsonlPath).size
+      this.sendOk(ws, id, { ok: true, size })
+    } catch (err) {
+      this.sendError(ws, id, `appendUserMarker failed: ${(err as Error).message}`)
     }
   }
 
@@ -561,6 +587,11 @@ export class MockDaemon {
   /** Full command history for test assertions. */
   getCommandHistory(): Array<{ cmd: string; payload: Record<string, unknown>; timestamp: number }> {
     return [...this._commandHistory]
+  }
+
+  /** Absolute path of a session's stream file (for marker-line assertions). */
+  streamFilePath(sid: string): string {
+    return path.join(this.tmpDir, 'streams', `${sid}.jsonl`)
   }
 
   /** Commands matching `cmd` name. */

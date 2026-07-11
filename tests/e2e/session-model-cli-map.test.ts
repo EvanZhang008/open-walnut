@@ -11,7 +11,7 @@
  *   'haiku'     → --model haiku          (passthrough)
  *   'fable'     → --model fable          (passthrough)
  *   'fable-1m'  → --model fable[1m]      (mapped)
- *   (no model)  → --model opus[1m]       (default)
+ *   (no model)  → (no --model flag)      ("Auto" — Claude Code picks its own default)
  *
  * CRITICAL: If MODEL_CLI_MAP is reverted to use full Bedrock model IDs
  * (e.g., 'global.anthropic.claude-opus-4-6-v1[1m]'), the alias-based
@@ -198,24 +198,27 @@ describe('MODEL_CLI_MAP alias resolution: E2E', () => {
     })
   })
 
-  // Test 2: Default (no model) uses opus[1m]
-  it('default (no model specified) → --model opus[1m]', async () => {
+  // Test 2: "Auto" (no model) → NO --model flag forwarded to the CLI.
+  // Walnut has no config-time default; Claude Code resolves its own settings-layer
+  // default. The mock CLI only echoes "[model:...]" when it actually received a
+  // --model arg, so the absence of that token proves no flag was passed.
+  it('"Auto" (no model specified) → no --model flag', async () => {
     const ws = await connectWs()
 
     const resultPromise = waitForWsEvent(ws, 'session:result')
     const rpcRes = await sendWsRpc(ws, 'session:start', {
       taskId: 'cli-map-task-008',
-      message: 'test default model mapping',
+      message: 'test auto model mapping',
       project: 'Walnut',
       mode: 'bypass',
-      // No model field — should default to opus[1m]
+      // No model field — "Auto": Walnut must NOT pass --model.
     })
     expect((rpcRes as Record<string, unknown>).ok).toBe(true)
 
     const result = await resultPromise
     const text = (result.data as { result?: string }).result ?? ''
 
-    expect(text).toContain('[model:opus[1m]]')
+    expect(text).not.toContain('[model:')
 
     ws.close()
     await delay(50)

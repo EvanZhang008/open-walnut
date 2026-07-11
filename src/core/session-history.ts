@@ -132,6 +132,13 @@ export interface SessionHistoryTool {
   planContent?: string;
   /** agentId extracted from Task/Agent tool_result — links to subagent JSONL */
   agentId?: string;
+  /** True when a <task-notification> line proved this background Agent/Task run
+   *  STOPPED (the CLI injects one each time an async agent stops). This is the
+   *  archival proof for subagent-lane streaming blocks — their transcript lives
+   *  in a separate subagents/agent-<id>.jsonl, never in this session's history,
+   *  so promote-blocks clears them on this flag instead of twin-matching
+   *  (inc-1783612454903: 226 lane blocks pinned below the last message). */
+  bgTaskFinished?: boolean;
   /** Team name extracted from Agent tool input (for multi-agent teams) */
   teamName?: string;
   /** Team agent name extracted from Agent tool input */
@@ -423,6 +430,32 @@ export function parseSessionMessages(content: string): SessionHistoryMessage[] {
     }
   }
 
+  // ── Background-agent completion proof (inc-1783612454903) ──
+  // The CLI injects a <task-notification> user line each time an async Agent/Task
+  // STOPS. The line itself is hidden from chat (transformInjectedUserText), but
+  // its <tool-use-id> is the ONLY archival proof for that agent's streamed
+  // lane blocks — their transcript persists to subagents/agent-<id>.jsonl, never
+  // to this session's JSONL, so promote-blocks can't twin-match them. Collect the
+  // ids here; the parent tool is stamped bgTaskFinished when tools are built.
+  // Any <status> counts as stopped (completed/failed/…) — the notification only
+  // fires when the agent has no live background children. A re-resumed agent
+  // notifies again on its next stop, so "finished" can only flap to true.
+  const finishedBgToolUseIds = new Set<string>();
+  for (const u of userTwinTexts) {
+    if (!u.content.startsWith('<task-notification>')) continue;
+    const toolUseId = u.content.match(/<tool-use-id>([^<]+)<\/tool-use-id>/)?.[1]?.trim();
+    if (toolUseId) finishedBgToolUseIds.add(toolUseId);
+  }
+  // queue-operation enqueues of the same notification (Pattern B — consumed
+  // mid-turn, never re-logged as a user line) carry the proof too.
+  for (const raw of rawMessages) {
+    if (raw.type !== 'queue-operation' || raw.operation !== 'enqueue') continue;
+    const c = raw.content;
+    if (!c || !c.startsWith('<task-notification>')) continue;
+    const toolUseId = c.match(/<tool-use-id>([^<]+)<\/tool-use-id>/)?.[1]?.trim();
+    if (toolUseId) finishedBgToolUseIds.add(toolUseId);
+  }
+
   for (let i = 0; i < rawMessages.length; i++) {
     const raw = rawMessages[i];
 
@@ -650,8 +683,12 @@ export function parseSessionMessages(content: string): SessionHistoryMessage[] {
           const matches = [...toolResult.matchAll(/agentId:\s*([a-f0-9]+)/g)];
           if (matches.length > 0) agentId = matches[matches.length - 1][1];
         } else if (block.name === 'Agent' && toolResult) {
-          // Team Agent: result contains "agent_id: name@team"
-          const agentMatch = toolResult.match(/agent_id:\s*(\S+)/);
+          // Team Agent: result contains "agent_id: name@team".
+          // Async (background) Agent: result contains "agentId: <hex>" — same
+          // spelling as Task. Without this, background Agent boxes had no
+          // agentId → the UI couldn't lazy-load their subagents/ transcript.
+          const agentMatch = toolResult.match(/agent_id:\s*(\S+)/)
+            ?? toolResult.match(/agentId:\s*([a-f0-9]+)/);
           if (agentMatch) agentId = agentMatch[1];
           // Also extract team_name from tool input
           if (typeof block.input?.team_name === 'string') {
@@ -688,6 +725,7 @@ export function parseSessionMessages(content: string): SessionHistoryMessage[] {
             ...(toolResult ? { result: toolResult.slice(0, 5000) } : {}),
             ...(toolUseId && errorResultIds.has(toolUseId) ? { isError: true } : {}),
             ...(agentId ? { agentId } : {}),
+            ...(toolUseId && finishedBgToolUseIds.has(toolUseId) ? { bgTaskFinished: true } : {}),
             ...(teamName ? { teamName } : {}),
             ...(teamAgentName ? { teamAgentName } : {}),
           });
@@ -1172,8 +1210,15 @@ export interface RecoveredSessionState {
    *  it so "is work in flight" is DERIVED (count of non-terminal), never an accumulated
    *  counter that a duplicate / lost / out-of-order event could desync. */
   bgTasks?: Record<string, string>;
-  /** DERIVED count of still-running background tasks (non-terminal entries in `bgTasks`).
-   *  Kept for existing readers; computed from the set, not accumulated. */
+  /** Task ids the CLI flagged `is_backgrounded:true` (task_updated patch). The CLI's own
+   *  turn-end does NOT wait for these (it emits result+idle while they run), so they are
+   *  excluded from `bgTasksInFlight` gating — but kept here so the live session can rebuild
+   *  its full set (UI still shows them). Incident 07fffbe5: dropping this field made a
+   *  16-min backgrounded grep hold a finished turn "Running". */
+  bgBackgroundedIds?: string[];
+  /** DERIVED count of still-running background tasks (non-terminal entries in `bgTasks`,
+   *  excluding backgrounded ones — the turn-over GATING count, mirroring
+   *  ClaudeCodeSession._runningBgCount). Computed from the set, not accumulated. */
   bgTasksInFlight?: number;
   /** Last observed CLI session_state_changed.state, when present in the stream. */
   cliSessionState?: 'running' | 'idle' | 'requires_action';
@@ -1198,10 +1243,14 @@ export interface RecoveredSessionState {
  */
 /** Count background tasks whose status is non-terminal (still running). Derived view over
  *  the rebuilt task set — mirrors ClaudeCodeSession._runningBgCount so the replay and live
- *  paths agree by construction. */
-function runningBgCount(bgTasks: Map<string, string>, terminal: Set<string>): number {
+ *  paths agree by construction. `backgrounded` tasks (CLI's is_backgrounded flag) are
+ *  excluded: the CLI's own turn-end doesn't wait for them (incident 07fffbe5). */
+function runningBgCount(bgTasks: Map<string, string>, terminal: Set<string>, backgrounded: Set<string>): number {
   let n = 0;
-  for (const status of bgTasks.values()) if (!terminal.has(status)) n++;
+  for (const [id, status] of bgTasks) {
+    if (backgrounded.has(id)) continue;
+    if (!terminal.has(status)) n++;
+  }
   return n;
 }
 
@@ -1226,6 +1275,9 @@ export async function recoverStateFromJsonl(sessionId: string, cwd?: string, hos
     // never desync a derived count the way it desyncs an accumulator. "Terminal is terminal":
     // once a task reaches a terminal status, later started/progress events don't revive it.
     const bgTasks = new Map<string, string>();
+    // Tasks the CLI flagged is_backgrounded — excluded from the gating count (sticky: no
+    // event un-backgrounds a task). Mirrors the live handler in claude-code-session.ts.
+    const bgBackgrounded = new Set<string>();
     const BG_TERMINAL = new Set(['completed', 'failed', 'stopped', 'cancelled']);
 
     for (const line of lines) {
@@ -1295,9 +1347,11 @@ export async function recoverStateFromJsonl(sessionId: string, cwd?: string, hos
         } else if (subtype === 'task_updated' && taskId != null) {
           // A task_updated whose patch.status is terminal is the FIRST terminal signal on
           // newer CLIs — record it (idempotent with the later task_notification).
-          const patchStatus = ((parsed as Record<string, unknown>).patch as Record<string, unknown> | undefined)
-            ?.status as string | undefined;
+          const patch = (parsed as Record<string, unknown>).patch as Record<string, unknown> | undefined;
+          const patchStatus = patch?.status as string | undefined;
           if (patchStatus) bgTasks.set(taskId, patchStatus);
+          // is_backgrounded → exclude from gating (see runningBgCount / incident 07fffbe5).
+          if (patch?.is_backgrounded === true) bgBackgrounded.add(taskId);
         } else if (subtype === 'task_progress' && taskId != null) {
           if (!bgTasks.has(taskId)) bgTasks.set(taskId, 'running');
         } else if (subtype === 'session_state_changed') {
@@ -1313,7 +1367,7 @@ export async function recoverStateFromJsonl(sessionId: string, cwd?: string, hos
           // set agent_complete on ANY idle, which marked a still-running workflow complete on
           // restart (defeating the recovery this whole block exists for). Gate on the derived
           // running-count; "terminal is terminal" keeps the set monotone toward done.
-          if (s === 'idle' && runningBgCount(bgTasks, BG_TERMINAL) === 0) { state.workStatus = 'agent_complete'; }
+          if (s === 'idle' && runningBgCount(bgTasks, BG_TERMINAL, bgBackgrounded) === 0) { state.workStatus = 'agent_complete'; }
           else if (s === 'running') { state.workStatus = undefined; }
         }
       }
@@ -1328,7 +1382,7 @@ export async function recoverStateFromJsonl(sessionId: string, cwd?: string, hos
         const isErr = (parsed as Record<string, unknown>).is_error;
         if (isErr) {
           state.workStatus = 'error';
-        } else if (runningBgCount(bgTasks, BG_TERMINAL) === 0 && state.cliSessionState !== 'running') {
+        } else if (runningBgCount(bgTasks, BG_TERMINAL, bgBackgrounded) === 0 && state.cliSessionState !== 'running') {
           state.workStatus = 'agent_complete';
         }
         // else: intermediate result during live background work — leave workStatus as-is.
@@ -1430,10 +1484,13 @@ export async function recoverStateFromJsonl(sessionId: string, cwd?: string, hos
       }
     }
 
-    // Finalize the background-task set: expose the rebuilt set + the DERIVED running count.
+    // Finalize the background-task set: expose the rebuilt set + the DERIVED running count
+    // (gating semantics — backgrounded tasks excluded) + which ids were backgrounded so the
+    // live session can rebuild its full set with the flag intact.
     if (bgTasks.size > 0) {
       state.bgTasks = Object.fromEntries(bgTasks);
-      state.bgTasksInFlight = runningBgCount(bgTasks, BG_TERMINAL);
+      state.bgTasksInFlight = runningBgCount(bgTasks, BG_TERMINAL, bgBackgrounded);
+      if (bgBackgrounded.size > 0) state.bgBackgroundedIds = [...bgBackgrounded];
     }
 
     return state;

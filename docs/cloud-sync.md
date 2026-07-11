@@ -28,36 +28,30 @@ Mac ~/.open-walnut  ──push/pull https://<domain>/git/data──▶  Caddy :4
 
 ## Mac-side setup
 
-Add the cloud hub as a remote of the data repo:
+Add the cloud hub as a remote of the data repo, with the device token embedded
+in the URL:
 
 ```bash
-git -C ~/.open-walnut remote add cloud https://<domain>/git/data
+git -C ~/.open-walnut remote add cloud "https://walnut:<device-token>@<domain>/git/data"
+chmod 600 ~/.open-walnut/.git/config   # token sits in this file — owner-only
 ```
 
-Then give git the device token as the password. Two options:
+The username half (`walnut`) is ignored by the server; the token is the
+password half. This is the ONLY supported credential path for the sync:
 
-**Recommended — macOS keychain credential helper** (token stored encrypted in
-the login keychain, never on disk in plaintext):
+- It works unattended — Walnut's auto-sync runs headless every 30s, so the
+  credential must be readable without any prompt or keychain session.
+- **Do NOT configure a credential helper (e.g. `osxkeychain`) for this repo.**
+  Helpers add nothing here (the URL token always wins) but git still calls the
+  helper's `store` action after every successful auth — on macOS that write
+  triggers repeated "Keychain Not Found" dialogs from background sync
+  processes that have no keychain session. Walnut's own git invocations
+  neutralize helpers (`-c credential.helper=`) whenever the remote URL carries
+  credentials, so a system-level helper (Xcode ships one) won't interfere.
 
-```bash
-git -C ~/.open-walnut config credential.helper osxkeychain
-git -C ~/.open-walnut push cloud main
-# On first push git prompts:
-#   Username: walnut          (any value — the server ignores it)
-#   Password: <device token>
-# The keychain remembers it; subsequent pushes/pulls are silent.
-```
-
-**Alternative — token embedded in the remote URL** (zero prompts, but the
-token sits in plaintext inside `~/.open-walnut/.git/config`; acceptable only
-because that file never leaves the machine and the token is revocable):
-
-```bash
-git -C ~/.open-walnut remote set-url cloud "https://walnut:<device-token>@<domain>/git/data"
-```
-
-Prefer the keychain helper. If a token ever leaks, revoke the device
-(`walnut device revoke <name>`) and pair a new one.
+The token never leaves the machine (`.git/config` is not synced) and is
+revocable: if it ever leaks, revoke the device (`walnut device revoke <name>`)
+and pair a new one.
 
 ## Day-to-day
 
@@ -70,11 +64,42 @@ A push lands in the bare hub repo; its `post-receive` hook immediately
 fast-forwards the companion's working tree (`/var/lib/walnut/.open-walnut`),
 so the running cloud server sees new data within a second — no restart needed.
 
+## Daemon bridge (live session talk)
+
+Data sync (above) covers projections and notes. LIVE session interaction
+(phone sends text into a running CLI session and streams its output) rides a
+separate channel: each execution host's daemon dials OUT to the companion
+over `wss://<domain>/bridge` and speaks its native RPC protocol there, so
+sessions stay talkable while the Mac sleeps.
+
+- **Zero config**: when the `cloud` git remote above exists, the Mac derives
+  the bridge URL from it, mints a per-host **machine token** on the companion
+  (`POST /api/devices` with `kind:"machine"`, using the remote's device
+  token), and pushes `bridge.configure` to each daemon after its capability
+  handshake (`src/providers/daemon-connection.ts`). The daemon persists
+  `bridge.json` next to its registry and re-dials on its own after restarts.
+- Machine tokens are scoped: valid ONLY for the `/bridge` upgrade, rejected
+  on every REST route, `/ws`, and git-http. Revoke like any device
+  (`walnut device revoke bridge-<host>`); the Mac re-mints on next connect.
+- Opt out / override in `config.yaml`:
+
+```yaml
+cloud_bridge:
+  enabled: false        # or:
+  url: wss://other.example.com/bridge
+```
+
+- Cloud-side registry: `src/web/ws/bridge-registry.ts` (one connection per
+  host, newer dial replaces older). Phone-facing endpoints:
+  `POST /api/v1/sessions/:id/messages` + `GET /api/v1/sessions/:id/stream`
+  (see `docs/api-v1.md`). `GET /api/v1/status` lists live `bridgeHosts`.
+
 ## Troubleshooting
 
 | Symptom | Likely cause |
 |---|---|
-| `401 Authentication required` | Missing/invalid device token — re-enter it (`git credential-osxkeychain erase` then push again) |
+| `401 Authentication required` | Missing/invalid device token in the remote URL — check `git -C ~/.open-walnut remote get-url cloud`, re-set it with a valid token |
+| Repeated "Keychain Not Found" dialogs | A credential helper is configured for the repo — remove it: `git -C ~/.open-walnut config credential.helper ""` (empty value also masks system-level helpers) |
 | `403` / receive-pack refused | `http.receivepack` unset on the hub repo — re-run `scripts/cloud/setup.sh` |
 | `404 data hub repo not found` | `WALNUT_GIT_HUB_DIR` mismatch or bare repo missing on the box |
 | Push hangs / resets | Check Caddy is proxying `/git/*` (it proxies everything to :3456 by default) |

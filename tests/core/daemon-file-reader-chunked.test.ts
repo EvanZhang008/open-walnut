@@ -156,6 +156,28 @@ describe('DaemonFileReader chunked reads', () => {
       .rejects.toThrow(/fs.readRange transport failure/)
   })
 
+  it('findSession routes through readFile — a found whale chunks via fs.readRange (the actual incident path)', async () => {
+    // Hashed-cwd sessions (encoded cwd >200 chars) have no exactPath and the
+    // glob dir contains a literal '*' that fs.find can't readdir — so history
+    // loads land in findSession(). It must NOT do a one-frame fs.read.
+    const content = 'x'.repeat(CHUNK_THRESHOLD + 100)
+    const fileBuf = Buffer.from(content, 'utf-8')
+    serveFile(fileBuf)
+    sendMock.mockImplementationOnce(async (cmd: string) => {
+      expect(cmd).toBe('fs.find')
+      return { ok: true, files: ['/home/u/.claude/projects/enc/sid.jsonl'] }
+    })
+
+    const reader = new DaemonFileReader('clouddev')
+    const result = await reader.findSession('sid')
+
+    expect(result).not.toBeNull()
+    expect(result!.content).toBe(content)
+    expect(result!.path).toBe('/home/u/.claude/projects/enc/sid.jsonl')
+    expect(callsFor('fs.read')).toHaveLength(0)
+    expect(callsFor('fs.readRange').length).toBeGreaterThan(1)
+  })
+
   it('local host (__local__) never stats or chunks — in-process daemon has no proxy in the path', async () => {
     const fileBuf = Buffer.from('local content', 'utf-8')
     serveFile(fileBuf)

@@ -227,12 +227,45 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   exported yet.
 - `fresh=1` (additive): the PRIMARY box reads the session's history **right
   now** instead of serving the (60s-throttled) sweep file — poll this every
-  few seconds for a live session view. On a cloud companion, or when the
-  session is unreachable, `fresh=1` gracefully falls back to the exported
-  file. `exportedAt` tells you which one you got.
-- Read-only: STEERING a session (sending messages) requires the primary
-  box's web UI today; a future additive endpoint will proxy interaction
-  through the primary (which owns the SSH channel to remote hosts).
+  few seconds for a live session view. On a cloud companion `fresh=1` reads
+  the live stream over the daemon bridge when that session's host is
+  connected (see below), and gracefully falls back to the exported file
+  otherwise. `exportedAt` tells you which one you got.
+
+### Session talk (additive) — send into + stream out of a session
+
+Each execution host's daemon dials OUT to the cloud companion over
+`wss://<domain>/bridge` (authenticated with a machine token), so the phone
+can talk to live sessions even when the primary box is asleep. On the
+primary box the same endpoints serve directly — no bridge involved.
+
+- `POST /api/v1/sessions/:id/messages` body `{ "text": "..." }` →
+  `202 { "messageId" }`. The message is delivered into the running CLI
+  session (mid-turn sends are fine — the session reads them between turns).
+  - `404 not_found` — unknown session.
+  - `409 { "error": { "code": "session_dead" } }` — the CLI process is not
+    running (idle-reaped). Waking a dead session stays a primary-box action;
+    show "wake it from your desktop".
+  - `503 { "error": { "code": "bridge_offline" } }` — no live bridge to that
+    session's host (cloud only). Disable the composer; keep polling.
+- `GET /api/v1/sessions/:id/stream` — SSE (same framing as conversation
+  streams: monotonic `id:`, `Last-Event-ID` replay, `:` pings). Events:
+  - `snapshot { blocks, isStreaming, completedLen, processStatus }` — sent
+    once on attach (primary box only; carries no id).
+  - `turn-start {}` — a new turn began (resets the replay window).
+  - `text-delta { delta }` / `thinking { delta }` — main-lane streaming text.
+  - `tool { name, toolUseId }` / `tool-result { toolUseId }`
+  - `status { processStatus }` — running | idle | stopped | error.
+  - `turn-end {}` — refetch the transcript here to reconcile.
+  - `error { message }`
+  - `bridge-online {}` / `bridge-offline {}` (cloud only) — sent on attach
+    and whenever the daemon bridge for this session's host comes/goes; on
+    offline fall back to `fresh=1` polling and disable the composer.
+  - `404 not_found` on servers without this endpoint — fall back to polling.
+- `/api/v1/status` additive field (cloud only):
+  `bridgeHosts: [ { hostAlias, since } ]` — hosts with a live daemon bridge.
+  A session is talkable when its `ProjectedSession.host` (`""` maps to the
+  primary's local daemon `__local__`) has an entry here.
 
 ### POST /api/v1/client-logs
 

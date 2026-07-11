@@ -658,6 +658,35 @@ function applyUpdateToSession(
   updates: Partial<Omit<SessionRecord, 'claudeSessionId'>>,
   logLabel: string,
 ): boolean {
+  // ── consumedOffset monotonic arbitration (single write choke point) ──
+  // The watermark is a byte position in the session's append-only stream file:
+  // it only ever moves forward. A stale writer (older event, concurrent
+  // reconcile, replayed persistence) loses silently — the higher offset already
+  // in place wins. Sentinels/garbage are rejected here so no caller can poison
+  // the guard: a MAX_SAFE_INTEGER watermark would suppress every future result.
+  // EXCEPTION: renameSessionId() does NOT go through here — it Object.assigns
+  // its `updates` directly, bypassing this arbitration entirely. That's safe
+  // TODAY only because its one caller always passes consumedOffset: undefined
+  // (the rename-reset convention, not an enforced invariant) — see the comment
+  // at the Object.assign call site in renameSessionId.
+  if ('consumedOffset' in updates && updates.consumedOffset !== undefined) {
+    const next = updates.consumedOffset;
+    const invalid = typeof next !== 'number' || !Number.isInteger(next)
+      || next < 0 || next >= Number.MAX_SAFE_INTEGER;
+    const regression = typeof session.consumedOffset === 'number' && !invalid
+      && next <= session.consumedOffset;
+    if (invalid || regression) {
+      if (invalid) {
+        log.session.warn('rejecting invalid consumedOffset write', {
+          sessionId: session.claudeSessionId, attempted: String(next),
+        });
+      }
+      updates = { ...updates };
+      delete updates.consumedOffset;
+      if (Object.keys(updates).length === 0) return false;
+    }
+  }
+
   if (isNoOpUpdate(session, updates)) return false;
 
   const prevStatus = session.process_status;
@@ -853,6 +882,16 @@ export async function renameSessionId(
 
     const session = rowToSession(oldRow);
     session.claudeSessionId = newClaudeSessionId;
+    // NOTE: this bypasses the consumedOffset monotonic arbitration that
+    // applyUpdateToSession() enforces (NaN/negative/regression/MAX_SAFE_INTEGER
+    // rejection) — `updates` is applied directly via Object.assign, with no
+    // sanitization at all. The ONLY safe value for `updates.consumedOffset`
+    // here is `undefined` — the rename-reset semantic: a new claudeSessionId
+    // means a new stream file with its own byte-offset coordinate space, so
+    // there is no watermark to carry over. A future caller passing a concrete
+    // number through here would skip every sanitization check and could
+    // poison the watermark (e.g. wedge it at a stale or bogus offset that
+    // silently suppresses real future convergence writes).
     if (updates) Object.assign(session, updates);
     session.lastActiveAt = new Date().toISOString();
 

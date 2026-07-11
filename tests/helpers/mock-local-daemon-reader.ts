@@ -106,6 +106,19 @@ class MockLocalDaemonFileReader {
     }
   }
 
+  /** Byte-range read [start, EOF) — mirrors the real reader's readFileRange contract
+   *  (used by session-reconcile.ts to tail daemon stream files). */
+  async readFileRange(remotePath: string, start: number): Promise<{ content: string; fileSize: number } | null> {
+    const abs = await this.resolve(remotePath);
+    if (!abs) return null;
+    try {
+      const buf = await fsp.readFile(abs);
+      return { content: buf.subarray(Math.min(start, buf.length)).toString('utf-8'), fileSize: buf.length };
+    } catch {
+      return null;
+    }
+  }
+
   async listDir(remotePath: string): Promise<string[]> {
     const abs = await this.resolve(remotePath);
     if (!abs) return [];

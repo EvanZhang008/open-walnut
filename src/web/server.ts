@@ -78,6 +78,7 @@ import { pushRouter } from './routes/push.js'
 import { authRouter } from './routes/auth.js'
 import { setupRouter } from './routes/setup.js'
 import { apiV1Router, closeApiV1Streams } from './routes/api-v1.js'
+import { sessionStreamV1Router } from './routes/session-stream-v1.js'
 import { incidentsRouter } from './routes/incidents.js'
 import { notificationsRouter } from './routes/notifications.js'
 import { addNotification as addFeedNotification } from '../core/notifications/store.js'
@@ -662,6 +663,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/v1/setup', setupRouter)
   // Frozen REST+SSE facade for mobile clients (see docs/api-v1.md).
   app.use('/api/v1', apiV1Router)
+  // Session talk endpoints (additive): send into + stream out of CC sessions.
+  app.use('/api/v1', sessionStreamV1Router)
   app.use('/api/browser-logs', browserLogsRouter)
   app.use('/api/audio', audioRouter)
   app.use('/api/stt', sttRouter)
@@ -2860,6 +2863,11 @@ export async function stopServer(): Promise<void> {
   // Close /api/v1 SSE streams so open connections + ping timers don't keep
   // the HTTP server alive (tests / graceful shutdown).
   try { closeApiV1Streams() } catch { /* best-effort */ }
+  // Close daemon bridge sockets + their sweep timer (cloud mode).
+  try {
+    const { closeAllBridges } = await import('./ws/bridge-registry.js')
+    closeAllBridges()
+  } catch { /* best-effort */ }
   // Cancel pending deferred-markDone callbacks so they don't mutate
   // sessionStreamBuffer after shutdown.
   for (const timer of deferredMarkDoneTimers) {

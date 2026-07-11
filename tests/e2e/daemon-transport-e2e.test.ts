@@ -266,6 +266,41 @@ describe('RemoteSessionManager event tracking', () => {
 
     await transport.cleanup()
   })
+
+  it('writeSyntheticUserEvent → daemon appends exactly ONE walnut-injected marker to the stream file', async () => {
+    const tmpId = `test-marker-${Date.now()}`
+    const transport = new RemoteSessionManager(tmpId, 'test-host', fakeSshTarget, `ws://127.0.0.1:${daemon.port}`)
+
+    let exitCode: number | null = null
+    await transport.start({
+      args: ['-p', '--output-format', 'stream-json', '--verbose'],
+      cwd: '/tmp',
+      message: 'marker test',
+      onOutput: () => {},
+      onExit: (code) => { exitCode = code },
+    })
+    await vi.waitFor(() => { expect(exitCode).not.toBeNull() }, { timeout: 10_000, interval: 100 })
+
+    transport.writeSyntheticUserEvent('follow-up message', 'qm-777-marker')
+
+    // Fire-and-forget RPC — wait for the marker to land on disk.
+    const streamFile = daemon.streamFilePath(tmpId)
+    await vi.waitFor(() => {
+      expect(fs.readFileSync(streamFile, 'utf-8')).toContain('qm-777-marker')
+    }, { timeout: 5_000, interval: 50 })
+
+    const lines = fs.readFileSync(streamFile, 'utf-8').split('\n').filter(Boolean)
+    const markers = lines.map(l => { try { return JSON.parse(l) } catch { return null } })
+      .filter((e): e is Record<string, unknown> => !!e)
+      .filter(e => e.subtype === 'walnut-injected')
+    // Exactly one marker per send — a double write would resurface as a
+    // duplicated user bubble in the console (dedup is id-based, twins share the id).
+    expect(markers.length).toBe(1)
+    expect(markers[0].walnutMessageId).toBe('qm-777-marker')
+    expect((markers[0].message as { content?: string }).content).toBe('follow-up message')
+
+    await transport.cleanup()
+  })
 })
 
 // ═══════════════════════════════════════════════════════════════════

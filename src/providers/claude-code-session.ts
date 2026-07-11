@@ -45,7 +45,7 @@ import type { DaemonTaskState } from './daemon-connection.js'
 import { checkCwdExists } from './cwd-check.js'
 import { recoverStateFromJsonl, extractImageFilePathFromInput } from '../core/session-history.js'
 import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase } from '../core/types.js'
-import { SESSION_MODEL_CLI_MAP, DEFAULT_CLI_MODEL, modelSupportsEffort } from '../core/types.js'
+import { SESSION_MODEL_CLI_MAP, modelSupportsEffort } from '../core/types.js'
 import { classifyStreamEvent, classifyDelta } from './claude-stream-event-map.js'
 import { accumulateWorkflowProgress, sortedPhases, sortedAgents } from '../core/workflow-progress.js'
 import type { WorkflowPhaseInfo, WorkflowAgentInfo } from '../core/event-types.js'
@@ -112,6 +112,11 @@ interface StreamMessageEvent {
   type: 'assistant' | 'user'
   /** Non-null when this event belongs to a subagent Task */
   parent_tool_use_id?: string | null
+  /** Subagent identity on inline-subagent lines (new CLI builds). Threaded to
+   *  the UI so orphan children (parent tool_call gone after turn end) can still
+   *  render a labelled task group. */
+  subagent_type?: string
+  task_description?: string
   message: {
     id?: string
     role: 'assistant' | 'user'
@@ -332,6 +337,43 @@ export class ClaudeCodeSession {
   /** Per-turn flag: reset on writeMessage()/send(), prevents duplicate JSONL result
    *  events within a single turn (e.g., tailer emits result, then PID-death handler fires). */
   private _turnResultEmitted = false
+  /** L1 byte-offset (`v`) of the event currently being processed by handleStreamLine.
+   *  Set at entry, valid only within that synchronous call. Undefined = old daemon. */
+  private _currentEventV: number | undefined
+  /** Consumed-offset watermark: `v` of the last RESULT this instance processed to
+   *  turn completion. The positional twin of `resultEmitted`: a result whose v is
+   *  ABOVE this watermark was never processed, no matter what the boolean claims
+   *  (incident 10e7df54 — the boolean was seeded from a lying task-phase proxy and
+   *  swallowed a real result forever). Persisted to SessionRecord.consumedOffset
+   *  (monotonic) so it survives restarts; seeded from the record on attach.
+   *  -1 = no watermark (old daemon / never seen a v). */
+  private _consumedOffset = -1
+
+  /** True when the event being processed sits at or below the consumed watermark —
+   *  i.e. it is a REPLAY of something this server already fully processed. Only
+   *  meaningful when both sides have positions; without them, returns undefined
+   *  (caller falls back to the boolean guards). */
+  private _isReplayedByOffset(): boolean | undefined {
+    if (this._currentEventV === undefined || this._consumedOffset < 0) return undefined
+    return this._currentEventV <= this._consumedOffset
+  }
+
+  /** Advance the consumed watermark to the just-processed event and persist it.
+   *  Monotonic: never moves backwards; MAX_SAFE_INTEGER (transport sentinel) is
+   *  never adopted. Fire-and-forget persistence — the in-memory watermark is
+   *  what the live guards read. */
+  private _advanceConsumedOffset(): void {
+    const v = this._currentEventV
+    if (v === undefined || v >= Number.MAX_SAFE_INTEGER) return
+    if (v <= this._consumedOffset) return
+    this._consumedOffset = v
+    if (this.claudeSessionId) {
+      const sid = this.claudeSessionId
+      import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+        updateSessionRecord(sid, { consumedOffset: v }),
+      ).catch(() => {})
+    }
+  }
   /** ── Idle-debt conservation (ported from the ACP adapter's idle accounting) ──
    *  The CLI emits one session_state_changed{idle} companion for every turn-over
    *  it reports via a `result` line. When the RESULT handler completes the turn
@@ -401,6 +443,11 @@ export class ClaudeCodeSession {
   /** The session ID we expect after a --resume. If Claude returns a different ID,
    *  we rename the existing record instead of creating a phantom new one. */
   private _expectedSessionId: string | null = null
+  /** Every claude session id this object has carried before the current one
+   *  (resume-rename, result-id adoption). SESSION_RESULT's stuck-activeProcessing
+   *  fixup uses this to verify the stale entry really belonged to THIS session —
+   *  matching by taskId alone cross-wired unrelated sessions' results. */
+  private _priorSessionIds = new Set<string>()
 
   /** Auto-generated title set by SessionRunner before first send */
   pendingTitle?: string
@@ -463,7 +510,7 @@ export class ClaudeCodeSession {
   /** THE authoritative set of background tasks (dynamic workflows / subagents), keyed by
    *  task_id, each carrying its latest status. "Is bg work in flight" is derived from this
    *  set (see hasActiveBackgroundWork) — there is no parallel scalar counter to desync. */
-  private _bgTasks = new Map<string, { description?: string; subagentType?: string; status: string; tokens?: number; lastTool?: string; summary?: string; workflowName?: string }>()
+  private _bgTasks = new Map<string, { description?: string; subagentType?: string; status: string; tokens?: number; lastTool?: string; summary?: string; workflowName?: string; isBackgrounded?: boolean }>()
   /** Workflow name from the most recent task_started with task_type==='local_workflow'. */
   private _workflowName: string | undefined
   /** The workflow script Claude generated (task_started.prompt) + its description —
@@ -482,10 +529,18 @@ export class ClaudeCodeSession {
   private static readonly _BG_TERMINAL_STATUSES = new Set(['completed', 'failed', 'stopped', 'cancelled'])
 
   /** Number of background tasks still running. DERIVED from the authoritative task set on
-   *  every read — never an accumulated counter, so no event can desync it. */
+   *  every read — never an accumulated counter, so no event can desync it.
+   *
+   *  GATING semantics (incident 07fffbe5): a task the CLI marked `is_backgrounded:true`
+   *  (via task_updated patch) is excluded — the CLI's OWN turn-end does not wait for
+   *  backgrounded tasks (it emits result+idle while they run), so neither may we.
+   *  Counting one here held a finished turn "Running" for the 16-min lifetime of a
+   *  backgrounded full-disk grep. The UI set (`backgroundTasks` getter) keeps ALL
+   *  tasks including backgrounded ones — only turn-over gating uses this count. */
   private _runningBgCount(): number {
     let n = 0
     for (const t of this._bgTasks.values()) {
+      if (t.isBackgrounded) continue
       if (!ClaudeCodeSession._BG_TERMINAL_STATUSES.has(t.status)) n++
     }
     return n
@@ -549,6 +604,10 @@ export class ClaudeCodeSession {
     this._activity = undefined
     this._processStatus = 'idle'
     this._turnResultEmitted = true
+    // The idle that completes a withheld turn is the turn's LAST lifecycle event —
+    // advance the watermark to it so a replay of this whole turn (result + idle)
+    // is positionally suppressed after a restart.
+    this._advanceConsumedOffset()
     this.emitStatusChanged('AGENT_COMPLETE')
     bus.emit(EventNames.SESSION_RESULT, {
       sessionId: sid, taskId: this.taskId,
@@ -582,9 +641,16 @@ export class ClaudeCodeSession {
     for (const [taskId, local] of this._bgTasks) {
       if (ClaudeCodeSession._BG_TERMINAL_STATUSES.has(local.status)) continue // already terminal locally
       const remote = daemonState.tasks[taskId]
-      if (remote && ClaudeCodeSession._BG_TERMINAL_STATUSES.has(remote.status)) {
+      if (!remote) continue
+      if (ClaudeCodeSession._BG_TERMINAL_STATUSES.has(remote.status)) {
         // Daemon recorded a terminal status our live stream missed — adopt the source of truth.
         this._bgTasks.set(taskId, { ...local, status: remote.status })
+        adopted++
+      } else if (remote.isBackgrounded && !local.isBackgrounded) {
+        // Same direction of monotone adoption: backgrounded = detached from turn-over
+        // gating. If the live stream dropped the task_updated{is_backgrounded} patch
+        // (SSH flap), the daemon's jsonl-rebuilt state still has it.
+        this._bgTasks.set(taskId, { ...local, isBackgrounded: true })
         adopted++
       }
     }
@@ -845,6 +911,13 @@ export class ClaudeCodeSession {
     return this.claudeSessionId
   }
 
+  /** True if this session currently carries `id` or carried it earlier in its
+   *  lifetime (resume-rename / result-id adoption). Used by the SESSION_RESULT
+   *  fixup to prove a stale activeProcessing entry belongs to THIS session. */
+  hasCarriedSessionId(id: string): boolean {
+    return this.claudeSessionId === id || this._priorSessionIds.has(id)
+  }
+
   get outputFile(): string | null {
     return this._outputFile
   }
@@ -977,10 +1050,19 @@ export class ClaudeCodeSession {
     // Map picker short IDs → CLI model aliases via the SESSION_MODELS registry
     // (single source of truth in core/types.ts). The CLI understands the [1m]
     // suffix for the 1M context window. An unknown id falls through to passthrough
-    // (CLI resolves it per provider), and no model at all → DEFAULT_CLI_MODEL.
-    const cliModel = SESSION_MODEL_CLI_MAP[model ?? ''] ?? (model || DEFAULT_CLI_MODEL)
+    // (CLI resolves it per provider).
+    //
+    // "Auto" (no model chosen in the picker) means DON'T pass --model at all —
+    // Claude Code then picks its own default from its own settings layers
+    // (env ANTHROPIC_MODEL, ~/.claude/settings.json, {cwd}/.claude/settings.json).
+    // Walnut deliberately has NO implicit default here: a session's model is a
+    // RUNTIME choice (the picker), never a Walnut config-time default. Only an
+    // explicit picker selection is forwarded as --model.
+    const cliModel = model ? (SESSION_MODEL_CLI_MAP[model] ?? model) : undefined
     this._cliModel = cliModel
-    args.push('--model', cliModel)
+    if (cliModel) {
+      args.push('--model', cliModel)
+    }
     // Reasoning effort (low/medium/high/max) → --effort. This is the SPAWN-TIME
     // path: initial start + cold --resume (mid-session changes go through
     // applyEffort()'s apply_flag_settings control_request instead, no respawn).
@@ -1107,7 +1189,7 @@ export class ClaudeCodeSession {
       fork: forkSession,
       spillFile,
       mode: this._mode as 'bypass' | 'plan' | 'accept' | 'default',
-      onOutput: (event) => this.handleStreamLine(event.line),
+      onOutput: (event) => this.handleStreamLine(event.line, event.v),
       onExit: (code, stderr) => {
         this._exitCode = code
         this._exitStderr = stderr
@@ -1282,8 +1364,17 @@ export class ClaudeCodeSession {
     if (record.cliModel) {
       session._cliModel = record.cliModel
     }
+    // Seed the consumed-offset watermark from the persisted record (sanitized:
+    // non-negative finite integer only — a corrupt/sentinel value must never
+    // become the guard, it would suppress every future result).
+    if (typeof record.consumedOffset === 'number'
+      && Number.isInteger(record.consumedOffset)
+      && record.consumedOffset >= 0
+      && record.consumedOffset < Number.MAX_SAFE_INTEGER) {
+      session._consumedOffset = record.consumedOffset
+    }
 
-    // ── resultEmitted recovery after server restart ──
+    // ── resultEmitted recovery after server restart (evidence-based) ──
     // `resultEmitted` is ephemeral — it lives only on the ClaudeCodeSession instance
     // in memory and is lost when the server restarts. New instances always start
     // with resultEmitted=false (the field default). Without recovery, the PID-death
@@ -1291,28 +1382,50 @@ export class ClaudeCodeSession {
     // that was already fully processed (git pull, usage tracking, task phase update,
     // triage dispatch) before the restart — flooding the user with stale notifications.
     //
-    // We use the linked task's phase as the durable proxy for "server already
-    // handled this result":
-    //   - The main-ai handler in server.ts advances task.phase to AGENT_COMPLETE
-    //     only AFTER completing all result bookkeeping
-    //   - tasks.json is written to disk and persists across restarts
-    //   - If task.phase is past IN_PROGRESS, the server already processed the real result
+    // The old recovery used the linked task's phase ALONE as the proxy for "server
+    // already handled this result". Incident 10e7df54 proved the proxy lies: a
+    // phase-drift reconciler had GUESSED the phase to AWAIT during a disconnect, the
+    // proxy then seeded resultEmitted=true, and the daemon replay's REAL (never
+    // processed) result was swallowed by the :resultEmitted guard — task wedged.
     //
-    // Race window: theoretically the server could crash between setting task.phase
-    // and flushing tasks.json to disk. In practice this window is sub-millisecond.
-    // Worst case: one extra triage notification — acceptable.
-    let taskPhaseIsTerminal = false
+    // Now the daemon STREAM file is consulted first (the only file that contains
+    // result/idle events — the canonical JSONL has zero): a result must actually
+    // EXIST for the current turn (fold.turnEnded) before the phase proxy may claim
+    // it was processed. Evidence says no result → resultEmitted=false regardless of
+    // what the (possibly guessed) phase says, so a replayed real result processes
+    // normally. Evidence unavailable (host unreachable etc.) → degrade to the old
+    // proxy, logged, per R1 (no guessing silently).
+    let taskPhasePastInProgress = false
     if (record.taskId) {
       try {
         const { getTask } = await import('../core/task-manager.js')
         const task = await getTask(record.taskId)
         if (task && task.phase !== 'TODO' && task.phase !== 'IN_PROGRESS') {
-          taskPhaseIsTerminal = true
+          taskPhasePastInProgress = true
         }
       } catch { /* task not found — assume non-terminal */ }
     }
-    session.resultEmitted = taskPhaseIsTerminal
-      || record.process_status === 'error'
+    let streamEvidence: Awaited<ReturnType<typeof import('../core/session-reconcile.js')['fetchStreamTailFold']>> = 'not-fetched'
+    try {
+      const { fetchStreamTailFold } = await import('../core/session-reconcile.js')
+      streamEvidence = await fetchStreamTailFold(record.claudeSessionId, record.host)
+    } catch (err) {
+      streamEvidence = 'evidence-fetch-threw'
+      log.session.warn('attachToExisting: stream evidence fetch failed', {
+        sessionId: record.claudeSessionId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+    if (typeof streamEvidence !== 'string') {
+      session.resultEmitted = record.process_status === 'error'
+        || (streamEvidence.fold.turnEnded && taskPhasePastInProgress)
+    } else {
+      log.session.info('attachToExisting: no stream evidence — resultEmitted falls back to phase proxy', {
+        sessionId: record.claudeSessionId, reason: streamEvidence, taskPhasePastInProgress,
+      })
+      session.resultEmitted = taskPhasePastInProgress
+        || record.process_status === 'error'
+    }
 
     // Create the session manager for attach (all sessions go through daemon now).
     //
@@ -1390,8 +1503,9 @@ export class ClaudeCodeSession {
         // replayed/real `result` would be mistaken for turn-over. We rebuild the
         // AUTHORITATIVE set (id→status); in-flight is derived from it, never a scalar.
         if (recovered.bgTasks) {
+          const backgrounded = new Set(recovered.bgBackgroundedIds ?? [])
           for (const [taskId, status] of Object.entries(recovered.bgTasks)) {
-            session._bgTasks.set(taskId, { status })
+            session._bgTasks.set(taskId, { status, isBackgrounded: backgrounded.has(taskId) || undefined })
           }
         }
         if (recovered.cliSessionState != null) {
@@ -1436,11 +1550,6 @@ export class ClaudeCodeSession {
           }
           session._scheduleTeamIdleCheck('(team-idle timeout after server restart)')
         }
-        // Belt-and-suspenders: if the JSONL has a result event (hasResult),
-        // reinforce resultEmitted even if tasks.json was momentarily stale.
-        if (recovered.workStatus === 'agent_complete' || recovered.workStatus === 'await_human_action') {
-          session.resultEmitted = true
-        }
         log.session.info('recovered state from canonical JSONL', {
           sessionId: record.claudeSessionId,
           recovered,
@@ -1472,6 +1581,76 @@ export class ClaudeCodeSession {
         sessionId: record.claudeSessionId,
         error: err instanceof Error ? err.message : String(err),
       })
+    }
+
+    // ── Stream-tail state merge + authoritative downgrade ──
+    // Runs OUTSIDE the canonical-recovery block above on purpose: the canonical
+    // JSONL contains ZERO result/session_state/task_* events on real data (they
+    // are stdout stream-json, captured only into the daemon stream file), and
+    // canonical recovery can fail entirely — the stream evidence must still apply.
+    if (typeof streamEvidence !== 'string') {
+      const fold = streamEvidence.fold
+      // Merge the fold's bg-task set on top of whatever canonical recovery seeded
+      // (usually nothing). Terminal is terminal; isBackgrounded is sticky.
+      for (const [taskId, t] of Object.entries(fold.bgTasks)) {
+        const prev = session._bgTasks.get(taskId)
+        const status = prev && ClaudeCodeSession._BG_TERMINAL_STATUSES.has(prev.status)
+          ? prev.status : t.status
+        session._bgTasks.set(taskId, {
+          ...prev,
+          status,
+          isBackgrounded: t.isBackgrounded || prev?.isBackgrounded,
+        })
+      }
+      if (fold.cliState != null) {
+        session._sessionStateSeen = true
+        session._cliSessionState = fold.cliState
+      }
+      // If the fold shows non-backgrounded bg work still in flight, the turn is
+      // genuinely live — mirror the canonical-recovery branch's running upgrade.
+      if (session.hasActiveBackgroundWork() && session._processStatus !== 'running') {
+        session._processStatus = 'running'
+        session._activity = 'Background tasks running'
+        log.session.info('attach: stream fold shows background work in flight — keeping running status', {
+          sessionId: record.claudeSessionId,
+          gatingBgCount: fold.gatingBgCount,
+        })
+      }
+      // ── Authoritative DOWNGRADE (incidents ed81e36d + 10e7df54) ──
+      // Every recovery _processStatus write is upward-only (→ 'running'). When the
+      // true result landed exactly in the restart window, the record stays 'running'
+      // forever — and the task can stay IN_PROGRESS — while the stream file proves
+      // the turn ended. Converge both. (The pre-stream version gated this on
+      // recovered.workStatus from the canonical JSONL, which never fired on real
+      // data.) reconcileProcessStatus re-checks bg/team debt from the same fold and
+      // no-ops unless the record or phase is genuinely stuck.
+      if (fold.turnEnded) {
+        try {
+          const { reconcileProcessStatus } = await import('../core/session-reconcile.js')
+          const outcome = await reconcileProcessStatus(record, {
+            evidence: streamEvidence,
+            teamActiveHint: session._teamActive && session._areTeammatesStillActive(),
+          })
+          if (outcome.converged) {
+            if (outcome.to !== record.process_status) {
+              session._processStatus = outcome.to
+              record.process_status = outcome.to
+            }
+            session.resultEmitted = true
+            // The verdict accounts for the whole folded file — adopt EOF as the
+            // in-memory watermark too (the record write already did, monotonically),
+            // so a daemon replay of this ended turn is positionally suppressed.
+            if (streamEvidence.fileSize > session._consumedOffset) {
+              session._consumedOffset = streamEvidence.fileSize
+            }
+          }
+        } catch (err) {
+          log.session.warn('attachToExisting: authoritative downgrade failed', {
+            sessionId: record.claudeSessionId,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
+      }
     }
 
     // ── Permission recovery: 2 layers + daemon attach, first one wins ──
@@ -1575,7 +1754,7 @@ export class ClaudeCodeSession {
           sessionId: record.claudeSessionId,
           fromOffset,
           mode: session._mode as 'bypass' | 'plan' | 'accept' | 'default',
-          onOutput: (event) => session.handleStreamLine(event.line),
+          onOutput: (event) => session.handleStreamLine(event.line, event.v),
           onExit: (code, stderr) => {
             session._exitCode = code
             session._exitStderr = stderr
@@ -2266,7 +2445,12 @@ export class ClaudeCodeSession {
   /** Track whether we've received any JSONL line yet (for first-line timing). */
   private _firstLineSeen = false
 
-  private handleStreamLine(line: string): void {
+  private handleStreamLine(line: string, v?: number): void {
+    // L1 versioned-event position of THIS line (byte offset at end-of-line in the
+    // daemon stream file). Held for the duration of this synchronous call so the
+    // result/idle handlers can compare it against the consumed watermark and
+    // advance it on turn completion. Undefined on old daemons without `v`.
+    this._currentEventV = v
     // Clear stall diagnostic timer — we're receiving output, session is responsive
     this._lastJsonlEventTs = Date.now()
     this._streamLinesSeen++
@@ -2336,6 +2520,7 @@ export class ClaudeCodeSession {
           const newId = sys.session_id as string
           const expectedId = this._expectedSessionId
           const oldSessionId = this.claudeSessionId
+          if (oldSessionId && oldSessionId !== newId) this._priorSessionIds.add(oldSessionId)
           this.claudeSessionId = newId
           this._expectedSessionId = null
           // ── time-to-init latency breakdown (instrumentation) ──
@@ -2428,9 +2613,15 @@ export class ClaudeCodeSession {
                   expectedSessionId: expectedId, actualSessionId: newId, taskId: this.taskId,
                 })
                 const { renameSessionId } = await import('../core/session-tracker.js')
+                // consumedOffset MUST reset on a sid change: the watermark is a byte
+                // position in the OLD sid's stream file; the new sid gets a new file
+                // with its own coordinates, so carrying the old number over could
+                // positionally suppress the new session's very first real results.
+                this._consumedOffset = -1
                 const renamed = await renameSessionId(expectedId, newId, {
                   outputFile: this._outputFile ?? undefined,
                   pid: this.pid ?? undefined,
+                  consumedOffset: undefined,
                 })
                 if (!renamed) {
                   // Original record not found — fall back to creating a fresh record
@@ -2608,6 +2799,19 @@ export class ClaudeCodeSession {
               // one instance's continuous stream — see _idleDebt doc). Whether this
               // idle may COMPLETE a turn is decided below; a debt-consuming idle
               // never may (it belongs to the already-completed previous turn).
+              // Positional replay guard (P3): an idle at/below the consumed watermark
+              // belongs to a turn this server already completed — a daemon replay
+              // after restart/reattach. It must never trigger a turn-over for the
+              // CURRENT turn (deterministic version of what idle-debt catches
+              // heuristically). Status bookkeeping is skipped too: the replayed
+              // idle describes a past moment, not the present.
+              if (this._isReplayedByOffset() === true) {
+                log.session.info('ignoring replayed idle (at/below consumed watermark)', {
+                  sessionId: sid, taskId: this.taskId,
+                  v: this._currentEventV, consumedOffset: this._consumedOffset,
+                })
+                break
+              }
               const wasCompanionIdle = this._idleDebt > 0
               if (wasCompanionIdle) this._idleDebt--
               // The idle handler only withholds completion while the derived count says
@@ -2678,6 +2882,10 @@ export class ClaudeCodeSession {
                 subagentType: sys.subagent_type as string | undefined,
                 status: startedStatus,
                 workflowName,
+                // Today the CLI flags backgrounding via a later task_updated patch, but
+                // read it here too in case a future CLI stamps it at start. Never
+                // un-background: keep a previously-recorded true.
+                isBackgrounded: sys.is_backgrounded === true || prevStarted?.isBackgrounded,
               })
               if (this._processStatus !== 'running') {
                 this._processStatus = 'running'
@@ -2725,11 +2933,24 @@ export class ClaudeCodeSession {
               const prev = this._bgTasks.get(taskId) ?? { status: 'running' }
               const patchStatus = patch.status as string | undefined
               const nextStatus = patchStatus ?? prev.status
+              // is_backgrounded (incident 07fffbe5): the CLI detaches this task from its
+              // turn — it will emit result+idle without waiting for it, and the task may
+              // NEVER get a terminal event. Dropping this field made hasActiveBackgroundWork()
+              // gate turn-over on a task the CLI itself doesn't wait for → stuck "Running".
+              // Sticky true: never un-background (no CLI path un-backgrounds a task).
+              const isBackgrounded = patch.is_backgrounded === true || prev.isBackgrounded
               this._bgTasks.set(taskId, {
                 ...prev,
                 status: nextStatus,
                 description: (patch.description as string | undefined) ?? prev.description,
+                isBackgrounded,
               })
+              if (patch.is_backgrounded === true && !prev.isBackgrounded) {
+                log.session.info('background task detached from turn (is_backgrounded)', {
+                  sessionId: sid, taskId: this.taskId, bgTaskId: taskId,
+                  remainingInFlight: this._runningBgCount(), via: 'task_updated',
+                })
+              }
               if (patchStatus && ClaudeCodeSession._BG_TERMINAL_STATUSES.has(patchStatus)) {
                 log.session.info('background task terminal', {
                   sessionId: sid, taskId: this.taskId, bgTaskId: taskId, status: patchStatus,
@@ -2798,6 +3019,8 @@ export class ClaudeCodeSession {
         if (!Array.isArray(msg.message?.content)) break
         const msgId = msg.message?.id ?? ''
         const parentToolUseId = msg.parent_tool_use_id ?? undefined
+        const subagentType = parentToolUseId ? (msg.subagent_type ?? undefined) : undefined
+        const taskDescription = parentToolUseId ? (msg.task_description ?? undefined) : undefined
         // Dedup strategy: the `assistant` JSONL content array does NOT include
         // thinking blocks, but the SSE stream at `inner.index` DOES. So an
         // index-based key drifts — we've had real cases where SSE wrote
@@ -2854,15 +3077,21 @@ export class ClaudeCodeSession {
 
             // Rewrite remote image paths to local paths (no-op for local sessions)
             const rewrittenDelta = this.rewriteRemoteImages(deltaText)
-            if (this.fullText.length < MAX_FULL_TEXT) {
+            // Subagent text must not leak into fullText — it becomes the turn's
+            // result fallback, which should be the MAIN conversation only.
+            if (!parentToolUseId && this.fullText.length < MAX_FULL_TEXT) {
               this.fullText += rewrittenDelta
             }
-            log.session.debug('JSONL event: text-delta', { sessionId: this.claudeSessionId, taskId: this.taskId })
+            log.session.debug('JSONL event: text-delta', { sessionId: this.claudeSessionId, taskId: this.taskId, parentToolUseId })
             bus.emit(EventNames.SESSION_TEXT_DELTA, {
               sessionId: this.claudeSessionId,
               taskId: this.taskId,
               delta: rewrittenDelta,
               ...(msgId ? { msgId } : {}),
+              ...(parentToolUseId ? { parentToolUseId } : {}),
+              ...(subagentType ? { subagentType } : {}),
+              ...(taskDescription ? { taskDescription } : {}),
+              ...(this._isReplayedByOffset() !== undefined ? { replayed: this._isReplayedByOffset() } : {}),
             }, ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
           } else if (block.type === 'tool_use') {
             // Dedup: skip tool_use blocks already emitted (daemon replay protection)
@@ -3051,6 +3280,9 @@ export class ClaudeCodeSession {
               input: block.input,
               ...(exitPlanContent ? { planContent: exitPlanContent } : {}),
               ...(parentToolUseId ? { parentToolUseId } : {}),
+              ...(subagentType ? { subagentType } : {}),
+              ...(taskDescription ? { taskDescription } : {}),
+              ...(this._isReplayedByOffset() !== undefined ? { replayed: this._isReplayedByOffset() } : {}),
             }, ['main-ai'], { source: 'session-runner' })
           }
         }
@@ -3165,6 +3397,22 @@ export class ClaudeCodeSession {
       case 'result': {
         const result = event as StreamResultEvent
 
+        // ── Positional replay guard (the watermark, P3) ──
+        // A result at or below the consumed watermark was already processed TO
+        // COMPLETION by this server (possibly a previous incarnation — the
+        // watermark persists). Deterministic: position, not a boolean that a
+        // restart can lose or a proxy can mis-seed. Intermediate workflow results
+        // never advance the watermark, so replays of an UNFINISHED turn still
+        // pass through here and hit the bg-work withhold below — correct.
+        if (this._isReplayedByOffset() === true) {
+          log.session.info('suppressing replayed result (at/below consumed watermark)', {
+            sessionId: this.claudeSessionId, taskId: this.taskId,
+            v: this._currentEventV, consumedOffset: this._consumedOffset,
+          })
+          this._turnResultEmitted = true
+          break
+        }
+
         // Guard against duplicate/replayed result events (daemon resume can replay
         // old JSONL lines). The init-reset above handles auto-continuation turns;
         // this guard catches pure replays where no new init was emitted.
@@ -3183,12 +3431,37 @@ export class ClaudeCodeSession {
         // triage dispatches = wasted tokens. resultEmitted is only reset to false by
         // writeMessage() when a new user message is sent, so this guard only blocks
         // replays, never legitimate new results.
-        if (this.resultEmitted) {
-          log.session.debug('suppressing replayed result (session already complete)', {
+        if (this.resultEmitted && this._isReplayedByOffset() !== false) {
+          // The boolean claims "already complete" AND the position doesn't refute it
+          // (either genuinely at/below the watermark, or no positions available).
+          //
+          // The `!== false` clause is the incident-10e7df54 fix: when the event's v
+          // is ABOVE the persisted watermark, this result was provably NEVER
+          // processed — the boolean is lying (it was seeded from a task-phase proxy
+          // that a disconnected-window reconciler had guessed wrong). Positional
+          // evidence beats the boolean: let the result through and process it.
+          //
+          // INFO, not debug (same incident): at debug level this swallow was
+          // invisible in prod logs — the one line that explained the wedge. Keep it
+          // loud, with enough result metadata (turns/duration) to tell a genuine
+          // replay (small, matches a past turn) from a swallowed real result.
+          log.session.info('suppressing replayed result (session already complete)', {
             sessionId: this.claudeSessionId, taskId: this.taskId,
+            numTurns: (result as { num_turns?: number }).num_turns,
+            durationMs: (result as { duration_ms?: number }).duration_ms,
+            isError: result.is_error === true,
+            v: this._currentEventV, consumedOffset: this._consumedOffset,
           })
           this._turnResultEmitted = true
           break
+        }
+        if (this.resultEmitted) {
+          // Positional override engaged: v > watermark proves this result is NEW.
+          log.session.warn('resultEmitted=true but event v exceeds consumed watermark — processing as new result', {
+            sessionId: this.claudeSessionId, taskId: this.taskId,
+            v: this._currentEventV, consumedOffset: this._consumedOffset,
+          })
+          this.resultEmitted = false
         }
 
         // ── Background-work intermediate result (dynamic workflows) ──
@@ -3264,6 +3537,9 @@ export class ClaudeCodeSession {
         // On error, keep the original session ID so events reach the frontend
         // (Claude CLI assigns a new throwaway ID even when --resume fails)
         if (result.session_id && !result.is_error) {
+          if (this.claudeSessionId && this.claudeSessionId !== result.session_id) {
+            this._priorSessionIds.add(this.claudeSessionId)
+          }
           this.claudeSessionId = result.session_id
         }
 
@@ -3420,6 +3696,10 @@ export class ClaudeCodeSession {
         }
 
         this._turnResultEmitted = true
+        // This result was processed to completion — advance the consumed watermark
+        // to its position so any future replay of it is positionally suppressed.
+        // (Withheld intermediate results broke out earlier and never reach here.)
+        this._advanceConsumedOffset()
 
         // ── Forensic observability: emit the per-turn wide event + run invariants. ──
         // Single call covers both team + non-team branches (teamActive distinguishes).
@@ -3784,6 +4064,7 @@ export class ClaudeCodeSession {
               taskId: this.taskId,
               delta: rewritten,
               ...(msgId ? { msgId } : {}),
+              ...(this._isReplayedByOffset() !== undefined ? { replayed: this._isReplayedByOffset() } : {}),
             }, ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
           } else if (deltaType === 'thinking_delta') {
             const text = delta?.thinking ?? ''
@@ -3793,6 +4074,7 @@ export class ClaudeCodeSession {
               taskId: this.taskId,
               delta: text,
               ...(msgId ? { msgId } : {}),
+              ...(this._isReplayedByOffset() !== undefined ? { replayed: this._isReplayedByOffset() } : {}),
             }, ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
           } else if (deltaType === 'citations_delta') {
             // Surface citation as a text_delta with the reference mark so it
@@ -3803,6 +4085,7 @@ export class ClaudeCodeSession {
               taskId: this.taskId,
               delta: ` ※${citation} `,
               ...(msgId ? { msgId } : {}),
+              ...(this._isReplayedByOffset() !== undefined ? { replayed: this._isReplayedByOffset() } : {}),
             }, ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
           }
           break
@@ -4718,30 +5001,39 @@ export class SessionRunner {
             }).catch(() => {})
           }
 
-          // Clear activeProcessing — try direct match first, fall back to taskId match.
-          // Session ID can change when --resume fails and Claude creates a new session.
+          // Clear activeProcessing — try direct match first, then the rename fixup.
+          // Session ID can change when --resume fails and Claude creates a new
+          // session; activeProcessing still holds the OLD id. The fixup must prove
+          // the stale entry belongs to THE SAME session object that emitted this
+          // result — the old "any session with this taskId" heuristic cross-wired
+          // UNRELATED sessions (a foreign result forced a fake turn-boundary onto
+          // a session that was mid-stream: 22 cross-session fixups on 2026-07-08).
           let resolvedSessionId = sessionId
           if (!this.activeProcessing.has(sessionId)) {
             const taskId = eventData<'session:result'>(event).taskId
-            if (taskId) {
+            // The session object that NOW carries the event's sessionId (it was
+            // renamed in handleStreamLine before the result reached us).
+            const emitter = this.findSessionByClaudeId(sessionId)
+            if (emitter && (!taskId || emitter.taskId === taskId)) {
               for (const activeId of this.activeProcessing) {
-                // The session object's sessionId was already updated to the new ID,
-                // so we can't match via findSessionByClaudeId(activeId).
-                // Instead, check if any session in our Map has this taskId and its
-                // old sessionId is the one stuck in activeProcessing.
-                for (const [mapKey, session] of this.sessions) {
-                  if ((mapKey === taskId || session.taskId === taskId) && activeId !== sessionId) {
-                    resolvedSessionId = activeId
-                    log.session.warn('SESSION_RESULT: sessionId mismatch — matched via taskId', {
-                      expectedSessionId: activeId,
-                      actualSessionId: sessionId,
-                      taskId,
-                    })
-                    break
-                  }
+                if (activeId === sessionId) continue
+                if (emitter.hasCarriedSessionId(activeId)) {
+                  resolvedSessionId = activeId
+                  log.session.warn('SESSION_RESULT: sessionId mismatch — matched via prior id of same session', {
+                    expectedSessionId: activeId,
+                    actualSessionId: sessionId,
+                    taskId,
+                  })
+                  break
                 }
-                if (resolvedSessionId !== sessionId) break
               }
+            }
+            if (resolvedSessionId === sessionId && this.activeProcessing.size > 0) {
+              // No provable owner — do NOT guess. The stale entry self-heals via
+              // the 60s activeProcessing safety timeout.
+              log.session.info('SESSION_RESULT: no activeProcessing match — leaving stale entries to safety timeout', {
+                sessionId, taskId, activeCount: this.activeProcessing.size,
+              })
             }
           }
 
@@ -5274,12 +5566,14 @@ export class SessionRunner {
       }
     }
 
-    // Resolve SSH host config and session_model default from config
+    // Resolve SSH host config from config
     const { getConfig } = await import('../core/config-manager.js')
     const config = await getConfig()
 
-    // Resolve model: explicit caller value > config default > hardcoded 'opus' fallback in send()
-    const resolvedModel = model ?? config.agent?.session_model
+    // Resolve model: explicit caller (picker) value ONLY. There is deliberately NO
+    // config-time default — "Auto" (undefined) means send() passes no --model and
+    // Claude Code uses its own settings-layer default. Model is a runtime choice.
+    const resolvedModel = model
     // Resolve effort: explicit caller value > config default > undefined (no --effort, API default)
     const resolvedEffort = data.effort ?? config.agent?.session_effort
 
@@ -6064,7 +6358,7 @@ export class SessionRunner {
             if (lower.includes('sonnet')) resolvedModel = 'sonnet[1m]'
             else if (lower.includes('haiku')) resolvedModel = 'haiku'  // haiku has no 1M variant
             else if (lower.includes('fable')) resolvedModel = 'fable[1m]'  // fable defaults to 1M like opus
-            else resolvedModel = undefined  // → send() defaults to 'opus[1m]'
+            else resolvedModel = undefined  // → send() passes no --model; CLI --resume keeps the session's own model
           }
         }
       } catch (err) {

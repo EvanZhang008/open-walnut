@@ -218,8 +218,10 @@ function registerSetInterest(): void {
  * Cloud-mode WS upgrade gate: accept a device token (or legacy API key) from
  * the `?token=` query param, or an Authorization: Bearer header for
  * non-browser clients. Failures count toward the per-IP auth rate limit.
+ * Returns the validated credential (caller enforces per-path kind rules) or
+ * null on failure.
  */
-async function verifyCloudUpgrade(url: URL, request: IncomingMessage): Promise<boolean> {
+async function verifyCloudUpgrade(url: URL, request: IncomingMessage): Promise<{ name: string; kind: 'device' | 'api_key' | 'machine' } | null> {
   // Rate-limit key: behind the local reverse proxy every socket peer is
   // loopback — use X-Forwarded-For (first hop) so one abusive client can't
   // exhaust the shared budget for everyone. Only trusted when the actual
@@ -232,7 +234,7 @@ async function verifyCloudUpgrade(url: URL, request: IncomingMessage): Promise<b
   const { isAuthRateLimited, recordAuthFailure } = await import('../middleware/auth-rate-limit.js')
   if (isAuthRateLimited(ip)) {
     log.ws.warn('cloud ws upgrade: rate limited', { ip })
-    return false
+    return null
   }
   const header = request.headers.authorization
   const token = url.searchParams.get('token')
@@ -240,17 +242,17 @@ async function verifyCloudUpgrade(url: URL, request: IncomingMessage): Promise<b
   if (!token) {
     recordAuthFailure(ip)
     log.ws.warn('cloud ws upgrade: missing token', { ip })
-    return false
+    return null
   }
   const { validateBearerCredential } = await import('../middleware/auth.js')
   const cred = await validateBearerCredential(token)
   if (!cred) {
     recordAuthFailure(ip)
     log.ws.warn('cloud ws upgrade: invalid token', { ip })
-    return false
+    return null
   }
   log.ws.info('cloud ws upgrade authenticated', { name: cred.name, kind: cred.kind })
-  return true
+  return cred
 }
 
 /**
@@ -261,8 +263,29 @@ export function attachWss(server: HttpServer): WebSocketServer {
   registerSetInterest()
 
   server.on('upgrade', (request: IncomingMessage, socket, head) => {
-    // Only upgrade requests to /ws (or all if no path check needed)
     const url = new URL(request.url ?? '/', `http://${request.headers.host}`)
+
+    // /bridge (cloud mode only): a remote daemon dialing in. Requires a
+    // machine token; the connection goes to the bridge registry, NOT the
+    // browser client set (no RPC surface, no broadcasts).
+    if (CLOUD_MODE && url.pathname === '/bridge') {
+      // Import BEFORE handleUpgrade: the daemon sends its hello immediately on
+      // open, and message listeners must be attached synchronously in the
+      // upgrade callback or the first frame is lost (first-connection race).
+      Promise.all([verifyCloudUpgrade(url, request), import('./bridge-registry.js')]).then(([cred, { attachBridge }]) => {
+        if (!cred || cred.kind !== 'machine') {
+          socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
+          socket.destroy()
+          return
+        }
+        wss!.handleUpgrade(request, socket, head, (ws) => {
+          attachBridge(ws, cred.name)
+        })
+      }).catch(() => socket.destroy())
+      return
+    }
+
+    // Only upgrade requests to /ws (or all if no path check needed)
     if (url.pathname !== '/ws') {
       socket.destroy()
       return
@@ -275,8 +298,10 @@ export function attachWss(server: HttpServer): WebSocketServer {
     // change the server's protocol negotiation). Trusted-LAN mode: unchanged,
     // no gate (the WS `auth` RPC remains available for remote API-key clients).
     if (CLOUD_MODE) {
-      verifyCloudUpgrade(url, request).then((ok) => {
-        if (!ok) {
+      verifyCloudUpgrade(url, request).then((cred) => {
+        // Machine tokens are bridge-only — a daemon credential must not open
+        // the browser RPC surface.
+        if (!cred || cred.kind === 'machine') {
           // Minimal raw HTTP response — the socket isn't an Express res.
           socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
           socket.destroy()

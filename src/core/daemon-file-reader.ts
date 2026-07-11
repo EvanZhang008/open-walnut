@@ -168,8 +168,13 @@ export class DaemonFileReader implements SessionFileReader {
     })
     if (!result.ok || !(result.files as string[])?.length) return null
     const filePath = (result.files as string[])[0]
-    const content = await conn.send('fs.read', { path: filePath, encoding: 'utf-8' })
-    return content.ok ? { content: content.data as string, path: filePath } : null
+    // Read via readFile so whale files chunk through fs.readRange. This is the
+    // HOT path for hashed-cwd sessions (encoded cwd >200 chars → no exactPath →
+    // glob dir contains '*' → fs.find ENOENTs → findSession): the incident whale
+    // (inc-1783532915925) reached its 11.4MB one-frame fs.read HERE, not in
+    // readFile — chunking only there left this path un-fixed.
+    const content = await this.readFile(filePath)
+    return content !== null ? { content, path: filePath } : null
   }
 
   /**

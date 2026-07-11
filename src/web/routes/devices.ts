@@ -25,8 +25,9 @@ devicesRouter.get('/', async (_req: Request, res: Response, next: NextFunction) 
   }
 })
 
-// POST /api/devices { name } → { name, token, pairingURI, createdAt }
-// The token/URI appear ONLY in this response.
+// POST /api/devices { name, kind? } → { name, token, pairingURI, createdAt }
+// The token/URI appear ONLY in this response. kind:'machine' mints a daemon
+// bridge credential (accepted only on the /bridge WS upgrade, never on REST).
 devicesRouter.post('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const name = typeof req.body?.name === 'string' ? req.body.name.trim() : ''
@@ -34,12 +35,13 @@ devicesRouter.post('/', async (req: Request, res: Response, next: NextFunction) 
       res.status(400).json({ error: 'name is required' })
       return
     }
+    const kind = req.body?.kind === 'machine' ? 'machine' as const : undefined
     // The scanning phone needs the server address too — the console's origin
     // (forwarded through the proxy) IS the reachable URL for this instance.
     const origin = `${req.protocol}://${req.get('host') ?? ''}`
-    const { token, createdAt } = await createDevice(name)
+    const { token, createdAt } = await createDevice(name, { kind })
     const pairingURI = `wn://pair?name=${encodeURIComponent(name)}&token=${token}&server=${encodeURIComponent(origin)}`
-    log.web.info('devices: created via console', { name })
+    log.web.info('devices: created via console', { name, kind: kind ?? 'device' })
     res.status(201).json({ name, token, pairingURI, createdAt })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

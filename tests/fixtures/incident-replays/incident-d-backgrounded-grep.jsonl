@@ -1,0 +1,33 @@
+{"type":"user","session_id":"incident-d","message":{"role":"user","content":[{"type":"text","text":"(user message)"}]}}
+{"type":"result","subtype":"success","is_error":false,"num_turns":0,"duration_ms":105281,"result":"(result text)","session_id":"incident-d"}
+{"type":"result","subtype":"success","is_error":false,"num_turns":4,"duration_ms":81614,"result":"(result text)","session_id":"incident-d"}
+{"type":"system","subtype":"session_state_changed","session_id":"incident-d","state":"idle"}
+{"type":"system","subtype":"session_state_changed","session_id":"incident-d","state":"running"}
+{"type":"result","subtype":"success","is_error":false,"num_turns":1,"duration_ms":19619,"result":"(result text)","session_id":"incident-d"}
+{"type":"system","subtype":"session_state_changed","session_id":"incident-d","state":"idle"}
+{"type":"system","subtype":"session_state_changed","session_id":"incident-d","state":"running"}
+{"type":"result","subtype":"success","is_error":false,"num_turns":1,"duration_ms":31537,"result":"(result text)","session_id":"incident-d"}
+{"type":"system","subtype":"session_state_changed","session_id":"incident-d","state":"idle"}
+{"type":"system","subtype":"session_state_changed","session_id":"incident-d","state":"running"}
+{"type":"system","subtype":"task_started","session_id":"incident-d","task_id":"byb6d9nfo","task_type":"local_bash"}
+{"type":"system","subtype":"task_updated","session_id":"incident-d","task_id":"byb6d9nfo","patch":{"is_backgrounded":true}}
+{"type":"result","subtype":"success","is_error":false,"num_turns":5,"duration_ms":181820,"result":"(result text)","session_id":"incident-d"}
+{"type":"system","subtype":"session_state_changed","session_id":"incident-d","state":"idle"}
+{"type":"system","subtype":"task_updated","session_id":"incident-d","task_id":"byb6d9nfo","patch":{"status":"completed"}}
+{"type":"system","subtype":"task_notification","session_id":"incident-d","task_id":"byb6d9nfo","status":"completed"}
+{"type":"system","subtype":"session_state_changed","session_id":"incident-d","state":"running"}
+{"type":"result","subtype":"success","is_error":false,"num_turns":2,"duration_ms":22306,"result":"(result text)","session_id":"incident-d"}
+{"type":"system","subtype":"session_state_changed","session_id":"incident-d","state":"idle"}
+{"type":"system","subtype":"session_state_changed","session_id":"incident-d","state":"running"}
+{"type":"system","subtype":"task_started","session_id":"incident-d","task_id":"bakbiny4m","task_type":"local_bash"}
+{"type":"system","subtype":"task_updated","session_id":"incident-d","task_id":"bakbiny4m","patch":{"is_backgrounded":true}}
+{"type":"system","subtype":"task_started","session_id":"incident-d","task_id":"bloiq0ggt","task_type":"local_bash"}
+{"type":"system","subtype":"task_notification","session_id":"incident-d","task_id":"bloiq0ggt","status":"completed"}
+{"type":"system","subtype":"task_started","session_id":"incident-d","task_id":"b60h9ag3m","task_type":"local_bash"}
+{"type":"system","subtype":"task_updated","session_id":"incident-d","task_id":"bakbiny4m","patch":{"status":"completed"}}
+{"type":"system","subtype":"task_notification","session_id":"incident-d","task_id":"bakbiny4m","status":"completed"}
+{"type":"system","subtype":"task_updated","session_id":"incident-d","task_id":"b60h9ag3m","patch":{"is_backgrounded":true}}
+{"type":"system","subtype":"task_started","session_id":"incident-d","task_id":"b4j6j9nbm","task_type":"local_bash"}
+{"type":"system","subtype":"task_notification","session_id":"incident-d","task_id":"b4j6j9nbm","status":"completed"}
+{"type":"result","subtype":"success","is_error":false,"num_turns":16,"duration_ms":411501,"result":"(result text)","session_id":"incident-d"}
+{"type":"system","subtype":"session_state_changed","session_id":"incident-d","state":"idle"}

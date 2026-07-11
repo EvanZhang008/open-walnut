@@ -13,6 +13,7 @@ import { promisify } from 'node:util';
 import { bus, EventNames } from './event-bus.js';
 import { WALNUT_HOME } from '../constants.js';
 import { log } from '../logging/index.js';
+import { credentialGuardArgs } from '../integrations/git-sync.js';
 import type { Config } from './types.js';
 
 const execFileAsync = promisify(execFile);
@@ -212,8 +213,12 @@ export class GitVersioningService {
   // ── Git operations ──
 
   private async gitCmd(args: string[]): Promise<string> {
+    // Network ops with token-in-URL remotes: suppress credential-helper writes
+    // (macOS keychain popups); local ops pass through untouched.
+    const isNetworkOp = ['clone', 'fetch', 'pull', 'push', 'ls-remote'].includes(args[0] ?? '');
+    const guard = isNetworkOp ? credentialGuardArgs() : [];
     try {
-      const { stdout } = await execFileAsync('git', args, {
+      const { stdout } = await execFileAsync('git', [...guard, ...args], {
         cwd: WALNUT_HOME,
         timeout: GIT_TIMEOUT_MS,
       });

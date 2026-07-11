@@ -369,6 +369,14 @@ async function writeStore(store: TaskStore): Promise<void> {
       if (rec?.label) groupInsert.run({ id, label: rec.label, hidden: rec.hidden ? 1 : 0 });
     }
   });
+
+  // Invalidate the read cache at COMMIT time, not just in withWriteLock.finally.
+  // Several helpers emit bus events between writeStore() and lock release
+  // (e.g. setFocusTier emits config:changed{focus_bar}); a browser that reacts
+  // to that event can GET /api/focus/tasks before .finally runs and be served
+  // the pre-write snapshot — the fork/quick-start "lands in Satellite despite
+  // focus_tier=focus" bug. The .finally invalidation stays as the backstop.
+  invalidateTaskStoreCache();
 }
 
 export interface AddTaskInput {

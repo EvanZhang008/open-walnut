@@ -27,6 +27,11 @@ export interface DeviceRecord {
   tokenHash: string
   createdAt: string
   lastUsedAt?: string
+  /**
+   * 'machine' = daemon bridge credential: accepted ONLY for the /bridge WS
+   * upgrade, rejected on every REST route. Absent = normal paired device.
+   */
+  kind?: 'machine'
 }
 
 interface AuthFile {
@@ -112,7 +117,7 @@ function validateDeviceName(name: string): void {
  * Create a new device. Returns the plaintext token ONCE — it is never stored
  * or shown again. 128-bit random → 32 hex chars.
  */
-export async function createDevice(name: string): Promise<{ name: string; token: string; createdAt: string }> {
+export async function createDevice(name: string, opts?: { kind?: 'machine' }): Promise<{ name: string; token: string; createdAt: string }> {
   validateDeviceName(name)
   const auth = await loadAuth()
   if (auth.devices.some((d) => d.name === name)) {
@@ -120,9 +125,9 @@ export async function createDevice(name: string): Promise<{ name: string; token:
   }
   const token = crypto.randomBytes(16).toString('hex')
   const createdAt = new Date().toISOString()
-  auth.devices.push({ name, tokenHash: sha256Hex(token), createdAt })
+  auth.devices.push({ name, tokenHash: sha256Hex(token), createdAt, ...(opts?.kind ? { kind: opts.kind } : {}) })
   await saveAuth(auth)
-  log.web.info('device-auth: device created', { name })
+  log.web.info('device-auth: device created', { name, kind: opts?.kind ?? 'device' })
   return { name, token, createdAt }
 }
 
@@ -131,7 +136,7 @@ export async function createDevice(name: string): Promise<{ name: string; token:
  * On success, updates the device's lastUsedAt — throttled to at most one disk
  * write per device per minute.
  */
-export async function verifyDeviceToken(token: string): Promise<{ name: string } | null> {
+export async function verifyDeviceToken(token: string): Promise<{ name: string; kind?: 'machine' } | null> {
   if (!token || typeof token !== 'string') return null
   const auth = await loadAuth()
   const candidateHash = sha256Hex(token)
@@ -158,7 +163,7 @@ export async function verifyDeviceToken(token: string): Promise<{ name: string }
       })
     }
   }
-  return { name: matched.name }
+  return matched.kind ? { name: matched.name, kind: matched.kind } : { name: matched.name }
 }
 
 /** Revoke a device by name. Returns true if it existed. */

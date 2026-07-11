@@ -165,6 +165,30 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
   it('idle scanner in template calls reapSession(idle-scan-missed-exit)', () => {
     expect(templateSrc).toMatch(/idle-scan-missed-exit/)
   })
+
+  // Turn-start delivery marker (incident inc-1783644415695): both implementations
+  // expose the appendUserMarker RPC writing the walnut-injected marker line, and
+  // both open the CLI's stdout fd in append mode so the marker is never clobbered.
+  it('both implementations handle the appendUserMarker command', () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [coreSrc, templateSrc]) {
+      expect(src.includes('walnut-injected')).toBe(true)
+      expect(src.includes('walnutMessageId')).toBe(true)
+      expect(src).toMatch(/appendFileSync\(session\.jsonlPath/)
+    }
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src.includes("case 'appendUserMarker'")).toBe(true)
+    }
+  })
+
+  it("both spawn the CLI's stdout fd in append mode (marker-clobber defense)", () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/openSync\(jsonlPath, 'a'\)/)
+      // 'w' open of the jsonl must be gone — fresh spawn truncates explicitly instead.
+      expect(src).not.toMatch(/openSync\(jsonlPath, resume \? 'a' : 'w'\)/)
+    }
+  })
 })
 
 // ── L1/L2 parity: versioned events + daemon-authoritative task state ──
@@ -221,5 +245,130 @@ describe('L1/L2 daemon-standalone vs daemon-source parity (versioned events + ta
   it('getState is declared in REQUIRED_DAEMON_CAPABILITIES', () => {
     const capsSrc = readFile(path.join(ROOT, 'src/providers/daemon-capabilities.ts'))
     expect(capsSrc).toMatch(/['"]getState['"]/)
+  })
+
+  // Incident-D fix (bash task is_backgrounded gating): both sides must carry
+  // the isBackgrounded field end-to-end — task-state entry, the running-count
+  // exclusion, and the sticky set-from-patch in applyTaskEvent. Without this,
+  // one side could silently drop the gating exclusion (incident 07fffbe5
+  // reopening) while this whole describe block stayed green.
+  it('both declare isBackgrounded on the task-state entry (object literal in applyTaskEvent)', () => {
+    const re = /isBackgrounded:\s*isBackgrounded\s*\|\|\s*undefined/
+    expect(standaloneSrc).toMatch(re)
+    expect(templateSrc).toMatch(re)
+  })
+  it('both exclude isBackgrounded tasks from runningTaskCount', () => {
+    const re = /if\s*\(\s*ts\.tasks\[id\]\.isBackgrounded\)\s*continue/
+    expect(standaloneSrc).toMatch(re)
+    expect(templateSrc).toMatch(re)
+  })
+  it('both seed isBackgrounded from the previous entry (carries forward across events)', () => {
+    const re = /let\s+isBackgrounded\s*=\s*prev\s*\?\s*prev\.isBackgrounded\s*===\s*true\s*:\s*false/
+    expect(standaloneSrc).toMatch(re)
+    expect(templateSrc).toMatch(re)
+  })
+  it('both set isBackgrounded stickily from patch.is_backgrounded === true (never cleared by false)', () => {
+    // The assignment is a plain `isBackgrounded = true` — never `= patch.is_backgrounded`
+    // or similar, which would let a `false` patch clear a previously-true flag.
+    const re = /is_backgrounded\s*===\s*true\)\s*isBackgrounded\s*=\s*true/
+    expect(standaloneSrc).toMatch(re)
+    expect(templateSrc).toMatch(re)
+    // Guard against the regression this test exists to catch: no direct
+    // assignment from the patch value that could carry a `false` through.
+    expect(standaloneSrc).not.toMatch(/isBackgrounded\s*=\s*patch\??\.\s*is_backgrounded\s*[^=]/)
+    expect(templateSrc).not.toMatch(/isBackgrounded\s*=\s*parsed\.patch\s*&&\s*parsed\.patch\.is_backgrounded\s*[^=]/)
+  })
+})
+
+// ── Tailer self-heal parity (incident 6c8428ac: frozen watcher offset) ──
+// The poll loop's catch must LOG (no-silent-failures) and force a watcher
+// rebuild after sustained failure. Both sides must carry identical thresholds.
+describe('tailer self-heal daemon-standalone vs daemon-source parity', () => {
+  const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+  const templateSrc = readFile(sourcePath)
+
+  it('neither watcher poll loop swallows tick errors silently (catch must log)', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/logMsg\(['"]error['"],\s*['"]watcher poll tick failed['"]/)
+    }
+  })
+  it('both use the same stall threshold and heal cooldown', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/STALL_ERRORS_BEFORE_HEAL\s*=\s*50/)
+      expect(src).toMatch(/HEAL_COOLDOWN_MS\s*=\s*60[_]?000/)
+    }
+  })
+  it('both rebuild the watcher on sustained failure (stop + ensure from frozen offset)', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/watcher stalled — forcing rebuild/)
+      expect(src).toMatch(/stopSessionWatcher\(sid\)[\s\S]{0,40}ensureWatcher\(sid\)/)
+    }
+  })
+  it('both reset consecutiveErrors on every successful tick (incl. no-new-bytes)', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/stat\.size\s*<=\s*offset\)\s*\{\s*consecutiveErrors\s*=\s*0;?\s*return;?\s*\}/)
+    }
+  })
+  it('both guard against healing an orphaned watcher after session replacement', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/s\.watcher\.pollTimer\s*!==\s*pollTimer/)
+    }
+  })
+})
+
+// ── Cloud bridge parity (phone → cloud → daemon dial-out) ──
+// The bridge is implemented twice (standalone + source template). Lock the
+// invariants: configure RPC + persistence, generation guard, hello frame,
+// silence-based teardown, backoff bounds, cleanup ordering, and startup
+// self-heal. If you touch the bridge in one file, mirror it in the other.
+describe('cloud bridge daemon-standalone vs daemon-source parity', () => {
+  const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+  const templateSrc = readFile(sourcePath)
+
+  it('both dispatch the bridge.configure command', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/case 'bridge\.configure': return cmdBridgeConfigure/)
+    }
+  })
+  it('both persist bridge.json (0600) and redial only on change', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/BRIDGE_FILE = path\.join\(DAEMON_DIR, 'bridge\.json'\)/)
+      expect(src).toMatch(/mode: 0o600/)
+      expect(src).toMatch(/if \(changed\) startBridge\('configure'\)/)
+    }
+  })
+  it('both carry the generation guard against stale dials', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/bridgeGeneration\+\+/)
+      expect(src).toMatch(/gen !== bridgeGeneration/)
+    }
+  })
+  it('both send hello with hostAlias/version/instanceId/sids as the first frame', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/ev: 'hello',\s*hostAlias: cfg\.hostAlias,\s*version: DAEMON_VERSION,\s*instanceId: DAEMON_INSTANCE_ID,\s*sids: \[\.\.\.sessions\.keys\(\)\]/)
+    }
+  })
+  it('both share ping interval, silence threshold, and backoff cap', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/BRIDGE_PING_INTERVAL_MS = 30[_]?000/)
+      expect(src).toMatch(/BRIDGE_SILENCE_MS = 75[_]?000/)
+      expect(src).toMatch(/BRIDGE_BACKOFF_MAX_MS = 60[_]?000/)
+    }
+  })
+  it('both route inbound bridge frames through handleCommand (no second dispatch)', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/handleCommand\(bridgeAdapter,/)
+    }
+  })
+  it('both put the token on the query string (browser-style clients cannot set headers)', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/searchParams\.set\('token', cfg\.token\)/)
+    }
+  })
+  it('both stop the bridge first in cleanup() and self-heal at startup', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/try \{ stopBridge\(\);? \} catch \{\}/)
+      expect(src).toMatch(/loadBridgeConfig\(\);?\s*\n\s*startBridge\('startup'\)/)
+    }
   })
 })

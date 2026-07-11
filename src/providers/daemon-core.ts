@@ -129,6 +129,22 @@ export interface DaemonCore<S extends CoreSessionData = CoreSessionData> {
    * control envelope and rejects anything wrapped in user-message shape.
    */
   handleSendRawCommand: (sid: string | undefined, raw: string | undefined) => SendResult
+  /**
+   * Append a walnut-injected user marker line to the session's stream file.
+   * The CLI never echoes stdin user messages to its stream-json stdout, so
+   * without this line the stream file records every turn's END (result) but
+   * no turn's START — the reconciler's backward anchor scan then lands on a
+   * PREVIOUS turn's user line and adopts that turn's stale result as the
+   * current turn's verdict (incident inc-1783644415695). The daemon owns the
+   * stream file, so it is the one writer that can place the marker at the
+   * true delivery point. Returns the post-append file size (the delivery
+   * watermark in the same byte coordinate as `v`/consumedOffset).
+   */
+  handleAppendUserMarker: (
+    sid: string | undefined,
+    message: string | undefined,
+    messageId: string | undefined,
+  ) => { ok: true; size: number } | { ok: false; reason: 'not_found' } | { error: string }
 }
 
 export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
@@ -576,6 +592,37 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
   }
 
   /**
+   * Turn-start marker append — see DaemonCore interface doc. Shape matches
+   * ClaudeCodeSession.writeSyntheticUserEvent's local fallback exactly, so
+   * every existing dedup layer (walnutMessageId strip in session-history,
+   * id-first optimistic consumption in the web UI, tailer responsive-timer
+   * exclusion) applies unchanged. Deliberately does NOT touch the FIFO path.
+   */
+  function handleAppendUserMarker(
+    sid: string | undefined,
+    message: string | undefined,
+    messageId: string | undefined,
+  ): { ok: true; size: number } | { ok: false; reason: 'not_found' } | { error: string } {
+    if (!sid || !message || !messageId) return { error: 'appendUserMarker: missing sid, message, or messageId' }
+    const session = sessions.get(sid)
+    if (!session) return { ok: false, reason: 'not_found' }
+    try {
+      const line = JSON.stringify({
+        type: 'user',
+        subtype: 'walnut-injected',
+        message: { role: 'user', content: message },
+        walnutMessageId: messageId,
+        timestamp: new Date(clock()).toISOString(),
+      }) + '\n'
+      fs.appendFileSync(session.jsonlPath, line)
+      const size = fs.statSync(session.jsonlPath).size
+      return { ok: true, size }
+    } catch (err) {
+      return { error: 'appendUserMarker failed: ' + (err as Error).message }
+    }
+  }
+
+  /**
    * Write a full buffer to a FIFO using O_NONBLOCK + retry loop. Required for
    * payloads larger than PIPE_BUF (512 bytes on macOS): a single non-blocking
    * writeSync may return a partial count, and stopping there leaves the pipe
@@ -644,6 +691,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     broadcastSessionState,
     handleSendCommand,
     handleSendRawCommand,
+    handleAppendUserMarker,
   }
 }
 

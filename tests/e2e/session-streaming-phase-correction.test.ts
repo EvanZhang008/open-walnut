@@ -162,3 +162,48 @@ describe('text-delta alone corrects stale AWAIT_HUMAN_ACTION', () => {
     expect((await fetchTask(taskId)).phase).toBe('AGENT_COMPLETE');
   });
 });
+
+// Fix C2 (incident 10e7df54): a REPLAYED delta must never raise the phase.
+// After a server restart the fresh session object has an empty stream-dedup set,
+// so a daemon-replayed text-delta passes upstream dedup and reaches
+// enforceStreamingPhase looking like live output. The tell is the persisted
+// session record: live output always rides a record flipped 'running' at send
+// time, so a non-running record means replay noise — the guard must skip the
+// raise. The tests above cover sessions with NO record (record==null passes
+// through); these cover the record-present branches on both sides of the guard.
+describe('replayed delta (record not running) must not raise AWAIT_HUMAN_ACTION', () => {
+  async function seedSessionRecord(
+    sessionId: string, taskId: string, processStatus: 'idle' | 'running',
+  ): Promise<void> {
+    const { createSessionRecord, updateSessionRecord } = await import('../../src/core/session-tracker.js');
+    await createSessionRecord(sessionId, taskId, 'Walnut'); // created as 'running'
+    if (processStatus !== 'running') {
+      await updateSessionRecord(sessionId, { process_status: processStatus });
+    }
+  }
+
+  it('record idle (replay): AWAIT_HUMAN_ACTION stays put on text-delta', async () => {
+    const task = await createTask('replay-delta-leaves-await');
+    const taskId = task.id as string;
+    await patchTask(taskId, { phase: 'AWAIT_HUMAN_ACTION' });
+    await seedSessionRecord('sess-replay-idle-1', taskId, 'idle');
+
+    await emitTextDelta('sess-replay-idle-1', taskId);
+
+    // REVERT CHECK: without the guard, the delta raises AWAIT → IN_PROGRESS here.
+    expect((await fetchTask(taskId)).phase).toBe('AWAIT_HUMAN_ACTION');
+  });
+
+  it('record running (live): AWAIT_HUMAN_ACTION → IN_PROGRESS still works', async () => {
+    const task = await createTask('live-delta-corrects-await');
+    const taskId = task.id as string;
+    await patchTask(taskId, { phase: 'AWAIT_HUMAN_ACTION' });
+    await seedSessionRecord('sess-live-running-1', taskId, 'running');
+
+    await emitTextDelta('sess-live-running-1', taskId);
+
+    const fetched = await fetchTask(taskId);
+    expect(fetched.phase).toBe('IN_PROGRESS');
+    expect(fetched.status).toBe('in_progress');
+  });
+});

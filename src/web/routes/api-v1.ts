@@ -46,6 +46,7 @@ import {
   scanDir,
   MAX_NOTE_SIZE,
 } from './notes-v2.js'
+import { emitSse as emitChannelSse, attachSse, closeAllSseChannels } from '../sse-channels.js'
 import { log } from '../../logging/index.js'
 
 export const apiV1Router = Router()
@@ -114,18 +115,27 @@ function getVersion(): string {
 
 // ─── GET /api/v1/status ────────────────────────────────────────────────────
 
-apiV1Router.get('/status', (_req: Request, res: Response) => {
+apiV1Router.get('/status', async (_req: Request, res: Response) => {
   // mode: LIVE = talking to the primary (Mac at home); REPLICA = the cloud
-  // companion serving synced data. TODO(Phase 2): when the reverse-WS bridge to
-  // the primary lands, a cloud box with a live bridge reports LIVE.
+  // companion serving synced data. Per-session talk capability is signalled by
+  // bridgeHosts (additive) — daemons dial the cloud box directly, so a REPLICA
+  // can still relay sends/streams for hosts listed there.
   let lastSyncAt: string | null = null
   try { lastSyncAt = getLastSyncAt() } catch { /* git unavailable — omit */ }
+  let bridgeHostsList: Array<{ hostAlias: string; since: number }> | undefined
+  if (CLOUD_MODE) {
+    try {
+      const { bridgeHosts } = await import('../ws/bridge-registry.js')
+      bridgeHostsList = bridgeHosts().map((b) => ({ hostAlias: b.hostAlias, since: b.since }))
+    } catch { /* registry unavailable — omit */ }
+  }
   res.json({
     mode: CLOUD_MODE ? 'REPLICA' : 'LIVE',
     cloud: CLOUD_MODE,
     version: getVersion(),
     serverTime: new Date().toISOString(),
     ...(lastSyncAt ? { lastSyncAt } : {}),
+    ...(bridgeHostsList ? { bridgeHosts: bridgeHostsList } : {}),
   })
 })
 
@@ -372,55 +382,17 @@ apiV1Router.get('/conversations/:id/messages', async (req: Request, res: Respons
 })
 
 // ─── SSE stream: per-conversation ring buffer + replay ────────────────────
+// Machinery lives in ../sse-channels.ts (shared with session streams). The
+// conversation channel resets its replay window on 'message-start' (a new
+// turn); seq stays monotonic across turns.
 
-interface SseEvent { seq: number; event: string; data: unknown }
-interface SseConn { res: Response; ping: NodeJS.Timeout }
-interface ConvBuffer { events: SseEvent[]; nextSeq: number; conns: Set<SseConn> }
-
-/** Ring cap per conversation — a turn rarely exceeds a few hundred events. */
-const RING_MAX = 512
-const PING_INTERVAL_MS = 25_000
-
-const sseBuffers = new Map<string, ConvBuffer>()
-
-function getBuffer(conversationId: string): ConvBuffer {
-  let buf = sseBuffers.get(conversationId)
-  if (!buf) {
-    buf = { events: [], nextSeq: 0, conns: new Set() }
-    sseBuffers.set(conversationId, buf)
-  }
-  return buf
-}
-
-function writeSseEvent(res: Response, ev: SseEvent): void {
-  res.write(`id: ${ev.seq}\nevent: ${ev.event}\ndata: ${JSON.stringify(ev.data)}\n\n`)
-  // compression() buffers responses — flush after every event or SSE stalls.
-  ;(res as Response & { flush?: () => void }).flush?.()
-}
-
-/** Emit an event into the conversation's ring buffer + all live SSE conns. */
 function emitSse(conversationId: string, event: string, data: unknown): void {
-  const buf = getBuffer(conversationId)
-  // A new turn starts a fresh window — seq stays monotonic across turns so
-  // Last-Event-ID from a previous turn never replays stale events.
-  if (event === 'message-start') buf.events = []
-  const ev: SseEvent = { seq: buf.nextSeq++, event, data }
-  buf.events.push(ev)
-  if (buf.events.length > RING_MAX) buf.events.splice(0, buf.events.length - RING_MAX)
-  for (const conn of buf.conns) {
-    try { writeSseEvent(conn.res, ev) } catch { /* dead conn — close handler cleans up */ }
-  }
+  emitChannelSse(conversationId, event, data, { reset: event === 'message-start' })
 }
 
 /** Close all live SSE connections (server shutdown / tests). */
 export function closeApiV1Streams(): void {
-  for (const buf of sseBuffers.values()) {
-    for (const conn of buf.conns) {
-      clearInterval(conn.ping)
-      try { conn.res.end() } catch { /* already closed */ }
-    }
-    buf.conns.clear()
-  }
+  closeAllSseChannels()
 }
 
 // GET /api/v1/conversations/:id/stream?agentId=
@@ -436,44 +408,7 @@ apiV1Router.get('/conversations/:id/stream', async (req: Request, res: Response,
       sendError(res, 404, 'not_found', `Conversation not found: ${conversationId}`)
       return
     }
-
-    res.status(200)
-    res.setHeader('Content-Type', 'text/event-stream')
-    // no-transform keeps proxies AND the compression middleware from buffering.
-    res.setHeader('Cache-Control', 'no-cache, no-transform')
-    res.setHeader('Connection', 'keep-alive')
-    res.setHeader('X-Accel-Buffering', 'no')
-    res.flushHeaders?.()
-    res.write(': connected\n\n')
-    ;(res as Response & { flush?: () => void }).flush?.()
-
-    const buf = getBuffer(conversationId)
-
-    // Replay: with Last-Event-ID → events after it; without → the whole
-    // current-turn window (late joiners see the in-flight turn from the top).
-    const lastIdRaw = req.header('Last-Event-ID')
-      ?? (typeof req.query.lastEventId === 'string' ? req.query.lastEventId : undefined)
-    const lastSeq = lastIdRaw != null && lastIdRaw !== '' ? Number(lastIdRaw) : null
-    for (const ev of buf.events) {
-      if (lastSeq != null && Number.isFinite(lastSeq) && ev.seq <= lastSeq) continue
-      writeSseEvent(res, ev)
-    }
-
-    const conn: SseConn = {
-      res,
-      ping: setInterval(() => {
-        try {
-          res.write(': ping\n\n')
-          ;(res as Response & { flush?: () => void }).flush?.()
-        } catch { /* close handler cleans up */ }
-      }, PING_INTERVAL_MS),
-    }
-    buf.conns.add(conn)
-
-    req.on('close', () => {
-      clearInterval(conn.ping)
-      buf.conns.delete(conn)
-    })
+    attachSse(conversationId, req, res)
   } catch (err) {
     next(err)
   }
@@ -722,6 +657,18 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
         res.json(await buildSessionTranscript(sessionId))
         return
       } catch { /* unreachable session — fall back to the exported file */ }
+    }
+    if (wantFresh && CLOUD_MODE && /^[A-Za-z0-9_-]+$/.test(sessionId)) {
+      // Cloud fresh path: read the live jsonl over the daemon bridge. Falls
+      // back to the git-synced file on any failure (bridge down, unknown sid).
+      try {
+        const { buildTranscriptViaBridge } = await import('./session-stream-v1.js')
+        const viaBridge = await buildTranscriptViaBridge(sessionId)
+        if (viaBridge) {
+          res.json(viaBridge)
+          return
+        }
+      } catch { /* fall back to the exported file */ }
     }
     let transcript = await readSessionTranscript(sessionId)
     if (!transcript && !CLOUD_MODE) {

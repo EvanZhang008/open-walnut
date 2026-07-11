@@ -42,6 +42,8 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
   'ping',
   'hello',
   'setMode',
+  'appendUserMarker',
+  'bridge.configure',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]

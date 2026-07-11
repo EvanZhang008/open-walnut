@@ -64,10 +64,12 @@ function requestIp(req: Request): string {
 /**
  * Validate a Bearer credential string: device token first (cloud credential),
  * then legacy config.yaml API keys. Returns the credential's display name.
+ * kind 'machine' = daemon bridge credential — valid ONLY for the /bridge WS
+ * upgrade; every other consumer must reject it.
  */
-export async function validateBearerCredential(token: string): Promise<{ name: string; kind: 'device' | 'api_key' } | null> {
+export async function validateBearerCredential(token: string): Promise<{ name: string; kind: 'device' | 'api_key' | 'machine' } | null> {
   const device = await verifyDeviceToken(token)
-  if (device) return { name: device.name, kind: 'device' }
+  if (device) return { name: device.name, kind: device.kind === 'machine' ? 'machine' : 'device' }
   const keyName = await validateApiKey(token)
   if (keyName) return { name: keyName, kind: 'api_key' }
   return null
@@ -142,9 +144,11 @@ async function cloudAuthMiddleware(req: Request, res: Response, next: NextFuncti
 
   try {
     const cred = await validateBearerCredential(authHeader.slice(7))
-    if (!cred) {
+    if (!cred || cred.kind === 'machine') {
+      // Machine tokens are bridge-upgrade-only: a leaked daemon credential
+      // must not open the whole REST surface.
       recordAuthFailure(ip)
-      log.web.warn('auth: invalid device token', { ip })
+      log.web.warn('auth: invalid device token', { ip, machine: cred?.kind === 'machine' })
       res.status(401).json({ error: 'Invalid or revoked token' })
       return
     }

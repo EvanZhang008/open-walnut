@@ -15,6 +15,8 @@ import {
   setRemote,
   ensureRepo,
   ensureCriticalIgnores,
+  credentialGuardArgs,
+  hardenGitConfigPerms,
 } from '../../src/integrations/git-sync.js';
 import { WALNUT_HOME } from '../../src/constants.js';
 import { bus } from '../../src/core/event-bus.js';
@@ -168,6 +170,52 @@ describe('auth.json is never synced (data-repo gitignore)', () => {
     const tracked = execSync('git ls-files', { cwd: tmpDir, encoding: 'utf-8' });
     expect(tracked).toContain('normal.txt');
     expect(tracked.split('\n')).not.toContain('auth.json');
+  });
+});
+
+// ── Credential-helper guard (token-in-URL remotes must not touch helpers) ──
+
+describe('credentialGuardArgs', () => {
+  it('returns the helper-neutralizing flag when the remote URL embeds credentials', () => {
+    initSync();
+    setRemote('https://walnut:deadbeef00112233@cloud.example.com/git/data');
+    expect(credentialGuardArgs(tmpDir)).toEqual(['-c', 'credential.helper=']);
+  });
+
+  it('returns nothing when the remote URL has no credentials (helper may be the only auth source)', () => {
+    initSync();
+    setRemote('https://cloud.example.com/git/data');
+    expect(credentialGuardArgs(tmpDir)).toEqual([]);
+  });
+
+  it('returns nothing when there is no remote at all', () => {
+    initSync();
+    expect(credentialGuardArgs(tmpDir)).toEqual([]);
+  });
+
+  it('returns nothing outside a git repo', () => {
+    expect(credentialGuardArgs(tmpDir)).toEqual([]);
+  });
+});
+
+describe('hardenGitConfigPerms', () => {
+  it('setRemote with a credentialed URL tightens .git/config to 0600', async () => {
+    initSync();
+    setRemote('https://walnut:deadbeef00112233@cloud.example.com/git/data');
+    const stat = await fsp.stat(path.join(tmpDir, '.git', 'config'));
+    expect(stat.mode & 0o777).toBe(0o600);
+  });
+
+  it('setRemote with a plain URL leaves permissions alone', async () => {
+    initSync();
+    const before = (await fsp.stat(path.join(tmpDir, '.git', 'config'))).mode & 0o777;
+    setRemote('https://cloud.example.com/git/data');
+    const after = (await fsp.stat(path.join(tmpDir, '.git', 'config'))).mode & 0o777;
+    expect(after).toBe(before);
+  });
+
+  it('never throws when .git/config is missing', () => {
+    expect(() => hardenGitConfigPerms('https://u:t@h/x', tmpDir)).not.toThrow();
   });
 });
 

@@ -50,7 +50,7 @@ export interface DaemonCommandResult {
  *  The daemon materializes this from the same task_* events Walnut sees, so Walnut can PULL it
  *  to reconcile a lost-terminal event without guessing liveness. `resourceVersion` = the byte
  *  offset of the latest applied event (monotonic, rebuilt from the jsonl after a daemon restart). */
-export interface DaemonTaskStateEntry { status: string; v: number; t: number; description?: string }
+export interface DaemonTaskStateEntry { status: string; v: number; t: number; description?: string; isBackgrounded?: boolean }
 export interface DaemonTaskState {
   tasks: Record<string, DaemonTaskStateEntry>
   resourceVersion: number
@@ -265,6 +265,35 @@ export class DaemonConnection {
     }
     // Host (re)connected — let SessionRunner redeliver stranded pending messages.
     if (changed && value) notifyHostConnected(this.hostKey)
+    // Push the cloud-bridge config on every (re)connect. Single choke point:
+    // connect(), reconnect() and forceRedeployAndReconnect() all land here.
+    // Fire-and-forget — bridge provisioning must never block or fail a connect.
+    if (changed && value) this.pushBridgeConfig()
+  }
+
+  /**
+   * Tell the daemon where to dial for the phone→cloud→daemon path (see
+   * bridge.configure in daemon-standalone.ts). Ephemeral sandboxes skip:
+   * they attach to production daemons and must not rewire them.
+   */
+  private pushBridgeConfig(): void {
+    if (this.isReadOnlyRemote) return
+    void (async () => {
+      try {
+        const { getBridgeConfigForHost } = await import('../integrations/cloud-bridge-config.js')
+        const cfg = await getBridgeConfigForHost(this.hostKey)
+        // Push disabled too — an operator turning the bridge off must reach
+        // daemons that already hold a persisted bridge.json.
+        await this.send('bridge.configure', cfg as unknown as Record<string, unknown>)
+        log.session.info('DaemonConnection: bridge config pushed', {
+          host: this.hostKey, enabled: cfg.enabled,
+        })
+      } catch (err) {
+        log.session.warn('DaemonConnection: bridge config push failed', {
+          host: this.hostKey, error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    })()
   }
 
   // ── Event subscription ──

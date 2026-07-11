@@ -23,8 +23,41 @@ export function setCompactionInProgress(v: boolean): void {
   compactionInProgress = v;
 }
 
+// Network git subcommands that may authenticate against a remote. Only these
+// get the credential-helper guard — local ops never touch credentials.
+const NETWORK_GIT_RE = /^(?:clone|fetch|pull|push|ls-remote)\b/;
+
+/**
+ * When the repo's remote URL already embeds credentials (https://user:token@host),
+ * neutralize ALL credential helpers (system/global/local) for network git ops via
+ * `-c credential.helper=`. Otherwise git calls the helper's `store` action after
+ * every successful auth — on macOS (osxkeychain) that write pops a
+ * "Keychain Not Found" dialog when the process has no keychain session, and it's
+ * pointless anyway: the token in the URL always wins, the stored copy is never read.
+ *
+ * IMPORTANT: only guard when the URL carries credentials. If it doesn't, a helper
+ * (e.g. keychain) may be the user's ONLY credential source — disabling it would
+ * silently break their sync with 401s.
+ */
+export function credentialGuardArgs(cwd?: string): string[] {
+  try {
+    const urls = execSync('git config --get-regexp "remote\\..*\\.url"', {
+      cwd: cwd ?? WALNUT_HOME,
+      timeout: LOCAL_TIMEOUT,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    // https://ANYTHING@host — userinfo present means embedded credentials
+    if (/https?:\/\/[^/\s]+@/.test(urls)) return ['-c', 'credential.helper='];
+  } catch {
+    // No remotes / not a repo — nothing to guard
+  }
+  return [];
+}
+
 export function git(args: string, options?: { cwd?: string; timeout?: number; env?: Record<string, string> }): string {
-  return execSync(`git ${args}`, {
+  const guard = NETWORK_GIT_RE.test(args) ? credentialGuardArgs(options?.cwd).join(' ') : '';
+  return execSync(`git ${guard ? `${guard} ` : ''}${args}`, {
     cwd: options?.cwd ?? WALNUT_HOME,
     timeout: options?.timeout ?? LOCAL_TIMEOUT,
     encoding: 'utf-8',
@@ -159,6 +192,20 @@ export function setRemote(url: string): void {
     git(`remote set-url origin ${url}`);
   } else {
     git(`remote add origin ${url}`);
+  }
+  hardenGitConfigPerms(url);
+}
+
+/**
+ * If the remote URL embeds credentials, .git/config now holds a plaintext
+ * token — tighten it from git's default 0644 to owner-only.
+ */
+export function hardenGitConfigPerms(url: string, repoDir?: string): void {
+  if (!/https?:\/\/[^/\s]+@/.test(url)) return;
+  try {
+    fs.chmodSync(path.join(repoDir ?? WALNUT_HOME, '.git', 'config'), 0o600);
+  } catch {
+    // Best-effort (e.g. exotic setups where .git is a file) — never fail the caller
   }
 }
 
@@ -356,7 +403,8 @@ export async function gitPullWalnut(): Promise<void> {
   try {
     if (!isGitAvailable() || !isRepo() || !hasRemote()) return;
     clearStaleLock();
-    execSync('git pull --ff-only', {
+    const guard = credentialGuardArgs().join(' ');
+    execSync(`git ${guard ? `${guard} ` : ''}pull --ff-only`, {
       cwd: WALNUT_HOME,
       timeout: 15000,
       stdio: 'ignore',
@@ -453,6 +501,28 @@ let lastSyncCache: { value: string | null; at: number } | null = null;
 const LAST_SYNC_CACHE_MS = 30_000;
 
 /** ISO timestamp of the most recent sync commit, or null if no repo/commits. */
+/**
+ * Derive cloud-companion credentials from the data repo's `cloud` remote
+ * (`https://walnut:<device-token>@<domain>/git/data`, see docs/cloud-sync.md).
+ * Zero-config source for the daemon bridge: if cloud sync works, the bridge
+ * knows where to dial. Returns null when no cloud remote is configured.
+ */
+export function getCloudRemoteCredentials(): { domain: string; token: string; secure: boolean } | null {
+  const url = gitSafe('remote get-url cloud');
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    if (!u.password) return null;
+    return {
+      domain: u.host,
+      token: u.password,
+      secure: u.protocol === 'https:',
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function getLastSyncAt(): string | null {
   const now = Date.now();
   if (lastSyncCache && now - lastSyncCache.at < LAST_SYNC_CACHE_MS) {

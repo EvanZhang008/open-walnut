@@ -2042,10 +2042,6 @@ sessionsRouter.post('/:sessionId/fork', async (req: Request, res: Response, next
           })
         }
       }
-      bus.emit(EventNames.TASK_CREATED, { task: newFork }, ['web-ui', 'main-agent'], { source: 'fork' })
-      task = newFork
-      childTaskCreated = true
-
       // Visually group the source task + fork. Reuse the source task's existing
       // group if it already belongs to one (continuous forks accrete into one
       // group: source + fork1 + fork2…). Best-effort: a grouping failure must not
@@ -2067,6 +2063,19 @@ sessionsRouter.post('/:sessionId/fork', async (req: Request, res: Response, next
           error: err instanceof Error ? err.message : String(err),
         })
       }
+
+      // Emit task:created with the FINAL persisted state, not the stale addTask()
+      // reference: togglePin/setFocusTier/grouping above all mutated store clones,
+      // so `newFork` still says pinned=false / no focus_tier / no group_id. The UI
+      // treats task:created as authoritative for a new task — emitting the stale
+      // object made forks of Focus tasks render in Satellite until a full refetch.
+      try {
+        task = await getTask(newFork.id)
+      } catch {
+        task = newFork // re-read is best-effort; stale beats no event
+      }
+      bus.emit(EventNames.TASK_CREATED, { task }, ['web-ui', 'main-agent'], { source: 'fork' })
+      childTaskCreated = true
 
       // Refine the auto-generated title in the background: summarize the fork's new
       // prompt into a few English words → `<words> - fork of <source>`. Fire-and-forget

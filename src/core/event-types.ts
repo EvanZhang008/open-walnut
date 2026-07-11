@@ -147,6 +147,22 @@ export interface SessionTextDeltaEvent {
    *  share a natural key — no content matching needed. Optional: absent on
    *  legacy paths that predate id threading. */
   msgId?: string;
+  /** Non-null when this text belongs to an inline subagent (Agent/Task).
+   *  The CLI interleaves subagent lines into the main session's stream with
+   *  parent_tool_use_id set — without threading it here, subagent text renders
+   *  as main-conversation text and splits the live turn mid-token. */
+  parentToolUseId?: string;
+  /** Subagent identity (from the CLI's inline-subagent lines). Lets the UI
+   *  label an ORPHAN task group when the parent Agent tool_call is no longer
+   *  in the buffer (background subagent continuing after turn end / resume). */
+  subagentType?: string;
+  taskDescription?: string;
+  /** Positional replay verdict at emit time (daemon `v` vs consumedOffset —
+   *  same yardstick as the live result/idle replay guards). true = replayed
+   *  history (must never raise phase/status), false = positionally NEW output
+   *  (ground truth the CLI is working — may self-heal a wrongly-settled
+   *  record), undefined = no positional info (legacy path, be conservative). */
+  replayed?: boolean;
 }
 
 export interface SessionToolUseEvent {
@@ -158,6 +174,11 @@ export interface SessionToolUseEvent {
   planContent?: string;
   /** Non-null when this tool call belongs to a subagent Task */
   parentToolUseId?: string;
+  /** See SessionTextDeltaEvent.subagentType/taskDescription. */
+  subagentType?: string;
+  taskDescription?: string;
+  /** See SessionTextDeltaEvent.replayed. */
+  replayed?: boolean;
 }
 
 export interface SessionToolResultEvent {
@@ -175,6 +196,10 @@ export interface SessionThinkingDeltaEvent {
   delta: string;
   /** See SessionTextDeltaEvent.msgId — same semantics for thinking chunks. */
   msgId?: string;
+  /** See SessionTextDeltaEvent.parentToolUseId — same semantics. */
+  parentToolUseId?: string;
+  /** See SessionTextDeltaEvent.replayed. */
+  replayed?: boolean;
 }
 
 /** Catch-all for Claude CLI event types we don't know how to parse.

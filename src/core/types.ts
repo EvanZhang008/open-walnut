@@ -54,10 +54,9 @@ export const VALID_SESSION_MODEL_IDS: ReadonlySet<string> =
   new Set(SESSION_MODELS.map((m) => m.id));
 /** Distinct model families — used by raw-model-string parsers (formatModelName, etc.). */
 export const SESSION_MODEL_FAMILIES: readonly SessionModelFamily[] = ['opus', 'sonnet', 'haiku', 'fable'] as const;
-/** Default session model alias (config.agent.session_model fallback). */
-export const DEFAULT_SESSION_MODEL_ID = 'opus-1m';
-/** Default CLI --model value when no model is specified. */
-export const DEFAULT_CLI_MODEL = 'opus[1m]';
+// NOTE: there is intentionally NO default session/CLI model constant. "Auto" means
+// Walnut passes no --model and Claude Code resolves its own settings-layer default.
+// A session's model is a runtime (picker) choice, never a Walnut config-time default.
 
 // ── Reasoning effort (maps to the `claude -p --effort <level>` CLI flag) ──
 // The CLI accepts low/medium/high/xhigh/max (verified against binary 2.1.170:
@@ -431,8 +430,6 @@ export interface AgentConfig {
   /** Predefined model IDs shown in the agent form dropdown. Supports both string[] (legacy Bedrock IDs)
    *  and ModelEntry[] (new multi-provider format). */
   available_models?: string[] | import('../agent/providers/types.js').ModelEntry[];
-  /** Default model passed as --model to claude CLI sessions. Defaults to 'opus'. */
-  session_model?: string;
   /** Default reasoning-effort passed as --effort to claude CLI sessions (low/medium/high/max).
    *  Unset = let the CLI/API pick its default (resolves to 'high'). */
   session_effort?: SessionEffort;
@@ -645,6 +642,13 @@ export interface Config {
   api_keys?: ApiKeyEntry[];
   /** Registered push notification tokens for mobile clients */
   push_tokens?: PushTokenEntry[];
+  /** Daemon → cloud bridge. Default: derived from the data repo's `cloud`
+   *  git remote (zero-config when cloud sync is set up). Set enabled:false
+   *  to opt out; url overrides the derived wss endpoint. */
+  cloud_bridge?: {
+    enabled?: boolean;
+    url?: string;
+  };
 }
 
 export interface ApiKeyEntry {
@@ -807,6 +811,8 @@ export type StatusReason =
   | 'daemon_reported_exit'
   | 'daemon_reconnected'
   | 'retry_reconnect'
+  | 'reconciled_authoritative'
+  | 'streaming_evidence_self_heal'
   | 'user_stopped';
 
 export type StatusChangedBy =
@@ -900,4 +906,14 @@ export interface SessionRecord {
     reason?: string;
     receivedAt: string;  // ISO timestamp — for stale detection
   };
+  /** Consumed-offset watermark: byte position (the daemon's `v`) of the last
+   *  turn-lifecycle event this server PROCESSED (result handled / turn completed).
+   *  Survives restarts so replay-vs-new is decided by position, not by a boolean:
+   *  a replayed result with v > this was never processed and must go through
+   *  (incident 10e7df54 — the resultEmitted proxy lied and swallowed a real
+   *  result forever). Monotonic: writes only ever advance it. Reset (cleared)
+   *  on session-ID rename — the new stream file has its own coordinates.
+   *  Number.MAX_SAFE_INTEGER is a transport-layer sentinel and must NEVER be
+   *  persisted here. */
+  consumedOffset?: number;
 }

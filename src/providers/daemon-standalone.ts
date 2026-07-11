@@ -165,7 +165,7 @@ const LOG_FILE = path.join(DAEMON_DIR, `daemon-${DAEMON_INSTANCE_ID}.log`)
 // ── Types ──
 // L2: per-session background-task state. `resourceVersion` = byte offset of the latest
 // applied event (monotonic, rebuildable from the jsonl). Served on `getState`.
-interface TaskStateEntry { status: string; v: number; t: number; description?: string }
+interface TaskStateEntry { status: string; v: number; t: number; description?: string; isBackgrounded?: boolean }
 interface TaskState {
   tasks: Record<string, TaskStateEntry>
   resourceVersion: number
@@ -210,6 +210,10 @@ interface SessionData {
   pendingCtrl: PendingCtrl | null
   spawnTs?: number   // latency instrumentation: CLI spawn ts
   sawInit?: boolean  // latency instrumentation: first init line seen
+  // Tailer self-heal: last forced watcher rebuild ts. Session-level (not watcher
+  // closure) so the rebuilt watcher inherits the cooldown — a persistent error
+  // (EMFILE) can't thrash rebuild every few seconds.
+  lastWatcherHealAt?: number
 }
 
 interface AgentSub {
@@ -469,9 +473,16 @@ function emptyTaskState(): TaskState {
   return { tasks: {}, resourceVersion: 0, updatedAt: 0, derivedRunning: 0, recentTransitions: [] }
 }
 
+// GATING count: tasks the CLI flagged is_backgrounded are excluded — the CLI's own
+// turn-end does not wait for them (it emits result+idle while they run), so a daemon
+// derivedRunning that counted one would veto Walnut's turn-over convergence for the
+// task's whole lifetime (incident 07fffbe5: a 16-min backgrounded grep).
 function runningTaskCount(ts: TaskState): number {
   let n = 0
-  for (const id in ts.tasks) if (!BG_TERMINAL_STATUSES.has(ts.tasks[id].status)) n++
+  for (const id in ts.tasks) {
+    if (ts.tasks[id].isBackgrounded) continue
+    if (!BG_TERMINAL_STATUSES.has(ts.tasks[id].status)) n++
+  }
   return n
 }
 
@@ -485,6 +496,7 @@ function applyTaskEvent(ts: TaskState, parsed: Record<string, unknown>, v: numbe
   if (!subtype || !taskId) return false
   const prev = ts.tasks[taskId]
   let nextStatus: string | undefined
+  let isBackgrounded = prev ? prev.isBackgrounded === true : false
   if (subtype === 'task_started') {
     // Terminal is terminal: a late/duplicate start can't revive a finished task.
     nextStatus = prev && BG_TERMINAL_STATUSES.has(prev.status) ? prev.status : 'running'
@@ -494,6 +506,9 @@ function applyTaskEvent(ts: TaskState, parsed: Record<string, unknown>, v: numbe
     const patch = parsed.patch as Record<string, unknown> | undefined
     const ps = patch?.status as string | undefined
     nextStatus = ps ?? prev?.status ?? 'running'
+    // Sticky: is_backgrounded=true detaches the task from turn-over gating forever
+    // (no CLI path un-backgrounds a task). See runningTaskCount.
+    if (patch?.is_backgrounded === true) isBackgrounded = true
   } else if (subtype === 'task_notification') {
     nextStatus = (parsed.status as string | undefined) ?? prev?.status ?? 'running'
   } else {
@@ -501,7 +516,7 @@ function applyTaskEvent(ts: TaskState, parsed: Record<string, unknown>, v: numbe
   }
   const wasTerminal = prev ? BG_TERMINAL_STATUSES.has(prev.status) : false
   const isTerminal = BG_TERMINAL_STATUSES.has(nextStatus)
-  ts.tasks[taskId] = { status: nextStatus, v, t: now, description: (parsed.description as string | undefined) ?? prev?.description }
+  ts.tasks[taskId] = { status: nextStatus, v, t: now, description: (parsed.description as string | undefined) ?? prev?.description, isBackgrounded: isBackgrounded || undefined }
   if (v > ts.resourceVersion) ts.resourceVersion = v
   ts.updatedAt = now
   ts.derivedRunning = runningTaskCount(ts)
@@ -634,6 +649,7 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
     case 'attach': return cmdAttach(ws, id as number, cmd)
     case 'send': return cmdSend(ws, id as number, cmd)
     case 'sendRaw': return cmdSendRaw(ws, id as number, cmd)
+    case 'appendUserMarker': return cmdAppendUserMarker(ws, id as number, cmd)
     case 'stop': return cmdStop(ws, id as number, cmd)
     case 'setMode': return cmdSetMode(ws, id as number, cmd)
     case 'status': return cmdStatus(ws, id as number, cmd)
@@ -651,6 +667,7 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
     case 'fs.readRange': return cmdFsReadRange(ws, id as number, cmd)
     case 'git.diff': return cmdGitDiff(ws, id as number, cmd)
     case 'list': return cmdList(ws, id as number)
+    case 'bridge.configure': return cmdBridgeConfigure(ws, id as number, cmd)
     case 'ping': return sendOk(ws, id as number, { pong: true })
     case 'hello': return sendOk(ws, id as number, {
       version: DAEMON_VERSION,
@@ -742,9 +759,14 @@ function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, u
     return sendError(ws, id, 'mkfifo failed: ' + (err as Error).message)
   }
 
-  // Open files
+  // Open files. The CLI's stdout fd MUST be O_APPEND ('a'): the daemon also
+  // appends turn-start marker lines (appendUserMarker) to this file, and a
+  // positional 'w' fd would overwrite them on the CLI's next write. With both
+  // writers in O_APPEND every write() lands at the true EOF. Fresh spawns
+  // truncate explicitly first ('a' alone never truncates).
   const pipeFd = fs.openSync(pipePath, fs.constants.O_RDWR)
-  const outputFd = fs.openSync(jsonlPath, resume ? 'a' : 'w')
+  if (!resume) { try { fs.writeFileSync(jsonlPath, '') } catch {} }
+  const outputFd = fs.openSync(jsonlPath, 'a')
   const stderrFd = fs.openSync(stderrPath, resume ? 'a' : 'w')
 
   // Touch output file on resume so health checks see fresh mtime
@@ -910,19 +932,28 @@ function ensureWatcher(sid: string) {
 
   let offset = session.offset || 0
   const stderrPath = session.jsonlPath + '.err'
+  // Tailer self-heal state (incident 6c8428ac): a per-tick exception (e.g. EMFILE
+  // on the openSync below) swallowed by the old empty catch froze `offset` forever
+  // while the CLI kept writing — walnut showed idle for a running session. Track
+  // consecutive failures; persistent failure = stalled tailer → log + rebuild.
+  let consecutiveErrors = 0
+  let lastErrorLogTs = 0
+  const STALL_ERRORS_BEFORE_HEAL = 50 // ~5s of 100ms ticks failing back-to-back
+  const HEAL_COOLDOWN_MS = 60_000
 
   const pollTimer = setInterval(() => {
     const s = sessions.get(sid)
     if (!s || s.state !== 'running') return
     try {
       const stat = fs.statSync(s.jsonlPath)
-      if (stat.size <= offset) return
+      if (stat.size <= offset) { consecutiveErrors = 0; return }
 
       const fd = fs.openSync(s.jsonlPath, 'r')
       const bytesToRead = stat.size - offset
       const buf = Buffer.alloc(bytesToRead)
       fs.readSync(fd, buf, 0, bytesToRead, offset)
       fs.closeSync(fd)
+      consecutiveErrors = 0
       const batchStart = offset
       offset = stat.size
       if (s.watcher) s.watcher.offset = offset // expose for catch-up
@@ -1062,7 +1093,44 @@ function ensureWatcher(sid: string) {
           }
         } catch {}
       }
-    } catch {}
+    } catch (err) {
+      // ENOENT is benign: a fresh session's jsonl doesn't exist until the CLI
+      // writes its first line (cold start can take seconds). Not a stall.
+      if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') { consecutiveErrors = 0; return }
+      // NO-SILENT-FAILURES: the old empty catch here is what turned a per-tick
+      // error into a permanently frozen tailer with zero log evidence. Log
+      // (rate-limited — this fires every 100ms while the error persists) and
+      // self-heal after sustained failure.
+      consecutiveErrors++
+      const now = Date.now()
+      if (now - lastErrorLogTs > 10_000) {
+        lastErrorLogTs = now
+        logMsg('error', 'watcher poll tick failed', {
+          sid, consecutiveErrors, offset,
+          err: err instanceof Error ? `${(err as NodeJS.ErrnoException).code ?? ''} ${err.message}` : String(err),
+        })
+      }
+      if (consecutiveErrors >= STALL_ERRORS_BEFORE_HEAL
+        && now - (s.lastWatcherHealAt ?? 0) > HEAL_COOLDOWN_MS) {
+        // Generation guard: only heal if WE are still the session's watcher.
+        // If cmdStart replaced the session (new watcher), this timer is a leak —
+        // kill only ourselves and leave the replacement alone.
+        if (!s.watcher || s.watcher.pollTimer !== pollTimer) {
+          logMsg('warn', 'stalled watcher is orphaned (session replaced) — clearing self', { sid })
+          clearInterval(pollTimer)
+          return
+        }
+        s.lastWatcherHealAt = now
+        logMsg('error', 'watcher stalled — forcing rebuild', { sid, offset, consecutiveErrors })
+        // Persist the frozen offset, tear down, recreate. The rebuilt watcher
+        // resumes from session.offset; if the root cause (e.g. fd exhaustion)
+        // has cleared, tailing continues from where it froze — no bytes lost
+        // (append-only file), and client-side `v` dedup absorbs any overlap.
+        s.offset = offset
+        stopSessionWatcher(sid)
+        ensureWatcher(sid)
+      }
+    }
   }, 100)
 
   session.watcher = { pollTimer, offset }
@@ -1258,6 +1326,15 @@ function cmdSend(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, un
 function cmdSendRaw(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const { sid, raw } = cmd as { sid: string; raw: string }
   const result = core.handleSendRawCommand(sid, raw)
+  if ('error' in result) return sendError(ws, id, result.error)
+  sendOk(ws, id, result as unknown as Record<string, unknown>)
+}
+
+// ── Append turn-start user marker to the stream file ──
+// Logic lives in daemon-core.handleAppendUserMarker. Keep in sync with daemon-source.ts.
+function cmdAppendUserMarker(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const { sid, message, messageId } = cmd as { sid: string; message: string; messageId: string }
+  const result = core.handleAppendUserMarker(sid, message, messageId)
   if ('error' in result) return sendError(ws, id, result.error)
   sendOk(ws, id, result as unknown as Record<string, unknown>)
 }
@@ -2101,6 +2178,10 @@ function cleanupOrphanedProcessGroups() {
 
 // ── Cleanup ──
 function cleanup() {
+  // Close the cloud bridge first — a half-dead daemon must not keep looking
+  // reachable from the phone. bridge.json survives for the successor.
+  try { stopBridge() } catch {}
+
   // Phase C change: preserve running sessions across a graceful daemon
   // restart. The next daemon's reconcileRegistry() will adopt them as
   // orphans via the 1s poll. Previously we killed everything on SIGTERM
@@ -2180,6 +2261,196 @@ function handleDisconnect(ws: ServerWebSocket<WsData>) {
     removedFromSubs,
     sidsWithRemoval,
   })
+}
+
+// ── Cloud bridge: daemon dials OUT to the cloud companion ──
+//
+// The bridge makes this daemon reachable from the cloud box WITHOUT the Mac
+// relaying: phone → cloud → this socket → handleCommand(). The outbound
+// socket is treated as just another authenticated client — inbound frames go
+// through the same dispatch, jsonl fan-out reaches it via addSubscriber, so
+// the command surface stays identical to the SSH-tunneled path.
+//
+// Config arrives via the `bridge.configure` RPC (pushed by the Mac after its
+// capability handshake) and persists to bridge.json so a restarted daemon
+// re-dials on its own — cloud reachability must not depend on the Mac being
+// awake. Keep in sync with daemon-source.ts (CLAUDE.md).
+
+const BRIDGE_FILE = path.join(DAEMON_DIR, 'bridge.json')
+
+interface BridgeConfig { enabled: boolean; url: string; token: string; hostAlias: string }
+
+let bridgeConfig: BridgeConfig | null = null
+let bridgeClient: WebSocket | null = null
+let bridgeAdapter: ServerWebSocket<WsData> | null = null
+let bridgeRedialTimer: ReturnType<typeof setTimeout> | null = null
+let bridgePingTimer: ReturnType<typeof setInterval> | null = null
+let bridgeBackoffMs = 1000
+// Generation guard: every (re)start bumps this; stale socket callbacks and
+// queued redials check it and no-op, so an old dial can't fight a new config.
+let bridgeGeneration = 0
+let bridgeLastInbound = 0
+
+const BRIDGE_BACKOFF_MAX_MS = 60_000
+const BRIDGE_PING_INTERVAL_MS = 30_000
+// 2 missed 30s pings + margin — half-open sockets get torn down and redialed.
+const BRIDGE_SILENCE_MS = 75_000
+
+function loadBridgeConfig(): void {
+  try {
+    const raw = JSON.parse(fs.readFileSync(BRIDGE_FILE, 'utf-8')) as BridgeConfig
+    if (raw && typeof raw.url === 'string' && typeof raw.token === 'string'
+      && typeof raw.hostAlias === 'string') {
+      bridgeConfig = raw
+    }
+  } catch { /* no bridge configured */ }
+}
+
+function cmdBridgeConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const { url, token, hostAlias, enabled } = cmd as {
+    url?: string; token?: string; hostAlias?: string; enabled?: boolean
+  }
+  if (enabled && (typeof url !== 'string' || typeof token !== 'string' || typeof hostAlias !== 'string')) {
+    return sendError(ws, id, 'bridge.configure: url, token, hostAlias required when enabled')
+  }
+  const next: BridgeConfig = {
+    enabled: !!enabled,
+    url: url ?? bridgeConfig?.url ?? '',
+    token: token ?? bridgeConfig?.token ?? '',
+    hostAlias: hostAlias ?? bridgeConfig?.hostAlias ?? '',
+  }
+  const changed = JSON.stringify(next) !== JSON.stringify(bridgeConfig)
+  bridgeConfig = next
+  try {
+    fs.writeFileSync(BRIDGE_FILE, JSON.stringify(next), { mode: 0o600 })
+  } catch (err) {
+    logMsg('error', 'bridge: failed to persist bridge.json', { err: (err as Error).message })
+  }
+  if (changed) startBridge('configure')
+  logMsg('info', 'bridge: configured', { enabled: next.enabled, hostAlias: next.hostAlias, changed })
+  sendOk(ws, id, { applied: true, connected: bridgeAdapter != null })
+}
+
+function stopBridge(): void {
+  bridgeGeneration++
+  if (bridgeRedialTimer) { clearTimeout(bridgeRedialTimer); bridgeRedialTimer = null }
+  if (bridgePingTimer) { clearInterval(bridgePingTimer); bridgePingTimer = null }
+  if (bridgeAdapter) { try { handleDisconnect(bridgeAdapter) } catch {} }
+  if (bridgeClient) { try { bridgeClient.close() } catch {} }
+  bridgeClient = null
+  bridgeAdapter = null
+}
+
+function startBridge(reason: string): void {
+  stopBridge()
+  if (!bridgeConfig?.enabled) return
+  bridgeBackoffMs = 1000
+  logMsg('info', 'bridge: starting', { reason, url: bridgeConfig.url, hostAlias: bridgeConfig.hostAlias })
+  dialBridge(bridgeGeneration)
+}
+
+function scheduleBridgeRedial(gen: number): void {
+  if (gen !== bridgeGeneration || !bridgeConfig?.enabled) return
+  const jitter = 0.75 + Math.random() * 0.5
+  const delay = Math.round(Math.min(bridgeBackoffMs, BRIDGE_BACKOFF_MAX_MS) * jitter)
+  bridgeBackoffMs = Math.min(bridgeBackoffMs * 2, BRIDGE_BACKOFF_MAX_MS)
+  bridgeRedialTimer = setTimeout(() => {
+    bridgeRedialTimer = null
+    dialBridge(gen)
+  }, delay)
+}
+
+// Adapter: presents the outbound client WebSocket as a ServerWebSocket so
+// handleCommand/addSubscriber/safeSend work unchanged. The client socket
+// buffers internally (browser-style API, never returns 0), so returning
+// payload.length keeps safeSend on its fast path — the Bun drain-queue
+// backpressure dance only applies to real ServerWebSockets.
+function makeBridgeAdapter(client: WebSocket): ServerWebSocket<WsData> {
+  const adapter = {
+    data: {} as WsData,
+    get readyState() { return client.readyState },
+    send(payload: string): number {
+      try { client.send(payload); return payload.length } catch { return 0 }
+    },
+    close() { try { client.close() } catch {} },
+  }
+  return adapter as unknown as ServerWebSocket<WsData>
+}
+
+function dialBridge(gen: number): void {
+  if (gen !== bridgeGeneration || !bridgeConfig?.enabled) return
+  const cfg = bridgeConfig
+  let dialUrl: string
+  try {
+    // Token rides a query param: the browser-style WebSocket client (Bun
+    // global + Node 22 global) can't set headers, and the cloud upgrade
+    // handler accepts ?token= already.
+    const u = new URL(cfg.url)
+    u.searchParams.set('token', cfg.token)
+    dialUrl = u.toString()
+  } catch {
+    logMsg('error', 'bridge: invalid url — disabling until reconfigured', { url: cfg.url })
+    return
+  }
+
+  let client: WebSocket
+  try {
+    client = new WebSocket(dialUrl)
+  } catch (err) {
+    logMsg('warn', 'bridge: dial failed', { err: (err as Error).message })
+    scheduleBridgeRedial(gen)
+    return
+  }
+  bridgeClient = client
+
+  client.onopen = () => {
+    if (gen !== bridgeGeneration) { try { client.close() } catch {}; return }
+    bridgeBackoffMs = 1000
+    bridgeLastInbound = Date.now()
+    const adapter = makeBridgeAdapter(client)
+    bridgeAdapter = adapter
+    wsClients.add(adapter)
+    // hello registers this host in the cloud bridge registry (first frame).
+    safeSend(adapter, JSON.stringify({
+      ev: 'hello',
+      hostAlias: cfg.hostAlias,
+      version: DAEMON_VERSION,
+      instanceId: DAEMON_INSTANCE_ID,
+      sids: [...sessions.keys()],
+    }))
+    logMsg('info', 'bridge: connected', { hostAlias: cfg.hostAlias, wsId: wsId(adapter) })
+    bridgePingTimer = setInterval(() => {
+      if (gen !== bridgeGeneration) return
+      if (Date.now() - bridgeLastInbound > BRIDGE_SILENCE_MS) {
+        // Half-open link: the cloud stopped answering. close() triggers
+        // onclose → redial with backoff.
+        logMsg('warn', 'bridge: inbound silence — tearing down', {
+          silentMs: Date.now() - bridgeLastInbound,
+        })
+        try { client.close() } catch {}
+        return
+      }
+      safeSend(adapter, JSON.stringify({ ev: 'bridge-ping', ts: Date.now() }))
+    }, BRIDGE_PING_INTERVAL_MS)
+  }
+
+  client.onmessage = (e: MessageEvent) => {
+    if (gen !== bridgeGeneration || !bridgeAdapter) return
+    bridgeLastInbound = Date.now()
+    const msg = typeof e.data === 'string' ? e.data : Buffer.from(e.data as ArrayBuffer).toString()
+    handleCommand(bridgeAdapter, msg)
+  }
+
+  client.onclose = () => {
+    if (gen !== bridgeGeneration) return
+    if (bridgePingTimer) { clearInterval(bridgePingTimer); bridgePingTimer = null }
+    if (bridgeAdapter) { try { handleDisconnect(bridgeAdapter) } catch {}; bridgeAdapter = null }
+    bridgeClient = null
+    logMsg('info', 'bridge: disconnected — redialing', { nextBackoffMs: bridgeBackoffMs })
+    scheduleBridgeRedial(gen)
+  }
+
+  client.onerror = () => { /* onclose always follows */ }
 }
 
 // ── Main ──
@@ -2305,6 +2576,11 @@ if (action === '--start') {
 
   // Start session idle scanner (every 60s)
   setInterval(scanIdleSessions, SESSION_SCAN_INTERVAL_MS)
+
+  // Cloud bridge self-heal: a persisted bridge.json re-dials without waiting
+  // for the Mac to push bridge.configure again.
+  loadBridgeConfig()
+  startBridge('startup')
 
   // Heartbeat: one JSON line every 30s with daemon vitals. Absence = wedged
   // daemon (event loop blocked, OOM, etc). Cheap to emit, huge diagnostic

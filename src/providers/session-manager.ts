@@ -40,6 +40,12 @@ import type { DaemonTaskState } from './daemon-connection.js'
 export interface OutputEvent {
   /** Raw JSONL line (unparsed — handleStreamLine does the parsing) */
   line: string
+  /** L1 versioned-event position: byte offset at the END of this line in the
+   *  daemon's append-only stream file. Monotonic per session, identical live vs
+   *  replay. Consumers use it as the consumed-offset watermark (a result whose
+   *  v exceeds the persisted watermark was NEVER processed, whatever any boolean
+   *  guard claims — incident 10e7df54). Absent on old daemons. */
+  v?: number
 }
 
 // ── Session History ──

@@ -26,7 +26,7 @@ vi.mock('../../src/agent/model.js', () => ({
 
 import { WALNUT_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
-import { addTask } from '../../src/core/task-manager.js';
+import { addTask, getTask, togglePin, setFocusTier } from '../../src/core/task-manager.js';
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
 
@@ -265,5 +265,44 @@ describe('fork focus prompt + image attachment', () => {
 
     const evt = await getSessionStartEvent(body.taskId);
     expect(evt.model).toBe('opus-1m');
+  });
+
+  it('forks a Focus-pinned source → child lands in Focus, and the reactive GET sees it immediately', async () => {
+    // The user-reported bug: fork of a Focus task rendered in Satellite despite
+    // focus_tier=focus in the DB. Two root causes, both exercised here end-to-end:
+    //   (a) the read cache served the pre-write snapshot to the browser's reactive
+    //       GET /api/focus/tasks (fired on the config:changed the fork emits), so
+    //       the just-pinned fork appeared with no tier → satellite bucket;
+    //   (b) task:created carried the stale addTask() reference (pinned=false).
+    // We assert the SERVER truth (getTask) AND the exact reactive read the browser
+    // makes right after the fork returns.
+    const parent = await addTask({ title: 'Focus Pinned Parent', category: 'Inbox' });
+    await togglePin(parent.task.id);
+    await setFocusTier(parent.task.id, 'focus');
+    const sid = 'fork-focus-tier-src';
+    await createSessionRecord(sid, parent.task.id, 'proj', '/tmp/fork-focus-tier-cwd');
+
+    const res = await fetch(apiUrl(`/api/sessions/${sid}/fork`), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ create_child_task: true, message: 'Fork of a focus task' }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { taskId: string };
+    expect(body.taskId).not.toBe(parent.task.id);
+
+    // (a) The reactive read the browser makes — must show the fork in focus_tasks.
+    const focusRes = await fetch(apiUrl('/api/focus/tasks'));
+    const focusData = await focusRes.json() as {
+      pinned_tasks: string[]; focus_tasks: string[]; satellite_tasks: string[];
+    };
+    expect(focusData.pinned_tasks).toContain(body.taskId);
+    expect(focusData.focus_tasks).toContain(body.taskId);
+    expect(focusData.satellite_tasks).not.toContain(body.taskId);
+
+    // (b) The server-side task carries the inherited tier.
+    const fork = await getTask(body.taskId);
+    expect(fork.pinned).toBe(true);
+    expect(fork.focus_tier).toBe('focus');
   });
 });

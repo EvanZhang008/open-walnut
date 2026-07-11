@@ -469,9 +469,14 @@ function emptyTaskState() {
   return { tasks: {}, resourceVersion: 0, updatedAt: 0, derivedRunning: 0, recentTransitions: [] };
 }
 
+// GATING count: tasks the CLI flagged is_backgrounded are excluded — the CLI's own
+// turn-end does not wait for them (incident 07fffbe5). Mirrors daemon-standalone.ts.
 function runningTaskCount(ts) {
   let n = 0;
-  for (const id in ts.tasks) if (!BG_TERMINAL_STATUSES.has(ts.tasks[id].status)) n++;
+  for (const id in ts.tasks) {
+    if (ts.tasks[id].isBackgrounded) continue;
+    if (!BG_TERMINAL_STATUSES.has(ts.tasks[id].status)) n++;
+  }
   return n;
 }
 
@@ -482,6 +487,7 @@ function applyTaskEvent(ts, parsed, v, now) {
   if (!subtype || !taskId) return false;
   const prev = ts.tasks[taskId];
   let nextStatus;
+  let isBackgrounded = prev ? prev.isBackgrounded === true : false;
   if (subtype === 'task_started') {
     nextStatus = prev && BG_TERMINAL_STATUSES.has(prev.status) ? prev.status : 'running';
   } else if (subtype === 'task_progress') {
@@ -489,6 +495,8 @@ function applyTaskEvent(ts, parsed, v, now) {
   } else if (subtype === 'task_updated') {
     const ps = parsed.patch && parsed.patch.status;
     nextStatus = ps || (prev && prev.status) || 'running';
+    // Sticky: is_backgrounded=true detaches the task from turn-over gating forever.
+    if (parsed.patch && parsed.patch.is_backgrounded === true) isBackgrounded = true;
   } else if (subtype === 'task_notification') {
     nextStatus = parsed.status || (prev && prev.status) || 'running';
   } else {
@@ -496,7 +504,7 @@ function applyTaskEvent(ts, parsed, v, now) {
   }
   const wasTerminal = prev ? BG_TERMINAL_STATUSES.has(prev.status) : false;
   const isTerminal = BG_TERMINAL_STATUSES.has(nextStatus);
-  ts.tasks[taskId] = { status: nextStatus, v, t: now, description: parsed.description || (prev && prev.description) };
+  ts.tasks[taskId] = { status: nextStatus, v, t: now, description: parsed.description || (prev && prev.description), isBackgrounded: isBackgrounded || undefined };
   if (v > ts.resourceVersion) ts.resourceVersion = v;
   ts.updatedAt = now;
   ts.derivedRunning = runningTaskCount(ts);
@@ -827,6 +835,7 @@ function handleCommand(ws, msg) {
     case 'attach': return cmdAttach(ws, id, cmd);
     case 'send': return cmdSend(ws, id, cmd);
     case 'sendRaw': return cmdSendRaw(ws, id, cmd);
+    case 'appendUserMarker': return cmdAppendUserMarker(ws, id, cmd);
     case 'stop': return cmdStop(ws, id, cmd);
     case 'setMode': return cmdSetMode(ws, id, cmd);
     case 'status': return cmdStatus(ws, id, cmd);
@@ -844,6 +853,7 @@ function handleCommand(ws, msg) {
     case 'fs.readRange': return cmdFsReadRange(ws, id, cmd);
     case 'git.diff': return cmdGitDiff(ws, id, cmd);
     case 'list': return cmdList(ws, id);
+    case 'bridge.configure': return cmdBridgeConfigure(ws, id, cmd);
     case 'ping': return sendOk(ws, id, { pong: true });
     case 'hello': return sendOk(ws, id, {
       version: DAEMON_VERSION,
@@ -917,9 +927,12 @@ function cmdStart(ws, id, cmd) {
     return sendError(ws, id, 'mkfifo failed: ' + err.message);
   }
 
-  // Open files
+  // Open files. jsonl fd MUST be O_APPEND ('a') — the daemon also appends
+  // turn-start marker lines (appendUserMarker); a positional 'w' fd would
+  // overwrite them. Fresh spawns truncate explicitly first.
   const pipeFd = fs.openSync(pipePath, fs.constants.O_RDWR);
-  const outputFd = fs.openSync(jsonlPath, resume ? 'a' : 'w');
+  if (!resume) { try { fs.writeFileSync(jsonlPath, ''); } catch {} }
+  const outputFd = fs.openSync(jsonlPath, 'a');
   const stderrFd = fs.openSync(stderrPath, resume ? 'a' : 'w');
 
   // Touch output file on resume so health checks see fresh mtime
@@ -1109,19 +1122,28 @@ function ensureWatcher(sid) {
   if (session.state !== 'running') return;
 
   let offset = session.offset || 0;
+  // Tailer self-heal (incident 6c8428ac): a per-tick exception swallowed by the old
+  // empty catch froze offset forever while the CLI kept writing. Track consecutive
+  // failures; persistent failure = stalled tailer, log + rebuild. Keep in sync with
+  // daemon-standalone.ts.
+  let consecutiveErrors = 0;
+  let lastErrorLogTs = 0;
+  const STALL_ERRORS_BEFORE_HEAL = 50; // ~5s of 100ms ticks failing back-to-back
+  const HEAL_COOLDOWN_MS = 60000;
 
   const pollTimer = setInterval(() => {
     const s = sessions.get(sid);
     if (!s || s.state !== 'running') return; // reapSession will clean up
     try {
       const stat = fs.statSync(s.jsonlPath);
-      if (stat.size <= offset) return;
+      if (stat.size <= offset) { consecutiveErrors = 0; return; }
 
       const fd = fs.openSync(s.jsonlPath, 'r');
       const bytesToRead = stat.size - offset;
       const buf = Buffer.alloc(bytesToRead);
       fs.readSync(fd, buf, 0, bytesToRead, offset);
       fs.closeSync(fd);
+      consecutiveErrors = 0;
       const batchStart = offset;
       offset = stat.size;
       s.watcher.offset = offset; // expose for catch-up
@@ -1193,7 +1215,39 @@ function ensureWatcher(sid) {
           }
         }
       }
-    } catch {}
+    } catch (err) {
+      // ENOENT is benign: a fresh session's jsonl doesn't exist until the CLI
+      // writes its first line (cold start can take seconds). Not a stall.
+      if (err && err.code === 'ENOENT') { consecutiveErrors = 0; return; }
+      // NO-SILENT-FAILURES: the old empty catch turned a per-tick error into a
+      // permanently frozen tailer with zero log evidence. Log (rate-limited) and
+      // self-heal after sustained failure. Keep in sync with daemon-standalone.ts.
+      consecutiveErrors++;
+      const now = Date.now();
+      if (now - lastErrorLogTs > 10000) {
+        lastErrorLogTs = now;
+        logMsg('error', 'watcher poll tick failed', {
+          sid, consecutiveErrors, offset,
+          err: err && err.message ? ((err.code || '') + ' ' + err.message) : String(err),
+        });
+      }
+      if (consecutiveErrors >= STALL_ERRORS_BEFORE_HEAL
+        && now - (s.lastWatcherHealAt || 0) > HEAL_COOLDOWN_MS) {
+        // Generation guard: only heal if WE are still the session's watcher.
+        if (!s.watcher || s.watcher.pollTimer !== pollTimer) {
+          logMsg('warn', 'stalled watcher is orphaned (session replaced) — clearing self', { sid });
+          clearInterval(pollTimer);
+          return;
+        }
+        s.lastWatcherHealAt = now;
+        logMsg('error', 'watcher stalled — forcing rebuild', { sid, offset, consecutiveErrors });
+        // Persist the frozen offset, tear down, recreate. Rebuilt watcher resumes
+        // from session.offset (append-only file, client v-dedup absorbs overlap).
+        s.offset = offset;
+        stopSessionWatcher(sid);
+        ensureWatcher(sid);
+      }
+    }
   }, 100); // 100ms poll interval — low latency, minimal CPU
 
   session.watcher = { pollTimer, offset };
@@ -1440,6 +1494,32 @@ function cmdSendRaw(ws, id, cmd) {
     }
   } catch (err) {
     sendError(ws, id, 'sendRaw failed: ' + err.message);
+  }
+}
+
+// ── Append turn-start user marker to the stream file ──
+// The CLI never echoes stdin user messages to stream-json stdout, so the
+// stream file records turn ENDs (result) but no turn STARTs. This marker is
+// the reconciler's turn anchor. Keep in sync with daemon-core.ts
+// handleAppendUserMarker (daemon-standalone.ts).
+function cmdAppendUserMarker(ws, id, cmd) {
+  const { sid, message, messageId } = cmd;
+  if (!sid || !message || !messageId) return sendError(ws, id, 'appendUserMarker: missing sid, message, or messageId');
+  const session = sessions.get(sid);
+  if (!session) return sendOk(ws, id, { ok: false, reason: 'not_found' });
+  try {
+    const line = JSON.stringify({
+      type: 'user',
+      subtype: 'walnut-injected',
+      message: { role: 'user', content: message },
+      walnutMessageId: messageId,
+      timestamp: new Date().toISOString(),
+    }) + '\\n';
+    fs.appendFileSync(session.jsonlPath, line);
+    const size = fs.statSync(session.jsonlPath).size;
+    sendOk(ws, id, { ok: true, size });
+  } catch (err) {
+    sendError(ws, id, 'appendUserMarker failed: ' + err.message);
   }
 }
 
@@ -2097,6 +2177,211 @@ function sendEvent(ws, ev, data) {
   try { ws.send(JSON.stringify({ ev, ...data })); } catch {}
 }
 
+// ── Cloud bridge: daemon dials OUT to the cloud companion ──
+// Mirror of daemon-standalone.ts (keep in sync — CLAUDE.md). The outbound
+// socket is treated as just another client: inbound frames go through
+// handleCommand, jsonl fan-out reaches it via the session subscriber sets.
+// Config arrives via bridge.configure (pushed by the Mac) and persists to
+// bridge.json so a restarted daemon re-dials without the Mac.
+
+const BRIDGE_FILE = path.join(DAEMON_DIR, 'bridge.json');
+
+let bridgeConfig = null;
+let bridgeClient = null;
+let bridgeAdapter = null;
+let bridgeRedialTimer = null;
+let bridgePingTimer = null;
+let bridgeBackoffMs = 1000;
+let bridgeGeneration = 0;
+let bridgeLastInbound = 0;
+
+const BRIDGE_BACKOFF_MAX_MS = 60000;
+const BRIDGE_PING_INTERVAL_MS = 30000;
+const BRIDGE_SILENCE_MS = 75000;
+
+function getWsClientCtor() {
+  // Node 22+ has a global browser-style WebSocket client; older deploys get
+  // the ws package installed by deploySource(). Either works for dialing out.
+  if (typeof globalThis.WebSocket === 'function') return globalThis.WebSocket;
+  try { return require('ws').WebSocket || require('ws'); } catch {}
+  try { return require('node:ws').WebSocket; } catch {}
+  return null;
+}
+
+function loadBridgeConfig() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(BRIDGE_FILE, 'utf-8'));
+    if (raw && typeof raw.url === 'string' && typeof raw.token === 'string'
+      && typeof raw.hostAlias === 'string') {
+      bridgeConfig = raw;
+    }
+  } catch { /* no bridge configured */ }
+}
+
+function cmdBridgeConfigure(ws, id, cmd) {
+  const url = cmd.url, token = cmd.token, hostAlias = cmd.hostAlias, enabled = cmd.enabled;
+  if (enabled && (typeof url !== 'string' || typeof token !== 'string' || typeof hostAlias !== 'string')) {
+    return sendError(ws, id, 'bridge.configure: url, token, hostAlias required when enabled');
+  }
+  const next = {
+    enabled: !!enabled,
+    url: url != null ? url : (bridgeConfig ? bridgeConfig.url : ''),
+    token: token != null ? token : (bridgeConfig ? bridgeConfig.token : ''),
+    hostAlias: hostAlias != null ? hostAlias : (bridgeConfig ? bridgeConfig.hostAlias : ''),
+  };
+  const changed = JSON.stringify(next) !== JSON.stringify(bridgeConfig);
+  bridgeConfig = next;
+  try {
+    fs.writeFileSync(BRIDGE_FILE, JSON.stringify(next), { mode: 0o600 });
+  } catch (err) {
+    logMsg('error', 'bridge: failed to persist bridge.json', { err: err.message });
+  }
+  if (changed) startBridge('configure');
+  logMsg('info', 'bridge: configured', { enabled: next.enabled, hostAlias: next.hostAlias, changed });
+  sendOk(ws, id, { applied: true, connected: bridgeAdapter != null });
+}
+
+function stopBridge() {
+  bridgeGeneration++;
+  if (bridgeRedialTimer) { clearTimeout(bridgeRedialTimer); bridgeRedialTimer = null; }
+  if (bridgePingTimer) { clearInterval(bridgePingTimer); bridgePingTimer = null; }
+  if (bridgeAdapter) {
+    wsClients.delete(bridgeAdapter);
+    for (const [, session] of sessions) session.subscribers.delete(bridgeAdapter);
+    for (const [key, sub] of agentSubs) {
+      if (sub.ws === bridgeAdapter) {
+        clearInterval(sub.timer);
+        clearInterval(sub.rediscoverTimer);
+        agentSubs.delete(key);
+      }
+    }
+  }
+  if (bridgeClient) { try { bridgeClient.close(); } catch {} }
+  bridgeClient = null;
+  bridgeAdapter = null;
+}
+
+function startBridge(reason) {
+  stopBridge();
+  if (!bridgeConfig || !bridgeConfig.enabled) return;
+  bridgeBackoffMs = 1000;
+  logMsg('info', 'bridge: starting', { reason, url: bridgeConfig.url, hostAlias: bridgeConfig.hostAlias });
+  dialBridge(bridgeGeneration);
+}
+
+function scheduleBridgeRedial(gen) {
+  if (gen !== bridgeGeneration || !bridgeConfig || !bridgeConfig.enabled) return;
+  const jitter = 0.75 + Math.random() * 0.5;
+  const delay = Math.round(Math.min(bridgeBackoffMs, BRIDGE_BACKOFF_MAX_MS) * jitter);
+  bridgeBackoffMs = Math.min(bridgeBackoffMs * 2, BRIDGE_BACKOFF_MAX_MS);
+  bridgeRedialTimer = setTimeout(function() {
+    bridgeRedialTimer = null;
+    dialBridge(gen);
+  }, delay);
+}
+
+// Adapter: presents the outbound client socket with the server-side ws shape
+// (send/readyState/close) so handleCommand + subscriber fan-out work as-is.
+function makeBridgeAdapter(client) {
+  return {
+    get readyState() { return client.readyState; },
+    send(payload) { try { client.send(payload); } catch {} },
+    close() { try { client.close(); } catch {} },
+  };
+}
+
+function dialBridge(gen) {
+  if (gen !== bridgeGeneration || !bridgeConfig || !bridgeConfig.enabled) return;
+  const cfg = bridgeConfig;
+  const WsCtor = getWsClientCtor();
+  if (!WsCtor) {
+    logMsg('error', 'bridge: no WebSocket client available on this runtime');
+    return;
+  }
+  let dialUrl;
+  try {
+    // Token rides a query param — browser-style clients can't set headers,
+    // and the cloud upgrade handler accepts ?token= already.
+    const u = new URL(cfg.url);
+    u.searchParams.set('token', cfg.token);
+    dialUrl = u.toString();
+  } catch {
+    logMsg('error', 'bridge: invalid url — disabling until reconfigured', { url: cfg.url });
+    return;
+  }
+
+  let client;
+  try {
+    client = new WsCtor(dialUrl);
+  } catch (err) {
+    logMsg('warn', 'bridge: dial failed', { err: err.message });
+    scheduleBridgeRedial(gen);
+    return;
+  }
+  bridgeClient = client;
+
+  const onOpen = function() {
+    if (gen !== bridgeGeneration) { try { client.close(); } catch {} return; }
+    bridgeBackoffMs = 1000;
+    bridgeLastInbound = Date.now();
+    const adapter = makeBridgeAdapter(client);
+    bridgeAdapter = adapter;
+    wsClients.add(adapter);
+    adapter.send(JSON.stringify({
+      ev: 'hello',
+      hostAlias: cfg.hostAlias,
+      version: DAEMON_VERSION,
+      instanceId: DAEMON_INSTANCE_ID,
+      sids: [...sessions.keys()],
+    }));
+    logMsg('info', 'bridge: connected', { hostAlias: cfg.hostAlias });
+    bridgePingTimer = setInterval(function() {
+      if (gen !== bridgeGeneration) return;
+      if (Date.now() - bridgeLastInbound > BRIDGE_SILENCE_MS) {
+        logMsg('warn', 'bridge: inbound silence — tearing down', {
+          silentMs: Date.now() - bridgeLastInbound,
+        });
+        try { client.close(); } catch {}
+        return;
+      }
+      adapter.send(JSON.stringify({ ev: 'bridge-ping', ts: Date.now() }));
+    }, BRIDGE_PING_INTERVAL_MS);
+  };
+
+  const onMessage = function(data) {
+    if (gen !== bridgeGeneration || !bridgeAdapter) return;
+    bridgeLastInbound = Date.now();
+    handleCommand(bridgeAdapter, typeof data === 'string' ? data : data.toString());
+  };
+
+  const onClose = function() {
+    if (gen !== bridgeGeneration) return;
+    if (bridgePingTimer) { clearInterval(bridgePingTimer); bridgePingTimer = null; }
+    if (bridgeAdapter) {
+      wsClients.delete(bridgeAdapter);
+      for (const [, session] of sessions) session.subscribers.delete(bridgeAdapter);
+      bridgeAdapter = null;
+    }
+    bridgeClient = null;
+    logMsg('info', 'bridge: disconnected — redialing', { nextBackoffMs: bridgeBackoffMs });
+    scheduleBridgeRedial(gen);
+  };
+
+  // Support both the ws-package EventEmitter API and the browser-style
+  // on* properties (Node 22 global WebSocket).
+  if (typeof client.on === 'function') {
+    client.on('open', onOpen);
+    client.on('message', onMessage);
+    client.on('close', onClose);
+    client.on('error', function() { /* close always follows */ });
+  } else {
+    client.onopen = onOpen;
+    client.onmessage = function(e) { onMessage(e.data); };
+    client.onclose = onClose;
+    client.onerror = function() { /* close always follows */ };
+  }
+}
+
 // ── Session idle scanner ──
 // 5min: long enough for model response delays (up to 120s) and MCP tool execution,
 // short enough to detect stuck sessions promptly.
@@ -2228,6 +2513,10 @@ function cleanupOrphanedProcessGroups() {
 
 // ── Cleanup ──
 function cleanup() {
+  // Close the cloud bridge first — a half-dead daemon must not keep looking
+  // reachable from the phone. bridge.json survives for the successor.
+  try { stopBridge(); } catch {}
+
   // Graceful shutdown: leave session processes running so the next daemon
   // can adopt them (via sessions.json + .pgid files). Only close watchers
   // and agent subs. Flush registry to disk so the successor daemon's
@@ -2388,6 +2677,10 @@ if (action === '--start') {
 
     // Start session idle scanner (every 60s)
     setInterval(scanIdleSessions, SESSION_SCAN_INTERVAL_MS);
+
+    // Cloud bridge self-heal: a persisted bridge.json re-dials without the Mac.
+    loadBridgeConfig();
+    startBridge('startup');
 
     // Heartbeat: 30s vitals log. Absence = wedged daemon.
     setInterval(function() {

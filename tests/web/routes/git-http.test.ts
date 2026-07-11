@@ -51,6 +51,11 @@ async function git(args: string[]): Promise<string> {
       GIT_ASKPASS: 'true', // the /usr/bin/true binary — returns empty creds instead of prompting
       GIT_CONFIG_GLOBAL: '/dev/null',
       GIT_CONFIG_SYSTEM: '/dev/null',
+      // Apple's Xcode git IGNORES GIT_CONFIG_SYSTEM for its bundled gitconfig
+      // (credential.helper=osxkeychain) — with HOME pointed at a tmp dir that
+      // helper pops a macOS "Keychain Not Found" dialog on every auth failure.
+      // Only NOSYSTEM truly suppresses the bundled config.
+      GIT_CONFIG_NOSYSTEM: '1',
       GIT_AUTHOR_NAME: 'walnut-test',
       GIT_AUTHOR_EMAIL: 'walnut-test@localhost',
       GIT_COMMITTER_NAME: 'walnut-test',

@@ -1,0 +1,729 @@
+/**
+ * Unit tests for session-reconcile.ts — foldSessionTail (the pure stream-tail
+ * fold) + reconcileProcessStatus (the authoritative convergence primitive).
+ *
+ * Four incidents share the root cause (see the module header): a lost or
+ * swallowed result event wedged process_status at 'running' — or the task at
+ * IN_PROGRESS — with nothing to pull them back to truth.
+ *
+ * CRITICAL FIXTURE NOTE: the evidence source is the daemon STREAM file
+ * (WALNUT_STREAMS_DIR/<sid>.jsonl), NOT the canonical ~/.claude/projects JSONL.
+ * On real data the canonical file contains ZERO result/session_state/task_*
+ * lines — a v1 of these tests wrote canonical fixtures and passed while the
+ * production code path never fired. Fixtures here go to the stream dir.
+ *
+ * R1 evidence rule under test (all must hold to converge):
+ *   real result after the last real user message  — turn provably ended
+ *   trailing idle after that result               — CLI settled (error results exempt)
+ *   gatingBgCount === 0                           — backgrounded tasks excluded (incident D)
+ *   !teamActive                                   — no team poll loop
+ * Target: error→'error'; alive→'idle'; dead→'stopped'. Task phase: IN_PROGRESS
+ * → AGENT_COMPLETE (AWAIT_HUMAN_ACTION on error); later phases never regressed.
+ */
+
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import fsp from 'node:fs/promises'
+import path from 'node:path'
+import os from 'node:os'
+import { createMockConstants } from '../helpers/mock-constants.js'
+import { mockLocalDaemonReader } from '../helpers/mock-local-daemon-reader.js'
+
+vi.mock('../../src/constants.js', () => createMockConstants())
+vi.mock('../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader())
+
+import { foldSessionTail, reconcileProcessStatus, daemonStreamPath } from '../../src/core/session-reconcile.js'
+import {
+  createSessionRecord,
+  updateSessionRecord,
+  getSessionByClaudeId,
+  _resetSessionTrackerForTesting,
+} from '../../src/core/session-tracker.js'
+import { closeDb } from '../../src/core/session-db.js'
+import { bus, EventNames } from '../../src/core/event-bus.js'
+import type { BusEvent } from '../../src/core/event-bus.js'
+import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js'
+
+const CWD = '/Users/test/reconcile-project'
+
+// ── Stream-file fixture builders (shapes verified against real stream files) ──
+
+function initEvent(sid: string): string {
+  return JSON.stringify({
+    type: 'system', subtype: 'init', session_id: sid,
+    cwd: CWD, model: 'mock-model', tools: [], mcp_servers: [], permissionMode: 'default',
+  })
+}
+function userEvent(sid: string, text = 'hello'): string {
+  return JSON.stringify({
+    type: 'user', session_id: sid,
+    message: { role: 'user', content: [{ type: 'text', text }] },
+  })
+}
+/** Mid-turn tool_result echo — a `user` line that must NOT anchor the fold. */
+function toolResultUserEvent(sid: string): string {
+  return JSON.stringify({
+    type: 'user', session_id: sid,
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_x', content: 'ok' }] },
+  })
+}
+/** Inline subagent turn — a `user` line the Task tool's own conversation
+ *  emits into the SAME main stream file, carrying real text content but
+ *  scoped to `parent_tool_use_id`. Must NOT anchor the fold (it is not the
+ *  main-turn boundary — "inline subagent interleave" class of bug). */
+function subagentUserEvent(sid: string, parentToolUseId: string, text = 'subagent prompt'): string {
+  return JSON.stringify({
+    type: 'user', session_id: sid, parent_tool_use_id: parentToolUseId,
+    message: { role: 'user', content: [{ type: 'text', text }] },
+  })
+}
+function resultEvent(sid: string, isError = false): string {
+  return JSON.stringify({
+    type: 'result', subtype: isError ? 'error_during_execution' : 'success',
+    is_error: isError, duration_ms: 1000, num_turns: 1, result: 'Done',
+    session_id: sid, total_cost_usd: 0.01,
+  })
+}
+function notificationOriginResult(sid: string): string {
+  return JSON.stringify({
+    type: 'result', subtype: 'success', is_error: false, result: 'bg summary',
+    session_id: sid, origin: { kind: 'task-notification' },
+  })
+}
+function stateEvent(sid: string, state: 'running' | 'idle'): string {
+  return JSON.stringify({ type: 'system', subtype: 'session_state_changed', session_id: sid, state })
+}
+function taskStarted(sid: string, taskId: string): string {
+  return JSON.stringify({ type: 'system', subtype: 'task_started', session_id: sid, task_id: taskId, task_type: 'local_bash' })
+}
+function taskBackgrounded(sid: string, taskId: string): string {
+  return JSON.stringify({
+    type: 'system', subtype: 'task_updated', session_id: sid, task_id: taskId,
+    patch: { is_backgrounded: true },
+  })
+}
+function taskDone(sid: string, taskId: string): string {
+  return JSON.stringify({
+    type: 'system', subtype: 'task_notification', session_id: sid, task_id: taskId, status: 'completed',
+  })
+}
+function teamCreate(sid: string): string {
+  return JSON.stringify({
+    type: 'assistant', session_id: sid,
+    message: {
+      id: 'msg_team', role: 'assistant', model: 'mock-model',
+      content: [{ type: 'tool_use', id: 'tu_1', name: 'TeamCreate', input: {} }],
+    },
+  })
+}
+/** Daemon-appended delivery marker (appendUserMarker) — the ONLY trace a
+ *  plain-text FIFO send leaves in the stream file. Must anchor the fold. */
+function walnutInjectedEvent(sid: string, text = 'continue', messageId = 'qm-123-abc'): string {
+  return JSON.stringify({
+    type: 'user', subtype: 'walnut-injected', session_id: sid,
+    message: { role: 'user', content: text },
+    walnutMessageId: messageId, timestamp: new Date().toISOString(),
+  })
+}
+
+let streamsDir: string
+
+async function writeStream(sid: string, lines: string[]): Promise<void> {
+  await fsp.mkdir(streamsDir, { recursive: true })
+  await fsp.writeFile(path.join(streamsDir, `${sid}.jsonl`), lines.join('\n') + '\n')
+}
+
+/** Create a stuck-'running' record whose last_status_change is old enough to
+ *  clear any minAgeMs guard. */
+async function stuckRunningRecord(sid: string, opts: { pid?: number; taskId?: string } = {}) {
+  await createSessionRecord(sid, opts.taskId ?? '', 'proj', CWD, { pid: opts.pid })
+  return updateSessionRecord(sid, {
+    process_status: 'running',
+    last_status_change: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+  })
+}
+
+let tmpDir: string
+let savedStreamsEnv: string | undefined
+
+beforeEach(async () => {
+  tmpDir = WALNUT_HOME
+  // Point daemonStreamPath's __local__ branch at an isolated tmp dir — NEVER
+  // let unit tests read/write the production /tmp/open-walnut-streams.
+  savedStreamsEnv = process.env.WALNUT_STREAMS_DIR
+  streamsDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-reconcile-streams-'))
+  process.env.WALNUT_STREAMS_DIR = streamsDir
+  closeDb()
+  _resetSessionTrackerForTesting()
+  await fsp.rm(tmpDir, { recursive: true, force: true })
+  await fsp.mkdir(tmpDir, { recursive: true })
+  await fsp.mkdir(path.dirname(TASKS_FILE), { recursive: true })
+})
+
+afterEach(async () => {
+  closeDb()
+  _resetSessionTrackerForTesting()
+  await fsp.rm(tmpDir, { recursive: true, force: true })
+  await fsp.rm(streamsDir, { recursive: true, force: true })
+  if (savedStreamsEnv === undefined) delete process.env.WALNUT_STREAMS_DIR
+  else process.env.WALNUT_STREAMS_DIR = savedStreamsEnv
+})
+
+// ── foldSessionTail: the pure fold ──
+
+describe('foldSessionTail — turn-end evidence semantics', () => {
+  const sid = 'fold-sid'
+
+  it('result + trailing idle after the last real user message → turnEnded/agent_complete', () => {
+    const fold = foldSessionTail([
+      initEvent(sid), userEvent(sid), resultEvent(sid), stateEvent(sid, 'idle'),
+    ].join('\n'))
+    expect(fold.foundTurnAnchor).toBe(true)
+    expect(fold.turnEnded).toBe(true)
+    expect(fold.workStatus).toBe('agent_complete')
+  })
+
+  it('result WITHOUT trailing idle → not ended (companion idle must arrive)', () => {
+    const fold = foldSessionTail([initEvent(sid), userEvent(sid), resultEvent(sid)].join('\n'))
+    expect(fold.turnEnded).toBe(false)
+  })
+
+  it('idle BEFORE the result does not count as trailing (ordering matters)', () => {
+    const fold = foldSessionTail([
+      initEvent(sid), userEvent(sid), stateEvent(sid, 'idle'), resultEvent(sid),
+    ].join('\n'))
+    expect(fold.turnEnded).toBe(false)
+  })
+
+  it('error result is terminal WITHOUT an idle (CLI may bail before emitting one)', () => {
+    const fold = foldSessionTail([initEvent(sid), userEvent(sid), resultEvent(sid, true)].join('\n'))
+    expect(fold.turnEnded).toBe(true)
+    expect(fold.workStatus).toBe('error')
+  })
+
+  it('user message AFTER the result re-anchors the fold → no verdict (turn in progress)', () => {
+    const fold = foldSessionTail([
+      initEvent(sid), userEvent(sid), resultEvent(sid), stateEvent(sid, 'idle'),
+      userEvent(sid, 'follow-up'),
+    ].join('\n'))
+    expect(fold.foundTurnAnchor).toBe(true)
+    expect(fold.turnEnded).toBe(false)
+    expect(fold.lastResult).toBe(null)
+  })
+
+  it('tool_result user echoes do NOT re-anchor (mid-turn lines)', () => {
+    const fold = foldSessionTail([
+      initEvent(sid), userEvent(sid),
+      taskStarted(sid, 'bg-A'),
+      toolResultUserEvent(sid), // mid-turn echo AFTER task_started
+      taskDone(sid, 'bg-A'),
+      resultEvent(sid), stateEvent(sid, 'idle'),
+    ].join('\n'))
+    // If the echo anchored, bg-A's start would be outside the window and the
+    // fold would still converge — but the anchor must be the REAL user line.
+    expect(fold.turnEnded).toBe(true)
+    expect(Object.keys(fold.bgTasks)).toContain('bg-A')
+  })
+
+  it('subagent inline user lines do NOT re-anchor (parent_tool_use_id set)', () => {
+    const fold = foldSessionTail([
+      initEvent(sid), userEvent(sid),
+      taskStarted(sid, 'bg-A'), // background work started BEFORE the inline subagent line
+      subagentUserEvent(sid, 'tu_task_1'), // Task-tool subagent's own prompt, inlined mid-turn
+      resultEvent(sid), stateEvent(sid, 'idle'),
+    ].join('\n'))
+    // If the subagent line anchored, bg-A's start would fall outside the fold
+    // window and gatingBgCount would wrongly read 0 — the fold must anchor on
+    // the actual last REAL top-level user line (the one BEFORE bg-A started),
+    // so bg-A stays visible/gating and the turn must NOT be reported ended.
+    expect(fold.foundTurnAnchor).toBe(true)
+    expect(Object.keys(fold.bgTasks)).toContain('bg-A')
+    expect(fold.gatingBgCount).toBe(1)
+    expect(fold.turnEnded).toBe(false)
+  })
+
+  it('running bg task gates the verdict; completing it un-gates', () => {
+    const halfway = foldSessionTail([
+      userEvent(sid), taskStarted(sid, 'bg-A'), resultEvent(sid), stateEvent(sid, 'idle'),
+    ].join('\n'))
+    expect(halfway.gatingBgCount).toBe(1)
+    expect(halfway.turnEnded).toBe(false)
+
+    const drained = foldSessionTail([
+      userEvent(sid), taskStarted(sid, 'bg-A'), resultEvent(sid),
+      taskDone(sid, 'bg-A'), stateEvent(sid, 'idle'),
+    ].join('\n'))
+    expect(drained.gatingBgCount).toBe(0)
+    expect(drained.turnEnded).toBe(true)
+  })
+
+  it('INCIDENT D: is_backgrounded task does NOT gate (CLI turn-end does not wait for it)', () => {
+    const fold = foldSessionTail([
+      userEvent(sid),
+      taskStarted(sid, 'b60h9ag3m'),          // the full-disk grep
+      taskBackgrounded(sid, 'b60h9ag3m'),      // patch: {is_backgrounded: true} — NO terminal event ever
+      resultEvent(sid), stateEvent(sid, 'idle'), // CLI ended the turn anyway
+    ].join('\n'))
+    expect(fold.bgTasks['b60h9ag3m']?.isBackgrounded).toBe(true)
+    expect(fold.gatingBgCount).toBe(0)
+    expect(fold.turnEnded).toBe(true)
+  })
+
+  it('task-notification-origin result is bookkeeping — never turn-over', () => {
+    const fold = foldSessionTail([
+      userEvent(sid), notificationOriginResult(sid), stateEvent(sid, 'idle'),
+    ].join('\n'))
+    expect(fold.lastResult).toBe(null)
+    expect(fold.turnEnded).toBe(false)
+  })
+
+  it('TeamCreate without TeamDelete blocks the verdict', () => {
+    const fold = foldSessionTail([
+      userEvent(sid), teamCreate(sid), resultEvent(sid), stateEvent(sid, 'idle'),
+    ].join('\n'))
+    expect(fold.teamActive).toBe(true)
+    expect(fold.turnEnded).toBe(false)
+  })
+
+  it('no real user line in the window → no anchor, no verdict', () => {
+    const fold = foldSessionTail([initEvent(sid), resultEvent(sid), stateEvent(sid, 'idle')].join('\n'))
+    expect(fold.foundTurnAnchor).toBe(false)
+    expect(fold.turnEnded).toBe(false)
+  })
+
+  it('torn/partial lines are skipped without aborting the fold', () => {
+    const fold = foldSessionTail([
+      '{"type":"user","message":{"content":[{"ty', // torn line
+      userEvent(sid), resultEvent(sid), stateEvent(sid, 'idle'),
+    ].join('\n'))
+    expect(fold.turnEnded).toBe(true)
+  })
+})
+
+// ── reconcileProcessStatus: convergence + refusal ──
+
+describe('reconcileProcessStatus — convergence (incidents B/D shape)', () => {
+  it('running record + stream proves turn ended + dead process → stopped', async () => {
+    const sid = 'conv-dead'
+    await writeStream(sid, [initEvent(sid), userEvent(sid), resultEvent(sid), stateEvent(sid, 'idle')])
+    const record = await stuckRunningRecord(sid)
+
+    const outcome = await reconcileProcessStatus(record, { isAlive: false })
+    expect(outcome).toEqual({ converged: true, from: 'running', to: 'stopped' })
+
+    const after = await getSessionByClaudeId(sid)
+    expect(after?.process_status).toBe('stopped')
+    expect(after?.status_reason).toBe('reconciled_authoritative')
+    expect(after?.status_changed_by).toBe('reconciler')
+    expect(after?.pid == null).toBe(true)
+  })
+
+  it('running record + turn ended + ALIVE process → idle (between-turns FIFO state)', async () => {
+    const sid = 'conv-alive'
+    await writeStream(sid, [initEvent(sid), userEvent(sid), resultEvent(sid), stateEvent(sid, 'idle')])
+    const record = await stuckRunningRecord(sid, { pid: process.pid })
+
+    const outcome = await reconcileProcessStatus(record, { isAlive: true })
+    expect(outcome).toEqual({ converged: true, from: 'running', to: 'idle' })
+    const after = await getSessionByClaudeId(sid)
+    expect(after?.process_status).toBe('idle')
+    // Alive process keeps its PID — the FIFO is still usable for the next turn.
+    expect(after?.pid).toBe(process.pid)
+  })
+
+  it('error result → error, with errorMessage persisted', async () => {
+    const sid = 'conv-error'
+    await writeStream(sid, [initEvent(sid), userEvent(sid), resultEvent(sid, true)])
+    const record = await stuckRunningRecord(sid)
+
+    const outcome = await reconcileProcessStatus(record, { isAlive: false })
+    expect(outcome).toEqual({ converged: true, from: 'running', to: 'error' })
+    const after = await getSessionByClaudeId(sid)
+    expect(after?.process_status).toBe('error')
+    expect(after?.errorMessage).toContain('reconciled')
+  })
+
+  it('INCIDENT D shape: backgrounded bash still running does not block convergence', async () => {
+    const sid = 'conv-backgrounded'
+    await writeStream(sid, [
+      initEvent(sid), userEvent(sid),
+      taskStarted(sid, 'bg-grep'), taskBackgrounded(sid, 'bg-grep'), // never terminal
+      resultEvent(sid), stateEvent(sid, 'idle'),
+    ])
+    const record = await stuckRunningRecord(sid, { pid: process.pid })
+
+    const outcome = await reconcileProcessStatus(record, { isAlive: true })
+    expect(outcome).toEqual({ converged: true, from: 'running', to: 'idle' })
+  })
+
+  it('emits session:status-changed with the converged status', async () => {
+    const sid = 'conv-event'
+    await writeStream(sid, [initEvent(sid), userEvent(sid), resultEvent(sid), stateEvent(sid, 'idle')])
+    const record = await stuckRunningRecord(sid)
+
+    const events: BusEvent[] = []
+    bus.subscribe('test-listener', (e) => {
+      if (e.name === EventNames.SESSION_STATUS_CHANGED) events.push(e)
+    })
+    try {
+      await reconcileProcessStatus(record, { isAlive: false })
+    } finally {
+      bus.unsubscribe('test-listener')
+    }
+    expect(events.length).toBe(1)
+    expect((events[0].data as { process_status: string }).process_status).toBe('stopped')
+  })
+
+  it('is idempotent — second call is a no-op (record no longer has debt)', async () => {
+    const sid = 'conv-idem'
+    await writeStream(sid, [initEvent(sid), userEvent(sid), resultEvent(sid), stateEvent(sid, 'idle')])
+    const record = await stuckRunningRecord(sid)
+
+    const first = await reconcileProcessStatus(record, { isAlive: false })
+    expect(first.converged).toBe(true)
+
+    const fresh = await getSessionByClaudeId(sid)
+    const second = await reconcileProcessStatus(fresh!, { isAlive: false })
+    expect(second).toEqual({ converged: false, reason: 'not-running' })
+  })
+
+  it('accepts pre-fetched evidence (attach path) without re-reading the stream', async () => {
+    const sid = 'conv-prefetched'
+    // NO stream file on disk — proves the evidence input is used as-is.
+    const record = await stuckRunningRecord(sid)
+
+    const fold = foldSessionTail([userEvent(sid), resultEvent(sid), stateEvent(sid, 'idle')].join('\n'))
+    const outcome = await reconcileProcessStatus(record, {
+      evidence: { fold, fileSize: 1 },
+      isAlive: false,
+    })
+    expect(outcome).toEqual({ converged: true, from: 'running', to: 'stopped' })
+  })
+})
+
+describe('reconcileProcessStatus — refusal guards (must NOT converge)', () => {
+  it('no-op when record is settled and no task linked (idle is the normal state)', async () => {
+    const sid = 'guard-idle'
+    await writeStream(sid, [initEvent(sid), userEvent(sid), resultEvent(sid), stateEvent(sid, 'idle')])
+    await createSessionRecord(sid, '', 'proj', CWD)
+    const record = await updateSessionRecord(sid, { process_status: 'idle' })
+
+    const outcome = await reconcileProcessStatus(record, { isAlive: true })
+    expect(outcome).toEqual({ converged: false, reason: 'not-running' })
+  })
+
+  it('no-op when turn is genuinely still in progress (user message after last result)', async () => {
+    const sid = 'guard-live-turn'
+    await writeStream(sid, [
+      initEvent(sid), userEvent(sid), resultEvent(sid), stateEvent(sid, 'idle'),
+      userEvent(sid, 'follow-up'),
+    ])
+    const record = await stuckRunningRecord(sid, { pid: process.pid })
+
+    const outcome = await reconcileProcessStatus(record, { isAlive: true })
+    expect(outcome).toEqual({ converged: false, reason: 'turn-not-terminal' })
+    expect((await getSessionByClaudeId(sid))?.process_status).toBe('running')
+  })
+
+  it('no-op while non-backgrounded background tasks are in flight', async () => {
+    const sid = 'guard-bg'
+    await writeStream(sid, [
+      initEvent(sid), userEvent(sid),
+      taskStarted(sid, 'bg-A'), taskStarted(sid, 'bg-B'),
+      resultEvent(sid),          // "launched in background" result
+      taskDone(sid, 'bg-A'),     // bg-B still running
+      stateEvent(sid, 'idle'),
+    ])
+    const record = await stuckRunningRecord(sid, { pid: process.pid })
+
+    const outcome = await reconcileProcessStatus(record, { isAlive: true })
+    expect(outcome.converged).toBe(false)
+    expect((await getSessionByClaudeId(sid))?.process_status).toBe('running')
+  })
+
+  it('converges once ALL background tasks are terminal', async () => {
+    const sid = 'guard-bg-done'
+    await writeStream(sid, [
+      initEvent(sid), userEvent(sid),
+      taskStarted(sid, 'bg-A'), taskStarted(sid, 'bg-B'),
+      resultEvent(sid),
+      taskDone(sid, 'bg-A'), taskDone(sid, 'bg-B'),
+      stateEvent(sid, 'idle'),
+    ])
+    const record = await stuckRunningRecord(sid)
+
+    const outcome = await reconcileProcessStatus(record, { isAlive: false })
+    expect(outcome).toEqual({ converged: true, from: 'running', to: 'stopped' })
+  })
+
+  it('no-op while team mode is active (fold detection)', async () => {
+    const sid = 'guard-team'
+    await writeStream(sid, [
+      initEvent(sid), userEvent(sid), teamCreate(sid), resultEvent(sid), stateEvent(sid, 'idle'),
+    ])
+    const record = await stuckRunningRecord(sid, { pid: process.pid })
+
+    const outcome = await reconcileProcessStatus(record, { isAlive: true })
+    expect(outcome).toEqual({ converged: false, reason: 'turn-not-terminal' })
+  })
+
+  it('no-op on teamActiveHint even when the tail window itself shows no team', async () => {
+    const sid = 'guard-team-hint'
+    // Team was created in an EARLIER turn — outside this tail window.
+    await writeStream(sid, [initEvent(sid), userEvent(sid), resultEvent(sid), stateEvent(sid, 'idle')])
+    const record = await stuckRunningRecord(sid, { pid: process.pid })
+
+    const outcome = await reconcileProcessStatus(record, { isAlive: true, teamActiveHint: true })
+    expect(outcome).toEqual({ converged: false, reason: 'team-active' })
+  })
+
+  it('no-op when the stream file is missing (no evidence — never guess)', async () => {
+    const sid = 'guard-no-stream'
+    const record = await stuckRunningRecord(sid, { pid: process.pid })
+
+    const outcome = await reconcileProcessStatus(record, { isAlive: true })
+    expect(outcome).toEqual({ converged: false, reason: 'no-stream-file' })
+    expect((await getSessionByClaudeId(sid))?.process_status).toBe('running')
+  })
+
+  it('no-op when the record changed too recently (minAgeMs guard)', async () => {
+    const sid = 'guard-young'
+    await writeStream(sid, [initEvent(sid), userEvent(sid), resultEvent(sid), stateEvent(sid, 'idle')])
+    await createSessionRecord(sid, '', 'proj', CWD)
+    const record = await updateSessionRecord(sid, {
+      process_status: 'running',
+      last_status_change: new Date().toISOString(), // just flipped — likely a fresh send
+    })
+
+    const outcome = await reconcileProcessStatus(record, { isAlive: true, minAgeMs: 3 * 60 * 1000 })
+    expect(outcome).toEqual({ converged: false, reason: 'too-young' })
+  })
+
+  it('no-op on archived records', async () => {
+    const sid = 'guard-archived'
+    await writeStream(sid, [initEvent(sid), userEvent(sid), resultEvent(sid), stateEvent(sid, 'idle')])
+    await createSessionRecord(sid, '', 'proj', CWD)
+    const record = await updateSessionRecord(sid, {
+      process_status: 'running', archived: true,
+      last_status_change: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    })
+
+    const outcome = await reconcileProcessStatus(record, { isAlive: false })
+    expect(outcome).toEqual({ converged: false, reason: 'archived' })
+  })
+
+  it('skips the write when the record changed concurrently (conditional update race)', async () => {
+    const sid = 'guard-race'
+    await writeStream(sid, [initEvent(sid), userEvent(sid), resultEvent(sid), stateEvent(sid, 'idle')])
+    const record = await stuckRunningRecord(sid)
+
+    // Simulate a concurrent writer flipping the record AFTER our snapshot was taken:
+    // the stale snapshot still says 'running', but the DB row has moved on.
+    await updateSessionRecord(sid, { process_status: 'idle' })
+
+    const outcome = await reconcileProcessStatus(record, { isAlive: false })
+    expect(outcome.converged).toBe(false)
+    expect((await getSessionByClaudeId(sid))?.process_status).toBe('idle')
+  })
+})
+
+describe('reconcileProcessStatus — task phase sync (incident C shape)', () => {
+  it('advances a stuck IN_PROGRESS task to AGENT_COMPLETE on record convergence', async () => {
+    const { addTaskFull, getTask } = await import('../../src/core/task-manager.js')
+    const task = await addTaskFull({
+      title: 'stuck task', type: 'task', status: 'in_progress', phase: 'IN_PROGRESS',
+      category: 'Inbox', project: 'proj', source: 'local', created_at: new Date().toISOString(),
+    } as any)
+
+    const sid = 'phase-sync'
+    await writeStream(sid, [initEvent(sid), userEvent(sid), resultEvent(sid), stateEvent(sid, 'idle')])
+    const record = await stuckRunningRecord(sid, { taskId: task.id })
+
+    const outcome = await reconcileProcessStatus(record, { isAlive: false })
+    expect(outcome.converged).toBe(true)
+    expect((await getTask(task.id)).phase).toBe('AGENT_COMPLETE')
+  })
+
+  it('PHASE DEBT: settled record + task stuck IN_PROGRESS → phase synced without touching the record', async () => {
+    const { addTaskFull, getTask } = await import('../../src/core/task-manager.js')
+    const task = await addTaskFull({
+      title: 'incident-C task', type: 'task', status: 'in_progress', phase: 'IN_PROGRESS',
+      category: 'Inbox', project: 'proj', source: 'local', created_at: new Date().toISOString(),
+    } as any)
+
+    const sid = 'phase-debt'
+    await writeStream(sid, [initEvent(sid), userEvent(sid), resultEvent(sid), stateEvent(sid, 'idle')])
+    await createSessionRecord(sid, task.id, 'proj', CWD)
+    const record = await updateSessionRecord(sid, {
+      process_status: 'idle', // record already settled — the incident-C wedge
+      last_status_change: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    })
+
+    const outcome = await reconcileProcessStatus(record, { isAlive: true })
+    expect(outcome.converged).toBe(true)
+    expect((outcome as { phaseSynced?: boolean }).phaseSynced).toBe(true)
+    expect((await getTask(task.id)).phase).toBe('AGENT_COMPLETE')
+    // Record untouched — it was already correct.
+    expect((await getSessionByClaudeId(sid))?.process_status).toBe('idle')
+  })
+
+  it('never regresses a task already past IN_PROGRESS', async () => {
+    const { addTaskFull, getTask } = await import('../../src/core/task-manager.js')
+    const task = await addTaskFull({
+      title: 'already handled', type: 'task', status: 'in_progress', phase: 'AWAIT_HUMAN_ACTION',
+      category: 'Inbox', project: 'proj', source: 'local', created_at: new Date().toISOString(),
+    } as any)
+
+    const sid = 'phase-keep'
+    await writeStream(sid, [initEvent(sid), userEvent(sid), resultEvent(sid), stateEvent(sid, 'idle')])
+    const record = await stuckRunningRecord(sid, { taskId: task.id })
+
+    const outcome = await reconcileProcessStatus(record, { isAlive: false })
+    expect(outcome.converged).toBe(true)
+    expect((await getTask(task.id)).phase).toBe('AWAIT_HUMAN_ACTION')
+  })
+})
+
+// ── Incident inc-1783644415695: stale result adopted as current turn's verdict ──
+// The CLI never echoes stdin user messages, so a turn started by a plain-text
+// FIFO send has NO anchor in the stream file. The fold anchored on a PREVIOUS
+// turn's user line and adopted that turn's error result as the current turn's
+// verdict — converging a working session to a day-old error, 3× in one day.
+
+describe('foldSessionTail — turn-start visibility (incident inc-1783644415695)', () => {
+  const sid = 'anchor-sid'
+
+  it('walnut-injected delivery marker anchors the fold (turn started by plain-text send)', () => {
+    // Previous turn: user → error result. Current turn: marker only, no result yet.
+    const fold = foldSessionTail([
+      userEvent(sid, 'previous turn'), resultEvent(sid, true),
+      walnutInjectedEvent(sid, 'continue'),
+    ].join('\n'))
+    expect(fold.foundTurnAnchor).toBe(true)
+    // Anchored on the marker → the old error is BEFORE the anchor → no verdict.
+    expect(fold.lastResult).toBe(null)
+    expect(fold.turnEnded).toBe(false)
+  })
+
+  it('marker anchor + new result + idle → converges normally (reconciler keeps its job)', () => {
+    const fold = foldSessionTail([
+      userEvent(sid, 'previous turn'), resultEvent(sid, true),
+      walnutInjectedEvent(sid, 'continue'),
+      resultEvent(sid), stateEvent(sid, 'idle'),
+    ].join('\n'))
+    expect(fold.turnEnded).toBe(true)
+    expect(fold.workStatus).toBe('agent_complete')
+  })
+
+  it('INIT after a result invalidates it — a new turn began, the result is stale', () => {
+    // Legacy shape (no marker): old anchor, old error result, then the CLI
+    // started a new turn (init + running) — exactly the incident window.
+    const fold = foldSessionTail([
+      userEvent(sid, 'old turn'), resultEvent(sid, true),
+      stateEvent(sid, 'running'), initEvent(sid),
+    ].join('\n'))
+    expect(fold.foundTurnAnchor).toBe(true)
+    expect(fold.lastResult).toBe(null)
+    expect(fold.turnEnded).toBe(false)
+  })
+
+  it('state:running after a result invalidates it the same way', () => {
+    const fold = foldSessionTail([
+      userEvent(sid, 'old turn'), resultEvent(sid), stateEvent(sid, 'idle'),
+      stateEvent(sid, 'running'),
+    ].join('\n'))
+    expect(fold.lastResult).toBe(null)
+    expect(fold.turnEnded).toBe(false)
+  })
+
+  it('records lastResult.endOffset in the daemon v coordinate when baseOffset given', () => {
+    const lines = [userEvent(sid), resultEvent(sid), stateEvent(sid, 'idle')]
+    const content = lines.join('\n')
+    const base = 1000
+    const fold = foldSessionTail(content, base)
+    // endOffset = base + bytes of user line + \n + result line + \n
+    const expected = base
+      + Buffer.byteLength(lines[0], 'utf8') + 1
+      + Buffer.byteLength(lines[1], 'utf8') + 1
+    expect(fold.lastResult?.endOffset).toBe(expected)
+    expect(fold.turnEnded).toBe(true)
+  })
+})
+
+describe('reconcileProcessStatus — stale-evidence vetoes (incident inc-1783644415695)', () => {
+  it('INCIDENT REPLAY: old error + new init + no new result → turn-not-terminal, record stays running', async () => {
+    const sid = 'inc-stale-error'
+    await writeStream(sid, [
+      initEvent(sid), userEvent(sid, 'yesterday'),
+      resultEvent(sid, true),           // 23:51 — previous turn's real error
+      stateEvent(sid, 'idle'),
+      stateEvent(sid, 'running'),        // 00:12 — new turn (send not echoed)
+      initEvent(sid),
+      // ... turn still working, silent > 3min — reconciler tick fires here
+    ])
+    const record = await stuckRunningRecord(sid, { pid: process.pid })
+
+    const outcome = await reconcileProcessStatus(record, { isAlive: true })
+    expect(outcome).toEqual({ converged: false, reason: 'turn-not-terminal' })
+    expect((await getSessionByClaudeId(sid))?.process_status).toBe('running')
+  })
+
+  it('POSITIONAL VETO: result at/below consumedOffset → result-already-consumed', async () => {
+    const sid = 'inc-consumed'
+    // Marker-less legacy shape AND no init after the error (tailer never saw
+    // the new turn start) — only the positional watermark can save us here.
+    const lines = [initEvent(sid), userEvent(sid, 'yesterday'), resultEvent(sid, true)]
+    await writeStream(sid, lines)
+    const fileSize = lines.join('\n').length + 1
+    await createSessionRecord(sid, '', 'proj', CWD, { pid: process.pid })
+    const record = await updateSessionRecord(sid, {
+      process_status: 'running',
+      last_status_change: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      consumedOffset: fileSize, // live path already consumed everything incl. the error
+    })
+
+    const outcome = await reconcileProcessStatus(record, { isAlive: true })
+    expect(outcome).toEqual({ converged: false, reason: 'result-already-consumed' })
+    expect((await getSessionByClaudeId(sid))?.process_status).toBe('running')
+  })
+
+  it('positional veto does NOT block a genuinely unconsumed result (reconciler keeps its job)', async () => {
+    const sid = 'inc-unconsumed'
+    const lines = [initEvent(sid), userEvent(sid), resultEvent(sid), stateEvent(sid, 'idle')]
+    await writeStream(sid, lines)
+    await createSessionRecord(sid, '', 'proj', CWD)
+    const record = await updateSessionRecord(sid, {
+      process_status: 'running',
+      last_status_change: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      consumedOffset: 10, // watermark far below the result — the result was LOST, not consumed
+    })
+
+    const outcome = await reconcileProcessStatus(record, { isAlive: false })
+    expect(outcome).toEqual({ converged: true, from: 'running', to: 'stopped' })
+  })
+
+  it('error verdict with ALIVE process keeps the pid (no cold-resume split-brain)', async () => {
+    const sid = 'inc-keep-pid'
+    await writeStream(sid, [
+      initEvent(sid), walnutInjectedEvent(sid, 'go'), resultEvent(sid, true),
+    ])
+    const record = await stuckRunningRecord(sid, { pid: process.pid })
+
+    const outcome = await reconcileProcessStatus(record, { isAlive: true })
+    expect(outcome).toEqual({ converged: true, from: 'running', to: 'error' })
+    // NOTE: the tracker's terminal-state clear (applyUpdateToSession) still
+    // clears pid on 'error' records — this asserts reconcile itself no longer
+    // FORCES the clear. If the tracker policy changes, the pid survives.
+    const after = await getSessionByClaudeId(sid)
+    expect(after?.process_status).toBe('error')
+  })
+})
+
+describe('daemonStreamPath', () => {
+  it('remote host → fixed production path', () => {
+    expect(daemonStreamPath('sid-1', 'clouddev')).toBe('/tmp/open-walnut-streams/sid-1.jsonl')
+  })
+  it('local → honors WALNUT_STREAMS_DIR isolation', () => {
+    expect(daemonStreamPath('sid-1', null)).toBe(path.join(streamsDir, 'sid-1.jsonl'))
+    expect(daemonStreamPath('sid-1', '__local__')).toBe(path.join(streamsDir, 'sid-1.jsonl'))
+  })
+})

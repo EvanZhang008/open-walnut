@@ -65,7 +65,7 @@ export class RemoteSessionManager implements SessionManager {
   private _lastSeenV = -1
   private _imageCache = new Map<string, string>()
   private unsubscribeEvent: (() => void) | null = null
-  private _onOutput: ((event: { line: string }) => void) | null = null
+  private _onOutput: ((event: { line: string; v?: number }) => void) | null = null
   private _onExit: ((code: number, stderr?: string) => void) | null = null
   private _sid: string | null = null
   /**
@@ -565,11 +565,31 @@ export class RemoteSessionManager implements SessionManager {
     }
   }
 
-  writeSyntheticUserEvent(_message: string, _walnutMessageId: string): void {
-    // No-op for remote sessions.
-    // Synthetic user events were only written to the local mirror file for chat history replay.
-    // With no local mirror, the session-chat.ts real-time stream already handles display.
-    // The canonical JSONL on the remote host is the source of truth for history.
+  writeSyntheticUserEvent(message: string, walnutMessageId: string): void {
+    // Turn-start marker: ask the daemon to append a walnut-injected user line
+    // to the session's stream file at the delivery point. The CLI never echoes
+    // stdin user messages to stream-json stdout, so without this the stream
+    // file has turn ENDs (result) but no turn STARTs — the reconciler's
+    // backward anchor scan then lands on a PREVIOUS turn and adopts its stale
+    // result as the current turn's verdict (incident inc-1783644415695).
+    // Fire-and-forget: a failure (old daemon without the RPC, transient
+    // disconnect) only degrades reconcile precision — the fold's positional
+    // and init-invalidation rules still guard against a stale-result verdict.
+    if (!this.conn?.connected || !this._sid) return
+    this.conn.send('appendUserMarker', { sid: this._sid, message, messageId: walnutMessageId })
+      .then((result) => {
+        if (result?.ok !== true) {
+          log.session.debug('appendUserMarker declined', {
+            host: this.hostKey, sid: this._sid, reason: (result as { reason?: string })?.reason,
+          })
+        }
+      })
+      .catch((err) => {
+        log.session.debug('appendUserMarker failed (non-fatal)', {
+          host: this.hostKey, sid: this._sid,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      })
   }
 
   async setMode(mode: string): Promise<boolean> {
@@ -946,8 +966,9 @@ export class RemoteSessionManager implements SessionManager {
             // will log and skip; we don't second-guess it.
           }
 
-          // Forward to handler
-          this._onOutput?.({ line: event.line })
+          // Forward to handler, carrying the L1 byte-offset version when the
+          // daemon stamped one (consumers use it as the consumed watermark).
+          this._onOutput?.({ line: event.line, v: typeof event.v === 'number' ? event.v : undefined })
         }
         break
 

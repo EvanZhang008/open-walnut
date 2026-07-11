@@ -15,10 +15,15 @@
  * `sessions/transcripts/<sid>.json`. The primary is the machine that can
  * reach every session's JSONL — local ones on disk, remote ones over its
  * SSH channel — so the export IS the "proxy through the primary",
- * materialized as files instead of a live connection. STEERING a session
- * (sending messages) still requires the reverse-WS bridge (Phase 2); every
- * live path routes through the primary because corp remote hosts are only
- * reachable from there, and one relay = one audited path.
+ * materialized as files instead of a live connection.
+ *
+ * STEERING a session (Phase 2, live): each host's daemon dials OUT to the
+ * cloud companion (`/bridge`, see src/web/ws/bridge-registry.ts), so
+ * sends/streams flow phone → cloud → daemon directly and keep working while
+ * the primary sleeps. The primary remains the sole owner of session
+ * LIFECYCLE (spawn / resume / reap / daemon deploys, and it pushes the
+ * bridge config) — the bridge is a data plane, not a second controller.
+ * These file exports stay the fallback for hosts without a live bridge.
  *
  * Scope: all live sessions (running/idle/error) + sessions stopped within
  * STOPPED_RETENTION_DAYS. Environment sessions (triage/cron/hook/embedded
