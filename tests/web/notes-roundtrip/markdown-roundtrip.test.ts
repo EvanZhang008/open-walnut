@@ -113,7 +113,7 @@ describe('round-trip: ![[embeds]]', () => {
   it('legacy Notion/-rooted path stays byte-clean (resolution is backend-side)', () =>
     expectByteClean('![[Notion/Areas/Travel/_attachment/Untitled.png]]'));
   it('pdf embed with spaces in the name', () =>
-    expectByteClean('![[I-94 Travel History Chen Zhong 2026-03-14.pdf]]'));
+    expectByteClean('![[Quarterly Report Draft 2026-03-14.pdf]]'));
   it('two embeds on ONE line each survive', () =>
     expectByteClean('![[a.png]] ![[b.png]]'));
   it('embed sits in a paragraph between text', () =>

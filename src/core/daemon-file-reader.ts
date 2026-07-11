@@ -39,7 +39,7 @@ export class DaemonFileReader implements SessionFileReader {
   }
 
   /** Above this size, whole-file fs.read is unsafe over the tunnel — one giant
-   *  WS frame gets killed by corp SSH proxies (WSSH) mid-transfer, showing up
+   *  WS frame gets killed by some corporate SSH proxies mid-transfer, showing up
    *  only as a pong gap + read timeout (inc-1783532915925: 11.4MB JSONL never
    *  loaded). Chunk instead. Remote-only; the in-process local daemon has no
    *  proxy in the path. */
