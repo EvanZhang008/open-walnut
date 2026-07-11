@@ -8944,6 +8944,52 @@ img[data-lightbox-src],
   cursor: grabbing;
 }
 
+/* Floating stacked preview while dragging a WHOLE GROUP (chip grip). Names the
+   group + up to 3 members so the cursor always carries a visible payload. */
+.todo-pinned-group-drag-preview {
+  background: var(--bg);
+  box-shadow: 0 6px 18px rgba(0,0,0,0.22);
+  border: 1px solid var(--accent, #007aff);
+  border-radius: 8px;
+  padding: 6px 8px;
+  min-width: 180px;
+  max-width: 280px;
+  font-size: 12px;
+  opacity: 0.95;
+  cursor: grabbing;
+}
+.todo-pinned-group-drag-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
+  color: var(--accent, #007aff);
+  margin-bottom: 4px;
+}
+.todo-pinned-group-drag-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.todo-pinned-group-drag-count {
+  margin-left: auto;
+  font-size: 11px;
+  opacity: 0.7;
+  font-weight: 500;
+}
+.todo-pinned-group-drag-row {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 2px 1px 16px;
+  color: var(--text, #333);
+}
+.todo-pinned-group-drag-more {
+  padding: 1px 2px 1px 16px;
+  font-size: 11px;
+  opacity: 0.6;
+}
+
 /* ── Focus / Satellite sub-group styles (inside unified PINNED section) ── */
 
 .todo-pinned-subgroup {
