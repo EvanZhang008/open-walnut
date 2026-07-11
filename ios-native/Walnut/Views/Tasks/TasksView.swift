@@ -158,13 +158,22 @@ struct TasksView: View {
     }
     @State private var sessionScope: SessionScope = .pinned
 
-    /// Pinned = ONE row per pinned task (its latest session). Pin state is
-    /// inherited from the owning task, so a pinned task drags every old
-    /// stopped session along with pinned=true — deduping by task keeps this
-    /// scope the size of the desktop's pinned list, not 150+ ghosts.
+    /// Pinned = ONE row per CURRENTLY pinned open task (its latest session).
+    /// The session projection's own `pinned` flag is too broad — done tasks
+    /// keep their pin bit, so 160+ sessions carry pinned=true while the
+    /// desktop's Pinned list holds ~44 open tasks. Cross-reference the TASKS
+    /// projection (fresh pin + status) instead; fall back to the session flag
+    /// only when the tasks list hasn't loaded.
     private var pinnedScopeSessions: [WalnutSession] {
+        let pinnedOpenTaskIds = Set(
+            tasks.tasks.filter { $0.pinned == true && $0.statusKind != .done }.map(\.id)
+        )
         var latest: [String: WalnutSession] = [:]
-        for s in tasks.sessions where s.isPinned {
+        for s in tasks.sessions {
+            let isPinnedNow = pinnedOpenTaskIds.isEmpty
+                ? s.isPinned
+                : (s.taskId.map { pinnedOpenTaskIds.contains($0) } ?? false)
+            guard isPinnedNow else { continue }
             let key = s.taskId ?? s.id
             if let current = latest[key], WalnutSession.recencySort(current, s) { continue }
             latest[key] = s
@@ -217,11 +226,24 @@ struct TasksView: View {
                     .listRowBackground(Color.clear)
             }
         } else {
+            // Count in the HEADER: instant feedback that the scope switch did
+            // something — the top rows of all three scopes can be identical
+            // (recent sessions are usually pinned), so a bottom footer read
+            // as "the buttons do nothing".
             Section {
                 ForEach(scopedSessions) { session in sessionRow(session) }
-            } footer: {
-                Text("\(scopedSessions.count) sessions")
+            } header: {
+                Text(scopeHeader)
             }
+            .id(sessionScope) // force a fresh section render per scope
+        }
+    }
+
+    private var scopeHeader: String {
+        switch sessionScope {
+        case .pinned: return "\(scopedSessions.count) pinned — one per task"
+        case .recent: return "Last \(scopedSessions.count) by activity"
+        case .all: return "All \(scopedSessions.count) sessions"
         }
     }
 
