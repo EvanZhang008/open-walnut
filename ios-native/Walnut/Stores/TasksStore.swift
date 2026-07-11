@@ -130,7 +130,7 @@ final class TasksStore {
         switch filter {
         case .today: return todayTasks.count
         case .inProgress: return inProgressTasks.count
-        case .sessions: return activeSessions.count
+        case .sessions: return sessions.count
         case .allOpen: return openTasks.count
         case .done: return doneTasks.count
         }
@@ -145,7 +145,9 @@ final class TasksStore {
 
 /// The Reminders-style smart lists (+ the Sessions tab).
 enum TaskFilter: String, CaseIterable, Identifiable {
-    case today, inProgress, sessions, allOpen, done
+    // Declaration order IS the card order: Sessions leads — live agent work
+    // is the primary daily surface, task lists follow.
+    case sessions, today, inProgress, allOpen, done
     var id: String { rawValue }
 
     var title: String {

@@ -101,15 +101,36 @@ final class SessionConversationStore {
 
     /// Rebuild history from the transcript and drop optimistic bubbles that the
     /// transcript now contains (matched by user text — robust to reordering).
+    ///
+    /// MERGE, don't replace: the two sources cover different windows. The
+    /// exported file tail = last ~100 rows of the FULL history; the bridge
+    /// fresh read = last 512KB of raw jsonl, which can decode to far fewer
+    /// visible rows (heavy tool output) or even zero. Adopting a shorter
+    /// fresh result wholesale ERASED already-rendered history (blank page).
+    /// Keep existing rows older than the incoming window, append the rest.
     private func reconcile(_ transcript: SessionTranscript) {
-        historyMessages = transcript.messages.enumerated().map { offset, m in
+        let incoming = transcript.messages.map { m in
             ChatMessage(
-                id: "t-\(offset)",
+                id: "", // positional ids assigned after the merge (must be unique across it)
                 role: m.role,
                 text: m.text,
                 createdAt: m.timestamp,
                 kind: Self.mapKind(m.kind)
             )
+        }
+        let merged: [ChatMessage]
+        if incoming.isEmpty && !historyMessages.isEmpty {
+            merged = historyMessages // a zero-row tail never beats shown content
+        } else if let firstIncoming = transcript.messages.first?.timestamp,
+                  historyMessages.count > incoming.count {
+            // ISO-8601 strings compare lexicographically. Rows strictly before
+            // the incoming window survive; the window itself is authoritative.
+            merged = historyMessages.filter { $0.createdAt < firstIncoming } + incoming
+        } else {
+            merged = incoming
+        }
+        historyMessages = merged.enumerated().map { i, m in
+            ChatMessage(id: "t-\(i)", role: m.role, text: m.text, createdAt: m.createdAt, kind: m.kind)
         }
         let seen = Set(transcript.messages.filter { $0.role == "user" }.map(\.text))
         pendingUser.removeAll { seen.contains($0.text) }

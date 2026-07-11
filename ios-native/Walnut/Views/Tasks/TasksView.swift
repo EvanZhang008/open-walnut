@@ -8,7 +8,7 @@ struct TasksView: View {
     @Environment(ConnectionStore.self) private var connection
     @Environment(TasksStore.self) private var tasks
 
-    @State private var activeFilter: TaskFilter = .today
+    @State private var activeFilter: TaskFilter = .sessions
     @State private var selected: WalnutTask?
 
     var body: some View {
@@ -108,8 +108,16 @@ struct TasksView: View {
         }
         .listStyle(.insetGrouped)
         .accessibilityIdentifier("tasks.list")
-        .refreshable { await tasks.loadTasks() }
-        .task { await tasks.loadTasks() }
+        .refreshable {
+            async let t: Void = tasks.loadTasks()
+            async let se: Void = tasks.loadSessions()
+            _ = await (t, se)
+        }
+        .task {
+            async let t: Void = tasks.loadTasks()
+            async let se: Void = tasks.loadSessions()
+            _ = await (t, se)
+        }
         .animation(.snappy(duration: 0.25), value: activeFilter)
     }
 
@@ -142,19 +150,53 @@ struct TasksView: View {
 
     // MARK: - Sessions tab
 
-    /// PINNED on top, then ACTIVE (live process), then RECENT (stopped) —
-    /// mirrors the desktop Task panel's session tab structure. Pin state is
-    /// inherited from the owning task, so MANY old stopped sessions carry
-    /// pinned=true; the Pinned section only surfaces the ones still alive,
-    /// everything dead sorts into Recent by recency.
+    /// Sub-scope within the Sessions filter — mirrors the desktop panel's
+    /// Pinned / Recent split plus an everything view.
+    enum SessionScope: String, CaseIterable, Identifiable {
+        case pinned = "Pinned", recent = "Recent", all = "All"
+        var id: String { rawValue }
+    }
+    @State private var sessionScope: SessionScope = .pinned
+
+    /// Pinned = ONE row per pinned task (its latest session). Pin state is
+    /// inherited from the owning task, so a pinned task drags every old
+    /// stopped session along with pinned=true — deduping by task keeps this
+    /// scope the size of the desktop's pinned list, not 150+ ghosts.
+    private var pinnedScopeSessions: [WalnutSession] {
+        var latest: [String: WalnutSession] = [:]
+        for s in tasks.sessions where s.isPinned {
+            let key = s.taskId ?? s.id
+            if let current = latest[key], WalnutSession.recencySort(current, s) { continue }
+            latest[key] = s
+        }
+        return latest.values.sorted { a, b in
+            if a.statusKind.isAlive != b.statusKind.isAlive { return a.statusKind.isAlive }
+            return WalnutSession.recencySort(a, b)
+        }
+    }
+
+    private var scopedSessions: [WalnutSession] {
+        switch sessionScope {
+        case .pinned: return pinnedScopeSessions
+        case .recent: return Array(tasks.sessions.sorted(by: WalnutSession.recencySort).prefix(50))
+        case .all: return tasks.sessions.sorted(by: WalnutSession.recencySort)
+        }
+    }
+
     @ViewBuilder
     private var sessionSections: some View {
-        let pinned = tasks.pinnedSessions.filter { $0.statusKind.isAlive }
-        let pinnedIds = Set(pinned.map(\.id))
-        let active = tasks.activeSessions.filter { !pinnedIds.contains($0.id) }
-        let recent = tasks.sessions
-            .filter { !$0.statusKind.isAlive }
-            .sorted(by: WalnutSession.recencySort)
+        Section {
+            Picker("Scope", selection: $sessionScope) {
+                ForEach(SessionScope.allCases) { scope in
+                    Text(scope.rawValue).tag(scope)
+                }
+            }
+            .pickerStyle(.segmented)
+            .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 4, trailing: 12))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .accessibilityIdentifier("sessions.scope")
+        }
 
         if tasks.sessionsNotSyncedYet && tasks.sessions.isEmpty {
             Section {
@@ -165,7 +207,7 @@ struct TasksView: View {
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
             }
-        } else if pinned.isEmpty && active.isEmpty && recent.isEmpty {
+        } else if scopedSessions.isEmpty {
             Section {
                 Text(emptyText)
                     .foregroundStyle(.secondary)
@@ -175,20 +217,10 @@ struct TasksView: View {
                     .listRowBackground(Color.clear)
             }
         } else {
-            if !pinned.isEmpty {
-                Section("Pinned") {
-                    ForEach(pinned) { session in sessionRow(session) }
-                }
-            }
-            if !active.isEmpty {
-                Section("Active") {
-                    ForEach(active) { session in sessionRow(session) }
-                }
-            }
-            if !recent.isEmpty {
-                Section("Recent") {
-                    ForEach(recent) { session in sessionRow(session) }
-                }
+            Section {
+                ForEach(scopedSessions) { session in sessionRow(session) }
+            } footer: {
+                Text("\(scopedSessions.count) sessions")
             }
         }
     }

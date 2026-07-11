@@ -1,10 +1,20 @@
 import SwiftUI
 
 /// Read-only task detail — title, status/phase chips, category/project,
-/// priority, dates, and summary. Presented as a medium/large sheet.
+/// priority, dates, summary, and the task's sessions (tap → conversation).
+/// Presented as a medium/large sheet.
 struct TaskDetailSheet: View {
     let task: WalnutTask
     @Environment(\.dismiss) private var dismiss
+    @Environment(TasksStore.self) private var tasks
+
+    /// Every task can be (or spawn) a session — surface them here so the
+    /// conversation is one tap from the task, newest first.
+    private var taskSessions: [WalnutSession] {
+        tasks.sessions
+            .filter { $0.taskId == task.id }
+            .sorted(by: WalnutSession.recencySort)
+    }
 
     var body: some View {
         NavigationStack {
@@ -13,6 +23,9 @@ struct TaskDetailSheet: View {
                     header
                     chips
                     metadata
+                    if !taskSessions.isEmpty {
+                        sessionsBlock
+                    }
                     if let summary = task.summary, !summary.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Summary")
@@ -32,6 +45,36 @@ struct TaskDetailSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
+                }
+            }
+            // Conversations push inside the sheet's own stack.
+            .navigationDestination(for: WalnutSession.self) { session in
+                SessionConversationView(session: session)
+            }
+        }
+    }
+
+    private var sessionsBlock: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Sessions")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+            VStack(spacing: 0) {
+                ForEach(taskSessions.prefix(5)) { session in
+                    NavigationLink(value: session) {
+                        HStack {
+                            SessionRowView(session: session)
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(.vertical, 8)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    if session.id != taskSessions.prefix(5).last?.id {
+                        Divider()
+                    }
                 }
             }
         }

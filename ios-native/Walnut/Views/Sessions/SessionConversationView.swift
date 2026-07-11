@@ -87,11 +87,16 @@ struct SessionConversationView: View {
     private var messageList: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 10) {
-                if !store.loadedOnce && store.messages.isEmpty && !store.transcriptMissing {
-                    loadingState
-                }
-                if store.transcriptMissing && store.messages.isEmpty {
-                    emptyState
+                if store.messages.isEmpty && !store.streaming {
+                    // Loading until the first transcript answer; empty state
+                    // for BOTH "no tail exported" (404) and "tail exists but
+                    // has zero renderable rows" — otherwise a 200-with-empty
+                    // transcript painted a fully blank page.
+                    if store.loadedOnce || store.transcriptMissing {
+                        emptyState
+                    } else {
+                        loadingState
+                    }
                 }
                 ForEach(store.messages) { message in
                     MessageRow(message: message)
