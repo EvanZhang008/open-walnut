@@ -21,12 +21,6 @@ interface UseSessionHistoryReturn {
   stale: string | null;
   /** Index in messages[] where the fork boundary is (source messages end, forked messages start) */
   forkBoundaryIndex?: number;
-  /** The most recent turn's delta (messages appended by the last refetch). Consumers
-   *  use it as evidence to promote (remove) the matching streaming blocks — deletion
-   *  is proven, never blind. Monotonic token `deltaSeq` lets consumers react to each
-   *  new delta even when its contents repeat. */
-  lastDelta: SessionHistoryMessage[];
-  deltaSeq: number;
 }
 
 /** Diagnostic: count user text messages and check if they're interleaved or bunched */
@@ -75,8 +69,6 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
   // from `error` (which blanks the view when there's nothing to show).
   const [stale, setStale] = useState<string | null>(null);
   const [forkBoundaryIndex, setForkBoundaryIndex] = useState<number | undefined>(undefined);
-  const [lastDelta, setLastDelta] = useState<SessionHistoryMessage[]>([]);
-  const [deltaSeq, setDeltaSeq] = useState(0);
 
   // Cursor = combined-message count the client has synced to. Advances on every
   // successful full/delta fetch; reset on session switch. Held in a ref so a
@@ -154,8 +146,6 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                       forkBoundaryIndex: full.forkBoundaryIndex,
                       msgCount: full.cursor ?? full.messages.length,
                     });
-                    setLastDelta(full.messages);
-                    setDeltaSeq((s) => s + 1);
                   })
                   .catch(() => { /* keep current view; next turn retries */ });
                 return;
@@ -169,9 +159,6 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
             }
             // Advance cursor even on an empty delta (nothing new yet — archive lagging).
             cursorRef.current = result.cursor ?? cursorRef.current;
-            // Publish the delta (possibly empty) as promotion evidence for the consumer.
-            setLastDelta(result.messages);
-            setDeltaSeq((s) => s + 1);
           } else {
             // Server rebuilt (since out of range) → full replace.
             diagnoseOrdering('refetch-full', sid, result.messages);
@@ -183,8 +170,6 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
               forkBoundaryIndex: result.forkBoundaryIndex,
               msgCount: result.cursor ?? result.messages.length,
             });
-            setLastDelta(result.messages);
-            setDeltaSeq((s) => s + 1);
           }
         })
         .catch((e: Error) => {
@@ -350,5 +335,5 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     return () => { cancelled = true; controller.abort(); clearInterval(timer); };
   }, [sessionId, stale, enabled]);
 
-  return { messages, loading, phase2Pending, error, stale, forkBoundaryIndex, lastDelta, deltaSeq };
+  return { messages, loading, phase2Pending, error, stale, forkBoundaryIndex };
 }

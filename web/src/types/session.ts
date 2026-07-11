@@ -86,6 +86,11 @@ export interface SessionHistoryTool {
   planContent?: string;
   /** agentId linking to subagent JSONL */
   agentId?: string;
+  /** True when a <task-notification> proved this background Agent/Task run
+   *  stopped — promote-blocks clears its subagent-lane streaming blocks on
+   *  this flag (their transcript lives in a separate subagents/ JSONL, so
+   *  twin-matching is structurally impossible). */
+  bgTaskFinished?: boolean;
   /** Team name (for Claude Code Teams Agent tools) */
   teamName?: string;
   /** Team agent name (for Claude Code Teams Agent tools) */

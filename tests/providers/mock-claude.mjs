@@ -122,6 +122,18 @@ if (slowMatch) {
   effectiveMessage = slowMatch[2];
 }
 
+// Parse "chunk-delay:<ms>" prefix — inserts a real delay BETWEEN content_block_delta
+// emissions (currently wired into stream-partial-thinking-then-text only), so
+// browser tests can observe partial text mid-turn (the default burst is
+// synchronous and races any DOM poll). Composable after slow:, e.g.
+// "chunk-delay:250 stream-partial-thinking-then-text".
+let chunkDelayMs = 0;
+const chunkDelayMatch = effectiveMessage.match(/^chunk-delay:(\d+)\s+(.*)/);
+if (chunkDelayMatch) {
+  chunkDelayMs = parseInt(chunkDelayMatch[1], 10);
+  effectiveMessage = chunkDelayMatch[2];
+}
+
 // Build result text
 const permPart = permissionMode ? ` [permission-mode:${permissionMode}]` : '';
 const cwdPart = ` [cwd:${process.cwd()}]`;
@@ -296,41 +308,51 @@ if (outputFormat === 'stream-json') {
         //   assistant: content only carries the text block
         // This used to cause text duplication because the dedup trackingKey
         // didn't match between paths. Regression test for that bug.
-        emitStream(wrap({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }));
-        for (const t of ['Hmm ', 'let me ', 'think']) {
-          emitStream(wrap({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: t } }));
-        }
-        emitStream(wrap({ type: 'content_block_stop', index: 0 }));
+        // With a chunk-delay: prefix the deltas are spaced out (async IIFE) so
+        // browser tests can observe partial text mid-turn; the event SEQUENCE
+        // is identical either way.
+        (async () => {
+          const pause = () => chunkDelayMs > 0
+            ? new Promise((r) => setTimeout(r, chunkDelayMs))
+            : Promise.resolve();
+          emitStream(wrap({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }));
+          for (const t of ['Hmm ', 'let me ', 'think']) {
+            emitStream(wrap({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: t } }));
+            await pause();
+          }
+          emitStream(wrap({ type: 'content_block_stop', index: 0 }));
 
-        emitStream(wrap({ type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } }));
-        for (const chunk of ['Hel', 'lo,', ' wor', 'ld', '!']) {
-          emitStream(wrap({ type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: chunk } }));
-        }
-        emitStream(wrap({ type: 'content_block_stop', index: 1 }));
+          emitStream(wrap({ type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } }));
+          for (const chunk of ['Hel', 'lo,', ' wor', 'ld', '!']) {
+            emitStream(wrap({ type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: chunk } }));
+            await pause();
+          }
+          emitStream(wrap({ type: 'content_block_stop', index: 1 }));
 
-        // Final assistant carries ONLY the text (not thinking) — Claude Code
-        // strips thinking from the persisted message. This is where dedup
-        // was breaking: blockIdx=0 in the loop, but stream used index=1.
-        emitStream({
-          type: 'assistant',
-          message: {
-            id: msgId, role: 'assistant', model: 'mock-model',
-            content: [{ type: 'text', text: 'Hello, world!' }],
-            stop_reason: 'end_turn',
+          // Final assistant carries ONLY the text (not thinking) — Claude Code
+          // strips thinking from the persisted message. This is where dedup
+          // was breaking: blockIdx=0 in the loop, but stream used index=1.
+          emitStream({
+            type: 'assistant',
+            message: {
+              id: msgId, role: 'assistant', model: 'mock-model',
+              content: [{ type: 'text', text: 'Hello, world!' }],
+              stop_reason: 'end_turn',
+              usage: { input_tokens: 10, output_tokens: 5 },
+            },
+            session_id: outputSessionId,
+          });
+
+          emitStream(wrap({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 5 } }));
+          emitStream(wrap({ type: 'message_stop' }));
+          const resultEvent = {
+            type: 'result', subtype: 'success', is_error: false,
+            duration_ms: 50, num_turns: 1, result: 'Hello, world!',
+            session_id: outputSessionId, total_cost_usd: 0.001,
             usage: { input_tokens: 10, output_tokens: 5 },
-          },
-          session_id: outputSessionId,
-        });
-
-        emitStream(wrap({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 5 } }));
-        emitStream(wrap({ type: 'message_stop' }));
-        const resultEvent = {
-          type: 'result', subtype: 'success', is_error: false,
-          duration_ms: 50, num_turns: 1, result: 'Hello, world!',
-          session_id: outputSessionId, total_cost_usd: 0.001,
-          usage: { input_tokens: 10, output_tokens: 5 },
-        };
-        process.stdout.write(JSON.stringify(resultEvent) + '\n', () => process.exit(0));
+          };
+          process.stdout.write(JSON.stringify(resultEvent) + '\n', () => process.exit(0));
+        })();
         return;
       }
 
@@ -518,6 +540,48 @@ if (outputFormat === 'stream-json') {
       setTimeout(() => {
         emitWf({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
       }, 450);
+      return;
+    }
+
+    // 2a.9. "backgrounded-test" — reproduce incident 07fffbe5: a turn spawns a
+    //        local_bash task, the CLI detaches it via task_updated{is_backgrounded:true}
+    //        and then ends the turn (result + idle) WITHOUT ever emitting a terminal
+    //        event for that task. The turn must complete anyway: gating turn-over on
+    //        the backgrounded task held a finished turn "Running" for the task's full
+    //        lifetime (a 16-min backgrounded grep in production). Unlike workflow-test,
+    //        this scenario deliberately NEVER drains 'bg-detached'.
+    if (effectiveMessage === 'backgrounded-test') {
+      function emitBg(line) { process.stdout.write(JSON.stringify(line) + '\n'); }
+      const sid = outputSessionId;
+
+      emitBg({
+        type: 'assistant',
+        message: {
+          id: 'msg_bg_main', type: 'message', role: 'assistant', model: 'mock-model',
+          content: [{ type: 'text', text: 'Started a detached background command' }],
+          stop_reason: 'end_turn', usage: { input_tokens: 100, output_tokens: 20 },
+        },
+        session_id: sid,
+      });
+      // The bash task opens like any background task…
+      emitBg({
+        type: 'system', subtype: 'task_started', session_id: sid, task_id: 'bg-detached',
+        task_type: 'local_bash', description: 'long-running grep (backgrounded)',
+      });
+      setTimeout(() => {
+        // …then the CLI detaches it from the turn. NO terminal event will EVER follow
+        // for 'bg-detached' — the CLI's own turn-end does not wait for it.
+        emitBg({ type: 'system', subtype: 'task_updated', session_id: sid, task_id: 'bg-detached', patch: { is_backgrounded: true } });
+      }, 150);
+      setTimeout(() => {
+        // The turn's real result — must complete despite the live backgrounded task.
+        emitBg({ type: 'result', subtype: 'success', is_error: false, duration_ms: 200, num_turns: 1, result: 'Command backgrounded; moving on', session_id: sid, total_cost_usd: 0.002, usage: { input_tokens: 100, output_tokens: 20 } });
+      }, 300);
+      setTimeout(() => {
+        emitBg({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
+      }, 450);
+      // Do NOT exit (stream-json FIFO mode stays alive between turns) and do NOT
+      // drain 'bg-detached' — that non-terminal task is the whole point.
       return;
     }
 

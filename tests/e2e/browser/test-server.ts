@@ -505,13 +505,33 @@ try {
 // Now import server (it reads WALNUT_HOME from constants.ts which checks env var)
 const { startServer, stopServer } = await import('../../../src/web/server.js')
 
+// Wire local sessions through a MockDaemon spawning the mock Claude CLI, so
+// real-pipeline specs can create LIVE sessions (session:start RPC → mock CLI →
+// real WS stream events → real JSONL history). Additive: existing route-mocked
+// specs never start sessions, so this wiring is inert for them.
+// PW_NO_MOCK_DAEMON=1 disables the wiring entirely — a bisect lever: re-running
+// a failing suite with it proves whether failures come from this daemon wiring
+// or exist on HEAD (used to attribute the 2026-07 full-suite failures to a
+// parallel sidebar redesign, not this server change).
+const WIRE_MOCK_DAEMON = process.env.PW_NO_MOCK_DAEMON !== '1'
+const { createMockDaemon } = await import('../../helpers/mock-daemon.js')
+const { sessionRunner } = await import('../../../src/providers/claude-code-session.js')
+const mockDaemon = WIRE_MOCK_DAEMON ? await createMockDaemon() : null
+if (mockDaemon) {
+  const MOCK_CLI = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../providers/mock-claude.mjs')
+  sessionRunner.setCliCommand(MOCK_CLI)
+  sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${mockDaemon.port}`)
+}
+
 // Start server in production mode (serves static SPA files)
 await startServer({ port: 3457, dev: false })
 console.log('Playwright test server ready on http://localhost:3457')
 
 // Graceful shutdown
 const shutdown = async () => {
+  sessionRunner.setTestDaemonUrl(undefined)
   await stopServer()
+  if (mockDaemon) await mockDaemon.stop().catch(() => {})
   await fs.rm(tmpBase, { recursive: true, force: true }).catch(() => {})
   process.exit(0)
 }

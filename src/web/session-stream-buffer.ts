@@ -20,6 +20,13 @@ export interface StreamingTextBlock {
    *  by id instead of content. ACP-dialect: a CHANGE in msgId = a new message
    *  (and therefore a new block). Optional: absent for legacy events. */
   msgId?: string
+  /** Non-null when this text belongs to an inline subagent (Agent/Task) —
+   *  rendered inside the parent's task group, never as main-conversation text. */
+  parentToolUseId?: string
+  /** Subagent identity (inline-subagent lines) — labels an ORPHAN task group
+   *  when the parent Agent tool_call is gone (background agent after turn end). */
+  subagentType?: string
+  taskDescription?: string
 }
 
 export interface StreamingToolCallBlock {
@@ -32,6 +39,9 @@ export interface StreamingToolCallBlock {
   planContent?: string
   /** Non-null when this tool call belongs to a subagent Task */
   parentToolUseId?: string
+  /** See StreamingTextBlock.subagentType/taskDescription. */
+  subagentType?: string
+  taskDescription?: string
 }
 
 export interface StreamingSystemBlock {
@@ -55,6 +65,8 @@ export interface StreamingThinkingBlock {
   content: string
   /** See StreamingTextBlock.msgId. */
   msgId?: string
+  /** See StreamingTextBlock.parentToolUseId. */
+  parentToolUseId?: string
 }
 
 export type StreamingBlock = StreamingTextBlock | StreamingToolCallBlock | StreamingSystemBlock | StreamingPermissionBlock | StreamingThinkingBlock
@@ -134,7 +146,21 @@ class SessionStreamBuffer {
     entry.turnEnded = false
   }
 
-  appendTextDelta(sessionId: string, delta: string, msgId?: string): void {
+  /** Last non-subagent block, or undefined. The CLI interleaves inline-subagent
+   *  lines (parent_tool_use_id set) into the MIDDLE of the main turn's token
+   *  stream; merging main-lane deltas into "the last block" would split main
+   *  text at every subagent line (the mid-token markdown-corruption bug). Main
+   *  lane must anchor to the last MAIN-lane block instead. */
+  private lastMainLaneBlock(blocks: StreamingBlock[]): StreamingBlock | undefined {
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      const b = blocks[i]
+      if ((b.type === 'text' || b.type === 'thinking' || b.type === 'tool_call') && b.parentToolUseId) continue
+      return b
+    }
+    return undefined
+  }
+
+  appendTextDelta(sessionId: string, delta: string, msgId?: string, parentToolUseId?: string, subagentType?: string, taskDescription?: string): void {
     const entry = this.getOrCreate(sessionId)
     // ⚠️  DO NOT add `this.streaming.add(sessionId)` here. This is "Root Cause 5"
     // of the stuck-Streaming-badge bug: JSONL replay / late events re-populated the
@@ -143,33 +169,66 @@ class SessionStreamBuffer {
     // subscribe backstop, daemon recovery) all fought the symptom — the architectural
     // fix is to keep data events out of the streaming flag entirely. The flag is
     // driven exclusively by lifecycle events via markStreaming/markDone.
+
+    if (parentToolUseId) {
+      // Subagent lane. Deliberately NO resetIfTurnEnded: a background subagent
+      // keeps producing after the MAIN turn's result (or after a re-send to it) —
+      // its late lines must not wipe the finished turn's blocks (that orphans
+      // the children by deleting their parent Agent tool_call). Only MAIN-lane
+      // data starts a new turn.
+      this.touch(entry)
+      // Merge into the same lane+message block; never touches the main-lane
+      // accumulator, so interleaved subagent lines can't split main text.
+      for (let i = entry.blocks.length - 1; i >= 0; i--) {
+        const b = entry.blocks[i]
+        if (b.type === 'text' && b.parentToolUseId === parentToolUseId) {
+          if (!msgId || !b.msgId || b.msgId === msgId) {
+            b.content += delta
+            if (msgId && !b.msgId) b.msgId = msgId
+            return
+          }
+          break // same lane, different message → new block
+        }
+        if (b.type === 'tool_call' && b.parentToolUseId === parentToolUseId) break // lane's text flow interrupted
+      }
+      entry.blocks.push({
+        type: 'text', content: delta, ...(msgId ? { msgId } : {}), parentToolUseId,
+        ...(subagentType ? { subagentType } : {}), ...(taskDescription ? { taskDescription } : {}),
+      })
+      return
+    }
+
     this.resetIfTurnEnded(entry, sessionId)
     this.touch(entry)
 
-    const last = entry.blocks[entry.blocks.length - 1]
+    const anchor = this.lastMainLaneBlock(entry.blocks)
     // ACP message boundary: a CHANGE in msgId means a new assistant message —
     // start a new block so stream blocks match history messages 1:1 instead of
     // gluing consecutive messages' text into one block. When either side lacks
     // an id (legacy events), fall back to the historical "last block is text"
     // accumulation.
-    const sameMessage = last && last.type === 'text' && (!msgId || !last.msgId || last.msgId === msgId)
+    const sameMessage = anchor && anchor.type === 'text' && (!msgId || !anchor.msgId || anchor.msgId === msgId)
     if (sameMessage) {
       entry.textAccumulator += delta
-      last.content = entry.textAccumulator
-      if (msgId && !last.msgId) last.msgId = msgId
+      anchor.content = entry.textAccumulator
+      if (msgId && !anchor.msgId) anchor.msgId = msgId
     } else {
       entry.textAccumulator = delta
       entry.blocks.push({ type: 'text', content: delta, ...(msgId ? { msgId } : {}) })
     }
   }
 
-  appendToolUse(sessionId: string, toolUseId: string, name: string, input?: Record<string, unknown>, planContent?: string, parentToolUseId?: string): void {
+  appendToolUse(sessionId: string, toolUseId: string, name: string, input?: Record<string, unknown>, planContent?: string, parentToolUseId?: string, subagentType?: string, taskDescription?: string): void {
     const entry = this.getOrCreate(sessionId)
     // ⚠️  DO NOT add `this.streaming.add(sessionId)` here — see appendTextDelta
     // for the Root Cause 5 explanation. Data events must never flip the lifecycle flag.
-    this.resetIfTurnEnded(entry, sessionId)
-    // Tool call interrupts text flow — reset text accumulator
-    entry.textAccumulator = ''
+    // Subagent tool calls (parentToolUseId set) live in their own lane: they must
+    // NOT cut the main turn's text mid-token, and (background agents) must NOT
+    // start a new turn — see the subagent-lane note in appendTextDelta.
+    if (!parentToolUseId) {
+      this.resetIfTurnEnded(entry, sessionId)
+      entry.textAccumulator = ''
+    }
     this.touch(entry)
     // DUP-DEBUG: detect if the same toolUseId is appended twice — that means
     // two SESSION_TOOL_USE events reached the buffer for the same logical
@@ -182,7 +241,13 @@ class SessionStreamBuffer {
         blocksTotal: entry.blocks.length,
       })
     }
-    entry.blocks.push({ type: 'tool_call', toolUseId, name, input, status: 'calling', ...(planContent ? { planContent } : {}), ...(parentToolUseId ? { parentToolUseId } : {}) })
+    entry.blocks.push({
+      type: 'tool_call', toolUseId, name, input, status: 'calling',
+      ...(planContent ? { planContent } : {}),
+      ...(parentToolUseId ? { parentToolUseId } : {}),
+      ...(subagentType ? { subagentType } : {}),
+      ...(taskDescription ? { taskDescription } : {}),
+    })
   }
 
   appendToolResult(sessionId: string, toolUseId: string, result: string): void {
@@ -234,17 +299,40 @@ class SessionStreamBuffer {
   }
 
   /** Accumulate thinking text deltas (model's reasoning, gated behind thinking mode). */
-  appendThinkingDelta(sessionId: string, delta: string, msgId?: string): void {
+  appendThinkingDelta(sessionId: string, delta: string, msgId?: string, parentToolUseId?: string): void {
     const entry = this.getOrCreate(sessionId)
+
+    if (parentToolUseId) {
+      // Subagent lane — same isolation rule as appendTextDelta (incl. NO
+      // resetIfTurnEnded: late background-subagent lines must not wipe the
+      // finished turn's blocks).
+      this.touch(entry)
+      for (let i = entry.blocks.length - 1; i >= 0; i--) {
+        const b = entry.blocks[i]
+        if (b.type === 'thinking' && b.parentToolUseId === parentToolUseId) {
+          if (!msgId || !b.msgId || b.msgId === msgId) {
+            b.content += delta
+            if (msgId && !b.msgId) b.msgId = msgId
+            return
+          }
+          break
+        }
+        if ((b.type === 'text' || b.type === 'tool_call') && b.parentToolUseId === parentToolUseId) break
+      }
+      entry.blocks.push({ type: 'thinking', content: delta, ...(msgId ? { msgId } : {}), parentToolUseId })
+      return
+    }
+
     this.resetIfTurnEnded(entry, sessionId)
     this.touch(entry)
-    const last = entry.blocks[entry.blocks.length - 1]
+
+    const anchor = this.lastMainLaneBlock(entry.blocks)
     // Same ACP message-boundary rule as appendTextDelta.
-    const sameMessage = last && last.type === 'thinking' && (!msgId || !last.msgId || last.msgId === msgId)
+    const sameMessage = anchor && anchor.type === 'thinking' && (!msgId || !anchor.msgId || anchor.msgId === msgId)
     if (sameMessage) {
       entry.thinkingAccumulator += delta
-      last.content = entry.thinkingAccumulator
-      if (msgId && !last.msgId) last.msgId = msgId
+      anchor.content = entry.thinkingAccumulator
+      if (msgId && !anchor.msgId) anchor.msgId = msgId
     } else {
       entry.thinkingAccumulator = delta
       entry.blocks.push({ type: 'thinking', content: delta, ...(msgId ? { msgId } : {}) })

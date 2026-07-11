@@ -6,6 +6,7 @@ import { useLightbox } from '@/hooks/useLightbox';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { SessionMessage, PlanCard, CollapsedPlanWrite, GenericToolCall } from './SessionMessage';
 import { dedupeOptimisticMessages } from './optimistic-dedup';
+import { computeRenderFilter, allBlocksAbsorbed, buildHistoryEvidence } from '@/stream/render-filter';
 import { TeamCard } from './TeamCard';
 import { WorkflowProgress } from './WorkflowProgress';
 import { LoadingSpinner } from '../common/LoadingSpinner';
@@ -18,7 +19,7 @@ import { log } from '@/utils/log';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * SESSION CHAT — OPTIMISTIC MESSAGE LIFECYCLE & DEDUP
+ * SESSION CHAT — SINGLE TIMELINE (non-destructive absorption)
  * ═══════════════════════════════════════════════════════════════════════════════
  *
  * ## Two data sources displayed together
@@ -27,109 +28,55 @@ import { log } from '@/utils/log';
  *    Server reads the Claude Code JSONL output file and parses it into messages.
  *    This is the source of truth after a turn completes.
  *
- * 2. **Optimistic messages** (`optimisticMessages`): Client-side state managed by
+ * 2. **Streaming blocks** (`blocks` from useSessionStream): what the user watched
+ *    generate live. APPEND-ONLY — turn boundaries never delete blocks.
+ *
+ * 3. **Optimistic messages** (`optimisticMessages`): Client-side state managed by
  *    `useSessionSend`. Shown immediately when the user sends a message, before
  *    the JSONL contains it.
  *
+ * ## The absorption model (replaces destructive reconciliation)
+ *
+ * A streaming block renders only while the persisted history has NOT absorbed it.
+ * Every render, `computeRenderFilter` (stream/render-filter.ts) proves which
+ * blocks already have a persisted twin (msgId/toolUseId id-first; content
+ * multiset within the turn watermark window; finished-background-lane proof)
+ * and those are hidden. History arriving late means a block briefly renders
+ * TWICE (next to its twin) and collapses when evidence lands — it can never
+ * vanish. This is idempotent and order-insensitive, which kills the old
+ * machinery this file used to need: awaitingRefresh, pendingBatchTotal/Ids,
+ * the 5s fallback timer, clearCompletedAndShift, prevMsgLen freezing,
+ * blockIndexMap anchor shifting. (consumedQueueIds survives — it is the
+ * optimistic-BUBBLE sticky-consumption set, a different mechanism.)
+ *
+ * Once ALL blocks are hidden and no turn is live, `resetIfAbsorbed` physically
+ * drops the array (pure memory reclamation — zero visual difference).
+ *
+ * ## Turn watermark
+ *
+ * Content matching (for id-less blocks and optimistic-bubble text fallback)
+ * only trusts messages[watermark..] — the history length when the current turn
+ * started streaming (isStreaming false→true). Identical short texts recur
+ * across turns; the watermark prevents claiming an old twin for a new block.
+ * On shrink (/compact rewrote history) the slice clamps to empty and content
+ * matching pauses; id matching is scope-safe and unaffected.
+ *
  * ## Optimistic message status lifecycle
  *
- *   pending → received → delivered → (removed by handleBatchCompleted)
+ *   pending → received → delivered → (absorbed: hidden by dedup filter, then
+ *   removed by handleBatchCompleted / onBatchCompleted GC)
  *
- *   - **pending**: User hit send. Message exists only in React state. Grey styling.
- *   - **received**: Server acknowledged the WS RPC. queueId updated to real messageId.
- *     Shows "Queued" badge with Edit/Delete actions.
- *   - **delivered**: Server wrote to FIFO or spawned --resume. Message is in Claude's
- *     stdin. Shows "Delivered" badge.
- *   - **removed**: When the turn completes (session:batch-completed), the first N
- *     optimistic messages are removed outright (count-based). The re-fetched
- *     persisted history already contains them.
- *
- * ## How Claude Code JSONL records user messages
- *
- * Claude Code CLI writes a JSONL file (one JSON object per line). There are two
- * ways user messages appear in JSONL:
- *
- * **Pattern A — FIFO delivery during a running turn (mid-stream messages):**
- *   The server writes to a named FIFO pipe that Claude CLI reads as stdin.
- *   Claude CLI logs queue-operation entries:
- *     { type: "queue-operation", operation: "enqueue", content: "hi", timestamp: "..." }
- *     { type: "queue-operation", operation: "dequeue", timestamp: "..." }
- *   Then a normal `{ type: "human_turn_start", message: { role: "user", content: "hi" } }`
- *   appears. The session-history parser (server-side) matches enqueue→dequeue pairs
- *   (Pattern A) and uses the normal user message that follows, skipping the enqueue.
- *
- *   IMPORTANT: Mid-stream FIFO messages may NOT produce a user entry in JSONL if:
- *   - The CLI finishes its turn before reading the FIFO
- *   - The FIFO write succeeds but Claude doesn't process it in the current turn
- *   In these cases, the enqueue has no matching dequeue → Pattern B.
- *
- * **Pattern B — Enqueue without dequeue (message consumed between turns):**
- *   The message was enqueued to the FIFO but the turn ended before Claude processed it.
- *   The JSONL has: { type: "queue-operation", operation: "enqueue", content: "hi" }
- *   with NO matching dequeue. The session-history parser synthesizes a user message
- *   from the enqueue entry at its chronological position.
- *
- * **Pattern C — --resume delivery (message sent while no process was running):**
- *   Server spawns `claude --resume <id> -p "message"`. Claude CLI logs a normal
- *   `{ type: "human_turn_start", message: { role: "user", content: "..." } }`.
- *   These always appear in JSONL.
- *
- * ## The dedup problem and solution
- *
- * When a turn completes, we re-fetch persisted history and need to remove optimistic
- * messages that now exist in the persisted data (to avoid showing them twice).
- *
- * **The bug (fixed):** Original dedup checked optimistic message text against the
- * last 10 user texts from ALL persisted history. If the user had previously sent "hi"
- * in an earlier turn, and then sent "hi" again mid-stream, the new "hi" was
- * incorrectly matched against the OLD "hi" and removed from the timeline.
- *
- * **The fix:** Window-based dedup — only scan NEWLY APPEARED persisted messages
- * (messages[prevMsgLen..length]) when matching optimistic messages. This prevents
- * false matches against old history. `prevMsgLen` tracks the persisted message
- * count from the previous render, updated in useLayoutEffect.
- *
- * Count-based (multiset) matching: if the user sends "hi" twice and JSONL
- * contains one "hi", only one optimistic "hi" is removed.
- *
- * ## Turn boundary sequence (useLayoutEffect)
- *
- * When session:batch-completed fires → setHistoryVersion(+1) → history re-fetched:
- *
- * Render 1 (messages grow):
- *   useLayoutEffect fires → clearCompleted() — TURN-AWARE: drops only blocks
- *   before the last session:result boundary. Blocks of a next turn that started
- *   streaming during the (possibly multi-second) history refetch survive, and
- *   blockIndexMap anchors are shifted down by the removed count. (A full clear()
- *   here caused the "previous messages vanish while a new one is generating,
- *   then flash back" bug.)
- *   prevMsgLen NOT updated here (stays at old value).
- *
- * Render 2 (batched state updates from Render 1):
- *   blocks=[]. Dedup runs: optimistic messages matched against new persisted
- *   messages only (prevMsgLen still old → correct window).
- *   prevMsgLen updated in the else branch (no awaitingRefresh).
- *
- * ## prevMsgLen update timing (critical)
- *
- * prevMsgLen is intentionally NOT updated in the batch-completed path of useLayoutEffect.
- * The batch completion triggers re-renders (from clear()). Those re-renders must
- * still see prevMsgLen = old value so the dedup scan window covers the newly
- * appeared messages.
- *
- * ## handleBatchCompleted (useSessionSend)
- *
- * Removes exactly the batch's optimistic messages (id-first via messageIds,
- * count fallback) — see optimistic-dedup.ts.
+ * User messages appear in JSONL via Pattern A (FIFO enqueue→dequeue + user
+ * line), Pattern B (enqueue only, synthesized), or Pattern C (--resume spawn) —
+ * see src/core/session-history.ts. The echo-claim binding (walnutMessageId)
+ * gives id-exact dedup; text-window matching is the fallback
+ * (optimistic-dedup.ts, scanning messages[watermark..]).
  *
  * ## Unified timeline (buildTimeline)
  *
- * All optimistic messages participate in the timeline via
- * blockIndexMap — a Map<queueId, number> where the value is blocks.length at the
- * time the message was created. This preserves the message's visual position
- * relative to streaming blocks (interleaving). blockIndexMap is set once per
- * message and cleared on turn boundary.
- *
+ * Optimistic messages interleave with streaming blocks via blockIndexMap — a
+ * Map<queueId, blocks.length at send>. Blocks being append-only makes these
+ * anchors STABLE (no shifting on partial deletion, which no longer exists).
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
@@ -361,10 +308,15 @@ const StreamingBlockView = memo(function StreamingBlockView({ block, sessionId, 
   );
 });
 
-/** A streaming Task group — collapsible container for child blocks during live streaming */
+/** A streaming Task group — collapsible container for child blocks during live streaming.
+ *  `taskBlock` is absent for an ORPHAN group: a background subagent kept producing
+ *  after its parent Agent tool_call left the streaming buffer (turn ended / re-send).
+ *  Orphan identity comes from the children's subagentType/taskDescription instead. */
 interface StreamingTaskGroupProps {
-  taskBlock: StreamingBlock & { type: 'tool_call' };
+  taskBlock?: StreamingBlock & { type: 'tool_call' };
   childBlocks: StreamingBlock[];
+  orphanSubagentType?: string;
+  orphanTaskDescription?: string;
   sessionId: string;
   sessionCwd?: string;
   sessionHost?: string;
@@ -373,16 +325,20 @@ interface StreamingTaskGroupProps {
   onFileOpen?: (path: string, line?: number) => void;
 }
 
-function StreamingTaskGroup({ taskBlock, childBlocks, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: StreamingTaskGroupProps) {
+function StreamingTaskGroup({ taskBlock, childBlocks, orphanSubagentType, orphanTaskDescription, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: StreamingTaskGroupProps) {
   const [open, setOpen] = useState(true); // Default open during streaming
-  const description = typeof taskBlock.input?.description === 'string'
-    ? taskBlock.input.description
-    : typeof taskBlock.input?.prompt === 'string'
-      ? (taskBlock.input.prompt as string).slice(0, 80) + ((taskBlock.input.prompt as string).length > 80 ? '...' : '')
-      : 'Task';
-  const subagentType = typeof taskBlock.input?.subagent_type === 'string' ? taskBlock.input.subagent_type : '';
-  const isDone = taskBlock.status === 'done';
-  const isError = taskBlock.status === 'error';
+  const description = taskBlock
+    ? (typeof taskBlock.input?.description === 'string'
+        ? taskBlock.input.description
+        : typeof taskBlock.input?.prompt === 'string'
+          ? (taskBlock.input.prompt as string).slice(0, 80) + ((taskBlock.input.prompt as string).length > 80 ? '...' : '')
+          : 'Task')
+    : (orphanTaskDescription || 'Subagent (continued)');
+  const subagentType = taskBlock
+    ? (typeof taskBlock.input?.subagent_type === 'string' ? taskBlock.input.subagent_type : '')
+    : (orphanSubagentType ?? '');
+  const isDone = taskBlock?.status === 'done';
+  const isError = taskBlock?.status === 'error';
   const toolCount = childBlocks.filter(b => b.type === 'tool_call').length;
 
   return (
@@ -392,7 +348,7 @@ function StreamingTaskGroup({ taskBlock, childBlocks, sessionId, sessionCwd, ses
         <span className="task-group-icon">
           {isError ? '\u2717' : isDone ? '\u2713' : '\u25B6'}
         </span>
-        <span className="task-group-label">{taskBlock.name}</span>
+        <span className="task-group-label">{taskBlock ? taskBlock.name : 'Agent'}</span>
         {subagentType && <span className="task-group-agent-type">{subagentType}</span>}
         <span className="task-group-description">{description}</span>
         {!open && toolCount > 0 && (
@@ -416,49 +372,96 @@ function StreamingTaskGroup({ taskBlock, childBlocks, sessionId, sessionCwd, ses
 
 /**
  * Group streaming blocks by parentToolUseId.
- * Returns an array of "grouped items": either a standalone block or a task group.
+ * Returns an array of "grouped items": either a standalone block, a task group,
+ * or an ORPHAN task group (children whose parent tool_call is absent — a
+ * background subagent continuing after the turn ended / after a re-send).
+ * Orphan children must NEVER render flat in the main conversation; they get a
+ * synthesized box at the first child's position (bottom, for late arrivals).
  */
 type GroupedStreamItem =
   | { kind: 'block'; block: StreamingBlock; index: number }
-  | { kind: 'task-group'; taskBlock: StreamingBlock & { type: 'tool_call' }; childBlocks: StreamingBlock[]; index: number };
+  | { kind: 'task-group'; taskBlock: StreamingBlock & { type: 'tool_call' }; childBlocks: StreamingBlock[]; index: number }
+  | { kind: 'orphan-group'; parentToolUseId: string; childBlocks: StreamingBlock[]; subagentType?: string; taskDescription?: string; index: number };
 
 /** Tool names whose streaming child blocks should be grouped under them. */
 const GROUPABLE_STREAM_TOOLS = new Set(['Task', 'Agent']);
 
-function groupStreamingBlocks(blocks: StreamingBlock[]): GroupedStreamItem[] {
-  // Find all groupable tool_call blocks (Task, Agent) — these are potential parents
+function groupStreamingBlocks(blocks: StreamingBlock[], hidden?: Set<number>): GroupedStreamItem[] {
+  // Find all groupable tool_call blocks (Task, Agent) — these are potential
+  // parents. A HIDDEN parent (absorbed by history — its twin renders in the
+  // persisted timeline) is treated as ABSENT: its still-visible late children
+  // must form an ORPHAN group instead of anchoring to a block that no longer
+  // renders (same scenario as physical removal in the old model).
   const parentToolUseIds = new Set<string>();
-  for (const b of blocks) {
-    if (b.type === 'tool_call' && GROUPABLE_STREAM_TOOLS.has(b.name)) {
+  let hasLaneChildren = false;
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i];
+    if (b.type === 'tool_call' && GROUPABLE_STREAM_TOOLS.has(b.name) && !hidden?.has(i)) {
       parentToolUseIds.add(b.toolUseId);
+    }
+    if ((b.type === 'tool_call' || b.type === 'text' || b.type === 'thinking') && b.parentToolUseId) {
+      hasLaneChildren = true;
     }
   }
 
-  if (parentToolUseIds.size === 0) {
+  if (parentToolUseIds.size === 0 && !hasLaneChildren) {
     // No groupable blocks — return flat list
     return blocks.map((block, index) => ({ kind: 'block', block, index }));
   }
 
-  // Group child blocks under their parent
+  // Group child blocks under their parent. Children are tool_calls AND
+  // text/thinking — the CLI inlines the subagent's whole conversation
+  // (assistant text included) with parent_tool_use_id set. Children whose
+  // parent tool_call is NOT in blocks form an orphan lane. HIDDEN children
+  // are absorbed (their twin renders via the persisted message's group) —
+  // exclude them so groups don't double-render content.
   const childBlocksByParent = new Map<string, StreamingBlock[]>();
   const consumedIndices = new Set<number>();
 
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i];
-    if (b.type === 'tool_call' && b.parentToolUseId && parentToolUseIds.has(b.parentToolUseId)) {
-      const arr = childBlocksByParent.get(b.parentToolUseId);
-      if (arr) arr.push(b);
-      else childBlocksByParent.set(b.parentToolUseId, [b]);
+    const childParent = (b.type === 'tool_call' || b.type === 'text' || b.type === 'thinking')
+      ? b.parentToolUseId : undefined;
+    if (childParent) {
       consumedIndices.add(i);
+      if (hidden?.has(i)) continue;
+      const arr = childBlocksByParent.get(childParent);
+      if (arr) arr.push(b);
+      else childBlocksByParent.set(childParent, [b]);
     }
   }
 
-  // Build grouped result
+  // Build grouped result. Orphan lanes surface at their FIRST child's position.
+  const emittedOrphans = new Set<string>();
   const result: GroupedStreamItem[] = [];
   for (let i = 0; i < blocks.length; i++) {
-    if (consumedIndices.has(i)) continue;
     const b = blocks[i];
-    if (b.type === 'tool_call' && GROUPABLE_STREAM_TOOLS.has(b.name)) {
+    if (consumedIndices.has(i)) {
+      const pid = (b.type === 'tool_call' || b.type === 'text' || b.type === 'thinking') ? b.parentToolUseId : undefined;
+      // Anchor an orphan group at its first VISIBLE child — a hidden anchor
+      // index emits no timeline item, so the box would never render.
+      if (pid && !parentToolUseIds.has(pid) && !emittedOrphans.has(pid) && !hidden?.has(i)) {
+        emittedOrphans.add(pid);
+        const children = childBlocksByParent.get(pid) ?? [];
+        if (children.length === 0) continue; // all children absorbed — nothing to box
+        // Label from whichever child carries the subagent identity
+        let subagentType: string | undefined;
+        let taskDescription: string | undefined;
+        for (const c of children) {
+          if ((c.type === 'text' || c.type === 'tool_call') && (c.subagentType || c.taskDescription)) {
+            subagentType = c.subagentType;
+            taskDescription = c.taskDescription;
+            break;
+          }
+        }
+        result.push({ kind: 'orphan-group', parentToolUseId: pid, childBlocks: children, subagentType, taskDescription, index: i });
+      }
+      continue;
+    }
+    // parentToolUseIds membership already excludes HIDDEN parents — a hidden
+    // parent falls through to a plain 'block' (skipped at render), and its
+    // visible children boxed via the orphan path above.
+    if (b.type === 'tool_call' && parentToolUseIds.has(b.toolUseId)) {
       result.push({
         kind: 'task-group',
         taskBlock: b,
@@ -514,7 +517,9 @@ type TimelineItem =
 
 /**
  * Interleave streaming blocks and active optimistic messages by blockIndex.
- * Each user message was sent at a specific blocks.length — it renders at that position.
+ * Each user message was sent at a specific blocks.length — it renders at that
+ * position. `hidden` = blocks absorbed by persisted history (render filter):
+ * they keep their INDEX (anchors stay stable) but emit no timeline item.
  */
 function buildTimeline(
   blocks: StreamingBlock[],
@@ -522,8 +527,10 @@ function buildTimeline(
   blockIndexMap: Map<string, number>,
   isStreaming: boolean,
   isResuming: boolean,
+  hidden?: Set<number>,
 ): TimelineItem[] {
   const items: TimelineItem[] = [];
+  let visibleCount = 0;
 
   // Group user messages by their blockIndex
   const usersByIndex = new Map<number, OptimisticMessage[]>();
@@ -542,6 +549,8 @@ function buildTimeline(
         items.push({ kind: 'user', msg });
       }
     }
+    if (hidden?.has(i)) continue; // absorbed by history — its twin renders above
+    visibleCount++;
     items.push({ kind: 'block', block: blocks[i], index: i });
   }
 
@@ -553,8 +562,8 @@ function buildTimeline(
     }
   }
 
-  // Streaming/resuming indicator when no blocks yet
-  if (blocks.length === 0) {
+  // Streaming/resuming indicator when no VISIBLE blocks yet
+  if (visibleCount === 0) {
     if (isResuming && !isStreaming) {
       items.push({ kind: 'indicator', type: 'resuming' });
     } else if (isStreaming) {
@@ -570,16 +579,19 @@ const NEAR_BOTTOM_PX = 80;  // px from bottom to consider "at bottom"
 
 export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onTaskClick, onSessionClick, onFileOpen, onStreamingChange }: SessionChatHistoryProps) {
   const [historyVersion, setHistoryVersion] = useState(0);
-  const awaitingRefresh = useRef(false);
-  const pendingBatchTotal = useRef(0);
-  // Queue message ids accompanying pendingBatchTotal (Phase 1 id-first removal).
-  // Accumulated per batch-completed event, flushed together with the count.
-  const pendingBatchIds = useRef<string[]>([]);
-  // Track persisted message count to detect history growth (used for dedup windowing).
-  const prevMsgLen = useRef(0);
+  // Turn watermark: history length when the CURRENT turn started streaming.
+  // Content matching (id-less blocks + bubble text fallback) only trusts
+  // messages[watermark..] — identical short texts recur across turns, and the
+  // watermark stops a new block from claiming an old twin. Advances ONLY at
+  // turn start (isStreaming false→true) — never on message growth, so a
+  // finished turn's delta stays inside the window until the next turn begins.
+  const turnWatermark = useRef(0);
+  const watermarkInitialized = useRef(false);
   // queueIds already matched to a persisted twin — never re-render their bubble
   // (see "Sticky consumption" at the dedup call site). Reset on session switch.
   const consumedQueueIds = useRef<Set<string>>(new Set());
+  // Consumed queueIds already reported to the owner (useSessionSend GC).
+  const notifiedConsumedIds = useRef<Set<string>>(new Set());
   const [editingId, setEditingId] = useState<string | null>(null);
 
   // ── Message truncation — render only the tail to keep DOM count low ──
@@ -605,29 +617,80 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   }, [openLightbox]);
 
-  const { messages, loading, phase2Pending, error, stale, forkBoundaryIndex, lastDelta } = useSessionHistory(sessionId, historyVersion);
-  const { blocks, isStreaming, clearCompleted } = useSessionStream(sessionId);
+  const { messages, loading, phase2Pending, error, stale, forkBoundaryIndex } = useSessionHistory(sessionId, historyVersion);
+  const { blocks, isStreaming, resetIfAbsorbed } = useSessionStream(sessionId);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Keep the freshest delta in a ref so clearCompletedAndShift (invoked from a
-  // layout effect / timeout that may run a tick after the delta arrives) always
-  // hands the current evidence to the promotion.
-  const lastDeltaRef = useRef(lastDelta);
-  lastDeltaRef.current = lastDelta;
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
 
-  // Turn-boundary cleanup: EVIDENCE-BASED — remove only completed-turn blocks that
-  // have a twin in the just-arrived history delta; a next turn already streaming
-  // (and anything the archive hasn't caught up on) is kept (fixes "messages 1-4
-  // vanish while 5 is generating, then flash back"). blockIndexMap anchors
-  // optimistic messages to absolute block indices → shift down by removed count.
-  const clearCompletedAndShift = useCallback(() => {
-    const removed = clearCompleted(lastDeltaRef.current);
-    if (removed > 0) {
-      for (const [k, v] of blockIndexMap.current) {
-        blockIndexMap.current.set(k, Math.max(0, v - removed));
+  // ── Turn watermark maintenance ──
+  // First history load seeds the watermark at the full length (content
+  // matching starts trusting only what arrives AFTER this point — safe
+  // direction: an unmatched stale block lingers as a brief duplicate rather
+  // than a new block being claimed by an old twin). Each turn start
+  // (isStreaming false→true) advances it to the current length.
+  useLayoutEffect(() => {
+    if (!watermarkInitialized.current && messages.length > 0) {
+      watermarkInitialized.current = true;
+      turnWatermark.current = messages.length;
+    }
+  }, [messages]);
+  const prevIsStreaming = useRef(false);
+  useLayoutEffect(() => {
+    if (isStreaming && !prevIsStreaming.current) {
+      turnWatermark.current = messagesRef.current.length;
+      watermarkInitialized.current = true;
+    }
+    prevIsStreaming.current = isStreaming;
+  }, [isStreaming]);
+
+  // ── Non-destructive absorption (the single-timeline core) ──
+  // Which streaming blocks has persisted history already absorbed? Those are
+  // HIDDEN at render time — never deleted at event time. Late history = brief
+  // double-render that collapses when evidence lands; never a vanish.
+  // Evidence walks the FULL history — memoized by messages ref so whale
+  // sessions (5000+ msgs) don't re-walk on every streaming frame.
+  const historyEvidence = useMemo(() => buildHistoryEvidence(messages), [messages]);
+  // NOTE: turnWatermark.current is a ref read — invisible to the deps array,
+  // so a watermark write alone never recomputes this memo. That is sound only
+  // because every watermark write is triggered by a dep edge (messages /
+  // isStreaming, via useLayoutEffect): the write lands after that render, and
+  // the very next dep change (first delta appends a block within a frame)
+  // re-runs the memo with the fresh value — worst case one frame of the old
+  // watermark, which only widens the content window (duplicate-safe, never
+  // vanish). If you ever write the watermark on an independent trigger, this
+  // memo will keep serving a stale filter until some dep happens to change.
+  const { hidden: hiddenBlocks, unmatched: unmatchedBlocks } = useMemo(
+    () => computeRenderFilter({ blocks, messages, watermark: turnWatermark.current, isStreaming, historyEvidence }),
+    [blocks, messages, isStreaming, historyEvidence],
+  );
+
+  // Divergence tripwire: a FINISHED block with no history twin is kept visible
+  // (safe), but persistent misses mean archive & stream disagree — surface it.
+  // Deduped per count so a stable divergence logs once, not every render.
+  const lastUnmatchedLogged = useRef(0);
+  useEffect(() => {
+    if (isStreaming) return;
+    if (unmatchedBlocks.length > 0 && unmatchedBlocks.length !== lastUnmatchedLogged.current) {
+      log.warn('stream', `render-filter: ${unmatchedBlocks.length} completed block(s) had no delta twin — kept, not deleted`, {
+        sessionId, unmatched: unmatchedBlocks.slice(0, 5),
+      });
+    }
+    lastUnmatchedLogged.current = unmatchedBlocks.length;
+  }, [unmatchedBlocks, isStreaming, sessionId]);
+
+  // Memory reclamation: once EVERY block is absorbed and no turn is live,
+  // physically drop the array (zero visual difference — all were hidden).
+  // Bubble anchors clamp to 0 so pre-reset sends stay ABOVE the next turn's
+  // blocks (they were sent before that content existed).
+  useEffect(() => {
+    if (allBlocksAbsorbed(blocks, hiddenBlocks, isStreaming)) {
+      if (resetIfAbsorbed(hiddenBlocks.size)) {
+        for (const k of blockIndexMap.current.keys()) blockIndexMap.current.set(k, 0);
       }
     }
-  }, [clearCompleted]);
+  }, [blocks, hiddenBlocks, isStreaming, resetIfAbsorbed]);
 
   // Propagate the single useSessionStream instance's isStreaming to parents
   // (e.g. SessionPanel) so they can drive the ChatInput's send/interrupt state
@@ -695,35 +758,23 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   });
 
-  // Turn completed: remove the batch's optimistic messages and refresh history.
-  const batchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Turn completed: refresh history. Bubble removal is NOT triggered here —
+  // removing at event time would blank the user's message for the seconds the
+  // refetch takes (the vanish direction). Instead the render-time dedup hides
+  // a bubble in the SAME render that shows its persisted twin (zero flash),
+  // and the GC effect below then notifies useSessionSend to drop it by id.
+  // No ordering machinery: block absorption is a render-time filter too, so
+  // nothing here sequences against the refetch — the old awaitingRefresh flag,
+  // batch accumulators and 5s fallback timer are gone with the destructive model.
+  // Do NOT reintroduce anything that assumes event order here: batch-completed
+  // reliably arrives BEFORE session:result (the server bus fans out
+  // synchronously in subscription order and the result re-emit awaits task
+  // enrichment — a structural ~20-50ms inversion, not a race you can fix).
   useEvent('session:batch-completed', (data) => {
     const d = data as { sessionId?: string; count?: number; messageIds?: string[] };
     if (d.sessionId === sessionId) {
       log.info('stream', `batch-completed count=${d.count ?? 1} ids=${d.messageIds?.length ?? 0} blocks=${blocks.length} isStreaming=${isStreaming}`, { sessionId });
-      pendingBatchTotal.current += (d.count ?? 1);
-      if (d.messageIds) pendingBatchIds.current.push(...d.messageIds);
-      awaitingRefresh.current = true;
       setHistoryVersion((v) => v + 1);
-      // Fallback: if JSONL history doesn't grow (FIFO-injected messages not in output),
-      // force-clear after timeout. The batch count is authoritative.
-      // Use 5s timeout (not 1s) to avoid racing with remote session history fetches
-      // which can take 2-5s over SSH. A premature fallback clears awaitingRefresh
-      // but not streaming blocks, causing the same turn to appear in both persisted
-      // history AND the streaming timeline (2x duplication bug).
-      if (batchTimeoutRef.current) clearTimeout(batchTimeoutRef.current);
-      batchTimeoutRef.current = setTimeout(() => {
-        if (awaitingRefresh.current && pendingBatchTotal.current > 0) {
-          log.info('stream', `batch fallback timeout: clearing completed blocks+awaitingRefresh`, { sessionId });
-          awaitingRefresh.current = false;
-          // Turn-aware: clear only the completed turn's blocks (prevents 2x
-          // duplication) while preserving a next turn already streaming.
-          clearCompletedAndShift();
-          onBatchCompleted?.(pendingBatchTotal.current, pendingBatchIds.current.length > 0 ? [...pendingBatchIds.current] : undefined);
-          pendingBatchTotal.current = 0;
-          pendingBatchIds.current = [];
-        }
-      }, 5000);
     }
   });
 
@@ -745,17 +796,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   useEvent('session:error', (data) => {
     const d = data as { sessionId?: string; errorKind?: string };
     if (d.sessionId === sessionId && d.errorKind !== 'delivery_failed') {
-      awaitingRefresh.current = true;
       setHistoryVersion((v) => v + 1);
     }
   });
 
   // WebSocket reconnect: re-fetch history to recover events lost during disconnect.
   // Without this, a turn that completed during disconnect would be invisible.
-  // awaitingRefresh tells the useLayoutEffect below to clear streaming blocks and
-  // trigger scroll-to-bottom when the re-fetched history arrives with new messages.
+  // The absorption filter reconciles blocks against whatever arrives — no flag.
   useEvent('_ws:reconnected', () => {
-    awaitingRefresh.current = true;
     setHistoryVersion((v) => v + 1);
   });
 
@@ -767,49 +815,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   });
 
-  // Zero-flash cleanup (runs before browser paints).
-  // When session:batch-completed fires, the backend has authoritatively consumed the
-  // batch's messages from the queue. Clear streaming blocks and remove the matching
-  // optimistic messages once the re-fetched history grows.
-  //
-  // FIFO-injected user messages appear as queue-operation entries in the JSONL, so they're
-  // now included in the persisted history at their correct chronological positions. The dedup
-  // logic absorbs delivered messages once the re-fetched history contains them.
-  // All optimistic messages live in the timeline (not a separate section) to maintain
-  // their interleaved positions during the transition.
-  useLayoutEffect(() => {
-    if (awaitingRefresh.current) {
-      log.info('stream', `useLayoutEffect: awaitingRefresh=true → clearCompleted() msgs=${messages.length} prevMsgLen=${prevMsgLen.current} batchTotal=${pendingBatchTotal.current}`, { sessionId });
-      awaitingRefresh.current = false;
-      // Cancel the fallback timeout — the history refresh completed normally
-      if (batchTimeoutRef.current) {
-        clearTimeout(batchTimeoutRef.current);
-        batchTimeoutRef.current = null;
-      }
-      // Turn-aware clear: only the completed turn's blocks are now in persisted
-      // history. If turn N+1 started streaming during the (possibly 7s+) history
-      // refetch, its blocks + optimistic anchors survive — previously a full
-      // clear() here made the live turn vanish until the next snapshot restored
-      // it (the "flash" the user sees).
-      clearCompletedAndShift();
-      onBatchCompleted?.(pendingBatchTotal.current, pendingBatchIds.current.length > 0 ? [...pendingBatchIds.current] : undefined);
-      pendingBatchTotal.current = 0;
-      pendingBatchIds.current = [];
-      // Do NOT update prevMsgLen here. The batch completion triggers re-renders
-      // (from clear() and onBatchCompleted()). Those re-renders must still see
-      // prevMsgLen = old value so the dedup scan covers the newly appeared messages
-      // and removes the consumed optimistic message (prevents Pattern A duplicate).
-    } else {
-      // Normal growth path — just track the new length. Previously we had a
-      // "defensive clear" branch here to wipe stale blocks when messages grew
-      // without an awaitingRefresh signal, but that branch misfired during
-      // live turns whenever a stale resubscribe snapshot flipped isStreaming
-      // to false (see useSessionStream.ts non-regressive sync). The proper
-      // cleanup path is awaitingRefresh above; any block staleness past that
-      // is now handled by the hook's own lifecycle (session:result + clear()).
-      prevMsgLen.current = messages.length;
-    }
-  }, [messages, clearCompletedAndShift, onBatchCompleted]);
+  // NOTE (single-timeline model): there is no turn-boundary cleanup effect
+  // anymore. Absorption of streaming blocks into history is a render-time
+  // filter (hiddenBlocks above) — idempotent, order-insensitive, nothing to
+  // sequence against the history refetch. Optimistic-bubble dedup scans
+  // messages[turnWatermark..] each render (below).
 
   // ═══════════════════════════════════════════════════════════════════════════
   // AUTO-SCROLL — Dead simple. Standard chat pattern.
@@ -852,14 +862,13 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // Reset on session switch
   useEffect(() => {
     setHistoryVersion(0);
-    awaitingRefresh.current = false;
-    pendingBatchTotal.current = 0;
-    pendingBatchIds.current = [];
-    prevMsgLen.current = 0;
+    turnWatermark.current = 0;
+    watermarkInitialized.current = false;
     setEditingId(null);
     setTruncationOffset(0);
     blockIndexMap.current.clear();
     consumedQueueIds.current.clear();
+    notifiedConsumedIds.current.clear();
     isAtBottom.current = true;
     firstScrollDone.current = false;
     initialLoadDone.current = false;
@@ -867,13 +876,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     prevOptimisticLen.current = 0;
     setShowScrollArrow(false);
     if (scrollRafId.current !== null) { cancelAnimationFrame(scrollRafId.current); scrollRafId.current = null; }
-    if (batchTimeoutRef.current) { clearTimeout(batchTimeoutRef.current); batchTimeoutRef.current = null; }
     if (resizeTimerRef.current) { clearTimeout(resizeTimerRef.current); resizeTimerRef.current = null; }
   }, [sessionId]);
 
   // Cleanup on unmount
   useEffect(() => () => {
-    if (batchTimeoutRef.current) clearTimeout(batchTimeoutRef.current);
     if (scrollRafId.current !== null) cancelAnimationFrame(scrollRafId.current);
     if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current);
   }, []);
@@ -1108,21 +1115,19 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // fallback). The remaining dedup handles edge cases where persisted history
   // grows and matches a pending/delivered msg the events missed.
   //
-  // Rules live in optimistic-dedup.ts (pure, unit-tested): newly-appeared
-  // window on growth; full-array scan when history SHRANK (/compact rewrote
-  // the JSONL — the old window pointed past the end forever, so delivered
-  // bubbles stayed pinned at the bottom below newer content,
-  // inc-1783472776601).
+  // Rules live in optimistic-dedup.ts (pure, unit-tested): id-exact via
+  // echo-claim walnutMessageId (any scope), text-multiset within
+  // messages[turnWatermark..]. On shrink (/compact rewrote the JSONL) the
+  // helper scans the whole rewritten array (inc-1783472776601).
   const allOptimistic = optimisticMessages ?? [];
   // Sticky consumption: dedup is a per-render DISPLAY filter over optimistic
   // state it doesn't own — durable removal normally comes from
-  // handleBatchCompleted (count-based). When that event never fires (history
-  // refresh 502'd during an SSH-down window), a match must still not
-  // resurface on a later render after prevMsgLen catches up and the scan
-  // window moves past the twin. Remember consumed queueIds for the lifetime
-  // of this session view (cleared on session switch).
+  // handleBatchCompleted. When that event never fires (history refresh 502'd
+  // during an SSH-down window), a match must still not resurface on a later
+  // render after the watermark advances past the twin. Remember consumed
+  // queueIds for the lifetime of this session view (cleared on session switch).
   const visibleOptimistic = allOptimistic.filter(m => !consumedQueueIds.current.has(m.queueId));
-  const deduped = dedupeOptimisticMessages(visibleOptimistic, messages, prevMsgLen.current);
+  const deduped = dedupeOptimisticMessages(visibleOptimistic, messages, turnWatermark.current);
   if (deduped.length !== visibleOptimistic.length) {
     const keptIds = new Set(deduped.map(m => m.queueId));
     for (const m of visibleOptimistic) {
@@ -1130,7 +1135,33 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   }
 
+  // GC notification: tell the owner (useSessionSend) which bubbles were
+  // absorbed so its optimistic state doesn't grow unboundedly when the
+  // batch-completed removal missed them (e.g. tempId race). Post-render —
+  // parent setState during our render is illegal.
+  // Deliberately NO deps array: consumedQueueIds is a ref mutated during
+  // render (just above), so no dep could observe it — this must run after
+  // EVERY render. notifiedConsumedIds makes it idempotent. "Fixing" the lint
+  // by adding [onBatchCompleted] would silently stop bubble GC.
+  useEffect(() => {
+    if (!onBatchCompleted) return;
+    const unnotified: string[] = [];
+    for (const id of consumedQueueIds.current) {
+      if (!notifiedConsumedIds.current.has(id)) {
+        notifiedConsumedIds.current.add(id);
+        unnotified.push(id);
+      }
+    }
+    // count=0: id-only GC — removeBatchMessages must not fall back to
+    // removing N delivered bubbles when none of these ids match.
+    if (unnotified.length > 0) onBatchCompleted(0, unnotified);
+  });
+
   // ── Assign blockIndex for non-deduped optimistic messages (set once, never updated) ──
+  // Anchors are STABLE: blocks are append-only, so an index captured at send
+  // time keeps pointing at the same block forever (reset only drops a fully
+  // hidden array, clamping anchors to 0 — same visual position: top of the
+  // next turn).
   for (const msg of deduped) {
     if (!blockIndexMap.current.has(msg.queueId)) {
       blockIndexMap.current.set(msg.queueId, blocks.length);
@@ -1142,11 +1173,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if (!dedupedIds.has(key)) blockIndexMap.current.delete(key);
   }
 
-  // ── Build interleaved timeline ──
-  // All remaining optimistic messages participate in the timeline.
+  // ── Build interleaved timeline over VISIBLE blocks ──
+  // hiddenBlocks (absorbed by history) don't render; visibility is decided
+  // here, at render time, not by deleting state.
   const isResuming = !isStreaming && phase === 'IN_PROGRESS'
     && deduped.length > 0;
-  const timeline = buildTimeline(blocks, deduped, blockIndexMap.current, isStreaming, isResuming);
+  const timeline = buildTimeline(blocks, deduped, blockIndexMap.current, isStreaming, isResuming, hiddenBlocks);
 
   const hasContent = messages.length > 0 || timeline.length > 0 || isStreaming
     || deduped.length > 0;
@@ -1280,19 +1312,19 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           <div className="session-streaming-panel">
             {(() => {
               // Pre-group streaming blocks by parentToolUseId for Task grouping
-              const groupedBlocks = groupStreamingBlocks(blocks);
+              // (hidden/absorbed blocks neither anchor groups nor appear as children)
+              const groupedBlocks = groupStreamingBlocks(blocks, hiddenBlocks);
               // Build a lookup: block original index → grouped item
               const groupedByIndex = new Map<number, GroupedStreamItem>();
               const consumedBlockIndices = new Set<number>();
               for (const g of groupedBlocks) {
-                if (g.kind === 'task-group') {
+                if (g.kind === 'task-group' || g.kind === 'orphan-group') {
                   groupedByIndex.set(g.index, g);
-                  // Mark child block indices as consumed so they don't render separately
+                  // Mark ALL child block indices (tool_call/text/thinking) as
+                  // consumed so they don't render flat in the main conversation
                   for (const child of g.childBlocks) {
-                    if (child.type === 'tool_call') {
-                      const childIdx = blocks.indexOf(child);
-                      if (childIdx >= 0) consumedBlockIndices.add(childIdx);
-                    }
+                    const childIdx = blocks.indexOf(child);
+                    if (childIdx >= 0) consumedBlockIndices.add(childIdx);
                   }
                 }
               }
@@ -1308,12 +1340,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
               }
 
               if (item.kind === 'block') {
-                // Skip blocks that were consumed into a task group
-                if (consumedBlockIndices.has(item.index)) return null;
-
-                // Check if this block is a Task group parent
+                // Check if this block anchors a Task group (parent tool_call) or
+                // an ORPHAN group (anchored at its FIRST child, which is itself a
+                // consumed index — so this check must come before the skip below).
                 const grouped = groupedByIndex.get(item.index);
-                if (grouped && grouped.kind === 'task-group') {
+                if (grouped && (grouped.kind === 'task-group' || grouped.kind === 'orphan-group')) {
                   const isFirst = i === 0 || timeline[i - 1].kind !== 'block';
                   const isInLastGroup = !timeline.slice(i).some(t => t.kind === 'user');
                   return (
@@ -1326,8 +1357,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                       )}
                       <div className={isFirst ? 'session-msg-content' : ''}>
                         <StreamingTaskGroup
-                          taskBlock={grouped.taskBlock}
+                          taskBlock={grouped.kind === 'task-group' ? grouped.taskBlock : undefined}
                           childBlocks={grouped.childBlocks}
+                          orphanSubagentType={grouped.kind === 'orphan-group' ? grouped.subagentType : undefined}
+                          orphanTaskDescription={grouped.kind === 'orphan-group' ? grouped.taskDescription : undefined}
                           sessionId={sessionId}
                           sessionCwd={sessionCwd}
                           sessionHost={sessionHost}
@@ -1339,6 +1372,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                     </div>
                   );
                 }
+
+                // Skip blocks that were consumed into a task/orphan group
+                if (consumedBlockIndices.has(item.index)) return null;
 
                 // Regular block rendering
                 // Group consecutive blocks under one assistant header.

@@ -162,6 +162,43 @@ describe('readSessionHistory', () => {
     ]);
   });
 
+  it('stamps bgTaskFinished on the parent Agent tool from its task-notification (and extracts async agentId)', async () => {
+    // The hidden <task-notification> carries <tool-use-id> — the ONLY archival
+    // proof that a background agent's streamed lane blocks can be cleared
+    // (their transcript persists to subagents/agent-<id>.jsonl, never to this
+    // session's history — inc-1783612454903). The async Agent result also uses
+    // the Task-style "agentId: <hex>" spelling, which the Agent branch must
+    // parse so the UI can lazy-load the transcript.
+    const asyncResult = 'Async agent launched successfully. (internal metadata)\nagentId: a1370732f0ca8b5f3 (internal)';
+    const notifFinished = '<task-notification>\n<task-id>a1370732f0ca8b5f3</task-id>\n<tool-use-id>toolu_bg_done</tool-use-id>\n<status>completed</status>\n<summary>Agent finished</summary>\n<result>report…</result>\n</task-notification>';
+    await writeJsonl('s-bgdone', '/test', [
+      msg('u1', 'user', 'start two background agents'),
+      // Agent 1: finished (notification present)
+      msg('a1', 'assistant', 'Launching.', {
+        tools: [{ type: 'tool_use', id: 'toolu_bg_done', name: 'Agent', input: { name: 'done-agent', prompt: 'go' } }],
+      }),
+      { type: 'user', timestamp: '2025-01-01T00:00:03Z', uuid: 'uuid-tr1', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_bg_done', content: asyncResult }] } },
+      // Agent 2: still running (no notification)
+      msg('a2', 'assistant', 'Launching second.', {
+        tools: [{ type: 'tool_use', id: 'toolu_bg_running', name: 'Agent', input: { name: 'running-agent', prompt: 'go' } }],
+      }),
+      { type: 'user', timestamp: '2025-01-01T00:00:05Z', uuid: 'uuid-tr2', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_bg_running', content: asyncResult.replace('a1370732f0ca8b5f3', 'bbb0732f0ca8b5f31') }] } },
+      // Notification for agent 1 only — echo line (hidden from chat, but proof extracted)
+      { type: 'user', timestamp: '2025-01-01T00:01:00Z', uuid: 'uuid-notif1', message: { role: 'user', content: notifFinished } },
+      msg('a3', 'assistant', 'First agent done.'),
+    ]);
+
+    const messages = await readSessionHistory('s-bgdone', '/test');
+    const tools = messages.flatMap(m => m.tools ?? []);
+    const doneTool = tools.find(t => t.toolUseId === 'toolu_bg_done');
+    const runningTool = tools.find(t => t.toolUseId === 'toolu_bg_running');
+    expect(doneTool?.bgTaskFinished).toBe(true);
+    expect(doneTool?.agentId).toBe('a1370732f0ca8b5f3'); // async Agent spelling parsed
+    expect(runningTool?.bgTaskFinished).toBeUndefined();
+    // The notification line itself stays hidden from chat.
+    expect(messages.some(m => m.text.includes('task-notification'))).toBe(false);
+  });
+
   it('hides pure-plumbing injected lines; rewrites human-action echoes (all corpus shapes)', async () => {
     // Corpus-enumerated shapes (4000-session scan, Mac + remote). Pure plumbing
     // is hidden; lines representing a real human action are rewritten readable.

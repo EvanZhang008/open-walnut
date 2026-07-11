@@ -9,8 +9,9 @@ import { describe, it, expect } from 'vitest';
 import {
   promoteCompletedBlocks,
   buildDeltaEvidence,
+  buildIdOnlyEvidence,
 } from '@/cache/promote-blocks';
-import type { StreamingBlock } from '@/hooks/useSessionStream';
+import type { StreamingBlock } from '@/stream/stream-reducer';
 import type { SessionHistoryMessage } from '@/types/session';
 
 // ── Builders ────────────────────────────────────────────────────────────────
@@ -339,5 +340,197 @@ describe('promoteCompletedBlocks — msgId-first matching', () => {
     const r = promoteCompletedBlocks(blocks, delta, 1);
     expect(r.removed).toBe(1);
     expect(r.kept).toEqual([textId('live text', 'msg_B')]);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Inline-subagent children (groupInlineChildren moves them under tools[].childMessages)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('buildDeltaEvidence — childMessages recursion', () => {
+  it('collects evidence from tools[].childMessages (inline subagent conversation)', () => {
+    const delta: SessionHistoryMessage[] = [{
+      role: 'assistant', text: '', timestamp: '',
+      tools: [{
+        name: 'Agent', input: {}, toolUseId: 'toolu_parent',
+        childMessages: [
+          { role: 'assistant', text: 'subagent narration', timestamp: '', msgId: 'msg_sub' },
+          { role: 'assistant', text: '', timestamp: '', tools: [{ name: 'Bash', input: {}, toolUseId: 'toolu_child' }] },
+        ],
+      }],
+    }];
+    const ev = buildDeltaEvidence(delta);
+    expect(ev.toolUseIds.has('toolu_parent')).toBe(true);
+    expect(ev.toolUseIds.has('toolu_child')).toBe(true);
+    expect(ev.texts.get('subagent narration')).toBe(1);
+    expect(ev.textMsgIds.has('msg_sub')).toBe(true);
+  });
+
+  it('streamed subagent blocks promote once their childMessages twins land', () => {
+    const blocks: StreamingBlock[] = [
+      { type: 'text', content: 'main answer', msgId: 'msg_main' },
+      { type: 'tool_call', toolUseId: 'toolu_parent', name: 'Agent', status: 'done' },
+      { type: 'text', content: 'subagent narration', msgId: 'msg_sub', parentToolUseId: 'toolu_parent' },
+      { type: 'tool_call', toolUseId: 'toolu_child', name: 'Bash', status: 'done', parentToolUseId: 'toolu_parent' },
+    ];
+    const delta: SessionHistoryMessage[] = [
+      { role: 'assistant', text: 'main answer', timestamp: '', msgId: 'msg_main' },
+      {
+        role: 'assistant', text: '', timestamp: '',
+        tools: [{
+          name: 'Agent', input: {}, toolUseId: 'toolu_parent',
+          childMessages: [
+            { role: 'assistant', text: 'subagent narration', timestamp: '', msgId: 'msg_sub' },
+            { role: 'assistant', text: '', timestamp: '', tools: [{ name: 'Bash', input: {}, toolUseId: 'toolu_child' }] },
+          ],
+        }],
+      },
+    ];
+    const r = promoteCompletedBlocks(blocks, delta, blocks.length);
+    expect(r.removed).toBe(4);
+    expect(r.kept).toHaveLength(0);
+    expect(r.unmatched).toHaveLength(0);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Full-history ID-ONLY evidence + background-subagent lane (inc-1783612454903:
+// "last message is not the last one" — blocks whose twin persisted in an OLDER
+// turn, plus background-agent lane blocks with no possible twin, accumulated
+// below the real last message until a hard refresh)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('promoteCompletedBlocks — full-history evidence', () => {
+  it('promotes a block whose twin persisted BEFORE the delta window (id match)', () => {
+    // Twin landed turns ago — the delta doesn't contain it, only full history does.
+    const blocks = [textId('old turn text', 'msg_old'), tool('toolu_old')];
+    const delta = [asstTextId('brand new turn', 'msg_new')];
+    const full = buildIdOnlyEvidence([
+      asstTextId('old turn text', 'msg_old'),
+      asstTool('toolu_old'),
+      asstTextId('brand new turn', 'msg_new'),
+    ]);
+    const r = promoteCompletedBlocks(blocks, delta, blocks.length, full);
+    expect(r.removed).toBe(2);
+    expect(r.kept).toHaveLength(0);
+  });
+
+  it('does NOT content-match against full history (ids only)', () => {
+    // Identical short text recurs across turns. An id-less block must NOT claim
+    // an old twin from full history — content matching stays delta-scoped.
+    const blocks = [text('continue')];
+    const delta: SessionHistoryMessage[] = [];
+    const full = buildIdOnlyEvidence([asstText('continue')]);
+    const r = promoteCompletedBlocks(blocks, delta, blocks.length, full);
+    expect(r.removed).toBe(0);
+    expect(r.kept).toEqual(blocks);
+  });
+
+  it('thinking id in full history only removes when thinking was preserved', () => {
+    const blocks = [thinkingId('reasoning', 'msg_t')];
+    const fullRedacted = buildIdOnlyEvidence([asstTextId('answer only', 'msg_t')]);
+    expect(promoteCompletedBlocks(blocks, [], blocks.length, fullRedacted).removed).toBe(0);
+    const fullKept = buildIdOnlyEvidence([asstThinkingId('reasoning rewritten', 'msg_t')]);
+    expect(promoteCompletedBlocks(blocks, [], blocks.length, fullKept).removed).toBe(1);
+  });
+});
+
+describe('promoteCompletedBlocks — background-subagent lane', () => {
+  const laneText = (content: string, parent: string): StreamingBlock =>
+    ({ type: 'text', content, msgId: 'msg_lane', parentToolUseId: parent });
+  const laneTool = (id: string, parent: string): StreamingBlock =>
+    ({ type: 'tool_call', toolUseId: id, name: 'Bash', status: 'done', parentToolUseId: parent });
+  const agentToolMsg = (toolUseId: string, finished: boolean): SessionHistoryMessage => ({
+    role: 'assistant', text: '', timestamp: '',
+    tools: [{ name: 'Agent', input: {}, toolUseId, ...(finished ? { bgTaskFinished: true } : {}) }],
+  });
+
+  it('keeps lane blocks of a RUNNING background agent, silently (no unmatched log)', () => {
+    const blocks = [laneText('bg narration', 'toolu_bg'), laneTool('toolu_bgchild', 'toolu_bg')];
+    const delta = [agentToolMsg('toolu_bg', false)];
+    const r = promoteCompletedBlocks(blocks, delta, blocks.length);
+    // Lane blocks kept (agent still running), and NOT reported as divergence.
+    expect(r.kept).toEqual(blocks);
+    expect(r.unmatched).toHaveLength(0);
+  });
+
+  it('promotes lane blocks once the parent Agent is bgTaskFinished (delta evidence)', () => {
+    const blocks = [laneText('bg narration', 'toolu_bg'), laneTool('toolu_bgchild', 'toolu_bg')];
+    const delta = [agentToolMsg('toolu_bg', true)];
+    const r = promoteCompletedBlocks(blocks, delta, blocks.length);
+    expect(r.removed).toBe(2);
+    expect(r.kept).toHaveLength(0);
+  });
+
+  it('promotes lane blocks via bgTaskFinished in FULL history (parent persisted turns ago)', () => {
+    // The exact incident shape: parent Agent tool persisted long ago; the agent
+    // finished later — the notification stamps bgTaskFinished on that OLD tool,
+    // far outside any delta window.
+    const blocks = [
+      laneText('bg narration', 'toolu_bg'),
+      laneTool('toolu_bgchild', 'toolu_bg'),
+      { type: 'thinking', content: 'bg reasoning', msgId: 'msg_lane_t', parentToolUseId: 'toolu_bg' } as StreamingBlock,
+    ];
+    const full = buildIdOnlyEvidence([agentToolMsg('toolu_bg', true)]);
+    const r = promoteCompletedBlocks(blocks, [], blocks.length, full);
+    expect(r.removed).toBe(3);
+    expect(r.kept).toHaveLength(0);
+  });
+
+  it('running lane blocks do NOT veto pure-UI GC of the finished main turn', () => {
+    const blocks = [
+      text('main answer'),
+      perm('req_1'),
+      laneText('bg still going', 'toolu_bg'),
+    ];
+    const delta = [asstText('main answer'), agentToolMsg('toolu_bg', false)];
+    const r = promoteCompletedBlocks(blocks, delta, blocks.length);
+    // Main text promoted, permission GC'd (turn fully matched), lane block kept.
+    expect(r.kept).toEqual([laneText('bg still going', 'toolu_bg')]);
+    expect(r.removed).toBe(2);
+  });
+
+  it('sync inline-subagent twins still match BEFORE lane logic (childMessages path)', () => {
+    // Regression guard: a lane block whose twin DOES exist (sync agent, children
+    // grouped under the parent tool) must promote by twin even when the parent
+    // is not bgTaskFinished.
+    const blocks = [laneText('inline child text', 'toolu_sync')];
+    const delta: SessionHistoryMessage[] = [{
+      role: 'assistant', text: '', timestamp: '',
+      tools: [{
+        name: 'Agent', input: {}, toolUseId: 'toolu_sync',
+        childMessages: [{ role: 'assistant', text: 'whatever', timestamp: '', msgId: 'msg_lane' }],
+      }],
+    }];
+    const r = promoteCompletedBlocks(blocks, delta, blocks.length);
+    expect(r.removed).toBe(1);
+  });
+
+  it('lane text does not participate in a main-lane join-run', () => {
+    // main1 + main2 join to the persisted '\n'-joined message; the interleaved
+    // lane text must not pollute the run.
+    const blocks = [
+      text('main part one'),
+      laneText('bg interleaved', 'toolu_bg'),
+      text('main part two'),
+    ];
+    const delta = [asstText('main part one\nmain part two')];
+    const r = promoteCompletedBlocks(blocks, delta, blocks.length);
+    expect(r.kept).toEqual([laneText('bg interleaved', 'toolu_bg')]);
+    expect(r.removed).toBe(2);
+  });
+});
+
+describe('buildIdOnlyEvidence', () => {
+  it('strips the content multiset but keeps ids and bg flags', () => {
+    const ev = buildIdOnlyEvidence([
+      asstTextId('hello', 'msg_A'),
+      asstTool('toolu_1'),
+      { role: 'assistant', text: '', timestamp: '', tools: [{ name: 'Agent', input: {}, toolUseId: 'toolu_bg', bgTaskFinished: true }] },
+    ]);
+    expect(ev.texts.size).toBe(0);
+    expect(ev.textMsgIds.has('msg_A')).toBe(true);
+    expect(ev.toolUseIds.has('toolu_1')).toBe(true);
+    expect(ev.finishedBgParents.has('toolu_bg')).toBe(true);
   });
 });

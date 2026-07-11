@@ -3,95 +3,55 @@ import { useEvent } from './useWebSocket';
 import { wsClient, type ConnectionState } from '@/api/ws';
 import { isToolResultError } from '@/api/chat';
 import { log } from '@/utils/log';
-import type { SessionHistoryMessage } from '@/types/session';
 import {
   trackSession,
   getStreamState,
   clearStreamState,
-  clearCompletedTurn,
   initStreamState,
+  type StreamSnapshot,
 } from '@/cache/session-cache';
-import { promoteCompletedBlocks } from '@/cache/promote-blocks';
 import { shouldAdoptSnapshot } from '@/cache/snapshot-adoption';
+import {
+  writeMainText,
+  appendMainThinking,
+  appendLaneText,
+  appendLaneThinking,
+  appendToolCall,
+  backfillToolResult,
+  findToolCall,
+  appendSystemBlock,
+  lastMainLaneText,
+  type StreamingBlock,
+  type StreamingPermissionBlock,
+} from '@/stream/stream-reducer';
 
-/** A streaming block — text, tool call, or tool result */
-export interface StreamingTextBlock {
-  type: 'text';
-  content: string;
-  /** API message id (`msg_…`) this block belongs to — same id as the persisted
-   *  history message, enabling id-based promotion instead of content matching.
-   *  ACP-dialect rule: a CHANGE in msgId = a new message = a new block.
-   *  Optional (absent on legacy events/snapshots). */
-  msgId?: string;
-}
-
-export interface StreamingToolCallBlock {
-  type: 'tool_call';
-  toolUseId: string;
-  name: string;
-  input?: Record<string, unknown>;
-  result?: string;
-  status: 'calling' | 'done' | 'error';
-  planContent?: string;
-  /** Non-null when this tool call belongs to a subagent Task */
-  parentToolUseId?: string;
-}
-
-export interface StreamingSystemBlock {
-  type: 'system';
-  variant: 'compact' | 'error' | 'info';
-  message: string;
-  detail?: string;
-}
-
-export interface StreamingPermissionBlock {
-  type: 'permission';
-  requestId: string;
-  toolName: string;
-  input?: Record<string, unknown>;
-  reason?: string;
-  /** Set when resolved (from snapshot or permission-resolved event). Absent = pending. */
-  status?: 'pending' | 'allowed' | 'denied';
-}
-
-/** Model reasoning ("thinking" mode). Rendered gray/italic, collapsible. */
-export interface StreamingThinkingBlock {
-  type: 'thinking';
-  content: string;
-  /** See StreamingTextBlock.msgId. */
-  msgId?: string;
-}
-
-export type StreamingBlock = StreamingTextBlock | StreamingToolCallBlock | StreamingSystemBlock | StreamingPermissionBlock | StreamingThinkingBlock;
-
-interface StreamSnapshot {
-  blocks: StreamingBlock[];
-  isStreaming: boolean;
-  /** Server-authoritative count of leading blocks that belong to finished turns.
-   *  MUST be preferred over deriving from isStreaming: a snapshot taken between
-   *  the next turn's markStreaming and its first delta carries the PREVIOUS
-   *  turn's blocks with isStreaming=true — deriving mislabels them "live" and
-   *  evidence-promotion then never removes them (permanent duplicates). */
-  completedLen?: number;
-  /** Monotonic server-side mutation counter for this session's buffer
-   *  (0 = no buffer). Future id-based adoption compares this against the
-   *  last-applied seq instead of guessing freshness from block lengths. */
-  seq?: number;
-}
+// Block types + accumulation semantics live in stream-reducer — the SINGLE copy
+// shared with session-cache (formerly three divergent mirrors). Re-exported so
+// existing `import type { … } from '@/hooks/useSessionStream'` sites keep working.
+export type {
+  StreamingBlock,
+  StreamingTextBlock,
+  StreamingToolCallBlock,
+  StreamingSystemBlock,
+  StreamingPermissionBlock,
+  StreamingThinkingBlock,
+} from '@/stream/stream-reducer';
 
 interface UseSessionStreamReturn {
-  /** Blocks accumulated during the current streaming session */
+  /** Blocks accumulated during the current streaming session. APPEND-ONLY:
+   *  reconciliation never deletes from this array — the render filter
+   *  (stream/render-filter.ts) HIDES blocks proven absorbed by history.
+   *  Physical removal happens only via resetIfAbsorbed() / session switch
+   *  (all-or-nothing), so block INDICES are stable render identities. */
   blocks: StreamingBlock[];
   /** Whether there's an active stream running */
   isStreaming: boolean;
-  /** Clear ALL accumulated blocks (session switch / hard reset) */
-  clear: () => void;
-  /** Turn-aware, EVIDENCE-BASED clear: remove a completed-turn block only if a
-   *  twin is present in `delta` (the just-arrived persisted messages). Blocks of a
-   *  turn that started streaming after the last session:result — and anything the
-   *  archive hasn't caught up on — are preserved. Returns the removed count so
-   *  callers can shift position anchors (blockIndexMap). */
-  clearCompleted: (delta?: SessionHistoryMessage[]) => number;
+  /** Memory reclamation: full reset iff EVERY block is hidden (absorbed by
+   *  history) and no turn is live. All-or-nothing keeps indices stable — no
+   *  partial deletion, no anchor shifting, no ordering sensitivity. The caller
+   *  (SessionChatHistory) holds the hidden set; passing hiddenCount here keeps
+   *  the evidence check at the layer that computed it. Returns true if reset. */
+  resetIfAbsorbed: (hiddenCount: number) => boolean;
 }
 
 /**
@@ -111,53 +71,21 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
   const resubscribePending = useRef(false);
   const safetyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Turn boundary: blocks[0..completedLen) belong to turns that already emitted
-  // session:result/session:error. Blocks past this index belong to a NEW turn that
-  // started streaming while the post-turn history refresh was still in flight —
-  // clearCompleted() must never wipe those (they'd vanish mid-generation).
+  // session:result/session:error. This is a MERGE boundary only — the next
+  // turn's deltas must never rewrite a finished turn's final block (see
+  // stream-reducer liveness rule). It no longer drives any deletion.
   const completedLen = useRef(0);
   // Server buffer seq recorded at the last adopted snapshot (Phase 1 seq-based
   // adoption). null = never adopted for this session / pre-seq server.
   const lastAdoptedSeq = useRef<number | null>(null);
-  // Race guard: clearCompleted() may run before session:result stamps the
-  // boundary (batch-completed precedes result by ~20-50ms in prod; a fast 304
-  // history refetch could land in between). Removing 0 blocks then would leave
-  // the whole turn duplicated against persisted history — instead defer the
-  // clear to the session:result handler.
-  const pendingClearRef = useRef(false);
-  // Ref mirrors so clearCompleted (a stable callback) can read current state
-  // synchronously. useLayoutEffect (not useEffect): callers invoke clearCompleted
-  // from their own useLayoutEffect, and this hook's effects flush first within
+  // Ref mirrors so resetIfAbsorbed (a stable callback) can read current state
+  // synchronously. useLayoutEffect (not useEffect): callers invoke it from
+  // their own useLayoutEffect, and this hook's effects flush first within
   // the same commit — useEffect would be one paint stale.
   const isStreamingRef = useRef(false);
   useLayoutEffect(() => { isStreamingRef.current = isStreaming; }, [isStreaming]);
   const blocksLenRef = useRef(0);
   useLayoutEffect(() => { blocksLenRef.current = blocks.length; }, [blocks]);
-  // Full current blocks[] mirror — clearCompleted needs the array (not just the
-  // length) to run evidence-based promotion synchronously and return the removed
-  // count for anchor-shifting. Kept in sync in the same layout phase as the length.
-  const blocksRef = useRef<StreamingBlock[]>(blocks);
-  useLayoutEffect(() => { blocksRef.current = blocks; }, [blocks]);
-  // Delta captured when a clearCompleted() was deferred (batch-completed raced
-  // ahead of session:result). Replayed as evidence once the boundary is stamped.
-  const pendingDeltaRef = useRef<SessionHistoryMessage[] | null>(null);
-
-  // Apply a deferred turn-clear once the boundary lands (session:result/error/
-  // status-backstop). EVIDENCE-BASED: promote against the stashed delta rather
-  // than blind-wiping. `prev` is the current blocks[]; returns the kept array.
-  // Assumes the boundary = prev.length (the whole present buffer is the finished
-  // turn — deferral only happens when nothing newer had streamed yet).
-  const applyDeferredClear = useCallback((prev: StreamingBlock[]): StreamingBlock[] => {
-    pendingClearRef.current = false;
-    const delta = pendingDeltaRef.current ?? [];
-    pendingDeltaRef.current = null;
-    const { kept, removed } = promoteCompletedBlocks(prev, delta, prev.length);
-    log.info('stream', `deferred clear applied: blocks=${prev.length}→${kept.length} (removed ${removed}, evidence)`, { sessionId: activeSessionId.current });
-    completedLen.current = kept.length; // whatever survived is still "completed" (unflushed), retried next delta
-    blocksLenRef.current = kept.length;
-    blocksRef.current = kept;
-    if (kept.length === 0 && activeSessionId.current) clearStreamState(activeSessionId.current);
-    return kept;
-  }, []);
 
   // Track WS connection state to re-subscribe on reconnect
   const [wsConnected, setWsConnected] = useState(wsClient.state === 'connected');
@@ -194,7 +122,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
       setBlocks([...cached.blocks]);
       setIsStreaming(cached.isStreaming);
       streamBuffer.current = cached.textBuffer;
-      completedLen.current = cached.completedLen ?? (cached.isStreaming ? 0 : cached.blocks.length);
+      completedLen.current = cached.completedLen;
     } else {
       setBlocks([]);
       setIsStreaming(false);
@@ -205,7 +133,6 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     // Session switch OR reconnect: the server buffer may be a new generation —
     // forget the adopted seq so the next snapshot falls back to legacy rules.
     lastAdoptedSeq.current = null;
-    pendingClearRef.current = false;
 
     // Always subscribe to get server snapshot for correction (background).
     //
@@ -251,7 +178,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
         });
         setIsStreaming((prev) => (snapshot.isStreaming && !prev) ? true : prev);
         if (appliedBlocks) {
-          const lastText = [...snapshot.blocks].reverse().find((b): b is StreamingTextBlock => b.type === 'text');
+          const lastText = lastMainLaneText(snapshot.blocks);
           streamBuffer.current = lastText ? lastText.content : '';
           // Seed global cache with server snapshot for correction
           initStreamState(sessionId, snapshot.blocks, snapshot.isStreaming, snapshot.completedLen);
@@ -324,7 +251,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
             }
             return prev;
           });
-          const lastText = [...snapshot.blocks].reverse().find((b): b is StreamingTextBlock => b.type === 'text');
+          const lastText = lastMainLaneText(snapshot.blocks);
           if (lastText) streamBuffer.current = lastText.content;
         }
       })
@@ -360,13 +287,9 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
           return false;
         });
         // Backstop turn boundary: if session:result was missed (WS drop), stamp
-        // the boundary here so the next clearCompleted() still drops this turn.
+        // the merge boundary so the next turn's deltas open a new block.
         setBlocks((prev) => {
           completedLen.current = Math.max(completedLen.current, prev.length);
-          if (pendingClearRef.current) {
-            // Deferred turn clear (batch-completed raced ahead) — apply with evidence.
-            return applyDeferredClear(prev);
-          }
           return prev;
         });
       } else {
@@ -432,22 +355,13 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
       cancelAnimationFrame(textDeltaRaf.current);
       textDeltaRaf.current = null;
 
-      // Apply buffered text synchronously
+      // Apply buffered text synchronously. Merge/new-block/liveness rules live
+      // in the reducer (single copy): merge only into a LIVE main-lane text
+      // block of the SAME message.
       const accumulated = streamBuffer.current;
       const msgId = currentTextMsgId.current;
       if (accumulated) {
-        setBlocks((prev) => {
-          const last = prev[prev.length - 1];
-          // Merge only into a LIVE text block (past the completed-turn boundary)
-          // of the SAME message; a completed turn's final text block must never
-          // be overwritten by the next turn's deltas, and a different msgId
-          // means a new message (new block).
-          const sameMessage = last && last.type === 'text' && (!msgId || !last.msgId || last.msgId === msgId);
-          if (sameMessage && prev.length > completedLen.current) {
-            return [...prev.slice(0, -1), { type: 'text', content: accumulated, ...(msgId ? { msgId } : {}) }];
-          }
-          return [...prev, { type: 'text', content: accumulated, ...(msgId ? { msgId } : {}) }];
-        });
+        setBlocks((prev) => writeMainText(prev, accumulated, msgId, completedLen.current));
       }
     }
   }, []);
@@ -463,13 +377,28 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
   }, []);
 
   useEvent('session:text-delta', (data) => {
-    const { sessionId: sid, delta, msgId } = data as { sessionId: string; delta: string; taskId: string; msgId?: string };
+    const { sessionId: sid, delta, msgId, parentToolUseId, subagentType, taskDescription } = data as {
+      sessionId: string; delta: string; taskId: string; msgId?: string; parentToolUseId?: string;
+      subagentType?: string; taskDescription?: string;
+    };
     if (!sessionId || sid !== sessionId) return; // defensive client-side check
 
     setIsStreaming((prev) => {
       if (!prev) log.info('stream', 'text-delta → isStreaming false→true', { sessionId: sid });
       return true;
     });
+
+    // Subagent lane: the CLI interleaves inline-subagent text into the middle
+    // of the main turn's token stream. It must NEVER touch the main rAF
+    // accumulator (that's what split main text mid-token) — append/merge
+    // directly into this lane's own block. Subagent text arrives as whole
+    // message chunks (assistant lines, not token streams), so no rAF coalescing
+    // is needed.
+    if (parentToolUseId) {
+      setBlocks((prev) => appendLaneText(prev, { delta, msgId, parentToolUseId, subagentType, taskDescription }));
+      return;
+    }
+
     // Message boundary: a different msgId means the previous message finished —
     // flush its pending rAF content, then restart the accumulator for the new one.
     if (msgId && currentTextMsgId.current && msgId !== currentTextMsgId.current) {
@@ -484,50 +413,43 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
         textDeltaRaf.current = null;
         const accumulated = streamBuffer.current;
         const accMsgId = currentTextMsgId.current;
-
-        setBlocks((prev) => {
-          const last = prev[prev.length - 1];
-          // Merge only into a LIVE text block of the SAME message — see flushPendingTextRaf.
-          const sameMessage = last && last.type === 'text' && (!accMsgId || !last.msgId || last.msgId === accMsgId);
-          if (sameMessage && prev.length > completedLen.current) {
-            return [...prev.slice(0, -1), { type: 'text', content: accumulated, ...(accMsgId ? { msgId: accMsgId } : {}) }];
-          }
-          return [...prev, { type: 'text', content: accumulated, ...(accMsgId ? { msgId: accMsgId } : {}) }];
-        });
+        setBlocks((prev) => writeMainText(prev, accumulated, accMsgId, completedLen.current));
       });
     }
   });
 
   // Handle tool use events
   useEvent('session:tool-use', (data) => {
-    const { sessionId: sid, toolName, toolUseId, input, planContent, parentToolUseId } = data as {
+    const { sessionId: sid, toolName, toolUseId, input, planContent, parentToolUseId, subagentType, taskDescription } = data as {
       sessionId: string; toolName: string; toolUseId: string;
       input?: Record<string, unknown>; taskId: string; planContent?: string; parentToolUseId?: string;
+      subagentType?: string; taskDescription?: string;
     };
     if (!sessionId || sid !== sessionId) return;
 
     setIsStreaming(true);
-    // Flush any pending text before resetting the buffer
-    flushPendingTextRaf();
-    streamBuffer.current = '';
+    // A MAIN-lane tool call interrupts the main text flow — flush and reset the
+    // accumulator. A subagent tool call (parentToolUseId set) lives in its own
+    // lane and must NOT cut the main turn's text mid-token.
+    if (!parentToolUseId) {
+      flushPendingTextRaf();
+      streamBuffer.current = '';
+    }
 
     setBlocks((prev) => {
       // DUP-DEBUG: detect duplicate tool_use rendering at the closest layer
       // to the UI. If this WARN fires, the same toolUseId already exists in
       // local block state when a new event arrived — that's exactly what the
       // user sees as two identical Bash panels.
-      const existing = prev.find((b) => b.type === 'tool_call' && b.toolUseId === toolUseId);
+      const existing = findToolCall(prev, toolUseId);
       if (existing) {
         log.warn('frontend', 'session:tool-use DUPLICATE — toolUseId already in blocks', {
           sessionId: sid, toolUseId, toolName,
-          existingStatus: existing.type === 'tool_call' ? existing.status : undefined,
+          existingStatus: existing.status,
           totalBlocks: prev.length,
         });
       }
-      return [
-        ...prev,
-        { type: 'tool_call', toolUseId, name: toolName, input, status: 'calling', ...(planContent ? { planContent } : {}), ...(parentToolUseId ? { parentToolUseId } : {}) },
-      ];
+      return appendToolCall(prev, { toolUseId, toolName, input, planContent, parentToolUseId, subagentType, taskDescription });
     });
   });
 
@@ -538,18 +460,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     };
     if (!sessionId || sid !== sessionId) return;
 
-    setBlocks((prev) => {
-      const updated = [...prev];
-      // Find the matching tool_call block and mark it done
-      for (let i = updated.length - 1; i >= 0; i--) {
-        const b = updated[i];
-        if (b.type === 'tool_call' && b.toolUseId === toolUseId && b.status === 'calling') {
-          updated[i] = { ...b, status: isToolResultError(result) ? 'error' : 'done', result };
-          break;
-        }
-      }
-      return updated;
-    });
+    setBlocks((prev) => backfillToolResult(prev, toolUseId, result, isToolResultError(result)));
   });
 
   // pendingThinking holds only deltas not yet flushed to setBlocks; it is the
@@ -563,10 +474,20 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
   const currentThinkingMsgId = useRef<string | undefined>(undefined);
 
   useEvent('session:thinking-delta', (data) => {
-    const { sessionId: sid, delta, msgId } = data as { sessionId: string; delta: string; msgId?: string };
+    const { sessionId: sid, delta, msgId, parentToolUseId } = data as {
+      sessionId: string; delta: string; msgId?: string; parentToolUseId?: string;
+    };
     if (!sessionId || sid !== sessionId) return;
 
     setIsStreaming(true);
+
+    // Subagent lane — same isolation rule as text-delta (whole-message chunks,
+    // no rAF coalescing needed).
+    if (parentToolUseId) {
+      setBlocks((prev) => appendLaneThinking(prev, { delta, msgId, parentToolUseId }));
+      return;
+    }
+
     if (msgId) currentThinkingMsgId.current = msgId;
     pendingThinking.current += delta;
 
@@ -577,16 +498,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
         const accMsgId = currentThinkingMsgId.current;
         pendingThinking.current = '';
         if (!incoming) return;
-        setBlocks((prev) => {
-          const last = prev[prev.length - 1];
-          // Merge only into a LIVE thinking block of the SAME message —
-          // a different msgId means a new message (new block).
-          const sameMessage = last && last.type === 'thinking' && (!accMsgId || !last.msgId || last.msgId === accMsgId);
-          if (sameMessage && prev.length > completedLen.current) {
-            return [...prev.slice(0, -1), { type: 'thinking', content: last.content + incoming, ...(accMsgId ? { msgId: accMsgId } : {}) }];
-          }
-          return [...prev, { type: 'thinking', content: incoming, ...(accMsgId ? { msgId: accMsgId } : {}) }];
-        });
+        setBlocks((prev) => appendMainThinking(prev, incoming, accMsgId, completedLen.current));
       });
     }
   });
@@ -599,10 +511,9 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     };
     if (!sessionId || sid !== sessionId) return;
 
-    setBlocks((prev) => [
-      ...prev,
-      { type: 'system', variant: 'info', message: `Unknown Claude event: ${scope}:${eventType}`, detail: snippet },
-    ]);
+    setBlocks((prev) => appendSystemBlock(prev, {
+      variant: 'info', message: `Unknown Claude event: ${scope}:${eventType}`, detail: snippet,
+    }));
   });
 
   // Handle system events (compact, error, info notifications)
@@ -616,7 +527,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     flushPendingTextRaf();
     streamBuffer.current = '';  // system event breaks text accumulation
 
-    setBlocks((prev) => [...prev, { type: 'system', variant, message, detail } as StreamingSystemBlock]);
+    setBlocks((prev) => appendSystemBlock(prev, { variant, message, detail }));
   });
 
   // Handle permission request events (control_request from Claude Code)
@@ -647,7 +558,10 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     ));
   });
 
-  // Handle session result (streaming done)
+  // Handle session result (streaming done). NOTE: session:batch-completed for
+  // the same turn reliably arrives BEFORE this event (server bus fans out
+  // synchronously in subscription order; the result re-emit awaits task
+  // enrichment) — nothing here may assume result-first ordering.
   useEvent('session:result', (data) => {
     const { sessionId: sid } = data as { sessionId: string };
     if (!sessionId || sid !== sessionId) return;
@@ -659,15 +573,12 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
       return false;
     });
     setBlocks((prev) => {
-      // Turn boundary: everything present now belongs to the completed turn.
-      // Deltas arriving after this point are the NEXT turn and must survive
-      // the upcoming clearCompleted() from batch-completed/history-refresh.
+      // Merge boundary: everything present now belongs to the completed turn.
+      // The next turn's deltas must open new blocks, never rewrite these.
+      // Nothing is deleted here — the render filter hides blocks once history
+      // absorbs them (non-destructive single-timeline model).
       completedLen.current = prev.length;
-      if (pendingClearRef.current) {
-        // A clearCompleted() ran before this boundary was known — apply with evidence.
-        return applyDeferredClear(prev);
-      }
-      log.info('stream', `session:result blocks=${prev.length} (kept, cleared by batch-completed)`, { sessionId: sid });
+      log.info('stream', `session:result blocks=${prev.length} (kept; hidden on absorption)`, { sessionId: sid });
       return prev;
     });
     streamBuffer.current = '';
@@ -686,86 +597,40 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     if (error) {
       const detail = error.length > 500 ? error.slice(0, 500) + '…' : error;
       setBlocks((prev) => {
-        const next = [...prev, { type: 'system', variant: 'error', message: 'Session error', detail } as StreamingSystemBlock];
+        const next = appendSystemBlock(prev, { variant: 'error', message: 'Session error', detail });
         completedLen.current = next.length; // error ends the turn
         return next;
       });
     } else {
       setBlocks((prev) => {
         completedLen.current = prev.length;
-        if (pendingClearRef.current) return applyDeferredClear(prev);
         return prev;
       });
     }
   });
 
-  const clear = useCallback(() => {
-    flushPendingTextRaf();
-    setBlocks((prev) => {
-      if (prev.length > 0) log.info('stream', `clear() blocks=${prev.length}→0`, { sessionId: activeSessionId.current });
-      return [];
-    });
-    setIsStreaming((prev) => {
-      if (prev) log.info('stream', `clear() isStreaming true→false`, { sessionId: activeSessionId.current });
-      return false;
-    });
-    streamBuffer.current = '';
+  // Memory reclamation (single-timeline model): the render filter has proven
+  // EVERY block absorbed by history — the array renders nothing, so dropping it
+  // has zero visual effect. All-or-nothing by design: partial deletion is what
+  // made the old model ordering-sensitive (shifted anchors, stale boundaries).
+  // hiddenCount comes from the caller's computeRenderFilter result; comparing
+  // against the CURRENT length guards against a block appended after that
+  // computation (then count < length → no-op, retried next render).
+  const resetIfAbsorbed = useCallback((hiddenCount: number): boolean => {
+    if (isStreamingRef.current) return false;
+    if (blocksLenRef.current === 0 || hiddenCount < blocksLenRef.current) return false;
+    log.info('stream', `resetIfAbsorbed: all ${blocksLenRef.current} blocks absorbed → reset`, { sessionId: activeSessionId.current });
+    setBlocks([]);
+    blocksLenRef.current = 0;
     completedLen.current = 0;
-    pendingClearRef.current = false;
+    streamBuffer.current = '';
+    currentTextMsgId.current = undefined;
+    // Permission dedup only matters within a turn; a re-emitted request next
+    // turn must not be swallowed.
     seenPermissionIds.current.clear();
-    // Sync-clear global cache so switching away and back doesn't restore stale blocks
     if (activeSessionId.current) clearStreamState(activeSessionId.current);
-  }, [flushPendingTextRaf]);
+    return true;
+  }, []);
 
-  // Turn-aware clear (batch-completed / history-refresh path): EVIDENCE-BASED —
-  // remove a completed-turn block ONLY if a twin is proven present in the
-  // just-arrived persisted `delta`. A block without a twin is kept (worst case:
-  // shown twice briefly; never vanishes). Blocks of a NEXT turn already streaming
-  // are structurally excluded by completedLen. Fixes the "messages 1-4 vanish
-  // while 5 is generating, then flash back" bug — the old full/position clear
-  // deleted live/unflushed content on faith; now deletion needs proof.
-  //
-  // `delta` = the persisted messages that just arrived (the increment since the
-  // last cursor). Returns the removed block count so callers shift position
-  // anchors (blockIndexMap).
-  const clearCompleted = useCallback((delta: SessionHistoryMessage[] = []): number => {
-    flushPendingTextRaf();
-    if (completedLen.current === 0 && isStreamingRef.current && blocksLenRef.current > 0) {
-      // Boundary not stamped yet (batch-completed/refetch raced ahead of
-      // session:result) — defer to the result handler, stashing the evidence.
-      pendingClearRef.current = true;
-      if (delta.length > 0) pendingDeltaRef.current = delta;
-      return 0;
-    }
-    // Compute synchronously from the blocks mirror — the setState updater runs
-    // later (at render), too late to produce this function's return value.
-    const { kept, removed, unmatched } = promoteCompletedBlocks(
-      blocksRef.current, delta, completedLen.current,
-    );
-    if (unmatched.length > 0) {
-      // Content diverged / missing twin: we KEPT these (safe), but surface it —
-      // a persistent occurrence means the archive & stream disagree (a real bug).
-      log.warn('stream', `clearCompleted: ${unmatched.length} completed block(s) had no delta twin — kept, not deleted`, {
-        sessionId: activeSessionId.current, unmatched: unmatched.slice(0, 5),
-      });
-    }
-    if (removed > 0) {
-      log.info('stream', `clearCompleted() blocks=${blocksRef.current.length}→${kept.length} (removed ${removed}, evidence)`, { sessionId: activeSessionId.current });
-      setBlocks(kept);
-      blocksLenRef.current = kept.length;
-      blocksRef.current = kept;
-      completedLen.current = Math.max(0, completedLen.current - removed);
-    }
-    // Nothing left and turn ended → full reset; clear permission dedup so a
-    // re-emitted request next turn isn't swallowed.
-    if (kept.length === 0 && !isStreamingRef.current) {
-      seenPermissionIds.current.clear();
-    }
-    // Mirror into the global cache (same evidence) so switching away/back doesn't
-    // restore the already-persisted turn.
-    if (activeSessionId.current) clearCompletedTurn(activeSessionId.current, delta);
-    return removed;
-  }, [flushPendingTextRaf]);
-
-  return { blocks, isStreaming, clear, clearCompleted };
+  return { blocks, isStreaming, resetIfAbsorbed };
 }

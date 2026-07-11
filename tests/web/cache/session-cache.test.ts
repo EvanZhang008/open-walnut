@@ -537,26 +537,37 @@ describe('WS: session:batch-completed', () => {
     });
   });
 
-  it('batch-completed BEFORE result (race): defers the clear until result replays the delta evidence', async () => {
+  it('batch-completed BEFORE result (race): live tail is never GC\'d mid-turn; the next evidence pass after result collects it', async () => {
     trackSession('sid');
     fireEvent('session:text-delta', { sessionId: 'sid', delta: 'still streaming' });
     // batch-completed arrives ~50ms before session:result (observed in prod).
-    // Delta carries the block's twin, but the boundary isn't stamped yet → defer.
+    // Delta happens to carry a twin of the ACCUMULATING block's partial
+    // content — the live-tail guard must not let that GC a mid-turn block.
     mockFetchHistory.mockResolvedValue({
       messages: [{ role: 'assistant', text: 'still streaming', timestamp: '' }], delta: true, cursor: 1,
     });
     fireEvent('session:batch-completed', { sessionId: 'sid' });
 
-    // Live blocks must NOT be wiped mid-turn (boundary unknown → deferred).
     await vi.waitFor(() => expect(mockFetchHistory).toHaveBeenCalled());
     let state = getStreamState('sid');
     expect(state).toBeDefined();
     expect(state!.blocks).toHaveLength(1);
 
-    // result lands → deferred clear replays the stashed delta as evidence → block removed.
+    // result lands → single-timeline model: nothing is deleted at the turn
+    // boundary (the render filter hides absorbed blocks). The block stays in
+    // the cache with the boundary stamped.
     fireEvent('session:result', { sessionId: 'sid' });
     state = getStreamState('sid');
-    expect(state).toBeUndefined();
+    expect(state).toBeDefined();
+    expect(state!.isStreaming).toBe(false);
+    expect(state!.blocks).toHaveLength(1);
+
+    // The next evidence pass (another batch-completed → same delta) GCs the
+    // now-finished block; the state empties and is dropped. Yield a tick first
+    // so the first fetch's .finally releases the inflight guard.
+    await new Promise((r) => setTimeout(r, 0));
+    fireEvent('session:batch-completed', { sessionId: 'sid' });
+    await vi.waitFor(() => expect(getStreamState('sid')).toBeUndefined());
   });
 
   it('next-turn text-delta after result starts a NEW block (never merges into completed text)', () => {

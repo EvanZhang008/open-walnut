@@ -12,11 +12,12 @@
  * NEXT turn's blocks that had already started streaming (the "vanish"), and the
  * flash-back was the server snapshot briefly restoring them before the next clear.
  *
- * The fix (`promoteCompletedBlocks`): a completed-turn block is removed ONLY when a
- * TWIN is proven present in the just-arrived persisted delta (tool_call→toolUseId,
- * text/thinking→verbatim content). No twin (archive lagging / broken) → the block
- * is KEPT. A next turn already streaming is structurally protected by `completedLen`.
- * The guaranteed failure mode is "shown twice for a moment", NEVER "vanishes".
+ * The fix (single-timeline model, stream/render-filter.ts): blocks are
+ * APPEND-ONLY — nothing is deleted at turn boundaries. A block is HIDDEN at
+ * render time only when history proves a twin (tool_call→toolUseId,
+ * text→msgId/content, lane→bgTaskFinished). No twin (archive lagging /
+ * broken) → the block keeps rendering. The guaranteed failure mode is "shown
+ * twice for a moment", NEVER "vanishes".
  *
  * These tests assert that guarantee against a REAL browser + the real React
  * components — the delta history API, the useSessionStream hook, and the
@@ -268,7 +269,9 @@ test.describe('Streaming blocks survive turn boundaries (evidence-based promotio
     expect(txt, 'unmatched streaming block must be KEPT, never deleted').toContain('IMPORTANT RESULT A that the archive will drop');
 
     // A divergence warning must have been surfaced (kept, not deleted).
-    const hadWarning = warnings.some((w) => /no delta twin|clearCompleted/i.test(w));
+    // Matches the render-filter tripwire in SessionChatHistory ("render-filter:
+    // N completed block(s) had no delta twin — kept, not deleted").
+    const hadWarning = warnings.some((w) => /no delta twin/i.test(w));
     expect(hadWarning, `expected a "no delta twin — kept" warning; saw: ${warnings.slice(0, 8).join(' | ')}`).toBe(true);
   });
 });

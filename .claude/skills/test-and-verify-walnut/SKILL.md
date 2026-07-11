@@ -217,4 +217,24 @@ sessionRunner.setCliCommand(MOCK_WRAPPER); // before startServer
 
 ## Learned Patterns
 
-*(None yet.)*
+- **Real-session browser specs are now possible**: `tests/e2e/browser/test-server.ts` wires a
+  MockDaemon + mock CLI (`sessionRunner.setCliCommand` + `setTestDaemonUrl`) into the Playwright
+  server, so specs can create LIVE sessions via the `session:start` WS RPC and exercise the real
+  event pipeline (no `__capturedWs` injection needed). Disable with `PW_NO_MOCK_DAEMON=1` when
+  bisecting whether a failure comes from this wiring. See
+  `tests/e2e/browser/single-timeline-real-pipeline.spec.ts` for the pattern (start session →
+  poll `/api/sessions/task/:id` for the `mock-session-*` id → open `/sessions?id=`).
+- **`chunk-delay:<ms>` mock-CLI prefix**: spaces out `content_block_delta` emissions in
+  `stream-partial-thinking-then-text` so browser tests can observe partial text mid-turn
+  (the default burst is synchronous and races any DOM poll). Composable: `chunk-delay:250
+  stream-partial-thinking-then-text`.
+- **MockDaemon JSONL is NOT where history REST reads**: the MockDaemon captures CLI output in its
+  own tmpDir; `GET /:id/history` falls back to `SESSION_STREAMS_DIR/<sid>.jsonl`. Vitest tests
+  that need real-parser history must copy `daemon.streamFilePath(sid)` →
+  `SESSION_STREAMS_DIR` first (see `publishStreamsFile` in
+  `tests/web/stream/single-timeline-real-pipeline.test.ts`). Symptom otherwise: history 200 with
+  0 messages forever.
+- **Full-suite failure triage**: `npx playwright test` failures may come from PARALLEL agents'
+  uncommitted UI changes, not yours. Bisect by re-running the failing spec against the HEAD
+  version of the shared harness file you touched (`git checkout <file>` → run → restore) before
+  assuming a regression.
