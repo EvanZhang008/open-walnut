@@ -4294,7 +4294,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                       </div>
                       {!collapsedSections.has('satellite') && (
                         <SortableContext items={satelliteIds_arr} strategy={verticalListSortingStrategy}>
-                          <div className="todo-pinned-list todo-pinned-list-scroll" style={satelliteResize.height != null ? { maxHeight: satelliteResize.height } : undefined}>
+                          <div className={`todo-pinned-list todo-pinned-list-scroll${groupDragTier === 'satellite' ? ' todo-focus-drop-zone-over' : ''}`} style={satelliteResize.height != null ? { maxHeight: satelliteResize.height } : undefined}>
                             {satelliteTasksDisplay.map((task) => (
                               <SortableTierCard key={task.id} task={task} tier="satellite" isFocused={focusedTaskId === task.id} isSessionOpen={openSessionTaskIds?.has(task.id) ?? false} isDetailOpen={focusedTaskId === task.id && !suppressDetail} onClick={handlePinnedCardClick} onSetTier={onSetTier} onUnpinTask={onUnpinTask} onPinTask={onPinTask} onSetPriority={onSetPriority} onSetDate={onSetDate} onStar={onStar} onExpandDetail={handleExpandDetail} onClearFocus={onClearFocus} onOpenSession={onOpenSession} onSetPhase={setPhaseOrComplete} onUpdateTitle={onUpdate ? handleUpdateTitle : undefined} onDelete={onDelete} groupInfo={satelliteGroupMeta.get(task.id)} onRenameGroup={handleRenameGroup} onDissolveGroup={handleDissolveGroup} onHideGroup={handleHideGroup} selectMode={selectMode} isSelected={selectedIds.has(task.id)} onSelectToggle={onSelectToggle} onStartSelect={onStartSelect} isGroupTarget={groupTargetId === task.id} />
                             ))}
@@ -4326,7 +4326,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     {!collapsedSections.has('wait') && (
                       <SortableContext items={waitIds_arr} strategy={verticalListSortingStrategy}>
                         <div className="todo-pinned-list-scroll" style={waitResize.height != null ? { maxHeight: waitResize.height } : undefined}>
-                          <TierDropZone id="wait-drop-zone" isEmpty={waitTasksDisplay.length === 0}>
+                          <TierDropZone id="wait-drop-zone" isEmpty={waitTasksDisplay.length === 0} forceOver={groupDragTier === 'wait'}>
                             {waitTasksDisplay.map((task) => (
                               <SortableTierCard key={task.id} task={task} tier="wait" isFocused={focusedTaskId === task.id} isSessionOpen={openSessionTaskIds?.has(task.id) ?? false} isDetailOpen={focusedTaskId === task.id && !suppressDetail} onClick={handlePinnedCardClick} onSetTier={onSetTier} onUnpinTask={onUnpinTask} onPinTask={onPinTask} onSetPriority={onSetPriority} onSetDate={onSetDate} onStar={onStar} onExpandDetail={handleExpandDetail} onClearFocus={onClearFocus} onOpenSession={onOpenSession} onSetPhase={setPhaseOrComplete} onUpdateTitle={onUpdate ? handleUpdateTitle : undefined} onDelete={onDelete} groupInfo={waitGroupMeta.get(task.id)} onRenameGroup={handleRenameGroup} onDissolveGroup={handleDissolveGroup} onHideGroup={handleHideGroup} selectMode={selectMode} isSelected={selectedIds.has(task.id)} onSelectToggle={onSelectToggle} onStartSelect={onStartSelect} isGroupTarget={groupTargetId === task.id} />
                             ))}

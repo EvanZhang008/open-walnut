@@ -408,12 +408,16 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
 
 // ── TierDropZone — droppable target for any tier section ──
 
-export function TierDropZone({ id, isEmpty, children }: { id: string; isEmpty: boolean; children: React.ReactNode }) {
+export function TierDropZone({ id, isEmpty, children, forceOver }: { id: string; isEmpty: boolean; children: React.ReactNode; forceOver?: boolean }) {
   const { setNodeRef, isOver } = useDroppable({ id });
+  // forceOver lights the zone when a whole-group drag is hovering this tier — the
+  // group chip's `over` target is a member card, not the zone, so useDroppable's own
+  // isOver stays false and the tier would otherwise give no landing feedback.
+  const lit = isOver || !!forceOver;
   return (
     <div
       ref={setNodeRef}
-      className={`todo-pinned-list todo-focus-drop-zone${isEmpty ? ' todo-focus-drop-zone-empty' : ''}${isOver ? ' todo-focus-drop-zone-over' : ''}`}
+      className={`todo-pinned-list todo-focus-drop-zone${isEmpty ? ' todo-focus-drop-zone-empty' : ''}${lit ? ' todo-focus-drop-zone-over' : ''}`}
     >
       {children}
       {isEmpty && (
