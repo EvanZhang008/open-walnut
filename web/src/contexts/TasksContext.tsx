@@ -20,8 +20,12 @@ export interface TasksContextValue {
   reorder: (category: string, project: string, taskIds: string[]) => void;
   moveTask: (taskId: string, category: string, project: string, insertNearTaskId?: string) => void;
   reparentTask: (taskId: string, newParentId: string | null, opts?: { insertAfterId?: string }) => void;
-  deleteTask: (id: string) => Promise<void>;
+  deleteTask: (id: string) => void;
   bakeOrder: (orderedIds: string[]) => void;
+  /** Local-only batch patch (no API call) — for optimistic flows (Focus Bar pin/tier). */
+  patchTasksLocal: (patches: Record<string, Partial<Task>>) => void;
+  /** Suppress the next WS echo for a key (e.g. `update:<id>`) — pair with own API call. */
+  guardEcho: (key: string) => void;
   taskGroups: Record<string, string>;
   hiddenGroups: Set<string>;
   groupTasks: (taskIds: string[], label?: string) => void;

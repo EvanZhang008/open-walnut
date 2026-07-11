@@ -564,7 +564,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     const handleDockTask = (e: Event) => {
       const { taskId, sessionId } = (e as CustomEvent).detail as { taskId: string; sessionId?: string };
       const task = taskMapRef.current.get(taskId);
-      if (task) setFocusedTask(task);
+      // Nonce bump marks this as a user locate action — TodoPanel only
+      // auto-expands collapsed sections for those (never on refresh restore).
+      if (task) { setFocusedTask(task); setFocusNonce((n) => n + 1); }
       if (sessionId) openSessionOrToast(sessionId);
     };
     const handleDockChat = () => {
@@ -846,7 +848,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       const session = await fetchSession(sessionId);
       if (session?.taskId) {
         const task = taskMapRef.current.get(session.taskId);
-        if (task) setFocusedTask(task);
+        // User locate action — bump nonce so TodoPanel auto-expands to it.
+        if (task) { setFocusedTask(task); setFocusNonce((n) => n + 1); }
       }
     } catch { /* non-critical */ }
   }, []);
@@ -1406,8 +1409,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         </div>
       </div>
 
-      {/* Sessions Area Resize Handle */}
-      {(sessionColumns.length > 0 || triagePanelOpen) && (
+      {/* Sessions Area Resize Handle — only when chat is visible: with chat
+          collapsed the sessions area is flex:1 (fills the row), so this handle
+          can't resize anything and would just double the todo↔sessions gutter. */}
+      {chatVisible && (sessionColumns.length > 0 || triagePanelOpen) && (
         <div className="session-resize-handle" onMouseDown={sessionPanel.handleResizeStart} />
       )}
 

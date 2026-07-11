@@ -1862,36 +1862,8 @@ input:focus, textarea:focus, select:focus {
   transition: none;
 }
 
-.sessions-resize-handle {
-  width: 6px;
-  flex-shrink: 0;
-  cursor: col-resize;
-  position: relative;
-  z-index: 5;
-  transition: background 0.15s;
-}
-
-.sessions-resize-handle:hover {
-  background: color-mix(in srgb, var(--accent) 30%, transparent);
-}
-
-.sessions-resize-handle::after {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 3px;
-  height: 32px;
-  border-radius: 2px;
-  background: var(--accent);
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-
-.sessions-resize-handle:hover::after {
-  opacity: 0.6;
-}
+/* .sessions-resize-handle — styled by the unified panel-gutter pattern
+   (see "Unified panel resize gutters" near .todo-resize-handle). */
 
 .sessions-detail-pane {
   flex: 1;
@@ -4352,36 +4324,8 @@ input:focus, textarea:focus, select:focus {
   transition: none;
 }
 
-.memory-resize-handle {
-  width: 6px;
-  flex-shrink: 0;
-  cursor: col-resize;
-  position: relative;
-  background: transparent;
-  transition: background 0.15s;
-}
-
-.memory-resize-handle:hover {
-  background: color-mix(in srgb, var(--accent) 30%, transparent);
-}
-
-.memory-resize-handle::after {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 2px;
-  height: 30px;
-  border-radius: 1px;
-  background: var(--fg-tertiary);
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-
-.memory-resize-handle:hover::after {
-  opacity: 0.6;
-}
+/* .memory-resize-handle — styled by the unified panel-gutter pattern
+   (see "Unified panel resize gutters" near .todo-resize-handle). */
 
 .memory-detail-pane {
   flex: 1;
@@ -7570,37 +7514,68 @@ img[data-lightbox-src],
   pointer-events: none;
 }
 
-/* ===== Todo Resize Handle ===== */
-
-.todo-resize-handle {
-  width: 6px;
+/* ===== Unified panel resize gutters =====
+   ONE pattern for every vertical panel divider (todo↔chat, chat↔sessions,
+   sessions/memory/notes list↔detail, session col↔col): the visible divider is a
+   single 1px line — the adjacent panel's existing border — and the handle itself
+   takes NO layout space (no more pale 6-8px gap band). An invisible ±3px hot
+   zone straddles the line for grabbing; a full-height 3px accent bar fades in
+   on hover as the drag affordance. */
+.todo-resize-handle,
+.session-resize-handle,
+.sessions-resize-handle,
+.memory-resize-handle,
+.notes-resize-handle,
+.session-col-resize-handle {
+  width: 0;
   flex-shrink: 0;
-  cursor: col-resize;
   position: relative;
   z-index: 5;
-  transition: background 0.15s;
+  cursor: col-resize;
 }
-
-.todo-resize-handle:hover {
-  background: color-mix(in srgb, var(--accent) 30%, transparent);
+/* Between two session columns there is no adjacent panel border, so this one
+   handle draws the 1px line itself. */
+.session-col-resize-handle {
+  border-left: 1px solid var(--border);
 }
-
-.todo-resize-handle::after {
+.todo-resize-handle::before,
+.session-resize-handle::before,
+.sessions-resize-handle::before,
+.memory-resize-handle::before,
+.notes-resize-handle::before,
+.session-col-resize-handle::before {
   content: '';
   position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  right: -3px;
+  cursor: col-resize;
+}
+.todo-resize-handle::after,
+.session-resize-handle::after,
+.sessions-resize-handle::after,
+.memory-resize-handle::after,
+.notes-resize-handle::after,
+.session-col-resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -1px;
   width: 3px;
-  height: 32px;
-  border-radius: 2px;
   background: var(--accent);
   opacity: 0;
   transition: opacity 0.15s;
+  pointer-events: none;
 }
-
-.todo-resize-handle:hover::after {
-  opacity: 0.6;
+.todo-resize-handle:hover::after,
+.session-resize-handle:hover::after,
+.sessions-resize-handle:hover::after,
+.memory-resize-handle:hover::after,
+.notes-resize-handle:hover::after,
+.session-col-resize-handle:hover::after {
+  opacity: 0.5;
 }
 
 .main-page-todo.resizing {
@@ -7640,71 +7615,9 @@ img[data-lightbox-src],
   overflow: hidden;
 }
 
-.session-resize-handle {
-  width: 8px;
-  flex-shrink: 0;
-  cursor: col-resize;
-  position: relative;
-  z-index: 5;
-  transition: background 0.15s;
-}
-
-.session-resize-handle::after {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 4px;
-  height: 40px;
-  border-radius: 3px;
-  background: var(--border);
-  opacity: 0.5;
-  transition: opacity 0.15s, background 0.15s;
-}
-
-.session-resize-handle:hover {
-  background: color-mix(in srgb, var(--accent) 20%, transparent);
-}
-
-.session-resize-handle:hover::after {
-  background: var(--accent);
-  opacity: 0.8;
-}
-
-/* Draggable handle between session columns (inside sessions area) */
-.session-col-resize-handle {
-  width: 8px;
-  flex-shrink: 0;
-  cursor: col-resize;
-  position: relative;
-  z-index: 5;
-  border-left: 1px solid var(--border);
-  transition: background 0.15s;
-}
-
-.session-col-resize-handle::after {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 4px;
-  height: 40px;
-  border-radius: 3px;
-  background: var(--border);
-  opacity: 0.5;
-  transition: opacity 0.15s, background 0.15s;
-}
-
-.session-col-resize-handle:hover {
-  background: color-mix(in srgb, var(--accent) 20%, transparent);
-}
-
-.session-col-resize-handle:hover::after {
-  background: var(--accent);
-  opacity: 0.8;
-}
+/* .session-resize-handle + .session-col-resize-handle — styled by the unified
+   panel-gutter pattern (see "Unified panel resize gutters" near
+   .todo-resize-handle). */
 
 .session-panel {
   display: flex;
@@ -8515,12 +8428,25 @@ img[data-lightbox-src],
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  container-type: inline-size;
 }
 .todo-panel-toolbar .todo-search-bar {
   flex: 1;
+  /* min-width: 0 overrides the flex-item default (auto) so the search bar can
+     shrink below its content width when the tasks panel is dragged narrow —
+     otherwise it pushes the View trigger past the panel's overflow:hidden edge. */
+  min-width: 0;
   margin: 0;
   padding: 0;
   border-bottom: none;
+}
+/* Panel dragged narrow: shed the search bar's secondary controls (mic first,
+   then result count) so the input and the View trigger always stay visible. */
+@container (max-width: 240px) {
+  .todo-panel-toolbar .mic-btn-wrapper { display: none; }
+}
+@container (max-width: 170px) {
+  .todo-panel-toolbar .todo-search-count { display: none; }
 }
 
 /* ── Task Session Badge ("S" pill, same size as source badge) ── */
@@ -8574,11 +8500,14 @@ img[data-lightbox-src],
 
 /* Panel */
 .vd-panel {
-  position: absolute; top: calc(100% + 4px); right: 0; z-index: 100;
-  width: 340px; max-height: 80vh; overflow-y: auto;
+  /* Rendered in a portal on document.body — top/left/width/maxHeight come inline
+     from ViewDropdown's placement math (PANEL_WIDTH const), so no ancestor can
+     clip or cover it. z-index matches .session-fork-popover (above overlays). */
+  position: fixed; z-index: 10001;
+  overflow-y: auto; overflow-x: hidden;
   background: var(--card-bg); border: 1px solid var(--border-strong);
   border-radius: 10px; box-shadow: var(--card-shadow-hover);
-  padding: 10px; animation: contextBarSlideIn 0.12s ease-out;
+  padding: 12px; animation: contextBarSlideIn 0.12s ease-out;
 }
 
 /* Categories: 2-column chip grid */
@@ -8604,30 +8533,33 @@ img[data-lightbox-src],
 /* Separator */
 .vd-sep { height: 1px; background: var(--border); margin: 8px 0; }
 
-/* Filters row: inline selects side by side */
-.vd-filters { display: flex; gap: 8px; flex-wrap: wrap; }
-.vd-inline-sel { display: flex; align-items: center; gap: 4px; }
-.vd-inline-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--fg-muted); }
+/* Controls grid: 2 columns of fields (label above control) — never overflows the panel */
+.vd-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px;
+}
+.vd-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.vd-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--fg-muted); }
 .vd-sel {
-  font-size: 11px; padding: 3px 6px; border: 1px solid var(--border);
-  border-radius: 5px; background: var(--bg-secondary); color: var(--fg-primary);
-  cursor: pointer; max-width: 100px;
+  width: 100%; min-width: 0;
+  font-size: 12px; padding: 4px 8px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--bg-secondary); color: var(--fg-primary);
+  cursor: pointer;
 }
 .vd-sel:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .vd-sel.vd-filtered { color: var(--accent); border-color: var(--accent); font-weight: 500; }
 
-/* Sort + Group: segmented controls side by side */
-.vd-controls { display: flex; gap: 12px; align-items: center; }
-.vd-control-group { display: flex; align-items: center; gap: 6px; }
-.vd-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--fg-muted); }
+/* Sort + Group: segmented controls fill their grid cell */
 .vd-seg {
-  display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+  display: flex; width: 100%;
+  border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
 }
 .vd-seg-btn {
-  padding: 3px 8px; font-size: 11px; font-weight: 500;
+  flex: 1; min-width: 0;
+  padding: 4px 6px; font-size: 11px; font-weight: 500;
   background: var(--bg-secondary); color: var(--fg-secondary);
   border: none; border-right: 1px solid var(--border);
   cursor: pointer; transition: all 0.1s;
+  white-space: nowrap;
 }
 .vd-seg-btn:last-child { border-right: none; }
 .vd-seg-btn:hover { background: var(--hover-bg, rgba(0,0,0,0.04)); }
@@ -8774,6 +8706,15 @@ img[data-lightbox-src],
   line-height: 16px;
 }
 
+/* TASKS section bar — standalone sibling of .todo-pinned-wrapper (not inside a
+   .todo-pinned-section), so it carries its own padding + separator. */
+.todo-tasks-header {
+  flex-shrink: 0;
+  padding: 6px 12px 5px;
+  margin-bottom: 0;
+  border-bottom: 1px solid var(--border);
+}
+
 .todo-pinned-list {
   display: flex;
   flex-direction: column;
@@ -8783,6 +8724,67 @@ img[data-lightbox-src],
 .todo-pinned-list-scroll {
   overflow-y: auto;
   scrollbar-width: thin;
+}
+
+/* Per-tier resize handle — one under each of Focus/Satellite/Wait, independent
+   of the others and of the overall Pinned/list splitter. Always visible as ONE
+   hairline with a centered grip pill (so it reads as draggable at rest); it
+   REPLACES the subgroup divider border — keep it the only line here. */
+.todo-tier-resize-handle {
+  height: 9px;
+  margin: 1px -12px 0;
+  cursor: row-resize;
+  position: relative;
+  transition: background 0.15s;
+}
+
+/* the hairline */
+.todo-tier-resize-handle::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  background: var(--border);
+  transition: background 0.15s;
+}
+
+/* the grip pill — always visible so the line is discoverably draggable */
+.todo-tier-resize-handle::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 32px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--fg-muted);
+  opacity: 0.55;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.todo-tier-resize-handle:hover,
+.todo-tier-resize-handle.dragging {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.todo-tier-resize-handle:hover::before,
+.todo-tier-resize-handle.dragging::before {
+  background: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+.todo-tier-resize-handle:hover::after,
+.todo-tier-resize-handle.dragging::after {
+  background: var(--accent);
+  opacity: 1;
+}
+
+/* Last tier (Wait): the section's own border-bottom sits right below — skip
+   this handle's hairline so the boundary stays a single line (grip remains). */
+.todo-pinned-subgroup:last-child .todo-tier-resize-handle::before {
+  display: none;
 }
 
 .todo-pinned-card {
@@ -8952,6 +8954,15 @@ img[data-lightbox-src],
   margin-top: 6px;
   padding-top: 4px;
   border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+}
+
+/* An EXPANDED tier already ends with a .todo-tier-resize-handle that draws the
+   divider hairline — drop the next subgroup's border-top so there's one line,
+   not two. Collapsed tiers have no handle and keep the plain border above. */
+.todo-pinned-subgroup:has(.todo-tier-resize-handle) + .todo-pinned-subgroup {
+  border-top: none;
+  margin-top: 2px;
+  padding-top: 0;
 }
 
 .todo-pinned-sublabel {
@@ -9154,6 +9165,13 @@ img[data-lightbox-src],
   overflow-y: auto;
   padding: 0 12px 80px;
   min-height: 0;
+}
+
+/* Fully-lowered main list (pinned splitter dragged to the bottom): the 80px
+   bottom padding would otherwise keep ~80px of dead space visible at flex 0. */
+.todo-panel-list-collapsed {
+  padding: 0 12px;
+  overflow: hidden;
 }
 
 .todo-panel-item {
@@ -10446,13 +10464,20 @@ img[data-lightbox-src],
 .global-notes-section {
   flex-shrink: 0;
   border-top: 1px solid var(--border);
+  /* Always dock to the panel bottom. Without this, collapsing the Tasks
+     section leaves no flex-growing sibling, Notes floats mid-panel with dead
+     space below, and dragging its top handle reads as "the bottom shrinks". */
+  margin-top: auto;
 }
 
+/* Header metrics match the PINNED/RECENT/TASKS section rows exactly —
+   same left padding, chevron box, and label typography, so the four rows
+   read as one aligned family. */
 .global-notes-header {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 16px;
+  gap: 5px;
+  padding: 6px 12px;
   cursor: pointer;
   user-select: none;
   font-size: 12px;
@@ -10464,14 +10489,19 @@ img[data-lightbox-src],
 }
 
 .global-notes-chevron {
-  font-size: 10px;
-  width: 12px;
+  font-size: 9px;
+  width: 10px;
   text-align: center;
   color: var(--fg-muted);
+  flex-shrink: 0;
 }
 
 .global-notes-label {
+  font-size: 11px;
   font-weight: 600;
+  color: var(--fg-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   flex: 1;
 }
 
@@ -18958,18 +18988,8 @@ a.task-kebab-info:hover {
   transition: none;
 }
 
-.notes-resize-handle {
-  width: 6px;
-  flex-shrink: 0;
-  cursor: col-resize;
-  position: relative;
-  background: transparent;
-  transition: background 0.15s;
-}
-
-.notes-resize-handle:hover {
-  background: color-mix(in srgb, var(--accent) 30%, transparent);
-}
+/* .notes-resize-handle — styled by the unified panel-gutter pattern
+   (see "Unified panel resize gutters" near .todo-resize-handle). */
 
 .notes-editor-pane {
   flex: 1;
@@ -20589,17 +20609,37 @@ a.file-link:hover {
   display: none !important;
 }
 
-/* Drag handle between the diff and the chat column. */
+/* Drag handle between the diff and the chat column. Thin + transparent at
+   rest (matches .todo-pinned-splitter / .session-resize-handle elsewhere) —
+   only the centered ::after pill reveals on hover, so it doesn't read as a
+   permanent thick bar down the middle of the panel. */
 .session-panel-chat-resize,
 .sessions-detail-chat-resize {
-  flex: 0 0 5px;
+  flex: 0 0 6px;
   cursor: col-resize;
-  background: var(--border);
-  opacity: 0.5;
-  transition: opacity 0.15s, background 0.15s;
+  position: relative;
+  background: transparent;
+  transition: background 0.15s;
 }
 .session-panel-chat-resize:hover,
-.sessions-detail-chat-resize:hover { opacity: 1; background: var(--accent); }
+.sessions-detail-chat-resize:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+
+.session-panel-chat-resize::after,
+.sessions-detail-chat-resize::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 3px;
+  height: 32px;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.session-panel-chat-resize:hover::after,
+.sessions-detail-chat-resize:hover::after { opacity: 0.6; }
 
 /* Collapse chat → a thin rail with a 💬 button to restore it. */
 .session-chat-collapsed-rail {

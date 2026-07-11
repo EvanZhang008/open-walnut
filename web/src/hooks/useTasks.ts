@@ -37,6 +37,10 @@ function tasksShallowEqual(a: Task, b: Task): boolean {
     'parent_task_id', 'group_id', 'starred', 'due_date', 'completed_at', 'updated_at',
     'sync_error', 'external_url', 'needs_attention', 'source', 'sprint',
     'cwd', 'session_id', 'plan_session_id', 'exec_session_id',
+    // Focus Bar state is now DERIVED from task objects (useFocusBar), so pin
+    // changes must count as UI-visible diffs — without these keys a task:updated
+    // echo whose only change is pin/tier would bail as "shallow equal".
+    'pinned', 'focus_tier', 'pin_order',
   ];
   for (const k of scalarKeys) if (a[k] !== b[k]) return false;
   const arrKeys: (keyof Task)[] = ['tags', 'depends_on'];
@@ -250,6 +254,15 @@ interface UseTasksReturn {
    * Used by manual-sort auto-switch so the display doesn't reshuffle across sort modes.
    */
   bakeOrder: (orderedIds: string[]) => void;
+  deleteTask: (id: string) => void;
+  /**
+   * Local-only batch patch (no API call, no echo guard) — one setTasks pass for
+   * all entries. Used by optimistic flows that own their persistence (Focus Bar
+   * pin/tier/reorder). Unknown ids are skipped.
+   */
+  patchTasksLocal: (patches: Record<string, Partial<Task>>) => void;
+  /** Suppress the next WS echo for a key (e.g. `update:<id>`) — pair with own API call. */
+  guardEcho: (key: string) => void;
   /** Virtual-group name registry: group_id → label. */
   taskGroups: Record<string, string>;
   /** Set of group_ids currently hidden from the Focus (pinned) area. */
@@ -425,8 +438,18 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
       c.lastLogAt = now;
       log.info('tasks', 'ws event counts', { created: c.created, updated: c.updated, completed: c.completed, sessionChanged: c.sessionChanged });
     }
-    // Deduplicate: if task with same id already exists, skip
-    setTasks((prev) => prev.some((t) => t.id === task.id) ? prev : [task, ...prev]);
+    // Upsert: merge when the task already exists (the task:updated upsert path
+    // may have inserted it first — fork emits pin/tier updates BEFORE created —
+    // and this created payload is the authoritative final state incl. group_id).
+    setTasks((prev) => {
+      const idx = prev.findIndex((t) => t.id === task.id);
+      if (idx === -1) return [task, ...prev];
+      const merged = mergeTask(prev[idx], task);
+      if (tasksShallowEqual(prev[idx], merged)) return prev;
+      const next = prev.slice();
+      next[idx] = merged;
+      return next;
+    });
   });
 
   useEvent('task:updated', (data) => {
@@ -438,7 +461,16 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
     if (consumeEcho(`phase:${task.id}`)) { scrollLog('drag-trace-ws-updated-echo-phase', { id: task.id.slice(0,12) }); return; }
     setTasks((prev) => {
       const idx = prev.findIndex((t) => t.id === task.id);
-      if (idx === -1) return prev;
+      if (idx === -1) {
+        // Upsert: server-side create flows (fork) can emit task:updated (pin/tier/
+        // group writes) BEFORE their task:created. Dropping those events left the
+        // task invisible until the created event — and, worse, any state carried
+        // only in the updated payloads was lost. Insert instead of ignoring.
+        // Same guard as task:created: skip empty-title metadata/sync artifacts.
+        if (!task.title || task.title.trim() === '') return prev;
+        scrollLog('drag-trace-ws-updated-UPSERT', { id: task.id.slice(0,12) });
+        return [task, ...prev];
+      }
       const merged = mergeTask(prev[idx], task);
       if (tasksShallowEqual(prev[idx], merged)) {
         scrollLog('drag-trace-ws-updated-bail-shallowEqual', { id: task.id.slice(0,12) });
@@ -764,6 +796,24 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
     });
   }, [onOpError, refetch]);
 
+  // Local-only batch patch — NO API call, NO echo guard. One setTasks pass for
+  // all entries so dependent optimistic UI (e.g. a cross-tier drag that changes
+  // focus_tier + several pin_orders) commits in a single frame. Callers own
+  // persistence; the WS echo of their API call later merges as the correction.
+  // Unknown ids are skipped (a patch for a task not yet in the list is a no-op).
+  const patchTasksLocal = useCallback((patches: Record<string, Partial<Task>>) => {
+    setTasks((prev) => {
+      let changed = false;
+      const next = prev.map((t) => {
+        const patch = patches[t.id];
+        if (!patch) return t;
+        changed = true;
+        return { ...t, ...patch };
+      });
+      return changed ? next : prev;
+    });
+  }, []);
+
   // ── Virtual task groups ── (optimistic group_id flips + API; WS groups-changed
   // reconciles labels/membership; on error we refetch to resync.)
   const groupTasksCb = useCallback((taskIds: string[], label?: string) => {
@@ -820,5 +870,5 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
       .catch((err) => { onOpError(err); refetchGroups(); });
   }, [onOpError, refetchGroups]);
 
-  return { tasks, taskGroups, hiddenGroups, loading, error, operationError, clearOperationError, showOperationError, refetch, create, update, toggleComplete, setPhase, star, reorder, moveTask, reparentTask, bakeOrder, deleteTask, groupTasks: groupTasksCb, addToGroup: addToGroupCb, ungroupTasks: ungroupTasksCb, renameGroup: renameGroupCb, setGroupHidden: setGroupHiddenCb };
+  return { tasks, taskGroups, hiddenGroups, loading, error, operationError, clearOperationError, showOperationError, refetch, create, update, toggleComplete, setPhase, star, reorder, moveTask, reparentTask, bakeOrder, deleteTask, patchTasksLocal, guardEcho, groupTasks: groupTasksCb, addToGroup: addToGroupCb, ungroupTasks: ungroupTasksCb, renameGroup: renameGroupCb, setGroupHidden: setGroupHiddenCb };
 }

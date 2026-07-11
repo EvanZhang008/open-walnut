@@ -15,8 +15,8 @@ import { terminalPrewarm } from '@/api/terminal';
 import { log } from '@/utils/log';
 import { buildInvestigationClip } from '@/utils/investigation-clipboard';
 import { fetchTask, updateTask } from '@/api/tasks';
-import { fetchPinnedTasks, pinTask, unpinTask, setTaskTier } from '@/api/focus';
 import type { FocusTier } from '@/api/focus';
+import { useFocusBarContext } from '@/contexts/FocusBarContext';
 import { SessionRetryButton } from './SessionRetryButton';
 import { SideQuestionDrawer } from './SideQuestionDrawer';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
@@ -152,50 +152,33 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
   const [executeStarted, setExecuteStarted] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [fileViewerState, setFileViewerState] = useState<{ path: string; line?: number } | null>(null);
-  // Pre-fetched task + pin state for TaskQuickActions (avoids self-fetch null-render)
+  // Pre-fetched task for TaskQuickActions (avoids self-fetch null-render)
   const [sessionTask, setSessionTask] = useState<import('@open-walnut/core').Task | null>(null);
-  const [pinned, setPinned] = useState(false);
-  const [pinnedTier, setPinnedTier] = useState<FocusTier | undefined>(undefined);
   const panelRef = useRef<HTMLDivElement>(null);
 
-  const refreshPinState = useCallback((taskId: string | undefined) => {
-    if (!taskId) return;
-    fetchPinnedTasks().then((data) => {
-      const isPinned = data.pinned_tasks.includes(taskId);
-      setPinned(isPinned);
-      if (isPinned) {
-        const tier: FocusTier = data.focus_tasks?.includes(taskId) ? 'focus'
-          : data.wait_tasks?.includes(taskId) ? 'wait' : 'satellite';
-        setPinnedTier(tier);
-      } else {
-        setPinnedTier(undefined);
-      }
-    }).catch(() => {});
-  }, []);
+  // Pin state — read from the shared Focus Bar store (single source of truth).
+  // Mutations go through the shared optimistic handlers so every surface
+  // (Homepage tiers, dock, this panel) updates in the same frame.
+  const focusBar = useFocusBarContext();
+  const pinned = session?.taskId ? focusBar.isPinned(session.taskId) : false;
+  const pinnedTier: FocusTier | undefined = pinned && session?.taskId ? focusBar.tierOf(session.taskId) : undefined;
 
-  useEvent('config:changed', (data: unknown) => {
-    const { key } = (data ?? {}) as { key?: string };
-    if (key && key !== 'focus_bar') return;
-    refreshPinState(session?.taskId);
-  });
+  const handlePinTask = useCallback((id: string) => {
+    focusBar.pin(id).catch((err) => console.error('Pin failed:', err));
+  }, [focusBar]);
 
-  const handlePinTask = useCallback(async (id: string) => {
-    try { await pinTask(id); setPinned(true); } catch (err) { console.error('Pin failed:', err); }
-  }, []);
+  const handleUnpinTask = useCallback((id: string) => {
+    focusBar.unpin(id).catch((err) => console.error('Unpin failed:', err));
+  }, [focusBar]);
 
-  const handleUnpinTask = useCallback(async (id: string) => {
-    try { await unpinTask(id); setPinned(false); setPinnedTier(undefined); } catch (err) { console.error('Unpin failed:', err); }
-  }, []);
-
-  const handleSetTier = useCallback(async (id: string, tier: FocusTier) => {
-    try { await setTaskTier(id, tier); setPinnedTier(tier); } catch (err) { console.error('Set tier failed:', err); }
-  }, []);
+  const handleSetTier = useCallback((id: string, tier: FocusTier) => {
+    focusBar.setTier(id, tier).catch((err) => console.error('Set tier failed:', err));
+  }, [focusBar]);
 
   useEffect(() => {
-    if (!session?.taskId) { setSessionTask(null); setPinned(false); setPinnedTier(undefined); return; }
+    if (!session?.taskId) { setSessionTask(null); return; }
     fetchTask(session.taskId).then(setSessionTask).catch(() => {});
-    refreshPinState(session.taskId);
-  }, [session?.taskId, refreshPinState]);
+  }, [session?.taskId]);
 
   // Prewarm the remote terminal transport (ssh ControlMaster + dtach) when a
   // remote session is viewed, so a later Terminal click is ~0.2s not ~2.5s.

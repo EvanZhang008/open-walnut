@@ -52,6 +52,7 @@ import { ViewDropdown, type SortBy, type GroupBy, type DateFilter } from './View
 import { DatePicker, formatDateDisplay, isOverdue, parseDateLocal } from '../common/DatePicker';
 import { PersonIcon } from '../common/PersonIcon';
 import { useVerticalSplitter } from '@/hooks/useVerticalSplitter';
+import { useResizableHeight } from '@/hooks/useResizableHeight';
 import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
 import { ProjectDetailPane } from './ProjectDetailPane';
 import { CategoryDetailPane } from './CategoryDetailPane';
@@ -1497,7 +1498,6 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
 }
 
 const RECENT_VISIBLE_MAX = 3;
-const CARD_HEIGHT_PX = 30; // ~28px min-height + 2px gap
 
 // ── InlineAdd — "+" row at the bottom of a tier or project group to add a task
 // directly into that context. Reuses the parent onCreate (optimistic + tier-correct path). ──
@@ -1777,7 +1777,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   scrollLog('drag-trace-TodoPanel-render', { n: __renderCountRef.current, tasks: rawTasks.length });
   // Hide .metadata* tasks (project/category configuration tasks, not user-visible)
   const tasks = useMemo(() => rawTasks.filter((t) => !t.title.startsWith('.metadata')), [rawTasks]);
-  const { tierLimits } = useFocusBarContext();
   const navigate = useNavigate();
   const prompt = usePrompt();
   const [showCompleted, setShowCompleted] = useState(false);
@@ -1936,7 +1935,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Splitter between the PINNED+RECENT region and the main task list.
   // ratio = bottom (main list) share, matching the hook's drag direction
   // (drag divider down → list shrinks → ratio decreases). Default 0.4 = list ~40%.
-  const { ratio: listRatio, handleMouseDown: pinnedSplitterMouseDown } = useVerticalSplitter({ storageKey: 'open-walnut-todo-pinned-ratio', defaultRatio: 0.4, minRatio: 0.3, maxRatio: 0.8, containerRef: splitterContainerRef });
+  // minRatio 0 lets the main list collapse fully — pinned tiers have no per-tier
+  // visible cap, so this drag is the one control for how many pinned cards show.
+  const { ratio: listRatio, handleMouseDown: pinnedSplitterMouseDown } = useVerticalSplitter({ storageKey: 'open-walnut-todo-pinned-ratio', defaultRatio: 0.4, minRatio: 0, maxRatio: 0.8, containerRef: splitterContainerRef });
+  const listCollapsed = listRatio <= 0.02;
+
+  // Per-tier resize: each of Focus/Satellite/Wait gets its own drag handle at the
+  // bottom of its card list, independent of the other two and of the overall
+  // Pinned/list splitter above. Height is `null` (auto) until the user drags.
+  const focusResize = useResizableHeight('open-walnut-focus-tier-height-focus', { min: 60, max: 1200 });
+  const satelliteResize = useResizableHeight('open-walnut-focus-tier-height-satellite', { min: 60, max: 1200 });
+  const waitResize = useResizableHeight('open-walnut-focus-tier-height-wait', { min: 60, max: 1200 });
 
   // Determine if search mode is active (query entered)
   const isSearchMode = searchQuery.trim().length > 0;
@@ -1947,6 +1956,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const focusHandledRef = useRef(false);
   // Track previous focusNonce to detect re-focus on same task
   const prevNonceRef = useRef(focusNonce ?? 0);
+  // True while a user-initiated locate (nonce bump) is waiting to be handled —
+  // survives the task-not-loaded-yet retry. Page-load restores never set it.
+  const pendingLocateRef = useRef(false);
   // RAF handle for cancellation on unmount / new focus
   const scrollRafRef = useRef<number>(0);
 
@@ -2069,67 +2081,79 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (!isNewFocus && !nonceChanged && focusHandledRef.current) return; // already handled
     prevFocusedRef.current = focusedTaskId;
 
+    // Only an explicit user locate action (task click, dock activate, session
+    // click, quick-add) bumps focusNonce. A page-load restore (sessionStorage /
+    // URL param) re-fires this effect with the nonce unchanged — it must NOT
+    // switch tabs or un-collapse sections the user collapsed, or every refresh
+    // would re-expand (and re-persist) them. The ref survives the task-not-in-
+    // list-yet retry, where the effect re-runs with the nonce already consumed.
+    if (nonceChanged) pendingLocateRef.current = true;
+
     const task = tasks.find((t) => t.id === focusedTaskId);
     if (!task) {
       scrollLog('focus-effect-SKIP', { taskId: focusedTaskId.substring(0, 12), reason: 'task-not-in-list' });
       return; // task not yet in list (e.g. waiting for WebSocket) — will retry when tasks update
     }
     focusHandledRef.current = true;
+    const isUserLocate = pendingLocateRef.current;
+    pendingLocateRef.current = false;
     scrollLog('focus-effect-run', { taskId: focusedTaskId.substring(0, 12), isNewFocus, cat: task.category, proj: task.project, activeTab: activeCategory });
 
     // Switch to the correct category tab (unless already showing All or Starred with this task visible)
     const cat = task.category || 'Uncategorized';
-    if (activeCategory !== '' && activeCategory !== cat && activeCategory !== STARRED_TAB) {
-      setActiveCategory(cat);
-      persistTab(cat);
-      onCategoryChange?.(cat);
-    } else if (activeCategory === STARRED_TAB) {
-      // If task isn't visible under starred tab, switch to its category
-      const isStarred = !!task.starred;
-      const isCatFav = favorites?.isCategoryFavorite(cat) ?? false;
-      const isProjFav = favorites?.isProjectFavorite(task.project) ?? false;
-      if (!isStarred && !isCatFav && !isProjFav && !isDescendantVisibleInStarred(task)) {
+    if (isUserLocate) {
+      if (activeCategory !== '' && activeCategory !== cat && activeCategory !== STARRED_TAB) {
         setActiveCategory(cat);
         persistTab(cat);
         onCategoryChange?.(cat);
+      } else if (activeCategory === STARRED_TAB) {
+        // If task isn't visible under starred tab, switch to its category
+        const isStarred = !!task.starred;
+        const isCatFav = favorites?.isCategoryFavorite(cat) ?? false;
+        const isProjFav = favorites?.isProjectFavorite(task.project) ?? false;
+        if (!isStarred && !isCatFav && !isProjFav && !isDescendantVisibleInStarred(task)) {
+          setActiveCategory(cat);
+          persistTab(cat);
+          onCategoryChange?.(cat);
+        }
       }
-    }
 
-    // Expand collapsed category
-    if (collapsedCategories.has(cat)) {
-      setCollapsedCategories((prev) => {
-        const next = new Set(prev);
-        next.delete(cat);
-        persistSet(LS_COLLAPSED_CATS_KEY, next);
-        return next;
-      });
-    }
-
-    // Expand collapsed project
-    const hasDistinctProject = task.project && task.project !== task.category;
-    if (hasDistinctProject) {
-      const projKey = `${cat}/${task.project}`;
-      if (collapsedProjects.has(projKey)) {
-        setCollapsedProjects((prev) => {
+      // Expand collapsed category
+      if (collapsedCategories.has(cat)) {
+        setCollapsedCategories((prev) => {
           const next = new Set(prev);
-          next.delete(projKey);
-          persistSet(LS_COLLAPSED_PROJS_KEY, next);
+          next.delete(cat);
+          persistSet(LS_COLLAPSED_CATS_KEY, next);
           return next;
         });
       }
-    }
 
-    // Expand collapsed parent if focused task is a child (temporary — not persisted,
-    // so parents collapse back on page reload unless user manually expanded them)
-    if (task.parent_task_id) {
-      const parentTask = tasks.find((t) => t.id.startsWith(task.parent_task_id!));
-      if (parentTask && !expandedParents.has(parentTask.id)) {
-        setExpandedParents((prev) => {
-          const next = new Set(prev);
-          next.add(parentTask.id);
-          // Don't persist — only manual chevron clicks save to localStorage
-          return next;
-        });
+      // Expand collapsed project
+      const hasDistinctProject = task.project && task.project !== task.category;
+      if (hasDistinctProject) {
+        const projKey = `${cat}/${task.project}`;
+        if (collapsedProjects.has(projKey)) {
+          setCollapsedProjects((prev) => {
+            const next = new Set(prev);
+            next.delete(projKey);
+            persistSet(LS_COLLAPSED_PROJS_KEY, next);
+            return next;
+          });
+        }
+      }
+
+      // Expand collapsed parent if focused task is a child (temporary — not persisted,
+      // so parents collapse back on page reload unless user manually expanded them)
+      if (task.parent_task_id) {
+        const parentTask = tasks.find((t) => t.id.startsWith(task.parent_task_id!));
+        if (parentTask && !expandedParents.has(parentTask.id)) {
+          setExpandedParents((prev) => {
+            const next = new Set(prev);
+            next.add(parentTask.id);
+            // Don't persist — only manual chevron clicks save to localStorage
+            return next;
+          });
+        }
       }
     }
 
@@ -2163,7 +2187,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // If the focused task is pinned, expand the Pinned section AND its tier subgroup
     // before scrolling — a collapsed section/tier keeps the card out of the DOM, so
     // scrollToPinnedTask would silently find nothing and never jump there.
-    if (pinnedTaskIds?.has(focusedTaskId)) {
+    // User-locate only: the refresh restore path must respect collapsed state.
+    if (isUserLocate && pinnedTaskIds?.has(focusedTaskId)) {
       const tierKey = focusTaskIds?.has(focusedTaskId) ? 'focus'
         : waitTaskIds?.has(focusedTaskId) ? 'wait'
         : 'satellite';
@@ -4120,6 +4145,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (onUpdate) onUpdate(id, { title });
   }, [onUpdate]);
 
+  // The regular task list gets its own PINNED/RECENT-style collapsible bar.
+  const tasksCollapsed = collapsedSections.has('tasks');
+  // When both Pinned and Recent are collapsed (or absent), the pinned wrapper
+  // shrink-wraps its header rows instead of holding the splitter ratio — no
+  // dead blank region pushing the task list down.
+  const pinnedAreaCollapsed =
+    (pinnedTasks.length === 0 || collapsedSections.has('pinned')) &&
+    (recentTasks.length === 0 || collapsedSections.has('recent'));
+
   return (
     <div className={`todo-panel${splitterResizing ? ' splitter-resizing' : ''}`} ref={splitterContainerRef}>
       {/* Search bar + View dropdown — single row replaces old tabs + filters + sort */}
@@ -4170,7 +4204,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       {/* Unified DndContext wrapping both Pinned + Recent — enables drag from Recent to Pin */}
       {(pinnedTasks.length > 0 || recentTasks.length > 0 || hiddenPinnedGroups.length > 0) && (
         <DndContext sensors={pinnedSensors} collisionDetection={closestCenter} onDragStart={handlePinnedDragStart} onDragOver={handlePinnedDragOver} onDragEnd={handlePinnedDragEnd} onDragCancel={handlePinnedDragCancel}>
-          <div className="todo-pinned-wrapper" style={{ flex: `${1 - listRatio} 1 0%` }}>
+          <div
+            className="todo-pinned-wrapper"
+            style={
+              // Pinned+Recent both collapsed → shrink-wrap to the header rows (no
+              // dead blank region below them). Tasks section collapsed → pinned
+              // area takes all the freed space. Otherwise honor the splitter ratio.
+              pinnedAreaCollapsed ? { flex: '0 0 auto' }
+              : tasksCollapsed ? { flex: '1 1 auto' }
+              : { flex: `${1 - listRatio} 1 0%` }
+            }
+          >
           {/* PINNED section — Focus + Satellite + Wait sub-groups */}
           {pinnedTasks.length > 0 && (
             <div className="todo-pinned-section">
@@ -4191,7 +4235,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     </div>
                     {!collapsedSections.has('focus') && (
                       <SortableContext items={focusIds_arr} strategy={verticalListSortingStrategy}>
-                        <div className="todo-pinned-list-scroll" style={focusTasksDisplay.length > tierLimits.focus ? { maxHeight: tierLimits.focus * CARD_HEIGHT_PX } : undefined}>
+                        <div className="todo-pinned-list-scroll" style={focusResize.height != null ? { maxHeight: focusResize.height } : undefined}>
                           <TierDropZone id="focus-drop-zone" isEmpty={focusTasksDisplay.length === 0}>
                             {focusTasksDisplay.map((task) => (
                               <SortableTierCard key={task.id} task={task} tier="focus" isFocused={focusedTaskId === task.id} isSessionOpen={openSessionTaskIds?.has(task.id) ?? false} isDetailOpen={focusedTaskId === task.id && !suppressDetail} onClick={handlePinnedCardClick} onSetTier={onSetTier} onUnpinTask={onUnpinTask} onPinTask={onPinTask} onSetPriority={onSetPriority} onSetDate={onSetDate} onStar={onStar} onExpandDetail={handleExpandDetail} onClearFocus={onClearFocus} onOpenSession={onOpenSession} onSetPhase={setPhaseOrComplete} onUpdateTitle={onUpdate ? handleUpdateTitle : undefined} onDelete={onDelete} groupInfo={focusGroupMeta.get(task.id)} onRenameGroup={handleRenameGroup} onDissolveGroup={handleDissolveGroup} onHideGroup={handleHideGroup} selectMode={selectMode} isSelected={selectedIds.has(task.id)} onSelectToggle={onSelectToggle} onStartSelect={onStartSelect} isGroupTarget={groupTargetId === task.id} />
@@ -4204,6 +4248,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                             if (newTask?.id) onFocusTask?.(newTask);
                           }} />
                         </div>
+                        <div
+                          className={`todo-tier-resize-handle${focusResize.isDragging ? ' dragging' : ''}`}
+                          onMouseDown={(e) => focusResize.handleMouseDown(e, e.currentTarget.previousElementSibling?.getBoundingClientRect().height ?? 200)}
+                          title="Drag to resize Focus"
+                        />
                       </SortableContext>
                     )}
                   </div>
@@ -4219,7 +4268,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                       </div>
                       {!collapsedSections.has('satellite') && (
                         <SortableContext items={satelliteIds_arr} strategy={verticalListSortingStrategy}>
-                          <div className="todo-pinned-list todo-pinned-list-scroll" style={satelliteTasksDisplay.length > tierLimits.satellite ? { maxHeight: tierLimits.satellite * CARD_HEIGHT_PX } : undefined}>
+                          <div className="todo-pinned-list todo-pinned-list-scroll" style={satelliteResize.height != null ? { maxHeight: satelliteResize.height } : undefined}>
                             {satelliteTasksDisplay.map((task) => (
                               <SortableTierCard key={task.id} task={task} tier="satellite" isFocused={focusedTaskId === task.id} isSessionOpen={openSessionTaskIds?.has(task.id) ?? false} isDetailOpen={focusedTaskId === task.id && !suppressDetail} onClick={handlePinnedCardClick} onSetTier={onSetTier} onUnpinTask={onUnpinTask} onPinTask={onPinTask} onSetPriority={onSetPriority} onSetDate={onSetDate} onStar={onStar} onExpandDetail={handleExpandDetail} onClearFocus={onClearFocus} onOpenSession={onOpenSession} onSetPhase={setPhaseOrComplete} onUpdateTitle={onUpdate ? handleUpdateTitle : undefined} onDelete={onDelete} groupInfo={satelliteGroupMeta.get(task.id)} onRenameGroup={handleRenameGroup} onDissolveGroup={handleDissolveGroup} onHideGroup={handleHideGroup} selectMode={selectMode} isSelected={selectedIds.has(task.id)} onSelectToggle={onSelectToggle} onStartSelect={onStartSelect} isGroupTarget={groupTargetId === task.id} />
                             ))}
@@ -4229,6 +4278,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                               if (newTask?.id) onFocusTask?.(newTask);
                             }} />
                           </div>
+                          <div
+                            className={`todo-tier-resize-handle${satelliteResize.isDragging ? ' dragging' : ''}`}
+                            onMouseDown={(e) => satelliteResize.handleMouseDown(e, e.currentTarget.previousElementSibling?.getBoundingClientRect().height ?? 200)}
+                            title="Drag to resize Satellite"
+                          />
                         </SortableContext>
                       )}
                     </div>
@@ -4244,7 +4298,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     </div>
                     {!collapsedSections.has('wait') && (
                       <SortableContext items={waitIds_arr} strategy={verticalListSortingStrategy}>
-                        <div className="todo-pinned-list-scroll" style={waitTasksDisplay.length > tierLimits.wait ? { maxHeight: tierLimits.wait * CARD_HEIGHT_PX } : undefined}>
+                        <div className="todo-pinned-list-scroll" style={waitResize.height != null ? { maxHeight: waitResize.height } : undefined}>
                           <TierDropZone id="wait-drop-zone" isEmpty={waitTasksDisplay.length === 0}>
                             {waitTasksDisplay.map((task) => (
                               <SortableTierCard key={task.id} task={task} tier="wait" isFocused={focusedTaskId === task.id} isSessionOpen={openSessionTaskIds?.has(task.id) ?? false} isDetailOpen={focusedTaskId === task.id && !suppressDetail} onClick={handlePinnedCardClick} onSetTier={onSetTier} onUnpinTask={onUnpinTask} onPinTask={onPinTask} onSetPriority={onSetPriority} onSetDate={onSetDate} onStar={onStar} onExpandDetail={handleExpandDetail} onClearFocus={onClearFocus} onOpenSession={onOpenSession} onSetPhase={setPhaseOrComplete} onUpdateTitle={onUpdate ? handleUpdateTitle : undefined} onDelete={onDelete} groupInfo={waitGroupMeta.get(task.id)} onRenameGroup={handleRenameGroup} onDissolveGroup={handleDissolveGroup} onHideGroup={handleHideGroup} selectMode={selectMode} isSelected={selectedIds.has(task.id)} onSelectToggle={onSelectToggle} onStartSelect={onStartSelect} isGroupTarget={groupTargetId === task.id} />
@@ -4256,6 +4310,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                             if (newTask?.id) onFocusTask?.(newTask);
                           }} />
                         </div>
+                        <div
+                          className={`todo-tier-resize-handle${waitResize.isDragging ? ' dragging' : ''}`}
+                          onMouseDown={(e) => waitResize.handleMouseDown(e, e.currentTarget.previousElementSibling?.getBoundingClientRect().height ?? 200)}
+                          title="Drag to resize Wait"
+                        />
                       </SortableContext>
                     )}
                   </div>
@@ -4342,11 +4401,20 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       {/* Draggable divider between PINNED+RECENT and the main task list.
           Task detail now opens in a full-screen modal (hosted by MainPage), so only
           the inline project/category pane (detailTarget) compresses the list here. */}
-      {(pinnedTasks.length > 0 || recentTasks.length > 0) && !detailTarget && (
+      {(pinnedTasks.length > 0 || recentTasks.length > 0) && !detailTarget && !tasksCollapsed && !pinnedAreaCollapsed && (
         <div className="todo-pinned-splitter" onMouseDown={pinnedSplitterMouseDown} />
       )}
 
-      <div className="todo-panel-list" style={detailTarget ? { flex: `${1 - detailRatio} 1 0%` } : (pinnedTasks.length > 0 || recentTasks.length > 0) ? { flex: `${listRatio} 1 0%` } : undefined}>
+      {/* TASKS header bar — same collapsible affordance as PINNED / RECENT / Notes,
+          so the regular todo area can be folded away entirely. */}
+      <div className="todo-pinned-header todo-tasks-header" onClick={() => toggleSection('tasks')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('tasks'); }} style={{ cursor: 'pointer' }}>
+        <span className={`todo-pinned-chevron${tasksCollapsed ? '' : ' todo-pinned-chevron-open'}`}>{'▸'}</span>
+        <span className="todo-pinned-label">Tasks</span>
+        <span className="todo-pinned-count">{isSearchMode ? searchFiltered.length : filtered.length}</span>
+      </div>
+
+      {!tasksCollapsed && (
+      <div className={`todo-panel-list${!detailTarget && listCollapsed ? ' todo-panel-list-collapsed' : ''}`} style={detailTarget ? { flex: `${1 - detailRatio} 1 0%` } : (pinnedTasks.length > 0 || recentTasks.length > 0) && !pinnedAreaCollapsed ? { flex: `${listRatio} 1 0%` } : undefined}>
         {loading && (
           <div className="empty-state" style={{ padding: '24px 8px' }}>
             <div className="spinner" style={{ width: 20, height: 20, borderWidth: 2, margin: '0 auto' }} />
@@ -4730,6 +4798,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           </DndContext>
         )}
       </div>
+      )}
 
       {/* Detail pane: project or category (inline split-pane). Task detail now
           opens in a full-screen modal hosted by MainPage, not inline here. */}
@@ -4753,6 +4822,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       ) : null}
 
       {/* operationError is surfaced globally via the unified notification toaster (AppShell). */}
+      {/* Quick add belongs to the Tasks section — folds away with it. */}
+      {!tasksCollapsed && (
       <form className="todo-panel-add" onSubmit={handleAdd}>
         <input
           type="text"
@@ -4840,6 +4911,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           Add
         </button>
       </form>
+      )}
       <GlobalNotesSection
         {...globalNotes}
         tasks={tasks}

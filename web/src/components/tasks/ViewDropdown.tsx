@@ -4,7 +4,8 @@
  * Wide (~360px) panel with 2-column category grid and compact filter/sort/group sections.
  */
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { ICON_SLIDERS } from '../common/Icons';
 
 // ── Types ──
@@ -43,6 +44,9 @@ export interface ViewDropdownProps {
 
 const STARRED_TAB = '\u2605';
 
+// Keep in sync with .vd-panel width in globals.css.
+const PANEL_WIDTH = 340;
+
 const PHASE_OPTIONS = [
   { value: '', label: 'All' },
   { value: 'TODO', label: 'To Do' },
@@ -79,13 +83,47 @@ export function ViewDropdown({
 }: ViewDropdownProps) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   const hasActiveFilter = !!(phaseFilter || priorityFilter || tagFilter || dateFilter || activeCategory || showCompleted);
+
+  // The panel renders in a portal on document.body (fixed coords) so ancestor
+  // panels/overflow can never clip it. Smart placement: right-align to the trigger,
+  // clamp to the viewport on BOTH edges, cap height to the space below.
+  const [pos, setPos] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null);
+  useLayoutEffect(() => {
+    if (!open) { setPos(null); return; }
+    const margin = 8;
+    const place = () => {
+      const r = containerRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const width = Math.min(PANEL_WIDTH, window.innerWidth - margin * 2);
+      // Right edge of panel aligns with right edge of trigger, then clamp.
+      let left = r.right - width;
+      if (left + width + margin > window.innerWidth) left = window.innerWidth - width - margin;
+      if (left < margin) left = margin;
+      const top = r.bottom + 4;
+      setPos({ top, left, width, maxHeight: window.innerHeight - top - margin });
+    };
+    place();
+    let raf = 0;
+    const onScrollOrResize = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(place); };
+    window.addEventListener('resize', onScrollOrResize);
+    window.addEventListener('scroll', onScrollOrResize, true);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('resize', onScrollOrResize);
+      window.removeEventListener('scroll', onScrollOrResize, true);
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (containerRef.current?.contains(t)) return;
+      if (panelRef.current?.contains(t)) return;
+      setOpen(false);
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
@@ -118,10 +156,14 @@ export function ViewDropdown({
         {hasActiveFilter && <span className="vd-dot" />}
       </button>
 
-      {open && (
-        <div className="vd-panel">
-          {/* ── Filters: horizontal row of inline selects ── */}
-          <div className="vd-filters">
+      {open && pos && createPortal(
+        <div
+          className="vd-panel"
+          ref={panelRef}
+          style={{ top: pos.top, left: pos.left, width: pos.width, maxHeight: pos.maxHeight }}
+        >
+          {/* ── Filters + Sort + Group: unified 2-col grid, label above control ── */}
+          <div className="vd-grid">
             <InlineSelect label="Phase" value={phaseFilter} options={PHASE_OPTIONS} onChange={onPhaseFilterChange} />
             <InlineSelect label="Priority" value={priorityFilter} options={PRIORITY_OPTIONS} onChange={onPriorityFilterChange} />
             <InlineSelect label="Date" value={dateFilter} options={DATE_FILTER_OPTIONS} onChange={(v) => onDateFilterChange(v as DateFilter)} />
@@ -133,11 +175,7 @@ export function ViewDropdown({
                 onChange={onTagFilterChange}
               />
             )}
-          </div>
-
-          {/* ── Sort + Group: two segmented controls side by side ── */}
-          <div className="vd-controls">
-            <div className="vd-control-group">
+            <div className="vd-field">
               <span className="vd-label">Sort</span>
               <div className="vd-seg">
                 {([['manual', 'M'], ['priority', 'P\u2193'], ['date', 'C\u2193'], ['updated', 'U\u2193']] as const).map(([val, lbl]) => (
@@ -150,7 +188,7 @@ export function ViewDropdown({
                 ))}
               </div>
             </div>
-            <div className="vd-control-group">
+            <div className="vd-field">
               <span className="vd-label">Group</span>
               <div className="vd-seg">
                 {([['category', 'Cat'], ['none', 'Flat']] as const).map(([val, lbl]) => (
@@ -158,10 +196,6 @@ export function ViewDropdown({
                 ))}
               </div>
             </div>
-            <label className="vd-check">
-              <input type="checkbox" checked={showCompleted} onChange={() => onShowCompletedChange(!showCompleted)} />
-              Done
-            </label>
           </div>
 
           <div className="vd-sep" />
@@ -180,19 +214,24 @@ export function ViewDropdown({
             ))}
           </div>
 
-          {/* ── Clear ── */}
-          {hasActiveFilter && (
-            <div className="vd-footer">
+          {/* ── Footer: show-completed toggle + clear ── */}
+          <div className="vd-footer">
+            <label className="vd-check">
+              <input type="checkbox" checked={showCompleted} onChange={() => onShowCompletedChange(!showCompleted)} />
+              Show completed
+            </label>
+            {hasActiveFilter && (
               <button className="vd-clear" onClick={onClearAll}>Clear all</button>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );
 }
 
-// ── InlineSelect: compact label + select on one line ──
+// ── InlineSelect: grid field — small label above a full-width select ──
 
 function InlineSelect({ label, value, options, onChange }: {
   label: string;
@@ -201,8 +240,8 @@ function InlineSelect({ label, value, options, onChange }: {
   onChange: (v: string) => void;
 }) {
   return (
-    <div className="vd-inline-sel">
-      <span className="vd-inline-label">{label}</span>
+    <div className="vd-field">
+      <span className="vd-label">{label}</span>
       <select className={`vd-sel${value ? ' vd-filtered' : ''}`} value={value} onChange={(e) => onChange(e.target.value)}>
         {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>

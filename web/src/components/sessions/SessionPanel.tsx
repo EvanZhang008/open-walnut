@@ -26,7 +26,7 @@ import { log } from '@/utils/log';
 import { buildInvestigationClip } from '@/utils/investigation-clipboard';
 import { fetchTask } from '@/api/tasks';
 import { EditableSessionTitle } from './EditableSessionTitle';
-import { fetchPinnedTasks, pinTask, unpinTask, setTaskTier } from '@/api/focus';
+import { useFocusBarContext } from '@/contexts/FocusBarContext';
 import type { FocusTier } from '@/api/focus';
 import { timeAgo } from '@/utils/time';
 import { ProcessStatusBadge } from './WorkStatusPicker';
@@ -258,61 +258,25 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   // Full task object — passed to TaskQuickActions to avoid a duplicate fetch
   const [sessionTask, setSessionTask] = useState<import('@open-walnut/core').Task | null>(null);
 
-  // Pin state — self-contained (calls focus API directly)
-  const [pinned, setPinned] = useState(false);
-  const [pinnedTier, setPinnedTier] = useState<FocusTier | undefined>(undefined);
+  // Pin state — read from the shared Focus Bar store (single source of truth,
+  // same data every other surface renders). Mutations go through the shared
+  // optimistic handlers, so a pin/tier/complete here updates the Homepage
+  // pinned tiers in the same frame — no private fetch, no config:changed poll.
+  const focusBar = useFocusBarContext();
+  const pinned = session?.taskId ? focusBar.isPinned(session.taskId) : false;
+  const pinnedTier: FocusTier | undefined = pinned && session?.taskId ? focusBar.tierOf(session.taskId) : undefined;
 
-  // Check if this session's task is pinned (on mount + config changes)
-  const refreshPinState = useCallback((taskId: string | undefined) => {
-    if (!taskId) return;
-    fetchPinnedTasks()
-      .then((data) => {
-        const isPinned = data.pinned_tasks.includes(taskId);
-        setPinned(isPinned);
-        if (isPinned) {
-          const tier: FocusTier = data.focus_tasks?.includes(taskId) ? 'focus'
-            : data.wait_tasks?.includes(taskId) ? 'wait' : 'satellite';
-          setPinnedTier(tier);
-        } else {
-          setPinnedTier(undefined);
-        }
-      })
-      .catch(() => {});
-  }, []);
+  const handlePinTask = useCallback((id: string) => {
+    focusBar.pin(id).catch((err) => console.error('Pin failed:', err));
+  }, [focusBar]);
 
-  useEvent('config:changed', (data: unknown) => {
-    const { key } = (data ?? {}) as { key?: string };
-    if (key && key !== 'focus_bar') return;
-    refreshPinState(session?.taskId);
-  });
+  const handleUnpinTask = useCallback((id: string) => {
+    focusBar.unpin(id).catch((err) => console.error('Unpin failed:', err));
+  }, [focusBar]);
 
-  const handlePinTask = useCallback(async (id: string) => {
-    try {
-      await pinTask(id);
-      setPinned(true);
-    } catch (err) {
-      console.error('Pin failed:', err);
-    }
-  }, []);
-
-  const handleUnpinTask = useCallback(async (id: string) => {
-    try {
-      await unpinTask(id);
-      setPinned(false);
-      setPinnedTier(undefined);
-    } catch (err) {
-      console.error('Unpin failed:', err);
-    }
-  }, []);
-
-  const handleSetTier = useCallback(async (id: string, tier: FocusTier) => {
-    try {
-      await setTaskTier(id, tier);
-      setPinnedTier(tier);
-    } catch (err) {
-      console.error('Set tier failed:', err);
-    }
-  }, []);
+  const handleSetTier = useCallback((id: string, tier: FocusTier) => {
+    focusBar.setTier(id, tier).catch((err) => console.error('Set tier failed:', err));
+  }, [focusBar]);
 
   // Fetch session metadata
   useEffect(() => {
@@ -321,7 +285,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     setLoading(true);
     setTaskTitle(null);
     setSessionTask(null);
-    setPinned(false);
     fetchSession(sessionId).then((s) => {
       if (!cancelled) {
         setSession(s);
@@ -340,7 +303,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               setSessionTask(t);
             }
           }).catch(() => {});
-          refreshPinState(s.taskId);
         }
       }
     }).catch(() => {
