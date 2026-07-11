@@ -131,32 +131,6 @@ export function GeneralSection({ config, onSave }: Props) {
       </div>
 
       <div className="form-group">
-        <label>Tier visible limits</label>
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-          {(['focus', 'satellite', 'wait'] as const).map((tier) => (
-            <label key={tier} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
-              <span style={{ textTransform: 'capitalize' }}>{tier}</span>
-              <input
-                type="number"
-                min={1}
-                max={50}
-                value={focusBar.tierLimits[tier]}
-                onChange={(e) => {
-                  const v = Math.max(1, Math.min(50, parseInt(e.target.value, 10) || 1));
-                  focusBar.setTierLimits({ ...focusBar.tierLimits, [tier]: v });
-                }}
-                style={{ width: 52, textAlign: 'center' }}
-                data-testid={`tier-limit-${tier}`}
-              />
-            </label>
-          ))}
-        </div>
-        <p className="text-sm text-muted" style={{ margin: '4px 0 0' }}>
-          Max cards visible per tier before scrolling
-        </p>
-      </div>
-
-      <div className="form-group">
         <label>Move chatted task to top of its tier</label>
         <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap', marginTop: 4 }}>
           {BUMP_TIERS.map((tier) => (

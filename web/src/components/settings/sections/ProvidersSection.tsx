@@ -708,7 +708,7 @@ export function ProvidersSection({ config, onSave }: Props) {
     await onSave({ agent: { ...config.agent, main_provider: name } });
   };
 
-  // Save global agent-level settings (main_model, session_model, maxTokens)
+  // Save global agent-level settings (main_model, maxTokens)
   const handleSaveMainModel = async (v: string) => {
     setMainModel(v);
     await onSave({ agent: { ...config.agent, main_model: v || undefined } });

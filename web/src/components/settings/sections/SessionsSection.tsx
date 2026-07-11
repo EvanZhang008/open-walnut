@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import type { Config, SessionMode } from '@open-walnut/core';
-import { SESSION_MODELS } from '@open-walnut/core';
 import { SectionCard } from '../inputs/SectionCard';
 import { NumberInput } from '../inputs/NumberInput';
 import { KeyValueEditor } from '../inputs/KeyValueEditor';
@@ -13,7 +12,6 @@ interface Props {
 }
 
 export function SessionsSection({ config, onSave }: Props) {
-  const [sessionModel, setSessionModel] = useState(config.agent?.session_model ?? 'opus-1m');
   const [idleTimeout, setIdleTimeout] = useState<number | undefined>(config.session?.idle_timeout_minutes ?? 30);
   const [maxIdle, setMaxIdle] = useState<number | undefined>(config.session?.max_idle);
   const [sessionLimits, setSessionLimits] = useState<Record<string, string | number>>(config.session_limits ?? {});
@@ -30,7 +28,6 @@ export function SessionsSection({ config, onSave }: Props) {
   const [triageDebounce, setTriageDebounce] = useState<number | undefined>(config.agent?.triage?.debounce_minutes ?? 3);
 
   useEffect(() => {
-    setSessionModel(config.agent?.session_model ?? 'opus-1m');
     setIdleTimeout(config.session?.idle_timeout_minutes ?? 30);
     setMaxIdle(config.session?.max_idle);
     setSessionLimits(config.session_limits ?? {});
@@ -60,7 +57,6 @@ export function SessionsSection({ config, onSave }: Props) {
       // session_triage_agent, …) survive — updateConfig replaces the whole `agent` key.
       agent: {
         ...config.agent,
-        session_model: sessionModel,
         triage: { notify_mode: triageNotifyMode, debounce_minutes: triageDebounce ?? 3 },
       },
       session: {
@@ -81,13 +77,12 @@ export function SessionsSection({ config, onSave }: Props) {
 
   useAutoSave({
     current: JSON.stringify({
-      sessionModel, idleTimeout, maxIdle,
+      idleTimeout, maxIdle,
       sessionLimits: normalizeLimits(sessionLimits),
       permissionPrompt, autoApproveBypass, enabledModes, sdkEnabled, sdkPort,
       triageNotifyMode, triageDebounce: triageDebounce ?? 3,
     }),
     baseline: JSON.stringify({
-      sessionModel: config.agent?.session_model ?? 'opus-1m',
       idleTimeout: config.session?.idle_timeout_minutes ?? 30,
       maxIdle: config.session?.max_idle,
       sessionLimits: normalizeLimits(config.session_limits ?? {}),
@@ -104,25 +99,9 @@ export function SessionsSection({ config, onSave }: Props) {
 
   return (
     <SectionCard id="sessions" title="Tasks & Sessions" description="How Claude Code sessions run, and how their work is triaged back onto tasks. Changes save automatically." onSave={handleSave} showSave={false}>
-      <div className="form-group">
-        <label htmlFor="session-model">Session Model</label>
-        <select
-          id="session-model"
-          value={sessionModel}
-          onChange={(e) => setSessionModel(e.target.value)}
-          style={{ maxWidth: 200 }}
-        >
-          {SESSION_MODELS.map((m) => (
-            <option key={m.id} value={m.id}>{m.label}</option>
-          ))}
-        </select>
-        <p className="text-sm text-muted" style={{ marginTop: 2 }}>
-          Controls the <code style={{ fontSize: 11 }}>--model</code> flag for Claude Code CLI sessions.
-        </p>
-      </div>
-
-      <div className="settings-divider" />
-
+      {/* Session model is a RUNTIME choice made in the session picker ("Auto" = let
+          Claude Code pick its own default from its settings layers). Walnut keeps no
+          config-time default model, so there's intentionally no picker here. */}
       <div className="form-row">
         <div className="form-group">
           <label htmlFor="idle-timeout">Idle Timeout</label>
