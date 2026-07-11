@@ -1917,6 +1917,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // (React #185 guard — dragOver must not churn SortableContext-affecting state).
   const [nestTargetId, setNestTargetId] = useState<string | null>(null);
   const [groupTargetId, setGroupTargetId] = useState<string | null>(null);
+  // Which tier the currently-dragged WHOLE GROUP is hovering over. Lights that
+  // tier's drop zone so a group drag has the same landing feedback a single card
+  // gets (the group chip carries no per-tier `over` card until it lands).
+  const [groupDragTier, setGroupDragTier] = useState<FocusTier | null>(null);
   // ref holds `${overId}:${intent}` of the last applied highlight, to dedupe.
   const dropIntentRef = useRef<string | null>(null);
   // Remove the live-pointer listener if the panel unmounts mid-drag (prevents a
@@ -2397,13 +2401,25 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const [activeDragPinnedId, setActiveDragPinnedId] = useState<string | null>(null);
   const activeDragPinnedTask = useMemo(
     () => {
-      if (!activeDragPinnedId) return null;
+      if (!activeDragPinnedId || activeDragPinnedId.startsWith('group:')) return null;
       return pinnedTasks.find((t) => t.id === activeDragPinnedId)
         ?? recentTasks.find((t) => t.id === activeDragPinnedId)
         ?? null;
     },
     [activeDragPinnedId, pinnedTasks, recentTasks],
   );
+
+  // When the active drag is a whole-group chip (`group:<gid>:<tier>`), resolve the
+  // group's label + member titles so the DragOverlay can render a floating preview
+  // that follows the cursor — otherwise dragging a group showed nothing under the
+  // pointer and the user couldn't tell where it was going.
+  const activeDragGroup = useMemo(() => {
+    if (!activeDragPinnedId?.startsWith('group:')) return null;
+    const gid = activeDragPinnedId.slice('group:'.length).replace(/:(focus|satellite|wait)$/, '');
+    const members = pinnedTasks.filter((t) => t.group_id === gid);
+    if (members.length === 0) return null;
+    return { label: taskGroups?.[gid] ?? 'Group', titles: members.map((t) => t.title), count: members.length };
+  }, [activeDragPinnedId, pinnedTasks, taskGroups]);
 
   // Recent task IDs for SortableContext
   const recentIds = useMemo(() => recentTasks.map((t) => t.id), [recentTasks]);
@@ -2455,11 +2471,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const activeId = active.id as string;
     const overId = over.id as string;
 
-    // Whole-group drag (chip grip): the active id is `group:<gid>`, not a task id.
-    // Skip all per-item cross-tier / group-target logic here — the final relocation
-    // is resolved in handlePinnedDragEnd. Clear any stale group-target highlight.
+    // Whole-group drag (chip grip): the active id is `group:<gid>:<tier>`, not a task
+    // id. Per-item cross-tier reordering is resolved in handlePinnedDragEnd, but we
+    // DO light the hovered tier's drop zone here so the drag has a visible landing
+    // target (a group chip has no `over` card of its own until it lands). Clear any
+    // stale per-card group-target highlight left from a prior single-card drag.
     if (activeId.startsWith('group:')) {
       if (dropIntentRef.current !== null) { dropIntentRef.current = null; setGroupTargetId((prev) => (prev === null ? prev : null)); }
+      const snap = dragStartSnapshot.current;
+      const hoverTier: FocusTier | null = DROP_ZONE_TIERS[overId]
+        ?? ((snap?.focus.includes(overId) ? 'focus' : null))
+        ?? ((snap?.wait.includes(overId) ? 'wait' : null))
+        ?? ((snap?.satellite.includes(overId) ? 'satellite' : null));
+      setGroupDragTier((prev) => (prev === hoverTier ? prev : hoverTier));
       return;
     }
 
@@ -2572,6 +2596,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     window.removeEventListener('pointermove', trackPointer);
     dropIntentRef.current = null;
     setGroupTargetId((prev) => (prev === null ? prev : null));
+    setGroupDragTier((prev) => (prev === null ? prev : null));
   }, []);
 
   const handlePinnedDragCancel = useCallback(() => {
@@ -4236,7 +4261,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     {!collapsedSections.has('focus') && (
                       <SortableContext items={focusIds_arr} strategy={verticalListSortingStrategy}>
                         <div className="todo-pinned-list-scroll" style={focusResize.height != null ? { maxHeight: focusResize.height } : undefined}>
-                          <TierDropZone id="focus-drop-zone" isEmpty={focusTasksDisplay.length === 0}>
+                          <TierDropZone id="focus-drop-zone" isEmpty={focusTasksDisplay.length === 0} forceOver={groupDragTier === 'focus'}>
                             {focusTasksDisplay.map((task) => (
                               <SortableTierCard key={task.id} task={task} tier="focus" isFocused={focusedTaskId === task.id} isSessionOpen={openSessionTaskIds?.has(task.id) ?? false} isDetailOpen={focusedTaskId === task.id && !suppressDetail} onClick={handlePinnedCardClick} onSetTier={onSetTier} onUnpinTask={onUnpinTask} onPinTask={onPinTask} onSetPriority={onSetPriority} onSetDate={onSetDate} onStar={onStar} onExpandDetail={handleExpandDetail} onClearFocus={onClearFocus} onOpenSession={onOpenSession} onSetPhase={setPhaseOrComplete} onUpdateTitle={onUpdate ? handleUpdateTitle : undefined} onDelete={onDelete} groupInfo={focusGroupMeta.get(task.id)} onRenameGroup={handleRenameGroup} onDissolveGroup={handleDissolveGroup} onHideGroup={handleHideGroup} selectMode={selectMode} isSelected={selectedIds.has(task.id)} onSelectToggle={onSelectToggle} onStartSelect={onStartSelect} isGroupTarget={groupTargetId === task.id} />
                             ))}
@@ -4245,7 +4270,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                             // capture:true → routes to configured Default Platform/Category (fast local Inbox by default)
                             const result = await onCreate({ title, priority: 'none', pinnedTier: 'focus', capture: true });
                             const newTask = result as Task | undefined;
-                            if (newTask?.id) onFocusTask?.(newTask);
+                            // openDetail:false — quick-add just scrolls to the new card; don't pop the detail panel.
+                            if (newTask?.id) onFocusTask?.(newTask, { openDetail: false });
                           }} />
                         </div>
                         <div
@@ -4275,7 +4301,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                             <InlineAdd label="Add to Satellite…" onAdd={async (title) => {
                               const result = await onCreate({ title, priority: 'none', pinnedTier: 'satellite', capture: true });
                               const newTask = result as Task | undefined;
-                              if (newTask?.id) onFocusTask?.(newTask);
+                              // openDetail:false — quick-add just scrolls to the new card; don't pop the detail panel.
+                              if (newTask?.id) onFocusTask?.(newTask, { openDetail: false });
                             }} />
                           </div>
                           <div
@@ -4307,7 +4334,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                           <InlineAdd label="Add to Wait…" onAdd={async (title) => {
                             const result = await onCreate({ title, priority: 'none', pinnedTier: 'wait', capture: true });
                             const newTask = result as Task | undefined;
-                            if (newTask?.id) onFocusTask?.(newTask);
+                            // openDetail:false — quick-add just scrolls to the new card; don't pop the detail panel.
+                            if (newTask?.id) onFocusTask?.(newTask, { openDetail: false });
                           }} />
                         </div>
                         <div
@@ -4392,6 +4420,23 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             {activeDragPinnedTask && (
               <div className="todo-pinned-card todo-pinned-card-dragging">
                 <span className="todo-pinned-title" title={activeDragPinnedTask.title}>{activeDragPinnedTask.title}</span>
+              </div>
+            )}
+            {/* Whole-group drag: a stacked preview naming the group + its members so
+                the cursor always carries a visible payload while moving a cluster. */}
+            {activeDragGroup && (
+              <div className="todo-pinned-group-drag-preview">
+                <div className="todo-pinned-group-drag-header">
+                  <span className="task-group-chip-icon" aria-hidden="true">⑂</span>
+                  <span className="todo-pinned-group-drag-label">{activeDragGroup.label}</span>
+                  <span className="todo-pinned-group-drag-count">{activeDragGroup.count}</span>
+                </div>
+                {activeDragGroup.titles.slice(0, 3).map((t, i) => (
+                  <div key={i} className="todo-pinned-group-drag-row" title={t}>{t}</div>
+                ))}
+                {activeDragGroup.titles.length > 3 && (
+                  <div className="todo-pinned-group-drag-more">+{activeDragGroup.titles.length - 3} more</div>
+                )}
               </div>
             )}
           </DragOverlay>
@@ -4677,7 +4722,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                             <InlineAdd label={`Add to ${category}…`} onAdd={async (title) => {
                               const result = await onCreate({ title, priority: 'none', category });
                               const newTask = result as Task | undefined;
-                              if (newTask?.id) onFocusTask?.(newTask);
+                              // openDetail:false — quick-add just scrolls to the new card; don't pop the detail panel.
+                              if (newTask?.id) onFocusTask?.(newTask, { openDetail: false });
                             }} />
                           </SortableContext>
                           <SortableContext items={projects.map((p) => `proj:${category}/${p.project}`)} strategy={verticalListSortingStrategy}>
@@ -4762,7 +4808,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                           <InlineAdd label={`Add to ${project}…`} onAdd={async (title) => {
                                             const result = await onCreate({ title, priority: 'none', category, project });
                                             const newTask = result as Task | undefined;
-                                            if (newTask?.id) onFocusTask?.(newTask);
+                                            // openDetail:false — quick-add just scrolls to the new card; don't pop the detail panel.
+                                            if (newTask?.id) onFocusTask?.(newTask, { openDetail: false });
                                           }} />
                                         </SortableContext>
                                       )}

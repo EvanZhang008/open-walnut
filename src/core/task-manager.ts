@@ -3102,8 +3102,15 @@ export async function togglePin(taskId: string): Promise<{ pinned: boolean; pinn
 /**
  * Reorder pinned tasks. Sets pin_order = index for each ID in the array.
  * IDs not in the list keep their current pin state.
+ *
+ * Returns the FULL tier snapshot (not just pinned_tasks). A reorder never
+ * touches focus_tier, but the client's applyFocusData() treats any missing
+ * tier array as "empty" — so returning a pinned-only payload made it wipe
+ * every task's focus_tier to satellite (Focus/Wait tasks silently vanished
+ * until refetch). Returning the complete split keeps the client's snapshot
+ * apply lossless.
  */
-export async function reorderPins(orderedIds: string[]): Promise<string[]> {
+export async function reorderPins(orderedIds: string[]): Promise<TierResult> {
   return withWriteLock(async () => {
     const store = await readStore();
     const now = new Date().toISOString();
@@ -3115,8 +3122,7 @@ export async function reorderPins(orderedIds: string[]): Promise<string[]> {
       }
     }
     await writeStore(store);
-    const ordered = store.tasks.filter((t) => t.pinned).sort((a, b) => (a.pin_order ?? 0) - (b.pin_order ?? 0));
-    return ordered.map((t) => t.id);
+    return splitTiers(store);
   });
 }
 

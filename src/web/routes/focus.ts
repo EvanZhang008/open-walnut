@@ -73,9 +73,12 @@ focusRouter.put('/reorder', async (req: Request, res: Response, next: NextFuncti
       res.status(400).json({ error: 'task_ids must be an array of strings' })
       return
     }
-    const ordered = await reorderPins(task_ids)
+    // Return the FULL tier snapshot (pinned + focus/satellite/wait). A pinned-only
+    // payload made the client's applyFocusData() treat focus/wait as empty and wipe
+    // every task's tier to satellite — Focus tasks vanished until refetch.
+    const result = await reorderPins(task_ids)
     bus.emit(EventNames.CONFIG_CHANGED, { key: 'focus_bar' }, ['web-ui'])
-    res.json({ pinned_tasks: ordered })
+    res.json(result)
   } catch (err) {
     next(err)
   }
