@@ -502,25 +502,33 @@ const LAST_SYNC_CACHE_MS = 30_000;
 
 /** ISO timestamp of the most recent sync commit, or null if no repo/commits. */
 /**
- * Derive cloud-companion credentials from the data repo's `cloud` remote
+ * Derive cloud-companion credentials from the data repo's cloud remote
  * (`https://walnut:<device-token>@<domain>/git/data`, see docs/cloud-sync.md).
  * Zero-config source for the daemon bridge: if cloud sync works, the bridge
  * knows where to dial. Returns null when no cloud remote is configured.
+ *
+ * Remote name: setups that predate two-way auto-sync call it `cloud`; newer
+ * ones renamed it `origin`. Try both, but only accept a URL that looks like
+ * the companion's git endpoint (credentialed + /git/ path) — a plain GitHub
+ * origin must never be mistaken for a bridge target.
  */
 export function getCloudRemoteCredentials(): { domain: string; token: string; secure: boolean } | null {
-  const url = gitSafe('remote get-url cloud');
-  if (!url) return null;
-  try {
-    const u = new URL(url);
-    if (!u.password) return null;
-    return {
-      domain: u.host,
-      token: u.password,
-      secure: u.protocol === 'https:',
-    };
-  } catch {
-    return null;
+  for (const remote of ['cloud', 'origin']) {
+    const url = gitSafe(`remote get-url ${remote}`);
+    if (!url) continue;
+    try {
+      const u = new URL(url);
+      if (!u.password || !u.pathname.startsWith('/git/')) continue;
+      return {
+        domain: u.host,
+        token: u.password,
+        secure: u.protocol === 'https:',
+      };
+    } catch {
+      continue;
+    }
   }
+  return null;
 }
 
 export function getLastSyncAt(): string | null {
