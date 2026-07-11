@@ -58,7 +58,7 @@ function serializeMetadata(session: SessionRecord, task?: Task): string {
  *
  * LOCAL SESSIONS ONLY: remote sessions are skipped here because reading their
  * JSONL means pulling the full (up to ~14MB) file over the SSH tunnel, which
- * the corp proxy kills past ~5MB. Indexing remote conversation content requires
+ * some corporate proxies kill past ~5MB. Indexing remote conversation content requires
  * a daemon-side filter RPC (filter on the remote host, ship back ~50KB) — that
  * is a separate, larger change. Until then remote sessions stay metadata-only.
  */

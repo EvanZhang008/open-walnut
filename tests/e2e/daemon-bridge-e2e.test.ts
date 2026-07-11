@@ -196,6 +196,57 @@ describe('daemon cloud bridge (real source daemon)', () => {
     }
   }, 60_000)
 
+  // Security regression (CRITICAL-1): the cloud box is a PUBLIC relay, so a
+  // frame arriving over the bridge socket must be restricted to the phone-proxy
+  // command set. Privileged commands (fs.write / start / bridge.configure) that
+  // a compromised cloud box could use for RCE/exfil must be refused — they stay
+  // reachable only over the trusted SSH control socket.
+  it('bridge socket cannot invoke privileged commands (fs.write refused, status allowed)', async () => {
+    const cloud = await startFakeCloud()
+    const daemon = await spawnDaemon()
+    const ctl = await connectWs(daemon.port)
+    const victimFile = path.join(daemonDir, 'pwned-via-bridge.txt')
+    try {
+      await rpc(ctl, 1, 'bridge.configure', {
+        enabled: true,
+        url: `ws://127.0.0.1:${cloud.port}/bridge`,
+        token: 't',
+        hostAlias: HOST_ALIAS,
+      })
+      await waitFor(() => cloud.connections.some((c) => c.frames.some((f) => f.ev === 'hello')))
+      const bridgeSideWs = cloud.connections[0].ws
+
+      // Drive an RPC over the bridge socket and await its {id} response.
+      const bridgeRpc = (id: number, cmd: string, params: Record<string, unknown> = {}) =>
+        new Promise<Record<string, unknown>>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error(`bridge rpc timeout: ${cmd}`)), 8000)
+          const onMessage = (data: Buffer) => {
+            const msg = JSON.parse(data.toString()) as Record<string, unknown>
+            if (msg.id === id) { clearTimeout(timer); bridgeSideWs.off('message', onMessage); resolve(msg) }
+          }
+          bridgeSideWs.on('message', onMessage)
+          bridgeSideWs.send(JSON.stringify({ id, cmd, ...params }))
+        })
+
+      // fs.write is NOT in the allowlist → refused, and no file is created.
+      const denied = await bridgeRpc(701, 'fs.write', {
+        path: victimFile,
+        data: Buffer.from('pwned').toString('base64'),
+      })
+      expect(denied.ok).not.toBe(true)
+      expect(String(denied.error ?? '')).toContain('not permitted over bridge')
+      expect(fs.existsSync(victimFile)).toBe(false)
+
+      // status IS allowlisted → still works over the bridge.
+      const ok = await bridgeRpc(702, 'status', { sid: 'no-such-session' })
+      expect(ok.ok).toBe(true)
+    } finally {
+      try { ctl.close() } catch { /* already closed */ }
+      await stopDaemon(daemon)
+      await cloud.close()
+    }
+  }, 60_000)
+
   it('cloud drop → daemon redials with backoff', async () => {
     let cloud = await startFakeCloud()
     const cloudPort = cloud.port

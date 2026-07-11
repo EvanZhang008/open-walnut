@@ -40,6 +40,8 @@ interface BridgeConn {
 
 /** Close code for "replaced by a newer connection from the same host". */
 const CLOSE_REPLACED = 4000
+/** Close code for a hello whose hostAlias doesn't match the token identity. */
+const CLOSE_UNAUTHORIZED = 4001
 const DEFAULT_TIMEOUT_MS = 15_000
 // Daemon pings every 30s; two misses + margin = dead link.
 const SILENCE_MS = 75_000
@@ -224,8 +226,31 @@ function findConn(ws: WebSocket): BridgeConn | null {
   return null
 }
 
+/**
+ * A machine token is minted per host as `bridge-<alias>` (see
+ * cloud-bridge-config.ts `bridgeDeviceName`; '__local__' → 'local'). The
+ * bridge socket's authenticated device name is therefore the ONLY identity the
+ * cloud can trust — the `hostAlias` in the hello frame is attacker-choosable.
+ * Requiring them to match binds each token to its host, so a leaked/reused
+ * machine token can't register as (and evict / MITM) a different host.
+ */
+function tokenBoundAlias(deviceName: string): string {
+  const alias = deviceName.startsWith('bridge-') ? deviceName.slice('bridge-'.length) : deviceName
+  return alias === 'local' ? '__local__' : alias
+}
+
 function registerBridge(ws: WebSocket, deviceName: string, hello: Record<string, unknown>): void {
   const hostAlias = hello.hostAlias as string
+  const boundAlias = tokenBoundAlias(deviceName)
+  if (hostAlias !== boundAlias) {
+    // Token identity and claimed host disagree — impersonation attempt (or a
+    // misconfigured daemon). Refuse rather than let it take the host's slot.
+    log.ws.warn('bridge: hello hostAlias does not match token identity — rejecting', {
+      claimedHostAlias: hostAlias, tokenAlias: boundAlias, deviceName,
+    })
+    try { ws.close(CLOSE_UNAUTHORIZED, 'hostAlias/token mismatch') } catch { /* already closed */ }
+    return
+  }
   const existing = bridges.get(hostAlias)
   if (existing) {
     log.ws.info('bridge: replacing existing connection', { hostAlias })

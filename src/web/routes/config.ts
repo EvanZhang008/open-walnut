@@ -4,6 +4,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { getConfig, updateConfig } from '../../core/config-manager.js'
+import { CLOUD_MODE } from '../../constants.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { VALID_PRIORITIES } from '../../core/types.js'
 import { log } from '../../logging/index.js'
@@ -14,6 +15,36 @@ import { KNOWN_PROVIDERS, DEFAULT_BASE_URLS } from '../../agent/providers/defaul
 import type { ModelEntry } from '../../agent/providers/types.js'
 
 export const configRouter = Router()
+
+/** Fields that hold provider/API secrets — masked before leaving the box. */
+const SECRET_FIELDS = new Set([
+  'bedrock_bearer_token', 'bearer_token', 'api_key', 'perplexity_api_key',
+  'openai_api_key', 'aws_secret_access_key', 'aws_access_key_id', 'key',
+])
+
+function maskSecret(v: unknown): unknown {
+  if (typeof v !== 'string' || v.length === 0) return v
+  return v.length > 4 ? '••••••••' + v.slice(-4) : '••••'
+}
+
+/**
+ * Deep-clone config with every secret-valued field masked. Used in CLOUD mode:
+ * config.yaml is git-synced to the public box, and `GET /api/config` is
+ * reachable by ANY paired device — returning plaintext provider keys / bearer
+ * tokens there would hand a phone token holder the Bedrock credentials. On the
+ * trusted-LAN Mac the owner edits real values locally, so it stays unmasked.
+ */
+function redactConfig(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactConfig)
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = SECRET_FIELDS.has(k) ? maskSecret(v) : redactConfig(v)
+    }
+    return out
+  }
+  return value
+}
 
 // GET /api/config
 configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
@@ -26,7 +57,7 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
     const envTokenHint = !hasConfigToken && envBearerToken
       ? envBearerToken.slice(0, 8) + '••••••••' + envBearerToken.slice(-4)
       : undefined
-    res.json({ config, envTokenHint })
+    res.json({ config: CLOUD_MODE ? redactConfig(config) : config, envTokenHint })
   } catch (err) {
     next(err)
   }

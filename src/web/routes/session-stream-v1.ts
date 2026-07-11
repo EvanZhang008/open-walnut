@@ -195,7 +195,7 @@ const TRANSCRIPT_TAIL_ROWS = 200
 const TRANSCRIPT_TEXT_MAX = 4_000
 // Tail-only read over the bridge: ~200 rendered rows fit comfortably in the
 // last 512KB even with tool-result noise. A whale session's full 10MB+ jsonl
-// as one bridge frame is exactly the WSSH-killing payload class (inc-…925).
+// as one bridge frame is exactly the proxy-killing payload class (inc-…925).
 const TRANSCRIPT_TAIL_BYTES = 512 * 1024
 
 /**

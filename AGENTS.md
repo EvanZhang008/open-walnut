@@ -42,7 +42,7 @@ npm run dev:ephemeral   # Ephemeral server (random port, temp data, auto-cleans)
 
 `scripts/walnut-sandbox.sh` spins up a fully isolated Walnut on **:3457** (`env -i` + throwaway
 HOME + isolated data/daemon dir) to test any credential or record onboarding — **never touches
-prod 3456** (the script refuses to act on 3456). Docker-free (corp Docker is org-locked).
+prod 3456** (the script refuses to act on 3456). Docker-free (Docker may be locked down in some managed environments).
 
 ```bash
 scripts/walnut-sandbox.sh clean                  # no creds → first-run onboarding banner
@@ -104,9 +104,9 @@ Personal AI butler: tasks + knowledge + AI sessions. **Tasks are the atom.** `Ca
 
 **Keep in sync:** `daemon-standalone.ts` (bun binary) + `daemon-source.ts` (JS fallback). Build: `bash scripts/build-daemon.sh`.
 
-**Auto-deploy (use this):** `DaemonConnection` compares local `.version` vs remote `binary --version`; if differs, gzips + chunks binary into 1MB pieces, each via separate SSH connection (bypasses corp proxy that kills >5MB transfers), retries 2x per chunk, falls back to 44KB source deploy if chunked binary fails. Just `npm run build && bash scripts/build-daemon.sh && npm run dev:prod` — next UI send to that host auto-upgrades (old CLI processes survive via Phase C).
+**Auto-deploy (use this):** `DaemonConnection` compares local `.version` vs remote `binary --version`; if differs, gzips + chunks binary into 1MB pieces, each via separate SSH connection (bypasses proxies that kill >5MB transfers), retries 2x per chunk, falls back to 44KB source deploy if chunked binary fails. Just `npm run build && bash scripts/build-daemon.sh && npm run dev:prod` — next UI send to that host auto-upgrades (old CLI processes survive via Phase C).
 
-**Never scp manually** — corp SSH proxy (WSSH) kills large transfers. That's exactly what the chunked auto-deploy solves.
+**Never scp manually** — some corporate SSH proxies kills large transfers. That's exactly what the chunked auto-deploy solves.
 
 **Debugging send/delivery latency (quick refs):**
 - Both local (`__local__`) AND remote sessions go through the daemon / `RemoteSessionManager`. There is no separate "local" transport — don't assume a stall is SSH-specific.

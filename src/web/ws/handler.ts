@@ -259,7 +259,11 @@ async function verifyCloudUpgrade(url: URL, request: IncomingMessage): Promise<{
  * Attach the WebSocket server to an existing HTTP server via upgrade.
  */
 export function attachWss(server: HttpServer): WebSocketServer {
-  wss = new WebSocketServer({ noServer: true })
+  // maxPayload caps a single WS frame. The `ws` default is 100MB — any
+  // authenticated /ws client or /bridge daemon could push that and force the
+  // server to buffer it whole before JSON.parse (memory-exhaustion lever). 4MB
+  // comfortably covers real frames (jsonl lines, RPC params) with headroom.
+  wss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 })
   registerSetInterest()
 
   server.on('upgrade', (request: IncomingMessage, socket, head) => {

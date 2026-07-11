@@ -113,6 +113,30 @@ async function resolveTaskRef(taskId: string): Promise<string> {
 const DEFAULT_PORT = 3456
 const SYNC_INTERVAL_MS = 30_000 // Default plugin sync interval (30s)
 
+/**
+ * CORS origin gate. Allows requests with no `Origin` (native apps, curl,
+ * same-origin navigations) and browser origins that are localhost or on a
+ * private LAN (the dev Vite server + trusted-LAN devices). A public-internet
+ * origin is refused — the cloud SPA is same-origin so it never needs a
+ * cross-origin grant, and no wildcard is ever emitted.
+ */
+function corsOriginAllowed(
+  origin: string | undefined,
+  cb: (err: Error | null, allow?: boolean) => void,
+): void {
+  if (!origin) { cb(null, true); return } // non-browser / same-origin
+  try {
+    const host = new URL(origin).hostname
+    const isLoopback = host === 'localhost' || host === '127.0.0.1' || host === '::1'
+    const isPrivateLan = /^10\./.test(host)
+      || /^192\.168\./.test(host)
+      || /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+    cb(null, isLoopback || isPrivateLan)
+  } catch {
+    cb(null, false)
+  }
+}
+
 export interface ServerOptions {
   port?: number
   dev?: boolean
@@ -347,7 +371,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   }
 
   // -- Middleware --
-  app.use(cors())
+  // CORS: reflect only trusted origins — NEVER `*`. A wildcard let any public
+  // web page drive the API cross-origin (the LAN auth bypass + arbitrary
+  // file-content read made that a real data-exfil / agent-RCE vector). Native
+  // apps and same-origin SPA fetches send no cross-origin preflight, so they're
+  // unaffected; only browser pages from an untrusted origin are refused.
+  app.use(cors({ origin: corsOriginAllowed }))
 
   // Git smart HTTP for the cloud data hub (cloud mode only). MUST be mounted
   // BEFORE compression() and express.json(): git POST bodies are raw binary

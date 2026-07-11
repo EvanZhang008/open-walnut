@@ -645,7 +645,7 @@ export class DaemonConnection {
   /**
    * Stream a single buffer to a remote file in one SSH connection.
    * Uses ControlMaster mux when available so we don't pay handshake cost.
-   * Verifies remote sha256 + size before resolving — corp SSH proxies (WSSH)
+   * Verifies remote sha256 + size before resolving — some corporate SSH proxies
    * sometimes truncate mid-stream while still exiting code 0.
    * Returns true on success, false on any failure (caller decides whether to fall back).
    */
@@ -1098,7 +1098,7 @@ export class DaemonConnection {
    * binaries haven't been built yet (dev workflow).
    */
   private async deployDaemon(): Promise<void> {
-    // Preferred path: bun + ~63KB JS source. Bypasses WSSH bulk-transfer kills
+    // Preferred path: bun + ~63KB JS source. Bypasses corporate-proxy bulk-transfer kills
     // entirely (binary is 37MB compressed; source is gzipped to ~17KB on the
     // wire). Bun is a single static binary so probe-or-install completes in a
     // few seconds when missing. Falls through to binary on probe/install
@@ -1145,7 +1145,7 @@ export class DaemonConnection {
   /**
    * Probe for bun on the remote host. If absent, attempt one-shot install via
    * the official curl|bash script (which fetches from bun.sh — egress from the
-   * remote, NOT through WSSH). Returns the resolved bun executable path, or
+   * remote, NOT through the corporate proxy). Returns the resolved bun executable path, or
    * null if probe and install both failed.
    */
   private async probeOrInstallBun(): Promise<string | null> {
@@ -1172,7 +1172,7 @@ export class DaemonConnection {
 
     // Install. The install script writes to ~/.bun/bin/bun and downloads ~30MB
     // straight from bun.sh — that's a remote-host outbound HTTPS connection,
-    // bypassing WSSH entirely. 90s budget covers slow corporate egress.
+    // bypassing the corporate proxy entirely. 90s budget covers slow corporate egress.
     log.session.info('DaemonConnection: bun absent, attempting one-shot install', {
       host: this.hostKey,
     })
@@ -1232,7 +1232,7 @@ export class DaemonConnection {
       if (needsDeploy) {
         // Strategy: stream the whole gzipped binary in one SSH connection (mux'd
         // through ControlMaster). Empirically ~5s on success for our 37MB binary,
-        // sha256-verified end-to-end. Corporate SSH proxies (WSSH) kill large
+        // sha256-verified end-to-end. some corporate SSH proxies kill large
         // transfers *probabilistically* — at 37MB roughly 60% succeed; at 40MB+
         // success rate drops sharply (measured 0/2 at 40MB, 0/2 at 45MB). The
         // proxy decision isn't deterministic on size alone, so we always try
@@ -1278,7 +1278,7 @@ export class DaemonConnection {
           host: this.hostKey, gzBytes: gzSize,
         })
         // Fall through to chunked path below.
-        // 256KB — deep under WSSH's ~5MB kill threshold AND any per-connection
+        // 256KB — deep under the corporate proxy’s ~5MB kill threshold AND any per-connection
         // byte-rate throttling. Larger chunks (1MB) were the main failure mode
         // pre-2026-05-05: corp proxies would kill ~half the chunks on a ~40MB
         // binary, blowing past MAX_RETRIES=2, falling back to source deploy,
@@ -1286,7 +1286,7 @@ export class DaemonConnection {
         //
         // Tune by observation, not theory — too small wastes SSH setup overhead
         // (per-chunk connection cost dominates); too large hits proxy kills.
-        // 256KB was chosen after observing WSSH kills consistently at ~1MB and
+        // 256KB was chosen after observing proxy kills consistently at ~1MB and
         // confirming 256KB survives reliably across proxy variants.
         const CHUNK_SIZE = 262_144
         const totalChunks = Math.ceil(gzSize / CHUNK_SIZE)
@@ -1305,7 +1305,7 @@ export class DaemonConnection {
         // permanently, so err on the robust side here.
         //
         // Values chosen empirically — 5 retries per chunk handled the observed
-        // WSSH transient kills on 40MB deploys during the 2026-05-05 incident.
+        // proxy transient kills on 40MB deploys during the 2026-05-05 incident.
         // Tune downward only with data; the cost of failing the deploy is
         // ~30min of blocked remote sessions until the user notices.
         const MAX_CHUNK_RETRIES = 5

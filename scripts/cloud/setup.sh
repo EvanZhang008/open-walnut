@@ -212,6 +212,7 @@ User=$WALNUT_USER
 Group=$WALNUT_USER
 WorkingDirectory=$REPO_DIR
 Environment=WALNUT_CLOUD_MODE=1
+Environment=NODE_ENV=production
 Environment=OPEN_WALNUT_HOME=$DATA_HOME
 Environment=WALNUT_GIT_HUB_DIR=$WALNUT_LIB/git
 Environment=HOME=$WALNUT_LIB

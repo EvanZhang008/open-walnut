@@ -231,7 +231,25 @@ interface WsData {
   sendQueue?: string[]
   /** Total bytes currently held in sendQueue (for the overflow guard). */
   sendQueueBytes?: number
+  /**
+   * 'bridge' = the cloud dial-out socket. The cloud box is a semi-trusted
+   * PUBLIC relay, so its inbound frames are restricted to the phone-proxy
+   * command set (BRIDGE_ALLOWED_COMMANDS) — the full privileged RPC surface
+   * (fs.write/start/bridge.configure/…) is reachable ONLY over the trusted
+   * SSH-tunneled client path. Absent = trusted local/SSH client.
+   */
+  origin?: 'bridge'
 }
+
+/**
+ * Commands the cloud bridge is allowed to invoke. This MUST stay a subset of
+ * what routes/session-stream-v1.ts + ws/bridge-registry.ts actually send:
+ * status/appendUserMarker/send/attach/read-history/ping. Anything else from a
+ * bridge socket is a compromised-cloud-box escalation attempt and is rejected.
+ */
+const BRIDGE_ALLOWED_COMMANDS = new Set([
+  'status', 'appendUserMarker', 'send', 'attach', 'read-history', 'ping',
+])
 
 // DUP-DEBUG: per-process counter and lookup map for stable ws ids.
 // Lets logs distinguish "same ws received twice" from "two different ws each
@@ -642,6 +660,14 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
   if (cmd.cmd !== 'ping') {
     // ping is high-frequency keepalive — log spam if we trace it
     logMsg('debug', 'cmd_recv', { cmd: cmd.cmd, id, sid, traceId })
+  }
+
+  // Cloud bridge is a PUBLIC relay: restrict it to the phone-proxy command set.
+  // A frame outside the allowlist on a bridge socket means the cloud box was
+  // compromised and is trying to escalate to fs.write/start/etc — refuse it.
+  if (ws.data?.origin === 'bridge' && !BRIDGE_ALLOWED_COMMANDS.has(cmd.cmd as string)) {
+    logMsg('warn', 'bridge: rejected non-allowlisted command', { cmd: cmd.cmd, id })
+    return sendError(ws, id as number, 'command not permitted over bridge: ' + cmd.cmd)
   }
 
   switch (cmd.cmd) {
@@ -1822,7 +1848,7 @@ async function cmdFsStat(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
 }
 
 // Byte-range read for LARGE files. A whole-file fs.read of a multi-MB session
-// JSONL serializes into ONE giant WS frame; corp SSH proxies (WSSH) kill the
+// JSONL serializes into ONE giant WS frame; some corporate SSH proxies kill the
 // tunnel mid-frame, the client sees only a pong gap, and the read times out
 // forever (inc-1783532915925: 11.4MB history → 30s timeout loop). Range reads
 // keep every frame small enough to survive the proxy, and double as the
@@ -2390,7 +2416,7 @@ function scheduleBridgeRedial(gen: number): void {
 // backpressure dance only applies to real ServerWebSockets.
 function makeBridgeAdapter(client: WebSocket): ServerWebSocket<WsData> {
   const adapter = {
-    data: {} as WsData,
+    data: { origin: 'bridge' } as WsData,
     get readyState() { return client.readyState },
     send(payload: string): number {
       try { client.send(payload); return payload.length } catch { return 0 }

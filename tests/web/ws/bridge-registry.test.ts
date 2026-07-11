@@ -350,4 +350,24 @@ describe('bridge lifecycle + proxied send + streaming', () => {
       first.close()
     }
   })
+
+  // Security regression (HIGH-3): a machine token is minted per host as
+  // `bridge-<alias>`, so the token's device name IS its host identity. A hello
+  // claiming a DIFFERENT hostAlias must be refused (code 4001) — otherwise a
+  // leaked/reused token could evict and impersonate any other host's daemon.
+  it('hello with a hostAlias that mismatches the token identity is REJECTED (code 4001)', async () => {
+    const imposter = await connectFakeDaemon(machineToken, 'someone-elses-host')
+    try {
+      await waitFor(() => imposter.closedWith !== null)
+      expect(imposter.closedWith?.code).toBe(4001)
+      // It never entered the registry: the impersonated host is not listed.
+      const res = await fetch(apiUrl('/api/v1/status'), {
+        headers: { Authorization: `Bearer ${deviceToken}` },
+      })
+      const body = await res.json() as { bridgeHosts?: Array<{ hostAlias: string }> }
+      expect(body.bridgeHosts?.some((b) => b.hostAlias === 'someone-elses-host')).toBeFalsy()
+    } finally {
+      imposter.close()
+    }
+  })
 })

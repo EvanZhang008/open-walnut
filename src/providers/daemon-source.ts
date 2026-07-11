@@ -816,6 +816,14 @@ function decodeFrame(buf) {
 
 // ── Session management commands ──
 
+// Commands the cloud bridge is allowed to invoke — MUST match the standalone
+// twin's BRIDGE_ALLOWED_COMMANDS. Anything else from a bridge socket is a
+// compromised-cloud-box escalation attempt (fs.write/start/bridge.configure/…)
+// and is rejected; those stay reachable only over the trusted SSH path.
+var BRIDGE_ALLOWED_COMMANDS = new Set([
+  'status', 'appendUserMarker', 'send', 'attach', 'read-history', 'ping',
+]);
+
 function handleCommand(ws, msg) {
   let cmd;
   try { cmd = JSON.parse(msg); } catch { return sendError(ws, null, 'invalid JSON'); }
@@ -828,6 +836,14 @@ function handleCommand(ws, msg) {
       sid: typeof cmd.sid === 'string' ? cmd.sid : undefined,
       traceId: typeof cmd.traceId === 'string' ? cmd.traceId : undefined,
     });
+  }
+
+  // Cloud bridge is a PUBLIC relay: restrict it to the phone-proxy command set.
+  // A frame outside the allowlist on a bridge socket means the cloud box was
+  // compromised and is trying to escalate to fs.write/start/etc — refuse it.
+  if (ws.origin === 'bridge' && !BRIDGE_ALLOWED_COMMANDS.has(cmd.cmd)) {
+    logMsg('warn', 'bridge: rejected non-allowlisted command', { cmd: cmd.cmd, id });
+    return sendError(ws, id, 'command not permitted over bridge: ' + cmd.cmd);
   }
 
   switch (cmd.cmd) {
@@ -1998,7 +2014,7 @@ async function cmdFsStat(ws, id, cmd) {
 }
 
 // Byte-range read for LARGE files. A whole-file fs.read of a multi-MB session
-// JSONL serializes into ONE giant WS frame; corp SSH proxies (WSSH) kill the
+// JSONL serializes into ONE giant WS frame; some corporate SSH proxies kill the
 // tunnel mid-frame and the read times out forever (inc-1783532915925). Range
 // reads keep frames small and double as the incremental turn-delta path.
 // base64 (byte-exact; the CLIENT reassembles bytes then decodes UTF-8).
@@ -2309,6 +2325,9 @@ function scheduleBridgeRedial(gen) {
 // (send/readyState/close) so handleCommand + subscriber fan-out work as-is.
 function makeBridgeAdapter(client) {
   return {
+    // Marks this socket as the PUBLIC cloud relay so handleCommand restricts it
+    // to BRIDGE_ALLOWED_COMMANDS (regular SSH clients have no origin property).
+    origin: 'bridge',
     get readyState() { return client.readyState; },
     send(payload) { try { client.send(payload); } catch {} },
     close() { try { client.close(); } catch {} },
