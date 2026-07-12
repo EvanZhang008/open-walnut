@@ -45,8 +45,11 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     /// Notification provenance ("session-error", "cron", …) — drives card styling.
     let source: String?
 
-    // Client-only flag for optimistic user bubbles (not part of the wire format).
+    // Client-only flags for optimistic user bubbles (not part of the wire format).
     var pending: Bool? = nil
+    /// Send failed — the bubble stays in the timeline (tap to retry / copy /
+    /// delete) so composed text is never lost to a network error.
+    var failed: Bool? = nil
 
     private enum CodingKeys: String, CodingKey {
         case id, role, text, createdAt, kind, source

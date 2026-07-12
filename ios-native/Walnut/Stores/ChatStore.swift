@@ -177,7 +177,11 @@ final class ChatStore {
             let fetched = try await api.messages(conversationID: id, agentID: agentID, limit: Self.pageSize)
             connection?.reportReachability(true)
             guard id == activeID, agentID == activeAgentID else { return }
-            messages = fetched
+            // Carry local-only bubbles (failed sends, in-flight optimistic)
+            // across the replace — server history doesn't know about them and
+            // a refetch must never erase the user's unsent text.
+            let localOnly = messages.filter { $0.failed == true || $0.pending == true }
+            messages = fetched + localOnly
             hasOlder = fetched.count >= Self.pageSize
             DiskCache.save(Array(fetched.suffix(Self.cacheTail)), key: "messages-\(id)")
         } catch {
@@ -216,6 +220,9 @@ final class ChatStore {
         )
         optimistic.pending = true
 
+        // Append FIRST — even a createConversation failure must leave the
+        // text on screen as a failed bubble, never lose it.
+        messages.append(optimistic)
         do {
             if convID == nil {
                 let created = try await api.createConversation(agentID: activeAgentID)
@@ -226,9 +233,12 @@ final class ChatStore {
             }
             guard let convID else {
                 sending = false
+                if let idx = messages.firstIndex(where: { $0.id == optimistic.id }) {
+                    messages[idx].pending = false
+                    messages[idx].failed = true
+                }
                 return false
             }
-            messages.append(optimistic)
             _ = try await api.sendMessage(conversationID: convID, agentID: activeAgentID, text: text)
             connection?.reportReachability(true)
             // Accepted — solidify the bubble; message-start arrives on SSE shortly.
@@ -243,20 +253,52 @@ final class ChatStore {
             startTurnWatchdog(conversationID: convID)
             return true
         } catch {
-            messages.removeAll { $0.pending == true }
             sending = false
             if let apiError = error as? APIError, apiError.isTurnActive {
-                // Contract: disable composer until message-end arrives on SSE.
+                // Another turn is running — keep the text as a failed bubble
+                // (the draft is already cleared) so it can be retried after
+                // message-end, and gate sends until then.
+                if let idx = messages.firstIndex(where: { $0.id == optimistic.id }) {
+                    messages[idx].pending = false
+                    messages[idx].failed = true
+                }
                 streaming = true
                 watchedUserText = nil
                 if let convID { startTurnWatchdog(conversationID: convID) }
-                errorMessage = "The assistant is already replying — wait for it to finish."
+                errorMessage = "The assistant is already replying — tap the message to retry when it finishes."
             } else {
+                // KEEP the bubble, marked failed — the user's text must never
+                // vanish on a network error. Tap to retry / copy / delete.
+                if let idx = messages.firstIndex(where: { $0.id == optimistic.id }) {
+                    messages[idx].pending = false
+                    messages[idx].failed = true
+                }
                 reportIfNetwork(error)
                 errorMessage = error.localizedDescription
             }
             return false
         }
+    }
+
+    // MARK: - Failed-bubble actions
+
+    /// Re-send a failed bubble: remove it and run the normal send flow with
+    /// the same text (a fresh optimistic bubble appears immediately).
+    /// Precondition-guarded — send()'s busy guard returns without appending,
+    /// so removing the bubble first would LOSE the text mid-turn.
+    func retry(_ message: ChatMessage) async {
+        guard message.failed == true else { return }
+        guard !sending, !streaming else {
+            errorMessage = "Still replying — retry when the turn finishes."
+            return
+        }
+        messages.removeAll { $0.id == message.id }
+        errorMessage = nil
+        await send(message.text)
+    }
+
+    func discardFailed(_ message: ChatMessage) {
+        messages.removeAll { $0.id == message.id }
     }
 
     // MARK: - SSE

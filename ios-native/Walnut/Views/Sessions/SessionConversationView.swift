@@ -99,7 +99,11 @@ struct SessionConversationView: View {
                     }
                 }
                 ForEach(store.messages) { message in
-                    MessageRow(message: message)
+                    MessageRow(
+                        message: message,
+                        onRetry: { Task { await store.retry(message) } },
+                        onDiscard: { store.discardFailed(message) }
+                    )
                 }
                 if store.streaming {
                     liveRow

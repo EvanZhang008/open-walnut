@@ -37,6 +37,9 @@ targets:
         # QR pairing: the setup screen scans the wn://pair code shown by the
         # web console (Settings → Devices).
         NSCameraUsageDescription: Walnut uses the camera to scan the pairing QR code from your Walnut console.
+        # Voice input: the composer mic button records speech and transcribes
+        # it to text on your Walnut server.
+        NSMicrophoneUsageDescription: Walnut uses the microphone for voice input — speech is transcribed to text by your own Walnut server.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.openwalnut.ios

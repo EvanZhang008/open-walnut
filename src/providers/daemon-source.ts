@@ -821,7 +821,7 @@ function decodeFrame(buf) {
 // compromised-cloud-box escalation attempt (fs.write/start/bridge.configure/…)
 // and is rejected; those stay reachable only over the trusted SSH path.
 var BRIDGE_ALLOWED_COMMANDS = new Set([
-  'status', 'appendUserMarker', 'send', 'attach', 'read-history', 'ping', 'bridgeResume',
+  'status', 'appendUserMarker', 'send', 'attach', 'read-history', 'ping', 'bridgeResume', 'stt',
 ]);
 
 function handleCommand(ws, msg) {
@@ -871,6 +871,8 @@ function handleCommand(ws, msg) {
     case 'list': return cmdList(ws, id);
     case 'bridge.configure': return cmdBridgeConfigure(ws, id, cmd);
     case 'bridgeResume': return cmdBridgeResume(ws, id, cmd);
+    case 'stt': return cmdSttRelay(ws, id, cmd);
+    case 'stt-result': return cmdSttResult(ws, id, cmd);
     case 'ping': return sendOk(ws, id, { pong: true });
     case 'hello': return sendOk(ws, id, {
       version: DAEMON_VERSION,
@@ -945,6 +947,55 @@ function cmdBridgeResume(ws, id, cmd) {
     resume: true,
     mode: (session && session.mode) || 'default',
   });
+}
+
+// ── STT relay: bridge audio → the connected walnut server's local engine ──
+// Keep in sync with daemon-standalone.ts. A bridge stt request is relayed as
+// an stt-request event to a TRUSTED (non-bridge) client, which transcribes
+// and answers with an stt-result command carrying the same relayId. No
+// trusted client (Mac down) → fail fast so the cloud falls back to OpenAI.
+var STT_RELAY_TIMEOUT_MS = 90000;
+var sttRelayCounter = 0;
+var sttRelayPending = new Map();
+
+function cmdSttRelay(ws, id, cmd) {
+  var audio = cmd.audio, format = cmd.format, language = cmd.language;
+  if (!audio || !format) {
+    return sendError(ws, id, 'stt: missing audio or format');
+  }
+  var target = null;
+  for (const client of wsClients) {
+    if (client.origin !== 'bridge') { target = client; break; }
+  }
+  if (!target) {
+    return sendError(ws, id, 'stt: no transcription host connected');
+  }
+  sttRelayCounter += 1;
+  var relayId = sttRelayCounter;
+  var timer = setTimeout(function () {
+    sttRelayPending.delete(relayId);
+    sendError(ws, id, 'stt: transcription timed out');
+  }, STT_RELAY_TIMEOUT_MS);
+  sttRelayPending.set(relayId, { ws: ws, id: id, timer: timer });
+  logMsg('info', 'stt: relaying to transcription host', { relayId: relayId, format: format, audioB64Len: audio.length });
+  sendEvent(target, 'stt-request', { relayId: relayId, audio: audio, format: format, language: language });
+}
+
+function cmdSttResult(ws, id, cmd) {
+  var relayId = cmd.relayId, text = cmd.text, durationMs = cmd.durationMs, error = cmd.error;
+  var pending = typeof relayId === 'number' ? sttRelayPending.get(relayId) : undefined;
+  if (!pending) {
+    return sendOk(ws, id, { stale: true });
+  }
+  sttRelayPending.delete(relayId);
+  clearTimeout(pending.timer);
+  if (typeof text === 'string' && !error) {
+    logMsg('info', 'stt: relay complete', { relayId: relayId, chars: text.length, durationMs: durationMs });
+    sendOk(pending.ws, pending.id, { text: text, durationMs: durationMs || 0 });
+  } else {
+    sendError(pending.ws, pending.id, 'stt: ' + (error || 'transcription failed'));
+  }
+  sendOk(ws, id, {});
 }
 
 // ── Start a Claude session ──

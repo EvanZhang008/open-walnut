@@ -2,9 +2,12 @@ import SwiftUI
 
 /// One chat entry — user bubble (right, walnut tint), assistant rich markdown
 /// (left), a system-notification card, or a small grey chip for tool/thinking
-/// history rows.
+/// history rows. Failed sends render as a red-outlined bubble with a retry
+/// affordance (`onRetry` / `onDiscard` supplied by the owning view).
 struct MessageRow: View {
     let message: ChatMessage
+    var onRetry: (() -> Void)? = nil
+    var onDiscard: (() -> Void)? = nil
 
     var body: some View {
         switch message.kind {
@@ -27,17 +30,58 @@ struct MessageRow: View {
     /// saturated brown block read as a wall of color on long messages and
     /// crushed CJK legibility in dark mode.
     private var userBubble: some View {
-        HStack {
-            Spacer(minLength: 48)
-            Text(message.text)
-                .font(.body)
-                .lineSpacing(3)
-                .foregroundStyle(.primary)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(Theme.tintSoft, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                .opacity(message.pending == true ? 0.65 : 1)
-                .textSelection(.enabled)
+        let failed = message.failed == true
+        return VStack(alignment: .trailing, spacing: 4) {
+            HStack {
+                Spacer(minLength: 48)
+                Text(message.text)
+                    .font(.body)
+                    .lineSpacing(3)
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(
+                        failed ? Theme.danger.opacity(0.08) : Theme.tintSoft,
+                        in: RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    )
+                    .overlay {
+                        if failed {
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .strokeBorder(Theme.danger.opacity(0.5), lineWidth: 1)
+                        }
+                    }
+                    .opacity(message.pending == true ? 0.65 : 1)
+                    .textSelection(.enabled)
+                    .contextMenu {
+                        if failed {
+                            if let onRetry {
+                                Button { onRetry() } label: { Label("Retry", systemImage: "arrow.clockwise") }
+                            }
+                            Button { UIPasteboard.general.string = message.text } label: {
+                                Label("Copy", systemImage: "doc.on.doc")
+                            }
+                            if let onDiscard {
+                                Button(role: .destructive) { onDiscard() } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                        } else {
+                            Button { UIPasteboard.general.string = message.text } label: {
+                                Label("Copy", systemImage: "doc.on.doc")
+                            }
+                        }
+                    }
+            }
+            if failed {
+                Button {
+                    onRetry?()
+                } label: {
+                    Label("Not sent — tap to retry", systemImage: "exclamationmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(Theme.danger)
+                }
+                .accessibilityIdentifier("chat.retryFailed")
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 2)

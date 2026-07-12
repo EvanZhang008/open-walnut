@@ -45,6 +45,7 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
   'appendUserMarker',
   'bridge.configure',
   'bridgeResume',
+  'stt',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]

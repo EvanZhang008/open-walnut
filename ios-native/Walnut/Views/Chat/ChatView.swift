@@ -132,7 +132,11 @@ private struct MessageListView: View {
                     emptyState
                 }
                 ForEach(chat.messages) { message in
-                    MessageRow(message: message)
+                    MessageRow(
+                        message: message,
+                        onRetry: { Task { await chat.retry(message) } },
+                        onDiscard: { chat.discardFailed(message) }
+                    )
                 }
                 if chat.streaming {
                     liveRow

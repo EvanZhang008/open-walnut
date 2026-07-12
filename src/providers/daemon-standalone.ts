@@ -248,7 +248,7 @@ interface WsData {
  * bridge socket is a compromised-cloud-box escalation attempt and is rejected.
  */
 const BRIDGE_ALLOWED_COMMANDS = new Set([
-  'status', 'appendUserMarker', 'send', 'attach', 'read-history', 'ping', 'bridgeResume',
+  'status', 'appendUserMarker', 'send', 'attach', 'read-history', 'ping', 'bridgeResume', 'stt',
 ])
 
 // DUP-DEBUG: per-process counter and lookup map for stable ws ids.
@@ -695,6 +695,8 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
     case 'list': return cmdList(ws, id as number)
     case 'bridge.configure': return cmdBridgeConfigure(ws, id as number, cmd)
     case 'bridgeResume': return cmdBridgeResume(ws, id as number, cmd)
+    case 'stt': return cmdSttRelay(ws, id as number, cmd)
+    case 'stt-result': return cmdSttResult(ws, id as number, cmd)
     case 'ping': return sendOk(ws, id as number, { pong: true })
     case 'hello': return sendOk(ws, id as number, {
       version: DAEMON_VERSION,
@@ -785,6 +787,65 @@ function cmdBridgeResume(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     resume: true,
     mode: session?.mode ?? 'default',
   })
+}
+
+// ── STT relay: bridge audio → the connected walnut server's local engine ──
+// The daemon has no transcription engine of its own. A bridge `stt` request
+// is relayed as an `stt-request` event to a TRUSTED (non-bridge) client — the
+// walnut server holding this daemon's WS — which runs its configured engine
+// and answers with an `stt-result` command carrying the same relayId. No
+// trusted client connected (Mac down) → fail fast so the cloud box falls back
+// to its own OpenAI path. Audio payloads are never logged.
+
+const STT_RELAY_TIMEOUT_MS = 90_000
+let sttRelayCounter = 0
+const sttRelayPending = new Map<number, {
+  ws: ServerWebSocket<WsData>; id: number; timer: ReturnType<typeof setTimeout>
+}>()
+
+function cmdSttRelay(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const { audio, format, language } = cmd as { audio?: string; format?: string; language?: string }
+  if (!audio || !format) {
+    return sendError(ws, id, 'stt: missing audio or format')
+  }
+  // Pick any trusted client (never the bridge adapter — that would bounce the
+  // request straight back to the cloud). Normally there is exactly one: the
+  // walnut server's DaemonConnection.
+  let target: ServerWebSocket<WsData> | null = null
+  for (const client of wsClients) {
+    if (client.data?.origin !== 'bridge') { target = client; break }
+  }
+  if (!target) {
+    return sendError(ws, id, 'stt: no transcription host connected')
+  }
+  const relayId = ++sttRelayCounter
+  const timer = setTimeout(() => {
+    sttRelayPending.delete(relayId)
+    sendError(ws, id, 'stt: transcription timed out')
+  }, STT_RELAY_TIMEOUT_MS)
+  sttRelayPending.set(relayId, { ws, id, timer })
+  logMsg('info', 'stt: relaying to transcription host', { relayId, format, audioB64Len: audio.length })
+  sendEvent(target, 'stt-request', { relayId, audio, format, language })
+}
+
+function cmdSttResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const { relayId, text, durationMs, error } = cmd as {
+    relayId?: number; text?: string; durationMs?: number; error?: string
+  }
+  const pending = typeof relayId === 'number' ? sttRelayPending.get(relayId) : undefined
+  if (!pending) {
+    // Late result after timeout — ack and drop.
+    return sendOk(ws, id, { stale: true })
+  }
+  sttRelayPending.delete(relayId as number)
+  clearTimeout(pending.timer)
+  if (typeof text === 'string' && !error) {
+    logMsg('info', 'stt: relay complete', { relayId, chars: text.length, durationMs })
+    sendOk(pending.ws, pending.id, { text, durationMs: durationMs ?? 0 })
+  } else {
+    sendError(pending.ws, pending.id, 'stt: ' + (error ?? 'transcription failed'))
+  }
+  sendOk(ws, id, {})
 }
 
 // ── Start a Claude session ──

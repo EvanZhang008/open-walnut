@@ -512,6 +512,45 @@ export class DaemonConnection {
   }
 
   /**
+   * Answer a daemon-relayed STT request (phone voice input arriving over the
+   * cloud bridge while this box holds the transcription engine). Runs the
+   * configured local engine and replies with an `stt-result` carrying the
+   * relayId. Errors are reported back (not thrown) so the daemon can fail the
+   * bridge request and let the cloud box fall back to OpenAI. The audio
+   * payload is never logged.
+   */
+  private async handleSttRequest(event: DaemonEvent): Promise<void> {
+    const relayId = event.relayId
+    const audio = event.audio
+    const format = event.format
+    if (typeof relayId !== 'number' || typeof audio !== 'string' || typeof format !== 'string') return
+    let reply: Record<string, unknown>
+    try {
+      const { getConfig } = await import('../core/config-manager.js')
+      const { transcribeAudio } = await import('../core/stt/index.js')
+      const result = await transcribeAudio(await getConfig(), {
+        audio, format,
+        language: typeof event.language === 'string' && event.language !== '' ? event.language : undefined,
+      })
+      log.session.info('DaemonConnection: stt relay transcribed', {
+        host: this.hostKey, relayId, chars: result.text.length, durationMs: result.durationMs,
+      })
+      reply = { relayId, text: result.text, durationMs: result.durationMs }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      log.session.warn('DaemonConnection: stt relay failed', { host: this.hostKey, relayId, message })
+      reply = { relayId, error: message }
+    }
+    try {
+      await this.send('stt-result', reply)
+    } catch (err) {
+      log.session.warn('DaemonConnection: stt-result send failed', {
+        host: this.hostKey, relayId, message: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  /**
    * Disconnect from the daemon and clean up SSH tunnel.
    * Does NOT stop the daemon — it continues running independently.
    *
@@ -1637,6 +1676,12 @@ export class DaemonConnection {
     return new Promise((resolve, reject) => {
       const url = typeof urlOrPort === 'string' ? urlOrPort : `ws://127.0.0.1:${urlOrPort}`
       this._lastWsUrl = url
+      // maxPayload stays at the ws default (100MB) DELIBERATELY — it is the
+      // tripwire that caught inc-1783842393500 (134MB one-frame fs.read of a
+      // whale JSONL → "Max payload size exceeded"). DaemonFileReader chunks all
+      // big file reads to 1MB frames now; the largest remaining legit frame is
+      // a git.diff response (git stdout capped at 64MB in cmdGitDiff), so do
+      // NOT lower this without chunking git.diff first.
       const ws = new WebSocket(url, { handshakeTimeout: 10_000 })
 
       ws.on('open', () => {
@@ -1733,6 +1778,13 @@ export class DaemonConnection {
     // Unsolicited event (has 'ev' field)
     if ('ev' in msg) {
       const event = msg as unknown as DaemonEvent
+      // STT relay (cloud voice input): the daemon forwards phone audio from
+      // its bridge here because this box has the transcription engine. Handled
+      // internally — session-level eventHandlers never see it.
+      if (event.ev === 'stt-request') {
+        void this.handleSttRequest(event)
+        return
+      }
       // DUP-DEBUG: if handlerCount > 1, every event below fans out N times.
       // jsonl events are high-frequency — only log when something is off
       // (multiple handlers) or for low-frequency event types.

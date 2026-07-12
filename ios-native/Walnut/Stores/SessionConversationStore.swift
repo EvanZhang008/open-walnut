@@ -141,7 +141,10 @@ final class SessionConversationStore {
         // unchanged rows identical across fetches, so only the tail diffs.
         historyMessages = Self.assignStableIDs(merged)
         let seen = Set(transcript.messages.filter { $0.role == "user" }.map(\.text))
-        pendingUser.removeAll { seen.contains($0.text) }
+        // Failed bubbles are exempt: their text was NOT delivered — a match
+        // here is an older identical message, and absorbing the failed bubble
+        // would silently lose the pending retry.
+        pendingUser.removeAll { $0.failed != true && seen.contains($0.text) }
     }
 
     /// Derive a stable id per row from its content so re-fetches don't churn
@@ -169,7 +172,8 @@ final class SessionConversationStore {
     // MARK: - Send
 
     /// Optimistic user bubble → POST. Composer stays enabled (sessions accept
-    /// mid-turn messages). Returns false so the composer restores the draft.
+    /// mid-turn messages). On failure the bubble STAYS in the timeline marked
+    /// failed (tap to retry / copy / delete) — the user's text never vanishes.
     @discardableResult
     func send(_ text: String) async -> Bool {
         guard canSend else { return false }
@@ -187,20 +191,37 @@ final class SessionConversationStore {
                 pendingUser[idx].pending = false
             }
             return true
-        } catch let error as APIError where error.isBridgeOffline {
-            pendingUser.removeAll { $0.id == optimistic.id }
-            offline = true
-            startPolling()
-            return false
-        } catch let error as APIError where error.isSessionDead {
-            pendingUser.removeAll { $0.id == optimistic.id }
-            dead = true
-            return false
         } catch {
-            pendingUser.removeAll { $0.id == optimistic.id }
-            errorMessage = error.localizedDescription
+            if let idx = pendingUser.firstIndex(where: { $0.id == optimistic.id }) {
+                pendingUser[idx].pending = false
+                pendingUser[idx].failed = true
+            }
+            if let apiError = error as? APIError, apiError.isBridgeOffline {
+                offline = true
+                startPolling()
+            } else if let apiError = error as? APIError, apiError.isSessionDead {
+                dead = true
+            } else {
+                errorMessage = error.localizedDescription
+            }
             return false
         }
+    }
+
+    // MARK: - Failed-bubble actions
+
+    /// Re-send a failed bubble with the same text. Precondition-guarded —
+    /// send()'s canSend guard returns without appending, so removing the
+    /// bubble first while offline/dead would LOSE the text.
+    func retry(_ message: ChatMessage) async {
+        guard message.failed == true, canSend else { return }
+        pendingUser.removeAll { $0.id == message.id }
+        errorMessage = nil
+        await send(message.text)
+    }
+
+    func discardFailed(_ message: ChatMessage) {
+        pendingUser.removeAll { $0.id == message.id }
     }
 
     // MARK: - SSE

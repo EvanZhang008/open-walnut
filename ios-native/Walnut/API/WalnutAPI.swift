@@ -99,6 +99,20 @@ struct WalnutAPI {
         return accepted.messageId
     }
 
+    /// Voice input: upload recorded audio, get the recognized text back.
+    /// The server picks the engine (local whisper on the primary box, bridge
+    /// relay to it from the cloud, or OpenAI fallback). Long timeout — a cold
+    /// whisper model load plus a 60s clip can take a while.
+    func transcribe(audio: Data, format: String, language: String? = nil) async throws -> String {
+        struct Result: Codable { let text: String }
+        var body: [String: String] = ["audio": audio.base64EncodedString(), "format": format]
+        if let language { body["language"] = language }
+        let result: Result = try await sendAbsolute(
+            "POST", "/api/v1/stt/transcribe", body: body, timeout: 120
+        )
+        return result.text
+    }
+
     /// Authenticated SSE URL for a session's live turn stream (nil if unpaired).
     static func sessionStreamURL(id: String) -> URL? {
         guard let base = AppConfig.serverURL else { return nil }

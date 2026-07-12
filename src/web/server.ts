@@ -79,9 +79,11 @@ import { authRouter } from './routes/auth.js'
 import { setupRouter } from './routes/setup.js'
 import { apiV1Router, closeApiV1Streams } from './routes/api-v1.js'
 import { sessionStreamV1Router } from './routes/session-stream-v1.js'
+import { sttV1Router } from './routes/stt-v1.js'
 import { incidentsRouter } from './routes/incidents.js'
 import { notificationsRouter } from './routes/notifications.js'
-import { addNotification as addFeedNotification } from '../core/notifications/store.js'
+import { addNotification as addFeedNotification, resolvePermissionNotification } from '../core/notifications/store.js'
+import { stripEntityRefs, extractFirstRefs } from '../utils/entity-refs.js'
 import { registerAuthRpc } from './routes/auth-rpc.js'
 import { initPushNotifications } from '../core/push-notification.js'
 import { enqueueMainAgentTurn, getQueueStatus, recordLastTurnTokens, getLastTurnTokens } from './agent-turn-queue.js'
@@ -694,6 +696,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/v1', apiV1Router)
   // Session talk endpoints (additive): send into + stream out of CC sessions.
   app.use('/api/v1', sessionStreamV1Router)
+  // Voice input (additive): phone audio → text, works on primary AND cloud.
+  app.use('/api/v1', sttV1Router)
   app.use('/api/browser-logs', browserLogsRouter)
   app.use('/api/audio', audioRouter)
   app.use('/api/stt', sttRouter)
