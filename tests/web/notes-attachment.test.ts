@@ -14,7 +14,7 @@ beforeAll(async () => {
   await fsp.writeFile(path.join(att, '5C01F4A6.png'), 'x')
   const att2 = path.join(NOTES_DIR, 'Areas', 'Records', '_attachment')
   await fsp.mkdir(att2, { recursive: true })
-  await fsp.writeFile(path.join(att2, 'I-94 Travel History.pdf'), 'x')
+  await fsp.writeFile(path.join(att2, 'Quarterly Report Draft.pdf'), 'x')
   // A loose (non-_attachment) file to prove _attachment is preferred.
   await fsp.writeFile(path.join(NOTES_DIR, 'loose.png'), 'x')
 })
@@ -25,8 +25,8 @@ describe('resolveAttachmentPath', () => {
       .toBe(path.join(NOTES_DIR, 'Areas', 'Travel', '_attachment', '5C01F4A6.png'))
   })
   it('bare PDF with spaces → resolves', async () => {
-    expect(await resolveAttachmentPath('I-94 Travel History.pdf'))
-      .toBe(path.join(NOTES_DIR, 'Areas', 'Records', '_attachment', 'I-94 Travel History.pdf'))
+    expect(await resolveAttachmentPath('Quarterly Report Draft.pdf'))
+      .toBe(path.join(NOTES_DIR, 'Areas', 'Records', '_attachment', 'Quarterly Report Draft.pdf'))
   })
   it('legacy Notion/-prefixed path → strips prefix, resolves vault-relative', async () => {
     expect(await resolveAttachmentPath('Notion/Areas/Travel/_attachment/Untitled.png'))
