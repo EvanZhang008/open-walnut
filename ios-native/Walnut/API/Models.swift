@@ -335,12 +335,10 @@ extension WalnutSession {
         return id
     }
 
+    /// Strip fork/session boilerplate and count fork depth from a raw title.
     /// Server titles look like "Fork of Fork of Session: walnut — first message".
-    /// Decompose for mobile rows: the boilerplate ("Session: ", "Fork of " chains)
-    /// wastes the line — show the name as the headline, the message as a grey
-    /// preview (Mail/Messages pattern), fork-ness as a compact badge.
-    private var parsedTitle: (forkDepth: Int, name: String, preview: String?) {
-        var t = displayTitle
+    private static func stripBoilerplate(_ raw: String) -> (forkDepth: Int, name: String, preview: String?) {
+        var t = raw
         var forks = 0
         while t.hasPrefix("Fork of ") { forks += 1; t.removeFirst("Fork of ".count) }
         if t.hasPrefix("Session: ") { t.removeFirst("Session: ".count) }
@@ -351,8 +349,22 @@ extension WalnutSession {
         }
         return (forks, t, nil)
     }
+
+    /// The headline is the OWNING TASK'S name — that's what identifies the work
+    /// to the user. The session's own title ("Session: <category> — <msg>") is
+    /// boilerplate that surfaces the category, not the task, so it's never the
+    /// headline; its first-message tail still makes a useful grey preview.
+    private var parsedTitle: (forkDepth: Int, name: String, preview: String?) {
+        // Fork depth + any first-message preview come from the session title.
+        let fromSession = Self.stripBoilerplate(displayTitle)
+        if let taskTitle, !taskTitle.isEmpty {
+            return (fromSession.forkDepth, taskTitle, fromSession.preview)
+        }
+        return fromSession
+    }
     var forkDepth: Int { parsedTitle.forkDepth }
-    /// Headline for list rows / the nav bar — no "Session: "/"Fork of " boilerplate.
+    /// Headline for list rows / the nav bar — the task name (falls back to the
+    /// session name only when the session has no owning task).
     var rowTitle: String { parsedTitle.name }
     /// First-message preview (the part after " — "), when the title carries one.
     var rowSubtitle: String? { parsedTitle.preview }

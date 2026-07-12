@@ -129,11 +129,29 @@ final class SessionConversationStore {
         } else {
             merged = incoming
         }
-        historyMessages = merged.enumerated().map { i, m in
-            ChatMessage(id: "t-\(i)", role: m.role, text: m.text, createdAt: m.createdAt, kind: m.kind)
-        }
+        // STABLE ids, not positional. A positional "t-<i>" scheme changes every
+        // row's identity whenever the list length shifts (turn-end refetch, 5s
+        // poll), so SwiftUI tears down and rebuilds EVERY row — the visible
+        // flash + the "one message at a time" feel (the smooth live bubble gets
+        // yanked and the whole list re-renders). A content-derived id keeps
+        // unchanged rows identical across fetches, so only the tail diffs.
+        historyMessages = Self.assignStableIDs(merged)
         let seen = Set(transcript.messages.filter { $0.role == "user" }.map(\.text))
         pendingUser.removeAll { seen.contains($0.text) }
+    }
+
+    /// Derive a stable id per row from its content so re-fetches don't churn
+    /// identities. Same (role, timestamp, kind, text) → same id across loads; a
+    /// per-key occurrence suffix disambiguates true duplicates.
+    private static func assignStableIDs(_ rows: [ChatMessage]) -> [ChatMessage] {
+        var counts: [String: Int] = [:]
+        return rows.map { m in
+            let base = "\(m.role)|\(m.createdAt)|\(m.kind?.rawValue ?? "")|\(m.text.hashValue)"
+            let n = counts[base, default: 0]
+            counts[base] = n + 1
+            return ChatMessage(id: "\(base)#\(n)", role: m.role, text: m.text,
+                               createdAt: m.createdAt, kind: m.kind)
+        }
     }
 
     private static func mapKind(_ raw: String?) -> ChatMessage.Kind? {
@@ -310,10 +328,26 @@ final class SessionConversationStore {
     }
 
     /// Turn ended — fold the finished turn into history and clear the live turn.
+    /// Append the streamed text as a PROVISIONAL bubble first, then refetch. The
+    /// old code cleared `liveText` and awaited the transcript reload, so the
+    /// assistant's reply blinked out for the round-trip (visible flash + a
+    /// "message appears all at once" feel). Keeping the text on screen makes the
+    /// live bubble settle in place; the refetch quietly swaps in canonical rows.
     private func finalizeTurn() {
         streaming = false
-        liveText = ""
         activity = nil
+        let finished = liveText
+        liveText = ""
+        if !finished.isEmpty {
+            let dup = historyMessages.last.map { $0.role == "assistant" && $0.text == finished } ?? false
+            if !dup {
+                let provisional = ChatMessage(
+                    id: "provisional-\(finished.hashValue)", role: "assistant",
+                    text: finished, createdAt: ISO8601DateFormatter().string(from: .now), kind: nil
+                )
+                historyMessages.append(provisional)
+            }
+        }
         Task { await loadTranscript(fresh: true) }
     }
 
