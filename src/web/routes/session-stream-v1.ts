@@ -159,24 +159,43 @@ async function cloudSend(res: Response, sessionId: string, text: string): Promis
   }
   const { bridgeRequest, BridgeOfflineError } = await import('../ws/bridge-registry.js')
   try {
-    // Mirror the Mac's send sequence: liveness precheck → turn-start marker
-    // (walnutMessageId dedup rides the jsonl) → FIFO write.
+    // Liveness precheck — if dead, attempt a bridgeResume (respawn on its
+    // host using the daemon's stored args) instead of 409. This lets the
+    // phone send to idle/stopped/error sessions without the Mac being online.
     const status = await bridgeRequest(host, 'status', { sid: sessionId })
-    if (status.exists !== true || status.alive !== true) {
-      sendError(res, 409, 'session_dead', 'Session process is not running — wake it from your desktop')
+    if (status.exists !== true) {
+      sendError(res, 409, 'session_dead', 'Session not found on its host')
       return
     }
     const messageId = `qm-mobile-${crypto.randomBytes(6).toString('hex')}`
-    await bridgeRequest(host, 'appendUserMarker', { sid: sessionId, message: text, messageId })
-    const sent = await bridgeRequest(host, 'send', { sid: sessionId, message: text })
-    if (sent.ok !== true) {
-      const reason = String(sent.reason ?? sent.error ?? 'unknown')
-      if (reason === 'ENXIO' || reason === 'session_dead' || reason === 'not_found') {
-        sendError(res, 409, 'session_dead', 'Session process is not running — wake it from your desktop')
-      } else {
-        sendError(res, 503, 'bridge_offline', `Send failed: ${reason}`)
+    if (status.alive === true) {
+      // Live path — append marker + FIFO write (same as before).
+      await bridgeRequest(host, 'appendUserMarker', { sid: sessionId, message: text, messageId })
+      const sent = await bridgeRequest(host, 'send', { sid: sessionId, message: text })
+      if (sent.ok !== true) {
+        const reason = String(sent.reason ?? sent.error ?? 'unknown')
+        if (reason === 'ENXIO' || reason === 'session_dead' || reason === 'not_found') {
+          sendError(res, 409, 'session_dead', 'Session process died mid-send')
+        } else {
+          sendError(res, 503, 'bridge_offline', `Send failed: ${reason}`)
+        }
+        return
       }
-      return
+    } else {
+      // Dead path — resume: the daemon rebuilds from its stored args/cwd.
+      // Marker first (handleAppendUserMarker doesn't gate on state, and the
+      // jsonl survives death) so the transcript shows the user's message;
+      // bridgeResume then writes it as the initial stdin line, same as the
+      // Mac's --resume spawn path in session-runner. Marker failure is
+      // non-fatal — a lost-record session errors on the resume call instead.
+      await bridgeRequest(host, 'appendUserMarker', { sid: sessionId, message: text, messageId }).catch(() => {})
+      const resumed = await bridgeRequest(host, 'bridgeResume', { sid: sessionId, message: text }, 30_000)
+      if (!resumed.pid) {
+        const reason = String(resumed.error ?? 'resume failed')
+        sendError(res, 409, 'session_dead', reason)
+        return
+      }
+      log.web.info('mobile session resumed via bridge', { sessionId, host, messageId, pid: resumed.pid })
     }
     log.web.info('mobile session send via bridge', { sessionId, host, messageId })
     res.status(202).json({ messageId })

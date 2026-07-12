@@ -11,15 +11,19 @@ struct SessionRowView: View {
                 .padding(.top, 5)
 
             VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 5) {
+                // Task name IS the row — give it two lines so long names show as
+                // much as possible. No grey preview subtitle (it stole a line
+                // from the name and read as clutter).
+                HStack(alignment: .top, spacing: 5) {
                     if session.isPinned {
                         Image(systemName: "pin.fill")
                             .font(.caption2)
                             .foregroundStyle(Theme.tint)
+                            .padding(.top, 3)
                     }
                     Text(session.rowTitle)
                         .font(.body.weight(.medium))
-                        .lineLimit(1)
+                        .lineLimit(2)
                     if session.forkDepth > 0 {
                         HStack(spacing: 2) {
                             Image(systemName: "arrow.triangle.branch")
@@ -34,12 +38,6 @@ struct SessionRowView: View {
                         .padding(.vertical, 2)
                         .background(Color(.tertiarySystemFill), in: Capsule())
                     }
-                }
-                if let preview = session.rowSubtitle {
-                    Text(preview)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
                 }
                 HStack(spacing: 6) {
                     chip(session.isLocal ? "Mac" : session.host,

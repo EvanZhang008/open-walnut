@@ -56,13 +56,17 @@ final class SessionConversationStore {
 
     var statusKind: SessionStatus { SessionStatus(processStatus) }
 
-    /// Send is allowed only to a live session with a working bridge.
-    var canSend: Bool { statusKind.isAlive && !offline && !dead }
+    /// Send needs a working bridge, nothing more. An ENDED session is still
+    /// sendable — the server resumes it (`--resume` respawn on its host), so
+    /// gating on isAlive here wrongly bricked the composer for every idle/
+    /// stopped session. `dead` flips only after the server itself answers
+    /// 409 session_dead (no resumable record on that host).
+    var canSend: Bool { !offline && !dead }
 
     /// Notice shown under the composer when it can't send.
     var composerNotice: String? {
         if offline { return "Mac offline — read-only" }
-        if dead || !statusKind.isAlive { return "Session ended — reopen it from your desktop" }
+        if dead { return "Session can't be woken — reopen it from your desktop" }
         return nil
     }
 

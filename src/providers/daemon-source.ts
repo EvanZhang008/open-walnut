@@ -821,7 +821,7 @@ function decodeFrame(buf) {
 // compromised-cloud-box escalation attempt (fs.write/start/bridge.configure/…)
 // and is rejected; those stay reachable only over the trusted SSH path.
 var BRIDGE_ALLOWED_COMMANDS = new Set([
-  'status', 'appendUserMarker', 'send', 'attach', 'read-history', 'ping',
+  'status', 'appendUserMarker', 'send', 'attach', 'read-history', 'ping', 'bridgeResume',
 ]);
 
 function handleCommand(ws, msg) {
@@ -870,6 +870,7 @@ function handleCommand(ws, msg) {
     case 'git.diff': return cmdGitDiff(ws, id, cmd);
     case 'list': return cmdList(ws, id);
     case 'bridge.configure': return cmdBridgeConfigure(ws, id, cmd);
+    case 'bridgeResume': return cmdBridgeResume(ws, id, cmd);
     case 'ping': return sendOk(ws, id, { pong: true });
     case 'hello': return sendOk(ws, id, {
       version: DAEMON_VERSION,
@@ -880,6 +881,42 @@ function handleCommand(ws, msg) {
     });
     default: return sendError(ws, id, 'unknown command: ' + cmd.cmd);
   }
+}
+
+// ── Bridge-safe resume: respawn a dead session using its stored args ──
+function cmdBridgeResume(ws, id, cmd) {
+  var sid = cmd.sid, message = cmd.message;
+  if (!sid || !message) {
+    return sendError(ws, id, 'bridgeResume: missing sid or message');
+  }
+
+  var session = sessions.get(sid);
+  if (!session) {
+    var jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl');
+    if (!fs.existsSync(jsonlPath)) {
+      return sendError(ws, id, 'bridgeResume: session not found: ' + sid);
+    }
+    return sendError(ws, id, 'bridgeResume: session record lost (only files remain)');
+  }
+
+  if (session.state === 'running') {
+    return cmdSend(ws, id, { cmd: 'send', sid: sid, message: message });
+  }
+
+  if (!session.args || session.args.length === 0 || !session.cwd) {
+    return sendError(ws, id, 'bridgeResume: dead session has no stored args/cwd');
+  }
+
+  logMsg('info', 'bridgeResume: respawning dead session', { sid: sid, cwd: session.cwd });
+  cmdStart(ws, id, {
+    cmd: 'start',
+    sid: sid,
+    args: session.args,
+    cwd: session.cwd,
+    message: message,
+    resume: true,
+    mode: session.mode,
+  });
 }
 
 // ── Start a Claude session ──

@@ -248,7 +248,7 @@ interface WsData {
  * bridge socket is a compromised-cloud-box escalation attempt and is rejected.
  */
 const BRIDGE_ALLOWED_COMMANDS = new Set([
-  'status', 'appendUserMarker', 'send', 'attach', 'read-history', 'ping',
+  'status', 'appendUserMarker', 'send', 'attach', 'read-history', 'ping', 'bridgeResume',
 ])
 
 // DUP-DEBUG: per-process counter and lookup map for stable ws ids.
@@ -694,6 +694,7 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
     case 'git.diff': return cmdGitDiff(ws, id as number, cmd)
     case 'list': return cmdList(ws, id as number)
     case 'bridge.configure': return cmdBridgeConfigure(ws, id as number, cmd)
+    case 'bridgeResume': return cmdBridgeResume(ws, id as number, cmd)
     case 'ping': return sendOk(ws, id as number, { pong: true })
     case 'hello': return sendOk(ws, id as number, {
       version: DAEMON_VERSION,
@@ -704,6 +705,51 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
     })
     default: return sendError(ws, id as number, 'unknown command: ' + cmd.cmd)
   }
+}
+
+// ── Bridge-safe resume: respawn a dead session using its stored args ──
+// Unlike `start` (which takes arbitrary args/cwd from the caller — unsafe over
+// the public bridge), `bridgeResume` only accepts {sid, message} and rebuilds
+// the spawn from the daemon's own session registry. This makes it safe to
+// expose to the bridge (no arbitrary command injection): the bridge can only
+// resume sessions that already existed on this host.
+function cmdBridgeResume(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const { sid, message } = cmd as { sid: string; message: string }
+  if (!sid || !message) {
+    return sendError(ws, id, 'bridgeResume: missing sid or message')
+  }
+
+  const session = sessions.get(sid)
+  if (!session) {
+    // Try to discover from files (same as cmdAttach discovery path).
+    const jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl')
+    if (!fs.existsSync(jsonlPath)) {
+      return sendError(ws, id, 'bridgeResume: session not found: ' + sid)
+    }
+    // No in-memory record but files exist — can't resume without args/cwd.
+    return sendError(ws, id, 'bridgeResume: session record lost (only files remain)')
+  }
+
+  if (session.state === 'running') {
+    // Already alive — just send the message directly.
+    return cmdSend(ws, id, { cmd: 'send', sid, message })
+  }
+
+  // Dead but args retained in the session record — respawn via cmdStart.
+  if (!session.args || session.args.length === 0 || !session.cwd) {
+    return sendError(ws, id, 'bridgeResume: dead session has no stored args/cwd')
+  }
+
+  logMsg('info', 'bridgeResume: respawning dead session', { sid, cwd: session.cwd })
+  cmdStart(ws, id, {
+    cmd: 'start',
+    sid,
+    args: session.args,
+    cwd: session.cwd,
+    message,
+    resume: true,
+    mode: session.mode,
+  })
 }
 
 // ── Start a Claude session ──
