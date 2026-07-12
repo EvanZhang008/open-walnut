@@ -387,6 +387,18 @@ await fs.mkdir(testImgDir, { recursive: true })
 await fs.writeFile(path.join(testImgDir, 'blue.png'), makePng(51, 102, 204))
 await fs.writeFile(path.join(testImgDir, 'red.png'), makePng(204, 51, 51))
 
+// Create a test MP4 for video-preview.spec.ts. Content is a stub 'ftyp' box +
+// deterministic filler — enough for byte-exact Range assertions; the spec
+// asserts the <video> element + Download button, not actual decode.
+const testVideoDir = path.join(tmpBase, 'test-videos')
+await fs.mkdir(testVideoDir, { recursive: true })
+{
+  const ftyp = Buffer.from([0, 0, 0, 0x14, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d])
+  const filler = Buffer.alloc(2048)
+  for (let i = 0; i < filler.length; i++) filler[i] = i % 251
+  await fs.writeFile(path.join(testVideoDir, 'walkthrough.mp4'), Buffer.concat([ftyp, filler]))
+}
+
 // Seed chat-history.json with entity reference content for entity-refs.spec.ts
 // and image paths for lightbox.spec.ts
 await fs.writeFile(
@@ -432,6 +444,24 @@ await fs.writeFile(
           },
         ],
         timestamp: new Date(Date.now() - 15_000).toISOString(),
+      },
+      {
+        tag: 'ai',
+        role: 'user',
+        content: 'Record the walkthrough video',
+        timestamp: new Date(Date.now() - 10_000).toISOString(),
+        displayText: 'Record the walkthrough video',
+      },
+      {
+        tag: 'ai',
+        role: 'assistant',
+        content: [
+          {
+            type: 'text',
+            text: `Video recorded and delivered: ${path.join(testVideoDir, 'walkthrough.mp4')}`,
+          },
+        ],
+        timestamp: new Date(Date.now() - 5_000).toISOString(),
       },
     ],
   }),

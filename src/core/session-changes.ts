@@ -42,7 +42,7 @@ import {
   readSubagentContents,
   isSafeForProjectEncoding,
   remoteJsonlPath,
-  createFileReader,
+  extractCwdFromJsonlContent,
 } from './session-file-reader.js';
 import { log } from '../logging/index.js';
 
@@ -345,14 +345,63 @@ export function isExcludedPath(filePath: string): boolean {
   return isBookkeepingPath(filePath) || isAgentMemoryPath(filePath);
 }
 
-// ── mtime cache ──
+// ── mtime cache + incremental parse state ──
+
+/** Incremental-parse state: the main JSONL is append-only, so we remember the
+ *  byte offset of the last fully-parsed line and, on the next request, read +
+ *  parse only the appended bytes (DaemonFileReader.readFileRange handles the
+ *  chunked remote transfer). `mainFileMap` holds ONLY main-JSONL ops from
+ *  complete (newline-terminated) lines — never subagent ops or a trailing
+ *  partial line, which are re-added per request on a clone.
+ *
+ *  Rewrite safety (the JSONL is *usually* append-only, but /compact rewrites
+ *  it): a shrink (size < parsedBytes) invalidates outright, and a same-or-grown
+ *  rewrite is caught by re-reading from `lastLineStart` (a known line boundary,
+ *  so utf-8 decoding can't split a char) and verifying the first line still
+ *  matches `lastLineCheck`. Mismatch → full re-parse. */
+interface IncrementalState {
+  /** Byte offset just past the last parsed '\n' (never mid-line). */
+  parsedBytes: number;
+  /** Byte offset of the START of the last parsed line (re-read for verification). */
+  lastLineStart: number;
+  /** Cheap identity check of the last parsed line (null when nothing parsed yet). */
+  lastLineCheck: { len: number; head: string; tail: string } | null;
+  mainFileMap: Map<string, FileAccum>;
+  effectiveCwd?: string;
+}
+
+function lineCheckOf(line: string): { len: number; head: string; tail: string } {
+  return { len: line.length, head: line.slice(0, 64), tail: line.slice(-64) };
+}
+
+function lineMatches(line: string, check: { len: number; head: string; tail: string }): boolean {
+  return line.length === check.len && line.slice(0, 64) === check.head && line.slice(-64) === check.tail;
+}
 
 interface CacheEntry {
   mtimeMs: number;
   result: SessionChangesResult;
+  inc?: IncrementalState;
+  /** Git-root lookups persist across recomputes — repo roots don't move, and
+   *  re-walking them is listDir-per-level over the tunnel for remote sessions. */
+  gitRootByDir: Map<string, string | null>;
+  /** Absolute JSONL path resolved via fs.find, for sessions whose cwd is
+   *  unknown or too long for our path encoding (Claude Code hashes >200-char
+   *  encodings). Without this, such sessions could never stat → never cache →
+   *  full re-read on EVERY request (the 46s Changed-tab pain). */
+  resolvedPath?: string;
 }
 const changesCache = new Map<string, CacheEntry>();
 const MAX_CACHE = 30;
+
+/** Shallow-clone a fileMap: new accums + new ops arrays, shared (immutable) op
+ *  objects. The cached map must stay main-JSONL-only; per-request additions
+ *  (subagent ops, trailing partial line) go onto the clone. */
+function cloneFileMap(src: Map<string, FileAccum>): Map<string, FileAccum> {
+  const out = new Map<string, FileAccum>();
+  for (const [k, v] of src) out.set(k, { ...v, ops: [...v.ops] });
+  return out;
+}
 
 function cacheKey(sessionId: string, host?: string): string {
   return host ? `${sessionId}@${host}` : sessionId;
@@ -369,6 +418,21 @@ function cacheSet(key: string, entry: CacheEntry): void {
     const oldest = changesCache.keys().next().value;
     if (oldest) changesCache.delete(oldest);
   }
+}
+
+/** Split JSONL content at the last newline: `complete` (newline-terminated,
+ *  safe to parse + byte-account) vs `tail` (a possibly-partial final line that
+ *  is parsed per-request but never enters the incremental state). */
+function splitCompleteLines(content: string): { complete: string; tail: string } {
+  const lastNl = content.lastIndexOf('\n');
+  if (lastNl === -1) return { complete: '', tail: content };
+  return { complete: content.slice(0, lastNl + 1), tail: content.slice(lastNl + 1) };
+}
+
+/** Text of the final line in a newline-terminated block (without its '\n'). */
+function lastLineOf(complete: string): string {
+  const withoutFinal = complete.slice(0, -1);
+  return withoutFinal.slice(withoutFinal.lastIndexOf('\n') + 1);
 }
 
 // ── Main entry ──
@@ -388,44 +452,180 @@ export async function computeSessionChanges(
   outputFile?: string,
   opts?: { noCache?: boolean },
 ): Promise<SessionChangesResult> {
+  // Serialize per session key. The Changed tab and the Files panel's
+  // quick-access fetch fire CONCURRENTLY for the same session; two overlapping
+  // computes would both consume the same incremental state and double-merge
+  // the appended ops (a duplicated Edit reverse-applies twice → wrong before).
+  // The follower re-checks the mtime cache, so it's a cheap cache hit.
   const key = cacheKey(sessionId, host);
+  const prev = inflightByKey.get(key) ?? Promise.resolve();
+  const run = prev
+    .catch(() => { /* prior failure doesn't gate us */ })
+    .then(() => computeSessionChangesInner(key, sessionId, cwd, host, outputFile, opts));
+  inflightByKey.set(key, run);
+  void run.finally(() => {
+    if (inflightByKey.get(key) === run) inflightByKey.delete(key);
+  }).catch(() => { /* observed by the caller */ });
+  return run;
+}
 
-  // mtime fast-path: if the canonical JSONL hasn't changed since we last parsed,
-  // the SET of ops is identical — but `after` (current file content) may have
-  // changed on disk. So the cache is only valid for completed sessions where the
-  // JSONL mtime is the dominant signal. We still re-read current file content is
-  // cheap relative to re-parsing a 20MB JSONL, so: cache the parsed op map keyed
-  // on mtime, but always re-read file contents. For simplicity + correctness we
-  // cache the full result and invalidate on JSONL mtime change; an explicit
-  // refresh (no-cache) is available via the route's ?refresh=1.
-  // DAEMON-UNIFORM mtime-cache stat: both local (__local__) and remote go through
-  // the daemon's fs.stat. cwd known + safe → exact tilde path; else skip the cache
-  // (a find just to stat isn't worth it — the full read below still runs).
+const inflightByKey = new Map<string, Promise<SessionChangesResult>>();
+
+async function computeSessionChangesInner(
+  key: string,
+  sessionId: string,
+  cwd?: string,
+  host?: string,
+  outputFile?: string,
+  opts?: { noCache?: boolean },
+): Promise<SessionChangesResult> {
+  const t0 = Date.now();
+
+  // mtime fast-path + incremental parse. The canonical JSONL is append-only, so:
+  //   mtime unchanged            → cached result verbatim.
+  //   mtime changed, size grew   → read + parse ONLY the appended bytes
+  //                                (fs.readRange from the cached byte offset),
+  //                                merged into the cached main-JSONL op map.
+  //   size shrank (/compact) or  → full read + full parse, state rebuilt.
+  //   no prior state / ?refresh=1
+  // DAEMON-UNIFORM: both local (__local__) and remote go through the daemon's
+  // fs.stat / fs.readRange. cwd known + safe → exact tilde path; else skip the
+  // cache + incremental entirely (a find just to stat isn't worth it).
   let mtimeMs: number | undefined;
-  if (cwd && isSafeForProjectEncoding(cwd)) {
+  let statSize: number | undefined;
+  const { DaemonFileReader } = await import('./daemon-file-reader.js');
+  const reader = new DaemonFileReader(host ?? '__local__');
+  // The cache is consulted even under ?refresh=1 for its resolvedPath (a find
+  // result — refresh means "re-read the data", not "forget where the file is");
+  // the cached RESULT is only served when noCache is off.
+  const cachedEntry = cacheGet(key);
+  const cached = opts?.noCache ? undefined : cachedEntry;
+
+  // Resolve the JSONL path. cwd known + safe → exact tilde path. Otherwise
+  // (cwd unknown, or its encoding exceeds 200 chars → Claude Code hashes it and
+  // our computed path would be wrong) resolve the ABSOLUTE path once via
+  // fs.find and keep it in the cache — without this, such sessions can never
+  // stat → never cache → full multi-MB re-read on every request.
+  let jsonlPath = cwd && isSafeForProjectEncoding(cwd) ? remoteJsonlPath(sessionId, cwd) : null;
+  let resolvedPath = cachedEntry?.resolvedPath;
+  if (!jsonlPath) {
+    if (!resolvedPath) {
+      try {
+        resolvedPath = (await reader.findSessionPath(sessionId)) ?? undefined;
+      } catch {
+        // find failed — legacy full read below.
+      }
+    }
+    if (resolvedPath) jsonlPath = resolvedPath;
+  }
+
+  if (jsonlPath) {
     try {
-      const { DaemonFileReader } = await import('./daemon-file-reader.js');
-      const reader = new DaemonFileReader(host ?? '__local__');
-      const statResult = await reader.stat(remoteJsonlPath(sessionId, cwd));
+      const statResult = await reader.stat(jsonlPath);
       if (statResult) {
         mtimeMs = statResult.mtimeMs;
-        if (!opts?.noCache) {
-          const cached = cacheGet(key);
-          if (cached && cached.mtimeMs === mtimeMs) return cached.result;
-        }
+        statSize = statResult.size;
+        if (cached && cached.mtimeMs === mtimeMs) return cached.result;
+      } else if (resolvedPath && jsonlPath === resolvedPath) {
+        // The cached find result went stale (file moved/deleted) — drop it.
+        resolvedPath = undefined;
+        jsonlPath = null;
       }
     } catch {
       // stat failed (transport / old daemon) — proceed with full read.
     }
   }
 
-  // 1. Read the main-session JSONL (local or remote) + collect ops.
-  const fileMap = new Map<string, FileAccum>();
-  const main = await readSessionJsonlContent(sessionId, cwd, host, outputFile);
-  if (main) collectOpsFromJsonl(main.content, fileMap);
+  // 1. Main-session JSONL ops. Incremental when possible; else full read.
+  //    `fileMap` is the per-request map: cached main ops (cloned) + appended
+  //    ops + trailing-partial-line ops + subagent ops. The cache's own
+  //    `mainFileMap` only ever accumulates complete main-JSONL lines.
+  let fileMap: Map<string, FileAccum> | null = null;
+  let inc: IncrementalState | undefined;
+  let effectiveCwd = cwd;
+  let parseMode: 'incremental' | 'full' | 'legacy' = 'legacy';
+  const READ_TIMEOUT = host ? 120_000 : 30_000;
+  const withTimeout = <T>(p: Promise<T>): Promise<T> => Promise.race([
+    p,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`Session file read timeout (${READ_TIMEOUT / 1000}s)`)), READ_TIMEOUT)),
+  ]);
 
-  // foundCwd from JSONL beats a possibly-stale param cwd.
-  const effectiveCwd = main?.foundCwd ?? cwd;
+  if (jsonlPath && statSize !== undefined) {
+    try {
+      const prior = cached?.inc;
+      if (prior && prior.lastLineCheck && statSize >= prior.parsedBytes) {
+        // Incremental: re-read from the START of the last parsed line (a known
+        // line boundary — utf-8 safe) so we can verify it's byte-identical
+        // before trusting the append-only assumption.
+        const range = await withTimeout(reader.readFileRange(jsonlPath, prior.lastLineStart));
+        if (range !== null) {
+          const nl = range.content.indexOf('\n');
+          const firstLine = nl === -1 ? range.content : range.content.slice(0, nl);
+          if (nl !== -1 && lineMatches(firstLine, prior.lastLineCheck)) {
+            const appended = range.content.slice(nl + 1);
+            const { complete, tail } = splitCompleteLines(appended);
+            if (complete) {
+              collectOpsFromJsonl(complete, prior.mainFileMap);
+              const lastLine = lastLineOf(complete);
+              prior.lastLineStart = prior.parsedBytes + Buffer.byteLength(complete, 'utf-8')
+                - Buffer.byteLength(lastLine, 'utf-8') - 1;
+              prior.lastLineCheck = lineCheckOf(lastLine);
+              prior.parsedBytes += Buffer.byteLength(complete, 'utf-8');
+            }
+            inc = prior;
+            fileMap = cloneFileMap(prior.mainFileMap);
+            if (tail) collectOpsFromJsonl(tail, fileMap);
+            effectiveCwd = prior.effectiveCwd ?? cwd;
+            parseMode = 'incremental';
+          }
+          // Verification failed (rewrite, e.g. /compact) → fall through to full.
+        }
+      }
+      if (fileMap === null) {
+        // Full parse that ESTABLISHES incremental state. Read the raw file via
+        // readFileRange(0) — byte-exact chunked transfer — so parsedBytes is a
+        // true file byte offset (readSessionJsonlContent may append synthetic
+        // stream events, which would corrupt byte accounting).
+        const range = await withTimeout(reader.readFileRange(jsonlPath, 0));
+        if (range !== null) {
+          const { complete, tail } = splitCompleteLines(range.content);
+          const mainFileMap = new Map<string, FileAccum>();
+          collectOpsFromJsonl(complete, mainFileMap);
+          effectiveCwd = extractCwdFromJsonlContent(range.content) ?? cwd;
+          const lastLine = complete ? lastLineOf(complete) : '';
+          const parsedBytes = Buffer.byteLength(complete, 'utf-8');
+          inc = {
+            parsedBytes,
+            lastLineStart: complete ? parsedBytes - Buffer.byteLength(lastLine, 'utf-8') - 1 : 0,
+            lastLineCheck: complete ? lineCheckOf(lastLine) : null,
+            mainFileMap,
+            effectiveCwd,
+          };
+          fileMap = cloneFileMap(mainFileMap);
+          if (tail) collectOpsFromJsonl(tail, fileMap);
+          parseMode = 'full';
+        }
+      }
+    } catch (err) {
+      log.session.debug('session-changes: incremental read failed, falling back to legacy', {
+        sessionId, error: err instanceof Error ? err.message : String(err),
+      });
+      fileMap = null;
+      inc = undefined;
+    }
+  }
+
+  // Legacy path: cwd unknown/unsafe, stat failed, or the direct read failed —
+  // full read through readSessionJsonlContent (glob/find/stream fallbacks).
+  if (fileMap === null) {
+    fileMap = new Map<string, FileAccum>();
+    const main = await readSessionJsonlContent(sessionId, cwd, host, outputFile);
+    if (main) collectOpsFromJsonl(main.content, fileMap);
+    // foundCwd from JSONL beats a possibly-stale param cwd.
+    effectiveCwd = main?.foundCwd ?? cwd;
+    parseMode = 'legacy';
+  }
 
   // 2. Subagent JSONLs — subagents that edit write into their own files.
   try {
@@ -439,14 +639,18 @@ export async function computeSessionChanges(
     });
   }
 
+  // Git-root walk cache persists across recomputes (roots don't move; remote
+  // walks are listDir-per-level RPCs). Kept even when fileMap is empty.
+  const gitRootByDir = cached?.gitRootByDir ?? new Map<string, string | null>();
+
   if (fileMap.size === 0) {
     const empty: SessionChangesResult = { sessionId, groups: [], fileCount: 0, anyPartial: false };
-    if (mtimeMs !== undefined) cacheSet(key, { mtimeMs, result: empty });
+    if (mtimeMs !== undefined) cacheSet(key, { mtimeMs, result: empty, inc, gitRootByDir, resolvedPath });
     return empty;
   }
 
   // 3. Read current content for each file (after) + reconstruct before.
-  const reader = await createFileReader(host);
+  //    (createFileReader returns a DaemonFileReader for the same host — reuse ours.)
   const isRemote = !!host;
 
   // Resolve a per-file change record.
@@ -484,7 +688,7 @@ export async function computeSessionChanges(
   // a stray scratch file the session wrote elsewhere on disk (e.g. /tmp). The git
   // comparison modes can't diff such a file (it's in no repo), so to keep every
   // mode showing the SAME set ("doesn't matter which we choose"), we drop orphans.
-  const gitRootByDir = new Map<string, string | null>();
+  // (gitRootByDir is hoisted above and persisted in the cache across recomputes.)
   const resolveRepoRoot = async (filePath: string, fileCwd?: string): Promise<{ root: string; orphan: boolean }> => {
     const dir = path.dirname(filePath);
     let gitRoot: string | null;
@@ -549,6 +753,9 @@ export async function computeSessionChanges(
   const anyPartial = groups.some((g) => g.files.some((f) => f.partial));
   const result: SessionChangesResult = { sessionId, groups, fileCount, anyPartial };
 
-  if (mtimeMs !== undefined) cacheSet(key, { mtimeMs, result });
+  if (mtimeMs !== undefined) cacheSet(key, { mtimeMs, result, inc, gitRootByDir, resolvedPath });
+  log.session.info('session-changes computed', {
+    sessionId, host: host ?? '__local__', parseMode, fileCount, durationMs: Date.now() - t0,
+  });
   return result;
 }

@@ -6,7 +6,7 @@
  * full-screen FileViewer overlay and the inline right pane of SessionFileExplorer.
  */
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { fetchFileContent, rawFileContentUrl, type FileContentResponse } from '@/api/files';
+import { fetchFileContent, rawFileContentUrl, downloadFileUrl, type FileContentResponse } from '@/api/files';
 import { formatSize } from '@/utils/format';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { ICON_NEW_TAB } from '@/components/common/Icons';
@@ -47,6 +47,21 @@ function isMarkdownExt(ext: string | undefined, path: string): boolean {
   return e === 'md' || e === 'markdown' || e === 'mdx';
 }
 
+const VIDEO_EXTS = new Set(['mp4', 'm4v', 'webm', 'mov']);
+const AUDIO_EXTS = new Set(['mp3', 'wav', 'm4a', 'ogg']);
+
+/** Speed steps shared by the toolbar select and the </> keyboard shortcuts. */
+const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
+
+/** Media kind from the path alone — media never goes through the JSON content
+ *  fetch (a remote whole-file read of a 100MB video would kill the tunnel). */
+function mediaKind(path: string): 'video' | 'audio' | null {
+  const e = (path.split('.').pop() || '').toLowerCase();
+  if (VIDEO_EXTS.has(e)) return 'video';
+  if (AUDIO_EXTS.has(e)) return 'audio';
+  return null;
+}
+
 export function FileContentView({ path: filePath, line, host, hidePopout }: FileContentViewProps) {
   const [data, setData] = useState<FileContentResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -54,7 +69,20 @@ export function FileContentView({ path: filePath, line, host, hidePopout }: File
   const [showSource, setShowSource] = useState(false);
   // Fullscreen the preview (md/html) — CSS-fixed overlay, no remount.
   const [fullscreen, setFullscreen] = useState(false);
+  // Media playback speed — applied to the <video>/<audio> element directly.
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+
+  // Skip: back 3s (small — re-hear the last sentence), forward 10s (skip dead air).
+  const skipBy = (deltaSec: number) => {
+    const el = mediaRef.current;
+    if (!el) return;
+    const dur = Number.isFinite(el.duration) ? el.duration : Infinity;
+    el.currentTime = Math.min(Math.max(0, el.currentTime + deltaSec), dur);
+  };
+
+  const media = mediaKind(filePath);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,6 +90,10 @@ export function FileContentView({ path: filePath, line, host, hidePopout }: File
     setData(null);
     setShowSource(false);
     setFullscreen(false);
+    setPlaybackRate(1);
+    // Media plays straight from the raw URL — no JSON content fetch (which
+    // would whole-file-read a potentially huge binary on the remote side).
+    if (mediaKind(filePath)) { setLoading(false); return; }
     fetchFileContent(filePath, host)
       .then((d) => { if (!cancelled) setData(d); })
       .catch((err) => {
@@ -83,6 +115,38 @@ export function FileContentView({ path: filePath, line, host, hidePopout }: File
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, [line, data]);
 
+  // Media keyboard shortcuts. Capture phase so we beat the browser's native
+  // focused-<video> handling; preventDefault stops a double-seek. Skipped while
+  // typing in an input/textarea/editor. These fire in NATIVE video fullscreen
+  // too (keydown still reaches window) — the only way to change speed there,
+  // since the toolbar select isn't part of the fullscreened <video> element.
+  //   ← back 3s   → forward 10s   > speed up   < slow down (YouTube-style)
+  useEffect(() => {
+    if (!media) return;
+    const handler = (e: KeyboardEvent) => {
+      const isSeek = e.key === 'ArrowLeft' || e.key === 'ArrowRight';
+      const isSpeed = e.key === '>' || e.key === '<';
+      if (!isSeek && !isSpeed) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (isSeek) {
+        skipBy(e.key === 'ArrowLeft' ? -3 : 10);
+        return;
+      }
+      setPlaybackRate((prev) => {
+        const idx = PLAYBACK_RATES.indexOf(prev);
+        const at = idx === -1 ? PLAYBACK_RATES.indexOf(1) : idx;
+        const next = PLAYBACK_RATES[Math.min(Math.max(at + (e.key === '>' ? 1 : -1), 0), PLAYBACK_RATES.length - 1)];
+        if (mediaRef.current) mediaRef.current.playbackRate = next;
+        return next;
+      });
+    };
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
+  }, [media]);
+
   // Escape exits fullscreen (capture phase so it fires before the FileViewer's own
   // Escape-to-close handler, letting the first Escape just leave fullscreen).
   useEffect(() => {
@@ -103,6 +167,17 @@ export function FileContentView({ path: filePath, line, host, hidePopout }: File
   const isMarkdown = data?.content != null && isMarkdownExt(data.extension, filePath);
   const isRenderable = isHtml || isMarkdown;
   const showPreview = isRenderable && !showSource;
+
+  const downloadBtn = (
+    <a
+      className="fv-html-tab fv-download-btn"
+      href={downloadFileUrl(filePath, host)}
+      download
+      title="Download file"
+    >
+      ⬇ Download
+    </a>
+  );
 
   const markdownHtml = useMemo(() => {
     if (!isMarkdown || !data?.content) return '';
@@ -129,10 +204,81 @@ export function FileContentView({ path: filePath, line, host, hidePopout }: File
     <div className={`file-content-view${fullscreen ? ' fv-fullscreen' : ''}`} ref={contentRef}>
       {loading && <div className="file-viewer-loading">Loading file...</div>}
       {!loading && data?.error && <div className="file-viewer-error">{data.error}</div>}
-      {!loading && data?.binary && (
-        <div className="file-viewer-error">
-          Binary file ({formatSize(data.size)}) — cannot display
-        </div>
+      {!loading && !media && data?.binary && (
+        <>
+          <div className="fv-html-toolbar fv-toolbar-popout-only">{downloadBtn}{popoutBtn}</div>
+          <div className="file-viewer-error">
+            Binary file ({formatSize(data.size)}) — cannot display. Use Download to save it.
+          </div>
+        </>
+      )}
+      {!loading && media && (
+        <>
+          <div className="fv-html-toolbar">
+            {downloadBtn}
+            <button
+              type="button"
+              className="fv-html-tab fv-skip-btn"
+              onClick={() => skipBy(-3)}
+              title="Back 3 seconds (←)"
+              aria-label="Back 3 seconds"
+            >
+              ↺ 3s
+            </button>
+            <button
+              type="button"
+              className="fv-html-tab fv-skip-btn"
+              onClick={() => skipBy(10)}
+              title="Forward 10 seconds (→)"
+              aria-label="Forward 10 seconds"
+            >
+              10s ↻
+            </button>
+            <select
+              className="fv-html-tab fv-speed-select"
+              value={playbackRate}
+              onChange={(e) => {
+                const rate = Number(e.target.value);
+                setPlaybackRate(rate);
+                if (mediaRef.current) mediaRef.current.playbackRate = rate;
+              }}
+              title="Playback speed"
+              aria-label="Playback speed"
+            >
+              {PLAYBACK_RATES.map((r) => (
+                <option key={r} value={r}>{r}×</option>
+              ))}
+            </select>
+            <button
+              className="fv-html-tab fv-fullscreen-btn"
+              onClick={() => setFullscreen((f) => !f)}
+              title={fullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen'}
+            >
+              {fullscreen ? '✕ Exit' : '⛶ Fullscreen'}
+            </button>
+            {popoutBtn}
+          </div>
+          <div className="fv-media-preview">
+            {media === 'video' ? (
+              <video
+                controls
+                preload="metadata"
+                src={rawFileContentUrl(filePath, host)}
+                ref={(el) => { mediaRef.current = el; if (el) el.playbackRate = playbackRate; }}
+                // Some browsers reset playbackRate to 1 once metadata loads — re-apply.
+                onLoadedMetadata={(e) => { e.currentTarget.playbackRate = playbackRate; }}
+              />
+            ) : (
+              <audio
+                controls
+                preload="metadata"
+                src={rawFileContentUrl(filePath, host)}
+                ref={(el) => { mediaRef.current = el; if (el) el.playbackRate = playbackRate; }}
+                onLoadedMetadata={(e) => { e.currentTarget.playbackRate = playbackRate; }}
+              />
+            )}
+          </div>
+        </>
       )}
       {!loading && isRenderable && (
         <div className="fv-html-toolbar">
@@ -148,6 +294,7 @@ export function FileContentView({ path: filePath, line, host, hidePopout }: File
           >
             Source
           </button>
+          {downloadBtn}
           <button
             className="fv-html-tab fv-fullscreen-btn"
             onClick={() => setFullscreen((f) => !f)}
@@ -159,9 +306,9 @@ export function FileContentView({ path: filePath, line, host, hidePopout }: File
         </div>
       )}
       {/* Non-renderable files (plain code) have no preview/source toolbar — give them
-          a minimal one just for the pop-out button. */}
-      {!loading && !isRenderable && popoutBtn && (
-        <div className="fv-html-toolbar fv-toolbar-popout-only">{popoutBtn}</div>
+          a minimal one for Download + pop-out. Media/binary render their own. */}
+      {!loading && !isRenderable && !media && !data?.binary && !data?.error && (
+        <div className="fv-html-toolbar fv-toolbar-popout-only">{downloadBtn}{popoutBtn}</div>
       )}
       {!loading && showPreview && isHtml && (
         <iframe

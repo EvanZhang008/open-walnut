@@ -953,7 +953,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                 <SessionDiffView sessionId={sessionId} sessionCwd={session?.cwd} sessionHost={session?.host} onSelectCode={handleSelectCode} onComment={handleDiffComment} />
               )}
               {activeView === 'files' && (
-                <SessionFileExplorer cwd={session?.cwd} host={session?.host} />
+                <SessionFileExplorer cwd={session?.cwd} host={session?.host} sessionId={sessionId} />
               )}
               {activeView === 'terminal' && (
                 <SessionTerminal

@@ -32,6 +32,16 @@ export function rawFileContentUrl(filePath: string, host?: string): string {
   return `/api/file-content?${params}`;
 }
 
+/**
+ * URL that downloads a file's raw bytes (Content-Disposition: attachment).
+ * Works for any file type — the fallback when inline preview can't render it.
+ */
+export function downloadFileUrl(filePath: string, host?: string): string {
+  const params = new URLSearchParams({ path: filePath, raw: '1', download: '1' });
+  if (host) params.set('host', host);
+  return `/api/file-content?${params}`;
+}
+
 /** A single directory entry for the file explorer tree. */
 export interface DirEntry {
   name: string;

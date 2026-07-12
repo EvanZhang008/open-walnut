@@ -118,6 +118,33 @@ export class DaemonFileReader implements SessionFileReader {
     return { content: Buffer.concat(chunks).toString('utf-8'), fileSize }
   }
 
+  /**
+   * Read one raw byte window [start, start+length) via fs.readRange.
+   * Returns bytes UNDECODED (video/binary serving must never utf-8 decode).
+   * Callers loop this primitive; length should stay ≤ CHUNK_SIZE so no single
+   * WS frame can trip the corp-proxy kill described above.
+   */
+  async readRangeBytes(
+    remotePath: string,
+    start: number,
+    length: number,
+  ): Promise<{ buf: Buffer; fileSize: number; eof: boolean } | null> {
+    await this.resolve()
+    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    const res = await conn.send('fs.readRange', { path: remotePath, start, length })
+    if (!res.ok) {
+      const errMsg = typeof res.error === 'string' ? res.error : ''
+      if (/ENOENT|no such file/i.test(errMsg)) return null
+      throw new Error('fs.readRange transport failure: ' + (errMsg || 'unknown'))
+    }
+    const bytesRead = (res.bytesRead as number) ?? 0
+    return {
+      buf: bytesRead > 0 ? Buffer.from(res.data as string, 'base64') : Buffer.alloc(0),
+      fileSize: (res.fileSize as number) ?? 0,
+      eof: Boolean(res.eof) || bytesRead === 0,
+    }
+  }
+
   private async readFileChunked(remotePath: string, size: number): Promise<string | null> {
     const result = await this.readFileRange(remotePath, 0)
     if (result === null) return null
@@ -153,12 +180,12 @@ export class DaemonFileReader implements SessionFileReader {
   }
 
   /**
-   * Search for a session JSONL file under ~/.claude/projects using fs.find.
-   * Returns { content, path } if found, null otherwise. Path is the full
-   * remote path where the file was located (useful for caching so we don't
-   * have to search again next time).
+   * Locate a session JSONL's absolute path via fs.find WITHOUT reading it.
+   * One RPC — used by callers that want to stat/range-read afterwards (e.g.
+   * the session-changes incremental cache for hashed-cwd sessions, where a
+   * full read just to learn the path would defeat the point).
    */
-  async findSession(sessionId: string): Promise<{ content: string; path: string } | null> {
+  async findSessionPath(sessionId: string): Promise<string | null> {
     await this.resolve()
     const conn = await getDaemonConnection(this.host, this.sshTarget!)
     const result = await conn.send('fs.find', {
@@ -167,7 +194,18 @@ export class DaemonFileReader implements SessionFileReader {
       maxDepth: 3,
     })
     if (!result.ok || !(result.files as string[])?.length) return null
-    const filePath = (result.files as string[])[0]
+    return (result.files as string[])[0]
+  }
+
+  /**
+   * Search for a session JSONL file under ~/.claude/projects using fs.find.
+   * Returns { content, path } if found, null otherwise. Path is the full
+   * remote path where the file was located (useful for caching so we don't
+   * have to search again next time).
+   */
+  async findSession(sessionId: string): Promise<{ content: string; path: string } | null> {
+    const filePath = await this.findSessionPath(sessionId)
+    if (!filePath) return null
     // Read via readFile so whale files chunk through fs.readRange. This is the
     // HOT path for hashed-cwd sessions (encoded cwd >200 chars → no exactPath →
     // glob dir contains '*' → fs.find ENOENTs → findSession): the incident whale

@@ -16060,6 +16060,7 @@ a.task-kebab-info:hover {
 
 .session-file-explorer-toolbar .sfe-root-path-input {
   flex: 1;
+  width: 100%;
   color: var(--fg);
   background: var(--bg);
   border: 1px solid var(--accent);
@@ -16068,6 +16069,60 @@ a.task-kebab-info:hover {
   font-family: var(--font-mono, monospace);
   font-size: 12px;
   outline: none;
+}
+
+/* Path edit wrapper + fuzzy recent-folder suggestion dropdown */
+.sfe-path-edit {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.sfe-path-suggest {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  margin-top: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 8px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+}
+.sfe-path-suggest-item {
+  padding: 5px 8px;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+  cursor: pointer;
+}
+.sfe-path-suggest-item:hover,
+.sfe-path-suggest-item.active {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--fg);
+}
+
+/* Multi-root sections: cwd (🏠) + changed repos (📦) as collapsible headers */
+.sfe-root-header {
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 2;
+}
+.sfe-root-section + .sfe-root-section .sfe-root-header {
+  border-top: 1px solid var(--border);
+}
+.sfe-changed-badge {
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
 }
 
 .sfe-toolbar-actions {
@@ -16108,12 +16163,27 @@ a.task-kebab-info:hover {
 }
 
 .session-file-explorer-tree {
-  width: 40%;
-  min-width: 180px;
-  max-width: 55%;
+  /* width set inline (resizable via .sfe-divider drag; persisted) */
+  flex-shrink: 0;
+  min-width: 140px;
+  max-width: 600px;
   overflow: auto;
-  border-right: 1px solid var(--border);
   padding: 4px 0;
+}
+
+/* Draggable divider between tree and preview */
+.sfe-divider {
+  flex-shrink: 0;
+  width: 5px;
+  cursor: col-resize;
+  background: var(--border);
+  background-clip: content-box;
+  padding: 0 2px;
+}
+.sfe-divider:hover,
+.sfe-divider:active {
+  background: var(--accent);
+  background-clip: content-box;
 }
 
 .session-file-explorer-preview {
@@ -19953,6 +20023,42 @@ a.file-link:hover {
   height: 100%;
 }
 
+/* Video/audio player inside the file viewer */
+.fv-media-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 40vh;
+  background: #000;
+}
+.fv-media-preview video {
+  max-width: 100%;
+  max-height: 100%;
+}
+.fv-media-preview audio {
+  width: min(90%, 560px);
+}
+
+/* Download button — an <a> styled like the toolbar tabs */
+.fv-download-btn {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Playback speed selector — a <select> styled like the toolbar tabs */
+.fv-speed-select {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+}
+.fv-speed-select:hover {
+  background: var(--bg-tertiary);
+}
+
 /* Fullscreen button sits at the right end of the toolbar */
 .fv-fullscreen-btn {
   margin-left: auto;
@@ -20042,7 +20148,8 @@ a.file-link:hover {
 }
 
 .file-content-view.fv-fullscreen .fv-html-preview,
-.file-content-view.fv-fullscreen .fv-md-preview {
+.file-content-view.fv-fullscreen .fv-md-preview,
+.file-content-view.fv-fullscreen .fv-media-preview {
   flex: 1;
   height: auto;
   min-height: 0;

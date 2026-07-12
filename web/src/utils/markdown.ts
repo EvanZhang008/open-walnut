@@ -6,6 +6,7 @@ const TASK_REF_RE = /<task-ref\s+id="([^"]*)"(?:\s+label="([^"]*)")?\s*\/?>/g;
 /** Session-ref regex: matches <session-ref id="..." label="..."/> or <session-ref id="..."/> */
 const SESSION_REF_RE = /<session-ref\s+id="([^"]*)"(?:\s+label="([^"]*)")?\s*\/?>/g;
 
+
 /**
  * Convert entity reference XML tags to clickable HTML anchors.
  * Handles both labeled (resolved) and unlabeled (streaming/unresolved) variants.
@@ -130,6 +131,8 @@ const CODE_EXTENSIONS = new Set([
   'md', 'mdx', 'txt', 'log', 'csv', 'tsv', 'env', 'conf', 'cfg', 'ini',
   'lock', 'gitignore', 'dockerignore', 'editorconfig',
   'dockerfile', 'makefile',
+  // Media — clickable so the FileViewer can play them inline (video/audio player)
+  'mp4', 'm4v', 'webm', 'mov', 'mp3', 'wav', 'm4a', 'ogg',
 ]);
 
 /**

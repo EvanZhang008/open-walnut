@@ -1033,6 +1033,20 @@ sessionsRouter.get('/:sessionId/changes', async (req: Request, res: Response, ne
       res.status(502).json({ error: msg })
       return
     }
+    // ?light=1 → names/roots only (quick-access lists, e.g. the Files tab's
+    // changed-repo shortcuts). Same compute + cache; just strips the heavy
+    // reconstructed before/after payload.
+    if (req.query.light === '1') {
+      const light = result as unknown as { groups?: Array<{ files: Array<Record<string, unknown>> }> }
+      res.json({
+        ...result,
+        groups: (light.groups ?? []).map((g) => ({
+          ...g,
+          files: g.files.map((f) => ({ ...f, before: '', after: '' })),
+        })),
+      })
+      return
+    }
     res.json(result)
   } catch (err) {
     next(err)

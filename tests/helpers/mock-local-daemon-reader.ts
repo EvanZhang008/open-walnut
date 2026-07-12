@@ -130,6 +130,17 @@ class MockLocalDaemonFileReader {
   }
 
   async findSession(sessionId: string): Promise<{ content: string; path: string } | null> {
+    const found = await this.findSessionPath(sessionId);
+    if (!found) return null;
+    try {
+      return { content: await fsp.readFile(found, 'utf-8'), path: found };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Path-only find (mirrors the real reader's findSessionPath). */
+  async findSessionPath(sessionId: string): Promise<string | null> {
     // Recursive-ish find under ~/.claude/projects (one level of project dirs, matching maxDepth).
     const projectsAbs = await resolveTilde('~/.claude/projects');
     let dirs: string[];
@@ -141,8 +152,8 @@ class MockLocalDaemonFileReader {
     for (const d of dirs) {
       const candidate = path.join(projectsAbs, d, `${sessionId}.jsonl`);
       try {
-        const content = await fsp.readFile(candidate, 'utf-8');
-        return { content, path: candidate };
+        await fsp.access(candidate);
+        return candidate;
       } catch {
         // keep scanning
       }
