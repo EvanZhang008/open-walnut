@@ -907,11 +907,21 @@ function cmdBridgeResume(ws, id, cmd) {
     return sendError(ws, id, 'bridgeResume: dead session has no stored args/cwd');
   }
 
+  // Ensure --resume <sid> is present (fresh-start args lack it; stale --resume
+  // values point at an older generation). Keep in sync with daemon-standalone.
+  var args = session.args.slice();
+  var ri = args.indexOf('--resume');
+  if (ri >= 0 && ri + 1 < args.length) {
+    args[ri + 1] = sid;
+  } else {
+    args.push('--resume', sid);
+  }
+
   logMsg('info', 'bridgeResume: respawning dead session', { sid: sid, cwd: session.cwd });
   cmdStart(ws, id, {
     cmd: 'start',
     sid: sid,
-    args: session.args,
+    args: args,
     cwd: session.cwd,
     message: message,
     resume: true,

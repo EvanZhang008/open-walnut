@@ -740,11 +740,24 @@ function cmdBridgeResume(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     return sendError(ws, id, 'bridgeResume: dead session has no stored args/cwd')
   }
 
+  // Ensure --resume <sid> is in the args. A FRESH-started session's stored
+  // args have no --resume (it got renamed to the claude session id after
+  // init) — replaying them verbatim would spawn a brand-new conversation
+  // and orphan the history. A resumed session's args carry --resume already;
+  // rewrite its value to this sid to be safe.
+  const args = [...session.args]
+  const ri = args.indexOf('--resume')
+  if (ri >= 0 && ri + 1 < args.length) {
+    args[ri + 1] = sid
+  } else {
+    args.push('--resume', sid)
+  }
+
   logMsg('info', 'bridgeResume: respawning dead session', { sid, cwd: session.cwd })
   cmdStart(ws, id, {
     cmd: 'start',
     sid,
-    args: session.args,
+    args,
     cwd: session.cwd,
     message,
     resume: true,
