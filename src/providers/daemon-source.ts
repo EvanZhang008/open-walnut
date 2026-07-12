@@ -883,49 +883,67 @@ function handleCommand(ws, msg) {
   }
 }
 
-// ── Bridge-safe resume: respawn a dead session using its stored args ──
+// ── Bridge-safe resume: respawn a dead session with --resume <sid> ──
+// Only {sid, message, cwd?, model?} accepted; argv is built HERE (stored args
+// patched to --resume this sid, or a fixed default claude command when the
+// record was lost to a daemon restart). Gated on the session's jsonl existing
+// in STREAMS_DIR — proof it genuinely lived on this host. Keep in sync with
+// daemon-standalone.ts.
 function cmdBridgeResume(ws, id, cmd) {
-  var sid = cmd.sid, message = cmd.message;
+  var sid = cmd.sid, message = cmd.message, cwdHint = cmd.cwd, model = cmd.model;
   if (!sid || !message) {
     return sendError(ws, id, 'bridgeResume: missing sid or message');
   }
 
   var session = sessions.get(sid);
-  if (!session) {
-    var jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl');
-    if (!fs.existsSync(jsonlPath)) {
-      return sendError(ws, id, 'bridgeResume: session not found: ' + sid);
-    }
-    return sendError(ws, id, 'bridgeResume: session record lost (only files remain)');
-  }
 
-  if (session.state === 'running') {
+  if (session && session.state === 'running') {
     return cmdSend(ws, id, { cmd: 'send', sid: sid, message: message });
   }
 
-  if (!session.args || session.args.length === 0 || !session.cwd) {
-    return sendError(ws, id, 'bridgeResume: dead session has no stored args/cwd');
+  var jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl');
+  if (!fs.existsSync(jsonlPath)) {
+    return sendError(ws, id, 'bridgeResume: session not found: ' + sid);
   }
 
-  // Ensure --resume <sid> is present (fresh-start args lack it; stale --resume
-  // values point at an older generation). Keep in sync with daemon-standalone.
-  var args = session.args.slice();
-  var ri = args.indexOf('--resume');
-  if (ri >= 0 && ri + 1 < args.length) {
-    args[ri + 1] = sid;
+  var cwd = (session && session.cwd && session.cwd !== '') ? session.cwd : cwdHint;
+  if (!cwd) {
+    return sendError(ws, id, 'bridgeResume: no cwd known for session (record lost, no hint)');
+  }
+
+  var args;
+  if (session && session.args && session.args.length > 0) {
+    args = session.args.slice();
+    var ri = args.indexOf('--resume');
+    if (ri >= 0 && ri + 1 < args.length) {
+      args[ri + 1] = sid;
+    } else {
+      args.push('--resume', sid);
+    }
   } else {
-    args.push('--resume', sid);
+    args = [
+      'claude', '-p',
+      '--output-format', 'stream-json',
+      '--verbose',
+      '--include-partial-messages',
+      '--debug',
+      '--permission-mode', 'default',
+    ];
+    if (model) { args.push('--model', model); }
+    args.push('--resume', sid, '--input-format', 'stream-json', '--permission-prompt-tool', 'stdio');
   }
 
-  logMsg('info', 'bridgeResume: respawning dead session', { sid: sid, cwd: session.cwd });
+  logMsg('info', 'bridgeResume: respawning dead session', {
+    sid: sid, cwd: cwd, recordLost: !session || !session.args || session.args.length === 0,
+  });
   cmdStart(ws, id, {
     cmd: 'start',
     sid: sid,
     args: args,
-    cwd: session.cwd,
+    cwd: cwd,
     message: message,
     resume: true,
-    mode: session.mode,
+    mode: (session && session.mode) || 'default',
   });
 }
 

@@ -142,33 +142,36 @@ function ensureBusSubscriber(): void {
 
 // ─── Cloud path: session → host lookup + bridge send sequence ───────────────
 
-async function projectedHostForSession(sessionId: string): Promise<string | null> {
+async function projectedSession(sessionId: string): Promise<{ host: string; cwd?: string; model?: string } | null> {
   const { readSessionProjection } = await import('../../core/session-projection.js')
   const projection = await readSessionProjection()
   const s = projection?.sessions.find((p) => p.id === sessionId)
   if (!s) return null
   // Projection: '' = the primary box; daemons register as '__local__'.
-  return s.host === '' ? '__local__' : s.host
+  return { host: s.host === '' ? '__local__' : s.host, cwd: s.cwd, model: s.model }
+}
+
+async function projectedHostForSession(sessionId: string): Promise<string | null> {
+  return (await projectedSession(sessionId))?.host ?? null
 }
 
 async function cloudSend(res: Response, sessionId: string, text: string): Promise<void> {
-  const host = await projectedHostForSession(sessionId)
-  if (!host) {
+  const projected = await projectedSession(sessionId)
+  if (!projected) {
     sendError(res, 404, 'not_found', `Session not found: ${sessionId}`)
     return
   }
+  const host = projected.host
   const { bridgeRequest, BridgeOfflineError } = await import('../ws/bridge-registry.js')
   try {
-    // Liveness precheck — if dead, attempt a bridgeResume (respawn on its
-    // host using the daemon's stored args) instead of 409. This lets the
-    // phone send to idle/stopped/error sessions without the Mac being online.
+    // Liveness precheck — if the CLI is gone (dead record, or the record
+    // itself was lost to a daemon restart), attempt a bridgeResume instead
+    // of 409. This lets the phone send to idle/stopped/error sessions
+    // without the Mac being online. The daemon gates the resume on the
+    // session's jsonl existing on that host.
     const status = await bridgeRequest(host, 'status', { sid: sessionId })
-    if (status.exists !== true) {
-      sendError(res, 409, 'session_dead', 'Session not found on its host')
-      return
-    }
     const messageId = `qm-mobile-${crypto.randomBytes(6).toString('hex')}`
-    if (status.alive === true) {
+    if (status.exists === true && status.alive === true) {
       // Live path — append marker + FIFO write (same as before).
       await bridgeRequest(host, 'appendUserMarker', { sid: sessionId, message: text, messageId })
       const sent = await bridgeRequest(host, 'send', { sid: sessionId, message: text })
@@ -182,14 +185,18 @@ async function cloudSend(res: Response, sessionId: string, text: string): Promis
         return
       }
     } else {
-      // Dead path — resume: the daemon rebuilds from its stored args/cwd.
-      // Marker first (handleAppendUserMarker doesn't gate on state, and the
-      // jsonl survives death) so the transcript shows the user's message;
-      // bridgeResume then writes it as the initial stdin line, same as the
-      // Mac's --resume spawn path in session-runner. Marker failure is
-      // non-fatal — a lost-record session errors on the resume call instead.
-      await bridgeRequest(host, 'appendUserMarker', { sid: sessionId, message: text, messageId }).catch(() => {})
-      const resumed = await bridgeRequest(host, 'bridgeResume', { sid: sessionId, message: text }, 30_000)
+      // Dead/lost path — resume. The daemon rebuilds argv from its stored
+      // record when it survived, else from the cwd/model hints we pass from
+      // the projection. Marker first (best-effort — it needs a record, and
+      // the jsonl survives death) so the transcript shows the user's
+      // message; bridgeResume then writes it as the initial stdin line,
+      // same as the Mac's --resume spawn path in session-runner.
+      if (status.exists === true) {
+        await bridgeRequest(host, 'appendUserMarker', { sid: sessionId, message: text, messageId }).catch(() => {})
+      }
+      const resumed = await bridgeRequest(host, 'bridgeResume', {
+        sid: sessionId, message: text, cwd: projected.cwd, model: projected.model,
+      }, 30_000)
       if (!resumed.pid) {
         const reason = String(resumed.error ?? 'resume failed')
         sendError(res, 409, 'session_dead', reason)

@@ -707,61 +707,83 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
   }
 }
 
-// ── Bridge-safe resume: respawn a dead session using its stored args ──
-// Unlike `start` (which takes arbitrary args/cwd from the caller — unsafe over
-// the public bridge), `bridgeResume` only accepts {sid, message} and rebuilds
-// the spawn from the daemon's own session registry. This makes it safe to
-// expose to the bridge (no arbitrary command injection): the bridge can only
-// resume sessions that already existed on this host.
+// ── Bridge-safe resume: respawn a dead session with --resume <sid> ──
+// Unlike `start` (which takes arbitrary argv from the caller — unsafe over
+// the public bridge), `bridgeResume` only accepts {sid, message, cwd?, model?}
+// and builds the argv itself: either the registry's stored args (patched to
+// --resume this sid) or, when the record is gone (daemon restarted — the
+// registry only persists RUNNING sessions), a fixed default `claude --resume`
+// command. Gated on the session's jsonl existing in STREAMS_DIR, which proves
+// the session genuinely lived on this host — so a compromised cloud box still
+// can't run arbitrary commands, only wake conversations that were here.
 function cmdBridgeResume(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
-  const { sid, message } = cmd as { sid: string; message: string }
+  const { sid, message, cwd: cwdHint, model } = cmd as {
+    sid: string; message: string; cwd?: string; model?: string
+  }
   if (!sid || !message) {
     return sendError(ws, id, 'bridgeResume: missing sid or message')
   }
 
   const session = sessions.get(sid)
-  if (!session) {
-    // Try to discover from files (same as cmdAttach discovery path).
-    const jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl')
-    if (!fs.existsSync(jsonlPath)) {
-      return sendError(ws, id, 'bridgeResume: session not found: ' + sid)
-    }
-    // No in-memory record but files exist — can't resume without args/cwd.
-    return sendError(ws, id, 'bridgeResume: session record lost (only files remain)')
-  }
 
-  if (session.state === 'running') {
+  if (session && session.state === 'running') {
     // Already alive — just send the message directly.
     return cmdSend(ws, id, { cmd: 'send', sid, message })
   }
 
-  // Dead but args retained in the session record — respawn via cmdStart.
-  if (!session.args || session.args.length === 0 || !session.cwd) {
-    return sendError(ws, id, 'bridgeResume: dead session has no stored args/cwd')
+  // The jsonl is the proof-of-residence: without it this sid never ran here.
+  const jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl')
+  if (!fs.existsSync(jsonlPath)) {
+    return sendError(ws, id, 'bridgeResume: session not found: ' + sid)
   }
 
-  // Ensure --resume <sid> is in the args. A FRESH-started session's stored
-  // args have no --resume (it got renamed to the claude session id after
-  // init) — replaying them verbatim would spawn a brand-new conversation
-  // and orphan the history. A resumed session's args carry --resume already;
-  // rewrite its value to this sid to be safe.
-  const args = [...session.args]
-  const ri = args.indexOf('--resume')
-  if (ri >= 0 && ri + 1 < args.length) {
-    args[ri + 1] = sid
+  // cwd: registry record → caller's projection hint. --resume only finds the
+  // conversation when the cwd matches the original, so a wrong hint just
+  // yields a "No conversation found" turn error, not a security problem.
+  const cwd = (session?.cwd && session.cwd !== '') ? session.cwd : cwdHint
+  if (!cwd) {
+    return sendError(ws, id, 'bridgeResume: no cwd known for session (record lost, no hint)')
+  }
+
+  // argv: stored args when the record survived; otherwise the standard
+  // resume command (mirrors the Mac's spawn-time construction).
+  let args: string[]
+  if (session?.args && session.args.length > 0) {
+    // Ensure --resume <sid>: fresh-start args lack it (replaying them
+    // verbatim would spawn a NEW conversation); stale values get rewritten.
+    args = [...session.args]
+    const ri = args.indexOf('--resume')
+    if (ri >= 0 && ri + 1 < args.length) {
+      args[ri + 1] = sid
+    } else {
+      args.push('--resume', sid)
+    }
   } else {
-    args.push('--resume', sid)
+    args = [
+      'claude', '-p',
+      '--output-format', 'stream-json',
+      '--verbose',
+      '--include-partial-messages',
+      '--debug',
+      '--permission-mode', 'default',
+      ...(model ? ['--model', model] : []),
+      '--resume', sid,
+      '--input-format', 'stream-json',
+      '--permission-prompt-tool', 'stdio',
+    ]
   }
 
-  logMsg('info', 'bridgeResume: respawning dead session', { sid, cwd: session.cwd })
+  logMsg('info', 'bridgeResume: respawning dead session', {
+    sid, cwd, recordLost: !session || !session.args || session.args.length === 0,
+  })
   cmdStart(ws, id, {
     cmd: 'start',
     sid,
     args,
-    cwd: session.cwd,
+    cwd,
     message,
     resume: true,
-    mode: session.mode,
+    mode: session?.mode ?? 'default',
   })
 }
 
