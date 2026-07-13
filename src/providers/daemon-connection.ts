@@ -1502,6 +1502,24 @@ export class DaemonConnection {
       // happily tunneled to a port nobody was listening on.
       // Binary has `--status` subcommand; source daemon doesn't, so use `kill -0`
       // on its PID file instead. See daemon-source.ts — no --status handler.
+      // Readiness probe: POLL for the port file + live pid, up to ~45s.
+      // A fixed `sleep 2` raced daemon boot on loaded hosts (a busy dev box
+      // took ~20s from nohup to port write) — the probe declared failure
+      // while the daemon was still booting, connect() threw, and overlapping
+      // retries then stop-for-upgrade'd each other's half-booted daemons in a
+      // loop. Net effect: a 43-minute host outage that only self-healed when
+      // a retry landed after some earlier spawn finished booting. The poll
+      // breaks the loop by letting the FIRST attempt succeed.
+      const waitReady =
+        'for i in $(seq 1 22); do ' +
+        'DPID=$(cat /tmp/open-walnut/daemon.pid 2>/dev/null); ' +
+        '[ -s /tmp/open-walnut/daemon.port ] && [ -n "$DPID" ] && kill -0 "$DPID" 2>/dev/null && break; ' +
+        'sleep 2; done'
+      const confirmRunning =
+        'cat /tmp/open-walnut/daemon.port && echo && ' +
+        'DPID=$(cat /tmp/open-walnut/daemon.pid 2>/dev/null) && ' +
+        '[ -n "$DPID" ] && kill -0 "$DPID" 2>/dev/null && echo "{\\"running\\":true}"'
+
       let startCmd: string
       if (this._deployedViaSource && this._bunPath) {
         // Source deployed under bun — exec bun by absolute path (no preamble).
@@ -1509,14 +1527,12 @@ export class DaemonConnection {
         // populate process.env.PATH so cmdStart's spawn('claude', ...) finds the
         // CLI. See daemon-source.ts "PATH setup" block.
         startCmd = `nohup ${this._bunPath} /tmp/open-walnut/daemon.cjs --start > /tmp/open-walnut/daemon-start.log 2>&1 & ` +
-          'sleep 2 && cat /tmp/open-walnut/daemon.port && echo && ' +
-          'DPID=$(cat /tmp/open-walnut/daemon.pid 2>/dev/null) && ' +
-          '[ -n "$DPID" ] && kill -0 "$DPID" 2>/dev/null && echo "{\\"running\\":true}"'
+          `${waitReady}; ${confirmRunning}`
       } else if (!this._deployedViaSource && await this.getLocalBinaryPath()) {
         // Binary deploy — run directly, no PATH setup needed
         const remotePath = await this.getRemoteDaemonPath()
         startCmd = `nohup ${remotePath} --start > /tmp/open-walnut/daemon-start.log 2>&1 & ` +
-          `sleep 2 && cat /tmp/open-walnut/daemon.port && echo && ${remotePath} --status`
+          `${waitReady}; cat /tmp/open-walnut/daemon.port && echo && ${remotePath} --status`
       } else {
         // Source deploy under node — needs node PATH discovery.
         // `[ -n "$DPID" ]` guards against empty pid file (cat succeeds but
@@ -1524,12 +1540,10 @@ export class DaemonConnection {
         // the current shell's pid).
         const preamble = buildRemotePreamble(this.ssh.shell_setup)
         startCmd = `${preamble}; nohup node /tmp/open-walnut/daemon.cjs --start > /tmp/open-walnut/daemon-start.log 2>&1 & ` +
-          'sleep 2 && cat /tmp/open-walnut/daemon.port && echo && ' +
-          'DPID=$(cat /tmp/open-walnut/daemon.pid 2>/dev/null) && ' +
-          '[ -n "$DPID" ] && kill -0 "$DPID" 2>/dev/null && echo "{\\"running\\":true}"'
+          `${waitReady}; ${confirmRunning}`
       }
 
-      const output = await this.sshExec(startCmd, 20_000)
+      const output = await this.sshExec(startCmd, 60_000)
 
       // Parse out port + status confirmation. Defensive against preamble noise:
       // the source-deploy branch runs shell_setup which may source rc files

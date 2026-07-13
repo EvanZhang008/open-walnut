@@ -22,7 +22,7 @@ struct SessionConversationView: View {
     var body: some View {
         VStack(spacing: 0) {
             if store.offline {
-                OfflineBanner(text: "Mac offline — showing the last synced transcript")
+                OfflineBanner(text: "\(store.hostLabel) unreachable — showing the last synced transcript")
             }
             if let error = store.errorMessage {
                 ErrorBanner(text: error) { store.errorMessage = nil }

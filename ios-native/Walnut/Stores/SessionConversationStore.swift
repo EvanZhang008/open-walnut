@@ -20,6 +20,11 @@ import Observation
 final class SessionConversationStore {
     private let api = WalnutAPI()
     private let sessionId: String
+    /// Where this session's CLI runs — "Mac" or the remote host alias. The
+    /// offline notices name THIS host: a clouddev session going read-only is
+    /// a clouddev bridge problem, and saying "Mac offline" there sent the
+    /// user debugging the wrong machine.
+    let hostLabel: String
     private var sse: SSEClient?
     private var pollTask: Task<Void, Never>?
 
@@ -46,6 +51,7 @@ final class SessionConversationStore {
 
     init(session: WalnutSession) {
         self.sessionId = session.id
+        self.hostLabel = session.isLocal ? "Mac" : session.host
         self.processStatus = session.processStatus
     }
 
@@ -65,7 +71,7 @@ final class SessionConversationStore {
 
     /// Notice shown under the composer when it can't send.
     var composerNotice: String? {
-        if offline { return "Mac offline — read-only" }
+        if offline { return "\(hostLabel) unreachable — read-only" }
         if dead { return "Session can't be woken — reopen it from your desktop" }
         return nil
     }
