@@ -38,11 +38,13 @@ export class DaemonFileReader implements SessionFileReader {
     this.sshTarget = { hostname, user: hostDef.user, port: hostDef.port }
   }
 
-  /** Above this size, whole-file fs.read is unsafe over the tunnel — one giant
-   *  WS frame gets killed by some corporate SSH proxies mid-transfer, showing up
-   *  only as a pong gap + read timeout (inc-1783532915925: 11.4MB JSONL never
-   *  loaded). Chunk instead. Remote-only; the in-process local daemon has no
-   *  proxy in the path. */
+  /** Above this size, whole-file fs.read is unsafe as ONE WS frame — remote,
+   *  corp SSH proxies kill giant frames mid-transfer (inc-1783532915925: 11.4MB
+   *  JSONL never loaded, seen only as a pong gap + read timeout); local, the ws
+   *  client's default maxPayload (100MB) hard-kills the connection outright
+   *  (inc-1783842393500: 134MB JSONL → "Max payload size exceeded", daemon
+   *  connection bounced on every open). Chunk instead — ALL hosts, local
+   *  included. The real constraint is the WS frame size, not the proxy. */
   private static CHUNK_THRESHOLD = 2 * 1024 * 1024
   /** Per-chunk request size for fs.readRange (well under any proxy limit). */
   private static CHUNK_SIZE = 1024 * 1024
@@ -60,18 +62,17 @@ export class DaemonFileReader implements SessionFileReader {
       remotePath = (findResult.files as string[])[0]
     }
 
-    // Remote big-file path: stat first, chunk when large. stat failures
-    // (old daemon without fs.stat / transient) fall through to plain fs.read —
-    // no behavior regression for small files or old daemons.
-    if (this.host !== '__local__') {
-      try {
-        const st = await this.stat(remotePath)
-        if (st === null) return null // definitive ENOENT
-        if (st.size > DaemonFileReader.CHUNK_THRESHOLD) {
-          return await this.readFileChunked(remotePath, st.size)
-        }
-      } catch { /* stat unavailable — plain read below */ }
-    }
+    // Big-file path (ALL hosts, __local__ included): stat first, chunk when
+    // large. stat failures (old daemon without fs.stat / transient) fall
+    // through to plain fs.read — no behavior regression for small files or
+    // old daemons.
+    try {
+      const st = await this.stat(remotePath)
+      if (st === null) return null // definitive ENOENT
+      if (st.size > DaemonFileReader.CHUNK_THRESHOLD) {
+        return await this.readFileChunked(remotePath, st.size)
+      }
+    } catch { /* stat unavailable — plain read below */ }
 
     const result = await conn.send('fs.read', { path: remotePath, encoding: 'utf-8' })
     if (result.ok) return result.data as string
@@ -231,13 +232,12 @@ export class DaemonFileReader implements SessionFileReader {
       .filter(e => e.type === 'file' && e.name.startsWith('agent-') && e.name.endsWith('.jsonl'))
 
     for (const f of files) {
-      const content = await conn.send('fs.read', {
-        path: remoteDirPath + '/' + f.name,
-        encoding: 'utf-8',
-      })
-      if (content.ok && content.data) {
-        result.set(f.name, content.data as string)
-      }
+      // Route through readFile so whale subagent JSONLs chunk too (observed
+      // 9.9MB on inc-1783842393500's session — same one-frame fs.read class).
+      try {
+        const content = await this.readFile(remoteDirPath + '/' + f.name)
+        if (content) result.set(f.name, content)
+      } catch { /* skip unreadable file — matches old skip-on-error behavior */ }
     }
 
     return result
