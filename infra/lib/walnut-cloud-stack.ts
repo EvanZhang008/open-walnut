@@ -97,6 +97,14 @@ export class WalnutCloudStack extends cdk.Stack {
         `arn:aws:bedrock:*:${this.account}:inference-profile/*`,
       ],
     }))
+    role.addToPolicy(new iam.PolicyStatement({
+      sid: 'WalnutSecrets',
+      // Runtime secrets (e.g. the OpenAI key for the voice STT fallback) live
+      // under /walnut/* as SecureStrings; setup.sh materializes them into
+      // /etc/walnut/walnut.env on boot. Read-only, path-scoped.
+      actions: ['ssm:GetParameter', 'ssm:GetParameters'],
+      resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/walnut/*`],
+    }))
 
     // ── User data: minimal bootstrap, real logic lives in the repo ──────
     const userData = ec2.UserData.forLinux()

@@ -199,6 +199,25 @@ npm run build
 chown -R "$WALNUT_USER:$WALNUT_USER" "$REPO_DIR"
 
 echo "==> [8/9] walnut.service"
+# Secrets the companion needs at runtime (e.g. OPENAI_API_KEY for the voice
+# STT fallback) live in SSM Parameter Store under /walnut/* and materialize
+# into /etc/walnut/walnut.env here. Config.yaml is the wrong home for them:
+# it git-syncs through the data hub, and cloud-held secrets must never ride
+# a repo. Idempotent + best-effort — a missing parameter just means that
+# feature stays off.
+mkdir -p /etc/walnut
+touch /etc/walnut/walnut.env
+if OPENAI_KEY=$(aws ssm get-parameter --name /walnut/openai-api-key \
+    --with-decryption --query Parameter.Value --output text 2>/dev/null); then
+  grep -q '^OPENAI_API_KEY=' /etc/walnut/walnut.env \
+    && sed -i "s|^OPENAI_API_KEY=.*|OPENAI_API_KEY=$OPENAI_KEY|" /etc/walnut/walnut.env \
+    || echo "OPENAI_API_KEY=$OPENAI_KEY" >> /etc/walnut/walnut.env
+else
+  echo "    (no /walnut/openai-api-key in SSM — voice STT cloud fallback disabled)"
+fi
+chown "$WALNUT_USER:$WALNUT_USER" /etc/walnut/walnut.env
+chmod 600 /etc/walnut/walnut.env
+
 # Port note: the server takes its port from the --port CLI flag (default 3456
 # in src/web/server.ts DEFAULT_PORT) — there is no PORT env var.
 cat > /etc/systemd/system/walnut.service <<EOF
@@ -216,6 +235,8 @@ Environment=NODE_ENV=production
 Environment=OPEN_WALNUT_HOME=$DATA_HOME
 Environment=WALNUT_GIT_HUB_DIR=$WALNUT_LIB/git
 Environment=HOME=$WALNUT_LIB
+# Optional secrets (SSM-materialized above); '-' = absent file is fine.
+EnvironmentFile=-/etc/walnut/walnut.env
 ExecStart=$NODE_BIN $REPO_DIR/dist/cli.js web --port 3456
 Restart=always
 RestartSec=5
