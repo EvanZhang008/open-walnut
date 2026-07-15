@@ -583,6 +583,8 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
       phase: 'TODO',
       category: input.category,
       project: input.project,
+      source: input.source ?? 'local',
+      session_ids: [],
       created_at: now,
       updated_at: now,
     } as unknown as Task;
