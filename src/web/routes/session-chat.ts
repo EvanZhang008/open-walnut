@@ -8,7 +8,7 @@
 
 import { registerMethod } from '../ws/handler.js'
 import { bus, EventNames } from '../../core/event-bus.js'
-import { VALID_SESSION_MODEL_IDS, SESSION_MODEL_CLI_MAP, VALID_SESSION_EFFORT_IDS } from '../../core/types.js'
+import { VALID_SESSION_EFFORT_IDS, resolveModelSwitchValue } from '../../core/types.js'
 import type { SessionEffort, SessionMode } from '../../core/types.js'
 import { getSessionByClaudeId, updateSessionRecord } from '../../core/session-tracker.js'
 import { sendMessageToSession, editMessage, deleteMessage, getQueue } from '../../core/session-message-queue.js'
@@ -118,9 +118,12 @@ export function registerSessionChatRpc(): void {
       return { messageId }
     }
 
-    // Validate and normalize model value (allowlist check) against the
-    // SESSION_MODELS registry (single source of truth in core/types.ts).
-    const model = typeof data.model === 'string' && VALID_SESSION_MODEL_IDS.has(data.model) ? data.model : undefined
+    // Validate the model: a legacy picker alias (mapped through
+    // SESSION_MODEL_CLI_MAP) or a catalog value from GET /:id/models (passed
+    // through verbatim — the CLI is the authority). Shared validator with the
+    // HTTP /model route; invalid values silently drop (RPC semantics, no 400).
+    const cliModelResolved = typeof data.model === 'string' ? resolveModelSwitchValue(data.model) : null
+    const model = cliModelResolved !== null ? (data.model as string) : undefined
     // NOTE: reasoning-effort is NOT changed here. Mid-session effort switches go
     // through POST /api/sessions/:id/effort → applyEffort() (apply_flag_settings
     // control_request, no respawn).
@@ -128,8 +131,8 @@ export function registerSessionChatRpc(): void {
     // Model switch: SAME live mechanism as the /model route — apply_flag_settings
     // control_request (no respawn, running turn untouched) + persisted cliModel for
     // cold resume.
-    if (model) {
-      const cliModel = SESSION_MODEL_CLI_MAP[model]
+    if (model && cliModelResolved) {
+      const cliModel = cliModelResolved
       await updateSessionRecord(data.sessionId, { cliModel })
       log.web.info('session:send RPC model switch (live apply)', { sessionId: data.sessionId, model, cliModel })
       const live = await sessionRunner.getOrAttachLiveSession(data.sessionId as string).catch(() => undefined)

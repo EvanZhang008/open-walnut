@@ -27,8 +27,10 @@ export interface UseSpeechToTextReturn {
   error: string | null;
   /** Start or stop recording */
   toggleRecording: () => void;
-  /** Re-transcribe the last recording with a different model (one-shot whisper-cli) */
-  retryWithModel: (model: string) => Promise<void>;
+  /** Re-transcribe the last recording; pass a model for a one-shot whisper-cli retry */
+  retryWithModel: (model?: string) => Promise<void>;
+  /** Re-transcribe the last recording with the configured engine (after a failure) */
+  retryLast: () => Promise<void>;
   /** Debug audio file path from the last transcription (server-side) */
   lastDebugPath: string | null;
   /** Whether we have a last recording available for retry */
@@ -274,10 +276,18 @@ export function useSpeechToText({ onTranscribe, language }: UseSpeechToTextOptio
             onTranscribeRef.current(result.text);
             const preview = result.text.length > 50 ? result.text.slice(0, 50) + '...' : result.text;
             log.info('stt', `Transcribed: "${preview}" (${result.durationMs}ms)`);
+          } else {
+            // An empty transcription used to fail SILENTLY — spinner ends, nothing
+            // appears, and the user thinks the recording was eaten. Surface it; the
+            // audio is kept in lastAudioRef so Retry can still recover it.
+            log.warn('stt', `Transcription returned empty text (${result.durationMs}ms)`);
+            if (isMountedRef.current) {
+              setError('Transcription came back empty — the audio is kept, you can retry.');
+            }
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          log.error('stt', `Transcription failed: ${msg}`);
+          log.error('stt', `Transcription failed: ${msg} — audio kept for retry`);
           if (!isMountedRef.current) return;
           setError(msg);
         } finally {
@@ -305,14 +315,14 @@ export function useSpeechToText({ onTranscribe, language }: UseSpeechToTextOptio
     }
   }, [stopStream]);
 
-  const retryWithModel = useCallback(async (model: string) => {
+  const retryWithModel = useCallback(async (model?: string) => {
     const last = lastAudioRef.current;
     if (!last) return;
 
     setError(null);
     setIsTranscribing(true);
     try {
-      log.info('stt', `Retrying transcription with model: ${model}`);
+      log.info('stt', `Retrying transcription${model ? ` with model: ${model}` : ' (configured engine)'}`);
       const result = await transcribeAudio(last.base64, last.format, languageRef.current, model);
 
       if (isMountedRef.current && result.debugAudioPath) {
@@ -322,7 +332,9 @@ export function useSpeechToText({ onTranscribe, language }: UseSpeechToTextOptio
       if (result.text && isMountedRef.current) {
         onTranscribeRef.current(result.text);
         const preview = result.text.length > 50 ? result.text.slice(0, 50) + '...' : result.text;
-        log.info('stt', `Retry transcribed: "${preview}" (${result.durationMs}ms, model=${model})`);
+        log.info('stt', `Retry transcribed: "${preview}" (${result.durationMs}ms, model=${model ?? 'configured'})`);
+      } else if (!result.text && isMountedRef.current) {
+        setError('Transcription came back empty — the audio is kept, you can retry.');
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -333,6 +345,8 @@ export function useSpeechToText({ onTranscribe, language }: UseSpeechToTextOptio
     }
   }, []);
 
+  const retryLast = useCallback(() => retryWithModel(undefined), [retryWithModel]);
+
   return {
     isSupported: isMediaRecorderSupported,
     isRecording,
@@ -340,6 +354,7 @@ export function useSpeechToText({ onTranscribe, language }: UseSpeechToTextOptio
     error,
     toggleRecording,
     retryWithModel,
+    retryLast,
     lastDebugPath,
     hasLastRecording,
     level,

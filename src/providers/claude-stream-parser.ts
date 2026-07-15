@@ -45,6 +45,15 @@ export interface ClaudeStreamInit {
   cwd?: string;
 }
 
+/** Token usage carried on the CLI's final `result` line. All fields optional —
+ *  the CLI reports a session-accumulated total (see fork QueryEngine result line). */
+export interface ClaudeStreamUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+}
+
 /** Final result extracted from the result event */
 export interface ClaudeStreamResult {
   result: string;
@@ -52,6 +61,8 @@ export interface ClaudeStreamResult {
   durationMs?: number;
   durationApiMs?: number;
   isError?: boolean;
+  /** Token usage from the result line's `usage` object, when present. */
+  usage?: ClaudeStreamUsage;
 }
 
 /**
@@ -165,6 +176,17 @@ export function parseClaudeJsonlLine(
   if (type === 'result') {
     const result = (parsed.result ?? parsed.error ?? '') as string;
     const isError = parsed.subtype === 'error';
+    // The CLI's result line carries a `usage` object (input/output/cache tokens);
+    // surface it so a text-only adapter can report real token counts.
+    const rawUsage = parsed.usage as Record<string, unknown> | undefined;
+    const usage: ClaudeStreamUsage | undefined = rawUsage && typeof rawUsage === 'object'
+      ? {
+          input_tokens: typeof rawUsage.input_tokens === 'number' ? rawUsage.input_tokens : undefined,
+          output_tokens: typeof rawUsage.output_tokens === 'number' ? rawUsage.output_tokens : undefined,
+          cache_creation_input_tokens: typeof rawUsage.cache_creation_input_tokens === 'number' ? rawUsage.cache_creation_input_tokens : undefined,
+          cache_read_input_tokens: typeof rawUsage.cache_read_input_tokens === 'number' ? rawUsage.cache_read_input_tokens : undefined,
+        }
+      : undefined;
     callbacks?.onResult?.({
       result,
       // Claude Code's result event uses `total_cost_usd` (matches SDKResultMessage);
@@ -173,6 +195,7 @@ export function parseClaudeJsonlLine(
       durationMs: parsed.duration_ms as number | undefined,
       durationApiMs: parsed.duration_api_ms as number | undefined,
       isError,
+      usage,
     });
     // Emit a system block for the final result
     return {

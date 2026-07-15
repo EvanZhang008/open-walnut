@@ -27,8 +27,8 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { NOTES_DIR } from '../../constants.js'
 
-/** Attachment types served by the notes attachment route (no SVG — XSS risk). */
-export const ATTACHMENT_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'pdf'])
+// The attachment-type allowlist lives in notes-v2.ts (ATTACHMENT_EXTS) —
+// single source of truth; this module only resolves paths.
 
 /**
  * Resolve a raw `![[...]]` inner path to an absolute file under NOTES_DIR, or

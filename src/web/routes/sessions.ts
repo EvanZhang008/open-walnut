@@ -19,13 +19,15 @@ import { injectCompactBoundary, buildCompactSummary } from '../../utils/compact-
 import { findLocalJsonlPath } from '../../core/session-file-reader.js'
 import { getFrequentDirs, compileFromSessions } from '../../core/frequent-dirs.js'
 import type { SessionRecord, SessionMode, Task, SessionEffort } from '../../core/types.js'
-import { VALID_SESSION_MODEL_IDS, SESSION_MODEL_CLI_MAP, VALID_SESSION_EFFORT_IDS, modelSupportsEffort, modelSupportsXhighEffort, modelSupportsMaxEffort } from '../../core/types.js'
+import { VALID_SESSION_MODEL_IDS, SESSION_MODEL_CLI_MAP, VALID_SESSION_EFFORT_IDS, modelSupportsEffort, modelSupportsXhighEffort, modelSupportsMaxEffort, resolveModelSwitchValue, sessionModelsAsCatalog } from '../../core/types.js'
 import type { SessionHistoryMessage } from '../../core/session-history.js'
 import { processAndSaveImages, buildSessionImageContext } from './images.js'
 import { sessionRunner } from '../../providers/claude-code-session.js'
 import { listSideQuestions, addSideQuestion, getSideQuestion, markPromoted, deleteSideQuestion } from '../../core/side-questions.js'
 import type { ImagePayload } from './images.js'
 import { quickStartSession, QuickStartError } from '../../core/sessions/quick-start.js'
+import { ensureCwd } from '../../core/sessions/ensure-cwd.js'
+import { listLocalDirs, listRemoteDirs } from '../../core/sessions/dir-listing.js'
 import { QUICK_START_MESSAGE_HARD_LIMIT } from '../../constants.js'
 
 /** Diagnose message ordering — logs whether user text messages are interleaved or bunched at end. */
@@ -148,7 +150,21 @@ sessionsRouter.get('/working-dirs', async (_req: Request, res: Response, next: N
 
     entries.sort((a, b) => b.score - a.score)
     const result = entries.map(({ score: _s, ...rest }) => rest)
-    res.json({ dirs: result })
+    // Configured hosts ride along so the session launcher can offer every host
+    // from config.hosts — not just hosts that already have session history.
+    // Without this, a freshly added remote host never appears in Quick Start
+    // until its first session exists (chicken-and-egg).
+    // Only include enabled hosts (enabled defaults to true when unset).
+    // rawName marks auto-discovered FQDN-only entries (alias == hostname, no
+    // human-chosen alias) so the launcher can nudge the user to name them.
+    const configuredHosts = Object.entries(hosts)
+      .filter(([_alias, h]) => h.enabled !== false)
+      .map(([alias, h]) => ({
+        alias,
+        label: h.label ?? alias,
+        rawName: alias === h.hostname || undefined,
+      }))
+    res.json({ dirs: result, hosts: configuredHosts })
   } catch (err) {
     next(err)
   }
@@ -168,7 +184,7 @@ sessionsRouter.post('/working-dirs/recompile', async (_req: Request, res: Respon
 })
 
 // In-memory cache for SSH directory listings (avoid re-SSHing for 60s)
-const dirCache = new Map<string, { dirs: string[]; ts: number }>()
+const dirCache = new Map<string, { dirs: string[]; exists: boolean; ts: number }>()
 const DIR_CACHE_TTL = 60_000
 
 // GET /api/sessions/list-dirs — list subdirectories on a host (local or daemon) for path auto-complete
@@ -225,7 +241,7 @@ sessionsRouter.get('/list-dirs', async (req: Request, res: Response, next: NextF
       const cacheKey = `${host}::${dir}::${depth}`
       const cached = dirCache.get(cacheKey)
       if (cached && Date.now() - cached.ts < DIR_CACHE_TTL) {
-        res.json({ dirs: cached.dirs, parent: dir, cached: true })
+        res.json({ dirs: cached.dirs, parent: dir, exists: cached.exists, cached: true })
         return
       }
 
@@ -242,90 +258,21 @@ sessionsRouter.get('/list-dirs', async (req: Request, res: Response, next: NextF
         timeoutPromise,
       ]).finally(() => clearTimeout(timeoutId!))
 
-      // Recursive BFS directory listing via daemon's fs.ls command.
-      // The daemon's fs.ls expands ~ to the remote home directory.
-      const entries: string[] = []
-      let resolvedDir = dir
+      // BFS listing via daemon fs.ls (dir-listing.ts). ENOENT → exists:false (200);
+      // other daemon/SSH errors throw and map to 400 below.
+      const listing = await listRemoteDirs(conn, dir, depth)
 
-      // First call resolves ~ and gives us the real base path
-      const rootResult = await conn.send('fs.ls', { path: dir })
-      if (!rootResult.ok) {
-        res.status(400).json({ error: `Cannot list directory: ${rootResult.error ?? dir}` })
-        return
-      }
-      if (rootResult.resolvedPath && typeof rootResult.resolvedPath === 'string') {
-        resolvedDir = (rootResult.resolvedPath as string).endsWith('/')
-          ? rootResult.resolvedPath as string
-          : rootResult.resolvedPath + '/'
-      }
-
-      // Process root entries, then BFS walk
-      const queue: { dirPath: string; currentDepth: number }[] = []
-      const rootEntries = rootResult.entries as Array<{ name: string; type: string }>
-      for (const e of rootEntries) {
-        if (e.type !== 'dir' || e.name.startsWith('.')) continue
-        const fullPath = resolvedDir.endsWith('/')
-          ? `${resolvedDir}${e.name}`
-          : `${resolvedDir}/${e.name}`
-        entries.push(fullPath)
-        if (depth > 1) {
-          queue.push({ dirPath: fullPath, currentDepth: 1 })
-        }
-      }
-
-      while (queue.length > 0 && entries.length < 500) {
-        const batch = queue.splice(0, queue.length)
-        for (const item of batch) {
-          if (entries.length >= 500) break
-          try {
-            const result = await conn.send('fs.ls', { path: item.dirPath })
-            if (!result.ok) continue
-            const lsEntries = result.entries as Array<{ name: string; type: string }>
-            for (const e of lsEntries) {
-              if (entries.length >= 500) break
-              if (e.type !== 'dir' || e.name.startsWith('.')) continue
-              const fullPath = `${item.dirPath}/${e.name}`
-              entries.push(fullPath)
-              if (item.currentDepth + 1 < depth) {
-                queue.push({ dirPath: fullPath, currentDepth: item.currentDepth + 1 })
-              }
-            }
-          } catch {
-            // Directory unreadable or daemon error — skip
-          }
-        }
-      }
-
-      // Cache results
-      const resolvedCacheKey = `${host}::${resolvedDir}::${depth}`
-      dirCache.set(cacheKey, { dirs: entries, ts: Date.now() })
+      // Cache results (also under the resolved path — the daemon may have expanded ~)
+      const resolvedCacheKey = `${host}::${listing.parent}::${depth}`
+      dirCache.set(cacheKey, { dirs: listing.dirs, exists: listing.exists, ts: Date.now() })
       if (resolvedCacheKey !== cacheKey) {
-        dirCache.set(resolvedCacheKey, { dirs: entries, ts: Date.now() })
+        dirCache.set(resolvedCacheKey, { dirs: listing.dirs, exists: listing.exists, ts: Date.now() })
       }
 
-      res.json({ dirs: entries, parent: resolvedDir })
+      res.json({ dirs: listing.dirs, parent: listing.parent, exists: listing.exists })
     } else {
-      // Local filesystem — also preload multiple levels (async to avoid blocking event loop)
-      const entries: string[] = []
-      const walkLocal = async (d: string, currentDepth: number) => {
-        if (currentDepth > depth || entries.length >= 500) return
-        try {
-          const dirents = await fsp.readdir(d, { withFileTypes: true })
-          for (const dirent of dirents) {
-            if (entries.length >= 500) break
-            // Skip hidden directories
-            if (dirent.name.startsWith('.')) continue
-            if (dirent.isDirectory()) {
-              const full = path.join(d, dirent.name)
-              entries.push(full)
-              if (currentDepth < depth) await walkLocal(full, currentDepth + 1)
-            }
-          }
-        } catch { /* dir doesn't exist or is unreadable */ }
-      }
-      await walkLocal(dir, 1)
-
-      res.json({ dirs: entries, parent: dir })
+      const listing = await listLocalDirs(dir, depth)
+      res.json({ dirs: listing.dirs, parent: listing.parent, exists: listing.exists })
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -334,11 +281,34 @@ sessionsRouter.get('/list-dirs', async (req: Request, res: Response, next: NextF
   }
 })
 
+/**
+ * Fix-Walnut intent: wrap the user's bug report in a repair briefing. Kept
+ * server-side so iOS/cloud clients reuse it and copy iterates without a web
+ * redeploy. Repo-level safety rules (never kill :3456, dev:prod, log toolkit)
+ * are NOT repeated here — the session's cwd is the Walnut checkout, so the CLI
+ * auto-loads CLAUDE.md with all of them.
+ */
+function buildFixWalnutMessage(userReport: string): string {
+  return [
+    `The user reports something wrong with Walnut (this app — you are running inside its source checkout). Their report:`,
+    ``,
+    `"""`,
+    userReport,
+    `"""`,
+    ``,
+    `Fix it end to end:`,
+    `1. Reproduce/diagnose first — structured logs live in /tmp/open-walnut/ (start with \`scripts/walnut-logs.sh diagnose\`, see CLAUDE.md for the toolkit). If a screenshot is attached, read it.`,
+    `2. Find the root cause — fix causes, not symptoms.`,
+    `3. Implement the fix, then build and verify per the repo's CLAUDE.md workflow.`,
+    `4. Summarize root cause and what changed.`,
+  ].join('\n')
+}
+
 // POST /api/sessions/quick-start — create task + start session in one step
 sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: NextFunction) => {
   const requestTs = Date.now()
   try {
-    const { cwd, host, message, model: rawModel, mode, images, taskId: existingTaskId, taskMeta } = req.body as {
+    const { cwd, host, message, model: rawModel, mode, images, taskId: existingTaskId, taskMeta, intent, createCwd } = req.body as {
       cwd: string
       host?: string
       message: string
@@ -352,6 +322,10 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         priority?: 'immediate' | 'important' | 'backlog' | 'none'
         pinTier?: 'focus' | 'satellite' | 'wait'
       }
+      /** Optional launch intent — 'fix-walnut' wraps the message in a repair briefing. */
+      intent?: string
+      /** User opted into "create & start": mkdir the cwd (recursive) before starting. */
+      createCwd?: boolean
     }
 
     if (!cwd || typeof cwd !== 'string') {
@@ -360,6 +334,10 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     }
     if (!message || typeof message !== 'string') {
       res.status(400).json({ error: 'message is required' })
+      return
+    }
+    if (intent !== undefined && intent !== 'fix-walnut') {
+      res.status(400).json({ error: `Invalid intent: ${intent}. Must be 'fix-walnut'` })
       return
     }
 
@@ -417,12 +395,30 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     // pushed sessions into unrelated task-management side-quests.) Extension
     // point: pass an `appendSystemPrompt` on SESSION_START if a future need arises.
 
+    // Fix-Walnut intent: wrap the report in the repair briefing and give the
+    // task a recognizable title/project (instead of "Session: walnut" / Quick Start).
+    const isFixWalnut = intent === 'fix-walnut'
+    const sessionMessage = isFixWalnut ? buildFixWalnutMessage(message) : message
+    const reportSnippet = message.replace(/\s+/g, ' ').trim().slice(0, 60)
+    const fixWalnutExtras = isFixWalnut
+      ? { taskTitle: `Fix Walnut: ${reportSnippet}`, project: 'Fix Walnut' }
+      : {}
+
     // Shared core (also used by the claude-code routine executor): task create/
     // reuse + TASK_CREATED + SESSION_START emit + remote failure-cache clear.
     try {
+      if (createCwd === true) {
+        // Same sanitize rule as list-dirs — this path flows into a daemon RPC.
+        if (/[;&|`$(){}!<>]/.test(cwd)) {
+          res.status(400).json({ error: 'invalid characters in cwd' })
+          return
+        }
+        await ensureCwd(cwd, host)
+      }
       const updatedTask = await quickStartSession({
-        message, messagePrefix, cwd, host, model, mode,
+        message: sessionMessage, messagePrefix, cwd, host, model, mode,
         existingTaskId, taskMeta, source: 'quick-start', requestTs,
+        ...fixWalnutExtras,
       })
       res.json({ taskId: updatedTask.id, task: updatedTask })
     } catch (err) {
@@ -1254,15 +1250,18 @@ sessionsRouter.post('/:sessionId/effort', async (req: Request, res: Response, ne
 // Same mechanism as /effort: apply_flag_settings control_request (no respawn, the
 // running turn is untouched) + get_settings read-back for the true applied model.
 // Persists record.cliModel so a cold --resume respawns with the new --model.
+// Accepts BOTH a legacy picker alias ('sonnet-1m' → mapped to 'sonnet[1m]') and
+// a catalog value from GET /:id/models ('global.anthropic.claude-fable-5[1m]',
+// 'default' — passed through verbatim; the CLI is the authority on validity).
 sessionsRouter.post('/:sessionId/model', async (req: Request, res: Response, next: NextFunction) => {
   const sessionId = req.params.sessionId as string
   const { model: rawModel } = req.body as { model?: string }
   try {
-    if (typeof rawModel !== 'string' || !VALID_SESSION_MODEL_IDS.has(rawModel)) {
-      res.status(400).json({ error: `model must be one of: ${[...VALID_SESSION_MODEL_IDS].join('/')}` })
+    const cliModel = typeof rawModel === 'string' ? resolveModelSwitchValue(rawModel) : null
+    if (!cliModel) {
+      res.status(400).json({ error: `model must be a catalog value from GET /:sessionId/models or one of: ${[...VALID_SESSION_MODEL_IDS].join('/')}` })
       return
     }
-    const cliModel = SESSION_MODEL_CLI_MAP[rawModel]
 
     const record = await getSessionByClaudeId(sessionId)
     if (!record) {
@@ -1285,6 +1284,14 @@ sessionsRouter.post('/:sessionId/model', async (req: Request, res: Response, nex
         // 2.1.170 with a garbage model). Read back applied.model as the truth.
         if (applied) {
           effectiveModel = (await session.refreshAppliedSettings('model-change').catch(() => null))?.model ?? undefined
+          // Read-back disagrees with what we asked for ⇒ the CLI rejected or
+          // silently substituted it (allowlist / wire-level fallback). Our
+          // cached catalog is evidently stale — drop it so the picker's next
+          // open refetches, and tell the caller the switch did NOT take.
+          if (effectiveModel && !modelReadBackMatches(cliModel, effectiveModel)) {
+            applied = false
+            session.invalidateModelCatalog()
+          }
         }
       } catch (err) {
         // Non-fatal: the persisted cliModel still applies on the next (re)spawn.
@@ -1296,6 +1303,61 @@ sessionsRouter.post('/:sessionId/model', async (req: Request, res: Response, nex
 
     log.web.info('session model changed', { sessionId, model: rawModel, cliModel, appliedLive: applied, effectiveModel })
     res.json({ model: rawModel, cliModel, appliedLive: applied, effectiveModel })
+  } catch (err) {
+    next(err)
+  }
+})
+
+/** Does the get_settings read-back string plausibly equal what we switched to?
+ *  Tolerates decoration differences: 'global.anthropic.claude-opus-4-6-v1[1m]'
+ *  vs 'claude-opus-4-6[1m]' vs 'opus[1m]' all describe the same runtime model.
+ *  Aliases ('opus', 'sonnet[1m]') can't be compared literally — for those we
+ *  only require family containment. 'default' can resolve to anything → always
+ *  matches (the CLI decides what default means). */
+function modelReadBackMatches(requested: string, effective: string): boolean {
+  if (requested === 'default') return true
+  const strip = (s: string) => s.toLowerCase().replace(/\[1m\]$/, '').replace(/[-_]v\d+(:\d+)?$/, '')
+  const req = strip(requested)
+  const eff = strip(effective)
+  if (req === eff || eff.includes(req) || req.includes(eff)) return true
+  // Alias forms: compare family + [1m]-ness instead of the raw strings.
+  const fam = (s: string) => ['haiku', 'sonnet', 'fable', 'opus', 'mythos'].find((f) => s.includes(f))
+  const is1m = (s: string) => /\[1m\]$/.test(s.toLowerCase())
+  return fam(req) !== undefined && fam(req) === fam(eff) && is1m(requested) === is1m(effective)
+}
+
+// GET /api/sessions/:sessionId/models — the session's TRUE selectable model
+// catalog, fetched from the CLI's `initialize` control response (already
+// filtered by the host's availableModels allowlist and mapped through
+// modelOverrides). Each row's `value` is what the picker must send back to
+// POST /:sessionId/model. Degrades, never 5xxs:
+//   source:'cli'      → live catalog (row values are full provider IDs)
+//   source:'fallback' → static SESSION_MODELS registry rendered in catalog
+//                       shape (row values are legacy alias ids) — old CLI that
+//                       can't answer initialize, or session not reachable.
+// ?refresh=1 bypasses the session's cache (e.g. after a failed switch).
+sessionsRouter.get('/:sessionId/models', async (req: Request, res: Response, next: NextFunction) => {
+  const sessionId = req.params.sessionId as string
+  try {
+    const record = await getSessionByClaudeId(sessionId)
+    if (!record) {
+      res.status(404).json({ error: 'session not found' })
+      return
+    }
+    const session = await sessionRunner.getOrAttachLiveSession(sessionId).catch(() => undefined)
+    if (!session) {
+      res.json({ source: 'fallback', live: false, models: sessionModelsAsCatalog() })
+      return
+    }
+    const catalog = await session.getModelCatalog({ force: req.query.refresh === '1' }).catch(() => null)
+    if (!catalog) {
+      res.json({ source: 'fallback', live: true, models: sessionModelsAsCatalog() })
+      return
+    }
+    res.json({
+      source: 'cli', live: true, models: catalog.models,
+      fetchedAt: new Date(catalog.fetchedAt).toISOString(),
+    })
   } catch (err) {
     next(err)
   }
@@ -1639,6 +1701,13 @@ sessionsRouter.post('/:sessionId/execute', async (req: Request, res: Response, n
     // This prevents the user from ending up with an archived plan and no execution
     // session if the new session fails to start (e.g. CLI not found, SSH failure).
 
+    // Capture the live plan session NOW — the new exec session shares the same
+    // taskId map key, so after SESSION_START the old ClaudeCodeSession is evicted
+    // from the runner map and a lookup by planSessionId would come up empty.
+    // getOrAttachLiveSession (not findByClaudeId) so a plan session that survived
+    // a server restart (alive CLI, not in the in-memory map) is also retired.
+    const livePlanSession = await sessionRunner.getOrAttachLiveSession(planSessionId).catch(() => undefined)
+
     // Set up a temporary bus listener BEFORE emitting SESSION_START so we
     // catch the status-changed event that carries the new session's ID,
     // or a SESSION_ERROR if the process dies before init.
@@ -1708,6 +1777,25 @@ sessionsRouter.post('/:sessionId/execute', async (req: Request, res: Response, n
         ...(sourceRecord.planCompleted ? { planContent: planResult.content } : {}),
       })
       log.web.info('execute: archived session', { planSessionId, reason: archiveReason })
+    }
+
+    // ── Retire the plan session's live process ──
+    // Without this, the old CLI stays alive on the (possibly remote) host until
+    // the 2h idle reap, and any pending permission (e.g. an unapproved
+    // ExitPlanMode) keeps re-emitting "needs approval" toasts every 60s for a
+    // session the user has already abandoned. Deny first (needs the transport),
+    // then kill.
+    try {
+      const liveSession = livePlanSession ?? sessionRunner.findByClaudeId(planSessionId)
+      if (liveSession) {
+        liveSession.forceSettlePermissionRequests('Plan archived — executing in a new session')
+        liveSession.kill()
+        log.web.info('execute: retired archived plan session process', { planSessionId })
+      }
+    } catch (retireErr) {
+      log.web.warn('execute: failed to retire plan session process (continuing)', {
+        planSessionId, error: retireErr instanceof Error ? retireErr.message : String(retireErr),
+      })
     }
 
     // Clear task session slot so UI no longer shows archived plan as active
@@ -2030,8 +2118,17 @@ sessionsRouter.post('/:sessionId/fork', async (req: Request, res: Response, next
       // asynchronously into `<2-4 word summary of the fork prompt> - fork of <source>`.
       // Use `||` (not `??`) so an empty-string child_title also falls back to the
       // placeholder — consistent with `autoTitle = !child_title` below.
+      //
+      // Fork-of-a-fork: strip any existing fork decoration from the source title
+      // first, otherwise titles compound without bound ("X - fork of Y - fork of
+      // Z - …" reached 290+ chars in practice and permanently failed external
+      // sync plugins with title-length limits).
+      const sourceBaseTitle = sourceTask.title
+        .replace(/^Fork of\s+/i, '')
+        .replace(/\s+-\s+fork of\s+.*$/i, '')
+        .trim() || sourceTask.title
       const autoTitle = !child_title
-      const newTitle = child_title || `Fork of ${sourceTask.title}`
+      const newTitle = child_title || `Fork of ${sourceBaseTitle}`
       // No _skipPluginOps: a fork inherits the source's source (e.g. an external
       // sync plugin) and must pass the same content validation + push as any
       // other task. addTask throws on CJK → surfaced via next(err).
@@ -2098,7 +2195,7 @@ sessionsRouter.post('/:sessionId/fork', async (req: Request, res: Response, next
       // message was provided (no point summarizing the "Continue working on:" default).
       if (autoTitle && message?.trim()) {
         const forkId = newFork.id
-        const sourceTitle = sourceTask.title
+        const sourceTitle = sourceBaseTitle
         const placeholderTitle = newTitle
         void (async () => {
           try {

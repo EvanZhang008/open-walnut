@@ -23,6 +23,7 @@
 
 import { apiGet, apiPut } from '@/api/client';
 import { getDeviceToken } from '@/api/device-token';
+import { SKIP_PREFS_MERGE_FLAG } from './crash-recovery';
 
 const INCLUDE_PREFIXES = ['open-walnut-', 'walnut-todo-'];
 const EXCLUDE_PREFIXES = ['open-walnut-diff-review:'];
@@ -115,7 +116,22 @@ function flushKeepalive() {
  */
 export async function initUiPrefsSync(): Promise<void> {
   meta = readMeta();
+
+  // After a hard crash-heal, the session flag tells us to skip adopting the
+  // server copy for one boot — it may carry the same poisoned value that
+  // triggered the crash loop. The flag is consumed (removed) immediately.
+  const skipMerge = (() => {
+    try {
+      if (sessionStorage.getItem(SKIP_PREFS_MERGE_FLAG)) {
+        sessionStorage.removeItem(SKIP_PREFS_MERGE_FLAG);
+        return true;
+      }
+    } catch { /* ignore */ }
+    return false;
+  })();
+
   try {
+    if (skipMerge) throw new Error('skip prefs merge (crash recovery)');
     const res = await apiGet<{ prefs: Record<string, PrefEntry> }>(
       '/api/ui-prefs', undefined, { timeoutMs: 2500 },
     );

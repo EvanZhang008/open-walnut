@@ -41,17 +41,18 @@
  * recur across turns; matching them against all of history would wrongly claim
  * an old twin for a new block).
  *
- * BACKGROUND-SUBAGENT LANE (same incident, the bulk of the 226): blocks with
- * parentToolUseId stream from an async Agent whose transcript persists to a
- * SEPARATE subagents/agent-<id>.jsonl — their twins never appear in THIS
- * session's history, so twin-evidence is structurally impossible. Their
- * archival proof is different: the CLI injects a <task-notification> user line
- * (hidden from chat) when the agent stops; the parser stamps the parent
- * Agent/Task tool with bgTaskFinished. A lane block whose parent is finished
- * is promoted (its content stays viewable via the Agent box, which lazy-loads
- * the subagent transcript); a lane block whose parent is still running is kept
- * SILENTLY (live background agent — not a divergence bug, so it is neither
- * logged as unmatched nor allowed to block pure-UI GC).
+ * SUBAGENT LANE (inc-1783612454903 bg, inc-1783746028392 sync — the bulk of
+ * the 226): blocks with parentToolUseId stream from an Agent whose transcript
+ * persists to a SEPARATE subagents/agent-<id>.jsonl — their twins never appear
+ * in THIS session's history, so twin-evidence is structurally impossible.
+ * Their archival proof is the parser-stamped bgTaskFinished on the parent
+ * Agent/Task tool (from a <task-notification> line for background agents, or
+ * from a persisted tool_result for sync run_in_background:false agents — see
+ * session-history.ts). A lane block whose parent is finished is promoted (its
+ * content stays viewable via the Agent box, which lazy-loads the subagent
+ * transcript); a lane block whose parent is still running is kept SILENTLY
+ * (live agent — not a divergence bug, so it is neither logged as unmatched
+ * nor allowed to block pure-UI GC).
  */
 
 import type { StreamingBlock } from '@/stream/stream-reducer';
@@ -71,9 +72,13 @@ export interface DeltaEvidence {
    *  (it is frequently redacted) — otherwise id-removal would vanish the
    *  streamed reasoning with no persisted replacement to render. */
   thinkingMsgIds: Set<string>;
-  /** toolUseIds of Agent/Task tools whose BACKGROUND run has finished (parser
-   *  stamped bgTaskFinished from the <task-notification> line). A subagent-lane
-   *  block whose parentToolUseId is here is archived-elsewhere → promotable. */
+  /** toolUseIds of Agent/Task tools whose subagent run is PROVEN over. The
+   *  parser stamps bgTaskFinished from a <task-notification> line (background
+   *  agents) or from a persisted tool_result on an explicit
+   *  run_in_background:false call (sync agents block their turn, so a result
+   *  can only exist post-run — and they never get a notification;
+   *  inc-1783746028392). A subagent-lane block whose parentToolUseId is here
+   *  is archived-elsewhere → promotable. */
   finishedBgParents: Set<string>;
 }
 

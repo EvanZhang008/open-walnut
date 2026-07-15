@@ -172,6 +172,7 @@ export class MockDaemon {
       case 'rename': return this.cmdRename(ws, id, cmd)
       case 'ping': return this.sendOk(ws, id, { pong: true })
       case 'fs.read': return this.cmdFsRead(ws, id, cmd)
+      case 'fs.mkdir': return this.cmdFsMkdir(ws, id, cmd)
       case 'fs.ls': return this.cmdFsLs(ws, id, cmd)
       case 'list': return this.cmdList(ws, id)
       default: return this.sendError(ws, id, `unknown command: ${cmd.cmd}`)
@@ -438,6 +439,18 @@ export class MockDaemon {
       }
     } catch (err) {
       this.sendError(ws, id, `fs.read failed: ${(err as Error).message}`)
+    }
+  }
+
+  private cmdFsMkdir(ws: WebSocket, id: number, cmd: Record<string, unknown>): void {
+    const dirPath = cmd.path as string
+    if (!dirPath) return this.sendError(ws, id, 'fs.mkdir: missing path')
+
+    try {
+      fs.mkdirSync(dirPath, { recursive: true })
+      this.sendOk(ws, id, { created: true, resolvedPath: dirPath })
+    } catch (err) {
+      this.sendError(ws, id, `fs.mkdir failed: ${(err as Error).message}`)
     }
   }
 

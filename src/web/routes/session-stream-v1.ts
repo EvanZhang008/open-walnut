@@ -33,6 +33,28 @@ export const sessionStreamV1Router = Router()
 
 const SID_RE = /^[A-Za-z0-9_-]+$/
 
+// ── Image attachments (additive) — mirrors session-chat.ts constants ──
+const ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
+const MAX_SESSION_IMAGES = 5
+const MAX_IMAGE_BASE64_LENGTH = 14_000_000 // ~10MB binary
+
+interface SessionImage { data: string; mediaType: string }
+
+/** Extract valid image payloads from a request body (silently drops junk). */
+function extractValidImages(raw: unknown): SessionImage[] {
+  if (!Array.isArray(raw)) return []
+  return (raw as Array<{ data?: unknown; mediaType?: unknown }>)
+    .filter((img) =>
+      typeof img?.data === 'string'
+      && img.data.length > 0
+      && img.data.length <= MAX_IMAGE_BASE64_LENGTH
+      && typeof img.mediaType === 'string'
+      && ALLOWED_MIME.has(img.mediaType),
+    )
+    .slice(0, MAX_SESSION_IMAGES)
+    .map((img) => ({ data: img.data as string, mediaType: img.mediaType as string }))
+}
+
 function sendError(res: Response, status: number, code: string, message: string): void {
   res.status(status).json({ error: { code, message } })
 }
@@ -297,13 +319,25 @@ sessionStreamV1Router.post('/sessions/:id/messages', async (req: Request, res: R
       sendError(res, 400, 'bad_request', 'Invalid session id')
       return
     }
-    const text = req.body?.text
-    if (typeof text !== 'string' || text.trim() === '') {
+    // Additive: `images` allows an otherwise-empty text turn. Old clients that
+    // send no images keep the exact 400-on-empty-text behavior.
+    const images = extractValidImages(req.body?.images)
+    const rawText = req.body?.text
+    const text = typeof rawText === 'string' ? rawText : ''
+    if (text.trim() === '' && images.length === 0) {
       sendError(res, 400, 'bad_request', 'text (non-empty string) is required')
       return
     }
 
     if (CLOUD_MODE) {
+      // The CLI runs on a different machine than this EC2 replica, so images
+      // saved here are unreadable by the session's Read tool. Uploading base64
+      // over the bridge needs the privileged fs.write (not in the bridge
+      // allowlist) — out of scope. Reject clearly instead of silently dropping.
+      if (images.length > 0) {
+        sendError(res, 400, 'images_not_supported_cloud', 'Images can only be sent to sessions from the primary box')
+        return
+      }
       await cloudSend(res, sessionId, text)
       return
     }
@@ -314,12 +348,37 @@ sessionStreamV1Router.post('/sessions/:id/messages', async (req: Request, res: R
       sendError(res, 404, 'not_found', `Session not found: ${sessionId}`)
       return
     }
+
+    // Save images to disk and reference them by path in the augmented message —
+    // the CLI's stdin only takes text, so it reads the files with its Read tool.
+    // Same "[Images attached …]" prefix format as the WS session-chat path.
+    // Remote sessions: RemoteSessionManager.prepareOutbound() uploads the local
+    // files and rewrites the paths on the way to the exec host (no work here).
+    let enqueueText: string | undefined
+    if (images.length > 0) {
+      const { saveImageToDisk } = await import('./images.js')
+      const savedPaths: string[] = []
+      for (const img of images) {
+        try {
+          const { filePath } = await saveImageToDisk(img.data, img.mediaType)
+          savedPaths.push(filePath)
+        } catch (err) {
+          log.web.warn('Failed to save mobile session image', { sessionId, error: err instanceof Error ? err.message : String(err) })
+        }
+      }
+      if (savedPaths.length > 0) {
+        const pathList = savedPaths.map((p) => `- ${p}`).join('\n')
+        enqueueText = `[Images attached — use the Read tool to view them]\n${pathList}\n\n${text}`
+      }
+    }
+
     const { sendMessageToSession } = await import('../../core/session-message-queue.js')
     const msg = await sendMessageToSession(sessionId, text, {
       source: 'mobile',
       taskId: record.taskId,
+      ...(enqueueText ? { enqueueMessage: enqueueText } : {}),
     })
-    log.web.info('mobile session send accepted', { sessionId, messageId: msg.id })
+    log.web.info('mobile session send accepted', { sessionId, messageId: msg.id, imageCount: images.length })
     res.status(202).json({ messageId: msg.id })
   } catch (err) {
     next(err)

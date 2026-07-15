@@ -31,8 +31,11 @@ import type { Config } from './types.js';
 /** Which source the winning credential came from (for UI display + transparency). */
 export type CredentialSource = 'config' | 'claude-settings' | 'env' | 'aws-files' | 'none';
 
-/** How Bedrock will authenticate, derived from whatever was found. */
-export type CredentialMethod = 'bearer_token' | 'access_keys' | 'profile' | 'aws_chain';
+/** How Bedrock will authenticate, derived from whatever was found.
+ *  `credential_process` = a shell command that prints temporary AWS creds as
+ *  JSON; the resolver only surfaces the command string — the adapter runs it,
+ *  caches the result, and re-runs on expiry (see adapter-bedrock.ts). */
+export type CredentialMethod = 'bearer_token' | 'access_keys' | 'profile' | 'credential_process' | 'aws_chain';
 
 export const DEFAULT_REGION = 'us-west-2';
 
@@ -52,6 +55,9 @@ export interface ResolvedCredential {
   secretAccessKey?: string;
   /** AWS profile name from ~/.aws/config. */
   profile?: string;
+  /** Shell command that prints temporary AWS creds as JSON (method
+   *  'credential_process'). The adapter runs + caches + refreshes it. */
+  credentialExportCmd?: string;
   /** Short human-readable provenance, e.g. "AWS_BEARER_TOKEN_BEDROCK" or "profile: dev". */
   detail?: string;
 }
@@ -68,6 +74,10 @@ export interface ResolveInputs {
   processEnv: EnvBag;
   /** Existence of the two ~/.aws files. */
   awsFiles: { credentials: boolean; config: boolean };
+  /** Top-level `awsCredentialExport` command from ~/.claude/settings.json, if any.
+   *  A shell command that prints temporary AWS creds as JSON. The resolver only
+   *  surfaces it; the adapter runs + caches + refreshes it. */
+  claudeCredentialExport?: string;
 }
 
 /** Region resolved from an env-like bag (AWS_REGION wins over AWS_DEFAULT_REGION). */
@@ -99,7 +109,7 @@ function authFromEnv(env: EnvBag): Pick<ResolvedCredential, 'method' | 'bearerTo
 }
 
 /** Extract Bedrock auth from config.yaml (new `providers.bedrock` or legacy `provider.*`). */
-function authFromConfig(config: Config): Pick<ResolvedCredential, 'method' | 'bearerToken' | 'accessKeyId' | 'secretAccessKey' | 'profile' | 'detail'> | null {
+function authFromConfig(config: Config): Pick<ResolvedCredential, 'method' | 'bearerToken' | 'accessKeyId' | 'secretAccessKey' | 'profile' | 'credentialExportCmd' | 'detail'> | null {
   const b = config.providers?.bedrock;
   if (b) {
     if (b.bearer_token) return { method: 'bearer_token', bearerToken: b.bearer_token, detail: 'config.providers.bedrock.bearer_token' };
@@ -112,6 +122,7 @@ function authFromConfig(config: Config): Pick<ResolvedCredential, 'method' | 'be
       };
     }
     if (b.aws_profile) return { method: 'profile', profile: b.aws_profile, detail: `config profile: ${b.aws_profile}` };
+    if (b.aws_credential_export) return { method: 'credential_process', credentialExportCmd: b.aws_credential_export, detail: 'config.providers.bedrock.aws_credential_export' };
   }
   // Legacy single-provider field
   if (config.provider?.bedrock_bearer_token) {
@@ -130,7 +141,7 @@ function regionFromConfig(config: Config): string | undefined {
  * by priority. No I/O — feed it data, get a decision. Unit-test this directly.
  */
 export function resolveCredentialFrom(inputs: ResolveInputs): ResolvedCredential {
-  const { config, claudeEnv, processEnv, awsFiles } = inputs;
+  const { config, claudeEnv, processEnv, awsFiles, claudeCredentialExport } = inputs;
 
   // Region: independent priority chain so a config-only region still applies
   // even when the key comes from a lower source. Falls back to the default.
@@ -141,10 +152,16 @@ export function resolveCredentialFrom(inputs: ResolveInputs): ResolvedCredential
     DEFAULT_REGION;
 
   // Credential material: first source that yields auth wins.
-  const ladder: Array<{ source: CredentialSource; auth: ReturnType<typeof authFromEnv> }> = [
+  // The settings.json top-level `awsCredentialExport` sits BELOW env-block static
+  // creds (bearer/keys/profile) so an existing user's explicit auth keeps winning,
+  // but ABOVE the bare ~/.aws chain — it's the SSO/ada姿势 most internal users have.
+  const ladder: Array<{ source: CredentialSource; auth: Pick<ResolvedCredential, 'method' | 'bearerToken' | 'accessKeyId' | 'secretAccessKey' | 'profile' | 'credentialExportCmd' | 'detail'> | null }> = [
     { source: 'config', auth: authFromConfig(config) },
     { source: 'claude-settings', auth: authFromEnv(claudeEnv) },
     { source: 'env', auth: authFromEnv(processEnv) },
+    { source: 'claude-settings', auth: claudeCredentialExport
+        ? { method: 'credential_process', credentialExportCmd: claudeCredentialExport, detail: 'settings.json awsCredentialExport' }
+        : null },
   ];
 
   for (const { source, auth } of ladder) {
@@ -181,6 +198,25 @@ export function readClaudeSettingsEnv(settingsFile: string = CLAUDE_SETTINGS_FIL
   }
 }
 
+/**
+ * Read the top-level `awsCredentialExport` command from ~/.claude/settings.json.
+ * Best-effort. SECURITY: we only ever read the USER-GLOBAL settings file
+ * (CLAUDE_SETTINGS_FILE), never a project-level `.claude/settings.json`, so a
+ * checked-out repo can't inject a command Walnut would execute — mirroring
+ * Claude Code's own workspace-trust gate on this key.
+ */
+export function readClaudeCredentialExport(settingsFile: string = CLAUDE_SETTINGS_FILE): string | undefined {
+  try {
+    const raw = fs.readFileSync(settingsFile, 'utf-8');
+    const parsed = JSON.parse(raw) as { awsCredentialExport?: unknown };
+    return typeof parsed.awsCredentialExport === 'string' && parsed.awsCredentialExport.trim()
+      ? parsed.awsCredentialExport
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Best-effort existence check of the two ~/.aws files. */
 function probeAwsFiles(): { credentials: boolean; config: boolean } {
   const home = os.homedir();
@@ -202,6 +238,7 @@ export function resolveCredentials(config: Config): ResolvedCredential {
     claudeEnv: readClaudeSettingsEnv(),
     processEnv: process.env,
     awsFiles: probeAwsFiles(),
+    claudeCredentialExport: readClaudeCredentialExport(),
   });
   if (result.source !== 'none') {
     log.session.debug('credential-resolver: resolved Bedrock credential', {

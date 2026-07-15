@@ -8,6 +8,19 @@ export async function fetchConfig(): Promise<Config & { _envTokenHint?: string }
   return res.config;
 }
 
+/**
+ * Walnut's own source checkout (drives the "Fix Walnut" button). null on npm
+ * installs / cloud replicas → the button hides. Cached for the page lifetime:
+ * the install dir can't change without a server restart.
+ */
+let _installDirPromise: Promise<string | null> | null = null;
+export function fetchInstallDir(): Promise<string | null> {
+  _installDirPromise ??= apiGet<{ installDir?: string | null }>('/api/config')
+    .then(res => res.installDir ?? null)
+    .catch(() => { _installDirPromise = null; return null; });
+  return _installDirPromise;
+}
+
 export async function updateConfig(config: Partial<Config>): Promise<{ ok: boolean }> {
   return apiPut<{ ok: boolean }>('/api/config', config);
 }
@@ -26,6 +39,7 @@ export async function testConnection(
     bedrock_access_key?: string;
     bedrock_secret_key?: string;
     bedrock_profile?: string;
+    bedrock_credential_export?: string;
   },
 ): Promise<TestConnectionResult> {
   return apiPost<TestConnectionResult>('/api/config/test-connection', params);
@@ -53,7 +67,9 @@ export interface ProviderStatus {
   key_hint?: string;
   auto_detected: boolean;
   models: ModelEntry[];
-  credential_source?: string;  // bedrock: 'bearer_token' | 'api_key' | 'aws_credentials_file'
+  // bedrock: 'bearer_token' | 'access_keys' | 'profile' | 'credential_process' | 'aws_env' | 'aws_credentials_file' | 'aws_config_file'
+  // claude-cli: 'subscription' | 'cli_no_subscription' | 'cli_not_installed'
+  credential_source?: string;
 }
 
 export async function fetchProviders(): Promise<Record<string, ProviderStatus>> {

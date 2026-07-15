@@ -7,6 +7,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useSpeechToText } from '@/hooks/useSpeechToText';
 import { useSttStatus } from '@/hooks/useSttStatus';
 import { fetchSttDetection, fetchVocab, addVocabWord, MODEL_CATALOG, type GgmlModel } from '@/api/stt';
@@ -45,11 +46,12 @@ function MicWaveform({ level }: { level: number }) {
 }
 
 export function MicButton({ onTranscribe, language, disabled, size = 'md' }: MicButtonProps) {
-  const { isSupported, isRecording, isTranscribing, error, toggleRecording, retryWithModel, lastDebugPath, hasLastRecording, level, silenceWarning } = useSpeechToText({
+  const { isSupported, isRecording, isTranscribing, error, toggleRecording, retryWithModel, retryLast, lastDebugPath, hasLastRecording, level, silenceWarning } = useSpeechToText({
     onTranscribe,
     language,
   });
   const sttStatus = useSttStatus();
+  const navigate = useNavigate();
 
   // Dropdown state
   const [showChevron, setShowChevron] = useState(false);
@@ -64,6 +66,10 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
 
   const dismissTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const wrapperRef = useRef<HTMLDivElement>(null);
+
+  // Error bubble dismissal — re-arm whenever a new error arrives.
+  const [errorDismissed, setErrorDismissed] = useState(false);
+  useEffect(() => { setErrorDismissed(false); }, [error]);
 
   // Show chevron after transcription completes
   const wasTranscribing = useRef(false);
@@ -175,18 +181,22 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
   if (!isSupported) return null;
 
   const sttUnavailable = !sttStatus.isLoading && (!sttStatus.isConfigured || !sttStatus.isAvailable);
-  const isDisabled = disabled || isTranscribing || sttUnavailable;
+  // Never grey out for "not configured" — a disabled button with a hover-only tooltip is
+  // undiscoverable (first-run users think voice input doesn't exist). Keep it clickable
+  // and route the click to Settings → Speech-to-Text instead.
+  const isDisabled = disabled || isTranscribing;
 
   const btnClass = [
     'btn mic-btn',
     size === 'sm' && 'mic-btn-sm',
+    sttUnavailable && 'mic-unconfigured',
     isRecording && 'mic-recording',
     isRecording && silenceWarning && 'mic-recording-silent',
     isTranscribing && 'mic-transcribing',
   ].filter(Boolean).join(' ');
 
   const title = sttUnavailable
-    ? (sttStatus.error ?? 'Configure STT in Settings')
+    ? `${sttStatus.error ?? 'STT not configured'} — click to set up`
     : error
       ? `Error: ${error}`
       : isTranscribing
@@ -194,6 +204,15 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
         : isRecording
           ? (silenceWarning ?? 'Stop recording')
           : 'Voice input';
+
+  // Plain function (not useCallback): we're past an early return, hooks are not allowed here.
+  const handleClick = () => {
+    if (sttUnavailable) {
+      navigate('/settings#stt');
+      return;
+    }
+    void toggleRecording();
+  };
 
   const modelDisplayName = (m: GgmlModel) => {
     const cat = MODEL_CATALOG.find(c => c.filename === m.name || c.name === m.name);
@@ -204,7 +223,7 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
     <div className="mic-btn-wrapper" ref={wrapperRef}>
       <button
         className={btnClass}
-        onClick={toggleRecording}
+        onClick={handleClick}
         type="button"
         disabled={isDisabled}
         aria-label={title}
@@ -235,6 +254,27 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
             <line x1="12" y1="17" x2="12.01" y2="17" />
           </svg>
           <span>{silenceWarning}</span>
+        </div>
+      )}
+      {/* Transcription failure — visible bubble (title-attr tooltips are undiscoverable).
+          Offers Retry when the audio is still held; dismissed by starting a new recording
+          (toggleRecording clears error) or clicking ✕. */}
+      {error && !isRecording && !isTranscribing && !errorDismissed && (
+        <div className="mic-silence-warning mic-error-bubble" role="alert">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="8" x2="12" y2="12" />
+            <line x1="12" y1="16" x2="12.01" y2="16" />
+          </svg>
+          <span>{error}</span>
+          {hasLastRecording && (
+            <button type="button" className="mic-error-retry" onClick={() => void retryLast()}>
+              Retry
+            </button>
+          )}
+          <button type="button" className="mic-error-dismiss" aria-label="Dismiss" onClick={() => setErrorDismissed(true)}>
+            ✕
+          </button>
         </div>
       )}
       {/* Chevron badge — appears after transcription (outside button to avoid nested interactive elements) */}

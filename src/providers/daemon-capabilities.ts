@@ -33,6 +33,7 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
   'write-inbox',
   'fs.read',
   'fs.write',
+  'fs.mkdir',
   'fs.ls',
   'fs.find',
   'fs.stat',

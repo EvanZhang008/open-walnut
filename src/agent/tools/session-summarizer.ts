@@ -55,7 +55,10 @@ export async function summarizeSession(
     const agentDef = await getAgent(agentId);
     model = agentDef?.model;
   }
-  model = model ?? config.agent?.model;
+  // main_model is the actual config key (agent.model is a legacy field that is
+  // usually unset). Leaving this unresolved recorded usage as model 'unknown',
+  // which computeCost prices at the most-expensive fallback tier — 3× overbilled.
+  model = model ?? config.agent?.main_model ?? config.agent?.model;
 
   // 2. Read session history
   const messages = await readSessionHistory(sessionId, record?.cwd, record?.host, record?.outputFile);

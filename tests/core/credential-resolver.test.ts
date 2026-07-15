@@ -5,6 +5,7 @@ import os from 'node:os';
 import {
   resolveCredentialFrom,
   readClaudeSettingsEnv,
+  readClaudeCredentialExport,
   DEFAULT_REGION,
   type ResolveInputs,
 } from '../../src/core/credential-resolver.js';
@@ -126,6 +127,52 @@ describe('resolveCredentialFrom — auth method extraction within a source', () 
   });
 });
 
+describe('resolveCredentialFrom — awsCredentialExport (credential_process)', () => {
+  it('settings.json awsCredentialExport is used when no env-block creds exist', () => {
+    const r = resolveCredentialFrom(inputs({
+      claudeCredentialExport: 'my-export-cmd',
+    }));
+    expect(r.source).toBe('claude-settings');
+    expect(r.method).toBe('credential_process');
+    expect(r.credentialExportCmd).toBe('my-export-cmd');
+  });
+
+  it('env-block static creds still WIN over awsCredentialExport (no regression)', () => {
+    const r = resolveCredentialFrom(inputs({
+      claudeEnv: { AWS_BEARER_TOKEN_BEDROCK: 'settings-tok' },
+      claudeCredentialExport: 'my-export-cmd',
+    }));
+    expect(r.method).toBe('bearer_token');
+    expect(r.bearerToken).toBe('settings-tok');
+  });
+
+  it('process.env static creds also win over awsCredentialExport', () => {
+    const r = resolveCredentialFrom(inputs({
+      processEnv: { AWS_ACCESS_KEY_ID: 'AKIA', AWS_SECRET_ACCESS_KEY: 'secret' },
+      claudeCredentialExport: 'my-export-cmd',
+    }));
+    expect(r.method).toBe('access_keys');
+  });
+
+  it('awsCredentialExport beats the bare ~/.aws chain', () => {
+    const r = resolveCredentialFrom(inputs({
+      claudeCredentialExport: 'my-export-cmd',
+      awsFiles: { credentials: true, config: true },
+    }));
+    expect(r.method).toBe('credential_process');
+    expect(r.credentialExportCmd).toBe('my-export-cmd');
+  });
+
+  it('config.providers.bedrock.aws_credential_export is honored', () => {
+    const r = resolveCredentialFrom(inputs({
+      config: baseConfig({ providers: { bedrock: { api: 'bedrock', aws_credential_export: 'cfg-cmd' } } }),
+    }));
+    expect(r.source).toBe('config');
+    expect(r.method).toBe('credential_process');
+    expect(r.credentialExportCmd).toBe('cfg-cmd');
+  });
+});
+
 describe('resolveCredentialFrom — region resolution', () => {
   it('defaults to DEFAULT_REGION when nothing sets it', () => {
     const r = resolveCredentialFrom(inputs({ processEnv: { AWS_BEARER_TOKEN_BEDROCK: 'tok' } }));
@@ -180,5 +227,32 @@ describe('readClaudeSettingsEnv', () => {
   it('returns {} when there is no env block', () => {
     fs.writeFileSync(tmp, JSON.stringify({ enabledPlugins: { 'foo@bar': true } }));
     expect(readClaudeSettingsEnv(tmp)).toEqual({});
+  });
+});
+
+describe('readClaudeCredentialExport', () => {
+  const tmp = path.join(os.tmpdir(), `walnut-credexp-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
+  afterEach(() => { try { fs.rmSync(tmp); } catch { /* ignore */ } });
+
+  it('returns undefined when the file does not exist', () => {
+    expect(readClaudeCredentialExport(path.join(os.tmpdir(), 'missing-xyz.json'))).toBeUndefined();
+  });
+
+  it('returns undefined for malformed JSON', () => {
+    fs.writeFileSync(tmp, '{ not json');
+    expect(readClaudeCredentialExport(tmp)).toBeUndefined();
+  });
+
+  it('reads the top-level awsCredentialExport command', () => {
+    fs.writeFileSync(tmp, JSON.stringify({
+      env: { AWS_REGION: 'us-west-2' },
+      awsCredentialExport: '"/path/to/claude" default-credential-export',
+    }));
+    expect(readClaudeCredentialExport(tmp)).toBe('"/path/to/claude" default-credential-export');
+  });
+
+  it('returns undefined when awsCredentialExport is absent or blank', () => {
+    fs.writeFileSync(tmp, JSON.stringify({ awsCredentialExport: '   ' }));
+    expect(readClaudeCredentialExport(tmp)).toBeUndefined();
   });
 });

@@ -36,6 +36,7 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `not_found` | 404 | Unknown conversation / note |
 | `conflict` | 409 | Note hash mismatch / note already exists |
 | `turn_active` | 409 | A turn is already running on this conversation |
+| `images_not_supported_cloud` | 400 | Session-talk images attempted against the cloud companion (the CLI runs on another machine) — send from the primary box |
 | `too_large` | 413 | Note content exceeds 2 MB |
 | `internal` | 500 | Unhandled server error |
 
@@ -133,7 +134,23 @@ Returns the most recent `limit` messages, **oldest-first**, normalized for mobil
 
 ### POST /api/v1/conversations/:id/messages
 
-Body: `{ "text": "your message", "agentId": "general" }` (`agentId` optional)
+Body: `{ "text": "your message", "agentId": "general", "images"? }` (`agentId`
+and `images` optional).
+
+`images` (additive) attaches image content blocks to the turn:
+
+```json
+"images": [ { "data": "<raw base64>", "mediaType": "image/png" } ]
+```
+
+- Up to 5 images; allowed `mediaType`: `image/png`, `image/jpeg`, `image/gif`,
+  `image/webp`. Invalid/extra entries are silently dropped; oversized images are
+  server-side compressed for the model.
+- When at least one valid image is present, `text` may be empty (the model still
+  receives the images). With no images, an empty `text` is still `400 bad_request`
+  — behavior for old clients that never send `images` is unchanged.
+- Images are stored to disk and referenced by path in persisted history (the
+  transcript stays small); they are NOT echoed back on the messages endpoint.
 
 - `202 { "turnId": "…" }` — accepted; the turn runs asynchronously. Watch the
   SSE stream for progress and the final text.
@@ -239,10 +256,22 @@ Each execution host's daemon dials OUT to the cloud companion over
 can talk to live sessions even when the primary box is asleep. On the
 primary box the same endpoints serve directly — no bridge involved.
 
-- `POST /api/v1/sessions/:id/messages` body `{ "text": "..." }` →
+- `POST /api/v1/sessions/:id/messages` body `{ "text": "...", "images"? }` →
   `202 { "messageId" }`. The message is delivered into the running CLI
   session (mid-turn sends are fine — the session reads them between turns).
+  - `images` (additive) — same shape/limits as the conversation endpoint
+    (`[ { "data": "<raw base64>", "mediaType": "image/png" } ]`, ≤5, png/jpeg/
+    gif/webp). Non-cloud only: each image is saved to disk and the message is
+    prefixed with `[Images attached — use the Read tool to view them]` plus the
+    file paths, so the CLI reads them with its Read tool (remote hosts: the
+    files are uploaded and paths rewritten automatically). `text` may be empty
+    when images are present; with no images an empty `text` is still
+    `400 bad_request` (unchanged for old clients).
   - `404 not_found` — unknown session.
+  - `400 { "error": { "code": "images_not_supported_cloud" } }` — images were
+    attached while talking to the cloud companion (`REPLICA` mode). The CLI runs
+    on a different machine and can't read files saved on the cloud box; send
+    images to sessions from the primary box. Text-only sends are unaffected.
   - `409 { "error": { "code": "session_dead" } }` — the CLI process is not
     running (idle-reaped). Waking a dead session stays a primary-box action;
     show "wake it from your desktop".

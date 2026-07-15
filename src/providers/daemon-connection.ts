@@ -2124,8 +2124,10 @@ export class DaemonConnection {
   private startPing(): void {
     if (this.pingTimer) clearInterval(this.pingTimer)
     this.pingTimer = setInterval(() => {
-      // Detect stale connection: if no pong received for 2 ping intervals, connection is dead
-      if (this.lastPongAt > 0 && Date.now() - this.lastPongAt > DaemonConnection.PING_INTERVAL_MS * 2) {
+      // Detect stale connection: if no pong received for 3 ping intervals, connection is dead.
+      // 3x (45s) instead of 2x absorbs transient event-loop stalls at boot (QMD rebuild,
+      // session recovery) that previously cascaded into disconnect→reconnect→mass reattach.
+      if (this.lastPongAt > 0 && Date.now() - this.lastPongAt > DaemonConnection.PING_INTERVAL_MS * 3) {
         log.session.warn('DaemonConnection: no pong received, connection stale', {
           host: this.hostKey,
           lastPongAgoMs: Date.now() - this.lastPongAt,

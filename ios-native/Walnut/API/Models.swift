@@ -30,6 +30,13 @@ struct AgentSummary: Codable, Identifiable, Equatable {
     let isMain: Bool
 }
 
+/// One image attached to an outgoing message. Base64 JPEG/PNG bytes + its media
+/// type — the additive `images` field on the two message POST endpoints.
+struct ImagePayload: Codable, Equatable {
+    let data: String       // raw base64
+    let mediaType: String  // "image/jpeg", "image/png", …
+}
+
 struct ChatMessage: Codable, Identifiable, Equatable {
     enum Kind: String, Codable {
         case tool
@@ -50,6 +57,11 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     /// Send failed — the bubble stays in the timeline (tap to retry / copy /
     /// delete) so composed text is never lost to a network error.
     var failed: Bool? = nil
+    /// Client-only thumbnails (JPEG datas) for images the user attached to THIS
+    /// message. Local to the current app session — server history carries no
+    /// image references, so historical messages never show these. Excluded from
+    /// Codable so it never rides the wire or the disk cache.
+    var localImages: [Data]? = nil
 
     private enum CodingKeys: String, CodingKey {
         case id, role, text, createdAt, kind, source

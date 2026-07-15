@@ -127,6 +127,31 @@ describe('Focus Bar API', () => {
     expect(r.status).toBe(400);
   });
 
+  // Regression: reorder must return the FULL tier snapshot (focus/satellite/wait),
+  // not just pinned_tasks. The client's applyFocusData() treats a missing tier array
+  // as empty and wipes every task's focus_tier to satellite — which made Focus tasks
+  // silently vanish after a quick-add reorder (they only reappeared on refetch).
+  it('reorder returns the full tier split and preserves focus_tier', async () => {
+    // Put taskIds[1] in the Focus tier, taskIds[3] in Wait.
+    await api('PUT', `/api/focus/tasks/${taskIds[1]}/tier`, { tier: 'focus' });
+    await api('PUT', `/api/focus/tasks/${taskIds[3]}/tier`, { tier: 'wait' });
+
+    const order = [taskIds[3], taskIds[2], taskIds[1]];
+    const r = await api('PUT', '/api/focus/reorder', { task_ids: order });
+    expect(r.status).toBe(200);
+    // Response carries all four arrays, not just pinned_tasks.
+    expect(r.data.pinned_tasks).toEqual(order);
+    expect(r.data.focus_tasks).toContain(taskIds[1]);
+    expect(r.data.wait_tasks).toContain(taskIds[3]);
+    // The reorder left tiers untouched — a GET agrees.
+    const g = await api('GET', '/api/focus/tasks');
+    expect(g.data.focus_tasks).toContain(taskIds[1]);
+    expect(g.data.wait_tasks).toContain(taskIds[3]);
+    // Restore satellite defaults for the tests that follow.
+    await api('PUT', `/api/focus/tasks/${taskIds[1]}/tier`, { tier: 'satellite' });
+    await api('PUT', `/api/focus/tasks/${taskIds[3]}/tier`, { tier: 'satellite' });
+  });
+
   it('pin state stored on task objects', async () => {
     // Fetch a pinned task and verify the pinned field
     const r = await fetch(apiUrl(`/api/tasks/${taskIds[3]}`));

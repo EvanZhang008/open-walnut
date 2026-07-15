@@ -39,6 +39,17 @@ final class SessionConversationStore {
     var activity: String?
 
     var processStatus: String
+    /// Whether the view's bottom sentinel is currently on screen — written by
+    /// the view, read here to decide if a transcript reconcile should re-pin
+    /// the scroll position. Captured BEFORE mutating `historyMessages` so the
+    /// jump caused by the mutation can't corrupt the answer.
+    var viewIsAtBottom = true
+    /// Bumped when a content change may have displaced the scroll position
+    /// while the user was reading the bottom; the view responds by scrolling
+    /// back to its bottom sentinel. `defaultScrollAnchor(.bottom)` alone stops
+    /// pinning once the user has scrolled, so turn-end reconciles (which tear
+    /// down and rebuild tail rows) visibly yanked the list upward.
+    private(set) var scrollToBottomSignal = 0
     /// No live bridge to this session's host (503 / bridge-offline event).
     var offline = false
     /// The CLI process is gone (409 session_dead / terminal status).
@@ -145,7 +156,19 @@ final class SessionConversationStore {
         // flash + the "one message at a time" feel (the smooth live bubble gets
         // yanked and the whole list re-renders). A content-derived id keeps
         // unchanged rows identical across fetches, so only the tail diffs.
-        historyMessages = Self.assignStableIDs(merged)
+        let wasAtBottom = viewIsAtBottom
+        let next = Self.assignStableIDs(merged)
+        let changed = next.count != historyMessages.count || next.last?.id != historyMessages.last?.id
+        let firstPaint = !loadedOnce
+        historyMessages = next
+        // Re-pin after the reconcile: swapping the provisional turn bubble for
+        // canonical rows (different heights/ids) displaces the viewport, and
+        // the bottom anchor stops auto-pinning once the user has ever
+        // scrolled. Only when they were already reading the bottom — never
+        // hijack someone scrolled up into history, and never on the initial
+        // paint (rows haven't laid out; the jump overshoots into blank
+        // overscroll — `defaultScrollAnchor(.bottom)` owns the first frame).
+        if changed && wasAtBottom && !firstPaint { scrollToBottomSignal += 1 }
         let seen = Set(transcript.messages.filter { $0.role == "user" }.map(\.text))
         // Failed bubbles are exempt: their text was NOT delivered — a match
         // here is an older identical message, and absorbing the failed bubble
@@ -181,18 +204,25 @@ final class SessionConversationStore {
     /// mid-turn messages). On failure the bubble STAYS in the timeline marked
     /// failed (tap to retry / copy / delete) — the user's text never vanishes.
     @discardableResult
-    func send(_ text: String) async -> Bool {
+    func send(_ text: String, images: [SelectedImage] = []) async -> Bool {
         guard canSend else { return false }
         errorMessage = nil
+        let payloads = images.map { ImagePayload(data: $0.jpegData.base64EncodedString(), mediaType: "image/jpeg") }
         var optimistic = ChatMessage(
             id: "pending-\(Date().timeIntervalSince1970)",
             role: "user", text: text,
             createdAt: ISO8601DateFormatter().string(from: .now), kind: nil
         )
         optimistic.pending = true
+        // Carry thumbnails so the bubble shows them at once and a failed send
+        // retains them for retry (the user's attachments never vanish).
+        if !images.isEmpty { optimistic.localImages = images.map(\.jpegData) }
         pendingUser.append(optimistic)
+        // Sending always jumps to the bottom — the user wants to see their own
+        // message land even if they were scrolled up reading history.
+        scrollToBottomSignal += 1
         do {
-            _ = try await api.sendSessionMessage(id: sessionId, text: text)
+            _ = try await api.sendSessionMessage(id: sessionId, text: text, images: payloads)
             if let idx = pendingUser.firstIndex(where: { $0.id == optimistic.id }) {
                 pendingUser[idx].pending = false
             }
@@ -207,6 +237,8 @@ final class SessionConversationStore {
                 startPolling()
             } else if let apiError = error as? APIError, apiError.isSessionDead {
                 dead = true
+            } else if let apiError = error as? APIError, apiError.code == "images_not_supported_cloud" {
+                errorMessage = "Images can only be sent to sessions while your Mac is online."
             } else {
                 errorMessage = error.localizedDescription
             }
@@ -221,9 +253,12 @@ final class SessionConversationStore {
     /// bubble first while offline/dead would LOSE the text.
     func retry(_ message: ChatMessage) async {
         guard message.failed == true, canSend else { return }
+        // Rebuild attached images from the retained JPEG datas so retry
+        // re-sends them; drop any that no longer decode.
+        let images = (message.localImages ?? []).compactMap { SelectedImage(jpegData: $0) }
         pendingUser.removeAll { $0.id == message.id }
         errorMessage = nil
-        await send(message.text)
+        await send(message.text, images: images)
     }
 
     func discardFailed(_ message: ChatMessage) {
@@ -365,6 +400,7 @@ final class SessionConversationStore {
     /// "message appears all at once" feel). Keeping the text on screen makes the
     /// live bubble settle in place; the refetch quietly swaps in canonical rows.
     private func finalizeTurn() {
+        let wasAtBottom = viewIsAtBottom
         streaming = false
         activity = nil
         let finished = liveText
@@ -379,6 +415,9 @@ final class SessionConversationStore {
                 historyMessages.append(provisional)
             }
         }
+        // The live row disappearing + provisional row appearing shifts layout;
+        // keep the reader glued to the end of the reply they were watching.
+        if wasAtBottom { scrollToBottomSignal += 1 }
         Task { await loadTranscript(fresh: true) }
     }
 

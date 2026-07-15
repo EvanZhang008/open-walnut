@@ -22,6 +22,8 @@ import {
   addNotification,
   listNotifications,
   markRead,
+  dismissNotifications,
+  resolvePermissionNotification,
 } from '../../../src/core/notifications/store.js';
 
 const NOTIFICATIONS_FILE = path.join(WALNUT_HOME, 'notifications.json');
@@ -81,6 +83,76 @@ describe('notification store', () => {
     expect(rec.id).toMatch(/^notif-/);
     expect(typeof rec.timestamp).toBe('number');
     expect(rec.read).toBe(false);
+  });
+
+  it('dismisses specific entries by id or dedupKey', async () => {
+    const a = await addNotification({ kind: 'cron', severity: 'info', title: 'A', dedupKey: 'k:a' });
+    await addNotification({ kind: 'cron', severity: 'info', title: 'B', dedupKey: 'k:b' });
+    await addNotification({ kind: 'cron', severity: 'info', title: 'C', dedupKey: 'k:c' });
+
+    let res = await dismissNotifications({ ids: [a.id] });
+    expect(res.removed).toBe(1);
+
+    res = await dismissNotifications({ dedupKeys: ['k:b'] });
+    expect(res.removed).toBe(1);
+
+    const { feed } = await listNotifications();
+    expect(feed).toHaveLength(1);
+    expect(feed[0].dedupKey).toBe('k:c');
+  });
+
+  it('treats explicitly empty filter arrays as a no-op, NOT clear-all', async () => {
+    await addNotification({ kind: 'cron', severity: 'info', title: 'A', dedupKey: 'k:a' });
+    await addNotification({ kind: 'cron', severity: 'info', title: 'B', dedupKey: 'k:b' });
+
+    // The frontend's optimistic dismissFeed([]) deletes nothing locally, so the
+    // server must not interpret [] as an unfiltered wipe (UI/disk desync).
+    for (const filter of [{ ids: [] }, { dedupKeys: [] }, { ids: [], dedupKeys: [] }]) {
+      const res = await dismissNotifications(filter);
+      expect(res.removed).toBe(0);
+    }
+    const { feed } = await listNotifications();
+    expect(feed).toHaveLength(2);
+  });
+
+  it('clears the whole feed with no filter, writing a .backup first', async () => {
+    await addNotification({ kind: 'cron', severity: 'info', title: 'A', dedupKey: 'k:a' });
+    await addNotification({ kind: 'cron', severity: 'info', title: 'B', dedupKey: 'k:b' });
+
+    const res = await dismissNotifications();
+    expect(res.removed).toBe(2);
+    expect(res.unreadCount).toBe(0);
+
+    const { feed } = await listNotifications();
+    expect(feed).toHaveLength(0);
+
+    // Non-empty → empty transition snapshots the previous store.
+    const backup = JSON.parse(fs.readFileSync(NOTIFICATIONS_FILE.replace(/\.json$/, '.backup.json'), 'utf-8'));
+    expect(backup.notifications).toHaveLength(2);
+  });
+
+  it('dismissed pending permissions can be re-added under the same dedupKey (60s re-ask)', async () => {
+    await addNotification({ kind: 'permission', severity: 'warning', title: 'Bash', sessionId: 's1', dedupKey: 'perm:r1' });
+    await dismissNotifications({ dedupKeys: ['perm:r1'] });
+
+    const again = await addNotification({ kind: 'permission', severity: 'warning', title: 'Bash', sessionId: 's1', dedupKey: 'perm:r1' });
+    const { feed } = await listNotifications();
+    expect(feed).toHaveLength(1);
+    expect(feed[0].id).toBe(again.id);
+  });
+
+  it('stamps a permission notification with its resolution', async () => {
+    await addNotification({ kind: 'permission', severity: 'warning', title: 'Bash', sessionId: 's1', dedupKey: 'perm:r1' });
+
+    await resolvePermissionNotification('r1', 'allowed');
+    let { feed } = await listNotifications();
+    expect(feed[0].resolved).toBe('allowed');
+    expect(feed[0].severity).toBe('success');
+
+    // No-op for an unknown / already-dismissed request.
+    await resolvePermissionNotification('nope', 'denied');
+    ({ feed } = await listNotifications());
+    expect(feed).toHaveLength(1);
   });
 
   it('bounds the store to the most-recent MAX_NOTIFICATIONS', async () => {

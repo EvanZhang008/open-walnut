@@ -10,7 +10,7 @@
  */
 const USAGE_LABELS: Record<string, string> = {
   // sources
-  triage: 'Summary',
+  triage: 'Turn summary',
   subagent: 'Subagent',
   agent: 'Main agent',
   'agent-cli': 'Main agent (CLI)',
@@ -18,13 +18,18 @@ const USAGE_LABELS: Record<string, string> = {
   compaction: 'Compaction',
   heartbeat: 'Heartbeat',
   cron: 'Cron',
-  // agent ids
-  'turn-complete-triage': 'Summary',
-  'message-send-triage': 'Summary (retired per-message)',
+  // agent ids — two summarizers exist and must read as distinct things:
+  // turn-complete-triage = incremental per-turn task summary (cached, cheap each);
+  // session-summarizer = end-of-session full-transcript gist (uncached, pricey each).
+  'turn-complete-triage': 'Turn summary',
+  'message-send-triage': 'Turn summary (retired per-message)',
   'note-agent': 'Note agent',
-  'session-summarizer': 'Session summarizer',
+  'session-summarizer': 'Session gist (on end)',
   general: 'Main agent',
   unknown: 'Unknown',
+  // agent_id-less legacy rows fall back to their source name; 'subagent' here
+  // means "some subagent, recorded before per-agent attribution existed".
+  'subagent-legacy': 'Subagent (unattributed)',
 };
 
 export function usageDisplayName(name: string): string {

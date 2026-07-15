@@ -278,10 +278,13 @@ export function NotesPage() {
   const handleQuickCreate = useCallback(
     async (title: string) => {
       const trimmed = title.trim();
-      // Sanitize a title into a flat vault filename (no path traversal / slashes).
+      // Sanitize a title into a flat vault filename: replace path separators,
+      // strip only genuinely-unsafe filename chars. Spaces and hyphens are
+      // perfectly legal (Obsidian convention) — an earlier over-eager character
+      // class silently collapsed "Project Plan" → "ProjectPlan.md".
       const safe = trimmed
         .replace(/[\\/]+/g, '-')
-        .replace(/[<>:"|?* -]/g, '')
+        .replace(/[<>:"|?*]/g, '')
         .trim();
       const base = safe || `Untitled ${new Date().toISOString().slice(0, 10)} ${Date.now().toString(36)}`;
       const notePath = `${base}.md`;

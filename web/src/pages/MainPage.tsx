@@ -24,7 +24,7 @@ import { SessionPathSelector, type QuickStartPath, type QuickStartTaskMeta } fro
 import { QuestionPopover, parseAskQuestionInput } from '@/components/chat/QuestionPopover';
 import { TriagePanel } from '@/components/triage/TriagePanel';
 import { fetchSession, fetchSessionsForTask, quickStartSession } from '@/api/sessions';
-import { fetchConfig } from '@/api/config';
+import { fetchConfig, fetchInstallDir } from '@/api/config';
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
 import { QuickAccessBar } from '@/components/chat/QuickAccessBar';
 import { AgentTabBar, slugifyAgentId } from '@/components/chat/AgentTabBar';
@@ -200,6 +200,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const [focusedTask, setFocusedTask] = useState<Task | null>(null);
   // Nonce that increments on every focus action — forces re-scroll even for same task
   const [focusNonce, setFocusNonce] = useState(0);
+  // Locate scope for the current focus action. 'pinned' = only scroll/expand the
+  // Pinned region (tier quick-adds — the new card is already visible in its tier);
+  // 'all' additionally switches the TASKS category tab to the task's category.
+  // Tier quick-adds routed to the capture category used to switch the tab to e.g.
+  // "Personal", filtering the whole task list down to 1 — read as "all my tasks
+  // disappeared".
+  const [focusScope, setFocusScope] = useState<'all' | 'pinned'>('all');
   const inspector = useContextInspector(agentConsole.activeAgentId, conversations.activeConversationId ?? undefined);
   // Force re-render when UI Only settings change (hook subscribes to localStorage)
   useUiOnlySettings();
@@ -335,6 +342,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Session quick-start state (opened via /session command)
   const [pathSelectorOpen, setPathSelectorOpen] = useState(false);
   const [quickStartPath, setQuickStartPath] = useState<QuickStartPath | null>(null);
+  // Walnut's own source checkout (null on npm installs / cloud) — drives the
+  // fix-walnut pill. Fetched once; the API layer caches for the page lifetime.
+  const [walnutInstallDir, setWalnutInstallDir] = useState<string | null>(null);
+  useEffect(() => { fetchInstallDir().then(setWalnutInstallDir); }, []);
   // Task metadata picked in the launcher footer; applied to the new task on quick-start.
   // Using a ref (not state) for two reasons — same pattern as `quickStartPathRef` above:
   //   (1) Avoid re-renders on every keystroke/toggle inside the popover. Meta lives in
@@ -562,11 +573,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // ── Listen for FocusDock events ──
   useEffect(() => {
     const handleDockTask = (e: Event) => {
-      const { taskId, sessionId } = (e as CustomEvent).detail as { taskId: string; sessionId?: string };
+      const { taskId, sessionId, scope } = (e as CustomEvent).detail as { taskId: string; sessionId?: string; scope?: 'all' | 'pinned' };
       const task = taskMapRef.current.get(taskId);
       // Nonce bump marks this as a user locate action — TodoPanel only
       // auto-expands collapsed sections for those (never on refresh restore).
-      if (task) { setFocusedTask(task); setFocusNonce((n) => n + 1); }
+      if (task) { setFocusScope(scope ?? 'all'); setFocusedTask(task); setFocusNonce((n) => n + 1); }
       if (sessionId) openSessionOrToast(sessionId);
     };
     const handleDockChat = () => {
@@ -576,17 +587,25 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     const handleSessionLauncher = () => setPathSelectorOpen(true);
     const handleToggleTodo = () => setTodoVisible(prev => !prev);
     const handleToggleRoutines = () => setRoutinesVisible(prev => !prev);
+    // openSessionOnHome (utils/open-session.ts) — deep links (e.g. notification
+    // cards) open the session as a home-page column instead of /sessions.
+    const handleOpenSession = (e: Event) => {
+      const { sessionId } = (e as CustomEvent).detail as { sessionId?: string };
+      if (sessionId) openSessionOrToast(sessionId);
+    };
     window.addEventListener('dock:activate-task', handleDockTask);
     window.addEventListener('dock:activate-chat', handleDockChat);
     window.addEventListener('session-launcher:open', handleSessionLauncher);
     window.addEventListener('sidebar:toggle-todo', handleToggleTodo);
     window.addEventListener('sidebar:toggle-routines', handleToggleRoutines);
+    window.addEventListener('main:open-session', handleOpenSession);
     return () => {
       window.removeEventListener('dock:activate-task', handleDockTask);
       window.removeEventListener('dock:activate-chat', handleDockChat);
       window.removeEventListener('session-launcher:open', handleSessionLauncher);
       window.removeEventListener('sidebar:toggle-todo', handleToggleTodo);
       window.removeEventListener('sidebar:toggle-routines', handleToggleRoutines);
+      window.removeEventListener('main:open-session', handleOpenSession);
     };
   }, []);
 
@@ -713,10 +732,30 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   // Path selector → select handler
   const handlePathSelect = useCallback((path: QuickStartPath, taskMeta: QuickStartTaskMeta) => {
-    setQuickStartPath(path);
+    // Re-editing a fix-walnut launch (e.g. via the model chip) must not silently
+    // drop the repair intent — keep it as long as the target stays the checkout.
+    setQuickStartPath(prev =>
+      prev?.intent === 'fix-walnut' && path.cwd === prev.cwd ? { ...path, intent: prev.intent } : path);
     quickStartMetaRef.current = taskMeta;
     setQuickStartModel(taskMeta.model);   // mirror for the collapsed bar's <select>
     setPathSelectorOpen(false);
+  }, []);
+
+  // fix-walnut pill → skip the path picker entirely: the target is Walnut's own
+  // checkout (server-authoritative), the user only describes what's broken.
+  const walnutInstallDirRef = useRef(walnutInstallDir);
+  walnutInstallDirRef.current = walnutInstallDir;
+  const handleFixWalnut = useCallback(() => {
+    const dir = walnutInstallDirRef.current;
+    if (!dir) return; // pill is hidden when null; belt-and-braces
+    setPathSelectorOpen(false);
+    setQuickStartPath({ cwd: dir, host: null, category: 'Local', intent: 'fix-walnut' });
+    quickStartMetaRef.current = null; // DEFAULT_META semantics (starred + focus) applied server-side defaults
+    setQuickStartModel(undefined);
+    // Land the cursor in the input — the bar + hint + focused caret form one visual path.
+    setTimeout(() => {
+      document.querySelector<HTMLTextAreaElement>('.chat-input-textarea')?.focus();
+    }, 50);
   }, []);
 
   // Auto-open session panel when a quick-start or fork session resolves.
@@ -849,7 +888,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       if (session?.taskId) {
         const task = taskMapRef.current.get(session.taskId);
         // User locate action — bump nonce so TodoPanel auto-expands to it.
-        if (task) { setFocusedTask(task); setFocusNonce((n) => n + 1); }
+        if (task) { setFocusScope('all'); setFocusedTask(task); setFocusNonce((n) => n + 1); }
       }
     } catch { /* non-critical */ }
   }, []);
@@ -888,13 +927,18 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     try {
       if (input.starred && task?.id) star(task.id);
       if (tier && task?.id) {
-        // Locate the task wherever it landed. Focusing it scrolls the Pinned region to
-        // the right tier card. Set focus directly from the returned task object —
-        // dispatching the dock event alone is unreliable because the task may not be in
-        // the local map yet (arrives via WS).
+        // Locate the task in the PINNED region only. The new card already renders in
+        // its tier (optimistic pin), so scroll there — but do NOT let TodoPanel switch
+        // the TASKS category tab: a capture routes to the default capture category
+        // (e.g. Personal), and switching to it filters the list below down to almost
+        // nothing ("all my tasks disappeared"). Set focus directly from the returned
+        // task object — dispatching the dock event alone is unreliable because the
+        // task may not be in the local map yet (arrives via WS).
+        setFocusScope('pinned');
         setFocusedTask(task);
         setFocusNonce((n) => n + 1);
-        window.dispatchEvent(new CustomEvent('dock:activate-task', { detail: { taskId: task.id } }));
+        setSuppressDetail(true); // quick-add scrolls to the card; never pops the detail panel
+        window.dispatchEvent(new CustomEvent('dock:activate-task', { detail: { taskId: task.id, scope: 'pinned' } }));
       }
     } catch (err) {
       console.warn('Quick add post-create side-effect failed', err);
@@ -926,6 +970,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     const isRefocus = focusedTaskRef.current?.id === task.id;
     // Always focus (never toggle off) — unfocusing is done via detail panel close / Esc.
     // Increment nonce so TodoPanel re-scrolls even when the same task is re-clicked.
+    setFocusScope('all'); // explicit user locate — full behavior incl. tab switch
     setFocusedTask(task);
     setFocusNonce(n => n + 1);
     setSuppressDetail(opts?.openDetail === false); // Auto-clears on next direct click (opts is undefined → false)
@@ -956,6 +1001,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const handleOpenTaskDetailById = useCallback((taskId: string) => {
     const task = taskMapRef.current.get(taskId);
     if (!task) return;
+    setFocusScope('all');
     setFocusedTask(task);
     setFocusNonce(n => n + 1);
     setSuppressDetail(false);
@@ -1014,7 +1060,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // reorganize message sent later (source: 'quick-start') is suppressed in the UI
       // (see ChatMessage.tsx), so this echo is the single visual confirmation.
       chat.addLocalMessage(
-        `Quick Start on \`${qsp.cwd}\`${qsp.host ? ` (${qsp.hostLabel ?? qsp.host})` : ''}:\n> ${text}`,
+        `${qsp.intent === 'fix-walnut' ? 'Fix Walnut' : 'Quick Start'} on \`${qsp.cwd}\`${qsp.host ? ` (${qsp.hostLabel ?? qsp.host})` : ''}:\n> ${text}`,
         'quick-start-echo',
       );
 
@@ -1050,6 +1096,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         images,
         taskMeta,
         model,
+        intent: qsp.intent,
+        createCwd: qsp.createCwd,
       }).then((result) => {
         // Update ref with real taskId (WS events use this to match)
         if (pendingQuickStartRef.current === tempTaskId) {
@@ -1059,20 +1107,24 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         if (pendingQuickStartMetaRef.current?.id === pendingColId) {
           pendingQuickStartMetaRef.current = { ...pendingQuickStartMetaRef.current, realTaskId: result.taskId };
         }
-        // Notify main agent to reorganize the task (include user's prompt)
-        const agentMsg = [
-          `[Quick Start] Session created and running.`,
-          `- Task ID: ${result.taskId}`,
-          `- Path: ${qsp.cwd}`,
-          `- Category: Inbox / Quick Start`,
-          `- User prompt: "${text}"`,
-          ``,
-          `Please update the task:`,
-          `1. Set a descriptive title (replace "Session: ...")`,
-          `2. Move to the correct category and project if needed`,
-        ].join('\n');
-        // Images already sent to the session via quickStartSession() — don't duplicate
-        chat.sendMessage(agentMsg, undefined, undefined, 'quick-start');
+        // Notify main agent to reorganize the task (include user's prompt).
+        // Skipped for fix-walnut: the server already titled the task
+        // ("Fix Walnut: <report>") and set its project — renaming would clobber.
+        if (qsp.intent !== 'fix-walnut') {
+          const agentMsg = [
+            `[Quick Start] Session created and running.`,
+            `- Task ID: ${result.taskId}`,
+            `- Path: ${qsp.cwd}`,
+            `- Category: Inbox / Quick Start`,
+            `- User prompt: "${text}"`,
+            ``,
+            `Please update the task:`,
+            `1. Set a descriptive title (replace "Session: ...")`,
+            `2. Move to the correct category and project if needed`,
+          ].join('\n');
+          // Images already sent to the session via quickStartSession() — don't duplicate
+          chat.sendMessage(agentMsg, undefined, undefined, 'quick-start');
+        }
       }).catch((err) => {
         // Keep the pending column visible with error — user can Retry from panel
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -1167,6 +1219,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onClearFocus={handleClearFocus}
           focusedTaskId={focusedTask?.id}
           focusNonce={focusNonce}
+          focusScope={focusScope}
           favorites={favorites}
           ordering={ordering}
           onReorder={reorder}
@@ -1340,7 +1393,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           {quickStartPath && (
             <div className="quick-start-bar">
               <div className="qsb-top">
-                <span className="qsb-label">Quick Start</span>
+                <span className="qsb-label">{quickStartPath.intent === 'fix-walnut' ? '\u{1F527} Fix Walnut' : 'Quick Start'}</span>
                 {quickStartPath.host && <span className="qsb-host">{quickStartPath.hostLabel ?? quickStartPath.host}</span>}
                 {/* Compact, read-only model chip. Click it (or /session) to re-open the
                     picker and edit ALL launch settings (model / star / pin / priority) —
@@ -1357,6 +1410,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                 <button className="qsb-close" onClick={() => { setQuickStartPath(null); quickStartMetaRef.current = null; setQuickStartModel(undefined); }} aria-label="Cancel quick start">&times;</button>
               </div>
               <span className="qsb-path" title={quickStartPath.cwd}>{quickStartPath.cwd}</span>
+              {/* Persistent guidance — the input placeholder vanishes on first keystroke,
+                  this line stays visible for the whole compose. */}
+              {quickStartPath.intent === 'fix-walnut' && (
+                <span className="qsb-hint">
+                  Tell me what's broken — paste a screenshot (⌘V) if you have one, and I'll open a session to fix it.
+                </span>
+              )}
             </div>
           )}
 
@@ -1380,7 +1440,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               onClose={() => {/* closed automatically when tool result arrives */}}
             />
 
-            <QuickAccessBar onSessionClick={() => setPathSelectorOpen(true)} mode={chatMode} onModeToggle={toggleMode} stats={chat.stats} />
+            <QuickAccessBar
+              onSessionClick={() => setPathSelectorOpen(true)}
+              onFixWalnutClick={walnutInstallDir ? handleFixWalnut : undefined}
+              mode={chatMode}
+              onModeToggle={toggleMode}
+              stats={chat.stats}
+            />
 
             <ChatInput
               onSend={handleSendMessage}
@@ -1389,6 +1455,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               onClearQueue={chat.clearQueue}
               disabled={connectionState !== 'connected'}
               isStreaming={chat.isStreaming}
+              placeholder={quickStartPath?.intent === 'fix-walnut'
+                ? 'Describe what’s wrong — e.g. "sessions panel keeps spinning". Paste a screenshot (⌘V) to help.'
+                : undefined}
               focusedTaskTitle={quickStartPath ? `Session on ${quickStartPath.cwd.split('/').pop()}` : focusedTask?.title}
               focusedTask={quickStartPath ? null : focusedTask}
               onClearFocus={handleClearFocus}

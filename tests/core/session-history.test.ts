@@ -199,6 +199,42 @@ describe('readSessionHistory', () => {
     expect(messages.some(m => m.text.includes('task-notification'))).toBe(false);
   });
 
+  it('stamps bgTaskFinished on a SYNC Agent (run_in_background:false) from its tool_result alone', async () => {
+    // Sync inline agents BLOCK their parent turn, so a persisted tool_result can
+    // only exist after the run finished — and they never get a <task-notification>.
+    // Their transcript persists to subagents/*.jsonl (NOT inline in this session's
+    // JSONL), so without this stamp their streamed lane blocks had zero absorption
+    // evidence and pinned below every later turn until a page reload
+    // (inc-1783746028392: plan-mode Agent box stuck at the bottom forever).
+    await writeJsonl('s-syncdone', '/test', [
+      msg('u1', 'user', 'design the feature'),
+      // Sync agent: explicit run_in_background:false, result = the agent's ANSWER
+      // (not launch metadata), no notification will ever come.
+      msg('a1', 'assistant', 'Delegating to the plan agent.', {
+        tools: [{ type: 'tool_use', id: 'toolu_sync_done', name: 'Agent', input: { name: 'design-plan', prompt: 'go', run_in_background: false } }],
+      }),
+      { type: 'user', timestamp: '2025-01-01T00:00:03Z', uuid: 'uuid-str1', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_sync_done', content: 'Here is the implementation plan…' }] } },
+      // Contrast: rib ABSENT (= background default) with a result → must NOT stamp;
+      // its launch-metadata result exists while the agent is still running, and
+      // stamping would hide a LIVE agent's lane blocks (the vanish direction).
+      msg('a2', 'assistant', 'Also launching a bg agent.', {
+        tools: [{ type: 'tool_use', id: 'toolu_rib_absent', name: 'Agent', input: { name: 'bg-agent', prompt: 'go' } }],
+      }),
+      { type: 'user', timestamp: '2025-01-01T00:00:05Z', uuid: 'uuid-str2', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_rib_absent', content: 'Async agent launched successfully.\nagentId: ccc0732f0ca8b5f32 (internal)' }] } },
+      // Contrast: sync flag but NO result yet (mid-run snapshot read) → no stamp.
+      msg('a3', 'assistant', 'And one more sync agent still running.', {
+        tools: [{ type: 'tool_use', id: 'toolu_sync_running', name: 'Agent', input: { name: 'slow-plan', prompt: 'go', run_in_background: false } }],
+      }),
+      msg('a4', 'assistant', 'Waiting on it.'),
+    ]);
+
+    const messages = await readSessionHistory('s-syncdone', '/test');
+    const tools = messages.flatMap(m => m.tools ?? []);
+    expect(tools.find(t => t.toolUseId === 'toolu_sync_done')?.bgTaskFinished).toBe(true);
+    expect(tools.find(t => t.toolUseId === 'toolu_rib_absent')?.bgTaskFinished).toBeUndefined();
+    expect(tools.find(t => t.toolUseId === 'toolu_sync_running')?.bgTaskFinished).toBeUndefined();
+  });
+
   it('hides pure-plumbing injected lines; rewrites human-action echoes (all corpus shapes)', async () => {
     // Corpus-enumerated shapes (4000-session scan, Mac + remote). Pure plumbing
     // is hidden; lines representing a real human action are rewritten readable.

@@ -18,7 +18,8 @@ export type ApiProtocol =
   | 'openai-chat'             // OpenAI, OpenRouter, Together, DeepSeek, Moonshot, Qwen, ...
   | 'bedrock'                 // AWS Bedrock
   | 'google-generative-ai'    // Google Gemini
-  | 'ollama';                 // Local Ollama
+  | 'ollama'                  // Local Ollama
+  | 'claude-cli';             // Local `claude -p` subprocess (subscription, text-only)
 
 // ── Per-model quirks ──
 
@@ -54,9 +55,18 @@ export interface ProviderConfig {
   bearer_token?: string;       // Bedrock: Identity Center bearer token
   aws_access_key_id?: string;  // Bedrock: explicit IAM access key
   aws_secret_access_key?: string; // Bedrock: explicit IAM secret key
+  aws_session_token?: string;  // Bedrock: STS session token (temporary creds)
   aws_profile?: string;        // Bedrock: AWS profile from ~/.aws/config
+  /** Bedrock: a shell command that prints AWS creds as JSON `{Credentials:{...}}`
+   *  (Claude Code's `awsCredentialExport` settings key — `aws configure
+   *  export-credentials --format process` shape). The adapter runs it, caches
+   *  the temporary creds, and re-runs on expiry. */
+  aws_credential_export?: string;
   auth_header?: boolean;       // Use Authorization header instead of x-api-key
   headers?: Record<string, string>;  // Extra headers (e.g., OpenRouter site headers)
+  /** claude-cli: override the `claude` binary path (defaults to PATH lookup).
+   *  Used when a specific install must win (e.g. the logged-in toolbox binary). */
+  claude_cli_command?: string;
   /** User-defined model overrides. Merged with code-level MODEL_CATALOG at runtime.
    *  Matching IDs override catalog entries; new IDs are appended. */
   models?: ModelEntry[];

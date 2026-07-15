@@ -221,6 +221,9 @@ export const CLAUDE_SKILLS_DIR = path.join(CLAUDE_HOME, 'skills');
 /** Claude Code plugin registry — where enabled plugins + marketplaces are recorded. */
 export const CLAUDE_SETTINGS_FILE = path.join(CLAUDE_HOME, 'settings.json');
 export const CLAUDE_PLUGINS_DIR = path.join(CLAUDE_HOME, 'plugins');
+/** Claude Code's subscription OAuth store. We ONLY ever probe its EXISTENCE
+ *  (boolean) — never read the token value inside it. */
+export const CLAUDE_CREDENTIALS_FILE = path.join(CLAUDE_HOME, '.credentials.json');
 export const CRON_FILE = path.join(WALNUT_HOME, 'cron-jobs.json');
 export const USAGE_DB_FILE = path.join(WALNUT_HOME, 'usage.sqlite');
 // Env-aware so an isolated demo server (WALNUT_DAEMON_DIR=/tmp/open-walnut-demo)
@@ -317,4 +320,24 @@ export const DAEMON_BINARIES_DIR = (() => {
   }
   // Fallback: relative from project root
   return path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'daemon-binaries');
+})();
+
+/**
+ * Walnut's own source checkout, for the "Fix Walnut" quick-start entry.
+ * Walk up from the bundle looking for package.json (name === 'open-walnut')
+ * alongside a .git dir — a fixable *source* checkout, not an npm install or a
+ * cloud bundle. null → the UI hides the Fix Walnut button entirely.
+ */
+export const WALNUT_INSTALL_DIR: string | null = (() => {
+  let dir = path.dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 6; i++) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')) as { name?: string };
+      if (pkg.name === 'open-walnut' && fs.statSync(path.join(dir, '.git')).isDirectory()) return dir;
+    } catch {}
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
 })();

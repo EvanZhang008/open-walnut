@@ -2,11 +2,18 @@
  * Notification panel — slide-out overlay from sidebar. Two zones:
  *   1. Recent — the persistent notification feed (cron / permission / errors),
  *      from NotificationProvider. Opening the panel marks all read.
+ *      iPhone-style: entries with the same origin (same cron job, same session's
+ *      permissions) collapse into an expandable group; tapping an entry deep-links
+ *      to its session/task; each entry (and the whole feed) can be cleared.
  *   2. System — ambient health (remote hosts, data backup, embedding search).
  */
 import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { useNavigate } from 'react-router-dom';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
-import { useNotifications } from '@/contexts/notifications';
+import { useNotifications, type Notification } from '@/contexts/notifications';
+import { respondToPermission } from '@/api/sessions';
+import { navigateToTarget } from '@/utils/open-session';
 import { log } from '@/utils/log';
 
 interface NotificationPanelProps {
@@ -37,12 +44,24 @@ interface QmdStatus {
 
 export function NotificationPanel({ open, onClose, sidebarCollapsed }: NotificationPanelProps) {
   const { health, gitSync, loading } = useSystemHealth();
-  const { feed, unreadCount, markAllRead } = useNotifications();
+  const { feed, unreadCount, markAllRead, dismissFeed } = useNotifications();
   const [qmdStatus, setQmdStatus] = useState<QmdStatus | null>(null);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const navigate = useNavigate();
 
-  // Newest-first for display. Memoized so the copy+reverse doesn't run on every
-  // render (e.g. the 3s QMD poll re-renders below while the panel is open).
-  const feedNewestFirst = useMemo(() => [...feed].reverse(), [feed]);
+  // Same-origin entries collapse into one expandable group (iPhone-style):
+  // a cron job's repeated runs stack under the job name, a session's permission
+  // asks stack under the session. Groups are ordered by their newest entry.
+  const groups = useMemo(() => {
+    const byKey = new Map<string, Notification[]>();
+    for (const n of [...feed].reverse()) {
+      const key = groupKeyOf(n);
+      const list = byKey.get(key);
+      if (list) list.push(n);
+      else byKey.set(key, [n]);
+    }
+    return [...byKey.entries()].map(([key, items]) => ({ key, items }));
+  }, [feed]);
 
   // Opening the panel clears the unread badge (everything in the feed is now seen).
   // Re-fires while open if new persistent events arrive (unreadCount climbs again) —
@@ -75,7 +94,11 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
 
   const gitOk = gitSync.protected && gitSync.consecutiveFailures < 3;
 
-  return (
+  // Portal to <body>: the panel is mounted inside the Sidebar, whose mobile
+  // styles apply a transform — that turns the sidebar into the containing
+  // block for position:fixed, dragging the "fixed" panel off-screen with the
+  // slide animation. Rendering at the body level keeps fixed truly viewport-fixed.
+  return createPortal(
     <>
       {/* Backdrop */}
       <div className="notification-panel-backdrop" onClick={onClose} />
@@ -95,22 +118,57 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
         </div>
 
         <div className="notification-panel-body">
-          {/* Zone 1 — Recent: the persistent notification feed (newest first). */}
-          <div className="notification-section-label">Recent</div>
-          {feedNewestFirst.length === 0 ? (
+          {/* Zone 1 — Recent: the persistent notification feed, grouped by origin. */}
+          <div className="notification-section-label notification-section-label--row">
+            <span>Recent</span>
+            {feed.length > 0 && (
+              <button
+                className="notification-clear-all"
+                onClick={() => { dismissFeed(); setExpandedGroups(new Set()); }}
+              >
+                Clear All
+              </button>
+            )}
+          </div>
+          {groups.length === 0 ? (
             <div className="notification-feed-empty">No notifications yet</div>
           ) : (
             <div className="notification-feed">
-              {feedNewestFirst.map((n) => (
-                <div key={n.id} className={`notification-feed-item notification-feed-item--${n.severity}${n.read ? '' : ' unread'}`}>
-                  <div className="notification-feed-item-head">
-                    <span className={`notification-feed-dot notification-feed-dot--${n.severity}`} />
-                    <span className="notification-feed-item-title">{n.title}</span>
-                    <span className="notification-feed-item-time">{formatRelative(new Date(n.timestamp).toISOString())}</span>
+              {groups.map(({ key, items }) => {
+                const expanded = expandedGroups.has(key) || items.length === 1;
+                // A collapsed group must never bury an actionable entry: a newer
+                // resolved permission would otherwise cover an older still-pending
+                // one, hiding its Approve/Deny buttons behind "Show N more".
+                const pending = items.find(i => i.kind === 'permission' && !i.resolved);
+                const visible = expanded ? items : [pending ?? items[0]];
+                return (
+                  <div key={key} className="notification-feed-group">
+                    {visible.map((n) => (
+                      <FeedItem
+                        key={n.id}
+                        n={n}
+                        // Session links open on the HOME page's session columns
+                        // (the primary surface), not the /sessions page.
+                        onNavigate={(to) => { navigateToTarget(to, navigate); onClose(); }}
+                        onDismiss={() => dismissFeed([n.dedupKey])}
+                      />
+                    ))}
+                    {items.length > 1 && (
+                      <button
+                        className="notification-group-toggle"
+                        onClick={() => setExpandedGroups(prev => {
+                          const next = new Set(prev);
+                          if (next.has(key)) next.delete(key);
+                          else next.add(key);
+                          return next;
+                        })}
+                      >
+                        {expanded ? 'Show less' : `Show ${items.length - 1} more`}
+                      </button>
+                    )}
                   </div>
-                  {n.body && <div className="notification-feed-item-body">{n.body}</div>}
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
@@ -289,7 +347,120 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
           )}
         </div>
       </div>
-    </>
+    </>,
+    document.body,
+  );
+}
+
+/**
+ * Same-origin collapse key: a session's permission asks stack together, a cron
+ * job's repeated runs stack together. Everything else stands alone.
+ */
+function groupKeyOf(n: Notification): string {
+  if (n.kind === 'permission' && n.sessionId) return `perm:${n.sessionId}`;
+  if (n.kind === 'cron') return `cron:${n.title}`;
+  return n.dedupKey;
+}
+
+/** Where tapping a feed entry navigates, iPhone-style. Null → inert card. */
+function linkTargetOf(n: Notification): string | null {
+  if (n.sessionId) return `/sessions?id=${n.sessionId}`;
+  if (n.taskId) return `/tasks/${n.taskId}`;
+  if (n.kind === 'skill') return '/skills';
+  if (n.action?.kind === 'navigate' && n.action.to) return n.action.to;
+  return null;
+}
+
+function FeedItem({ n, onNavigate, onDismiss }: {
+  n: Notification;
+  onNavigate: (to: string) => void;
+  onDismiss: () => void;
+}) {
+  // Pending permission asks get inline Approve/Deny (the same endpoint the
+  // session view uses). 'busy' debounces the double-tap. On success the card
+  // stamps itself optimistically (`sent`) instead of waiting for the
+  // session:permission-resolved WS round-trip — a dropped WS would otherwise
+  // leave the buttons pending forever. The WS event later stamps the feed
+  // entry itself (idempotent). On failure (e.g. the request already expired
+  // on the CLI side) an inline error shows; the session deep link remains the
+  // fallback.
+  const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState<'allowed' | 'denied' | null>(null);
+  const [respondError, setRespondError] = useState(false);
+  const resolved = n.resolved ?? sent;
+  const pendingPermission = n.kind === 'permission' && !resolved && !!n.sessionId;
+  // dedupKey is `perm:<requestId>` for permission entries — the requestId is
+  // recovered from it because the record doesn't carry it as its own field.
+  const requestId = n.dedupKey.startsWith('perm:') ? n.dedupKey.slice(5) : null;
+  const target = linkTargetOf(n);
+
+  const respond = async (allow: boolean) => {
+    if (!n.sessionId || !requestId || busy) return;
+    setBusy(true);
+    setRespondError(false);
+    try {
+      await respondToPermission(n.sessionId, requestId, allow);
+      setSent(allow ? 'allowed' : 'denied');
+    } catch (err) {
+      setRespondError(true);
+      log.warn('notifications', 'inline permission respond failed', {
+        sessionId: n.sessionId, requestId, error: String(err),
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      className={`notification-feed-item notification-feed-item--${n.severity}${n.read ? '' : ' unread'}${target ? ' clickable' : ''}`}
+      onClick={target ? () => onNavigate(target) : undefined}
+      role={target ? 'button' : undefined}
+      tabIndex={target ? 0 : undefined}
+      onKeyDown={target ? (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onNavigate(target); }
+      } : undefined}
+    >
+      <div className="notification-feed-item-head">
+        <span className={`notification-feed-dot notification-feed-dot--${n.severity}`} />
+        <span className="notification-feed-item-title">{n.title}</span>
+        <span className="notification-feed-item-time">{formatRelative(new Date(n.timestamp).toISOString())}</span>
+        <button
+          className="notification-feed-item-dismiss"
+          onClick={(e) => { e.stopPropagation(); onDismiss(); }}
+          aria-label="Dismiss notification"
+        >
+          &times;
+        </button>
+      </div>
+      {n.body && <div className="notification-feed-item-body clamped">{n.body}</div>}
+      {n.kind === 'permission' && resolved && (
+        <div className="notification-feed-item-resolved">
+          {resolved === 'allowed' ? 'Approved' : 'Denied'}
+        </div>
+      )}
+      {pendingPermission && (
+        <div className="notification-feed-item-actions">
+          <button
+            className="notification-perm-btn approve"
+            disabled={busy}
+            onClick={(e) => { e.stopPropagation(); void respond(true); }}
+          >
+            Approve
+          </button>
+          <button
+            className="notification-perm-btn deny"
+            disabled={busy}
+            onClick={(e) => { e.stopPropagation(); void respond(false); }}
+          >
+            Deny
+          </button>
+          {respondError && (
+            <span className="notification-perm-error">Failed — open the session to respond</span>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

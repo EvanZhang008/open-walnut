@@ -3,7 +3,7 @@
  * ALL new notes-editor styling lives here (never globals.css). Imported by
  * NotesEditor.tsx. Base slash-panel / wikilink styles already exist in
  * globals.css; this file adds the NEW surfaces: prose typography, tables,
- * #tag chip, callouts, bubble toolbar, drag-handle gutter, tag autocomplete,
+ * #tag chip, callouts, bubble toolbar, tag autocomplete,
  * and the slash-menu group headers.
  */
 
@@ -115,8 +115,8 @@
 
 /* Bottom scroll padding: lets the last line scroll up to eye level instead of
    pinning to the viewport bottom. ::after is not an element node, so the
-   drag-handle hover logic (block elements only) and the `> *:last-child`
-   margin reset are unaffected; clicks in the zone still land in the editor. */
+   `> *:last-child` margin reset is unaffected; clicks in the zone still land
+   in the editor. */
 .notes-editor:not(.global-notes-editor-inline) .tiptap::after {
   content: '';
   display: block;
@@ -301,81 +301,6 @@
   margin: 2px 3px;
   background: var(--border, #2a2d34);
 }
-
-/* ── Drag-handle gutter (⠿ grip + ＋ inserter + block actions) ──────────── */
-.notes-drag-handle {
-  z-index: 20;
-}
-.notes-drag-handle-inner {
-  display: flex;
-  align-items: center;
-  gap: 1px;
-}
-.notes-drag-add,
-.notes-drag-grip {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 22px;
-  border: none;
-  background: transparent;
-  color: var(--fg-muted, #8a8f98);
-  border-radius: var(--radius-sm, 4px);
-  cursor: pointer;
-  font-size: 15px;
-  line-height: 1;
-}
-/* Grip supports BOTH gestures: click → block-actions menu; press+move → a
-   custom pointer drag (NOT the extension's native HTML5 drag, which loses text
-   with our custom nodes — that path is killed in NotesDragHandle.tsx). The
-   pointer drag runs the same validated whole-node move transaction the menu
-   uses, so reorder is real and lossless. */
-.notes-drag-grip { cursor: grab; }
-.notes-drag-grip.is-dragging { cursor: grabbing; }
-.notes-drag-add:hover,
-.notes-drag-grip:hover { background: var(--bg-hover, #2d3038); color: var(--fg, #e8eaed); }
-
-/* Drop-indicator line shown while dragging a block to a new slot. */
-.notes-drop-indicator {
-  height: 2px;
-  background: var(--accent, #4c8bf5);
-  border-radius: 1px;
-  box-shadow: 0 0 0 1px var(--accent, #4c8bf5);
-}
-/* While a block drag is in flight, suppress text selection + show grabbing. */
-body.notes-block-dragging,
-body.notes-block-dragging * { cursor: grabbing !important; user-select: none !important; }
-
-.notes-block-actions {
-  position: absolute;
-  top: 24px;
-  left: 0;
-  display: flex;
-  flex-direction: column;
-  min-width: 150px;
-  padding: 4px;
-  background: var(--bg-elevated, #23262d);
-  border: 1px solid var(--border, #2a2d34);
-  border-radius: var(--radius-md, 8px);
-  box-shadow: var(--card-shadow, 0 4px 16px rgba(0, 0, 0, 0.3));
-  z-index: 10002;
-}
-.notes-block-actions button {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  border: none;
-  background: transparent;
-  color: var(--fg-secondary, #c4c7cc);
-  font-size: 13px;
-  text-align: left;
-  border-radius: var(--radius-sm, 5px);
-  cursor: pointer;
-}
-.notes-block-actions button:hover { background: var(--bg-hover, #2d3038); color: var(--fg, #e8eaed); }
-.notes-block-actions button.danger:hover { background: var(--error, #ef4444); color: #fff; }
 
 /* ── Tag autocomplete popup ────────────────────────────────────────────── */
 .notes-tag-panel {

@@ -41,11 +41,12 @@ import { HooksSection } from '@/components/settings/sections/HooksSection';
 import { UsageSection } from '@/components/settings/sections/UsageSection';
 import { TimelineSection } from '@/components/settings/sections/TimelineSection';
 import { DevicesSection } from '@/components/settings/sections/DevicesSection';
+import { BugReportSection } from '@/components/settings/sections/BugReportSection';
 
 const SECTION_IDS = [
   'providers', 'general', 'sessions',
   'integrations', 'search', 'stt', 'audio-capture', 'heartbeat', 'remote-hosts', 'devices', 'advanced',
-  'repositories', 'hooks', 'usage', 'timeline',
+  'repositories', 'hooks', 'usage', 'timeline', 'bug-report',
 ];
 
 export function SettingsPage() {
@@ -135,6 +136,7 @@ export function SettingsPage() {
           <SectionErrorBoundary name="Hooks"><HooksSection /></SectionErrorBoundary>
           <SectionErrorBoundary name="Usage & Costs"><UsageSection /></SectionErrorBoundary>
           <SectionErrorBoundary name="Timeline"><TimelineSection /></SectionErrorBoundary>
+          <SectionErrorBoundary name="Bug Report"><BugReportSection /></SectionErrorBoundary>
         </div>
       </div>
     </div>

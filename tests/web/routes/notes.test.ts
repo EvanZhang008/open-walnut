@@ -2,7 +2,8 @@
  * Tests for the notes API routes:
  *
  * B3: PUT /api/notes/global emits notes:updated bus event with correct source/hash
- * B4: GET /api/notes-v2 tree excludes global-notes.md at root but includes it in subfolders
+ * B4: GET /api/notes-v2 tree includes root global-notes.md (editable from the
+ *     /notes page since the Notion-class editor rework) alongside other notes
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
@@ -49,7 +50,14 @@ beforeEach(async () => {
 
 afterEach(async () => {
   bus.clear();
-  await fs.rm(WALNUT_HOME, { recursive: true, force: true });
+  // The notes indexer's debounced update can write into WALNUT_HOME while the
+  // recursive rm is traversing (ENOTEMPTY flake) — settle, then retry once.
+  try {
+    await fs.rm(WALNUT_HOME, { recursive: true, force: true });
+  } catch {
+    await new Promise((r) => setTimeout(r, 400));
+    await fs.rm(WALNUT_HOME, { recursive: true, force: true });
+  }
 });
 
 // ── B3: PUT /api/notes/global emits bus event ─────────────────────────────
@@ -80,7 +88,9 @@ describe('B3: PUT /api/notes/global emits notes:updated event', () => {
     expect(event.name).toBe('notes:updated');
 
     const payload = event.data as { source: string; contentHash: string };
-    expect(payload.source).toBe('notes/global');
+    // Canonical source: `notes/{vault-path-without-.md}` — 'notes/global' is
+    // reserved for a literal vault-root global.md.
+    expect(payload.source).toBe('notes/global-notes');
 
     // Hash must match what computeContentHash produces for the written content
     const expectedHash = computeContentHash(content);
@@ -130,9 +140,12 @@ describe('B3: PUT /api/notes/global emits notes:updated event', () => {
   });
 });
 
-// ── B4: GET /api/notes-v2 tree excludes global-notes.md at root ───────────
+// ── B4: GET /api/notes-v2 tree includes root global-notes.md ──────────────
+// global-notes.md is deliberately IN the v2 tree: the /notes page edits it via
+// /api/notes-v2/content/global-notes.md (same doc as the home-panel widget).
+// The old root exclusion was removed in the Notion-class editor rework.
 
-describe('B4: GET /api/notes-v2 tree excludes root global-notes.md', () => {
+describe('B4: GET /api/notes-v2 tree includes root global-notes.md', () => {
   /** Helper: write a file inside NOTES_DIR */
   async function writeNote(relPath: string, content = '# Note'): Promise<void> {
     const fullPath = path.join(NOTES_DIR, relPath);
@@ -140,11 +153,9 @@ describe('B4: GET /api/notes-v2 tree excludes root global-notes.md', () => {
     await fs.writeFile(fullPath, content, 'utf-8');
   }
 
-  it('excludes global-notes.md from the root of notes tree', async () => {
+  it('lists global-notes.md as a note alongside regular notes', async () => {
     await fs.mkdir(NOTES_DIR, { recursive: true });
-    // Write the reserved global notes file
     await fs.writeFile(GLOBAL_NOTES_FILE, '# Global Notes', 'utf-8');
-    // Also write a regular note
     await writeNote('regular.md', '# Regular Note');
 
     const app = createNotesV2App();
@@ -153,12 +164,13 @@ describe('B4: GET /api/notes-v2 tree excludes root global-notes.md', () => {
     expect(res.status).toBe(200);
     const { tree } = res.body;
 
-    // global-notes.md must be absent
     const names = (tree as Array<{ name: string }>).map((n) => n.name);
-    expect(names).not.toContain('global-notes.md');
-
-    // regular note must be present
+    expect(names).toContain('global-notes.md');
     expect(names).toContain('regular.md');
+
+    const globalNode = (tree as Array<{ name: string; kind?: string }>)
+      .find((n) => n.name === 'global-notes.md');
+    expect(globalNode?.kind).toBe('note');
   });
 
   it('includes other .md files in the root', async () => {
@@ -174,12 +186,11 @@ describe('B4: GET /api/notes-v2 tree excludes root global-notes.md', () => {
     const names = (res.body.tree as Array<{ name: string }>).map((n) => n.name);
     expect(names).toContain('notes-a.md');
     expect(names).toContain('notes-b.md');
-    expect(names).not.toContain('global-notes.md');
+    expect(names).toContain('global-notes.md');
   });
 
-  it('includes global-notes.md that lives inside a subfolder (not excluded)', async () => {
+  it('includes global-notes.md that lives inside a subfolder', async () => {
     await fs.mkdir(NOTES_DIR, { recursive: true });
-    // A file named global-notes.md in a subfolder is NOT the reserved file
     await writeNote('archive/global-notes.md', '# Not reserved');
 
     const app = createNotesV2App();
@@ -188,7 +199,6 @@ describe('B4: GET /api/notes-v2 tree excludes root global-notes.md', () => {
     expect(res.status).toBe(200);
     const { tree } = res.body;
 
-    // Tree should contain the archive folder
     const archiveFolder = (tree as Array<{ name: string; type: string; children?: any[] }>)
       .find((n) => n.name === 'archive' && n.type === 'folder');
     expect(archiveFolder).toBeDefined();
@@ -196,7 +206,7 @@ describe('B4: GET /api/notes-v2 tree excludes root global-notes.md', () => {
     expect(archiveFolder!.children![0].name).toBe('global-notes.md');
   });
 
-  it('returns empty tree when only global-notes.md exists', async () => {
+  it('returns just global-notes.md when it is the only file', async () => {
     await fs.mkdir(NOTES_DIR, { recursive: true });
     await fs.writeFile(GLOBAL_NOTES_FILE, '# Global only', 'utf-8');
 
@@ -204,6 +214,8 @@ describe('B4: GET /api/notes-v2 tree excludes root global-notes.md', () => {
     const res = await request(app).get('/api/notes-v2');
 
     expect(res.status).toBe(200);
-    expect(res.body.tree).toEqual([]);
+    expect(res.body.tree).toEqual([
+      { name: 'global-notes.md', path: 'global-notes.md', type: 'file', kind: 'note' },
+    ]);
   });
 });

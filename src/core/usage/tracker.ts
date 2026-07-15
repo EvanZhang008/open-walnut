@@ -142,6 +142,11 @@ export class UsageTracker {
 
   /**
    * Get usage summary for a time period.
+   *
+   * The dashboard tracks WALNUT's own spend. Claude Code CLI sessions
+   * (source='session') are pass-through costs of external coding sessions — they
+   * stay in the DB as raw data but are excluded from every aggregate except the
+   * dedicated session_cost field.
    */
   getSummary(period: UsagePeriod): UsageSummary {
     const db = this.getDb();
@@ -150,11 +155,11 @@ export class UsageTracker {
       SELECT
         COALESCE(SUM(CASE WHEN source != 'session' THEN cost_usd ELSE 0 END), 0) AS total_cost,
         COALESCE(SUM(CASE WHEN source = 'session' THEN cost_usd ELSE 0 END), 0) AS session_cost,
-        COALESCE(SUM(input_tokens), 0) AS input_tokens,
-        COALESCE(SUM(output_tokens), 0) AS output_tokens,
-        COALESCE(SUM(cache_read_input_tokens), 0) AS cache_read_tokens,
-        COALESCE(SUM(cache_creation_input_tokens), 0) AS cache_creation_tokens,
-        COUNT(*) AS api_calls
+        COALESCE(SUM(CASE WHEN source != 'session' THEN input_tokens ELSE 0 END), 0) AS input_tokens,
+        COALESCE(SUM(CASE WHEN source != 'session' THEN output_tokens ELSE 0 END), 0) AS output_tokens,
+        COALESCE(SUM(CASE WHEN source != 'session' THEN cache_read_input_tokens ELSE 0 END), 0) AS cache_read_tokens,
+        COALESCE(SUM(CASE WHEN source != 'session' THEN cache_creation_input_tokens ELSE 0 END), 0) AS cache_creation_tokens,
+        COALESCE(SUM(CASE WHEN source != 'session' THEN 1 ELSE 0 END), 0) AS api_calls
       FROM usage
       ${clause}
     `).get(...params) as {
@@ -183,7 +188,8 @@ export class UsageTracker {
   }
 
   /**
-   * Get daily cost aggregations for the chart.
+   * Get daily cost aggregations for the chart. Walnut spend only — Claude Code
+   * CLI sessions (source='session') are excluded.
    */
   getDailyCosts(days: number): DailyCost[] {
     const db = this.getDb();
@@ -198,7 +204,7 @@ export class UsageTracker {
         COALESCE(SUM(cache_creation_input_tokens), 0) AS cache_creation_tokens,
         COUNT(*) AS api_calls
       FROM usage
-      WHERE date >= ?
+      WHERE date >= ? AND source != 'session'
       GROUP BY date
       ORDER BY date ASC
     `).all(cutoff) as DailyCost[];
@@ -230,7 +236,8 @@ export class UsageTracker {
   }
 
   /**
-   * Get recent usage records.
+   * Get recent usage records. Walnut spend only — Claude Code CLI session
+   * rows stay queryable in the raw DB but don't clutter the activity feed.
    */
   getRecentRecords(limit: number): UsageRecord[] {
     const db = this.getDb();
@@ -242,6 +249,7 @@ export class UsageTracker {
         cost_usd, task_id, session_id, run_id,
         external_cost_usd, duration_ms, parent_source, agent_id
       FROM usage
+      WHERE source != 'session'
       ORDER BY timestamp DESC
       LIMIT ?
     `).all(limit) as Array<{
@@ -302,9 +310,22 @@ export class UsageTracker {
   private getGrouped(column: 'source' | 'model' | 'agent_id', period: UsagePeriod): UsageByGroup[] {
     const db = this.getDb();
     const { clause, params } = this.periodToWhere(period);
-    // NULL group keys (e.g. old rows or sources with no agent_id) collapse to 'unknown'
-    // so they still surface as a row rather than a blank/dropped bucket.
-    const nameExpr = `COALESCE(${column}, 'unknown')`;
+    // NULL group keys collapse rather than drop. For agent_id, fall back to the
+    // row's source (rows recorded before agent_id existed still say WHAT spent
+    // the money, just not which named agent) — far more useful than one giant
+    // 'unknown' bucket. Legacy sources that ARE a specific agent map to its
+    // canonical id so old and new rows merge into one line instead of showing
+    // e.g. "Summary" twice. Model/source columns are NOT NULL; 'unknown' is a backstop.
+    const nameExpr = column === 'agent_id'
+      ? `COALESCE(${column}, CASE source
+            WHEN 'agent' THEN 'general'
+            WHEN 'triage' THEN 'turn-complete-triage'
+            WHEN 'subagent' THEN 'subagent-legacy'
+            ELSE source END)`
+      : `COALESCE(${column}, 'unknown')`;
+    // Walnut spend only — session rows would dwarf everything and carry no
+    // agent_id, turning the By Agent view into a giant 'unknown' bucket.
+    const sessionFilter = clause ? `${clause} AND source != 'session'` : `WHERE source != 'session'`;
     const rows = db.prepare(`
       SELECT
         ${nameExpr} AS name,
@@ -315,7 +336,7 @@ export class UsageTracker {
         COALESCE(SUM(cache_creation_input_tokens), 0) AS cache_creation_tokens,
         COUNT(*) AS api_calls
       FROM usage
-      ${clause}
+      ${sessionFilter}
       GROUP BY ${nameExpr}
       ORDER BY cost_usd DESC
     `).all(...params) as Array<{

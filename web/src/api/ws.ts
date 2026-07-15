@@ -89,6 +89,8 @@ class WsClient {
   // Distinguishes cold first-connect from subsequent reconnects.
   // `_ws:reconnected` only fires on reconnects, not the initial page load.
   private hasConnectedBefore = false;
+  /** Last close event, kept for crash/bug reports (onclose otherwise discards it). */
+  lastClose: { code: number; codeDesc: string; reason: string; at: string } | null = null;
 
   get state() {
     return this._state;
@@ -127,6 +129,12 @@ class WsClient {
     };
 
     ws.onclose = (ev) => {
+      this.lastClose = {
+        code: ev.code,
+        codeDesc: WS_CLOSE_CODES[ev.code] ?? 'unknown',
+        reason: ev.reason || 'none',
+        at: new Date().toISOString(),
+      };
       log.info('ws', 'disconnected', {
         code: ev.code,
         codeDesc: WS_CLOSE_CODES[ev.code] ?? 'unknown',

@@ -7,9 +7,10 @@ interface Props {
 }
 
 export function UsageSummaryCards({ summary, loading }: Props) {
+  // Walnut's own spend only. Claude Code CLI session costs (summary.session_cost)
+  // are external pass-through numbers — intentionally not shown here.
   const cards = [
     { label: 'Walnut Cost', value: summary ? `$${summary.total_cost.toFixed(2)}` : '--', accent: true },
-    { label: 'Claude Code', value: summary ? `$${summary.session_cost.toFixed(2)}` : '--' },
     { label: 'Input Tokens', value: summary ? formatTokens(summary.input_tokens) : '--' },
     { label: 'Output Tokens', value: summary ? formatTokens(summary.output_tokens) : '--' },
     { label: 'Cache Read', value: summary ? formatTokens(summary.cache_read_tokens) : '--' },

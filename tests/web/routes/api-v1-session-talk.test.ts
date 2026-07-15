@@ -13,10 +13,14 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-apiv1-session-talk'))
 
-import { WALNUT_HOME } from '../../../src/constants.js'
+import { WALNUT_HOME, IMAGES_DIR } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
 import { bus, EventNames } from '../../../src/core/event-bus.js'
 import { createSessionRecord } from '../../../src/core/session-tracker.js'
+
+// 1×1 red PNG for image-attachment cases.
+const TINY_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
 
 let server: HttpServer
 let port: number
@@ -146,6 +150,45 @@ describe('POST /api/v1/sessions/:id/messages', () => {
       body: JSON.stringify({ text: '   ' }),
     })
     expect(res.status).toBe(400)
+  })
+
+  it('images (non-cloud): enqueues the [Images attached …] prefix + a saved file path', async () => {
+    const res = await fetch(apiUrl(`/api/v1/sessions/${SID}/messages`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: 'look at this',
+        images: [{ data: TINY_PNG_BASE64, mediaType: 'image/png' }],
+      }),
+    })
+    expect(res.status).toBe(202)
+    const { messageId } = await res.json() as { messageId: string }
+
+    const { getQueue } = await import('../../../src/core/session-message-queue.js')
+    const queue = await getQueue(SID)
+    const msg = queue.find((m) => m.id === messageId)!
+    expect(msg).toBeDefined()
+    // The ENQUEUED text (what the CLI reads) carries the prefix + a real path;
+    // the file was actually written under IMAGES_DIR.
+    expect(msg.message).toContain('[Images attached — use the Read tool to view them]')
+    expect(msg.message).toContain('look at this')
+    const pathLine = msg.message.split('\n').find((l) => l.startsWith('- '))!
+    expect(pathLine).toBeDefined()
+    const filePath = pathLine.slice(2).trim()
+    expect(filePath).toContain(IMAGES_DIR)
+    await expect(fs.stat(filePath)).resolves.toBeDefined()
+  })
+
+  it('images with empty text (non-cloud) is accepted', async () => {
+    const res = await fetch(apiUrl(`/api/v1/sessions/${SID}/messages`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: '',
+        images: [{ data: TINY_PNG_BASE64, mediaType: 'image/png' }],
+      }),
+    })
+    expect(res.status).toBe(202)
   })
 })
 

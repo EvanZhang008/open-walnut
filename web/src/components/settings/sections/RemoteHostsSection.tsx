@@ -12,12 +12,14 @@ interface HostEntry {
   port: number | undefined;
   label: string;
   shell_setup: string;
+  enabled: boolean;
+  discovered: boolean;
 }
 
 let nextHostKey = 0;
 
 function emptyHost(): HostEntry {
-  return { _key: nextHostKey++, alias: '', hostname: '', user: '', port: undefined, label: '', shell_setup: '' };
+  return { _key: nextHostKey++, alias: '', hostname: '', user: '', port: undefined, label: '', shell_setup: '', enabled: true, discovered: false };
 }
 
 interface Props {
@@ -38,6 +40,8 @@ export function RemoteHostsSection({ config, onSave }: Props) {
       port: h.port,
       label: h.label ?? '',
       shell_setup: h.shell_setup ?? '',
+      enabled: h.enabled ?? true,
+      discovered: h.discovered ?? false,
     }));
     setHosts(entries);
   }, [config]);
@@ -68,6 +72,8 @@ export function RemoteHostsSection({ config, onSave }: Props) {
         port: h.port,
         label: h.label || undefined,
         shell_setup: h.shell_setup || undefined,
+        enabled: h.enabled,
+        discovered: h.discovered,
       };
     }
     return hostsConfig;
@@ -89,6 +95,8 @@ export function RemoteHostsSection({ config, onSave }: Props) {
         port: v.port,
         label: v.label || undefined,
         shell_setup: v.shell_setup || undefined,
+        enabled: v.enabled ?? true,
+        discovered: v.discovered ?? false,
       };
     }
     return out;
@@ -114,9 +122,34 @@ export function RemoteHostsSection({ config, onSave }: Props) {
             else if (expanded === idx) setExpanded(null);
           }}
         >
-          <summary className="settings-collapsible-title">
-            {host.alias || host.hostname || `Host ${idx + 1}`}
-            {host.label && <span className="text-sm text-muted" style={{ marginLeft: 8 }}>({host.label})</span>}
+          <summary className="settings-collapsible-title" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }} onClick={(e) => e.stopPropagation()}>
+              <input
+                type="checkbox"
+                checked={host.enabled}
+                onChange={(e) => {
+                  e.stopPropagation();
+                  updateHost(idx, 'enabled', e.target.checked);
+                }}
+                style={{ margin: 0 }}
+              />
+            </label>
+            <span style={{ opacity: host.enabled ? 1 : 0.5 }}>
+              {/* FQDN-only entries (alias == hostname) read better label-first;
+                  normal entries stay alias-first with the label in parens. */}
+              {host.alias && host.alias === host.hostname && host.label ? (
+                <>
+                  {host.label}
+                  <span className="text-sm text-muted" style={{ marginLeft: 8 }}>({host.hostname})</span>
+                </>
+              ) : (
+                <>
+                  {host.alias || host.hostname || `Host ${idx + 1}`}
+                  {host.label && <span className="text-sm text-muted" style={{ marginLeft: 8 }}>({host.label})</span>}
+                </>
+              )}
+              {host.discovered && <span className="text-xs text-muted" style={{ marginLeft: 8 }}>🔍 auto-discovered</span>}
+            </span>
           </summary>
           <div className="settings-collapsible-body">
             <div className="form-row">

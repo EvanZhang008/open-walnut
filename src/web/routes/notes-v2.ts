@@ -10,10 +10,12 @@
 
 import fsp from 'node:fs/promises'
 import path from 'node:path'
+import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { NOTES_DIR, CLOUD_MODE } from '../../constants.js'
 import { computeContentHash } from '../../utils/file-ops.js'
+import { withFileLock } from '../../utils/file-lock.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { log } from '../../logging/index.js'
 import { memoryNotesSearch } from '../../core/memory-search.js'
@@ -78,8 +80,13 @@ export function ensureIndexBootstrap(): void {
       const data = event.data as { source?: string } | undefined
       const source = data?.source
       if (!source || !source.startsWith('notes/')) return
-      const relPath = source.slice('notes/'.length) + '.md'
-      scheduleNotesIndexUpdate(relPath)
+      // Source names are canonical `notes/{vault-path-without-.md}` from every
+      // emitter (legacy /api/notes route + agent files tool included — both
+      // translate their 'notes/global' alias to 'notes/global-notes' before
+      // emitting). 'notes/instructions' is AGENTS.md — vault-resident but
+      // deliberately not bus-reconciled (rebuild/fs.watch still index it).
+      if (source === 'notes/instructions') return
+      scheduleNotesIndexUpdate(source.slice('notes/'.length) + '.md')
     },
     { global: true, interest: [EventNames.NOTES_UPDATED] },
   )
@@ -133,7 +140,12 @@ export function getWildcardPath(req: Request): string | null {
 // Attachment file types surfaced in the tree (Obsidian _attachment folders hold
 // these). `kind: 'attachment'` lets the FE preview them via /attachment instead of
 // loading them as markdown. Match case-insensitively (real vaults have `.PDF`).
-const ATTACHMENT_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'pdf'])
+// Office docs are listed (not rendered): clicking opens them in the local app
+// (Word/Excel) via /reveal, or downloads through /attachment as a fallback.
+const ATTACHMENT_EXTS = new Set([
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'pdf',
+  'docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt',
+])
 
 function isAttachmentFile(name: string): boolean {
   const ext = name.slice(name.lastIndexOf('.') + 1).toLowerCase()
@@ -170,6 +182,7 @@ export async function scanDir(dirPath: string, relBase: string): Promise<TreeNod
 
   for (const entry of entries) {
     if (entry.name.startsWith('.')) continue // skip hidden files
+    if (entry.name.startsWith('~$')) continue // Office owner/lock temp files
     const relPath = relBase ? `${relBase}/${entry.name}` : entry.name
 
     if (entry.isDirectory()) {
@@ -210,6 +223,23 @@ const ATTACHMENT_MIME: Record<string, string> = {
   gif: 'image/gif',
   webp: 'image/webp',
   pdf: 'application/pdf',
+  // Office formats: served as downloads (Content-Disposition below switches to
+  // `attachment` for these) — the browser can't render them inline.
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  doc: 'application/msword',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  xls: 'application/vnd.ms-excel',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  ppt: 'application/vnd.ms-powerpoint',
+}
+
+// Extensions the browser can render inline; everything else downloads.
+const INLINE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'pdf'])
+
+// RFC 5987 ext-value: encodeURIComponent leaves ' * ( ) unescaped, but a bare
+// ' collides with the UTF-8'' delimiter and breaks download filenames.
+function rfc5987Encode(s: string): string {
+  return encodeURIComponent(s).replace(/['()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase())
 }
 
 const MAX_ATTACHMENT_SIZE = 50 * 1024 * 1024 // 50 MB (mirror local-image)
@@ -273,9 +303,78 @@ notesV2Router.get('/attachment', async (req: Request, res: Response, next: NextF
     res.setHeader('Content-Type', mime)
     res.setHeader('Content-Length', buffer.length)
     res.setHeader('Cache-Control', 'public, max-age=3600')
-    // Inline so the browser renders the PDF/image in-page instead of downloading.
-    res.setHeader('Content-Disposition', 'inline')
+    // Inline so the browser renders PDF/images in-page; Office docs download
+    // (with their real filename) since the browser can't render them.
+    res.setHeader(
+      'Content-Disposition',
+      INLINE_EXTS.has(ext)
+        ? 'inline'
+        : `attachment; filename*=UTF-8''${rfc5987Encode(path.basename(fullPath))}`,
+    )
     res.send(buffer)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ─── Reveal / open on the local machine (tree context menu) ────────────────
+// POST /api/notes-v2/reveal { path, mode: 'finder' | 'app' | 'vscode' | 'path' }
+// Walnut's server runs on the SAME Mac as the browser (localhost console), so
+// "Open in Finder / Word / VS Code" is a local `open` spawn. 'path' only
+// resolves and returns the absolute path (for Copy path — clipboard lives in
+// the browser). Path is vault-contained (resolveSafePath /
+// resolveAttachmentPath) — never arbitrary.
+// Local-only: rejected in cloud mode where there's no desktop to open into.
+notesV2Router.post('/reveal', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (CLOUD_MODE) { res.status(400).json({ error: 'Not available in cloud mode' }); return }
+    const { path: notePath, mode } = req.body ?? {}
+    if (typeof notePath !== 'string' || !['finder', 'app', 'vscode', 'path'].includes(mode)) {
+      res.status(400).json({ error: 'path and mode (finder|app|vscode|path) are required' })
+      return
+    }
+    // Folders resolve via resolveSafePath; files may also match by basename
+    // (attachment fallback) — try the strict resolver first.
+    let isDir = false
+    let fullPath = resolveSafePath(notePath)
+    if (fullPath) {
+      try { isDir = (await fsp.stat(fullPath)).isDirectory() } catch { fullPath = null }
+    }
+    if (!fullPath) fullPath = await resolveAttachmentPath(notePath)
+    if (!fullPath) { res.status(404).json({ error: 'Not found' }); return }
+
+    if (mode !== 'path') {
+      // FILE type allowlist for anything we hand to `open`: only notes +
+      // known attachment types. The vault syncs from git / agent writes, so
+      // an arbitrary dropped file (.command, .webloc, .html…) must never be
+      // launchable through this endpoint. Folders are fine (Finder/VS Code).
+      if (!isDir) {
+        const ext = path.extname(fullPath).slice(1).toLowerCase()
+        if (ext !== 'md' && !ATTACHMENT_EXTS.has(ext)) {
+          res.status(400).json({ error: `File type not allowed: .${ext}` })
+          return
+        }
+      }
+      // `open` is macOS-only; -R reveals in Finder, -a targets an app. execFile
+      // (not exec) — args are never shell-interpolated. Await the exit so a
+      // failure (app not installed, `open` error) surfaces as a real error —
+      // fire-and-forget made the context menu silently do nothing.
+      const args =
+        mode === 'finder' ? ['-R', fullPath]
+        : mode === 'vscode' ? ['-a', 'Visual Studio Code', fullPath]
+        : [fullPath] // 'app' — default application (Word/Excel/Preview…)
+      try {
+        await new Promise<void>((resolve, reject) => {
+          execFile('open', args, { timeout: 5000 }, (err) => (err ? reject(err) : resolve()))
+        })
+      } catch (err) {
+        log.memory.warn('notes reveal failed', { path: notePath, mode, error: String(err) })
+        res.status(500).json({ error: `open failed: ${err instanceof Error ? err.message : String(err)}` })
+        return
+      }
+      log.memory.info('notes reveal', { path: notePath, mode })
+    }
+    res.json({ ok: true, fullPath })
   } catch (err) {
     next(err)
   }
@@ -412,26 +511,6 @@ notesV2Router.put('/content/*path', async (req: Request, res: Response, next: Ne
 
     const filePath = fullPath.endsWith('.md') ? fullPath : fullPath + '.md'
 
-    // Optimistic locking: reject if file was modified externally.
-    // Optional for backward compatibility — callers that don't send
-    // expectedHash accept last-write-wins semantics.
-    if (expectedHash) {
-      try {
-        const currentContent = await fsp.readFile(filePath, 'utf-8')
-        const currentHash = computeContentHash(currentContent)
-        if (currentHash !== expectedHash) {
-          res.status(409).json({
-            error: 'Content was modified externally',
-            currentHash,
-          })
-          return
-        }
-      } catch (err: any) {
-        if (err.code !== 'ENOENT') throw err
-        // File doesn't exist — no conflict possible
-      }
-    }
-
     // IDENTITY: stamp an id into frontmatter at create time (not lazily) so the
     // bytes written — and hence contentHash — reflect the stamped content. The
     // FE refreshes its expected hash from the response id+hash without a spurious
@@ -444,8 +523,30 @@ notesV2Router.put('/content/*path', async (req: Request, res: Response, next: Ne
       finalContent = stampId(content, id)
     }
 
+    // Optimistic locking: reject if file was modified externally.
+    // Optional for backward compatibility — callers that don't send
+    // expectedHash accept last-write-wins semantics.
+    // check+write run under the file lock — the agent's writeFileChecked path
+    // locks too, so an agent write can't slip between our check and write.
     await fsp.mkdir(path.dirname(filePath), { recursive: true })
-    await fsp.writeFile(filePath, finalContent, 'utf-8')
+    const conflict = await withFileLock(filePath, async () => {
+      if (expectedHash) {
+        try {
+          const currentContent = await fsp.readFile(filePath, 'utf-8')
+          const currentHash = computeContentHash(currentContent)
+          if (currentHash !== expectedHash) return currentHash
+        } catch (err: any) {
+          if (err.code !== 'ENOENT') throw err
+          // File doesn't exist — no conflict possible
+        }
+      }
+      await fsp.writeFile(filePath, finalContent, 'utf-8')
+      return null
+    })
+    if (conflict) {
+      res.status(409).json({ error: 'Content was modified externally', currentHash: conflict })
+      return
+    }
 
     const stat = await fsp.stat(filePath)
     const contentHash = computeContentHash(finalContent)
@@ -521,8 +622,12 @@ notesV2Router.post('/move', async (req: Request, res: Response, next: NextFuncti
     const toFull = resolveSafePath(to)
     if (!fromFull || !toFull) { res.status(400).json({ error: 'invalid path' }); return }
 
-    const fromFile = fromFull.endsWith('.md') ? fromFull : fromFull + '.md'
-    const toFile = toFull.endsWith('.md') ? toFull : toFull + '.md'
+    // Attachments (png/pdf/docx/…) move verbatim; only NOTE paths get the
+    // legacy `.md` suffix convention. Without this branch, dragging an
+    // attachment stat'ed `img.png.md` → always 404 (tree drag was a silent no-op).
+    const isAttachment = isAttachmentFile(path.basename(fromFull))
+    const fromFile = isAttachment || fromFull.endsWith('.md') ? fromFull : fromFull + '.md'
+    const toFile = isAttachment || toFull.endsWith('.md') ? toFull : toFull + '.md'
 
     // Check source exists
     try {
@@ -551,12 +656,16 @@ notesV2Router.post('/move', async (req: Request, res: Response, next: NextFuncti
 
     const fromRel = toRelPath(fromFile)
     const toRel = toRelPath(toFile)
-    // Fast path: a one-row path update keeps the id (and all edges) intact.
-    updateNotePath(fromRel, toRel)
-    // Then reconcile both paths: the old path's QMD doc deactivates (file gone),
-    // the new path indexes (and re-points the QMD virtual path).
-    scheduleNotesIndexUpdate(fromRel)
-    scheduleNotesIndexUpdate(toRel)
+    // Index bookkeeping is notes-only — attachments aren't in the structural
+    // index, and reconciling a binary file would just churn.
+    if (!isAttachment) {
+      // Fast path: a one-row path update keeps the id (and all edges) intact.
+      updateNotePath(fromRel, toRel)
+      // Then reconcile both paths: the old path's QMD doc deactivates (file gone),
+      // the new path indexes (and re-points the QMD virtual path).
+      scheduleNotesIndexUpdate(fromRel)
+      scheduleNotesIndexUpdate(toRel)
+    }
 
     log.memory.info('Note moved', { from, to })
     res.json({ ok: true })
@@ -961,7 +1070,9 @@ notesV2Router.post('/tags/rename', async (req: Request, res: Response, next: Nex
     // Targeted by the tag index — NOT a vault scan.
     const paths = notePathsForTag(from)
     let updated = 0
-    const inlineRe = new RegExp(`(^|[\\s(])#${escapeRegExp(from)}\\b`, 'g')
+    // Negative lookahead on the FULL tag charset (see INLINE_TAG_RE): `\b`
+    // treats `-`/`/` as boundaries, so renaming #work also hit #work-log.
+    const inlineRe = new RegExp(`(^|[\\s(])#${escapeRegExp(from)}(?![A-Za-z0-9/_-])`, 'g')
 
     for (const relPath of paths) {
       const abs = resolveSafePath(relPath)
@@ -982,11 +1093,21 @@ notesV2Router.post('/tags/rename', async (req: Request, res: Response, next: Nex
           typeof t === 'string' && normalizeTag(t) === from ? to : t,
         )
         if (JSON.stringify(replaced) !== JSON.stringify(data.tags)) {
-          // Rewrite only the tag tokens in the raw block to stay byte-minimal.
-          newRaw = raw.replace(
-            new RegExp(`(^|[\\s,\\[])#?${escapeRegExp(from)}(?=$|[\\s,\\]])`, 'gm'),
-            (_m, pre) => `${pre}${to}`,
-          )
+          // Rewrite only the tag tokens, and ONLY on lines that belong to the
+          // `tags:` key (inline array or block list) — an unscoped rewrite also
+          // hit bare words in other fields (`title: my work notes`).
+          const tokenRe = new RegExp(`(^|[\\s,\\[])#?${escapeRegExp(from)}(?=$|[\\s,\\]])`, 'g')
+          let inTagsBlock = false
+          newRaw = raw
+            .split('\n')
+            .map((line) => {
+              const key = line.match(/^([A-Za-z_][\w-]*):/)
+              if (key) inTagsBlock = key[1] === 'tags'
+              else if (!/^\s*(-\s|#)/.test(line) && line.trim() !== '') inTagsBlock = false
+              const isTagsLine = inTagsBlock || /^tags:/.test(line)
+              return isTagsLine ? line.replace(tokenRe, (_m, pre) => `${pre}${to}`) : line
+            })
+            .join('\n')
           changed = changed || newRaw !== raw
         }
       }

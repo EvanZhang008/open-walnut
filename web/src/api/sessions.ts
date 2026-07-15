@@ -1,5 +1,5 @@
 import { apiGet, apiPatch, apiPost } from './client';
-import type { SessionSummary, SessionRecord, SessionEffort } from '@open-walnut/core';
+import type { SessionSummary, SessionRecord, SessionEffort, SessionModelCatalogEntry } from '@open-walnut/core';
 import type { ImageAttachment } from './chat';
 import type { SessionHistoryMessage } from '@/types/session';
 import { log } from '@/utils/log';
@@ -121,7 +121,13 @@ import type { SessionTreeResponse } from '@/types/session';
 export async function fetchSessionTree(hideCompleted?: boolean): Promise<SessionTreeResponse> {
   const params = hideCompleted ? { hideCompleted: 'true' } : undefined;
   const res = await apiGet<SessionTreeResponse>('/api/sessions/tree', params);
-  return res;
+  if (!res || typeof res !== 'object') {
+    return { tree: [], orphanSessions: [] };
+  }
+  return {
+    tree: Array.isArray(res.tree) ? res.tree : [],
+    orphanSessions: Array.isArray(res.orphanSessions) ? res.orphanSessions : [],
+  };
 }
 
 export async function fetchSession(sessionId: string): Promise<SessionRecord | null> {
@@ -220,6 +226,28 @@ export async function fetchSessionLiveSettings(sessionId: string, opts?: { detai
     undefined, opts?.details ? { timeoutMs: 60_000 } : undefined);
 }
 
+/** The session's TRUE selectable model catalog (GET /:id/models).
+ *  source:'cli'      → rows straight from the CLI's initialize response (values
+ *                      are full provider IDs — send them verbatim to setSessionModel).
+ *  source:'fallback' → static SESSION_MODELS registry in catalog shape (values
+ *                      are legacy alias ids) — old CLI or unreachable session. */
+export interface SessionModelCatalog {
+  source: 'cli' | 'fallback';
+  live: boolean;
+  models: SessionModelCatalogEntry[];
+  fetchedAt?: string;
+}
+
+export async function fetchSessionModelCatalog(
+  sessionId: string,
+  opts?: { refresh?: boolean },
+): Promise<SessionModelCatalog> {
+  // Server bounds the CLI initialize read at 10s (it can queue behind a heavy
+  // get_context_usage on the CLI's serial control loop) — give the HTTP call 15s.
+  return apiGet(`/api/sessions/${sessionId}/models${opts?.refresh ? '?refresh=1' : ''}`,
+    undefined, { timeoutMs: 15_000 });
+}
+
 export interface SessionPlanResponse {
   content: string;
   planFile?: string;
@@ -258,15 +286,35 @@ export interface WorkingDirEntry {
   lastUsed: string;
 }
 
-// Cache working dirs so /session popover opens instantly (prefetched on page load)
-let _workingDirsCache: WorkingDirEntry[] | null = null;
-let _workingDirsFetching: Promise<WorkingDirEntry[]> | null = null;
+/** A host from config.hosts — shown as a launcher tab even with zero session history. */
+export interface ConfiguredHost {
+  alias: string;
+  label: string;
+  /** True for auto-discovered FQDN-only entries with no human-chosen alias —
+   *  the launcher shows a "name this host" nudge for these. */
+  rawName?: boolean;
+}
 
-export async function fetchWorkingDirs(): Promise<WorkingDirEntry[]> {
+export interface WorkingDirsResult {
+  dirs: WorkingDirEntry[];
+  /** All configured remote hosts (may be absent on older servers). */
+  hosts: ConfiguredHost[];
+}
+
+// Cache working dirs so /session popover opens instantly (prefetched on page load)
+let _workingDirsCache: WorkingDirsResult | null = null;
+let _workingDirsFetching: Promise<WorkingDirsResult> | null = null;
+
+export async function fetchWorkingDirs(): Promise<WorkingDirsResult> {
   if (_workingDirsCache) return _workingDirsCache;
   if (_workingDirsFetching) return _workingDirsFetching;
-  _workingDirsFetching = apiGet<{ dirs: WorkingDirEntry[] }>('/api/sessions/working-dirs')
-    .then(res => { _workingDirsCache = res.dirs; _workingDirsFetching = null; return res.dirs; })
+  _workingDirsFetching = apiGet<{ dirs: WorkingDirEntry[]; hosts?: ConfiguredHost[] }>('/api/sessions/working-dirs')
+    .then(res => {
+      const result: WorkingDirsResult = { dirs: res.dirs, hosts: res.hosts ?? [] };
+      _workingDirsCache = result;
+      _workingDirsFetching = null;
+      return result;
+    })
     .catch(err => { _workingDirsFetching = null; throw err; });
   return _workingDirsFetching;
 }
@@ -274,12 +322,50 @@ export async function fetchWorkingDirs(): Promise<WorkingDirEntry[]> {
 /** Invalidate cache (e.g. after starting a new session) */
 export function invalidateWorkingDirsCache(): void { _workingDirsCache = null; _workingDirsFetching = null; }
 
-export async function listDirs(prefix: string, host?: string | null): Promise<{ dirs: string[]; parent: string }> {
+export interface DirListing {
+  dirs: string[];
+  parent: string;
+  /** false = the listed directory itself doesn't exist (still HTTP 200). */
+  exists: boolean;
+}
+
+export async function listDirs(prefix: string, host?: string | null, opts?: { signal?: AbortSignal }): Promise<DirListing> {
   const params = new URLSearchParams({ prefix });
   if (host) params.set('host', host);
-  const res = await apiGet<{ dirs: string[]; parent: string }>(`/api/sessions/list-dirs?${params}`);
-  return { dirs: res.dirs, parent: res.parent };
+  const res = await apiGet<{ dirs: string[]; parent: string; exists?: boolean }>(
+    `/api/sessions/list-dirs?${params}`, undefined, opts,
+  );
+  // Tolerate old servers that don't send `exists` (mixed-version window)
+  return { dirs: res.dirs, parent: res.parent, exists: res.exists ?? true };
 }
+
+// Client-side listing cache — survives popover close/reopen (module-level, 30s TTL).
+// Keyed by host + the RESOLVED parent dir from the server (~ already expanded).
+const _liveDirCache = new Map<string, { listing: DirListing; ts: number }>();
+const LIVE_DIR_CACHE_TTL = 30_000;
+
+function liveDirCacheKey(host: string | null | undefined, parent: string): string {
+  return `${host ?? '__local__'}::${parent}`;
+}
+
+/** Cached listDirs. Serves from cache when the request's parent dir was fetched <30s ago. */
+export async function listDirsCached(prefix: string, host?: string | null, opts?: { signal?: AbortSignal }): Promise<DirListing> {
+  // Request-side key uses the raw parent-of-prefix; on response we also store
+  // under the server-resolved parent so `~`-prefixed requests hit next time.
+  const rawParent = prefix.endsWith('/') ? prefix : prefix.slice(0, prefix.lastIndexOf('/') + 1);
+  const key = liveDirCacheKey(host, rawParent);
+  const hit = _liveDirCache.get(key);
+  if (hit && Date.now() - hit.ts < LIVE_DIR_CACHE_TTL) return hit.listing;
+  const listing = await listDirs(prefix, host, opts);
+  const entry = { listing, ts: Date.now() };
+  _liveDirCache.set(key, entry);
+  const resolvedKey = liveDirCacheKey(host, listing.parent.endsWith('/') ? listing.parent : listing.parent + '/');
+  if (resolvedKey !== key) _liveDirCache.set(resolvedKey, entry);
+  return listing;
+}
+
+/** Drop the live-dir cache (e.g. after creating a directory). */
+export function invalidateLiveDirCache(): void { _liveDirCache.clear(); }
 
 // Prefetch working dirs + pre-warm SSH (fire-and-forget). Uses the most-frequent
 // path per host (instead of root /) for a useful cache hit.
@@ -294,10 +380,15 @@ let _prewarmStarted = false;
 export function prewarmWorkingDirs(): void {
   if (_prewarmStarted) return;
   _prewarmStarted = true;
-  fetchWorkingDirs().then(dirs => {
+  fetchWorkingDirs().then(({ dirs, hosts }) => {
     const bestPerHost = new Map<string, string>();
     for (const d of dirs) {
       if (d.host && !bestPerHost.has(d.host)) bestPerHost.set(d.host, d.cwd);
+    }
+    // Configured hosts with no history yet still get a pre-warm (from ~) so the
+    // first live browse on a fresh host isn't a cold SSH connect.
+    for (const h of hosts) {
+      if (!bestPerHost.has(h.alias)) bestPerHost.set(h.alias, '~/');
     }
     for (const [host, cwd] of bestPerHost) { listDirs(cwd, host).catch(() => {}); }
   }).catch(() => { _prewarmStarted = false; /* allow retry on next open */ });
@@ -320,6 +411,10 @@ export async function quickStartSession(opts: {
   images?: ImageAttachment[];
   taskId?: string; // retry mode: reuse existing task
   taskMeta?: QuickStartTaskMeta;
+  /** Launch intent — 'fix-walnut' makes the server wrap the message in a repair briefing. */
+  intent?: 'fix-walnut';
+  /** User opted into "create & start": server mkdirs the cwd before starting. */
+  createCwd?: boolean;
 }): Promise<{ taskId: string; task: unknown }> {
   // Convert ImageAttachment[] to the backend ImagePayload format (data + mediaType only)
   const payload: Record<string, unknown> = { ...opts };
@@ -330,6 +425,7 @@ export async function quickStartSession(opts: {
   }
   const result = await apiPost<{ taskId: string; task: unknown }>('/api/sessions/quick-start', payload);
   invalidateWorkingDirsCache(); // new session → new path entry
+  if (opts.createCwd) invalidateLiveDirCache(); // the dir now exists — stale "missing" entries lie
   return result;
 }
 

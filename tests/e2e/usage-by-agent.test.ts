@@ -54,18 +54,16 @@ describe('GET /api/usage/by-agent', () => {
 
     const triage = body.agents.find((a) => a.name === 'turn-complete-triage');
     const general = body.agents.find((a) => a.name === 'general');
-    const unknown = body.agents.find((a) => a.name === 'unknown');
 
     expect(triage).toBeDefined();
     expect(triage!.api_calls).toBe(2);
     expect(triage!.input_tokens).toBe(1500);
 
+    // Legacy agentId-less 'agent' row merges into 'general' (canonical main
+    // agent) instead of collapsing into a giant 'unknown' bucket.
     expect(general).toBeDefined();
-    expect(general!.api_calls).toBe(1);
-
-    // Legacy rows (recorded before agent_id existed) surface, not silently dropped.
-    expect(unknown).toBeDefined();
-    expect(unknown!.api_calls).toBe(1);
+    expect(general!.api_calls).toBe(2);
+    expect(body.agents.some((a) => a.name === 'unknown')).toBe(false);
 
     // Percentages across all agent buckets sum to ~100.
     const totalPct = body.agents.reduce((s, a) => s + a.percentage, 0);

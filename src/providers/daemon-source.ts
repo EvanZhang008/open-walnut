@@ -863,6 +863,7 @@ function handleCommand(ws, msg) {
     case 'write-inbox': return cmdWriteInbox(ws, id, cmd);
     case 'fs.read': return cmdFsRead(ws, id, cmd);
     case 'fs.write': return cmdFsWrite(ws, id, cmd);
+    case 'fs.mkdir': return cmdFsMkdir(ws, id, cmd);
     case 'fs.ls': return cmdFsLs(ws, id, cmd);
     case 'fs.find': return cmdFsFind(ws, id, cmd);
     case 'fs.stat': return cmdFsStat(ws, id, cmd);
@@ -1278,7 +1279,7 @@ function ensureWatcher(sid) {
       consecutiveErrors = 0;
       const batchStart = offset;
       offset = stat.size;
-      s.watcher.offset = offset; // expose for catch-up
+      if (s.watcher) s.watcher.offset = offset; // expose for catch-up
 
       const text = buf.toString('utf-8');
       const lines = text.split('\\n');
@@ -2046,6 +2047,25 @@ async function cmdFsWrite(ws, id, cmd) {
     sendOk(ws, id, { written: true, size: buf.length });
   } catch (err) {
     sendError(ws, id, 'fs.write failed: ' + err.message);
+  }
+}
+
+async function cmdFsMkdir(ws, id, cmd) {
+  let dirPath = cmd.path;
+  if (!dirPath) return sendError(ws, id, 'fs.mkdir: missing path');
+
+  // Expand ~ to home directory (Node fs doesn't do shell expansion)
+  if (dirPath === '~' || dirPath.startsWith('~/')) {
+    dirPath = HOME_DIR + dirPath.slice(1);
+  }
+
+  try {
+    // recursive:true tolerates already-existing directories (idempotent)
+    await fs.promises.mkdir(dirPath, { recursive: true });
+    sendOk(ws, id, { created: true, resolvedPath: dirPath });
+  } catch (err) {
+    const code = err.code ?? '';
+    sendError(ws, id, 'fs.mkdir failed: ' + err.message + (code ? ' (' + code + ')' : ''));
   }
 }
 

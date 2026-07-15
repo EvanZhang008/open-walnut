@@ -30,6 +30,7 @@ import { WikiLinkClickExtension } from './wiki-link/WikiLinkClickExtension';
 import { WikiLinkDisambiguation } from './wiki-link/WikiLinkDisambiguation';
 import { resolveWikiLinkTarget } from './wiki-link/resolve-wiki-link';
 import { tableExtensions } from './extensions/table-kit';
+import { ListAutoJoin } from './extensions/list-auto-join';
 import { EmptyAwareTaskItem } from './extensions/empty-task-item';
 import { normalizeForEditor } from './notes-content-preprocess';
 import { TagNode } from './extensions/tag-node';
@@ -38,7 +39,6 @@ import { WikiEmbedNode } from './extensions/wiki-embed-node';
 import { TagTrigger } from './extensions/tag-trigger';
 import type { TagTriggerState } from './extensions/tag-trigger';
 import { NotesBubbleMenu } from './NotesBubbleMenu';
-import { NotesDragHandle } from './NotesDragHandle';
 import { TagAutocomplete } from './TagAutocomplete';
 import type { TagSuggestion } from './TagAutocomplete';
 import type { NoteListItem } from '@/api/notes-v2';
@@ -65,9 +65,8 @@ interface NotesEditorProps {
   /** Called when a wiki link is clicked */
   onWikiLinkClick?: (target: string) => void;
   /**
-   * Enable the Notion block tools (bubble toolbar + hover drag-handle/＋).
-   * Off by default so the compact home-popup surface can opt out where the
-   * gutter is too narrow for a grip rail.
+   * Enable the selection format toolbar (bubble menu). Off by default so the
+   * compact home-popup surface can opt out.
    */
   enableBlockTools?: boolean;
   /** Frequency-ranked vault tags for #tag autocomplete (from GET /tags; empty = manual typing). */
@@ -398,6 +397,9 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
         link: false,
       }),
       TightTaskList,
+      // Merge adjacent same-type lists eagerly — markdown can't express the
+      // split, so the editor must not show one (numbering restarting at 1).
+      ListAutoJoin,
       // Empty-aware so a bare `- [ ]` orphan checkbox round-trips byte-clean
       // (see empty-task-item.ts + notes-content-preprocess.ts).
       EmptyAwareTaskItem.configure({
@@ -678,27 +680,6 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
     setSlashState({ phase: 'closed' });
   }, []);
 
-  // Open the insert-block menu anchored at a document position (drag-handle ＋).
-  // Inserts a fresh paragraph containing a literal "/" and drops the caret right
-  // after it, so the SAME SlashCommandExtension trigger machinery opens the menu
-  // (one menu, two entry points — §3.3). This routes ＋ through the identical
-  // path as manual typing: range tracking + type-to-filter work, the chosen
-  // block's deleteRange removes the "/" cleanly (one transaction = one Cmd+Z),
-  // and a dismiss leaves only "/" exactly like an aborted manual slash — never
-  // a silent stray empty paragraph or a desynced menu state.
-  const handleInsertBelow = useCallback((pos: number) => {
-    if (!editor) return;
-    const safePos = Math.min(pos, editor.state.doc.content.size);
-    editor
-      .chain()
-      .focus()
-      .insertContentAt(safePos, { type: 'paragraph', content: [{ type: 'text', text: '/' }] })
-      // Caret lands just after the inserted "/" (safePos = paragraph open token).
-      .setTextSelection(safePos + 2)
-      .run();
-    // The extension's view.update detects the "/" and opens the menu itself.
-  }, [editor]);
-
   const handleTagClose = useCallback(() => {
     setTagState({ phase: 'closed' });
   }, []);
@@ -772,11 +753,8 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
         editor={editor}
         className={`notes-editor ${className ?? ''}`}
       />
-      {/* Selection format toolbar + hover drag-handle (opt-in per surface). */}
+      {/* Selection format toolbar (opt-in per surface). */}
       {editor && enableBlockTools && <NotesBubbleMenu editor={editor} />}
-      {editor && enableBlockTools && (
-        <NotesDragHandle editor={editor} onInsertBelow={handleInsertBelow} />
-      )}
       {editor && slashState.phase !== 'closed' && (
         <SlashCommandPortal
           editor={editor}

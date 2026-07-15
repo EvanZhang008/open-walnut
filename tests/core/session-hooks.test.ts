@@ -198,9 +198,12 @@ describe('SessionHookDispatcher', () => {
       expect(payload.isSessionError).toBe(true);
     });
 
-    it('session:ended → onSessionEnd', async () => {
+    it('session:ended maps to NO hook point (it fires per-turn, not on real session end)', async () => {
+      // session:ended is a UI-refresh signal emitted after EVERY turn. The
+      // 'onSessionEnd' hook point was removed because hooks bound to it ran
+      // per-turn (the session-summary-gist bug). Only state cleanup remains.
       const handler = vi.fn();
-      dispatcher.init([makeHook({ hooks: ['onSessionEnd'], handler })]);
+      dispatcher.init([makeHook({ hooks: ['onTurnComplete'], handler })]);
 
       bus.emit(EventNames.SESSION_ENDED, {
         sessionId: 's1',
@@ -208,14 +211,13 @@ describe('SessionHookDispatcher', () => {
 
       await tick();
 
-      expect(handler).toHaveBeenCalledTimes(1);
-      expect(handler.mock.calls[0][0].sessionId).toBe('s1');
+      expect(handler).not.toHaveBeenCalled();
     });
 
     it('non-session events are ignored', async () => {
       const handler = vi.fn();
       dispatcher.init([
-        makeHook({ hooks: ['onSessionStart', 'onTurnComplete', 'onSessionEnd'], handler }),
+        makeHook({ hooks: ['onSessionStart', 'onTurnComplete'], handler }),
       ]);
 
       bus.emit(EventNames.TASK_CREATED, { id: 't1' }, ['*']);
@@ -1013,20 +1015,19 @@ describe('SessionHookDispatcher', () => {
   // ────────────────────────────────────────────
 
   describe('Session state cleanup', () => {
-    it('session:ended fires onSessionEnd and clears payload cache', async () => {
-      const endHandler = vi.fn();
-      dispatcher.init([makeHook({ hooks: ['onSessionEnd'], handler: endHandler })]);
+    it('session:ended clears payload cache (state cleanup only, no hook dispatch)', async () => {
+      // init() is what subscribes the dispatcher to the bus — register an unrelated
+      // hook; session:ended maps to no hook point so it must never fire.
+      const handler = vi.fn();
+      dispatcher.init([makeHook({ hooks: ['onTurnComplete'], handler })]);
 
       // Start a session
       bus.emit(EventNames.SESSION_STARTED, { sessionId: 's1' }, ['*']);
       await tick();
 
-      // End session → onSessionEnd should fire
       bus.emit(EventNames.SESSION_ENDED, { sessionId: 's1' }, ['*']);
       await tick();
 
-      expect(endHandler).toHaveBeenCalledTimes(1);
-      expect(endHandler.mock.calls[0][0].sessionId).toBe('s1');
       // Verify payload cache was cleared for this session
       expect(dispatcher['payloadBuilder'].clearSession).toHaveBeenCalledWith('s1');
     });

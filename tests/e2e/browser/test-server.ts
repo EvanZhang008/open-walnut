@@ -524,6 +524,37 @@ await fs.writeFile(
   '# Memory Index\n\n- daily/: Daily logs\n- topics/: Topic files\n- projects/: Project memories\n- knowledge/: Knowledge base\n- working-memory.md: Active context\n',
 )
 
+// ── Path-selector fixtures (session-path-selector.spec.ts) ──
+// Real on-disk tree the list-dirs route lists for real, + seeded
+// frequent-directories.json so the picker has history/frecency data.
+const psFixtureRoot = path.join(tmpBase, 'ps-fixture')
+await fs.mkdir(path.join(psFixtureRoot, 'projects', 'walnut', 'web'), { recursive: true })
+await fs.mkdir(path.join(psFixtureRoot, 'projects', 'wallets'), { recursive: true })
+await fs.mkdir(path.join(psFixtureRoot, 'projects', 'zmarinax'), { recursive: true })
+await fs.mkdir(path.join(psFixtureRoot, 'projects', '.hiddenproj'), { recursive: true })
+await fs.mkdir(path.join(psFixtureRoot, 'other'), { recursive: true })
+await fs.writeFile(
+  path.join(tmpBase, 'frequent-directories.json'),
+  JSON.stringify({
+    version: 1,
+    compiledAt: new Date().toISOString(),
+    directories: [
+      {
+        cwd: path.join(psFixtureRoot, 'projects', 'walnut'),
+        host: null, count: 25,
+        lastUsed: new Date(Date.now() - 3600_000).toISOString(),
+        categoryVotes: { Passion: 25 },
+      },
+      {
+        cwd: path.join(psFixtureRoot, 'other'),
+        host: null, count: 2,
+        lastUsed: new Date(Date.now() - 20 * 86400_000).toISOString(),
+        categoryVotes: { Inbox: 2 },
+      },
+    ],
+  }, null, 2),
+)
+
 // Ensure src/web/static symlink exists → dist/web/static
 // When running via `npx tsx`, import.meta.url resolves to src/web/server.ts,
 // so the server looks for static files at src/web/static/ which doesn't exist.

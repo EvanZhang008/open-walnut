@@ -979,3 +979,124 @@ describe('path traversal protection', () => {
     expect(res.body.error).toBe('invalid path');
   });
 });
+
+// ─── Review-fix coverage: Office attachments, ~$ lock files, /reveal,
+//     attachment move (no .md suffix), tag-rename precision ────────────
+
+describe('Office attachments in tree + streaming', () => {
+  it('lists docx/xlsx as attachments and skips ~$ Office lock files', async () => {
+    await writeNote('n.md', 'note');
+    await fs.writeFile(path.join(NOTES_DIR, 'report.docx'), 'DOCX');
+    await fs.writeFile(path.join(NOTES_DIR, 'sheet.XLSX'), 'XLSX');
+    await fs.writeFile(path.join(NOTES_DIR, '~$report.docx'), 'LOCK');
+
+    const app = createApp();
+    const res = await request(app).get('/api/notes-v2');
+    expect(res.status).toBe(200);
+    const byName = Object.fromEntries(
+      (res.body.tree as Array<{ name: string; kind?: string }>).map((n) => [n.name, n]),
+    );
+    expect(byName['report.docx']?.kind).toBe('attachment');
+    expect(byName['sheet.XLSX']?.kind).toBe('attachment');
+    expect(byName['~$report.docx']).toBeUndefined();
+  });
+
+  it('serves docx as attachment download (RFC 5987-clean filename)', async () => {
+    await fs.writeFile(path.join(NOTES_DIR, "Q3 plan's (final).docx"), 'DOCX');
+
+    const app = createApp();
+    const res = await request(app)
+      .get('/api/notes-v2/attachment')
+      .query({ path: "Q3 plan's (final).docx" });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('officedocument.wordprocessingml');
+    const cd = res.headers['content-disposition']!;
+    expect(cd).toContain('attachment');
+    // ' * ( ) must be percent-encoded — a bare ' collides with the UTF-8'' delimiter.
+    expect(cd).not.toMatch(/UTF-8''[^%]*['()*]/);
+  });
+});
+
+describe('POST /api/notes-v2/move (attachments)', () => {
+  it('moves an attachment verbatim — no .md suffix appended', async () => {
+    await fs.writeFile(path.join(NOTES_DIR, 'img.png'), 'PNG');
+
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/notes-v2/move')
+      .send({ from: 'img.png', to: '_attachment/img.png' });
+
+    expect(res.status).toBe(200);
+    expect(await fileExists('_attachment/img.png')).toBe(true);
+    expect(await fileExists('img.png')).toBe(false);
+    expect(await fileExists('_attachment/img.png.md')).toBe(false);
+  });
+});
+
+describe('POST /api/notes-v2/reveal', () => {
+  it("mode 'path' resolves without spawning and returns the absolute path", async () => {
+    await writeNote('some/note.md', 'hi');
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/notes-v2/reveal')
+      .send({ path: 'some/note.md', mode: 'path' });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.fullPath).toBe(path.join(NOTES_DIR, 'some/note.md'));
+  });
+
+  it('rejects launching a disallowed file type (only notes + attachments open)', async () => {
+    await fs.writeFile(path.join(NOTES_DIR, 'evil.command'), 'echo pwned');
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/notes-v2/reveal')
+      .send({ path: 'evil.command', mode: 'app' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('not allowed');
+  });
+
+  it('rejects bad mode and traversal path', async () => {
+    const app = createApp();
+    expect(
+      (await request(app).post('/api/notes-v2/reveal').send({ path: 'a.md', mode: 'exec' })).status,
+    ).toBe(400);
+    expect(
+      (await request(app).post('/api/notes-v2/reveal').send({ path: '../../etc/passwd', mode: 'path' })).status,
+    ).toBe(404);
+  });
+});
+
+describe('POST /api/notes-v2/tags/rename (precision)', () => {
+  it('does not rewrite prefix-overlapping tags (#work vs #work-log)', async () => {
+    await writeNote('t.md', '---\nid: n_t\ntags: [work]\n---\nBody #work and #work-log stay distinct');
+    await syncIndex();
+
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/notes-v2/tags/rename')
+      .send({ from: 'work', to: 'job' });
+
+    expect(res.status).toBe(200);
+    const after = await readNote('t.md');
+    expect(after).toContain('#job ');
+    expect(after).toContain('#work-log');
+    expect(after).not.toContain('#job-log');
+  });
+
+  it('does not corrupt non-tag frontmatter fields carrying the same word', async () => {
+    await writeNote('f.md', '---\nid: n_f\ntitle: my work notes\ntags: [work]\n---\nBody #work');
+    await syncIndex();
+
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/notes-v2/tags/rename')
+      .send({ from: 'work', to: 'job' });
+
+    expect(res.status).toBe(200);
+    const after = await readNote('f.md');
+    expect(after).toContain('title: my work notes'); // untouched
+    expect(after).toContain('tags: [job]');
+    expect(after).toContain('#job');
+  });
+});

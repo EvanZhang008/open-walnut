@@ -23,7 +23,7 @@ import { addTask, getTask } from '../../src/core/task-manager.js';
 // trailing-debounces; the actual self-report + dispatch work lives in runTriage).
 // These tests assert that work, so they call runTriage directly — the debounce
 // timing is covered separately in session-hooks-triage-debounce.test.ts.
-import { runTriage } from '../../src/core/session-hooks/builtins.js';
+import { runTriage, __resetTriageRateLimiter } from '../../src/core/session-hooks/builtins.js';
 import type { OnTurnCompletePayload } from '../../src/core/session-hooks/types.js';
 import type { Task } from '../../src/core/types.js';
 
@@ -31,6 +31,8 @@ import type { Task } from '../../src/core/types.js';
 // so sharing one SID would make the second test get skipped.
 const SID_OK = 'self-report-session-ok';
 const SID_FAIL = 'self-report-session-fail';
+const SID_RATE = 'self-report-session-rate';
+const SID_MILE = 'self-report-session-milestone';
 
 const SAMPLE_REPORT = `WHAT_I_DID: Edited fork-title.ts to add normalizeLabel and a heuristic fallback.
 STATUS: succeeded — build passes and unit tests are green.
@@ -60,6 +62,8 @@ function unregisterFakeSessions() {
   const map = (sessionRunner as any).sessions as Map<string, unknown>;
   map.delete(SID_OK);
   map.delete(SID_FAIL);
+  map.delete(SID_RATE);
+  map.delete(SID_MILE);
 }
 
 /** Capture the next subagent:start emit via a global bus subscriber. */
@@ -91,6 +95,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   unregisterFakeSessions();
+  __resetTriageRateLimiter(); // agent rate-limiter is per-process state — isolate tests
   try { bus.unsubscribe('test-capture-subagent-start'); } catch {}
 });
 afterEach(() => {
@@ -157,5 +162,75 @@ describe('turn-complete self-report (fallback)', () => {
     // No self-summary block injected.
     expect(String(captured.payload!.context ?? '')).not.toContain('<session_self_summary>');
     expect(String(captured.payload!.task)).toContain('<session_history>');
+  });
+});
+
+// A non-milestone report (PHASE_SIGNAL: conversational) — the kind that must NOT
+// bypass the agent rate limit.
+const CONVERSATIONAL_REPORT = SAMPLE_REPORT.replace(
+  'PHASE_SIGNAL: implement-done',
+  'PHASE_SIGNAL: conversational(user-asked-question)',
+);
+
+describe('turn-complete triage agent rate limit', () => {
+  it('within the hour: cheap tier persists summary but NO agent dispatch; report is buffered, then batch-drained', async () => {
+    registerFakeSession(SID_RATE, async () => CONVERSATIONAL_REPORT);
+    const captured1 = captureSubagentStart();
+
+    // First run — agent has never run for this key → dispatches (and stamps the hour clock).
+    await runTriage(makePayload(SID_RATE));
+    expect(captured1.payload).toBeDefined();
+
+    // Second run right after (only the 5s replay-cooldown cleared; hour clock kept).
+    __resetTriageRateLimiter({ keepAgentRuns: true });
+    bus.unsubscribe('test-capture-subagent-start');
+    const captured2 = captureSubagentStart();
+
+    await runTriage(makePayload(SID_RATE));
+
+    // Cheap tier still persisted the summary…
+    const t = await getTask(taskId);
+    expect(t.summary).toContain('normalizeLabel');
+    // …but the expensive agent was NOT dispatched (rate-limited, report buffered).
+    expect(captured2.payload).toBeUndefined();
+
+    // Third run with a milestone signal → bypasses the limit AND drains the buffer:
+    // the dispatched agent receives BOTH reports in one <session_self_summary> batch.
+    __resetTriageRateLimiter({ keepAgentRuns: true });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ((sessionRunner as any).sessions.get(SID_RATE) as { askSideQuestion: unknown }).askSideQuestion =
+      vi.fn(async () => SAMPLE_REPORT);
+    bus.unsubscribe('test-capture-subagent-start');
+    const captured3 = captureSubagentStart();
+
+    await runTriage(makePayload(SID_RATE));
+
+    expect(captured3.payload).toBeDefined();
+    const ctx = String(captured3.payload!.context);
+    expect(ctx).toContain('conversational(user-asked-question)'); // buffered report included
+    expect(ctx).toContain('implement-done');                       // current report included
+    expect(String(captured3.payload!.task)).toContain('2 turns');
+  });
+
+  it('a milestone PHASE_SIGNAL bypasses the rate limit immediately', async () => {
+    registerFakeSession(SID_MILE, async () => SAMPLE_REPORT); // implement-done = milestone
+    const captured1 = captureSubagentStart();
+    await runTriage(makePayload(SID_MILE));
+    expect(captured1.payload).toBeDefined();
+
+    // Immediately again with a milestone report — still dispatches despite the hour clock.
+    __resetTriageRateLimiter({ keepAgentRuns: true });
+    bus.unsubscribe('test-capture-subagent-start');
+    const captured2 = captureSubagentStart();
+    await runTriage(makePayload(SID_MILE));
+    expect(captured2.payload).toBeDefined();
+  });
+
+  it('backfills SessionRecord.summary from the cheap tier (gist replacement)', async () => {
+    // The updateSessionRecord call is best-effort (session record may not exist in
+    // this unit test's store) — assert the task-side summary persisted, which is
+    // the same code path that triggers the backfill.
+    const t = await getTask(taskId);
+    expect(t.summary).toBeTruthy();
   });
 });

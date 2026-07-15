@@ -35,6 +35,7 @@ import { contextInspectorRouter } from './routes/context-inspector.js'
 import { registerChatRpc } from './routes/chat.js'
 import { registerSessionChatRpc } from './routes/session-chat.js'
 import { registerBrowserLogsRpc, browserLogsRouter } from './routes/browser-logs.js'
+import { bugReportRouter } from './routes/bug-report.js'
 import { usageRouter } from './routes/usage.js'
 import { imagesRouter } from './routes/images.js'
 import { localImageRouter } from './routes/local-image.js'
@@ -263,6 +264,15 @@ async function resolveCredentialHealth(): Promise<{
     const providers = buildProviderMap(config.providers, config)
     for (const [, prov] of Object.entries(providers)) {
       if (prov.api === 'bedrock' || prov.api === 'ollama') continue
+      // claude-cli is keyless: ready when the local CLI is installed AND a
+      // subscription credential exists (existence probe only, never the value).
+      if (prov.api === 'claude-cli') {
+        const { detectClaudeCli } = await import('../core/claude-cli-detect.js')
+        if (detectClaudeCli().subscriptionReady) {
+          return { hasReadyProvider: true, source: 'config', detail: 'claude-cli (subscription)' }
+        }
+        continue
+      }
       const implemented = prov.api === 'anthropic-messages'
         || prov.api === 'openai-chat' || prov.api === 'google-generative-ai'
       if (implemented && (prov.api_key || prov.bearer_token)) {
@@ -285,6 +295,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Ensure ~/.open-walnut/ directory structure exists and seed config defaults
   const { initDirectories } = await import('../core/init.js')
   await initDirectories()
+
+  // Route every log.error()/log.fatal() into the notification center (deduped
+  // + storm-throttled in the bridge). Installed before any subsystem starts so
+  // boot-time errors are captured too. broadcastEvent is safe pre-attachWss
+  // (no clients yet → no-op).
+  {
+    const { installLogErrorNotifications } = await import('../core/notifications/log-error-bridge.js')
+    installLogErrorNotifications(broadcastEvent)
+  }
 
   // ── Setup health checks: Claude CLI + provider readiness ──
   systemHealth.claudeCliAvailable = checkClaudeCliAvailable()
@@ -431,9 +450,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // Persist to the durable notification feed (survives refresh). Fire-and-forget:
       // a slow disk must never block the cron callback. dedupKey + timestamp use
       // eventTs so they match the frontend's live event (see comment above).
+      // The feed is a plain-text surface: strip <task-ref>/<session-ref> markup
+      // down to labels, but first lift the referenced ids onto the record so the
+      // notification card can deep-link to the session/task the job produced.
+      const refs = extractFirstRefs(text)
       void addFeedNotification({
-        kind: 'cron', severity: 'info', title: jobName, body: text, timestamp: eventTs,
-        dedupKey: `cron:${jobName}:${eventTs}`,
+        kind: 'cron', severity: 'info', title: jobName, body: stripEntityRefs(text), timestamp: eventTs,
+        dedupKey: `cron:${jobName}:${eventTs}`, ...refs,
       }).catch(err => log.cron.warn('failed to persist cron notification', { jobName, error: err instanceof Error ? err.message : String(err) }))
       // Chat message (for inline display)
       broadcastEvent('cron:chat-message', { content: text, jobName, timestamp, agentWillRespond: opts?.agentWillRespond ?? false, conversationId })
@@ -699,6 +722,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Voice input (additive): phone audio → text, works on primary AND cloud.
   app.use('/api/v1', sttV1Router)
   app.use('/api/browser-logs', browserLogsRouter)
+  // One-shot diagnostic bundle (Settings → Bug Report; also curl-able).
+  app.use('/api/bug-report', bugReportRouter)
   app.use('/api/audio', audioRouter)
   app.use('/api/stt', sttRouter)
   app.use('/api/incidents', incidentsRouter)
@@ -1094,6 +1119,27 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // companion for the read-only GET /api/v1/sessions.
       const { startSessionProjectionExport } = await import('../core/session-projection.js')
       sessionProjectionHandle = startSessionProjectionExport()
+    } else {
+      // Cloud box: two-way task sync over git (see task-outbox.ts).
+      // Writer half — every local task mutation drops an op file that rides
+      // git-sync to the primary. Reader half (projection import) runs in
+      // reconcileAfterPull() from the auto-commit loop below.
+      const { recordTaskOp, importProjectionOnCloud } = await import('../core/task-outbox.js')
+      bus.subscribe('task-outbox', (event) => {
+        // Ops the outbox itself produced (import/apply) are event-silent, but
+        // guard on source anyway in case that ever changes.
+        if (event.source === 'cloud-outbox') return
+        const data = event.data as { task?: import('../core/types.js').Task; id?: string }
+        if (event.name === EventNames.TASK_DELETED) {
+          if (data.id) void recordTaskOp({ type: 'delete', id: data.id })
+        } else if (event.name === EventNames.TASK_CREATED) {
+          if (data.task) void recordTaskOp({ type: 'create', task: data.task })
+        } else if (data.task) {
+          void recordTaskOp({ type: 'update', task: data.task })
+        }
+      }, { global: true, interest: ['task:'] })
+      // Seed the local replica from the synced projection shortly after boot.
+      setTimeout(() => { void importProjectionOnCloud() }, 5_000)
     }
 
     // Git history compaction rewrites local refs — running it on BOTH the Mac
@@ -1532,6 +1578,16 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // Update the buffered permission block status
         if (requestId) {
           sessionStreamBuffer.resolvePermission(sessionId, requestId, allowed ? 'allowed' : 'denied')
+          // Stamp the outcome onto the feed record too, so the notification
+          // center can show resolved permissions as settled (and hide the
+          // approve/deny actions). Fire-and-forget like the add path. `allowed`
+          // is optional on the event — skip the stamp rather than persist a
+          // missing value as "denied" (the store's idempotence check would then
+          // block a later correct stamp).
+          if (typeof allowed === 'boolean') {
+            void resolvePermissionNotification(requestId, allowed ? 'allowed' : 'denied')
+              .catch(err => log.web.warn('failed to resolve permission notification', { sessionId, error: err instanceof Error ? err.message : String(err) }))
+          }
         }
         sendStreamEvent(sessionId, event.name, event.data)
       }
@@ -2409,6 +2465,12 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
       syncTick++
       if (committed || syncTick % 2 === 0) {
         autoSync()
+        // Two-way task reconcile after the pull half of autoSync():
+        // primary applies cloud outbox ops; cloud imports the fresh projection.
+        // Self-gating (mode + mtime), never throws, fire-and-forget.
+        import('../core/task-outbox.js')
+          .then(({ reconcileAfterPull }) => reconcileAfterPull())
+          .catch(() => { /* best-effort */ })
       }
     } catch (err) {
       if (isLockContention(err)) {
@@ -2964,10 +3026,18 @@ export async function stopServer(): Promise<void> {
     qmdWatcherHandle.stop()
     qmdWatcherHandle = null
   }
-  // Close QMD stores (non-blocking — best-effort)
-  import('../core/qmd-store.js')
-    .then(({ closeQmdStores }) => closeQmdStores())
+  // Detach the log-error → notification bridge (a test's next startServer()
+  // reinstalls it; leaving it set would write to a torn-down store).
+  import('../core/notifications/log-error-bridge.js')
+    .then(({ uninstallLogErrorNotifications }) => uninstallLogErrorNotifications())
     .catch(() => {})
+  // Close QMD stores — MUST be awaited: llm.dispose() releases the Metal
+  // residency sets; exiting before it runs trips a GGML_ASSERT abort in
+  // node-llama-cpp's static destructors (SIGABRT on shutdown).
+  try {
+    const { closeQmdStores } = await import('../core/qmd-store.js')
+    await closeQmdStores()
+  } catch { /* best-effort */ }
   if (gitAutoCommitHandle) {
     gitAutoCommitHandle.stop()
     gitAutoCommitHandle = null
@@ -2981,6 +3051,7 @@ export async function stopServer(): Promise<void> {
     sessionProjectionHandle = null
   }
   bus.unsubscribe('web-ui')
+  bus.unsubscribe('task-outbox')
   bus.unsubscribe('main-ai')
   bus.unsubscribe('heartbeat-config')
   bus.unsubscribe('embedding-sync')

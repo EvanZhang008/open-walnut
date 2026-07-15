@@ -6,6 +6,36 @@ const TASK_REF_RE = /<task-ref\s+id="([^"]*)"(?:\s+label="([^"]*)")?\s*\/?>/g;
 /** Session-ref regex: matches <session-ref id="..." label="..."/> or <session-ref id="..."/> */
 const SESSION_REF_RE = /<session-ref\s+id="([^"]*)"(?:\s+label="([^"]*)")?\s*\/?>/g;
 
+/** Legacy bracket ref: [mr9i88ys-87a4|Some Label] → Some Label. */
+const LEGACY_REF_RE = /\[([a-z0-9]{7,10}-[a-f0-9]{4})\|([^\]]+)\]/g;
+
+/**
+ * Strip entity refs down to plain-text labels (no links) — for plain-text
+ * surfaces like the notification feed where anchors can't render. Mirrors the
+ * server-side stripEntityRefs (src/utils/entity-refs.ts).
+ */
+export function stripEntityRefsToText(text: string): string {
+  return text
+    .replace(TASK_REF_RE, (_m, id: string, label?: string) => label || id)
+    .replace(SESSION_REF_RE, (_m, id: string, label?: string) => label || id)
+    .replace(LEGACY_REF_RE, (_m, _id: string, label: string) => label);
+}
+
+/**
+ * Pull the first session/task id referenced in a text — the deep-link target
+ * for a notification whose body is stripped to plain text. Mirrors the
+ * server-side extractFirstRefs (src/utils/entity-refs.ts); legacy `[id|label]`
+ * refs are skipped on both sides (the bracket form carries no task/session
+ * marker, so a link built from one would be a guess).
+ */
+export function extractFirstRefIds(text: string): { sessionId?: string; taskId?: string } {
+  const out: { sessionId?: string; taskId?: string } = {};
+  const sessionMatch = new RegExp(SESSION_REF_RE.source).exec(text);
+  if (sessionMatch?.[1]) out.sessionId = sessionMatch[1];
+  const taskMatch = new RegExp(TASK_REF_RE.source).exec(text);
+  if (taskMatch?.[1]) out.taskId = taskMatch[1];
+  return out;
+}
 
 /**
  * Convert entity reference XML tags to clickable HTML anchors.

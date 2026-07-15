@@ -953,4 +953,113 @@ describe('L2: daemon-authoritative PULL reconcile (reconcileFromDaemon)', () => 
     expect(inFlight(session)).toBe(0)
     expect(resultEvents.length).toBe(0)
   })
+
+  // inc-1784012867247: reconcileFromDaemon() corrected `_bgTasks` in memory but never told
+  // the browser — a "Background tasks 3/4" panel stayed pinned at a stale snapshot for 56+
+  // minutes after every task had actually gone terminal, because nothing re-broadcast the
+  // corrected set. This is the choke point: any adoption must re-emit.
+  it('re-broadcasts SESSION_BACKGROUND_TASKS after adopting a daemon-authoritative correction', async () => {
+    const sid = 'l2-rebroadcast'
+    const session = makeSessionWithDaemonState('task-l2-rebroadcast', {
+      z1: { status: 'completed', v: 100 },
+    })
+    const snapshots: Array<Record<string, unknown>> = []
+    bus.subscribe('web-ui', (e: BusEvent) => {
+      if (e.name === EventNames.SESSION_BACKGROUND_TASKS) snapshots.push(e.data as Record<string, unknown>)
+    })
+    feedLines(session, [
+      makeInitEvent(sid),
+      makeTaskStartedEvent(sid, 'z1'),
+      makeSessionStateEvent(sid, 'running'),
+    ])
+    const preCorrectionCount = snapshots.length
+    await (session as unknown as { reconcileFromDaemon(): Promise<void> }).reconcileFromDaemon()
+    expect(snapshots.length).toBeGreaterThan(preCorrectionCount)
+    const latest = snapshots[snapshots.length - 1]
+    const tasks = latest.tasks as Array<{ taskId: string; status: string }>
+    expect(tasks.find(t => t.taskId === 'z1')?.status).toBe('completed')
+    expect(latest.inFlight).toBe(0)
+  })
+
+  // inc-1784012867247's actual failure mode: the lost-terminal task was `is_backgrounded`
+  // (detached from turn-over gating), so hasActiveBackgroundWork()/_runningBgCount() already
+  // read 0 for it — the exact condition isBackgroundWorkActive's callers use to decide
+  // whether reconcileFromDaemon() is even worth calling. hasPendingBackgroundTasks() must see
+  // it anyway (any non-terminal entry, backgrounded or not) or the session gets ZERO ticks
+  // that ever PULL the daemon's authoritative state for it.
+  it('hasPendingBackgroundTasks() stays true for a backgrounded (turn-detached) task with no terminal event yet', async () => {
+    const sid = 'l2-backgrounded-pending'
+    const session = makeRunningRemoteSession('task-l2-backgrounded')
+    feedLines(session, [
+      makeInitEvent(sid),
+      makeTaskStartedEvent(sid, 'bg1'),
+      { type: 'system', subtype: 'task_updated', task_id: 'bg1', patch: { is_backgrounded: true } } as unknown as string,
+    ].map(l => typeof l === 'string' ? l : JSON.stringify(l)))
+    const s = session as unknown as { hasPendingBackgroundTasks(): boolean }
+    expect(session.hasActiveBackgroundWork()).toBe(false) // backgrounded → excluded from turn-over gating
+    expect(s.hasPendingBackgroundTasks()).toBe(true) // but still non-terminal → worth reconciling
+  })
+
+  it('hasPendingBackgroundTasks() is false once every task (including backgrounded) is terminal', async () => {
+    const sid = 'l2-backgrounded-done'
+    const session = makeRunningRemoteSession('task-l2-backgrounded-done')
+    feedLines(session, [
+      makeInitEvent(sid),
+      makeTaskStartedEvent(sid, 'bg2'),
+      JSON.stringify({ type: 'system', subtype: 'task_updated', task_id: 'bg2', patch: { is_backgrounded: true } }),
+      makeTaskNotificationEvent(sid, 'bg2', 'completed'),
+    ])
+    const s = session as unknown as { hasPendingBackgroundTasks(): boolean }
+    expect(s.hasPendingBackgroundTasks()).toBe(false)
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════
+//  Regression: session_state_changed{running} persists process_status
+//  to SQLite, not just the in-memory field.
+//
+//  A message injected directly into the daemon's FIFO (phone → EC2 bridge →
+//  daemon, bypassing this class's own writeMessage()) only ever surfaces as a
+//  session_state_changed{running} system event on the stream — there's no
+//  other signal that a turn started. Before this fix, that branch updated
+//  only this._processStatus and emitted a bus-only event; the SQLite record
+//  stayed on whatever the PREVIOUS turn left behind (idle/error/stopped)
+//  for the entire duration of the new turn, since the only other writer
+//  (SESSION_RESULT/SESSION_ERROR) fires exclusively at turn-END.
+// ═══════════════════════════════════════════════════════════════════
+
+describe('session_state_changed{running} persists to session tracker', () => {
+  it('flips the SQLite process_status from idle to running (not just in-memory)', async () => {
+    const sid = 'wf-running-persist'
+    const { importSessionRecord, getSessionByClaudeId } = await import('../../src/core/session-tracker.js')
+
+    // Seed a tracker row left 'idle' by a prior turn — the exact stale state
+    // a phone-injected message would otherwise be read against mid-turn.
+    await importSessionRecord({
+      claudeSessionId: sid,
+      taskId: 'task-wf-running-persist',
+      project: 'test-project',
+    })
+
+    const session = new ClaudeCodeSession('task-wf-running-persist', 'test-project')
+    const transport = createMockTransport({ isRemote: true, hasPipe: true })
+    ;(session as unknown as { _transport: unknown })._transport = transport
+    ;(session as unknown as { _active: boolean })._active = true
+    ;(session as unknown as { _processStatus: string })._processStatus = 'idle'
+
+    feedLines(session, [
+      makeInitEvent(sid),
+      makeSessionStateEvent(sid, 'running'),
+    ])
+
+    expect(session.processStatus).toBe('running')
+
+    // The tracker write is fire-and-forget (dynamic import + async write) —
+    // give it a tick to land before reading back.
+    await new Promise((r) => setTimeout(r, 200))
+
+    const record = await getSessionByClaudeId(sid)
+    expect(record).not.toBeNull()
+    expect(record!.process_status).toBe('running')
+  })
 })

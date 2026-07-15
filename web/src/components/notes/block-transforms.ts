@@ -1,9 +1,9 @@
 /**
  * Shared block-transform module — the SINGLE path for inserting / converting
- * blocks, used by the slash menu, the bubble toolbar "Turn into", and the
- * drag-handle block actions (one transform, three surfaces — §3.4 / §1 of
- * 03-editor-architecture.md). Each transform is ONE ProseMirror transaction so
- * one user action maps to exactly one Cmd+Z (the P0 editing-quality bar).
+ * blocks, used by the slash menu and the bubble toolbar "Turn into" (one
+ * transform, shared across surfaces — §3.4 / §1 of 03-editor-architecture.md).
+ * Each transform is ONE ProseMirror transaction so one user action maps to
+ * exactly one Cmd+Z (the P0 editing-quality bar).
  *
  * Every command runs through `editor.chain()...run()`, which dispatches a
  * single transaction and fires `onUpdate` once — so reorder/insert/turn-into
@@ -13,7 +13,7 @@
 import type { Editor, Range } from '@tiptap/core';
 import { log } from '@/utils/log';
 
-/** Block kinds the slash menu / bubble / grip can turn the current block into. */
+/** Block kinds the slash menu / bubble toolbar can turn the current block into. */
 export type BlockKind =
   | 'paragraph'
   | 'h1'

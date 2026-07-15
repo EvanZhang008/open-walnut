@@ -138,6 +138,9 @@ const NON_PERSISTED_KEYS = new Set<string>(['hostname']);
 // ── Singleton ──────────────────────────────────────────────────────────────
 let db: DatabaseType | null = null;
 let initAttempted = false;
+// Rethrown on every call after a failed open — see task-db.ts for rationale
+// (silent null degrades every caller to an uninformative "null.prepare").
+let initError: unknown = null;
 
 /**
  * Return the shared SQLite handle, lazily opening + initializing it on the
@@ -157,7 +160,7 @@ let initAttempted = false;
  */
 export function getDb(): DatabaseType | null {
   if (db) return db;
-  if (initAttempted) return db; // previous open failed; don't retry in a hot loop
+  if (initAttempted) throw initError; // previous open failed; rethrow the real cause (no hot-loop retry)
   initAttempted = true;
 
   try {
@@ -187,6 +190,7 @@ export function getDb(): DatabaseType | null {
     log.session.info('session-db: WAL checkpoint on open', { result: checkpoint });
     return db;
   } catch (err) {
+    initError = err;
     log.session.error('session-db open failed', { path: SESSION_DB_PATH, err: String(err) });
     throw err;
   }
@@ -202,6 +206,7 @@ export function closeDb(): void {
     db = null;
   }
   initAttempted = false;
+  initError = null;
 }
 
 /**

@@ -181,6 +181,18 @@ Plans: architecture diagrams first → UX scenarios → pseudocode. No detailed 
 
 Use the structured logger (`log.info('subsystem', 'message', { sessionId, taskId })`) — never raw `console.log`. IDs must be **full, never truncated** so `grep <sessionId>` traces across browser + server. The logger routes through `console.log`/`warn`/`error` which the browser-logger monkey-patch forwards to `/tmp/open-walnut/`. Never use `console.debug` (invisible to forwarder).
 
+### Where logs land (browser crashes included)
+
+| What | Where |
+|---|---|
+| Server structured JSON (+ forwarded browser console) | `/tmp/open-walnut/open-walnut-<date>.log` — filter browser lines with `jq 'select(.subsystem=="browser")'` or `open-walnut logs -s browser` |
+| Every HTTP request (method/path/status/ms/reqId) | same file, `subsystem=web` (request-logger middleware) |
+| Uncaught JS exceptions / unhandled rejections / React render crashes | forwarded as `subsystem=browser` `[uncaught]` / `[unhandledrejection]` / `[react]` / `[error-boundary]` entries. Delivery: WS RPC when connected; REST `POST /api/browser-logs` fallback when WS is down (e.g. crash before mount) |
+| Daemon logs | `/tmp/open-walnut/daemon-d-*.log` |
+| Server exit trace | `/tmp/open-walnut-exit.log` |
+
+**"Blank page" triage:** grep the local-date AND previous-day files (UTC timestamps vs local filename!) for `error-boundary`, `\[react\]`, `\[uncaught\]`, and `JSON parse failed`. A repeated crash self-heals via `web/src/utils/crash-recovery.ts` (clears sessionStorage → then walnut localStorage keys + skips one prefs merge); the heals also log `[crash-recovery]`.
+
 ## Log investigation toolkit: `scripts/walnut-logs.sh`
 
 One entry point for digging through Walnut logs (structured JSON at `/tmp/open-walnut/open-walnut-<date>.log`). Needs `jq`.

@@ -493,6 +493,17 @@ input:focus, textarea:focus, select:focus {
   left: 56px;
 }
 
+/* Narrow screens: the fixed left offset + 320px width would push the panel
+   off-screen — take the full viewport instead (iPhone-style sheet). */
+@media (max-width: 640px) {
+  .notification-panel,
+  .notification-panel.sidebar-collapsed {
+    left: 0;
+    width: 100vw;
+    border-right: none;
+  }
+}
+
 @keyframes notif-slide-in {
   from { transform: translateX(-16px); opacity: 0; }
   to { transform: translateX(0); opacity: 1; }
@@ -711,6 +722,129 @@ input:focus, textarea:focus, select:focus {
   line-height: 1.4;
   margin-top: 3px;
   word-break: break-word;
+}
+
+/* iPhone-style notification center: clickable cards, per-item ×, groups. */
+.notification-feed-item.clickable {
+  cursor: pointer;
+}
+
+.notification-feed-item.clickable:hover {
+  border-color: var(--border-strong);
+  background: color-mix(in srgb, var(--accent) 10%, var(--card-bg));
+}
+
+.notification-feed-item-body.clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.notification-feed-item-dismiss {
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  color: var(--fg-muted);
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+.notification-feed-item-dismiss:hover {
+  opacity: 1;
+  color: var(--fg);
+}
+
+.notification-section-label--row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.notification-clear-all {
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.notification-clear-all:hover {
+  text-decoration: underline;
+}
+
+.notification-feed-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.notification-group-toggle {
+  align-self: flex-start;
+  border: none;
+  background: none;
+  color: var(--fg-muted);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0 2px 2px;
+}
+
+.notification-group-toggle:hover {
+  color: var(--fg);
+}
+
+.notification-feed-item-resolved {
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+
+.notification-feed-item-actions {
+  display: flex;
+  flex-wrap: wrap; /* the inline respond-error spans a full row below the buttons */
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.notification-perm-btn {
+  flex: 1;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.notification-perm-btn.approve {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.notification-perm-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.notification-perm-btn:not(:disabled):hover {
+  opacity: 0.9;
+}
+
+.notification-perm-error {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: var(--error, #d64545);
 }
 
 .notification-retry-btn {
@@ -5995,6 +6129,78 @@ input:focus, textarea:focus, select:focus {
   flex-shrink: 0;
 }
 
+.task-group-model {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(175, 82, 222, 0.10);
+  color: #AF52DE;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  flex-shrink: 0;
+}
+
+/* Collapsed "Prompt & settings" row at the top of a task-group body */
+.task-group-prompt {
+  margin-bottom: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+.task-group-prompt-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 8px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--fg-muted);
+  text-align: left;
+}
+.task-group-prompt-toggle:hover { background: var(--bg-tertiary); }
+
+.task-group-prompt-title {
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.task-group-prompt-preview {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-muted);
+  opacity: 0.8;
+}
+
+.task-group-prompt-body {
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+}
+
+.task-group-prompt-settings {
+  font-size: 10px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  color: var(--fg-muted);
+  margin-bottom: 6px;
+  word-break: break-all;
+}
+
+.task-group-prompt-pre {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--fg-secondary);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
 .task-group-description {
   flex: 1;
   color: var(--fg-secondary);
@@ -6663,6 +6869,47 @@ input:focus, textarea:focus, select:focus {
 .mic-silence-warning svg {
   flex-shrink: 0;
   color: var(--warning, #d98a00);
+}
+
+/* Transcription-failure bubble — same anchor as the silence warning, red accents + Retry */
+.mic-error-bubble {
+  border-color: var(--danger, #d9534f);
+  max-width: 320px;
+}
+.mic-error-bubble svg {
+  color: var(--danger, #d9534f);
+}
+.mic-error-retry {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius-sm, 6px);
+  cursor: pointer;
+}
+.mic-error-retry:hover {
+  background: var(--accent-hover);
+}
+.mic-error-dismiss {
+  flex-shrink: 0;
+  padding: 0 2px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--fg-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.mic-error-dismiss:hover {
+  color: var(--fg);
+}
+
+/* Not configured — dimmed but still clickable (click routes to Settings → Speech-to-Text) */
+.mic-unconfigured {
+  opacity: 0.55;
 }
 
 .mic-transcribing {
@@ -8851,14 +9098,13 @@ img[data-lightbox-src],
   height: 12px;
 }
 
-/* Editable title in pinned cards */
+/* Editable title in pinned cards — stays single-line (nowrap/hidden inherited);
+   the browser auto-scrolls the hidden overflow to keep the caret visible. */
 .todo-pinned-title.editing {
   outline: 1px solid var(--accent);
   border-radius: 3px;
   padding: 0 3px;
-  white-space: pre-wrap;
-  overflow: visible;
-  text-overflow: unset;
+  text-overflow: clip;
   cursor: text;
 }
 
@@ -8879,6 +9125,12 @@ img[data-lightbox-src],
 .todo-pinned-card-done .todo-pinned-title {
   text-decoration: line-through;
   color: var(--fg-muted);
+}
+
+/* Tier dot on a Recent card whose task is already pinned — replaces the drag
+   grip ("already placed"; the tier card is the draggable one). */
+.todo-recent-tier-dot {
+  margin: 0 1px;
 }
 
 /* Task whose session is currently open on the home page — left accent bar so it
@@ -14280,12 +14532,32 @@ a.task-kebab-info:hover {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   box-shadow: var(--card-shadow-hover);
-  max-height: 420px;
+  max-height: min(72vh, 720px);
   overflow: hidden;
   display: flex;
   flex-direction: column;
   z-index: 50;
   animation: commandPaletteIn 0.15s ease-out;
+}
+
+/* Concept explainer strip — tells new users what a session is (and that a task
+   tracks it) right where both get created. */
+.sps-header {
+  padding: 8px 10px 0;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.sps-header-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.sps-header-hint {
+  font-size: 11px;
+  color: var(--fg-muted);
+  line-height: 1.35;
 }
 
 .sps-search {
@@ -14312,34 +14584,38 @@ a.task-kebab-info:hover {
   font-family: 'SF Mono', Menlo, monospace;
   background: var(--accent-subtle);
   border-color: var(--accent);
-  padding-right: 70px; /* room for Go button */
+  padding-right: 72px; /* room for the compact status button (widest: "+ folder") */
 }
 
-.sps-go-btn {
+/* Compact status/confirm button — replaces the old wide "Start session ⇧↵" pill.
+   Color = live existence verdict: green ✓ exists, amber "+ folder" missing,
+   neutral ↵ unknown (loading / host down). */
+.sps-status-btn {
   position: absolute;
   right: 12px;
   top: 50%;
   transform: translateY(-50%);
+  /* Above the has-ghost input (z-index:1), which otherwise swallows clicks. */
+  z-index: 2;
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
+  justify-content: center;
+  min-width: 26px;
+  height: 22px;
+  padding: 0 7px;
   border: none;
   border-radius: 4px;
-  background: var(--accent);
-  color: #fff;
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 700;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.1s;
+  transition: background 0.1s, filter 0.1s;
 }
-.sps-go-btn:hover { background: var(--accent-hover, #0070e0); }
-.sps-go-btn kbd {
-  font-family: inherit;
-  font-size: 10px;
-  opacity: 0.8;
-}
+.sps-status-btn:hover { filter: brightness(1.08); }
+.sps-status-valid { background: var(--success, #34C759); color: #fff; }
+.sps-status-missing { background: var(--warning, #FF9500); color: #fff; font-size: 11px; }
+.sps-status-unknown { background: var(--accent); color: #fff; }
+.sps-status-btn:disabled { opacity: 0.5; cursor: default; }
 
 .sps-host-filter {
   display: flex;
@@ -14443,6 +14719,25 @@ a.task-kebab-info:hover {
   margin-left: auto;
 }
 
+/* Pencil marker on auto-discovered raw-FQDN host tabs — "this name is editable" */
+.sps-host-tab-raw {
+  margin-left: 4px;
+  font-size: 9px;
+  opacity: 0.55;
+}
+
+/* One-line nudge under the tab row, shown only while a raw host tab is active */
+.sps-raw-host-nudge {
+  padding: 4px 12px 0;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.sps-raw-host-nudge a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .sps-empty, .sps-error {
   padding: 20px 12px;
   text-align: center;
@@ -14450,6 +14745,126 @@ a.task-kebab-info:hover {
   color: var(--fg-muted);
 }
 .sps-error { color: var(--error); }
+
+/* Section labels — "📁 subdirectories" / "🕘 history" / per-host groups.
+   Live and history results must be visually distinct: history can never
+   impersonate a live listing. */
+.sps-section-label {
+  padding: 6px 10px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  opacity: 0.8;
+  position: sticky;
+  top: 0;
+  background: var(--card-bg);
+  z-index: 1;
+}
+
+/* Marker on a live dir that's also in session history */
+.sps-hist-marker {
+  font-size: 10px;
+  color: var(--accent);
+  opacity: 0.9;
+}
+
+/* Per-host live diagnostics: missing dir / empty dir (informational) */
+.sps-live-note {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  font-style: italic;
+}
+
+/* Host unreachable — subtle, never a modal */
+.sps-host-down {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  opacity: 0.55;
+  font-style: italic;
+}
+
+/* "Create <path> & start session" row for nonexistent leaf dirs */
+.sps-create-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--fg);
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+}
+.sps-create-row:hover {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+}
+.sps-create-row .sps-create-icon {
+  font-weight: 700;
+  color: var(--accent);
+}
+.sps-create-row code {
+  font-family: 'SF Mono', Menlo, monospace;
+  font-size: 11px;
+  word-break: break-all;
+}
+
+/* Ghost-text inline completion — overlay sits behind a transparent-background
+   input with identical font/padding; wrapper carries the visual background. */
+.sps-ghost-wrap {
+  position: relative;
+  border-radius: 6px;
+}
+.sps-ghost-wrap.editing {
+  background: var(--accent-subtle);
+}
+.sps-ghost-overlay {
+  position: absolute;
+  inset: 0;
+  padding: 7px 10px;
+  padding-right: 72px; /* mirror .sps-search-input.editing status-button room */
+  font-family: 'SF Mono', Menlo, monospace;
+  font-size: 13px;
+  /* MUST match the input's inherited line-height (body 1.5 → 19.5px). The input
+     centers its text in that line box; 'normal' (~15px) floats the ghost ~2px
+     higher than the typed text — visible baseline mismatch. */
+  line-height: 1.5;
+  white-space: pre;
+  overflow: hidden;
+  pointer-events: none;
+  border: 1px solid transparent; /* mirror input border box */
+}
+.sps-ghost-typed { color: transparent; }
+.sps-ghost-text { color: var(--fg-muted); opacity: 0.6; }
+.sps-search-input.has-ghost.editing {
+  background: transparent; /* let the ghost overlay show through */
+  position: relative;
+  z-index: 1;
+}
+
+/* Key hints row — lives below the list so the search placeholder can state purpose. */
+.sps-keys-hint {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  font-size: 10px;
+  color: var(--fg-muted);
+  opacity: 0.7;
+  border-top: 1px solid var(--border);
+}
+.sps-keys-hint kbd {
+  font-family: 'SF Mono', Menlo, monospace;
+  font-size: 9px;
+  padding: 0 3px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-secondary);
+}
 
 /* Task metadata footer — Star / Needs attention / Pin tier / Priority */
 .sps-meta-footer {
@@ -14460,6 +14875,19 @@ a.task-kebab-info:hover {
   flex-direction: column;
   gap: 6px;
   background: var(--bg-secondary, transparent);
+}
+/* Edit mode: collapse to one dense row — vertical space goes back to the path list */
+.sps-meta-footer.compact {
+  padding: 4px 10px;
+}
+.sps-meta-footer.compact .sps-meta-row {
+  flex-wrap: nowrap;
+  gap: 6px;
+  overflow-x: auto;
+}
+.sps-meta-footer.compact .sps-meta-model-select {
+  margin-left: auto;
+  max-width: 110px;
 }
 .sps-meta-row {
   display: flex;
@@ -14582,6 +15010,16 @@ a.task-kebab-info:hover {
   color: var(--fg-muted);
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+/* Persistent compose guidance (fix-walnut) — placeholder text vanishes on the
+   first keystroke; this line stays visible through the whole compose. */
+.qsb-hint {
+  display: block;
+  font-size: 11px;
+  color: var(--fg-muted);
+  line-height: 1.35;
+  margin-top: 2px;
 }
 
 /* Compact read-only model chip — click to re-open the picker and edit all settings. */
@@ -14838,6 +15276,37 @@ a.task-kebab-info:hover {
   gap: 8px;
 }
 
+/* Custom model ID row — terminal `/model <id>` parity */
+.model-picker-custom {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
+.model-picker-custom-input {
+  flex: 1;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card-bg);
+  color: var(--fg-primary);
+}
+
+.model-picker-custom-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.model-picker-custom-input::placeholder {
+  color: var(--fg-muted);
+  font-size: 11.5px;
+}
+
 .model-picker-option {
   flex: 1 1 calc(33.3% - 6px);
   min-width: 100px;
@@ -14912,6 +15381,15 @@ a.task-kebab-info:hover {
   font-weight: 600;
   color: var(--accent);
   margin-top: 4px;
+}
+
+/* Catalog rows the CLI marks disabled (org-restricted): visible, greyed, no Switch. */
+.model-picker-option-disabled {
+  opacity: 0.45;
+}
+
+.model-picker-option-badge-disabled {
+  color: var(--fg-muted, var(--fg-secondary));
 }
 
 /* ===== Hooks Page ===== */

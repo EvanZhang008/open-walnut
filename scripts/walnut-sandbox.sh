@@ -25,6 +25,8 @@
 #   scripts/walnut-sandbox.sh token [REGION]         # use host AWS_BEARER_TOKEN_BEDROCK
 #   scripts/walnut-sandbox.sh keys  [REGION]         # use host AWS_ACCESS_KEY_ID/SECRET
 #   scripts/walnut-sandbox.sh profile <NAME> [REGION]# use a ~/.aws profile (incl. credential_process)
+#   scripts/walnut-sandbox.sh export ["CMD"] [REGION] # use an awsCredentialExport command (temp creds)
+#   scripts/walnut-sandbox.sh subscription [MODEL]   # text-only Claude Code subscription (claude -p)
 #   scripts/walnut-sandbox.sh test                   # POST /api/config/test-connection (real round-trip)
 #   scripts/walnut-sandbox.sh chat ["message"]       # send one message to the butler, print its reply
 #   scripts/walnut-sandbox.sh record <out.mp4>       # record the onboarding chain (needs a token; see below)
@@ -98,7 +100,22 @@ providers:
     api: bedrock
 $1
 agent:
-  main_provider: bedrock
+  main_provider: bedrock${WALNUT_SANDBOX_MAIN_MODEL:+
+  main_model: $WALNUT_SANDBOX_MAIN_MODEL}
+YAML
+}
+
+# Write a providers.claude_cli config.yaml (text-only subscription provider).
+write_subscription_config() {  # $1 = model alias (default|opus|sonnet|haiku)
+  mkdir -p "$ROOT/.open-walnut"
+  cat > "$ROOT/.open-walnut/config.yaml" <<YAML
+version: 1
+providers:
+  claude_cli:
+    api: claude-cli
+agent:
+  main_provider: claude_cli
+  main_model: ${1:-default}
 YAML
 }
 
@@ -137,6 +154,34 @@ case "$cmd" in
     write_bedrock_config "    region: $region
     aws_profile: $prof"
     # REAL HOME so ~/.aws/config resolves; ~/.toolbox/bin on PATH so credential_process (ada) runs.
+    launch "$HOME" "$HOME/.toolbox/bin:$PATH"
+    wait_health ;;
+
+  export)
+    # awsCredentialExport path: a shell command prints {Credentials:{...,SessionToken}}.
+    # Default to Claude Code's own exporter. REAL HOME + ~/.toolbox/bin so the command
+    # (which reads ~/.aws / runs credential_process helpers) can resolve.
+    xcmd="${2:-\"$HOME/.toolbox/bin/claude\" default-credential-export}"
+    region="${3:-us-west-2}"
+    # Emit as a YAML single-quoted scalar (double any embedded single quotes) so a
+    # command like `"/path/claude" default-credential-export` — a double-quoted path
+    # followed by an arg — doesn't break YAML parsing and silently drop the block.
+    xcmd_yaml="'${xcmd//\'/\'\'}'"
+    reset_root; build_once
+    write_bedrock_config "    region: $region
+    aws_credential_export: $xcmd_yaml"
+    launch "$HOME" "$HOME/.toolbox/bin:$PATH"
+    wait_health ;;
+
+  subscription)
+    # Text-only Claude Code SUBSCRIPTION provider (spawns `claude -p`, no key).
+    # REAL HOME so the CLI finds the logged-in subscription (keychain/.credentials);
+    # ~/.toolbox/bin on PATH so a logged-in `claude` resolves. We deliberately do
+    # NOT inject AWS_BEARER_TOKEN_BEDROCK — the adapter strips it anyway, and its
+    # absence keeps the config purely subscription.
+    model="${2:-default}"
+    reset_root; build_once
+    write_subscription_config "$model"
     launch "$HOME" "$HOME/.toolbox/bin:$PATH"
     wait_health ;;
 

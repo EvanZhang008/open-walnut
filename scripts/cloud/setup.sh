@@ -193,6 +193,11 @@ export PATH="/usr/local/bin:$PATH"
 git config --global --add safe.directory "$REPO_DIR"
 cd "$REPO_DIR"
 npm ci
+# npm ci normally installs the right prebuilt native binding, but a deploy can
+# leave a stale/foreign-platform binding behind (observed 2026-07-10: linux-arm64
+# binding missing → every SQLite consumer degraded to "null.prepare" errors).
+# Verify the binding actually loads on THIS platform; rebuild if it doesn't.
+node -e "require('better-sqlite3')" 2>/dev/null || npm rebuild better-sqlite3
 npm run build
 (cd web && npx vite build)
 # Service user must be able to read everything (incl. node_modules).
@@ -214,6 +219,17 @@ if OPENAI_KEY=$(aws ssm get-parameter --name /walnut/openai-api-key \
     || echo "OPENAI_API_KEY=$OPENAI_KEY" >> /etc/walnut/walnut.env
 else
   echo "    (no /walnut/openai-api-key in SSM — voice STT cloud fallback disabled)"
+fi
+# web_search (Tavily) — same pattern: config.yaml is machine-local and never
+# carries secrets, so the key rides SSM → env. web-search-tool falls back to
+# TAVILY_API_KEY when tools.web_search.api_key is absent from config.
+if TAVILY_KEY=$(aws ssm get-parameter --name /walnut/tavily-api-key \
+    --with-decryption --query Parameter.Value --output text 2>/dev/null); then
+  grep -q '^TAVILY_API_KEY=' /etc/walnut/walnut.env \
+    && sed -i "s|^TAVILY_API_KEY=.*|TAVILY_API_KEY=$TAVILY_KEY|" /etc/walnut/walnut.env \
+    || echo "TAVILY_API_KEY=$TAVILY_KEY" >> /etc/walnut/walnut.env
+else
+  echo "    (no /walnut/tavily-api-key in SSM — web_search disabled on the companion)"
 fi
 chown "$WALNUT_USER:$WALNUT_USER" /etc/walnut/walnut.env
 chmod 600 /etc/walnut/walnut.env

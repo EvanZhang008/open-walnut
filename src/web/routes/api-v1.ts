@@ -21,7 +21,6 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import type { MessageParam } from '../../agent/model.js'
 import type { ChatEntry } from '../../core/types.js'
@@ -47,6 +46,8 @@ import {
   MAX_NOTE_SIZE,
 } from './notes-v2.js'
 import { emitSse as emitChannelSse, attachSse, closeAllSseChannels } from '../sse-channels.js'
+import { processAndSaveImages, buildImageAnnotation, type ImagePayload } from './images.js'
+import { stripEntityRefs } from '../../utils/entity-refs.js'
 import { log } from '../../logging/index.js'
 
 export const apiV1Router = Router()
@@ -92,26 +93,9 @@ apiV1Router.use((_req: Request, res: Response, next: NextFunction) => {
   next()
 })
 
-// ── Version (from the repo/package root package.json, cached) ──
+// ── Version (moved to core/version.ts so the bug-report bundler can share it) ──
 
-let cachedVersion: string | null = null
-function getVersion(): string {
-  if (cachedVersion) return cachedVersion
-  try {
-    // Walk up from this module (works from both src/ under tsx and dist/ bundles).
-    let dir = path.dirname(fileURLToPath(import.meta.url))
-    for (let i = 0; i < 6; i++) {
-      const candidate = path.join(dir, 'package.json')
-      if (fs.existsSync(candidate)) {
-        const pkg = JSON.parse(fs.readFileSync(candidate, 'utf-8')) as { version?: string }
-        if (pkg.version) { cachedVersion = pkg.version; return cachedVersion }
-      }
-      dir = path.dirname(dir)
-    }
-  } catch { /* fall through */ }
-  cachedVersion = '0.0.0'
-  return cachedVersion
-}
+import { getVersion } from '../../core/version.js'
 
 // ─── GET /api/v1/status ────────────────────────────────────────────────────
 
@@ -232,17 +216,6 @@ function shortText(s: string): string {
  * errors surface; triage/session-result/subagent/heartbeat are dev noise).
  */
 const HIDDEN_NOTIFICATION_SOURCES = new Set(['triage', 'session', 'subagent', 'heartbeat'])
-
-/** <task-ref id label/> / <session-ref id label/> → plain label (mobile has no ref pills). */
-const ENTITY_REF_RE = /<(task|session)-ref\s+id="([^"]*)"(?:\s+label="([^"]*)")?\s*\/?>/g
-/** Legacy bracket ref: [mr9i88ys-87a4|Some Label] → Some Label. */
-const LEGACY_REF_RE = /\[([a-z0-9]{7,10}-[a-f0-9]{4})\|([^\]]+)\]/g
-
-function stripEntityRefs(text: string): string {
-  return text
-    .replace(ENTITY_REF_RE, (_m, _kind, id: string, label?: string) => label || id)
-    .replace(LEGACY_REF_RE, (_m, _id, label: string) => label)
-}
 
 /**
  * Drop machine banners prefixed onto user turns before the real message:
@@ -419,6 +392,57 @@ apiV1Router.get('/conversations/:id/stream', async (req: Request, res: Response,
 /** REST-initiated turns currently running or queued, keyed by conversation. */
 const activeTurns = new Map<string, string>()
 
+// ── Image attachments (additive) ──
+// Frozen-contract note: `images` is optional. Absent → identical to today.
+// Mirrors the WS chat pipeline (chat.ts): candidate entries are filtered here
+// (allowed type + string data, capped at 5) exactly like processAndSaveImages
+// filters, so we can decide "empty text is OK because an image is present"
+// before doing the disk I/O. processAndSaveImages does the same filtering
+// again + compression when it actually saves.
+
+const ALLOWED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
+const MAX_IMAGES_PER_MESSAGE = 5
+
+/** Extract the valid image payloads from a request body (silently drops junk). */
+function extractValidImages(raw: unknown): ImagePayload[] {
+  if (!Array.isArray(raw)) return []
+  return (raw as Array<{ data?: unknown; mediaType?: unknown }>)
+    .filter((img) =>
+      typeof img?.data === 'string'
+      && img.data.length > 0
+      && typeof img.mediaType === 'string'
+      && ALLOWED_IMAGE_TYPES.has(img.mediaType),
+    )
+    .slice(0, MAX_IMAGES_PER_MESSAGE)
+    .map((img) => ({ data: img.data as string, mediaType: img.mediaType as string }))
+}
+
+/**
+ * Replace base64 image blocks in a user message with lightweight path-based
+ * blocks for persistence. Mirror of the private helper in chat.ts (that file
+ * is off-limits to this change) — only the first user message carries images.
+ */
+function replaceImagesWithPaths(
+  msgs: MessageParam[],
+  savedImages: Array<{ filePath: string; filename: string; mediaType: string }>,
+): MessageParam[] {
+  if (savedImages.length === 0) return msgs
+  return msgs.map((msg) => {
+    const { role, content } = msg as { role: string; content: unknown }
+    if (role !== 'user' || !Array.isArray(content)) return msg
+    if (!(content as Array<{ type: string }>).some((b) => b.type === 'image')) return msg
+    let imageIdx = 0
+    const newContent = (content as Array<Record<string, unknown>>).map((block) => {
+      if (block.type === 'image' && imageIdx < savedImages.length) {
+        const saved = savedImages[imageIdx++]
+        return { type: 'image', path: saved.filePath, media_type: saved.mediaType }
+      }
+      return block
+    })
+    return { role, content: newContent } as unknown as MessageParam
+  })
+}
+
 apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const agentId = requestAgentId(req)
@@ -431,8 +455,12 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
       sendError(res, 404, 'not_found', `Conversation not found: ${conversationId}`)
       return
     }
-    const text = req.body?.text
-    if (typeof text !== 'string' || text.trim().length === 0) {
+    // Additive: `images` allows an otherwise-empty text turn. Old clients that
+    // send no images keep the exact 400-on-empty-text behavior.
+    const images = extractValidImages(req.body?.images)
+    const rawText = req.body?.text
+    const text = typeof rawText === 'string' ? rawText : ''
+    if (text.trim().length === 0 && images.length === 0) {
       sendError(res, 400, 'bad_request', 'text (non-empty string) is required')
       return
     }
@@ -441,9 +469,21 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
       return
     }
 
+    // Save + compress images OUTSIDE the queue (disk I/O) — same as chat.ts, so
+    // the per-agent queue isn't held during uploads.
+    let savedImages: Array<{ filePath: string; filename: string; mediaType: string }> = []
+    let imageContentBlocks: unknown[] | null = null
+    if (images.length > 0) {
+      const processed = await processAndSaveImages(images)
+      if (processed) {
+        savedImages = processed.savedImages
+        imageContentBlocks = processed.imageContentBlocks
+      }
+    }
+
     const turnId = crypto.randomUUID()
     activeTurns.set(conversationId, turnId)
-    log.web.info('api-v1 message accepted', { conversationId, turnId, agentId, messageLength: text.length })
+    log.web.info('api-v1 message accepted', { conversationId, turnId, agentId, messageLength: text.length, imageCount: savedImages.length })
 
     // Additive SSE event: if another turn currently holds the agent queue
     // (possibly a long one on a DIFFERENT conversation), this turn will wait.
@@ -456,7 +496,7 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
 
     // Fire the turn through the SAME per-agent queue the WS chat uses — one
     // serialization path. The 202 returns immediately; progress streams on SSE.
-    void runApiV1Turn(agentId, conversationId, text, turnId)
+    void runApiV1Turn(agentId, conversationId, text, turnId, { savedImages, imageContentBlocks })
       .catch((err) => {
         log.web.error('api-v1 turn failed', {
           conversationId, turnId,
@@ -480,7 +520,16 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
  * Emits SSE events AND the same WS broadcast events, so the web UI mirrors
  * turns fired from mobile.
  */
-async function runApiV1Turn(agentId: string, conversationId: string, text: string, turnId: string): Promise<void> {
+async function runApiV1Turn(
+  agentId: string,
+  conversationId: string,
+  text: string,
+  turnId: string,
+  imageData?: {
+    savedImages: Array<{ filePath: string; filename: string; mediaType: string }>
+    imageContentBlocks: unknown[] | null
+  },
+): Promise<void> {
   await enqueueAgentTurn(agentId, 'api-v1', async () => {
     // Lazy import to avoid loading the agent at server startup (same as chat.ts).
     const { runAgentLoop } = await import('../../agent/loop.js')
@@ -510,8 +559,27 @@ async function runApiV1Turn(agentId: string, conversationId: string, text: strin
 
     const history = await chatHistory.getApiMessages(agentId, conversationId)
 
+    // Build the user content: images (if any) become base64 content blocks
+    // followed by a text block prefixed with the <attached-images> annotation
+    // — same shape chat.ts feeds runAgentLoop. Persist the path-based form so
+    // chat-history.json stays small (base64 → { type:'image', path } refs).
+    const savedImages = imageData?.savedImages ?? []
+    const imageContentBlocks = imageData?.imageContentBlocks ?? null
+    let userContent: string | unknown[] = text
+    if (imageContentBlocks) {
+      const blocks = [...imageContentBlocks]
+      blocks.push({ type: 'text', text: buildImageAnnotation(savedImages) + text })
+      userContent = blocks
+    }
+
     // Eager persist: the user message survives crashes mid-turn.
-    await chatHistory.addUserMessage(text, {
+    const userContentForPersist: string | unknown[] = savedImages.length > 0 && Array.isArray(userContent)
+      ? (replaceImagesWithPaths(
+          [{ role: 'user', content: userContent } as MessageParam],
+          savedImages,
+        )[0] as { content: unknown[] }).content
+      : userContent
+    await chatHistory.addUserMessage(userContentForPersist, {
       displayText: text,
       turnId,
       agentId,
@@ -521,7 +589,7 @@ async function runApiV1Turn(agentId: string, conversationId: string, text: strin
     emitSse(conversationId, 'message-start', { turnId })
 
     try {
-      const result = await runAgentLoop(text, history, {
+      const result = await runAgentLoop(userContent, history, {
         onTextDelta: (delta) => {
           emitSse(conversationId, 'text-delta', { delta })
           broadcastEvent(EventNames.AGENT_TEXT_DELTA, { delta, agentId, conversationId })

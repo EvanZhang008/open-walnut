@@ -20,8 +20,6 @@ export type {
   OnModeChangePayload,
   OnTurnCompletePayload,
   OnTurnErrorPayload,
-  OnSessionEndPayload,
-  OnSessionIdlePayload,
 } from './types.js';
 
 import { SessionHookDispatcher } from './dispatcher.js';

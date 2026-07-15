@@ -173,12 +173,22 @@ export class SessionHealthMonitor {
     // Detect stale AWAIT_HUMAN_ACTION sessions (stuck sub-agents)
     await this.checkStaleAwaitingSessions(sessions, updateSessionRecord, taskMap)
 
+    // Self-heal background-task panels for sessions that are NOT turn-over gating
+    // candidates (idle / AWAIT_HUMAN_ACTION) — checkHungSessions only runs for
+    // process_status==='running', and checkIdleTimeout's own reconcile call is
+    // skipped entirely for AWAIT_HUMAN_ACTION and is a no-op once a `isBackgrounded`
+    // task has already zeroed the turn-over count. Without this, a backgrounded
+    // task's terminal event lost in a transport gap (SSH flap / daemon restart) has
+    // NO tick that will ever PULL the daemon's authoritative state for it — the UI
+    // panel shows the pre-restart snapshot forever (inc-1784012867247).
+    await this.reconcilePendingBackgroundTasks(sessions)
+
     // Authoritative reconcile for stuck sessions — the periodic safety net behind
     // the event-driven paths. Any lost/swallowed result event (tailer freeze,
     // restart window, WS drop, replay-guard swallow) previously wedged
     // process_status at 'running' — or the task at IN_PROGRESS — forever because
     // NOTHING re-checked them against the daemon stream file. This does.
-    await this.reconcileStuckRunningSessions(sessions, taskMap)
+    const reconciledIds = await this.reconcileStuckRunningSessions(sessions, taskMap)
 
     // Detect hung Claude Code processes: message delivered but no Claude output for 5 minutes.
     // Root cause: Claude Code can hang internally (e.g. between autocompact and API call)
@@ -193,7 +203,8 @@ export class SessionHealthMonitor {
     const idleTimedOutIds = await this.checkIdleTimeout(sessions, updateSessionRecord, taskMap, cachedIsAlive)
 
     for (const session of sessions) {
-      // Skip sessions already handled by idle timeout or hung detection (prevents stale-state race)
+      // Skip sessions already handled by reconcile, idle timeout, or hung detection (prevents stale-state race)
+      if (reconciledIds.has(session.claudeSessionId)) continue
       if (idleTimedOutIds.has(session.claudeSessionId)) continue
       if (hungKilledIds.has(session.claudeSessionId)) continue
 
@@ -382,6 +393,44 @@ export class SessionHealthMonitor {
         totalMs: checkTotal, orphanMs: tOrphan - checkT0, recoverMs: tRecover - tOrphan,
         sessionCount: sessions.length, taskCount: taskMap.size,
       })
+    }
+  }
+
+  /**
+   * PULL daemon-authoritative background-task state for every non-terminal session
+   * still holding a non-terminal `_bgTasks` entry, REGARDLESS of process_status or
+   * task phase. This is the ONLY tick that reaches sessions in idle/AWAIT_HUMAN_ACTION
+   * — checkHungSessions gates on process_status==='running', and checkIdleTimeout's
+   * isBackgroundWorkActive call both skips AWAIT_HUMAN_ACTION outright and would be a
+   * no-op anyway once a `isBackgrounded` task alone has zeroed the turn-over count
+   * (see ClaudeCodeSession.hasPendingBackgroundTasks doc). Cheap: the session-side
+   * check short-circuits before the daemon RPC when the task set has nothing
+   * non-terminal left, so idle sessions with no pending work cost nothing here.
+   */
+  private async reconcilePendingBackgroundTasks(sessions: SessionRecord[]): Promise<void> {
+    let runner: { reconcilePendingBackgroundTasks(id: string): Promise<void> } | undefined
+    try {
+      const { sessionRunner } = await import('../providers/claude-code-session.js')
+      runner = sessionRunner
+    } catch { return }
+
+    // PARALLEL, not sequential: each call can wait out a full 30s daemon-command
+    // timeout when a host's tunnel is in the "connected but no pong yet" stale
+    // window (DaemonConnection.PING_INTERVAL_MS * 3 grace before it's declared
+    // dead). A `for...of` + await here would serialize those 30s waits across
+    // every session on that host — exactly the 30s/60s/90s-multiple check() stalls
+    // this tick must not reproduce.
+    const results = await Promise.allSettled(
+      sessions.map((session) => runner!.reconcilePendingBackgroundTasks(session.claudeSessionId)),
+    )
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i]
+      if (r.status === 'rejected') {
+        log.session.debug('health monitor: reconcilePendingBackgroundTasks failed', {
+          sessionId: sessions[i].claudeSessionId,
+          error: r.reason instanceof Error ? r.reason.message : String(r.reason),
+        })
+      }
     }
   }
 
@@ -743,10 +792,11 @@ export class SessionHealthMonitor {
    */
   private reconcileAttemptAt = new Map<string, number>()
 
-  private async reconcileStuckRunningSessions(sessions: SessionRecord[], taskMap?: Map<string, Task>): Promise<void> {
+  private async reconcileStuckRunningSessions(sessions: SessionRecord[], taskMap?: Map<string, Task>): Promise<Set<string>> {
     const ACTIVITY_FRESH_MS = 3 * 60 * 1000   // events this recent = genuinely streaming
     const RECONCILE_RETRY_MS = 5 * 60 * 1000  // min gap between tail reads per session
     const MAX_PER_TICK = 5                    // bound worst-case I/O per 30s tick
+    const convergedIds = new Set<string>()
 
     const { getRegisteredSessionManager } = await import('../providers/session-manager.js')
     const now = Date.now()
@@ -775,14 +825,15 @@ export class SessionHealthMonitor {
       // with a live CLI) would otherwise trigger a full JSONL read every tick.
       const lastAttempt = this.reconcileAttemptAt.get(session.claudeSessionId) ?? 0
       if (now - lastAttempt < RECONCILE_RETRY_MS) continue
-      this.reconcileAttemptAt.set(session.claudeSessionId, now)
-      attempted++
 
       try {
+        attempted++
+        this.reconcileAttemptAt.set(session.claudeSessionId, now)
         const { reconcileProcessStatus } = await import('./session-reconcile.js')
         const outcome = await reconcileProcessStatus(session, { minAgeMs: ACTIVITY_FRESH_MS })
         if (outcome.converged) {
           this.reconcileAttemptAt.delete(session.claudeSessionId)
+          convergedIds.add(session.claudeSessionId)
           log.session.info('health monitor: reconciled stuck session', {
             sessionId: session.claudeSessionId,
             taskId: session.taskId,
@@ -790,6 +841,12 @@ export class SessionHealthMonitor {
             phaseSynced: outcome.phaseSynced ?? false,
             debt: recordDebt ? 'record' : 'phase',
           })
+          // Sync live CCS instance so in-memory state and DB agree.
+          try {
+            const { sessionRunner } = await import('../providers/claude-code-session.js')
+            const liveSession = sessionRunner.findSessionByClaudeId(session.claudeSessionId)
+            if (liveSession) liveSession.setProcessStatusFromReconciler(outcome.to)
+          } catch { /* runner not loaded — session is attach-only */ }
         }
       } catch (err) {
         log.session.warn('health monitor: reconcile attempt failed', {
@@ -806,6 +863,7 @@ export class SessionHealthMonitor {
         if (!runningIds.has(sid)) this.reconcileAttemptAt.delete(sid)
       }
     }
+    return convergedIds
   }
 
   /**
@@ -1080,7 +1138,12 @@ export class SessionHealthMonitor {
       const task = taskMap.get(taskId)!
 
       // Only Rule A: all primary sessions dead + task stuck at IN_PROGRESS → needs attention.
-      // isProcessAlive() is a hard OS fact — safe to act on.
+      // isProcessAlive() is a hard OS fact for local sessions — safe to act on.
+      //
+      // GUARD: if ALL dead sessions are remote and the daemon is currently disconnected
+      // (status_reason === 'remote_unreachable'), liveness is UNKNOWN — a tunnel flap
+      // causes isAlive→false but the CLI is likely still running on the remote host.
+      // Do NOT force AWAIT_HUMAN_ACTION from connectivity loss alone (inc-311a517d).
       //
       // NO Rule B (alive → force IN_PROGRESS): if process_status is accurate, Layer 1
       // already set IN_PROGRESS on session:input. If process_status is wrong (e.g. stuck
@@ -1088,7 +1151,13 @@ export class SessionHealthMonitor {
       // wrong. Fix session status accuracy instead.
       let expectedPhase: TaskPhase | null = null
       if (alive.length === 0 && task.phase === 'IN_PROGRESS') {
-        expectedPhase = 'AWAIT_HUMAN_ACTION'  // all primary sessions dead + stuck at IN_PROGRESS
+        // All dead sessions are remote + unreachable? → connectivity unknown, skip.
+        const allRemoteUnreachable = dead.length > 0 && dead.every(
+          s => s.host && s.status_reason === 'remote_unreachable',
+        )
+        if (!allRemoteUnreachable) {
+          expectedPhase = 'AWAIT_HUMAN_ACTION'  // all primary sessions dead + stuck at IN_PROGRESS
+        }
       }
 
       if (expectedPhase) {

@@ -153,7 +153,7 @@ function errMsg(err: unknown): string {
  * walnut-logs.sh `recent_logs`: timestamps are UTC but filenames use the local
  * date, so a single session can straddle two files — we scan both.
  */
-function recentLogFiles(): string[] {
+export function recentLogFiles(): string[] {
   let files: string[];
   try {
     files = fs
@@ -212,7 +212,7 @@ function grepDatedLogs(
 }
 
 /** Parse the `"time":"...Z"` field (UTC ISO) → epoch ms, or null if absent/unparseable. */
-function lineTimeMs(line: string): number | null {
+export function lineTimeMs(line: string): number | null {
   const m = line.match(/"time":"([^"]+)"/);
   if (!m) return null;
   const ms = Date.parse(m[1]);
@@ -335,7 +335,7 @@ function fileExists(p: string): boolean {
 }
 
 /** Last `n` lines of a file, or '' if missing/unreadable. */
-function tailFile(file: string, n: number): string {
+export function tailFile(file: string, n: number): string {
   let content: string;
   try {
     content = fs.readFileSync(file, 'utf-8');

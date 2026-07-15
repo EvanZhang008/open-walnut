@@ -47,9 +47,13 @@ vi.mock('../../../src/agent/loop.js', () => ({
   }),
 }))
 
-import { WALNUT_HOME } from '../../../src/constants.js'
+import { WALNUT_HOME, IMAGES_DIR, conversationFile } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
 import { resetIndexBootstrap } from '../../../src/web/routes/notes-v2.js'
+
+// 1×1 red PNG — small enough that compressForApi early-exits (stays PNG).
+const TINY_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
 
 let server: HttpServer
 let port: number
@@ -383,6 +387,73 @@ describe('conversations + messages + SSE', () => {
     const json = await res.json() as { error: { code: string } }
     expect(json.error.code).toBe('bad_request')
   })
+
+  it('accepts images: saves files to the images dir + persists path-based blocks', async () => {
+    mockState.gate = null
+    const convId = await createConversation()
+
+    const before = await fs.readdir(IMAGES_DIR).catch(() => [] as string[])
+
+    const sse = await connectSse(apiUrl(`/api/v1/conversations/${convId}/stream`))
+    try {
+      const sendRes = await fetch(apiUrl(`/api/v1/conversations/${convId}/messages`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: 'what is in this image?',
+          images: [{ data: TINY_PNG_BASE64, mediaType: 'image/png' }],
+        }),
+      })
+      expect(sendRes.status).toBe(202)
+      await sse.waitFor((e) => e.event === 'message-end')
+    } finally {
+      sse.close()
+    }
+
+    // A new file landed in the images dir.
+    const after = await fs.readdir(IMAGES_DIR)
+    expect(after.length).toBeGreaterThan(before.length)
+
+    // The persisted user entry carries a lightweight path-based image block
+    // (base64 was swapped for { type:'image', path } — transcript stays small).
+    const raw = JSON.parse(await fs.readFile(conversationFile('general', convId), 'utf-8')) as {
+      entries: Array<{ role: string; content: unknown }>
+    }
+    const userEntry = raw.entries.find((e) =>
+      e.role === 'user' && Array.isArray(e.content)
+      && (e.content as Array<{ type: string }>).some((b) => b.type === 'image'),
+    )
+    expect(userEntry).toBeDefined()
+    const imgBlock = (userEntry!.content as Array<Record<string, unknown>>).find((b) => b.type === 'image')!
+    expect(typeof imgBlock.path).toBe('string')
+    expect(imgBlock.path as string).toContain(IMAGES_DIR)
+    expect(imgBlock).not.toHaveProperty('source') // no base64 blob persisted
+  }, 20_000)
+
+  it('accepts empty text when an image is present; empty text + no images still 400', async () => {
+    mockState.gate = null
+    const convId = await createConversation()
+
+    const withImage = await fetch(apiUrl(`/api/v1/conversations/${convId}/messages`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: '', images: [{ data: TINY_PNG_BASE64, mediaType: 'image/png' }] }),
+    })
+    expect(withImage.status).toBe(202)
+
+    // Wait for the turn to finish so the queue frees up before the next send.
+    const sse = await connectSse(apiUrl(`/api/v1/conversations/${convId}/stream`))
+    try { await sse.waitFor((e) => e.event === 'message-end') } finally { sse.close() }
+
+    const noImage = await fetch(apiUrl(`/api/v1/conversations/${convId}/messages`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: '   ', images: [] }),
+    })
+    expect(noImage.status).toBe(400)
+    const json = await noImage.json() as { error: { code: string } }
+    expect(json.error.code).toBe('bad_request')
+  }, 20_000)
 })
 
 describe('notes', () => {

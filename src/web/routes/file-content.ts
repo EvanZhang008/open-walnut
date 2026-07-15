@@ -18,6 +18,42 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import { createFileReader } from '../../core/session-file-reader.js'
 import type { DaemonFileReader } from '../../core/daemon-file-reader.js'
+import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
+
+/**
+ * In CLOUD mode a LOCAL file read (no `host=`) is confined to a small root
+ * allowlist. The public box holds git-synced provider secrets (config.yaml),
+ * auth.json (token hashes) and AWS creds; the old `..`-only check let any
+ * paired-device token read them by absolute path. Remote reads (`host=`) still
+ * go through the daemon on the target host and are unaffected. On the Mac
+ * (trusted LAN, owner's own machine) the FileViewer needs the whole FS, so this
+ * confinement is cloud-only.
+ */
+function cloudLocalReadAllowed(absPath: string): boolean {
+  const resolved = path.resolve(absPath)
+  const roots = [
+    path.join(os.tmpdir(), 'open-walnut'),
+    path.join(os.tmpdir(), 'open-walnut-streams'),
+    '/tmp/open-walnut',
+    '/tmp/open-walnut-streams',
+  ]
+  return roots.some((r) => resolved === r || resolved.startsWith(r + path.sep))
+}
+
+/** Absolute paths / dirs whose contents are secrets — never served locally. */
+function isSecretPath(absPath: string): boolean {
+  const resolved = path.resolve(absPath)
+  const home = os.homedir()
+  const denied = [
+    path.join(WALNUT_HOME, 'auth.json'),
+    path.join(WALNUT_HOME, 'sync', 'bridge-tokens.json'),
+    path.join(home, '.aws'),
+    path.join(home, '.ssh'),
+    path.join(home, '.config', 'walnut-secrets'),
+  ]
+  return denied.some((d) => resolved === d || resolved.startsWith(d + path.sep))
+    || /(^|\/)config\.ya?ml$/.test(resolved)
+}
 
 export const fileContentRouter = Router()
 
@@ -214,6 +250,15 @@ fileContentRouter.get('/', async (req: Request, res: Response, next: NextFunctio
     const isRemote = typeof host === 'string' && host.length > 0
     if (!isRemote && !path.isAbsolute(filePath)) {
       res.status(400).json({ error: 'Path must be absolute' })
+      return
+    }
+
+    // Cloud box: confine local reads to safe roots and never serve secret files.
+    // (Remote `host=` reads run on the target daemon and keep their own scope.
+    // The Mac/trusted-LAN FileViewer is intentionally unconfined — it's the
+    // owner's own machine.)
+    if (!isRemote && CLOUD_MODE && (isSecretPath(filePath) || !cloudLocalReadAllowed(filePath))) {
+      res.status(403).json({ error: 'Path not permitted' })
       return
     }
 

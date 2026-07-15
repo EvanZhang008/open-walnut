@@ -687,6 +687,7 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
     case 'write-inbox': return cmdWriteInbox(ws, id as number, cmd)
     case 'fs.read': return cmdFsRead(ws, id as number, cmd)
     case 'fs.write': return cmdFsWrite(ws, id as number, cmd)
+    case 'fs.mkdir': return cmdFsMkdir(ws, id as number, cmd)
     case 'fs.ls': return cmdFsLs(ws, id as number, cmd)
     case 'fs.find': return cmdFsFind(ws, id as number, cmd)
     case 'fs.stat': return cmdFsStat(ws, id as number, cmd)
@@ -1905,6 +1906,26 @@ async function cmdFsWrite(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
     sendOk(ws, id, { written: true, size: buf.length })
   } catch (err: unknown) {
     sendError(ws, id, 'fs.write failed: ' + (err as Error).message)
+  }
+}
+
+async function cmdFsMkdir(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  let dirPath = cmd.path as string
+  if (!dirPath) return sendError(ws, id, 'fs.mkdir: missing path')
+
+  // Expand ~ to home directory (Node fs doesn't do shell expansion)
+  if (dirPath === '~' || dirPath.startsWith('~/')) {
+    dirPath = HOME_DIR + dirPath.slice(1)
+  }
+
+  try {
+    // recursive:true tolerates already-existing directories (idempotent)
+    await fs.promises.mkdir(dirPath, { recursive: true })
+    sendOk(ws, id, { created: true, resolvedPath: dirPath })
+  } catch (err: unknown) {
+    const e = err as NodeJS.ErrnoException
+    const code = e.code ?? ''
+    sendError(ws, id, 'fs.mkdir failed: ' + e.message + (code ? ' (' + code + ')' : ''))
   }
 }
 

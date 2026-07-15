@@ -32,45 +32,50 @@ struct MessageRow: View {
     private var userBubble: some View {
         let failed = message.failed == true
         return VStack(alignment: .trailing, spacing: 4) {
-            HStack {
-                Spacer(minLength: 48)
-                Text(message.text)
-                    .font(.body)
-                    .lineSpacing(3)
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(
-                        failed ? Theme.danger.opacity(0.08) : Theme.tintSoft,
-                        in: RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    )
-                    .overlay {
-                        if failed {
-                            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                .strokeBorder(Theme.danger.opacity(0.5), lineWidth: 1)
+            if let images = message.localImages, !images.isEmpty {
+                attachedImages(images, dimmed: message.pending == true)
+            }
+            if !message.text.isEmpty {
+                HStack {
+                    Spacer(minLength: 48)
+                    Text(message.text)
+                        .font(.body)
+                        .lineSpacing(3)
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(
+                            failed ? Theme.danger.opacity(0.08) : Theme.tintSoft,
+                            in: RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        )
+                        .overlay {
+                            if failed {
+                                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                    .strokeBorder(Theme.danger.opacity(0.5), lineWidth: 1)
+                            }
                         }
-                    }
-                    .opacity(message.pending == true ? 0.65 : 1)
-                    .textSelection(.enabled)
-                    .contextMenu {
-                        if failed {
-                            if let onRetry {
-                                Button { onRetry() } label: { Label("Retry", systemImage: "arrow.clockwise") }
-                            }
-                            Button { UIPasteboard.general.string = message.text } label: {
-                                Label("Copy", systemImage: "doc.on.doc")
-                            }
-                            if let onDiscard {
-                                Button(role: .destructive) { onDiscard() } label: {
-                                    Label("Delete", systemImage: "trash")
+                        .opacity(message.pending == true ? 0.65 : 1)
+                        .textSelection(.enabled)
+                        .contextMenu {
+                            if failed {
+                                if let onRetry {
+                                    Button { onRetry() } label: { Label("Retry", systemImage: "arrow.clockwise") }
+                                }
+                                Button { UIPasteboard.general.string = message.text } label: {
+                                    Label("Copy", systemImage: "doc.on.doc")
+                                }
+                                if let onDiscard {
+                                    Button(role: .destructive) { onDiscard() } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                }
+                            } else {
+                                Button { UIPasteboard.general.string = message.text } label: {
+                                    Label("Copy", systemImage: "doc.on.doc")
                                 }
                             }
-                        } else {
-                            Button { UIPasteboard.general.string = message.text } label: {
-                                Label("Copy", systemImage: "doc.on.doc")
-                            }
                         }
-                    }
+                }
             }
             if failed {
                 Button {
@@ -85,6 +90,25 @@ struct MessageRow: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 2)
+    }
+
+    /// Thumbnails for images attached to a sent user message (local to this app
+    /// session — historical messages carry none). Right-aligned above the text,
+    /// each rounded and capped at ~200pt so a tall photo can't dominate.
+    private func attachedImages(_ datas: [Data], dimmed: Bool) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Spacer(minLength: 48)
+            ForEach(Array(datas.enumerated()), id: \.offset) { _, data in
+                if let image = UIImage(data: data) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: 200, maxHeight: 200)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+            }
+        }
+        .opacity(dimmed ? 0.65 : 1)
     }
 
     /// Assistant replies render as full block markdown (headings, lists, code,

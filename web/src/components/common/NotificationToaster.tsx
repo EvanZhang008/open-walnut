@@ -16,6 +16,7 @@
 import { useNavigate } from 'react-router-dom';
 import { useNotifications } from '@/contexts/notifications';
 import type { NotificationSeverity } from '@/contexts/notifications';
+import { navigateToTarget } from '@/utils/open-session';
 
 // Escape-coded so the source bytes are identical across editors/terminals
 // (raw multi-codepoint emoji like ⚠️ can render or copy-paste inconsistently).
@@ -68,7 +69,9 @@ export function NotificationToaster() {
                 e.stopPropagation();  // action has its own target — don't also open the center
                 const a = toast.action;
                 if (a?.kind === 'navigate' && a.to) {
-                  navigate(a.to);
+                  // Session deep links open on the home page's session columns
+                  // (primary surface) instead of the /sessions page.
+                  navigateToTarget(a.to, navigate);
                 } else if (a?.kind === 'callback') {
                   toast.onAction?.();
                 } else {

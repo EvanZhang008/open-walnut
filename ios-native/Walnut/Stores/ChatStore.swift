@@ -42,6 +42,19 @@ final class ChatStore {
         activeAgent?.name ?? (activeAgentID == "general" ? "Walnut" : activeAgentID)
     }
 
+    /// Whether the view's bottom sentinel is on screen — written by the view.
+    /// Read before layout-shifting mutations to decide if the list should
+    /// re-pin to the bottom (never hijack a reader scrolled up in history).
+    var viewIsAtBottom = true
+    /// Bumped when a mutation may have displaced the viewport while the user
+    /// was at the bottom; the view answers by scrolling to its sentinel.
+    private(set) var scrollToBottomSignal = 0
+    /// The INITIAL paint is `defaultScrollAnchor(.bottom)`'s job — a
+    /// programmatic scrollTo before the LazyVStack has real row heights lands
+    /// in overscroll and paints a blank page. Signals only fire after the
+    /// first successful load of the current conversation.
+    private var initialPaintDone = false
+
     var loadingList = false
     var loadingMessages = false
     var sending = false
@@ -149,6 +162,7 @@ final class ChatStore {
         streamText = ""
         activity = nil
         errorMessage = nil
+        initialPaintDone = false // fresh list → bottom anchor owns first paint
         messages = id.flatMap { DiskCache.load([ChatMessage].self, key: "messages-\($0)") } ?? []
         connectStream()
         if let id {
@@ -181,8 +195,18 @@ final class ChatStore {
             // across the replace — server history doesn't know about them and
             // a refetch must never erase the user's unsent text.
             let localOnly = messages.filter { $0.failed == true || $0.pending == true }
+            let wasAtBottom = viewIsAtBottom
+            let changed = fetched.count + localOnly.count != messages.count
+                || fetched.last?.id != messages.dropLast(localOnly.count).last?.id
             messages = fetched + localOnly
             hasOlder = fetched.count >= Self.pageSize
+            // Replacing rows with canonical ids/heights displaces the viewport
+            // once the bottom anchor's auto-pin has lapsed (any manual scroll)
+            // — glue the reader back only if they were already at the bottom.
+            // Never on the initial paint: rows haven't laid out yet and the
+            // jump overshoots real content into blank overscroll.
+            if changed && wasAtBottom && initialPaintDone { scrollToBottomSignal += 1 }
+            initialPaintDone = true
             DiskCache.save(Array(fetched.suffix(Self.cacheTail)), key: "messages-\(id)")
         } catch {
             reportIfNetwork(error)
@@ -208,21 +232,28 @@ final class ChatStore {
     // MARK: - Send flow (POST → 202 {turnId} → SSE deltas)
 
     @discardableResult
-    func send(_ text: String) async -> Bool {
+    func send(_ text: String, images: [SelectedImage] = []) async -> Bool {
         guard !sending, !streaming else { return false }
         sending = true
         errorMessage = nil
 
+        let payloads = images.map { ImagePayload(data: $0.jpegData.base64EncodedString(), mediaType: "image/jpeg") }
         var convID = activeID
         var optimistic = ChatMessage(
             id: "local-\(Date().timeIntervalSince1970)",
             role: "user", text: text, createdAt: ISO8601DateFormatter().string(from: .now), kind: nil
         )
         optimistic.pending = true
+        // Carry thumbnails so the bubble shows them immediately and a failed
+        // send retains them for retry (the store owns no-loss preservation).
+        if !images.isEmpty { optimistic.localImages = images.map(\.jpegData) }
 
         // Append FIRST — even a createConversation failure must leave the
-        // text on screen as a failed bubble, never lose it.
+        // text + images on screen as a failed bubble, never lose them.
         messages.append(optimistic)
+        // Sending always jumps to the bottom — the user wants to see their own
+        // message land even if they were scrolled up reading history.
+        scrollToBottomSignal += 1
         do {
             if convID == nil {
                 let created = try await api.createConversation(agentID: activeAgentID)
@@ -239,7 +270,7 @@ final class ChatStore {
                 }
                 return false
             }
-            _ = try await api.sendMessage(conversationID: convID, agentID: activeAgentID, text: text)
+            _ = try await api.sendMessage(conversationID: convID, agentID: activeAgentID, text: text, images: payloads)
             connection?.reportReachability(true)
             // Accepted — solidify the bubble; message-start arrives on SSE shortly.
             if let idx = messages.firstIndex(where: { $0.id == optimistic.id }) {
@@ -292,9 +323,12 @@ final class ChatStore {
             errorMessage = "Still replying — retry when the turn finishes."
             return
         }
+        // Rebuild the attached images from the retained JPEG datas so retry
+        // re-sends them (no loss); silently drop any that no longer decode.
+        let images = (message.localImages ?? []).compactMap { SelectedImage(jpegData: $0) }
         messages.removeAll { $0.id == message.id }
         errorMessage = nil
-        await send(message.text)
+        await send(message.text, images: images)
     }
 
     func discardFailed(_ message: ChatMessage) {
@@ -430,6 +464,7 @@ final class ChatStore {
         turnWatchdog?.cancel()
         turnWatchdog = nil
         watchedUserText = nil
+        let wasAtBottom = viewIsAtBottom
         streaming = false
         streamText = ""
         activity = nil
@@ -444,6 +479,9 @@ final class ChatStore {
                 ))
             }
         }
+        // Live row → provisional row shifts layout; keep the reader glued to
+        // the end of the reply they were watching.
+        if wasAtBottom { scrollToBottomSignal += 1 }
         // Reconcile with server history (real ids + tool/thinking rows).
         Task {
             await self.loadMessages(conversationID)

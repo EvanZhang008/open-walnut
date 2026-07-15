@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo, memo } from 'react';
-import { searchNotes, saveNoteContent } from '@/api/notes-v2';
+import { searchNotes, saveNoteContent, revealNote } from '@/api/notes-v2';
 import type { NoteTreeNode, SearchResult } from '@/api/notes-v2';
 import { NotesBookmarksGroup } from './NotesBookmarksGroup';
 import { NotesRecentGroup, RECENT_GROUP_KEY } from './NotesRecentGroup';
@@ -41,6 +41,18 @@ function collectNotePaths(nodes: NoteTreeNode[], acc: Set<string> = new Set()): 
   return acc;
 }
 
+/** Every file path (notes AND attachments) — used for the move name-collision guard. */
+function collectFilePaths(nodes: NoteTreeNode[], acc: Set<string> = new Set()): Set<string> {
+  for (const n of nodes) {
+    if (n.type === 'folder') {
+      if (n.children) collectFilePaths(n.children, acc);
+    } else {
+      acc.add(n.path);
+    }
+  }
+  return acc;
+}
+
 interface NotesTreePanelProps {
   tree: NoteTreeNode[];
   selectedPath: string | null;
@@ -51,7 +63,7 @@ interface NotesTreePanelProps {
   onCreateNote: (path: string) => void;
   onCreateFolder: (path: string) => void;
   onDeleteNote: (path: string) => void;
-  onRenameNote: (from: string, to: string) => void;
+  onRenameNote: (from: string, to: string) => void | Promise<void>;
   onRefresh: () => void;
   /** Vault-relative paths (WITH .md) of bookmarked notes — drives the Bookmarks group. */
   favoriteNotes: string[];
@@ -129,13 +141,14 @@ export const NotesTreePanel = memo(function NotesTreePanel({
     if (!revealPath) return;
     setExpandedFolders((prev) => {
       const next = new Set(prev);
-      // Expand all prefixes EXCEPT the leaf itself when it's a note (its parent
-      // folders must open, but a .md leaf isn't a folder). For a folder target we
+      // Expand all prefixes EXCEPT the leaf itself when it's a FILE (its parent
+      // folders must open, but a .md/attachment leaf isn't a folder — adding it
+      // would persist junk paths in the expanded set). For a folder target we
       // expand it too so its children show.
       const prefixes = ancestorFolderPaths(revealPath);
-      const isNote = revealPath.endsWith('.md');
+      const isFile = /\.[A-Za-z0-9]+$/.test(revealPath);
       for (const p of prefixes) {
-        if (isNote && p === revealPath) continue;
+        if (isFile && p === revealPath) continue;
         next.add(p);
       }
       return next;
@@ -158,6 +171,8 @@ export const NotesTreePanel = memo(function NotesTreePanel({
 
   // Feature 4: note paths present in the current tree (skip stale recents).
   const existingNotePaths = useMemo(() => collectNotePaths(tree), [tree]);
+  // All files (incl. attachments) — the drag-move collision guard must see both.
+  const existingFilePaths = useMemo(() => collectFilePaths(tree), [tree]);
   // Recent group is COLLAPSED iff the sentinel is in the expanded-folders set.
   const recentExpanded = !expandedFolders.has(RECENT_GROUP_KEY);
   const toggleRecent = useCallback(() => {
@@ -299,6 +314,28 @@ export const NotesTreePanel = memo(function NotesTreePanel({
     }
   }, [contextMenu, onDeleteNote, confirm]);
 
+  // Local-machine actions (context menu): Finder / default app / VS Code /
+  // Copy path. Failures (cloud mode 400, clipboard denial) surface via alert —
+  // a swallowed rejection reads as "the menu item did nothing".
+  const handleReveal = useCallback((p: string, mode: 'finder' | 'app' | 'vscode') => {
+    setContextMenu(null);
+    revealNote(p, mode).catch(() => {
+      void alert({ title: 'Not available', message: 'Opening local files only works on the local console.' });
+    });
+  }, [alert]);
+
+  const handleCopyPath = useCallback(async (p: string) => {
+    setContextMenu(null);
+    try {
+      const fullPath = await revealNote(p, 'path');
+      await navigator.clipboard.writeText(fullPath);
+    } catch {
+      // Safari drops the user-activation across the network await, and cloud
+      // mode 400s the resolve — either way, tell the user instead of no-op'ing.
+      void alert({ title: 'Copy failed', message: 'Could not copy the path to the clipboard.' });
+    }
+  }, [alert]);
+
   // ── Drag-to-move (#5) ──
   // The dragged source is held in a ref (read synchronously by dragover/drop)
   // AND state (drives visuals). Drop targets are resolved from the DOM via the
@@ -358,13 +395,21 @@ export const NotesTreePanel = memo(function NotesTreePanel({
     const to = destFolder ? `${destFolder}/${base}` : base;
     if (to === src) return;
     // Guard a name collision before hitting the backend (move endpoint 4xx's on
-    // an existing destination, which would otherwise fail silently).
-    if (existingNotePaths.has(to)) {
-      await alert({ title: 'Already exists', message: `A note named “${base}” already exists in that folder.` });
+    // an existing destination, which would otherwise fail silently). Attachments
+    // collide too, so check ALL files, not just notes.
+    if (existingFilePaths.has(to)) {
+      await alert({ title: 'Already exists', message: `A file named “${base}” already exists in that folder.` });
       return;
     }
-    onRenameNote(src, to); // → NotesPage.handleRenameNote → moveNote (preserves id/backlinks)
-  }, [onRenameNote, existingNotePaths, alert]);
+    try {
+      // → NotesPage.handleRenameNote → moveNote (preserves id/backlinks)
+      await onRenameNote(src, to);
+    } catch (e) {
+      // Surface the failure — a silently-swallowed rejection made failed drags
+      // look like the drop just didn't register (user-reported confusion).
+      await alert({ title: 'Move failed', message: e instanceof Error ? e.message : 'Could not move the file.' });
+    }
+  }, [onRenameNote, existingFilePaths, alert]);
 
   // Single drop handler for the whole tree (delegated). Resolves the target
   // folder from the DOM so it's correct regardless of which row/area received
@@ -619,8 +664,8 @@ export const NotesTreePanel = memo(function NotesTreePanel({
             </>
           )}
           {/* Notes get Open-in-new-tab + bookmark toggle + Rename + Delete. Attachments
-              are view-only in the tree today (rename/delete go through the .md-suffixing
-              note routes, which don't apply to binary files) — preview-only keeps it correct. */}
+              are drag-movable + local-open only: Rename/Delete stay note-only because
+              those routes speak the .md-suffix convention, which binary files don't. */}
           {contextMenu.node.type === 'file' && contextMenu.node.kind !== 'attachment' && (
             <>
               <button onClick={() => { const p = contextMenu.node.path; setContextMenu(null); onSelect(p, { newTab: true }); }}>
@@ -630,8 +675,18 @@ export const NotesTreePanel = memo(function NotesTreePanel({
                 {favoriteNotes.includes(contextMenu.node.path) ? 'Remove bookmark' : 'Bookmark'}
               </button>
               <button onClick={() => handleStartRename(contextMenu.node)}>Rename</button>
-              <button className="danger" onClick={handleDeleteFromMenu}>Delete</button>
             </>
+          )}
+          {/* Attachments (docx/xlsx/pdf/…): open with the OS default app (Word/Excel). */}
+          {contextMenu.node.kind === 'attachment' && (
+            <button onClick={() => handleReveal(contextMenu.node.path, 'app')}>Open in default app</button>
+          )}
+          {/* Local-machine actions — every node type (file, folder, attachment). */}
+          <button onClick={() => handleReveal(contextMenu.node.path, 'finder')}>Reveal in Finder</button>
+          <button onClick={() => handleCopyPath(contextMenu.node.path)}>Copy path</button>
+          <button onClick={() => handleReveal(contextMenu.node.path, 'vscode')}>Open in VS Code</button>
+          {contextMenu.node.type === 'file' && contextMenu.node.kind !== 'attachment' && (
+            <button className="danger" onClick={handleDeleteFromMenu}>Delete</button>
           )}
         </div>
       )}
@@ -666,7 +721,7 @@ function FileIcon() {
   );
 }
 
-/** Icon for an attachment node — image glyph for pictures, document glyph for PDF. */
+/** Icon for an attachment node — image glyph for pictures, document glyph for PDF/Office. */
 function AttachmentIcon({ name }: { name: string }) {
   const ext = name.slice(name.lastIndexOf('.') + 1).toLowerCase();
   if (ext === 'pdf') {
@@ -675,6 +730,17 @@ function AttachmentIcon({ name }: { name: string }) {
         <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
         <polyline points="14 2 14 8 20 8" />
         <path d="M9 15h1.5a1.5 1.5 0 0 0 0-3H9v4M14 12v4M14 12h2M14 14h1.5" strokeWidth="1.4" />
+      </svg>
+    );
+  }
+  if (['docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt'].includes(ext)) {
+    // Office document glyph — file outline with text lines.
+    return (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16" className="notes-tree-icon notes-tree-icon-attachment">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+        <polyline points="14 2 14 8 20 8" />
+        <line x1="8" y1="13" x2="16" y2="13" strokeWidth="1.4" />
+        <line x1="8" y1="17" x2="13" y2="17" strokeWidth="1.4" />
       </svg>
     );
   }

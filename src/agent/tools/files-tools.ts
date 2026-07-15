@@ -39,6 +39,14 @@ import { findSimilarFile } from '../../utils/file-utils.js';
 import { isBinaryByExtension } from '../../utils/binary-detect.js';
 import { isBlockedDevicePath } from '../../constants/files.js';
 
+// Canonical NOTES_UPDATED event source. The legacy agent-facing source
+// 'notes/global' maps to global-notes.md, whose canonical (v2) event name is
+// 'notes/global-notes' — every UI hook keys on the canonical form, and a bare
+// 'notes/global' would collide with a real vault-root global.md.
+function canonicalNotesSource(source: string): string {
+  return source === 'notes/global' ? 'notes/global-notes' : source;
+}
+
 function json(data: unknown): string {
   return JSON.stringify(data, null, 2);
 }
@@ -344,7 +352,7 @@ memory/daily[/YYYY-MM-DD], memory/repo/{slug}, repos/{name}, /absolute/path — 
       // CoalescingQueue and trigger an unnecessary AI turn.
       if (resolved.type === 'notes' && result.content_hash) {
         bus.emit(EventNames.NOTES_UPDATED, {
-          source,
+          source: canonicalNotesSource(source),
           contentHash: result.content_hash,
         }, ['web-ui'], { source: 'files-tools' });
       }
@@ -444,7 +452,7 @@ memory/daily[/YYYY-MM-DD], memory/repo/{slug}, repos/{name}, /absolute/path — 
       // CoalescingQueue and trigger an unnecessary AI turn.
       if (resolved.type === 'notes' && result.content_hash) {
         bus.emit(EventNames.NOTES_UPDATED, {
-          source,
+          source: canonicalNotesSource(source),
           contentHash: result.content_hash,
         }, ['web-ui'], { source: 'files-tools' });
       }

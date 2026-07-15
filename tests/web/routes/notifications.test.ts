@@ -49,6 +49,23 @@ describe('GET /api/notifications', () => {
     expect(res.body.feed).toHaveLength(2);
     expect(res.body.unreadCount).toBe(2);
   });
+
+  it('strips entity-ref XML from legacy bodies and truncates long ones', async () => {
+    // Simulates a record persisted BEFORE producers started stripping refs.
+    await addNotification({
+      kind: 'cron', severity: 'info', title: 'Report',
+      body: 'Done: <task-ref id="mr1-0001" label="Daily Report"/> and <session-ref id="abc" label="CLI run"/>. ' + 'x'.repeat(700),
+      dedupKey: 'cron:Report:1',
+    });
+
+    const res = await request(createApp()).get('/api/notifications');
+    const body = res.body.feed[0].body as string;
+    expect(body).not.toContain('<task-ref');
+    expect(body).not.toContain('<session-ref');
+    expect(body).toContain('Daily Report');
+    expect(body).toContain('CLI run');
+    expect(body.length).toBeLessThanOrEqual(601); // 600 + ellipsis
+  });
 });
 
 describe('POST /api/notifications/mark-read', () => {
@@ -72,6 +89,50 @@ describe('POST /api/notifications/mark-read', () => {
 
   it('rejects a non-array ids payload', async () => {
     const res = await request(createApp()).post('/api/notifications/mark-read').send({ ids: 'nope' });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('POST /api/notifications/dismiss', () => {
+  it('dismisses by dedupKeys', async () => {
+    await addNotification({ kind: 'cron', severity: 'info', title: 'A', dedupKey: 'k:a' });
+    await addNotification({ kind: 'cron', severity: 'info', title: 'B', dedupKey: 'k:b' });
+
+    const res = await request(createApp()).post('/api/notifications/dismiss').send({ dedupKeys: ['k:a'] });
+    expect(res.status).toBe(200);
+    expect(res.body.removed).toBe(1);
+    expect(res.body.unreadCount).toBe(1);
+
+    const list = await request(createApp()).get('/api/notifications');
+    expect(list.body.feed).toHaveLength(1);
+    expect(list.body.feed[0].dedupKey).toBe('k:b');
+  });
+
+  it('clears everything with an empty payload', async () => {
+    await addNotification({ kind: 'cron', severity: 'info', title: 'A', dedupKey: 'k:a' });
+    await addNotification({ kind: 'cron', severity: 'info', title: 'B', dedupKey: 'k:b' });
+
+    const res = await request(createApp()).post('/api/notifications/dismiss').send({});
+    expect(res.status).toBe(200);
+    expect(res.body.removed).toBe(2);
+
+    const list = await request(createApp()).get('/api/notifications');
+    expect(list.body.feed).toHaveLength(0);
+  });
+
+  it('treats an explicitly empty dedupKeys array as a no-op, not clear-all', async () => {
+    await addNotification({ kind: 'cron', severity: 'info', title: 'A', dedupKey: 'k:a' });
+
+    const res = await request(createApp()).post('/api/notifications/dismiss').send({ dedupKeys: [] });
+    expect(res.status).toBe(200);
+    expect(res.body.removed).toBe(0);
+
+    const list = await request(createApp()).get('/api/notifications');
+    expect(list.body.feed).toHaveLength(1);
+  });
+
+  it('rejects a non-array dedupKeys payload', async () => {
+    const res = await request(createApp()).post('/api/notifications/dismiss').send({ dedupKeys: 42 });
     expect(res.status).toBe(400);
   });
 });

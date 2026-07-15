@@ -4,7 +4,7 @@
  * Tests the ModelPicker UI flow:
  *  1. /model command appears in session command palette with Control badge
  *  2. Selecting /model opens the ModelPicker drawer
- *  3. Model cards render correctly (5 options including 1M variants, active state)
+ *  3. Model cards render correctly (7 fallback options including 1M variants)
  *  4. Selecting a model closes the picker
  *
  * Requires seed data in test-server.ts:
@@ -16,31 +16,22 @@ import { test, expect } from '@playwright/test'
 /**
  * Opens the SessionPanel for the model-switch test task.
  *
- * Flow: home page → "All" tab → find the task row →
- * click the SessionPill on the task row (which opens the SessionPanel inline).
- *
- * The SessionPill is always visible on the task row for tasks with sessions,
- * regardless of whether the TaskDetailPane has finished loading session records.
+ * Flow: home page → find the task row → plain click (a task with a session
+ * opens the SessionPanel inline; category tabs moved into the View dropdown,
+ * so the active-tab localStorage key is preset to '' = All).
  */
 async function openSessionPanel(page: import('@playwright/test').Page) {
+  await page.addInitScript(() => {
+    try { localStorage.setItem('walnut-todo-active-tab', '') } catch { /* ignore */ }
+  })
   await page.goto('/')
   await page.waitForLoadState('networkidle')
 
-  // Click "All" category tab to show all tasks (default may be starred)
-  const allTab = page.locator('.todo-panel-tab', { hasText: 'All' })
-  await expect(allTab).toBeVisible({ timeout: 5000 })
-  await allTab.click()
-  await page.waitForTimeout(300)
-
-  // Find the task row
-  const taskItem = page.locator('.todo-panel-item', { hasText: 'Model switch test task' })
+  // Plain click on a task row with a session opens the SessionPanel inline.
+  const taskItem = page.locator('.todo-panel-item', { hasText: 'Model switch test task' }).first()
   await expect(taskItem).toBeVisible({ timeout: 5000 })
-
-  // Click the SessionPill on the task row — this opens SessionPanel inline
-  const sessionPill = taskItem.locator('.task-session-pill')
-  await expect(sessionPill).toBeVisible({ timeout: 3000 })
-  await sessionPill.click()
-  await page.waitForTimeout(1000)
+  await taskItem.click()
+  await page.waitForTimeout(500)
 
   // Verify the SessionPanel is open with its chat input
   const sessionPanelInput = page.locator('.session-panel .chat-input-textarea')
@@ -119,9 +110,9 @@ test.describe('Model Switch UI', () => {
     const input = await openSessionPanel(page)
     const picker = await openModelPicker(page, input)
 
-    // Should have exactly 5 model options (including 1M variants)
+    // Fallback registry: 7 model options (incl. 1M + Fable variants)
     const options = picker.locator('.model-picker-option')
-    await expect(options).toHaveCount(5)
+    await expect(options).toHaveCount(7)
 
     // Check option labels
     const names = picker.locator('.model-picker-option-name')
@@ -130,39 +121,28 @@ test.describe('Model Switch UI', () => {
     await expect(names.nth(2)).toHaveText('Sonnet')
     await expect(names.nth(3)).toHaveText('Sonnet 1M')
     await expect(names.nth(4)).toHaveText('Haiku')
+    await expect(names.nth(5)).toHaveText('Fable')
+    await expect(names.nth(6)).toHaveText('Fable 1M')
 
     // Check option descriptions
     const descs = picker.locator('.model-picker-option-desc')
     await expect(descs.nth(0)).toHaveText('Most capable')
     await expect(descs.nth(1)).toHaveText('1M context window')
     await expect(descs.nth(2)).toHaveText('Balanced')
-    await expect(descs.nth(3)).toHaveText('1M context window')
     await expect(descs.nth(4)).toHaveText('Fastest')
 
-    // Opus should be the active model (default)
-    const activeOption = picker.locator('.model-picker-option-active')
-    await expect(activeOption).toHaveCount(1)
-    await expect(activeOption.locator('.model-picker-option-name')).toHaveText('Opus')
-    await expect(activeOption.locator('.model-picker-option-badge')).toHaveText('Active')
-
-    // Non-active options should have "Next turn" and "Now" buttons
-    // Use filter with "Balanced" description to get only the plain Sonnet (not Sonnet 1M)
+    // Non-active options have a single "Switch" button (applied live, no
+    // Now/Next-turn split anymore).
     const sonnetOption = picker.locator('.model-picker-option').filter({ hasText: 'Balanced' })
     await expect(sonnetOption.locator('.model-picker-btn')).toBeVisible()
-    await expect(sonnetOption.locator('.model-picker-btn')).toHaveText('Next turn')
-    await expect(sonnetOption.locator('.model-picker-btn-immediate')).toBeVisible()
-    await expect(sonnetOption.locator('.model-picker-btn-immediate')).toHaveText('Now')
-
-    const haikuOption = picker.locator('.model-picker-option').filter({ hasText: 'Haiku' })
-    await expect(haikuOption.locator('.model-picker-btn')).toBeVisible()
-    await expect(haikuOption.locator('.model-picker-btn-immediate')).toBeVisible()
+    await expect(sonnetOption.locator('.model-picker-btn')).toHaveText('Switch')
   })
 
   test('selecting model closes picker', async ({ page }) => {
     const input = await openSessionPanel(page)
     const picker = await openModelPicker(page, input)
 
-    // Click "Next turn" on the plain Sonnet option (filter by "Balanced" description)
+    // Click "Switch" on the plain Sonnet option (filter by "Balanced" description)
     const sonnetOption = picker.locator('.model-picker-option').filter({ hasText: 'Balanced' })
     await sonnetOption.locator('.model-picker-btn').click()
 

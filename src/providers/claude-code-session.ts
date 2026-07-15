@@ -44,14 +44,15 @@ import type { SessionManager } from './session-manager.js'
 import type { DaemonTaskState } from './daemon-connection.js'
 import { checkCwdExists } from './cwd-check.js'
 import { recoverStateFromJsonl, extractImageFilePathFromInput } from '../core/session-history.js'
-import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase } from '../core/types.js'
-import { SESSION_MODEL_CLI_MAP, modelSupportsEffort } from '../core/types.js'
+import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase, SessionModelCatalogEntry, SessionEffort } from '../core/types.js'
+import { SESSION_MODEL_CLI_MAP, modelSupportsEffort, VALID_SESSION_EFFORT_IDS } from '../core/types.js'
 import { classifyStreamEvent, classifyDelta } from './claude-stream-event-map.js'
 import { accumulateWorkflowProgress, sortedPhases, sortedAgents } from '../core/workflow-progress.js'
 import type { WorkflowPhaseInfo, WorkflowAgentInfo } from '../core/event-types.js'
 import { recordTurn } from '../core/observability/recorder.js'
 import type { SessionServerClient } from './session-server-client.js'
 import { sanitizeInitModel, CONTEXT_WINDOW_DEFAULT } from '../agent/providers/defaults.js'
+import { openTurn, settleTurn, abortTurn, getOpenTurnPromise } from './turn-ledger.js'
 
 // ── JSONL types from `claude -p --output-format stream-json --verbose` ──
 
@@ -565,6 +566,19 @@ export class ClaudeCodeSession {
     return this._runningBgCount() > 0
   }
 
+  /** True when the task set holds ANY non-terminal entry, INCLUDING backgrounded ones.
+   *  Distinct from hasActiveBackgroundWork(), which excludes backgrounded tasks
+   *  (turn-over gating only) — that exclusion is exactly why a backgrounded task's lost
+   *  terminal event can wedge the UI panel forever with no self-heal opportunity
+   *  (inc-1784012867247): _runningBgCount() already reads 0 for it, so nothing ever
+   *  flags this session as worth a reconcileFromDaemon() PULL. This is that flag. */
+  hasPendingBackgroundTasks(): boolean {
+    for (const t of this._bgTasks.values()) {
+      if (!ClaudeCodeSession._BG_TERMINAL_STATUSES.has(t.status)) return true
+    }
+    return false
+  }
+
   // ── Why there is NO activity-based "reconcile" of stuck background tasks ──
   //
   // Layer 1 (deriving in-flight from the _bgTasks set) makes every DUPLICATE / OUT-OF-ORDER /
@@ -660,6 +674,11 @@ export class ClaudeCodeSession {
       sessionId: this.claudeSessionId, taskId: this.taskId,
       adopted, remainingInFlight: this._runningBgCount(), daemonRv: daemonState.resourceVersion,
     })
+    // The panel showed a stale count from before this correction — without this the
+    // fix stays server-memory-only forever (inc-1784012867247: a "3/4" panel pinned
+    // for 56+ min after every task had actually gone terminal, because nothing ever
+    // told the browser the in-memory set had just changed underneath it).
+    if (this.claudeSessionId) this._emitBackgroundTasksUpdate(this.claudeSessionId)
     // If the withheld turn can now complete (CLI already idle, all bg work terminal), finish it.
     if (this._runningBgCount() === 0 && !this.resultEmitted && !this._turnResultEmitted
       && this._cliSessionState === 'idle') {
@@ -859,6 +878,15 @@ export class ClaudeCodeSession {
     reject: (err: Error) => void
     timer: ReturnType<typeof setTimeout>
   }>()
+  /** Cached per-session model catalog from the CLI's `initialize` control
+   *  response — the session's TRUE selectable models (already filtered by the
+   *  host's availableModels + mapped through modelOverrides). Event-driven
+   *  invalidation only (no clock TTL): teardown, explicit invalidate, or a
+   *  read-back model that isn't in the cached set. null = never fetched /
+   *  invalidated / CLI can't answer (old build). */
+  private _modelCatalog: { models: SessionModelCatalogEntry[]; fetchedAt: number } | null = null
+  /** Concurrency guard: parallel picker opens share ONE initialize round-trip. */
+  private _modelCatalogInflight: Promise<SessionModelCatalogEntry[] | null> | null = null
   /** Timestamp when spawn() was called — used to measure time-to-init for diagnostics. */
   private _spawnTs = 0
   /** Wall-clock ts of the HTTP request that triggered this start (latency instrumentation only).
@@ -928,6 +956,14 @@ export class ClaudeCodeSession {
 
   get processStatus(): ProcessStatus {
     return this._processStatus
+  }
+
+  /** Allow the health-monitor reconcile loop to sync the in-memory status after
+   *  an authoritative DB converge — without this, the in-memory map would
+   *  desync from the record and the next writeMessage would base its mid-turn
+   *  decision on the stale pre-converge value. */
+  setProcessStatusFromReconciler(status: ProcessStatus): void {
+    this._processStatus = status
   }
 
   /**
@@ -1157,6 +1193,10 @@ export class ClaudeCodeSession {
     this._resetWorkflowState()
     this._teamActive = false
     this._cliSessionState = undefined
+    // Fresh process ⇒ fresh settings snapshot: the model catalog belongs to the
+    // OLD process (its availableModels/modelOverrides at ITS spawn time).
+    this._modelCatalog = null
+    this._modelCatalogInflight = null
     this._cwd = cwd ?? null
 
     const isResume = !!resumeSessionId && !forkSession
@@ -1872,6 +1912,10 @@ export class ClaudeCodeSession {
     this._active = false
     this._pendingPermissionRequests.clear()
     this._clearAllPermissionReEmitTimers()
+    // A killed process can never settle its own turn — reject rather than let
+    // a caller await forever (SessionRunner clears activeProcessing separately;
+    // this only settles the ledger's promise for whoever is awaiting THIS turn).
+    if (this.claudeSessionId) abortTurn(this.claudeSessionId, 'session-killed')
   }
 
   /**
@@ -2060,6 +2104,11 @@ export class ClaudeCodeSession {
       pending.resolve(null)
     }
     this._pendingPayloadReads.clear()
+    // The model catalog is a property of the CLI PROCESS (its settings snapshot
+    // at spawn) — a respawn/cold-resume may see different settings, so drop it
+    // here and let the next picker open refetch from the new process.
+    this._modelCatalog = null
+    this._modelCatalogInflight = null
   }
 
   // ── Private ──
@@ -2791,6 +2840,27 @@ export class ClaudeCodeSession {
               if (this._processStatus !== 'running') {
                 this._processStatus = 'running'
                 this.emitStatusChanged('IN_PROGRESS')
+                // Persist the running transition — mirrors writeMessage()'s DB write.
+                // This event also fires for turns started by messages injected
+                // directly into the daemon's FIFO (e.g. phone → EC2 bridge → daemon),
+                // which never go through this class's own writeMessage(). Without
+                // this write, process_status stays on whatever the PREVIOUS turn left
+                // behind (idle/error/stopped) for the entire duration of the new turn,
+                // since the only other writer is the SESSION_RESULT/SESSION_ERROR
+                // handler below, which fires exclusively at turn-END.
+                if (this.claudeSessionId) {
+                  import('../core/session-tracker.js').then(({ updateSessionRecord }) => {
+                    updateSessionRecord(this.claudeSessionId!, {
+                      process_status: 'running',
+                      activity: undefined,
+                      last_status_change: new Date().toISOString(),
+                      status_reason: 'message_sent',
+                      status_changed_by: 'session-runner',
+                      ...(this.pid != null ? { pid: this.pid } : {}),
+                      ...(this._host ? { host: this._host } : {}),
+                    }).catch(() => {})
+                  }).catch(() => {})
+                }
               }
             } else if (newState === 'idle') {
               // Idle-debt consumption: every idle settles an owed companion first
@@ -4410,6 +4480,118 @@ export class ClaudeCodeSession {
   }
 
   /**
+   * Fetch the session's TRUE model catalog. Primary: the `list_models`
+   * control_request — the CLI's purpose-built READ-ONLY catalog query
+   * (2.1.199+; the CLI's own thin-client picker uses it). Fallback: an empty
+   * `initialize` control_request — a handshake that happens to carry the same
+   * `models[]` (the two subtypes serve the catalog from the same function in
+   * the CLI), supported since ancient builds. Older CLIs (≤2.1.170) answer
+   * list_models with a FAST explicit "Unsupported control request subtype"
+   * error, so the fallback engages within ~a second, not after a timeout.
+   *
+   * The rows are the CLI's own picker source: already filtered by the host's
+   * availableModels allowlist and already mapped through modelOverrides —
+   * each row's `value` is the ONLY universally-safe string to hand back to
+   * set_model / --model. (Live-verified on 2.1.199: aliases get rejected
+   * under an allowlist; canonical short IDs ack success but 400 at the wire;
+   * catalog values always work.)
+   *
+   * Returns null (never throws) when the read can't be trusted — neither
+   * subtype answered, dead transport, timeout — same contract as getSettings.
+   * Callers fall back to the static SESSION_MODELS registry.
+   *
+   * BUDGET: 10s total across BOTH attempts (the HTTP client caps at 15s), not
+   * getSettings' 5s — the CLI answers control_requests serially on its stdin
+   * loop, so a read can queue behind a heavy get_context_usage (measured
+   * 16s+), plus remote-daemon RTT. A list_models failure with little budget
+   * left means the CLI isn't answering at all (timeout, not old-build error) —
+   * initialize would hang the same way, so don't burn a second wait on it.
+   */
+  private async fetchModelCatalog(budgetMs = 10_000): Promise<SessionModelCatalogEntry[] | null> {
+    const t0 = Date.now()
+    let payload = await this.readControlPayload('lm', 'list_models', budgetMs)
+    if (!payload) {
+      const remaining = budgetMs - (Date.now() - t0)
+      if (remaining < 1_500) return null
+      payload = await this.readControlPayload('init', 'initialize', remaining)
+    }
+    const rows = (payload as { models?: unknown } | null)?.models
+    if (!Array.isArray(rows)) return null
+    const models: SessionModelCatalogEntry[] = []
+    for (const row of rows as Array<Record<string, unknown>>) {
+      if (!row || typeof row.value !== 'string' || !row.value.trim()) continue
+      if (typeof row.displayName !== 'string' || !row.displayName.trim()) continue
+      models.push({
+        value: row.value,
+        ...(typeof row.resolvedModel === 'string' && row.resolvedModel ? { resolvedModel: row.resolvedModel } : {}),
+        displayName: row.displayName,
+        ...(typeof row.description === 'string' && row.description ? { description: row.description } : {}),
+        ...(row.disabled === true ? { disabled: true } : {}),
+        ...(typeof row.supportsEffort === 'boolean' ? { supportsEffort: row.supportsEffort } : {}),
+        ...(Array.isArray(row.supportedEffortLevels)
+          ? { supportedEffortLevels: (row.supportedEffortLevels as unknown[])
+              .filter((l): l is SessionEffort => typeof l === 'string' && VALID_SESSION_EFFORT_IDS.has(l)) }
+          : {}),
+      })
+    }
+    // Empty-after-sanitize = old/odd CLI — treat as "can't answer" so callers fall back.
+    return models.length > 0 ? models : null
+  }
+
+  /**
+   * Cached accessor for the model catalog. Cache lives on the session instance
+   * and is invalidated by EVENTS, not a clock: transport teardown / respawn
+   * (fresh process = fresh settings snapshot), invalidateModelCatalog(), or a
+   * read-back model that isn't in the cached set (refreshAppliedSettings).
+   * Parallel callers share one in-flight catalog round-trip.
+   */
+  async getModelCatalog(opts?: { force?: boolean }): Promise<{ models: SessionModelCatalogEntry[]; fetchedAt: number } | null> {
+    if (!opts?.force && this._modelCatalog) return this._modelCatalog
+    if (this._modelCatalogInflight) {
+      const models = await this._modelCatalogInflight
+      return models ? this._modelCatalog : null
+    }
+    const inflight = this.fetchModelCatalog()
+    this._modelCatalogInflight = inflight
+    try {
+      const models = await inflight
+      if (models) {
+        this._modelCatalog = { models, fetchedAt: Date.now() }
+        log.session.info('model catalog fetched', {
+          sessionId: this.claudeSessionId, taskId: this.taskId, modelCount: models.length,
+        })
+        return this._modelCatalog
+      }
+      return null
+    } finally {
+      this._modelCatalogInflight = null
+    }
+  }
+
+  /** Drop the cached catalog so the next getModelCatalog() refetches — called
+   *  when read-back truth disagrees with the cached set (allowlist/overrides
+   *  evidently changed under us) or explicitly via the route's ?refresh=1. */
+  invalidateModelCatalog(): void {
+    if (this._modelCatalog) {
+      log.session.info('model catalog invalidated', {
+        sessionId: this.claudeSessionId, taskId: this.taskId,
+      })
+    }
+    this._modelCatalog = null
+  }
+
+  /** Loose membership check: is `model` one of the cached catalog's rows?
+   *  Compares against value and resolvedModel, tolerating [1m] and -vN suffix
+   *  decoration differences between the read-back string and catalog strings. */
+  private modelInCachedCatalog(model: string): boolean {
+    if (!this._modelCatalog) return true // no cache → nothing to contradict
+    const strip = (s: string) => s.toLowerCase().replace(/\[1m\]$/, '').replace(/[-_]v\d+(:\d+)?$/, '')
+    const needle = strip(model)
+    return this._modelCatalog.models.some((m) =>
+      strip(m.value) === needle || (m.resolvedModel ? strip(m.resolvedModel) === needle : false))
+  }
+
+  /**
    * Read the CLI's own per-category context breakdown via `get_context_usage` —
    * the same data source as the interactive `/context` command (fork:
    * collectContextData → analyzeContextUsage), so the numbers reflect what the
@@ -4586,6 +4768,12 @@ export class ClaudeCodeSession {
         // Window size can change with the model (200K↔1M, env clamps) — re-seed
         // the authoritative context% denominator from the CLI.
         this.seedCliContextWindow('model-change')
+        // Read-back truth outside the cached catalog ⇒ the allowlist/overrides
+        // evidently shifted under us (or the CLI fell back to something we don't
+        // know) — drop the cache so the next picker open refetches reality.
+        if (!this.modelInCachedCatalog(appliedModel)) {
+          this.invalidateModelCatalog()
+        }
       }
     }
     // First settings read with no window seeded yet (e.g. a session ATTACHED
@@ -4670,6 +4858,35 @@ export class ClaudeCodeSession {
     return true
   }
 
+  /**
+   * Force-settle ALL pending permission requests as denied. For retired sessions
+   * (archived plan sessions, etc.) — unlike resolvePermissionRequest, this never
+   * re-queues on transport loss: the deny write to the CLI is best-effort (the
+   * process is dead or about to be killed), but the re-emit timers, UI state and
+   * persisted record are always cleaned up so the 60s re-ask loop stops.
+   */
+  forceSettlePermissionRequests(reason: string): void {
+    for (const [requestId, pending] of [...this._pendingPermissionRequests]) {
+      this._pendingPermissionRequests.delete(requestId)
+      this._clearPermissionReEmitTimer(requestId)
+      this.respondToControlRequest(requestId, pending.request, false, reason)
+      if (this.claudeSessionId) {
+        bus.emit(EventNames.SESSION_PERMISSION_RESOLVED, {
+          sessionId: this.claudeSessionId,
+          taskId: this.taskId,
+          requestId,
+          toolName: pending.request.tool_name,
+          allowed: false,
+        }, ['*'], { source: 'session-runner' })
+      }
+    }
+    if (this.claudeSessionId) {
+      import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+        updateSessionRecord(this.claudeSessionId!, { pendingPermission: undefined }),
+      ).catch(() => {})
+    }
+  }
+
   /** True when Claude Code is blocked waiting for a permission decision. */
   get hasPendingPermission(): boolean {
     return this._pendingPermissionRequests.size > 0
@@ -4703,6 +4920,22 @@ export class ClaudeCodeSession {
       if (!this._pendingPermissionRequests.has(requestId)) {
         this._clearPermissionReEmitTimer(requestId)
         return
+      }
+      // Backstop: an archived session is retired — nobody will ever approve its
+      // permissions, so settle them as denied instead of re-asking forever.
+      // Covers any archive path that forgets to call forceSettlePermissionRequests.
+      if (this.claudeSessionId) {
+        import('../core/session-tracker.js')
+          .then(({ getSessionByClaudeId }) => getSessionByClaudeId(this.claudeSessionId!))
+          .then(record => {
+            if (record?.archived && this._pendingPermissionRequests.has(requestId)) {
+              log.session.info('permission re-emit: session archived — force-settling instead of re-asking', {
+                sessionId: this.claudeSessionId, requestId, toolName: request.tool_name,
+              })
+              this.forceSettlePermissionRequests('Session archived — permission request retired')
+            }
+          })
+          .catch(() => {})
       }
       if (this.claudeSessionId) {
         log.session.info('re-emitting stale permission request (periodic)', {
@@ -4801,10 +5034,34 @@ export class SessionRunner {
   }
 
   /**
-   * Clear activeProcessing + batchCounts + safety timer for a session.
-   * Centralizes cleanup to prevent dangling timers or stale entries.
+   * Await the CURRENTLY open turn for a session, if one is in flight.
+   * Returns `undefined` immediately when no turn is open (nothing to wait on —
+   * NOT the same as a settled/errored turn). Otherwise resolves with the same
+   * `TurnOutcome` that `clearActiveProcessing()` settled the ledger with, or
+   * rejects if the turn times out / gets aborted (kill, interrupt, spawn failure).
+   *
+   * This is the payoff of the turn ledger: a caller that today would poll
+   * `hasPipe`/`processStatus` to guess "is it done yet?" can instead await a
+   * deterministic promise resolved by the SAME code that already decides
+   * turn-completion (clearActiveProcessing's call sites) — no new guessing.
    */
-  private clearActiveProcessing(sessionId: string): void {
+  currentTurn(sessionId: string): Promise<import('./turn-ledger.js').TurnOutcome> | undefined {
+    return getOpenTurnPromise(sessionId)
+  }
+
+  /**
+   * Clear activeProcessing + batchCounts + safety timer for a session, and
+   * settle its turn-ledger promissory note with `outcome` (default: 'idle' —
+   * the common "turn completed normally" case). Centralizes cleanup to
+   * prevent dangling timers or stale entries.
+   *
+   * `activeProcessing` membership IS "a turn is in flight" — `setActiveProcessing`/
+   * `clearActiveProcessing` already bracket exactly one turn per call. Routing
+   * the ledger through these two existing chokepoints means every existing
+   * call site gets promise-based turn accounting for free, with no new guessing
+   * logic: the ledger only records outcomes this code already decided.
+   */
+  private clearActiveProcessing(sessionId: string, outcome: import('./turn-ledger.js').TurnOutcome = { kind: 'idle' }): void {
     this.activeProcessing.delete(sessionId)
     this.batchCounts.delete(sessionId)
     this.batchMessageIds.delete(sessionId)
@@ -4813,17 +5070,23 @@ export class SessionRunner {
       clearTimeout(timer)
       this.activeProcessingTimers.delete(sessionId)
     }
+    settleTurn(sessionId, outcome)
   }
 
   /**
-   * Add a session to activeProcessing with a safety timeout.
-   * The timeout auto-clears the entry after 60s to prevent permanent stuck state
-   * (e.g., if SESSION_RESULT arrives with a mismatched session ID).
+   * Add a session to activeProcessing with a safety timeout, and open a
+   * turn-ledger promissory note for it. The timeout auto-clears the entry
+   * after 60s to prevent permanent stuck state (e.g., if SESSION_RESULT
+   * arrives with a mismatched session ID) — that timeout used to be a bare
+   * guess with no distinguishable cause; it now rejects the ledger promise
+   * with 'no_result' via `abortTurn`, so any caller awaiting this turn gets a
+   * precise failure instead of silently having activeProcessing cleared.
    */
   private setActiveProcessing(sessionId: string, batchCount: number, messageIds?: string[]): void {
     this.activeProcessing.add(sessionId)
     this.batchCounts.set(sessionId, batchCount)
     if (messageIds) this.batchMessageIds.set(sessionId, [...messageIds])
+    openTurn(sessionId)
 
     // Cancel any existing safety timer for this sessionId
     const existingTimer = this.activeProcessingTimers.get(sessionId)
@@ -4837,6 +5100,7 @@ export class SessionRunner {
         this.batchCounts.delete(sessionId)
         this.batchMessageIds.delete(sessionId)
         this.activeProcessingTimers.delete(sessionId)
+        abortTurn(sessionId, 'activeProcessing-safety-timeout')
         // Try to process next messages if any accumulated while stuck
         this.processNext(sessionId).catch(() => {})
       }
@@ -5064,7 +5328,9 @@ export class SessionRunner {
 
           const batchCount = this.batchCounts.get(resolvedSessionId) ?? 1
           const batchIds = this.batchMessageIds.get(resolvedSessionId)
-          this.clearActiveProcessing(resolvedSessionId)
+          const resultIsError = event.name === EventNames.SESSION_ERROR
+            || (eventData<'session:result'>(event) as { isError?: boolean }).isError === true
+          this.clearActiveProcessing(resolvedSessionId, { kind: 'result', isError: resultIsError })
 
           // NO un-scoped removeProcessed here. Every delivery point already removes
           // its own batch eagerly (FIFO write / mid-turn inject / settleResumeSuccess),
@@ -5282,7 +5548,7 @@ export class SessionRunner {
   /**
    * Find an in-memory CLI session by its Claude session ID.
    */
-  private findSessionByClaudeId(claudeSessionId: string): ClaudeCodeSession | undefined {
+  findSessionByClaudeId(claudeSessionId: string): ClaudeCodeSession | undefined {
     for (const [, session] of this.sessions) {
       if (session.sessionId === claudeSessionId) return session
     }
@@ -5318,6 +5584,23 @@ export class SessionRunner {
     if (!session) return false
     await session.reconcileFromDaemon()
     return session.hasActiveBackgroundWork()
+  }
+
+  /** PULL daemon-authoritative task state for a session that is NOT a turn-over
+   *  gating candidate — i.e. it's already idle / AWAIT_HUMAN_ACTION, so neither
+   *  checkHungSessions (running-only) nor checkIdleTimeout's isBackgroundWorkActive
+   *  call (skipped for AWAIT_HUMAN_ACTION, and a no-op once _runningBgCount() is
+   *  already 0 because the only outstanding entry is `isBackgrounded`) ever reaches
+   *  reconcileFromDaemon() for it. A backgrounded task's lost terminal event then has
+   *  NO self-heal opportunity for the lifetime of the session (inc-1784012867247: a
+   *  workflow panel pinned at a stale count for 56+ minutes after the real work
+   *  finished). Health monitor calls this on the periodic tick for exactly that class
+   *  of session — reconcileFromDaemon() itself is a no-op (besides the daemon RPC)
+   *  when nothing changed, so this is safe to poll unconditionally. */
+  async reconcilePendingBackgroundTasks(claudeSessionId: string): Promise<void> {
+    const session = this.findSessionByClaudeId(claudeSessionId)
+    if (!session || !session.hasPendingBackgroundTasks()) return
+    await session.reconcileFromDaemon()
   }
 
   /** Check if a session has a pending permission request. Used by health monitor to skip idle timeout. */
@@ -5974,7 +6257,7 @@ export class SessionRunner {
       if (this.activeProcessing.has(sessionId)) {
         const oldBatchCount = this.batchCounts.get(sessionId) ?? 1
         const oldBatchIds = this.batchMessageIds.get(sessionId)
-        this.clearActiveProcessing(sessionId)
+        this.clearActiveProcessing(sessionId, { kind: 'stopped' })
 
         bus.emit(EventNames.SESSION_BATCH_COMPLETED, {
           sessionId,
@@ -6244,7 +6527,7 @@ export class SessionRunner {
    * NOT batch-completed (which deletes them). Called from send()'s onSpawnSettled(false).
    */
   private settleResumeFailure(sessionId: string, msgs: QueuedMessage[], err: Error): void {
-    this.clearActiveProcessing(sessionId)
+    this.clearActiveProcessing(sessionId, { kind: 'error', message: err.message })
     log.session.warn('resume spawn failed — reverting batch to pending', { sessionId, error: err.message })
     revertToPending(msgs).catch(() => {})
     bus.emit(EventNames.SESSION_BATCH_FAILED, {
@@ -6587,10 +6870,10 @@ export class SessionRunner {
           else this.settleResumeFailure(sessionId, msgs, err ?? new Error('resume spawn failed'))
         })
     } catch (err) {
-      // Clean up activeProcessing + batchCounts on any error (send() EMFILE, lookup failure, etc.)
-      this.clearActiveProcessing(sessionId)
-
       const errorMsg = err instanceof Error ? err.message : String(err)
+      // Clean up activeProcessing + batchCounts on any error (send() EMFILE, lookup failure, etc.)
+      this.clearActiveProcessing(sessionId, { kind: 'error', message: errorMsg })
+
       log.session.warn('processNext failed', { sessionId, error: errorMsg })
 
       // Delivery failed (SSH/daemon down, spawn EMFILE, etc.). Revert the batch to

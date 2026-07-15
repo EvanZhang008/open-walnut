@@ -89,16 +89,18 @@ describe('UsageTracker', () => {
       expect(rec.cost_usd).toBe(1.23);
     });
 
-    it('separates session costs from total_cost', () => {
+    it('separates session costs from total_cost and excludes them from all other aggregates', () => {
       tracker.record({ source: 'agent', model: 'claude-opus-4-6', input_tokens: 1000, output_tokens: 500 });
-      tracker.record({ source: 'session', model: 'claude-code-cli', external_cost_usd: 2.00 });
+      tracker.record({ source: 'session', model: 'claude-code-cli', input_tokens: 999_999, external_cost_usd: 2.00 });
 
       const summary = tracker.getSummary('all');
-      // total_cost excludes session records; session_cost captures them
+      // total_cost excludes session records; session_cost captures them.
+      // Tokens and api_calls are walnut-only too — session rows are pass-through.
       expect(summary.total_cost).toBeGreaterThan(0);
       expect(summary.total_cost).toBeLessThan(2.00);
       expect(summary.session_cost).toBe(2.00);
-      expect(summary.api_calls).toBe(2);
+      expect(summary.api_calls).toBe(1);
+      expect(summary.input_tokens).toBe(1000);
     });
 
     it('defaults token counts to 0', () => {
@@ -231,15 +233,33 @@ describe('UsageTracker', () => {
       expect(general!.api_calls).toBe(1);
     });
 
-    it("surfaces records without an agentId (old rows) as 'unknown'", () => {
-      tracker.record({ source: 'agent', model: 'claude-opus-4-6', input_tokens: 1000 });          // no agentId
+    it('surfaces records without an agentId (old rows) under their canonical agent', () => {
+      tracker.record({ source: 'agent', model: 'claude-opus-4-6', input_tokens: 1000 });          // no agentId → main agent
+      tracker.record({ source: 'triage', model: 'claude-opus-4-6', input_tokens: 200 });          // no agentId → summary agent
       tracker.record({ source: 'subagent', model: 'claude-opus-4-6', input_tokens: 500, agentId: 'note-agent' });
+      tracker.record({ source: 'subagent', model: 'claude-opus-4-6', input_tokens: 100 });        // no agentId → generic subagent
 
       const agents = tracker.getByAgent('all');
-      const unknown = agents.find(a => a.name === 'unknown');
-      expect(unknown).toBeDefined();
-      expect(unknown!.api_calls).toBe(1);
+      // agentId-less rows merge into the canonical agent for their source,
+      // not a giant 'unknown' bucket: agent→general, triage→turn-complete-triage.
+      expect(agents.find(a => a.name === 'general')?.api_calls).toBe(1);
+      expect(agents.find(a => a.name === 'turn-complete-triage')?.api_calls).toBe(1);
+      expect(agents.find(a => a.name === 'subagent-legacy')?.api_calls).toBe(1);
       expect(agents.some(a => a.name === 'note-agent')).toBe(true);
+      expect(agents.some(a => a.name === 'unknown')).toBe(false);
+    });
+
+    it('excludes Claude Code session rows from every grouped view', () => {
+      tracker.record({ source: 'session', model: 'claude-code-cli', external_cost_usd: 100 });
+      tracker.record({ source: 'agent', model: 'claude-opus-4-6', input_tokens: 1000, agentId: 'general' });
+
+      expect(tracker.getByAgent('all').some(a => a.name === 'session')).toBe(false);
+      expect(tracker.getBySource('all').some(s => s.name === 'session')).toBe(false);
+      expect(tracker.getByModel('all').some(m => m.name === 'claude-code-cli')).toBe(false);
+      expect(tracker.getRecentRecords(10).some(r => r.source === 'session')).toBe(false);
+      // Daily chart is walnut-only too
+      const daily = tracker.getDailyCosts(30);
+      expect(daily[0].cost_usd).toBeLessThan(100);
     });
   });
 

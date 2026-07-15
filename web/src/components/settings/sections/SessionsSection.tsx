@@ -25,7 +25,7 @@ export function SessionsSection({ config, onSave }: Props) {
   // Triage throttling (config.agent.triage)
   type TriageNotifyMode = 'off' | 'buffered' | 'realtime';
   const [triageNotifyMode, setTriageNotifyMode] = useState<TriageNotifyMode>(config.agent?.triage?.notify_mode ?? 'off');
-  const [triageDebounce, setTriageDebounce] = useState<number | undefined>(config.agent?.triage?.debounce_minutes ?? 3);
+  const [triageDebounce, setTriageDebounce] = useState<number | undefined>(config.agent?.triage?.debounce_minutes ?? 4);
 
   useEffect(() => {
     setIdleTimeout(config.session?.idle_timeout_minutes ?? 30);
@@ -37,7 +37,7 @@ export function SessionsSection({ config, onSave }: Props) {
     setSdkEnabled(config.session_server?.enabled ?? false);
     setSdkPort(config.session_server?.port ?? 7890);
     setTriageNotifyMode(config.agent?.triage?.notify_mode ?? 'off');
-    setTriageDebounce(config.agent?.triage?.debounce_minutes ?? 3);
+    setTriageDebounce(config.agent?.triage?.debounce_minutes ?? 4);
   }, [config]);
 
   // Normalize the per-host limits to numbers. The KeyValueEditor yields strings while a
@@ -57,7 +57,7 @@ export function SessionsSection({ config, onSave }: Props) {
       // session_triage_agent, …) survive — updateConfig replaces the whole `agent` key.
       agent: {
         ...config.agent,
-        triage: { notify_mode: triageNotifyMode, debounce_minutes: triageDebounce ?? 3 },
+        triage: { notify_mode: triageNotifyMode, debounce_minutes: triageDebounce ?? 4 },
       },
       session: {
         idle_timeout_minutes: idleTimeout,
@@ -92,7 +92,7 @@ export function SessionsSection({ config, onSave }: Props) {
       sdkEnabled: config.session_server?.enabled ?? false,
       sdkPort: config.session_server?.port ?? 7890,
       triageNotifyMode: config.agent?.triage?.notify_mode ?? 'off',
-      triageDebounce: config.agent?.triage?.debounce_minutes ?? 3,
+      triageDebounce: config.agent?.triage?.debounce_minutes ?? 4,
     }),
     save: handleSave,
   });

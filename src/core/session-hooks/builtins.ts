@@ -15,7 +15,6 @@ import type {
   OnTurnErrorPayload,
   OnMessageSendPayload,
   OnToolUsePayload,
-  OnSessionEndPayload,
 } from './types.js';
 
 // ── Triage dedup state ──
@@ -36,7 +35,34 @@ const TRIAGE_COOLDOWN_MS = 5_000; // 5 seconds — normal triage cycle takes 10-
 // Key: sessionId, Value: pending timer. The map self-bounds: every armed timer either
 // fires (and self-deletes) or is cancelled (and deletes), so no separate prune needed.
 const triageDebounceTimers = new Map<string, NodeJS.Timeout>();
-const DEFAULT_TRIAGE_DEBOUNCE_MS = 3 * 60_000; // 3 minutes
+const DEFAULT_TRIAGE_DEBOUNCE_MS = 4 * 60_000; // 4 minutes
+
+// ── Triage agent rate limit ──
+// Two-tier design: the CHEAP tier (side_question self-report → code-only persist of
+// summary/milestone) runs on every debounced fire; the EXPENSIVE tier (triage
+// subagent) is rate-limited to once per hour per session:task. Self-reports that
+// arrive while the agent is rate-limited are BUFFERED; when the agent finally runs
+// it receives the whole buffered batch and reconciles all of them at once.
+// A milestone-worthy PHASE_SIGNAL (plan-written / committed / verify-* …) BYPASSES
+// the rate limit — those are the moments a notification decision can't wait an hour.
+const triageAgentLastRun = new Map<string, number>();
+const TRIAGE_AGENT_MIN_INTERVAL_MS = 60 * 60_000; // 1 hour
+
+/** Self-reports accumulated while the triage agent was rate-limited.
+ *  Key: "sessionId:taskId". Drained (and cleared) when the agent runs. */
+const pendingSelfReports = new Map<string, Array<{ turnIndex?: number; at: string; report: string }>>();
+const MAX_BUFFERED_REPORTS = 20; // safety bound; oldest dropped beyond this
+
+/** Test-only: reset rate-limiter + buffers so unit tests are order-independent.
+ *  `keepAgentRuns` clears only the 5s replay cooldown — lets a test invoke runTriage
+ *  back-to-back while preserving the 1h agent rate-limit state under test. */
+export function __resetTriageRateLimiter(opts?: { keepAgentRuns?: boolean }): void {
+  triageLastDispatch.clear();
+  if (!opts?.keepAgentRuns) {
+    triageAgentLastRun.clear();
+    pendingSelfReports.clear();
+  }
+}
 
 /** Cancel a pending debounced triage for a session — used when the user resumes
  *  interaction (message-send), so a mid-conversation triage never fires. */
@@ -227,12 +253,13 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
         });
       }
 
-      // ── Ask the session for a structured self-report (side_question) ──
-      // The session is the authoritative source for what it just did. When this
-      // succeeds we (a) persist a Tier-1 summary immediately and (b) inject the
-      // self-report so the triage subagent reconciles instead of reading the full
-      // JSONL. On any failure we leave selfReport='' → triage falls back to the
-      // history-reading path (its session_history context source still loads).
+      // ── CHEAP TIER: ask the session for a structured self-report (side_question) ──
+      // The session is the authoritative source for what it just did, and it answers
+      // from its own in-cache context (cost lands on the Claude Code session, not
+      // Walnut). When this succeeds we (a) persist a Tier-1 summary immediately and
+      // (b) inject the self-report so the triage subagent reconciles instead of
+      // reading the full JSONL. On any failure we leave selfReport='' → triage falls
+      // back to the history-reading path (its session_history context source loads).
       let selfReport = '';
       try {
         const { sessionRunner } = await import('../../providers/claude-code-session.js');
@@ -256,6 +283,20 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
               } catch (err) {
                 log.session.debug('turn-complete-triage: early summary persist skipped (triage subagent will still summarize)', {
                   taskId: p.taskId, error: err instanceof Error ? err.message : String(err),
+                });
+              }
+              // Backfill SessionRecord.summary for free — this replaces the removed
+              // session-summary-gist hook (which paid a full-transcript LLM pass for
+              // the same field). QMD prepends it as the highest-signal search chunk.
+              try {
+                const { updateSessionRecord } = await import('../session-tracker.js');
+                await updateSessionRecord(p.sessionId, {
+                  summary,
+                  summaryGeneratedAt: new Date().toISOString(),
+                });
+              } catch (err) {
+                log.session.debug('turn-complete-triage: session summary backfill skipped', {
+                  sessionId: p.sessionId, error: err instanceof Error ? err.message : String(err),
                 });
               }
             }
@@ -291,16 +332,60 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
         });
       }
 
+      // ── EXPENSIVE TIER: the triage subagent, rate-limited to 1/hour ──
+      // The cheap tier above already persisted summary + milestone from the
+      // self-report, so most fires need no agent at all. Buffer the report and
+      // return. The agent runs when (a) an hour has passed since its last run for
+      // this session:task, (b) this turn carries a milestone-worthy PHASE_SIGNAL
+      // (notification decisions can't wait an hour), or (c) there is no self-report
+      // (session dead/timeout — the agent's history-read is the only summary path).
+      const hasMilestoneSignal = selfReport ? milestoneFromSelfReport(selfReport) !== null : false;
+      const lastAgentRun = triageAgentLastRun.get(dedupKey) ?? 0;
+      const agentDue = now - lastAgentRun >= TRIAGE_AGENT_MIN_INTERVAL_MS;
+
+      // Prune stale rate-limit entries (and their orphaned buffers) so the maps
+      // stay bounded across a long-lived server with many sessions.
+      if (triageAgentLastRun.size > 200) {
+        for (const [k, ts] of triageAgentLastRun) {
+          if (now - ts > 2 * TRIAGE_AGENT_MIN_INTERVAL_MS) {
+            triageAgentLastRun.delete(k);
+            pendingSelfReports.delete(k);
+          }
+        }
+      }
+
+      if (selfReport && !agentDue && !hasMilestoneSignal) {
+        const buf = pendingSelfReports.get(dedupKey) ?? [];
+        buf.push({ turnIndex: p.turnIndex, at: new Date().toISOString(), report: selfReport });
+        if (buf.length > MAX_BUFFERED_REPORTS) buf.shift();
+        pendingSelfReports.set(dedupKey, buf);
+        log.session.info('turn-complete-triage: agent rate-limited — self-report buffered', {
+          sessionId: p.sessionId, taskId: p.taskId,
+          buffered: buf.length, nextAgentInMs: TRIAGE_AGENT_MIN_INTERVAL_MS - (now - lastAgentRun),
+        });
+        return;
+      }
+      triageAgentLastRun.set(dedupKey, now);
+
+      // Drain anything buffered during the rate-limited window and hand the agent
+      // the whole batch (oldest first) so its reconciliation sees every turn.
+      const buffered = pendingSelfReports.get(dedupKey) ?? [];
+      pendingSelfReports.delete(dedupKey);
+      const reports = [...buffered.map(b => b.report), ...(selfReport ? [selfReport] : [])];
+
       const sessionType = p.isPlanSession ? 'plan-mode ' : '';
-      // With a self-report, triage reconciles two inputs (prior summary + this
-      // report) and reads PHASE_SIGNAL directly — no JSONL guessing. Without one,
-      // it falls back to reading <session_history>.
-      const triageTask = selfReport
-        ? `A Claude Code ${sessionType}session just finished for task ${p.taskId}. Session ID: ${p.sessionId}. Turn index: ${p.turnIndex ?? 'unknown'}.\n\nThe session reported its own status below (<session_self_summary>). Use it as the authoritative source — do NOT call session_history (you already have what you need). Reconcile it with the existing task summary, refresh the summary/note, and decide from its PHASE_SIGNAL and USER_INTENT fields only whether to notify the main agent.`
+      // With self-report(s), triage reconciles them against the prior summary and
+      // reads PHASE_SIGNAL directly — no JSONL guessing. Without any, it falls
+      // back to reading <session_history>.
+      const batchNote = reports.length > 1
+        ? ` ${reports.length} turns completed since the last triage run; ALL their self-reports are below in chronological order — reconcile the full batch, not just the last one.`
+        : '';
+      const triageTask = reports.length > 0
+        ? `A Claude Code ${sessionType}session finished ${reports.length > 1 ? `${reports.length} turns` : 'a turn'} for task ${p.taskId}. Session ID: ${p.sessionId}. Turn index: ${p.turnIndex ?? 'unknown'}.${batchNote}\n\nThe session reported its own status below (<session_self_summary>). Use it as the authoritative source — do NOT call session_history (you already have what you need). Reconcile it with the existing task summary, refresh the summary/note, and decide from its PHASE_SIGNAL and USER_INTENT fields only whether to notify the main agent.`
         : `A Claude Code ${sessionType}session just finished for task ${p.taskId}. Session ID: ${p.sessionId}. Turn index: ${p.turnIndex ?? 'unknown'}.\n\nThe <session_history> context below contains recent messages (User + Assistant) with [index] labels. Use these to understand what happened, refresh the summary/note, and decide whether to notify. If you need full details of a specific message, call session_history with index=N.`;
 
-      const selfReportContext = selfReport
-        ? `<session_self_summary>\nThe session produced this structured self-report of the turn it just finished. Treat it as authoritative; do not re-read the transcript.\n\n${selfReport}\n</session_self_summary>`
+      const selfReportContext = reports.length > 0
+        ? `<session_self_summary>\nThe session produced ${reports.length > 1 ? 'these structured self-reports (oldest first)' : 'this structured self-report'} of the turn${reports.length > 1 ? 's' : ''} since the last triage. Treat them as authoritative; do not re-read the transcript.\n\n${reports.join('\n\n---\n\n')}\n</session_self_summary>`
         : '';
       const combinedContext = [selfReportContext, notificationContext].filter(Boolean).join('\n\n');
 
@@ -312,7 +397,7 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
           taskId: p.taskId, sessionId: p.sessionId, cwd: p.session?.cwd, host: p.session?.host,
           // With a self-report in hand, skip the 4000-token session_history read
           // it replaces — otherwise the loader runs regardless of the prompt.
-          ...(selfReport ? { suppressSources: ['session_history' as const] } : {}),
+          ...(reports.length > 0 ? { suppressSources: ['session_history' as const] } : {}),
         },
         ...(combinedContext ? { context: combinedContext } : {}),
       }, ['subagent-runner'], { source: 'turn-complete-triage' });
@@ -321,6 +406,8 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
       sessionId: p.sessionId,
       taskId: p.taskId,
       agentId: triageAgentId,
+      batchedReports: reports.length,
+      bypassedRateLimit: hasMilestoneSignal && !agentDue,
     });
   } catch (err) {
     log.session.error('turn-complete-triage hook failed', {
@@ -332,11 +419,14 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
 }
 
 /**
- * turn-complete-triage: trailing-debounces the (expensive) triage work on turn
- * completion. Hook: onTurnComplete. Each turn-complete (re)arms a per-session timer;
- * triage fires ONCE only after the session has been quiet for `debounce_minutes`
- * (config.agent.triage.debounce_minutes, default 3). A user message-send cancels the
+ * turn-complete-triage: trailing-debounces the summary work on turn completion.
+ * Hook: onTurnComplete. Each turn-complete (re)arms a per-session timer; the work
+ * fires ONCE after the session has been quiet for `debounce_minutes`
+ * (config.agent.triage.debounce_minutes, default 4). A user message-send cancels the
  * pending timer (see messageSendTriageHook) — interaction resumed, no mid-chat triage.
+ *
+ * The fired work itself is two-tier (see runTriage): a cheap per-fire self-report
+ * persist, and the triage subagent rate-limited to 1/hour (milestones bypass).
  */
 export const turnCompleteTriageHook: SessionHookDefinition = {
   id: 'turn-complete-triage',
@@ -559,74 +649,14 @@ export const cwdRenameDetectorHook: SessionHookDefinition = {
   },
 };
 
-// ── Session summary gist dedup ──
-// onSessionEnd can fire more than once (reconnect/replay). Skip if a summary was
-// generated within this window.
-const SUMMARY_COOLDOWN_MS = 60 * 60 * 1000; // 1h
-
-/**
- * session-summary-gist: on session end, generate a compact LLM gist and write it
- * to SessionRecord.summary. The QMD session-sync subscriber re-indexes the
- * session (the gist is prepended as a `# Session Gist` heading → highest-signal
- * chunk). Conversation body itself is already indexed per-turn by serializer v2;
- * this only adds the high-level summary.
- *
- * Skips embedded subagent sessions, trivial sessions (<2 messages), and sessions
- * summarized within the cooldown.
- */
-export const sessionSummaryGistHook: SessionHookDefinition = {
-  id: 'session-summary-gist',
-  name: 'Session Summary Gist (onSessionEnd)',
-  description: 'Generates an LLM gist on session end for high-signal search ranking.',
-  hooks: ['onSessionEnd'],
-  priority: 70,
-  source: 'builtin',
-  enabled: true,
-  handler: async (payload) => {
-    const p = payload as OnSessionEndPayload;
-    const session = p.session;
-    if (!session) return;
-    if (session.provider === 'embedded') return;        // subagent — skip
-    if ((session.messageCount ?? 0) < 2) return;         // trivial — skip
-
-    // Cooldown: avoid re-summarizing on repeated end events.
-    if (session.summaryGeneratedAt) {
-      const age = Date.now() - new Date(session.summaryGeneratedAt).getTime();
-      if (age < SUMMARY_COOLDOWN_MS) return;
-    }
-
-    try {
-      const { summarizeSession } = await import('../../agent/tools/session-summarizer.js');
-      const summary = await summarizeSession(session.claudeSessionId, session);
-      if (!summary || summary.startsWith('Error running session summarizer') || summary.startsWith('No history')) {
-        return; // failed/empty — leave existing doc (raw content) intact
-      }
-
-      const { updateSessionRecord } = await import('../session-tracker.js');
-      await updateSessionRecord(session.claudeSessionId, {
-        summary,
-        summaryGeneratedAt: new Date().toISOString(),
-      });
-
-      // Re-index immediately so the gist is searchable without waiting for the
-      // next turn (there won't be one — the session just ended).
-      const { syncSession, flushSessionEmbeddings } = await import('../qmd-session-sync.js');
-      const updated = { ...session, summary, summaryGeneratedAt: new Date().toISOString() };
-      await syncSession(updated, p.task);
-      await flushSessionEmbeddings();
-
-      log.session.info('session-summary-gist: generated + indexed', {
-        sessionId: session.claudeSessionId,
-        summaryLength: summary.length,
-      });
-    } catch (err) {
-      log.session.warn('session-summary-gist hook failed', {
-        sessionId: session.claudeSessionId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  },
-};
+// NOTE: the former session-summary-gist hook (an LLM pass over the FULL transcript
+// on 'onSessionEnd') was removed. It was built before per-turn summaries existed and
+// was triggered by a misnamed event: session:ended fires after EVERY turn (it's a UI
+// refresh signal), not on real session death — so the "once per session" gist ran
+// once per active hour, re-reading an ever-growing transcript with zero cache hits.
+// Its only output (SessionRecord.summary, a search-ranking boost) is now backfilled
+// for free from task.summary by the cheap tier above; conversation bodies are already
+// indexed per-turn by serializer v2, so search recall is unaffected.
 
 /** All built-in hook definitions. */
 export const builtinHooks: SessionHookDefinition[] = [
@@ -634,5 +664,4 @@ export const builtinHooks: SessionHookDefinition[] = [
   messageSendTriageHook,
   sessionErrorNotifyHook,
   cwdRenameDetectorHook,
-  sessionSummaryGistHook,
 ];

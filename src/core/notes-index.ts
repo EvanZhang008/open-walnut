@@ -402,11 +402,15 @@ export function divergentCopyGroups(): CollisionEntry[][] {
   return [...groups.values()].filter((g) => g.length > 1)
 }
 
-/** Update just the path of a note (move/rename — links key on id, survive). */
+/** Update just the path of a note (move/rename — links key on id, survive).
+ * content_hash is RESET so the follow-up reconcile doesn't hash-skip: the QMD
+ * semantic doc is keyed by path, so a move must re-point it (the old path's
+ * doc gets deactivated by the ENOENT reconcile). With the hash preserved, the
+ * skip made moved notes vanish from semantic search until their next edit. */
 export function updateNotePath(fromRel: string, toRel: string): boolean {
   const d = getNotesIndexDb()
   if (!d) return false
-  const res = d.prepare(`UPDATE notes SET path=? WHERE path=?`).run(toRel, fromRel)
+  const res = d.prepare(`UPDATE notes SET path=?, content_hash='' WHERE path=?`).run(toRel, fromRel)
   return res.changes > 0
 }
 

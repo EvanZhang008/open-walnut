@@ -48,11 +48,15 @@ async function getStatus(): Promise<SttStatus> {
     })
     .catch((err) => {
       fetchPromise = null;
-      // Cache error with short TTL so it retries quickly
-      const fallback: SttStatus = { engine: null, available: false, error: String(err) };
-      cachedStatus = fallback;
       cacheTimestamp = Date.now();
       cacheIsError = true;
+      // Stale-while-error: a transient /status fetch failure (browser congestion,
+      // 15s timeout) must NOT flip a working engine to "not configured" — that used
+      // to disable the mic mid-recording. Keep the last good status; the short
+      // error TTL retries soon.
+      if (cachedStatus?.engine) return cachedStatus;
+      const fallback: SttStatus = { engine: null, available: false, error: String(err) };
+      cachedStatus = fallback;
       return fallback;
     });
 

@@ -3,6 +3,7 @@ import type { Config } from '@open-walnut/core';
 import { SectionCard } from '../inputs/SectionCard';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { SecretInput } from '../inputs/SecretInput';
+import { PluginConfigCards } from './PluginConfigCards';
 import { useAutoSave } from '@/hooks/useAutoSave';
 
 interface Props {
@@ -116,6 +117,9 @@ export function IntegrationsSection({ config, onSave }: Props) {
           )}
         </div>
       </details>
+
+      {/* Data-driven plugin configs (external plugins discovered from manifests) */}
+      <PluginConfigCards config={config} onSave={onSave} excludeIds={['ms-todo']} />
 
       {/* Slack */}
       <details className="settings-collapsible">
