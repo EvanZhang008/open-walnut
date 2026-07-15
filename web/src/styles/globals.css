@@ -8653,6 +8653,10 @@ img[data-lightbox-src],
   flex-shrink: 1;
   min-height: 0;
   overflow-y: auto;
+  /* Scroll anchoring fights the per-tier resize drags: shrinking a list inside
+     this scroller makes the browser shift scrollTop to "stabilize" content,
+     which reads as the whole pinned area jumping under the cursor. */
+  overflow-anchor: none;
 }
 
 .todo-pinned-section {
@@ -8868,6 +8872,13 @@ img[data-lightbox-src],
 
 .todo-pinned-card-attention.todo-pinned-card-active {
   background: rgba(255, 59, 48, 0.12);
+}
+
+/* Completed task surfaced in Recent (via "Show completed") — struck-through +
+   muted so it reads as history, not an actionable card. */
+.todo-pinned-card-done .todo-pinned-title {
+  text-decoration: line-through;
+  color: var(--fg-muted);
 }
 
 /* Task whose session is currently open on the home page — left accent bar so it

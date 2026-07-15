@@ -1576,7 +1576,9 @@ function SortableRecentCard({ task, isFocused, isSessionOpen, isDetailOpen, onCl
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: task.id, data: { source: 'recent' } });
+    // Done cards (shown via "Show completed") can't be dragged into pin tiers —
+    // the tiers filter out done tasks, so the card would silently vanish.
+  } = useSortable({ id: task.id, data: { source: 'recent' }, disabled: task.status === 'done' || task.phase === 'COMPLETE' });
 
   // Phase picker state — fixed positioning to escape overflow:hidden scroll containers
   const [phaseMenuOpen, setPhaseMenuOpen] = useState(false);
@@ -1656,8 +1658,10 @@ function SortableRecentCard({ task, isFocused, isSessionOpen, isDetailOpen, onCl
     setIsEditing(true);
   }, [onUpdateTitle]);
 
-  const needsAttention = task.phase === 'AGENT_COMPLETE' || task.phase === 'AWAIT_HUMAN_ACTION';
-  const ago = timeAgo(task.last_session_update ?? task.created_at);
+  const isDone = task.status === 'done' || task.phase === 'COMPLETE';
+  const needsAttention = !isDone && (task.phase === 'AGENT_COMPLETE' || task.phase === 'AWAIT_HUMAN_ACTION');
+  // Done cards show completion time (that's what "recently completed" means here)
+  const ago = timeAgo((isDone && task.completed_at) || task.last_session_update || task.created_at);
 
   const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
@@ -1669,7 +1673,7 @@ function SortableRecentCard({ task, isFocused, isSessionOpen, isDetailOpen, onCl
     <div
       ref={setNodeRef}
       style={style}
-      className={`todo-pinned-card${isFocused ? ' todo-pinned-card-active' : ''}${needsAttention ? ' todo-pinned-card-attention' : ''}${isSessionOpen ? ' todo-pinned-card-session-open' : ''}`}
+      className={`todo-pinned-card${isFocused ? ' todo-pinned-card-active' : ''}${needsAttention ? ' todo-pinned-card-attention' : ''}${isSessionOpen ? ' todo-pinned-card-session-open' : ''}${isDone ? ' todo-pinned-card-done' : ''}`}
       onClick={(e) => {
         if (isEditing) return;
         if ((e.target as HTMLElement).closest('.pinned-phase-picker')) return;
@@ -1745,14 +1749,14 @@ function SortableRecentCard({ task, isFocused, isSessionOpen, isDetailOpen, onCl
       >
         {task.title}
       </span>
-      {ago && <span className="todo-recent-ago" title={task.last_session_update}>{ago}</span>}
+      {ago && <span className="todo-recent-ago" title={(isDone && task.completed_at) || task.last_session_update}>{ago}</span>}
       <TaskKebabMenu
         task={task}
         isFocused={isFocused}
         isDetailOpen={isDetailOpen}
         isPinned={!!isPinned}
         pinnedTier={pinnedTier}
-        isDone={task.phase === 'COMPLETE'}
+        isDone={isDone}
         onExpandDetail={onExpandDetail}
         onClearFocus={onClearFocus}
         onSetPriority={onSetPriority}
@@ -1950,6 +1954,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const focusResize = useResizableHeight('open-walnut-focus-tier-height-focus', { min: 60, max: 1200 });
   const satelliteResize = useResizableHeight('open-walnut-focus-tier-height-satellite', { min: 60, max: 1200 });
   const waitResize = useResizableHeight('open-walnut-focus-tier-height-wait', { min: 60, max: 1200 });
+  // Recent gets the same treatment — before this it was hard-capped at ~3 rows
+  // (RECENT_VISIBLE_MAX * 30) with no way to pull it taller.
+  const recentResize = useResizableHeight('open-walnut-focus-tier-height-recent', { min: 60, max: 1200 });
 
   // Determine if search mode is active (query entered)
   const isSearchMode = searchQuery.trim().length > 0;
@@ -2296,21 +2303,28 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return 'satellite';
   }, [pinnedTaskIds, focusTaskIds, waitTaskIds]);
 
-  // Recent tasks: all non-completed tasks excluding pinned, sorted by most recent activity
+  // Recent tasks: all non-completed tasks excluding pinned, sorted by most recent
+  // activity. When "Show completed" is on, recently completed tasks surface here
+  // too — including ones completed while pinned (the tiers never display done
+  // tasks, so Recent is their only landing spot) — ranked by completion time.
   const recentTasks = useMemo(() => {
     const pinSet = pinnedTaskIds ?? new Set<string>();
-    // Use the most recent timestamp between session activity and creation time
+    // Use the most recent of session activity / creation / completion time
     const recentTime = (t: Task) => {
-      const s = t.last_session_update ?? '';
-      const c = t.created_at ?? '';
-      return s > c ? s : c;
+      let m = t.created_at ?? '';
+      if (t.last_session_update && t.last_session_update > m) m = t.last_session_update;
+      if (t.completed_at && t.completed_at > m) m = t.completed_at;
+      return m;
     };
     return tasks
-      .filter(t => !pinSet.has(t.id)
-                   && t.status !== 'done' && t.phase !== 'COMPLETE')
+      .filter(t => {
+        const isDone = t.status === 'done' || t.phase === 'COMPLETE';
+        if (isDone) return showCompleted;
+        return !pinSet.has(t.id);
+      })
       .sort((a, b) => recentTime(b).localeCompare(recentTime(a)))
       .slice(0, 50);
-  }, [tasks, pinnedTaskIds]);
+  }, [tasks, pinnedTaskIds, showCompleted]);
 
   // Stable sensor config — inline objects in useSensor destabilize dnd-kit's internal
   // memoization (Object.values({distance:5}) produces new ref each render → sensors
@@ -4276,7 +4290,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         </div>
                         <div
                           className={`todo-tier-resize-handle${focusResize.isDragging ? ' dragging' : ''}`}
-                          onMouseDown={(e) => focusResize.handleMouseDown(e, e.currentTarget.previousElementSibling?.getBoundingClientRect().height ?? 200)}
+                          onMouseDown={(e) => focusResize.handleMouseDown(e, e.currentTarget.previousElementSibling as HTMLElement | null)}
                           title="Drag to resize Focus"
                         />
                       </SortableContext>
@@ -4307,7 +4321,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                           </div>
                           <div
                             className={`todo-tier-resize-handle${satelliteResize.isDragging ? ' dragging' : ''}`}
-                            onMouseDown={(e) => satelliteResize.handleMouseDown(e, e.currentTarget.previousElementSibling?.getBoundingClientRect().height ?? 200)}
+                            onMouseDown={(e) => satelliteResize.handleMouseDown(e, e.currentTarget.previousElementSibling as HTMLElement | null)}
                             title="Drag to resize Satellite"
                           />
                         </SortableContext>
@@ -4340,7 +4354,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         </div>
                         <div
                           className={`todo-tier-resize-handle${waitResize.isDragging ? ' dragging' : ''}`}
-                          onMouseDown={(e) => waitResize.handleMouseDown(e, e.currentTarget.previousElementSibling?.getBoundingClientRect().height ?? 200)}
+                          onMouseDown={(e) => waitResize.handleMouseDown(e, e.currentTarget.previousElementSibling as HTMLElement | null)}
                           title="Drag to resize Wait"
                         />
                       </SortableContext>
@@ -4383,7 +4397,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
               </div>
               {!collapsedSections.has('recent') && (
                 <SortableContext items={recentIds} strategy={verticalListSortingStrategy}>
-                  <div className="todo-pinned-list todo-pinned-list-scroll" style={{ maxHeight: RECENT_VISIBLE_MAX * 30 }}>
+                  {/* ~3 rows by default; drag the handle below to resize (persisted). */}
+                  <div className="todo-pinned-list todo-pinned-list-scroll" style={{ maxHeight: recentResize.height ?? RECENT_VISIBLE_MAX * 30 }}>
                     {recentTasks.map((task) => (
                       <SortableRecentCard
                         key={task.id}
@@ -4409,6 +4424,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                       />
                     ))}
                   </div>
+                  <div
+                    className={`todo-tier-resize-handle${recentResize.isDragging ? ' dragging' : ''}`}
+                    onMouseDown={(e) => recentResize.handleMouseDown(e, e.currentTarget.previousElementSibling as HTMLElement | null)}
+                    title="Drag to resize Recent"
+                  />
                 </SortableContext>
               )}
             </div>
