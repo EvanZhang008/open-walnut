@@ -13,6 +13,12 @@ export default defineConfig({
     baseURL: 'http://localhost:3457',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
+    // Managed/sandboxed environments ship a pre-installed Chromium whose build
+    // number may not match this Playwright version — let them point at it
+    // instead of downloading (e.g. PW_EXECUTABLE_PATH=/opt/pw-browsers/chromium).
+    ...(process.env.PW_EXECUTABLE_PATH
+      ? { launchOptions: { executablePath: process.env.PW_EXECUTABLE_PATH } }
+      : {}),
   },
 
   projects: [
