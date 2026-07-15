@@ -12,11 +12,14 @@ import os from 'node:os'
 import fs from 'node:fs/promises'
 import zlib from 'node:zlib'
 
-// Set WALNUT_HOME to temp dir BEFORE importing server modules
-// WALNUT_EPHEMERAL=1 prevents the safety check from overriding back to ~/.open-walnut
+// Set WALNUT_HOME to temp dir BEFORE importing server modules.
+// Ephemeral identity is argv-based (see IS_EPHEMERAL in src/constants.ts) — the
+// env-var flag was removed after it leaked through the daemon into prod servers.
+// Pushing the flag onto argv keeps the leaked-tmpdir safety check from overriding
+// OPEN_WALNUT_HOME back to ~/.open-walnut, without anything for children to inherit.
 const tmpBase = path.join(os.tmpdir(), `walnut-pw-${Date.now()}`)
 process.env.OPEN_WALNUT_HOME = tmpBase
-process.env.OPEN_WALNUT_EPHEMERAL = '1'
+process.argv.push('--_ephemeral-child')
 
 // Ensure directories exist
 await fs.rm(tmpBase, { recursive: true, force: true })

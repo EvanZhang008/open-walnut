@@ -8,10 +8,18 @@ export const WALNUT_HOME = resolveOpenWalnutHome();
 /**
  * True when running as an ephemeral child server (open-walnut web --_ephemeral-child).
  * Ephemeral servers run over a snapshot of production data and must never touch
- * production's shared remote singleton daemons. Read at import time — the env is
- * fixed at spawn (web.ts sets OPEN_WALNUT_EPHEMERAL=1) and never changes in-process.
+ * production's shared remote singleton daemons.
+ *
+ * Identity is read from ARGV, not env, on purpose: "ephemeral" is a property of
+ * exactly one process instance (how it was invoked), while env vars inherit down
+ * the whole process tree. The old OPEN_WALNUT_EPHEMERAL=1 env flag leaked
+ * ephemeral-server → shared local daemon → every claude CLI it spawned → any
+ * `npm run dev:prod` run inside such a CLI, booting the production server in
+ * attach-only mode (all remote sessions stuck on "Reconnecting…"). argv cannot
+ * leak that way. In-process embedders (test harnesses) that need ephemeral
+ * semantics push '--_ephemeral-child' onto process.argv before importing.
  */
-export const IS_EPHEMERAL = process.env.OPEN_WALNUT_EPHEMERAL === '1';
+export const IS_EPHEMERAL = process.argv.includes('--_ephemeral-child');
 
 /**
  * True when running as a headless cloud companion (WALNUT_CLOUD_MODE=1).
@@ -56,14 +64,15 @@ function resolveOpenWalnutHome(): string {
 
   if (!envHome) return productionHome
 
-  // Ephemeral child processes set OPEN_WALNUT_EPHEMERAL=1 — trust OPEN_WALNUT_HOME as-is
-  if (process.env.OPEN_WALNUT_EPHEMERAL === '1') return envHome
+  // A true ephemeral child (argv-identified, cannot be inherited) trusts
+  // OPEN_WALNUT_HOME as-is — web.ts pointed it at the snapshot tmpdir.
+  if (process.argv.includes('--_ephemeral-child')) return envHome
 
   // Check if OPEN_WALNUT_HOME looks like an ephemeral temp dir (leaked from parent)
   if (isEphemeralTmpDir(envHome)) {
     process.stderr.write(
       `WARNING: OPEN_WALNUT_HOME=${envHome} looks like a leaked ephemeral temp dir.\n` +
-      `  Overriding to ${productionHome}. Set OPEN_WALNUT_EPHEMERAL=1 to suppress.\n`,
+      `  Overriding to ${productionHome}. (Only --_ephemeral-child processes may use one.)\n`,
     )
     process.env.OPEN_WALNUT_HOME = productionHome
     return productionHome
