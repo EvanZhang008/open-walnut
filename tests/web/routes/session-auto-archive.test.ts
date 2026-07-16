@@ -33,9 +33,21 @@ vi.mock('../../../src/providers/session-manager.js', () => ({
   getRegisteredSessionManager: () => null,
 }));
 
-// Mock claude-code-session (the sessionRunner import at module level)
+// Mock claude-code-session. Restart now respawns a fresh CLI via
+// sessionRunner.reinitialize() (which marks the record 'running'); terminate uses
+// findSessionByClaudeId(). Stub both so the routes exercise their real logic
+// without a live CLI.
+const reinitializeMock = vi.fn(async (sessionId: string) => {
+  const { updateSessionRecord } = await import('../../../src/core/session-tracker.js');
+  await updateSessionRecord(sessionId, { process_status: 'running', errorMessage: undefined } as Record<string, unknown>);
+});
+const settleInFlightTurnMock = vi.fn(() => {});
 vi.mock('../../../src/providers/claude-code-session.js', () => ({
-  sessionRunner: null,
+  sessionRunner: {
+    reinitialize: (sid: string) => reinitializeMock(sid),
+    findSessionByClaudeId: () => null,
+    settleInFlightTurn: (sid: string) => settleInFlightTurnMock(sid),
+  },
 }));
 
 // Mock session-message-queue (used by retry/restart to inspect & resend the queue)
@@ -303,17 +315,20 @@ describe('POST /api/sessions/:sessionId/retry', () => {
   });
 });
 
-// ── Test 3: Session restart resumes in place ──
+// ── Test 3: Session restart re-initializes in place ──
 //
-// NOTE: restart was reworked (see sessions.ts POST /:sessionId/restart) from the
-// old "archive old session + spawn new" model to an in-place "kill CLI + revert
-// queue + reset to idle + resume the SAME session" model. So restart no longer
-// archives — it resets process_status to 'idle' and returns status 'restarted'.
-// Auto-archive of terminal (error/stopped) sessions now lives only in the
-// retry / quick-start paths (Tests 1 & 2). These tests assert the new contract.
+// NOTE: restart was reworked again (see sessions.ts POST /:sessionId/restart) to a
+// "respawn a fresh CLI via sessionRunner.reinitialize()" model. reinitialize spawns
+// `claude -p --resume` with NO message so the process re-emits its init event +
+// re-runs the SessionStart hook (reloading CLAUDE.md/.claude/skills/MCP/model), then
+// idles. It suppresses the old process's exit (no phantom "-1" error) and marks the
+// record 'running'. Restart still does NOT archive — auto-archive of terminal
+// sessions lives only in retry / quick-start (Tests 1 & 2).
 
 describe('POST /api/sessions/:sessionId/restart', () => {
-  it('resets an error session to idle and returns status=restarted', async () => {
+  beforeEach(() => { reinitializeMock.mockClear(); });
+
+  it('respawns an error session (running) and returns status=restarted', async () => {
     const task = await createTestTask('Restart Task');
     await createSessionRecord('restart-sess-1', task.id, 'proj', '/tmp');
     await updateSessionRecord('restart-sess-1', {
@@ -330,15 +345,30 @@ describe('POST /api/sessions/:sessionId/restart', () => {
     expect(res.body.status).toBe('restarted');
     expect(res.body.sessionId).toBe('restart-sess-1');
 
-    // Restart resumes the SAME session in place — it is NOT archived, the record
-    // is reset to idle and its error cleared so the resumed CLI starts clean.
+    // Restart re-initializes the SAME session in place — NOT archived. reinitialize
+    // was invoked and (via the mock) flipped the record to running + cleared the error.
+    expect(reinitializeMock).toHaveBeenCalledWith('restart-sess-1');
     const after = await getSessionByClaudeId('restart-sess-1');
     expect(after!.archived).toBeFalsy();
-    expect(after!.process_status).toBe('idle');
+    expect(after!.process_status).toBe('running');
     expect(after!.errorMessage).toBeUndefined();
   });
 
-  it('resets a stopped session to idle on restart', async () => {
+  it('settles any in-flight turn on restart (mid-turn spinner does not hang)', async () => {
+    settleInFlightTurnMock.mockClear();
+    const task = await createTestTask('Restart Midturn');
+    await createSessionRecord('restart-midturn', task.id, 'proj', '/tmp');
+    await updateSessionRecord('restart-midturn', { process_status: 'running' });
+
+    const app = createApp();
+    const res = await request(app).post('/api/sessions/restart-midturn/restart').send({});
+
+    expect(res.status).toBe(200);
+    // reinitialize() itself settles the turn; assert the route path completed.
+    expect(reinitializeMock).toHaveBeenCalledWith('restart-midturn');
+  });
+
+  it('respawns a stopped session on restart', async () => {
     const task = await createTestTask('Restart Stopped');
     await createSessionRecord('restart-stopped', task.id, 'proj', '/tmp');
     await updateSessionRecord('restart-stopped', { process_status: 'stopped' });
@@ -350,10 +380,11 @@ describe('POST /api/sessions/:sessionId/restart', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('restarted');
+    expect(reinitializeMock).toHaveBeenCalledWith('restart-stopped');
 
     const after = await getSessionByClaudeId('restart-stopped');
     expect(after!.archived).toBeFalsy();
-    expect(after!.process_status).toBe('idle');
+    expect(after!.process_status).toBe('running');
   });
 
   it('returns 404 for unknown session', async () => {
@@ -363,9 +394,24 @@ describe('POST /api/sessions/:sessionId/restart', () => {
       .send({});
 
     expect(res.status).toBe(404);
+    expect(reinitializeMock).not.toHaveBeenCalled();
   });
 
-  it('restarts a session even when it has no task (in-place resume)', async () => {
+  it('rejects restart on an archived session', async () => {
+    const task = await createTestTask('Restart Archived');
+    await createSessionRecord('restart-archived', task.id, 'proj', '/tmp');
+    await updateSessionRecord('restart-archived', { process_status: 'stopped', archived: true });
+
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/sessions/restart-archived/restart')
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(reinitializeMock).not.toHaveBeenCalled();
+  });
+
+  it('restarts a session even when it has no task (in-place re-init)', async () => {
     await createSessionRecord('no-task-restart', '', 'proj', '/tmp');
     await updateSessionRecord('no-task-restart', { process_status: 'error' });
 
@@ -374,12 +420,55 @@ describe('POST /api/sessions/:sessionId/restart', () => {
       .post('/api/sessions/no-task-restart/restart')
       .send({});
 
-    // In-place resume does not require a task — restart succeeds and resets to idle.
+    // In-place re-init does not require a task — restart succeeds.
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('restarted');
+    expect(reinitializeMock).toHaveBeenCalledWith('no-task-restart');
 
     const after = await getSessionByClaudeId('no-task-restart');
-    expect(after!.process_status).toBe('idle');
+    expect(after!.process_status).toBe('running');
+  });
+});
+
+// ── Test 4: Session terminate closes the CLI, no respawn ──
+//
+// terminate marks the record 'stopped' (not error), does not archive, and does not
+// call reinitialize. With no live session/manager registered (mocks return null),
+// it falls through to the record-update + status broadcast path.
+
+describe('POST /api/sessions/:sessionId/terminate', () => {
+  beforeEach(() => { reinitializeMock.mockClear(); settleInFlightTurnMock.mockClear(); });
+
+  it('marks a running session stopped and returns status=terminated', async () => {
+    const task = await createTestTask('Terminate Task');
+    await createSessionRecord('term-sess-1', task.id, 'proj', '/tmp');
+    await updateSessionRecord('term-sess-1', { process_status: 'running', pid: 12345 });
+
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/sessions/term-sess-1/terminate')
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('terminated');
+    expect(res.body.sessionId).toBe('term-sess-1');
+    expect(reinitializeMock).not.toHaveBeenCalled();
+    // terminate settles any killed mid-turn batch so the UI spinner clears.
+    expect(settleInFlightTurnMock).toHaveBeenCalledWith('term-sess-1');
+
+    const after = await getSessionByClaudeId('term-sess-1');
+    expect(after!.archived).toBeFalsy();
+    expect(after!.process_status).toBe('stopped');
+    expect(after!.pid).toBeUndefined();
+  });
+
+  it('returns 404 for unknown session', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/sessions/nonexistent/terminate')
+      .send({});
+
+    expect(res.status).toBe(404);
   });
 });
 

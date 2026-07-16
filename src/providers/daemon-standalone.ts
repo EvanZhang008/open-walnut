@@ -852,10 +852,15 @@ function cmdSttResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<strin
 // ── Start a Claude session ──
 function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const { sid, args, cwd, message, resume, mode } = cmd as {
-    sid: string; args: string[]; cwd: string; message: string; resume?: boolean; mode?: string
+    sid: string; args: string[]; cwd: string; message?: string; resume?: boolean; mode?: string
   }
-  if (!sid || !args || !cwd || !message) {
-    return sendError(ws, id, 'start: missing required fields (sid, args, cwd, message)')
+  // `message` is OPTIONAL: an empty/absent message spawns the CLI without writing
+  // any user turn to the FIFO — the process emits `init` (+ SessionStart hook, fresh
+  // settings/skills/MCP load) then blocks on stdin, idle. This is the "restart to
+  // re-initialize, don't run a turn" path (POST /restart with an empty queue). A
+  // present message keeps the classic behavior (spawn + deliver the first turn).
+  if (!sid || !args || !cwd) {
+    return sendError(ws, id, 'start: missing required fields (sid, args, cwd)')
   }
 
   // Validate cwd exists before spawning — prevents misleading ENOENT on /bin/bash
@@ -1011,12 +1016,19 @@ function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, u
     logMsg('error', 'spawn error (post-start)', { sid, error: err.message })
   })
 
-  // Write initial message to FIFO
-  const payload = JSON.stringify({
-    type: 'user',
-    message: { role: 'user', content: message },
-  })
-  fs.writeSync(pipeFd, Buffer.from(payload + '\n'))
+  // Write initial message to FIFO — only when one was provided. An empty message
+  // means "spawn idle" (restart-to-reinitialize): the CLI still opens stdin and
+  // emits its init event, but runs no turn. We keep the pipeFd open across the
+  // O_RDWR lifetime like the send path, so the FIFO survives until the first real
+  // message; closing it here (as the message path does after writing) is fine
+  // because the CLI already holds its own read end.
+  if (message) {
+    const payload = JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content: message },
+    })
+    fs.writeSync(pipeFd, Buffer.from(payload + '\n'))
+  }
   fs.closeSync(pipeFd)
 
   // Close fds in parent

@@ -5809,7 +5809,9 @@ export class SessionRunner {
       session.pendingTitle = data.title
     } else {
       const defaultPromptPrefix = 'Working on task:'
-      const isCustomPrompt = !message.startsWith(defaultPromptPrefix)
+      // Empty message = init-only spawn (no first turn) — fall through to the
+      // task title so the session isn't named "Title — " with a dangling dash.
+      const isCustomPrompt = message.length > 0 && !message.startsWith(defaultPromptPrefix)
 
       if (taskTitle && isCustomPrompt) {
         session.pendingTitle = `${taskTitle} — ${message.slice(0, 80)}`
@@ -6045,7 +6047,8 @@ export class SessionRunner {
       sessionTitle = data.title
     } else {
       const defaultPromptPrefix = 'Working on task:'
-      const isCustomPrompt = !message.startsWith(defaultPromptPrefix)
+      // Empty message = init-only spawn — same dangling-dash guard as handleStart.
+      const isCustomPrompt = message.length > 0 && !message.startsWith(defaultPromptPrefix)
       if (taskTitle && isCustomPrompt) {
         sessionTitle = `${taskTitle} — ${message.slice(0, 80)}`
       } else if (taskTitle) {
@@ -6549,6 +6552,150 @@ export class SessionRunner {
   }
 
   /**
+   * Resolve the cold-resume spawn args (model + effort) from the persisted record.
+   * Model/mode/effort changes are applied LIVE via control_requests (applyModel /
+   * applyPermissionMode / applyEffort — no respawn); the record fields read here are
+   * the durable fallback so a cold --resume re-applies them (control_requests are
+   * in-memory only, lost when the CLI dies). Shared by processNext + reinitialize.
+   */
+  private async resolveResumeArgs(sessionId: string): Promise<{ model?: string; effort?: import('../core/types.js').SessionEffort }> {
+    let resolvedModel: string | undefined
+    let resolvedEffort: import('../core/types.js').SessionEffort | undefined
+    try {
+      const { getSessionByClaudeId: getSession } = await import('../core/session-tracker.js')
+      const record = await getSession(sessionId)
+      if (record?.effort) {
+        resolvedEffort = record.effort
+      }
+      // Fall back to stored CLI model for --resume so the [1m] context window
+      // marker is preserved.  record.cliModel stores the original --model arg
+      // (e.g. "opus[1m]").  record.model stores the *reported* model from init
+      // events (e.g. "global.anthropic.claude-opus-4-6-v1") which never includes
+      // [1m] — using it for resume would silently downgrade to 200K context.
+      // Skip malformed model strings (e.g. orphan "]" from old ANSI stripping bug).
+      const storedCliModel = record?.cliModel
+      const storedModel = record?.model
+      if (storedCliModel) {
+        resolvedModel = storedCliModel
+      } else if (storedModel && (!storedModel.endsWith(']') || storedModel.endsWith('[1m]'))) {
+        if (storedModel.endsWith('[1m]')) {
+          // Already has context marker — use as-is
+          resolvedModel = storedModel
+        } else {
+          // Backward compat: sessions created before cliModel was persisted
+          // only have the reported model (e.g. "global.anthropic.claude-opus-4-6-v1")
+          // which never includes [1m].  Infer CLI alias + [1m] from model family
+          // so resume preserves 1M context (the default for new sessions).
+          const lower = storedModel.toLowerCase()
+          if (lower.includes('sonnet')) resolvedModel = 'sonnet[1m]'
+          else if (lower.includes('haiku')) resolvedModel = 'haiku'  // haiku has no 1M variant
+          else if (lower.includes('fable')) resolvedModel = 'fable[1m]'  // fable defaults to 1M like opus
+          else resolvedModel = undefined  // → send() passes no --model; CLI --resume keeps the session's own model
+        }
+      }
+    } catch (err) {
+      log.session.warn('resolveResumeArgs: failed to read record', { sessionId, error: err instanceof Error ? err.message : String(err) })
+    }
+    return { model: resolvedModel, effort: resolvedEffort }
+  }
+
+  /**
+   * Settle an in-flight turn's batch bookkeeping (if any) so the UI stops showing
+   * a streaming spinner / "Running" state. Used when a turn is killed out-of-band
+   * (Restart respawn, Terminate) rather than completing naturally. Mirrors the
+   * interrupt path in handleSend: clear activeProcessing + emit BATCH_COMPLETED
+   * with the batch's message ids so the frontend resolves its optimistic rows.
+   * No-op when the session isn't mid-turn. Does NOT sweep the disk queue —
+   * pending/processing messages survive (they re-deliver on the next processNext).
+   */
+  settleInFlightTurn(sessionId: string): void {
+    if (!this.activeProcessing.has(sessionId)) return
+    const oldBatchCount = this.batchCounts.get(sessionId) ?? 1
+    const oldBatchIds = this.batchMessageIds.get(sessionId)
+    log.session.info('settleInFlightTurn: settling killed mid-turn batch', { sessionId, count: oldBatchCount })
+    this.clearActiveProcessing(sessionId, { kind: 'stopped' })
+    bus.emit(EventNames.SESSION_BATCH_COMPLETED, {
+      sessionId,
+      count: oldBatchCount,
+      ...(oldBatchIds && oldBatchIds.length > 0 ? { messageIds: oldBatchIds } : {}),
+    }, ['main-ai'], { source: 'session-runner' })
+  }
+
+  /**
+   * Restart a session by respawning a fresh `claude -p --resume` process WITHOUT
+   * running a turn. The new CLI re-emits its `init` event and re-runs the
+   * SessionStart hook, so all spawn-time settings (CLAUDE.md, .claude/, skills,
+   * MCP servers, model/effort) are reloaded — the thing users expect from "Restart".
+   *
+   * Why not just `mgr.kill()` (the old restart route did): a bare daemon `stop`
+   * reaps the CLI and surfaces the death as `SESSION_ERROR` / "Remote session
+   * exited with code -1", leaving the session in Error and never respawning. The
+   * respawn path here instead detaches the old transport BEFORE spawning (send()
+   * sets resultEmitted + detaches at claude-code-session.ts:1161), so the old
+   * process's exit is suppressed, not surfaced as an error.
+   *
+   * Delivers no message (daemon cmdStart now treats message as optional → spawn
+   * idle), so this costs no tokens and does NOT pollute the conversation. Any
+   * pending queue is left untouched and drains on the next real send.
+   */
+  async reinitialize(sessionId: string): Promise<void> {
+    const { model, effort } = await this.resolveResumeArgs(sessionId)
+    const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+    const record = await getSessionByClaudeId(sessionId)
+    if (!record) throw new Error(`reinitialize: no session record for ${sessionId}`)
+
+    const { getConfig } = await import('../core/config-manager.js')
+    const cfg = await getConfig()
+
+    // Resolve SSH target for remote sessions so the respawn lands on the right host.
+    let sshTarget: SshTarget | undefined
+    if (record.host) {
+      const hostDef = cfg.hosts?.[record.host]
+      if (hostDef) {
+        const hostname = hostDef.hostname ?? (hostDef as Record<string, unknown>).ssh as string | undefined
+        if (hostname) sshTarget = { hostname, user: hostDef.user, port: hostDef.port, shell_setup: hostDef.shell_setup }
+      }
+    }
+
+    // Reuse the live session object if we have one (send() detaches its old
+    // transport + suppresses the dying process's events); otherwise make a fresh one.
+    let target: ClaudeCodeSession | undefined
+    for (const [, s] of this.sessions) {
+      if (s.sessionId === sessionId) { target = s; break }
+    }
+    if (!target) {
+      target = new ClaudeCodeSession(record.taskId, record.project, this.cliCommand)
+      target._testDaemonUrl = this._testDaemonUrl
+      this.sessions.set(record.taskId || `reconnected-${sessionId}`, target)
+    }
+
+    // Mid-turn guard: if the session was actively processing a turn when Restart
+    // was hit, the respawn kills that turn. Settle the in-flight batch NOW —
+    // clear activeProcessing and tell the UI the batch completed — so the
+    // frontend stops the streaming spinner / "Running" state immediately instead
+    // of waiting out the 60s safety timeout. Mirrors handleSend's interrupt path.
+    this.settleInFlightTurn(sessionId)
+
+    const resumeMode = record.mode && record.mode !== 'default' ? record.mode : undefined
+    log.session.info('reinitialize: respawning fresh CLI (no turn)', { sessionId, taskId: record.taskId, host: record.host, model, mode: resumeMode })
+
+    // Empty message ⇒ daemon spawns idle: init event + SessionStart hook fire,
+    // no user turn runs. onSpawnSettled reports spawn success/failure only.
+    await new Promise<void>((resolve, reject) => {
+      target!.send('', record.cwd ?? undefined, sessionId, resumeMode, model, undefined, record.host ?? undefined, sshTarget, undefined, cfg.session?.permission_prompt, undefined, cfg.session?.stream_partial_messages, effort,
+        (ok, err) => {
+          if (ok) {
+            import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+              updateSessionRecord(sessionId, { process_status: 'running', errorMessage: undefined, status_reason: 'restart_reinitialize', status_changed_by: 'user' } as Record<string, unknown>)).catch(() => {})
+            resolve()
+          } else {
+            reject(err ?? new Error('reinitialize spawn failed'))
+          }
+        })
+    })
+  }
+
+  /**
    * Redeliver pending queue messages for sessions on a host that just
    * (re)connected. Called from the daemon pool's host-connected callback.
    * Local sessions (host=null → '__local__') are included when the local
@@ -6604,49 +6751,9 @@ export class SessionRunner {
         }
       }
 
-      // Resolve cold-resume spawn args from the record. Model/mode/effort changes
-      // are all applied LIVE via control_requests (applyModel / applyPermissionMode /
-      // applyEffort — no respawn); the record fields read here are the durable
-      // fallback so a cold --resume re-applies them (control_requests are in-memory
-      // only, lost when the CLI dies).
-      let resolvedModel: string | undefined
-      let resolvedEffort: import('../core/types.js').SessionEffort | undefined
-      try {
-        const { getSessionByClaudeId: getSession } = await import('../core/session-tracker.js')
-        const record = await getSession(sessionId)
-        if (record?.effort) {
-          resolvedEffort = record.effort
-        }
-        // Fall back to stored CLI model for --resume so the [1m] context window
-        // marker is preserved.  record.cliModel stores the original --model arg
-        // (e.g. "opus[1m]").  record.model stores the *reported* model from init
-        // events (e.g. "global.anthropic.claude-opus-4-6-v1") which never includes
-        // [1m] — using it for resume would silently downgrade to 200K context.
-        // Skip malformed model strings (e.g. orphan "]" from old ANSI stripping bug).
-        const storedCliModel = record?.cliModel
-        const storedModel = record?.model
-        if (!resolvedModel && storedCliModel) {
-          resolvedModel = storedCliModel
-        } else if (!resolvedModel && storedModel
-          && (!storedModel.endsWith(']') || storedModel.endsWith('[1m]'))) {
-          if (storedModel.endsWith('[1m]')) {
-            // Already has context marker — use as-is
-            resolvedModel = storedModel
-          } else {
-            // Backward compat: sessions created before cliModel was persisted
-            // only have the reported model (e.g. "global.anthropic.claude-opus-4-6-v1")
-            // which never includes [1m].  Infer CLI alias + [1m] from model family
-            // so resume preserves 1M context (the default for new sessions).
-            const lower = storedModel.toLowerCase()
-            if (lower.includes('sonnet')) resolvedModel = 'sonnet[1m]'
-            else if (lower.includes('haiku')) resolvedModel = 'haiku'  // haiku has no 1M variant
-            else if (lower.includes('fable')) resolvedModel = 'fable[1m]'  // fable defaults to 1M like opus
-            else resolvedModel = undefined  // → send() passes no --model; CLI --resume keeps the session's own model
-          }
-        }
-      } catch (err) {
-        log.session.warn('processNext: failed to read record for resume args', { sessionId, error: err instanceof Error ? err.message : String(err) })
-      }
+      // Resolve cold-resume spawn args (model/effort) from the record — the durable
+      // fallback re-applied on a cold --resume (live control_requests are in-memory only).
+      const { model: resolvedModel, effort: resolvedEffort } = await this.resolveResumeArgs(sessionId)
 
       // Rehydrate: if this.sessions lost the entry (e.g. reconciler didn't flag the
       // record as reconnectable on startup, so init() never populated the map), try

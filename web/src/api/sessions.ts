@@ -438,9 +438,16 @@ export async function retrySession(sessionId: string): Promise<
 }
 
 export async function restartSession(sessionId: string): Promise<
-  { status: 'restarted'; sessionId: string }
+  { status: 'restarted'; sessionId: string; pendingMessages?: number }
 > {
   return apiPost(`/api/sessions/${sessionId}/restart`, {});
+}
+
+/** Terminate a session — closes the CLI process (no respawn) and marks it stopped. */
+export async function terminateSession(sessionId: string): Promise<
+  { status: 'terminated'; sessionId: string }
+> {
+  return apiPost(`/api/sessions/${sessionId}/terminate`, {});
 }
 
 export async function respondToPermission(

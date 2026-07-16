@@ -1002,8 +1002,12 @@ function cmdSttResult(ws, id, cmd) {
 // ── Start a Claude session ──
 function cmdStart(ws, id, cmd) {
   const { sid, args, cwd, message, resume, mode } = cmd;
-  if (!sid || !args || !cwd || !message) {
-    return sendError(ws, id, 'start: missing required fields (sid, args, cwd, message)');
+  // message is OPTIONAL: empty/absent spawns the CLI without writing a user turn
+  // to the FIFO — the process emits its init event (+ SessionStart hook, fresh
+  // settings/skills/MCP load) then blocks on stdin, idle. Restart-to-reinitialize
+  // path. Keep in sync with daemon-standalone.ts.
+  if (!sid || !args || !cwd) {
+    return sendError(ws, id, 'start: missing required fields (sid, args, cwd)');
   }
 
   // Replace-existing cleanup: prevents stale orphanPollTimer from the old
@@ -1103,12 +1107,16 @@ function cmdStart(ws, id, cmd) {
     },
   });
 
-  // Write initial message to FIFO
-  const payload = JSON.stringify({
-    type: 'user',
-    message: { role: 'user', content: message },
-  });
-  fs.writeSync(pipeFd, Buffer.from(payload + '\\n'));
+  // Write initial message to FIFO — only when one was provided. Empty message =
+  // "spawn idle" (restart-to-reinitialize): CLI emits init but runs no turn.
+  // Keep in sync with daemon-standalone.ts.
+  if (message) {
+    const payload = JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content: message },
+    });
+    fs.writeSync(pipeFd, Buffer.from(payload + '\\n'));
+  }
   fs.closeSync(pipeFd);
 
   // Close fds in parent
@@ -2248,7 +2256,7 @@ async function cmdGitDiff(ws, id, cmd) {
       const letter = code[0];
       if (letter === 'R' || letter === 'C') {
         const oldRel = parts[i + 1], newRel = parts[i + 2]; i += 3;
-        if (newRel) entries.push({ status: 'modified', relPath: newRel, oldRelPath: oldRel });
+        if (newRel) entries.push({ status: 'renamed', relPath: newRel, oldRelPath: oldRel });
       } else {
         const rel = parts[i + 1]; i += 2;
         if (rel) entries.push({ status: letter === 'A' ? 'added' : letter === 'D' ? 'deleted' : 'modified', relPath: rel });
@@ -2274,7 +2282,7 @@ async function cmdGitDiff(ws, id, cmd) {
         before = show.code === 0 ? show.stdout : '';
       }
       const after = e.status === 'deleted' ? '' : await readText(joinPosix(repoRoot, e.relPath));
-      files.push({ relPath: e.relPath, before: before, after: after, status: e.status });
+      files.push({ relPath: e.relPath, before: before, after: after, status: e.status, oldRelPath: e.oldRelPath });
     }
     files.sort((a, b) => a.relPath.localeCompare(b.relPath));
     sendOk(ws, id, { repoRoot: repoRoot, files: files });

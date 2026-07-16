@@ -332,7 +332,10 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       res.status(400).json({ error: 'cwd is required' })
       return
     }
-    if (!message || typeof message !== 'string') {
+    // An EMPTY message is allowed: spawn + init the CLI (SessionStart hook,
+    // MCP/skills load) with no first turn — it idles on stdin until the user
+    // sends. Same daemon contract as restart's empty-queue respawn.
+    if (typeof message !== 'string') {
       res.status(400).json({ error: 'message is required' })
       return
     }
@@ -1922,18 +1925,20 @@ sessionsRouter.post('/:sessionId/retry', async (req: Request, res: Response, nex
   }
 })
 
-// POST /api/sessions/:sessionId/restart — kill the current CLI and immediately resume.
+// POST /api/sessions/:sessionId/restart — respawn a fresh `claude -p --resume`
+// process so the session RE-INITIALIZES: the new CLI re-emits its `init` event and
+// re-runs the SessionStart hook, reloading all spawn-time settings (CLAUDE.md,
+// .claude/, skills, MCP servers, model/effort). This is what users expect from
+// "Restart" — a clean re-read of config, visibly back to Running.
 //
-// Flow:
-//   1. Kill the running CLI (SessionManager.kill if registered, otherwise SIGTERM to process group).
-//   2. Revert any 'processing' messages in the queue back to 'pending' — they were stuck mid-send.
-//   3. Reset session record to idle.
-//   4. Emit SESSION_SEND to trigger processNext, which spawns a fresh `claude -p --resume` and
-//      drains the pending queue. If queue is empty, we skip step 4 (no message means no CLI work,
-//      which matches Claude CLI semantics — `claude -p --resume` without stdin input is a no-op).
-//
-// All log statements prefixed "session restart:" so the full path is greppable when the
-// UX appears unresponsive.
+// The old implementation bare-killed via SessionManager.kill() and only respawned
+// if the queue held pending messages. With an empty queue (the common "I changed a
+// setting, reload it" case) it left the session idle with no feedback, and the bare
+// daemon `stop` surfaced the reap as "Remote session exited with code -1" (Error).
+// sessionRunner.reinitialize() fixes all three: it detaches the old transport
+// BEFORE spawning (suppressing the dying process's exit → no phantom error) and
+// spawns with no message (init + hook fire, no turn → costs no tokens, no
+// conversation pollution). Any pending queue is untouched and drains on next send.
 sessionsRouter.post('/:sessionId/restart', async (req: Request, res: Response, next: NextFunction) => {
   const sessionId = req.params.sessionId as string
   const startedAt = Date.now()
@@ -1943,6 +1948,10 @@ sessionsRouter.post('/:sessionId/restart', async (req: Request, res: Response, n
     if (!record) {
       log.web.warn('session restart: session not found', { sessionId })
       res.status(404).json({ error: 'Session not found' })
+      return
+    }
+    if (record.archived) {
+      res.status(400).json({ error: 'Cannot restart an archived session' })
       return
     }
 
@@ -1955,103 +1964,121 @@ sessionsRouter.post('/:sessionId/restart', async (req: Request, res: Response, n
       taskId: record.taskId,
     })
 
-    // Step 1: Kill the running CLI.
-    if (record.pid != null) {
-      const { isSessionProcessAlive: isAlive } = await import('../../utils/session-liveness.js')
-      const alive = await isAlive(record)
-      log.web.info('session restart: liveness check', { sessionId, pid: record.pid, alive })
-
-      if (alive) {
-        const { getRegisteredSessionManager } = await import('../../providers/session-manager.js')
-        const mgr = getRegisteredSessionManager(sessionId)
-        if (mgr) {
-          log.web.info('session restart: killing via SessionManager', { sessionId, pid: record.pid, managerKind: mgr.constructor.name })
-          mgr.kill()
-        } else {
-          log.web.info('session restart: killing via process.kill (no manager registered)', { sessionId, pid: record.pid })
-          try {
-            process.kill(-record.pid, 'SIGTERM')
-            log.web.info('session restart: SIGTERM sent to process group', { sessionId, pgid: record.pid })
-          } catch (err) {
-            log.web.warn('session restart: process.kill failed (likely already dead)', {
-              sessionId, pid: record.pid,
-              error: err instanceof Error ? err.message : String(err),
-            })
-          }
-        }
-      } else {
-        log.web.info('session restart: CLI already dead, skipping kill', { sessionId, pid: record.pid })
-      }
-    } else {
-      log.web.info('session restart: no pid in record, nothing to kill', { sessionId })
-    }
-
-    // Step 2: Revert any in-flight 'processing' messages back to 'pending' so they get
-    // re-sent to the new CLI. A message stuck in 'processing' means the old CLI was
-    // killed mid-send — without revert it would be lost forever.
+    // Revert any in-flight 'processing' messages back to 'pending' — if the old CLI
+    // was mid-send when we respawn, those messages must survive and re-deliver.
     const { getQueue, revertToPending } = await import('../../core/session-message-queue.js')
     const queue = await getQueue(sessionId)
     const stuck = queue.filter((m) => m.status === 'processing')
-    log.web.info('session restart: queue state', {
-      sessionId,
-      queueSize: queue.length,
-      pendingCount: queue.filter((m) => m.status === 'pending').length,
-      processingCount: stuck.length,
-    })
     if (stuck.length > 0) {
       await revertToPending(stuck)
-      log.web.info('session restart: reverted processing → pending', {
-        sessionId,
-        count: stuck.length,
-        messageIds: stuck.map((m) => m.id),
-      })
+      log.web.info('session restart: reverted processing → pending', { sessionId, count: stuck.length })
     }
 
-    // Step 3: Reset record to idle.
-    await updateSessionRecord(sessionId, {
-      process_status: 'idle',
-      errorMessage: undefined,
-      pid: undefined,
-    })
-    log.web.info('session restart: record reset to idle', { sessionId })
+    // Respawn a fresh CLI (idle — no turn). reinitialize() owns the graceful
+    // transport swap that suppresses the old process's exit.
+    const { sessionRunner } = await import('../../providers/claude-code-session.js')
+    await sessionRunner.reinitialize(sessionId)
 
-    // Step 4: If there are pending messages, trigger processNext to spawn a fresh CLI.
-    const pendingAfterRevert = stuck.length + queue.filter((m) => m.status === 'pending').length
+    // If messages are pending after the revert, kick processNext so the fresh CLI
+    // drains them (reinitialize itself delivers nothing).
+    const pendingAfterRevert = queue.filter((m) => m.status === 'pending').length + stuck.length
     if (pendingAfterRevert > 0) {
       const { bus, EventNames } = await import('../../core/event-bus.js')
-      // handleSend drains the queue via processNext — message body is unused for the
-      // non-interrupt path (it reads pending messages from the queue). Pass empty string
-      // to avoid confusion in bus event logs.
-      bus.emit(EventNames.SESSION_SEND, {
-        sessionId,
-        taskId: record.taskId,
-        message: '',
-      }, ['session-runner'], { source: 'restart' })
-      log.web.info('session restart: emitted SESSION_SEND to trigger resume', {
-        sessionId,
-        pendingMessages: pendingAfterRevert,
-      })
-    } else {
-      log.web.info('session restart: no pending messages — CLI will stay idle until next user input', { sessionId })
+      bus.emit(EventNames.SESSION_SEND, { sessionId, taskId: record.taskId, message: '' }, ['session-runner'], { source: 'restart' })
+      log.web.info('session restart: kicked pending queue after reinit', { sessionId, pendingMessages: pendingAfterRevert })
     }
 
     log.web.info('session restart: complete', {
       sessionId,
       durationMs: Date.now() - startedAt,
-      triggeredResume: pendingAfterRevert > 0,
-    })
-    res.json({
-      status: 'restarted',
-      sessionId,
       pendingMessages: pendingAfterRevert,
-      resumed: pendingAfterRevert > 0,
     })
+    res.json({ status: 'restarted', sessionId, pendingMessages: pendingAfterRevert })
   } catch (err) {
     log.web.error('session restart: failed', {
       sessionId,
       durationMs: Date.now() - startedAt,
       error: err instanceof Error ? err.message : String(err),
       stack: err instanceof Error ? err.stack : undefined,
+    })
+    next(err)
+  }
+})
+
+// POST /api/sessions/:sessionId/terminate — close the CLI process, full stop.
+//
+// Unlike restart (which respawns), this just kills the running `claude -p` and
+// marks the session 'stopped'. No respawn, no queue drain, no error banner — the
+// intentional kill is suppressed the same way restart suppresses it (via the
+// live session's interrupt(), which sets resultEmitted so the daemon's reap is
+// not surfaced as "exited with code -1"). Pending messages are left in the queue.
+sessionsRouter.post('/:sessionId/terminate', async (req: Request, res: Response, next: NextFunction) => {
+  const sessionId = req.params.sessionId as string
+  const startedAt = Date.now()
+  log.web.info('session terminate: request received', { sessionId })
+  try {
+    const record = await getSessionByClaudeId(sessionId)
+    if (!record) {
+      res.status(404).json({ error: 'Session not found' })
+      return
+    }
+
+    // Prefer the live session object's interrupt() — it sets resultEmitted (so the
+    // exit is suppressed, not reported as an error), stops monitoring, closes the
+    // FIFO and marks the process stopped. Falls back to a raw process-group SIGTERM
+    // if no in-memory session/manager is registered (e.g. after a server restart).
+    const { sessionRunner } = await import('../../providers/claude-code-session.js')
+    const live = sessionRunner.findSessionByClaudeId(sessionId)
+    if (live) {
+      log.web.info('session terminate: interrupting live session', { sessionId, host: record.host })
+      await live.interrupt()
+    } else {
+      const { getRegisteredSessionManager } = await import('../../providers/session-manager.js')
+      const mgr = getRegisteredSessionManager(sessionId)
+      if (mgr) {
+        log.web.info('session terminate: killing via SessionManager', { sessionId, managerKind: mgr.constructor.name })
+        mgr.kill()
+      } else if (record.pid != null && !record.host) {
+        // Local session, no manager — SIGTERM the process group directly.
+        try {
+          process.kill(-record.pid, 'SIGTERM')
+          log.web.info('session terminate: SIGTERM sent to process group', { sessionId, pgid: record.pid })
+        } catch (err) {
+          log.web.warn('session terminate: process.kill failed (likely already dead)', { sessionId, error: err instanceof Error ? err.message : String(err) })
+        }
+      } else {
+        log.web.info('session terminate: no live session/manager to kill', { sessionId, host: record.host })
+      }
+    }
+
+    // Settle any killed mid-turn batch so the UI stops the streaming spinner /
+    // "Running" state immediately instead of waiting out the 60s safety timeout.
+    // No-op when the session wasn't processing a turn.
+    sessionRunner.settleInFlightTurn(sessionId)
+
+    // Persist stopped state + notify the UI so the status flips immediately.
+    await updateSessionRecord(sessionId, {
+      process_status: 'stopped',
+      errorMessage: undefined,
+      activity: undefined,
+      pid: undefined,
+      status_reason: 'user_terminated',
+      status_changed_by: 'user',
+    } as Record<string, unknown>)
+    const { bus, EventNames } = await import('../../core/event-bus.js')
+    bus.emit(EventNames.SESSION_STATUS_CHANGED, {
+      sessionId,
+      taskId: record.taskId,
+      process_status: 'stopped',
+    }, ['*'], { source: 'terminate' })
+
+    log.web.info('session terminate: complete', { sessionId, durationMs: Date.now() - startedAt })
+    res.json({ status: 'terminated', sessionId })
+  } catch (err) {
+    log.web.error('session terminate: failed', {
+      sessionId,
+      durationMs: Date.now() - startedAt,
+      error: err instanceof Error ? err.message : String(err),
     })
     next(err)
   }

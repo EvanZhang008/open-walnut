@@ -7,7 +7,7 @@
  * (restart / investigate / open-notes …) and pass them down.
  */
 import { useState, useRef, useEffect } from 'react';
-import { ICON_SEARCH, ICON_REFRESH } from '../common/Icons';
+import { ICON_SEARCH, ICON_REFRESH, ICON_STOP } from '../common/Icons';
 
 interface SessionKebabSectionProps {
   sessionId: string;
@@ -25,6 +25,9 @@ interface SessionKebabSectionProps {
   // Restart
   onRestart: () => void;
   restartBusy: boolean;
+  // Terminate — close the CLI process (no respawn)
+  onTerminate: () => void;
+  terminateBusy: boolean;
   // Investigate
   onInvestigate: () => void;
   investigating: boolean;
@@ -61,6 +64,7 @@ export function SessionKebabSection({
   sessionId, cwd, host, hostname, archived,
   notesOpen, onToggleNotes, messagesOpen, onToggleMessages, msgCount,
   onRestart, restartBusy,
+  onTerminate, terminateBusy,
   onInvestigate, investigating, investigateResult,
   onAfterAction,
 }: SessionKebabSectionProps) {
@@ -100,9 +104,22 @@ export function SessionKebabSection({
           className="task-kebab-item"
           onClick={(e) => { e.stopPropagation(); onRestart(); }}
           disabled={restartBusy}
+          title="Respawn the CLI so it re-reads settings (CLAUDE.md, .claude, skills, MCP) and re-runs the SessionStart hook — no message sent, conversation preserved"
         >
           <span className="task-kebab-icon">{ICON_REFRESH}</span>
           <span>{restartBusy ? 'Restarting…' : 'Restart'}</span>
+        </button>
+      )}
+
+      {!archived && (
+        <button
+          className="task-kebab-item"
+          onClick={(e) => { e.stopPropagation(); onTerminate(); }}
+          disabled={terminateBusy}
+          title="Close the CLI process — does not respawn. The session goes stopped; your next message resumes it."
+        >
+          <span className="task-kebab-icon">{ICON_STOP}</span>
+          <span>{terminateBusy ? 'Terminating…' : 'Terminate'}</span>
         </button>
       )}
 
