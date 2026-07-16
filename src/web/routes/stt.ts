@@ -3,11 +3,12 @@
  */
 
 import express, { Router, type Request, type Response, type NextFunction } from 'express';
-import { unlink, stat, mkdir, writeFile, readFile, appendFile, readdir, rm } from 'node:fs/promises';
+import { unlink, stat, readFile, appendFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { getConfig, updateConfig } from '../../core/config-manager.js';
 import { transcribeAudio, createEngine, getOrCreateEngine, type SttResult } from '../../core/stt/index.js';
+import { saveRecordingAudio, writeRecordingResult, listRecordings, readRecordingAudio } from '../../core/stt/recordings.js';
 import { createWhisperCppEngine } from '../../core/stt/engine-whisper-cpp.js';
 import { detectSystem } from '../../core/stt/detect.js';
 import { installViaBrew, downloadGgmlModel, MODEL_CATALOG, VAD_MODEL, getModelDir, SHERPA_MODEL_CATALOG, downloadSherpaModel, getSherpaModelDir, findSherpaModels, type SetupEvent } from '../../core/stt/setup.js';
@@ -50,6 +51,14 @@ sttRouter.post('/transcribe', express.json({ limit: '35mb' }), async (req: Reque
     const effectiveLanguage = language || config.stt?.language;
     const sttReq = { audio, format, language: effectiveLanguage };
 
+    // Persist the audio BEFORE transcription — if the engine hangs or the
+    // browser drops the response, the recording (and later its result) survive
+    // and are recoverable via GET /api/stt/recordings.
+    const saved = await saveRecordingAudio(audio, format).catch((e: unknown) => {
+      log.stt.warn(`Failed to persist recording audio: ${e instanceof Error ? e.message : String(e)}`);
+      return null;
+    });
+
     let result: SttResult;
 
     if (model && typeof model === 'string') {
@@ -79,13 +88,81 @@ sttRouter.post('/transcribe', express.json({ limit: '35mb' }), async (req: Reque
       log.stt.info(`Retry transcription with model: ${model} (via whisper-cli)`);
       result = await engine.transcribe(sttReq);
     } else {
-      result = await transcribeAudio(config, sttReq);
+      try {
+        result = await transcribeAudio(config, sttReq);
+      } catch (engineErr) {
+        // Record the failure next to the saved audio so the recordings list
+        // shows WHY this one has no text (and offers re-transcribe).
+        if (saved) {
+          await writeRecordingResult(saved.id, {
+            format,
+            language: effectiveLanguage || 'auto',
+            audioSizeBytes: Math.round(audio.length * 3 / 4),
+            error: engineErr instanceof Error ? engineErr.message : String(engineErr),
+          }).catch(() => {});
+        }
+        throw engineErr;
+      }
     }
 
-    // Save audio + result for debugging truncation issues
-    const debugAudioPath = await saveDebugAudio(audio, format, effectiveLanguage, result).catch(() => undefined);
+    if (saved) {
+      await writeRecordingResult(saved.id, {
+        format,
+        language: effectiveLanguage || 'auto',
+        audioSizeBytes: Math.round(audio.length * 3 / 4),
+        result,
+      }).catch(() => {});
+      log.stt.info(`Recording saved: ${saved.audioPath}`);
+    }
 
-    res.json({ ...result, debugAudioPath });
+    res.json({ ...result, debugAudioPath: saved?.audioPath, recordingId: saved?.id });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/stt/recordings?limit=20
+ * List recent voice recordings (newest first) with their transcription
+ * results/errors — the recovery surface when a response never reached the UI.
+ */
+sttRouter.get('/recordings', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
+    res.json({ recordings: await listRecordings(limit) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/stt/recordings/:id/transcribe
+ * Re-run transcription on a stored recording (audio is read from disk —
+ * the browser doesn't need to still hold it).
+ */
+sttRouter.post('/recordings/:id/transcribe', express.json(), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id } = req.params as { id: string };
+    const stored = await readRecordingAudio(id);
+    if (!stored) {
+      res.status(404).json({ error: `Recording not found: ${id}` });
+      return;
+    }
+    const config = await getConfig();
+    const effectiveLanguage = (typeof req.body?.language === 'string' && req.body.language) || config.stt?.language;
+    log.stt.info(`Re-transcribing stored recording: ${id}`);
+    const result = await transcribeAudio(config, {
+      audio: stored.audio,
+      format: stored.format,
+      language: effectiveLanguage,
+    });
+    await writeRecordingResult(id, {
+      format: stored.format,
+      language: effectiveLanguage || 'auto',
+      audioSizeBytes: Math.round(stored.audio.length * 3 / 4),
+      result,
+    }).catch(() => {});
+    res.json({ ...result, recordingId: id });
   } catch (err) {
     next(err);
   }
@@ -510,57 +587,6 @@ sttRouter.post('/auto-config', express.json(), async (_req: Request, res: Respon
   }
 });
 
-// ── Debug audio saving ──
-// Saves raw audio + transcription metadata to ~/.open-walnut/stt-debug/
-// for investigating truncation and recognition issues.
-
-const DEBUG_DIR = join(homedir(), '.open-walnut', 'stt-debug');
-const MAX_DEBUG_FILES = 100; // keep last 100 recordings
-
-async function saveDebugAudio(
-  audio: string,
-  format: string,
-  language: string | undefined,
-  result: SttResult,
-): Promise<string> {
-  await mkdir(DEBUG_DIR, { recursive: true });
-
-  const ts = new Date().toISOString().replace(/[:.]/g, '-');
-  const baseName = `${ts}`;
-  const audioPath = join(DEBUG_DIR, `${baseName}.${format}`);
-
-  // Save raw audio
-  await writeFile(audioPath, Buffer.from(audio, 'base64'));
-
-  // Save companion metadata
-  await writeFile(
-    join(DEBUG_DIR, `${baseName}.json`),
-    JSON.stringify({
-      timestamp: new Date().toISOString(),
-      format,
-      language: language || 'auto',
-      audioSizeBytes: Math.round(audio.length * 3 / 4),
-      result,
-    }, null, 2),
-  );
-
-  // Prune old files — keep only the latest MAX_DEBUG_FILES recordings
-  try {
-    const files = await readdir(DEBUG_DIR);
-    const jsonFiles = files.filter(f => f.endsWith('.json')).sort();
-    if (jsonFiles.length > MAX_DEBUG_FILES) {
-      const toDelete = jsonFiles.slice(0, jsonFiles.length - MAX_DEBUG_FILES);
-      for (const jf of toDelete) {
-        const stem = jf.replace('.json', '');
-        const af = files.find(f => f.startsWith(stem) && !f.endsWith('.json'));
-        await unlink(join(DEBUG_DIR, jf)).catch(() => {});
-        if (af) await unlink(join(DEBUG_DIR, af)).catch(() => {});
-      }
-    }
-  } catch {
-    // Pruning is best-effort
-  }
-
-  log.stt.info(`Debug audio saved: ${audioPath}`);
-  return audioPath;
-}
+// Audio persistence lives in src/core/stt/recordings.ts — every transcription
+// (and its result/error) is stored under ~/.open-walnut/stt-debug/ and exposed
+// via GET /api/stt/recordings for recovery.

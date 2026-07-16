@@ -7,6 +7,7 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { transcribeAudio } from '@/api/stt';
+import { setVoiceStatus } from '@/utils/voice-status';
 import { log } from '@/utils/log';
 
 export interface UseSpeechToTextOptions {
@@ -241,6 +242,7 @@ export function useSpeechToText({ onTranscribe, language }: UseSpeechToTextOptio
         // Convert blob to base64 using FileReader (avoids stack overflow on large audio)
         if (!isMountedRef.current) return;
         setIsTranscribing(true);
+        setVoiceStatus({ transcribing: true });
         try {
           const base64 = await new Promise<string>((resolve, reject) => {
             const reader = new FileReader();
@@ -272,6 +274,7 @@ export function useSpeechToText({ onTranscribe, language }: UseSpeechToTextOptio
           }
 
           if (result.text) {
+            setVoiceStatus({ transcribing: false, lastFailed: false });
             if (!isMountedRef.current) return;
             onTranscribeRef.current(result.text);
             const preview = result.text.length > 50 ? result.text.slice(0, 50) + '...' : result.text;
@@ -281,6 +284,7 @@ export function useSpeechToText({ onTranscribe, language }: UseSpeechToTextOptio
             // appears, and the user thinks the recording was eaten. Surface it; the
             // audio is kept in lastAudioRef so Retry can still recover it.
             log.warn('stt', `Transcription returned empty text (${result.durationMs}ms)`);
+            setVoiceStatus({ transcribing: false, lastFailed: true });
             if (isMountedRef.current) {
               setError('Transcription came back empty — the audio is kept, you can retry.');
             }
@@ -288,6 +292,7 @@ export function useSpeechToText({ onTranscribe, language }: UseSpeechToTextOptio
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           log.error('stt', `Transcription failed: ${msg} — audio kept for retry`);
+          setVoiceStatus({ transcribing: false, lastFailed: true });
           if (!isMountedRef.current) return;
           setError(msg);
         } finally {

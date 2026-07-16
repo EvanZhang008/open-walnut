@@ -8,6 +8,18 @@ export interface TranscribeResult {
   text: string;
   durationMs: number;
   debugAudioPath?: string;
+  /** Server-side stored recording id — audio survives even if this response is lost */
+  recordingId?: string;
+}
+
+export interface VoiceRecording {
+  id: string;
+  timestamp: string;
+  format: string;
+  language: string;
+  audioSizeBytes: number;
+  result?: { text: string; durationMs: number };
+  error?: string;
 }
 
 export interface SttStatus {
@@ -112,6 +124,17 @@ export function addVocabWord(word: string): Promise<{ added: boolean; word: stri
 
 export function fetchSttStatus(): Promise<SttStatus> {
   return apiGet<SttStatus>('/api/stt/status');
+}
+
+// ── Voice recording history (server-side, survives lost responses) ──
+
+export function fetchRecordings(limit = 20): Promise<{ recordings: VoiceRecording[] }> {
+  return apiGet<{ recordings: VoiceRecording[] }>(`/api/stt/recordings?limit=${limit}`);
+}
+
+/** Re-transcribe a stored recording server-side (audio read from disk). */
+export function retranscribeRecording(id: string, language?: string): Promise<TranscribeResult> {
+  return apiPost<TranscribeResult>(`/api/stt/recordings/${encodeURIComponent(id)}/transcribe`, { language });
 }
 
 export function fetchSttDetection(): Promise<DetectionResult> {

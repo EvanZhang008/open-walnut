@@ -10,7 +10,8 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSpeechToText } from '@/hooks/useSpeechToText';
 import { useSttStatus } from '@/hooks/useSttStatus';
-import { fetchSttDetection, fetchVocab, addVocabWord, MODEL_CATALOG, type GgmlModel } from '@/api/stt';
+import { fetchSttDetection, fetchVocab, addVocabWord, fetchRecordings, retranscribeRecording, MODEL_CATALOG, type GgmlModel, type VoiceRecording } from '@/api/stt';
+import { registerVoiceInsertTarget } from '@/utils/voice-status';
 import { log } from '@/utils/log';
 
 interface MicButtonProps {
@@ -24,6 +25,9 @@ interface MicButtonProps {
   size?: 'sm' | 'md';
 }
 
+// How long the chevron stays after a SUCCESSFUL transcription. After a failure
+// (or empty result) the chevron persists until the next recording — it's the
+// recovery entry point, hiding it would strand the user.
 const RETRY_DISMISS_MS = 10_000;
 
 /**
@@ -63,6 +67,9 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
   const [vocabInput, setVocabInput] = useState('');
   const [vocabStatus, setVocabStatus] = useState<string | null>(null);
   const vocabInputRef = useRef<HTMLInputElement>(null);
+  // Voice history (server-side recordings — survives lost responses)
+  const [recordings, setRecordings] = useState<VoiceRecording[]>([]);
+  const [retranscribingId, setRetranscribingId] = useState<string | null>(null);
 
   const dismissTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -71,7 +78,17 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
   const [errorDismissed, setErrorDismissed] = useState(false);
   useEffect(() => { setErrorDismissed(false); }, [error]);
 
-  // Show chevron after transcription completes
+  // Register this input as the sidebar Voice panel's insert target. Last mount
+  // wins (the composer the user is looking at); onTranscribe already knows how
+  // to insert at the caret of its own textarea.
+  const onTranscribeStable = useRef(onTranscribe);
+  onTranscribeStable.current = onTranscribe;
+  useEffect(() => {
+    registerVoiceInsertTarget((text) => onTranscribeStable.current(text));
+  }, []);
+
+  // Show chevron after transcription completes. On success it auto-dismisses;
+  // on failure/empty (error set) it STAYS — it's the recovery entry point.
   const wasTranscribing = useRef(false);
   useEffect(() => {
     if (isTranscribing) {
@@ -81,13 +98,15 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
       if (hasLastRecording) {
         setShowChevron(true);
         clearTimeout(dismissTimer.current);
-        dismissTimer.current = setTimeout(() => {
-          setShowChevron(false);
-          setDropdownOpen(false);
-        }, RETRY_DISMISS_MS);
+        if (!error) {
+          dismissTimer.current = setTimeout(() => {
+            setShowChevron(false);
+            setDropdownOpen(false);
+          }, RETRY_DISMISS_MS);
+        }
       }
     }
-  }, [isTranscribing, hasLastRecording]);
+  }, [isTranscribing, hasLastRecording, error]);
 
   // Hide on new recording
   useEffect(() => {
@@ -135,8 +154,40 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
         .then(res => setVocabWords(res.words))
         .catch(() => {})
     );
+    promises.push(
+      fetchRecordings(8)
+        .then(res => setRecordings(res.recordings))
+        .catch(() => {})
+    );
     await Promise.all(promises);
   }, [dropdownOpen, downloadedModels.length, modelsLoading]);
+
+  // Re-transcribe a stored recording server-side and insert the text.
+  const handleRecordingRetry = useCallback(async (rec: VoiceRecording) => {
+    setRetranscribingId(rec.id);
+    try {
+      const result = await retranscribeRecording(rec.id, language);
+      if (result.text) {
+        onTranscribe(result.text);
+        setDropdownOpen(false);
+        log.info('stt', `Recovered recording ${rec.id}: "${result.text.slice(0, 50)}"`);
+      }
+      // Refresh list so the item now shows its text
+      fetchRecordings(8).then(res => setRecordings(res.recordings)).catch(() => {});
+    } catch (err) {
+      log.error('stt', `Recording retry failed: ${err}`);
+    } finally {
+      setRetranscribingId(null);
+    }
+  }, [language, onTranscribe]);
+
+  // Insert an already-transcribed recording's text (no re-run needed).
+  const handleRecordingInsert = useCallback((rec: VoiceRecording) => {
+    if (rec.result?.text) {
+      onTranscribe(rec.result.text);
+      setDropdownOpen(false);
+    }
+  }, [onTranscribe]);
 
   const handleRetryModel = useCallback(async (modelName: string) => {
     setDropdownOpen(false);
@@ -214,6 +265,15 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
     void toggleRecording();
   };
 
+  // Right-click opens the history/retry dropdown — a persistent entry point
+  // that survives page reloads (the chevron only appears after a transcription).
+  const handleContextMenu = (e: React.MouseEvent) => {
+    if (sttUnavailable || isRecording) return;
+    e.preventDefault();
+    setShowChevron(true);
+    void handleChevronClick(e);
+  };
+
   const modelDisplayName = (m: GgmlModel) => {
     const cat = MODEL_CATALOG.find(c => c.filename === m.name || c.name === m.name);
     return cat?.displayName ?? m.name.replace('ggml-', '').replace('.bin', '');
@@ -224,6 +284,7 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
       <button
         className={btnClass}
         onClick={handleClick}
+        onContextMenu={handleContextMenu}
         type="button"
         disabled={isDisabled}
         aria-label={title}
@@ -344,6 +405,42 @@ export function MicButton({ onTranscribe, language, disabled, size = 'md' }: Mic
             </button>
           </div>
           {vocabStatus && <div className="mic-vocab-status">{vocabStatus}</div>}
+
+          {/* Voice history — server-side recordings; every one is recoverable */}
+          {recordings.length > 0 && (
+            <>
+              <div className="mic-retry-divider" />
+              <div className="mic-retry-header">Recent voice input</div>
+              {recordings.map(rec => {
+                const time = rec.timestamp ? new Date(rec.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+                const text = rec.result?.text ?? '';
+                const failed = !text;
+                return (
+                  <div key={rec.id} className={`mic-history-item${failed ? ' mic-history-failed' : ''}`}>
+                    <div className="mic-history-main">
+                      <span className="mic-history-time">{time}</span>
+                      <span className="mic-history-text" title={failed ? (rec.error ?? 'No transcription') : text}>
+                        {failed ? (rec.error ? `Failed: ${rec.error}` : 'No transcription') : text}
+                      </span>
+                    </div>
+                    <div className="mic-history-actions">
+                      {text && (
+                        <button type="button" className="mic-history-btn" title="Insert this text"
+                          onClick={() => handleRecordingInsert(rec)}>
+                          Insert
+                        </button>
+                      )}
+                      <button type="button" className="mic-history-btn" title="Re-transcribe from stored audio"
+                        disabled={retranscribingId === rec.id}
+                        onClick={() => void handleRecordingRetry(rec)}>
+                        {retranscribingId === rec.id ? '…' : 'Redo'}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </>
+          )}
 
           {/* Copy path */}
           {lastDebugPath && (
