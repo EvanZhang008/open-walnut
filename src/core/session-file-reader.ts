@@ -295,14 +295,13 @@ export async function readSessionJsonlContent(
       const result = await Promise.race([
         (async () => {
           // Try exact encoded path first.
-          // DaemonFileReader.readFile() now distinguishes ENOENT (returns null)
-          // from transport/RPC errors (throws). When cwd is known AND is safe
-          // for our encoding and exact path returns null, the file genuinely
-          // doesn't exist — no amount of globbing will conjure it.
           if (exactPath) {
             const content = await reader.readFile(exactPath);
             if (content) return withFoundCwd(await mergeSyntheticFromLocalStreams(content), srcLabel, exactPath);
-            return null;
+            // Exact path missed — fall through to glob/find. This happens when
+            // the cwd in the session record is a symlink (e.g. /home/user →
+            // /local/home/user) and Claude Code stored the file under the
+            // resolved path's encoding.
           }
           // cwd unknown OR unsafe-for-encoding (>200 chars, hashed by Claude Code):
           // fall back to glob, then find.

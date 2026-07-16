@@ -1067,6 +1067,14 @@ export async function readSessionHistory(sessionId: string, cwd?: string, host?:
     cacheSet(sessionId, { mtimeMs, messages }, host);
   }
 
+  // Persist to disk cache (fire-and-forget) so history survives app restarts
+  // and is available when remote JSONL is temporarily unreachable.
+  if (messages.length > 0) {
+    import('./history-disk-cache.js').then(({ writeHistoryCache }) => {
+      writeHistoryCache(sessionId, messages);
+    }).catch(() => {});
+  }
+
   return messages;
 }
 

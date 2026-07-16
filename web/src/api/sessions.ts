@@ -37,6 +37,8 @@ export interface SessionHistoryResult {
   stale?: boolean;
   /** Human-readable reason for `stale` (the underlying read error). */
   staleReason?: string;
+  /** Set when session exists but history file is unavailable (remote unreachable, file deleted). */
+  historyUnavailable?: string;
 }
 
 export async function fetchSessionHistory(
