@@ -374,5 +374,6 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS sessions_host ON sessions(host);
   CREATE INDEX IF NOT EXISTS sessions_process_status ON sessions(process_status);
   CREATE INDEX IF NOT EXISTS sessions_updated_at ON sessions(last_active_at);
+  CREATE INDEX IF NOT EXISTS sessions_last_status_change ON sessions(last_status_change);
 `;
 

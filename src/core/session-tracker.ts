@@ -458,6 +458,57 @@ export async function getSessionsForTask(taskId: string): Promise<SessionRecord[
   return rows.map(rowToSession);
 }
 
+// ── Health-scan active-set queries (I1: periodic work = O(active), never O(history)) ──
+// The health monitor used to consume listSessions() (whole table, ~6000 rows) every
+// 30s tick; 99%+ of that was terminal records that can never change state on their
+// own. These queries push the predicate into SQL so the tick's working set is the
+// handful of rows that actually need watching. Predicate rationale:
+//   - running/idle: ALWAYS included, no age window — a wedged record from weeks ago
+//     is exactly what the reconcile safety net exists for.
+//   - stopped/error within the recency window: needed by connection-lost recovery
+//     and the orphan sweeps; a real orphan only appears near its death window.
+const HEALTH_SCAN_RECENT_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Active session set for the health monitor's periodic tick.
+ * Isolated rows (rowToSession builds fresh objects) — safe to mutate.
+ */
+export async function listSessionsForHealthScan(): Promise<SessionRecord[]> {
+  await ensureSessionInit();
+  const db = getDb();
+  if (!db) return [];
+  const cutoff = new Date(Date.now() - HEALTH_SCAN_RECENT_MS).toISOString();
+  // archived IS NOT 1 (not `= 0`): rows created before the archived column
+  // default — or via sessionToRow, which skips undefined fields — hold NULL.
+  const rows = db.prepare(`
+    SELECT * FROM sessions
+    WHERE archived IS NOT 1 AND (
+      process_status IN ('running', 'idle')
+      OR (process_status IN ('stopped', 'error') AND last_status_change >= ?)
+    )
+  `).all(cutoff) as Record<string, any>[];
+  return rows.map(rowToSession);
+}
+
+/**
+ * Terminal-but-with-pid records — candidates for the orphan process sweep.
+ * Only recent ones: a genuinely leaked process is discovered within its death
+ * window; anything older either was already handled or its PID was recycled.
+ */
+export async function listOrphanCandidates(): Promise<SessionRecord[]> {
+  await ensureSessionInit();
+  const db = getDb();
+  if (!db) return [];
+  const cutoff = new Date(Date.now() - HEALTH_SCAN_RECENT_MS).toISOString();
+  const rows = db.prepare(`
+    SELECT * FROM sessions
+    WHERE pid IS NOT NULL
+      AND process_status IN ('stopped', 'error')
+      AND last_status_change >= ?
+  `).all(cutoff) as Record<string, any>[];
+  return rows.map(rowToSession);
+}
+
 /**
  * Create a new session record.
  */
