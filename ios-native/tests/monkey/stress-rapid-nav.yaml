@@ -1,0 +1,29 @@
+# Lifecycle stressor: rapid tab switching + repeated open/close of heavy pages.
+# Catches leaked SSE clients, store teardown races, and view identity churn.
+appId: dev.openwalnut.ios
+---
+- launchApp
+- repeat:
+    times: 20
+    commands:
+      - tapOn: "Notes"
+      - tapOn: "Tasks"
+      - tapOn: "Settings"
+      - tapOn: "Chat"
+- extendedWaitUntil:
+    visible:
+        id: "chat.composer"
+    timeout: 5000
+# History sheet open/close loop (sheet presentation races).
+- repeat:
+    times: 8
+    commands:
+      - tapOn:
+          id: "chat.history"
+      - swipe:
+          direction: DOWN
+          duration: 300
+- extendedWaitUntil:
+    visible:
+        id: "chat.composer"
+    timeout: 5000
