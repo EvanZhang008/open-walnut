@@ -19,7 +19,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { REMOTE_IMAGES_DIR } from '../constants.js'
 import { log } from '../logging/index.js'
-import { getDaemonConnection, DaemonConnection, type DaemonEvent, type DaemonTaskState, type DaemonGetStateResult } from './daemon-connection.js'
+import { getDaemonConnection, getDirectDaemonConnection, DaemonConnection, type DaemonEvent, type DaemonTaskState, type DaemonGetStateResult } from './daemon-connection.js'
 import {
   findLocalImagePaths,
   findRemoteImagePaths,
@@ -126,8 +126,19 @@ export class RemoteSessionManager implements SessionManager {
    */
   private async ensureConnected(): Promise<DaemonConnection> {
     if (this._directWsUrl) {
-      this.conn = new DaemonConnection(this.hostKey, this.sshTarget)
-      await this.conn.connectDirect(this._directWsUrl)
+      // __local__ goes through the pool: ONE shared connection per wsUrl. A
+      // private `new DaemonConnection` here leaked one never-destroyed instance
+      // (with ping + permanent reconnect loop) per local session — the
+      // 100-instance reconnect storm. Non-__local__ direct URLs (tests with
+      // per-test MockDaemons, whose OS-assigned ports get REUSED across tests
+      // and would collide in a wsUrl-keyed pool) keep the private connection.
+      // WALNUT_LOCAL_CONN_POOL=0 restores the old behavior for __local__ too.
+      if (this.hostKey === '__local__' && process.env.WALNUT_LOCAL_CONN_POOL !== '0') {
+        this.conn = await getDirectDaemonConnection(this.hostKey, this._directWsUrl)
+      } else {
+        this.conn = new DaemonConnection(this.hostKey, this.sshTarget)
+        await this.conn.connectDirect(this._directWsUrl)
+      }
     } else if (this.sshTarget) {
       this.conn = await getDaemonConnection(this.hostKey, this.sshTarget)
     } else {

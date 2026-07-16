@@ -35,9 +35,23 @@ export function shortLabelForFqdn(hostname: string): string {
   return `${first.slice(0, 12)}…${first.slice(-8)}`;
 }
 
+// ── mtime cache ──
+// scanSshConfig is called from getConfig(), which sits on the request hot path —
+// without a cache every API call re-reads + re-parses ~/.ssh/config and spams an
+// INFO log line. Cache by (path, mtime): the file changing is the ONLY thing that
+// can change the result.
+const scanCache = new Map<string, { mtimeMs: number; result: Map<string, DiscoveredHost> }>();
+
+/** Reset the scan cache (tests only). */
+export function _resetScanCacheForTest(): void {
+  scanCache.clear();
+}
+
 /**
  * Parse ~/.ssh/config and extract Host entries.
- * Returns a map of alias → host config.
+ * Returns a map of alias → host config. Cached by file mtime — call freely
+ * from hot paths; a re-parse (and its log line) happens only when the file
+ * actually changed.
  *
  * Customer-experience filters applied before returning:
  *  - git/code servers dropped (you can't run a Claude Code session on github)
@@ -50,6 +64,24 @@ export function shortLabelForFqdn(hostname: string): string {
  */
 export async function scanSshConfig(configPath?: string): Promise<Map<string, DiscoveredHost>> {
   const sshConfigPath = configPath ?? path.join(os.homedir(), '.ssh', 'config');
+
+  let mtimeMs: number;
+  try {
+    mtimeMs = (await fs.stat(sshConfigPath)).mtimeMs;
+  } catch {
+    // No file → no discovered hosts. Cache under mtime 0 semantics not needed;
+    // an empty map is cheap to rebuild and ENOENT stat is a single syscall.
+    return new Map();
+  }
+  const cached = scanCache.get(sshConfigPath);
+  if (cached && cached.mtimeMs === mtimeMs) return cached.result;
+
+  const result = await parseSshConfigFile(sshConfigPath);
+  scanCache.set(sshConfigPath, { mtimeMs, result });
+  return result;
+}
+
+async function parseSshConfigFile(sshConfigPath: string): Promise<Map<string, DiscoveredHost>> {
   const discovered = new Map<string, DiscoveredHost>();
 
   try {

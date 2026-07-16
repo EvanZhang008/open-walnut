@@ -1846,6 +1846,21 @@ export class DaemonConnection {
   private scheduleReconnect(delayMs: number): void {
     if (this._destroyed || this._connected || this.reconnectTimer) return
 
+    // Auto-reconnect for __local__ is a pool-instance privilege. A __local__
+    // connection outside the pool is an orphan from the pre-pool leak (or a
+    // future bypass construction site) — letting it keep a permanent backoff
+    // loop is exactly how the 100-instance reconnect storm formed. Scoped to
+    // __local__: tests legitimately hold private direct-ws connections to
+    // per-test MockDaemons under other host keys. WALNUT_LOCAL_CONN_POOL=0
+    // (legacy private-connection mode) disables the guard too.
+    if (this.hostKey === '__local__' && process.env.WALNUT_LOCAL_CONN_POOL !== '0' && !isPooledConnection(this)) {
+      log.session.warn('DaemonConnection: skipping auto-reconnect for non-pooled __local__ instance', {
+        host: this.hostKey,
+      })
+      this.disconnect()
+      return
+    }
+
     this.reconnectTimer = setTimeout(async () => {
       this.reconnectTimer = null
       if (this._destroyed || this._connected) return
@@ -2242,6 +2257,61 @@ export async function getDaemonConnection(hostKey: string, sshTarget: SshTarget)
 
   connectingPromises.set(hostKey, promise)
   return promise
+}
+
+/**
+ * Pooled variant of connectDirect() — ONE shared connection per WebSocket URL.
+ *
+ * Before this existed, every local session's RemoteSessionManager did a private
+ * `new DaemonConnection(...).connectDirect(wsUrl)`, bypassing the pool. Those
+ * instances were never destroyed (kill()/cleanup() deliberately leave the conn
+ * alone, assuming it's shared) — so a server that had started 100+ local
+ * sessions held 100+ live connections, each with its own ping timer and its own
+ * permanent exponential-backoff reconnect loop. One local-daemon restart then
+ * produced 100+ simultaneous reconnects (the observed reconnect storm) and the
+ * daemon carried 100+ useless WS clients.
+ *
+ * Pool key is the wsUrl (`direct:<wsUrl>`), not the hostKey: tests spin up
+ * per-test MockDaemons on distinct ports and must not share connections.
+ *
+ * Rollback: WALNUT_LOCAL_CONN_POOL=0 restores the private-connection behavior
+ * at the call site (remote-session-manager.ts).
+ */
+export async function getDirectDaemonConnection(hostKey: string, wsUrl: string): Promise<DaemonConnection> {
+  const poolKey = `direct:${wsUrl}`
+  const existing = connectionPool.get(poolKey)
+  if (existing?.connected) return existing
+
+  const pending = connectingPromises.get(poolKey)
+  if (pending) return pending
+
+  let conn = connectionPool.get(poolKey)
+  if (!conn) {
+    conn = new DaemonConnection(hostKey, null)
+    connectionPool.set(poolKey, conn)
+  }
+
+  const promise = conn.connectDirect(wsUrl).then(() => {
+    connectingPromises.delete(poolKey)
+    return conn!
+  }).catch((err) => {
+    connectingPromises.delete(poolKey)
+    throw err
+  })
+
+  connectingPromises.set(poolKey, promise)
+  return promise
+}
+
+/**
+ * True when this instance is (still) the pooled connection for some key.
+ * Auto-reconnect is a pool-instance privilege — see scheduleReconnect.
+ */
+export function isPooledConnection(conn: DaemonConnection): boolean {
+  for (const pooled of connectionPool.values()) {
+    if (pooled === conn) return true
+  }
+  return false
 }
 
 /**
