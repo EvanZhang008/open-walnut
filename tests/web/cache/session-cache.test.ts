@@ -683,24 +683,49 @@ describe('WS: session:batch-completed', () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('WS: _ws:reconnected', () => {
-  it('re-subscribes all tracked sessions via sendRpc', () => {
+  // The reconnect sweep is debounced 1s (WS flap coalescing — starvation fix
+  // 2026-07-15) — fire, then advance past the debounce window.
+  const fireReconnectAndSettle = async () => {
+    vi.useFakeTimers();
+    fireEvent('_ws:reconnected', {});
+    await vi.advanceTimersByTimeAsync(1_100);
+    vi.useRealTimers();
+  };
+
+  it('re-subscribes all tracked sessions via sendRpc', async () => {
     trackSession('sid-a');
     trackSession('sid-b');
 
-    fireEvent('_ws:reconnected', {});
+    await fireReconnectAndSettle();
 
     expect(mockSendRpc).toHaveBeenCalledWith('session:stream-subscribe', { sessionId: 'sid-a' });
     expect(mockSendRpc).toHaveBeenCalledWith('session:stream-subscribe', { sessionId: 'sid-b' });
   });
 
-  it('fetches history for all tracked sessions', () => {
+  it('fetches history for all tracked sessions (delta, not full)', async () => {
     trackSession('sid-a');
     trackSession('sid-b');
+    setHistoryCache('sid-a', makeHistory(5));
 
+    await fireReconnectAndSettle();
+
+    // Delta fetch: since = cached msgCount (5 for sid-a, 0 for uncached sid-b).
+    // Full parallel fetches on reconnect were a measured 40-60s freeze.
+    expect(mockFetchHistory).toHaveBeenCalledWith('sid-a', { since: 5 });
+    expect(mockFetchHistory).toHaveBeenCalledWith('sid-b', { since: 0 });
+  });
+
+  it('coalesces rapid reconnect flaps into one sweep', async () => {
+    trackSession('sid-a');
+    vi.useFakeTimers();
     fireEvent('_ws:reconnected', {});
+    await vi.advanceTimersByTimeAsync(500);
+    fireEvent('_ws:reconnected', {}); // flap within the window resets the timer
+    await vi.advanceTimersByTimeAsync(1_100);
+    vi.useRealTimers();
 
-    expect(mockFetchHistory).toHaveBeenCalledWith('sid-a');
-    expect(mockFetchHistory).toHaveBeenCalledWith('sid-b');
+    const subscribeCalls = mockSendRpc.mock.calls.filter(c => c[0] === 'session:stream-subscribe');
+    expect(subscribeCalls).toHaveLength(1);
   });
 
   it('updates stream state from server snapshot', async () => {
@@ -711,7 +736,7 @@ describe('WS: _ws:reconnected', () => {
     };
     mockSendRpc.mockResolvedValue(snapshot);
 
-    fireEvent('_ws:reconnected', {});
+    await fireReconnectAndSettle();
 
     await vi.waitFor(() => {
       const state = getStreamState('sid-a');
@@ -721,8 +746,8 @@ describe('WS: _ws:reconnected', () => {
     });
   });
 
-  it('no-op when no sessions are tracked', () => {
-    fireEvent('_ws:reconnected', {});
+  it('no-op when no sessions are tracked', async () => {
+    await fireReconnectAndSettle();
     expect(mockSendRpc).not.toHaveBeenCalled();
     expect(mockFetchHistory).not.toHaveBeenCalled();
   });

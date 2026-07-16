@@ -15,6 +15,21 @@
 const STORAGE_KEY = 'open_walnut_scroll_debug';
 const MAX_ENTRIES = 500;
 const T0_KEY = 'open_walnut_scroll_debug_t0';
+const ENABLE_KEY = 'open_walnut_scroll_debug_on';
+
+// OFF by default. Every scrollLog() call does a synchronous localStorage
+// read-modify-write of a ~500-entry JSON blob PLUS a console.log that the
+// browser-logger forwards to the server. With per-render call sites this was
+// measured as a primary main-thread starvation amplifier (~9k calls/day,
+// event-loop freezes of 10-60s). Enable only while actively debugging scroll:
+//   localStorage.setItem('open_walnut_scroll_debug_on', '1')  + reload
+let enabled: boolean | null = null;
+export function scrollDebugEnabled(): boolean {
+  if (enabled === null) {
+    try { enabled = localStorage.getItem(ENABLE_KEY) === '1'; } catch { enabled = false; }
+  }
+  return enabled;
+}
 
 interface ScrollLogEntry {
   /** ms since first log in this session */
@@ -55,6 +70,7 @@ function saveBuffer(buf: ScrollLogEntry[]) {
  * Log a scroll debug event. Also writes to console for live debugging.
  */
 export function scrollLog(tag: string, data: Record<string, unknown> = {}) {
+  if (!scrollDebugEnabled()) return;
   const entry: ScrollLogEntry = {
     t: Date.now() - getT0(),
     tag,

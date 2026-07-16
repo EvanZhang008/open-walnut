@@ -1,4 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, memo } from 'react';
+import { scrollDebugEnabled } from '@/utils/scroll-debug';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
 import { useSessionStream, type StreamingBlock } from '@/hooks/useSessionStream';
 import { useEvent } from '@/hooks/useWebSocket';
@@ -849,8 +850,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const ignoreScrollUntil = useRef(0);
 
   // ── Scroll debug logging (persisted via browser-logger → walnut logs -s browser) ──
+  // Gated: every call is a console.log that the browser-logger forwards to the
+  // server — on hot scroll/resize paths this amplifies main-thread starvation.
   const sid8 = sessionId.substring(0, 8);
   const scrollLog = useCallback((layer: string, action: string, el?: HTMLElement | null) => {
+    if (!scrollDebugEnabled()) return;
     if (el) {
       const top = Math.round(el.scrollTop);
       const ch = Math.round(el.clientHeight);

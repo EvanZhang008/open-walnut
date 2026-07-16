@@ -414,8 +414,14 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
         isFirstConnect.current = false;
         return; // skip — initial fetch already handled above
       }
-      log.info('tasks', 'ws reconnected → refetching tasks');
-      refetch();
+      // Debounced: WS flaps (disconnect→connect within seconds) would otherwise
+      // refetch the whole list per flap, contributing to reconnect-storm
+      // main-thread freezes (starvation report 2026-07-15).
+      const timer = setTimeout(() => {
+        log.info('tasks', 'ws reconnected → refetching tasks');
+        refetch();
+      }, 1_000);
+      return () => clearTimeout(timer);
     }
   }, [wsConnected, refetch]);
 

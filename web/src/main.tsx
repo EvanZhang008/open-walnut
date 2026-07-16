@@ -6,11 +6,15 @@ import { AppErrorBoundary } from './components/common/AppErrorBoundary';
 import { ConfirmProvider } from './hooks/useConfirm';
 import { initAppInfo } from './utils/app-info';
 import { initBrowserLogger } from './utils/browser-logger';
+import { initLongTaskMonitor } from './utils/longtask-monitor';
 import { initUiPrefsSync } from './utils/ui-prefs-sync';
 import './styles/globals.css';
 
 // Persist browser console logs to disk (view with: open-walnut logs -s browser)
 initBrowserLogger();
+// Report main-thread blocks >200ms with attribution (rate-limited) — makes
+// starvation windows self-identify in the server log.
+initLongTaskMonitor();
 // Cache server version/mode for crash reports (survives to server-down crashes).
 initAppInfo();
 
