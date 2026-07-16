@@ -1,4 +1,5 @@
-import { execSync } from 'node:child_process';
+import { execSync, exec } from 'node:child_process';
+import { promisify } from 'node:util';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -69,6 +70,33 @@ export function git(args: string, options?: { cwd?: string; timeout?: number; en
 export function gitSafe(args: string, options?: { cwd?: string; timeout?: number; env?: Record<string, string> }): string | null {
   try {
     return git(args, options);
+  } catch {
+    return null;
+  }
+}
+
+// ── Async variants for the periodic tick path ───────────────────────────────
+// The 30s auto-commit/sync tick used to run the whole git chain through
+// execSync — every `pull`/`push` network round-trip (1-2s) blocked the event
+// loop, and ALL HTTP requests stalled behind it. The tick path now uses these
+// async variants; the sync `git()`/`gitSafe()` stay for one-shot callers
+// (init, compaction, CLI) where blocking is acceptable.
+const execAsync = promisify(exec);
+
+export async function gitAsync(args: string, options?: { cwd?: string; timeout?: number; env?: Record<string, string> }): Promise<string> {
+  const guard = NETWORK_GIT_RE.test(args) ? credentialGuardArgs(options?.cwd).join(' ') : '';
+  const { stdout } = await execAsync(`git ${guard ? `${guard} ` : ''}${args}`, {
+    cwd: options?.cwd ?? WALNUT_HOME,
+    timeout: options?.timeout ?? LOCAL_TIMEOUT,
+    encoding: 'utf-8',
+    env: options?.env ? { ...process.env, ...options.env } : undefined,
+  });
+  return stdout.trim();
+}
+
+export async function gitSafeAsync(args: string, options?: { cwd?: string; timeout?: number; env?: Record<string, string> }): Promise<string | null> {
+  try {
+    return await gitAsync(args, options);
   } catch {
     return null;
   }
@@ -209,20 +237,20 @@ export function hardenGitConfigPerms(url: string, repoDir?: string): void {
   }
 }
 
-export function sync(): { pulled: number; pushed: number; conflicts: number } {
+export async function sync(): Promise<{ pulled: number; pushed: number; conflicts: number }> {
   let pulled = 0;
   let pushed = 0;
   let conflicts = 0;
 
   // Commit everything BEFORE pulling/merging so no local edit is ever
   // unrecorded — even if it loses an LWW conflict it stays in history.
-  git('add -A');
+  await gitAsync('add -A');
 
   // Check for staged changes
-  const diff = gitSafe('diff --cached --stat');
+  const diff = await gitSafeAsync('diff --cached --stat');
   if (diff && diff.length > 0) {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    gitSafe(`commit -m "open-walnut sync ${timestamp}"`);
+    await gitSafeAsync(`commit -m "open-walnut sync ${timestamp}"`);
     pushed = 1;
   }
 
@@ -233,12 +261,12 @@ export function sync(): { pulled: number; pushed: number; conflicts: number } {
   // rewrite the local commits and destroy that guarantee).
   if (hasRemote()) {
     const branch = getBranch();
-    const pullResult = gitSafe(`pull --rebase origin ${branch}`, { timeout: NETWORK_TIMEOUT });
+    const pullResult = await gitSafeAsync(`pull --rebase origin ${branch}`, { timeout: NETWORK_TIMEOUT });
     if (pullResult === null) {
       // Rebase failed — could be a content conflict or a network error.
       // Abort any half-applied rebase (no-op if none), then take the merge path.
-      gitSafe('rebase --abort');
-      const merge = lwwMerge(branch);
+      await gitSafeAsync('rebase --abort');
+      const merge = await lwwMerge(branch);
       conflicts = merge.conflicts;
       if (merge.merged) pulled = 1;
     } else if (pullResult.includes('Updating') || pullResult.includes('Fast-forward')) {
@@ -246,7 +274,7 @@ export function sync(): { pulled: number; pushed: number; conflicts: number } {
     }
 
     // Push
-    const pushResult = gitSafe(`push origin ${branch}`, { timeout: NETWORK_TIMEOUT });
+    const pushResult = await gitSafeAsync(`push origin ${branch}`, { timeout: NETWORK_TIMEOUT });
     if (pushResult === null) {
       pushed = 0; // push failed
     }
@@ -274,39 +302,39 @@ export function sync(): { pulled: number; pushed: number; conflicts: number } {
  * If the merge fails for a NON-conflict reason (unrelated histories, etc.)
  * we abort and fall back to the legacy `pull -X theirs`, logging loudly.
  */
-function lwwMerge(branch: string): { merged: boolean; conflicts: number } {
+async function lwwMerge(branch: string): Promise<{ merged: boolean; conflicts: number }> {
   const remoteRef = `origin/${branch}`;
 
-  if (gitSafe(`fetch origin ${branch}`, { timeout: NETWORK_TIMEOUT }) === null) {
+  if (await gitSafeAsync(`fetch origin ${branch}`, { timeout: NETWORK_TIMEOUT }) === null) {
     // Network/transport failure — nothing to merge; push below will fail too.
     log.git.warn('git-sync fetch failed — skipping merge this cycle', { branch });
     return { merged: false, conflicts: 0 };
   }
 
-  const localHead = gitSafe('rev-parse HEAD');
-  const remoteHead = gitSafe(`rev-parse ${remoteRef}`);
+  const localHead = await gitSafeAsync('rev-parse HEAD');
+  const remoteHead = await gitSafeAsync(`rev-parse ${remoteRef}`);
   if (!localHead || !remoteHead || localHead === remoteHead) {
     return { merged: false, conflicts: 0 };
   }
 
   // True merge WITHOUT -X: non-overlapping edits auto-merge; overlapping
   // edits leave unmerged paths we resolve per-file below.
-  if (gitSafe(`merge --no-edit ${remoteRef}`) !== null) {
+  if (await gitSafeAsync(`merge --no-edit ${remoteRef}`) !== null) {
     return { merged: true, conflicts: 0 }; // clean auto-merge or fast-forward
   }
 
-  const unmerged = gitSafe('diff --name-only --diff-filter=U');
+  const unmerged = await gitSafeAsync('diff --name-only --diff-filter=U');
   const files = (unmerged ?? '').split('\n').map((f) => f.trim()).filter(Boolean);
   if (files.length === 0) {
     // Merge failed but not from content conflicts (unrelated histories,
     // dirty tree, lock…). Fall back to legacy behavior — but LOUDLY: this
     // path silently prefers remote and should be investigated.
-    gitSafe('merge --abort');
+    await gitSafeAsync('merge --abort');
     log.git.error(
       'git-sync merge failed with a NON-conflict error — falling back to `pull -X theirs` (REMOTE WINS unconditionally). Investigate!',
       { branch, localHead, remoteHead },
     );
-    const fallback = gitSafe(`pull -X theirs origin ${branch}`, { timeout: NETWORK_TIMEOUT });
+    const fallback = await gitSafeAsync(`pull -X theirs origin ${branch}`, { timeout: NETWORK_TIMEOUT });
     return { merged: fallback !== null, conflicts: fallback !== null ? 1 : 0 };
   }
 
@@ -314,30 +342,30 @@ function lwwMerge(branch: string): { merged: boolean; conflicts: number } {
   const localWins: string[] = [];
   const remoteWins: string[] = [];
   for (const file of files) {
-    const localTime = Number(gitSafe(`log -1 --format=%ct HEAD -- "${file}"`) || '0');
-    const remoteTime = Number(gitSafe(`log -1 --format=%ct ${remoteRef} -- "${file}"`) || '0');
+    const localTime = Number(await gitSafeAsync(`log -1 --format=%ct HEAD -- "${file}"`) || '0');
+    const remoteTime = Number(await gitSafeAsync(`log -1 --format=%ct ${remoteRef} -- "${file}"`) || '0');
     const side = localTime > remoteTime ? '--ours' : '--theirs';
-    if (gitSafe(`checkout ${side} -- "${file}"`) !== null) {
-      gitSafe(`add -- "${file}"`);
+    if (await gitSafeAsync(`checkout ${side} -- "${file}"`) !== null) {
+      await gitSafeAsync(`add -- "${file}"`);
     } else {
       // Delete/modify conflict: the winning side deleted the file, so
       // `checkout --ours/--theirs` has no blob to restore — honor the delete.
       // TODO(edge): rename/rename conflicts land here too and resolve as
       // delete; acceptable for a data repo of flat JSON/MD files.
-      gitSafe(`rm -f -- "${file}"`);
+      await gitSafeAsync(`rm -f -- "${file}"`);
     }
     (side === '--ours' ? localWins : remoteWins).push(file);
   }
 
   // Anything still unmerged means resolution failed — don't commit a broken tree.
-  const stillUnmerged = gitSafe('diff --name-only --diff-filter=U');
+  const stillUnmerged = await gitSafeAsync('diff --name-only --diff-filter=U');
   if (stillUnmerged && stillUnmerged.trim().length > 0) {
-    gitSafe('merge --abort');
+    await gitSafeAsync('merge --abort');
     log.git.error(
       'git-sync LWW resolution left unmerged paths — aborted merge, falling back to `pull -X theirs` (REMOTE WINS). Investigate!',
       { branch, unresolved: stillUnmerged.split('\n') },
     );
-    gitSafe(`pull -X theirs origin ${branch}`, { timeout: NETWORK_TIMEOUT });
+    await gitSafeAsync(`pull -X theirs origin ${branch}`, { timeout: NETWORK_TIMEOUT });
     return { merged: true, conflicts: files.length };
   }
 
@@ -357,13 +385,13 @@ function lwwMerge(branch: string): { merged: boolean; conflicts: number } {
   );
   let committed: string | null;
   try {
-    committed = gitSafe(`commit -F "${msgFile}"`);
+    committed = await gitSafeAsync(`commit -F "${msgFile}"`);
   } finally {
     try { fs.unlinkSync(msgFile); } catch { /* best-effort */ }
   }
   if (committed === null) {
     // Never leave the repo mid-merge — abort and retry on the next cycle.
-    gitSafe('merge --abort');
+    await gitSafeAsync('merge --abort');
     log.git.error('git-sync LWW merge commit failed — merge aborted, will retry next cycle', {
       branch, files,
     });
@@ -385,10 +413,10 @@ function lwwMerge(branch: string): { merged: boolean; conflicts: number } {
   return { merged: true, conflicts: files.length };
 }
 
-export function autoSync(): void {
+export async function autoSync(): Promise<void> {
   try {
     if (!isGitAvailable() || !isRepo() || !hasRemote()) return;
-    sync();
+    await sync();
   } catch {
     // Never throw from autoSync
   }
@@ -449,26 +477,26 @@ export function isLockContention(err: unknown): boolean {
  * Retries once on index.lock contention (common when multiple processes
  * run git ops against the same repo, e.g. orphaned server processes).
  */
-export function commitIfDirty(): boolean {
+export async function commitIfDirty(): Promise<boolean> {
   if (compactionInProgress) return false;
   clearStaleLock();
-  const status = gitSafe('status --porcelain');
+  const status = await gitSafeAsync('status --porcelain');
   if (!status || status.trim().length === 0) return false;
 
   const lines = status.split('\n').filter((l) => l.trim());
   const timestamp = new Date().toISOString().slice(0, 19).replace('T', ' ');
 
   try {
-    git('add -A');
+    await gitAsync('add -A');
   } catch (err) {
     if (!isLockContention(err)) throw err;
-    // Lock held by another process — wait briefly and retry once
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
+    // Lock held by another process — wait briefly (async, loop keeps running) and retry once
+    await new Promise((r) => setTimeout(r, 300));
     clearStaleLock(5_000);
-    git('add -A');
+    await gitAsync('add -A');
   }
 
-  gitSafe(`commit -m "auto-save ${timestamp} (${lines.length} files)"`);
+  await gitSafeAsync(`commit -m "auto-save ${timestamp} (${lines.length} files)"`);
   return true;
 }
 

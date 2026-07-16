@@ -102,16 +102,16 @@ describe('sync', () => {
     // Create a new file to trigger a commit
     await fsp.writeFile(path.join(tmpDir, 'test-file.txt'), 'test content');
 
-    const result = sync();
+    const result = await sync();
     // Should have committed the change (pushed=1 means commit was created)
     expect(result.pushed).toBe(1);
     expect(result.conflicts).toBe(0);
   });
 
-  it('reports no changes when repo is clean', () => {
+  it('reports no changes when repo is clean', async () => {
     initSync();
 
-    const result = sync();
+    const result = await sync();
     // No new files, so no push
     expect(result.pushed).toBe(0);
     expect(result.pulled).toBe(0);
@@ -122,7 +122,7 @@ describe('sync', () => {
     initSync();
     await fsp.writeFile(path.join(tmpDir, 'pending.txt'), 'data');
 
-    sync();
+    await sync();
 
     const status = getSyncStatus();
     expect(status.pendingChanges).toBe(0);
@@ -165,7 +165,7 @@ describe('auth.json is never synced (data-repo gitignore)', () => {
     await fsp.writeFile(path.join(tmpDir, 'auth.json'), '{"devices":[]}', 'utf-8');
     await fsp.writeFile(path.join(tmpDir, 'normal.txt'), 'data', 'utf-8');
 
-    sync();
+    await sync();
 
     const tracked = execSync('git ls-files', { cwd: tmpDir, encoding: 'utf-8' });
     expect(tracked).toContain('normal.txt');
@@ -294,7 +294,7 @@ describe('sync conflict policy (LWW with history)', () => {
       'utf-8',
     );
 
-    const result = sync();
+    const result = await sync();
 
     expect(result.conflicts).toBe(0);
     const merged = await fsp.readFile(path.join(tmpDir, 'data.txt'), 'utf-8');
@@ -316,7 +316,7 @@ describe('sync conflict policy (LWW with history)', () => {
     commitAll(cloneDir, 'remote edit');
     run('git push origin main', cloneDir);
 
-    const result = sync();
+    const result = await sync();
 
     // Newer side (remote) won the working tree.
     expect(result.conflicts).toBeGreaterThan(0);
@@ -354,7 +354,7 @@ describe('sync conflict policy (LWW with history)', () => {
     // commit-before-merge guarantee also covers uncommitted saves.
     await fsp.writeFile(path.join(tmpDir, 'data.txt'), 'LOCAL-VERSION\n', 'utf-8');
 
-    const result = sync();
+    const result = await sync();
 
     expect(result.conflicts).toBeGreaterThan(0);
     const content = await fsp.readFile(path.join(tmpDir, 'data.txt'), 'utf-8');
@@ -372,7 +372,7 @@ describe('sync conflict policy (LWW with history)', () => {
     commitAll(cloneDir, 'remote adds file');
     run('git push origin main', cloneDir);
 
-    const result = sync();
+    const result = await sync();
 
     expect(result.pulled).toBe(1);
     expect(result.conflicts).toBe(0);

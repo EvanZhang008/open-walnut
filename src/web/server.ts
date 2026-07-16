@@ -328,6 +328,23 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   const { startEventLoopMonitor } = await import('../core/event-loop-monitor.js')
   startEventLoopMonitor()
 
+  // Ops guardrails: a niced server process (inherited from launching dev:prod
+  // out of a niced shell, e.g. a background claude session) is starved first
+  // under machine overload — HTTP latency spikes that look like app bugs.
+  // Can't renice without root; make it loud instead.
+  try {
+    const os = await import('node:os')
+    const priority = os.getPriority()
+    if (priority > 0) {
+      log.web.error(`server running at nice ${priority} — HTTP latency will suffer under load; restart dev:prod from a non-niced shell`, { nice: priority })
+    }
+    const cores = os.cpus().length
+    const load1 = os.loadavg()[0]
+    if (load1 > cores * 2) {
+      log.web.warn('machine heavily overloaded at server start', { load1: Math.round(load1), cores })
+    }
+  } catch { /* diagnostics only */ }
+
   // Migrate global-notes.md → notes/global.md (one-time, idempotent)
   await migrateGlobalNotes()
 
@@ -2427,15 +2444,15 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
 
   health.protected = true
 
-  // Commit any leftover dirty state from a previous crash
-  try {
-    if (commitIfDirty()) {
+  // Commit any leftover dirty state from a previous crash (async, fire-and-forget)
+  commitIfDirty().then((committed) => {
+    if (committed) {
       health.lastCommitAt = new Date().toISOString()
       log.git.info('committed leftover dirty state on startup')
     }
-  } catch (err) {
+  }).catch((err) => {
     log.git.warn('startup commit failed', { error: String(err) })
-  }
+  })
 
   // Pull remote if configured
   try { gitPullWalnut() } catch (err) {
@@ -2443,9 +2460,14 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
   }
 
   let syncTick = 0
-  const timer = setInterval(() => {
+  // setTimeout self-reschedule (not setInterval): the next tick is armed only
+  // AFTER the current one finishes, so slow network git ops can never stack
+  // concurrent ticks — same shape as startPluginSyncPolling below.
+  let gitTickTimer: ReturnType<typeof setTimeout> | null = null
+  let gitTickStopped = false
+  const gitTick = async (): Promise<void> => {
     try {
-      const committed = commitIfDirty()
+      const committed = await commitIfDirty()
       if (committed) {
         health.lastCommitAt = new Date().toISOString()
         health.consecutiveFailures = 0
@@ -2458,13 +2480,13 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
       // Pull remote changes + push our own commits, on BOTH sides: the cloud
       // box has no other sync path, and the primary needs it so edits reach
       // the hub (and cloud-side edits land back) without a manual push.
-      // autoSync() self-gates on hasRemote() and never throws. sync() is
-      // execSync (blocks the event loop ~1-2s of network round-trips), so on
-      // an idle tree only every other cycle syncs (60s); a fresh commit
-      // always pushes immediately.
+      // autoSync() self-gates on hasRemote() and never throws. All git ops in
+      // this tick are async now (execFile), so network round-trips no longer
+      // block the event loop; the every-other-cycle throttle on an idle tree
+      // (60s) stays to keep remote traffic modest.
       syncTick++
       if (committed || syncTick % 2 === 0) {
-        autoSync()
+        await autoSync()
         // Two-way task reconcile after the pull half of autoSync():
         // primary applies cloud outbox ops; cloud imports the fresh projection.
         // Self-gating (mode + mtime), never throws, fire-and-forget.
@@ -2518,17 +2540,25 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
             })
         }
       }
+    } finally {
+      if (!gitTickStopped) {
+        gitTickTimer = setTimeout(() => { void gitTick() }, GIT_POLL_INTERVAL_MS)
+        gitTickTimer.unref?.()
+      }
     }
-  }, GIT_POLL_INTERVAL_MS)
+  }
+  gitTickTimer = setTimeout(() => { void gitTick() }, GIT_POLL_INTERVAL_MS)
+  gitTickTimer.unref?.()
 
   log.git.info('git auto-commit started', { intervalMs: GIT_POLL_INTERVAL_MS })
   emitStatus()
 
   return {
     stop() {
-      clearInterval(timer)
-      // Final commit on shutdown
-      try { commitIfDirty() } catch {}
+      gitTickStopped = true
+      if (gitTickTimer) clearTimeout(gitTickTimer)
+      // Final commit on shutdown (fire-and-forget — process is exiting)
+      commitIfDirty().catch(() => {})
     },
     health,
   }

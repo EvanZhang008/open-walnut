@@ -42,6 +42,11 @@ npm run dev:prod        # Build all → restart 3456 with latest code
 npm run dev:ephemeral   # Ephemeral server (random port, temp data, auto-cleans)
 ```
 
+**⚠️ Launch dev:prod from a non-niced shell.** A server started from a niced parent (e.g. a
+background agent session) inherits the positive nice and gets scheduler-starved under machine
+load — HTTP latency spikes that look like app bugs. The server logs an error at startup and
+exposes `processNice` in `GET /api/config` when this happens; fix = restart from a normal shell.
+
 ### Isolated sandbox for onboarding / provider testing / demos
 
 `scripts/walnut-sandbox.sh` spins up a fully isolated Walnut on **:3457** (`env -i` + throwaway
