@@ -37,6 +37,11 @@ final class SessionConversationStore {
     var streaming = false
     var liveText = ""
     var activity: String?
+    /// Delta coalescing (freeze fix, mirrors ChatStore): re-rendering the live
+    /// markdown row per SSE delta saturated the main thread on long replies.
+    /// Deltas buffer here and flush to `liveText` on a ~8Hz cadence.
+    @ObservationIgnored private var pendingDelta = ""
+    @ObservationIgnored private var deltaFlushTask: Task<Void, Never>?
 
     var processStatus: String
     /// Whether the view's bottom sentinel is currently on screen — written by
@@ -107,6 +112,22 @@ final class SessionConversationStore {
         pollTask = nil
     }
 
+    /// Backgrounding MUST tear down the SSE stream and the poll loop: live
+    /// URLSession tasks hold a process assertion, so iOS can't terminate the
+    /// app gracefully and the watchdog SIGKILLs it after 5s (0x8BADF00D —
+    /// seen in the field via MetricKit). ChatStore already did this via
+    /// MainTabView's scenePhase hook; this page was the gap.
+    func suspend() {
+        close()
+    }
+
+    /// Foregrounding revives the stream and catches up on missed turns.
+    func resume() {
+        guard sse == nil else { return }
+        connectStream()
+        Task { await loadTranscript(fresh: true) }
+    }
+
     // MARK: - Transcript
 
     private func loadTranscript(fresh: Bool) async {
@@ -164,11 +185,13 @@ final class SessionConversationStore {
         // Re-pin after the reconcile: swapping the provisional turn bubble for
         // canonical rows (different heights/ids) displaces the viewport, and
         // the bottom anchor stops auto-pinning once the user has ever
-        // scrolled. Only when they were already reading the bottom — never
-        // hijack someone scrolled up into history, and never on the initial
-        // paint (rows haven't laid out; the jump overshoots into blank
-        // overscroll — `defaultScrollAnchor(.bottom)` owns the first frame).
-        if changed && wasAtBottom && !firstPaint { scrollToBottomSignal += 1 }
+        // scrolled. Fire when the user was already reading the bottom — and
+        // ALWAYS on the first paint: `defaultScrollAnchor(.bottom)` positions
+        // by the LazyVStack's height ESTIMATE, which with variable-height rows
+        // leaves the real bottom rows un-instantiated (intermittent blank
+        // list, QA-confirmed); scrollTo(sentinel) after real layout forces
+        // them in.
+        if firstPaint || (changed && wasAtBottom) { scrollToBottomSignal += 1 }
         let seen = Set(transcript.messages.filter { $0.role == "user" }.map(\.text))
         // Failed bubbles are exempt: their text was NOT delivered — a match
         // here is an older identical message, and absorbing the failed bubble
@@ -321,11 +344,12 @@ final class SessionConversationStore {
         case "turn-start":
             streaming = true
             liveText = ""
+            pendingDelta = ""
             activity = nil
         case "text-delta":
             if let p = try? JSONDecoder().decode(DeltaPayload.self, from: data) {
                 streaming = true
-                liveText += p.delta
+                appendDelta(p.delta)
             }
         case "thinking":
             streaming = true
@@ -370,6 +394,7 @@ final class SessionConversationStore {
     private func seedFromSnapshot(_ snap: SnapshotPayload) {
         applyStatus(snap.processStatus)
         streaming = snap.isStreaming
+        pendingDelta = "" // snapshot resets the live region wholesale
         let live = snap.completedLen < snap.blocks.count
             ? Array(snap.blocks[snap.completedLen...]) : []
         // Main lane only (no parentToolUseId) — subagent lanes aren't shown here.
@@ -393,6 +418,25 @@ final class SessionConversationStore {
         }
     }
 
+    /// Buffer a streamed text delta and schedule a coalesced flush — SwiftUI
+    /// sees `liveText` change at a bounded cadence regardless of delta rate.
+    private func appendDelta(_ delta: String) {
+        pendingDelta += delta
+        guard deltaFlushTask == nil else { return }
+        deltaFlushTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(120))
+            guard let self else { return }
+            self.deltaFlushTask = nil
+            self.flushPendingDelta()
+        }
+    }
+
+    private func flushPendingDelta() {
+        guard !pendingDelta.isEmpty else { return }
+        liveText += pendingDelta
+        pendingDelta = ""
+    }
+
     /// Turn ended — fold the finished turn into history and clear the live turn.
     /// Append the streamed text as a PROVISIONAL bubble first, then refetch. The
     /// old code cleared `liveText` and awaited the transcript reload, so the
@@ -400,6 +444,9 @@ final class SessionConversationStore {
     /// "message appears all at once" feel). Keeping the text on screen makes the
     /// live bubble settle in place; the refetch quietly swaps in canonical rows.
     private func finalizeTurn() {
+        flushPendingDelta() // `finished` below must include the delta tail
+        deltaFlushTask?.cancel()
+        deltaFlushTask = nil
         let wasAtBottom = viewIsAtBottom
         streaming = false
         activity = nil

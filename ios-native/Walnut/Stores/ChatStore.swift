@@ -49,10 +49,13 @@ final class ChatStore {
     /// Bumped when a mutation may have displaced the viewport while the user
     /// was at the bottom; the view answers by scrolling to its sentinel.
     private(set) var scrollToBottomSignal = 0
-    /// The INITIAL paint is `defaultScrollAnchor(.bottom)`'s job — a
-    /// programmatic scrollTo before the LazyVStack has real row heights lands
-    /// in overscroll and paints a blank page. Signals only fire after the
-    /// first successful load of the current conversation.
+    /// First-paint pin guard. `defaultScrollAnchor(.bottom)` alone positions
+    /// the viewport at the LazyVStack's ESTIMATED bottom; with variable-height
+    /// markdown rows the estimate is far off and the rows at the real offset
+    /// are never instantiated — the list renders BLANK until any gesture
+    /// forces a layout pass (QA-confirmed, intermittent). The first load must
+    /// therefore always fire the scroll signal: scrollTo(sentinel) runs after
+    /// real layout, clamps to content bounds, and forces the bottom rows in.
     private var initialPaintDone = false
 
     var loadingList = false
@@ -62,6 +65,14 @@ final class ChatStore {
     var streaming = false
     /// Accumulated live assistant text for the in-flight turn.
     var streamText = ""
+    /// Delta coalescing (freeze fix): applying every SSE text-delta straight
+    /// to `streamText` re-rendered the live markdown row PER DELTA — a full
+    /// MarkdownParser.parse of the ever-growing reply on the main thread,
+    /// dozens of times a second. Long replies saturated the main thread and
+    /// froze the app. Deltas buffer here (non-observed via ObservationIgnored)
+    /// and flush on a ~8Hz cadence instead.
+    @ObservationIgnored private var pendingDelta = ""
+    @ObservationIgnored private var deltaFlushTask: Task<Void, Never>?
     /// Latest tool/thinking status, e.g. "Read" — shown as an activity row.
     var activity: String?
     var errorMessage: String?
@@ -158,12 +169,21 @@ final class ChatStore {
         UserDefaults.standard.set(id, forKey: activeConversationKey)
         turnWatchdog?.cancel()
         turnWatchdog = nil
+        deltaFlushTask?.cancel()
+        deltaFlushTask = nil
+        pendingDelta = ""
         streaming = false
         streamText = ""
         activity = nil
         errorMessage = nil
-        initialPaintDone = false // fresh list → bottom anchor owns first paint
+        initialPaintDone = false
         messages = id.flatMap { DiskCache.load([ChatMessage].self, key: "messages-\($0)") } ?? []
+        // Cached rows landed — force the bottom rows to instantiate (the
+        // blank-list bug hits the cold-launch cache path hardest). Deferred a
+        // tick so the view is attached and observing before the signal moves.
+        if !messages.isEmpty {
+            Task { @MainActor in self.scrollToBottomSignal += 1 }
+        }
         connectStream()
         if let id {
             Task { await self.loadMessages(id) }
@@ -203,9 +223,8 @@ final class ChatStore {
             // Replacing rows with canonical ids/heights displaces the viewport
             // once the bottom anchor's auto-pin has lapsed (any manual scroll)
             // — glue the reader back only if they were already at the bottom.
-            // Never on the initial paint: rows haven't laid out yet and the
-            // jump overshoots real content into blank overscroll.
-            if changed && wasAtBottom && initialPaintDone { scrollToBottomSignal += 1 }
+            // The FIRST load always pins: see initialPaintDone (blank-list fix).
+            if !initialPaintDone || (changed && wasAtBottom) { scrollToBottomSignal += 1 }
             initialPaintDone = true
             DiskCache.save(Array(fetched.suffix(Self.cacheTail)), key: "messages-\(id)")
         } catch {
@@ -383,10 +402,11 @@ final class ChatStore {
         case "message-start":
             streaming = true
             streamText = ""
+            pendingDelta = ""
             activity = nil
         case "text-delta":
             if let payload = try? JSONDecoder().decode(DeltaPayload.self, from: data) {
-                streamText += payload.delta
+                appendDelta(payload.delta)
             }
         case "tool":
             if let payload = try? JSONDecoder().decode(ToolPayload.self, from: data) {
@@ -401,6 +421,7 @@ final class ChatStore {
             activity = "Waiting for another task"
         case "message-end":
             let payload = try? JSONDecoder().decode(EndPayload.self, from: data)
+            flushPendingDelta() // the streamText fallback must include the tail
             finalizeTurn(conversationID: conversationID, fullText: payload?.fullText ?? streamText)
         case "error":
             let payload = try? JSONDecoder().decode(ErrorPayload.self, from: data)
@@ -411,6 +432,26 @@ final class ChatStore {
         default:
             break
         }
+    }
+
+    /// Buffer a streamed text delta and schedule a coalesced flush. SwiftUI
+    /// only sees `streamText` change ~8x/second regardless of delta rate, so
+    /// the live markdown row re-renders at a bounded cadence.
+    private func appendDelta(_ delta: String) {
+        pendingDelta += delta
+        guard deltaFlushTask == nil else { return }
+        deltaFlushTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(120))
+            guard let self else { return }
+            self.deltaFlushTask = nil
+            self.flushPendingDelta()
+        }
+    }
+
+    private func flushPendingDelta() {
+        guard !pendingDelta.isEmpty else { return }
+        streamText += pendingDelta
+        pendingDelta = ""
     }
 
     /// Mid-turn freeze breaker. The composer is disabled while `streaming` is
@@ -464,6 +505,10 @@ final class ChatStore {
         turnWatchdog?.cancel()
         turnWatchdog = nil
         watchedUserText = nil
+        // Drop any unflushed delta tail — `fullText` is authoritative here.
+        deltaFlushTask?.cancel()
+        deltaFlushTask = nil
+        pendingDelta = ""
         let wasAtBottom = viewIsAtBottom
         streaming = false
         streamText = ""

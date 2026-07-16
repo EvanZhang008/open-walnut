@@ -26,27 +26,56 @@ final class CrashReporter: NSObject, MXMetricManagerSubscriber {
                     "exceptionCode": crash.exceptionCode.map(String.init) ?? "?",
                     "terminationReason": crash.terminationReason ?? "?",
                     "appVersion": crash.applicationVersion,
+                    "build": Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?",
                     "stack": Self.compactStack(crash.callStackTree),
                 ])
             }
             for hang in payload.hangDiagnostics ?? [] {
                 AppLog.error("crash", "hang from previous launch", [
                     "duration": "\(hang.hangDuration)",
+                    "build": Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?",
                     "stack": Self.compactStack(hang.callStackTree),
                 ])
             }
         }
-        // Crash forensics shouldn't wait for the next background/threshold
-        // trigger — push now while we have the user's attention span.
+        // Crash forensics must survive a follow-up crash AND reach the server
+        // promptly: persist to disk first, then push immediately instead of
+        // waiting for the next background/threshold trigger.
+        AppLog.shared.persistNow()
         AppLog.shared.uploadIfNeeded(force: true)
     }
 
-    /// AppLog meta is [String:String] with modest line sizes — flatten the
-    /// call-stack tree JSON and cap it. The full tree is huge (all threads,
-    /// full offsets); the first chunk carries the crashing frames, which is
-    /// what actually identifies the bug.
+    /// Flatten the call-stack tree to one "uuid+offset" frame per line —
+    /// the raw jsonRepresentation is so indentation-heavy that a 6000-char
+    /// cap barely covered 30 frames of JSON noise and cut off the frames
+    /// that identify the bug. The attributed (crashing) thread comes first;
+    /// symbolicate later with the archived dSYM (see apple-dev skill).
     private static func compactStack(_ tree: MXCallStackTree) -> String {
-        let json = String(data: tree.jsonRepresentation(), encoding: .utf8) ?? "?"
-        return String(json.prefix(6_000))
+        guard let root = try? JSONSerialization.jsonObject(with: tree.jsonRepresentation()) as? [String: Any],
+              let stacks = root["callStacks"] as? [[String: Any]]
+        else { return "unparseable" }
+
+        var lines: [String] = []
+        func walk(_ frames: [[String: Any]], depth: Int) {
+            for frame in frames {
+                guard lines.count < 80 else { return }
+                let uuid = (frame["binaryUUID"] as? String)?.prefix(8) ?? "?"
+                let name = frame["binaryName"] as? String ?? ""
+                let offset = frame["offsetIntoBinaryTextSegment"] as? Int ?? 0
+                lines.append("\(name.isEmpty ? String(uuid) : name)+\(offset)")
+                if let sub = frame["subFrames"] as? [[String: Any]] {
+                    walk(sub, depth: depth + 1)
+                }
+            }
+        }
+        // Attributed thread (the one that crashed/hung) first, others after.
+        let ordered = stacks.sorted { ($0["threadAttributed"] as? Bool ?? false) && !($1["threadAttributed"] as? Bool ?? false) }
+        for (i, stack) in ordered.enumerated() {
+            guard lines.count < 80 else { break }
+            let attributed = stack["threadAttributed"] as? Bool ?? false
+            lines.append("--- thread\(i)\(attributed ? " (attributed)" : "") ---")
+            walk(stack["callStackRootFrames"] as? [[String: Any]] ?? [], depth: 0)
+        }
+        return lines.joined(separator: "\n")
     }
 }

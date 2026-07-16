@@ -23,6 +23,25 @@ final class AppLog: @unchecked Sendable {
     private var buffer: [Entry] = []
     private var uploading = false
 
+    /// Device identity snapshot, cached at first main-thread touch. The
+    /// upload path previously fetched these via `await MainActor.run` — which
+    /// never returns while the main thread is FROZEN, silently hanging the
+    /// very upload that was supposed to report the freeze (see
+    /// MainThreadWatchdog). Cached values keep uploads main-thread-free.
+    private var cachedDevice = "unknown"
+    private var cachedOS = "iOS ?"
+
+    /// Call from the main thread at startup (WalnutApp.init).
+    @MainActor
+    func captureDeviceIdentity() {
+        let device = AppConfig.deviceName ?? UIDevice.current.name
+        let os = "iOS \(UIDevice.current.systemVersion)"
+        lock.lock()
+        cachedDevice = device
+        cachedOS = os
+        lock.unlock()
+    }
+
     private static let maxBuffered = 2000
     private static let uploadThreshold = 200
     private static let persistURL: URL = {
@@ -82,6 +101,13 @@ final class AppLog: @unchecked Sendable {
 
     // MARK: - Persistence + upload
 
+    /// Public flush point for callers holding must-not-lose lines (crash
+    /// diagnostics): write the buffer to disk NOW so a follow-up crash or
+    /// kill can't eat them before the next background-triggered persist.
+    func persistNow() {
+        persist()
+    }
+
     private func persist() {
         lock.lock()
         let snapshot = buffer
@@ -117,10 +143,16 @@ final class AppLog: @unchecked Sendable {
                 entry.meta?.forEach { line["m_\($0.key)"] = $0.value }
                 return line
             }
+            // Cached identity, NOT MainActor.run — a frozen main thread would
+            // block that await forever and the freeze report would never send.
+            self.lock.lock()
+            let device = self.cachedDevice
+            let os = self.cachedOS
+            self.lock.unlock()
             let payload: [String: Any] = [
-                "device": await MainActor.run { AppConfig.deviceName ?? UIDevice.current.name },
+                "device": device,
                 "appVersion": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?",
-                "os": await MainActor.run { "iOS \(UIDevice.current.systemVersion)" },
+                "os": os,
                 "lines": lines,
             ]
             guard let body = try? JSONSerialization.data(withJSONObject: payload) else { return }

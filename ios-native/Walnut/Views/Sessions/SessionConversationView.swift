@@ -13,6 +13,7 @@ struct SessionConversationView: View {
 
     @State private var store: SessionConversationStore
     @State private var showInfo = false
+    @Environment(\.scenePhase) private var scenePhase
 
     init(session: WalnutSession) {
         self.session = session
@@ -68,6 +69,16 @@ struct SessionConversationView: View {
         }
         .task { await store.open() }
         .onDisappear { store.close() }
+        .onChange(of: scenePhase) { _, phase in
+            // Kill the SSE stream + poll loop on background — live URLSession
+            // tasks block graceful termination and get the app watchdog-killed
+            // (0x8BADF00D). Revive and catch up on foreground.
+            if phase == .background {
+                store.suspend()
+            } else if phase == .active {
+                store.resume()
+            }
+        }
     }
 
     /// Nav-bar subtitle: live status + where it runs ("Running · clouddev").
