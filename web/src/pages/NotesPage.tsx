@@ -8,16 +8,20 @@ import { NotesEditorPanel } from '@/components/notes/NotesEditorPanel';
 import { NotesTabStrip, type OpenTab, type TabKind } from '@/components/notes/NotesTabStrip';
 import { AttachmentPreview } from '@/components/notes/AttachmentPreview';
 import { NotesChat } from '@/components/notes/NotesChat';
+import { NotesSessionChat } from '@/components/notes/NotesSessionChat';
 import { CommandPalette, pushRecent } from '@/components/notes/CommandPalette';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ICON_EXPAND } from '@/components/common/Icons';
 import { openPopout } from '@/popout/openPopout';
 import { saveNoteContent } from '@/api/notes-v2';
+import { quickStartSession } from '@/api/sessions';
+import { fetchNotesDir } from '@/api/config';
 import { log } from '@/utils/log';
 
 const LS_WIDTH_KEY = 'open-walnut-notes-tree-width';
 const LS_TABS_KEY = 'open-walnut-notes-tabs';
 const LS_CHAT_OPEN_KEY = 'open-walnut-notes-chat-open';
+const LS_CC_SESSION_KEY = 'open-walnut-notes-cc-session';
 const WIDTH_MIN = 220;
 const WIDTH_MAX = 500;
 const WIDTH_DEFAULT = 280;
@@ -114,6 +118,38 @@ export function NotesPage() {
     });
   }, []);
 
+  // ── Claude Code session hosted in the chat column ──
+  // A REAL CLI session (full MCP/skills config) started from the tree's context
+  // menu, vs. the built-in note-agent. Lifecycle: `{}` = pane open, HTTP in
+  // flight (INSTANT — set synchronously in the click handler) → `taskId` =
+  // quick-start accepted, session linking → `sessionId` = live (persisted so a
+  // page reload reattaches).
+  const [ccSession, setCcSession] = useState<{ taskId?: string; sessionId?: string; launchId?: number } | null>(() => {
+    try {
+      const sid = localStorage.getItem(LS_CC_SESSION_KEY);
+      return sid ? { sessionId: sid } : null;
+    } catch { return null; }
+  });
+  const [chatMode, setChatMode] = useState<'assistant' | 'session'>('assistant');
+  const [ccStartError, setCcStartError] = useState<string | null>(null);
+
+  // Prefetch the vault root once so the click handler never awaits it — the
+  // promise is page-lifetime cached in api/config.
+  useEffect(() => { void fetchNotesDir(); }, []);
+
+  // Preserve launchId — it's the pane's React key, and changing it mid-launch
+  // would remount NotesSessionChat and drop its locally-queued messages.
+  const handleCcResolved = useCallback((sessionId: string) => {
+    setCcSession((cur) => ({ ...cur, sessionId }));
+    try { localStorage.setItem(LS_CC_SESSION_KEY, sessionId); } catch { /* ignore */ }
+  }, []);
+
+  const handleCcGone = useCallback(() => {
+    setCcSession(null);
+    setChatMode('assistant');
+    try { localStorage.removeItem(LS_CC_SESSION_KEY); } catch { /* ignore */ }
+  }, []);
+
   const activeTab = useMemo(() => tabs.find((t) => t.path === activePath) ?? null, [tabs, activePath]);
   // useNoteContent only ever sees a NOTE path; attachment tabs (and "no tab") → null
   // so the markdown editor never loads a binary file and the hook clears.
@@ -208,6 +244,36 @@ export function NotesPage() {
       return next;
     });
   }, []);
+
+  // Context-menu "Start Claude Code session": quick-start in the notes vault
+  // (cwd = NOTES_DIR so the CLI's native CLAUDE.md discovery picks up the vault
+  // instructions). Message is EMPTY on purpose: spawn + init only (SessionStart
+  // hook, MCP/skills load) — no auto first turn; the CLI idles until the user
+  // actually types. PERCEIVED-INSTANT: pane state is set synchronously; the
+  // HTTP round-trip fills in taskId later.
+  const handleStartCcSession = useCallback(async (targetPath?: string) => {
+    setCcStartError(null);
+    setChatMode('session');
+    setChatOpen(true);
+    setCcSession({ launchId: Date.now() });
+    try { localStorage.setItem(LS_CHAT_OPEN_KEY, '1'); } catch { /* ignore */ }
+    // Bring the session's subject into view: open the note in the editor, or
+    // expand+scroll a folder in the tree — the pane and its target move together.
+    if (targetPath) {
+      if (targetPath.endsWith('.md')) handleSelect(targetPath);
+      else revealInTree(targetPath);
+    }
+    try {
+      const notesDir = await fetchNotesDir(); // prefetched on mount — resolves instantly
+      if (!notesDir) throw new Error('Notes vault directory unavailable (cloud mode?)');
+      const result = await quickStartSession({ cwd: notesDir, message: '' });
+      setCcSession((cur) => cur && !cur.sessionId ? { ...cur, taskId: result.taskId } : cur);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn('notes', 'Failed to start Claude Code session from notes', { error: msg, targetPath });
+      setCcStartError(msg);
+    }
+  }, [handleSelect, revealInTree]);
 
   // '+' → a fresh place to pick/create a note: clear the active tab (shows the
   // empty state) and open the Cmd+K quick-switcher (§1.3 "New / empty").
@@ -368,6 +434,7 @@ export function NotesPage() {
           onToggleFavorite={toggleFavoriteNote}
           revealPath={reveal.path}
           revealNonce={reveal.nonce}
+          onStartSession={handleStartCcSession}
         />
       </div>
       <div className="notes-resize-handle" onMouseDown={handleResizeStart} />
@@ -438,7 +505,57 @@ export function NotesPage() {
         <>
           <div className="notes-chat-divider" />
           <div className="notes-chat-pane">
-            <NotesChat activeNotePath={activeNotePath} />
+            {(() => {
+              // Mode tabs — only shown once a CC session exists (or is starting),
+              // so the plain assistant keeps its uncluttered single-title header.
+              const tabs = (ccSession || ccStartError) ? (
+                <div className="notes-chat-mode-tabs" role="tablist">
+                  <button
+                    role="tab"
+                    aria-selected={chatMode === 'assistant'}
+                    className={`notes-chat-mode-tab${chatMode === 'assistant' ? ' active' : ''}`}
+                    onClick={() => setChatMode('assistant')}
+                  >
+                    Note Assistant
+                  </button>
+                  <button
+                    role="tab"
+                    aria-selected={chatMode === 'session'}
+                    className={`notes-chat-mode-tab${chatMode === 'session' ? ' active' : ''}`}
+                    onClick={() => setChatMode('session')}
+                  >
+                    Claude Code
+                  </button>
+                </div>
+              ) : undefined;
+
+              if (chatMode === 'session' && ccStartError) {
+                return (
+                  <div className="notes-chat">
+                    <div className="notes-chat-header">{tabs}</div>
+                    <div className="notes-chat-empty">
+                      <p style={{ color: 'var(--color-error, #ff3b30)' }}>Failed to start session: {ccStartError}</p>
+                      <p>Fix the issue, then retry from the notes tree's context menu.</p>
+                    </div>
+                  </div>
+                );
+              }
+              if (chatMode === 'session' && ccSession) {
+                return (
+                  <NotesSessionChat
+                    /* launchId keeps ONE instance across launching→taskId→sessionId,
+                       so pre-link queued messages survive; sessionId keys restores. */
+                    key={ccSession.launchId ?? ccSession.sessionId}
+                    taskId={ccSession.taskId}
+                    sessionId={ccSession.sessionId}
+                    onResolved={handleCcResolved}
+                    onGone={handleCcGone}
+                    headerLeft={tabs}
+                  />
+                );
+              }
+              return <NotesChat activeNotePath={activeNotePath} headerLeft={tabs} />;
+            })()}
           </div>
         </>
       )}

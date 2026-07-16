@@ -4,7 +4,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { getConfig, updateConfig } from '../../core/config-manager.js'
-import { CLOUD_MODE, WALNUT_INSTALL_DIR } from '../../constants.js'
+import { CLOUD_MODE, WALNUT_INSTALL_DIR, NOTES_DIR } from '../../constants.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { VALID_PRIORITIES } from '../../core/types.js'
 import { log } from '../../logging/index.js'
@@ -37,7 +37,14 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
     // installDir: Walnut's own source checkout (null on npm installs / cloud
     // bundles) — drives the "Fix Walnut" quick-start button. Cloud replicas
     // proxy sessions to daemons elsewhere, so a local path would be wrong there.
-    res.json({ config: CLOUD_MODE ? redactConfig(config) : config, envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR })
+    // notesDir: the vault root — cwd for "Start Claude Code session" launched
+    // from the /notes page. Local-only for the same reason as installDir.
+    // processNice: >0 means the server inherited a positive nice (launched from
+    // a niced shell) and will be scheduler-starved under load — surfaced so
+    // fix-walnut / bug reports can spot it without shell access.
+    let processNice = 0
+    try { processNice = (await import('node:os')).getPriority() } catch { /* diagnostics only */ }
+    res.json({ config: CLOUD_MODE ? redactConfig(config) : config, envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice })
   } catch (err) {
     next(err)
   }

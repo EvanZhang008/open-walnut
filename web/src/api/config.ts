@@ -21,6 +21,18 @@ export function fetchInstallDir(): Promise<string | null> {
   return _installDirPromise;
 }
 
+/**
+ * Notes vault root (cwd for Claude Code sessions started from /notes). null in
+ * cloud mode. Same page-lifetime cache rationale as installDir.
+ */
+let _notesDirPromise: Promise<string | null> | null = null;
+export function fetchNotesDir(): Promise<string | null> {
+  _notesDirPromise ??= apiGet<{ notesDir?: string | null }>('/api/config')
+    .then(res => res.notesDir ?? null)
+    .catch(() => { _notesDirPromise = null; return null; });
+  return _notesDirPromise;
+}
+
 export async function updateConfig(config: Partial<Config>): Promise<{ ok: boolean }> {
   return apiPut<{ ok: boolean }>('/api/config', config);
 }

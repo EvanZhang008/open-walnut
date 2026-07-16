@@ -77,6 +77,11 @@ interface NotesTreePanelProps {
    */
   revealPath?: string | null;
   revealNonce?: number;
+  /**
+   * Start a REAL Claude Code session (full MCP/skills config) in the chat
+   * column, opened on the clicked note/folder (undefined = vault root).
+   */
+  onStartSession?: (targetPath?: string) => void;
 }
 
 /** Cumulative folder prefixes of a vault path: `a/b/c.md` → ['a', 'a/b', 'a/b/c.md']. */
@@ -107,6 +112,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
   onToggleFavorite,
   revealPath,
   revealNonce,
+  onStartSession,
 }: NotesTreePanelProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
@@ -680,6 +686,13 @@ export const NotesTreePanel = memo(function NotesTreePanel({
           {/* Attachments (docx/xlsx/pdf/…): open with the OS default app (Word/Excel). */}
           {contextMenu.node.kind === 'attachment' && (
             <button onClick={() => handleReveal(contextMenu.node.path, 'app')}>Open in default app</button>
+          )}
+          {/* Real Claude Code session (full MCP/skills config) opened on this
+              note/folder — renders in the chat column next to the assistant. */}
+          {onStartSession && contextMenu.node.kind !== 'attachment' && (
+            <button onClick={() => { const p = contextMenu.node.path; setContextMenu(null); onStartSession(p); }}>
+              Start Claude Code session
+            </button>
           )}
           {/* Local-machine actions — every node type (file, folder, attachment). */}
           <button onClick={() => handleReveal(contextMenu.node.path, 'finder')}>Reveal in Finder</button>
