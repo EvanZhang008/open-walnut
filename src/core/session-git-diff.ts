@@ -177,6 +177,7 @@ export async function computeSessionGitDiff(
       before: f.before,
       after: f.after,
       status: f.status,
+      ...(f.oldRelPath ? { oldRelPath: f.oldRelPath } : {}),
       ops: 1,
       partial: false,
     }));

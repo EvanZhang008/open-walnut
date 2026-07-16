@@ -550,6 +550,147 @@ describe('computeSessionChanges — agent memory-store filtering', () => {
   });
 });
 
+// The reported bug: the Changed view only surfaced Edit/Write tool ops, so files
+// MOVED / DELETED / CREATED via a Bash command (git mv, rm, touch, cp, `>`) were
+// invisible in the default (JSONL) mode. These exercise the Bash-op path.
+describe('computeSessionChanges — Bash file ops (move / delete / create)', () => {
+  it('shows a `git mv` as a RENAME (status=renamed, oldRelPath = source)', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const dest = path.join(repo, 'Areas', 'Career', 'PERM', 'Perm-old.md');
+    // The destination exists on disk (post-move); the source is gone.
+    await putFile(dest, '# Perm notes\n');
+
+    await writeSessionJsonl('s1', repo, [
+      assistantToolUse(repo, [{
+        name: 'Bash',
+        input: { command: `cd ${repo}\ngit mv "Projects/Perm.md" "Areas/Career/PERM/Perm-old.md" 2>/dev/null || mv "Projects/Perm.md" "Areas/Career/PERM/Perm-old.md"` },
+      }]),
+    ]);
+
+    const res = await computeSessionChanges('s1', repo);
+    const change = res.groups.flatMap(g => g.files).find(f => f.relPath === path.join('Areas', 'Career', 'PERM', 'Perm-old.md'));
+    expect(change).toBeDefined();
+    expect(change!.status).toBe('renamed');
+    expect(change!.oldRelPath).toBe(path.join('Projects', 'Perm.md'));
+    // The source path must NOT appear as its own (phantom) entry.
+    const rels = res.groups.flatMap(g => g.files.map(f => f.relPath));
+    expect(rels).not.toContain(path.join('Projects', 'Perm.md'));
+  });
+
+  it('shows a folder `git mv` as a rename (dir move, content-preserving)', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const moved = path.join(repo, 'Projects', 'PERM');
+    await putFile(path.join(moved, 'README.md'), 'x\n'); // dir has a file post-move
+
+    await writeSessionJsonl('s1', repo, [
+      assistantToolUse(repo, [{ name: 'Bash', input: { command: `cd ${repo} && git mv "Areas/Career/PERM" "Projects/PERM"` } }]),
+    ]);
+
+    const res = await computeSessionChanges('s1', repo);
+    const change = res.groups.flatMap(g => g.files).find(f => f.status === 'renamed');
+    expect(change).toBeDefined();
+    expect(change!.relPath).toBe(path.join('Projects', 'PERM'));
+    expect(change!.oldRelPath).toBe(path.join('Areas', 'Career', 'PERM'));
+  });
+
+  it('shows `rm` as a DELETE, recovering the removed content from git (local)', async () => {
+    // A real git repo so `git show HEAD:<rel>` can recover the deleted content.
+    const { execFileSync } = await import('node:child_process');
+    const repo = path.join(workRoot, 'realrepo');
+    await fsp.mkdir(repo, { recursive: true });
+    execFileSync('git', ['-C', repo, 'init', '-q']);
+    execFileSync('git', ['-C', repo, 'config', 'user.email', 't@t']);
+    execFileSync('git', ['-C', repo, 'config', 'user.name', 't']);
+    const doomed = path.join(repo, 'gone.ts');
+    await putFile(doomed, 'export const dead = 1;\n');
+    execFileSync('git', ['-C', repo, 'add', '.']);
+    execFileSync('git', ['-C', repo, 'commit', '-qm', 'init']);
+    await fsp.rm(doomed); // the session deleted it
+
+    await writeSessionJsonl('s1', repo, [
+      assistantToolUse(repo, [{ name: 'Bash', input: { command: `cd ${repo} && rm gone.ts` } }]),
+    ]);
+
+    const res = await computeSessionChanges('s1', repo);
+    const change = res.groups.flatMap(g => g.files).find(f => f.relPath === 'gone.ts');
+    expect(change).toBeDefined();
+    expect(change!.status).toBe('deleted');
+    expect(change!.after).toBe('');
+    // before recovered from git HEAD:
+    expect(change!.before).toBe('export const dead = 1;\n');
+    expect(change!.partial).toBe(false);
+  });
+
+  it('shows a delete of an UNTRACKED file with empty before + partial (nothing to recover)', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const repo = path.join(workRoot, 'realrepo2');
+    await fsp.mkdir(repo, { recursive: true });
+    execFileSync('git', ['-C', repo, 'init', '-q']);
+    // File was never committed → git show can't recover it.
+    await writeSessionJsonl('s1', repo, [
+      assistantToolUse(repo, [{ name: 'Bash', input: { command: `cd ${repo} && rm scratch.txt` } }]),
+    ]);
+
+    const res = await computeSessionChanges('s1', repo);
+    const change = res.groups.flatMap(g => g.files).find(f => f.relPath === 'scratch.txt');
+    expect(change).toBeDefined();
+    expect(change!.status).toBe('deleted');
+    expect(change!.before).toBe('');
+    expect(change!.partial).toBe(true);
+  });
+
+  it('shows `touch` of a new file as ADDED', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const created = path.join(repo, 'fresh.md');
+    await putFile(created, 'hello\n');
+
+    await writeSessionJsonl('s1', repo, [
+      assistantToolUse(repo, [{ name: 'Bash', input: { command: `cd ${repo} && touch fresh.md` } }]),
+    ]);
+
+    const res = await computeSessionChanges('s1', repo);
+    const change = res.groups.flatMap(g => g.files).find(f => f.relPath === 'fresh.md');
+    expect(change).toBeDefined();
+    expect(change!.status).toBe('added');
+    expect(change!.after).toBe('hello\n');
+    expect(change!.before).toBe('');
+  });
+
+  it('a rename FOLLOWED by an Edit on the destination shows renamed + the edit diff', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const dest = path.join(repo, 'b.ts');
+    await putFile(dest, 'const v = 2;\n'); // post-move, post-edit
+
+    await writeSessionJsonl('s1', repo, [
+      assistantToolUse(repo, [{ name: 'Bash', input: { command: `cd ${repo} && git mv a.ts b.ts` } }]),
+      assistantToolUse(repo, [{ name: 'Edit', input: { file_path: dest, old_string: 'const v = 1;', new_string: 'const v = 2;' } }]),
+    ]);
+
+    const res = await computeSessionChanges('s1', repo);
+    const change = res.groups.flatMap(g => g.files).find(f => f.relPath === 'b.ts');
+    expect(change).toBeDefined();
+    expect(change!.status).toBe('renamed');
+    expect(change!.oldRelPath).toBe('a.ts');
+    // The edit still reconstructs a real content diff on the destination.
+    expect(change!.after).toBe('const v = 2;\n');
+    expect(change!.before).toBe('const v = 1;\n');
+  });
+
+  it('ignores unsafe/globbed Bash commands (no fabricated ops)', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    await writeSessionJsonl('s1', repo, [
+      assistantToolUse(repo, [{ name: 'Bash', input: { command: `cd ${repo} && rm *.tmp && mv $SRC $DST` } }]),
+    ]);
+    const res = await computeSessionChanges('s1', repo);
+    expect(res.fileCount).toBe(0);
+  });
+});
+
 describe('computeSessionChanges — empty + identical', () => {
   it('returns empty result when the session edited nothing', async () => {
     const repo = path.join(workRoot, 'repo');

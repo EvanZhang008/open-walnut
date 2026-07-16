@@ -7,7 +7,9 @@ export interface SessionFileChange {
   relPath: string;
   before: string;
   after: string;
-  status: 'added' | 'modified' | 'deleted';
+  status: 'added' | 'modified' | 'deleted' | 'renamed';
+  /** For a rename (mv/git mv), the repo-relative ORIGINAL path. */
+  oldRelPath?: string;
   ops: number;
   partial: boolean;
 }

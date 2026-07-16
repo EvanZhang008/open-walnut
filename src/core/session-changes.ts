@@ -37,6 +37,8 @@
 
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import {
   readSessionJsonlContent,
   readSubagentContents,
@@ -44,6 +46,7 @@ import {
   remoteJsonlPath,
   extractCwdFromJsonlContent,
 } from './session-file-reader.js';
+import { parseBashFileOps } from './bash-file-ops.js';
 import { log } from '../logging/index.js';
 
 // ── Public types (shared shape with the frontend api wrapper) ──
@@ -58,10 +61,14 @@ export interface SessionFileChange {
   before: string;
   /** Current content on disk (what the user sees now). */
   after: string;
-  /** How the file was changed — 'added' (Write to a new/empty file), 'deleted'
-   *  (current content empty), or 'modified'. */
-  status: 'added' | 'modified' | 'deleted';
-  /** Number of distinct Edit/Write/MultiEdit ops the session applied. */
+  /** How the file was changed — 'added' (Write/touch/cp/`>` to a new/empty file),
+   *  'deleted' (rm/`git rm`, or current content empty), 'renamed' (mv/`git mv`),
+   *  or 'modified'. */
+  status: 'added' | 'modified' | 'deleted' | 'renamed';
+  /** For a rename (mv/git mv), the repo-relative ORIGINAL path. Absent otherwise.
+   *  `filePath`/`relPath` hold the destination; this is the source. */
+  oldRelPath?: string;
+  /** Number of distinct Edit/Write/MultiEdit + Bash file ops the session applied. */
   ops: number;
   /** True when before/after could not be fully reconstructed (e.g. an Edit's
    *  old_string no longer matches the current file because another process
@@ -94,7 +101,11 @@ export interface SessionChangesResult {
 
 type FileOp =
   | { kind: 'edit'; oldString: string; newString: string; replaceAll: boolean }
-  | { kind: 'write'; content: string };
+  | { kind: 'write'; content: string }
+  // Bash-derived path ops (no content payload — reconstructed from disk + git):
+  | { kind: 'create' }
+  | { kind: 'delete' }
+  | { kind: 'rename'; from: string };
 
 interface FileAccum {
   filePath: string;
@@ -135,9 +146,42 @@ function collectOpsFromJsonl(content: string, fileMap: Map<string, FileAccum>): 
     const lineCwd = typeof raw.cwd === 'string' ? raw.cwd : undefined;
 
     for (const block of blocks) {
-      if (block.type !== 'tool_use' || !block.name || !EDIT_TOOLS.has(block.name)) continue;
+      if (block.type !== 'tool_use' || !block.name) continue;
       const input = block.input;
       if (!input) continue;
+
+      // Bash file ops (mv/git mv/rm/git rm/cp/touch/`>` redirection) — moves,
+      // renames, deletes and shell-created files leave NO Edit/Write op, so parse
+      // the recorded command string into structured create/delete/rename ops.
+      if (block.name === 'Bash') {
+        const command = typeof input.command === 'string' ? input.command : undefined;
+        if (!command) continue;
+        for (const op of parseBashFileOps(command, lineCwd)) {
+          if (op.kind === 'rename' && op.from) {
+            // A rename RETIRES the source path and carries its history to the dest:
+            // migrate any prior ops (edits/create on the old path) onto the
+            // destination accum, then drop the source so we don't show a phantom
+            // "modified" for a file that no longer exists.
+            const srcAccum = fileMap.get(op.from);
+            const destAccum = fileMap.get(op.path) ?? { filePath: op.path, cwd: lineCwd, ops: [] };
+            if (!destAccum.cwd && lineCwd) destAccum.cwd = lineCwd;
+            if (srcAccum) {
+              destAccum.ops.push(...srcAccum.ops);
+              fileMap.delete(op.from);
+            }
+            destAccum.ops.push({ kind: 'rename', from: op.from });
+            fileMap.set(op.path, destAccum);
+            continue;
+          }
+          const accum = fileMap.get(op.path) ?? { filePath: op.path, cwd: lineCwd, ops: [] };
+          if (!accum.cwd && lineCwd) accum.cwd = lineCwd;
+          accum.ops.push(op.kind === 'delete' ? { kind: 'delete' } : { kind: 'create' });
+          fileMap.set(op.path, accum);
+        }
+        continue;
+      }
+
+      if (!EDIT_TOOLS.has(block.name)) continue;
       const filePath = typeof input.file_path === 'string' ? input.file_path
         : typeof input.notebook_path === 'string' ? input.notebook_path
           : undefined;
@@ -186,6 +230,37 @@ function collectOpsFromJsonl(content: string, fileMap: Map<string, FileAccum>): 
   }
 }
 
+const execFileAsync = promisify(execFile);
+
+/**
+ * Recover a deleted file's last-committed content via `git show HEAD:<relpath>`,
+ * for LOCAL sessions only (git + the repo are on this host). Returns null when the
+ * file wasn't tracked (untracked delete), isn't in a git repo, or git fails — the
+ * caller then shows the delete with an empty `before` and marks it partial.
+ */
+async function readDeletedBeforeLocal(absPath: string): Promise<string | null> {
+  try {
+    const dir = path.dirname(absPath);
+    const root = await execFileAsync('git', ['-C', dir, 'rev-parse', '--show-toplevel'], { timeout: 10_000 });
+    const repoRoot = root.stdout.trim();
+    if (!repoRoot) return null;
+    // git returns the canonical (realpath'd) root, but `absPath` may still carry a
+    // symlinked prefix (e.g. macOS /var → /private/var), which would make
+    // path.relative produce a spurious `../..`. Canonicalize the containing dir
+    // (the file itself is gone, so realpath the parent) before computing rel.
+    let realDir = dir;
+    try { realDir = await fsp.realpath(dir); } catch { /* dir also gone — use as-is */ }
+    const rel = path.relative(repoRoot, path.join(realDir, path.basename(absPath)));
+    if (!rel || rel.startsWith('..')) return null;
+    const show = await execFileAsync('git', ['-C', repoRoot, 'show', `HEAD:${rel}`], {
+      timeout: 10_000, maxBuffer: 64 * 1024 * 1024,
+    });
+    return show.stdout;
+  } catch {
+    return null; // untracked / not a repo / git error
+  }
+}
+
 // ── before reconstruction (reverse-apply ops onto current content) ──
 
 /** Reverse one edit: turn newString back into oldString in `text`. */
@@ -208,11 +283,39 @@ function reverseEdit(text: string, op: { oldString: string; newString: string; r
 /**
  * Reconstruct {before, after, status, partial} for a file from its current
  * on-disk content + the chronological ops the session applied.
+ *
+ * @param current       Disk content of the file (the destination path for a
+ *                       rename); null when the file no longer exists.
+ * @param accum          The file's accumulated ops (oldest first).
+ * @param deletedBefore  For a deleted file, its content at the git base (from
+ *                       `git show HEAD:path`), so the diff can show what was
+ *                       removed. null when unavailable (remote / no git / untracked).
  */
-function reconstructFile(current: string | null, accum: FileAccum): Omit<SessionFileChange, 'filePath' | 'relPath'> {
+function reconstructFile(
+  current: string | null,
+  accum: FileAccum,
+  deletedBefore?: string | null,
+): Omit<SessionFileChange, 'filePath' | 'relPath' | 'oldRelPath'> & { renamedFrom?: string } {
   const ops = accum.ops;
   const lastOp = ops[ops.length - 1];
   let partial = false;
+
+  // Find the last rename (its `from` is the display source). A later delete of a
+  // renamed dest is handled by the delete branch below.
+  let renamedFrom: string | undefined;
+  for (let i = ops.length - 1; i >= 0; i--) {
+    const op = ops[i];
+    if (op.kind === 'rename') { renamedFrom = op.from; break; }
+  }
+
+  // ── Deleted: the file's last op was a `rm`, or it's gone from disk. `after` is
+  //    empty; `before` is the pre-delete content (git-show injected, else best-
+  //    effort). Edits/renames before the delete are moot — the file is gone. ──
+  if (lastOp?.kind === 'delete') {
+    const before = deletedBefore ?? '';
+    if (deletedBefore == null) partial = true; // couldn't recover the removed content
+    return { before, after: '', status: 'deleted', ops: ops.length, partial };
+  }
 
   // `after`: the current content. If the file was deleted on disk (read=null) but
   // the session's last op was a Write, fall back to that Write's content as the
@@ -228,20 +331,22 @@ function reconstructFile(current: string | null, accum: FileAccum): Omit<Session
     partial = true;
   }
 
-  // `before`: reverse-apply ops newest→oldest onto `after`.
+  // `before`: reverse-apply ops newest→oldest onto `after`. rename/create are
+  // content-boundary markers, not text edits:
+  //   - create: the file did not exist before this op → reset `before` to ''.
+  //   - rename: content-preserving (bytes unchanged) → skip in text terms.
   let before = after;
   for (let i = ops.length - 1; i >= 0; i--) {
     const op = ops[i];
-    if (op.kind === 'write') {
-      // A Write replaced the whole file. Everything before this Write is unknown
-      // from `after` alone — the pre-Write content is whatever the op BEFORE it
-      // produced. If this is the first op, before-this-write is "" (file created),
-      // unless an even-earlier op exists. Since we go newest→oldest, once we hit a
-      // Write we reset `before` to the empty string and keep walking earlier ops
-      // (which, if any, were edits to the pre-existing file → they reconstruct the
-      // original). In practice a Write is usually the FIRST op (file created) or the
-      // ONLY op, so before = "".
+    if (op.kind === 'write' || op.kind === 'create') {
+      // A Write/create established the whole file. Everything before it is unknown
+      // from `after` alone; reset `before` to '' and keep walking earlier ops
+      // (edits to a pre-existing file, if any, reconstruct the original).
       before = '';
+    } else if (op.kind === 'rename' || op.kind === 'delete') {
+      // rename: bytes unchanged. delete here is not the last op (handled above) —
+      // an intermediate delete+recreate; treat as a content boundary too.
+      if (op.kind === 'delete') before = '';
     } else {
       const r = reverseEdit(before, op);
       before = r.text;
@@ -249,13 +354,15 @@ function reconstructFile(current: string | null, accum: FileAccum): Omit<Session
     }
   }
 
-  // Status.
+  // Status. A rename is a rename even when the content is byte-identical (a pure
+  // move) — it takes precedence over modified/added so the move is visible.
   let status: SessionFileChange['status'];
-  if (before === '' && after !== '') status = 'added';
+  if (renamedFrom !== undefined) status = 'renamed';
+  else if (before === '' && after !== '') status = 'added';
   else if (after === '' && before !== '') status = 'deleted';
   else status = 'modified';
 
-  return { before, after, status, ops: ops.length, partial };
+  return { before, after, status, ops: ops.length, partial, renamedFrom };
 }
 
 // ── repo grouping ──
@@ -653,7 +760,10 @@ async function computeSessionChangesInner(
   //    (createFileReader returns a DaemonFileReader for the same host — reuse ours.)
   const isRemote = !!host;
 
-  // Resolve a per-file change record.
+  // Resolve a per-file change record. For a DELETED file (last op = rm/git rm),
+  // recover the removed content from git so the diff shows what was lost: local
+  // sessions run `git show HEAD:<relpath>` in-process; remote sessions can't
+  // (no per-file SSH), so the delete still shows with an empty before + partial.
   const changesByPath = new Map<string, SessionFileChange>();
   await Promise.all(
     [...fileMap.values()].map(async (accum) => {
@@ -663,8 +773,16 @@ async function computeSessionChangesInner(
       } catch {
         current = null;
       }
-      const recon = reconstructFile(current, accum);
-      changesByPath.set(accum.filePath, { filePath: accum.filePath, relPath: accum.filePath, ...recon });
+      const isDeleted = accum.ops[accum.ops.length - 1]?.kind === 'delete';
+      const deletedBefore = isDeleted && !isRemote
+        ? await readDeletedBeforeLocal(accum.filePath)
+        : null;
+      const { renamedFrom, ...recon } = reconstructFile(current, accum, deletedBefore);
+      const change: SessionFileChange = { filePath: accum.filePath, relPath: accum.filePath, ...recon };
+      // renamedFrom is absolute here; converted to a repo-relative oldRelPath once
+      // the repo root is known (grouping step below).
+      if (renamedFrom !== undefined) change.oldRelPath = renamedFrom;
+      changesByPath.set(accum.filePath, change);
     }),
   );
 
@@ -716,12 +834,21 @@ async function computeSessionChangesInner(
     // did not. We keep `partial` no-ops: there before===after only because
     // reconstruction couldn't compute a real before (the file changed on disk
     // after the edit), so it IS a real change, just not perfectly reconstructable.
-    if (change.before === change.after && !change.partial) continue;
+    // EXCEPT renames/deletes: a pure move has before===after content but is still
+    // a real structural change the user wants to see.
+    const structural = change.status === 'renamed' || change.status === 'deleted';
+    if (change.before === change.after && !change.partial && !structural) continue;
     const { root, orphan } = await resolveRepoRoot(accum.filePath, accum.cwd);
     // Skip stray out-of-repo scratch files (see resolveRepoRoot) so the set
     // matches the git modes, which can never show a non-repo file.
     if (orphan) continue;
     change.relPath = path.relative(root, accum.filePath) || path.basename(accum.filePath);
+    // Convert an absolute rename source to a repo-relative display path (fall back
+    // to a basename if it lived outside this root).
+    if (change.oldRelPath) {
+      const relOld = path.relative(root, change.oldRelPath);
+      change.oldRelPath = relOld && !relOld.startsWith('..') ? relOld : path.basename(change.oldRelPath);
+    }
 
     let group = groupsByRoot.get(root);
     if (!group) {

@@ -89,6 +89,29 @@ describe('GET /api/sessions/:id/changes', () => {
     expect(res.body.groups[0].kind).toBe('cwd');
   });
 
+  it('surfaces a `git mv` file move as status=renamed with oldRelPath over the wire', async () => {
+    await createSessionRecord(SID, 'task-1', 'proj', REPO);
+    const dest = path.join(REPO, 'docs', 'new.md');
+    await fs.mkdir(path.dirname(dest), { recursive: true });
+    await fs.writeFile(dest, '# moved\n');
+    await writeSessionJsonl(REPO, [
+      {
+        type: 'assistant', cwd: REPO, timestamp: '2025-01-01T00:00:00Z',
+        message: {
+          id: 'a1', role: 'assistant',
+          content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: `cd ${REPO} && git mv old.md docs/new.md` } }],
+        },
+      },
+    ]);
+
+    const res = await request(createApp()).get(`/api/sessions/${SID}/changes`);
+    expect(res.status).toBe(200);
+    const change = res.body.groups.flatMap((g: { files: unknown[] }) => g.files).find((f: { relPath: string }) => f.relPath === path.join('docs', 'new.md'));
+    expect(change).toBeDefined();
+    expect(change.status).toBe('renamed');
+    expect(change.oldRelPath).toBe('old.md');
+  });
+
   it('returns an empty result for a session that edited nothing', async () => {
     await createSessionRecord(SID, 'task-1', 'proj', REPO);
     await writeSessionJsonl(REPO, [

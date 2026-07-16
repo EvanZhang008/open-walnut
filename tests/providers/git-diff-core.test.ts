@@ -131,7 +131,7 @@ describe('computeGitDiff', () => {
     expect(reads).not.toContain(REPO + '/gone.ts');        // deleted → no working-tree read
   });
 
-  it('rename: reads before from the OLD path, after from the new path', async () => {
+  it('rename: status=renamed, oldRelPath set, before from the OLD path, after from the new path', async () => {
     const { exec } = mockExec({
       'git rev-parse --show-toplevel': { stdout: REPO },
       'git diff --name-status -z HEAD': { stdout: 'R100\0old/name.ts\0new/name.ts\0' },
@@ -139,7 +139,7 @@ describe('computeGitDiff', () => {
       'git show HEAD:old/name.ts': { stdout: 'body\n' },
     });
     const res = await computeGitDiff('uncommitted', REPO, exec, mockRead({ [REPO + '/new/name.ts']: 'body\n' }));
-    expect(res!.files[0]).toMatchObject({ relPath: 'new/name.ts', before: 'body\n', after: 'body\n', status: 'modified' });
+    expect(res!.files[0]).toMatchObject({ relPath: 'new/name.ts', oldRelPath: 'old/name.ts', before: 'body\n', after: 'body\n', status: 'renamed' });
   });
 
   it('sorts files by relPath', async () => {
