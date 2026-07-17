@@ -50,7 +50,7 @@
   background: #fff;
 }
 
-/* Fallback card for any unexpected/unsupported attachment type. */
+/* Open-with-local-app card (Office docs + any unsupported type). */
 .notes-attachment-card {
   padding: 12px 18px;
   border: 1px solid var(--border, #2a2c31);
@@ -58,6 +58,8 @@
   color: var(--text, #e6e6e6);
   text-decoration: none;
   background: var(--bg, #121316);
+  font: inherit;
+  cursor: pointer;
 }
 .notes-attachment-card:hover {
   border-color: var(--accent, #6b8afd);

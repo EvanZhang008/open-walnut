@@ -20,6 +20,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'hooks', label: 'Hooks' },
   { id: 'usage', label: 'Usage & Costs', divider: true },
   { id: 'timeline', label: 'Timeline' },
+  { id: 'bug-report', label: 'Bug Report', divider: true },
 ];
 
 interface SettingsNavProps {

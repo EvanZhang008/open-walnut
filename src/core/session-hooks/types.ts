@@ -6,7 +6,14 @@
 
 import type { Task, SessionRecord, SessionMode } from '../types.js';
 
-/** All available session hook points. */
+/** All available session hook points.
+ *
+ * NOTE: there is deliberately NO 'onSessionEnd' / 'onSessionIdle'. The CLI is a
+ * long-running process — the bus event `session:ended` fires after EVERY turn
+ * (it's a UI-refresh signal from server.ts), so an "end" hook point built on it
+ * would fire per-turn (that bug shipped once, as session-summary-gist). The only
+ * real end-of-life signals are the daemon's idle reap / process death, which have
+ * no hook plumbing today; add a properly-sourced hook point if a need arises. */
 export type SessionHookPoint =
   | 'onSessionStart'
   | 'onMessageSend'
@@ -16,9 +23,7 @@ export type SessionHookPoint =
   | 'onPlanComplete'
   | 'onModeChange'
   | 'onTurnComplete'
-  | 'onTurnError'
-  | 'onSessionEnd'
-  | 'onSessionIdle';
+  | 'onTurnError';
 
 /** Base context shared by all hook payloads. */
 export interface SessionHookContext {
@@ -89,16 +94,6 @@ export interface OnTurnErrorPayload extends SessionHookContext {
   isSessionError: boolean;
 }
 
-/** onSessionEnd payload */
-export interface OnSessionEndPayload extends SessionHookContext {
-  finalStatus?: string;
-}
-
-/** onSessionIdle payload — derived: timer-based */
-export interface OnSessionIdlePayload extends SessionHookContext {
-  idleSinceMs: number;
-}
-
 /** Filter criteria for hook matching. */
 export interface SessionHookFilter {
   modes?: SessionMode[];
@@ -134,6 +129,6 @@ export interface SessionHooksConfig {
   hooks?: Omit<SessionHookDefinition, 'source' | 'handler'>[];
   /** Override builtin hook settings (keyed by hook id). */
   overrides?: Record<string, { enabled?: boolean; priority?: number; timeoutMs?: number }>;
-  /** Global idle timeout in ms (default: 300_000 = 5 min). */
+  /** @deprecated no-op — the onSessionIdle hook point was removed (never had a consumer). */
   idleTimeoutMs?: number;
 }

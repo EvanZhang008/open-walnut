@@ -38,6 +38,10 @@ export interface NotificationRecord {
   dedupKey: string;
   /** Optional deep-link target the UI can navigate to (e.g. a session). */
   sessionId?: string;
+  /** Optional deep-link target for task-producing notifications (e.g. cron). */
+  taskId?: string;
+  /** Permission notifications only — how the request ended, if it did. */
+  resolved?: 'allowed' | 'denied';
 }
 
 interface NotificationsStore {
@@ -83,9 +87,17 @@ function writeStore(store: NotificationsStore): void {
   if (store.notifications.length > MAX_NOTIFICATIONS) {
     store.notifications = store.notifications.slice(-MAX_NOTIFICATIONS);
   }
-  // No empty→backup safety net here (unlike cron store): this module exposes only
-  // add/markRead — there is no clear/delete path that could wipe the feed, so a
-  // non-empty→empty transition can't happen. Mirrors observability/incidents.ts.
+  // dismiss/clear can legitimately empty the feed, so guard the non-empty→empty
+  // transition with a .backup snapshot (same safety net as the cron store) in
+  // case the wipe turns out to be a bug rather than a user action.
+  if (store.notifications.length === 0 && fs.existsSync(NOTIFICATIONS_FILE)) {
+    try {
+      const prev = JSON.parse(fs.readFileSync(NOTIFICATIONS_FILE, 'utf-8'));
+      if (Array.isArray(prev?.notifications) && prev.notifications.length > 0) {
+        fs.copyFileSync(NOTIFICATIONS_FILE, NOTIFICATIONS_FILE.replace(/\.json$/, '.backup.json'));
+      }
+    } catch { /* best-effort */ }
+  }
   fs.mkdirSync(path.dirname(NOTIFICATIONS_FILE), { recursive: true });
   fs.writeFileSync(NOTIFICATIONS_FILE, JSON.stringify(store, null, 2));
 }
@@ -151,5 +163,60 @@ export async function markRead(ids?: string[]): Promise<{ unreadCount: number }>
     }
     writeStore(store);
     return { unreadCount: store.notifications.filter(n => !n.read).length };
+  });
+}
+
+/**
+ * Remove notifications from the feed. Matches by id OR dedupKey — the frontend
+ * addresses entries by dedupKey because a live WS entry carries a locally
+ * generated id that differs from the server record's id (dedupKey is the only
+ * cross-layer identity). With no filter at all, clears the whole feed; an
+ * explicitly EMPTY array is a no-op, not a wipe — the frontend's optimistic
+ * `dismissFeed([])` deletes nothing locally, so treating [] as "clear all" here
+ * would silently desync the UI from disk.
+ * Note: dismissing a still-pending permission only removes the current record —
+ * the CLI's 60s re-ask re-adds it under the same dedupKey, which is intentional
+ * (an unresolved approval should come back).
+ */
+export async function dismissNotifications(
+  filter?: { ids?: string[]; dedupKeys?: string[] },
+): Promise<{ unreadCount: number; removed: number }> {
+  return withWriteLock(async () => {
+    const store = readStore();
+    const before = store.notifications.length;
+    const idSet = filter?.ids?.length ? new Set(filter.ids) : null;
+    const keySet = filter?.dedupKeys?.length ? new Set(filter.dedupKeys) : null;
+    const clearAll = !filter || (filter.ids === undefined && filter.dedupKeys === undefined);
+    if (idSet || keySet) {
+      store.notifications = store.notifications.filter(n => !(idSet?.has(n.id) || keySet?.has(n.dedupKey)));
+    } else if (clearAll) {
+      store.notifications = [];
+    }
+    writeStore(store);
+    return {
+      unreadCount: store.notifications.filter(n => !n.read).length,
+      removed: before - store.notifications.length,
+    };
+  });
+}
+
+/**
+ * Stamp a permission notification with its outcome (found by `perm:<requestId>`
+ * dedupKey). No-op if the record was already dismissed or aged off the feed.
+ */
+export async function resolvePermissionNotification(
+  requestId: string,
+  resolved: 'allowed' | 'denied',
+): Promise<void> {
+  return withWriteLock(async () => {
+    const store = readStore();
+    const rec = store.notifications.find(n => n.dedupKey === `perm:${requestId}`);
+    if (!rec || rec.resolved === resolved) return;
+    rec.resolved = resolved;
+    // denied → 'info' (not warning/error): a deny is a neutral user decision,
+    // nothing needs fixing. NotificationProvider mirrors this mapping for the
+    // optimistic client-side stamp — keep the two in sync.
+    rec.severity = resolved === 'allowed' ? 'success' : 'info';
+    writeStore(store);
   });
 }

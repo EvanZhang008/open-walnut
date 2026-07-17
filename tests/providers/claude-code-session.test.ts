@@ -35,6 +35,7 @@ import type { BusEvent } from '../../src/core/event-bus.js';
 import { WALNUT_HOME, SESSION_STREAMS_DIR } from '../../src/constants.js';
 import { enqueueMessage, getQueue, markProcessing, resetCache as resetQueueCache } from '../../src/core/session-message-queue.js';
 import fs from 'node:fs';
+import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js';
 
 // Retrieve the actual tmpBase from the mocked module (single source of truth)
 const tmpBase = WALNUT_HOME;
@@ -1819,6 +1820,90 @@ describe('ClaudeCodeSession.applyModel', () => {
 //  existing status handler reconciles). Replaces pendingMode → --resume.
 // ═══════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════
+//  forceSettlePermissionRequests — retiring an archived plan session must
+//  deny its pending permissions (ExitPlanMode etc.), stop the 60s re-emit
+//  timers, and emit SESSION_PERMISSION_RESOLVED so the notification feed
+//  stamps the record. Regression for the "archived plan session spams
+//  'needs permission approval' every 60s forever" bug.
+// ═══════════════════════════════════════════════════════════════════
+
+describe('ClaudeCodeSession.forceSettlePermissionRequests', () => {
+  function makePendingPermissionSession() {
+    const session = new ClaudeCodeSession('task-settle', 'proj', MOCK_CLI);
+    const writes: string[] = [];
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    (session as any)._transport = {
+      writeRaw: (json: string) => { writes.push(json); return Promise.resolve(true); },
+      stopTail: () => {},
+      kill: () => {},
+      detach: () => {},
+    };
+    (session as any)._active = true;
+    (session as any).claudeSessionId = 'settle-sid-1';
+    (session as any)._mode = 'default';
+    // Feed a real control_request through handleStreamLine so the pending map
+    // and the re-emit timer are populated by production code, not by hand.
+    (session as any).handleStreamLine(JSON.stringify({
+      type: 'control_request',
+      request_id: 'req-settle-1',
+      request: { subtype: 'can_use_tool', tool_name: 'ExitPlanMode', input: { plan: 'x' } },
+    }));
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+    return { session, writes };
+  }
+
+  it('denies pending requests, clears timers, and emits permission-resolved', async () => {
+    const { session, writes } = makePendingPermissionSession();
+    expect(session.hasPendingPermission).toBe(true);
+    /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+    expect((session as any)._permissionReEmitTimers.size).toBe(1);
+
+    const resolved: BusEvent[] = [];
+    bus.subscribe('test-settle', (e) => { resolved.push(e); },
+      { global: true, interest: [EventNames.SESSION_PERMISSION_RESOLVED] });
+
+    session.forceSettlePermissionRequests('Plan archived — executing in a new session');
+
+    expect(session.hasPendingPermission).toBe(false);
+    /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+    expect((session as any)._permissionReEmitTimers.size).toBe(0);
+
+    // Deny was written to the CLI as a control_response
+    const denyLine = writes.map((w) => JSON.parse(w)).find((w) => w.type === 'control_response');
+    expect(denyLine).toBeTruthy();
+    expect(denyLine.response.request_id).toBe('req-settle-1');
+    expect(denyLine.response.response.behavior).toBe('deny');
+
+    const ev = resolved.find((e) => e.name === EventNames.SESSION_PERMISSION_RESOLVED);
+    expect(ev).toBeTruthy();
+    expect((ev!.data as { requestId: string }).requestId).toBe('req-settle-1');
+    expect((ev!.data as { allowed: boolean }).allowed).toBe(false);
+    bus.unsubscribe('test-settle');
+  });
+
+  it('does not re-queue when the transport is gone (unlike resolvePermissionRequest)', () => {
+    const { session } = makePendingPermissionSession();
+    /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+    (session as any)._transport = null;
+
+    session.forceSettlePermissionRequests('Session archived');
+
+    // Pending map and timers must be empty even though the deny could not be delivered
+    expect(session.hasPendingPermission).toBe(false);
+    /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+    expect((session as any)._permissionReEmitTimers.size).toBe(0);
+  });
+
+  it('kill() also clears pending permissions and timers', () => {
+    const { session } = makePendingPermissionSession();
+    session.kill();
+    expect(session.hasPendingPermission).toBe(false);
+    /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+    expect((session as any)._permissionReEmitTimers.size).toBe(0);
+  });
+});
+
 describe('ClaudeCodeSession.applyPermissionMode', () => {
   function makeSessionWithStubTransport() {
     const session = new ClaudeCodeSession('task-pmode', 'proj', MOCK_CLI);
@@ -2109,4 +2194,328 @@ describe('ClaudeCodeSession.getSettings (effort read-back)', () => {
     expect((session as any)._effectiveEffort).toBe('high');
     // requested xhigh ≠ effective high ⇒ this is the "overridden" case the badge flags
   });
+});
+
+// Verifies the per-session model catalog: getModelCatalog() sends ONE
+// `list_models` control_request (the CLI's read-only catalog query, 2.1.199+),
+// falls back to `initialize` when the CLI errors it (old builds answer with a
+// fast explicit "Unsupported control request subtype"), sanitizes the
+// response's models[] (the CLI's own allowlist-filtered picker source), caches
+// it on the session, shares an in-flight fetch between parallel callers, and
+// drops the cache on the documented invalidation events. Same stub-transport
+// pattern as getSettings.
+describe('ClaudeCodeSession.getModelCatalog', () => {
+  function makeSessionWithStubTransport() {
+    const session = new ClaudeCodeSession('task-cat', 'proj', MOCK_CLI);
+    const writes: string[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any)._transport = {
+      writeRaw: (json: string) => { writes.push(json); return Promise.resolve(true); },
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any)._active = true;
+    return { session, writes };
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const feed = (session: ClaudeCodeSession, obj: unknown) => (session as any).handleStreamLine(JSON.stringify(obj));
+
+  // Real 2.1.199 list_models/initialize response shape (trimmed — the two
+  // subtypes serve models[] from the same function in the CLI).
+  const CLI_MODELS = [
+    { value: 'default', resolvedModel: 'global.anthropic.claude-fable-5', displayName: 'Default' },
+    {
+      value: 'global.anthropic.claude-fable-5', resolvedModel: 'global.anthropic.claude-fable-5',
+      displayName: 'Fable', description: 'Fast & capable',
+      supportsEffort: true, supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    },
+    {
+      value: 'global.anthropic.claude-opus-4-8[1m]', resolvedModel: 'global.anthropic.claude-opus-4-8[1m]',
+      displayName: 'Opus (1M context)', disabled: true,
+    },
+  ];
+
+  async function fetchWithReply(session: ClaudeCodeSession, writes: string[], models: unknown) {
+    const promise = session.getModelCatalog();
+    await new Promise((r) => setTimeout(r, 5));
+    const env = writes.map((w) => JSON.parse(w)).find((e) => e.request?.subtype === 'list_models');
+    expect(env).toBeTruthy();
+    feed(session, {
+      type: 'control_response',
+      response: { subtype: 'success', request_id: env.request_id, response: { models } },
+    });
+    return promise;
+  }
+
+  it('sends a list_models control_request and returns the sanitized catalog', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    const catalog = await fetchWithReply(session, writes, CLI_MODELS);
+    expect(writes.length).toBe(1);
+    expect((JSON.parse(writes[0]!).request_id as string).startsWith('lm-')).toBe(true);
+    expect(catalog).not.toBeNull();
+    expect(catalog!.models.map((m) => m.value)).toEqual([
+      'default', 'global.anthropic.claude-fable-5', 'global.anthropic.claude-opus-4-8[1m]',
+    ]);
+    expect(catalog!.models[1]).toMatchObject({
+      displayName: 'Fable', supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    });
+    expect(catalog!.models[2].disabled).toBe(true);
+    expect(typeof catalog!.fetchedAt).toBe('number');
+  });
+
+  it('drops malformed rows and filters bogus effort levels', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    const catalog = await fetchWithReply(session, writes, [
+      { value: '', displayName: 'no value' },              // dropped
+      { displayName: 'missing value' },                    // dropped
+      { value: 'm1' },                                     // dropped (no displayName)
+      { value: 'ok', displayName: 'OK', supportedEffortLevels: ['high', 'ultra', 42] },
+    ]);
+    expect(catalog!.models).toHaveLength(1);
+    expect(catalog!.models[0].supportedEffortLevels).toEqual(['high']);
+  });
+
+  it('resolves null when models is missing or empty after sanitize (old CLI)', async () => {
+    const a = makeSessionWithStubTransport();
+    expect(await fetchWithReply(a.session, a.writes, undefined)).toBeNull();
+    const b = makeSessionWithStubTransport();
+    expect(await fetchWithReply(b.session, b.writes, [{ displayName: 'junk only' }])).toBeNull();
+  });
+
+  it('falls back to initialize when the CLI errors list_models (old build)', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    const promise = session.getModelCatalog();
+    await new Promise((r) => setTimeout(r, 5));
+    // Old CLI: fast explicit error on the unknown subtype…
+    const lmId = JSON.parse(writes[0]!).request_id as string;
+    expect(lmId.startsWith('lm-')).toBe(true);
+    feed(session, { type: 'control_response', response: { subtype: 'error', request_id: lmId, error: 'Unsupported control request subtype: list_models' } });
+    await new Promise((r) => setTimeout(r, 5));
+    // …must trigger a second write: the initialize fallback.
+    expect(writes.length).toBe(2);
+    const initEnv = JSON.parse(writes[1]!);
+    expect(initEnv.request?.subtype).toBe('initialize');
+    expect((initEnv.request_id as string).startsWith('init-')).toBe(true);
+    feed(session, {
+      type: 'control_response',
+      response: { subtype: 'success', request_id: initEnv.request_id, response: { pid: 1, models: CLI_MODELS } },
+    });
+    const catalog = await promise;
+    expect(catalog!.models).toHaveLength(3);
+  });
+
+  it('resolves null when both subtypes error, and with no transport', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    const promise = session.getModelCatalog();
+    await new Promise((r) => setTimeout(r, 5));
+    feed(session, { type: 'control_response', response: { subtype: 'error', request_id: JSON.parse(writes[0]!).request_id, error: 'nope' } });
+    await new Promise((r) => setTimeout(r, 5));
+    feed(session, { type: 'control_response', response: { subtype: 'error', request_id: JSON.parse(writes[1]!).request_id, error: 'nope' } });
+    await expect(promise).resolves.toBeNull();
+    expect(writes.length).toBe(2);
+
+    const bare = new ClaudeCodeSession('task-cat-dead', 'proj', MOCK_CLI);
+    await expect(bare.getModelCatalog()).resolves.toBeNull();
+  });
+
+  it('does NOT fall back to initialize when list_models times out (CLI unresponsive)', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    // Tiny budget, no reply: the list_models wait consumes it all — a second
+    // attempt against an unresponsive CLI would just hang the same way.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await (session as any).fetchModelCatalog(80);
+    expect(result).toBeNull();
+    expect(writes.length).toBe(1);
+    expect(JSON.parse(writes[0]!).request?.subtype).toBe('list_models');
+  });
+
+  it('caches: second call answers from cache with zero extra writes', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    await fetchWithReply(session, writes, CLI_MODELS);
+    const again = await session.getModelCatalog();
+    expect(writes.length).toBe(1);
+    expect(again!.models).toHaveLength(3);
+  });
+
+  it('parallel callers share ONE in-flight initialize write', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    const p1 = session.getModelCatalog();
+    const p2 = session.getModelCatalog();
+    await new Promise((r) => setTimeout(r, 5));
+    expect(writes.length).toBe(1);
+    const requestId = JSON.parse(writes[0]!).request_id as string;
+    feed(session, {
+      type: 'control_response',
+      response: { subtype: 'success', request_id: requestId, response: { models: CLI_MODELS } },
+    });
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(r1!.models).toHaveLength(3);
+    expect(r2!.models).toHaveLength(3);
+  });
+
+  it('invalidateModelCatalog forces a refetch; force:true bypasses a warm cache', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    await fetchWithReply(session, writes, CLI_MODELS);
+
+    session.invalidateModelCatalog();
+    const p2 = session.getModelCatalog();
+    await new Promise((r) => setTimeout(r, 5));
+    expect(writes.length).toBe(2); // cache dropped → second initialize write
+    feed(session, {
+      type: 'control_response',
+      response: { subtype: 'success', request_id: JSON.parse(writes[1]!).request_id, response: { models: CLI_MODELS.slice(0, 2) } },
+    });
+    expect((await p2)!.models).toHaveLength(2);
+
+    const p3 = session.getModelCatalog({ force: true });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(writes.length).toBe(3); // warm cache bypassed
+    feed(session, {
+      type: 'control_response',
+      response: { subtype: 'success', request_id: JSON.parse(writes[2]!).request_id, response: { models: CLI_MODELS } },
+    });
+    expect((await p3)!.models).toHaveLength(3);
+  });
+
+  it('teardown (_rejectAllSideQuestions path) clears the cache', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    await fetchWithReply(session, writes, CLI_MODELS);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any)._rejectAllSideQuestions('teardown');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((session as any)._modelCatalog).toBeNull();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+//  Turn-ledger live round-trip — SessionRunner.currentTurn() through a REAL
+//  daemon (MockDaemon), not a stubbed transport. Proves the promissory note
+//  opened by setActiveProcessing (processNext) settles with the outcome
+//  clearActiveProcessing's call sites already decide, end-to-end through the
+//  same daemon/session-manager plumbing production code uses.
+// ═══════════════════════════════════════════════════════════════════
+
+describe('SessionRunner.currentTurn — live daemon round-trip', () => {
+  let daemon: MockDaemon;
+  let runner: SessionRunner;
+
+  beforeEach(async () => {
+    daemon = await createMockDaemon();
+    runner = new SessionRunner(MOCK_CLI);
+    runner.setTestDaemonUrl(`ws://127.0.0.1:${daemon.port}`);
+    runner.init();
+  });
+
+  afterEach(async () => {
+    runner.destroyAndKill();
+    await daemon.stop();
+  });
+
+  it('currentTurn resolves with the result outcome once the real turn completes', async () => {
+    const collected = collectEvents();
+    const sessionId = 'ledger-live-task';
+
+    bus.emit(EventNames.SESSION_START, {
+      taskId: sessionId,
+      message: 'hello ledger',
+      project: 'test-proj',
+    }, ['session-runner'], { source: 'test' });
+
+    // handleStart's `this.sessions.set(mapKey, session)` runs asynchronously
+    // after SESSION_START is emitted (it's inside an async bus handler) — poll
+    // until the session object exists before awaiting its sessionReady.
+    let liveSession: ClaudeCodeSession | undefined;
+    for (let i = 0; i < 200 && !liveSession; i++) {
+      liveSession = runner.getByTaskId(sessionId);
+      if (!liveSession) await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(liveSession).toBeDefined();
+    const claudeSessionId = await liveSession!.sessionReady;
+    expect(claudeSessionId).toBeTruthy();
+
+    // By the time sessionReady resolves the FIRST turn may already be settling
+    // (init arrives before result). Wait for its result before starting a fresh,
+    // independently-observable second turn on the same session.
+    await waitForResult(collected);
+
+    // Re-drive a second turn on the SAME session and observe currentTurn
+    // transition open → settled live, through the real daemon round-trip.
+    const collected2 = collectEvents();
+    await enqueueMessage(claudeSessionId, 'second turn');
+    bus.emit(EventNames.SESSION_SEND, {
+      sessionId: claudeSessionId,
+      message: 'second turn',
+    }, ['session-runner'], { source: 'test' });
+
+    // Poll until the turn opens (processNext's setActiveProcessing runs async).
+    let openPromise: Promise<import('../../src/providers/turn-ledger.js').TurnOutcome> | undefined;
+    const pollStart = Date.now();
+    while (!openPromise && Date.now() - pollStart < 5000) {
+      openPromise = runner.currentTurn(claudeSessionId);
+      if (!openPromise) await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(openPromise).toBeDefined();
+
+    await waitForResult(collected2);
+
+    const outcome = await openPromise!;
+    expect(outcome).toEqual({ kind: 'result', isError: false });
+    // Settled — no longer open.
+    expect(runner.currentTurn(claudeSessionId)).toBeUndefined();
+  });
+
+  it('currentTurn rejects with a stopped outcome when the turn is interrupted', async () => {
+    const collected = collectEvents();
+    const sessionId = 'ledger-live-interrupt-task';
+
+    // The INITIAL spawn (SESSION_START → handleStart → session.send()) is not
+    // ledger-tracked — only the activeProcessing chokepoints (processNext /
+    // injectMidTurn, reached via SESSION_SEND) open a turn. So first let the
+    // initial turn complete, then drive a second, ledger-tracked turn we can
+    // interrupt mid-flight.
+    bus.emit(EventNames.SESSION_START, {
+      taskId: sessionId,
+      message: 'hello',
+      project: 'test-proj',
+    }, ['session-runner'], { source: 'test' });
+
+    let liveSession: ClaudeCodeSession | undefined;
+    for (let i = 0; i < 200 && !liveSession; i++) {
+      liveSession = runner.getByTaskId(sessionId);
+      if (!liveSession) await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(liveSession).toBeDefined();
+    const claudeSessionId = await liveSession!.sessionReady;
+    expect(claudeSessionId).toBeTruthy();
+    await waitForResult(collected);
+
+    const collected2 = collectEvents();
+    await enqueueMessage(claudeSessionId, 'slow:2000 second turn');
+    bus.emit(EventNames.SESSION_SEND, {
+      sessionId: claudeSessionId,
+      message: 'slow:2000 second turn',
+    }, ['session-runner'], { source: 'test' });
+
+    // Poll until the second turn opens (processNext's setActiveProcessing).
+    let openPromise: Promise<import('../../src/providers/turn-ledger.js').TurnOutcome> | undefined;
+    const pollStart = Date.now();
+    while (!openPromise && Date.now() - pollStart < 5000) {
+      openPromise = runner.currentTurn(claudeSessionId);
+      if (!openPromise) await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(openPromise).toBeDefined();
+
+    bus.emit(EventNames.SESSION_SEND, {
+      sessionId: claudeSessionId,
+      message: '',
+      interrupt: true,
+    }, ['session-runner'], { source: 'test' });
+
+    const outcome = await openPromise!;
+    expect(outcome).toEqual({ kind: 'stopped' });
+
+    // Drain the still-running mock CLI's eventual result so it doesn't leak
+    // into the next test's bus subscribers.
+    await waitForResult(collected2).catch(() => {});
+  }, 20_000);
 });

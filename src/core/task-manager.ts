@@ -2028,6 +2028,26 @@ export async function updateSummary(idPrefix: string, content: string): Promise<
 /**
  * Get a single task by partial ID match.
  */
+/**
+ * Batch lookup by exact ids, predicate pushed into SQL. For periodic callers
+ * (health monitor) that only need the tasks referenced by their active session
+ * set — avoids materializing the whole store per tick.
+ */
+export async function listTasksByIds(ids: string[]): Promise<Task[]> {
+  if (ids.length === 0) return [];
+  await ensureInit();
+  const db = getDb()!;
+  const out: Task[] = [];
+  // SQLite parameter limit is 999; chunk defensively.
+  for (let i = 0; i < ids.length; i += 500) {
+    const chunk = ids.slice(i, i + 500);
+    const placeholders = chunk.map(() => '?').join(',');
+    const rows = db.prepare(`SELECT * FROM tasks WHERE id IN (${placeholders})`).all(...chunk) as Record<string, any>[];
+    for (const row of rows) out.push(rowToTask(row));
+  }
+  return out;
+}
+
 export async function getTask(idPrefix: string): Promise<Task> {
   const store = await readStore();
   const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));

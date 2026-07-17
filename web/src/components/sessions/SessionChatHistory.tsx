@@ -1,10 +1,11 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, memo } from 'react';
+import { scrollDebugEnabled } from '@/utils/scroll-debug';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
 import { useSessionStream, type StreamingBlock } from '@/hooks/useSessionStream';
 import { useEvent } from '@/hooks/useWebSocket';
 import { useLightbox } from '@/hooks/useLightbox';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
-import { SessionMessage, PlanCard, CollapsedPlanWrite, GenericToolCall } from './SessionMessage';
+import { SessionMessage, PlanCard, CollapsedPlanWrite, GenericToolCall, TaskGroupPrompt, agentModelLabel } from './SessionMessage';
 import { dedupeOptimisticMessages } from './optimistic-dedup';
 import { computeRenderFilter, allBlocksAbsorbed, buildHistoryEvidence } from '@/stream/render-filter';
 import { TeamCard } from './TeamCard';
@@ -337,6 +338,7 @@ function StreamingTaskGroup({ taskBlock, childBlocks, orphanSubagentType, orphan
   const subagentType = taskBlock
     ? (typeof taskBlock.input?.subagent_type === 'string' ? taskBlock.input.subagent_type : '')
     : (orphanSubagentType ?? '');
+  const modelChip = agentModelLabel(taskBlock?.input);
   const isDone = taskBlock?.status === 'done';
   const isError = taskBlock?.status === 'error';
   const toolCount = childBlocks.filter(b => b.type === 'tool_call').length;
@@ -350,6 +352,7 @@ function StreamingTaskGroup({ taskBlock, childBlocks, orphanSubagentType, orphan
         </span>
         <span className="task-group-label">{taskBlock ? taskBlock.name : 'Agent'}</span>
         {subagentType && <span className="task-group-agent-type">{subagentType}</span>}
+        {modelChip && <span className="task-group-model">{modelChip}</span>}
         <span className="task-group-description">{description}</span>
         {!open && toolCount > 0 && (
           <span className="task-group-badge">{toolCount} tool{toolCount !== 1 ? 's' : ''}</span>
@@ -358,6 +361,7 @@ function StreamingTaskGroup({ taskBlock, childBlocks, orphanSubagentType, orphan
       </button>
       {open && (
         <div className="task-group-body">
+          {taskBlock && <TaskGroupPrompt input={taskBlock.input} />}
           {childBlocks.map((child, ci) => (
             <StreamingBlockView key={ci} block={child} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
           ))}
@@ -846,8 +850,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const ignoreScrollUntil = useRef(0);
 
   // ── Scroll debug logging (persisted via browser-logger → walnut logs -s browser) ──
+  // Gated: every call is a console.log that the browser-logger forwards to the
+  // server — on hot scroll/resize paths this amplifies main-thread starvation.
   const sid8 = sessionId.substring(0, 8);
   const scrollLog = useCallback((layer: string, action: string, el?: HTMLElement | null) => {
+    if (!scrollDebugEnabled()) return;
     if (el) {
       const top = Math.round(el.scrollTop);
       const ch = Math.round(el.clientHeight);

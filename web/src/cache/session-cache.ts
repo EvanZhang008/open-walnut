@@ -342,20 +342,17 @@ function registerGlobalListeners(): void {
     state.completedLen = state.blocks.length; // error ends the turn
   });
 
-  // ── batch-completed (turn wrote to JSONL, streaming blocks are now history) ──
-  wsClient.onEvent('session:batch-completed', (data: unknown) => {
-    const sid = (data as { sessionId?: string })?.sessionId;
-    if (!sid || !trackedSessions.has(sid)) return;
-
-    // Delta fetch: ask only for messages after what we've cached. The response is
-    // the absorption evidence — a few KB, not the full 6.4MB payload. If the archive
-    // hasn't flushed yet the delta is empty and gcAbsorbedBlocks is a safe no-op
-    // (blocks stay, retried on the next batch-completed / when the column opens).
-    if (inflightBgFetches.has(sid)) return;
+  // Shared delta refresh — used by batch-completed AND the reconnect sweep.
+  // Delta fetch: ask only for messages after what we've cached. The response is
+  // the absorption evidence — a few KB, not the full 6.4MB payload. If the archive
+  // hasn't flushed yet the delta is empty and gcAbsorbedBlocks is a safe no-op
+  // (blocks stay, retried on the next batch-completed / when the column opens).
+  function deltaRefreshHistory(sid: string): Promise<void> {
+    if (inflightBgFetches.has(sid)) return Promise.resolve();
     inflightBgFetches.add(sid);
     const cached = historyCache.get(sid);
     const since = cached?.msgCount ?? 0;
-    fetchSessionHistory(sid, { since })
+    return fetchSessionHistory(sid, { since })
       .then((r) => {
         // GC streaming blocks proven present in history (memory bound for
         // background sessions — correctness lives in the render filter).
@@ -401,10 +398,27 @@ function registerGlobalListeners(): void {
       })
       .catch((err) => log.warn('session-cache', 'bg history fetch failed', { sid, error: String(err) }))
       .finally(() => inflightBgFetches.delete(sid));
+  }
+
+  // ── batch-completed (turn wrote to JSONL, streaming blocks are now history) ──
+  wsClient.onEvent('session:batch-completed', (data: unknown) => {
+    const sid = (data as { sessionId?: string })?.sessionId;
+    if (!sid || !trackedSessions.has(sid)) return;
+    void deltaRefreshHistory(sid);
   });
 
   // ── WS reconnect — refresh all tracked sessions ──
+  // Debounced: WS can flap (disconnect→connect within seconds); refreshing up to
+  // 20 sessions per flap starves the main thread. Coalesce rapid reconnects.
+  let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   wsClient.onEvent('_ws:reconnected', () => {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(() => {
+      void refreshAllOnReconnect();
+    }, 1_000);
+  });
+
+  async function refreshAllOnReconnect(): Promise<void> {
     log.info(
       'session-cache',
       `ws reconnected, refreshing ${trackedSessions.size} sessions`,
@@ -418,23 +432,17 @@ function registerGlobalListeners(): void {
           if (snap) initStreamState(sid, snap.blocks, snap.isStreaming, snap.completedLen);
         })
         .catch(() => {});
-
-      // Refresh history (may have missed batch-completed during disconnect)
-      if (!inflightBgFetches.has(sid)) {
-        inflightBgFetches.add(sid);
-        fetchSessionHistory(sid)
-          .then((r) =>
-            historyCacheSet(sid, {
-              messages: r.messages,
-              forkBoundaryIndex: r.forkBoundaryIndex,
-              msgCount: r.messages.length,
-            }),
-          )
-          .catch((err) => log.warn('session-cache', 'bg history fetch failed', { sid, error: String(err) }))
-          .finally(() => inflightBgFetches.delete(sid));
-      }
     }
-  });
+    // History refresh: SEQUENTIAL delta fetches, not a parallel full-fetch burst.
+    // The old code fired N full (multi-MB) fetches at once — decoding them
+    // back-to-back was a measured 40-60s main-thread freeze (Window A,
+    // starvation report 2026-07-15). Delta + one-at-a-time keeps each turn small;
+    // the length-mismatch guard inside deltaRefreshHistory still rebuilds any
+    // session whose cached prefix diverged during the disconnect.
+    for (const sid of trackedSessions) {
+      await deltaRefreshHistory(sid).catch(() => {});
+    }
+  }
 }
 
 // Auto-register on import

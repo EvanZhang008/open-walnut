@@ -170,3 +170,35 @@ describe('end-to-end simulated stream', () => {
     expect(blocks[0].type).toBe('text');
   });
 });
+
+describe('parseClaudeJsonlLine: result-line usage extraction', () => {
+  it('surfaces token usage from the result line', () => {
+    let captured: { usage?: unknown; costUsd?: number } | undefined;
+    parseClaudeJsonlLine(line({
+      type: 'result',
+      subtype: 'success',
+      result: 'done',
+      total_cost_usd: 0.0012,
+      usage: {
+        input_tokens: 123,
+        output_tokens: 45,
+        cache_creation_input_tokens: 10,
+        cache_read_input_tokens: 5,
+      },
+    }), { onResult: (r) => { captured = r; } });
+    expect(captured?.usage).toEqual({
+      input_tokens: 123,
+      output_tokens: 45,
+      cache_creation_input_tokens: 10,
+      cache_read_input_tokens: 5,
+    });
+    expect(captured?.costUsd).toBe(0.0012);
+  });
+
+  it('leaves usage undefined when the result line has none', () => {
+    let captured: { usage?: unknown } | undefined;
+    parseClaudeJsonlLine(line({ type: 'result', subtype: 'success', result: 'ok' }),
+      { onResult: (r) => { captured = r; } });
+    expect(captured?.usage).toBeUndefined();
+  });
+});

@@ -57,13 +57,16 @@ struct WalnutAPI {
         return try await get(path)
     }
 
-    /// POST a message; returns the turnId from the 202 response.
+    /// POST a message; returns the turnId from the 202 response. `images` is an
+    /// additive field (≤5 base64 JPEG/PNG) — omitted when empty so older servers
+    /// and image-free sends behave exactly as before.
     /// Throws APIError.server(code: "turn_active") when a turn is already running.
-    func sendMessage(conversationID: String, agentID: String = "general", text: String) async throws -> String {
+    func sendMessage(conversationID: String, agentID: String = "general", text: String, images: [ImagePayload] = []) async throws -> String {
+        struct Body: Encodable { let text: String; let agentId: String; let images: [ImagePayload]? }
         struct Accepted: Codable { let turnId: String }
         let accepted: Accepted = try await send(
             "POST", "/conversations/\(escape(conversationID))/messages",
-            body: ["text": text, "agentId": agentID]
+            body: Body(text: text, agentId: agentID, images: images.isEmpty ? nil : images)
         )
         return accepted.turnId
     }
@@ -90,13 +93,32 @@ struct WalnutAPI {
 
     /// Send text INTO a live session; returns the queued messageId (202).
     /// Distinct error codes callers act on: 404 not_found, 503 bridge_offline
-    /// (no live bridge to the session's host), 409 session_dead (CLI gone).
-    func sendSessionMessage(id: String, text: String) async throws -> String {
+    /// (no live bridge to the session's host), 409 session_dead (CLI gone),
+    /// 400 images_not_supported_cloud (attached images can't reach a CLI that
+    /// runs on another machine — only the Mac-online path accepts them).
+    /// `images` is additive (≤5 base64 JPEG/PNG), omitted when empty.
+    func sendSessionMessage(id: String, text: String, images: [ImagePayload] = []) async throws -> String {
+        struct Body: Encodable { let text: String; let images: [ImagePayload]? }
         struct Accepted: Codable { let messageId: String }
         let accepted: Accepted = try await send(
-            "POST", "/sessions/\(escape(id))/messages", body: ["text": text]
+            "POST", "/sessions/\(escape(id))/messages",
+            body: Body(text: text, images: images.isEmpty ? nil : images)
         )
         return accepted.messageId
+    }
+
+    /// Voice input: upload recorded audio, get the recognized text back.
+    /// The server picks the engine (local whisper on the primary box, bridge
+    /// relay to it from the cloud, or OpenAI fallback). Long timeout — a cold
+    /// whisper model load plus a 60s clip can take a while.
+    func transcribe(audio: Data, format: String, language: String? = nil) async throws -> String {
+        struct Result: Codable { let text: String }
+        var body: [String: String] = ["audio": audio.base64EncodedString(), "format": format]
+        if let language { body["language"] = language }
+        let result: Result = try await sendAbsolute(
+            "POST", "/api/v1/stt/transcribe", body: body, timeout: 120
+        )
+        return result.text
     }
 
     /// Authenticated SSE URL for a session's live turn stream (nil if unpaired).

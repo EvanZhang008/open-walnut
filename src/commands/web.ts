@@ -137,8 +137,11 @@ async function runEphemeralLauncher(): Promise<void> {
 
   // 5. Spawn detached child
   const binPath = process.argv[1]
+  // Ephemeral identity travels via the --_ephemeral-child argv flag ONLY (see
+  // IS_EPHEMERAL in constants.ts). No env marker: env inherits down the whole
+  // process tree and has twice poisoned shared daemons + prod servers.
   const child = spawn(process.execPath, [binPath, 'web', '--_ephemeral-child'], {
-    env: { ...process.env, OPEN_WALNUT_HOME: tmpDir, OPEN_WALNUT_EPHEMERAL: '1' },
+    env: { ...process.env, OPEN_WALNUT_HOME: tmpDir },
     stdio: 'ignore',  // No pipes — no SIGPIPE risk
     detached: true,
   })

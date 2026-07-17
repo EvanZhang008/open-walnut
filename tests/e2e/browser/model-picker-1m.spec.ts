@@ -1,21 +1,18 @@
 /**
- * Playwright browser test: ModelPicker 1M variant rendering.
+ * Playwright browser test: ModelPicker catalog-driven rendering.
  *
- * Tests that the ModelPicker UI correctly renders all 5 model options
- * including the 1M context window variants (Opus 1M, Sonnet 1M).
+ * The picker's rows come from GET /api/sessions/:id/models — the session's TRUE
+ * selectable catalog (CLI initialize response), falling back to the static
+ * SESSION_MODELS registry when the CLI can't answer.
  *
- * This validates the MODEL_CLI_MAP fix:
- *   - 'opus-1m'   -> 'opus[1m]'  (was broken: used full model ID + [1m])
- *   - 'sonnet-1m' -> 'sonnet[1m]' (was broken)
- *   - Non-1M models pass through as aliases (opus, sonnet, haiku)
- *
- * Tests:
- *  1. ModelPicker renders all 5 options (Opus, Opus 1M, Sonnet, Sonnet 1M, Haiku)
- *  2. Default active model (Opus) shows "Active" badge, not action buttons
- *  3. 1M variants show "1M context window" description
- *  4. Non-active models show "Next turn" and "Now" buttons
- *  5. Clicking "Now" on a 1M variant closes the picker (switch flow works)
- *  6. Escape key closes the picker
+ * Two regimes are covered:
+ *  1. FALLBACK (real test server, mock CLI can't answer initialize):
+ *     the 7 legacy alias rows render, Switch sends the alias id.
+ *  2. CLI catalog (route intercepted with a fixed catalog): rows render from
+ *     displayName, disabled rows are greyed with no Switch, the active row is
+ *     matched via resolvedModel, an out-of-catalog live model yields a
+ *     synthetic non-clickable "Active" row, and Switch POSTs the row's VALUE
+ *     (full provider ID) — the load-bearing contract of the whole feature.
  *
  * Requires seed data in test-server.ts:
  *  - Task: pw-task-model-switch (in_progress, with session)
@@ -25,47 +22,52 @@ import { test, expect } from '@playwright/test'
 import path from 'node:path'
 
 const SCREENSHOT_DIR = '/tmp/test-and-verify'
+const SESSION_ID = 'pw-model-switch-session'
 
-/**
- * Opens the SessionPanel for the model-switch test task.
- *
- * Strategy: navigate to home → "All" tab → find the task row →
- * click the SessionPill on the task row (which opens the SessionPanel inline).
- *
- * The SessionPill is always visible on the task row for tasks with sessions,
- * regardless of whether the TaskDetailPane has finished loading session records.
- */
+/** A CLI-shaped catalog (2.1.199 initialize response, trimmed) used by the
+ *  interception tests: one default row, one enabled row, one disabled row. */
+const CLI_CATALOG = {
+  source: 'cli',
+  live: true,
+  fetchedAt: new Date(0).toISOString(),
+  models: [
+    { value: 'default', resolvedModel: 'global.anthropic.claude-fable-5', displayName: 'Default' },
+    {
+      value: 'global.anthropic.claude-fable-5',
+      resolvedModel: 'global.anthropic.claude-fable-5',
+      displayName: 'Fable', description: 'Fast & capable',
+      supportsEffort: true, supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    },
+    {
+      value: 'global.anthropic.claude-opus-4-8[1m]',
+      resolvedModel: 'global.anthropic.claude-opus-4-8[1m]',
+      displayName: 'Opus (1M context)', description: 'Restricted example',
+      disabled: true,
+    },
+  ],
+}
+
 async function openSessionPanel(page: import('@playwright/test').Page) {
+  // Category tabs moved into the View dropdown; the persisted tab defaults to ★
+  // (starred), which hides the seeded task. Preset it to '' (All) up front.
+  await page.addInitScript(() => {
+    try { localStorage.setItem('walnut-todo-active-tab', '') } catch { /* ignore */ }
+  })
   await page.goto('/')
   await page.waitForLoadState('networkidle')
 
-  // Click "All" category tab to show all tasks
-  const allTab = page.locator('.todo-panel-tab', { hasText: 'All' })
-  await expect(allTab).toBeVisible({ timeout: 5000 })
-  await allTab.click()
-  await page.waitForTimeout(300)
-
-  // Find the task row
-  const taskItem = page.locator('.todo-panel-item', { hasText: 'Model switch test task' })
+  // Plain click on a task row with a session opens the SessionPanel inline.
+  const taskItem = page.locator('.todo-panel-item', { hasText: 'Model switch test task' }).first()
   await expect(taskItem).toBeVisible({ timeout: 5000 })
+  await taskItem.click()
+  await page.waitForTimeout(500)
 
-  // Click the SessionPill on the task row — this opens SessionPanel inline
-  const sessionPill = taskItem.locator('.task-session-pill')
-  await expect(sessionPill).toBeVisible({ timeout: 3000 })
-  await sessionPill.click()
-  await page.waitForTimeout(1000)
-
-  // Verify the SessionPanel is open with its chat input
   const sessionPanelInput = page.locator('.session-panel .chat-input-textarea')
   await expect(sessionPanelInput).toBeVisible({ timeout: 5000 })
 
   return sessionPanelInput
 }
 
-/**
- * Types /m in the session chat input and selects the /model command from the palette.
- * Returns after the ModelPicker is visible.
- */
 async function openModelPicker(page: import('@playwright/test').Page, input: import('@playwright/test').Locator) {
   await input.focus()
   await input.fill('/m')
@@ -74,10 +76,8 @@ async function openModelPicker(page: import('@playwright/test').Page, input: imp
   const palette = page.locator('.session-panel .command-palette')
   await expect(palette).toBeVisible({ timeout: 3000 })
 
-  // Use the control-specific class to find /model (avoids matching other items with "model" in text)
   const modelItem = palette.locator('.command-palette-item.command-palette-control', { hasText: 'model' })
   await expect(modelItem).toBeVisible({ timeout: 3000 })
-  // CommandPalette uses onMouseDown, not onClick
   await modelItem.dispatchEvent('mousedown')
   await page.waitForTimeout(300)
 
@@ -87,144 +87,207 @@ async function openModelPicker(page: import('@playwright/test').Page, input: imp
   return modelPicker
 }
 
-// ── Tests ──
+/** Intercept the catalog route with a fixed CLI-shaped catalog. */
+async function interceptCatalog(page: import('@playwright/test').Page, body: unknown) {
+  await page.route(`**/api/sessions/${SESSION_ID}/models*`, (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) }))
+}
 
-test.describe('ModelPicker 1M Variants', () => {
-  test('renders all 5 model options including 1M variants', async ({ page }) => {
+/** Intercept the live-settings pull so the "live" model is deterministic. */
+async function interceptLiveSettings(page: import('@playwright/test').Page, appliedModel: string | null) {
+  await page.route(`**/api/sessions/${SESSION_ID}/settings*`, (route) =>
+    route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({
+        live: appliedModel !== null,
+        requested: { model: appliedModel ?? undefined },
+        applied: appliedModel !== null ? { model: appliedModel, effort: null, mode: null } : null,
+      }),
+    }))
+}
+
+// ── Regime 1: FALLBACK (no interception — real server, CLI can't answer) ──
+
+test.describe('ModelPicker fallback registry', () => {
+  test('renders all 7 legacy rows including 1M variants', async ({ page }) => {
     const input = await openSessionPanel(page)
     const picker = await openModelPicker(page, input)
 
-    // Should have exactly 5 model options
     const options = picker.locator('.model-picker-option')
-    await expect(options).toHaveCount(5)
+    await expect(options).toHaveCount(7)
 
-    // Verify all 5 option labels in correct order
     const names = picker.locator('.model-picker-option-name')
     await expect(names.nth(0)).toHaveText('Opus')
     await expect(names.nth(1)).toHaveText('Opus 1M')
     await expect(names.nth(2)).toHaveText('Sonnet')
     await expect(names.nth(3)).toHaveText('Sonnet 1M')
     await expect(names.nth(4)).toHaveText('Haiku')
+    await expect(names.nth(5)).toHaveText('Fable')
+    await expect(names.nth(6)).toHaveText('Fable 1M')
 
-    // Screenshot: all 5 options visible
-    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'model-picker-all-5-options.png') })
+    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'model-picker-fallback-7-options.png') })
   })
 
-  test('1M variants show correct description', async ({ page }) => {
+  test('Switch in fallback mode sends the legacy alias id', async ({ page }) => {
     const input = await openSessionPanel(page)
     const picker = await openModelPicker(page, input)
 
-    // Verify descriptions for each model
-    const descs = picker.locator('.model-picker-option-desc')
-    await expect(descs.nth(0)).toHaveText('Most capable')
-    await expect(descs.nth(1)).toHaveText('1M context window')
-    await expect(descs.nth(2)).toHaveText('Balanced')
-    await expect(descs.nth(3)).toHaveText('1M context window')
-    await expect(descs.nth(4)).toHaveText('Fastest')
-  })
+    const [req] = await Promise.all([
+      page.waitForRequest((r) => r.url().includes(`/api/sessions/${SESSION_ID}/model`) && r.method() === 'POST'),
+      picker.locator('.model-picker-option').filter({ hasText: 'Fastest' })
+        .locator('.model-picker-btn').click(),
+    ])
+    expect(req.postDataJSON()).toEqual({ model: 'haiku' })
 
-  test('default model (Opus) is marked Active', async ({ page }) => {
-    const input = await openSessionPanel(page)
-    const picker = await openModelPicker(page, input)
-
-    // Opus should be the active model (default for new sessions)
-    const activeOption = picker.locator('.model-picker-option-active')
-    await expect(activeOption).toHaveCount(1)
-    await expect(activeOption.locator('.model-picker-option-name')).toHaveText('Opus')
-    await expect(activeOption.locator('.model-picker-option-badge')).toHaveText('Active')
-
-    // Active option should NOT have action buttons
-    const activeButtons = activeOption.locator('.model-picker-option-actions')
-    await expect(activeButtons).toHaveCount(0)
-  })
-
-  test('non-active models show Next turn and Now buttons', async ({ page }) => {
-    const input = await openSessionPanel(page)
-    const picker = await openModelPicker(page, input)
-
-    // Check all 4 non-active models have buttons.
-    // Use description text to disambiguate models with similar names (Sonnet vs Sonnet 1M).
-    const modelFilters = [
-      { name: 'Opus 1M', desc: 'Opus 1M' },
-      { name: 'Sonnet', desc: 'Balanced' },
-      { name: 'Sonnet 1M', desc: 'Sonnet 1M' },
-      { name: 'Haiku', desc: 'Fastest' },
-    ]
-    for (const { name, desc } of modelFilters) {
-      const option = picker.locator('.model-picker-option').filter({ hasText: desc })
-      await expect(option.locator('.model-picker-option-name')).toContainText(name)
-      const btn = option.locator('.model-picker-btn')
-      await expect(btn).toBeVisible()
-      await expect(btn).toHaveText('Next turn')
-      const btnImmediate = option.locator('.model-picker-btn-immediate')
-      await expect(btnImmediate).toBeVisible()
-      await expect(btnImmediate).toHaveText('Now')
-    }
-
-    // Screenshot: buttons visible on non-active models
-    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'model-picker-buttons-visible.png') })
-  })
-
-  test('clicking Now on Opus 1M closes the picker', async ({ page }) => {
-    const input = await openSessionPanel(page)
-    const picker = await openModelPicker(page, input)
-
-    // Find Opus 1M specifically — filter by description to disambiguate from "Opus"
-    const opus1mOption = picker.locator('.model-picker-option').filter({ hasText: '1M context window' }).first()
-    await expect(opus1mOption.locator('.model-picker-option-name')).toHaveText('Opus 1M')
-
-    // Click "Now" button
-    await opus1mOption.locator('.model-picker-btn-immediate').click()
-
-    // Picker should close
     await expect(picker).toBeHidden({ timeout: 3000 })
-
-    // Screenshot: after Opus 1M switch
-    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'model-picker-opus-1m-switch.png') })
-  })
-
-  test('clicking Next turn on Sonnet 1M closes the picker', async ({ page }) => {
-    const input = await openSessionPanel(page)
-    const picker = await openModelPicker(page, input)
-
-    // Find Sonnet 1M specifically
-    const sonnet1mOption = picker.locator('.model-picker-option').filter({ hasText: 'Sonnet 1M' })
-    await expect(sonnet1mOption.locator('.model-picker-option-name')).toHaveText('Sonnet 1M')
-
-    // Click "Next turn" button
-    await sonnet1mOption.locator('.model-picker-btn').click()
-
-    // Picker should close
-    await expect(picker).toBeHidden({ timeout: 3000 })
-
-    // Screenshot: after Sonnet 1M deferred switch
-    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'model-picker-sonnet-1m-switch.png') })
   })
 
   test('Escape key closes the ModelPicker', async ({ page }) => {
     const input = await openSessionPanel(page)
     const picker = await openModelPicker(page, input)
-
-    // Verify picker is open
     await expect(picker).toBeVisible()
-
-    // Press Escape
     await page.keyboard.press('Escape')
-
-    // Picker should close
     await expect(picker).toBeHidden({ timeout: 3000 })
   })
+})
 
-  test('header shows Current model label', async ({ page }) => {
+// ── Regime 2: CLI catalog (route intercepted) ──
+
+test.describe('ModelPicker CLI catalog', () => {
+  test('renders catalog rows; disabled row greyed with no Switch; active via resolvedModel', async ({ page }) => {
+    await interceptCatalog(page, CLI_CATALOG)
+    // Live model = fable full ID → matches the SPECIFIC Fable row (not 'default',
+    // which shares the same resolvedModel — tier-2 beats tier-3).
+    await interceptLiveSettings(page, 'global.anthropic.claude-fable-5')
+
     const input = await openSessionPanel(page)
     const picker = await openModelPicker(page, input)
 
-    // The header shows "Current: opus" (normalizeModelId default)
-    const currentLabel = picker.locator('.model-picker-current')
-    await expect(currentLabel).toBeVisible()
-    await expect(currentLabel).toContainText('Current:')
+    const options = picker.locator('.model-picker-option')
+    await expect(options).toHaveCount(3)
 
-    // Screenshot: header with current model
+    const names = picker.locator('.model-picker-option-name')
+    await expect(names.nth(0)).toHaveText('Default')
+    await expect(names.nth(1)).toHaveText('Fable')
+    await expect(names.nth(2)).toHaveText('Opus (1M context)')
+
+    // Active row = Fable (resolvedModel match on the non-default row).
+    const active = picker.locator('.model-picker-option-active')
+    await expect(active).toHaveCount(1)
+    await expect(active.locator('.model-picker-option-name')).toHaveText('Fable')
+    await expect(active.locator('.model-picker-option-badge')).toHaveText('Active')
+
+    // Disabled row: greyed, badge "Restricted", no Switch button.
+    const disabled = picker.locator('.model-picker-option-disabled')
+    await expect(disabled).toHaveCount(1)
+    await expect(disabled.locator('.model-picker-option-name')).toHaveText('Opus (1M context)')
+    await expect(disabled.locator('.model-picker-btn')).toHaveCount(0)
+    await expect(disabled.locator('.model-picker-option-badge-disabled')).toHaveText('Restricted')
+
+    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'model-picker-cli-catalog.png') })
+  })
+
+  test('Switch sends the catalog row VALUE (full provider ID) verbatim', async ({ page }) => {
+    await interceptCatalog(page, CLI_CATALOG)
+    // Live = opus[1m] (the disabled row) so Fable is switchable.
+    await interceptLiveSettings(page, 'global.anthropic.claude-opus-4-8[1m]')
+
+    const input = await openSessionPanel(page)
+    const picker = await openModelPicker(page, input)
+
+    const fableRow = picker.locator('.model-picker-option').filter({ hasText: 'Fast & capable' })
+    const [req] = await Promise.all([
+      page.waitForRequest((r) => r.url().includes(`/api/sessions/${SESSION_ID}/model`) && r.method() === 'POST'),
+      fableRow.locator('.model-picker-btn').click(),
+    ])
+    // THE load-bearing assertion: the body carries the value, never an alias.
+    expect(req.postDataJSON()).toEqual({ model: 'global.anthropic.claude-fable-5' })
+  })
+
+  test('out-of-catalog live model renders a synthetic non-clickable Active row', async ({ page }) => {
+    await interceptCatalog(page, CLI_CATALOG)
+    // Live model that NO catalog row claims (e.g. org tightened the allowlist
+    // mid-session): the picker must show it truthfully with no row selected.
+    await interceptLiveSettings(page, 'us.anthropic.claude-sonnet-4-6[1m]')
+
+    const input = await openSessionPanel(page)
+    const picker = await openModelPicker(page, input)
+
+    const synthetic = picker.locator('[data-testid="picker-out-of-catalog"]')
+    await expect(synthetic).toBeVisible()
+    await expect(synthetic.locator('.model-picker-option-desc'))
+      .toContainText('not in this session\'s selectable catalog')
+    await expect(synthetic.locator('.model-picker-btn')).toHaveCount(0)
+
+    // No CATALOG row is active — the synthetic row is the only active-styled one.
+    const actives = picker.locator('.model-picker-option-active')
+    await expect(actives).toHaveCount(1)
+
+    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'model-picker-out-of-catalog.png') })
+  })
+
+  test('effort buttons follow the active row supportedEffortLevels', async ({ page }) => {
+    // Catalog whose active row lacks xhigh/max — those two segments must disable.
+    const catalog = JSON.parse(JSON.stringify(CLI_CATALOG)) as typeof CLI_CATALOG
+    catalog.models[1] = {
+      ...catalog.models[1],
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high'],
+    }
+    await interceptCatalog(page, catalog)
+    await interceptLiveSettings(page, 'global.anthropic.claude-fable-5')
+
+    const input = await openSessionPanel(page)
+    const picker = await openModelPicker(page, input)
+
+    const segs = picker.locator('.model-picker-effort-seg')
+    await expect(segs).toHaveCount(5)
+    await expect(segs.nth(0)).toBeEnabled()   // low
+    await expect(segs.nth(1)).toBeEnabled()   // medium
+    await expect(segs.nth(2)).toBeEnabled()   // high
+    await expect(segs.nth(3)).toBeDisabled()  // xhigh — not in supportedEffortLevels
+    await expect(segs.nth(4)).toBeDisabled()  // max   — not in supportedEffortLevels
+  })
+
+  test('custom model input sends an out-of-catalog ID verbatim (terminal /model parity)', async ({ page }) => {
+    await interceptCatalog(page, CLI_CATALOG)
+    await interceptLiveSettings(page, 'global.anthropic.claude-fable-5')
+
+    const input = await openSessionPanel(page)
+    const picker = await openModelPicker(page, input)
+
+    const custom = picker.locator('[data-testid="picker-custom-model"]')
+    await expect(custom).toBeVisible()
+    const customInput = custom.locator('.model-picker-custom-input')
+    const customBtn = custom.locator('.model-picker-btn')
+
+    // Garbage (quotes/space) → shape check fails → button disabled.
+    await customInput.fill('bad "model"')
+    await expect(customBtn).toBeDisabled()
+
+    // A valid provider-ID-shaped string NOT in the catalog (the fable-1m
+    // Bedrock registry gap) → enabled → POSTs verbatim.
+    await customInput.fill('global.anthropic.claude-fable-5[1m]')
+    await expect(customBtn).toBeEnabled()
+    const [req] = await Promise.all([
+      page.waitForRequest((r) => r.url().includes(`/api/sessions/${SESSION_ID}/model`) && r.method() === 'POST'),
+      customBtn.click(),
+    ])
+    expect(req.postDataJSON()).toEqual({ model: 'global.anthropic.claude-fable-5[1m]' })
+
+    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'model-picker-custom-input.png') })
+  })
+
+  test('header Current label uses the active row displayName', async ({ page }) => {
+    await interceptCatalog(page, CLI_CATALOG)
+    await interceptLiveSettings(page, 'global.anthropic.claude-fable-5')
+
+    const input = await openSessionPanel(page)
+    const picker = await openModelPicker(page, input)
+
+    const currentLabel = picker.locator('.model-picker-current')
+    await expect(currentLabel).toContainText('Current: Fable')
+
     await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'model-picker-header-current.png') })
   })
 })

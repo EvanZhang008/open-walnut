@@ -192,6 +192,38 @@ struct TasksView: View {
         }
     }
 
+    /// The Pinned scope mirrors the desktop focus bar's three tiers. Each pinned
+    /// task carries a focus_tier: `focus`, `wait`, or (default/absent) satellite.
+    /// Ordered Focus → Satellite → Wait to match the desktop reading order.
+    private enum FocusTier: String, CaseIterable {
+        case focus, satellite, wait
+        var title: String {
+            switch self {
+            case .focus: return "Focus"
+            case .satellite: return "Satellite"
+            case .wait: return "Wait"
+            }
+        }
+    }
+
+    private func tier(of session: WalnutSession) -> FocusTier {
+        switch session.focusTier {
+        case "focus": return .focus
+        case "wait": return .wait
+        default: return .satellite
+        }
+    }
+
+    /// Pinned sessions grouped by focus tier, in Focus → Satellite → Wait order,
+    /// dropping empty tiers.
+    private var pinnedTierGroups: [(tier: FocusTier, sessions: [WalnutSession])] {
+        let grouped = Dictionary(grouping: pinnedScopeSessions, by: tier)
+        return FocusTier.allCases.compactMap { t in
+            guard let rows = grouped[t], !rows.isEmpty else { return nil }
+            return (t, rows)
+        }
+    }
+
     @ViewBuilder
     private var sessionSections: some View {
         Section {
@@ -225,6 +257,17 @@ struct TasksView: View {
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
             }
+        } else if sessionScope == .pinned {
+            // Pinned mirrors the desktop focus bar: split into Focus / Satellite
+            // / Wait sub-sections (a session's tier comes from its owning task).
+            ForEach(pinnedTierGroups, id: \.tier) { group in
+                Section {
+                    ForEach(group.sessions) { session in sessionRow(session) }
+                } header: {
+                    Text("\(group.tier.title) · \(group.sessions.count)")
+                }
+            }
+            .id(sessionScope)
         } else {
             // Count in the HEADER: instant feedback that the scope switch did
             // something — the top rows of all three scopes can be identical

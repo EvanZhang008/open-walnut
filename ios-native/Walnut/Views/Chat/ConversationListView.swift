@@ -80,6 +80,10 @@ struct ConversationListView: View {
         guard let date = parser.date(from: iso)
             ?? ISO8601DateFormatter().date(from: iso)
         else { return "" }
+        // The active conversation's timestamp can be ~now or slightly ahead
+        // (server clock skew) — RelativeDateTimeFormatter renders that as the
+        // future tense "in 0s". Clamp anything under a minute to "now".
+        if abs(date.timeIntervalSinceNow) < 60 { return "now" }
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: .now)

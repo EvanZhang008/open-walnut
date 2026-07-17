@@ -20,7 +20,7 @@ import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
 import type { ImageAttachment } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
-import { fetchSession, executePlanContinue, executePlanSession, updateSession, restartSession, investigateSession, setSessionEffort, setSessionModel } from '@/api/sessions';
+import { fetchSession, executePlanContinue, executePlanSession, updateSession, restartSession, terminateSession, investigateSession, setSessionEffort, setSessionModel } from '@/api/sessions';
 import { terminalPrewarm } from '@/api/terminal';
 import { log } from '@/utils/log';
 import { buildInvestigationClip } from '@/utils/investigation-clipboard';
@@ -524,6 +524,21 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     setRestartBusy(false);
   }, [sessionId]);
 
+  const [terminateBusy, setTerminateBusy] = useState(false);
+  const handleTerminate = useCallback(async () => {
+    log.info('session-panel', 'terminate button clicked', { sessionId });
+    setTerminateBusy(true);
+    try {
+      await terminateSession(sessionId);
+    } catch (err) {
+      log.error('session-panel', 'terminate API failed', {
+        sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    setTerminateBusy(false);
+  }, [sessionId]);
+
   // Investigate — freeze an evidence bundle + open a manual incident, then copy
   // every id (session/task/incident/bundle/host) to the clipboard so the human
   // can paste them into a debug session. The chip confirms inline; the timer is
@@ -669,6 +684,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                       msgCount={historyMessages.filter(m => m.role === 'user' && m.text.trim()).length}
                       onRestart={handleRestart}
                       restartBusy={restartBusy}
+                      onTerminate={handleTerminate}
+                      terminateBusy={terminateBusy}
                       onInvestigate={handleInvestigate}
                       investigating={investigating}
                       investigateResult={investigateResult}
@@ -953,7 +970,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                 <SessionDiffView sessionId={sessionId} sessionCwd={session?.cwd} sessionHost={session?.host} onSelectCode={handleSelectCode} onComment={handleDiffComment} />
               )}
               {activeView === 'files' && (
-                <SessionFileExplorer cwd={session?.cwd} host={session?.host} />
+                <SessionFileExplorer cwd={session?.cwd} host={session?.host} sessionId={sessionId} />
               )}
               {activeView === 'terminal' && (
                 <SessionTerminal

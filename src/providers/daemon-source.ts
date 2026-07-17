@@ -821,7 +821,7 @@ function decodeFrame(buf) {
 // compromised-cloud-box escalation attempt (fs.write/start/bridge.configure/…)
 // and is rejected; those stay reachable only over the trusted SSH path.
 var BRIDGE_ALLOWED_COMMANDS = new Set([
-  'status', 'appendUserMarker', 'send', 'attach', 'read-history', 'ping',
+  'status', 'appendUserMarker', 'send', 'attach', 'read-history', 'ping', 'bridgeResume', 'stt',
 ]);
 
 function handleCommand(ws, msg) {
@@ -863,6 +863,7 @@ function handleCommand(ws, msg) {
     case 'write-inbox': return cmdWriteInbox(ws, id, cmd);
     case 'fs.read': return cmdFsRead(ws, id, cmd);
     case 'fs.write': return cmdFsWrite(ws, id, cmd);
+    case 'fs.mkdir': return cmdFsMkdir(ws, id, cmd);
     case 'fs.ls': return cmdFsLs(ws, id, cmd);
     case 'fs.find': return cmdFsFind(ws, id, cmd);
     case 'fs.stat': return cmdFsStat(ws, id, cmd);
@@ -870,6 +871,9 @@ function handleCommand(ws, msg) {
     case 'git.diff': return cmdGitDiff(ws, id, cmd);
     case 'list': return cmdList(ws, id);
     case 'bridge.configure': return cmdBridgeConfigure(ws, id, cmd);
+    case 'bridgeResume': return cmdBridgeResume(ws, id, cmd);
+    case 'stt': return cmdSttRelay(ws, id, cmd);
+    case 'stt-result': return cmdSttResult(ws, id, cmd);
     case 'ping': return sendOk(ws, id, { pong: true });
     case 'hello': return sendOk(ws, id, {
       version: DAEMON_VERSION,
@@ -882,11 +886,128 @@ function handleCommand(ws, msg) {
   }
 }
 
+// ── Bridge-safe resume: respawn a dead session with --resume <sid> ──
+// Only {sid, message, cwd?, model?} accepted; argv is built HERE (stored args
+// patched to --resume this sid, or a fixed default claude command when the
+// record was lost to a daemon restart). Gated on the session's jsonl existing
+// in STREAMS_DIR — proof it genuinely lived on this host. Keep in sync with
+// daemon-standalone.ts.
+function cmdBridgeResume(ws, id, cmd) {
+  var sid = cmd.sid, message = cmd.message, cwdHint = cmd.cwd, model = cmd.model;
+  if (!sid || !message) {
+    return sendError(ws, id, 'bridgeResume: missing sid or message');
+  }
+
+  var session = sessions.get(sid);
+
+  if (session && session.state === 'running') {
+    return cmdSend(ws, id, { cmd: 'send', sid: sid, message: message });
+  }
+
+  var jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl');
+  if (!fs.existsSync(jsonlPath)) {
+    return sendError(ws, id, 'bridgeResume: session not found: ' + sid);
+  }
+
+  var cwd = (session && session.cwd && session.cwd !== '') ? session.cwd : cwdHint;
+  if (!cwd) {
+    return sendError(ws, id, 'bridgeResume: no cwd known for session (record lost, no hint)');
+  }
+
+  var args;
+  if (session && session.args && session.args.length > 0) {
+    args = session.args.slice();
+    var ri = args.indexOf('--resume');
+    if (ri >= 0 && ri + 1 < args.length) {
+      args[ri + 1] = sid;
+    } else {
+      args.push('--resume', sid);
+    }
+  } else {
+    args = [
+      'claude', '-p',
+      '--output-format', 'stream-json',
+      '--verbose',
+      '--include-partial-messages',
+      '--debug',
+      '--permission-mode', 'default',
+    ];
+    if (model) { args.push('--model', model); }
+    args.push('--resume', sid, '--input-format', 'stream-json', '--permission-prompt-tool', 'stdio');
+  }
+
+  logMsg('info', 'bridgeResume: respawning dead session', {
+    sid: sid, cwd: cwd, recordLost: !session || !session.args || session.args.length === 0,
+  });
+  cmdStart(ws, id, {
+    cmd: 'start',
+    sid: sid,
+    args: args,
+    cwd: cwd,
+    message: message,
+    resume: true,
+    mode: (session && session.mode) || 'default',
+  });
+}
+
+// ── STT relay: bridge audio → the connected walnut server's local engine ──
+// Keep in sync with daemon-standalone.ts. A bridge stt request is relayed as
+// an stt-request event to a TRUSTED (non-bridge) client, which transcribes
+// and answers with an stt-result command carrying the same relayId. No
+// trusted client (Mac down) → fail fast so the cloud falls back to OpenAI.
+var STT_RELAY_TIMEOUT_MS = 90000;
+var sttRelayCounter = 0;
+var sttRelayPending = new Map();
+
+function cmdSttRelay(ws, id, cmd) {
+  var audio = cmd.audio, format = cmd.format, language = cmd.language;
+  if (!audio || !format) {
+    return sendError(ws, id, 'stt: missing audio or format');
+  }
+  var target = null;
+  for (const client of wsClients) {
+    if (client.origin !== 'bridge') { target = client; break; }
+  }
+  if (!target) {
+    return sendError(ws, id, 'stt: no transcription host connected');
+  }
+  sttRelayCounter += 1;
+  var relayId = sttRelayCounter;
+  var timer = setTimeout(function () {
+    sttRelayPending.delete(relayId);
+    sendError(ws, id, 'stt: transcription timed out');
+  }, STT_RELAY_TIMEOUT_MS);
+  sttRelayPending.set(relayId, { ws: ws, id: id, timer: timer });
+  logMsg('info', 'stt: relaying to transcription host', { relayId: relayId, format: format, audioB64Len: audio.length });
+  sendEvent(target, 'stt-request', { relayId: relayId, audio: audio, format: format, language: language });
+}
+
+function cmdSttResult(ws, id, cmd) {
+  var relayId = cmd.relayId, text = cmd.text, durationMs = cmd.durationMs, error = cmd.error;
+  var pending = typeof relayId === 'number' ? sttRelayPending.get(relayId) : undefined;
+  if (!pending) {
+    return sendOk(ws, id, { stale: true });
+  }
+  sttRelayPending.delete(relayId);
+  clearTimeout(pending.timer);
+  if (typeof text === 'string' && !error) {
+    logMsg('info', 'stt: relay complete', { relayId: relayId, chars: text.length, durationMs: durationMs });
+    sendOk(pending.ws, pending.id, { text: text, durationMs: durationMs || 0 });
+  } else {
+    sendError(pending.ws, pending.id, 'stt: ' + (error || 'transcription failed'));
+  }
+  sendOk(ws, id, {});
+}
+
 // ── Start a Claude session ──
 function cmdStart(ws, id, cmd) {
   const { sid, args, cwd, message, resume, mode } = cmd;
-  if (!sid || !args || !cwd || !message) {
-    return sendError(ws, id, 'start: missing required fields (sid, args, cwd, message)');
+  // message is OPTIONAL: empty/absent spawns the CLI without writing a user turn
+  // to the FIFO — the process emits its init event (+ SessionStart hook, fresh
+  // settings/skills/MCP load) then blocks on stdin, idle. Restart-to-reinitialize
+  // path. Keep in sync with daemon-standalone.ts.
+  if (!sid || !args || !cwd) {
+    return sendError(ws, id, 'start: missing required fields (sid, args, cwd)');
   }
 
   // Replace-existing cleanup: prevents stale orphanPollTimer from the old
@@ -986,12 +1107,16 @@ function cmdStart(ws, id, cmd) {
     },
   });
 
-  // Write initial message to FIFO
-  const payload = JSON.stringify({
-    type: 'user',
-    message: { role: 'user', content: message },
-  });
-  fs.writeSync(pipeFd, Buffer.from(payload + '\\n'));
+  // Write initial message to FIFO — only when one was provided. Empty message =
+  // "spawn idle" (restart-to-reinitialize): CLI emits init but runs no turn.
+  // Keep in sync with daemon-standalone.ts.
+  if (message) {
+    const payload = JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content: message },
+    });
+    fs.writeSync(pipeFd, Buffer.from(payload + '\\n'));
+  }
   fs.closeSync(pipeFd);
 
   // Close fds in parent
@@ -1162,7 +1287,7 @@ function ensureWatcher(sid) {
       consecutiveErrors = 0;
       const batchStart = offset;
       offset = stat.size;
-      s.watcher.offset = offset; // expose for catch-up
+      if (s.watcher) s.watcher.offset = offset; // expose for catch-up
 
       const text = buf.toString('utf-8');
       const lines = text.split('\\n');
@@ -1933,6 +2058,25 @@ async function cmdFsWrite(ws, id, cmd) {
   }
 }
 
+async function cmdFsMkdir(ws, id, cmd) {
+  let dirPath = cmd.path;
+  if (!dirPath) return sendError(ws, id, 'fs.mkdir: missing path');
+
+  // Expand ~ to home directory (Node fs doesn't do shell expansion)
+  if (dirPath === '~' || dirPath.startsWith('~/')) {
+    dirPath = HOME_DIR + dirPath.slice(1);
+  }
+
+  try {
+    // recursive:true tolerates already-existing directories (idempotent)
+    await fs.promises.mkdir(dirPath, { recursive: true });
+    sendOk(ws, id, { created: true, resolvedPath: dirPath });
+  } catch (err) {
+    const code = err.code ?? '';
+    sendError(ws, id, 'fs.mkdir failed: ' + err.message + (code ? ' (' + code + ')' : ''));
+  }
+}
+
 async function cmdFsLs(ws, id, cmd) {
   let dirPath = cmd.path;
   if (!dirPath) return sendError(ws, id, 'fs.ls: missing path');
@@ -2112,7 +2256,7 @@ async function cmdGitDiff(ws, id, cmd) {
       const letter = code[0];
       if (letter === 'R' || letter === 'C') {
         const oldRel = parts[i + 1], newRel = parts[i + 2]; i += 3;
-        if (newRel) entries.push({ status: 'modified', relPath: newRel, oldRelPath: oldRel });
+        if (newRel) entries.push({ status: 'renamed', relPath: newRel, oldRelPath: oldRel });
       } else {
         const rel = parts[i + 1]; i += 2;
         if (rel) entries.push({ status: letter === 'A' ? 'added' : letter === 'D' ? 'deleted' : 'modified', relPath: rel });
@@ -2138,7 +2282,7 @@ async function cmdGitDiff(ws, id, cmd) {
         before = show.code === 0 ? show.stdout : '';
       }
       const after = e.status === 'deleted' ? '' : await readText(joinPosix(repoRoot, e.relPath));
-      files.push({ relPath: e.relPath, before: before, after: after, status: e.status });
+      files.push({ relPath: e.relPath, before: before, after: after, status: e.status, oldRelPath: e.oldRelPath });
     }
     files.sort((a, b) => a.relPath.localeCompare(b.relPath));
     sendOk(ws, id, { repoRoot: repoRoot, files: files });

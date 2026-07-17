@@ -33,6 +33,7 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
   'write-inbox',
   'fs.read',
   'fs.write',
+  'fs.mkdir',
   'fs.ls',
   'fs.find',
   'fs.stat',
@@ -44,6 +45,8 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
   'setMode',
   'appendUserMarker',
   'bridge.configure',
+  'bridgeResume',
+  'stt',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]

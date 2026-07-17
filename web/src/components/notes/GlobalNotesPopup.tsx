@@ -1,9 +1,22 @@
 import { useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { MarkdownEditorPanel } from './MarkdownEditorPanel';
+import type { RawFlushIO } from './MarkdownEditorPanel';
 import type { Editor } from '@tiptap/core';
 import type { Task } from '@open-walnut/core';
 import { ICON_COLLAPSE } from '@/components/common/Icons';
+import { fetchGlobalNotes, saveGlobalNotes } from '@/api/notes';
+
+// Raw-flush cold-start IO — same shape as PopoutGlobalNotes: the raw view's
+// fallback save goes through the legacy global endpoint, frontmatter-preserving.
+const GLOBAL_RAW_IO: RawFlushIO = {
+  read: async () => {
+    const { content, contentHash } = await fetchGlobalNotes();
+    return { content, contentHash };
+  },
+  save: (_id, content, contentHash) => saveGlobalNotes(content, contentHash),
+  splitFrontmatter: true,
+};
 
 interface GlobalNotesPopupProps {
   content: string;
@@ -43,14 +56,19 @@ export function GlobalNotesPopup({ content, onDirty, saving, onClose, tasks, foc
         <div className="notes-popup-body">
           {/* saveStatus idle — the popup header already shows its own "Saving…"
               next to the collapse button, so we don't duplicate it in the shell. */}
+          {/* Same feature set as PopoutGlobalNotes — both are full-width surfaces
+              over the same doc; wikilinks/raw were missing here by accident. */}
           <MarkdownEditorPanel
             content={content}
             onEditorUpdate={onDirty}
             saveStatus="idle"
             docId="notes/global"
             autoFocus
+            enableWikiLinks
             enableBlockTools
             showWidthToggle
+            showRawToggle
+            rawFlushIO={GLOBAL_RAW_IO}
             tasks={tasks}
             focusedTaskId={focusedTaskId}
             onTaskClick={onTaskClick}

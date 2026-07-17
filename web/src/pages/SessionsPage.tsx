@@ -431,7 +431,7 @@ export function SessionsPage() {
                 <SessionDiffView sessionId={selectedId} sessionCwd={selectedSession?.cwd} sessionHost={selectedSession?.host} onSelectCode={handleSelectCode} onComment={handleDiffComment} />
               )}
               {activeView === 'files' && (
-                <SessionFileExplorer cwd={selectedSession?.cwd} host={selectedSession?.host} />
+                <SessionFileExplorer cwd={selectedSession?.cwd} host={selectedSession?.host} sessionId={selectedId} />
               )}
               {activeView === 'terminal' && (
                 <SessionTerminal

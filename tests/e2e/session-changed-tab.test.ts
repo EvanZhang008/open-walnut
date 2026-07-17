@@ -108,4 +108,54 @@ describe('Session Changed view — GET /changes (live server)', () => {
     const res = await fetch(apiUrl('/api/sessions/does-not-exist/changes'))
     expect(res.status).toBe(404)
   })
+
+  // The reported bug: only Edit/Write showed; files moved/deleted via Bash didn't.
+  it('surfaces a Bash `git mv` rename and an `rm` delete through the live server', async () => {
+    const { execFileSync } = await import('node:child_process')
+    // A REAL git repo so the delete's before can be recovered via `git show`.
+    const repo = path.join(os.tmpdir(), `walnut-changed-e2e-bash-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+    await fs.mkdir(repo, { recursive: true })
+    execFileSync('git', ['-C', repo, 'init', '-q'])
+    execFileSync('git', ['-C', repo, 'config', 'user.email', 't@t'])
+    execFileSync('git', ['-C', repo, 'config', 'user.name', 't'])
+    await fs.writeFile(path.join(repo, 'old-name.md'), '# doc\n')
+    await fs.writeFile(path.join(repo, 'trash.txt'), 'delete me\n')
+    execFileSync('git', ['-C', repo, 'add', '.'])
+    execFileSync('git', ['-C', repo, 'commit', '-qm', 'init'])
+    // Session moved one file and deleted the other via Bash.
+    await fs.rename(path.join(repo, 'old-name.md'), path.join(repo, 'renamed.md'))
+    await fs.rm(path.join(repo, 'trash.txt'))
+
+    const bashSid = 'changed-e2e-bash-sid'
+    await createSessionRecord(bashSid, 'changed-task-bash', 'TestProject', repo)
+    const dir = path.join(CLAUDE_HOME, 'projects', encodeProjectPath(repo))
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(path.join(dir, `${bashSid}.jsonl`), [
+      { type: 'user', cwd: repo, message: { role: 'user', content: 'reorg' } },
+      {
+        type: 'assistant', cwd: repo, timestamp: '2025-01-01T00:00:00Z',
+        message: {
+          id: 'a1', role: 'assistant',
+          content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: `cd ${repo} && git mv old-name.md renamed.md && rm trash.txt` } }],
+        },
+      },
+    ].map(l => JSON.stringify(l)).join('\n'))
+
+    const res = await fetch(apiUrl(`/api/sessions/${bashSid}/changes`))
+    expect(res.status).toBe(200)
+    const body = await res.json() as { groups: Array<{ files: Array<{ relPath: string; status: string; oldRelPath?: string; before: string; after: string }> }> }
+    const files = body.groups.flatMap(g => g.files)
+    const renamed = files.find(f => f.relPath === 'renamed.md')
+    expect(renamed).toBeDefined()
+    expect(renamed!.status).toBe('renamed')
+    expect(renamed!.oldRelPath).toBe('old-name.md')
+
+    const deleted = files.find(f => f.relPath === 'trash.txt')
+    expect(deleted).toBeDefined()
+    expect(deleted!.status).toBe('deleted')
+    expect(deleted!.after).toBe('')
+    expect(deleted!.before).toBe('delete me\n') // recovered from git HEAD
+
+    await fs.rm(repo, { recursive: true, force: true }).catch(() => {})
+  })
 })

@@ -32,7 +32,7 @@ vi.mock('../../src/core/config-manager.js', () => ({
 
 import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js';
 import { IntegrationRegistry } from '../../src/core/integration-registry.js';
-import { loadPlugins } from '../../src/core/integration-loader.js';
+import { loadPlugins, getUnconfiguredPlugins } from '../../src/core/integration-loader.js';
 import { getConfig } from '../../src/core/config-manager.js';
 
 // ── Helpers ──
@@ -225,5 +225,79 @@ export default function register(api) {
     await loadPlugins(registry);
 
     expect(registry.has('no-sync')).toBe(false);
+  });
+
+  it('records plugin with missing required config as unconfigured (with schema + uiHints)', async () => {
+    const pluginDir = path.join(tmpDir, 'plugins', 'needs-config');
+    await writeManifest(pluginDir, {
+      id: 'needs-config',
+      name: 'Needs Config',
+      configSchema: {
+        type: 'object',
+        properties: { room_id: { type: 'string' } },
+        required: ['room_id'],
+      },
+      uiHints: {
+        room_id: { label: 'Room ID', help: 'Find it at https://example.com/rooms' },
+      },
+    });
+    await writePluginTs(pluginDir, `
+export default function register(api) {
+  api.registerSync(${NOOP_SYNC_SOURCE});
+}
+`);
+
+    const registry = new IntegrationRegistry();
+    await loadPlugins(registry);
+
+    // Not loaded — required room_id absent from config
+    expect(registry.has('needs-config')).toBe(false);
+
+    // But surfaced for the Settings UI with exactly what's missing
+    const unconfigured = getUnconfiguredPlugins();
+    const entry = unconfigured.find(p => p.id === 'needs-config');
+    expect(entry).toBeDefined();
+    expect(entry!.missing).toEqual(['room_id']);
+    expect(entry!.uiHints?.room_id?.help).toContain('https://example.com/rooms');
+    expect((entry!.configSchema as any)?.required).toEqual(['room_id']);
+  });
+
+  it('clears unconfigured list once required config is provided', async () => {
+    const pluginDir = path.join(tmpDir, 'plugins', 'now-configured');
+    await writeManifest(pluginDir, {
+      id: 'now-configured',
+      name: 'Now Configured',
+      configSchema: {
+        type: 'object',
+        properties: { room_id: { type: 'string' } },
+        required: ['room_id'],
+      },
+    });
+    await writePluginTs(pluginDir, `
+export default function register(api) {
+  api.registerSync(${NOOP_SYNC_SOURCE});
+}
+`);
+
+    // First load: missing config → unconfigured
+    const registry1 = new IntegrationRegistry();
+    await loadPlugins(registry1);
+    expect(getUnconfiguredPlugins().some(p => p.id === 'now-configured')).toBe(true);
+
+    // Provide the required field and reload
+    vi.mocked(getConfig).mockResolvedValue({
+      version: 1,
+      user: { name: 'test' },
+      defaults: { priority: 'none', category: 'Inbox' },
+      provider: { type: 'bedrock' },
+      plugins: { 'now-configured': { room_id: 'abc-123' } },
+    } as any);
+
+    const registry2 = new IntegrationRegistry();
+    await loadPlugins(registry2);
+    expect(registry2.has('now-configured')).toBe(true);
+    expect(getUnconfiguredPlugins().some(p => p.id === 'now-configured')).toBe(false);
+    // Loaded plugin carries its manifest schema for the settings form
+    expect((registry2.get('now-configured')!.configSchema as any)?.required).toEqual(['room_id']);
   });
 });

@@ -162,9 +162,12 @@ export function useNoteContent(notePath: string | null) {
     const path = currentPathRef.current;
     if (!path) return;
 
-    // Map current note path to the source format used by files tools.
-    // Source format must stay in sync with files-tools.ts bus.emit(NOTES_UPDATED, { source }).
-    // Notes v2 paths are like "folder/note.md" → source is "notes/folder/note"
+    // Map current note path to the canonical source format:
+    // `notes/{vault-path-without-.md}`. EVERY emitter uses it — the legacy
+    // /api/notes/global route and the agent files tool translate their
+    // 'notes/global' alias to 'notes/global-notes' before emitting, so
+    // global-notes.md edits from any surface land here with one name.
+    // ('notes/global' on the wire would mean a literal vault-root global.md.)
     const normalizedPath = path.replace(/\.md$/, '');
     if (source !== `notes/${normalizedPath}`) return;
 

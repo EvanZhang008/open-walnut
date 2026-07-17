@@ -89,6 +89,12 @@ const EXPLICIT_TASK_KEYS = new Set<string>([
 // ── Singleton ──────────────────────────────────────────────────────────────
 let db: DatabaseType | null = null;
 let initAttempted = false;
+// The original open error, rethrown on every subsequent call. Without this a
+// failed open degrades to `getDb()` returning null forever, and every caller's
+// `getDb()!.prepare(...)` dies with an uninformative "null.prepare" TypeError
+// while the real cause (e.g. a missing better-sqlite3 native binding) is
+// logged exactly once and lost.
+let initError: unknown = null;
 
 /**
  * Return the shared SQLite handle, lazily opening + initializing it on the
@@ -106,7 +112,7 @@ let initAttempted = false;
  */
 export function getDb(): DatabaseType | null {
   if (db) return db;
-  if (initAttempted) return db; // previous open failed; don't retry in a hot loop
+  if (initAttempted) throw initError; // previous open failed; rethrow the real cause (no hot-loop retry)
   initAttempted = true;
 
   try {
@@ -141,6 +147,7 @@ export function getDb(): DatabaseType | null {
     log.task.info('task-db: WAL checkpoint on open', { result: checkpoint });
     return db;
   } catch (err) {
+    initError = err;
     log.task.error('task-db open failed', { path: TASK_DB_PATH, err: String(err) });
     throw err;
   }
@@ -157,6 +164,7 @@ export function closeDb(): void {
     db = null;
   }
   initAttempted = false;
+  initError = null;
 }
 
 /**

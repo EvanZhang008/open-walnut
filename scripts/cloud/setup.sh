@@ -193,12 +193,47 @@ export PATH="/usr/local/bin:$PATH"
 git config --global --add safe.directory "$REPO_DIR"
 cd "$REPO_DIR"
 npm ci
+# npm ci normally installs the right prebuilt native binding, but a deploy can
+# leave a stale/foreign-platform binding behind (observed 2026-07-10: linux-arm64
+# binding missing → every SQLite consumer degraded to "null.prepare" errors).
+# Verify the binding actually loads on THIS platform; rebuild if it doesn't.
+node -e "require('better-sqlite3')" 2>/dev/null || npm rebuild better-sqlite3
 npm run build
 (cd web && npx vite build)
 # Service user must be able to read everything (incl. node_modules).
 chown -R "$WALNUT_USER:$WALNUT_USER" "$REPO_DIR"
 
 echo "==> [8/9] walnut.service"
+# Secrets the companion needs at runtime (e.g. OPENAI_API_KEY for the voice
+# STT fallback) live in SSM Parameter Store under /walnut/* and materialize
+# into /etc/walnut/walnut.env here. Config.yaml is the wrong home for them:
+# it git-syncs through the data hub, and cloud-held secrets must never ride
+# a repo. Idempotent + best-effort — a missing parameter just means that
+# feature stays off.
+mkdir -p /etc/walnut
+touch /etc/walnut/walnut.env
+if OPENAI_KEY=$(aws ssm get-parameter --name /walnut/openai-api-key \
+    --with-decryption --query Parameter.Value --output text 2>/dev/null); then
+  grep -q '^OPENAI_API_KEY=' /etc/walnut/walnut.env \
+    && sed -i "s|^OPENAI_API_KEY=.*|OPENAI_API_KEY=$OPENAI_KEY|" /etc/walnut/walnut.env \
+    || echo "OPENAI_API_KEY=$OPENAI_KEY" >> /etc/walnut/walnut.env
+else
+  echo "    (no /walnut/openai-api-key in SSM — voice STT cloud fallback disabled)"
+fi
+# web_search (Tavily) — same pattern: config.yaml is machine-local and never
+# carries secrets, so the key rides SSM → env. web-search-tool falls back to
+# TAVILY_API_KEY when tools.web_search.api_key is absent from config.
+if TAVILY_KEY=$(aws ssm get-parameter --name /walnut/tavily-api-key \
+    --with-decryption --query Parameter.Value --output text 2>/dev/null); then
+  grep -q '^TAVILY_API_KEY=' /etc/walnut/walnut.env \
+    && sed -i "s|^TAVILY_API_KEY=.*|TAVILY_API_KEY=$TAVILY_KEY|" /etc/walnut/walnut.env \
+    || echo "TAVILY_API_KEY=$TAVILY_KEY" >> /etc/walnut/walnut.env
+else
+  echo "    (no /walnut/tavily-api-key in SSM — web_search disabled on the companion)"
+fi
+chown "$WALNUT_USER:$WALNUT_USER" /etc/walnut/walnut.env
+chmod 600 /etc/walnut/walnut.env
+
 # Port note: the server takes its port from the --port CLI flag (default 3456
 # in src/web/server.ts DEFAULT_PORT) — there is no PORT env var.
 cat > /etc/systemd/system/walnut.service <<EOF
@@ -216,6 +251,8 @@ Environment=NODE_ENV=production
 Environment=OPEN_WALNUT_HOME=$DATA_HOME
 Environment=WALNUT_GIT_HUB_DIR=$WALNUT_LIB/git
 Environment=HOME=$WALNUT_LIB
+# Optional secrets (SSM-materialized above); '-' = absent file is fine.
+EnvironmentFile=-/etc/walnut/walnut.env
 ExecStart=$NODE_BIN $REPO_DIR/dist/cli.js web --port 3456
 Restart=always
 RestartSec=5

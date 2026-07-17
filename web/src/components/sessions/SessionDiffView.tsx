@@ -130,6 +130,7 @@ function useTokens(hunks: HunkData[] | undefined, relPath: string): ReturnType<t
 function statusGlyph(status: SessionFileChange['status']): { ch: string; cls: string; title: string } {
   if (status === 'added') return { ch: 'A', cls: 'added', title: 'Added' };
   if (status === 'deleted') return { ch: 'D', cls: 'deleted', title: 'Deleted' };
+  if (status === 'renamed') return { ch: 'R', cls: 'renamed', title: 'Renamed / moved' };
   return { ch: 'M', cls: 'modified', title: 'Modified' };
 }
 
@@ -152,11 +153,14 @@ function TreeRow({
       <button
         className={`session-diff-tree-file${isSel ? ' is-selected' : ''}`}
         style={pad}
-        title={node.change.relPath}
+        title={node.change.status === 'renamed' && node.change.oldRelPath ? `${node.change.oldRelPath} → ${node.change.relPath}` : node.change.relPath}
         onClick={() => onSelectFile(node.change)}
       >
         <span className={`session-diff-tree-status status-${g.cls}`} title={g.title}>{g.ch}</span>
         <span className="session-diff-tree-name">{node.name}</span>
+        {node.change.status === 'renamed' && node.change.oldRelPath && (
+          <span className="session-diff-tree-renamed-from" title={`moved from ${node.change.oldRelPath}`}>← {node.change.oldRelPath.split('/').pop()}</span>
+        )}
         {node.change.partial && <span className="session-diff-tree-partial" title="Reconstructed best-effort (file changed on disk after the edit)">{ICON_WARNING}</span>}
       </button>
     );
@@ -771,6 +775,9 @@ function FileDiffPane({
     <div className="session-diff-filepane" data-file-path={change.filePath}>
       <div className="session-diff-filepane-head">
         <span className="session-diff-filepane-path" title={change.filePath}>{change.relPath}</span>
+        {change.status === 'renamed' && change.oldRelPath && (
+          <span className="session-diff-filepane-renamed" title={`moved from ${change.oldRelPath}`}>renamed from <code>{change.oldRelPath}</code></span>
+        )}
         <span className="session-diff-filepane-stat">
           {adds > 0 && <span className="session-diff-stat-add">+{adds}</span>}
           {dels > 0 && <span className="session-diff-stat-del">{'−'}{dels}</span>}
@@ -796,6 +803,8 @@ function FileDiffPane({
         >
           {renderHunks}
         </Diff>
+      ) : change.status === 'renamed' ? (
+        <div className="session-diff-file-empty">File moved{change.oldRelPath ? ` from ${change.oldRelPath}` : ''} — content unchanged.</div>
       ) : (
         <div className="session-diff-file-empty">No textual diff (binary, identical, or unreadable content).</div>
       )}

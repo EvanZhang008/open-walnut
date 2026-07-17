@@ -550,6 +550,147 @@ describe('computeSessionChanges — agent memory-store filtering', () => {
   });
 });
 
+// The reported bug: the Changed view only surfaced Edit/Write tool ops, so files
+// MOVED / DELETED / CREATED via a Bash command (git mv, rm, touch, cp, `>`) were
+// invisible in the default (JSONL) mode. These exercise the Bash-op path.
+describe('computeSessionChanges — Bash file ops (move / delete / create)', () => {
+  it('shows a `git mv` as a RENAME (status=renamed, oldRelPath = source)', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const dest = path.join(repo, 'Areas', 'Career', 'PERM', 'Perm-old.md');
+    // The destination exists on disk (post-move); the source is gone.
+    await putFile(dest, '# Perm notes\n');
+
+    await writeSessionJsonl('s1', repo, [
+      assistantToolUse(repo, [{
+        name: 'Bash',
+        input: { command: `cd ${repo}\ngit mv "Projects/Perm.md" "Areas/Career/PERM/Perm-old.md" 2>/dev/null || mv "Projects/Perm.md" "Areas/Career/PERM/Perm-old.md"` },
+      }]),
+    ]);
+
+    const res = await computeSessionChanges('s1', repo);
+    const change = res.groups.flatMap(g => g.files).find(f => f.relPath === path.join('Areas', 'Career', 'PERM', 'Perm-old.md'));
+    expect(change).toBeDefined();
+    expect(change!.status).toBe('renamed');
+    expect(change!.oldRelPath).toBe(path.join('Projects', 'Perm.md'));
+    // The source path must NOT appear as its own (phantom) entry.
+    const rels = res.groups.flatMap(g => g.files.map(f => f.relPath));
+    expect(rels).not.toContain(path.join('Projects', 'Perm.md'));
+  });
+
+  it('shows a folder `git mv` as a rename (dir move, content-preserving)', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const moved = path.join(repo, 'Projects', 'PERM');
+    await putFile(path.join(moved, 'README.md'), 'x\n'); // dir has a file post-move
+
+    await writeSessionJsonl('s1', repo, [
+      assistantToolUse(repo, [{ name: 'Bash', input: { command: `cd ${repo} && git mv "Areas/Career/PERM" "Projects/PERM"` } }]),
+    ]);
+
+    const res = await computeSessionChanges('s1', repo);
+    const change = res.groups.flatMap(g => g.files).find(f => f.status === 'renamed');
+    expect(change).toBeDefined();
+    expect(change!.relPath).toBe(path.join('Projects', 'PERM'));
+    expect(change!.oldRelPath).toBe(path.join('Areas', 'Career', 'PERM'));
+  });
+
+  it('shows `rm` as a DELETE, recovering the removed content from git (local)', async () => {
+    // A real git repo so `git show HEAD:<rel>` can recover the deleted content.
+    const { execFileSync } = await import('node:child_process');
+    const repo = path.join(workRoot, 'realrepo');
+    await fsp.mkdir(repo, { recursive: true });
+    execFileSync('git', ['-C', repo, 'init', '-q']);
+    execFileSync('git', ['-C', repo, 'config', 'user.email', 't@t']);
+    execFileSync('git', ['-C', repo, 'config', 'user.name', 't']);
+    const doomed = path.join(repo, 'gone.ts');
+    await putFile(doomed, 'export const dead = 1;\n');
+    execFileSync('git', ['-C', repo, 'add', '.']);
+    execFileSync('git', ['-C', repo, 'commit', '-qm', 'init']);
+    await fsp.rm(doomed); // the session deleted it
+
+    await writeSessionJsonl('s1', repo, [
+      assistantToolUse(repo, [{ name: 'Bash', input: { command: `cd ${repo} && rm gone.ts` } }]),
+    ]);
+
+    const res = await computeSessionChanges('s1', repo);
+    const change = res.groups.flatMap(g => g.files).find(f => f.relPath === 'gone.ts');
+    expect(change).toBeDefined();
+    expect(change!.status).toBe('deleted');
+    expect(change!.after).toBe('');
+    // before recovered from git HEAD:
+    expect(change!.before).toBe('export const dead = 1;\n');
+    expect(change!.partial).toBe(false);
+  });
+
+  it('shows a delete of an UNTRACKED file with empty before + partial (nothing to recover)', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const repo = path.join(workRoot, 'realrepo2');
+    await fsp.mkdir(repo, { recursive: true });
+    execFileSync('git', ['-C', repo, 'init', '-q']);
+    // File was never committed → git show can't recover it.
+    await writeSessionJsonl('s1', repo, [
+      assistantToolUse(repo, [{ name: 'Bash', input: { command: `cd ${repo} && rm scratch.txt` } }]),
+    ]);
+
+    const res = await computeSessionChanges('s1', repo);
+    const change = res.groups.flatMap(g => g.files).find(f => f.relPath === 'scratch.txt');
+    expect(change).toBeDefined();
+    expect(change!.status).toBe('deleted');
+    expect(change!.before).toBe('');
+    expect(change!.partial).toBe(true);
+  });
+
+  it('shows `touch` of a new file as ADDED', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const created = path.join(repo, 'fresh.md');
+    await putFile(created, 'hello\n');
+
+    await writeSessionJsonl('s1', repo, [
+      assistantToolUse(repo, [{ name: 'Bash', input: { command: `cd ${repo} && touch fresh.md` } }]),
+    ]);
+
+    const res = await computeSessionChanges('s1', repo);
+    const change = res.groups.flatMap(g => g.files).find(f => f.relPath === 'fresh.md');
+    expect(change).toBeDefined();
+    expect(change!.status).toBe('added');
+    expect(change!.after).toBe('hello\n');
+    expect(change!.before).toBe('');
+  });
+
+  it('a rename FOLLOWED by an Edit on the destination shows renamed + the edit diff', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const dest = path.join(repo, 'b.ts');
+    await putFile(dest, 'const v = 2;\n'); // post-move, post-edit
+
+    await writeSessionJsonl('s1', repo, [
+      assistantToolUse(repo, [{ name: 'Bash', input: { command: `cd ${repo} && git mv a.ts b.ts` } }]),
+      assistantToolUse(repo, [{ name: 'Edit', input: { file_path: dest, old_string: 'const v = 1;', new_string: 'const v = 2;' } }]),
+    ]);
+
+    const res = await computeSessionChanges('s1', repo);
+    const change = res.groups.flatMap(g => g.files).find(f => f.relPath === 'b.ts');
+    expect(change).toBeDefined();
+    expect(change!.status).toBe('renamed');
+    expect(change!.oldRelPath).toBe('a.ts');
+    // The edit still reconstructs a real content diff on the destination.
+    expect(change!.after).toBe('const v = 2;\n');
+    expect(change!.before).toBe('const v = 1;\n');
+  });
+
+  it('ignores unsafe/globbed Bash commands (no fabricated ops)', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    await writeSessionJsonl('s1', repo, [
+      assistantToolUse(repo, [{ name: 'Bash', input: { command: `cd ${repo} && rm *.tmp && mv $SRC $DST` } }]),
+    ]);
+    const res = await computeSessionChanges('s1', repo);
+    expect(res.fileCount).toBe(0);
+  });
+});
+
 describe('computeSessionChanges — empty + identical', () => {
   it('returns empty result when the session edited nothing', async () => {
     const repo = path.join(workRoot, 'repo');
@@ -562,5 +703,182 @@ describe('computeSessionChanges — empty + identical', () => {
     const res = await computeSessionChanges('s1', repo);
     expect(res.fileCount).toBe(0);
     expect(res.groups).toEqual([]);
+  });
+});
+
+// ── Incremental parse cache (append-only byte counter) ──
+//
+// The JSONL is append-only in normal operation, so recomputes should read +
+// parse ONLY appended bytes from the cached offset. /compact rewrites the file
+// (usually SHRINKING it, sometimes not) — both rewrite shapes must fall back to
+// a full re-parse rather than merging ops from two incompatible histories.
+describe('computeSessionChanges — incremental parse cache', () => {
+  const jsonlAbs = (sessionId: string, cwd: string) =>
+    path.join(tmpBase, 'projects', encodeProjectPath(cwd), `${sessionId}.jsonl`);
+
+  /** Append lines to an existing session JSONL and force a DIFFERENT mtime
+   *  (rapid test writes can land in the same mtime tick, which would wrongly
+   *  serve the cached result and mask the incremental path). */
+  async function appendSessionJsonl(sessionId: string, cwd: string, lines: unknown[]) {
+    const p = jsonlAbs(sessionId, cwd);
+    await fsp.appendFile(p, '\n' + lines.map(l => JSON.stringify(l)).join('\n'));
+    const now = new Date(Date.now() + 5_000);
+    await fsp.utimes(p, now, now);
+  }
+
+  it('picks up ops appended AFTER the first compute (unique session per test → fresh cache)', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const f1 = path.join(repo, 'first.ts');
+    const f2 = path.join(repo, 'second.ts');
+    await putFile(f1, 'one v2\n');
+
+    const sid = `inc-append-${Date.now()}`;
+    await writeSessionJsonl(sid, repo, [
+      { type: 'user', cwd: repo, message: { role: 'user', content: 'go' } },
+      assistantToolUse(repo, [{ name: 'Edit', input: { file_path: f1, old_string: 'one v1', new_string: 'one v2' } }]),
+    ]);
+
+    const res1 = await computeSessionChanges(sid, repo);
+    expect(res1.fileCount).toBe(1);
+
+    // Session continues: a new turn edits a second file (pure append).
+    await putFile(f2, 'two v2\n');
+    await appendSessionJsonl(sid, repo, [
+      assistantToolUse(repo, [{ name: 'Edit', input: { file_path: f2, old_string: 'two v1', new_string: 'two v2' } }]),
+    ]);
+
+    const res2 = await computeSessionChanges(sid, repo);
+    const paths = res2.groups.flatMap(g => g.files.map(x => x.filePath));
+    expect(paths).toContain(f1); // from the cached prefix
+    expect(paths).toContain(f2); // from the appended bytes
+    expect(res2.fileCount).toBe(2);
+  });
+
+  it('repeated appends accumulate correctly (multi-round incremental)', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const sid = `inc-multi-${Date.now()}`;
+    await writeSessionJsonl(sid, repo, [
+      { type: 'user', cwd: repo, message: { role: 'user', content: 'go' } },
+    ]);
+    expect((await computeSessionChanges(sid, repo)).fileCount).toBe(0);
+
+    for (let round = 1; round <= 3; round++) {
+      const f = path.join(repo, `r${round}.ts`);
+      await putFile(f, `v2-${round}\n`);
+      await appendSessionJsonl(sid, repo, [
+        assistantToolUse(repo, [{ name: 'Edit', input: { file_path: f, old_string: `v1-${round}`, new_string: `v2-${round}` } }]),
+      ]);
+      const res = await computeSessionChanges(sid, repo);
+      expect(res.fileCount).toBe(round);
+    }
+  });
+
+  it('a REWRITE that shrinks the file (e.g. /compact) rebuilds from scratch — no ghost ops', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const fOld = path.join(repo, 'pre-compact.ts');
+    const fNew = path.join(repo, 'post-compact.ts');
+    await putFile(fOld, 'old v2\n');
+    await putFile(fNew, 'new v2\n');
+
+    const sid = `inc-shrink-${Date.now()}`;
+    // A long history (padding makes the rewrite strictly smaller).
+    await writeSessionJsonl(sid, repo, [
+      { type: 'user', cwd: repo, message: { role: 'user', content: 'x'.repeat(4000) } },
+      assistantToolUse(repo, [{ name: 'Edit', input: { file_path: fOld, old_string: 'old v1', new_string: 'old v2' } }]),
+    ]);
+    expect((await computeSessionChanges(sid, repo)).groups.flatMap(g => g.files.map(x => x.filePath))).toContain(fOld);
+
+    // /compact rewrote history: the old Edit line is GONE, a new one exists.
+    await writeSessionJsonl(sid, repo, [
+      { type: 'user', cwd: repo, message: { role: 'user', content: 'compacted' } },
+      assistantToolUse(repo, [{ name: 'Edit', input: { file_path: fNew, old_string: 'new v1', new_string: 'new v2' } }]),
+    ]);
+    const p = jsonlAbs(sid, repo);
+    const now = new Date(Date.now() + 10_000);
+    await fsp.utimes(p, now, now);
+
+    const res = await computeSessionChanges(sid, repo);
+    const paths = res.groups.flatMap(g => g.files.map(x => x.filePath));
+    expect(paths).toContain(fNew);
+    expect(paths).not.toContain(fOld); // stale cached ops must NOT survive the rewrite
+  });
+
+  it('a SAME-OR-LARGER rewrite is caught by the last-line check (not merged as an append)', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const fOld = path.join(repo, 'a.ts');
+    const fNew = path.join(repo, 'b.ts');
+    await putFile(fOld, 'a v2\n');
+    await putFile(fNew, 'b v2\n');
+
+    const sid = `inc-rewrite-${Date.now()}`;
+    await writeSessionJsonl(sid, repo, [
+      { type: 'user', cwd: repo, message: { role: 'user', content: 'go' } },
+      assistantToolUse(repo, [{ name: 'Edit', input: { file_path: fOld, old_string: 'a v1', new_string: 'a v2' } }]),
+    ]);
+    await computeSessionChanges(sid, repo);
+
+    // Rewrite with DIFFERENT content but ≥ size (padding), so only the
+    // last-line verification can detect it.
+    await writeSessionJsonl(sid, repo, [
+      { type: 'user', cwd: repo, message: { role: 'user', content: 'rewritten'.repeat(200) } },
+      assistantToolUse(repo, [{ name: 'Edit', input: { file_path: fNew, old_string: 'b v1', new_string: 'b v2' } }]),
+    ]);
+    const p = jsonlAbs(sid, repo);
+    const now = new Date(Date.now() + 10_000);
+    await fsp.utimes(p, now, now);
+
+    const res = await computeSessionChanges(sid, repo);
+    const paths = res.groups.flatMap(g => g.files.map(x => x.filePath));
+    expect(paths).toContain(fNew);
+    expect(paths).not.toContain(fOld);
+  });
+
+  it('LONG cwd (>200-char encoding, hashed by Claude Code) still caches via find-resolved path', async () => {
+    // A cwd whose encoded form exceeds 200 chars → remoteJsonlPath would be
+    // wrong (Claude Code hashes it), so the engine must resolve the absolute
+    // path via findSessionPath and STILL get mtime-cache + incremental parse.
+    // This mirrors the real 46s-per-click session (encoded cwd = 203 chars).
+    // Build the path so its ENCODED form lands in (200, 250): >200 to trip the
+    // hashing guard, <255 so the encoded fixture dir name stays a legal filename.
+    const pad = Math.max(1, 205 - encodeProjectPath(workRoot).length);
+    const longCwd = path.join(workRoot, 'x'.repeat(Math.min(pad, 200)), 'tail-dir');
+    expect(encodeProjectPath(longCwd).length).toBeGreaterThan(200);
+    expect(encodeProjectPath(longCwd).length).toBeLessThan(250);
+    await gitInit(longCwd);
+    const f = path.join(longCwd, 'deep.ts');
+    await putFile(f, 'deep v2\n');
+
+    const sid = `inc-longcwd-${Date.now()}`;
+    // The fixture writes to the encoded dir (the mock's find scans project dirs
+    // regardless of name, mirroring the daemon's fs.find).
+    await writeSessionJsonl(sid, longCwd, [
+      { type: 'user', cwd: longCwd, message: { role: 'user', content: 'go' } },
+      assistantToolUse(longCwd, [{ name: 'Edit', input: { file_path: f, old_string: 'deep v1', new_string: 'deep v2' } }]),
+    ]);
+
+    const res1 = await computeSessionChanges(sid, longCwd);
+    expect(res1.fileCount).toBe(1);
+    // Second call with unchanged mtime → cached object identity (would fail if
+    // the long cwd skipped the cache and re-parsed).
+    const res2 = await computeSessionChanges(sid, longCwd);
+    expect(res2).toBe(res1);
+  });
+
+  it('mtime unchanged → cached result returned (no reparse of anything)', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const f = path.join(repo, 'c.ts');
+    await putFile(f, 'c v2\n');
+    const sid = `inc-mtime-${Date.now()}`;
+    await writeSessionJsonl(sid, repo, [
+      assistantToolUse(repo, [{ name: 'Edit', input: { file_path: f, old_string: 'c v1', new_string: 'c v2' } }]),
+    ]);
+    const res1 = await computeSessionChanges(sid, repo);
+    const res2 = await computeSessionChanges(sid, repo);
+    expect(res2).toBe(res1); // identity: the exact cached object
   });
 });

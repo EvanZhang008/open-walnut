@@ -1,0 +1,38 @@
+# Send-path stressor: giant paste, rapid sends, and voice-bar toggling.
+# Guards the no-loss invariant (text/images must never vanish) and the
+# composer's enable/disable state machine.
+appId: dev.openwalnut.ios
+---
+- launchApp
+# 1. Very long message (payload limits + layout of a huge user bubble).
+- tapOn:
+    id: "chat.composer"
+- inputText: "AAAA BBBB CCCC DDDD EEEE FFFF GGGG HHHH IIII JJJJ KKKK LLLL MMMM NNNN OOOO PPPP QQQQ RRRR SSSS TTTT UUUU VVVV WWWW XXXX YYYY ZZZZ 0000 1111 2222 3333 4444 5555 6666 7777 8888 9999 aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj kkkk llll mmmm nnnn oooo pppp qqqq rrrr ssss tttt uuuu vvvv wwww xxxx yyyy zzzz"
+- tapOn:
+    id: "chat.send"
+- extendedWaitUntil:
+    visible:
+        id: "chat.composer"
+    timeout: 10000
+# 2. Mic bar open/cancel loop (AVAudioSession activate/deactivate churn).
+- repeat:
+    times: 5
+    commands:
+      - tapOn:
+          id: "chat.mic"
+      - extendedWaitUntil:
+          visible:
+              id: "chat.voiceCancel"
+          timeout: 4000
+      - tapOn:
+          id: "chat.voiceCancel"
+# 3. Unicode / emoji / RTL torture message.
+- tapOn:
+    id: "chat.composer"
+- inputText: "🐒👨‍👩‍👧‍👦 ¡ñö! العربية 中文测试 🇺🇸 ​ zero-width"
+- tapOn:
+    id: "chat.send"
+- extendedWaitUntil:
+    visible:
+        id: "chat.composer"
+    timeout: 10000

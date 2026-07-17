@@ -1,0 +1,19 @@
+[14:15:41] round 1: swipe RIGHT
+[14:15:44] round 2: tapOn point 131,221
+[14:15:48] round 3: swipe LEFT
+[14:15:51] round 4: tapOn point 328,658
+[14:15:55] round 5: back gesture (left-edge swipe)
+[14:15:58] round 6: type random text
+[14:16:01] round 7: tapOn point 190,226
+[14:16:09] round 8: background-foreground
+[14:16:13] round 9: tapOn point 242,406
+[14:16:16] round 10: swipe LEFT
+[14:16:22] round 11: background-foreground
+[14:16:26] round 12: type random text
+[14:16:30] round 13: swipe UP
+[14:16:33] round 14: tapOn point 50,165
+[14:16:36] round 15: tapOn point 97,107
+[14:16:39] round 16: swipe LEFT
+[14:16:43] round 17: swipe DOWN
+[14:16:43] screen static for 5 rounds — running positive control (tab switch)
+[14:16:52] FREEZE confirmed: tab switch did not repaint

@@ -493,6 +493,17 @@ input:focus, textarea:focus, select:focus {
   left: 56px;
 }
 
+/* Narrow screens: the fixed left offset + 320px width would push the panel
+   off-screen — take the full viewport instead (iPhone-style sheet). */
+@media (max-width: 640px) {
+  .notification-panel,
+  .notification-panel.sidebar-collapsed {
+    left: 0;
+    width: 100vw;
+    border-right: none;
+  }
+}
+
 @keyframes notif-slide-in {
   from { transform: translateX(-16px); opacity: 0; }
   to { transform: translateX(0); opacity: 1; }
@@ -711,6 +722,129 @@ input:focus, textarea:focus, select:focus {
   line-height: 1.4;
   margin-top: 3px;
   word-break: break-word;
+}
+
+/* iPhone-style notification center: clickable cards, per-item ×, groups. */
+.notification-feed-item.clickable {
+  cursor: pointer;
+}
+
+.notification-feed-item.clickable:hover {
+  border-color: var(--border-strong);
+  background: color-mix(in srgb, var(--accent) 10%, var(--card-bg));
+}
+
+.notification-feed-item-body.clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.notification-feed-item-dismiss {
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  color: var(--fg-muted);
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+.notification-feed-item-dismiss:hover {
+  opacity: 1;
+  color: var(--fg);
+}
+
+.notification-section-label--row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.notification-clear-all {
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.notification-clear-all:hover {
+  text-decoration: underline;
+}
+
+.notification-feed-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.notification-group-toggle {
+  align-self: flex-start;
+  border: none;
+  background: none;
+  color: var(--fg-muted);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0 2px 2px;
+}
+
+.notification-group-toggle:hover {
+  color: var(--fg);
+}
+
+.notification-feed-item-resolved {
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+
+.notification-feed-item-actions {
+  display: flex;
+  flex-wrap: wrap; /* the inline respond-error spans a full row below the buttons */
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.notification-perm-btn {
+  flex: 1;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.notification-perm-btn.approve {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.notification-perm-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.notification-perm-btn:not(:disabled):hover {
+  opacity: 0.9;
+}
+
+.notification-perm-error {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: var(--error, #d64545);
 }
 
 .notification-retry-btn {
@@ -5995,6 +6129,78 @@ input:focus, textarea:focus, select:focus {
   flex-shrink: 0;
 }
 
+.task-group-model {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(175, 82, 222, 0.10);
+  color: #AF52DE;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  flex-shrink: 0;
+}
+
+/* Collapsed "Prompt & settings" row at the top of a task-group body */
+.task-group-prompt {
+  margin-bottom: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+.task-group-prompt-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 8px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--fg-muted);
+  text-align: left;
+}
+.task-group-prompt-toggle:hover { background: var(--bg-tertiary); }
+
+.task-group-prompt-title {
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.task-group-prompt-preview {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-muted);
+  opacity: 0.8;
+}
+
+.task-group-prompt-body {
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+}
+
+.task-group-prompt-settings {
+  font-size: 10px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  color: var(--fg-muted);
+  margin-bottom: 6px;
+  word-break: break-all;
+}
+
+.task-group-prompt-pre {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--fg-secondary);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
 .task-group-description {
   flex: 1;
   color: var(--fg-secondary);
@@ -6663,6 +6869,240 @@ input:focus, textarea:focus, select:focus {
 .mic-silence-warning svg {
   flex-shrink: 0;
   color: var(--warning, #d98a00);
+}
+
+/* Transcription-failure bubble — same anchor as the silence warning, red accents + Retry */
+.mic-error-bubble {
+  border-color: var(--danger, #d9534f);
+  max-width: 320px;
+}
+.mic-error-bubble svg {
+  color: var(--danger, #d9534f);
+}
+.mic-error-retry {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius-sm, 6px);
+  cursor: pointer;
+}
+.mic-error-retry:hover {
+  background: var(--accent-hover);
+}
+.mic-error-dismiss {
+  flex-shrink: 0;
+  padding: 0 2px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--fg-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.mic-error-dismiss:hover {
+  color: var(--fg);
+}
+
+/* Not configured — dimmed but still clickable (click routes to Settings → Speech-to-Text) */
+.mic-unconfigured {
+  opacity: 0.55;
+}
+
+/* ── Voice history panel (sidebar slide-out; shares .notification-panel shell) ── */
+.voice-panel-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.voice-panel-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.voice-panel-hint {
+  flex: 1;
+  font-size: 10.5px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.voice-panel-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--fg-muted);
+  font-size: 13px;
+  padding: 2px 4px;
+}
+.voice-panel-close:hover { color: var(--fg); }
+.voice-panel-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+.voice-panel-empty {
+  padding: 24px 16px;
+  font-size: 12.5px;
+  color: var(--fg-muted);
+  text-align: center;
+}
+/* Natural rows (match the Notifications panel): whole row clickable to insert,
+   quiet hover tint, icon actions appear only on hover — no loud pill buttons. */
+.voice-panel-item {
+  padding: 9px 16px;
+  cursor: pointer;
+}
+.voice-panel-item + .voice-panel-item {
+  border-top: 1px solid var(--border);
+}
+.voice-panel-item:hover { background: var(--bg-hover, rgba(0,0,0,0.04)); }
+.voice-panel-item-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+  min-height: 18px;
+}
+.voice-panel-time {
+  font-size: 10.5px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.voice-panel-badge {
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--danger, #d9534f);
+}
+.voice-panel-flash {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.voice-panel-hover-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.voice-panel-item:hover .voice-panel-hover-actions,
+.voice-panel-item:focus-within .voice-panel-hover-actions {
+  opacity: 1;
+}
+.voice-panel-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--fg-muted);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm, 6px);
+  cursor: pointer;
+}
+.voice-panel-icon-btn:hover {
+  color: var(--fg);
+  background: var(--bg-active, rgba(0,0,0,0.07));
+}
+.voice-panel-icon-btn:disabled { opacity: 0.5; cursor: default; }
+.voice-panel-busy { font-size: 12px; }
+.voice-panel-text {
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--fg);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.voice-panel-item.failed .voice-panel-text {
+  color: var(--fg-muted);
+  font-style: italic;
+}
+
+/* Sidebar Voice entry — transcribing pulse + failure dot */
+.sidebar-voice-btn { position: relative; }
+.voice-icon-transcribing {
+  animation: voice-pulse 1.2s ease-in-out infinite;
+  color: var(--accent);
+}
+@keyframes voice-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.voice-failed-dot {
+  background: var(--danger, #d9534f);
+}
+
+/* Voice history rows in the mic dropdown */
+.mic-history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 12px;
+  font-size: 12px;
+}
+.mic-history-item:hover {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+}
+.mic-history-main {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+.mic-history-time {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.mic-history-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+}
+.mic-history-failed .mic-history-text {
+  color: var(--danger, #d9534f);
+  font-style: italic;
+}
+.mic-history-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.mic-history-btn {
+  padding: 1px 7px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--accent);
+  background: none;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm, 6px);
+  cursor: pointer;
+}
+.mic-history-btn:hover {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.mic-history-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .mic-transcribing {
@@ -8653,8 +9093,13 @@ img[data-lightbox-src],
   flex-shrink: 1;
   min-height: 0;
   overflow-y: auto;
+  /* Flex column so an undragged RECENT can flex-grow to fill leftover space. */
   display: flex;
   flex-direction: column;
+  /* Scroll anchoring fights the per-tier resize drags: shrinking a list inside
+     this scroller makes the browser shift scrollTop to "stabilize" content,
+     which reads as the whole pinned area jumping under the cursor. */
+  overflow-anchor: none;
 }
 
 .todo-pinned-section {
@@ -8665,7 +9110,9 @@ img[data-lightbox-src],
 
 /* Expanded RECENT grows to consume the wrapper's leftover space so there's no
    dead gap between it and the TASKS bar; the inner list scrolls when the recent
-   items exceed that space. Requires the wrapper to be a flex column. */
+   items exceed that space. Requires the wrapper to be a flex column. Once the
+   user drags the resize handle, TodoPanel pins an explicit maxHeight inline
+   (via recentResize.height), which caps this flex-grow at the dragged size. */
 .todo-pinned-section-recent {
   flex: 1 1 auto;
   min-height: 0;
@@ -8676,7 +9123,9 @@ img[data-lightbox-src],
 .todo-pinned-list-recent {
   flex: 1 1 auto;
   min-height: 0;
-  /* Cap removed: fills available space via flex, no fixed maxHeight. */
+  /* No fixed cap by default: fills available space via flex. When dragged,
+     the inline maxHeight from recentResize.height takes over and the list
+     scrolls past it (todo-pinned-list-scroll already sets overflow-y:auto). */
 }
 
 .todo-pinned-header {
@@ -8865,14 +9314,13 @@ img[data-lightbox-src],
   height: 12px;
 }
 
-/* Editable title in pinned cards */
+/* Editable title in pinned cards — stays single-line (nowrap/hidden inherited);
+   the browser auto-scrolls the hidden overflow to keep the caret visible. */
 .todo-pinned-title.editing {
   outline: 1px solid var(--accent);
   border-radius: 3px;
   padding: 0 3px;
-  white-space: pre-wrap;
-  overflow: visible;
-  text-overflow: unset;
+  text-overflow: clip;
   cursor: text;
 }
 
@@ -8886,6 +9334,19 @@ img[data-lightbox-src],
 
 .todo-pinned-card-attention.todo-pinned-card-active {
   background: rgba(255, 59, 48, 0.12);
+}
+
+/* Completed task surfaced in Recent (via "Show completed") — struck-through +
+   muted so it reads as history, not an actionable card. */
+.todo-pinned-card-done .todo-pinned-title {
+  text-decoration: line-through;
+  color: var(--fg-muted);
+}
+
+/* Tier dot on a Recent card whose task is already pinned — replaces the drag
+   grip ("already placed"; the tier card is the draggable one). */
+.todo-recent-tier-dot {
+  margin: 0 1px;
 }
 
 /* Task whose session is currently open on the home page — left accent bar so it
@@ -14287,12 +14748,32 @@ a.task-kebab-info:hover {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   box-shadow: var(--card-shadow-hover);
-  max-height: 420px;
+  max-height: min(72vh, 720px);
   overflow: hidden;
   display: flex;
   flex-direction: column;
   z-index: 50;
   animation: commandPaletteIn 0.15s ease-out;
+}
+
+/* Concept explainer strip — tells new users what a session is (and that a task
+   tracks it) right where both get created. */
+.sps-header {
+  padding: 8px 10px 0;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.sps-header-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.sps-header-hint {
+  font-size: 11px;
+  color: var(--fg-muted);
+  line-height: 1.35;
 }
 
 .sps-search {
@@ -14319,34 +14800,38 @@ a.task-kebab-info:hover {
   font-family: 'SF Mono', Menlo, monospace;
   background: var(--accent-subtle);
   border-color: var(--accent);
-  padding-right: 70px; /* room for Go button */
+  padding-right: 72px; /* room for the compact status button (widest: "+ folder") */
 }
 
-.sps-go-btn {
+/* Compact status/confirm button — replaces the old wide "Start session ⇧↵" pill.
+   Color = live existence verdict: green ✓ exists, amber "+ folder" missing,
+   neutral ↵ unknown (loading / host down). */
+.sps-status-btn {
   position: absolute;
   right: 12px;
   top: 50%;
   transform: translateY(-50%);
+  /* Above the has-ghost input (z-index:1), which otherwise swallows clicks. */
+  z-index: 2;
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
+  justify-content: center;
+  min-width: 26px;
+  height: 22px;
+  padding: 0 7px;
   border: none;
   border-radius: 4px;
-  background: var(--accent);
-  color: #fff;
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 700;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.1s;
+  transition: background 0.1s, filter 0.1s;
 }
-.sps-go-btn:hover { background: var(--accent-hover, #0070e0); }
-.sps-go-btn kbd {
-  font-family: inherit;
-  font-size: 10px;
-  opacity: 0.8;
-}
+.sps-status-btn:hover { filter: brightness(1.08); }
+.sps-status-valid { background: var(--success, #34C759); color: #fff; }
+.sps-status-missing { background: var(--warning, #FF9500); color: #fff; font-size: 11px; }
+.sps-status-unknown { background: var(--accent); color: #fff; }
+.sps-status-btn:disabled { opacity: 0.5; cursor: default; }
 
 .sps-host-filter {
   display: flex;
@@ -14450,6 +14935,25 @@ a.task-kebab-info:hover {
   margin-left: auto;
 }
 
+/* Pencil marker on auto-discovered raw-FQDN host tabs — "this name is editable" */
+.sps-host-tab-raw {
+  margin-left: 4px;
+  font-size: 9px;
+  opacity: 0.55;
+}
+
+/* One-line nudge under the tab row, shown only while a raw host tab is active */
+.sps-raw-host-nudge {
+  padding: 4px 12px 0;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.sps-raw-host-nudge a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .sps-empty, .sps-error {
   padding: 20px 12px;
   text-align: center;
@@ -14457,6 +14961,126 @@ a.task-kebab-info:hover {
   color: var(--fg-muted);
 }
 .sps-error { color: var(--error); }
+
+/* Section labels — "📁 subdirectories" / "🕘 history" / per-host groups.
+   Live and history results must be visually distinct: history can never
+   impersonate a live listing. */
+.sps-section-label {
+  padding: 6px 10px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  opacity: 0.8;
+  position: sticky;
+  top: 0;
+  background: var(--card-bg);
+  z-index: 1;
+}
+
+/* Marker on a live dir that's also in session history */
+.sps-hist-marker {
+  font-size: 10px;
+  color: var(--accent);
+  opacity: 0.9;
+}
+
+/* Per-host live diagnostics: missing dir / empty dir (informational) */
+.sps-live-note {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  font-style: italic;
+}
+
+/* Host unreachable — subtle, never a modal */
+.sps-host-down {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  opacity: 0.55;
+  font-style: italic;
+}
+
+/* "Create <path> & start session" row for nonexistent leaf dirs */
+.sps-create-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--fg);
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+}
+.sps-create-row:hover {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+}
+.sps-create-row .sps-create-icon {
+  font-weight: 700;
+  color: var(--accent);
+}
+.sps-create-row code {
+  font-family: 'SF Mono', Menlo, monospace;
+  font-size: 11px;
+  word-break: break-all;
+}
+
+/* Ghost-text inline completion — overlay sits behind a transparent-background
+   input with identical font/padding; wrapper carries the visual background. */
+.sps-ghost-wrap {
+  position: relative;
+  border-radius: 6px;
+}
+.sps-ghost-wrap.editing {
+  background: var(--accent-subtle);
+}
+.sps-ghost-overlay {
+  position: absolute;
+  inset: 0;
+  padding: 7px 10px;
+  padding-right: 72px; /* mirror .sps-search-input.editing status-button room */
+  font-family: 'SF Mono', Menlo, monospace;
+  font-size: 13px;
+  /* MUST match the input's inherited line-height (body 1.5 → 19.5px). The input
+     centers its text in that line box; 'normal' (~15px) floats the ghost ~2px
+     higher than the typed text — visible baseline mismatch. */
+  line-height: 1.5;
+  white-space: pre;
+  overflow: hidden;
+  pointer-events: none;
+  border: 1px solid transparent; /* mirror input border box */
+}
+.sps-ghost-typed { color: transparent; }
+.sps-ghost-text { color: var(--fg-muted); opacity: 0.6; }
+.sps-search-input.has-ghost.editing {
+  background: transparent; /* let the ghost overlay show through */
+  position: relative;
+  z-index: 1;
+}
+
+/* Key hints row — lives below the list so the search placeholder can state purpose. */
+.sps-keys-hint {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  font-size: 10px;
+  color: var(--fg-muted);
+  opacity: 0.7;
+  border-top: 1px solid var(--border);
+}
+.sps-keys-hint kbd {
+  font-family: 'SF Mono', Menlo, monospace;
+  font-size: 9px;
+  padding: 0 3px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-secondary);
+}
 
 /* Task metadata footer — Star / Needs attention / Pin tier / Priority */
 .sps-meta-footer {
@@ -14467,6 +15091,19 @@ a.task-kebab-info:hover {
   flex-direction: column;
   gap: 6px;
   background: var(--bg-secondary, transparent);
+}
+/* Edit mode: collapse to one dense row — vertical space goes back to the path list */
+.sps-meta-footer.compact {
+  padding: 4px 10px;
+}
+.sps-meta-footer.compact .sps-meta-row {
+  flex-wrap: nowrap;
+  gap: 6px;
+  overflow-x: auto;
+}
+.sps-meta-footer.compact .sps-meta-model-select {
+  margin-left: auto;
+  max-width: 110px;
 }
 .sps-meta-row {
   display: flex;
@@ -14589,6 +15226,16 @@ a.task-kebab-info:hover {
   color: var(--fg-muted);
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+/* Persistent compose guidance (fix-walnut) — placeholder text vanishes on the
+   first keystroke; this line stays visible through the whole compose. */
+.qsb-hint {
+  display: block;
+  font-size: 11px;
+  color: var(--fg-muted);
+  line-height: 1.35;
+  margin-top: 2px;
 }
 
 /* Compact read-only model chip — click to re-open the picker and edit all settings. */
@@ -14845,6 +15492,37 @@ a.task-kebab-info:hover {
   gap: 8px;
 }
 
+/* Custom model ID row — terminal `/model <id>` parity */
+.model-picker-custom {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
+.model-picker-custom-input {
+  flex: 1;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card-bg);
+  color: var(--fg-primary);
+}
+
+.model-picker-custom-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.model-picker-custom-input::placeholder {
+  color: var(--fg-muted);
+  font-size: 11.5px;
+}
+
 .model-picker-option {
   flex: 1 1 calc(33.3% - 6px);
   min-width: 100px;
@@ -14919,6 +15597,15 @@ a.task-kebab-info:hover {
   font-weight: 600;
   color: var(--accent);
   margin-top: 4px;
+}
+
+/* Catalog rows the CLI marks disabled (org-restricted): visible, greyed, no Switch. */
+.model-picker-option-disabled {
+  opacity: 0.45;
+}
+
+.model-picker-option-badge-disabled {
+  color: var(--fg-muted, var(--fg-secondary));
 }
 
 /* ===== Hooks Page ===== */
@@ -16078,6 +16765,7 @@ a.task-kebab-info:hover {
 
 .session-file-explorer-toolbar .sfe-root-path-input {
   flex: 1;
+  width: 100%;
   color: var(--fg);
   background: var(--bg);
   border: 1px solid var(--accent);
@@ -16086,6 +16774,60 @@ a.task-kebab-info:hover {
   font-family: var(--font-mono, monospace);
   font-size: 12px;
   outline: none;
+}
+
+/* Path edit wrapper + fuzzy recent-folder suggestion dropdown */
+.sfe-path-edit {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.sfe-path-suggest {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  margin-top: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 8px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+}
+.sfe-path-suggest-item {
+  padding: 5px 8px;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+  cursor: pointer;
+}
+.sfe-path-suggest-item:hover,
+.sfe-path-suggest-item.active {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--fg);
+}
+
+/* Multi-root sections: cwd (🏠) + changed repos (📦) as collapsible headers */
+.sfe-root-header {
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 2;
+}
+.sfe-root-section + .sfe-root-section .sfe-root-header {
+  border-top: 1px solid var(--border);
+}
+.sfe-changed-badge {
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
 }
 
 .sfe-toolbar-actions {
@@ -16126,12 +16868,27 @@ a.task-kebab-info:hover {
 }
 
 .session-file-explorer-tree {
-  width: 40%;
-  min-width: 180px;
-  max-width: 55%;
+  /* width set inline (resizable via .sfe-divider drag; persisted) */
+  flex-shrink: 0;
+  min-width: 140px;
+  max-width: 600px;
   overflow: auto;
-  border-right: 1px solid var(--border);
   padding: 4px 0;
+}
+
+/* Draggable divider between tree and preview */
+.sfe-divider {
+  flex-shrink: 0;
+  width: 5px;
+  cursor: col-resize;
+  background: var(--border);
+  background-clip: content-box;
+  padding: 0 2px;
+}
+.sfe-divider:hover,
+.sfe-divider:active {
+  background: var(--accent);
+  background-clip: content-box;
 }
 
 .session-file-explorer-preview {
@@ -19147,6 +19904,74 @@ a.task-kebab-info:hover {
   border-top: 1px solid var(--border);
 }
 
+/* Chat-column mode tabs (Note Assistant ⇄ Claude Code session) */
+.notes-chat-mode-tabs {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px;
+}
+.notes-chat-mode-tab {
+  font-size: 12px;
+  padding: 3px 10px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.notes-chat-mode-tab:hover { color: var(--fg); }
+.notes-chat-mode-tab.active {
+  background: var(--bg);
+  color: var(--fg);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+/* Claude Code session hosted in the notes chat column */
+.notes-session-chat-badge {
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.notes-session-chat-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.notes-session-chat-body .session-history {
+  flex: 1;
+  overflow-y: auto;
+  font-size: 12px;
+  padding: 10px;
+}
+.notes-session-chat-starting {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.notes-session-chat-pending {
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.notes-session-chat-starting-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  padding: 6px 2px;
+}
+.notes-session-chat-badge.pending { color: var(--color-warning, #ff9500); }
+
 /* ─── Tree Panel ─── */
 
 .notes-tree-panel {
@@ -19971,6 +20796,42 @@ a.file-link:hover {
   height: 100%;
 }
 
+/* Video/audio player inside the file viewer */
+.fv-media-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 40vh;
+  background: #000;
+}
+.fv-media-preview video {
+  max-width: 100%;
+  max-height: 100%;
+}
+.fv-media-preview audio {
+  width: min(90%, 560px);
+}
+
+/* Download button — an <a> styled like the toolbar tabs */
+.fv-download-btn {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Playback speed selector — a <select> styled like the toolbar tabs */
+.fv-speed-select {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+}
+.fv-speed-select:hover {
+  background: var(--bg-tertiary);
+}
+
 /* Fullscreen button sits at the right end of the toolbar */
 .fv-fullscreen-btn {
   margin-left: auto;
@@ -20060,7 +20921,8 @@ a.file-link:hover {
 }
 
 .file-content-view.fv-fullscreen .fv-html-preview,
-.file-content-view.fv-fullscreen .fv-md-preview {
+.file-content-view.fv-fullscreen .fv-md-preview,
+.file-content-view.fv-fullscreen .fv-media-preview {
   flex: 1;
   height: auto;
   min-height: 0;
@@ -21161,8 +22023,30 @@ a.file-link:hover {
 .session-diff-tree-status.status-added { color: var(--success, #1a7f37); }
 .session-diff-tree-status.status-deleted { color: var(--error, #cf222e); }
 .session-diff-tree-status.status-modified { color: var(--warning, #b7791f); }
+.session-diff-tree-status.status-renamed { color: var(--accent, #8250df); }
 .session-diff-tree-name { overflow: hidden; text-overflow: ellipsis; }
+.session-diff-tree-renamed-from {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  color: var(--text-tertiary, #8b949e);
+  opacity: 0.85;
+}
 .session-diff-tree-partial { flex: 0 0 auto; color: var(--warning, #b7791f); font-size: 10px; }
+.session-diff-filepane-renamed {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-tertiary, #8b949e);
+}
+.session-diff-filepane-renamed code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+}
 
 /* ── Single-file diff (center) ── */
 .session-diff-main {

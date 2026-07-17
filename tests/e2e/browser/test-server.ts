@@ -12,11 +12,14 @@ import os from 'node:os'
 import fs from 'node:fs/promises'
 import zlib from 'node:zlib'
 
-// Set WALNUT_HOME to temp dir BEFORE importing server modules
-// WALNUT_EPHEMERAL=1 prevents the safety check from overriding back to ~/.open-walnut
+// Set WALNUT_HOME to temp dir BEFORE importing server modules.
+// Ephemeral identity is argv-based (see IS_EPHEMERAL in src/constants.ts) — the
+// env-var flag was removed after it leaked through the daemon into prod servers.
+// Pushing the flag onto argv keeps the leaked-tmpdir safety check from overriding
+// OPEN_WALNUT_HOME back to ~/.open-walnut, without anything for children to inherit.
 const tmpBase = path.join(os.tmpdir(), `walnut-pw-${Date.now()}`)
 process.env.OPEN_WALNUT_HOME = tmpBase
-process.env.OPEN_WALNUT_EPHEMERAL = '1'
+process.argv.push('--_ephemeral-child')
 
 // Ensure directories exist
 await fs.rm(tmpBase, { recursive: true, force: true })
@@ -387,6 +390,18 @@ await fs.mkdir(testImgDir, { recursive: true })
 await fs.writeFile(path.join(testImgDir, 'blue.png'), makePng(51, 102, 204))
 await fs.writeFile(path.join(testImgDir, 'red.png'), makePng(204, 51, 51))
 
+// Create a test MP4 for video-preview.spec.ts. Content is a stub 'ftyp' box +
+// deterministic filler — enough for byte-exact Range assertions; the spec
+// asserts the <video> element + Download button, not actual decode.
+const testVideoDir = path.join(tmpBase, 'test-videos')
+await fs.mkdir(testVideoDir, { recursive: true })
+{
+  const ftyp = Buffer.from([0, 0, 0, 0x14, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d])
+  const filler = Buffer.alloc(2048)
+  for (let i = 0; i < filler.length; i++) filler[i] = i % 251
+  await fs.writeFile(path.join(testVideoDir, 'walkthrough.mp4'), Buffer.concat([ftyp, filler]))
+}
+
 // Seed chat-history.json with entity reference content for entity-refs.spec.ts
 // and image paths for lightbox.spec.ts
 await fs.writeFile(
@@ -432,6 +447,24 @@ await fs.writeFile(
           },
         ],
         timestamp: new Date(Date.now() - 15_000).toISOString(),
+      },
+      {
+        tag: 'ai',
+        role: 'user',
+        content: 'Record the walkthrough video',
+        timestamp: new Date(Date.now() - 10_000).toISOString(),
+        displayText: 'Record the walkthrough video',
+      },
+      {
+        tag: 'ai',
+        role: 'assistant',
+        content: [
+          {
+            type: 'text',
+            text: `Video recorded and delivered: ${path.join(testVideoDir, 'walkthrough.mp4')}`,
+          },
+        ],
+        timestamp: new Date(Date.now() - 5_000).toISOString(),
       },
     ],
   }),
@@ -489,6 +522,37 @@ await fs.writeFile(
 await fs.writeFile(
   path.join(memoryDir, 'index.md'),
   '# Memory Index\n\n- daily/: Daily logs\n- topics/: Topic files\n- projects/: Project memories\n- knowledge/: Knowledge base\n- working-memory.md: Active context\n',
+)
+
+// ── Path-selector fixtures (session-path-selector.spec.ts) ──
+// Real on-disk tree the list-dirs route lists for real, + seeded
+// frequent-directories.json so the picker has history/frecency data.
+const psFixtureRoot = path.join(tmpBase, 'ps-fixture')
+await fs.mkdir(path.join(psFixtureRoot, 'projects', 'walnut', 'web'), { recursive: true })
+await fs.mkdir(path.join(psFixtureRoot, 'projects', 'wallets'), { recursive: true })
+await fs.mkdir(path.join(psFixtureRoot, 'projects', 'zmarinax'), { recursive: true })
+await fs.mkdir(path.join(psFixtureRoot, 'projects', '.hiddenproj'), { recursive: true })
+await fs.mkdir(path.join(psFixtureRoot, 'other'), { recursive: true })
+await fs.writeFile(
+  path.join(tmpBase, 'frequent-directories.json'),
+  JSON.stringify({
+    version: 1,
+    compiledAt: new Date().toISOString(),
+    directories: [
+      {
+        cwd: path.join(psFixtureRoot, 'projects', 'walnut'),
+        host: null, count: 25,
+        lastUsed: new Date(Date.now() - 3600_000).toISOString(),
+        categoryVotes: { Passion: 25 },
+      },
+      {
+        cwd: path.join(psFixtureRoot, 'other'),
+        host: null, count: 2,
+        lastUsed: new Date(Date.now() - 20 * 86400_000).toISOString(),
+        categoryVotes: { Inbox: 2 },
+      },
+    ],
+  }, null, 2),
 )
 
 // Ensure src/web/static symlink exists → dist/web/static

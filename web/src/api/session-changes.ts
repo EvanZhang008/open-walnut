@@ -7,7 +7,9 @@ export interface SessionFileChange {
   relPath: string;
   before: string;
   after: string;
-  status: 'added' | 'modified' | 'deleted';
+  status: 'added' | 'modified' | 'deleted' | 'renamed';
+  /** For a rename (mv/git mv), the repo-relative ORIGINAL path. */
+  oldRelPath?: string;
   ops: number;
   partial: boolean;
 }
@@ -67,6 +69,22 @@ export async function fetchSessionChanges(
   return apiGet<SessionChangesResult>(
     `/api/sessions/${sessionId}/changes`,
     Object.keys(params).length ? params : undefined,
+    { signal: opts?.signal, timeoutMs: 60_000 },
+  );
+}
+
+/**
+ * Lightweight changed-files fetch for quick-access lists (Files tab): same
+ * compute/cache as the full call but before/after are stripped server-side
+ * (?light=1) — only paths, repo roots and statuses come back.
+ */
+export async function fetchSessionChangedPaths(
+  sessionId: string,
+  opts?: { signal?: AbortSignal },
+): Promise<SessionChangesResult> {
+  return apiGet<SessionChangesResult>(
+    `/api/sessions/${sessionId}/changes`,
+    { light: '1' },
     { signal: opts?.signal, timeoutMs: 60_000 },
   );
 }

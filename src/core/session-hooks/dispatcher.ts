@@ -10,7 +10,6 @@
  * Fast path: events not starting with 'session:' are skipped immediately.
  */
 
-import { randomBytes } from 'node:crypto';
 import { bus, EventNames } from '../event-bus.js';
 import type { BusEvent } from '../event-bus.js';
 import type { SessionMode } from '../types.js';
@@ -28,8 +27,6 @@ import type {
   OnModeChangePayload,
   OnTurnCompletePayload,
   OnTurnErrorPayload,
-  OnSessionEndPayload,
-  OnSessionIdlePayload,
 } from './types.js';
 import { PayloadBuilder } from './payload.js';
 import { log } from '../../logging/index.js';
@@ -40,24 +37,19 @@ interface SessionState {
   awaitingFirstResponse: boolean;
   turnIndex: number;
   lastMode?: SessionMode;
-  idleTimer?: ReturnType<typeof setTimeout>;
   lastActivityAt: number;
 }
 
 const DEFAULT_HANDLER_TIMEOUT_MS = 30_000;
 const DEFAULT_AGENT_TIMEOUT_MS = 120_000;
-const DEFAULT_IDLE_TIMEOUT_MS = 300_000; // 5 min
 
 export class SessionHookDispatcher {
   private hooks: SessionHookDefinition[] = [];
   private sessionState = new Map<string, SessionState>();
   private payloadBuilder = new PayloadBuilder();
-  private idleTimeoutMs: number;
   private pruneTimer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(config?: SessionHooksConfig) {
-    this.idleTimeoutMs = config?.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
-  }
+  constructor(_config?: SessionHooksConfig) {}
 
   /**
    * Register hook definitions and subscribe to the event bus.
@@ -141,10 +133,6 @@ export class SessionHookDispatcher {
       clearInterval(this.pruneTimer);
       this.pruneTimer = null;
     }
-    // Clear all idle timers
-    for (const [, state] of this.sessionState) {
-      if (state.idleTimer) clearTimeout(state.idleTimer);
-    }
     this.sessionState.clear();
     this.payloadBuilder.clearAll();
   }
@@ -178,8 +166,8 @@ export class SessionHookDispatcher {
 
     if (!sessionId) return;
 
-    // Reset idle timer on any activity
-    this.resetIdleTimer(sessionId, taskId, event.traceId);
+    // Track activity for turn-state bookkeeping.
+    this.getOrCreateState(sessionId).lastActivityAt = Date.now();
 
     for (const { hookPoint, extraPayload } of hookPoints) {
       const matching = this.hooks.filter(h => h.hooks.includes(hookPoint));
@@ -369,13 +357,11 @@ export class SessionHookDispatcher {
       }
 
       case EventNames.SESSION_ENDED: {
-        results.push({
-          hookPoint: 'onSessionEnd',
-          extraPayload: {} satisfies Partial<OnSessionEndPayload>,
-        });
-        // Cleanup session state
-        const endState = this.sessionState.get(sessionId);
-        if (endState?.idleTimer) clearTimeout(endState.idleTimer);
+        // No hook point maps here anymore. session:ended is a UI-refresh signal
+        // emitted after EVERY turn (server.ts), NOT a real end-of-session — the
+        // former 'onSessionEnd'/'onSessionIdle' hook points were removed because
+        // that misnomer made hooks fire per-turn (the session-summary-gist bug).
+        // Keep only the state cleanup: payload cache is rebuilt fresh next turn.
         this.sessionState.delete(sessionId);
         this.payloadBuilder.clearSession(sessionId);
         break;
@@ -383,32 +369,6 @@ export class SessionHookDispatcher {
     }
 
     return results;
-  }
-
-  // ── Idle timer ──
-
-  private resetIdleTimer(sessionId: string, taskId: string | undefined, _traceId: string): void {
-    const state = this.getOrCreateState(sessionId);
-    if (state.idleTimer) clearTimeout(state.idleTimer);
-
-    const matching = this.hooks.filter(h => h.hooks.includes('onSessionIdle'));
-    if (matching.length === 0) return;
-
-    state.idleTimer = setTimeout(async () => {
-      // Generate a fresh traceId for the idle event (the original traceId from
-      // the last activity event would be stale and misleading in traces)
-      const idleTraceId = randomBytes(4).toString('hex');
-      const context = await this.payloadBuilder.build(sessionId, taskId, idleTraceId);
-      const payload: OnSessionIdlePayload = {
-        ...context,
-        idleSinceMs: Date.now() - state.lastActivityAt,
-      };
-
-      const filtered = matching.filter(h => this.matchesFilter(h, context));
-      await Promise.allSettled(
-        filtered.map(h => this.dispatchHook(h, 'onSessionIdle', payload)),
-      );
-    }, this.idleTimeoutMs);
   }
 
   // ── Hook dispatch ──

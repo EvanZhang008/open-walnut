@@ -39,6 +39,20 @@ export async function uploadNoteAttachment(
   });
 }
 
+/**
+ * Reveal / open a vault file or folder on the local machine (context menu):
+ * 'finder' = Reveal in Finder, 'app' = open with the default app (Word/Excel/
+ * Preview…), 'vscode' = open in VS Code, 'path' = just resolve (for Copy path).
+ * Returns the absolute path. Local console only (400 in cloud mode).
+ */
+export async function revealNote(
+  path: string,
+  mode: 'finder' | 'app' | 'vscode' | 'path',
+): Promise<string> {
+  const res = await apiPost<{ ok: boolean; fullPath: string }>('/api/notes-v2/reveal', { path, mode });
+  return res.fullPath;
+}
+
 export interface NoteListItem {
   path: string;
   name: string;

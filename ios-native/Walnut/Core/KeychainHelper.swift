@@ -1,9 +1,22 @@
 import Foundation
 import Security
 
-/// Minimal Keychain wrapper for the device token (kSecClassGenericPassword).
+/// Device-token store. Prefers the Keychain (kSecClassGenericPassword); falls
+/// back to UserDefaults when the Keychain is unavailable.
+///
+/// Why the fallback: an unsigned build (simulator archives with no keychain
+/// access group, or a stripped provisioning profile) makes `SecItemAdd` fail
+/// with `errSecMissingEntitlement (-34018)`. The old code ignored that status,
+/// so the token silently never persisted — every cold start bounced back to
+/// setup and every authenticated request failed with "Server not configured"
+/// while cached data masked it. We now check the status and degrade to
+/// UserDefaults so the app keeps working; a properly signed device build still
+/// uses the Keychain.
 enum KeychainHelper {
     private static let service = "dev.openwalnut.ios"
+    /// UserDefaults key prefix for the fallback store (namespaced to avoid
+    /// colliding with the app's other prefs).
+    private static let fallbackPrefix = "walnut.keychainFallback."
 
     static func set(_ value: String, forKey key: String) {
         let data = Data(value.utf8)
@@ -17,7 +30,15 @@ enum KeychainHelper {
         var attributes = query
         attributes[kSecValueData as String] = data
         attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        SecItemAdd(attributes as CFDictionary, nil)
+        let status = SecItemAdd(attributes as CFDictionary, nil)
+        if status == errSecSuccess {
+            // Keychain took it — clear any stale fallback so reads prefer it.
+            UserDefaults.standard.removeObject(forKey: fallbackPrefix + key)
+        } else {
+            // Keychain unavailable (e.g. -34018 on an unsigned build): persist
+            // to UserDefaults so the token still survives a cold start.
+            UserDefaults.standard.set(value, forKey: fallbackPrefix + key)
+        }
     }
 
     static func get(_ key: String) -> String? {
@@ -30,8 +51,11 @@ enum KeychainHelper {
         ]
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        if status == errSecSuccess, let data = result as? Data, let value = String(data: data, encoding: .utf8) {
+            return value
+        }
+        // Fall back to the UserDefaults copy written when the Keychain failed.
+        return UserDefaults.standard.string(forKey: fallbackPrefix + key)
     }
 
     static func delete(_ key: String) {
@@ -41,5 +65,6 @@ enum KeychainHelper {
             kSecAttrAccount as String: key,
         ]
         SecItemDelete(query as CFDictionary)
+        UserDefaults.standard.removeObject(forKey: fallbackPrefix + key)
     }
 }

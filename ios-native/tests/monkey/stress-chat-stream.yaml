@@ -1,0 +1,41 @@
+# Freeze-class stressor: interact with the UI WHILE a long reply streams.
+# The historical freeze came from per-delta markdown re-parsing on the main
+# thread — this flow reproduces that load and asserts the UI stays responsive
+# (every tap below fails the flow if the element can't be hit within timeout).
+appId: dev.openwalnut.ios
+---
+- launchApp
+- tapOn:
+    id: "chat.composer"
+- inputText: "Write a 1500-word essay about distributed systems with many markdown headings, bullet lists, code blocks and tables. Do not ask questions, just write it."
+- tapOn:
+    id: "chat.send"
+# While streaming: the UI must stay interactive. Each assertion has a timeout;
+# a frozen main thread fails the flow here.
+- repeat:
+    times: 6
+    commands:
+      - swipe:
+          direction: UP
+          duration: 400
+      - swipe:
+          direction: DOWN
+          duration: 400
+      - extendedWaitUntil:
+          visible:
+              id: "chat.composer"
+          timeout: 5000
+# Tab away and back mid-stream — store lifecycle under streaming load.
+- tapOn: "Notes"
+- tapOn: "Chat"
+- extendedWaitUntil:
+    visible:
+        id: "chat.composer"
+    timeout: 5000
+# Background/foreground mid-stream (SSE teardown + revive path).
+- pressKey: home
+- launchApp
+- extendedWaitUntil:
+    visible:
+        id: "chat.composer"
+    timeout: 10000

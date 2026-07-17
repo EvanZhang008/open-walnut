@@ -512,6 +512,45 @@ export class DaemonConnection {
   }
 
   /**
+   * Answer a daemon-relayed STT request (phone voice input arriving over the
+   * cloud bridge while this box holds the transcription engine). Runs the
+   * configured local engine and replies with an `stt-result` carrying the
+   * relayId. Errors are reported back (not thrown) so the daemon can fail the
+   * bridge request and let the cloud box fall back to OpenAI. The audio
+   * payload is never logged.
+   */
+  private async handleSttRequest(event: DaemonEvent): Promise<void> {
+    const relayId = event.relayId
+    const audio = event.audio
+    const format = event.format
+    if (typeof relayId !== 'number' || typeof audio !== 'string' || typeof format !== 'string') return
+    let reply: Record<string, unknown>
+    try {
+      const { getConfig } = await import('../core/config-manager.js')
+      const { transcribeAudio } = await import('../core/stt/index.js')
+      const result = await transcribeAudio(await getConfig(), {
+        audio, format,
+        language: typeof event.language === 'string' && event.language !== '' ? event.language : undefined,
+      })
+      log.session.info('DaemonConnection: stt relay transcribed', {
+        host: this.hostKey, relayId, chars: result.text.length, durationMs: result.durationMs,
+      })
+      reply = { relayId, text: result.text, durationMs: result.durationMs }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      log.session.warn('DaemonConnection: stt relay failed', { host: this.hostKey, relayId, message })
+      reply = { relayId, error: message }
+    }
+    try {
+      await this.send('stt-result', reply)
+    } catch (err) {
+      log.session.warn('DaemonConnection: stt-result send failed', {
+        host: this.hostKey, relayId, message: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  /**
    * Disconnect from the daemon and clean up SSH tunnel.
    * Does NOT stop the daemon — it continues running independently.
    *
@@ -1463,6 +1502,24 @@ export class DaemonConnection {
       // happily tunneled to a port nobody was listening on.
       // Binary has `--status` subcommand; source daemon doesn't, so use `kill -0`
       // on its PID file instead. See daemon-source.ts — no --status handler.
+      // Readiness probe: POLL for the port file + live pid, up to ~45s.
+      // A fixed `sleep 2` raced daemon boot on loaded hosts (a busy dev box
+      // took ~20s from nohup to port write) — the probe declared failure
+      // while the daemon was still booting, connect() threw, and overlapping
+      // retries then stop-for-upgrade'd each other's half-booted daemons in a
+      // loop. Net effect: a 43-minute host outage that only self-healed when
+      // a retry landed after some earlier spawn finished booting. The poll
+      // breaks the loop by letting the FIRST attempt succeed.
+      const waitReady =
+        'for i in $(seq 1 22); do ' +
+        'DPID=$(cat /tmp/open-walnut/daemon.pid 2>/dev/null); ' +
+        '[ -s /tmp/open-walnut/daemon.port ] && [ -n "$DPID" ] && kill -0 "$DPID" 2>/dev/null && break; ' +
+        'sleep 2; done'
+      const confirmRunning =
+        'cat /tmp/open-walnut/daemon.port && echo && ' +
+        'DPID=$(cat /tmp/open-walnut/daemon.pid 2>/dev/null) && ' +
+        '[ -n "$DPID" ] && kill -0 "$DPID" 2>/dev/null && echo "{\\"running\\":true}"'
+
       let startCmd: string
       if (this._deployedViaSource && this._bunPath) {
         // Source deployed under bun — exec bun by absolute path (no preamble).
@@ -1470,14 +1527,12 @@ export class DaemonConnection {
         // populate process.env.PATH so cmdStart's spawn('claude', ...) finds the
         // CLI. See daemon-source.ts "PATH setup" block.
         startCmd = `nohup ${this._bunPath} /tmp/open-walnut/daemon.cjs --start > /tmp/open-walnut/daemon-start.log 2>&1 & ` +
-          'sleep 2 && cat /tmp/open-walnut/daemon.port && echo && ' +
-          'DPID=$(cat /tmp/open-walnut/daemon.pid 2>/dev/null) && ' +
-          '[ -n "$DPID" ] && kill -0 "$DPID" 2>/dev/null && echo "{\\"running\\":true}"'
+          `${waitReady}; ${confirmRunning}`
       } else if (!this._deployedViaSource && await this.getLocalBinaryPath()) {
         // Binary deploy — run directly, no PATH setup needed
         const remotePath = await this.getRemoteDaemonPath()
         startCmd = `nohup ${remotePath} --start > /tmp/open-walnut/daemon-start.log 2>&1 & ` +
-          `sleep 2 && cat /tmp/open-walnut/daemon.port && echo && ${remotePath} --status`
+          `${waitReady}; cat /tmp/open-walnut/daemon.port && echo && ${remotePath} --status`
       } else {
         // Source deploy under node — needs node PATH discovery.
         // `[ -n "$DPID" ]` guards against empty pid file (cat succeeds but
@@ -1485,12 +1540,10 @@ export class DaemonConnection {
         // the current shell's pid).
         const preamble = buildRemotePreamble(this.ssh.shell_setup)
         startCmd = `${preamble}; nohup node /tmp/open-walnut/daemon.cjs --start > /tmp/open-walnut/daemon-start.log 2>&1 & ` +
-          'sleep 2 && cat /tmp/open-walnut/daemon.port && echo && ' +
-          'DPID=$(cat /tmp/open-walnut/daemon.pid 2>/dev/null) && ' +
-          '[ -n "$DPID" ] && kill -0 "$DPID" 2>/dev/null && echo "{\\"running\\":true}"'
+          `${waitReady}; ${confirmRunning}`
       }
 
-      const output = await this.sshExec(startCmd, 20_000)
+      const output = await this.sshExec(startCmd, 60_000)
 
       // Parse out port + status confirmation. Defensive against preamble noise:
       // the source-deploy branch runs shell_setup which may source rc files
@@ -1637,6 +1690,12 @@ export class DaemonConnection {
     return new Promise((resolve, reject) => {
       const url = typeof urlOrPort === 'string' ? urlOrPort : `ws://127.0.0.1:${urlOrPort}`
       this._lastWsUrl = url
+      // maxPayload stays at the ws default (100MB) DELIBERATELY — it is the
+      // tripwire that caught inc-1783842393500 (134MB one-frame fs.read of a
+      // whale JSONL → "Max payload size exceeded"). DaemonFileReader chunks all
+      // big file reads to 1MB frames now; the largest remaining legit frame is
+      // a git.diff response (git stdout capped at 64MB in cmdGitDiff), so do
+      // NOT lower this without chunking git.diff first.
       const ws = new WebSocket(url, { handshakeTimeout: 10_000 })
 
       ws.on('open', () => {
@@ -1733,6 +1792,13 @@ export class DaemonConnection {
     // Unsolicited event (has 'ev' field)
     if ('ev' in msg) {
       const event = msg as unknown as DaemonEvent
+      // STT relay (cloud voice input): the daemon forwards phone audio from
+      // its bridge here because this box has the transcription engine. Handled
+      // internally — session-level eventHandlers never see it.
+      if (event.ev === 'stt-request') {
+        void this.handleSttRequest(event)
+        return
+      }
       // DUP-DEBUG: if handlerCount > 1, every event below fans out N times.
       // jsonl events are high-frequency — only log when something is off
       // (multiple handlers) or for low-frequency event types.
@@ -1779,6 +1845,21 @@ export class DaemonConnection {
 
   private scheduleReconnect(delayMs: number): void {
     if (this._destroyed || this._connected || this.reconnectTimer) return
+
+    // Auto-reconnect for __local__ is a pool-instance privilege. A __local__
+    // connection outside the pool is an orphan from the pre-pool leak (or a
+    // future bypass construction site) — letting it keep a permanent backoff
+    // loop is exactly how the 100-instance reconnect storm formed. Scoped to
+    // __local__: tests legitimately hold private direct-ws connections to
+    // per-test MockDaemons under other host keys. WALNUT_LOCAL_CONN_POOL=0
+    // (legacy private-connection mode) disables the guard too.
+    if (this.hostKey === '__local__' && process.env.WALNUT_LOCAL_CONN_POOL !== '0' && !isPooledConnection(this)) {
+      log.session.warn('DaemonConnection: skipping auto-reconnect for non-pooled __local__ instance', {
+        host: this.hostKey,
+      })
+      this.disconnect()
+      return
+    }
 
     this.reconnectTimer = setTimeout(async () => {
       this.reconnectTimer = null
@@ -2058,8 +2139,10 @@ export class DaemonConnection {
   private startPing(): void {
     if (this.pingTimer) clearInterval(this.pingTimer)
     this.pingTimer = setInterval(() => {
-      // Detect stale connection: if no pong received for 2 ping intervals, connection is dead
-      if (this.lastPongAt > 0 && Date.now() - this.lastPongAt > DaemonConnection.PING_INTERVAL_MS * 2) {
+      // Detect stale connection: if no pong received for 3 ping intervals, connection is dead.
+      // 3x (45s) instead of 2x absorbs transient event-loop stalls at boot (QMD rebuild,
+      // session recovery) that previously cascaded into disconnect→reconnect→mass reattach.
+      if (this.lastPongAt > 0 && Date.now() - this.lastPongAt > DaemonConnection.PING_INTERVAL_MS * 3) {
         log.session.warn('DaemonConnection: no pong received, connection stale', {
           host: this.hostKey,
           lastPongAgoMs: Date.now() - this.lastPongAt,
@@ -2174,6 +2257,61 @@ export async function getDaemonConnection(hostKey: string, sshTarget: SshTarget)
 
   connectingPromises.set(hostKey, promise)
   return promise
+}
+
+/**
+ * Pooled variant of connectDirect() — ONE shared connection per WebSocket URL.
+ *
+ * Before this existed, every local session's RemoteSessionManager did a private
+ * `new DaemonConnection(...).connectDirect(wsUrl)`, bypassing the pool. Those
+ * instances were never destroyed (kill()/cleanup() deliberately leave the conn
+ * alone, assuming it's shared) — so a server that had started 100+ local
+ * sessions held 100+ live connections, each with its own ping timer and its own
+ * permanent exponential-backoff reconnect loop. One local-daemon restart then
+ * produced 100+ simultaneous reconnects (the observed reconnect storm) and the
+ * daemon carried 100+ useless WS clients.
+ *
+ * Pool key is the wsUrl (`direct:<wsUrl>`), not the hostKey: tests spin up
+ * per-test MockDaemons on distinct ports and must not share connections.
+ *
+ * Rollback: WALNUT_LOCAL_CONN_POOL=0 restores the private-connection behavior
+ * at the call site (remote-session-manager.ts).
+ */
+export async function getDirectDaemonConnection(hostKey: string, wsUrl: string): Promise<DaemonConnection> {
+  const poolKey = `direct:${wsUrl}`
+  const existing = connectionPool.get(poolKey)
+  if (existing?.connected) return existing
+
+  const pending = connectingPromises.get(poolKey)
+  if (pending) return pending
+
+  let conn = connectionPool.get(poolKey)
+  if (!conn) {
+    conn = new DaemonConnection(hostKey, null)
+    connectionPool.set(poolKey, conn)
+  }
+
+  const promise = conn.connectDirect(wsUrl).then(() => {
+    connectingPromises.delete(poolKey)
+    return conn!
+  }).catch((err) => {
+    connectingPromises.delete(poolKey)
+    throw err
+  })
+
+  connectingPromises.set(poolKey, promise)
+  return promise
+}
+
+/**
+ * True when this instance is (still) the pooled connection for some key.
+ * Auto-reconnect is a pool-instance privilege — see scheduleReconnect.
+ */
+export function isPooledConnection(conn: DaemonConnection): boolean {
+  for (const pooled of connectionPool.values()) {
+    if (pooled === conn) return true
+  }
+  return false
 }
 
 /**

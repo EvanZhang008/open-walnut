@@ -48,6 +48,44 @@ describe('GET /api/sessions', () => {
   });
 });
 
+describe('GET /api/sessions/working-dirs', () => {
+  it('includes all configured hosts even with zero session history', async () => {
+    // The launcher's host tabs are built from this response. A freshly added
+    // remote host has NO history yet — it must still be offered, otherwise the
+    // user can never start that first session (chicken-and-egg).
+    const { CONFIG_FILE } = await import('../../../src/constants.js');
+    await fs.mkdir(WALNUT_HOME, { recursive: true });
+    await fs.writeFile(CONFIG_FILE, [
+      'version: 1',
+      'hosts:',
+      '  freshbox:',
+      '    hostname: fresh.example.com',
+      '    label: Fresh Box',
+      '  unlabeled:',
+      '    hostname: unlabeled.example.com',
+      '',
+    ].join('\n'));
+
+    const app = createApp();
+    const res = await request(app).get('/api/sessions/working-dirs');
+
+    expect(res.status).toBe(200);
+    expect(res.body.dirs).toEqual([]);
+    expect(res.body.hosts).toEqual(expect.arrayContaining([
+      { alias: 'freshbox', label: 'Fresh Box' },
+      { alias: 'unlabeled', label: 'unlabeled' }, // label falls back to alias
+    ]));
+  });
+
+  it('returns empty hosts array when no hosts configured', async () => {
+    const app = createApp();
+    const res = await request(app).get('/api/sessions/working-dirs');
+
+    expect(res.status).toBe(200);
+    expect(res.body.hosts).toEqual([]);
+  });
+});
+
 describe('GET /api/sessions/recent', () => {
   it('returns recent sessions sorted by lastActiveAt', async () => {
     await createSessionRecord('old-sess', 'task-1', 'proj');

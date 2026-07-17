@@ -111,6 +111,34 @@ export function useBackgroundTasks(sessionId: string | undefined): BackgroundTas
     return () => { cancelled = true; };
   }, [sessionId]);
 
+  // On WS reconnect, re-fetch the persisted manifest. A server restart drops the
+  // in-memory ClaudeCodeSession (and thus the live event stream) but the daemon
+  // keeps running — reattach recovers `_bgTasks` server-side and, once the recovery
+  // or reconcile logic corrects it, re-emits a fresh snapshot; but the client may
+  // have missed that server-side stream state before this listener existed
+  // (inc-1784012867247: no reconnect handler here means the panel kept showing
+  // whatever it last got BEFORE the disconnect, forever — every other stream-backed
+  // hook in the codebase already re-syncs on reconnect, this one didn't). Setting
+  // sawLiveRef back to false lets a still-authoritative manifest fetch apply even
+  // though a live snapshot arrived before the disconnect.
+  useEvent('_ws:reconnected', () => {
+    if (!sessionId) return;
+    sawLiveRef.current = false;
+    fetchWorkflowProgress(sessionId).then((snap) => {
+      if (!snap || sawLiveRef.current) return;
+      log.info('workflow', `reconnect: restored persisted workflow: agents=${snap.agents?.length ?? 0} phases=${snap.phases?.length ?? 0}`, { sessionId });
+      setState({
+        workflowName: snap.workflowName,
+        workflowDescription: snap.workflowDescription,
+        scriptSource: snap.scriptSource,
+        inFlight: snap.inFlight ?? 0,
+        tasks: [],
+        phases: Array.isArray(snap.phases) ? snap.phases : [],
+        agents: Array.isArray(snap.agents) ? (snap.agents as WorkflowAgent[]) : [],
+      });
+    }).catch(() => {});
+  });
+
   useEvent('session:background-tasks', (data) => {
     const d = data as {
       sessionId?: string;

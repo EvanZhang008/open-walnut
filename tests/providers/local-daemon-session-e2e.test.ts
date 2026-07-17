@@ -179,6 +179,51 @@ describe.skipIf(!binaryExists())('Local daemon session E2E', () => {
     ws.close()
   }, 20000)
 
+  // Restart-to-reinitialize path: cmdStart now accepts an ABSENT message. The CLI
+  // must still spawn and emit its init event (SessionStart hook + fresh settings
+  // load happen here) WITHOUT any user turn being written to the FIFO. This is the
+  // protocol change that makes the Restart button actually re-initialize.
+  it('spawns and emits init with NO message (idle re-init)', async () => {
+    const daemon = new LocalDaemon({ daemonDir: DAEMON_DIR })
+    const port = await daemon.ensureRunning()
+
+    const ws = new WebSocket(`ws://localhost:${port}`)
+    await new Promise((r) => ws.on('open', r))
+
+    const lines: string[] = []
+    ws.on('message', (data) => {
+      const msg = JSON.parse(data.toString())
+      if (msg.ev === 'jsonl' && typeof msg.line === 'string') lines.push(msg.line)
+    })
+
+    // Mock CLI emits ONLY an init line (like a real `claude -p --resume` that has
+    // received no user turn), then idles on stdin until killed.
+    const mockClaude = makeMockClaude(tmpDir, [
+      '{"type":"system","subtype":"init","session_id":"reinit-sid","model":"claude-test"}',
+    ])
+
+    const sid = 'test-local-reinit-' + Date.now()
+    const startRes = await sendCmd(ws, {
+      cmd: 'start',
+      sid,
+      args: [mockClaude],
+      cwd: tmpDir,
+      // NO message field — the key assertion. cmdStart must not reject this.
+      mode: 'default',
+    })
+    expect(startRes.ok).toBe(true)
+    expect(startRes.pid).toBeGreaterThan(0)
+
+    await new Promise((r) => setTimeout(r, 1500))
+
+    // init streamed through even though we sent no message, and NO user turn was
+    // injected into the JSONL (the FIFO got no `{"type":"user",...}` write).
+    expect(lines.some((l) => l.includes('"init"'))).toBe(true)
+    expect(lines.some((l) => l.includes('"type":"user"'))).toBe(false)
+
+    ws.close()
+  }, 20000)
+
   it('bypass mode auto-allows control_request — walnut never sees it', async () => {
     const daemon = new LocalDaemon({ daemonDir: DAEMON_DIR })
     const port = await daemon.ensureRunning()

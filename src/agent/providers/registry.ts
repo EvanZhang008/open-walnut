@@ -19,6 +19,7 @@ import { AnthropicAdapter } from './adapter-anthropic.js';
 import { OpenAIAdapter } from './adapter-openai.js';
 import { GoogleAdapter } from './adapter-google.js';
 import { OllamaAdapter } from './adapter-ollama.js';
+import { ClaudeCliAdapter } from './adapter-claude-cli.js';
 import { log } from '../../logging/index.js';
 
 // ── Adapter factory ──
@@ -44,6 +45,9 @@ function getOrCreateAdapter(protocol: ApiProtocol): ProtocolAdapter {
       break;
     case 'ollama':
       adapter = new OllamaAdapter();
+      break;
+    case 'claude-cli':
+      adapter = new ClaudeCliAdapter();
       break;
     default:
       throw new Error(`Unknown protocol: ${protocol}`);
@@ -139,6 +143,10 @@ function applyResolvedBedrockAuth(bedrock: ProviderConfig, fullConfig?: Config):
       break;
     case 'profile':
       out.aws_profile = resolved.profile;
+      break;
+    case 'credential_process':
+      // Surface the command; the adapter runs + caches + refreshes it.
+      out.aws_credential_export = resolved.credentialExportCmd;
       break;
     // 'aws_chain' / null: leave as-is — default credential chain applies.
   }

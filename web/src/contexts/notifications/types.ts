@@ -33,6 +33,10 @@ export interface Notification {
   /** stable identity for de-dup (perm:<requestId>, cron:<job>:<ts>, …). */
   dedupKey: string;
   sessionId?: string;
+  /** deep-link target for task-producing notifications (e.g. cron). */
+  taskId?: string;
+  /** permission notifications only — outcome once the request settles. */
+  resolved?: 'allowed' | 'denied';
   action?: NotificationAction;
   onAction?: () => void;
   /** emit a browser Notification when the tab is hidden (permission only). */
@@ -52,6 +56,13 @@ export const TOAST_DURATION_MS: Record<NotificationKind, number> = {
   'audio-error': 8000,
   skill: 10000,
 };
+
+/**
+ * Feed body cap for entries appended live over WS. Matches MAX_BODY_CHARS in
+ * src/web/routes/notifications.ts (applied server-side on GET) so an entry
+ * doesn't change length after a refresh.
+ */
+export const MAX_FEED_BODY_CHARS = 600;
 
 /** Whether a kind persists to the durable feed (vs toast-only). */
 export const IS_PERSISTENT: Record<NotificationKind, boolean> = {

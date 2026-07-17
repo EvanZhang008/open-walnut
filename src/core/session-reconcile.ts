@@ -505,6 +505,16 @@ export async function reconcileProcessStatus(
       process_status: to,
       activity: undefined,
     }, ['*'], { source: 'session-reconcile', urgency: 'urgent' })
+
+    // Free the task's session slot on terminal converge (mirrors the live result path
+    // in session-runner which clears on stopped/error). Without this, a reconciled
+    // session holds the slot forever and blocks new sessions for the task.
+    if ((to === 'stopped' || to === 'error') && record.taskId) {
+      try {
+        const { clearSessionSlot } = await import('./task-manager.js')
+        await clearSessionSlot(record.taskId, sid)
+      } catch { /* task gone or slot already cleared — harmless */ }
+    }
   }
 
   // ── Phase sync: deliver what the lost result would have delivered ──

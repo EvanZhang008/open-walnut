@@ -4,7 +4,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { getConfig, updateConfig } from '../../core/config-manager.js'
-import { CLOUD_MODE } from '../../constants.js'
+import { CLOUD_MODE, WALNUT_INSTALL_DIR, NOTES_DIR } from '../../constants.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { VALID_PRIORITIES } from '../../core/types.js'
 import { log } from '../../logging/index.js'
@@ -16,35 +16,12 @@ import type { ModelEntry } from '../../agent/providers/types.js'
 
 export const configRouter = Router()
 
-/** Fields that hold provider/API secrets — masked before leaving the box. */
-const SECRET_FIELDS = new Set([
-  'bedrock_bearer_token', 'bearer_token', 'api_key', 'perplexity_api_key',
-  'openai_api_key', 'aws_secret_access_key', 'aws_access_key_id', 'key',
-])
-
-function maskSecret(v: unknown): unknown {
-  if (typeof v !== 'string' || v.length === 0) return v
-  return v.length > 4 ? '••••••••' + v.slice(-4) : '••••'
-}
-
-/**
- * Deep-clone config with every secret-valued field masked. Used in CLOUD mode:
- * config.yaml is git-synced to the public box, and `GET /api/config` is
- * reachable by ANY paired device — returning plaintext provider keys / bearer
- * tokens there would hand a phone token holder the Bedrock credentials. On the
- * trusted-LAN Mac the owner edits real values locally, so it stays unmasked.
- */
-function redactConfig(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(redactConfig)
-  if (value && typeof value === 'object') {
-    const out: Record<string, unknown> = {}
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = SECRET_FIELDS.has(k) ? maskSecret(v) : redactConfig(v)
-    }
-    return out
-  }
-  return value
-}
+// Secret masking lives in core so the bug-report bundler can reuse it.
+// CLOUD-mode rationale: config.yaml is git-synced to the public box, and
+// `GET /api/config` is reachable by ANY paired device — returning plaintext
+// provider keys / bearer tokens there would hand a phone token holder the
+// Bedrock credentials. On the trusted-LAN Mac it stays unmasked.
+import { redactConfig } from '../../core/config-redact.js'
 
 // GET /api/config
 configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
@@ -57,7 +34,17 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
     const envTokenHint = !hasConfigToken && envBearerToken
       ? envBearerToken.slice(0, 8) + '••••••••' + envBearerToken.slice(-4)
       : undefined
-    res.json({ config: CLOUD_MODE ? redactConfig(config) : config, envTokenHint })
+    // installDir: Walnut's own source checkout (null on npm installs / cloud
+    // bundles) — drives the "Fix Walnut" quick-start button. Cloud replicas
+    // proxy sessions to daemons elsewhere, so a local path would be wrong there.
+    // notesDir: the vault root — cwd for "Start Claude Code session" launched
+    // from the /notes page. Local-only for the same reason as installDir.
+    // processNice: >0 means the server inherited a positive nice (launched from
+    // a niced shell) and will be scheduler-starved under load — surfaced so
+    // fix-walnut / bug reports can spot it without shell access.
+    let processNice = 0
+    try { processNice = (await import('node:os')).getPriority() } catch { /* diagnostics only */ }
+    res.json({ config: CLOUD_MODE ? redactConfig(config) : config, envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice })
   } catch (err) {
     next(err)
   }
@@ -66,7 +53,7 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
 // POST /api/config/test-connection — test Bedrock connection with any auth method
 configRouter.post('/test-connection', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { bedrock_region, bedrock_bearer_token, bedrock_access_key, bedrock_secret_key, bedrock_profile } = req.body
+    const { bedrock_region, bedrock_bearer_token, bedrock_access_key, bedrock_secret_key, bedrock_profile, bedrock_credential_export } = req.body
     const config = await getConfig()
     const region = bedrock_region || config.provider?.bedrock_region || config.providers?.bedrock?.region || 'us-west-2'
 
@@ -82,8 +69,20 @@ configRouter.post('/test-connection', async (req: Request, res: Response, next: 
     const accessKey = bedrock_access_key || config.providers?.bedrock?.aws_access_key_id
     const secretKey = bedrock_secret_key || config.providers?.bedrock?.aws_secret_access_key
     const profile = bedrock_profile || config.providers?.bedrock?.aws_profile
+    const credentialExport = bedrock_credential_export || config.providers?.bedrock?.aws_credential_export
 
-    if (bedrock_bearer_token || (!bedrock_access_key && !bedrock_profile && token)) {
+    if (bedrock_credential_export || (!bedrock_bearer_token && !bedrock_access_key && !bedrock_profile && credentialExport)) {
+      // Credential-process command → temp creds
+      const { runCredentialProcess } = await import('../../core/aws-credential-process.js')
+      const creds = await runCredentialProcess(credentialExport)
+      client = new AnthropicBedrock({
+        awsRegion: region,
+        awsAccessKey: creds.accessKeyId,
+        awsSecretKey: creds.secretAccessKey,
+        ...(creds.sessionToken && { awsSessionToken: creds.sessionToken }),
+      } as unknown as ConstructorParameters<typeof AnthropicBedrock>[0])
+      authMethod = 'credential_process'
+    } else if (bedrock_bearer_token || (!bedrock_access_key && !bedrock_profile && token)) {
       // Bearer token auth
       client = new AnthropicBedrock({
         awsRegion: region,
@@ -234,10 +233,28 @@ configRouter.get('/providers', async (_req: Request, res: Response, next: NextFu
         continue
       }
 
+      // claude-cli is keyless: "ready" means the local CLI is installed AND a
+      // subscription credential exists (existence probe only, never the value).
+      if (prov.api === 'claude-cli') {
+        const { detectClaudeCli } = await import('../../core/claude-cli-detect.js')
+        const caps = detectClaudeCli()
+        providers[name] = {
+          api: prov.api,
+          base_url: prov.base_url,
+          status: caps.subscriptionReady ? 'ready' : 'no_key',
+          auto_detected: !explicitNames.has(name),
+          models: getModelsForProvider(name, prov.models),
+          credential_source: caps.subscriptionReady
+            ? 'subscription'
+            : caps.installed ? 'cli_no_subscription' : 'cli_not_installed',
+        }
+        continue
+      }
+
       // Try to resolve the key from env
       const envKey = autoDetectApiKey(name)
       let hasKey = !!(prov.api_key || prov.bearer_token || envKey
-        || prov.aws_access_key_id || prov.aws_profile)
+        || prov.aws_access_key_id || prov.aws_profile || prov.aws_credential_export)
 
       // For Bedrock: check the full AWS credential chain when no explicit key is found
       let awsCredentialSource: 'env' | 'credentials_file' | 'config_file' | undefined
@@ -278,6 +295,7 @@ configRouter.get('/providers', async (_req: Request, res: Response, next: NextFu
         if (prov.bearer_token) credentialSource = 'bearer_token'
         else if (prov.aws_access_key_id) credentialSource = 'access_keys'
         else if (prov.aws_profile) credentialSource = 'profile'
+        else if (prov.aws_credential_export) credentialSource = 'credential_process'
         else if (envKey) credentialSource = 'env_api_key'
         else if (prov.api_key) credentialSource = 'api_key'
         else if (awsCredentialSource) credentialSource = `aws_${awsCredentialSource}`
@@ -298,6 +316,21 @@ configRouter.get('/providers', async (_req: Request, res: Response, next: NextFu
     for (const name of Object.keys(KNOWN_PROVIDERS)) {
       if (!providers[name]) {
         const template = KNOWN_PROVIDERS[name]
+        // claude-cli is keyless: probe the local subscription instead of 'no_key'.
+        if (template.api === 'claude-cli') {
+          const { detectClaudeCli } = await import('../../core/claude-cli-detect.js')
+          const caps = detectClaudeCli()
+          providers[name] = {
+            api: template.api,
+            status: caps.subscriptionReady ? 'ready' : 'no_key',
+            auto_detected: false,
+            models: getModelsForProvider(name),
+            credential_source: caps.subscriptionReady
+              ? 'subscription'
+              : caps.installed ? 'cli_no_subscription' : 'cli_not_installed',
+          }
+          continue
+        }
         providers[name] = {
           api: template.api,
           base_url: template.base_url,
@@ -354,6 +387,9 @@ configRouter.post('/test-provider', async (req: Request, res: Response, next: Ne
         '*': 'gpt-4o-mini',
       },
       'google-generative-ai': { '*': 'gemini-3-flash-preview' },
+      // claude-cli spawns the local `claude -p`; a short alias resolves to the
+      // subscription's model. maxTokens is ignored by the CLI (it runs its own turn).
+      'claude-cli': { '*': 'haiku' },
     }
     const protocolModels = TEST_MODELS[protocol]
     if (!protocolModels) {

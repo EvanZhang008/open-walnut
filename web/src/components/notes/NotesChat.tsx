@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useChat } from '@/hooks/useChat';
 import { listConversations } from '@/api/conversations';
 import { ChatPanel } from '@/components/chat/ChatPanel';
@@ -20,7 +20,12 @@ const NOTE_AGENT_ID = 'note-agent';
  * fetch the active one on mount. `activeNotePath` (the note currently open in the
  * editor) is surfaced to the agent as a one-line context hint on each send.
  */
-export function NotesChat({ activeNotePath }: { activeNotePath: string | null }) {
+export function NotesChat({ activeNotePath, headerLeft }: {
+  activeNotePath: string | null;
+  /** Replaces the "Note Assistant" title — the pane's mode tabs live here when
+   *  the chat column can also host a Claude Code session. */
+  headerLeft?: ReactNode;
+}) {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -53,7 +58,7 @@ export function NotesChat({ activeNotePath }: { activeNotePath: string | null })
   return (
     <div className="notes-chat">
       <div className="notes-chat-header">
-        <span className="notes-chat-title">Note Assistant</span>
+        {headerLeft ?? <span className="notes-chat-title">Note Assistant</span>}
         {chat.messages.length > 0 && (
           <button
             className="notes-chat-clear"

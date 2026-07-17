@@ -275,6 +275,10 @@ export class LocalDaemon {
     delete env.VITEST_WORKER_ID
     delete env.VITEST_POOL_ID
     delete env.OPEN_WALNUT_HOME
+    // Legacy ephemeral marker: nothing reads it anymore (IS_EPHEMERAL is argv-based
+    // now), but stale builds running inside daemon-spawned CLIs might — scrub it so
+    // the daemon can never become a carrier again (incident 2026-07-14).
+    delete env.OPEN_WALNUT_EPHEMERAL
     if (env.NODE_ENV === 'test') delete env.NODE_ENV
 
     const proc = spawn(binaryPath, ['--start'], {

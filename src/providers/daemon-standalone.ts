@@ -248,7 +248,7 @@ interface WsData {
  * bridge socket is a compromised-cloud-box escalation attempt and is rejected.
  */
 const BRIDGE_ALLOWED_COMMANDS = new Set([
-  'status', 'appendUserMarker', 'send', 'attach', 'read-history', 'ping',
+  'status', 'appendUserMarker', 'send', 'attach', 'read-history', 'ping', 'bridgeResume', 'stt',
 ])
 
 // DUP-DEBUG: per-process counter and lookup map for stable ws ids.
@@ -687,6 +687,7 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
     case 'write-inbox': return cmdWriteInbox(ws, id as number, cmd)
     case 'fs.read': return cmdFsRead(ws, id as number, cmd)
     case 'fs.write': return cmdFsWrite(ws, id as number, cmd)
+    case 'fs.mkdir': return cmdFsMkdir(ws, id as number, cmd)
     case 'fs.ls': return cmdFsLs(ws, id as number, cmd)
     case 'fs.find': return cmdFsFind(ws, id as number, cmd)
     case 'fs.stat': return cmdFsStat(ws, id as number, cmd)
@@ -694,6 +695,9 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
     case 'git.diff': return cmdGitDiff(ws, id as number, cmd)
     case 'list': return cmdList(ws, id as number)
     case 'bridge.configure': return cmdBridgeConfigure(ws, id as number, cmd)
+    case 'bridgeResume': return cmdBridgeResume(ws, id as number, cmd)
+    case 'stt': return cmdSttRelay(ws, id as number, cmd)
+    case 'stt-result': return cmdSttResult(ws, id as number, cmd)
     case 'ping': return sendOk(ws, id as number, { pong: true })
     case 'hello': return sendOk(ws, id as number, {
       version: DAEMON_VERSION,
@@ -706,13 +710,157 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
   }
 }
 
+// ── Bridge-safe resume: respawn a dead session with --resume <sid> ──
+// Unlike `start` (which takes arbitrary argv from the caller — unsafe over
+// the public bridge), `bridgeResume` only accepts {sid, message, cwd?, model?}
+// and builds the argv itself: either the registry's stored args (patched to
+// --resume this sid) or, when the record is gone (daemon restarted — the
+// registry only persists RUNNING sessions), a fixed default `claude --resume`
+// command. Gated on the session's jsonl existing in STREAMS_DIR, which proves
+// the session genuinely lived on this host — so a compromised cloud box still
+// can't run arbitrary commands, only wake conversations that were here.
+function cmdBridgeResume(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const { sid, message, cwd: cwdHint, model } = cmd as {
+    sid: string; message: string; cwd?: string; model?: string
+  }
+  if (!sid || !message) {
+    return sendError(ws, id, 'bridgeResume: missing sid or message')
+  }
+
+  const session = sessions.get(sid)
+
+  if (session && session.state === 'running') {
+    // Already alive — just send the message directly.
+    return cmdSend(ws, id, { cmd: 'send', sid, message })
+  }
+
+  // The jsonl is the proof-of-residence: without it this sid never ran here.
+  const jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl')
+  if (!fs.existsSync(jsonlPath)) {
+    return sendError(ws, id, 'bridgeResume: session not found: ' + sid)
+  }
+
+  // cwd: registry record → caller's projection hint. --resume only finds the
+  // conversation when the cwd matches the original, so a wrong hint just
+  // yields a "No conversation found" turn error, not a security problem.
+  const cwd = (session?.cwd && session.cwd !== '') ? session.cwd : cwdHint
+  if (!cwd) {
+    return sendError(ws, id, 'bridgeResume: no cwd known for session (record lost, no hint)')
+  }
+
+  // argv: stored args when the record survived; otherwise the standard
+  // resume command (mirrors the Mac's spawn-time construction).
+  let args: string[]
+  if (session?.args && session.args.length > 0) {
+    // Ensure --resume <sid>: fresh-start args lack it (replaying them
+    // verbatim would spawn a NEW conversation); stale values get rewritten.
+    args = [...session.args]
+    const ri = args.indexOf('--resume')
+    if (ri >= 0 && ri + 1 < args.length) {
+      args[ri + 1] = sid
+    } else {
+      args.push('--resume', sid)
+    }
+  } else {
+    args = [
+      'claude', '-p',
+      '--output-format', 'stream-json',
+      '--verbose',
+      '--include-partial-messages',
+      '--debug',
+      '--permission-mode', 'default',
+      ...(model ? ['--model', model] : []),
+      '--resume', sid,
+      '--input-format', 'stream-json',
+      '--permission-prompt-tool', 'stdio',
+    ]
+  }
+
+  logMsg('info', 'bridgeResume: respawning dead session', {
+    sid, cwd, recordLost: !session || !session.args || session.args.length === 0,
+  })
+  cmdStart(ws, id, {
+    cmd: 'start',
+    sid,
+    args,
+    cwd,
+    message,
+    resume: true,
+    mode: session?.mode ?? 'default',
+  })
+}
+
+// ── STT relay: bridge audio → the connected walnut server's local engine ──
+// The daemon has no transcription engine of its own. A bridge `stt` request
+// is relayed as an `stt-request` event to a TRUSTED (non-bridge) client — the
+// walnut server holding this daemon's WS — which runs its configured engine
+// and answers with an `stt-result` command carrying the same relayId. No
+// trusted client connected (Mac down) → fail fast so the cloud box falls back
+// to its own OpenAI path. Audio payloads are never logged.
+
+const STT_RELAY_TIMEOUT_MS = 90_000
+let sttRelayCounter = 0
+const sttRelayPending = new Map<number, {
+  ws: ServerWebSocket<WsData>; id: number; timer: ReturnType<typeof setTimeout>
+}>()
+
+function cmdSttRelay(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const { audio, format, language } = cmd as { audio?: string; format?: string; language?: string }
+  if (!audio || !format) {
+    return sendError(ws, id, 'stt: missing audio or format')
+  }
+  // Pick any trusted client (never the bridge adapter — that would bounce the
+  // request straight back to the cloud). Normally there is exactly one: the
+  // walnut server's DaemonConnection.
+  let target: ServerWebSocket<WsData> | null = null
+  for (const client of wsClients) {
+    if (client.data?.origin !== 'bridge') { target = client; break }
+  }
+  if (!target) {
+    return sendError(ws, id, 'stt: no transcription host connected')
+  }
+  const relayId = ++sttRelayCounter
+  const timer = setTimeout(() => {
+    sttRelayPending.delete(relayId)
+    sendError(ws, id, 'stt: transcription timed out')
+  }, STT_RELAY_TIMEOUT_MS)
+  sttRelayPending.set(relayId, { ws, id, timer })
+  logMsg('info', 'stt: relaying to transcription host', { relayId, format, audioB64Len: audio.length })
+  sendEvent(target, 'stt-request', { relayId, audio, format, language })
+}
+
+function cmdSttResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const { relayId, text, durationMs, error } = cmd as {
+    relayId?: number; text?: string; durationMs?: number; error?: string
+  }
+  const pending = typeof relayId === 'number' ? sttRelayPending.get(relayId) : undefined
+  if (!pending) {
+    // Late result after timeout — ack and drop.
+    return sendOk(ws, id, { stale: true })
+  }
+  sttRelayPending.delete(relayId as number)
+  clearTimeout(pending.timer)
+  if (typeof text === 'string' && !error) {
+    logMsg('info', 'stt: relay complete', { relayId, chars: text.length, durationMs })
+    sendOk(pending.ws, pending.id, { text, durationMs: durationMs ?? 0 })
+  } else {
+    sendError(pending.ws, pending.id, 'stt: ' + (error ?? 'transcription failed'))
+  }
+  sendOk(ws, id, {})
+}
+
 // ── Start a Claude session ──
 function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const { sid, args, cwd, message, resume, mode } = cmd as {
-    sid: string; args: string[]; cwd: string; message: string; resume?: boolean; mode?: string
+    sid: string; args: string[]; cwd: string; message?: string; resume?: boolean; mode?: string
   }
-  if (!sid || !args || !cwd || !message) {
-    return sendError(ws, id, 'start: missing required fields (sid, args, cwd, message)')
+  // `message` is OPTIONAL: an empty/absent message spawns the CLI without writing
+  // any user turn to the FIFO — the process emits `init` (+ SessionStart hook, fresh
+  // settings/skills/MCP load) then blocks on stdin, idle. This is the "restart to
+  // re-initialize, don't run a turn" path (POST /restart with an empty queue). A
+  // present message keeps the classic behavior (spawn + deliver the first turn).
+  if (!sid || !args || !cwd) {
+    return sendError(ws, id, 'start: missing required fields (sid, args, cwd)')
   }
 
   // Validate cwd exists before spawning — prevents misleading ENOENT on /bin/bash
@@ -868,12 +1016,19 @@ function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, u
     logMsg('error', 'spawn error (post-start)', { sid, error: err.message })
   })
 
-  // Write initial message to FIFO
-  const payload = JSON.stringify({
-    type: 'user',
-    message: { role: 'user', content: message },
-  })
-  fs.writeSync(pipeFd, Buffer.from(payload + '\n'))
+  // Write initial message to FIFO — only when one was provided. An empty message
+  // means "spawn idle" (restart-to-reinitialize): the CLI still opens stdin and
+  // emits its init event, but runs no turn. We keep the pipeFd open across the
+  // O_RDWR lifetime like the send path, so the FIFO survives until the first real
+  // message; closing it here (as the message path does after writing) is fine
+  // because the CLI already holds its own read end.
+  if (message) {
+    const payload = JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content: message },
+    })
+    fs.writeSync(pipeFd, Buffer.from(payload + '\n'))
+  }
   fs.closeSync(pipeFd)
 
   // Close fds in parent
@@ -1763,6 +1918,26 @@ async function cmdFsWrite(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
     sendOk(ws, id, { written: true, size: buf.length })
   } catch (err: unknown) {
     sendError(ws, id, 'fs.write failed: ' + (err as Error).message)
+  }
+}
+
+async function cmdFsMkdir(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  let dirPath = cmd.path as string
+  if (!dirPath) return sendError(ws, id, 'fs.mkdir: missing path')
+
+  // Expand ~ to home directory (Node fs doesn't do shell expansion)
+  if (dirPath === '~' || dirPath.startsWith('~/')) {
+    dirPath = HOME_DIR + dirPath.slice(1)
+  }
+
+  try {
+    // recursive:true tolerates already-existing directories (idempotent)
+    await fs.promises.mkdir(dirPath, { recursive: true })
+    sendOk(ws, id, { created: true, resolvedPath: dirPath })
+  } catch (err: unknown) {
+    const e = err as NodeJS.ErrnoException
+    const code = e.code ?? ''
+    sendError(ws, id, 'fs.mkdir failed: ' + e.message + (code ? ' (' + code + ')' : ''))
   }
 }
 

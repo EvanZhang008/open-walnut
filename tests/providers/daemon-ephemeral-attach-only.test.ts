@@ -1,7 +1,7 @@
 /**
  * Unit tests for ephemeral attach-only isolation (DaemonConnection).
  *
- * An ephemeral server (OPEN_WALNUT_EPHEMERAL=1) runs over a snapshot of production
+ * An ephemeral server (argv --_ephemeral-child) runs over a snapshot of production
  * data. It MAY attach to an already-running remote daemon to debug live sessions,
  * but must NEVER deploy/start/stop/redeploy it — two servers owning the singleton
  * remote daemon caused a redeploy/restart crash loop.

@@ -62,7 +62,17 @@ async function request<T>(method: string, path: string, body?: unknown, extra?: 
   }
   if (res.status === 204) return undefined as T;
   const jsonT0 = performance.now();
-  const data = await res.json();
+  let data: T;
+  try {
+    data = await res.json();
+  } catch (jsonErr) {
+    // Server may return a truncated or empty body (e.g. killed mid-response,
+    // partial write through a proxy, or stale static asset). Surface it as an
+    // ApiError so callers' existing .catch() paths handle it gracefully instead
+    // of an uncaught exception crashing React.
+    console.error(`[api] ${method} ${path} → ${res.status} JSON parse failed in ${Math.round(performance.now() - jsonT0)}ms`, jsonErr);
+    throw new ApiError(res.status, `Response body is not valid JSON (${(jsonErr as Error).message ?? 'parse error'})`);
+  }
   const jsonMs = Math.round(performance.now() - jsonT0);
   // Log slow requests (>500ms network or >100ms JSON parse)
   if (elapsed > 500 || jsonMs > 100) {
@@ -75,6 +85,24 @@ async function request<T>(method: string, path: string, body?: unknown, extra?: 
 export function apiGet<T>(path: string, params?: Record<string, string>, opts?: { signal?: AbortSignal; timeoutMs?: number }): Promise<T> {
   const url = params ? `${path}?${new URLSearchParams(params)}` : path;
   return request<T>('GET', url, undefined, opts);
+}
+
+/** GET a text/plain endpoint (e.g. /api/bug-report) with the same auth/timeout plumbing. */
+export async function apiGetText(path: string, params?: Record<string, string>, opts?: { timeoutMs?: number }): Promise<string> {
+  const url = params ? `${path}?${new URLSearchParams(params)}` : path;
+  const headers: Record<string, string> = {};
+  const deviceToken = getDeviceToken();
+  if (deviceToken) headers['Authorization'] = `Bearer ${deviceToken}`;
+  const res = await fetch(url, { method: 'GET', headers, signal: AbortSignal.timeout(opts?.timeoutMs ?? 30_000) });
+  if (!res.ok) {
+    let message = res.statusText;
+    try {
+      const data = await res.json();
+      if (data.error) message = data.error;
+    } catch { /* use statusText */ }
+    throw new ApiError(res.status, message);
+  }
+  return res.text();
 }
 
 export function apiPost<T>(path: string, body?: unknown, opts?: { timeoutMs?: number }): Promise<T> {

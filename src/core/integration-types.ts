@@ -186,6 +186,20 @@ export interface RegisteredPlugin {
   migrations: MigrateFn[];
   httpRoutes: HttpRoute[];
   extIndex?: ExtIndexSpec;
+  /** Manifest configSchema/uiHints — drives the data-driven Settings → Integrations form. */
+  configSchema?: Record<string, unknown>;
+  uiHints?: Record<string, { label?: string; help?: string }>;
+}
+
+/** Plugin discovered on disk but not loaded because required config is missing.
+ *  Kept so the Settings UI can tell the user exactly what to fill in. */
+export interface UnconfiguredPlugin {
+  id: string;
+  name: string;
+  description?: string;
+  missing: string[];
+  configSchema?: Record<string, unknown>;
+  uiHints?: Record<string, { label?: string; help?: string }>;
 }
 
 // ── Manifest: plugin manifest.json schema ──

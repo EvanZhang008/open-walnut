@@ -12,13 +12,15 @@ const CONTEXT_WINDOW_DEFAULT = 200_000; // fallback when backend doesn't provide
 
 interface QuickAccessBarProps {
   onSessionClick: () => void;
+  /** Fix Walnut pill — omit to hide (e.g. npm installs / cloud, where installDir is unknown). */
+  onFixWalnutClick?: () => void;
   mode?: ChatMode;
   onModeToggle?: () => void;
   /** Chat stats for the context-usage % indicator (omit to hide it). */
   stats?: ChatStats | null;
 }
 
-export function QuickAccessBar({ onSessionClick, mode, onModeToggle, stats }: QuickAccessBarProps) {
+export function QuickAccessBar({ onSessionClick, onFixWalnutClick, mode, onModeToggle, stats }: QuickAccessBarProps) {
   const isPlan = mode === 'plan';
 
   const contextWindow = stats?.contextWindow ?? CONTEXT_WINDOW_DEFAULT;
@@ -31,11 +33,21 @@ export function QuickAccessBar({ onSessionClick, mode, onModeToggle, stats }: Qu
       <button
         className="quick-access-pill"
         onClick={onSessionClick}
-        title="Quick Start a session (/session)"
+        title="Type a path and start a Claude Code session there directly (/session)"
       >
         <span className="quick-access-pill-icon">{'\u{1F4BB}'}</span>
-        <span className="quick-access-pill-label">/session</span>
+        <span className="quick-access-pill-label">Quick session</span>
       </button>
+      {onFixWalnutClick && (
+        <button
+          className="quick-access-pill"
+          onClick={onFixWalnutClick}
+          title="Something wrong with Walnut? Describe it (paste a screenshot too) and a session will fix it"
+        >
+          <span className="quick-access-pill-icon">{'\u{1F527}'}</span>
+          <span className="quick-access-pill-label">fix-walnut</span>
+        </button>
+      )}
       {onModeToggle && (
         <button
           className={`mode-toggle-pill${isPlan ? ' plan-active' : ''}`}

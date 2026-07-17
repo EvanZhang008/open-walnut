@@ -33,6 +33,28 @@ export const sessionStreamV1Router = Router()
 
 const SID_RE = /^[A-Za-z0-9_-]+$/
 
+// ── Image attachments (additive) — mirrors session-chat.ts constants ──
+const ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
+const MAX_SESSION_IMAGES = 5
+const MAX_IMAGE_BASE64_LENGTH = 14_000_000 // ~10MB binary
+
+interface SessionImage { data: string; mediaType: string }
+
+/** Extract valid image payloads from a request body (silently drops junk). */
+function extractValidImages(raw: unknown): SessionImage[] {
+  if (!Array.isArray(raw)) return []
+  return (raw as Array<{ data?: unknown; mediaType?: unknown }>)
+    .filter((img) =>
+      typeof img?.data === 'string'
+      && img.data.length > 0
+      && img.data.length <= MAX_IMAGE_BASE64_LENGTH
+      && typeof img.mediaType === 'string'
+      && ALLOWED_MIME.has(img.mediaType),
+    )
+    .slice(0, MAX_SESSION_IMAGES)
+    .map((img) => ({ data: img.data as string, mediaType: img.mediaType as string }))
+}
+
 function sendError(res: Response, status: number, code: string, message: string): void {
   res.status(status).json({ error: { code, message } })
 }
@@ -142,41 +164,67 @@ function ensureBusSubscriber(): void {
 
 // ─── Cloud path: session → host lookup + bridge send sequence ───────────────
 
-async function projectedHostForSession(sessionId: string): Promise<string | null> {
+async function projectedSession(sessionId: string): Promise<{ host: string; cwd?: string; model?: string } | null> {
   const { readSessionProjection } = await import('../../core/session-projection.js')
   const projection = await readSessionProjection()
   const s = projection?.sessions.find((p) => p.id === sessionId)
   if (!s) return null
   // Projection: '' = the primary box; daemons register as '__local__'.
-  return s.host === '' ? '__local__' : s.host
+  return { host: s.host === '' ? '__local__' : s.host, cwd: s.cwd, model: s.model }
+}
+
+async function projectedHostForSession(sessionId: string): Promise<string | null> {
+  return (await projectedSession(sessionId))?.host ?? null
 }
 
 async function cloudSend(res: Response, sessionId: string, text: string): Promise<void> {
-  const host = await projectedHostForSession(sessionId)
-  if (!host) {
+  const projected = await projectedSession(sessionId)
+  if (!projected) {
     sendError(res, 404, 'not_found', `Session not found: ${sessionId}`)
     return
   }
+  const host = projected.host
   const { bridgeRequest, BridgeOfflineError } = await import('../ws/bridge-registry.js')
   try {
-    // Mirror the Mac's send sequence: liveness precheck → turn-start marker
-    // (walnutMessageId dedup rides the jsonl) → FIFO write.
+    // Liveness precheck — if the CLI is gone (dead record, or the record
+    // itself was lost to a daemon restart), attempt a bridgeResume instead
+    // of 409. This lets the phone send to idle/stopped/error sessions
+    // without the Mac being online. The daemon gates the resume on the
+    // session's jsonl existing on that host.
     const status = await bridgeRequest(host, 'status', { sid: sessionId })
-    if (status.exists !== true || status.alive !== true) {
-      sendError(res, 409, 'session_dead', 'Session process is not running — wake it from your desktop')
-      return
-    }
     const messageId = `qm-mobile-${crypto.randomBytes(6).toString('hex')}`
-    await bridgeRequest(host, 'appendUserMarker', { sid: sessionId, message: text, messageId })
-    const sent = await bridgeRequest(host, 'send', { sid: sessionId, message: text })
-    if (sent.ok !== true) {
-      const reason = String(sent.reason ?? sent.error ?? 'unknown')
-      if (reason === 'ENXIO' || reason === 'session_dead' || reason === 'not_found') {
-        sendError(res, 409, 'session_dead', 'Session process is not running — wake it from your desktop')
-      } else {
-        sendError(res, 503, 'bridge_offline', `Send failed: ${reason}`)
+    if (status.exists === true && status.alive === true) {
+      // Live path — append marker + FIFO write (same as before).
+      await bridgeRequest(host, 'appendUserMarker', { sid: sessionId, message: text, messageId })
+      const sent = await bridgeRequest(host, 'send', { sid: sessionId, message: text })
+      if (sent.ok !== true) {
+        const reason = String(sent.reason ?? sent.error ?? 'unknown')
+        if (reason === 'ENXIO' || reason === 'session_dead' || reason === 'not_found') {
+          sendError(res, 409, 'session_dead', 'Session process died mid-send')
+        } else {
+          sendError(res, 503, 'bridge_offline', `Send failed: ${reason}`)
+        }
+        return
       }
-      return
+    } else {
+      // Dead/lost path — resume. The daemon rebuilds argv from its stored
+      // record when it survived, else from the cwd/model hints we pass from
+      // the projection. Marker first (best-effort — it needs a record, and
+      // the jsonl survives death) so the transcript shows the user's
+      // message; bridgeResume then writes it as the initial stdin line,
+      // same as the Mac's --resume spawn path in session-runner.
+      if (status.exists === true) {
+        await bridgeRequest(host, 'appendUserMarker', { sid: sessionId, message: text, messageId }).catch(() => {})
+      }
+      const resumed = await bridgeRequest(host, 'bridgeResume', {
+        sid: sessionId, message: text, cwd: projected.cwd, model: projected.model,
+      }, 30_000)
+      if (!resumed.pid) {
+        const reason = String(resumed.error ?? 'resume failed')
+        sendError(res, 409, 'session_dead', reason)
+        return
+      }
+      log.web.info('mobile session resumed via bridge', { sessionId, host, messageId, pid: resumed.pid })
     }
     log.web.info('mobile session send via bridge', { sessionId, host, messageId })
     res.status(202).json({ messageId })
@@ -271,13 +319,25 @@ sessionStreamV1Router.post('/sessions/:id/messages', async (req: Request, res: R
       sendError(res, 400, 'bad_request', 'Invalid session id')
       return
     }
-    const text = req.body?.text
-    if (typeof text !== 'string' || text.trim() === '') {
+    // Additive: `images` allows an otherwise-empty text turn. Old clients that
+    // send no images keep the exact 400-on-empty-text behavior.
+    const images = extractValidImages(req.body?.images)
+    const rawText = req.body?.text
+    const text = typeof rawText === 'string' ? rawText : ''
+    if (text.trim() === '' && images.length === 0) {
       sendError(res, 400, 'bad_request', 'text (non-empty string) is required')
       return
     }
 
     if (CLOUD_MODE) {
+      // The CLI runs on a different machine than this EC2 replica, so images
+      // saved here are unreadable by the session's Read tool. Uploading base64
+      // over the bridge needs the privileged fs.write (not in the bridge
+      // allowlist) — out of scope. Reject clearly instead of silently dropping.
+      if (images.length > 0) {
+        sendError(res, 400, 'images_not_supported_cloud', 'Images can only be sent to sessions from the primary box')
+        return
+      }
       await cloudSend(res, sessionId, text)
       return
     }
@@ -288,12 +348,37 @@ sessionStreamV1Router.post('/sessions/:id/messages', async (req: Request, res: R
       sendError(res, 404, 'not_found', `Session not found: ${sessionId}`)
       return
     }
+
+    // Save images to disk and reference them by path in the augmented message —
+    // the CLI's stdin only takes text, so it reads the files with its Read tool.
+    // Same "[Images attached …]" prefix format as the WS session-chat path.
+    // Remote sessions: RemoteSessionManager.prepareOutbound() uploads the local
+    // files and rewrites the paths on the way to the exec host (no work here).
+    let enqueueText: string | undefined
+    if (images.length > 0) {
+      const { saveImageToDisk } = await import('./images.js')
+      const savedPaths: string[] = []
+      for (const img of images) {
+        try {
+          const { filePath } = await saveImageToDisk(img.data, img.mediaType)
+          savedPaths.push(filePath)
+        } catch (err) {
+          log.web.warn('Failed to save mobile session image', { sessionId, error: err instanceof Error ? err.message : String(err) })
+        }
+      }
+      if (savedPaths.length > 0) {
+        const pathList = savedPaths.map((p) => `- ${p}`).join('\n')
+        enqueueText = `[Images attached — use the Read tool to view them]\n${pathList}\n\n${text}`
+      }
+    }
+
     const { sendMessageToSession } = await import('../../core/session-message-queue.js')
     const msg = await sendMessageToSession(sessionId, text, {
       source: 'mobile',
       taskId: record.taskId,
+      ...(enqueueText ? { enqueueMessage: enqueueText } : {}),
     })
-    log.web.info('mobile session send accepted', { sessionId, messageId: msg.id })
+    log.web.info('mobile session send accepted', { sessionId, messageId: msg.id, imageCount: images.length })
     res.status(202).json({ messageId: msg.id })
   } catch (err) {
     next(err)

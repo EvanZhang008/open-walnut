@@ -94,6 +94,29 @@ describe('task-db: schema idempotency', () => {
       | undefined;
     expect(row?.title).toBe('t');
   });
+
+  it('a failed open rethrows the ORIGINAL error on every later call (never silent null)', async () => {
+    // Force the open to fail: TASKS_DIR occupied by a plain file, so the
+    // mkdirSync inside getDb() throws. This simulates any hard open failure
+    // (e.g. the missing better-sqlite3 native binding seen in prod 2026-07-10).
+    await fsp.rm(TASKS_DIR, { recursive: true, force: true });
+    await fsp.writeFile(TASKS_DIR, 'not a directory');
+
+    let firstErr: unknown;
+    try { getDb(); } catch (err) { firstErr = err; }
+    expect(firstErr).toBeTruthy();
+
+    // Subsequent calls must surface the same root cause — a silent `null`
+    // here degrades every caller to "Cannot read properties of null".
+    expect(() => getDb()).toThrow();
+    try { getDb(); } catch (err) { expect(err).toBe(firstErr); }
+
+    // closeDb() clears the poisoned state so a repaired environment recovers.
+    await fsp.rm(TASKS_DIR, { force: true });
+    await fsp.mkdir(TASKS_DIR, { recursive: true });
+    closeDb();
+    expect(getDb()).not.toBeNull();
+  });
 });
 
 // ── 2. CRUD round-trip ─────────────────────────────────────────────────────

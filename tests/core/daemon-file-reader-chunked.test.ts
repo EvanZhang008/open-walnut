@@ -1,15 +1,19 @@
 /**
- * DaemonFileReader chunked-read regression tests (inc-1783532915925).
+ * DaemonFileReader chunked-read regression tests
+ * (inc-1783532915925 remote, inc-1783842393500 local).
  *
- * Root cause under test: whole-file fs.read of a >10MB session JSONL serialized
- * into ONE WebSocket frame, which corp SSH proxies kill mid-transfer — the
- * client only sees a pong gap + 30s read timeout, and history never loads.
+ * Root cause under test: whole-file fs.read serialized into ONE WebSocket
+ * frame. Remote: corp SSH proxies kill giant frames mid-transfer (11.4MB JSONL,
+ * seen only as a pong gap + 30s read timeout). Local: the ws client's default
+ * maxPayload (100MB) hard-kills the connection (134MB JSONL → "Max payload
+ * size exceeded" + daemon connection bounced on every open).
  * Fix: readFile() stats first and switches to fs.readRange 1MB chunks above
- * CHUNK_THRESHOLD. These tests pin the chunking protocol:
+ * CHUNK_THRESHOLD — for ALL hosts, __local__ included. These tests pin:
  *   - byte-exact reassembly (a range boundary can split a UTF-8 multi-byte char)
- *   - small files / local host keep the plain fs.read path
+ *   - small files keep the plain fs.read path
  *   - stat failure degrades to plain fs.read (old daemons)
  *   - ENOENT stays null (not a throw)
+ *   - local host chunks exactly like remote (no proxy ≠ no frame limit)
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -178,7 +182,20 @@ describe('DaemonFileReader chunked reads', () => {
     expect(callsFor('fs.readRange').length).toBeGreaterThan(1)
   })
 
-  it('local host (__local__) never stats or chunks — in-process daemon has no proxy in the path', async () => {
+  it('local whale (__local__, > CHUNK_THRESHOLD) chunks via fs.readRange — inc-1783842393500 (134MB one-frame fs.read exceeded ws maxPayload)', async () => {
+    const content = 'x'.repeat(CHUNK_THRESHOLD + CHUNK_SIZE / 2)
+    const fileBuf = Buffer.from(content, 'utf-8')
+    serveFile(fileBuf)
+
+    const reader = new DaemonFileReader('__local__')
+    const result = await reader.readFile('/local/whale.jsonl')
+
+    expect(result).toBe(content)
+    expect(callsFor('fs.read')).toHaveLength(0) // the incident path — must not be taken
+    expect(callsFor('fs.readRange')).toHaveLength(Math.ceil(fileBuf.length / CHUNK_SIZE))
+  })
+
+  it('small local file keeps the plain fs.read path (stat, then one fs.read)', async () => {
     const fileBuf = Buffer.from('local content', 'utf-8')
     serveFile(fileBuf)
 
@@ -186,7 +203,7 @@ describe('DaemonFileReader chunked reads', () => {
     const result = await reader.readFile('/local/file.jsonl')
 
     expect(result).toBe('local content')
-    expect(callsFor('fs.stat')).toHaveLength(0)
     expect(callsFor('fs.readRange')).toHaveLength(0)
+    expect(callsFor('fs.read')).toHaveLength(1)
   })
 })

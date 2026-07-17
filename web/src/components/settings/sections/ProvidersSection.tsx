@@ -11,10 +11,11 @@ import { InstallButton } from '@/components/common/InstallButton';
 // `api` matches ProviderConfig.api (the ApiProtocol union). Typing the field as the union
 // (not `string`) lets `template.api` assign cleanly into ProviderConfig without widening,
 // while keeping `base_url` optional across all entries (an `as const` tuple would drop it).
-type ProviderApi = 'anthropic-messages' | 'openai-chat' | 'bedrock' | 'google-generative-ai' | 'ollama';
+type ProviderApi = 'anthropic-messages' | 'openai-chat' | 'bedrock' | 'google-generative-ai' | 'ollama' | 'claude-cli';
 const ALL_PROVIDERS: { name: string; label: string; api: ProviderApi; base_url?: string; needsKey: boolean }[] = [
   { name: 'bedrock', label: 'AWS Bedrock', api: 'bedrock', needsKey: false },
   { name: 'anthropic', label: 'Anthropic', api: 'anthropic-messages', needsKey: true },
+  { name: 'claude_cli', label: 'Claude Code Subscription', api: 'claude-cli', needsKey: false },
   { name: 'openai', label: 'OpenAI', api: 'openai-chat', needsKey: true },
   { name: 'openrouter', label: 'OpenRouter', api: 'openai-chat', base_url: 'https://openrouter.ai/api/v1', needsKey: true },
   { name: 'gemini', label: 'Google Gemini', api: 'google-generative-ai', needsKey: true },
@@ -33,6 +34,7 @@ const PROTOCOL_LABELS: Record<string, string> = {
   'bedrock': 'AWS Bedrock',
   'google-generative-ai': 'Google Generative AI',
   'ollama': 'Local Ollama',
+  'claude-cli': 'Local `claude` CLI (subscription, text-only)',
 };
 
 /** Display label for a model entry — use label if available, else truncated ID. */
@@ -71,6 +73,7 @@ function BedrockConfig({
     bedrock_access_key?: string;
     bedrock_secret_key?: string;
     bedrock_profile?: string;
+    bedrock_credential_export?: string;
   }) => Promise<void>;
   testStatus: 'idle' | 'testing' | 'ok' | 'error';
   testMsg?: string;
@@ -84,6 +87,7 @@ function BedrockConfig({
   const [accessKey, setAccessKey] = useState(bedrockConf?.aws_access_key_id ?? '');
   const [secretKey, setSecretKey] = useState(bedrockConf?.aws_secret_access_key ?? '');
   const [profile, setProfile] = useState(bedrockConf?.aws_profile ?? '');
+  const [credentialExport, setCredentialExport] = useState(bedrockConf?.aws_credential_export ?? '');
   const [profiles, setProfiles] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
 
@@ -93,14 +97,15 @@ function BedrockConfig({
   const isReady = serverInfo?.status === 'ready';
 
   // Determine which method the backend is actually using
-  const detectedMethod: 'token' | 'keys' | 'profile' | 'auto' =
+  const detectedMethod: 'token' | 'keys' | 'profile' | 'export' | 'auto' =
     cs === 'bearer_token' ? 'token'
     : (cs === 'access_keys' || cs === 'env_api_key' || cs === 'aws_env' || cs === 'aws_credentials_file' || cs === 'api_key') ? 'keys'
     : (cs === 'profile' || cs === 'aws_config_file') ? 'profile'
+    : cs === 'credential_process' ? 'export'
     : 'auto';
 
   // Selected credential tab — defaults to backend-detected method, or 'token' as fallback
-  const [selectedMethod, setSelectedMethod] = useState<'token' | 'keys' | 'profile'>(
+  const [selectedMethod, setSelectedMethod] = useState<'token' | 'keys' | 'profile' | 'export'>(
     detectedMethod !== 'auto' ? detectedMethod : 'token'
   );
 
@@ -111,6 +116,7 @@ function BedrockConfig({
     setAccessKey(bc?.aws_access_key_id ?? '');
     setSecretKey(bc?.aws_secret_access_key ?? '');
     setProfile(bc?.aws_profile ?? '');
+    setCredentialExport(bc?.aws_credential_export ?? '');
   }, [config]);
 
   // Update selected tab when backend detection changes
@@ -124,21 +130,39 @@ function BedrockConfig({
   }, []);
 
   // Save with a specific method (uses current field values).
-  // `regionOverride` lets the region <select> save immediately without waiting for the
-  // async setRegion state update to flush (onChange handler still holds the old `region`).
-  const saveWithMethod = async (method: 'token' | 'keys' | 'profile', regionOverride?: string) => {
+  // `overrides` lets <select> onChange handlers save immediately without waiting for
+  // the async setState to flush — the handler's closure still holds the OLD value, so
+  // saving without an override would persist the stale (often empty) field. That was
+  // the "profile snaps back to None" bug: save wrote no aws_profile, the config echo
+  // then reset the dropdown.
+  const saveWithMethod = async (
+    method: 'token' | 'keys' | 'profile' | 'export',
+    overrides?: { region?: string; profile?: string },
+  ) => {
+    const effProfile = overrides?.profile ?? profile;
     const creds: Record<string, string> = {};
     if (method === 'token' && token) creds.bearer_token = token;
     if (method === 'keys' && accessKey) creds.aws_access_key_id = accessKey;
     if (method === 'keys' && secretKey) creds.aws_secret_access_key = secretKey;
-    if (method === 'profile' && profile) creds.aws_profile = profile;
+    if (method === 'profile' && effProfile) creds.aws_profile = effProfile;
+    if (method === 'export' && credentialExport) creds.aws_credential_export = credentialExport;
+
+    // Preserve non-credential fields (models, base_url, …) while REPLACING the
+    // credential fields — switching auth method must not leave the old method's
+    // secret behind, but must also not wipe the provider's model list.
+    const {
+      bearer_token: _bt, aws_access_key_id: _ak, aws_secret_access_key: _sk,
+      aws_profile: _pf, aws_credential_export: _ce,
+      ...rest
+    } = config.providers?.bedrock ?? {};
 
     await onSave({
       providers: {
         ...config.providers,
         bedrock: {
+          ...rest,
           api: 'bedrock' as const,
-          region: regionOverride ?? region,
+          region: overrides?.region ?? region,
           ...creds,
         },
       },
@@ -156,15 +180,16 @@ function BedrockConfig({
   };
 
   // Check if a method has the required fields filled
-  const methodReady = (method: 'token' | 'keys' | 'profile'): boolean => {
+  const methodReady = (method: 'token' | 'keys' | 'profile' | 'export'): boolean => {
     if (method === 'token') return !!(token || (cs === 'bearer_token'));  // env token counts
     if (method === 'keys') return !!(accessKey && secretKey);
     if (method === 'profile') return !!(profile || profiles.length > 0);  // profile dropdown has a default
+    if (method === 'export') return !!(credentialExport || cs === 'credential_process');
     return false;
   };
 
   // Radio click: select + auto-save only if fields are ready
-  const selectMethod = (method: 'token' | 'keys' | 'profile') => {
+  const selectMethod = (method: 'token' | 'keys' | 'profile' | 'export') => {
     if (method === selectedMethod) return;
     setSelectedMethod(method);
     if (methodReady(method)) saveWithMethod(method);
@@ -183,6 +208,7 @@ function BedrockConfig({
       params.bedrock_secret_key = secretKey;
     }
     if (selectedMethod === 'profile' && profile) params.bedrock_profile = profile;
+    if (selectedMethod === 'export' && credentialExport) params.bedrock_credential_export = credentialExport;
     onTest(params);
   };
 
@@ -192,7 +218,7 @@ function BedrockConfig({
       <div className="provider-config-row">
         <div className="form-group" style={{ margin: 0, flex: 1, maxWidth: 200 }}>
           <label htmlFor="bedrock-region">Region</label>
-          <select id="bedrock-region" value={region} onChange={(e) => { const r = e.target.value; setRegion(r); if (methodReady(selectedMethod)) saveWithMethod(selectedMethod, r); }}>
+          <select id="bedrock-region" value={region} onChange={(e) => { const r = e.target.value; setRegion(r); if (methodReady(selectedMethod)) saveWithMethod(selectedMethod, { region: r }); }}>
             {BEDROCK_REGIONS.map((r) => <option key={r} value={r}>{r}</option>)}
           </select>
         </div>
@@ -272,7 +298,14 @@ function BedrockConfig({
               id="bedrock-profile"
               value={profile}
               disabled={selectedMethod !== 'profile'}
-              onChange={(e) => { setProfile(e.target.value); setTimeout(handleFieldBlur, 0); }}
+              onChange={(e) => {
+                // Pass the picked value straight to save — the `profile` state var in this
+                // closure is stale (setState hasn't flushed), so relying on handleFieldBlur
+                // here used to save an EMPTY profile and the dropdown snapped back to None.
+                const p = e.target.value;
+                setProfile(p);
+                saveWithMethod('profile', { profile: p });
+              }}
             >
               <option value="">None (auto-detect)</option>
               {profiles.map((p) => <option key={p} value={p}>{p}</option>)}
@@ -293,6 +326,31 @@ function BedrockConfig({
               {cs === 'aws_config_file' && !profile
                 ? <>Using <code style={{ fontSize: 11 }}>~/.aws/config</code>. Select a profile to override.</>
                 : 'Supports SSO, credential_process, role chaining.'}
+            </p>
+          )}
+        </div>
+
+        {/* Credential command (awsCredentialExport) — SSO / temporary creds */}
+        <div className={`bedrock-cred-group${selectedMethod !== 'export' ? ' dimmed' : ''}`}>
+          <label className="bedrock-cred-radio" onClick={() => selectMethod('export')}>
+            <input type="radio" name="bedrock-auth" checked={selectedMethod === 'export'} onChange={() => selectMethod('export')} />
+            <span>Credential command</span>
+          </label>
+          <input
+            id="bedrock-credential-export"
+            type="text"
+            value={credentialExport}
+            onChange={(e) => setCredentialExport(e.target.value)}
+            onBlur={handleFieldBlur}
+            disabled={selectedMethod !== 'export'}
+            placeholder="e.g. aws configure export-credentials --format process"
+            autoComplete="off"
+          />
+          {selectedMethod === 'export' && (
+            <p className="text-xs text-muted" style={{ marginTop: 2 }}>
+              {cs === 'credential_process' && !credentialExport
+                ? <>Detected from <code style={{ fontSize: 11 }}>~/.claude/settings.json</code> (<code style={{ fontSize: 11 }}>awsCredentialExport</code>). Enter to override.</>
+                : 'A command that prints temporary AWS creds as JSON. Auto-refreshed near expiry.'}
             </p>
           )}
         </div>
@@ -538,10 +596,16 @@ function ProviderCard({
     else if (cs === 'aws_config_file') statusLabel = 'Ready (~/.aws/config)';
     else if (cs === 'aws_env') statusLabel = 'Ready (AWS env vars)';
     else if (cs === 'bearer_token' && isEnv) statusLabel = 'Ready (env)';
+    else if (cs === 'subscription') statusLabel = 'Ready (subscription logged in)';
     else if (isEnv) statusLabel = 'Ready (env)';
     else statusLabel = 'Ready';
   }
   else if (def.api === 'ollama') { statusDot = 'error'; statusLabel = 'Offline'; }
+  else if (def.api === 'claude-cli') {
+    const cs = serverInfo?.credential_source;
+    statusDot = 'error';
+    statusLabel = cs === 'cli_not_installed' ? 'CLI not installed' : 'Not logged in';
+  }
 
   const envKeyName = `${def.name.toUpperCase().replace(/-/g, '_')}_API_KEY`;
 
@@ -621,8 +685,40 @@ function ProviderCard({
             </div>
           )}
 
-          {/* Non-key providers (bedrock handled above, ollama) */}
-          {!def.needsKey && def.api !== 'bedrock' && (
+          {/* Claude Code subscription: text-only, no tool calls — spawns the local `claude` CLI */}
+          {def.api === 'claude-cli' && (
+            <div>
+              {serverInfo?.credential_source === 'cli_not_installed' && (
+                <>
+                  <p className="text-sm text-muted">
+                    Claude Code CLI is not installed. Install it, then log in with{' '}
+                    <code style={{ fontSize: 11 }}>claude login</code> to use your subscription.
+                  </p>
+                  <div style={{ marginTop: 8 }}>
+                    <InstallButton target="claude-cli" label="Install Claude Code CLI" />
+                  </div>
+                </>
+              )}
+              {serverInfo?.credential_source === 'cli_no_subscription' && (
+                <p className="text-sm text-muted">
+                  Claude Code CLI is installed but not logged in. Run{' '}
+                  <code style={{ fontSize: 11 }}>claude login</code> in a terminal to sign in with
+                  your subscription, then reload this page.
+                </p>
+              )}
+              {serverInfo?.credential_source === 'subscription' && (
+                <p className="text-sm text-muted">
+                  Detected a logged-in Claude Code subscription (Pro/Max). No API key needed — the
+                  butler spawns the local <code style={{ fontSize: 11 }}>claude</code> CLI directly.
+                  Text-only: no tool calls, so this works best for titles/summaries or simple chat,
+                  not for tasks that need file/shell tools.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Non-key providers (bedrock/claude-cli handled above, ollama) */}
+          {!def.needsKey && def.api !== 'bedrock' && def.api !== 'claude-cli' && (
             <div>
               <p className="text-sm text-muted">
                 No API key required — connects to local server.

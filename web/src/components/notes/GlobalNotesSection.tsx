@@ -109,6 +109,9 @@ export function GlobalNotesSection(props: GlobalNotesSectionProps) {
         </div>
         {!collapsed && (
           <div className="global-notes-body" style={{ height }}>
+            {/* Deliberate compact opt-out of MarkdownEditorPanel: this inline
+                panel has its own header row and no room for the shell's
+                toolbar/grip rail. The fullscreen popup/pop-out use the shell. */}
             <NotesEditor
               content={content}
               onDirty={onEditorUpdate}

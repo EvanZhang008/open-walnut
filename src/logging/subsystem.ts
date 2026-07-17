@@ -66,6 +66,59 @@ function formatMeta(meta: Record<string, unknown> | undefined): string {
   return ' ' + chalk.dim(JSON.stringify(meta));
 }
 
+// ── Error → notification bridge ──
+// A single chokepoint so EVERY log.error()/fatal() anywhere in the server can
+// land in the notification center, instead of each producer hand-wiring
+// addNotification. The sink is injected by server.ts at startup (dependency
+// direction: logging must not import notifications/store — everything imports
+// logging, so that edge would be a cycle). CLI commands / daemons / tests that
+// never set a sink are unaffected.
+
+export interface ErrorNotifyPayload {
+  subsystem: string;
+  message: string;
+  meta?: Record<string, unknown>;
+}
+
+// The sink lives on globalThis, NOT in module state: external plugins are
+// esbuild-bundled with their own COPY of this module (integration-loader
+// rebases + inlines src/ imports), so a module-level variable would be a
+// different instance per bundle and plugin errors (the biggest producer —
+// external plugin sync) would silently miss the sink.
+const ERROR_SINK_KEY = Symbol.for('open-walnut.errorNotificationSink');
+type GlobalWithSink = { [ERROR_SINK_KEY]?: ((payload: ErrorNotifyPayload) => void) | null };
+
+let inErrorSink = false;
+
+/** Install (or clear, with null) the error→notification sink. */
+export function setErrorNotificationSink(
+  sink: ((payload: ErrorNotifyPayload) => void) | null,
+): void {
+  (globalThis as GlobalWithSink)[ERROR_SINK_KEY] = sink;
+}
+
+function forwardToErrorSink(
+  subsystem: string,
+  message: string,
+  meta?: Record<string, unknown>,
+): void {
+  const sink = (globalThis as GlobalWithSink)[ERROR_SINK_KEY];
+  // Reentrancy guard: if the sink itself logs an error (e.g. the notification
+  // store failing to write), don't loop back into the sink.
+  if (!sink || inErrorSink) return;
+  // The notification store's own logger — a store write failure logged at
+  // error level must never try to write another notification.
+  if (subsystem.startsWith('notif')) return;
+  inErrorSink = true;
+  try {
+    sink({ subsystem, message, meta });
+  } catch {
+    // The sink must never break logging.
+  } finally {
+    inErrorSink = false;
+  }
+}
+
 function emit(
   level: LogLevel,
   subsystem: string,
@@ -90,7 +143,12 @@ function emit(
     ...(meta && Object.keys(meta).length > 0 ? meta : {}),
   });
 
-  // 2. Terminal (stderr) — colored human-readable
+  // 2. Error/fatal → notification center (sink injected by server.ts; no-op elsewhere)
+  if (level === 'error' || level === 'fatal') {
+    forwardToErrorSink(subsystem, message, meta);
+  }
+
+  // 3. Terminal (stderr) — colored human-readable
   try {
     const colorFn = levelColor[level];
     const tag = chalk.bold(`[${subsystem}]`);

@@ -110,44 +110,69 @@ struct ChatView: View {
 
 /// Scrollable message list, newest pinned at the visual bottom.
 ///
-/// Relies on iOS 17's `defaultScrollAnchor(.bottom)`: content starts anchored
-/// at the bottom and stays pinned while streaming grows it. No manual
-/// `scrollTo` — with a LazyVStack of variable-height rows a programmatic jump
-/// lands on estimated (wrong) offsets and fights the anchor.
+/// `defaultScrollAnchor(.bottom)` handles the initial position and streaming
+/// growth, but its auto-pin lapses after the user's first manual scroll — so
+/// the turn-end reconcile (provisional row swapped for canonical history)
+/// yanked the viewport upward. A bottom sentinel tracks whether the user is
+/// at the bottom; the store bumps `scrollToBottomSignal` after layout-shifting
+/// mutations and the view re-pins via ScrollViewReader — only when they were
+/// already at the bottom, never while reading history.
 private struct MessageListView: View {
     @Environment(ChatStore.self) private var chat
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 10) {
-                if chat.hasOlder {
-                    Button("Load earlier messages") {
-                        Task { await chat.loadOlder() }
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    if chat.hasOlder {
+                        Button("Load earlier messages") {
+                            Task { await chat.loadOlder() }
+                        }
+                        .font(.footnote)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
                     }
-                    .font(.footnote)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
+                    if chat.messages.isEmpty && !chat.loadingMessages && !chat.streaming {
+                        emptyState
+                    }
+                    ForEach(chat.messages) { message in
+                        MessageRow(
+                            message: message,
+                            onRetry: { Task { await chat.retry(message) } },
+                            onDiscard: { chat.discardFailed(message) }
+                        )
+                    }
+                    if chat.streaming {
+                        liveRow
+                    }
+                    // Sentinel: its on-screen visibility IS the "user is at
+                    // the bottom" state the store consults before re-pinning.
+                    Color.clear
+                        .frame(height: 1)
+                        .id("bottom-sentinel")
+                        .onAppear { chat.viewIsAtBottom = true }
+                        .onDisappear { chat.viewIsAtBottom = false }
                 }
-                if chat.messages.isEmpty && !chat.loadingMessages && !chat.streaming {
-                    emptyState
+                .padding(.vertical, 12)
+            }
+            .defaultScrollAnchor(.bottom)
+            .redacted(reason: chat.loadingMessages && chat.messages.isEmpty ? .placeholder : [])
+            .scrollDismissesKeyboard(.interactively)
+            .refreshable {
+                if let id = chat.activeID {
+                    await chat.loadMessages(id)
                 }
-                ForEach(chat.messages) { message in
-                    MessageRow(message: message)
-                }
-                if chat.streaming {
-                    liveRow
+                await chat.refreshConversations()
+            }
+            .onChange(of: chat.scrollToBottomSignal) {
+                // Next runloop tick so mutated rows have laid out; animated to
+                // read as "settling", not a teleport.
+                Task { @MainActor in
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo("bottom-sentinel", anchor: .bottom)
+                    }
                 }
             }
-            .padding(.vertical, 12)
-        }
-        .defaultScrollAnchor(.bottom)
-        .redacted(reason: chat.loadingMessages && chat.messages.isEmpty ? .placeholder : [])
-        .scrollDismissesKeyboard(.interactively)
-        .refreshable {
-            if let id = chat.activeID {
-                await chat.loadMessages(id)
-            }
-            await chat.refreshConversations()
         }
     }
 

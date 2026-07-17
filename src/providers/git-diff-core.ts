@@ -29,7 +29,9 @@ export interface GitDiffFile {
   before: string;
   /** Current working-tree content ('' for deleted files). */
   after: string;
-  status: 'added' | 'modified' | 'deleted';
+  status: 'added' | 'modified' | 'deleted' | 'renamed';
+  /** For a rename/copy, the repo-relative ORIGINAL path (git R/C entries). */
+  oldRelPath?: string;
 }
 
 export interface GitDiffResult {
@@ -92,12 +94,13 @@ function parseNameStatusZ(out: string): NameStatus[] {
     if (!code) { i++; continue; }
     const letter = code[0];
     if (letter === 'R' || letter === 'C') {
-      // Rename/copy: code, oldPath, newPath
+      // Rename/copy: code, oldPath, newPath. Surface as 'renamed' so the UI shows
+      // the move (a pure rename has identical before/after content otherwise).
       const oldRel = parts[i + 1];
       const newRel = parts[i + 2];
       i += 3;
       if (!newRel) continue;
-      entries.push({ status: 'modified', relPath: newRel, oldRelPath: oldRel });
+      entries.push({ status: 'renamed', relPath: newRel, oldRelPath: oldRel });
     } else {
       const rel = parts[i + 1];
       i += 2;
@@ -163,7 +166,7 @@ export async function computeGitDiff(
       before = show.code === 0 ? show.stdout : ''; // non-zero = absent at base
     }
     const after = e.status === 'deleted' ? '' : await readText(joinPosix(repoRoot, e.relPath));
-    files.push({ relPath: e.relPath, before, after, status: e.status });
+    files.push({ relPath: e.relPath, before, after, status: e.status, oldRelPath: e.oldRelPath });
   }
 
   files.sort((a, b) => a.relPath.localeCompare(b.relPath));

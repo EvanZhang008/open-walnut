@@ -725,7 +725,21 @@ export function parseSessionMessages(content: string): SessionHistoryMessage[] {
             ...(toolResult ? { result: toolResult.slice(0, 5000) } : {}),
             ...(toolUseId && errorResultIds.has(toolUseId) ? { isError: true } : {}),
             ...(agentId ? { agentId } : {}),
-            ...(toolUseId && finishedBgToolUseIds.has(toolUseId) ? { bgTaskFinished: true } : {}),
+            // Subagent-run-over proof, one per agent flavor (inc-1783746028392):
+            //  · background — task-notification stamped it into finishedBgToolUseIds
+            //    (its tool_result is launch metadata written while the agent still
+            //    runs, so result-presence proves NOTHING for bg).
+            //  · sync inline (explicit run_in_background:false) — the call BLOCKS
+            //    its parent turn, so a persisted tool_result can only exist after
+            //    the run finished. Sync agents never get a task-notification, and
+            //    the CLI persists their transcript to subagents/*.jsonl (NOT inline
+            //    in this session's JSONL), so without this stamp their streamed
+            //    lane blocks had no absorption evidence at all and pinned below
+            //    every later turn until a page reload.
+            // run_in_background ABSENT = background (CLI default) → notification only.
+            ...(toolUseId && (finishedBgToolUseIds.has(toolUseId)
+              || (GROUPABLE_TOOL_NAMES.has(block.name) && block.input?.run_in_background === false && !!toolResult))
+              ? { bgTaskFinished: true } : {}),
             ...(teamName ? { teamName } : {}),
             ...(teamAgentName ? { teamAgentName } : {}),
           });
@@ -1065,6 +1079,14 @@ export async function readSessionHistory(sessionId: string, cwd?: string, host?:
   // in place, so caching with children attached would share mutable state across consumers.
   if (mtimeMs !== undefined && options?.skipSubagents) {
     cacheSet(sessionId, { mtimeMs, messages }, host);
+  }
+
+  // Persist to disk cache (fire-and-forget) so history survives app restarts
+  // and is available when remote JSONL is temporarily unreachable.
+  if (messages.length > 0) {
+    import('./history-disk-cache.js').then(({ writeHistoryCache }) => {
+      writeHistoryCache(sessionId, messages);
+    }).catch(() => {});
   }
 
   return messages;

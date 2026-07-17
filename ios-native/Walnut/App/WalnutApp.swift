@@ -8,6 +8,7 @@ struct WalnutApp: App {
     @State private var tasks: TasksStore
 
     init() {
+        CrashReporter.shared.start()
         let connection = ConnectionStore()
         let chat = ChatStore()
         let notes = NotesStore()

@@ -10,7 +10,7 @@ import { ProcessStatusBadge } from './WorkStatusPicker';
 import { SessionForkButton } from './SessionForkButton';
 import { SessionKebabSection } from './SessionKebabSection';
 import { TaskQuickActions } from './TaskQuickActions';
-import { updateSession, executePlanSession, executePlanContinue, restartSession, investigateSession } from '@/api/sessions';
+import { updateSession, executePlanSession, executePlanContinue, restartSession, terminateSession, investigateSession } from '@/api/sessions';
 import { terminalPrewarm } from '@/api/terminal';
 import { log } from '@/utils/log';
 import { buildInvestigationClip } from '@/utils/investigation-clipboard';
@@ -298,6 +298,25 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
     setRestartBusy(false);
   }, [session?.claudeSessionId, session?.taskId]);
 
+  const [terminateBusy, setTerminateBusy] = useState(false);
+  const handleTerminate = useCallback(async () => {
+    if (!session?.claudeSessionId) {
+      log.warn('session-detail', 'terminate clicked but no claudeSessionId', { taskId: session?.taskId });
+      return;
+    }
+    log.info('session-detail', 'terminate button clicked', { sessionId: session.claudeSessionId });
+    setTerminateBusy(true);
+    try {
+      await terminateSession(session.claudeSessionId);
+    } catch (err) {
+      log.error('session-detail', 'terminate API failed', {
+        sessionId: session.claudeSessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    setTerminateBusy(false);
+  }, [session?.claudeSessionId, session?.taskId]);
+
   // Investigate — freeze an evidence bundle + open a manual incident. Shows a
   // brief inline confirmation ("incident <id>") since there's no global toast bus.
   const [investigating, setInvestigating] = useState(false);
@@ -495,6 +514,8 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
                     msgCount={historyMessages.filter(m => m.role === 'user' && m.text.trim()).length}
                     onRestart={handleRestart}
                     restartBusy={restartBusy}
+                    onTerminate={handleTerminate}
+                    terminateBusy={terminateBusy}
                     onInvestigate={handleInvestigate}
                     investigating={investigating}
                     investigateResult={investigateResult}

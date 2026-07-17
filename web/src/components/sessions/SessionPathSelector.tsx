@@ -1,20 +1,37 @@
 /**
  * SessionPathSelector — popover above chat input for picking a working directory.
- * Features: history paths, live SSH/local directory listing, Tab completion,
- * Shift+Tab host cycling, SSH pre-warm on open.
+ *
+ * Four-state input model (see path-selector/input-model.ts): history browse,
+ * dir-browse (trailing /), segment fuzzy completion, scoped keyword search.
+ * Unified ranking (path-selector/ranking.ts): history/frecency first, then
+ * leaf-hit > mid-hit, prefix > substring > subsequence. All-tab fans out live
+ * listings to every host in parallel (path-selector/useLiveDirs.ts).
+ *
+ * Extras: ghost-text inline completion (ArrowRight accepts), Cmd+Backspace
+ * deletes the last path segment, "create & start" for nonexistent leaf dirs,
+ * hidden dirs shown only when the typed segment starts with '.'.
  */
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { fetchWorkingDirs, listDirs, prewarmWorkingDirs, type WorkingDirEntry } from '@/api/sessions';
+import { useNavigate } from 'react-router-dom';
+import { fetchWorkingDirs, prewarmWorkingDirs, type WorkingDirEntry, type ConfiguredHost } from '@/api/sessions';
 import type { TaskPriority } from '@open-walnut/core';
-import { SESSION_MODELS } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
-import { TIER_OPTIONS, TIER_COLORS, PRIORITY_OPTIONS } from './task-meta-constants';
+import { classifyInput, resolveSpaceAmbiguity, deleteLastSegment, ghostSuffix, pathValidity, type InputState } from './path-selector/input-model';
+import { rankCandidates, buildSections, type Candidate, type RankedItem } from './path-selector/ranking';
+import { useLiveDirs, type HostLiveState } from './path-selector/useLiveDirs';
+import { GhostTextInput } from './path-selector/GhostTextInput';
+import { PathList } from './path-selector/PathList';
+import { MetaFooter } from './path-selector/MetaFooter';
 
 export interface QuickStartPath {
   cwd: string;
   host: string | null;
   hostLabel?: string;
   category: string;
+  /** Launch intent — 'fix-walnut' routes through the server-side repair briefing. */
+  intent?: 'fix-walnut';
+  /** User opted into "create & start": quick-start mkdirs the cwd first. */
+  createCwd?: boolean;
 }
 
 /** Task metadata the user sets in the session-launcher footer. Applied to the new task on quick-start.
@@ -27,44 +44,6 @@ export interface QuickStartTaskMeta {
   pinTier: FocusTier | undefined;
   /** Session model alias (SESSION_MODELS id). undefined = Auto — let the CLI/config default decide. */
   model: string | undefined;
-}
-
-function timeAgo(iso: string): string {
-  const ms = Math.max(0, Date.now() - new Date(iso).getTime());
-  const mins = Math.floor(ms / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  return `${days}d ago`;
-}
-
-function fuzzyMatch(query: string, cwd: string): boolean {
-  if (!query) return true;
-  const lower = cwd.toLowerCase();
-  return query.toLowerCase().split(/\s+/).filter(Boolean).every(t => lower.includes(t));
-}
-
-function pathFuzzyScore(editingPath: string, cwd: string): number {
-  if (!editingPath) return 2;
-  const cwdLower = cwd.toLowerCase();
-  const editLower = editingPath.toLowerCase();
-  if (cwdLower.startsWith(editLower)) return 2;
-  const segments = editLower.split('/').filter(s => s.length >= 2);
-  if (segments.length === 0) return 2;
-  const matchCount = segments.filter(seg => cwdLower.includes(seg)).length;
-  return matchCount > 0 ? 1 : 0;
-}
-
-interface ListItem {
-  cwd: string;
-  host: string | null;
-  hostLabel?: string;
-  category: string;
-  count: number;
-  lastUsed: string;
-  live?: boolean;
 }
 
 interface Props {
@@ -90,7 +69,11 @@ const DEFAULT_META: QuickStartTaskMeta = {
 };
 
 export function SessionPathSelector({ open, onClose, onSelect, initialMeta, initialPath }: Props) {
+  const navigate = useNavigate();
   const [dirs, setDirs] = useState<WorkingDirEntry[]>([]);
+  // All hosts from config.hosts — a freshly added remote host must show as a tab
+  // even before its first session exists (else the user can't ever start one).
+  const [configuredHosts, setConfiguredHosts] = useState<ConfiguredHost[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
@@ -98,11 +81,6 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
   const [hostFilter, setHostFilter] = useState<string>('all');
   const [editMode, setEditMode] = useState(false);
   const [editingPath, setEditingPath] = useState('');
-  const [liveDirs, setLiveDirs] = useState<string[]>([]);
-  const [liveLoading, setLiveLoading] = useState(false);
-  const [liveError, setLiveError] = useState<string | null>(null);
-  // For "All" mode: live dirs tagged with their source host
-  const [liveTaggedDirs, setLiveTaggedDirs] = useState<Array<{ cwd: string; host: string | null; hostLabel?: string }>>([]);
 
   // Task metadata the user picks in the footer — applied to the new task when the session starts.
   const [meta, setMeta] = useState<QuickStartTaskMeta>(initialMeta ?? DEFAULT_META);
@@ -117,7 +95,6 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
-  const liveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Fetch history + pre-warm SSH connections on open
   useEffect(() => {
@@ -126,8 +103,6 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
     setError(null);
     setQuery('');
     setSelectedIdx(0);
-    setLiveDirs([]);
-    setLiveTaggedDirs([]);
     setMeta(initialMetaRef.current ?? DEFAULT_META);
     // Re-opening to edit a confirmed selection: open straight into edit mode with the
     // path pre-filled and its host tab active — an "edit this selection" view. Without
@@ -148,7 +123,7 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
     prewarmWorkingDirs();
     // fetchWorkingDirs returns from cache if already prefetched
     fetchWorkingDirs()
-      .then(d => { setDirs(d); setLoading(false); })
+      .then(({ dirs: d, hosts: h }) => { setDirs(d); setConfiguredHosts(h); setLoading(false); })
       .catch(e => { setError(e.message); setLoading(false); });
   }, [open]);
 
@@ -159,6 +134,27 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
     }
   }, [open, loading]);
 
+  // New-user / new-host fallback: when the active tab has NO history at all,
+  // browse mode is a dead end ("No session history yet"). Seed edit mode with ~/
+  // so the live home-directory listing starts immediately — a first-run user (or a
+  // freshly added remote host) can pick a folder without knowing to type a path.
+  // Seeded once per tab per open (Set) so Escape-out isn't fought.
+  const seededFiltersRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!open) { seededFiltersRef.current.clear(); return; }
+    if (loading || editMode || initialPathRef.current?.cwd) return;
+    if (seededFiltersRef.current.has(hostFilter)) return;
+    const hasHistory = dirs.some(d => {
+      if (hostFilter === 'all') return true;
+      if (hostFilter === '__local__') return !d.host;
+      return d.host === hostFilter;
+    });
+    if (dirs.length > 0 && hasHistory) return;
+    seededFiltersRef.current.add(hostFilter);
+    setEditMode(true);
+    setEditingPath('~/');
+  }, [open, loading, editMode, hostFilter, dirs]);
+
   // Keep cursor at end of input when editingPath changes (e.g. after click or Tab)
   useEffect(() => {
     if (editMode && searchRef.current) {
@@ -167,151 +163,187 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
     }
   }, [editMode, editingPath]);
 
-  // Live directory listing with multi-level preload cache
-  const liveCacheRef = useRef<{ prefix: string; host: string | undefined; dirs: string[] } | null>(null);
-  const activePath = editMode ? editingPath : ((query.startsWith('/') || query.startsWith('~')) ? query : '');
+  // ── Input classification (four-state model) ──
+  const active = editMode ? editingPath : query;
+  const preState = useMemo(() => classifyInput(active), [active]);
 
-  // Resolve effective host for live listing
-  const effectiveHost = hostFilter !== 'all' && hostFilter !== '__local__' ? hostFilter : undefined;
+  // Path whose parent gets live-listed ('' = pure browse, no live listing)
+  const activePath = preState.kind === 'browse' ? ''
+    : preState.kind === 'scoped-search' ? preState.base
+    : preState.kind === 'dir-browse' ? preState.dir
+    : preState.dir + preState.partial;
 
+  const { byHost, anyLoading } = useLiveDirs(activePath, hostFilter, configuredHosts);
+
+  // Space-ambiguity: once live children of the base are known, a literal dir
+  // named "b keyword" flips scoped-search back to a path interpretation.
+  const inputState: InputState = useMemo(() => {
+    if (preState.kind !== 'scoped-search') return preState;
+    const allChildren: string[] = [];
+    for (const s of byHost.values()) if (s.status === 'done') allChildren.push(...s.dirs);
+    return resolveSpaceAmbiguity(preState, allChildren);
+  }, [preState, byHost]);
+
+  // ~ → resolved-path rewrite (single-host modes only; in All mode each host
+  // expands ~ differently, so the raw ~ must stay in the input).
   useEffect(() => {
-    if (!activePath || activePath.length < 2) {
-      // Only clear if non-empty — avoids creating new [] refs that would trigger the
-      // reset effect and clobber the initial focus-task-derived selectedIdx.
-      setLiveDirs(prev => prev.length === 0 ? prev : []);
-      setLiveTaggedDirs(prev => prev.length === 0 ? prev : []);
-      return;
+    if (!editMode || hostFilter === 'all') return;
+    if (!editingPath.startsWith('~/') && editingPath !== '~') return;
+    const key = hostFilter === '__local__' ? '__local__' : hostFilter;
+    const state = byHost.get(key);
+    if (state?.status === 'done' && state.parent && !state.parent.startsWith('~')) {
+      // Replace the ~-prefix with the resolved parent, keeping any typed partial.
+      const typedDir = editingPath.endsWith('/') ? editingPath : editingPath.slice(0, editingPath.lastIndexOf('/') + 1);
+      const partial = editingPath.slice(typedDir.length);
+      const parent = state.parent.endsWith('/') ? state.parent : state.parent + '/';
+      setEditingPath(parent + partial);
     }
+  }, [editMode, hostFilter, editingPath, byHost]);
 
-    const filterChildren = (allDirs: string[], parentDir: string, partialName: string) =>
-      allDirs.filter(p => {
-        if (!p.startsWith(parentDir)) return false;
-        const rest = p.slice(parentDir.length);
-        if (rest.includes('/')) return false;
-        if (partialName && !rest.toLowerCase().startsWith(partialName.toLowerCase())) return false;
-        return true;
-      });
-
-    const dir = activePath.endsWith('/') ? activePath : activePath.slice(0, activePath.lastIndexOf('/') + 1);
-    const partial = activePath.endsWith('/') ? '' : activePath.slice(activePath.lastIndexOf('/') + 1);
-
-    if (hostFilter === 'all') {
-      // "All" mode: only live-scan local filesystem.
-      // SSH hosts show through history entries — switch to SSH tab for live remote browsing.
-      setLiveError(null);
-      if (liveTimerRef.current) clearTimeout(liveTimerRef.current);
-      liveTimerRef.current = setTimeout(() => {
-        setLiveLoading(true);
-        listDirs(activePath, null)
-          .then(res => {
-            setLiveTaggedDirs(filterChildren(res.dirs, res.parent, partial).map(p => ({ cwd: p, host: null })));
-            setLiveDirs([]);
-            setLiveLoading(false);
-          })
-          .catch((err) => {
-            setLiveTaggedDirs([]);
-            setLiveDirs([]);
-            setLiveLoading(false);
-            setLiveError(err.message || String(err));
-          });
-      }, 150);
-      return () => { if (liveTimerRef.current) clearTimeout(liveTimerRef.current); };
-    }
-
-    // Specific host or local mode
-    const host = effectiveHost;
-    const cache = liveCacheRef.current;
-
-    if (cache && cache.host === host && activePath.startsWith(cache.prefix)) {
-      const filtered = filterChildren(cache.dirs, dir, partial);
-      if (filtered.length > 0 || dir === cache.prefix) {
-        setLiveDirs(filtered);
-        setLiveTaggedDirs([]);
-        return;
-      }
-    }
-
-    if (liveTimerRef.current) clearTimeout(liveTimerRef.current);
-    liveTimerRef.current = setTimeout(() => {
-      setLiveLoading(true);
-      listDirs(activePath, host)
-        .then(res => {
-          // Use resolved parent from API (handles ~ expansion)
-          liveCacheRef.current = { prefix: res.parent, host, dirs: res.dirs };
-          setLiveDirs(filterChildren(res.dirs, res.parent, partial));
-          setLiveTaggedDirs([]);
-          setLiveLoading(false);
-          // If prefix was ~, rewrite editingPath to the resolved path
-          if (activePath.startsWith('~/') && res.parent && !res.parent.startsWith('~')) {
-            setEditingPath(res.parent);
-          }
-        })
-        .catch((err) => { setLiveDirs([]); setLiveTaggedDirs([]); setLiveLoading(false); setLiveError(err.message || String(err)); });
-    }, 150);
-    return () => { if (liveTimerRef.current) clearTimeout(liveTimerRef.current); };
-  }, [activePath, hostFilter, effectiveHost, dirs]);
-
-  // Host tabs
+  // Host tabs — union of configured hosts (config.hosts, even with zero history)
+  // and any host seen in history (covers hosts removed from config but still in history).
   const hostTabs = useMemo(() => {
-    const labels = new Map<string, string>();
-    labels.set('all', 'All');
-    labels.set('__local__', 'Local');
-    for (const d of dirs) {
-      if (d.host && !labels.has(d.host)) labels.set(d.host, d.hostLabel ?? d.host);
+    const labels = new Map<string, { label: string; rawName?: boolean }>();
+    labels.set('all', { label: 'All' });
+    labels.set('__local__', { label: 'Local' });
+    for (const h of configuredHosts) {
+      if (!labels.has(h.alias)) labels.set(h.alias, { label: h.label, rawName: h.rawName });
     }
-    return Array.from(labels.entries()).map(([key, label]) => ({ key, label }));
-  }, [dirs]);
+    for (const d of dirs) {
+      if (d.host && !labels.has(d.host)) labels.set(d.host, { label: d.hostLabel ?? d.host });
+    }
+    return Array.from(labels.entries()).map(([key, v]) => ({ key, label: v.label, rawName: v.rawName }));
+  }, [dirs, configuredHosts]);
 
   const currentHost = hostFilter !== 'all' && hostFilter !== '__local__' ? hostFilter : null;
   const currentHostLabel = hostTabs.find(t => t.key === hostFilter)?.label;
 
-  // Filtered list — merges history + live dirs
-  const filtered: ListItem[] = useMemo(() => {
+  // ── Candidates: live children (+preloaded deep hits) merged with history ──
+  const pathMode = inputState.kind !== 'browse';
+  const sections = useMemo(() => {
     const hostFiltered = dirs.filter(d => {
       if (hostFilter === '__local__' && d.host) return false;
       if (hostFilter !== 'all' && hostFilter !== '__local__' && d.host !== hostFilter) return false;
       return true;
     });
+    const historyByKey = new Map<string, WorkingDirEntry>();
+    for (const d of hostFiltered) historyByKey.set(`${d.host ?? '__local__'}::${d.cwd}`, d);
 
-    // Build live items from either tagged (All mode) or single-host list
-    const buildLiveItems = (historySet: Set<string>): ListItem[] => {
-      if (liveTaggedDirs.length > 0) {
-        // All mode: each item already has host/hostLabel
-        return liveTaggedDirs
-          .filter(p => !historySet.has(p.cwd))
-          .map(p => ({
-            cwd: p.cwd, host: p.host, hostLabel: p.hostLabel ?? (p.host ? undefined : 'local'),
-            category: 'Inbox', count: 0, lastUsed: '', live: true,
-          }));
+    const candidates: Candidate[] = [];
+
+    if (!pathMode) {
+      // Browse: history only. Empty query → frecency top list (ranking sorts it).
+      for (const d of hostFiltered) {
+        candidates.push({ cwd: d.cwd, host: d.host, hostLabel: d.hostLabel, source: 'history', depth: 0, history: d });
       }
-      return liveDirs
-        .filter(p => !historySet.has(p))
-        .map(p => ({
-          cwd: p, host: currentHost, hostLabel: currentHostLabel,
-          category: 'Inbox', count: 0, lastUsed: '', live: true,
-        }));
-    };
+    } else {
+      const partial = inputState.kind === 'segment' ? inputState.partial
+        : inputState.kind === 'scoped-search' ? inputState.keyword : '';
+      const showHidden = partial.startsWith('.');
+      const seen = new Set<string>();
 
-    if (editMode) {
-      const scored = hostFiltered
-        .map(d => ({ d, score: pathFuzzyScore(editingPath, d.cwd) }))
-        .filter(x => x.score > 0);
-      scored.sort((a, b) => b.score - a.score);
-      const historyItems: ListItem[] = scored.map(x => ({ ...x.d, live: false }));
-      const liveItems = buildLiveItems(new Set(historyItems.map(h => h.cwd)));
-      return [...liveItems, ...historyItems];
+      for (const [hostKey, state] of byHost) {
+        if (state.status !== 'done' || !state.exists) continue;
+        const host = hostKey === '__local__' ? null : hostKey;
+        const hostLabel = hostTabs.find(t => t.key === hostKey)?.label;
+        const parent = state.parent.endsWith('/') ? state.parent : state.parent + '/';
+        for (const p of state.dirs) {
+          if (!p.startsWith(parent)) continue;
+          const rest = p.slice(parent.length);
+          if (!rest) continue;
+          const depth = rest.split('/').length; // 1 = direct child
+          // dir-browse and scoped-search list direct children; segment mode also
+          // admits preloaded depth-2 "deep hits" (b/*/*c*) per the design.
+          if (inputState.kind !== 'segment' && depth > 1) continue;
+          const leaf = rest.slice(rest.lastIndexOf('/') + 1);
+          if (leaf.startsWith('.') && !showHidden) continue;
+          const key = `${hostKey}::${p}`;
+          seen.add(key);
+          candidates.push({
+            cwd: p, host, hostLabel, source: 'live', depth,
+            history: historyByKey.get(key),
+          });
+        }
+        // History entries under this parent the live listing didn't cover (deeper
+        // than the preload) — still admitted, tagged as history.
+        for (const d of hostFiltered) {
+          if ((d.host ?? '__local__') !== hostKey) continue;
+          const key = `${hostKey}::${d.cwd}`;
+          if (seen.has(key)) continue;
+          if (!(d.cwd + '/').startsWith(parent)) continue;
+          if (d.cwd.length <= parent.length) continue; // the parent itself isn't a candidate
+          seen.add(key);
+          const rest = d.cwd.slice(parent.length);
+          candidates.push({
+            cwd: d.cwd, host: d.host, hostLabel: d.hostLabel,
+            source: 'history', depth: rest.split('/').length, history: d,
+          });
+        }
+      }
     }
 
-    // Browse mode
-    const historyItems = hostFiltered.filter(d => fuzzyMatch(query, d.cwd)).map(d => ({ ...d, live: false }));
-    if ((query.startsWith('/') || query.startsWith('~')) && (liveDirs.length > 0 || liveTaggedDirs.length > 0)) {
-      const liveItems = buildLiveItems(new Set(historyItems.map(h => h.cwd)));
-      return [...liveItems, ...historyItems];
+    const ranked = rankCandidates(inputState, candidates);
+    const hostActivity = new Map<string, number>();
+    for (const d of dirs) {
+      const key = d.host ?? '__local__';
+      hostActivity.set(key, (hostActivity.get(key) ?? 0) + d.count);
     }
-    return historyItems;
-  }, [dirs, query, hostFilter, editMode, editingPath, liveDirs, liveTaggedDirs, currentHost, currentHostLabel]);
+    return buildSections(ranked, {
+      hostGrouping: pathMode && hostFilter === 'all',
+      hostActivity,
+    });
+  }, [dirs, hostFilter, inputState, pathMode, byHost, hostTabs]);
 
-  useEffect(() => { setSelectedIdx(0); }, [query, hostFilter, editMode, editingPath, liveDirs, liveTaggedDirs]);
+  const flatItems = useMemo(() => sections.flatMap(s => s.items), [sections]);
+
+  // Ghost suffix: first ranked candidate whose leaf strictly prefix-extends the
+  // typed partial (checked in ranked order so it matches the top suggestion).
+  const ghost = useMemo(() => {
+    if (!editMode) return null;
+    for (const item of flatItems.slice(0, 10)) {
+      const g = ghostSuffix(inputState, item.cwd);
+      if (g) return g;
+    }
+    return null;
+  }, [editMode, inputState, flatItems]);
+
+  // Live existence verdict for the typed path — drives the ✓ / "new" badge next
+  // to the confirm button, and flips confirm into create-&-start when missing.
+  const validity = useMemo(
+    () => pathValidity(inputState, byHost.values()),
+    [inputState, byHost],
+  );
+
+  // "Create & start" — path mode with an unambiguous target host (a specific
+  // tab, or All when only one host exists), listing settled, exact path missing.
+  const createTarget = useMemo(() => {
+    if (hostFilter !== 'all') return hostFilter === '__local__' ? '__local__' : hostFilter;
+    return byHost.size === 1 ? Array.from(byHost.keys())[0] : null;
+  }, [hostFilter, byHost]);
+
+  const createOption = useMemo(() => {
+    if (!pathMode || !createTarget) return null;
+    const state = byHost.get(createTarget);
+    if (!state || state.status !== 'done') return null;
+    if (inputState.kind === 'dir-browse') {
+      return state.exists ? null : (inputState.dir.replace(/\/+$/, '') || '/');
+    }
+    if (inputState.kind === 'segment' && inputState.partial) {
+      if (!state.exists) return inputState.dir + inputState.partial;
+      const parent = state.parent.endsWith('/') ? state.parent : state.parent + '/';
+      const hasExact = state.dirs.some(p => {
+        if (!p.startsWith(parent)) return false;
+        const rest = p.slice(parent.length);
+        return !rest.includes('/') && rest === inputState.partial;
+      });
+      return hasExact ? null : parent + inputState.partial;
+    }
+    return null;
+  }, [createTarget, pathMode, inputState, byHost]);
+
+  // Reset keyboard selection when the input context changes. Deliberately NOT
+  // keyed on byHost — progressive per-host arrivals must not yank the cursor.
+  useEffect(() => { setSelectedIdx(0); }, [active, hostFilter, editMode]);
 
   // Scroll selected into view
   useEffect(() => {
@@ -320,12 +352,15 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
     items[selectedIdx]?.scrollIntoView({ block: 'nearest' });
   }, [selectedIdx]);
 
-  const handleSelect = useCallback((d: ListItem) => {
-    onSelect({ cwd: d.cwd, host: d.host, hostLabel: d.hostLabel, category: d.category }, meta);
+  const handleSelect = useCallback((d: RankedItem) => {
+    onSelect({
+      cwd: d.cwd, host: d.host, hostLabel: d.hostLabel,
+      category: d.history?.category ?? 'Inbox',
+    }, meta);
   }, [onSelect, meta]);
 
-  // Confirm the current editingPath (Shift+Enter or Go button)
-  const handleConfirm = useCallback(() => {
+  // Confirm the current editingPath (Shift+Enter or the Start-session button)
+  const handleConfirm = useCallback((opts?: { createCwd?: boolean }) => {
     if (!editingPath) return;
     const trimmed = editingPath.replace(/\/+$/, '') || '/';
     const match = dirs.find(d => d.cwd === trimmed);
@@ -334,14 +369,50 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
       host: match?.host ?? currentHost,
       hostLabel: match?.hostLabel ?? currentHostLabel,
       category: match?.category ?? 'Inbox',
+      ...(opts?.createCwd ? { createCwd: true } : {}),
     }, meta);
   }, [editingPath, dirs, onSelect, currentHost, currentHostLabel, meta]);
 
-  const enterEditMode = useCallback((d: ListItem) => {
-    setEditMode(true);
-    setEditingPath(d.cwd);
-    setSelectedIdx(0);
-  }, []);
+  // "Create & start" row: confirm the missing path with the createCwd flag.
+  // Host comes from createTarget (not hostFilter) so All-tab-with-one-host works.
+  const handleCreate = useCallback(() => {
+    if (!createOption || !createTarget) return;
+    const trimmed = createOption.replace(/\/+$/, '') || '/';
+    const host = createTarget === '__local__' ? null : createTarget;
+    onSelect({
+      cwd: trimmed,
+      host,
+      hostLabel: hostTabs.find(t => t.key === createTarget)?.label,
+      category: 'Inbox',
+      createCwd: true,
+    }, meta);
+  }, [createOption, createTarget, onSelect, hostTabs, meta]);
+
+  // Single confirm entry (⇧Enter + the status button): a path the live listing
+  // says is MISSING never silently starts — it routes to create-&-start when a
+  // target host is unambiguous, else no-ops (the per-host "does not exist" note
+  // explains). 'unknown' (loading / host down) never blocks.
+  const confirmCurrent = useCallback(() => {
+    if (validity === 'missing') {
+      if (createOption && createTarget) handleCreate();
+      return;
+    }
+    handleConfirm();
+  }, [validity, createOption, createTarget, handleCreate, handleConfirm]);
+
+  // Item interaction: live dir → drill deeper (stay in picker); history → fill path.
+  const drillOrFill = useCallback((d: RankedItem) => {
+    if (!editMode) {
+      setEditMode(true);
+      setSelectedIdx(0);
+    }
+    if (d.source === 'live') {
+      setEditingPath(d.cwd + '/');
+      if (d.host && hostFilter === 'all') setHostFilter(d.host);
+    } else {
+      setEditingPath(d.cwd);
+    }
+  }, [editMode, hostFilter]);
 
   // Dismiss by clicking outside / Esc. When editing an already-confirmed selection
   // (opened via initialPath), dismissing SAVES the current edits (path + meta) instead
@@ -358,7 +429,7 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
   }, [editingPath, handleConfirm, onClose]);
 
   // Keyboard navigation
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     // Shift+Tab: cycle host tabs (works in both modes)
     if (e.key === 'Tab' && e.shiftKey) {
       e.preventDefault();
@@ -376,38 +447,40 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
       if (e.key === 'Enter' && (e.shiftKey || e.metaKey)) {
         // Shift+Enter or Cmd+Enter: confirm and start session
         e.preventDefault();
-        handleConfirm();
+        confirmCurrent();
       } else if (e.key === 'Enter') {
         // Enter: always select/autocomplete (never sends)
         e.preventDefault();
-        if (filtered.length > 0) {
-          const sel = filtered[Math.min(selectedIdx, filtered.length - 1)];
-          if (sel.live) {
-            // Live directory — navigate deeper
-            setEditingPath(sel.cwd + '/');
-            if (sel.host && hostFilter === 'all') setHostFilter(sel.host);
-          } else {
-            // History item — fill the path into input
-            setEditingPath(sel.cwd);
-          }
+        if (flatItems.length > 0) {
+          drillOrFill(flatItems[Math.min(selectedIdx, flatItems.length - 1)]);
         }
         // If no items, Enter does nothing (path is incomplete)
       } else if (e.key === 'Escape') {
         e.preventDefault();
         setEditMode(false);
         setEditingPath('');
-        setLiveDirs([]);
-        setLiveTaggedDirs([]);
       } else if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setSelectedIdx(prev => Math.min(prev + 1, Math.max(filtered.length - 1, 0)));
+        setSelectedIdx(prev => Math.min(prev + 1, Math.max(flatItems.length - 1, 0)));
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
         setSelectedIdx(prev => Math.max(prev - 1, 0));
+      } else if (e.key === 'ArrowRight') {
+        // Ghost accept — only when the caret sits at the end of the input;
+        // otherwise let the default caret move happen.
+        const input = e.currentTarget;
+        if (ghost && input.selectionStart === input.value.length && input.selectionEnd === input.value.length) {
+          e.preventDefault();
+          setEditingPath(editingPath + ghost);
+        }
+      } else if (e.key === 'Backspace' && e.metaKey) {
+        // Cmd+Backspace: delete last path segment (overrides macOS delete-to-line-start)
+        e.preventDefault();
+        setEditingPath(deleteLastSegment(editingPath));
       } else if (e.key === 'Tab') {
         e.preventDefault();
-        if (filtered[selectedIdx]) {
-          const sel = filtered[selectedIdx];
+        if (flatItems[selectedIdx]) {
+          const sel = flatItems[selectedIdx];
           setEditingPath(sel.cwd.endsWith('/') ? sel.cwd : sel.cwd + '/');
         }
       }
@@ -415,35 +488,25 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
       // --- BROWSE MODE ---
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setSelectedIdx(prev => Math.min(prev + 1, Math.max(filtered.length - 1, 0)));
+        setSelectedIdx(prev => Math.min(prev + 1, Math.max(flatItems.length - 1, 0)));
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
         setSelectedIdx(prev => Math.max(prev - 1, 0));
       } else if (e.key === 'Enter' && (e.shiftKey || e.metaKey)) {
         // Shift+Enter: send selected item directly (skip edit mode)
         e.preventDefault();
-        if (filtered[selectedIdx] && !filtered[selectedIdx].live) {
-          handleSelect(filtered[selectedIdx]);
+        if (flatItems[selectedIdx] && flatItems[selectedIdx].source === 'history') {
+          handleSelect(flatItems[selectedIdx]);
         }
       } else if (e.key === 'Enter') {
         // Enter: enter edit mode with selected item
         e.preventDefault();
-        if (filtered[selectedIdx]) {
-          const sel = filtered[selectedIdx];
-          if (sel.live) {
-            setEditMode(true);
-            setEditingPath(sel.cwd + '/');
-            if (sel.host && hostFilter === 'all') setHostFilter(sel.host);
-            setSelectedIdx(0);
-          } else {
-            enterEditMode(sel);
-          }
-        }
+        if (flatItems[selectedIdx]) drillOrFill(flatItems[selectedIdx]);
       } else if (e.key === 'Escape') {
         handleDismiss();
       }
     }
-  }, [editMode, filtered, selectedIdx, handleDismiss, enterEditMode, handleConfirm, handleSelect, hostFilter, hostTabs]);
+  }, [editMode, flatItems, selectedIdx, handleDismiss, confirmCurrent, handleSelect, drillOrFill, hostFilter, hostTabs, ghost, editingPath]);
 
   // Close on outside click — saves edits when editing an existing selection (see handleDismiss).
   useEffect(() => {
@@ -459,26 +522,65 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
 
   if (!open) return null;
 
+  // Live host states drive per-host empty states / host-down rows in path mode.
+  const visibleHostStates: Map<string, HostLiveState> = pathMode ? byHost : new Map();
+
+  const emptyHint = editMode
+    ? (anyLoading ? 'Listing directories...' : 'No matches. Press ⇧Enter or click Go to use this path.')
+    : dirs.length === 0
+      ? 'No session history yet — type a path (e.g. ~/projects) to browse.'
+      : 'No paths match your search.';
+
   return (
     <div className="session-path-selector" ref={popoverRef}>
+      {/* One-line concept explainer — new users repeatedly ask "task vs session?".
+          A session is the live Claude Code run; the task is the tracking record
+          Walnut auto-creates for it. Say it at the exact moment both get created. */}
+      <div className="sps-header">
+        <span className="sps-header-title">Start a coding session</span>
+        <span className="sps-header-hint">
+          Runs Claude Code in the folder you pick — a task is created automatically to track it.
+        </span>
+      </div>
       <div className="sps-search">
-        <input
+        <GhostTextInput
           ref={searchRef}
-          className={`sps-search-input${editMode ? ' editing' : ''}`}
-          type="text"
-          placeholder={editMode ? 'Type path... (Enter select, ⇧Enter go, Esc back)' : 'Search paths... (↑↓ navigate, Enter select, Esc close)'}
           value={editMode ? editingPath : query}
-          onChange={e => editMode ? setEditingPath(e.target.value) : setQuery(e.target.value)}
+          ghost={ghost}
+          editing={editMode}
+          placeholder={editMode ? 'Type your path... (Enter select, ⇧Enter start session, Esc back)' : 'Type a path — start a Claude Code session there directly'}
+          onChange={v => {
+            if (editMode) { setEditingPath(v); return; }
+            // Path-like input flips straight into edit mode (shell mental model) —
+            // ghost text / Cmd+Backspace / create-row all live there.
+            if (v.startsWith('/') || v.startsWith('~')) {
+              setEditMode(true);
+              setEditingPath(v);
+              setQuery('');
+            } else {
+              setQuery(v);
+            }
+          }}
           onKeyDown={handleKeyDown}
-          autoFocus
         />
+        {/* Compact status/confirm button — color answers "is this a real folder?":
+            green ✓ = exists (start), amber "+ folder" = missing (create folder & start),
+            neutral ↵ = no verdict yet (loading / host down — never blocks).
+            Kept small on purpose: the header + keys-hint already say "start session".
+            Label says "folder" explicitly — "+ new" read as "new session" to users. */}
         {editMode && editingPath && (
           <button
-            className="sps-go-btn"
-            onClick={handleConfirm}
-            title="Start session (⇧Enter)"
+            className={`sps-status-btn sps-status-${validity}`}
+            disabled={validity === 'missing' && !createOption}
+            onClick={confirmCurrent}
+            title={
+              validity === 'valid' ? 'Folder exists — start session here (⇧Enter)'
+              : validity === 'missing'
+                ? (createOption ? "Folder doesn't exist — create the folder, then start a session in it (⇧Enter)" : 'Folder not found on any host — pick a host tab to create it')
+              : 'Start session (⇧Enter)'
+            }
           >
-            Go <kbd>⇧↵</kbd>
+            {validity === 'valid' ? '✓' : validity === 'missing' ? '+ folder' : '↵'}
           </button>
         )}
       </div>
@@ -490,150 +592,62 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
               key={tab.key}
               className={`sps-host-tab${hostFilter === tab.key ? ' active' : ''}`}
               onClick={() => setHostFilter(tab.key)}
+              // Crowded tab row — the "give it a name" nudge lives in the tooltip
+              // and in a one-line banner shown only when this tab is active.
+              title={tab.rawName ? 'Auto-discovered from ~/.ssh/config — give it a friendly name in Settings → Remote Hosts' : undefined}
             >
               {tab.label}
+              {tab.rawName && <span className="sps-host-tab-raw" aria-hidden>✎</span>}
             </button>
           ))}
           <span className="sps-host-hint">Shift+Tab</span>
         </div>
       )}
 
-      <div className="sps-path-list" ref={listRef}>
-        {loading && <div className="sps-empty">Loading paths...</div>}
-        {error && <div className="sps-error">{error}</div>}
-        {liveError && <div className="sps-error" style={{ fontSize: '12px', padding: '4px 8px' }}>SSH: {liveError}</div>}
-        {!loading && !error && filtered.length === 0 && (
-          <div className="sps-empty">
-            {editMode
-              ? (liveLoading ? 'Listing directories...' : 'No matches. Press ⇧Enter or click Go to use this path.')
-              : dirs.length === 0
-                ? 'No session history yet. Start a session on a task first.'
-                : 'No paths match your search.'}
-          </div>
-        )}
-        {filtered.map((d, idx) => {
-          const fullCwd = `${d.cwd}${d.live ? '/' : ''}`;
-          return (
-          <div
-            key={`${d.cwd}::${d.host ?? ''}::${d.live ? 'live' : 'hist'}`}
-            className={`sps-path-item${idx === selectedIdx ? ' active' : ''}${d.live ? ' sps-live' : ''}`}
-            onClick={() => {
-              if (editMode) {
-                if (d.live) {
-                  setEditingPath(d.cwd + '/');
-                  if (d.host && hostFilter === 'all') setHostFilter(d.host);
-                } else {
-                  setEditingPath(d.cwd);
-                }
-              } else {
-                if (d.live) {
-                  setEditMode(true);
-                  setEditingPath(d.cwd + '/');
-                  if (d.host && hostFilter === 'all') setHostFilter(d.host);
-                  setSelectedIdx(0);
-                } else {
-                  enterEditMode(d);
-                }
-              }
+      {/* Nudge shown ONLY while a raw auto-discovered host tab is selected — zero
+          cost to the crowded tab row, appears exactly when the user is looking
+          at the ugly name and cares. */}
+      {hostTabs.find(t => t.key === hostFilter)?.rawName && (
+        <div className="sps-raw-host-nudge">
+          Auto-discovered host —{' '}
+          <a
+            href="/settings#remote-hosts"
+            onClick={(e) => {
+              e.preventDefault();
+              onClose();
+              navigate('/settings#remote-hosts');
             }}
-            onMouseEnter={() => setSelectedIdx(idx)}
           >
-            <div className="sps-path-main">
-              {/* title is the only way to read the full path once it wraps in a narrow popover */}
-              <span className="sps-path-cwd" title={fullCwd}>{fullCwd}</span>
-            </div>
-            {/* Host badge lives in the meta row (not beside the path) so the path span gets the
-                full popover width. Sharing the row forced long paths to wrap to 7+ lines. */}
-            <div className="sps-path-meta">
-              <span className={`sps-path-host-tag${d.live ? ' sps-tag-live' : ''}`}>
-                {d.host ? (d.hostLabel ?? d.host) : 'local'}
-              </span>
-              {!d.live && (
-                <>
-                  <span className="sps-path-category">{d.category}</span>
-                  <span>{d.count} session{d.count !== 1 ? 's' : ''}</span>
-                  <span>{timeAgo(d.lastUsed)}</span>
-                </>
-              )}
-            </div>
-          </div>
-          );
-        })}
+            give it a friendly name in Settings
+          </a>
+        </div>
+      )}
+
+      <PathList
+        ref={listRef}
+        sections={sections}
+        selectedIdx={selectedIdx}
+        loading={loading || (anyLoading && flatItems.length === 0)}
+        loadError={error}
+        hostStates={visibleHostStates}
+        pathMode={pathMode}
+        activeHostLabel={currentHostLabel ?? 'Local'}
+        createOption={createOption}
+        emptyHint={emptyHint}
+        onItemClick={drillOrFill}
+        onItemHover={setSelectedIdx}
+        onCreate={handleCreate}
+      />
+
+      {/* Key hints live here (not in the placeholder) so the placeholder can say
+          what the popover is FOR — new users scan purpose first, keys later. */}
+      <div className="sps-keys-hint">
+        <kbd>↑↓</kbd> navigate · <kbd>Enter</kbd> select · <kbd>→</kbd> complete · <kbd>⇧Enter</kbd> start session · <kbd>Esc</kbd> close
       </div>
 
-      {/* Task metadata footer — applied to the new task on quick-start */}
-      <div className="sps-meta-footer">
-        <div className="sps-meta-row">
-          <button
-            type="button"
-            className={`sps-meta-toggle${meta.starred ? ' active' : ''}`}
-            onClick={() => setMeta(m => ({ ...m, starred: !m.starred }))}
-            title="Star this task"
-          >
-            <span className="sps-meta-toggle-icon">{meta.starred ? '★' : '☆'}</span>
-            <span>Star</span>
-          </button>
-          <button
-            type="button"
-            className={`sps-meta-toggle${meta.needs_attention ? ' active attention' : ''}`}
-            onClick={() => setMeta(m => ({ ...m, needs_attention: !m.needs_attention }))}
-            title="Flag as needs attention"
-          >
-            <span className="sps-meta-toggle-icon">●</span>
-            <span>Needs attention</span>
-          </button>
-        </div>
-
-        <div className="sps-meta-row">
-          <span className="sps-meta-label">Pin to</span>
-          <div className="sps-meta-tier-options">
-            {TIER_OPTIONS.map(t => (
-              <button
-                key={t.value}
-                type="button"
-                className={`sps-tier-btn${meta.pinTier === t.value ? ' active' : ''}`}
-                style={{ color: TIER_COLORS[t.value] }}
-                onClick={() => setMeta(m => ({ ...m, pinTier: m.pinTier === t.value ? undefined : t.value }))}
-                title={t.label}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="sps-meta-row">
-          <span className="sps-meta-label">Priority</span>
-          <div className="sps-meta-priority-options">
-            {PRIORITY_OPTIONS.map(p => (
-              <button
-                key={p.value}
-                type="button"
-                className={`badge badge-${p.value}${meta.priority === p.value ? ' badge-active' : ''} badge-clickable`}
-                onClick={() => setMeta(m => ({ ...m, priority: p.value }))}
-                title={p.label}
-              >
-                {p.icon}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="sps-meta-row">
-          <span className="sps-meta-label">Model</span>
-          <select
-            className="sps-meta-model-select"
-            value={meta.model ?? ''}
-            onChange={(e) => setMeta(m => ({ ...m, model: e.target.value || undefined }))}
-            title="Session model — Auto lets Claude/config pick the default"
-          >
-            <option value="">Auto</option>
-            {SESSION_MODELS.map(sm => (
-              <option key={sm.id} value={sm.id}>{sm.label}</option>
-            ))}
-          </select>
-        </div>
-      </div>
+      {/* Task metadata footer — applied to the new task on quick-start.
+          Compact single row in edit mode: space goes back to the path list. */}
+      <MetaFooter meta={meta} onChange={setMeta} compact={editMode} />
     </div>
   );
 }

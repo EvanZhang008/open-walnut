@@ -12,16 +12,26 @@ import { TaskKebabMenu } from './TaskKebabMenu';
 import { PersonIcon } from '../common/PersonIcon';
 import * as ICONS from '../common/Icons';
 
+/** Sortable id for a group's chip in a tier — encodes the tier so a group split
+ *  across tiers renders distinct chips without an id collision. Kept in sync with
+ *  the parser in TodoPanel (`group:<gid>:<tier>`). */
+export function groupSortableId(groupId: string, tier: FocusTier): string {
+  return `group:${groupId}:${tier}`;
+}
+
 /**
- * Draggable group header chip (Focus area). The chip represents the WHOLE cluster:
- * grabbing its grip (⣿) drags the entire group as a unit — the pinned drag handlers
- * detect the `group:<id>` draggable id and relocate every member together (reorder
- * within a tier, or move the whole group across tiers). The label still click-to-
- * renames; the ⊘/✕ buttons still hide/dissolve. Split out into its own component so
- * `useDraggable` sits at a stable top-level hook position (it can't be called from
- * the conditional chip JSX inside SortableTierCard).
+ * Group header chip (Focus area). The chip represents the WHOLE cluster: grabbing its
+ * grip (⣿) drags the entire group as a unit.
+ *
+ * It's a `useSortable` unit (not a bare `useDraggable`) so that DURING its own drag —
+ * when TodoPanel collapses the group's member ids in the tier's SortableContext.items
+ * down to this chip's single id — `verticalListSortingStrategy` gives it a real
+ * activeIndex and pushes the sibling cards away, opening an empty slot exactly like a
+ * regular task drag. At rest the chip's id is NOT in items (index -1, inert), which is
+ * harmless: it just renders as a static header above its lead member. Droppable is
+ * disabled so the chip never becomes a collision target for single-card drags.
  */
-function GroupChip({ groupId, tier, label, onRename, onDissolve, onHide }: {
+export function GroupChip({ groupId, tier, label, onRename, onDissolve, onHide }: {
   groupId: string;
   tier: FocusTier;
   label: string;
@@ -29,16 +39,19 @@ function GroupChip({ groupId, tier, label, onRename, onDissolve, onHide }: {
   onDissolve?: (groupId: string) => void;
   onHide?: (groupId: string) => void;
 }) {
-  // Draggable id encodes the tier so a group split across tiers (rare) renders two
-  // distinct chips without a dnd-kit id collision. The pinned drag handler parses
-  // `group:<gid>:<tier>` back out.
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
-    id: `group:${groupId}:${tier}`,
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: groupSortableId(groupId, tier),
     data: { type: 'group', groupId, tier },
+    disabled: { droppable: true, draggable: false },
   });
-  const style: CSSProperties | undefined = transform
-    ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`, opacity: isDragging ? 0.6 : undefined, zIndex: isDragging ? 20 : undefined, position: 'relative' }
-    : undefined;
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    // While collapsed-and-dragging the chip stands in for the whole cluster; dim it
+    // like a dragged card. (The floating DragOverlay carries the visible payload.)
+    opacity: isDragging ? 0.5 : undefined,
+    position: 'relative',
+  };
   return (
     <div
       ref={setNodeRef}
@@ -138,14 +151,10 @@ interface SortableTierCardProps {
   onSetPhase?: (id: string, phase: string) => void;
   onUpdateTitle?: (id: string, title: string) => void;
   onDelete?: (id: string) => void;
-  /** Virtual-group cluster info for this card (chip on lead, rail on every member). */
+  /** Virtual-group cluster info for this card — drives the rail/rounding on every
+   *  member. The header chip itself is now rendered standalone by TodoPanel (see
+   *  GroupChip), so the rename/dissolve/hide callbacks live there, not here. */
   groupInfo?: TierGroupRenderInfo;
-  /** Rename the group (chip label click). */
-  onRenameGroup?: (groupId: string, label: string) => void;
-  /** Dissolve the whole group (chip ✕). */
-  onDissolveGroup?: (groupId: string) => void;
-  /** Hide the whole group from the Focus area (chip ⊘) — membership untouched. */
-  onHideGroup?: (groupId: string) => void;
   /** Multi-select (shared with the main list): in select mode a click toggles
    *  selection instead of opening the card; a leading checkbox + highlight show state. */
   selectMode?: boolean;
@@ -157,7 +166,7 @@ interface SortableTierCardProps {
   isGroupTarget?: boolean;
 }
 
-export const SortableTierCard = memo(function SortableTierCard({ task, tier, isFocused, isSessionOpen, isDetailOpen, onClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onStar, onExpandDetail, onClearFocus, onOpenSession, onSetPhase, onUpdateTitle, onDelete, groupInfo, onRenameGroup, onDissolveGroup, onHideGroup, selectMode, isSelected, onSelectToggle, onStartSelect, isGroupTarget }: SortableTierCardProps) {
+export const SortableTierCard = memo(function SortableTierCard({ task, tier, isFocused, isSessionOpen, isDetailOpen, onClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onStar, onExpandDetail, onClearFocus, onOpenSession, onSetPhase, onUpdateTitle, onDelete, groupInfo, selectMode, isSelected, onSelectToggle, onStartSelect, isGroupTarget }: SortableTierCardProps) {
   const {
     attributes,
     listeners,
@@ -268,19 +277,10 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
     ? ` task-grouped${groupInfo.isLead ? ' task-group-lead' : ''}${groupInfo.isLast ? ' task-group-last' : ''}`
     : '';
 
+  // NOTE: the group header chip is rendered STANDALONE by TodoPanel's tier loop (keyed
+  // `group:<gid>:<tier>`), not here — it must outlive its lead member card so the
+  // collapse-on-drag handoff (members → single sentinel) keeps the same drag node.
   return (
-    <>
-    {/* Group header chip — only above the lead member; names + drags the whole cluster. */}
-    {groupInfo?.isLead && (
-      <GroupChip
-        groupId={groupInfo.groupId}
-        tier={tier}
-        label={groupInfo.label}
-        onRename={onRenameGroup}
-        onDissolve={onDissolveGroup}
-        onHide={onHideGroup}
-      />
-    )}
     <div
       ref={setNodeRef}
       style={style}
@@ -402,22 +402,21 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
         onDelete={onDelete}
       />
     </div>
-    </>
   );
 });
 
 // ── TierDropZone — droppable target for any tier section ──
 
-export function TierDropZone({ id, isEmpty, children, forceOver }: { id: string; isEmpty: boolean; children: React.ReactNode; forceOver?: boolean }) {
+export function TierDropZone({ id, isEmpty, children }: { id: string; isEmpty: boolean; children: React.ReactNode }) {
   const { setNodeRef, isOver } = useDroppable({ id });
-  // forceOver lights the zone when a whole-group drag is hovering this tier — the
-  // group chip's `over` target is a member card, not the zone, so useDroppable's own
-  // isOver stays false and the tier would otherwise give no landing feedback.
-  const lit = isOver || !!forceOver;
+  // isOver lights the zone only when it is itself the closest drop target — i.e. the
+  // cursor is over empty space in the tier, not over a card (closestCenter picks the
+  // card in that case). Groups now drag exactly like a task (the collapsed sentinel
+  // opens a real empty slot), so the old always-on group-drag tint is gone.
   return (
     <div
       ref={setNodeRef}
-      className={`todo-pinned-list todo-focus-drop-zone${isEmpty ? ' todo-focus-drop-zone-empty' : ''}${lit ? ' todo-focus-drop-zone-over' : ''}`}
+      className={`todo-pinned-list todo-focus-drop-zone${isEmpty ? ' todo-focus-drop-zone-empty' : ''}${isOver ? ' todo-focus-drop-zone-over' : ''}`}
     >
       {children}
       {isEmpty && (

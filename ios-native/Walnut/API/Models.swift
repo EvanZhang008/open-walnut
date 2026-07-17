@@ -30,6 +30,13 @@ struct AgentSummary: Codable, Identifiable, Equatable {
     let isMain: Bool
 }
 
+/// One image attached to an outgoing message. Base64 JPEG/PNG bytes + its media
+/// type — the additive `images` field on the two message POST endpoints.
+struct ImagePayload: Codable, Equatable {
+    let data: String       // raw base64
+    let mediaType: String  // "image/jpeg", "image/png", …
+}
+
 struct ChatMessage: Codable, Identifiable, Equatable {
     enum Kind: String, Codable {
         case tool
@@ -45,8 +52,16 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     /// Notification provenance ("session-error", "cron", …) — drives card styling.
     let source: String?
 
-    // Client-only flag for optimistic user bubbles (not part of the wire format).
+    // Client-only flags for optimistic user bubbles (not part of the wire format).
     var pending: Bool? = nil
+    /// Send failed — the bubble stays in the timeline (tap to retry / copy /
+    /// delete) so composed text is never lost to a network error.
+    var failed: Bool? = nil
+    /// Client-only thumbnails (JPEG datas) for images the user attached to THIS
+    /// message. Local to the current app session — server history carries no
+    /// image references, so historical messages never show these. Excluded from
+    /// Codable so it never rides the wire or the disk cache.
+    var localImages: [Data]? = nil
 
     private enum CodingKeys: String, CodingKey {
         case id, role, text, createdAt, kind, source
@@ -335,12 +350,10 @@ extension WalnutSession {
         return id
     }
 
+    /// Strip fork/session boilerplate and count fork depth from a raw title.
     /// Server titles look like "Fork of Fork of Session: walnut — first message".
-    /// Decompose for mobile rows: the boilerplate ("Session: ", "Fork of " chains)
-    /// wastes the line — show the name as the headline, the message as a grey
-    /// preview (Mail/Messages pattern), fork-ness as a compact badge.
-    private var parsedTitle: (forkDepth: Int, name: String, preview: String?) {
-        var t = displayTitle
+    private static func stripBoilerplate(_ raw: String) -> (forkDepth: Int, name: String, preview: String?) {
+        var t = raw
         var forks = 0
         while t.hasPrefix("Fork of ") { forks += 1; t.removeFirst("Fork of ".count) }
         if t.hasPrefix("Session: ") { t.removeFirst("Session: ".count) }
@@ -351,8 +364,22 @@ extension WalnutSession {
         }
         return (forks, t, nil)
     }
+
+    /// The headline is the OWNING TASK'S name — that's what identifies the work
+    /// to the user. The session's own title ("Session: <category> — <msg>") is
+    /// boilerplate that surfaces the category, not the task, so it's never the
+    /// headline; its first-message tail still makes a useful grey preview.
+    private var parsedTitle: (forkDepth: Int, name: String, preview: String?) {
+        // Fork depth + any first-message preview come from the session title.
+        let fromSession = Self.stripBoilerplate(displayTitle)
+        if let taskTitle, !taskTitle.isEmpty {
+            return (fromSession.forkDepth, taskTitle, fromSession.preview)
+        }
+        return fromSession
+    }
     var forkDepth: Int { parsedTitle.forkDepth }
-    /// Headline for list rows / the nav bar — no "Session: "/"Fork of " boilerplate.
+    /// Headline for list rows / the nav bar — the task name (falls back to the
+    /// session name only when the session has no owning task).
     var rowTitle: String { parsedTitle.name }
     /// First-message preview (the part after " — "), when the title carries one.
     var rowSubtitle: String? { parsedTitle.preview }

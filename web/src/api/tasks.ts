@@ -58,6 +58,10 @@ export async function fetchTasks(filter?: TaskFilter, opts?: { slim?: boolean; m
     params.slim = '1';
   }
   const res = await apiGet<{ tasks: Task[] }>('/api/tasks', Object.keys(params).length ? params : undefined);
+  if (!Array.isArray(res?.tasks)) {
+    console.error('[api] /api/tasks returned unexpected shape', { keys: Object.keys(res ?? {}) });
+    return [];
+  }
   return res.tasks;
 }
 

@@ -44,6 +44,12 @@ const MAX_ARGS_LEN = 1000
 // ── State ──
 
 const buffer: BrowserLogEntry[] = []
+// Retained history ring for crash/bug reports. The buffer above is a FLUSH
+// queue (drained every 2s) — at crash time it holds ≤2s of logs. This ring
+// keeps the last MAX_HISTORY entries regardless of flushes. Entries are the
+// SAME objects pushed to the buffer, so dedup count mutations stay visible.
+const MAX_HISTORY = 300
+const history: BrowserLogEntry[] = []
 let flushTimer: ReturnType<typeof setInterval> | null = null
 let initialized = false
 
@@ -125,6 +131,9 @@ function addEntry(level: BrowserLogEntry['level'], args: unknown[]): void {
       buffer.shift()
     }
     buffer.push(entry)
+    // Same object into the retained history ring (see MAX_HISTORY comment).
+    if (history.length >= MAX_HISTORY) history.shift()
+    history.push(entry)
 
     // Auto-flush when threshold reached
     if (buffer.length >= FLUSH_THRESHOLD) {
@@ -135,12 +144,41 @@ function addEntry(level: BrowserLogEntry['level'], args: unknown[]): void {
   }
 }
 
+// Throttle the REST fallback so a WS-down window doesn't spam the endpoint.
+let lastRestFlush = 0
+const REST_FLUSH_MIN_INTERVAL_MS = 5000
+
 function flush(): void {
   if (buffer.length === 0) return
 
   // Check WS BEFORE draining — keep entries in buffer if not connected
   // so they survive until next flush when WS may be available.
-  if (wsClient.state !== 'connected') return
+  if (wsClient.state !== 'connected') {
+    // WS never connects when React crashes before mount (the WS client is
+    // started from a hook) — exactly when we most need the logs server-side.
+    // Fall back to REST for buffers that contain an error, throttled.
+    const hasError = buffer.some((e) => e.level === 'error')
+    const now = Date.now()
+    if (hasError && now - lastRestFlush >= REST_FLUSH_MIN_INTERVAL_MS) {
+      lastRestFlush = now
+      const entries = buffer.splice(0, buffer.length)
+      try {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+        // Cloud mode requires the device token; on a trusted LAN none is stored.
+        try {
+          const token = localStorage.getItem('walnut.deviceToken')
+          if (token) headers['Authorization'] = `Bearer ${token}`
+        } catch { /* storage unavailable */ }
+        void fetch('/api/browser-logs', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ entries }),
+          keepalive: true,
+        }).catch(() => { /* server down — logs lost, nothing else to try */ })
+      } catch { /* fetch unavailable — ignore */ }
+    }
+    return
+  }
 
   const entries = buffer.splice(0, buffer.length)
   // Fire-and-forget — don't await
@@ -190,6 +228,17 @@ export function initBrowserLogger(): void {
 
   patchConsole()
 
+  // Uncaught exceptions + promise rejections. These NEVER go through console.*
+  // (the browser prints them natively), so without these hooks a crash — e.g. a
+  // throw inside a drag event handler or a render error that blanks the page —
+  // leaves zero trace in the server log.
+  window.addEventListener('error', (e) => {
+    addEntry('error', [`[uncaught] ${e.message}`, `${e.filename ?? ''}:${e.lineno ?? 0}:${e.colno ?? 0}`, e.error instanceof Error ? e.error : undefined])
+  })
+  window.addEventListener('unhandledrejection', (e) => {
+    addEntry('error', ['[unhandledrejection]', e.reason instanceof Error ? e.reason : safeStringify(e.reason)])
+  })
+
   // Periodic flush
   flushTimer = setInterval(flush, FLUSH_INTERVAL_MS)
 
@@ -199,6 +248,17 @@ export function initBrowserLogger(): void {
   // Don't log from here — would trigger our own interceptor and buffer a meta-log.
   // DevTools will show the patched console is active via the normal log output.
 }
+
+/**
+ * Recent console entries (retained across flushes) for crash/bug reports.
+ * Returns shallow clones so consumers can't mutate the live ring.
+ */
+export function getRecentEntries(): BrowserLogEntry[] {
+  return history.map((e) => ({ ...e }))
+}
+
+export type { BrowserLogEntry }
+export { safeStringify }
 
 /**
  * Tear down — restore original console methods (useful for tests).
@@ -219,4 +279,5 @@ export function destroyBrowserLogger(): void {
 
   window.removeEventListener('beforeunload', beaconFlush)
   buffer.length = 0
+  history.length = 0
 }

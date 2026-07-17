@@ -50,7 +50,7 @@ async function runGitSync(options: Record<string, unknown>, globals: GlobalOptio
   }
 
   try {
-    const result = sync();
+    const result = await sync();
     if (!globals.json) {
       if (result.pulled) console.log(`  \u2193 Pulled changes`);
       if (result.pushed) console.log(`  \u2191 Pushed changes`);

@@ -1,29 +1,50 @@
 import React from 'react';
 import {
-  SESSION_MODELS,
   SESSION_EFFORTS,
   DEFAULT_SESSION_EFFORT,
+  sessionModelsAsCatalog,
+  resolveModelSwitchValue,
   modelSupportsEffort,
   modelSupportsXhighEffort,
   modelSupportsMaxEffort,
 } from '@open-walnut/core';
-import type { SessionEffort } from '@open-walnut/core';
-import { fetchSessionLiveSettings } from '@/api/sessions';
-import type { SessionLiveSettings } from '@/api/sessions';
+import type { SessionEffort, SessionModelCatalogEntry } from '@open-walnut/core';
+import { fetchSessionLiveSettings, fetchSessionModelCatalog } from '@/api/sessions';
+import type { SessionLiveSettings, SessionModelCatalog } from '@/api/sessions';
 
-// Picker options derived from the single source of truth (core/types.ts).
-const MODELS = SESSION_MODELS;
 const EFFORTS = SESSION_EFFORTS;
 
-/** Normalize a raw model string (e.g. init event model) to our picker IDs */
-function normalizeModelId(raw?: string | null): string {
-  if (!raw) return 'opus';
-  const lower = raw.toLowerCase();
-  const is1m = lower.includes('[1m]');
-  if (lower.includes('haiku')) return 'haiku';  // haiku has no 1M variant
-  if (lower.includes('sonnet')) return is1m ? 'sonnet-1m' : 'sonnet';
-  if (lower.includes('fable')) return is1m ? 'fable-1m' : 'fable';
-  return is1m ? 'opus-1m' : 'opus';
+/** Strip decoration that differs between equivalent model strings: the [1m]
+ *  context tag and provider version suffixes (-v1, -v1:0, _v2 …). Used for
+ *  loose matching between a live/read-back model ID and catalog rows. */
+function stripModelDecoration(s: string): string {
+  return s.toLowerCase().replace(/\[1m\]$/, '').replace(/[-_]v\d+(:\d+)?$/, '');
+}
+
+/**
+ * Find which catalog row is the ACTIVE one for a live model string.
+ * Tiers (first hit wins):
+ *  1. exact `value` match
+ *  2. `resolvedModel` match on a NON-'default' row — a specific row beats the
+ *     'default' row, which shares its resolvedModel with whatever it points at
+ *  3. `resolvedModel` match on the 'default' row
+ *  4. loose match ([1m]/-vN stripped) against value/resolvedModel
+ *  5. null — live model is OUT of the catalog (org tightened the allowlist,
+ *     refusal fallback, resumed onto something else): show truthfully, select nothing.
+ */
+function matchCatalogRow(models: SessionModelCatalogEntry[], live?: string | null): SessionModelCatalogEntry | null {
+  if (!live) return null;
+  const exact = models.find((m) => m.value === live);
+  if (exact) return exact;
+  const byResolved = models.find((m) => m.value !== 'default' && m.resolvedModel === live);
+  if (byResolved) return byResolved;
+  const viaDefault = models.find((m) => m.value === 'default' && m.resolvedModel === live);
+  if (viaDefault) return viaDefault;
+  const needle = stripModelDecoration(live);
+  return models.find((m) =>
+    stripModelDecoration(m.value) === needle
+    || (m.resolvedModel ? stripModelDecoration(m.resolvedModel) === needle : false),
+  ) ?? null;
 }
 
 /** Short display form of a full runtime model ID (e.g. "us.anthropic.claude-sonnet-4-6[1m]" → "sonnet-4-6 1M"). */
@@ -74,6 +95,26 @@ export function ModelPicker({ currentModel, currentEffort, sessionId, onSwitch, 
     return () => { cancelled = true; };
   }, [sessionId]);
 
+  // ── Catalog pull (parallel to the live-settings pull): the session's TRUE
+  // selectable models from the CLI's initialize response — already filtered by
+  // the host's availableModels and mapped through modelOverrides. Until it
+  // answers (or with no sessionId, e.g. tests), render the static registry in
+  // catalog shape — identical rows to the pre-catalog picker.
+  const [catalog, setCatalog] = React.useState<SessionModelCatalog | null>(null);
+  React.useEffect(() => {
+    if (!sessionId) return;
+    let cancelled = false;
+    fetchSessionModelCatalog(sessionId)
+      .then((c) => { if (!cancelled) setCatalog(c); })
+      .catch(() => { /* keep fallback rows — degraded, never broken */ });
+    return () => { cancelled = true; };
+  }, [sessionId]);
+  const models: SessionModelCatalogEntry[] = catalog?.models ?? sessionModelsAsCatalog();
+  const catalogIsLive = catalog?.source === 'cli';
+  // NOTE on switch failure: the panel closes the picker on Switch, so staleness
+  // recovery lives SERVER-side — the /model route invalidates the session's
+  // catalog cache on a read-back mismatch, and the next picker open refetches.
+
   // ── Live details: collapsed by default; expanding lazily pulls the heavier
   // reads (get_context_usage tokenizes the CLI's whole tool surface — too heavy
   // to fire on every picker open). Result is kept until the picker closes.
@@ -96,22 +137,60 @@ export function ModelPicker({ currentModel, currentEffort, sessionId, onSwitch, 
   };
 
   const applied = liveSettings?.live ? liveSettings.applied : null;
-  // Active states prefer the LIVE applied values over the (possibly stale) record.
-  const activeModelId = normalizeModelId(applied?.model ?? currentModel);
-  const requestedModelId = normalizeModelId(liveSettings?.requested?.model ?? currentModel);
-  const modelMismatch = applied !== null && activeModelId !== requestedModelId;
+  // Active row = catalog row matching the LIVE model (applied wins over record).
+  // No match ⇒ the session runs a model OUTSIDE the catalog — we show that
+  // truthfully (synthetic row below) instead of pretending a row is active.
+  const liveModel = applied?.model ?? currentModel;
+  const activeRow = matchCatalogRow(models, liveModel);
+  const requestedModel = liveSettings?.requested?.model ?? currentModel;
+  const requestedRow = matchCatalogRow(models, requestedModel);
+  // Mismatch = the CLI is NOT running what was requested. Mirrors the server's
+  // read-back comparator: 'default' always counts as applied (it can resolve to
+  // anything), same catalog row counts, and a legacy alias counts when the live
+  // ID contains it ('sonnet' requested → 'global.anthropic.claude-sonnet-5[1m]'
+  // live is the alias WORKING, not a mismatch).
+  const requestApplied = (() => {
+    if (!requestedModel || !liveModel) return true;
+    if (requestedModel === 'default') return true;
+    if (requestedRow && activeRow && requestedRow.value === activeRow.value) return true;
+    const req = stripModelDecoration(requestedModel);
+    const liv = stripModelDecoration(liveModel);
+    return req === liv || liv.includes(req) || req.includes(liv);
+  })();
+  const modelMismatch = applied !== null && !requestApplied;
 
-  // Effort is a capability of the ACTIVE model (live-aware).
-  const capabilityModel = applied?.model ?? currentModel;
-  const effortSupported = modelSupportsEffort(capabilityModel);
-  const xhighSupported = modelSupportsXhighEffort(capabilityModel);
-  const maxSupported = modelSupportsMaxEffort(capabilityModel);
+  // Effort is a capability of the ACTIVE model. The catalog row (CLI truth) wins
+  // when it carries capability fields; otherwise fall back to the static
+  // substring-based tables (which already understand full provider IDs).
+  const capabilityModel = liveModel;
+  const rowLevels = activeRow?.supportedEffortLevels;
+  const effortSupported = activeRow?.supportsEffort !== undefined
+    ? activeRow.supportsEffort
+    : rowLevels !== undefined ? rowLevels.length > 0 : modelSupportsEffort(capabilityModel);
+  const xhighSupported = rowLevels !== undefined ? rowLevels.includes('xhigh') : modelSupportsXhighEffort(capabilityModel);
+  const maxSupported = rowLevels !== undefined ? rowLevels.includes('max') : modelSupportsMaxEffort(capabilityModel);
 
   const requestedEffort: SessionEffort = liveSettings?.requested?.effort ?? currentEffort ?? DEFAULT_SESSION_EFFORT;
   const appliedEffort = (applied?.effort ?? null) as SessionEffort | null;
   // No explicit effort = the API default ('high'). Live value wins when present.
   const activeEffort: SessionEffort = appliedEffort ?? requestedEffort;
   const effortMismatch = applied !== null && appliedEffort !== null && appliedEffort !== requestedEffort;
+
+  // ── Custom model ID input — parity with the terminal's `/model <id>`.
+  // The catalog only lists rows the CLI's picker GENERATES; the switch
+  // validator accepts more (e.g. an allowlisted model whose menu row the
+  // upstream registry forgot — fable-5[1m] on Bedrock). Any string that
+  // passes the same shape check the server uses is sent verbatim; the CLI
+  // remains the authority (explicit ack error / read-back on the way back).
+  // WHAT TO TYPE: the FINAL provider-ready ID — the modelOverrides VALUE if
+  // the host configures overrides ("global.anthropic.claude-fable-5[1m]"),
+  // else the native provider ID ("us.anthropic.claude-opus-4-8"). NEVER the
+  // canonical short ID ("claude-fable-5[1m]"): it acks success but 400s at
+  // the wire and silently falls back — full pipeline in the doc comment on
+  // resolveModelSwitchValue (src/core/types.ts).
+  const [customValue, setCustomValue] = React.useState('');
+  const customResolved = customValue.trim() ? resolveModelSwitchValue(customValue) : null;
+  const submitCustom = () => { if (customResolved) onSwitch(customResolved); };
 
   // Close on Escape key
   React.useEffect(() => {
@@ -124,7 +203,7 @@ export function ModelPicker({ currentModel, currentEffort, sessionId, onSwitch, 
     <div className="model-picker">
       <div className="model-picker-header">
         <span className="model-picker-title">Switch Model</span>
-        <span className="model-picker-current">Current: {activeModelId}</span>
+        <span className="model-picker-current">Current: {activeRow?.displayName ?? shortModelLabel(liveModel)}</span>
         <button className="model-picker-close" onClick={onClose} type="button">&times;</button>
       </div>
 
@@ -145,7 +224,7 @@ export function ModelPicker({ currentModel, currentEffort, sessionId, onSwitch, 
               </span>
               {(modelMismatch || effortMismatch) && (
                 <span className="model-picker-live-mismatch" title="The CLI is using different settings than requested (env override or unsupported value silently downgraded/ignored).">
-                  {' '}⚠ requested{modelMismatch ? ` ${requestedModelId}` : ''}{effortMismatch ? ` · effort ${requestedEffort}` : ''} not applied
+                  {' '}⚠ requested{modelMismatch ? ` ${requestedRow?.displayName ?? shortModelLabel(liveSettings?.requested?.model ?? currentModel)}` : ''}{effortMismatch ? ` · effort ${requestedEffort}` : ''} not applied
                 </span>
               )}
             </>
@@ -232,7 +311,7 @@ export function ModelPicker({ currentModel, currentEffort, sessionId, onSwitch, 
           Reasoning effort
           {!effortSupported && (
             <span className="model-picker-effort-hint" title="This model does not support effort levels">
-              {' '}— not supported by {activeModelId}
+              {' '}— not supported by {activeRow?.displayName ?? shortModelLabel(liveModel)}
             </span>
           )}
         </div>
@@ -267,35 +346,81 @@ export function ModelPicker({ currentModel, currentEffort, sessionId, onSwitch, 
       </div>
 
       <div className="model-picker-options">
-        {MODELS.map((m) => (
-          <div
-            key={m.id}
-            className={`model-picker-option${m.id === activeModelId ? ' model-picker-option-active' : ''}`}
-          >
-            <div className="model-picker-option-name">
-              {m.label}
-              {modelMismatch && m.id === requestedModelId && (
-                <span className="model-picker-option-requested" title="You requested this model but the CLI is not using it"> ⚠ requested</span>
+        {/* Out-of-catalog live model: the session runs something no catalog row
+            claims (allowlist tightened mid-session, refusal fallback, resumed
+            onto a now-restricted model). Show it truthfully — selected nowhere,
+            switchable nowhere — instead of pretending a row is active. */}
+        {liveModel && !activeRow && (
+          <div className="model-picker-option model-picker-option-active" data-testid="picker-out-of-catalog">
+            <div className="model-picker-option-name">{shortModelLabel(liveModel)}</div>
+            <div className="model-picker-option-desc">Current model — not in this session's selectable catalog</div>
+            <div className="model-picker-option-badge">Active</div>
+          </div>
+        )}
+        {models.map((m) => {
+          const isActive = activeRow?.value === m.value;
+          const isRequestedNotApplied = modelMismatch && requestedRow?.value === m.value;
+          return (
+            <div
+              key={m.value}
+              className={`model-picker-option${isActive ? ' model-picker-option-active' : ''}${m.disabled ? ' model-picker-option-disabled' : ''}`}
+            >
+              <div className="model-picker-option-name">
+                {m.displayName}
+                {isRequestedNotApplied && (
+                  <span className="model-picker-option-requested" title="You requested this model but the CLI is not using it"> ⚠ requested</span>
+                )}
+              </div>
+              <div className="model-picker-option-desc">{m.description ?? ''}</div>
+              {!isActive && !m.disabled && (
+                <div className="model-picker-option-actions">
+                  <button
+                    className="btn btn-sm model-picker-btn"
+                    onClick={() => onSwitch(m.value)}
+                    type="button"
+                    title={catalogIsLive
+                      ? 'Applied live — the next turn uses this model (no restart)'
+                      : 'Applied live via the legacy alias path — the next turn uses this model'}
+                  >
+                    Switch
+                  </button>
+                </div>
+              )}
+              {!isActive && m.disabled && (
+                <div className="model-picker-option-badge model-picker-option-badge-disabled" title="Restricted by your organization's settings — visible but not selectable">
+                  Restricted
+                </div>
+              )}
+              {isActive && (
+                <div className="model-picker-option-badge">Active</div>
               )}
             </div>
-            <div className="model-picker-option-desc">{m.description}</div>
-            {m.id !== activeModelId && (
-              <div className="model-picker-option-actions">
-                <button
-                  className="btn btn-sm model-picker-btn"
-                  onClick={() => onSwitch(m.id)}
-                  type="button"
-                  title="Applied live — the next turn uses this model (no restart)"
-                >
-                  Switch
-                </button>
-              </div>
-            )}
-            {m.id === activeModelId && (
-              <div className="model-picker-option-badge">Active</div>
-            )}
-          </div>
-        ))}
+          );
+        })}
+      </div>
+
+      {/* Custom model ID — same escape hatch as the terminal's `/model <id>`.
+          Works for allowlisted models missing a catalog row (upstream registry
+          gaps), org-specific inference profiles, brand-new model IDs. */}
+      <div className="model-picker-custom" data-testid="picker-custom-model">
+        <input
+          className="model-picker-custom-input"
+          type="text"
+          placeholder="Custom model ID… (e.g. global.anthropic.claude-fable-5[1m])"
+          value={customValue}
+          onChange={(e) => setCustomValue(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') submitCustom(); e.stopPropagation(); }}
+          spellCheck={false}
+        />
+        <button
+          className="btn btn-sm model-picker-btn"
+          type="button"
+          disabled={!customResolved}
+          onClick={submitCustom}
+          title="Sent verbatim to the CLI — it validates against your settings (allowlist / overrides) and reports back the true applied model"
+        >
+          Switch
+        </button>
       </div>
     </div>
   );

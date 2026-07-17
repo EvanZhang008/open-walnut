@@ -211,6 +211,153 @@ export function modelSupportsMaxEffort(model?: string): boolean {
   return modelEffortCapability(model).max;
 }
 
+// ── Per-session model catalog (from the CLI `initialize` control request) ──
+// The CLI's initialize control_response carries `models[]` — the session's TRUE
+// selectable catalog: already filtered by the host's availableModels allowlist
+// and already mapped through modelOverrides. Each row's `value` is the ONLY
+// universally-safe string to send to set_model / --model (aliases get rejected
+// under an allowlist; canonical short IDs pass validation but 400 at the wire).
+// SESSION_MODELS above remains the FALLBACK for old CLIs (no initialize answer),
+// the create-time picker (no session exists yet), and cron/routines (session-less).
+export interface SessionModelCatalogEntry {
+  /** Model identifier to switch to — send VERBATIM to set_model / --model. */
+  value: string;
+  /** Canonical wire model id this row's value resolves to (active-row matching). */
+  resolvedModel?: string;
+  /** Human-readable display name (e.g. "Fable", "Opus 4.6 (1M context)"). */
+  displayName: string;
+  /** Capability description shown under the name. */
+  description?: string;
+  /** Visible but not selectable (e.g. excluded by org policy). */
+  disabled?: boolean;
+  /** Whether this model accepts effort levels at all. */
+  supportsEffort?: boolean;
+  /** Exact effort levels the model accepts — drives the picker's effort buttons. */
+  supportedEffortLevels?: SessionEffort[];
+}
+
+/**
+ * SESSION_MODELS rendered in catalog shape — the degraded-mode source when the
+ * CLI can't answer initialize (old build / dead session / timeout). `value` is
+ * the LEGACY PICKER ALIAS (e.g. 'sonnet-1m'), NOT cliModel: a fallback-mode
+ * switch must round-trip through the existing alias path in
+ * resolveModelSwitchValue untouched, byte-identical to today's behavior.
+ */
+export function sessionModelsAsCatalog(): SessionModelCatalogEntry[] {
+  return SESSION_MODELS.map((m) => {
+    const cap = modelEffortCapability(m.cliModel);
+    const levels: SessionEffort[] = cap.effort
+      ? SESSION_EFFORT_IDS.filter((e) =>
+          (e !== 'xhigh' || cap.xhigh) && (e !== 'max' || cap.max))
+      : [];
+    return {
+      value: m.id,
+      displayName: m.label,
+      description: m.description,
+      supportsEffort: cap.effort,
+      supportedEffortLevels: levels,
+    };
+  });
+}
+
+/**
+ * Resolve a user/UI-supplied model switch value to the string handed to
+ * applyModel / persisted as record.cliModel — the ONE validator shared by the
+ * HTTP route (POST /:id/model) and the WS RPC (session:send). Returns null for
+ * garbage (caller decides 400 vs silent-drop).
+ *  - Legacy picker alias ('sonnet-1m') → its CLI mapping ('sonnet[1m]'), exactly
+ *    as today, so the fallback picker and older UIs keep working.
+ *  - Anything catalog-value-shaped (a CLI-provided ModelInfo.value like
+ *    'global.anthropic.claude-fable-5[1m]' or 'default') → passthrough verbatim.
+ *    Shape check only — the CLI is the authority on whether it's allowed; it
+ *    lands in apply_flag_settings JSON and later in `--model` argv on a cold
+ *    resume, hence the conservative charset.
+ *
+ * ── WHICH STRING TO SEND — the CLI's model-resolution pipeline in one place ──
+ * (verified against CLI 2.1.199/2.1.208 binaries + live stream-json probes;
+ * this is why the catalog `value` is the ONLY universally-safe switch string)
+ *
+ * The CLI resolves models through a 5-layer pipeline:
+ *   L1 hardcoded model registry  — per-model provider IDs, e.g. opus-4-8 has
+ *      bedrock:"us.anthropic.claude-opus-4-8" (only us.*; global.* cross-region
+ *      profiles do NOT exist in the registry — that's what modelOverrides add)
+ *   L2 picker-row generation     — rows are GENERATED from the registry (incl.
+ *      which models get a "(1M context)" row via a per-model flag); a model can
+ *      be switchable yet have NO row (upstream registry gaps)
+ *   L3 settings.modelOverrides   — rewrites each row's value string; keys MUST
+ *      exactly match the registry's first-party canonical ID (usually undated
+ *      like "claude-opus-4-8", but haiku is DATED: "claude-haiku-4-5-20251001").
+ *      A mismatched key is SILENTLY ignored — no error, no warning.
+ *   L4 settings.availableModels  — pure FILTER over generated rows: can only
+ *      remove rows, never add. An allowlist entry for a row that was never
+ *      generated (L2) does nothing.
+ *   L5 output                    — /model menu = initialize response models[]
+ *      = what Walnut's catalog shows. set_model/--model validation is a
+ *      SEPARATE path that checks the raw string against the same allowlist,
+ *      so "menu lacks the row but switching works" is normal.
+ *
+ * THREE NAMESPACES — each settings field accepts exactly ONE form, mismatches
+ * are silently ignored (no error, no warning):
+ *   ┌──────────────────────────┬──────────────┬───────────────────────────────┐
+ *   │ string form              │ example      │ valid in                      │
+ *   ├──────────────────────────┼──────────────┼───────────────────────────────┤
+ *   │ family alias             │ fable        │ model / --model / set_model   │
+ *   │                          │              │ (BEST: full pipeline resolve) │
+ *   │ canonical first-party ID │ claude-      │ modelOverrides KEY only       │
+ *   │                          │ fable-5      │ (⚠️ haiku's is DATED; [1m]-   │
+ *   │                          │              │ suffixed keys are invalid)    │
+ *   │ full provider ID         │ global.anth… │ modelOverrides VALUE, and     │
+ *   │                          │ fable-5[1m]  │ direct model/--model input    │
+ *   └──────────────────────────┴──────────────┴───────────────────────────────┘
+ *
+ * Therefore a raw model string must be an ALIAS or the FINAL provider-ready ID:
+ *   ✅ the modelOverrides VALUE when overrides are configured
+ *      ("global.anthropic.claude-fable-5[1m]")
+ *   ✅ the registry's native provider ID when they aren't
+ *      ("us.anthropic.claude-opus-4-8")
+ *   ⚠️ NEVER the canonical short ID ("claude-fable-5[1m]") — it passes the
+ *      allowlist AND acks success AND echoes in get_settings, but goes to the
+ *      wire verbatim, 400s at the provider, and silently falls back to another
+ *      model ("three layers lie"). Ground truth is the assistant message's
+ *      `model` field / the read-back in refreshAppliedSettings.
+ * Catalog rows' `value` is already the post-override final ID — sending it
+ * verbatim can never hit these traps.
+ *
+ * 1M-CONTEXT GOTCHAS (registry flags, verified on Bedrock 2.1.208):
+ *   - `native_1m` alone only applies to the first-party API. A model is 1M on
+ *     Bedrock/Vertex only with `native_1m_3p` (sonnet-5 has it; fable-5 does
+ *     NOT — plain fable-5 on Bedrock is 200K, the [1m] suffix is REQUIRED).
+ *   - Only models with `supports_1m_suffix` grow a "(1M context)" menu row
+ *     (opus-4-x, sonnet-4-x families; fable-5/sonnet-5 don't) — so fable-1m is
+ *     switchable but has NO row. Recommended user config when only the 1M
+ *     variant is wanted: point the BASE key at the 1M value
+ *     ("claude-fable-5": "global.anthropic.claude-fable-5[1m]") — every path
+ *     (alias, menu row, default) then lands on 1M with a clean display name.
+ *
+ * KNOWN UPSTREAM CLI BUGS Walnut deliberately does NOT paper over (we mirror
+ * the CLI's catalog truthfully; the picker's custom-ID input is the escape
+ * hatch, with explicit ack errors + read-back as the safety net):
+ *   1. Registry gaps → switchable models with no menu row (fable-1m above).
+ *   2. Allowlist prefix-matching never strips provider prefixes, so rows whose
+ *      value is an alias (Haiku's is "haiku") resolve to "us.anthropic.…" and
+ *      fail entries like "claude-haiku-4-5" → row wrongly filtered. Workaround
+ *      in user config: use the bare family alias ("haiku") as the entry.
+ *   3. modelOverrides key mismatches are silently ignored (dated haiku key,
+ *      [1m]-suffixed keys).
+ * Net guarantee: Walnut's menu is exactly as correct as the customer's CLI —
+ * that ceiling is structural — and the custom input + read-back cover
+ * everything above it.
+ */
+export function resolveModelSwitchValue(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (VALID_SESSION_MODEL_IDS.has(trimmed)) return SESSION_MODEL_CLI_MAP[trimmed];
+  if (!trimmed || trimmed.length > 256) return null;
+  // Reject whitespace, quotes and control chars (shell-argv + JSON safety);
+  // allow the charset real provider IDs use: letters, digits, . _ : / - [ ]
+  if (!/^[A-Za-z0-9._:/\-[\]]+$/.test(trimmed)) return null;
+  return trimmed;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -417,7 +564,7 @@ export interface AgentConfig {
   session_triage_agent?: string;
   /**
    * Triage throttling. Turn-complete triage trailing-debounces by `debounce_minutes`
-   * (default 3) so a burst of interactive turns collapses into one end-of-interaction
+   * (default 4) so a burst of interactive turns collapses into one end-of-interaction
    * triage. `notify_mode` gates the expensive main-agent notification:
    *   - 'off' (default): never wake the main agent; task.summary still updates (poll model)
    *   - 'buffered': don't wake in real time, but nudge the heartbeat to review soon
@@ -505,6 +652,12 @@ export interface Config {
     /** Shell snippet run before claude on remote sessions (e.g. 'source $HOME/.nvm/nvm.sh').
      *  Use to set up PATH for node managers (nvm, fnm, volta, asdf) or other env. */
     shell_setup?: string;
+    /** Whether this host is enabled (shown in session path selector).
+     *  Auto-discovered hosts default to true. User can toggle off to hide. */
+    enabled?: boolean;
+    /** Whether this host was auto-discovered from SSH config (vs manually added).
+     *  Informational only — doesn't affect behavior. */
+    discovered?: boolean;
   }>;
   /** Per-host maximum concurrent CLI session limits.
    *  'local' key = sessions without a host.
@@ -884,9 +1037,10 @@ export interface SessionRecord {
   archive_reason?: string;
   /** Plan text stored on execution session (from the archived plan session). */
   planContent?: string;
-  /** LLM-generated gist (topics/decisions/questions) for search indexing. Set by onSessionEnd summary agent. */
+  /** Session gist for search indexing. Backfilled for free from the task summary by
+   *  turn-complete triage (the dedicated full-transcript LLM summarizer was removed). */
   summary?: string;
-  /** ISO timestamp of last summary generation — used to skip re-summarizing recently-summarized sessions. */
+  /** ISO timestamp of last summary backfill. */
   summaryGeneratedAt?: string;
   /** Error message when process_status is 'error' — persisted for post-mortem display. */
   errorMessage?: string;

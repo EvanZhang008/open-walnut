@@ -12,7 +12,7 @@ settings:
     # DEVELOPMENT_TEAM is left blank here (public repo) — the build/upload script
     # injects the signer's team ID from a local, gitignored credentials file.
     CODE_SIGN_STYLE: Automatic
-    DEVELOPMENT_TEAM: ""
+    DEVELOPMENT_TEAM: G3PQWSGR5W
 targets:
   Walnut:
     type: application
@@ -25,7 +25,7 @@ targets:
       properties:
         CFBundleDisplayName: Walnut
         CFBundleShortVersionString: "1.0.0"
-        CFBundleVersion: "7"
+        CFBundleVersion: "19"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
@@ -37,6 +37,9 @@ targets:
         # QR pairing: the setup screen scans the wn://pair code shown by the
         # web console (Settings → Devices).
         NSCameraUsageDescription: Walnut uses the camera to scan the pairing QR code from your Walnut console.
+        # Voice input: the composer mic button records speech and transcribes
+        # it to text on your Walnut server.
+        NSMicrophoneUsageDescription: Walnut uses the microphone for voice input — speech is transcribed to text by your own Walnut server.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.openwalnut.ios

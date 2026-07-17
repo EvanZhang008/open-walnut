@@ -2,6 +2,7 @@ import { memo, useRef } from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import type { NavigateFunction } from 'react-router-dom';
 import { AppShell } from './components/layout/AppShell';
+import { DebugCrashProbe } from './components/common/AppErrorBoundary';
 import { MainPage } from './pages/MainPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { TaskDetailPage } from './pages/TaskDetailPage';
@@ -46,6 +47,8 @@ export function App() {
 
   return (
     <AppShell>
+      {/* E2E/QA crash probe — throws once when its sessionStorage flag is set. */}
+      <DebugCrashProbe />
       {/* MainPage is always mounted — hidden via CSS class when another route is active.
           This preserves all React state (chat, tasks, WebSocket, focused task, scroll position)
           across navigation to other pages and back. The CSS class is in globals.css. */}

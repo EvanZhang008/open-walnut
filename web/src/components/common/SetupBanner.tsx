@@ -81,17 +81,24 @@ export function SetupBanner({ health, loading, onNavigateSettings }: SetupBanner
   const providerOk = health.hasReadyProvider ?? false;
   const cliOk = health.claudeCliAvailable ?? true;
   const source = health.credentialSource;
+  // The butler's ready via a logged-in Claude Code subscription — resolveCredentialHealth()
+  // tags this `source:'config'` (it's not a Bedrock/API-key ladder hit) with a detail
+  // string prefix, so it needs its own check rather than the source !== 'config' test below.
+  const viaSubscription = providerOk && source === 'config' && !!health.credentialDetail?.startsWith('claude-cli');
 
-  // ── Path 1: auto-detected. Provider is ready from a NON-config source → show a
-  //    small confirmation note (transparent + overridable), not the full checklist. ──
-  const autoDetected = providerOk && !!source && source !== 'config' && source !== 'none';
+  // ── Path 1: auto-detected. Provider is ready from a NON-config source (or from the
+  //    subscription) → show a small confirmation note (transparent + overridable),
+  //    not the full checklist. ──
+  const autoDetected = providerOk && ((!!source && source !== 'config' && source !== 'none') || viaSubscription);
   if (autoDetected) {
     if (autoNoteDismissed) return null;
     return (
       <div className="setup-banner setup-banner-autodetect">
         <div className="setup-banner-header">
           <span className="setup-banner-title">
-            {'✓'} Auto-detected Bedrock via {SOURCE_LABELS[source] ?? source}
+            {viaSubscription
+              ? <>{'✓'} Using your Claude Code subscription</>
+              : <>{'✓'} Auto-detected Bedrock via {SOURCE_LABELS[source!] ?? source}</>}
           </span>
           <button className="setup-banner-dismiss" onClick={handleAutoNoteDismiss} aria-label="Dismiss">&times;</button>
         </div>

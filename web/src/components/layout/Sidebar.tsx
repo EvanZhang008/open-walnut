@@ -4,6 +4,8 @@ import { useSystemHealth } from '@/hooks/useSystemHealth';
 import { useAudioCapture } from '@/hooks/useAudioCapture';
 import { useNotifications } from '@/contexts/notifications';
 import { NotificationPanel } from '@/components/common/NotificationPanel';
+import { VoicePanel } from '@/components/common/VoicePanel';
+import { subscribeVoiceStatus, getVoiceStatus, type VoiceStatus } from '@/utils/voice-status';
 
 const SS_CHAT_VISIBLE_KEY = 'open-walnut-home-chat-visible';
 const SS_TODO_VISIBLE_KEY = 'open-walnut-home-todo-visible';
@@ -24,6 +26,10 @@ export function Sidebar({ open, collapsed, onToggleCollapse }: SidebarProps) {
   const audio = useAudioCapture();
   const { notify, unreadCount } = useNotifications();
   const [notifOpen, setNotifOpen] = useState(false);
+  const [voiceOpen, setVoiceOpen] = useState(false);
+  // Live voice status (transcribing spinner / failure dot) from any MicButton.
+  const [voiceStatus, setVoiceStatusState] = useState<VoiceStatus>(getVoiceStatus());
+  useEffect(() => subscribeVoiceStatus(setVoiceStatusState), []);
   const location = useLocation();
 
   // "Other" group — collapsed by default; remembered across reloads and
@@ -216,6 +222,16 @@ export function Sidebar({ open, collapsed, onToggleCollapse }: SidebarProps) {
           </button>
         )}
         <button
+          className={`sidebar-link sidebar-voice-btn${voiceStatus.transcribing ? ' voice-transcribing' : ''}`}
+          onClick={() => setVoiceOpen(!voiceOpen)}
+          title={collapsed ? 'Voice history' : undefined}
+          aria-label="Voice history"
+        >
+          <VoiceHistoryIcon transcribing={voiceStatus.transcribing} />
+          <span className="sidebar-label">Voice</span>
+          {voiceStatus.lastFailed && <span className="notification-badge-dot voice-failed-dot" />}
+        </button>
+        <button
           className="sidebar-link sidebar-notification-btn"
           onClick={() => setNotifOpen(!notifOpen)}
           title={collapsed ? 'Notifications' : undefined}
@@ -234,6 +250,11 @@ export function Sidebar({ open, collapsed, onToggleCollapse }: SidebarProps) {
       <NotificationPanel
         open={notifOpen}
         onClose={() => setNotifOpen(false)}
+        sidebarCollapsed={collapsed}
+      />
+      <VoicePanel
+        open={voiceOpen}
+        onClose={() => setVoiceOpen(false)}
         sidebarCollapsed={collapsed}
       />
     </aside>
@@ -420,6 +441,22 @@ function TodoListIcon() {
       <line x1="3" y1="6" x2="3.01" y2="6" />
       <line x1="3" y1="12" x2="3.01" y2="12" />
       <line x1="3" y1="18" x2="3.01" y2="18" />
+    </svg>
+  );
+}
+
+function VoiceHistoryIcon({ transcribing }: { transcribing: boolean }) {
+  // Mic glyph; spins subtly via CSS while a transcription is in flight.
+  return (
+    <svg
+      viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round"
+      className={transcribing ? 'voice-icon-transcribing' : undefined}
+    >
+      <rect x="9" y="1" width="6" height="12" rx="3" />
+      <path d="M19 10v2a7 7 0 01-14 0v-2" />
+      <line x1="12" y1="19" x2="12" y2="23" />
+      <line x1="8" y1="23" x2="16" y2="23" />
     </svg>
   );
 }

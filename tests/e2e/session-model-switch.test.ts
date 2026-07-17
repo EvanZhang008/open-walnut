@@ -489,7 +489,7 @@ describe('POST /api/sessions/:id/model — live switch route', () => {
     await delay(50)
   })
 
-  it('rejects an unknown model alias (400) and a missing session (404)', async () => {
+  it('rejects garbage model strings (400), accepts catalog values, 404s a missing session', async () => {
     const ws = await connectWs()
     const resultPromise = waitForWsEvent(ws, 'session:result')
     await sendWsRpc(ws, 'session:start', {
@@ -501,11 +501,29 @@ describe('POST /api/sessions/:id/model — live switch route', () => {
     const sessionId = ((await resultPromise).data as { sessionId: string }).sessionId
     await delay(400)
 
-    const bad = await fetch(`http://localhost:${port}/api/sessions/${sessionId}/model`, {
+    // Garbage (quotes / whitespace / empty) → 400. NOTE: an UNKNOWN but
+    // catalog-value-shaped string (e.g. 'gpt-5') is now passed through — the
+    // CLI is the authority on validity, not Walnut's static registry.
+    for (const garbage of ['"global.anthropic.claude-opus-4-8"', 'two words', '']) {
+      const bad = await fetch(`http://localhost:${port}/api/sessions/${sessionId}/model`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: garbage }),
+      })
+      expect(bad.status).toBe(400)
+    }
+
+    // A catalog value (full provider ID) is accepted verbatim and persisted.
+    const catalogValue = 'global.anthropic.claude-fable-5[1m]'
+    const ok = await fetch(`http://localhost:${port}/api/sessions/${sessionId}/model`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ model: 'gpt-5' }),
+      body: JSON.stringify({ model: catalogValue }),
     })
-    expect(bad.status).toBe(400)
+    expect(ok.status).toBe(200)
+    const okBody = await ok.json() as { cliModel?: string }
+    expect(okBody.cliModel).toBe(catalogValue)
+    const recResp = await fetch(`http://localhost:${port}/api/sessions/${sessionId}`)
+    const recBody = await recResp.json() as { session?: { cliModel?: string } }
+    expect(recBody.session?.cliModel).toBe(catalogValue)
 
     const missing = await fetch(`http://localhost:${port}/api/sessions/no-such-session/model`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -515,6 +533,48 @@ describe('POST /api/sessions/:id/model — live switch route', () => {
 
     ws.close()
     await delay(50)
+  })
+})
+
+// GET /api/sessions/:id/models — the per-session catalog route. The mock CLI
+// can't answer `list_models` or the `initialize` fallback (no control loop),
+// so these tests prove the DEGRADED modes — which is where the route's
+// behavior actually branches. The CLI-catalog happy path is proven by the
+// getModelCatalog unit tests (stub transport) + the real-binary probe.
+describe('GET /api/sessions/:id/models — catalog route degraded modes', () => {
+  it('falls back to the static registry when the CLI cannot answer the catalog reads', async () => {
+    const ws = await connectWs()
+    const resultPromise = waitForWsEvent(ws, 'session:result')
+    await sendWsRpc(ws, 'session:start', {
+      taskId: 'model-catalog-task-001',
+      message: 'catalog fallback test session',
+      project: 'Walnut',
+      mode: 'bypass',
+    })
+    const sessionId = ((await resultPromise).data as { sessionId: string }).sessionId
+    await delay(300)
+
+    const resp = await fetch(`http://localhost:${port}/api/sessions/${sessionId}/models`)
+    expect(resp.status).toBe(200)
+    const body = await resp.json() as {
+      source: string; live: boolean
+      models: Array<{ value: string; displayName: string }>
+    }
+    // Mock CLI exits per turn + never answers list_models/initialize → fallback either way.
+    expect(body.source).toBe('fallback')
+    // Fallback rows are the legacy alias registry — values round-trip through
+    // the alias branch of the switch validator.
+    expect(body.models.map((m) => m.value)).toContain('opus')
+    expect(body.models.map((m) => m.value)).toContain('fable-1m')
+    expect(body.models.every((m) => m.displayName)).toBe(true)
+
+    ws.close()
+    await delay(50)
+  })
+
+  it('404s an unknown session', async () => {
+    const resp = await fetch(`http://localhost:${port}/api/sessions/no-such-session/models`)
+    expect(resp.status).toBe(404)
   })
 })
 

@@ -20,6 +20,9 @@ export const KNOWN_PROVIDERS: Record<string, Omit<ProviderConfig, 'api_key'>> = 
   openrouter: { api: 'openai-chat', base_url: 'https://openrouter.ai/api/v1' },
   gemini: { api: 'google-generative-ai' },
   ollama: { api: 'ollama' },
+  // Local Claude Code subscription, text-only. Keyless — readiness is probed via
+  // detectClaudeCli() (binary on PATH + subscription credential exists).
+  claude_cli: { api: 'claude-cli' },
 };
 
 /** Default model constant — backward compat. */

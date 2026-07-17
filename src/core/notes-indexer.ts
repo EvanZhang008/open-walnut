@@ -45,6 +45,7 @@ import {
   stampId,
 } from './parse-frontmatter.js'
 import { computeContentHash } from '../utils/file-ops.js'
+import { bus, EventNames } from './event-bus.js'
 import { log } from '../logging/index.js'
 
 const QMD_COLLECTION = 'vault'
@@ -241,10 +242,12 @@ export async function reconcileNote(relPath: string): Promise<string | null> {
     id = generateNoteId()
     const stamped = stampId(bytes, id)
     try {
+      let wrote = false
       await withFileLock(abs, async () => {
         const current = await fsp.readFile(abs, 'utf-8')
         if (computeContentHash(current) !== fileHash) return // changed → skip, retry next cycle
         await fsp.writeFile(abs, stamped, 'utf-8')
+        wrote = true
       })
       // Re-read the stamped bytes so the index row matches what's on disk.
       bytes = stamped
@@ -252,6 +255,18 @@ export async function reconcileNote(relPath: string): Promise<string | null> {
       data = reparsed.data
       body = reparsed.body
       raw = reparsed.raw
+      // The back-write changed the on-disk bytes (and hash) outside any editor
+      // save path. Without an event, open editors keep a stale contentHash and
+      // their NEXT save 409s for no visible reason — emit the same contract as
+      // the write routes so they re-sync. (The reconcile subscriber sees this
+      // too, but the follow-up reconcile hash-skips: no loop.)
+      if (wrote) {
+        bus.emit(
+          EventNames.NOTES_UPDATED,
+          { source: `notes/${relPath.replace(/\.md$/, '')}`, contentHash: computeContentHash(stamped) },
+          ['web-ui'],
+        )
+      }
     } catch (err) {
       log.memory.debug('notes-indexer: id back-write skipped', {
         path: relPath,

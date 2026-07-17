@@ -67,7 +67,7 @@ function SyncIndicator({ task }: { task: Task }) {
     );
   }
 
-  const badge = meta?.badge ?? source.charAt(0).toUpperCase();
+  const badge = meta?.badge ?? (source ? source.charAt(0).toUpperCase() : '?');
   const badgeColor = meta?.badgeColor;
   const integrationName = meta?.name ?? source;
 

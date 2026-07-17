@@ -430,6 +430,45 @@ interface SessionToolCallProps {
 /** Tool names that should render as collapsible groups with child messages. */
 const GROUPABLE_HISTORY_TOOLS = new Set(['Task', 'Agent']);
 
+/** Short model label for the task-group header chip (full Bedrock IDs → "opus-4-8"). */
+export function agentModelLabel(input?: Record<string, unknown>): string {
+  const model = input?.model;
+  if (typeof model !== 'string' || !model) return '';
+  const last = model.split('.').pop() ?? model;
+  return last.replace(/^claude-/, '').replace(/-v\d+.*$/, '').replace(/\[[^\]]*\]$/, '');
+}
+
+/** Collapsed-by-default row inside a task-group body exposing the subagent's
+ *  full input: prompt text + remaining settings (model, effort, isolation…).
+ *  Opt-in visibility — header stays uncluttered. */
+export function TaskGroupPrompt({ input }: { input?: Record<string, unknown> }) {
+  const [open, setOpen] = useState(false);
+  const prompt = typeof input?.prompt === 'string' ? input.prompt : '';
+  const settings = Object.entries(input ?? {})
+    .filter(([k, v]) => k !== 'prompt' && k !== 'description' && v !== undefined && v !== null)
+    .map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`);
+  if (!prompt && settings.length === 0) return null;
+  return (
+    <div className="task-group-prompt">
+      <button className="task-group-prompt-toggle" onClick={() => setOpen(p => !p)}>
+        <span className="task-group-chevron">{open ? '▼' : '▶'}</span>
+        <span className="task-group-prompt-title">Prompt &amp; settings</span>
+        {!open && prompt && (
+          <span className="task-group-prompt-preview">{prompt.slice(0, 120)}</span>
+        )}
+      </button>
+      {open && (
+        <div className="task-group-prompt-body">
+          {settings.length > 0 && (
+            <div className="task-group-prompt-settings">{settings.join(' · ')}</div>
+          )}
+          {prompt && <pre className="task-group-prompt-pre">{prompt}</pre>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Collapsible group for a Task/Agent tool call with child messages.
  *  Lazy-loads subagent content on first expand via API when childMessages is undefined. */
 const TASK_GROUP_INITIAL = 10;
@@ -447,6 +486,7 @@ function TaskGroup({ tool, sessionId, sessionCwd, sessionHost, onTaskClick, onSe
       ? (tool.input.prompt as string).slice(0, 80) + ((tool.input.prompt as string).length > 80 ? '...' : '')
       : tool.name;
   const subagentType = typeof tool.input?.subagent_type === 'string' ? tool.input.subagent_type : '';
+  const modelChip = agentModelLabel(tool.input);
   const hasResult = !!tool.result;
 
   // Resolved children: inline (already attached) or lazy-loaded
@@ -494,6 +534,7 @@ function TaskGroup({ tool, sessionId, sessionCwd, sessionHost, onTaskClick, onSe
         </span>
         <span className="task-group-label">{tool.name}</span>
         {subagentType && <span className="task-group-agent-type">{subagentType}</span>}
+        {modelChip && <span className="task-group-model">{modelChip}</span>}
         <span className="task-group-description">{description}</span>
         {!open && toolCount > 0 && (
           <span className="task-group-badge">{toolCount} tool{toolCount !== 1 ? 's' : ''}</span>
@@ -501,6 +542,7 @@ function TaskGroup({ tool, sessionId, sessionCwd, sessionHost, onTaskClick, onSe
       </button>
       {open && (
         <div className="task-group-body">
+          <TaskGroupPrompt input={tool.input} />
           {loadingChildren ? (
             <div className="task-group-loading">Loading subagent history...</div>
           ) : allChildren.length > 0 ? (

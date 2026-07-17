@@ -1,6 +1,10 @@
 # Open Walnut — Personal Intelligent Butler
 
-> **References**: [ARCHITECTURE.md](./ARCHITECTURE.md) | [src/core/AGENTS.md](./src/core/AGENTS.md) | [src/agent/AGENTS.md](./src/agent/AGENTS.md) | [web/src/AGENTS.md](./web/src/AGENTS.md) | [tests/AGENTS.md](./tests/AGENTS.md) | [src/logging/AGENTS.md](./src/logging/AGENTS.md)
+> **References**: [ARCHITECTURE.md](./ARCHITECTURE.md) | per-directory `AGENTS.md` files are
+> concise quick-references; the **deep implementation details live in skills** (auto-discovered,
+> load on demand): `walnut-core-internals` (src/core/), `walnut-agent-loop` (src/agent/),
+> `walnut-web-frontend` (web/src/), `walnut-testing` (tests/), `walnut-logging` (src/logging/).
+> Load the matching skill before non-trivial work in that area.
 
 ## Ownership: You Are the CTO
 
@@ -37,6 +41,11 @@ No company-internal names, personal info, internal URLs, credentials, or interna
 npm run dev:prod        # Build all → restart 3456 with latest code
 npm run dev:ephemeral   # Ephemeral server (random port, temp data, auto-cleans)
 ```
+
+**⚠️ Launch dev:prod from a non-niced shell.** A server started from a niced parent (e.g. a
+background agent session) inherits the positive nice and gets scheduler-starved under machine
+load — HTTP latency spikes that look like app bugs. The server logs an error at startup and
+exposes `processNice` in `GET /api/config` when this happens; fix = restart from a normal shell.
 
 ### Isolated sandbox for onboarding / provider testing / demos
 
@@ -117,19 +126,34 @@ Personal AI butler: tasks + knowledge + AI sessions. **Tasks are the atom.** `Ca
 
 ### Subsystem Map
 
+The product is FOUR surfaces sharing one core: the **web console** (Mac,
+:3456), the **iOS app** (`ios-native/`, SwiftUI, talks the frozen `/api/v1`),
+the **cloud companion** (an EC2 instance you deploy, `WALNUT_CLOUD_MODE=1`
+REPLICA — same codebase, proxies to daemons over the `/bridge` WS), and the
+**session daemon** (bun/node twins deployed to every exec host — Mac local +
+remote dev boxes — owning `claude` CLI processes so they survive tunnel/Mac
+death).
+
 | Subsystem | Entry point | Details |
 |---|---|---|
-| Agent loop & tools | `src/agent/` | [src/agent/AGENTS.md](./src/agent/AGENTS.md) |
+| Agent loop & tools | `src/agent/` | skill `walnut-agent-loop` + [src/agent/AGENTS.md](./src/agent/AGENTS.md) |
+| Core (tasks/sessions data) | `src/core/` | skill `walnut-core-internals` + [src/core/AGENTS.md](./src/core/AGENTS.md) |
 | Sessions (local + SSH) | `src/providers/` | [ARCHITECTURE.md](./ARCHITECTURE.md) |
+| Session daemon (twins) | `src/providers/daemon-standalone.ts` + `daemon-source.ts` | "Remote Session Daemon" section above |
+| Web GUI | `src/web/`, `web/src/` | skill `walnut-web-frontend` + [web/src/AGENTS.md](./web/src/AGENTS.md) |
+| iOS app | `ios-native/` (xcodegen; `project.yml`) | frozen contract [docs/api-v1.md](./docs/api-v1.md) |
+| Cloud companion | `src/web/ws/bridge-registry.ts`, `scripts/cloud/setup.sh` | infra: `infra/` (CDK); deploy = bundle→S3→SSM |
+| Voice input (STT) | `src/core/stt/`, `src/web/routes/stt-v1.ts` | routes primary/bridge/openai by reachability |
 | Memory & search | `src/core/memory-*.ts` | [ARCHITECTURE.md](./ARCHITECTURE.md) |
 | Event bus | `src/core/event-bus.ts` | [ARCHITECTURE.md](./ARCHITECTURE.md) |
 | Subagents | `src/providers/` | [ARCHITECTURE.md](./ARCHITECTURE.md) |
 | Cron | `src/core/cron/` | [ARCHITECTURE.md](./ARCHITECTURE.md) |
 | Plugins | `src/core/integration-*.ts` | [ARCHITECTURE.md](./ARCHITECTURE.md) |
-| Web GUI | `src/web/`, `web/src/` | [web/src/AGENTS.md](./web/src/AGENTS.md) |
-| Chat history | `src/core/chat-history.ts` | [src/core/AGENTS.md](./src/core/AGENTS.md) |
+| Chat history | `src/core/chat-history.ts` | skill `walnut-core-internals` |
 | Usage tracking | `src/core/usage/` | [ARCHITECTURE.md](./ARCHITECTURE.md) |
-| Git sync | `src/integrations/git-sync.ts` | [ARCHITECTURE.md](./ARCHITECTURE.md) |
+| Git sync (data hub) | `src/integrations/git-sync.ts` | Mac ⇄ EC2 data plane; secrets NEVER ride it |
+| Logging | `src/logging/` | skill `walnut-logging` + [src/logging/AGENTS.md](./src/logging/AGENTS.md) |
+| Testing | `tests/` | skill `walnut-testing` + [tests/AGENTS.md](./tests/AGENTS.md) |
 
 ## Development
 
@@ -161,6 +185,18 @@ Plans: architecture diagrams first → UX scenarios → pseudocode. No detailed 
 ### Frontend logging: `import { log } from '@/utils/log'`
 
 Use the structured logger (`log.info('subsystem', 'message', { sessionId, taskId })`) — never raw `console.log`. IDs must be **full, never truncated** so `grep <sessionId>` traces across browser + server. The logger routes through `console.log`/`warn`/`error` which the browser-logger monkey-patch forwards to `/tmp/open-walnut/`. Never use `console.debug` (invisible to forwarder).
+
+### Where logs land (browser crashes included)
+
+| What | Where |
+|---|---|
+| Server structured JSON (+ forwarded browser console) | `/tmp/open-walnut/open-walnut-<date>.log` — filter browser lines with `jq 'select(.subsystem=="browser")'` or `open-walnut logs -s browser` |
+| Every HTTP request (method/path/status/ms/reqId) | same file, `subsystem=web` (request-logger middleware) |
+| Uncaught JS exceptions / unhandled rejections / React render crashes | forwarded as `subsystem=browser` `[uncaught]` / `[unhandledrejection]` / `[react]` / `[error-boundary]` entries. Delivery: WS RPC when connected; REST `POST /api/browser-logs` fallback when WS is down (e.g. crash before mount) |
+| Daemon logs | `/tmp/open-walnut/daemon-d-*.log` |
+| Server exit trace | `/tmp/open-walnut-exit.log` |
+
+**"Blank page" triage:** grep the local-date AND previous-day files (UTC timestamps vs local filename!) for `error-boundary`, `\[react\]`, `\[uncaught\]`, and `JSON parse failed`. A repeated crash self-heals via `web/src/utils/crash-recovery.ts` (clears sessionStorage → then walnut localStorage keys + skips one prefs merge); the heals also log `[crash-recovery]`.
 
 ## Log investigation toolkit: `scripts/walnut-logs.sh`
 

@@ -4,6 +4,7 @@ import { log } from '../logging/index.js';
 import { CONFIG_FILE } from '../constants.js';
 import { VALID_PRIORITIES, type Config, type TaskPriority } from './types.js';
 import { MODEL_CATALOG } from '../agent/providers/model-catalog.js';
+import { scanSshConfig } from './ssh-config-scanner.js';
 
 const DEFAULT_CONFIG: Config = {
   version: 1,
@@ -37,6 +38,7 @@ function ensureBuiltInLocalReservation(config: Config): void {
 
 /**
  * Read config.yaml. Returns default config if file doesn't exist.
+ * Also merges auto-discovered SSH hosts.
  */
 export async function getConfig(): Promise<Config> {
   try {
@@ -58,6 +60,8 @@ export async function getConfig(): Promise<Config> {
     if (!config.agent?.main_model) {
       config.agent = { ...config.agent, main_model: (MODEL_CATALOG.bedrock ?? [])[0]?.id };
     }
+    // Merge auto-discovered SSH hosts
+    await mergeSshDiscoveredHosts(config);
     return config;
   } catch (err) {
     log.session.debug('config-manager: config file not found, using defaults', {
@@ -65,6 +69,48 @@ export async function getConfig(): Promise<Config> {
     });
     const defaultModels = (MODEL_CATALOG.bedrock ?? []).map(m => m.id);
     return { ...DEFAULT_CONFIG, agent: { available_models: defaultModels, main_model: defaultModels[0] } };
+  }
+}
+
+/**
+ * Merge auto-discovered SSH config hosts into config.hosts.
+ * Rules:
+ *  - Discovered hosts are added with enabled=true, discovered=true
+ *  - Existing manual hosts are never touched (enabled defaults to true if unset)
+ *  - A discovered host is skipped when its alias OR its hostname already exists
+ *    in config — the user's entry IS that machine (e.g. user-defined 'clouddev'
+ *    pointing at the same dev box); showing the raw FQDN again is just noise.
+ */
+async function mergeSshDiscoveredHosts(config: Config): Promise<void> {
+  const discovered = await scanSshConfig();
+  if (discovered.size === 0) return;
+
+  // Initialize hosts if not present
+  if (!config.hosts) {
+    config.hosts = {};
+  }
+
+  // Hostnames already covered by an existing entry (manual or previously merged).
+  const knownHostnames = new Set(
+    Object.values(config.hosts).map((h) => h.hostname.toLowerCase()),
+  );
+
+  for (const [alias, host] of discovered) {
+    // Skip if the alias OR the machine (hostname) is already configured.
+    if (config.hosts[alias] || knownHostnames.has(host.hostname.toLowerCase())) {
+      continue;
+    }
+
+    // Add discovered host
+    config.hosts[alias] = {
+      hostname: host.hostname,
+      user: host.user,
+      port: host.port,
+      label: host.label,
+      enabled: true,
+      discovered: true,
+    };
+    knownHostnames.add(host.hostname.toLowerCase());
   }
 }
 

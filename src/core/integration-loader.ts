@@ -37,6 +37,7 @@ import type {
   HttpRoute,
   RegisteredPlugin,
   ExtIndexSpec,
+  UnconfiguredPlugin,
 } from './integration-types.js';
 
 const log = createSubsystemLogger('plugin-loader');
@@ -150,6 +151,15 @@ function resolveBuiltinDir(): string {
 
 const BUILTIN_DIR = resolveBuiltinDir();
 const EXTERNAL_DIR = path.join(WALNUT_HOME, 'plugins');
+
+// Plugins discovered on disk but skipped for missing required config.
+// Reset on each loadPlugins() run; served via /api/integrations for the Settings UI.
+const unconfiguredPlugins: UnconfiguredPlugin[] = [];
+
+/** Plugins that were found but not loaded because required config is missing. */
+export function getUnconfiguredPlugins(): UnconfiguredPlugin[] {
+  return unconfiguredPlugins;
+}
 
 // ── Basic JSON Schema validation (type-only, no ajv needed) ──
 
@@ -419,13 +429,29 @@ async function loadPlugin(
   // Validate config against configSchema
   const { enabled: _enabled, ...pluginConfig } = configEntry;
 
-  // Skip plugin if required config fields are missing
+  // Skip plugin if required config fields are missing.
+  // Record it as unconfigured so the Settings UI can show what to fill in,
+  // and log per-field guidance from the manifest's uiHints.
   const requiredFields = (manifest.configSchema as any)?.required as string[] | undefined;
   if (requiredFields?.length) {
     const missing = requiredFields.filter(f => !(f in pluginConfig));
     if (missing.length > 0) {
-      log.info('Plugin not loaded — missing required config', {
-        id: pluginId, missing, hint: `Add to plugins.${pluginId} in config.yaml`,
+      const fieldHints = missing.map(f => {
+        const hint = manifest.uiHints?.[f];
+        return hint?.help ? `${f} (${hint.help})` : f;
+      });
+      log.warn('Plugin not loaded — missing required config', {
+        id: pluginId,
+        missing,
+        hint: `Set plugins.${pluginId}.{${missing.join(', ')}} in config.yaml or Settings → Integrations. ${fieldHints.join('; ')}`,
+      });
+      unconfiguredPlugins.push({
+        id: pluginId,
+        name: manifest.name,
+        description: manifest.description,
+        missing,
+        configSchema: manifest.configSchema,
+        uiHints: manifest.uiHints,
       });
       return;
     }
@@ -520,6 +546,8 @@ async function loadPlugin(
     migrations: builder.collected.migrations,
     httpRoutes: builder.collected.httpRoutes,
     extIndex: builder.collected.extIndex ?? undefined,
+    configSchema: manifest.configSchema,
+    uiHints: manifest.uiHints,
   };
 
   registry.register(pluginId, registered);
@@ -541,6 +569,7 @@ async function loadPlugin(
 
 export async function loadPlugins(registry: IntegrationRegistry): Promise<void> {
   log.info('Loading plugins', { builtinDir: BUILTIN_DIR, externalDir: EXTERNAL_DIR });
+  unconfiguredPlugins.length = 0;
 
   // Read plugin configs from config.yaml
   const config = await getConfig();
