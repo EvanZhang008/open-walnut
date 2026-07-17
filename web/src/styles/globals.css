@@ -8653,12 +8653,30 @@ img[data-lightbox-src],
   flex-shrink: 1;
   min-height: 0;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 }
 
 .todo-pinned-section {
   flex-shrink: 0;
   border-bottom: 1px solid var(--border);
   padding: 6px 12px 4px;
+}
+
+/* Expanded RECENT grows to consume the wrapper's leftover space so there's no
+   dead gap between it and the TASKS bar; the inner list scrolls when the recent
+   items exceed that space. Requires the wrapper to be a flex column. */
+.todo-pinned-section-recent {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.todo-pinned-list-recent {
+  flex: 1 1 auto;
+  min-height: 0;
+  /* Cap removed: fills available space via flex, no fixed maxHeight. */
 }
 
 .todo-pinned-header {
