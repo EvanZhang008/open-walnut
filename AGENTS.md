@@ -5,6 +5,11 @@
 > load on demand): `walnut-core-internals` (src/core/), `walnut-agent-loop` (src/agent/),
 > `walnut-web-frontend` (web/src/), `walnut-testing` (tests/), `walnut-logging` (src/logging/).
 > Load the matching skill before non-trivial work in that area.
+> **Learnings & decisions also live in skills** — one subject per skill, `decision-<slug>`
+> for design decisions (Summary + Context + Evidence + Decision + do-not-rebuild + References);
+> keep the frontmatter description SHORT (one line: what was decided + when to read it). Read
+> the relevant one BEFORE rebuilding/"fixing" anything it marks as deliberately removed; write
+> one whenever a choice rests on evidence a future reader couldn't rederive from the code.
 
 ## Ownership: You Are the CTO
 

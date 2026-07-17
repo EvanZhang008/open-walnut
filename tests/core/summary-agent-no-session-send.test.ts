@@ -1,32 +1,29 @@
 /**
- * Guards the post-turn SUMMARY agent's tool discipline.
+ * Guards the retirement of the summarizer subagents.
  *
- * The agent formerly known as "triage" used to auto-drive sessions (Outcome A →
- * session_send to push the 5-phase workflow forward). That auto-pilot was removed:
- * the agent now only RECORDS what a session did (summary/note/phase + optional
- * notify). It must NOT have the session_send tool — if this regresses, the agent
- * could once again message live sessions on its own.
+ * History: "triage" first auto-drove sessions (session_send), then became a
+ * recorder-only subagent, and finally (2026-07) was DELETED entirely: the session
+ * itself writes the merged summary via side_question and a deterministic
+ * PHASE_SIGNAL lookup decides phase/notify (see session-hooks/builtins.ts).
  *
- * The retired per-message triage agent (message-send-triage) must also be gone.
+ * If either retired agent id resolves to a real agent definition again, someone
+ * re-introduced a model-driven summarizer — that regression must be deliberate
+ * (re-read the eval notes in memory usage_dashboard_and_summarizer_cost_overhaul.md).
  */
 import { describe, it, expect } from 'vitest';
 import { getAgent, DEFAULT_TRIAGE_AGENT_ID } from '../../src/core/agent-registry.js';
 
-describe('session summary agent (formerly turn-complete-triage)', () => {
-  it('does NOT have session_send in allowed_tools (records, never drives)', async () => {
+describe('summarizer subagents are retired', () => {
+  it('the turn-complete triage agent no longer exists (session self-report replaced it)', async () => {
     const agent = await getAgent(DEFAULT_TRIAGE_AGENT_ID);
-    expect(agent).toBeDefined();
-    expect(agent!.allowed_tools).not.toContain('session_send');
+    expect(agent).toBeUndefined();
   });
 
-  it('keeps the recorder tools it needs (task_get/task_update/notify_main_agent)', async () => {
-    const agent = await getAgent(DEFAULT_TRIAGE_AGENT_ID);
-    expect(agent!.allowed_tools).toContain('task_get');
-    expect(agent!.allowed_tools).toContain('task_update');
-    expect(agent!.allowed_tools).toContain('notify_main_agent');
+  it('the id constant survives for event/usage classification', () => {
+    expect(DEFAULT_TRIAGE_AGENT_ID).toBe('turn-complete-triage');
   });
 
-  it('the retired per-message triage agent no longer exists', async () => {
+  it('the retired per-message triage agent no longer exists either', async () => {
     const retired = await getAgent('message-send-triage');
     expect(retired).toBeUndefined();
   });

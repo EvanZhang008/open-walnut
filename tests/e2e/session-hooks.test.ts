@@ -229,17 +229,17 @@ afterAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 
-// ── Test 1: Triage hook fires after session completion ──
+// ── Test 1: Turn completion dispatches NO summarizer subagent (retired 2026-07) ──
+// The triage subagent was deleted: the session itself writes the summary via
+// side_question and code decides phase/notify (see session-hooks/builtins.ts).
+// The hook WORK is covered by turn-complete-self-report.test.ts (fake session);
+// here we guard the e2e contract that completion no longer spawns any subagent.
 
-describe('Triage hook fires after session completion', () => {
-  it('session:result triggers subagent:start with turn-complete-triage agent', async () => {
+describe('Turn completion dispatches no summarizer subagent', () => {
+  it('session:result does NOT trigger any subagent:start', async () => {
     const ws = await connectWs()
 
-    // Listen on the bus for the subagent:start event that the triage hook emits
-    const { promise: subagentStartPromise, cleanup } = waitForBusEvent(
-      EventNames.SUBAGENT_START,
-      15000,
-    )
+    const { events: subagentEvents, cleanup } = collectBusEvents(EventNames.SUBAGENT_START)
 
     // Start a session — mock CLI completes immediately
     const rpcRes = await sendWsRpc(ws, 'session:start', {
@@ -249,17 +249,15 @@ describe('Triage hook fires after session completion', () => {
     })
     expect((rpcRes as Record<string, unknown>).ok).toBe(true)
 
-    // Wait for the session result first (so we know the session completed)
+    // Wait for the session result (so we know the session completed), then give
+    // the debounce-0 fire path time to run.
     await waitForWsEvent(ws, 'session:result')
+    await delay(1500)
 
-    // Now wait for the triage hook to dispatch subagent:start
-    const subagentData = await subagentStartPromise
-
-    // Verify the triage subagent was dispatched with correct data
-    expect(subagentData.agentId).toBe('turn-complete-triage')
-    expect(subagentData.taskId).toBe('hook-task-001')
-    expect(typeof subagentData.task).toBe('string')
-    expect(subagentData.task as string).toContain('hook-task-001')
+    // The mock CLI can't answer side_question, so the summary work skips gracefully
+    // — and crucially, NO subagent is dispatched for the turn (the summarizer
+    // subagent is retired; a dispatch here means someone re-introduced it).
+    expect(subagentEvents.length).toBe(0)
 
     cleanup()
     ws.close()
@@ -698,32 +696,15 @@ describe('Full-path: message send through hooks to mock CLI', () => {
   })
 })
 
-// ── Test 7: Full-path triage hook triggers SubagentRunner pickup ──
+// ── Test 7: SubagentRunner picks up subagent:start events ──
+// Historically this went session:result → triage hook → subagent:start. The triage
+// subagent is retired (turn completion no longer emits subagent:start), but the
+// SubagentRunner pickup path is still live for user/agent-dispatched subagents —
+// so emit the event directly and assert the runner processes it.
 
-describe('Full-path: triage hook triggers SubagentRunner', () => {
-  it('session:result → triage hook → subagent:start → SubagentRunner picks up → subagent:started/result/error', async () => {
+describe('SubagentRunner picks up subagent:start', () => {
+  it('subagent:start → SubagentRunner picks up → subagent:started/result/error', async () => {
     const targetTaskId = 'hook-task-002'
-
-    // Listen on the bus for subagent:start with our specific taskId.
-    // Previous tests may also emit subagent:start for other tasks, so we filter.
-    const subagentStartSubscriberName = `test-subagent-start-${Date.now()}-${Math.random().toString(36).slice(2)}`
-    const subagentStartPromise = new Promise<Record<string, unknown>>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        bus.unsubscribe(subagentStartSubscriberName)
-        reject(new Error('Timed out waiting for subagent:start for hook-task-002'))
-      }, 15000)
-
-      bus.subscribe(subagentStartSubscriberName, (event) => {
-        if (event.name === EventNames.SUBAGENT_START) {
-          const data = event.data as Record<string, unknown>
-          if (data.taskId === targetTaskId) {
-            clearTimeout(timer)
-            bus.unsubscribe(subagentStartSubscriberName)
-            resolve(data)
-          }
-        }
-      }, { global: true })
-    })
 
     // Listen for subagent:started (emitted immediately when SubagentRunner picks up
     // the event, before runAgentLoop) OR subagent:result/error (emitted after the
@@ -763,23 +744,14 @@ describe('Full-path: triage hook triggers SubagentRunner', () => {
       }, { global: true })
     })
 
-    const ws = await connectWs()
-
-    // Start a session with a task — triage fires on completion
-    const rpcRes = await sendWsRpc(ws, 'session:start', {
+    // Emit subagent:start directly (as an agent-dispatched run would) — turn
+    // completion no longer produces this event.
+    bus.emit(EventNames.SUBAGENT_START, {
+      agentId: 'general',
+      task: `Summarize the current state of task ${targetTaskId}.`,
       taskId: targetTaskId,
-      message: 'subagent pickup e2e test',
-      project: 'Walnut',
-    })
-    expect((rpcRes as Record<string, unknown>).ok).toBe(true)
-
-    // Wait for session:result (initial prompt completes)
-    await waitForWsEvent(ws, 'session:result')
-
-    // Wait for subagent:start (triage hook fires)
-    const subagentStartData = await subagentStartPromise
-    expect(subagentStartData.agentId).toBe('turn-complete-triage')
-    expect(subagentStartData.taskId).toBe(targetTaskId)
+      context_override: { taskId: targetTaskId },
+    }, ['subagent-runner'], { source: 'session-hooks-e2e' })
 
     // Wait for SubagentRunner to confirm pickup via subagent:started (fast),
     // or subagent:result/error (slower but also proves pickup).
@@ -794,22 +766,21 @@ describe('Full-path: triage hook triggers SubagentRunner', () => {
 
     if (pickup.type === 'started') {
       // subagent:started carries runId, agentId, agentName, task, taskId
-      expect(pickup.data.agentId).toBe('turn-complete-triage')
+      expect(pickup.data.agentId).toBe('general')
       expect(pickup.data.taskId).toBe(targetTaskId)
       expect(pickup.data.runId).toBeTruthy()
       expect(typeof pickup.data.task).toBe('string')
     } else if (pickup.type === 'error') {
       expect(pickup.data.error).toBeTruthy()
-      expect(pickup.data.agentId).toBe('turn-complete-triage')
+      expect(pickup.data.agentId).toBe('general')
       expect(pickup.data.taskId).toBe(targetTaskId)
     } else {
       // result
-      expect(pickup.data.agentId).toBe('turn-complete-triage')
+      expect(pickup.data.agentId).toBe('general')
       expect(pickup.data.taskId).toBe(targetTaskId)
       expect(pickup.data.result).toBeTruthy()
     }
 
-    ws.close()
     await delay(50)
   })
 })

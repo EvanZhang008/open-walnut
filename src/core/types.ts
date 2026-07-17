@@ -560,7 +560,10 @@ export interface AgentConfig {
   agents?: Omit<AgentDefinition, 'source'>[];
   /** Agent ID to use for session summarization (defined in config.yaml agent.agents[]). */
   session_summarizer_agent?: string;
-  /** Agent ID to use for the turn-complete session summary. Default: 'turn-complete-triage' (builtin). */
+  /** LEGACY: agentId recognised when classifying turn-complete summary events.
+   *  The triage subagent was deleted (2026-07) — session self-report + deterministic
+   *  PHASE_SIGNAL lookup replaced it — so this no longer selects any agent; it only
+   *  affects event classification in server.ts. */
   session_triage_agent?: string;
   /**
    * Triage throttling. Turn-complete triage trailing-debounces by `debounce_minutes`

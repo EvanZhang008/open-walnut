@@ -24,44 +24,29 @@ import type {
 const triageLastDispatch = new Map<string, number>();
 const TRIAGE_COOLDOWN_MS = 5_000; // 5 seconds — normal triage cycle takes 10-30s
 
-// ── Triage trailing-debounce state ──
-// Turn-complete triage is the expensive path (Opus subagent + optional main-agent
-// turn over the full conversation). Running it on EVERY turn during an interactive
-// back-and-forth burns money for no benefit. Instead we trailing-debounce: each
+// ── Summary trailing-debounce state ──
+// Asking the session for a self-report on EVERY turn during an interactive
+// back-and-forth is pointless churn. Instead we trailing-debounce: each
 // turn-complete (re)arms a per-session timer; a user message cancels it (interaction
-// is ongoing). Triage fires ONCE only after the session has been quiet for the
-// configured window — which is also the best available approximation of "the session
-// finished" on a long-running CLI (the only real end-signal is the 2h idle reap).
-// Key: sessionId, Value: pending timer. The map self-bounds: every armed timer either
-// fires (and self-deletes) or is cancelled (and deletes), so no separate prune needed.
+// is ongoing). The summary work fires ONCE only after the session has been quiet for
+// the configured window — which is also the best available approximation of "the
+// session finished" on a long-running CLI (the only real end-signal is the 2h idle
+// reap). Key: sessionId, Value: pending timer. The map self-bounds: every armed
+// timer either fires (and self-deletes) or is cancelled (and deletes).
 const triageDebounceTimers = new Map<string, NodeJS.Timeout>();
 const DEFAULT_TRIAGE_DEBOUNCE_MS = 4 * 60_000; // 4 minutes
 
-// ── Triage agent rate limit ──
-// Two-tier design: the CHEAP tier (side_question self-report → code-only persist of
-// summary/milestone) runs on every debounced fire; the EXPENSIVE tier (triage
-// subagent) is rate-limited to once per hour per session:task. Self-reports that
-// arrive while the agent is rate-limited are BUFFERED; when the agent finally runs
-// it receives the whole buffered batch and reconciles all of them at once.
-// A milestone-worthy PHASE_SIGNAL (plan-written / committed / verify-* …) BYPASSES
-// the rate limit — those are the moments a notification decision can't wait an hour.
-const triageAgentLastRun = new Map<string, number>();
-const TRIAGE_AGENT_MIN_INTERVAL_MS = 60 * 60_000; // 1 hour
+// ── Notify dedup ──
+// The self-report's PHASE_SIGNAL drives notification via a deterministic lookup
+// (see decideNotify). A stuck session can re-emit the same signal every quiet
+// period (verify-fail on every retry) — remember the last notified signal per
+// session:task and suppress repeats. A DIFFERENT signal resets the gate.
+const lastNotifiedSignal = new Map<string, string>();
 
-/** Self-reports accumulated while the triage agent was rate-limited.
- *  Key: "sessionId:taskId". Drained (and cleared) when the agent runs. */
-const pendingSelfReports = new Map<string, Array<{ turnIndex?: number; at: string; report: string }>>();
-const MAX_BUFFERED_REPORTS = 20; // safety bound; oldest dropped beyond this
-
-/** Test-only: reset rate-limiter + buffers so unit tests are order-independent.
- *  `keepAgentRuns` clears only the 5s replay cooldown — lets a test invoke runTriage
- *  back-to-back while preserving the 1h agent rate-limit state under test. */
-export function __resetTriageRateLimiter(opts?: { keepAgentRuns?: boolean }): void {
+/** Test-only: reset per-process triage state so unit tests are order-independent. */
+export function __resetTriageRateLimiter(): void {
   triageLastDispatch.clear();
-  if (!opts?.keepAgentRuns) {
-    triageAgentLastRun.clear();
-    pendingSelfReports.clear();
-  }
+  lastNotifiedSignal.clear();
 }
 
 /** Cancel a pending debounced triage for a session — used when the user resumes
@@ -75,36 +60,66 @@ function cancelPendingTriage(sessionId: string): void {
 }
 
 // ── Session self-report (side_question / "/btw") ──
-// Instead of the triage subagent reading the full session JSONL to GUESS what the
-// session did, we ask the SESSION ITSELF for a structured self-report via the
-// native Claude Code side_question control protocol (ClaudeCodeSession.askSideQuestion).
-// The session has its full context in-cache, so it's the authoritative source and
-// far cheaper than a 4000-token history read. The answer is NOT added to the
-// session transcript. Best-effort: on timeout/failure we fall back to the old
-// history-reading triage path, so triage never regresses.
-// Must stay comfortably under the dispatcher's DEFAULT_HANDLER_TIMEOUT_MS (30s in
-// dispatcher.ts) — the hook runs as an inline `handler`, so if the side_question
-// outlived that budget the dispatcher would abort the whole hook and triage would
-// never dispatch. 20s leaves ~10s headroom for updateSummary + the emit.
+// The SESSION ITSELF is the sole summarizer: we ask it for a structured self-report
+// via the native Claude Code side_question control protocol (askSideQuestion). The
+// session has its full context in-cache, so it's the authoritative source and the
+// marginal cost is ~zero (rides the session's own prompt cache). The answer is NOT
+// added to the session transcript.
+//
+// There is deliberately NO fallback summarizer agent — the session writes the summary
+// and the deterministic PHASE_SIGNAL lookup below decides phase/notify. Full rationale
+// + the 4-model eval evidence: skill `decision-summarizer-self-report`.
+// Do not re-introduce a summarizer/notify-deciding model without reading it. If the
+// session is dead when the quiet-period fires, we skip; the next turn's report (which
+// merges against the fed-back summary) covers the gap.
 const SELF_REPORT_TIMEOUT_MS = 20_000;
-const SELF_REPORT_PROMPT =
-`You just finished a turn. Give a structured self-report of THIS session so a supervisor can update the task WITHOUT re-reading your transcript. You have the full context — be the authoritative source. Use EXACTLY these labels, each 1-3 sentences, plain text, English only, self-contained (no "this bug"/"the feature"):
 
-WHAT_I_DID: Concrete changes this turn — which files/functions changed and WHY.
+/** Past this length, append is no longer offered — the session must either say
+ *  `unchanged` or consolidate with a full `rewrite:`. Deterministic cap so appends
+ *  can't grow the summary without bound. */
+export const SUMMARY_APPEND_CAP = 600; // chars
+
+/** Build the self-report prompt. `existingSummary` is injected so the session works
+ *  DELTA-FIRST against the running task summary — this is what survives multi-day
+ *  sessions and compactions: the prior summary is re-fed every time, so the session
+ *  never needs to remember the task's beginning. Cheap-by-default protocol:
+ *  `unchanged` (no output) > `append:` (one short sentence) > `rewrite:` (full
+ *  paragraph, only when the summary drifted from reality or needs consolidating). */
+export function buildSelfReportPrompt(existingSummary?: string): string {
+  const existing = existingSummary?.trim() ?? '';
+  let summaryBlock: string;
+  if (!existing) {
+    summaryBlock = `(no summary exists yet — write the FIRST one: one paragraph, ≤3 sentences: what the task is about + where it stands now + immediate next step)`;
+  } else if (existing.length > SUMMARY_APPEND_CAP) {
+    summaryBlock = `<existing_summary>\n${existing}\n</existing_summary>\nAnswer with ONE of:
+- \`unchanged\` — the summary above is still accurate for where the task stands NOW.
+- \`rewrite: <full paragraph>\` — the summary is long/stale; consolidate everything (old + this turn) into a fresh ≤3-sentence paragraph. Keep still-true context (goal, key decisions), drop what's obsolete.`;
+  } else {
+    summaryBlock = `<existing_summary>\n${existing}\n</existing_summary>\nAnswer with ONE of (cheapest that fits):
+- \`unchanged\` — the summary above is still accurate for where the task stands NOW.
+- \`append: <one short sentence>\` — the usual case: just the NEW progress/state since that summary. It will be appended verbatim.
+- \`rewrite: <full paragraph>\` — ONLY if the summary no longer reflects reality (direction change, plan invalidated): a fresh ≤3-sentence paragraph.`;
+  }
+  return `You just finished a turn. Give a structured self-report of THIS session so the task dashboard can be updated WITHOUT re-reading your transcript. You have the full context — be the authoritative source. Use EXACTLY these labels, plain text, English only, self-contained (no "this bug"/"the feature"):
+
+TASK_SUMMARY: The task's one-glance dashboard line. ${summaryBlock}
+WHAT_I_DID: Concrete changes this turn — which files/functions changed and WHY (1-3 sentences).
 STATUS: <succeeded|failed|blocked|waiting> — one human sentence on what works / what doesn't.
-CHANGES_TRIED: Approaches attempted, dead-ends, and why abandoned (so next turn won't repeat).
 PHASE_SIGNAL: one of — plan-written | implement-done | reconfirmed | verify-pass | verify-fail | review-done | committed(<hash>) | conversational(user-asked-question).
 NEXT_STEPS: What you'd do next, or what you need from the human to proceed.
 BLOCKERS: Anything blocking, or "none".
 USER_INTENT: <question-pending | workflow-command | autonomous> — gist of user's last message.
 VERIFIED: <ran-and-saw-pass | assumed | not-applicable> — what evidence you have.
 ARTIFACTS: commit hash / PR url / plan file path / key files / screenshot paths, or "none".`;
+}
 
-/** The exact labels emitted by SELF_REPORT_PROMPT. Used to anchor extractField's
+/** The exact labels emitted by buildSelfReportPrompt. Used to anchor extractField's
  *  field terminator so a wrapped value containing an unrelated ALL-CAPS "WORD:"
- *  line (e.g. "API:", "TODO:", "NOTE:") doesn't prematurely cut the field. */
+ *  line (e.g. "API:", "TODO:", "NOTE:") doesn't prematurely cut the field.
+ *  CHANGES_TRIED is retired from the prompt but kept here so old buffered reports
+ *  still parse. */
 const SELF_REPORT_LABELS = [
-  'WHAT_I_DID', 'STATUS', 'CHANGES_TRIED', 'PHASE_SIGNAL', 'NEXT_STEPS',
+  'TASK_SUMMARY', 'WHAT_I_DID', 'STATUS', 'CHANGES_TRIED', 'PHASE_SIGNAL', 'NEXT_STEPS',
   'BLOCKERS', 'USER_INTENT', 'VERIFIED', 'ARTIFACTS',
 ] as const;
 const NEXT_LABEL_LOOKAHEAD = `(?:${SELF_REPORT_LABELS.join('|')})`;
@@ -126,10 +141,50 @@ export function extractField(report: string, label: string): string {
   return m ? m[1].trim() : '';
 }
 
-/** Build the compact Tier-1 task.summary text from a session self-report. The
- *  triage subagent may further refine this, but persisting it here guarantees a
- *  stable summary even if the subagent is skipped/fails. Exported for unit tests. */
-export function summaryFromSelfReport(report: string): string {
+/** How the session answered the TASK_SUMMARY field. Exported for unit tests. */
+export type SummaryDirective =
+  | { kind: 'unchanged' }
+  | { kind: 'append'; text: string }
+  | { kind: 'rewrite'; text: string }
+  | { kind: 'none' }; // field absent/empty — legacy report or parse miss
+
+/** Parse the TASK_SUMMARY field's three-way directive. Tolerant of markdown wrapping
+ *  (backticks/quotes/bold) and marker casing, but the markers themselves are strict
+ *  prefixes — `append:` / `rewrite:` / `unchanged`. A non-empty answer WITHOUT a
+ *  marker is treated as `rewrite` (the model forgot the marker; losing its paragraph
+ *  would be worse than accepting it). Exported for unit tests. */
+export function parseSummaryDirective(report: string): SummaryDirective {
+  let raw = extractField(report, 'TASK_SUMMARY').trim();
+  if (!raw) return { kind: 'none' };
+  // Strip symmetric markdown wrapping the model may add around the whole answer.
+  raw = raw.replace(/^[`*"']+/, '').replace(/[`*"']+$/, '').trim();
+  if (/^unchanged\b[.!]?$/i.test(raw)) return { kind: 'unchanged' };
+  const append = raw.match(/^append\s*:\s*([\s\S]+)$/i);
+  if (append) return { kind: 'append', text: append[1].replace(/\s+/g, ' ').trim() };
+  const rewrite = raw.match(/^rewrite\s*:\s*([\s\S]+)$/i);
+  if (rewrite) return { kind: 'rewrite', text: rewrite[1].replace(/\s+/g, ' ').trim() };
+  // No marker but real content → safest interpretation is a full rewrite.
+  return { kind: 'rewrite', text: raw.replace(/\s+/g, ' ').trim() };
+}
+
+/** Resolve the new task.summary from a self-report + the current summary.
+ *  Returns '' when nothing should be persisted (unchanged / empty report).
+ *  Exported for unit tests. */
+export function summaryFromSelfReport(report: string, existingSummary = ''): string {
+  const directive = parseSummaryDirective(report);
+  switch (directive.kind) {
+    case 'unchanged':
+      return '';
+    case 'append': {
+      const base = existingSummary.replace(/\s+/g, ' ').trim();
+      if (!base) return directive.text; // nothing to append to — the sentence IS the summary
+      return `${base}${/[.!?]$/.test(base) ? '' : '.'} ${directive.text}`;
+    }
+    case 'rewrite':
+      return directive.text;
+    case 'none':
+      break; // legacy report without TASK_SUMMARY — compose from the other fields
+  }
   const status = extractField(report, 'STATUS');
   const did = extractField(report, 'WHAT_I_DID');
   const next = extractField(report, 'NEXT_STEPS');
@@ -182,10 +237,76 @@ export function milestoneFromSelfReport(report: string): { signal: string; line:
   return { signal, line: `${MILESTONE_LABELS[signal]} — ${did}` };
 }
 
+/** Signals that warrant waking the user, and their notification headlines. Everything
+ *  else (implement-done / verify-pass / review-done / reconfirmed / conversational)
+ *  is progress the user discovers on their own schedule. */
+const NOTIFY_SIGNALS: Record<string, string> = {
+  'plan-written': 'Plan ready for review',
+  'verify-fail': 'Verification failed — needs a decision',
+  'committed': 'Committed — ready for review/deploy',
+  'blocked': 'Blocked — needs human input',
+};
+
 /**
- * runTriage: the actual (expensive) turn-complete triage work — session self-report
- * + triage subagent dispatch. Invoked from the trailing-debounce timer below, NOT
- * directly on turn completion, so a burst of interactive turns collapses into one run.
+ * Deterministic notify decision from a self-report. Replaces the retired triage
+ * subagent's judgment call: a 4-model eval (2026-07) showed models disagree exactly
+ * on this gate (false notifies, missed notifies) while the policy is a lookup table.
+ *
+ *   notify ← plan-written | verify-fail | committed | blocked (STATUS/BLOCKERS)
+ *   silent ← everything else
+ *
+ * An engaged user (USER_INTENT: question-pending) always suppresses — they will see
+ * the result themselves. A repeat of the same signal for the same session:task is
+ * deduped via lastNotifiedSignal (a stuck session re-emitting verify-fail every
+ * quiet period must not re-notify); a different signal resets the gate.
+ * Exported for unit tests.
+ */
+export function decideNotify(report: string, dedupKey: string): string | null {
+  const intent = extractField(report, 'USER_INTENT').toLowerCase();
+  if (intent.startsWith('question-pending')) return null;
+
+  const signal = extractField(report, 'PHASE_SIGNAL').toLowerCase();
+  const status = extractField(report, 'STATUS').toLowerCase();
+  const blockers = extractField(report, 'BLOCKERS').trim();
+  const isBlocked = /^blocked/.test(status) || (!!blockers && !/^none\b/i.test(blockers));
+
+  let kind: string | null = null;
+  if (signal.startsWith('plan-written')) kind = 'plan-written';
+  else if (signal.startsWith('verify-fail')) kind = 'verify-fail';
+  else if (signal.startsWith('committed')) kind = 'committed';
+  else if (isBlocked) kind = 'blocked';
+  if (!kind) return null;
+
+  if (lastNotifiedSignal.get(dedupKey) === kind) return null;
+  // Bounded: one entry per session:task; drop oldest past a generous cap.
+  if (lastNotifiedSignal.size > 500) {
+    const first = lastNotifiedSignal.keys().next().value;
+    if (first) lastNotifiedSignal.delete(first);
+  }
+  lastNotifiedSignal.set(dedupKey, kind);
+
+  const did = extractField(report, 'WHAT_I_DID').replace(/\s+/g, ' ').trim();
+  const next = extractField(report, 'NEXT_STEPS').replace(/\s+/g, ' ').trim();
+  let msg = did ? `${NOTIFY_SIGNALS[kind]}: ${did}` : NOTIFY_SIGNALS[kind];
+  if (kind === 'blocked' && blockers && !/^none\b/i.test(blockers)) {
+    msg += ` Blocker: ${blockers.replace(/\s+/g, ' ').trim()}`;
+  }
+  if (next) msg += ` Next: ${next}`;
+  return msg;
+}
+
+/**
+ * runTriage: the turn-complete summary work. Invoked from the trailing-debounce
+ * timer below, NOT directly on turn completion, so a burst of interactive turns
+ * collapses into one run.
+ *
+ * Single-tier design (the expensive triage subagent was deleted 2026-07): the
+ * SESSION writes its own merged summary via side_question (it re-receives the
+ * existing task.summary each time, so multi-day / post-compaction sessions never
+ * lose the task's origin), and code deterministically persists summary + milestone,
+ * decides notify via the PHASE_SIGNAL lookup (decideNotify), and syncs the phase.
+ * Session dead / no answer → skip silently; the next turn's merged report covers
+ * the gap.
  *
  * The TRIAGE_COOLDOWN_MS guard is checked HERE (fire time), not at arm time: the
  * debounce re-arms on every turn-complete during an interactive burst, and checking
@@ -202,7 +323,7 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
 
   // Cooldown: prevent burst dispatches from replayed events after server restart.
   // The daemon may replay N result events in milliseconds — without this guard,
-  // each one spawns a full triage subagent (task_get + task_update + notify_main_agent).
+  // each one would fire a redundant side_question + summary persist per replayed event.
   const dedupKey = `${p.sessionId}:${p.taskId}`;
   const now = Date.now();
 
@@ -224,193 +345,153 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
   triageLastDispatch.set(dedupKey, now);
 
   try {
-      const { DEFAULT_TRIAGE_AGENT_ID } = await import('../agent-registry.js');
-      const { getConfig } = await import('../config-manager.js');
-      const config = await getConfig();
-      const triageAgentId = config.agent?.session_triage_agent ?? DEFAULT_TRIAGE_AGENT_ID;
+    // ── Ask the session for a structured self-report (side_question) ──
+    // The session answers from its own in-cache context (cost rides the session's
+    // prompt cache, not Walnut). The existing task.summary is fed INTO the prompt
+    // so the session merges rather than rewrites-from-memory — this is what keeps
+    // summaries complete across multi-day sessions and compactions. Session dead /
+    // timeout → skip; the next turn's merged report covers the gap.
+    const { sessionRunner } = await import('../../providers/claude-code-session.js');
+    const session = sessionRunner.findByClaudeId(p.sessionId);
+    if (!session) {
+      log.session.info('turn-complete-summary: session not live — skipped (next turn will merge)', {
+        sessionId: p.sessionId, taskId: p.taskId,
+      });
+      return;
+    }
 
-      // Build recent notification history so triage can avoid duplicates
-      let notificationContext = '';
+    let existingSummary = '';
+    try {
+      const { getTask } = await import('../task-manager.js');
+      existingSummary = (await getTask(taskId)).summary ?? '';
+    } catch { /* task readable failures already guarded upstream */ }
+
+    let selfReport = '';
+    try {
+      selfReport = (await session.askSideQuestion(
+        buildSelfReportPrompt(existingSummary), SELF_REPORT_TIMEOUT_MS,
+      )).trim();
+    } catch (err) {
+      log.session.warn('turn-complete-summary: side_question failed — skipped (next turn will merge)', {
+        sessionId: p.sessionId, taskId: p.taskId, error: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    if (!selfReport) return;
+
+    log.session.info('turn-complete-summary: got session self-report', {
+      sessionId: p.sessionId, taskId: p.taskId, reportLen: selfReport.length,
+    });
+
+    // (a) Persist the summary per the session's directive: `unchanged` → '' (skip),
+    // `append:` → existing + one sentence, `rewrite:` → replace. updateSummary runs
+    // plugin content validation and can reject (e.g. CJK drift on externally-synced
+    // tasks) — log and move on; the milestone/notify decisions below don't depend
+    // on the persist.
+    //
+    // Observability contract: parse outcomes are NEVER silent. Every fire logs the
+    // resolved directive; a report that parses to NOTHING (no directive AND no
+    // legacy-composable fields) is a format regression → ERROR with a report head
+    // so `walnut-logs.sh errors` surfaces it immediately.
+    const directive = parseSummaryDirective(selfReport);
+    const summary = summaryFromSelfReport(selfReport, existingSummary);
+    log.session.info('turn-complete-summary: directive parsed', {
+      sessionId: p.sessionId, taskId: p.taskId,
+      directive: directive.kind, summaryLen: summary.length,
+    });
+    if (directive.kind === 'none' && !summary) {
+      log.session.error('turn-complete-summary: self-report UNPARSEABLE — no TASK_SUMMARY directive and no legacy fields; prompt/format regression?', {
+        sessionId: p.sessionId, taskId: p.taskId,
+        reportHead: selfReport.slice(0, 300),
+      });
+    }
+    if (summary) {
       try {
-        const { getTriageEntries } = await import('../chat-history.js');
-        const { entries } = await getTriageEntries(10, p.taskId);
-        // Filter to entries that actually triggered main agent notification:
-        // New entries: tag:'ai' source:'triage' (stored via addAIMessages)
-        // Legacy entries: notification === false (stored via addNotification)
-        const notified = entries.filter(e => e.tag === 'ai' || e.notification === false);
-        if (notified.length > 0) {
-          const lines = notified.slice(0, 5).map(e => {
-            const ts = e.timestamp ? new Date(e.timestamp).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) : '?';
-            const contentStr = typeof e.content === 'string' ? e.content : '';
-            const summary = contentStr.slice(0, 150) || '(no content)';
-            return `[${ts}] ${summary}`;
-          });
-          notificationContext = `<recent_notifications>\nThese are the most recent notifications you sent to the main agent for this task:\n${lines.join('\n')}\n</recent_notifications>`;
-        }
+        const { updateSummary } = await import('../task-manager.js');
+        await updateSummary(taskId, summary);
       } catch (err) {
-        log.session.warn('failed to load notification history for triage', {
+        log.session.debug('turn-complete-summary: summary persist skipped', {
           taskId: p.taskId, error: err instanceof Error ? err.message : String(err),
         });
       }
-
-      // ── CHEAP TIER: ask the session for a structured self-report (side_question) ──
-      // The session is the authoritative source for what it just did, and it answers
-      // from its own in-cache context (cost lands on the Claude Code session, not
-      // Walnut). When this succeeds we (a) persist a Tier-1 summary immediately and
-      // (b) inject the self-report so the triage subagent reconciles instead of
-      // reading the full JSONL. On any failure we leave selfReport='' → triage falls
-      // back to the history-reading path (its session_history context source loads).
-      let selfReport = '';
+      // Backfill SessionRecord.summary for free — this replaces the removed
+      // session-summary-gist hook (which paid a full-transcript LLM pass for
+      // the same field). QMD prepends it as the highest-signal search chunk.
       try {
-        const { sessionRunner } = await import('../../providers/claude-code-session.js');
-        const session = sessionRunner.findByClaudeId(p.sessionId);
-        if (session) {
-          selfReport = (await session.askSideQuestion(SELF_REPORT_PROMPT, SELF_REPORT_TIMEOUT_MS)).trim();
-          if (selfReport) {
-            // (a) Persist an EARLY Tier-1 summary as a best-effort optimization so a
-            // usable summary exists even before the triage subagent runs. This can
-            // fail — updateSummary runs plugin content validation, and although the
-            // prompt asks for English, models drift to CJK (see CLAUDE.md Opus 4.8
-            // note) and externally-synced sources reject CJK. That's OK: we ALSO
-            // inject the self-report as triage context below, so the triage subagent
-            // still produces the authoritative summary via its own validated path.
-            // Hence a persist failure is logged at debug, not treated as data loss.
-            const summary = summaryFromSelfReport(selfReport);
-            if (summary) {
-              try {
-                const { updateSummary } = await import('../task-manager.js');
-                await updateSummary(taskId, summary);
-              } catch (err) {
-                log.session.debug('turn-complete-triage: early summary persist skipped (triage subagent will still summarize)', {
-                  taskId: p.taskId, error: err instanceof Error ? err.message : String(err),
-                });
-              }
-              // Backfill SessionRecord.summary for free — this replaces the removed
-              // session-summary-gist hook (which paid a full-transcript LLM pass for
-              // the same field). QMD prepends it as the highest-signal search chunk.
-              try {
-                const { updateSessionRecord } = await import('../session-tracker.js');
-                await updateSessionRecord(p.sessionId, {
-                  summary,
-                  summaryGeneratedAt: new Date().toISOString(),
-                });
-              } catch (err) {
-                log.session.debug('turn-complete-triage: session summary backfill skipped', {
-                  sessionId: p.sessionId, error: err instanceof Error ? err.message : String(err),
-                });
-              }
-            }
-
-            // (b) Append a compact milestone line — only on a real PHASE_SIGNAL
-            // transition (plan-written / implement-done / verify-* / review-done /
-            // committed). This replaces the verbose per-turn conversation_log: one
-            // line per meaningful step, sourced from the session's own WHAT_I_DID.
-            const milestone = milestoneFromSelfReport(selfReport);
-            if (milestone) {
-              try {
-                const { appendMilestone } = await import('../task-manager.js');
-                await appendMilestone(taskId, milestone.line);
-                log.session.info('turn-complete-triage: milestone recorded', {
-                  taskId: p.taskId, sessionId: p.sessionId, signal: milestone.signal,
-                });
-              } catch (err) {
-                log.session.debug('turn-complete-triage: milestone persist skipped', {
-                  taskId: p.taskId, error: err instanceof Error ? err.message : String(err),
-                });
-              }
-            }
-
-            log.session.info('turn-complete-triage: got session self-report', {
-              sessionId: p.sessionId, taskId: p.taskId, reportLen: selfReport.length,
-            });
-          }
-        }
+        const { updateSessionRecord } = await import('../session-tracker.js');
+        await updateSessionRecord(p.sessionId, {
+          summary,
+          summaryGeneratedAt: new Date().toISOString(),
+        });
       } catch (err) {
-        // side_question unavailable (session dead / timeout / write fail) → fall back.
-        log.session.warn('turn-complete-triage: side_question self-report failed, falling back to history read', {
-          sessionId: p.sessionId, taskId: p.taskId, error: err instanceof Error ? err.message : String(err),
+        log.session.debug('turn-complete-summary: session summary backfill skipped', {
+          sessionId: p.sessionId, error: err instanceof Error ? err.message : String(err),
         });
       }
+    }
 
-      // ── EXPENSIVE TIER: the triage subagent, rate-limited to 1/hour ──
-      // The cheap tier above already persisted summary + milestone from the
-      // self-report, so most fires need no agent at all. Buffer the report and
-      // return. The agent runs when (a) an hour has passed since its last run for
-      // this session:task, (b) this turn carries a milestone-worthy PHASE_SIGNAL
-      // (notification decisions can't wait an hour), or (c) there is no self-report
-      // (session dead/timeout — the agent's history-read is the only summary path).
-      const hasMilestoneSignal = selfReport ? milestoneFromSelfReport(selfReport) !== null : false;
-      const lastAgentRun = triageAgentLastRun.get(dedupKey) ?? 0;
-      const agentDue = now - lastAgentRun >= TRIAGE_AGENT_MIN_INTERVAL_MS;
-
-      // Prune stale rate-limit entries (and their orphaned buffers) so the maps
-      // stay bounded across a long-lived server with many sessions.
-      if (triageAgentLastRun.size > 200) {
-        for (const [k, ts] of triageAgentLastRun) {
-          if (now - ts > 2 * TRIAGE_AGENT_MIN_INTERVAL_MS) {
-            triageAgentLastRun.delete(k);
-            pendingSelfReports.delete(k);
-          }
-        }
-      }
-
-      if (selfReport && !agentDue && !hasMilestoneSignal) {
-        const buf = pendingSelfReports.get(dedupKey) ?? [];
-        buf.push({ turnIndex: p.turnIndex, at: new Date().toISOString(), report: selfReport });
-        if (buf.length > MAX_BUFFERED_REPORTS) buf.shift();
-        pendingSelfReports.set(dedupKey, buf);
-        log.session.info('turn-complete-triage: agent rate-limited — self-report buffered', {
-          sessionId: p.sessionId, taskId: p.taskId,
-          buffered: buf.length, nextAgentInMs: TRIAGE_AGENT_MIN_INTERVAL_MS - (now - lastAgentRun),
+    // (b) Append a compact milestone line — only on a real PHASE_SIGNAL transition
+    // (plan-written / implement-done / verify-* / review-done / committed). One
+    // line per meaningful step, sourced from the session's own WHAT_I_DID.
+    // PHASE_SIGNAL drives both milestone AND notify — a missing field silently
+    // degrades both, so warn when it's absent (format drift indicator).
+    if (!extractField(selfReport, 'PHASE_SIGNAL')) {
+      log.session.warn('turn-complete-summary: report has NO PHASE_SIGNAL field — milestone/notify skipped this turn (format drift?)', {
+        sessionId: p.sessionId, taskId: p.taskId,
+      });
+    }
+    const milestone = milestoneFromSelfReport(selfReport);
+    if (milestone) {
+      try {
+        const { appendMilestone } = await import('../task-manager.js');
+        await appendMilestone(taskId, milestone.line);
+        log.session.info('turn-complete-summary: milestone recorded', {
+          taskId: p.taskId, sessionId: p.sessionId, signal: milestone.signal,
         });
-        return;
+      } catch (err) {
+        log.session.debug('turn-complete-summary: milestone persist skipped', {
+          taskId: p.taskId, error: err instanceof Error ? err.message : String(err),
+        });
       }
-      triageAgentLastRun.set(dedupKey, now);
+    }
 
-      // Drain anything buffered during the rate-limited window and hand the agent
-      // the whole batch (oldest first) so its reconciliation sees every turn.
-      const buffered = pendingSelfReports.get(dedupKey) ?? [];
-      pendingSelfReports.delete(dedupKey);
-      const reports = [...buffered.map(b => b.report), ...(selfReport ? [selfReport] : [])];
+    // (c) Phase sync — deterministic, replaces the triage subagent's Step 3 AND the
+    // server's old post-triage fallback (which ran after EVERY triage result). The
+    // session has been quiet for the debounce window and the turn is over, so the
+    // ball is in the human's court: AGENT_COMPLETE → AWAIT_HUMAN_ACTION
+    // (+ needs_attention). applySessionPhase's 'triage-sync' trigger only fires from
+    // AGENT_COMPLETE, so an in-progress or human-verified task is never touched.
+    try {
+      const { applySessionPhase } = await import('../phase.js');
+      await applySessionPhase(taskId, 'triage-sync', 'turn-complete-summary', { sessionId: p.sessionId });
+    } catch (err) {
+      log.session.warn('turn-complete-summary: phase sync failed', {
+        taskId: p.taskId, error: err instanceof Error ? err.message : String(err),
+      });
+    }
 
-      const sessionType = p.isPlanSession ? 'plan-mode ' : '';
-      // With self-report(s), triage reconciles them against the prior summary and
-      // reads PHASE_SIGNAL directly — no JSONL guessing. Without any, it falls
-      // back to reading <session_history>.
-      const batchNote = reports.length > 1
-        ? ` ${reports.length} turns completed since the last triage run; ALL their self-reports are below in chronological order — reconcile the full batch, not just the last one.`
-        : '';
-      const triageTask = reports.length > 0
-        ? `A Claude Code ${sessionType}session finished ${reports.length > 1 ? `${reports.length} turns` : 'a turn'} for task ${p.taskId}. Session ID: ${p.sessionId}. Turn index: ${p.turnIndex ?? 'unknown'}.${batchNote}\n\nThe session reported its own status below (<session_self_summary>). Use it as the authoritative source — do NOT call session_history (you already have what you need). Reconcile it with the existing task summary, refresh the summary/note, and decide from its PHASE_SIGNAL and USER_INTENT fields only whether to notify the main agent.`
-        : `A Claude Code ${sessionType}session just finished for task ${p.taskId}. Session ID: ${p.sessionId}. Turn index: ${p.turnIndex ?? 'unknown'}.\n\nThe <session_history> context below contains recent messages (User + Assistant) with [index] labels. Use these to understand what happened, refresh the summary/note, and decide whether to notify. If you need full details of a specific message, call session_history with index=N.`;
-
-      const selfReportContext = reports.length > 0
-        ? `<session_self_summary>\nThe session produced ${reports.length > 1 ? 'these structured self-reports (oldest first)' : 'this structured self-report'} of the turn${reports.length > 1 ? 's' : ''} since the last triage. Treat them as authoritative; do not re-read the transcript.\n\n${reports.join('\n\n---\n\n')}\n</session_self_summary>`
-        : '';
-      const combinedContext = [selfReportContext, notificationContext].filter(Boolean).join('\n\n');
-
-      bus.emit('subagent:start', {
-        agentId: triageAgentId,
-        task: triageTask,
+    const notifyMessage = decideNotify(selfReport, dedupKey);
+    if (notifyMessage) {
+      // (d) Notify — same event contract the triage subagent's notify_main_agent
+      // produced. agentId stays 'turn-complete-triage' so the server's notify_mode
+      // gate ('off'/'buffered'/'realtime'), UI rendering, and usage classification
+      // all work unchanged. runId carries the session id (there is no subagent run
+      // anymore).
+      bus.emit('subagent:result', {
+        runId: `self-report-${p.sessionId}-${p.turnIndex ?? 0}`,
+        agentId: 'turn-complete-triage',
+        agentName: 'Session Summary',
         taskId: p.taskId,
-        context_override: {
-          taskId: p.taskId, sessionId: p.sessionId, cwd: p.session?.cwd, host: p.session?.host,
-          // With a self-report in hand, skip the 4000-token session_history read
-          // it replaces — otherwise the loader runs regardless of the prompt.
-          ...(reports.length > 0 ? { suppressSources: ['session_history' as const] } : {}),
-        },
-        ...(combinedContext ? { context: combinedContext } : {}),
-      }, ['subagent-runner'], { source: 'turn-complete-triage' });
+        result: selfReport,
+        notification: notifyMessage,
+      }, ['main-ai'], { source: 'turn-complete-summary' });
 
-    log.session.info('turn-complete-triage hook: dispatched', {
-      sessionId: p.sessionId,
-      taskId: p.taskId,
-      agentId: triageAgentId,
-      batchedReports: reports.length,
-      bypassedRateLimit: hasMilestoneSignal && !agentDue,
-    });
+      log.session.info('turn-complete-summary: notify decided', {
+        sessionId: p.sessionId, taskId: p.taskId, message: notifyMessage.slice(0, 200),
+      });
+    }
   } catch (err) {
-    log.session.error('turn-complete-triage hook failed', {
+    log.session.error('turn-complete-summary hook failed', {
       sessionId: p.sessionId,
       taskId: p.taskId,
       error: err instanceof Error ? err.message : String(err),
@@ -423,15 +504,16 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
  * Hook: onTurnComplete. Each turn-complete (re)arms a per-session timer; the work
  * fires ONCE after the session has been quiet for `debounce_minutes`
  * (config.agent.triage.debounce_minutes, default 4). A user message-send cancels the
- * pending timer (see messageSendTriageHook) — interaction resumed, no mid-chat triage.
+ * pending timer (see messageSendTriageHook) — interaction resumed, no mid-chat fire.
  *
- * The fired work itself is two-tier (see runTriage): a cheap per-fire self-report
- * persist, and the triage subagent rate-limited to 1/hour (milestones bypass).
+ * The fired work (see runTriage) is a single free pass: session self-report via
+ * side_question → code persists summary/milestone + PHASE_SIGNAL lookup decides
+ * phase/notify. No subagent is dispatched.
  */
 export const turnCompleteTriageHook: SessionHookDefinition = {
   id: 'turn-complete-triage',
-  name: 'Turn Complete Triage (onTurnComplete)',
-  description: 'Dispatches triage subagent when a session turn completes successfully.',
+  name: 'Turn Complete Summary (onTurnComplete)',
+  description: 'Collects a session self-report and persists summary/milestone/phase when a turn completes.',
   hooks: ['onTurnComplete'],
   priority: 50,
   source: 'builtin',
@@ -443,7 +525,7 @@ export const turnCompleteTriageHook: SessionHookDefinition = {
     // and a dangling taskId (non-empty, but the task no longer exists in
     // tasks.json — deleted/stale/cross-workspace; the payload builder resolves
     // `task` via getTask() and leaves it undefined when that throws). Triaging a
-    // nonexistent task burns an Opus round-trip + side_question updating nothing.
+    // nonexistent task burns a side_question updating nothing.
     if (!p.taskId || !p.task) return;
 
     // Skip triage for embedded subagent sessions (provider='embedded').

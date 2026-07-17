@@ -1,14 +1,14 @@
 /**
- * Unit tests for the turn-complete triage TRAILING DEBOUNCE.
+ * Unit tests for the turn-complete summary TRAILING DEBOUNCE.
  *
- * The expensive triage work (session self-report + subagent dispatch) must NOT run
- * on every turn during an interactive burst. Instead turnCompleteTriageHook arms a
- * per-session timer; the work (runTriage → bus.emit('subagent:start')) fires ONCE
- * only after the session has been quiet for config.agent.triage.debounce_minutes.
+ * The summary work (session self-report via side_question) must NOT run on every
+ * turn during an interactive burst. Instead turnCompleteTriageHook arms a
+ * per-session timer; the work (runTriage → askSideQuestion) fires ONCE only after
+ * the session has been quiet for config.agent.triage.debounce_minutes.
  *
- * These tests assert the SCHEDULING — when (and how many times) a triage subagent is
- * dispatched. They complement turn-complete-self-report and taskless-session-no-triage,
- * which call runTriage directly to assert the work itself.
+ * These tests assert the SCHEDULING — when (and how many times) the session is
+ * asked for a self-report. They complement turn-complete-self-report and
+ * taskless-session-no-triage, which call runTriage directly to assert the work.
  *
  * We use REAL timers with a short fractional-minute window (not fake timers): the fire
  * path (runTriage) does real fs I/O before it emits, which fake timers can't flush
@@ -22,7 +22,6 @@ import { vi } from 'vitest';
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-triage-debounce'));
 
 import { WALNUT_HOME } from '../../src/constants.js';
-import { bus } from '../../src/core/event-bus.js';
 import { sessionRunner } from '../../src/providers/claude-code-session.js';
 import { addTask } from '../../src/core/task-manager.js';
 import { updateConfig } from '../../src/core/config-manager.js';
@@ -40,33 +39,45 @@ let task: Task;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Register a fake live session so runTriage's askSideQuestion path is exercised
- *  (it returns '' → triage falls back to the history path, which still dispatches). */
+/** Register a fake live session. runTriage's fire path calls its askSideQuestion —
+ *  that call IS the observable "the debounced work ran" signal now (no subagent is
+ *  dispatched anymore). Returning a full self-report keeps the fire path realistic
+ *  (summary persist + milestone), though these tests only count the asks. */
+const FAKE_REPORT = `TASK_SUMMARY: Debounce test task summary.
+WHAT_I_DID: nothing real.
+STATUS: succeeded
+PHASE_SIGNAL: reconfirmed
+NEXT_STEPS: none
+BLOCKERS: none
+USER_INTENT: autonomous
+VERIFIED: not-applicable
+ARTIFACTS: none`;
+
+const fakeSessions = new Map<string, { askSideQuestion: ReturnType<typeof vi.fn> }>();
+
 function registerFakeSession(sid: string) {
   const fake = {
     sessionId: sid,
-    askSideQuestion: vi.fn(async () => ''),
+    askSideQuestion: vi.fn(async () => FAKE_REPORT),
     detach: () => {},
     kill: () => {},
     get active() { return false; },
   };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (sessionRunner as any).sessions.set(sid, fake);
+  fakeSessions.set(sid, fake);
   return fake;
 }
 
-/** Capture subagent:start emits, tracking the per-session dispatch count. Assertions
- *  are scoped to a test's own sessionId via firedFor(), so a timer leaked from an
- *  earlier real-timer test can't pollute a later one. */
+/** The per-session fire count = how many times the debounced work asked the session. */
 function captureDispatches(): { sessionIds: string[]; firedFor: (sid: string) => number } {
-  const sessionIds: string[] = [];
-  bus.subscribe('test-capture-debounce', (event) => {
-    if (event.name === 'subagent:start') {
-      const ov = (event.data as Record<string, unknown>).context_override as { sessionId?: string } | undefined;
-      if (ov?.sessionId) sessionIds.push(ov.sessionId);
-    }
-  }, { global: true });
-  return { sessionIds, firedFor: (sid: string) => sessionIds.filter((s) => s === sid).length };
+  return {
+    get sessionIds() {
+      return [...fakeSessions.entries()].flatMap(([sid, f]) =>
+        Array(f.askSideQuestion.mock.calls.length).fill(sid) as string[]);
+    },
+    firedFor: (sid: string) => fakeSessions.get(sid)?.askSideQuestion.mock.calls.length ?? 0,
+  };
 }
 
 function turnPayload(sid: string): OnTurnCompletePayload {
@@ -111,11 +122,11 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
-  try { bus.unsubscribe('test-capture-debounce'); } catch { /* not subscribed */ }
+  fakeSessions.clear();
 });
 
 afterEach(() => {
-  try { bus.unsubscribe('test-capture-debounce'); } catch { /* not subscribed */ }
+  fakeSessions.clear();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const map = (sessionRunner as any).sessions as Map<string, unknown>;
   for (const k of [...map.keys()]) if (k.startsWith('dbnc-')) map.delete(k);

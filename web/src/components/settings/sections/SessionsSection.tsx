@@ -242,14 +242,16 @@ export function SessionsSection({ config, onSave }: Props) {
 
       <div className="settings-divider" />
 
-      {/* Task Triage — a TASK concern (updates the task's summary/note/phase and decides
-          task notifications), merely triggered by a session turn. Grouped here under
+      {/* Task Summary — a TASK concern (updates the task's summary/milestones/phase and
+          decides task notifications), merely triggered by a session turn. The session
+          itself writes the summary (side_question self-report, ~free); phase/notify is a
+          deterministic PHASE_SIGNAL lookup — no summarizer agent runs. Grouped here under
           "Tasks & Sessions" rather than buried in the session-runtime knobs above. */}
       <div className="form-group">
-        <label style={{ fontWeight: 600 }}>Task Triage</label>
+        <label style={{ fontWeight: 600 }}>Task Summary</label>
         <p className="text-sm text-muted" style={{ margin: '2px 0 0' }}>
-          After a session turn, a triage agent updates the task&rsquo;s summary and decides
-          whether anything needs your attention. These control its cost and noisiness.
+          After a session goes quiet, the session itself reports what it did — Walnut updates
+          the task&rsquo;s summary and decides whether anything needs your attention.
         </p>
       </div>
 

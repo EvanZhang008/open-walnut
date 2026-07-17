@@ -94,9 +94,9 @@ Legacy code (do not extend):
 
 ### Needs-attention notification
 
-`needs_attention?: boolean` — a synced flag that signals "this task needs human input." The AI triage agent sets it via `task_update` when a session completes — instruction #4 in all three triage prompts in `server.ts`.
+`needs_attention?: boolean` — a synced flag that signals "this task needs human input." Set deterministically by `applySessionPhase('triage-sync')` (AGENT_COMPLETE → AWAIT_HUMAN_ACTION sets it) from the turn-complete summary flow in `session-hooks/builtins.ts`. The triage subagent that used to set it via `task_update` was deleted 2026-07 — the session self-report's PHASE_SIGNAL + the `decideNotify()` lookup replaced its judgment.
 
-Default behavior: set it unless the session clearly succeeded and the agent is resuming with obvious next steps. In the UI, flagged tasks show a red dot (`.task-attention-dot`). Clicking/focusing a task in MainPage auto-clears the flag via `PATCH { needs_attention: false }`. `applyPhase('COMPLETE')` also clears it.
+In the UI, flagged tasks show a red dot (`.task-attention-dot`). Clicking/focusing a task in MainPage auto-clears the flag via `PATCH { needs_attention: false }`. `applyPhase('COMPLETE')` also clears it.
 
 MS To-Do sync: roundtripped via `Attention: true` header line in body. External plugins may include it in their sync payload (typically push-only). The `task_query` tool includes it when truthy and supports `where.needs_attention` filter.
 

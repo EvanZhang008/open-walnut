@@ -4,6 +4,11 @@
 phase lifecycle, session monitoring, message queue, JSONL patterns, compaction). Load that skill
 before non-trivial work in `src/core/`.
 
+**Decision records: `.claude/skills/decision-*` skills** — one skill per load-bearing design
+decision, with the evidence (e.g. `decision-summarizer-self-report`,
+`decision-no-session-end-gist`). Read the relevant one BEFORE rebuilding or "fixing" anything
+it says was deliberately removed; new learnings/decisions get their own `decision-<slug>` skill.
+
 ## Invariants you must not break (even without reading the skill)
 
 - **Daemon-uniform file access (THE one rule):** every read of a Claude Code session-data file

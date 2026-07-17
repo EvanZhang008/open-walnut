@@ -178,17 +178,21 @@ describe('taskless session: turn-complete triage', () => {
     expect(fake.askSideQuestion).not.toHaveBeenCalled();
   });
 
-  it('control: WITH a real task it DOES dispatch (capture harness is real)', async () => {
-    registerFakeSession(SID_WITHTASK_TURN);
+  it('control: WITH a real task the work DOES run (asks the session, persists summary)', async () => {
+    const fake = registerFakeSession(SID_WITHTASK_TURN);
     const captured = captureSubagentStarts();
 
-    // The hook now only arms a trailing-debounce timer; the dispatch work lives in
-    // runTriage (the fire path). Call it directly so this control asserts the harness
-    // captures a real dispatch — the debounce timing is covered in its own test.
+    // The hook only arms a trailing-debounce timer; the summary work lives in
+    // runTriage (the fire path). Call it directly. No subagent is dispatched anymore
+    // — the observable work is the side_question ask + the persisted summary.
     await runTriage(turnPayload(SID_WITHTASK_TURN, realTaskId, realTask));
 
-    expect(captured.count).toBe(1);
-    expect(captured.payloads[0].taskId).toBe(realTaskId);
+    expect(fake.askSideQuestion).toHaveBeenCalledOnce();
+    const { getTask } = await import('../../src/core/task-manager.js');
+    const t = await getTask(realTaskId);
+    expect(t.summary).toBeTruthy();
+    // And still zero subagent dispatches — the summarizer subagent is retired.
+    expect(captured.count).toBe(0);
   });
 });
 
