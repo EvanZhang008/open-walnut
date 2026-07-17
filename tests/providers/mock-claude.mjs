@@ -49,6 +49,9 @@ for (let i = 0; i < args.length; i++) {
     modelFlag = args[++i];
   } else if (args[i] === '--effort' && args[i + 1]) {
     effortFlag = args[++i];
+  } else if (args[i] === '--session-id' && args[i + 1]) {
+    // Pre-assigned session id (init-only spawn) — adopt it like --resume does.
+    sessionId = args[++i];
   } else if (args[i] === '-p' || args[i] === '--verbose') {
     // skip known flags
   } else {

@@ -1132,6 +1132,20 @@ export class ClaudeCodeSession {
       this._expectedSessionId = null
     }
 
+    // Init-only spawn (fresh session, EMPTY first message): the CLI emits NO
+    // JSONL at all (not even the init line) until its first stdin input, so
+    // sessionReady would never resolve and the task would never link. Pre-assign
+    // the id via --session-id: we persist + resolve right after the daemon
+    // confirms the spawn, and the CLI idles (SessionStart hook, MCP/skills
+    // loaded) until the user's first real message arrives over the FIFO.
+    let preassignedId: string | null = null
+    if (!message && !resumeSessionId) {
+      preassignedId = crypto.randomUUID()
+      args.push('--session-id', preassignedId)
+      this.claudeSessionId = preassignedId
+      this._expectedSessionId = preassignedId
+    }
+
     if (appendSystemPrompt) {
       args.push('--append-system-prompt', appendSystemPrompt)
     }
@@ -1171,7 +1185,13 @@ export class ClaudeCodeSession {
     }
 
     this._active = true
-    this._processStatus = 'running'
+    // Init-only spawn (pre-assigned id): NO first turn — the CLI inits then
+    // idles on its FIFO. Claiming 'running' here made the pre-spawn status
+    // emit (below) mark the stream buffer streaming; the corrective 'idle'
+    // then landed inside the markDone dedup window and was SUPPRESSED, so the
+    // UI showed a stuck "working…" indicator on a session that was never
+    // going to produce output.
+    this._processStatus = preassignedId ? 'idle' : 'running'
     this._exitCode = null
     this._exitStderr = undefined
     this.resultEmitted = false
@@ -1200,7 +1220,9 @@ export class ClaudeCodeSession {
     this._cwd = cwd ?? null
 
     const isResume = !!resumeSessionId && !forkSession
-    const tmpId = isResume ? resumeSessionId : crypto.randomBytes(8).toString('hex')
+    // Pre-assigned id (init-only spawn) names the stream/FIFO files directly —
+    // no renameForSession dance later, the id IS the final session id.
+    const tmpId = isResume ? resumeSessionId : (preassignedId ?? crypto.randomBytes(8).toString('hex'))
 
     this._spawnTs = Date.now()
     const transport = createSessionManager(tmpId, host ?? undefined, sshTarget, undefined, this.cliCommand, this._testDaemonUrl)
@@ -1314,6 +1336,32 @@ export class ClaudeCodeSession {
         ).catch(() => {})
       }
 
+      // Init-only spawn: no first turn ⇒ the CLI emits no init JSONL line, so the
+      // normal init handler will never persist/resolve. The id was pre-assigned
+      // (--session-id), the daemon confirmed the pid — persist the record and
+      // resolve sessionReady NOW so the task links and the UI attaches. The CLI
+      // sits idle on its FIFO; the eventual first message flows the normal path.
+      if (preassignedId) {
+        registerSessionManager(preassignedId, transport)
+        // Idle, not mid-turn: no turn runs until the user sends. Set BEFORE
+        // persist so the record lands with the truthful status.
+        this._processStatus = 'idle'
+        this._activity = undefined
+        ;(async () => {
+          try {
+            await this.persistSessionRecord(preassignedId, this._cwd ?? undefined)
+          } catch (err) {
+            log.session.error('CRITICAL: init-only spawn record persist failed', {
+              sessionId: preassignedId, taskId: this.taskId,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          } finally {
+            this._resolveSessionReady(preassignedId)
+          }
+        })()
+        this.emitStatusChanged('IN_PROGRESS')
+      }
+
       // Spawn confirmed by the daemon (pid returned). Only now is it safe to
       // consider the message delivered — see onSpawnSettled doc on send().
       try { onSpawnSettled?.(true) } catch { /* callback must never break spawn */ }
@@ -1366,7 +1414,11 @@ export class ClaudeCodeSession {
     this._outputFile = transport.outputFile
     this.emitStatusChanged('IN_PROGRESS')
     this.startLivenessMonitor()
-    this.startStallDiagTimer('resume-spawn')
+    // Init-only spawn: silence is EXPECTED (the CLI idles until the first user
+    // message) — a 30s no-JSONL stall warning would be a false alarm.
+    if (!preassignedId) {
+      this.startStallDiagTimer('resume-spawn')
+    }
   }
 
   /**
@@ -4987,6 +5039,9 @@ export class ClaudeCodeSession {
       forkedFromSessionId: this.forkedFromSessionId,
       cliModel: this._cliModel,
       effort: this._effort,
+      // Init-only spawn persists while parked ('idle' — no first turn). All
+      // other callers persist mid-turn, where the default 'running' is right.
+      initialProcessStatus: this._processStatus === 'idle' ? 'idle' : undefined,
     })
   }
 }

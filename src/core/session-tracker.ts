@@ -517,7 +517,7 @@ export async function createSessionRecord(
   taskId: string,
   project: string,
   cwd?: string,
-  extra?: { pid?: number; outputFile?: string; title?: string; description?: string; mode?: SessionMode; planFile?: string; planCompleted?: boolean; host?: string; provider?: import('./types.js').SessionProvider; type?: SessionType; fromPlanSessionId?: string; forkedFromSessionId?: string; cliModel?: string; effort?: import('./types.js').SessionEffort },
+  extra?: { pid?: number; outputFile?: string; title?: string; description?: string; mode?: SessionMode; planFile?: string; planCompleted?: boolean; host?: string; provider?: import('./types.js').SessionProvider; type?: SessionType; fromPlanSessionId?: string; forkedFromSessionId?: string; cliModel?: string; effort?: import('./types.js').SessionEffort; initialProcessStatus?: SessionRecord['process_status'] },
 ): Promise<SessionRecord> {
   await ensureSessionInit();
   return withWriteLock(async () => {
@@ -590,7 +590,10 @@ export async function createSessionRecord(
       claudeSessionId,
       taskId,
       project,
-      process_status: 'running',
+      // init-only spawns pass 'idle': the CLI initialized then parked on its
+      // FIFO — no turn is running, and defaulting to 'running' left a
+      // permanent Running badge until the first real turn ended.
+      process_status: extra?.initialProcessStatus ?? 'running',
       mode: extra?.mode ?? 'default',
       last_status_change: now,
       startedAt: now,
