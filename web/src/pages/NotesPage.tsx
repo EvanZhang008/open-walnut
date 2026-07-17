@@ -9,19 +9,23 @@ import { NotesTabStrip, type OpenTab, type TabKind } from '@/components/notes/No
 import { AttachmentPreview } from '@/components/notes/AttachmentPreview';
 import { NotesChat } from '@/components/notes/NotesChat';
 import { NotesSessionChat } from '@/components/notes/NotesSessionChat';
+import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { CommandPalette, pushRecent } from '@/components/notes/CommandPalette';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ICON_EXPAND } from '@/components/common/Icons';
 import { openPopout } from '@/popout/openPopout';
 import { saveNoteContent } from '@/api/notes-v2';
-import { quickStartSession } from '@/api/sessions';
+import { quickStartSession, fetchSession } from '@/api/sessions';
 import { fetchNotesDir } from '@/api/config';
 import { log } from '@/utils/log';
 
 const LS_WIDTH_KEY = 'open-walnut-notes-tree-width';
 const LS_TABS_KEY = 'open-walnut-notes-tabs';
 const LS_CHAT_OPEN_KEY = 'open-walnut-notes-chat-open';
+// Persisted CC tab set: JSON array of {key,label,taskId?,sessionId?} (older
+// formats — single {taskId,sessionId} object or a plain sid — still migrate).
 const LS_CC_SESSION_KEY = 'open-walnut-notes-cc-session';
+const LS_CC_MODE_KEY = 'open-walnut-notes-chat-mode';
 const WIDTH_MIN = 220;
 const WIDTH_MAX = 500;
 const WIDTH_DEFAULT = 280;
@@ -41,6 +45,25 @@ function readWidth(): number {
 interface PersistedTabs {
   tabs: OpenTab[];
   activePath: string | null;
+}
+
+/** One Claude Code session tab in the chat column. */
+interface CcTab {
+  /** Stable identity for tab switching/persistence (`cc-<launch ts>`). */
+  key: string;
+  /** Display name — the note/folder the session was started from. */
+  label: string;
+  taskId?: string;
+  sessionId?: string;
+  /** In-flight quick-start failure (shown inside the tab, not persisted). */
+  error?: string;
+}
+
+/** Tab label from the right-clicked target: basename without .md; vault root → "Notes". */
+function ccTabLabel(targetPath?: string): string {
+  if (!targetPath) return 'Notes';
+  const base = targetPath.split('/').pop() || targetPath;
+  return base.replace(/\.md$/, '') || 'Notes';
 }
 
 /** A localStorage entry is a valid tab iff it's `{ path: string, kind: 'note'|'attachment' }`. */
@@ -118,37 +141,98 @@ export function NotesPage() {
     });
   }, []);
 
-  // ── Claude Code session hosted in the chat column ──
-  // A REAL CLI session (full MCP/skills config) started from the tree's context
-  // menu, vs. the built-in note-agent. Lifecycle: `{}` = pane open, HTTP in
-  // flight (INSTANT — set synchronously in the click handler) → `taskId` =
-  // quick-start accepted, session linking → `sessionId` = live (persisted so a
-  // page reload reattaches).
-  const [ccSession, setCcSession] = useState<{ taskId?: string; sessionId?: string; launchId?: number } | null>(() => {
+  // ── Claude Code sessions hosted in the chat column (multi-tab) ──
+  // REAL CLI sessions (full MCP/skills config) started from the tree's context
+  // menu — one TAB PER SESSION, labeled after the note/folder it was started
+  // from, so earlier sessions stay reachable instead of being replaced.
+  // Tab lifecycle: `{key,label}` = pane open, HTTP in flight (INSTANT — set
+  // synchronously in the click handler) → `taskId` = quick-start accepted,
+  // linking → `sessionId` = live, rendered with the REAL <SessionPanel>.
+  //
+  // PERSISTENCE: the whole tab set + the active tab survive reloads as JSON —
+  // each session sticks until its tab is explicitly closed (or the record is
+  // genuinely gone/archived). A refresh mid-launch (taskId only) resumes the
+  // pending resolution instead of losing the session.
+  const [ccTabs, setCcTabs] = useState<CcTab[]>(() => {
     try {
-      const sid = localStorage.getItem(LS_CC_SESSION_KEY);
-      return sid ? { sessionId: sid } : null;
-    } catch { return null; }
+      const raw = localStorage.getItem(LS_CC_SESSION_KEY);
+      if (!raw) return [];
+      if (raw.startsWith('[')) {
+        const list = JSON.parse(raw) as CcTab[];
+        return list.filter((t) => t && t.key && (t.taskId || t.sessionId));
+      }
+      // Legacy single-session formats: {taskId,sessionId} JSON or a plain sid.
+      if (raw.startsWith('{')) {
+        const p = JSON.parse(raw) as { taskId?: string; sessionId?: string };
+        return (p.taskId || p.sessionId) ? [{ key: 'cc-legacy', label: 'Claude Code', taskId: p.taskId, sessionId: p.sessionId }] : [];
+      }
+      return [{ key: 'cc-legacy', label: 'Claude Code', sessionId: raw }];
+    } catch { return []; }
   });
-  const [chatMode, setChatMode] = useState<'assistant' | 'session'>('assistant');
-  const [ccStartError, setCcStartError] = useState<string | null>(null);
+  // 'assistant' | a cc tab key.
+  const [chatMode, setChatMode] = useState<string>(() => {
+    try {
+      const mode = localStorage.getItem(LS_CC_MODE_KEY);
+      if (!mode || mode === 'assistant') return 'assistant';
+      const raw = localStorage.getItem(LS_CC_SESSION_KEY) ?? '';
+      // Legacy 'session' value maps onto the migrated single tab.
+      if (mode === 'session') return raw ? 'cc-legacy' : 'assistant';
+      return raw.includes(`"${mode}"`) ? mode : 'assistant';
+    } catch { return 'assistant'; }
+  });
+
+  useEffect(() => {
+    try {
+      const persistable = ccTabs.filter((t) => t.taskId || t.sessionId)
+        .map(({ key, label, taskId, sessionId }) => ({ key, label, taskId, sessionId }));
+      if (persistable.length > 0) localStorage.setItem(LS_CC_SESSION_KEY, JSON.stringify(persistable));
+      else localStorage.removeItem(LS_CC_SESSION_KEY);
+    } catch { /* ignore */ }
+  }, [ccTabs]);
+  useEffect(() => {
+    try { localStorage.setItem(LS_CC_MODE_KEY, chatMode); } catch { /* ignore */ }
+  }, [chatMode]);
 
   // Prefetch the vault root once so the click handler never awaits it — the
   // promise is page-lifetime cached in api/config.
   useEffect(() => { void fetchNotesDir(); }, []);
 
-  // Preserve launchId — it's the pane's React key, and changing it mid-launch
-  // would remount NotesSessionChat and drop its locally-queued messages.
-  const handleCcResolved = useCallback((sessionId: string) => {
-    setCcSession((cur) => ({ ...cur, sessionId }));
-    try { localStorage.setItem(LS_CC_SESSION_KEY, sessionId); } catch { /* ignore */ }
+  const handleCcResolved = useCallback((key: string, sessionId: string) => {
+    setCcTabs((tabs) => tabs.map((t) => t.key === key ? { ...t, sessionId } : t));
   }, []);
 
-  const handleCcGone = useCallback(() => {
-    setCcSession(null);
-    setChatMode('assistant');
-    try { localStorage.removeItem(LS_CC_SESSION_KEY); } catch { /* ignore */ }
+  // Close ONE tab; if it was active, fall back to the newest remaining CC tab
+  // (or the assistant when none are left).
+  const handleCcClose = useCallback((key: string) => {
+    setCcTabs((tabs) => {
+      const next = tabs.filter((t) => t.key !== key);
+      setChatMode((mode) => mode === key ? (next[next.length - 1]?.key ?? 'assistant') : mode);
+      return next;
+    });
   }, []);
+
+  // Restored-session validation: persisted sids may point at sessions that were
+  // archived/deleted while we were away — drop those tabs instead of rendering
+  // dead panels. Live "close" stays explicit (each tab's ✕ / panel close).
+  const ccSids = ccTabs.map((t) => t.sessionId).filter(Boolean).join(',');
+  useEffect(() => {
+    if (!ccSids) return;
+    let cancelled = false;
+    for (const sid of ccSids.split(',')) {
+      fetchSession(sid).then((s) => {
+        if (cancelled || (s && !s.archived)) return;
+        log.info('notes', 'Persisted CC session is gone — closing its tab', { sessionId: sid });
+        setCcTabs((tabs) => {
+          const dead = tabs.find((t) => t.sessionId === sid);
+          if (dead) setChatMode((mode) => mode === dead.key ? 'assistant' : mode);
+          return tabs.filter((t) => t.sessionId !== sid);
+        });
+      }).catch(() => { /* transient — keep the tab; the panel has its own retries */ });
+    }
+    return () => { cancelled = true; };
+  }, [ccSids]);
+
+  const activeCcTab = useMemo(() => ccTabs.find((t) => t.key === chatMode) ?? null, [ccTabs, chatMode]);
 
   const activeTab = useMemo(() => tabs.find((t) => t.path === activePath) ?? null, [tabs, activePath]);
   // useNoteContent only ever sees a NOTE path; attachment tabs (and "no tab") → null
@@ -252,11 +336,17 @@ export function NotesPage() {
   // actually types. PERCEIVED-INSTANT: pane state is set synchronously; the
   // HTTP round-trip fills in taskId later.
   const handleStartCcSession = useCallback(async (targetPath?: string) => {
-    setCcStartError(null);
-    setChatMode('session');
+    const key = `cc-${Date.now()}`;
+    setCcTabs((tabs) => [...tabs, { key, label: ccTabLabel(targetPath) }]);
+    setChatMode(key);
     setChatOpen(true);
-    setCcSession({ launchId: Date.now() });
-    try { localStorage.setItem(LS_CHAT_OPEN_KEY, '1'); } catch { /* ignore */ }
+    // Persist directly too — the chatMode effect won't re-fire if the state
+    // already equals `key` (React bails on same-value sets), yet the stored key
+    // may have been cleared externally (e.g. a stale server-prefs merge).
+    try {
+      localStorage.setItem(LS_CHAT_OPEN_KEY, '1');
+      localStorage.setItem(LS_CC_MODE_KEY, key);
+    } catch { /* ignore */ }
     // Bring the session's subject into view: open the note in the editor, or
     // expand+scroll a folder in the tree — the pane and its target move together.
     if (targetPath) {
@@ -267,11 +357,11 @@ export function NotesPage() {
       const notesDir = await fetchNotesDir(); // prefetched on mount — resolves instantly
       if (!notesDir) throw new Error('Notes vault directory unavailable (cloud mode?)');
       const result = await quickStartSession({ cwd: notesDir, message: '' });
-      setCcSession((cur) => cur && !cur.sessionId ? { ...cur, taskId: result.taskId } : cur);
+      setCcTabs((tabs) => tabs.map((t) => t.key === key && !t.sessionId ? { ...t, taskId: result.taskId } : t));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn('notes', 'Failed to start Claude Code session from notes', { error: msg, targetPath });
-      setCcStartError(msg);
+      setCcTabs((tabs) => tabs.map((t) => t.key === key ? { ...t, error: msg } : t));
     }
   }, [handleSelect, revealInTree]);
 
@@ -443,7 +533,7 @@ export function NotesPage() {
           className={`notes-ai-toggle${chatOpen ? ' active' : ''}`}
           onClick={toggleChat}
           aria-pressed={chatOpen}
-          title={chatOpen ? 'Hide Note Assistant' : 'Ask the Note Assistant'}
+          title={chatOpen ? 'Hide Note Agent' : 'Ask the Note Agent'}
         >
           <SparkleIcon />
           <span>AI</span>
@@ -504,11 +594,14 @@ export function NotesPage() {
       {chatOpen && (
         <>
           <div className="notes-chat-divider" />
-          <div className="notes-chat-pane">
+          {/* SessionPanel is designed for the wider home-page columns — give it room. */}
+          <div className={`notes-chat-pane${activeCcTab?.sessionId ? ' notes-chat-pane-session' : ''}`}>
             {(() => {
-              // Mode tabs — only shown once a CC session exists (or is starting),
-              // so the plain assistant keeps its uncluttered single-title header.
-              const tabs = (ccSession || ccStartError) ? (
+              // Session tabs — only shown once a CC session exists (or is
+              // starting), so the plain agent keeps its uncluttered header.
+              // One tab PER SESSION (labeled by its origin note/folder), so
+              // earlier sessions stay reachable.
+              const tabs = ccTabs.length > 0 ? (
                 <div className="notes-chat-mode-tabs" role="tablist">
                   <button
                     role="tab"
@@ -516,40 +609,72 @@ export function NotesPage() {
                     className={`notes-chat-mode-tab${chatMode === 'assistant' ? ' active' : ''}`}
                     onClick={() => setChatMode('assistant')}
                   >
-                    Note Assistant
+                    Note Agent
                   </button>
-                  <button
-                    role="tab"
-                    aria-selected={chatMode === 'session'}
-                    className={`notes-chat-mode-tab${chatMode === 'session' ? ' active' : ''}`}
-                    onClick={() => setChatMode('session')}
-                  >
-                    Claude Code
-                  </button>
+                  {ccTabs.map((t) => (
+                    <span
+                      key={t.key}
+                      role="tab"
+                      tabIndex={0}
+                      aria-selected={chatMode === t.key}
+                      className={`notes-chat-mode-tab notes-chat-cc-tab${chatMode === t.key ? ' active' : ''}${t.error ? ' error' : ''}`}
+                      title={`Claude Code — ${t.label}`}
+                      onClick={() => setChatMode(t.key)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setChatMode(t.key); }}
+                    >
+                      <CcTabIcon />
+                      <span className="notes-chat-cc-tab-label">{t.label}</span>
+                      <button
+                        className="notes-chat-cc-tab-close"
+                        title="Close session tab"
+                        aria-label={`Close session ${t.label}`}
+                        onClick={(e) => { e.stopPropagation(); handleCcClose(t.key); }}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
                 </div>
               ) : undefined;
 
-              if (chatMode === 'session' && ccStartError) {
-                return (
-                  <div className="notes-chat">
-                    <div className="notes-chat-header">{tabs}</div>
-                    <div className="notes-chat-empty">
-                      <p style={{ color: 'var(--color-error, #ff3b30)' }}>Failed to start session: {ccStartError}</p>
-                      <p>Fix the issue, then retry from the notes tree's context menu.</p>
+              if (activeCcTab) {
+                if (activeCcTab.error) {
+                  return (
+                    <div className="notes-chat">
+                      <div className="notes-chat-header">{tabs}</div>
+                      <div className="notes-chat-empty">
+                        <p style={{ color: 'var(--color-error, #ff3b30)' }}>Failed to start session: {activeCcTab.error}</p>
+                        <p>Close this tab, fix the issue, then retry from the notes tree's context menu.</p>
+                      </div>
                     </div>
-                  </div>
-                );
-              }
-              if (chatMode === 'session' && ccSession) {
+                  );
+                }
+                // Live session → the REAL SessionPanel (same rich UI as the
+                // home-page session columns: title, Fork/Changed/Files/Terminal,
+                // model badge, tool cards). It owns its own header, so the
+                // session tabs sit in a slim strip above it.
+                if (activeCcTab.sessionId) {
+                  return (
+                    <div className="notes-chat notes-session-host">
+                      <div className="notes-chat-header notes-session-host-tabs">{tabs}</div>
+                      <div className="notes-session-host-panel">
+                        <SessionPanel
+                          key={activeCcTab.sessionId}
+                          sessionId={activeCcTab.sessionId}
+                          onClose={() => handleCcClose(activeCcTab.key)}
+                          onSessionReplaced={(_oldId, newId) => handleCcResolved(activeCcTab.key, newId)}
+                        />
+                      </div>
+                    </div>
+                  );
+                }
+                // Still linking → the slim pending shell; hands off to the
+                // panel via onResolved the moment the sessionId materializes.
                 return (
                   <NotesSessionChat
-                    /* launchId keeps ONE instance across launching→taskId→sessionId,
-                       so pre-link queued messages survive; sessionId keys restores. */
-                    key={ccSession.launchId ?? ccSession.sessionId}
-                    taskId={ccSession.taskId}
-                    sessionId={ccSession.sessionId}
-                    onResolved={handleCcResolved}
-                    onGone={handleCcGone}
+                    key={activeCcTab.key}
+                    taskId={activeCcTab.taskId}
+                    onResolved={(sid) => handleCcResolved(activeCcTab.key, sid)}
                     headerLeft={tabs}
                   />
                 );
@@ -591,6 +716,16 @@ function NotesEmptyState({ onNewNote }: { onNewNote: () => void }) {
         </button>
       </div>
     </div>
+  );
+}
+
+/** Tiny terminal glyph marking Claude Code session tabs. */
+function CcTabIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M3 5l3 3-3 3" />
+      <path d="M8 11h5" />
+    </svg>
   );
 }
 

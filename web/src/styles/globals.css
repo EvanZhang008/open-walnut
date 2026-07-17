@@ -467,11 +467,14 @@ input:focus, textarea:focus, select:focus {
   right: 8px;
 }
 
+/* Transparent click-away layer — no dimming. A dark backdrop made the sidebar
+   read as a highlighted dark band next to the light panel; natural style is
+   the panel sliding out with everything else visually unchanged. */
 .notification-panel-backdrop {
   position: fixed;
   inset: 0;
   z-index: 998;
-  background: rgba(0, 0, 0, 0.2);
+  background: transparent;
 }
 
 .notification-panel {
@@ -481,7 +484,8 @@ input:focus, textarea:focus, select:focus {
   bottom: 0;
   width: 320px;
   z-index: 999;
-  background: var(--bg);
+  /* Same surface as the sidebar so panel + sidebar read as one column. */
+  background: var(--bg-secondary);
   border-right: 1px solid var(--border);
   box-shadow: 4px 0 24px rgba(0, 0, 0, 0.12);
   display: flex;
@@ -702,12 +706,17 @@ input:focus, textarea:focus, select:focus {
 
 .notification-feed-item-title {
   flex: 1;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--fg);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* Expanded (clicked): un-truncate the title so the full message is readable. */
+.notification-feed-item-title.expanded {
+  white-space: normal;
+  word-break: break-word;
 }
 
 .notification-feed-item-time {
@@ -717,15 +726,17 @@ input:focus, textarea:focus, select:focus {
 }
 
 .notification-feed-item-body {
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--fg-secondary);
-  line-height: 1.4;
+  line-height: 1.45;
   margin-top: 3px;
   word-break: break-word;
 }
 
-/* iPhone-style notification center: clickable cards, per-item ×, groups. */
-.notification-feed-item.clickable {
+/* iPhone-style notification center: clickable cards, per-item ×, groups.
+   Every card is clickable now: with a target it navigates, without one it
+   expands to show the full title/body. */
+.notification-feed-item {
   cursor: pointer;
 }
 
@@ -6833,6 +6844,138 @@ input:focus, textarea:focus, select:focus {
   justify-content: flex-end;
 }
 
+/* ── "+" attach menu (Claude-style) ── */
+.chat-plus-group {
+  position: relative;
+  flex-shrink: 0;
+}
+.chat-plus-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.chat-plus-btn:hover:not(:disabled),
+.chat-plus-btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+.chat-plus-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.chat-plus-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  min-width: 180px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  padding: 4px;
+  z-index: 50;
+  animation: contextBarSlideIn 0.12s ease;
+}
+.chat-plus-menu-item,
+.chat-send-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  border-radius: calc(var(--radius-sm) - 2px);
+  color: var(--fg);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.chat-plus-menu-item:hover:not(:disabled),
+.chat-send-menu-item:hover:not(:disabled) {
+  background: var(--bg-secondary);
+}
+.chat-plus-menu-item:disabled,
+.chat-send-menu-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.chat-plus-menu-item svg { color: var(--fg-muted); flex-shrink: 0; }
+.chat-send-menu-item.danger { color: var(--error); }
+
+/* ── Send split-button (icon + optional "▾" menu) ── */
+.chat-send-group {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+}
+.chat-send-btn-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  color: #fff;
+  cursor: pointer;
+  transition: filter 0.15s, opacity 0.15s;
+}
+.chat-send-btn-icon:hover:not(:disabled) { filter: brightness(0.92); }
+.chat-send-btn-icon:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+/* When the split menu is present, square off the shared edge so the two
+   buttons read as one control. */
+.chat-send-group.has-menu .chat-send-btn-icon {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.chat-send-caret {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  padding: 0;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-left: 1px solid rgba(255, 255, 255, 0.35);
+  border-top-right-radius: var(--radius-sm);
+  border-bottom-right-radius: var(--radius-sm);
+  color: #fff;
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+.chat-send-caret:hover { filter: brightness(0.92); }
+.chat-send-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  min-width: 180px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  padding: 4px;
+  z-index: 50;
+  animation: contextBarSlideIn 0.12s ease;
+}
+
 /* ── Image attachment styles ── */
 
 .chat-attach-btn {
@@ -6866,6 +7009,8 @@ input:focus, textarea:focus, select:focus {
   background: transparent;
   border: 1px solid var(--border-strong);
   color: var(--fg-muted);
+  min-width: 40px;
+  height: 40px;
   padding: 6px 8px;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -6998,6 +7143,15 @@ input:focus, textarea:focus, select:focus {
 }
 
 /* ── Voice history panel (sidebar slide-out; shares .notification-panel shell) ── */
+/* No dimming backdrop — it made the sidebar read as a dark highlight band.
+   The layer stays for click-away close only. */
+.voice-panel-backdrop {
+  background: transparent;
+}
+/* Match the panel to the sidebar's surface so the two read as one column. */
+.notification-panel.voice-panel {
+  background: var(--bg-secondary);
+}
 .voice-panel-header {
   display: flex;
   align-items: baseline;
@@ -19944,6 +20098,16 @@ a.task-kebab-info:hover {
   background: var(--bg);
   overflow: hidden;
 }
+/* Hosting the full SessionPanel (live CC session) — it's designed for the
+   wider home-page columns, so widen the pane. */
+.notes-chat-pane-session { flex-basis: 480px; min-width: 380px; }
+
+/* Wrapper when the live CC session renders the real SessionPanel: a slim
+   mode-tab strip on top, the panel filling the rest. */
+.notes-session-host { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.notes-session-host-tabs { padding: 8px 12px 6px; }
+.notes-session-host-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.notes-session-host-panel .session-panel { flex: 1; min-height: 0; }
 
 .notes-chat {
   display: flex;
@@ -19989,7 +20153,7 @@ a.task-kebab-info:hover {
   border-top: 1px solid var(--border);
 }
 
-/* Chat-column mode tabs (Note Assistant ⇄ Claude Code session) */
+/* Chat-column tabs (Note Agent + one tab per Claude Code session) */
 .notes-chat-mode-tabs {
   display: inline-flex;
   gap: 2px;
@@ -19997,7 +20161,11 @@ a.task-kebab-info:hover {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 2px;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
+.notes-chat-mode-tabs::-webkit-scrollbar { display: none; }
 .notes-chat-mode-tab {
   font-size: 12px;
   padding: 3px 10px;
@@ -20015,6 +20183,31 @@ a.task-kebab-info:hover {
   font-weight: 600;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
 }
+/* Per-session tab: terminal glyph + origin label + close ×. A <span> (not a
+   <button>) so the nested close button is valid HTML. */
+.notes-chat-cc-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding-right: 4px;
+}
+.notes-chat-cc-tab.error { color: var(--color-error, #ff3b30); }
+.notes-chat-cc-tab-label {
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.notes-chat-cc-tab-close {
+  border: none;
+  background: none;
+  color: var(--fg-muted);
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 3px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.notes-chat-cc-tab-close:hover { color: var(--fg); background: var(--bg-hover); }
 
 /* Claude Code session hosted in the notes chat column */
 .notes-session-chat-badge {

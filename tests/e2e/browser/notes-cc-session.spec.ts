@@ -3,10 +3,11 @@
  *
  *  1. Right-click a note → "Start Claude Code session" appears (not on attachments).
  *  2. Clicking it opens the chat column in "Claude Code" mode with mode tabs.
- *  3. The quick-start request targets the notes vault (cwd = notesDir) and the
- *     opening message references the clicked note.
- *  4. Once the session links (task:updated), the pane renders the live session
- *     chat with its input; the mode tabs switch back to the Note Assistant.
+ *  3. The quick-start request targets the notes vault (cwd = notesDir) with an
+ *     EMPTY message (init-only spawn — no auto first turn).
+ *  4. Once the session links (task:updated), the pending shell hands off to the
+ *     REAL <SessionPanel> — the same rich UI as the home-page session columns.
+ *  5. The session SURVIVES a page reload (persisted until explicitly closed).
  *
  * Uses the REAL pipeline: quick-start REST → SESSION_START → MockDaemon spawns
  * the mock Claude CLI → real WS stream + JSONL history (same infra as
@@ -32,11 +33,17 @@ async function gotoNotes(page: Page) {
   await page.waitForLoadState('networkidle')
 }
 
-test('right-click note → Start Claude Code session → live session chat in the side pane', async ({ page }) => {
+test('right-click note → Start Claude Code session → full SessionPanel, per-session tabs, survives reload', async ({ page }) => {
   await seedNote()
   await gotoNotes(page)
-  // Fresh state — a persisted CC session id from another spec run would skip pending.
-  await page.evaluate(() => localStorage.removeItem('open-walnut-notes-cc-session'))
+  // Fresh state — persisted CC tabs from another spec run were already read
+  // into React state at mount, so clear the keys AND reload.
+  await page.evaluate(() => {
+    localStorage.removeItem('open-walnut-notes-cc-session')
+    localStorage.removeItem('open-walnut-notes-chat-mode')
+  })
+  await page.reload()
+  await page.waitForLoadState('networkidle')
 
   // Capture the quick-start request body to assert cwd + message targeting.
   let quickStartBody: { cwd?: string; message?: string } | null = null
@@ -45,9 +52,11 @@ test('right-click note → Start Claude Code session → live session chat in th
     await route.continue()
   })
 
-  // Expand the folder, right-click the note.
+  // Expand the folder, right-click the note. Exclude Recent/Bookmark rows —
+  // they share .notes-tree-file and a prior run's recents (synced via server
+  // ui-prefs) would otherwise shadow the real tree node.
   const folderEl = page.locator('.notes-tree-folder', { hasText: 'CCTest' })
-  const file = page.locator('.notes-tree-file', { hasText: 'Session Note' })
+  const file = page.locator('.notes-tree-file:not(.notes-bookmark-row)', { hasText: 'Session Note' })
   if (!(await file.isVisible().catch(() => false))) await folderEl.click()
   await file.click({ button: 'right' })
 
@@ -56,14 +65,16 @@ test('right-click note → Start Claude Code session → live session chat in th
   const clickedAt = Date.now()
   await menuItem.click()
 
-  // PERCEIVED-INSTANT: the full chat shell (pane + mode tabs + ENABLED input +
-  // kickoff bubble) is interactive well under 500ms — no blank spinner phase.
+  // PERCEIVED-INSTANT: the full chat shell (pane + tabs + ENABLED input) is
+  // interactive well under 500ms — no blank spinner phase. The session tab is
+  // named after the note it was started from.
   const tabs = page.locator('.notes-chat-mode-tabs')
   await expect(tabs).toBeVisible({ timeout: 2000 })
   await expect(page.locator('.notes-session-chat .chat-input-textarea')).toBeVisible({ timeout: 2000 })
   const shellReadyMs = Date.now() - clickedAt
   expect(shellReadyMs).toBeLessThan(500)
-  await expect(tabs.locator('.notes-chat-mode-tab.active')).toHaveText('Claude Code')
+  const ccTab = tabs.locator('.notes-chat-cc-tab', { hasText: 'Session Note' })
+  await expect(ccTab).toHaveClass(/active/)
 
   // The clicked note also opened in the editor (pane and target move together).
   await expect(page.locator('.notes-tab', { hasText: 'Session Note' })).toBeVisible()
@@ -74,15 +85,44 @@ test('right-click note → Start Claude Code session → live session chat in th
   expect(quickStartBody!.cwd).toBeTruthy()
   expect(quickStartBody!.message).toBe('')
 
-  // The session links (mock CLI) → live pane flips from Starting… to the real
-  // history view; the badge leaves the pending state.
-  await expect(page.locator('.notes-session-chat-badge.pending')).toHaveCount(0, { timeout: 30_000 })
-  await expect(page.locator('.notes-session-chat .chat-input-textarea')).toBeVisible()
+  // The session links (mock CLI) → the pending shell hands off to the REAL
+  // SessionPanel: same rich UI as home-page session columns (header chips,
+  // close button, its own input).
+  const panel = page.locator('.notes-chat-pane .session-panel')
+  await expect(panel).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('.notes-session-chat')).toHaveCount(0)
+  await expect(panel.locator('.chat-input-textarea')).toBeVisible()
+  await expect(panel.locator('.session-panel-close')).toBeVisible()
 
-  // Mode tabs switch back to the built-in assistant without losing the session tab.
-  await tabs.locator('.notes-chat-mode-tab', { hasText: 'Note Assistant' }).click()
-  await expect(page.locator('.notes-chat-title, .notes-chat .notes-chat-mode-tab.active').first()).toBeVisible()
-  await expect(tabs.locator('.notes-chat-mode-tab', { hasText: 'Claude Code' })).toBeVisible()
+  // ── SECOND SESSION → its own tab; the first stays reachable. ──
+  await file.click({ button: 'right' })
+  await page.locator('.notes-context-menu button', { hasText: 'Start Claude Code session' }).click()
+  await expect(tabs.locator('.notes-chat-cc-tab')).toHaveCount(2)
+  await expect(page.locator('.notes-chat-pane .session-panel')).toBeVisible({ timeout: 30_000 })
+  // Switch back to the FIRST session's tab — its panel renders again.
+  await tabs.locator('.notes-chat-cc-tab').first().click()
+  await expect(page.locator('.notes-chat-pane .session-panel')).toBeVisible()
+
+  // ── SURVIVES RELOAD: both tabs + the active one are persisted. ──
+  await page.reload()
+  await page.waitForLoadState('networkidle')
+  await expect(page.locator('.notes-chat-pane .session-panel')).toBeVisible({ timeout: 15_000 })
+  await expect(page.locator('.notes-chat-mode-tabs .notes-chat-cc-tab')).toHaveCount(2)
+  await expect(page.locator('.notes-chat-mode-tabs .notes-chat-cc-tab').first()).toHaveClass(/active/)
+
+  // Tabs switch back to the built-in agent without losing the session tabs.
+  await page.locator('.notes-chat-mode-tabs .notes-chat-mode-tab', { hasText: 'Note Agent' }).click()
+  await expect(page.locator('.notes-chat-pane .session-panel')).toHaveCount(0)
+  await expect(page.locator('.notes-chat-mode-tabs .notes-chat-cc-tab')).toHaveCount(2)
+
+  // EXPLICIT close (tab ×) both sessions → pane returns to the agent and the
+  // persisted state is cleared (a reload must NOT resurrect them).
+  await page.locator('.notes-chat-mode-tabs .notes-chat-cc-tab-close').first().click()
+  await expect(page.locator('.notes-chat-mode-tabs .notes-chat-cc-tab')).toHaveCount(1)
+  await page.locator('.notes-chat-mode-tabs .notes-chat-cc-tab-close').click()
+  await expect(page.locator('.notes-chat-mode-tabs')).toHaveCount(0)
+  const persisted = await page.evaluate(() => localStorage.getItem('open-walnut-notes-cc-session'))
+  expect(persisted).toBeNull()
 })
 
 test('attachments do not offer Start Claude Code session', async ({ page }) => {
@@ -96,11 +136,14 @@ test('attachments do not offer Start Claude Code session', async ({ page }) => {
   })
   await gotoNotes(page)
 
+  // Folder expansion state persists (server-synced ui-prefs) — a blind click
+  // on an already-expanded folder COLLAPSES it. Only click when the child
+  // isn't visible yet.
   const folderEl = page.locator('.notes-tree-folder', { hasText: 'CCTest' })
-  await folderEl.click()
   const attachFolder = page.locator('.notes-tree-folder', { hasText: '_attachment' })
-  await attachFolder.click()
+  if (!(await attachFolder.isVisible().catch(() => false))) await folderEl.click()
   const attachment = page.locator('.notes-tree-file.notes-tree-attachment, .notes-tree-file', { hasText: '.png' }).first()
+  if (!(await attachment.isVisible().catch(() => false))) await attachFolder.click()
   await attachment.click({ button: 'right' })
 
   await expect(page.locator('.notes-context-menu')).toBeVisible()

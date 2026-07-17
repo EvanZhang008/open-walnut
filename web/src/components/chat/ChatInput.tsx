@@ -103,6 +103,13 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // "+" attach menu + send split-button dropdown (Claude-style). Both close on
+  // outside click; refs anchor the click-outside test to each group.
+  const [plusOpen, setPlusOpen] = useState(false);
+  const [sendMenuOpen, setSendMenuOpen] = useState(false);
+  const plusGroupRef = useRef<HTMLDivElement>(null);
+  const sendGroupRef = useRef<HTMLDivElement>(null);
+
   // Draft persistence: debounce save to localStorage
   const draftTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const draftKeyRef = useRef(draftKey);
@@ -164,6 +171,22 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefillNonce]);
+
+  // Close the "+" and send dropdowns on outside click / Escape.
+  useEffect(() => {
+    if (!plusOpen && !sendMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (plusOpen && plusGroupRef.current && !plusGroupRef.current.contains(t)) setPlusOpen(false);
+      if (sendMenuOpen && sendGroupRef.current && !sendGroupRef.current.contains(t)) setSendMenuOpen(false);
+    };
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') { setPlusOpen(false); setSendMenuOpen(false); }
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };
+  }, [plusOpen, sendMenuOpen]);
 
   const queueFull = isStreaming && (queueCount ?? 0) >= MAX_QUEUE_SIZE;
 
@@ -627,6 +650,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   };
 
   const handleAttachClick = () => {
+    setPlusOpen(false);
     fileInputRef.current?.click();
   };
 
@@ -640,20 +664,30 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   };
 
   const handleInterruptSend = () => {
+    setSendMenuOpen(false);
     const text = value.trim();
     if ((!text && images.length === 0) || disabled || !onInterruptSend) return;
     dispatchSend(onInterruptSend, text, images);
   };
 
-  const canSend = !disabled && !queueFull && (value.trim() || images.length > 0);
+  const handleStop = () => {
+    setSendMenuOpen(false);
+    onStop?.();
+  };
 
-  // Determine send button label
-  // When onInterruptSend is set (session context with stream-json), keep "Send" even while streaming
-  let sendLabel = 'Send';
+  const canSend = !disabled && !queueFull && !!(value.trim() || images.length > 0);
+
+  // The primary send action always sends the composed message. Its title reflects
+  // whether a live turn is running (queue / interrupt) so the icon-only button
+  // stays self-explanatory. The overflow "▾" exposes Interrupt / Stop while streaming.
+  let sendTitle = 'Send';
   if (isStreaming && !onInterruptSend) {
-    if (queueFull) sendLabel = 'Queue full';
-    else sendLabel = 'Queue';
+    sendTitle = queueFull ? 'Queue full' : 'Queue message (sends after the current turn)';
+  } else if (isStreaming && onInterruptSend) {
+    sendTitle = 'Send (queues after the current turn)';
   }
+  // The split-menu is only useful mid-turn, and only when we have an interrupt/stop action.
+  const showSendMenu = !!isStreaming && (!!onInterruptSend || !!onStop);
 
   return (
     <div
@@ -700,9 +734,44 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
           </button>
         </div>
       )}
-      {/* Input row: attach button sits outside the bordered input-box as a sibling,
-          so it aligns beside (not inside) the shared border */}
+      {/* Input row (Claude-style): [+] · input · mic · send.
+          The "+" holds attachments; send is an icon with a split "▾" for
+          Interrupt/Stop while a turn is streaming. */}
       <div className="chat-input-row">
+        {/* "+" attach menu — anchors a small popover of attachment actions */}
+        <div className="chat-plus-group" ref={plusGroupRef}>
+          <button
+            className={`chat-plus-btn${plusOpen ? ' active' : ''}`}
+            onClick={() => setPlusOpen((o) => !o)}
+            type="button"
+            disabled={disabled}
+            aria-label="Add attachment"
+            aria-haspopup="menu"
+            aria-expanded={plusOpen}
+            title="Add attachment"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+          </button>
+          {plusOpen && (
+            <div className="chat-plus-menu" role="menu">
+              <button
+                className="chat-plus-menu-item"
+                onClick={handleAttachClick}
+                type="button"
+                role="menuitem"
+                disabled={images.length >= MAX_IMAGES}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
+                </svg>
+                <span>{images.length >= MAX_IMAGES ? 'Image limit reached' : 'Attach image'}</span>
+              </button>
+            </div>
+          )}
+        </div>
         {/* Unified input box: pill + images + textarea share one border */}
         <div className="chat-input-box">
           {/* Inline task context pill */}
@@ -784,48 +853,69 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
           style={{ display: 'none' }}
           onChange={handleFileChange}
         />
-        <button
-          className="btn chat-attach-btn"
-          onClick={handleAttachClick}
-          type="button"
-          disabled={disabled || images.length >= MAX_IMAGES}
-          aria-label="Attach image"
-          title="Attach image (or paste/drag-drop)"
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
-          </svg>
-        </button>
-      </div>
-      {/* Action buttons — below the input, right-aligned */}
-      <div className="chat-input-buttons">
-        {isStreaming && onStop && (
+        {/* Send — icon button (↑). While streaming it grows a split "▾" that
+            exposes Interrupt / Stop. */}
+        <div className={`chat-send-group${showSendMenu ? ' has-menu' : ''}`} ref={sendGroupRef}>
           <button
-            className="btn chat-stop-btn"
-            onClick={onStop}
-            type="button"
-          >
-            Stop
-          </button>
-        )}
-        {isStreaming && onInterruptSend && (
-          <button
-            className="btn chat-interrupt-btn"
-            onClick={handleInterruptSend}
+            className="chat-send-btn-icon"
+            onClick={handleSend}
             disabled={!canSend}
             type="button"
-            title="Stop the running turn and send this message"
+            aria-label={sendTitle}
+            title={sendTitle}
           >
-            ⚡ Interrupt
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="19" x2="12" y2="5" />
+              <polyline points="6 11 12 5 18 11" />
+            </svg>
           </button>
-        )}
-        <button
-          className="btn btn-primary chat-send-btn"
-          onClick={handleSend}
-          disabled={!canSend}
-        >
-          {sendLabel}
-        </button>
+          {showSendMenu && (
+            <>
+              <button
+                className="chat-send-caret"
+                onClick={() => setSendMenuOpen((o) => !o)}
+                type="button"
+                aria-label="More send options"
+                aria-haspopup="menu"
+                aria-expanded={sendMenuOpen}
+                title="More send options"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
+              {sendMenuOpen && (
+                <div className="chat-send-menu" role="menu">
+                  {onInterruptSend && (
+                    <button
+                      className="chat-send-menu-item"
+                      onClick={handleInterruptSend}
+                      disabled={!canSend}
+                      type="button"
+                      role="menuitem"
+                      title="Stop the running turn and send this message now"
+                    >
+                      <span aria-hidden="true">⚡</span>
+                      <span>Interrupt &amp; send</span>
+                    </button>
+                  )}
+                  {onStop && (
+                    <button
+                      className="chat-send-menu-item danger"
+                      onClick={handleStop}
+                      type="button"
+                      role="menuitem"
+                      title="Stop the running turn"
+                    >
+                      <span aria-hidden="true">⏹</span>
+                      <span>Stop turn</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </div>
     </div>
   );

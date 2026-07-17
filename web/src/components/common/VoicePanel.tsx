@@ -118,7 +118,10 @@ export function VoicePanel({ open, onClose, sidebarCollapsed }: VoicePanelProps)
 
   return createPortal(
     <>
-      <div className="notification-panel-backdrop" onClick={onClose} />
+      {/* Transparent click-away layer — no dimming. The dark backdrop made the
+          sidebar look "highlighted dark" next to the white panel; natural style
+          is the panel just sliding out with everything else unchanged. */}
+      <div className="notification-panel-backdrop voice-panel-backdrop" onClick={onClose} />
       <div className={`notification-panel voice-panel${sidebarCollapsed ? ' sidebar-collapsed' : ''}`} role="dialog" aria-label="Voice history">
         <div className="voice-panel-header">
           <span className="voice-panel-title">Voice history</span>

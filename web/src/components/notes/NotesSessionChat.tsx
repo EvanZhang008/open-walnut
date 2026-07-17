@@ -10,21 +10,24 @@ import type { SessionRecord } from '@/types/session';
 import { log } from '@/utils/log';
 
 /**
- * NotesSessionChat — a REAL Claude Code session hosted in the /notes chat
- * column. Unlike NotesChat (the embedded note-agent with note tools only),
- * this is the full CLI session pipeline: quick-start task → SESSION_START →
- * `claude -p` spawn with the user's whole config (MCP servers, skills,
- * ~/.claude, permissions). Rendering reuses the same building blocks as
- * SessionPanel / FocusDock cards: SessionChatHistory + ChatInput +
- * useSessionSend — so streaming, optimistic bubbles, tool cards and slash
- * commands all behave identically to a home-page session column.
+ * NotesSessionChat — the PENDING shell for a REAL Claude Code session launched
+ * from the /notes tree (quick-start task → SESSION_START → `claude -p` spawn
+ * with the user's whole config: MCP servers, skills, ~/.claude, permissions).
+ *
+ * It renders only while the quick-start task hasn't linked to a sessionId yet;
+ * the moment it resolves it flushes anything the user typed to the server
+ * queue and hands off via onResolved — NotesPage then swaps in the REAL
+ * <SessionPanel> (the exact home-page session UI: title, Fork/Changed/Files/
+ * Terminal chips, model badge, tool cards), whose useSessionSend rehydrates
+ * the just-flushed messages from the disk queue.
  *
  * PERCEIVED-INSTANT START: the CLI takes seconds to spawn, so the pane never
  * shows a bare spinner. From the first paint it renders the full chat shell —
  * a live "Starting…" badge and an ENABLED input. The session is spawned with
  * an EMPTY message (init only — no auto first turn); anything typed before it
- * links is queued locally and flushed the moment the sessionId resolves
- * (task:updated event, with a fast poll as fallback).
+ * links is queued locally and flushed on adoption (task:updated event, with a
+ * fast poll as fallback). The sessionId/onGone props remain for the rare
+ * direct-render fallback but NotesPage no longer uses them.
  */
 
 const RESOLVE_POLL_MS = 400;
@@ -67,13 +70,32 @@ export function NotesSessionChat({ taskId, sessionId: knownSessionId, onResolved
   const onGoneRef = useRef(onGone);
   onGoneRef.current = onGone;
 
+  // Queue mirror + adoption guard live in refs: adoption must flush BEFORE
+  // notifying the parent (which may unmount this pane for the full
+  // SessionPanel the moment onResolved fires), and none of it can run inside
+  // a setState updater (StrictMode double-invokes updaters → double sends).
+  const localQueueRef = useRef<QueuedLocal[]>([]);
+  localQueueRef.current = localQueue;
+  const adoptedRef = useRef(Boolean(knownSessionId));
+
   const adoptSessionId = useCallback((sid: string) => {
-    setSessionId((cur) => {
-      if (cur) return cur;
+    if (adoptedRef.current) return;
+    adoptedRef.current = true;
+    // Flush queued messages BEFORE notifying the parent: onResolved swaps this
+    // shell for the full SessionPanel, whose useSessionSend rehydrates its
+    // optimistic bubbles from the server disk queue on mount — so the sends
+    // must land server-side first or the swap races the rehydrate.
+    const queued = localQueueRef.current;
+    localQueueRef.current = [];
+    setLocalQueue([]);
+    setSessionId(sid);
+    if (queued.length > 0) {
+      void Promise.all(queued.map((m) => send(sid, m.text, m.images)))
+        .finally(() => onResolvedRef.current?.(sid));
+    } else {
       onResolvedRef.current?.(sid);
-      return sid;
-    });
-  }, []);
+    }
+  }, [send]);
 
   // ── Pending resolution: WS event (primary) + fast poll (fallback) + timeout ──
   useEvent('task:updated', (data: unknown) => {
@@ -112,14 +134,6 @@ export function NotesSessionChat({ taskId, sessionId: knownSessionId, onResolved
     const d = data as { taskId?: string; error?: string };
     if (d.taskId === taskId) setError(d.error || 'Session failed to start');
   });
-
-  // Flush locally-queued messages once the session links. send() enqueues to
-  // the server-side disk queue, so ordering + delivery guards apply from here.
-  useEffect(() => {
-    if (!sessionId || localQueue.length === 0) return;
-    for (const m of localQueue) send(sessionId, m.text, m.images);
-    setLocalQueue([]);
-  }, [sessionId, localQueue, send]);
 
   // ── Session metadata (cwd for image-path resolution + restore validation) ──
   useEffect(() => {

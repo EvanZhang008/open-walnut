@@ -58,7 +58,7 @@ export function NotesChat({ activeNotePath, headerLeft }: {
   return (
     <div className="notes-chat">
       <div className="notes-chat-header">
-        {headerLeft ?? <span className="notes-chat-title">Note Assistant</span>}
+        {headerLeft ?? <span className="notes-chat-title">Note Agent</span>}
         {chat.messages.length > 0 && (
           <button
             className="notes-chat-clear"

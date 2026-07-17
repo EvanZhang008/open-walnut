@@ -387,6 +387,9 @@ function FeedItem({ n, onNavigate, onDismiss }: {
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState<'allowed' | 'denied' | null>(null);
   const [respondError, setRespondError] = useState(false);
+  // Entries without a navigation target (e.g. plugin/system errors) expand on
+  // click instead — otherwise a truncated error message is simply unreadable.
+  const [expanded, setExpanded] = useState(false);
   const resolved = n.resolved ?? sent;
   const pendingPermission = n.kind === 'permission' && !resolved && !!n.sessionId;
   // dedupKey is `perm:<requestId>` for permission entries — the requestId is
@@ -413,17 +416,21 @@ function FeedItem({ n, onNavigate, onDismiss }: {
 
   return (
     <div
-      className={`notification-feed-item notification-feed-item--${n.severity}${n.read ? '' : ' unread'}${target ? ' clickable' : ''}`}
-      onClick={target ? () => onNavigate(target) : undefined}
-      role={target ? 'button' : undefined}
-      tabIndex={target ? 0 : undefined}
-      onKeyDown={target ? (e) => {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onNavigate(target); }
-      } : undefined}
+      className={`notification-feed-item notification-feed-item--${n.severity}${n.read ? '' : ' unread'}${target ? ' clickable' : ''}${expanded ? ' expanded' : ''}`}
+      onClick={target ? () => onNavigate(target) : () => setExpanded(v => !v)}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          if (target) onNavigate(target);
+          else setExpanded(v => !v);
+        }
+      }}
     >
       <div className="notification-feed-item-head">
         <span className={`notification-feed-dot notification-feed-dot--${n.severity}`} />
-        <span className="notification-feed-item-title">{n.title}</span>
+        <span className={`notification-feed-item-title${expanded ? ' expanded' : ''}`}>{n.title}</span>
         <span className="notification-feed-item-time">{formatRelative(new Date(n.timestamp).toISOString())}</span>
         <button
           className="notification-feed-item-dismiss"
@@ -433,7 +440,7 @@ function FeedItem({ n, onNavigate, onDismiss }: {
           &times;
         </button>
       </div>
-      {n.body && <div className="notification-feed-item-body clamped">{n.body}</div>}
+      {n.body && <div className={`notification-feed-item-body${expanded ? '' : ' clamped'}`}>{n.body}</div>}
       {n.kind === 'permission' && resolved && (
         <div className="notification-feed-item-resolved">
           {resolved === 'allowed' ? 'Approved' : 'Denied'}
