@@ -9093,6 +9093,9 @@ img[data-lightbox-src],
   flex-shrink: 1;
   min-height: 0;
   overflow-y: auto;
+  /* Flex column so an undragged RECENT can flex-grow to fill leftover space. */
+  display: flex;
+  flex-direction: column;
   /* Scroll anchoring fights the per-tier resize drags: shrinking a list inside
      this scroller makes the browser shift scrollTop to "stabilize" content,
      which reads as the whole pinned area jumping under the cursor. */
@@ -9103,6 +9106,26 @@ img[data-lightbox-src],
   flex-shrink: 0;
   border-bottom: 1px solid var(--border);
   padding: 6px 12px 4px;
+}
+
+/* Expanded RECENT grows to consume the wrapper's leftover space so there's no
+   dead gap between it and the TASKS bar; the inner list scrolls when the recent
+   items exceed that space. Requires the wrapper to be a flex column. Once the
+   user drags the resize handle, TodoPanel pins an explicit maxHeight inline
+   (via recentResize.height), which caps this flex-grow at the dragged size. */
+.todo-pinned-section-recent {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.todo-pinned-list-recent {
+  flex: 1 1 auto;
+  min-height: 0;
+  /* No fixed cap by default: fills available space via flex. When dragged,
+     the inline maxHeight from recentResize.height takes over and the list
+     scrolls past it (todo-pinned-list-scroll already sets overflow-y:auto). */
 }
 
 .todo-pinned-header {

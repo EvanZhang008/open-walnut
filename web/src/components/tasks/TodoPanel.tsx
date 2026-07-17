@@ -4504,9 +4504,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             </div>
           )}
 
-          {/* Recent tasks section — draggable cards, drop on Pinned tiers to pin */}
+          {/* Recent tasks section — draggable cards, drop on Pinned tiers to pin.
+              When expanded it flex-grows to fill the wrapper's leftover space (no
+              dead gap above TASKS); the list scrolls once items exceed that space. */}
           {recentTasks.length > 0 && (
-            <div className="todo-pinned-section">
+            <div className={`todo-pinned-section${!collapsedSections.has('recent') ? ' todo-pinned-section-recent' : ''}`}>
               <div className="todo-pinned-header" onClick={() => toggleSection('recent')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('recent'); }} style={{ cursor: 'pointer' }}>
                 <span className={`todo-pinned-chevron${collapsedSections.has('recent') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
                 <span className="todo-pinned-label">Recent</span>
@@ -4514,8 +4516,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
               </div>
               {!collapsedSections.has('recent') && (
                 <SortableContext items={recentIds} strategy={verticalListSortingStrategy}>
-                  {/* ~3 rows by default; drag the handle below to resize (persisted). */}
-                  <div className="todo-pinned-list todo-pinned-list-scroll" style={{ maxHeight: recentResize.height ?? RECENT_VISIBLE_MAX * 30 }}>
+                  {/* Undragged: flex-grow fills the wrapper's leftover space (no dead gap
+                      above TASKS), with a ~3-row min so it stays compact when there's
+                      little room. Once dragged, an explicit maxHeight pins the height and
+                      the list scrolls past it (persisted via recentResize). */}
+                  <div
+                    className="todo-pinned-list todo-pinned-list-scroll todo-pinned-list-recent"
+                    style={recentResize.height != null
+                      ? { maxHeight: recentResize.height, flex: 'none' }
+                      : { minHeight: RECENT_VISIBLE_MAX * 30 }}
+                  >
                     {recentTasks.map((task) => (
                       <SortableRecentCard
                         key={task.id}
