@@ -763,6 +763,13 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       // it so the hook's Phase 1 doesn't waste an event loop tick (and doesn't race
       // with the Phase 2 SSH round-trip).
       if (record?.host) {
+        // Serve disk cache for instant display (Phase 1) while Phase 2 does SSH
+        const { readHistoryCache } = await import('../../core/history-disk-cache.js')
+        const diskCached = await readHistoryCache(sessionId)
+        if (diskCached && diskCached.messages.length > 0) {
+          res.json({ messages: diskCached.messages, total: diskCached.messages.length })
+          return
+        }
         res.json({ messages: [], total: 0 })
         return
       }
@@ -799,6 +806,16 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
           res.json({ messages: cached, total: cached.length, stale: true, staleReason: msg })
           return
         }
+        // Disk cache fallback (survives app restarts)
+        const { readHistoryCache } = await import('../../core/history-disk-cache.js')
+        const diskCached = await readHistoryCache(sessionId)
+        if (diskCached && diskCached.messages.length > 0) {
+          log.web.info('serving disk-cached history (live read threw)', {
+            sessionId, host: record?.host, messages: diskCached.messages.length, cachedAt: diskCached.cachedAt,
+          })
+          res.json({ messages: diskCached.messages, total: diskCached.messages.length, stale: true, staleReason: msg })
+          return
+        }
       }
       res.status(502).json({ error: msg })
       return
@@ -806,6 +823,35 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
     logMessageOrdering('P2:full', sessionId, messages, record?.host)
     if (messages.length === 0 && !record) {
       res.status(404).json({ error: 'Session not found' })
+      return
+    }
+
+    // Disk cache fallback: when the live read returned empty (remote JSONL gone,
+    // daemon just restarted, etc.) but the session record exists, serve the last
+    // successfully cached history so the user doesn't see "No history found".
+    if (messages.length === 0 && record) {
+      const { readHistoryCache } = await import('../../core/history-disk-cache.js')
+      const diskCached = await readHistoryCache(sessionId)
+      if (diskCached && diskCached.messages.length > 0) {
+        log.web.info('serving disk-cached history (live read returned empty)', {
+          sessionId, host: record.host, messages: diskCached.messages.length, cachedAt: diskCached.cachedAt,
+        })
+        res.json({
+          messages: diskCached.messages,
+          total: diskCached.messages.length,
+          cursor: diskCached.messages.length,
+          delta: false,
+          stale: true,
+          staleReason: 'Session file unavailable — showing cached history',
+        })
+        return
+      }
+      // No disk cache either — return a meaningful reason so the UI can show
+      // "host unreachable" instead of generic "No conversation history found".
+      const reason = record.host
+        ? `Remote host "${record.host}" is unreachable — session history is stored on that machine`
+        : 'Session history file not found'
+      res.json({ messages: [], total: 0, cursor: 0, delta: false, historyUnavailable: reason })
       return
     }
 

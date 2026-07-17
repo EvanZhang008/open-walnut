@@ -133,6 +133,7 @@ export const CONFIG_FILE = path.join(WALNUT_HOME, 'config.yaml');
 export const SYNC_DIR = path.join(WALNUT_HOME, 'sync');
 export const SESSIONS_FILE = path.join(WALNUT_HOME, 'sessions.json');
 export const CLAUDE_HOME = path.join(os.homedir(), '.claude');
+export const HISTORY_CACHE_DIR = path.join(WALNUT_HOME, 'cache', 'history');
 export const HOOK_LOG_FILE = path.join(WALNUT_HOME, 'hook-errors.log');
 export const DAILY_DIR = path.join(MEMORY_DIR, 'daily');
 /** Pinned global memory. Lives INSIDE memory/ (three-word model: memory / skill / history). */
