@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { WALNUT_HOME } from '../constants.js';
 import { bus, EventNames } from '../core/event-bus.js';
+import { markCriticalSection } from '../core/event-loop-monitor.js';
 import { log } from '../logging/index.js';
 
 export interface SyncStatus {
@@ -426,19 +427,34 @@ export async function autoSync(): Promise<void> {
  * Pull latest data from the open-walnut git repo (best-effort, async).
  * Used by the server to fetch data pushed by remote hooks.
  * Silently does nothing if ~/.open-walnut/ is not a git repo or has no remote.
+ *
+ * Single-flight: session:result and session:error can fire together (multiple
+ * sessions finishing at once) — concurrent callers share ONE in-flight pull
+ * instead of racing two `git pull` processes into .git/index.lock contention.
  */
+let pullInflight: Promise<void> | null = null;
+
 export async function gitPullWalnut(): Promise<void> {
+  if (pullInflight) return pullInflight;
+  pullInflight = (async () => {
+    const endSection = markCriticalSection('git-pull-walnut');
+    try {
+      if (!isGitAvailable() || !isRepo() || !hasRemote()) return;
+      clearStaleLock();
+      // gitSafeAsync applies the credential-helper guard itself (pull is a
+      // network subcommand) and swallows errors — same best-effort semantics
+      // as the old execSync version, minus the event-loop block.
+      await gitSafeAsync('pull --ff-only', { timeout: NETWORK_TIMEOUT });
+    } catch {
+      // Best-effort — don't fail callers
+    } finally {
+      endSection();
+    }
+  })();
   try {
-    if (!isGitAvailable() || !isRepo() || !hasRemote()) return;
-    clearStaleLock();
-    const guard = credentialGuardArgs().join(' ');
-    execSync(`git ${guard ? `${guard} ` : ''}pull --ff-only`, {
-      cwd: WALNUT_HOME,
-      timeout: 15000,
-      stdio: 'ignore',
-    });
-  } catch {
-    // Best-effort — don't fail callers
+    await pullInflight;
+  } finally {
+    pullInflight = null;
   }
 }
 
