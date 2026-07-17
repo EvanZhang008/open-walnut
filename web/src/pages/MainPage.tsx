@@ -1321,7 +1321,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               a small "auto-detected" note when a non-config source was used, or nothing when
               fully configured. So mount it unconditionally rather than gating on setupComplete
               (which is true once auto-detected and would hide the auto-detect note). */}
-          <SetupBanner health={health} loading={healthLoading} onNavigateSettings={handleNavigateSettings} />
+          <SetupBanner
+            health={health}
+            loading={healthLoading}
+            onNavigateSettings={handleNavigateSettings}
+            onStartSession={() => setPathSelectorOpen(true)}
+          />
 
           <ChatPanel messageCount={chat.messages.length} prependedRef={chat.prependedRef}>
             {chat.hasMore && (

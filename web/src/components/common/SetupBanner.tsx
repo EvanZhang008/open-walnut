@@ -1,6 +1,6 @@
 /**
- * SetupBanner — first-run onboarding shown in the chat area until the butler
- * has a working AI provider. It routes between THREE paths to a credential:
+ * SetupBanner — first-run onboarding shown in the chat area until the Walnut
+ * main agent has a working AI provider. It routes between THREE paths to a credential:
  *
  *   1. Auto-detect  — when Walnut already resolved a credential from a non-config
  *      source (env / ~/.claude/settings.json / ~/.aws), show a small dismissible
@@ -46,9 +46,13 @@ interface SetupBannerProps {
    *  and we'd flash the "no provider" onboarding on every refresh before health arrives. */
   loading?: boolean;
   onNavigateSettings: (hash?: string) => void;
+  /** Open the session launcher (path selector). Lets the user start a Claude Code
+   *  session straight from the banner — sessions use the `claude` CLI's own auth and
+   *  do NOT need the Walnut main agent's provider, so this works with no provider configured. */
+  onStartSession?: () => void;
 }
 
-export function SetupBanner({ health, loading, onNavigateSettings }: SetupBannerProps) {
+export function SetupBanner({ health, loading, onNavigateSettings, onStartSession }: SetupBannerProps) {
   const [dismissed, setDismissed] = useState(() => {
     try { return localStorage.getItem(LS_DISMISS_KEY) === 'true'; } catch { return false; }
   });
@@ -81,7 +85,7 @@ export function SetupBanner({ health, loading, onNavigateSettings }: SetupBanner
   const providerOk = health.hasReadyProvider ?? false;
   const cliOk = health.claudeCliAvailable ?? true;
   const source = health.credentialSource;
-  // The butler's ready via a logged-in Claude Code subscription — resolveCredentialHealth()
+  // The Walnut main agent's ready via a logged-in Claude Code subscription — resolveCredentialHealth()
   // tags this `source:'config'` (it's not a Bedrock/API-key ladder hit) with a detail
   // string prefix, so it needs its own check rather than the source !== 'config' test below.
   const viaSubscription = providerOk && source === 'config' && !!health.credentialDetail?.startsWith('claude-cli');
@@ -115,7 +119,9 @@ export function SetupBanner({ health, loading, onNavigateSettings }: SetupBanner
   if (providerOk && cliOk) return null;
   if (dismissed) return null;
 
-  // ── Provider NOT ready → full onboarding with the three paths. ──
+  // ── Provider NOT ready → full onboarding. We lead with what ALREADY works
+  //    (starting Claude Code sessions needs no main-agent provider — the CLI uses its
+  //    own auth), then offer the main-agent setup as the "full experience" upgrade. ──
   return (
     <div className="setup-banner">
       <div className="setup-banner-header">
@@ -125,7 +131,15 @@ export function SetupBanner({ health, loading, onNavigateSettings }: SetupBanner
 
       {!providerOk && (
         <>
-          {/* Path 2 — the hero: paste into your own Claude Code */}
+          {/* Lead: the recommended path is connecting a provider so the main agent runs. */}
+          <p className="setup-lead">
+            For the best experience, <strong>connect an LLM provider</strong> (Amazon
+            Bedrock, an Anthropic API key, or your Claude subscription) so the{' '}
+            <strong>Walnut main agent</strong> can manage your tasks, sessions, and memory
+            for you.
+          </p>
+
+          {/* Primary — the hero: paste into your own Claude Code */}
           <div className="setup-hero">
             <div className="setup-hero-label">
               <span className="setup-hero-badge">Fastest</span>
@@ -136,17 +150,35 @@ export function SetupBanner({ health, loading, onNavigateSettings }: SetupBanner
             <CopyCommand command={SETUP_SKILL_PASTE} multiline />
           </div>
 
-          {/* Path 3 — manual */}
+          {/* Primary — manual */}
           <div className="setup-alt">
             <span className="text-sm text-muted">Or configure a provider yourself:</span>
             <button className="setup-step-btn" onClick={() => onNavigateSettings('#providers')}>
               Settings &rarr; AI Provider
             </button>
           </div>
+
+          <div className="setup-divider">
+            <span>However — no provider? You can still use the essentials</span>
+          </div>
+
+          {/* Fallback — sessions + tasks work without a provider (CLI's own auth). */}
+          <div className="setup-usable">
+            <div className="setup-usable-label">
+              <span className="setup-usable-badge">✓ Ready now</span>
+              Start a Claude Code session and create tasks right away — sessions use your
+              own <code>claude</code> login, so they work without the Walnut main agent.
+            </div>
+            {onStartSession && (
+              <button className="setup-usable-btn" onClick={onStartSession}>
+                Start a session &rarr;
+              </button>
+            )}
+          </div>
         </>
       )}
 
-      {/* CLI install — optional, only powers coding sessions (the butler doesn't need it). */}
+      {/* CLI install — optional, only powers coding sessions (the main agent doesn't need it). */}
       {!cliOk && (
         <div className="setup-banner-steps" style={{ marginTop: 10 }}>
           <SetupStep done={false} label="Install Claude Code CLI (for coding sessions)" required={false}>

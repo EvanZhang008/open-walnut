@@ -874,8 +874,8 @@ input:focus, textarea:focus, select:focus {
 .setup-banner {
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 14px;
-  margin: 12px;
+  padding: 12px;
+  margin: 10px 12px;
   background: var(--bg-secondary);
 }
 
@@ -883,7 +883,7 @@ input:focus, textarea:focus, select:focus {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .setup-banner-title {
@@ -1020,15 +1020,15 @@ input:focus, textarea:focus, select:focus {
 .setup-hero {
   border: 1px solid var(--accent);
   border-radius: var(--radius-sm);
-  padding: 10px;
+  padding: 8px 10px;
   background: color-mix(in srgb, var(--accent) 6%, var(--bg-secondary));
 }
 
 .setup-hero-label {
-  font-size: 13px;
+  font-size: 12.5px;
   color: var(--fg);
-  line-height: 1.45;
-  margin-bottom: 8px;
+  line-height: 1.4;
+  margin-bottom: 6px;
 }
 
 .setup-hero-badge {
@@ -1053,15 +1053,16 @@ input:focus, textarea:focus, select:focus {
   display: block;
   flex: 1;
   white-space: pre-wrap;
-  line-height: 1.5;
-  padding: 8px 10px;
+  line-height: 1.4;
+  padding: 6px 9px;
+  font-size: 11.5px;
 }
 
 .setup-alt {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-top: 10px;
+  margin-top: 8px;
   flex-wrap: wrap;
 }
 
@@ -1073,6 +1074,90 @@ input:focus, textarea:focus, select:focus {
   font-size: inherit;
   padding: 0;
   text-decoration: underline;
+}
+
+/* ── Onboarding: lead-in framing the setup as "best experience" ── */
+.setup-lead {
+  font-size: 12.5px;
+  color: var(--fg-muted);
+  line-height: 1.45;
+  margin: 0 0 8px;
+}
+
+/* ── Onboarding: "you can already use this now" (sessions need no main agent) ── */
+.setup-usable {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  border: 1px solid color-mix(in srgb, #34c759 35%, var(--border));
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  background: color-mix(in srgb, #34c759 7%, var(--bg-secondary));
+}
+
+.setup-usable-label {
+  flex: 1;
+  min-width: 200px;
+  font-size: 12.5px;
+  color: var(--fg);
+  line-height: 1.4;
+}
+
+.setup-usable-label code {
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+}
+
+.setup-usable-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #fff;
+  background: #34c759;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.setup-usable-btn {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  background: #34c759;
+  border: 1px solid #34c759;
+  border-radius: var(--radius-sm);
+  padding: 5px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.setup-usable-btn:hover { filter: brightness(1.08); }
+
+/* Divider between "works now" and the main-agent-setup upsell. */
+.setup-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0 8px;
+  color: var(--fg-muted);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.setup-divider::before,
+.setup-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
 }
 
 .setup-banner-autodetect {
