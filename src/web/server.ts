@@ -777,7 +777,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // SPA fallback: serve index.html for non-API routes
     app.use((req, res, next) => {
       if (req.method !== 'GET' || req.path.startsWith('/api/')) return next()
-      res.sendFile(path.join(staticDir, 'index.html'))
+      res.sendFile('index.html', { root: staticDir })
     })
   }
 
