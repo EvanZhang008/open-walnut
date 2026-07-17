@@ -9,6 +9,12 @@ struct WalnutApp: App {
 
     init() {
         CrashReporter.shared.start()
+        // Cache device identity while the main thread is definitely alive —
+        // frozen-main-thread uploads depend on it (see AppLog).
+        AppLog.shared.captureDeviceIdentity()
+        // Live freeze detector — reports an unresponsive main thread FROM a
+        // background thread, while the freeze is still happening.
+        MainThreadWatchdog.shared.start()
         let connection = ConnectionStore()
         let chat = ChatStore()
         let notes = NotesStore()

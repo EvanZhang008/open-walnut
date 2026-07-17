@@ -12,7 +12,7 @@ settings:
     # DEVELOPMENT_TEAM is left blank here (public repo) — the build/upload script
     # injects the signer's team ID from a local, gitignored credentials file.
     CODE_SIGN_STYLE: Automatic
-    DEVELOPMENT_TEAM: G3PQWSGR5W
+    DEVELOPMENT_TEAM: ""
 targets:
   Walnut:
     type: application
