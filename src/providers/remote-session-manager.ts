@@ -100,6 +100,8 @@ export class RemoteSessionManager implements SessionManager {
     hostKey: string,
     sshTarget: SshTarget | null,
     directWsUrl?: string,
+    /** CLI binary name (e.g. 'claude', 'codex'). Default: 'claude'. */
+    private binary?: string,
   ) {
     this.hostKey = hostKey
     this.sshTarget = sshTarget
@@ -193,7 +195,7 @@ export class RemoteSessionManager implements SessionManager {
 
     const startPayload = {
       sid: this.tmpId,
-      args: ['claude', ...opts.args],
+      args: [opts.binary || this.binary || 'claude', ...opts.args],
       cwd: opts.cwd,
       message: preparedMessage,
       resume: opts.resume ?? false,

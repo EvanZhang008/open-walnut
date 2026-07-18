@@ -58,6 +58,29 @@ export const SESSION_MODEL_FAMILIES: readonly SessionModelFamily[] = ['opus', 's
 // Walnut passes no --model and Claude Code resolves its own settings-layer default.
 // A session's model is a runtime (picker) choice, never a Walnut config-time default.
 
+// ── Codex CLI models (for engine='codex' sessions) ──
+// Parallel to SESSION_MODELS. Codex CLI accepts `--model <id>` (e.g. gpt-5.5).
+// Ref: https://developers.openai.com/codex/config-reference (model setting).
+export type CodexModelFamily = 'gpt-5' | 'gpt-4o';
+export interface CodexModelEntry {
+  id: string;
+  label: string;
+  description: string;
+  /** Value passed to `codex exec --model`, e.g. 'gpt-5.5'. */
+  cliModel: string;
+  family: CodexModelFamily;
+}
+export const CODEX_SESSION_MODELS: readonly CodexModelEntry[] = [
+  { id: 'gpt-5.5',    label: 'GPT-5.5',    description: 'Most capable Codex model',   cliModel: 'gpt-5.5',    family: 'gpt-5'  },
+  { id: 'gpt-4o',     label: 'GPT-4o',     description: 'Fast & cost-effective',      cliModel: 'gpt-4o',     family: 'gpt-4o' },
+  { id: 'gpt-4o-mini', label: 'GPT-4o Mini', description: 'Fastest, lowest latency',  cliModel: 'gpt-4o-mini', family: 'gpt-4o' },
+] as const;
+/** Codex alias id → CLI --model value. */
+export const CODEX_MODEL_CLI_MAP: Record<string, string> =
+  Object.fromEntries(CODEX_SESSION_MODELS.map((m) => [m.id, m.cliModel]));
+export const VALID_CODEX_MODEL_IDS: ReadonlySet<string> =
+  new Set(CODEX_SESSION_MODELS.map((m) => m.id));
+
 // ── Reasoning effort (maps to the `claude -p --effort <level>` CLI flag) ──
 // The CLI accepts low/medium/high/xhigh/max (verified against binary 2.1.170:
 // EFFORT_LEVELS = ['low','medium','high','xhigh','max']). When no --effort is
@@ -399,14 +422,17 @@ export interface Task {
   group_id?: string;
   depends_on?: string[];       // Full IDs of tasks that must complete before this one
   description: string;
+  /** DERIVED short text — auto-extracted from the note's "## Executive Summary"
+   *  section by the turn-complete self-report flow. Kept because list views,
+   *  search, sync and the frozen iOS /api/v1 contract consume a short field.
+   *  Never author it directly; edit the note instead. */
   summary: string;
+  /** The task's single AI-maintained living document (5 sections: Executive
+   *  Summary / Goal / Context / Progress / Work Log). See session-hooks/builtins.ts. */
   note: string;
   conversation_log?: string;  // Append-only markdown log of user↔agent interactions
-  /** Append-only compact milestone log — ONE line per major PHASE_SIGNAL transition
-   *  (plan-written, implement-done, verify-pass/fail, review-done, committed). Written
-   *  by turn-complete triage from the session's own WHAT_I_DID self-report. Replaces the
-   *  verbose per-turn conversation_log in the UI; conversation_log is kept but hidden. */
-  milestones?: string;
+  // `milestones` was removed 2026-07-18 — the note's Work Log section replaced it.
+  // Old data still carries the key harmlessly inside the payload blob.
   phase: TaskPhase;
   sprint?: string;
   tags?: string[];
@@ -627,6 +653,9 @@ export interface Config {
   };
   /** Plugin configurations. Keys are plugin IDs (e.g. 'ms-todo'). Each plugin defines its own config schema. */
   plugins?: Record<string, Record<string, unknown> & { enabled?: boolean }>;
+  /** Git repos to install plugins from ("plugin store"). Each repo is cloned under
+   *  ~/.open-walnut/plugin-stores/ and scanned for plugin dirs (manifest.json). */
+  plugin_sources?: Array<{ url: string; ref?: string; enabled?: boolean }>;
   favorites?: {
     categories?: string[];
     projects?: string[];
@@ -949,6 +978,8 @@ export interface ConversationIndex {
 export type ProcessStatus = 'running' | 'idle' | 'stopped' | 'error';
 export type SessionMode = 'bypass' | 'accept' | 'default' | 'plan';
 export type SessionProvider = 'cli' | 'sdk' | 'embedded';
+/** Which coding-agent CLI binary backs a 'cli' session (claude-code vs codex vs future engines). */
+export type SessionEngine = 'claude' | 'codex';
 export type SessionType = 'interactive' | 'triage' | 'hook' | 'cron' | 'subagent';
 
 export type StatusReason =
@@ -995,6 +1026,8 @@ export interface SessionRecord {
   process_status: ProcessStatus;
   mode: SessionMode;
   provider?: SessionProvider;
+  /** Which coding-agent CLI backs this session. Only set when provider='cli'. Undefined = 'claude' (default). */
+  engine?: SessionEngine;
   /** Session type — determines lifecycle and cleanup behavior. Undefined = 'interactive'. */
   type?: SessionType;
   activity?: string;
@@ -1045,6 +1078,13 @@ export interface SessionRecord {
   summary?: string;
   /** ISO timestamp of last summary backfill. */
   summaryGeneratedAt?: string;
+  /** ONE-LINE recap of the session's latest turn(s) — "what just happened here".
+   *  Written by the turn-complete self-report (same pass as the note update, zero
+   *  extra cost); shown as a small tip under the session in the UI so the user
+   *  doesn't have to re-read a long transcript to re-orient. */
+  recap?: string;
+  /** ISO timestamp of the last recap update. */
+  recapAt?: string;
   /** Error message when process_status is 'error' — persisted for post-mortem display. */
   errorMessage?: string;
   /** Why the last process_status change happened (K8s condition style). */

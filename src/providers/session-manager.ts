@@ -64,9 +64,11 @@ export interface SessionHistory {
 // ── Start Options ──
 
 export interface TransportStartOptions {
-  /** Claude CLI arguments (e.g. ['-p', '--output-format', 'stream-json', ...]) */
+  /** CLI binary name (e.g. 'claude', 'codex'). Default: 'claude'. */
+  binary?: string
+  /** CLI arguments (e.g. ['-p', '--output-format', 'stream-json', ...]) */
   args: string[]
-  /** Working directory for the Claude process */
+  /** Working directory for the process */
   cwd: string
   /** Initial message to send */
   message: string
@@ -76,7 +78,7 @@ export interface TransportStartOptions {
   fork?: boolean
   /** Callback for each JSONL line from the output stream */
   onOutput: (event: OutputEvent) => void
-  /** Callback when the Claude process exits. stderr is included for remote sessions (read from .jsonl.err on the remote host). */
+  /** Callback when the process exits. stderr is included for remote sessions (read from .jsonl.err on the remote host). */
   onExit: (code: number, stderr?: string) => void
   /**
    * When the initial Quick Start message was spilled to a local temp file,
@@ -370,7 +372,7 @@ export const getRegisteredTransport = getRegisteredSessionManager
  * @param host — host key from config.hosts (null = local)
  * @param sshTarget — resolved SSH connection parameters
  * @param _outputFileOverride — unused (kept for API compat during migration)
- * @param _cliCommand — unused (kept for API compat during migration)
+ * @param cliCommand — CLI binary name (e.g. 'claude', 'codex'). Default: 'claude'.
  * @param directWsUrl — override WebSocket URL (tests, or explicit local daemon URL)
  */
 export function createSessionManager(
@@ -378,11 +380,11 @@ export function createSessionManager(
   host?: string,
   sshTarget?: SshTarget,
   _outputFileOverride?: string,
-  _cliCommand?: string,
+  cliCommand?: string,
   directWsUrl?: string,
 ): SessionManager {
   if (host && sshTarget) {
-    return new RemoteSessionManager(tmpId, host, sshTarget, directWsUrl)
+    return new RemoteSessionManager(tmpId, host, sshTarget, directWsUrl, cliCommand)
   }
 
   // Unified architecture: all sessions (local + remote) go through a daemon.
@@ -398,7 +400,7 @@ export function createSessionManager(
   if (!wsUrl) {
     throw new Error('Local daemon not running. Call localDaemon.ensureRunning() before creating sessions.')
   }
-  return new RemoteSessionManager(tmpId, '__local__', null, wsUrl)
+  return new RemoteSessionManager(tmpId, '__local__', null, wsUrl, cliCommand)
 }
 
 /**
