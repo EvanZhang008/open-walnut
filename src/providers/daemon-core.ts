@@ -578,7 +578,27 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     try {
       const buf = Buffer.from(raw.endsWith('\n') ? raw : raw + '\n')
       const result = writeFifoFully(session.pipePath, buf)
-      if (result === 'ok') return { ok: true }
+      if (result === 'ok') {
+        // control_response travels Walnut → FIFO and is not echoed to stdout,
+        // so the stream watcher cannot observe it. Clear daemon-authoritative
+        // pending state here, but only after the complete line was delivered.
+        if (session.pendingCtrl) {
+          try {
+            const parsed = JSON.parse(raw.trim()) as {
+              type?: string
+              response?: { request_id?: string }
+            }
+            if (parsed.type === 'control_response'
+              && parsed.response?.request_id === session.pendingCtrl.reqId) {
+              const requestId = session.pendingCtrl.reqId
+              session.pendingCtrl = null
+              persistRegistry()
+              logger('info', 'sendRaw cleared pending control_response', { sid, requestId })
+            }
+          } catch { /* non-JSON raw payload — nothing to acknowledge */ }
+        }
+        return { ok: true }
+      }
       if (result === 'ENXIO') {
         reapSession(sid, -1, 'sendRaw-enxio')
         return { ok: false, reason: 'ENXIO', exitCode: session.exitCode }

@@ -29,6 +29,7 @@ let outputFormat = 'json';
 let inputFormat = null;
 let modelFlag = null;
 let effortFlag = null;
+let dangerouslySkipPermissions = false;
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--resume') {
@@ -49,6 +50,8 @@ for (let i = 0; i < args.length; i++) {
     modelFlag = args[++i];
   } else if (args[i] === '--effort' && args[i + 1]) {
     effortFlag = args[++i];
+  } else if (args[i] === '--dangerously-skip-permissions') {
+    dangerouslySkipPermissions = true;
   } else if (args[i] === '--session-id' && args[i + 1]) {
     // Pre-assigned session id (init-only spawn) — adopt it like --resume does.
     sessionId = args[++i];
@@ -143,7 +146,8 @@ const cwdPart = ` [cwd:${process.cwd()}]`;
 const sysPart = appendSystemPrompt ? ` [has-system-prompt]` : '';
 const modelPart = modelFlag ? ` [model:${modelFlag}]` : '';
 const effortPart = effortFlag ? ` [effort:${effortFlag}]` : '';
-const resultText = `Hello! I processed your message: ${effectiveMessage}${permPart}${cwdPart}${sysPart}${modelPart}${effortPart}`;
+const bypassCapabilityPart = dangerouslySkipPermissions ? ' [dangerously-skip-permissions:true]' : '';
+const resultText = `Hello! I processed your message: ${effectiveMessage}${permPart}${cwdPart}${sysPart}${modelPart}${effortPart}${bypassCapabilityPart}`;
 
 // ── stream-json mode: emit JSONL lines ──
 if (outputFormat === 'stream-json') {

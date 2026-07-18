@@ -189,6 +189,12 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
       expect(src).not.toMatch(/openSync\(jsonlPath, resume \? 'a' : 'w'\)/)
     }
   })
+
+  it('both bridge resume paths authorize runtime bypass mode changes', () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    expect(standaloneSrc).toContain('--dangerously-skip-permissions')
+    expect(templateSrc).toContain('--dangerously-skip-permissions')
+  })
 })
 
 // ── L1/L2 parity: versioned events + daemon-authoritative task state ──

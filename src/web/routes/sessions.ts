@@ -651,35 +651,28 @@ sessionsRouter.patch('/:sessionId', async (req: Request, res: Response, next: Ne
       if (!archived) updates.archive_reason = undefined  // clear reason on unarchive
     }
 
-    const updated = await updateSessionRecord(sessionId, updates)
-    log.web.info('session updated via REST', { sessionId, fields: Object.keys(updates) })
-
-    // Mode change: LIVE via set_permission_mode control_request — the third
-    // member of the live-settings family (model/effort/mode). No respawn, no
-    // pendingMode, the running turn is untouched. The CLI echoes the new mode
-    // in the control_response AND emits a system/status event with the new
-    // permissionMode, which the existing status handler uses to reconcile
-    // _mode + record + daemon policy (same path as an in-CLI EnterPlanMode).
-    // record.mode (persisted above) is the durable fallback: processNext
-    // passes it as --permission-mode on any cold --resume.
-    if (mode !== undefined && existingRecord?.mode !== mode) {
-      const liveSession = sessionRunner.findByClaudeId(sessionId)
-        ?? (updated.process_status !== 'stopped'
-          ? await sessionRunner.getOrAttachLiveSession(sessionId).catch(() => undefined)
-          : undefined)
-      if (liveSession) {
-        liveSession.setMode(mode as SessionMode)
-        liveSession.applyPermissionMode(mode as SessionMode)
-          .then((confirmed) => {
-            if (!confirmed) {
-              log.web.warn('set_permission_mode not confirmed — record.mode persisted, applies on next resume', { sessionId, mode })
-            }
-          })
-          .catch((err) => log.web.warn('live mode apply failed — record.mode persisted, applies on next resume', {
-            sessionId, mode, error: err instanceof Error ? err.message : String(err),
-          }))
+    // A live mode is persisted only after the CLI confirms it. For stopped
+    // records, persistence remains the desired mode for the next cold resume.
+    if (mode !== undefined && existingRecord) {
+      try {
+        const application = await sessionRunner.changePermissionMode(sessionId, mode as SessionMode)
+        const expectedLive = existingRecord.pid != null
+          && existingRecord.process_status !== 'stopped'
+          && existingRecord.process_status !== 'error'
+        if (application === 'not-live' && expectedLive) {
+          res.status(409).json({ error: 'Live session is unavailable; permission mode was not changed' })
+          return
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        log.web.warn('live permission mode change rejected', { sessionId, mode, error: message })
+        res.status(409).json({ error: message })
+        return
       }
     }
+
+    const updated = await updateSessionRecord(sessionId, updates)
+    log.web.info('session updated via REST', { sessionId, fields: Object.keys(updates) })
 
     // Emit status change so frontend updates in real time
     if (archived !== undefined || mode !== undefined) {

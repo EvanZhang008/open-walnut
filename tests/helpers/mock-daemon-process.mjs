@@ -114,6 +114,8 @@ function cmdStart(ws, id, cmd) {
         if (cmd.args[i + 1]) {
           cliArgs.push(arg, cmd.args[++i])
         }
+      } else if (arg === '--dangerously-skip-permissions') {
+        cliArgs.push(arg)
       }
     }
   }

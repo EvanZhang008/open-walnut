@@ -112,6 +112,7 @@ export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<In
     '--output-format', 'stream-json',
     '--verbose',
     '--model', model,
+    '--dangerously-skip-permissions',
     '--permission-mode', permissionMode,
   ];
   if (systemPrompt) {

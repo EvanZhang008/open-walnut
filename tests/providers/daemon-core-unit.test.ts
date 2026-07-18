@@ -39,6 +39,8 @@ function makeSession(sid: string, overrides: Partial<TestSession> = {}): TestSes
     cwd: '/tmp',
     args: ['/bin/sleep', '60'],
     orphanPollTimer: null,
+    mode: 'default',
+    pendingCtrl: null,
     watchers: new Map(),
     proc: null,
     ...overrides,
@@ -538,5 +540,74 @@ describe('handleSendCommand', () => {
 
     // Cleanup: close read fd
     try { fs.closeSync((sess as unknown as { _readFd: number })._readFd) } catch {}
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════
+//  handleSendRawCommand — permission response acknowledgement
+// ════════════════════════════════════════════════════════════════════════
+
+describe('handleSendRawCommand', () => {
+  function setupLiveSession(sid: string, pendingReqId: string): TestSession {
+    const pipePath = path.join(h.streamsDir, `${sid}.pipe`)
+    try { fs.unlinkSync(pipePath) } catch {}
+    require('node:child_process').execSync(`mkfifo ${JSON.stringify(pipePath)}`)
+    const readFd = fs.openSync(pipePath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
+    const sess = makeSession(sid, {
+      pid: 4001,
+      pipePath,
+      pendingCtrl: {
+        reqId: pendingReqId,
+        toolName: 'Bash',
+        request: { subtype: 'can_use_tool', tool_name: 'Bash', input: {} },
+        receivedAt: h.now,
+      },
+    })
+    ;(sess as unknown as { _readFd: number })._readFd = readFd
+    h.sessions.set(sid, sess)
+    h.pidAlive.add(4001)
+    return sess
+  }
+
+  it('clears and persists matching pendingCtrl after a successful FIFO write', () => {
+    const core = createDaemonCore(h.deps)
+    const sess = setupLiveSession('raw-clears-pending', 'req-1')
+    core.persistRegistry()
+
+    const raw = JSON.stringify({
+      type: 'control_response',
+      response: { subtype: 'success', request_id: 'req-1', response: { behavior: 'allow' } },
+    })
+    expect(core.handleSendRawCommand('raw-clears-pending', raw)).toEqual({ ok: true })
+    expect(sess.pendingCtrl).toBeNull()
+    expect(core.readRegistry()['raw-clears-pending']?.pendingCtrl).toBeUndefined()
+
+    try { fs.closeSync((sess as unknown as { _readFd: number })._readFd) } catch {}
+  })
+
+  it('does not clear pendingCtrl when the FIFO write fails', () => {
+    const core = createDaemonCore(h.deps)
+    const sid = 'raw-failed-write'
+    const pipePath = path.join(h.streamsDir, `${sid}.pipe`)
+    require('node:child_process').execSync(`mkfifo ${JSON.stringify(pipePath)}`)
+    const sess = makeSession(sid, {
+      pid: 4002,
+      pipePath,
+      pendingCtrl: {
+        reqId: 'req-2',
+        toolName: 'Edit',
+        request: { subtype: 'can_use_tool', tool_name: 'Edit', input: {} },
+        receivedAt: h.now,
+      },
+    })
+    h.sessions.set(sid, sess)
+    h.pidAlive.add(4002)
+
+    const raw = JSON.stringify({
+      type: 'control_response',
+      response: { subtype: 'success', request_id: 'req-2', response: { behavior: 'allow' } },
+    })
+    expect(core.handleSendRawCommand(sid, raw)).toMatchObject({ ok: false, reason: 'ENXIO' })
+    expect(sess.pendingCtrl?.reqId).toBe('req-2')
   })
 })

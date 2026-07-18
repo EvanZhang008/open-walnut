@@ -5,7 +5,7 @@
  * What's real: Express server, session-tracker, task-manager, REST endpoints.
  * What's mocked: constants.js (temp dir).
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { Server as HttpServer } from 'node:http'
@@ -18,6 +18,7 @@ import { WALNUT_HOME } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
 import { createSessionRecord, updateSessionRecord, getSessionByClaudeId } from '../../../src/core/session-tracker.js'
 import type { SessionMode } from '../../../src/core/types.js'
+import { sessionRunner } from '../../../src/providers/claude-code-session.js'
 
 let server: HttpServer
 let port: number
@@ -76,6 +77,10 @@ afterAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
 // ── PATCH /api/sessions/:id { mode } ──
 
 describe('PATCH session mode', () => {
@@ -129,6 +134,26 @@ describe('PATCH session mode', () => {
       body: JSON.stringify({ mode: 'plan' }),
     })
     expect(res.status).toBe(404)
+  })
+
+  it('rejects an unconfirmed live mode change and preserves the persisted mode', async () => {
+    await seedSession('mode-live-rejected-001', 'mode-test-task-001', 'plan', {
+      pid: 98765,
+      initialProcessStatus: 'idle',
+    })
+    vi.spyOn(sessionRunner, 'changePermissionMode').mockRejectedValue(
+      new Error('set_permission_mode rejected by CLI'),
+    )
+
+    const res = await fetch(apiUrl('/api/sessions/mode-live-rejected-001'), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'bypass' }),
+    })
+
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ error: 'set_permission_mode rejected by CLI' })
+    expect((await getSessionByClaudeId('mode-live-rejected-001'))?.mode).toBe('plan')
   })
 
   it('mode toggle round-trip: bypass → plan → bypass', async () => {

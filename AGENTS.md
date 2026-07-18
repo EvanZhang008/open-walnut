@@ -1,5 +1,6 @@
 # Open Walnut — Personal Intelligent Butler
 
+> **ACP reference implementation:** https://github.com/agentclientprotocol/claude-agent-acp (public).
 > **References**: [ARCHITECTURE.md](./ARCHITECTURE.md) | per-directory `AGENTS.md` files are
 > concise quick-references; the **deep implementation details live in skills** (auto-discovered,
 > load on demand): `walnut-core-internals` (src/core/), `walnut-agent-loop` (src/agent/),

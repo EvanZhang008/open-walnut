@@ -917,6 +917,9 @@ function cmdBridgeResume(ws, id, cmd) {
   var args;
   if (session && session.args && session.args.length > 0) {
     args = session.args.slice();
+    if (!args.includes('--dangerously-skip-permissions')) {
+      args.splice(1, 0, '--dangerously-skip-permissions');
+    }
     var ri = args.indexOf('--resume');
     if (ri >= 0 && ri + 1 < args.length) {
       args[ri + 1] = sid;
@@ -930,6 +933,7 @@ function cmdBridgeResume(ws, id, cmd) {
       '--verbose',
       '--include-partial-messages',
       '--debug',
+      '--dangerously-skip-permissions',
       '--permission-mode', 'default',
     ];
     if (model) { args.push('--model', model); }
@@ -1334,15 +1338,19 @@ function ensureWatcher(sid) {
               const toolName = parsed.request.tool_name;
               if (shouldAutoRespond(s.mode, toolName)) {
                 const resp = buildControlResponse(parsed.request_id, parsed.request, true);
-                writeFifoRaw(s.pipePath, resp);
-                s.pendingCtrl = null;
-                logMsg('info', 'auto-allowed control_request', { sid, tool: toolName, mode: s.mode });
-                continue;
+                if (writeFifoRaw(s.pipePath, resp)) {
+                  s.pendingCtrl = null;
+                  try { persistRegistry(); } catch {}
+                  logMsg('info', 'auto-allowed control_request', { sid, tool: toolName, mode: s.mode });
+                  continue;
+                }
               }
               s.pendingCtrl = { reqId: parsed.request_id, toolName: toolName || 'unknown', request: parsed.request, receivedAt: Date.now() };
+              try { persistRegistry(); } catch {}
             } else if (parsed.type === 'control_response' && s.pendingCtrl) {
               if (parsed.response && parsed.response.request_id === s.pendingCtrl.reqId) {
                 s.pendingCtrl = null;
+                try { persistRegistry(); } catch {}
               }
             }
           } catch {}
@@ -1623,6 +1631,18 @@ function cmdSendRaw(ws, id, cmd) {
     const buf = Buffer.from(raw.endsWith('\\n') ? raw : raw + '\\n');
     const result = writeFifoFully(session.pipePath, buf);
     if (result === 'ok') {
+      if (session.pendingCtrl) {
+        try {
+          const parsed = JSON.parse(raw.trim());
+          if (parsed.type === 'control_response' && parsed.response
+              && parsed.response.request_id === session.pendingCtrl.reqId) {
+            const requestId = session.pendingCtrl.reqId;
+            session.pendingCtrl = null;
+            try { persistRegistry(); } catch {}
+            logMsg('info', 'sendRaw cleared pending control_response', { sid: sid, requestId: requestId });
+          }
+        } catch {}
+      }
       sendOk(ws, id, { ok: true });
     } else if (result === 'ENXIO') {
       reapSession(sid, -1, 'sendRaw-enxio');
@@ -1674,9 +1694,12 @@ function cmdSetMode(ws, id, cmd) {
   session.mode = mode;
   if (session.pendingCtrl && shouldAutoRespond(mode, session.pendingCtrl.toolName)) {
     const resp = buildControlResponse(session.pendingCtrl.reqId, session.pendingCtrl.request, true);
-    writeFifoRaw(session.pipePath, resp);
-    logMsg('info', 'setMode: auto-allowed pending control_request', { sid, tool: session.pendingCtrl.toolName, mode });
-    session.pendingCtrl = null;
+    if (writeFifoRaw(session.pipePath, resp)) {
+      logMsg('info', 'setMode: auto-allowed pending control_request', { sid, tool: session.pendingCtrl.toolName, mode });
+      session.pendingCtrl = null;
+    } else {
+      logMsg('warn', 'setMode: failed to write pending control_response', { sid, tool: session.pendingCtrl.toolName, mode });
+    }
   }
   try { persistRegistry(); } catch {}
   sendOk(ws, id, { oldMode, newMode: mode });

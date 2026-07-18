@@ -144,21 +144,15 @@ export function registerSessionChatRpc(): void {
           }))
       }
     }
-    // Mode switch: LIVE via set_permission_mode control_request — same live-settings
-    // family as model/effort, no respawn. record.mode (persisted here) is the durable
-    // cold-resume fallback (processNext passes it as --permission-mode).
+    // Mode switch: confirm against a live CLI before persistence. A stopped
+    // session stores the requested mode for its next cold resume.
     if (typeof data.mode === 'string') {
       const nextMode = data.mode as SessionMode
+      const application = await sessionRunner.changePermissionMode(data.sessionId, nextMode)
       await updateSessionRecord(data.sessionId, { mode: nextMode })
-      log.web.info('session:send RPC mode switch (live apply)', { sessionId: data.sessionId, mode: nextMode })
-      const liveForMode = await sessionRunner.getOrAttachLiveSession(data.sessionId as string).catch(() => undefined)
-      if (liveForMode) {
-        liveForMode.setMode(nextMode)
-        liveForMode.applyPermissionMode(nextMode)
-          .catch((err) => log.web.warn('session:send live mode apply failed — record.mode persists for next resume', {
-            sessionId: data.sessionId, mode: nextMode, error: err instanceof Error ? err.message : String(err),
-          }))
-      }
+      log.web.info('session:send RPC mode switch confirmed', {
+        sessionId: data.sessionId, mode: nextMode, application,
+      })
     }
 
     // Pure model switch (no message text): the live apply above did all the work —

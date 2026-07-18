@@ -535,6 +535,9 @@ describe('Session permission mode', () => {
     expect(rd.isError).toBe(false)
     // Mock CLI echoes back the --permission-mode flag value in the result text
     expect(rd.result).toContain('[permission-mode:plan]')
+    // Runtime set_permission_mode can only enter bypass when this capability was
+    // authorized at process startup, even if the initial mode is Plan.
+    expect(rd.result).toContain('[dangerously-skip-permissions:true]')
 
     ws.close()
     await delay(50)
@@ -576,6 +579,27 @@ describe('Session permission mode', () => {
     expect(rd.isError).toBe(false)
     // No mode → Walnut defaults to bypassPermissions (no approval prompts).
     expect(rd.result).toContain('[permission-mode:bypassPermissions]')
+
+    ws.close()
+    await delay(50)
+  })
+
+  it('session with explicit "default" mode spawns CLI with --permission-mode default', async () => {
+    const ws = await connectWs()
+    const resultPromise = waitForWsEvent(ws, 'session:result')
+
+    await sendWsRpc(ws, 'session:start', {
+      taskId: 'sess-task-002',
+      message: 'explicit default mode e2e test',
+      project: 'Walnut',
+      mode: 'default',
+    })
+
+    const resultEvent = await resultPromise
+    const rd = resultEvent.data as { result: string; isError: boolean }
+    expect(rd.isError).toBe(false)
+    expect(rd.result).toContain('[permission-mode:default]')
+    expect(rd.result).toContain('[dangerously-skip-permissions:true]')
 
     ws.close()
     await delay(50)

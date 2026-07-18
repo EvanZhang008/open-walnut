@@ -218,6 +218,12 @@ function mapPermissionMode(cliMode: string): SessionMode | null {
   }
 }
 
+function isMissingBypassCapabilityError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err)
+  return message.includes('bypassPermissions')
+    && message.includes('--dangerously-skip-permissions')
+}
+
 // ── Helpers for PID-death handler ──
 
 /**
@@ -983,11 +989,8 @@ export class ClaudeCodeSession {
     return this._mode
   }
 
-  /** Update the in-memory session mode so emitStatusChanged() reflects the new
-   *  value immediately. The actual CLI-side switch is applyPermissionMode()
-   *  (live set_permission_mode control_request — no respawn); callers invoke
-   *  both. Kept separate because attach/reconcile paths need the in-memory
-   *  update without firing a control_request. */
+  /** Update in-memory mode without contacting the CLI. Reserved for trusted
+   *  attach/reconcile paths; user mode changes use applyPermissionMode(). */
   setMode(mode: SessionMode): void {
     this._mode = mode
   }
@@ -1068,6 +1071,12 @@ export class ClaudeCodeSession {
       args.push('--debug')
     }
 
+    // This flag authorizes the bypass capability at process startup; it does
+    // not activate bypass by itself. Claude Code rejects a later
+    // set_permission_mode(bypassPermissions) unless the process was launched
+    // with this capability, including processes that start in Plan mode.
+    args.push('--dangerously-skip-permissions')
+
     // Store mode and set initial activity.
     // Default (no mode, or explicit 'bypass'): bypassPermissions — users shouldn't
     // be prompted to approve every edit. Plan mode must be explicitly requested.
@@ -1078,6 +1087,10 @@ export class ClaudeCodeSession {
     } else if (mode === 'accept') {
       this._mode = 'accept'
       args.push('--permission-mode', 'acceptEdits')
+    } else if (mode === 'default') {
+      this._mode = 'default'
+      this._activity = 'implementing'
+      args.push('--permission-mode', 'default')
     } else {
       this._mode = 'bypass'
       this._activity = 'implementing'
@@ -1164,13 +1177,11 @@ export class ClaudeCodeSession {
     // Store host key for liveness checks and record persistence
     this._host = host ?? null
 
-    // Kill any existing process before spawning a new one.
-    // This prevents multiple processes competing for the same Claude session
-    // (e.g., after server restart, startup recovery re-processes queued messages
-    // while the old process from the previous server instance is still alive).
+    // Callers that replace a live process stop it through the daemon's
+    // SIGINT-first graceful path before send(). Never process.kill(this.pid)
+    // here: remote PIDs are host-local and may identify an unrelated Mac process.
     if (this.pid !== null) {
-      log.session.info('killing old process before respawn', { taskId: this.taskId, oldPid: this.pid })
-      try { process.kill(this.pid, 'SIGTERM') } catch { /* already dead */ }
+      log.session.info('replacing previously stopped process', { taskId: this.taskId, oldPid: this.pid })
     }
     this.resultEmitted = true  // Suppress spurious events from old process
     // Stop monitoring (tailer + liveness) BEFORE replacing transport
@@ -1569,15 +1580,16 @@ export class ClaudeCodeSession {
       }
     }
 
-    // Recover state from CloudCode canonical JSONL (source of truth).
+    // Recover state from CloudCode canonical JSONL.
     // The session record in sessions.json may be stale if the server crashed
     // before an async updateSessionRecord() completed. The CloudCode JSONL
-    // is maintained by Claude CLI itself and always has the ground truth.
+    // is maintained by Claude CLI itself. Permission mode is the exception:
+    // canonical user rows only update on the next turn, so they can lag a
+    // confirmed live set_permission_mode switch. Keep record.mode authoritative.
     let jsonlByteLength = 0
     try {
       const recovered = await recoverStateFromJsonl(record.claudeSessionId, record.cwd, record.host)
       if (recovered) {
-        if (recovered.mode) session._mode = recovered.mode as SessionMode
         if (recovered.model) {
           // De-duplicate [1m][1m] from old resume bug
           const cleanModel = recovered.model.replace(/(\[1m\])+$/, '[1m]')
@@ -1649,7 +1661,6 @@ export class ClaudeCodeSession {
         // Patch the in-memory record directly so other code paths that read it
         // (reconciler, API responses) see the corrected values immediately.
         // The next updateSessionRecord() call from any code path will persist these.
-        if (recovered.mode) record.mode = recovered.mode as SessionRecord['mode']
         if (recovered.model) record.model = recovered.model
         if (recovered.planFile) record.planFile = recovered.planFile
         if (recovered.planCompleted != null) record.planCompleted = recovered.planCompleted
@@ -2099,8 +2110,12 @@ export class ClaudeCodeSession {
    * which doesn't give Claude Code time to flush session state. Then --resume fails,
    * creates a new session with a different ID, and activeProcessing gets permanently stuck.
    */
-  async gracefulStop(): Promise<void> {
+  async gracefulStop(suppressExit = false): Promise<void> {
     if (!this._transport) return
+    if (suppressExit) {
+      this.resultEmitted = true
+      this.stopMonitoring()
+    }
     log.session.info('gracefulStop: using transport', { taskId: this.taskId })
     await this._transport.stop()
     log.session.info('gracefulStop: complete', { taskId: this.taskId })
@@ -2149,11 +2164,11 @@ export class ClaudeCodeSession {
       pending.reject(new Error(reason))
     }
     this._pendingControlAcks.clear()
-    // Payload reads (get_settings & friends) settle to null (untrusted) on
-    // teardown, never throw — a hanging read must not clobber a known value.
+    // Ordinary payload reads settle to null on teardown; strict callers such
+    // as set_permission_mode reject through their per-request wrapper.
     for (const pending of this._pendingPayloadReads.values()) {
       clearTimeout(pending.timer)
-      pending.resolve(null)
+      pending.reject(new Error(reason))
     }
     this._pendingPayloadReads.clear()
     // The model catalog is a property of the CLI PROCESS (its settings snapshot
@@ -4068,8 +4083,7 @@ export class ClaudeCodeSession {
           this._pendingPayloadReads.delete(requestId)
           clearTimeout(payloadRead.timer)
           if (cr.response?.subtype === 'error') {
-            // Errored read ⇒ untrusted; resolve null (never clobber a known value).
-            payloadRead.resolve(null)
+            payloadRead.reject(new Error(cr.response.error || 'control request failed'))
           } else {
             const payload = (cr.response?.response as Record<string, unknown> | undefined) ?? null
             log.session.debug('control_request payload read resolved', {
@@ -4443,10 +4457,8 @@ export class ClaudeCodeSession {
    * apply_flag_settings). Live-verified on 2.1.170: the response ECHOES the new
    * mode ({"mode":"plan"}) — a real confirmation, unlike apply_flag_settings'
    * blind ACK — and the CLI then emits a `system`/`status` event with the new
-   * permissionMode, which our existing status handler picks up to reconcile
-   * _mode, the session record, and the daemon auto-response policy. So this
-   * method only needs to fire the request and verify the echo; record/state
-   * reconciliation rides the same event path as an in-CLI EnterPlanMode.
+   * permissionMode. This method verifies the echo, then updates local state and
+   * daemon policy itself; the status event is an additional reconciliation path.
    *
    * Durability: record.mode is persisted by the caller (PATCH route) and
    * processNext already falls back to record.mode on a cold --resume
@@ -4460,15 +4472,26 @@ export class ClaudeCodeSession {
     const cliMode = mode === 'bypass' ? 'bypassPermissions'
       : mode === 'accept' ? 'acceptEdits'
       : mode
-    this._mode = mode  // optimistic; the CLI's status event re-confirms
     const payload = await this.readControlPayloadWithRequest(
       `pmode-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
-      { subtype: 'set_permission_mode', mode: cliMode }, timeoutMs)
+      { subtype: 'set_permission_mode', mode: cliMode }, timeoutMs, true)
     const echoed = (payload as { mode?: string } | null)?.mode
     log.session.info('set_permission_mode applied', {
       sessionId: this.claudeSessionId, taskId: this.taskId, requested: cliMode, echoed: echoed ?? null,
     })
-    return echoed === cliMode
+    if (echoed !== cliMode) return false
+
+    // Only confirmed state is user-visible or persisted. Keep the daemon's
+    // auto-response policy in sync immediately instead of waiting for a later
+    // system/status event that may be delayed or absent.
+    this._mode = mode
+    const daemonUpdated = await this._transport.setMode?.(mode)
+    if (daemonUpdated === false) {
+      log.session.warn('set_permission_mode confirmed but daemon policy update failed', {
+        sessionId: this.claudeSessionId, taskId: this.taskId, mode,
+      })
+    }
+    return true
   }
 
   /** Shared transport plumbing for apply_flag_settings control_requests (ACK-only). */
@@ -4730,27 +4753,42 @@ export class ClaudeCodeSession {
       { subtype }, timeoutMs)
   }
 
-  /** Full-request variant of readControlPayload for subtypes that carry
-   *  parameters (e.g. set_permission_mode{mode}). Same null-on-failure contract. */
-  private readControlPayloadWithRequest(requestId: string, request: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown> | null> {
-    if (!this._transport) return Promise.resolve(null)
+  /** Full-request variant for parameterized payload reads. Ordinary reads keep
+   *  the null-on-failure contract; state-changing calls can request strict
+   *  errors so the caller never persists an unconfirmed value. */
+  private readControlPayloadWithRequest(
+    requestId: string,
+    request: Record<string, unknown>,
+    timeoutMs: number,
+    strict = false,
+  ): Promise<Record<string, unknown> | null> {
+    if (!this._transport) {
+      return strict ? Promise.reject(new Error('session not started')) : Promise.resolve(null)
+    }
     const envelope = JSON.stringify({
       type: 'control_request',
       request_id: requestId,
       request,
     })
-    return new Promise<Record<string, unknown> | null>((resolve) => {
+    return new Promise<Record<string, unknown> | null>((resolve, reject) => {
+      const fail = (err: Error) => {
+        if (strict) reject(err)
+        else resolve(null)
+      }
       const timer = setTimeout(() => {
         this._pendingPayloadReads.delete(requestId)
         log.session.debug('control payload read timed out', {
           sessionId: this.claudeSessionId, taskId: this.taskId, requestId, subtype: request.subtype,
         })
-        resolve(null) // timeout ⇒ untrusted, don't clobber
+        fail(new Error(`${String(request.subtype)} control request timed out`))
       }, timeoutMs)
-      // reject collapses to null too: an errored read must not overwrite a known value.
       this._pendingPayloadReads.set(requestId, {
         resolve,
-        reject: () => { this._pendingPayloadReads.delete(requestId); clearTimeout(timer); resolve(null) },
+        reject: (err) => {
+          this._pendingPayloadReads.delete(requestId)
+          clearTimeout(timer)
+          fail(err)
+        },
         timer,
       })
       Promise.resolve(this._transport!.writeRaw(envelope)).then((ok) => {
@@ -4759,15 +4797,15 @@ export class ClaudeCodeSession {
           if (pending) {
             this._pendingPayloadReads.delete(requestId)
             clearTimeout(pending.timer)
-            resolve(null) // FIFO write failed ⇒ untrusted
+            fail(new Error(`failed to write ${String(request.subtype)} control_request to session`))
           }
         }
-      }).catch(() => {
+      }).catch((err) => {
         const pending = this._pendingPayloadReads.get(requestId)
         if (pending) {
           this._pendingPayloadReads.delete(requestId)
           clearTimeout(pending.timer)
-          resolve(null)
+          fail(err instanceof Error ? err : new Error(String(err)))
         }
       })
     })
@@ -5527,6 +5565,34 @@ export class SessionRunner {
         sessionId: claudeSessionId, error: err instanceof Error ? err.message : String(err),
       })
       return undefined
+    }
+  }
+
+  /**
+   * Apply a permission mode to a live CLI and return only after confirmation.
+   * Sessions launched before Walnut authorized the bypass capability are
+   * gracefully resumed once with the requested mode and current startup flags.
+   */
+  async changePermissionMode(
+    claudeSessionId: string,
+    mode: SessionMode,
+  ): Promise<'applied' | 'reinitialized' | 'not-live'> {
+    const live = await this.getOrAttachLiveSession(claudeSessionId)
+    if (!live) return 'not-live'
+
+    try {
+      const confirmed = await live.applyPermissionMode(mode)
+      if (!confirmed) {
+        throw new Error(`Claude Code did not confirm permission mode "${mode}"`)
+      }
+      return 'applied'
+    } catch (err) {
+      if (mode !== 'bypass' || !isMissingBypassCapabilityError(err)) throw err
+      log.session.info('permission mode requires bypass startup capability — reinitializing', {
+        sessionId: claudeSessionId, mode,
+      })
+      await this.reinitialize(claudeSessionId, mode)
+      return 'reinitialized'
     }
   }
 
@@ -6693,7 +6759,7 @@ export class SessionRunner {
    * idle), so this costs no tokens and does NOT pollute the conversation. Any
    * pending queue is left untouched and drains on the next real send.
    */
-  async reinitialize(sessionId: string): Promise<void> {
+  async reinitialize(sessionId: string, modeOverride?: SessionMode): Promise<void> {
     const { model, effort } = await this.resolveResumeArgs(sessionId)
     const { getSessionByClaudeId } = await import('../core/session-tracker.js')
     const record = await getSessionByClaudeId(sessionId)
@@ -6731,8 +6797,12 @@ export class SessionRunner {
     // of waiting out the 60s safety timeout. Mirrors handleSend's interrupt path.
     this.settleInFlightTurn(sessionId)
 
-    const resumeMode = record.mode && record.mode !== 'default' ? record.mode : undefined
+    const resumeMode = modeOverride ?? record.mode
     log.session.info('reinitialize: respawning fresh CLI (no turn)', { sessionId, taskId: record.taskId, host: record.host, model, mode: resumeMode })
+
+    // Stop through the daemon's SIGINT-first path and wait for its ack so the
+    // canonical conversation is flushed before --resume reads it.
+    await target.gracefulStop(true)
 
     // Empty message ⇒ daemon spawns idle: init event + SessionStart hook fire,
     // no user turn runs. onSpawnSettled reports spawn success/failure only.

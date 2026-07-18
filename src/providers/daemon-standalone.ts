@@ -755,6 +755,9 @@ function cmdBridgeResume(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // Ensure --resume <sid>: fresh-start args lack it (replaying them
     // verbatim would spawn a NEW conversation); stale values get rewritten.
     args = [...session.args]
+    if (!args.includes('--dangerously-skip-permissions')) {
+      args.splice(1, 0, '--dangerously-skip-permissions')
+    }
     const ri = args.indexOf('--resume')
     if (ri >= 0 && ri + 1 < args.length) {
       args[ri + 1] = sid
@@ -768,6 +771,7 @@ function cmdBridgeResume(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       '--verbose',
       '--include-partial-messages',
       '--debug',
+      '--dangerously-skip-permissions',
       '--permission-mode', 'default',
       ...(model ? ['--model', model] : []),
       '--resume', sid,
@@ -1189,10 +1193,12 @@ function ensureWatcher(sid: string) {
               const toolName = req.tool_name as string | undefined
               if (shouldAutoRespond(s.mode, toolName)) {
                 const resp = buildControlResponse(parsed.request_id as string, req, true)
-                writeFifoRaw(s.pipePath, resp)
-                s.pendingCtrl = null
-                logMsg('info', 'auto-allowed control_request', { sid, tool: toolName, mode: s.mode })
-                continue
+                if (writeFifoRaw(s.pipePath, resp)) {
+                  s.pendingCtrl = null
+                  try { persistRegistry() } catch {}
+                  logMsg('info', 'auto-allowed control_request', { sid, tool: toolName, mode: s.mode })
+                  continue
+                }
               }
               s.pendingCtrl = {
                 reqId: parsed.request_id as string,
@@ -1200,10 +1206,12 @@ function ensureWatcher(sid: string) {
                 request: req,
                 receivedAt: Date.now(),
               }
+              try { persistRegistry() } catch {}
             } else if (parsed.type === 'control_response' && s.pendingCtrl) {
               const resp = parsed.response as Record<string, unknown> | undefined
               if (resp?.request_id === s.pendingCtrl.reqId) {
                 s.pendingCtrl = null
+                try { persistRegistry() } catch {}
               }
             }
           } catch { /* parse failed, fall through to normal push */ }
@@ -1530,9 +1538,12 @@ function cmdSetMode(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string,
   session.mode = mode as SessionMode
   if (session.pendingCtrl && shouldAutoRespond(session.mode, session.pendingCtrl.toolName)) {
     const resp = buildControlResponse(session.pendingCtrl.reqId, session.pendingCtrl.request, true)
-    writeFifoRaw(session.pipePath, resp)
-    logMsg('info', 'setMode: auto-allowed pending control_request', { sid, tool: session.pendingCtrl.toolName, mode })
-    session.pendingCtrl = null
+    if (writeFifoRaw(session.pipePath, resp)) {
+      logMsg('info', 'setMode: auto-allowed pending control_request', { sid, tool: session.pendingCtrl.toolName, mode })
+      session.pendingCtrl = null
+    } else {
+      logMsg('warn', 'setMode: failed to write pending control_response', { sid, tool: session.pendingCtrl.toolName, mode })
+    }
   }
   try { persistRegistry() } catch {}
   sendOk(ws, id, { oldMode, newMode: mode })
