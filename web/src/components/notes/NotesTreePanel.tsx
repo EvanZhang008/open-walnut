@@ -82,6 +82,11 @@ interface NotesTreePanelProps {
    * column, opened on the clicked note/folder (undefined = vault root).
    */
   onStartSession?: (targetPath?: string) => void;
+  /**
+   * Start a NEW Walnut Agent (note-agent) chat in the chat column, named after
+   * the clicked note/folder — a fresh conversation, deletable from the switcher.
+   */
+  onStartAgentChat?: (targetPath?: string) => void;
 }
 
 /** Cumulative folder prefixes of a vault path: `a/b/c.md` → ['a', 'a/b', 'a/b/c.md']. */
@@ -113,6 +118,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
   revealPath,
   revealNonce,
   onStartSession,
+  onStartAgentChat,
 }: NotesTreePanelProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
@@ -687,8 +693,14 @@ export const NotesTreePanel = memo(function NotesTreePanel({
           {contextMenu.node.kind === 'attachment' && (
             <button onClick={() => handleReveal(contextMenu.node.path, 'app')}>Open in default app</button>
           )}
-          {/* Real Claude Code session (full MCP/skills config) opened on this
-              note/folder — renders in the chat column next to the assistant. */}
+          {/* Chat-column launchers — a fresh Walnut Agent conversation, or a
+              real Claude Code session (full MCP/skills config), opened on this
+              note/folder. Both land as named entries in the pane's switcher. */}
+          {onStartAgentChat && contextMenu.node.kind !== 'attachment' && (
+            <button onClick={() => { const p = contextMenu.node.path; setContextMenu(null); onStartAgentChat(p); }}>
+              New Note Agent chat
+            </button>
+          )}
           {onStartSession && contextMenu.node.kind !== 'attachment' && (
             <button onClick={() => { const p = contextMenu.node.path; setContextMenu(null); onStartSession(p); }}>
               Start Claude Code session

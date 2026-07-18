@@ -20032,7 +20032,11 @@ a.task-kebab-info:hover {
 
 .notes-split-view {
   display: flex;
-  height: calc(100vh - 48px);
+  /* Full-bleed inside the content area (AppShell zeroes its padding for
+     /notes) — fill it exactly; each pane scrolls internally. */
+  flex: 1;
+  min-height: 0;
+  height: 100%;
 }
 
 .notes-tree-pane {
@@ -20086,21 +20090,32 @@ a.task-kebab-info:hover {
   color: var(--accent);
 }
 
+/* Divider doubles as the chat pane's drag-resize handle: thin visual line,
+   wider invisible hit area (border-box padding trick keeps layout at 1px). */
 .notes-chat-divider {
   flex: 0 0 1px;
   background: var(--border);
+  cursor: col-resize;
+  position: relative;
 }
+.notes-chat-divider::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  right: -3px;
+}
+.notes-chat-divider:hover { background: var(--accent); }
 .notes-chat-pane {
-  flex: 0 0 360px;
-  min-width: 300px;
+  /* Width driven inline (drag-persisted); these are fallbacks. */
+  flex: 0 0 420px;
+  min-width: 320px;
   display: flex;
   flex-direction: column;
   background: var(--bg);
   overflow: hidden;
 }
-/* Hosting the full SessionPanel (live CC session) — it's designed for the
-   wider home-page columns, so widen the pane. */
-.notes-chat-pane-session { flex-basis: 480px; min-width: 380px; }
 
 /* Wrapper when the live CC session renders the real SessionPanel: a slim
    mode-tab strip on top, the panel filling the rest. */
@@ -20153,61 +20168,150 @@ a.task-kebab-info:hover {
   border-top: 1px solid var(--border);
 }
 
-/* Chat-column tabs (Note Agent + one tab per Claude Code session) */
-.notes-chat-mode-tabs {
-  display: inline-flex;
-  gap: 2px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 2px;
-  max-width: 100%;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-.notes-chat-mode-tabs::-webkit-scrollbar { display: none; }
-.notes-chat-mode-tab {
-  font-size: 12px;
-  padding: 3px 10px;
-  border: none;
-  border-radius: 4px;
-  background: none;
-  color: var(--fg-muted);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.notes-chat-mode-tab:hover { color: var(--fg); }
-.notes-chat-mode-tab.active {
-  background: var(--bg);
-  color: var(--fg);
-  font-weight: 600;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
-}
-/* Per-session tab: terminal glyph + origin label + close ×. A <span> (not a
-   <button>) so the nested close button is valid HTML. */
-.notes-chat-cc-tab {
+/* Chat-column dropdown switcher (Note Agent + one entry per CC session).
+   Trigger doubles as the pane title; menu rows carry their own close ×. */
+.notes-chat-switcher { position: relative; }
+.notes-chat-switcher-trigger {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding-right: 4px;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 3px 8px;
+  cursor: pointer;
+  max-width: 100%;
 }
-.notes-chat-cc-tab.error { color: var(--color-error, #ff3b30); }
-.notes-chat-cc-tab-label {
-  max-width: 110px;
+.notes-chat-switcher-trigger:hover { background: var(--bg-hover); border-color: var(--border); }
+.notes-chat-switcher-title {
+  max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.notes-chat-cc-tab-close {
+/* Origin-folder context: muted prefix in the trigger ("Areas/Records / vialto"),
+   second line in menu rows. */
+.notes-chat-switcher-folder {
+  font-weight: 400;
+  color: var(--fg-muted);
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl; /* ellipsis on the LEFT — the deepest folder is the useful part */
+  text-align: left;
+}
+.notes-chat-switcher-sep {
+  font-weight: 400;
+  color: var(--fg-muted);
+}
+.notes-chat-switcher-item-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.notes-chat-switcher-item-folder {
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+.notes-chat-switcher-caret {
+  font-size: 9px;
+  color: var(--fg-muted);
+  transition: transform 0.12s;
+}
+.notes-chat-switcher-caret.open { transform: rotate(180deg); }
+.notes-chat-switcher-hint {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.notes-chat-switcher-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 60;
+  min-width: 210px;
+  max-width: 300px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+  padding: 4px;
+}
+.notes-chat-switcher-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  font-size: 12.5px;
+  color: var(--fg);
+  background: none;
+  border: none;
+  border-radius: 5px;
+  padding: 6px 8px;
+  cursor: pointer;
+  text-align: left;
+}
+.notes-chat-switcher-item:hover { background: var(--bg-hover); }
+.notes-chat-switcher-item.active { background: color-mix(in srgb, var(--accent) 10%, transparent); font-weight: 600; }
+.notes-chat-switcher-item.error { color: var(--color-error, #ff3b30); }
+.notes-chat-switcher-item-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Labeled group headers — the kind of chat (Walnut Agent / Claude Code) is
+   stated outright, never implied by an icon or a bare divider. */
+.notes-chat-switcher-group {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--fg-muted);
+  padding: 7px 8px 3px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+.notes-chat-switcher-group-first { border-top: none; margin-top: 0; padding-top: 4px; }
+/* Trigger badge — explicit "this pane is a Claude Code session" marker. */
+.notes-chat-switcher-badge {
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-radius: 4px;
+  padding: 1.5px 5px;
+  flex: 0 0 auto;
+}
+.notes-chat-switcher-close {
   border: none;
   background: none;
   color: var(--fg-muted);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1;
-  padding: 0 3px;
+  padding: 0 4px;
   border-radius: 3px;
   cursor: pointer;
+  flex: 0 0 auto;
 }
-.notes-chat-cc-tab-close:hover { color: var(--fg); background: var(--bg-hover); }
+.notes-chat-switcher-close:hover { color: var(--fg); background: var(--bg-hover); }
 
 /* Claude Code session hosted in the notes chat column */
 .notes-session-chat-badge {

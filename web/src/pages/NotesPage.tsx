@@ -7,7 +7,9 @@ import { NotesTreePanel } from '@/components/notes/NotesTreePanel';
 import { NotesEditorPanel } from '@/components/notes/NotesEditorPanel';
 import { NotesTabStrip, type OpenTab, type TabKind } from '@/components/notes/NotesTabStrip';
 import { AttachmentPreview } from '@/components/notes/AttachmentPreview';
-import { NotesChat } from '@/components/notes/NotesChat';
+import { NotesChat, NOTE_AGENT_ID } from '@/components/notes/NotesChat';
+import { NotesChatSwitcher } from '@/components/notes/NotesChatSwitcher';
+import { useConversations } from '@/hooks/useConversations';
 import { NotesSessionChat } from '@/components/notes/NotesSessionChat';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { CommandPalette, pushRecent } from '@/components/notes/CommandPalette';
@@ -34,6 +36,18 @@ function clampWidth(w: number): number {
   return Math.max(WIDTH_MIN, Math.min(WIDTH_MAX, w));
 }
 
+// Chat column (right pane) drag-resize bounds. Wide max — the full
+// SessionPanel benefits from real estate on big screens.
+const LS_CHAT_WIDTH_KEY = 'open-walnut-notes-chat-width';
+const CHAT_WIDTH_MIN = 320;
+const CHAT_WIDTH_MAX = 900;
+const CHAT_WIDTH_DEFAULT = 420;
+
+function clampChatWidth(w: number): number {
+  if (!Number.isFinite(w)) return CHAT_WIDTH_DEFAULT;
+  return Math.max(CHAT_WIDTH_MIN, Math.min(CHAT_WIDTH_MAX, w));
+}
+
 function readWidth(): number {
   try {
     const stored = localStorage.getItem(LS_WIDTH_KEY);
@@ -53,6 +67,9 @@ interface CcTab {
   key: string;
   /** Display name — the note/folder the session was started from. */
   label: string;
+  /** Vault-relative folder of the origin ('' = vault root) — disambiguates
+   *  same-named notes and answers "which folder is this session in?". */
+  folder?: string;
   taskId?: string;
   sessionId?: string;
   /** In-flight quick-start failure (shown inside the tab, not persisted). */
@@ -64,6 +81,15 @@ function ccTabLabel(targetPath?: string): string {
   if (!targetPath) return 'Notes';
   const base = targetPath.split('/').pop() || targetPath;
   return base.replace(/\.md$/, '') || 'Notes';
+}
+
+/** Vault-relative folder of the origin. A folder target IS its own context;
+ *  for a note it's the containing dir. Root → 'Notes' (the vault itself). */
+function ccTabFolder(targetPath?: string): string {
+  if (!targetPath) return 'Notes';
+  if (!targetPath.endsWith('.md')) return targetPath; // folder target
+  const idx = targetPath.lastIndexOf('/');
+  return idx === -1 ? 'Notes' : targetPath.slice(0, idx);
 }
 
 /** A localStorage entry is a valid tab iff it's `{ path: string, kind: 'note'|'attachment' }`. */
@@ -169,11 +195,14 @@ export function NotesPage() {
       return [{ key: 'cc-legacy', label: 'Claude Code', sessionId: raw }];
     } catch { return []; }
   });
-  // 'assistant' | a cc tab key.
+  // 'assistant' (main agent chat) | 'conv-…' (agent side chat) | a cc tab key.
   const [chatMode, setChatMode] = useState<string>(() => {
     try {
       const mode = localStorage.getItem(LS_CC_MODE_KEY);
       if (!mode || mode === 'assistant') return 'assistant';
+      // Agent side chats validate against the fetched conversation list (effect
+      // below) — trust the persisted id until that list arrives.
+      if (mode.startsWith('conv-')) return mode;
       const raw = localStorage.getItem(LS_CC_SESSION_KEY) ?? '';
       // Legacy 'session' value maps onto the migrated single tab.
       if (mode === 'session') return raw ? 'cc-legacy' : 'assistant';
@@ -181,10 +210,34 @@ export function NotesPage() {
     } catch { return 'assistant'; }
   });
 
+  // ── Walnut Agent (note-agent) conversations: the stable main chat plus named
+  // side chats — same right-click create / × delete lifecycle as CC sessions,
+  // but backed by the conversations API (server-persisted, shared with the
+  // home page's agent chat). The MAIN conversation is the permanent
+  // "Note Agent" row; side chats can be removed. ──
+  const noteConvs = useConversations(NOTE_AGENT_ID);
+  const mainConvId = useMemo(
+    () => noteConvs.conversations.find((c) => c.isMain)?.id ?? noteConvs.activeConversationId,
+    [noteConvs.conversations, noteConvs.activeConversationId],
+  );
+  const agentSideChats = useMemo(
+    () => noteConvs.conversations.filter((c) => !c.isMain),
+    [noteConvs.conversations],
+  );
+
+  // A persisted agent-chat mode may point at a conversation deleted elsewhere —
+  // fall back to the main chat once the list is authoritative.
+  useEffect(() => {
+    if (noteConvs.isLoading) return;
+    if (chatMode.startsWith('conv-') && !noteConvs.conversations.some((c) => c.id === chatMode)) {
+      setChatMode('assistant');
+    }
+  }, [noteConvs.isLoading, noteConvs.conversations, chatMode]);
+
   useEffect(() => {
     try {
       const persistable = ccTabs.filter((t) => t.taskId || t.sessionId)
-        .map(({ key, label, taskId, sessionId }) => ({ key, label, taskId, sessionId }));
+        .map(({ key, label, folder, taskId, sessionId }) => ({ key, label, folder, taskId, sessionId }));
       if (persistable.length > 0) localStorage.setItem(LS_CC_SESSION_KEY, JSON.stringify(persistable));
       else localStorage.removeItem(LS_CC_SESSION_KEY);
     } catch { /* ignore */ }
@@ -211,22 +264,50 @@ export function NotesPage() {
     });
   }, []);
 
+  // Delete a Walnut Agent side chat (server-side; main is 409-protected there).
+  const handleAgentChatDelete = useCallback((convId: string) => {
+    setChatMode((mode) => (mode === convId ? 'assistant' : mode));
+    void noteConvs.remove(convId);
+  }, [noteConvs]);
+
+  // The switcher's × dispatches by key shape: conversation ids delete an agent
+  // side chat, anything else closes a CC session tab.
+  const handleSwitcherClose = useCallback((key: string) => {
+    if (key.startsWith('conv-')) handleAgentChatDelete(key);
+    else handleCcClose(key);
+  }, [handleAgentChatDelete, handleCcClose]);
+
   // Restored-session validation: persisted sids may point at sessions that were
   // archived/deleted while we were away — drop those tabs instead of rendering
   // dead panels. Live "close" stays explicit (each tab's ✕ / panel close).
+  // Same fetch also BACKFILLS folder context onto entries persisted before the
+  // folder field existed (they showed a bare "Claude Code" — confusing).
   const ccSids = ccTabs.map((t) => t.sessionId).filter(Boolean).join(',');
   useEffect(() => {
     if (!ccSids) return;
     let cancelled = false;
     for (const sid of ccSids.split(',')) {
       fetchSession(sid).then((s) => {
-        if (cancelled || (s && !s.archived)) return;
-        log.info('notes', 'Persisted CC session is gone — closing its tab', { sessionId: sid });
-        setCcTabs((tabs) => {
-          const dead = tabs.find((t) => t.sessionId === sid);
-          if (dead) setChatMode((mode) => mode === dead.key ? 'assistant' : mode);
-          return tabs.filter((t) => t.sessionId !== sid);
-        });
+        if (cancelled) return;
+        if (!s || s.archived) {
+          log.info('notes', 'Persisted CC session is gone — closing its tab', { sessionId: sid });
+          setCcTabs((tabs) => {
+            const dead = tabs.find((t) => t.sessionId === sid);
+            if (dead) setChatMode((mode) => mode === dead.key ? 'assistant' : mode);
+            return tabs.filter((t) => t.sessionId !== sid);
+          });
+          return;
+        }
+        // Backfill: legacy entry with no folder → derive from the record. cwd
+        // is the vault root for notes sessions, so the best available context
+        // is the session title; fall back to the cwd basename.
+        setCcTabs((tabs) => tabs.map((t) => {
+          if (t.sessionId !== sid || t.folder !== undefined) return t;
+          const fromTitle = s.title?.trim();
+          const fromCwd = s.cwd ? s.cwd.split('/').filter(Boolean).pop() : undefined;
+          const label = (t.label === 'Claude Code' && fromTitle) ? fromTitle : t.label;
+          return { ...t, label, folder: fromCwd ?? 'Notes' };
+        }));
       }).catch(() => { /* transient — keep the tab; the panel has its own retries */ });
     }
     return () => { cancelled = true; };
@@ -335,9 +416,31 @@ export function NotesPage() {
   // hook, MCP/skills load) — no auto first turn; the CLI idles until the user
   // actually types. PERCEIVED-INSTANT: pane state is set synchronously; the
   // HTTP round-trip fills in taskId later.
+  // Context-menu "New Note Agent chat": a fresh named conversation of the
+  // built-in agent, titled after the clicked note/folder — mirrors the CC
+  // session flow but stays inside the conversations API (instant, no spawn).
+  const handleStartAgentChat = useCallback(async (targetPath?: string) => {
+    setChatOpen(true);
+    try { localStorage.setItem(LS_CHAT_OPEN_KEY, '1'); } catch { /* ignore */ }
+    if (targetPath) {
+      if (targetPath.endsWith('.md')) handleSelect(targetPath);
+      else revealInTree(targetPath);
+    }
+    try {
+      const cid = await noteConvs.create(ccTabLabel(targetPath));
+      setChatMode(cid);
+      // Persist directly — same React same-value-bail caveat as the CC flow.
+      try { localStorage.setItem(LS_CC_MODE_KEY, cid); } catch { /* ignore */ }
+    } catch (err) {
+      log.warn('notes', 'Failed to create Note Agent chat', {
+        error: err instanceof Error ? err.message : String(err), targetPath,
+      });
+    }
+  }, [noteConvs, handleSelect, revealInTree]);
+
   const handleStartCcSession = useCallback(async (targetPath?: string) => {
     const key = `cc-${Date.now()}`;
-    setCcTabs((tabs) => [...tabs, { key, label: ccTabLabel(targetPath) }]);
+    setCcTabs((tabs) => [...tabs, { key, label: ccTabLabel(targetPath), folder: ccTabFolder(targetPath) }]);
     setChatMode(key);
     setChatOpen(true);
     // Persist directly too — the chatMode effect won't re-fire if the state
@@ -413,6 +516,45 @@ export function NotesPage() {
   useEffect(() => {
     try { localStorage.setItem(LS_WIDTH_KEY, String(listWidth)); } catch { /* ignore */ }
   }, [listWidth]);
+
+  // Resizable chat column — the divider between editor and chat pane is a drag
+  // handle (mirrors the tree resize). Width persists; dragging LEFT widens.
+  const [chatWidth, setChatWidth] = useState<number>(() => {
+    try {
+      const stored = localStorage.getItem(LS_CHAT_WIDTH_KEY);
+      if (stored) return clampChatWidth(Number(stored));
+    } catch { /* ignore */ }
+    return CHAT_WIDTH_DEFAULT;
+  });
+  const chatResizingRef = useRef(false);
+
+  const handleChatResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    chatResizingRef.current = true;
+    const startX = e.clientX;
+    const startWidth = chatWidth;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!chatResizingRef.current) return;
+      // The pane is on the RIGHT: dragging the divider left grows it.
+      setChatWidth(clampChatWidth(startWidth + (startX - ev.clientX)));
+    };
+    const onMouseUp = () => {
+      chatResizingRef.current = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  }, [chatWidth]);
+
+  useEffect(() => {
+    try { localStorage.setItem(LS_CHAT_WIDTH_KEY, String(chatWidth)); } catch { /* ignore */ }
+  }, [chatWidth]);
 
   const handleCreateNote = useCallback(
     async (notePath: string) => {
@@ -525,6 +667,7 @@ export function NotesPage() {
           revealPath={reveal.path}
           revealNonce={reveal.nonce}
           onStartSession={handleStartCcSession}
+          onStartAgentChat={handleStartAgentChat}
         />
       </div>
       <div className="notes-resize-handle" onMouseDown={handleResizeStart} />
@@ -593,48 +736,28 @@ export function NotesPage() {
       </div>
       {chatOpen && (
         <>
-          <div className="notes-chat-divider" />
-          {/* SessionPanel is designed for the wider home-page columns — give it room. */}
-          <div className={`notes-chat-pane${activeCcTab?.sessionId ? ' notes-chat-pane-session' : ''}`}>
+          <div className="notes-chat-divider" onMouseDown={handleChatResizeStart} title="Drag to resize" />
+          <div className="notes-chat-pane" style={{ flex: `0 0 ${chatWidth}px`, width: chatWidth }}>
             {(() => {
-              // Session tabs — only shown once a CC session exists (or is
-              // starting), so the plain agent keeps its uncluttered header.
-              // One tab PER SESSION (labeled by its origin note/folder), so
-              // earlier sessions stay reachable.
-              const tabs = ccTabs.length > 0 ? (
-                <div className="notes-chat-mode-tabs" role="tablist">
-                  <button
-                    role="tab"
-                    aria-selected={chatMode === 'assistant'}
-                    className={`notes-chat-mode-tab${chatMode === 'assistant' ? ' active' : ''}`}
-                    onClick={() => setChatMode('assistant')}
-                  >
-                    Note Agent
-                  </button>
-                  {ccTabs.map((t) => (
-                    <span
-                      key={t.key}
-                      role="tab"
-                      tabIndex={0}
-                      aria-selected={chatMode === t.key}
-                      className={`notes-chat-mode-tab notes-chat-cc-tab${chatMode === t.key ? ' active' : ''}${t.error ? ' error' : ''}`}
-                      title={`Claude Code — ${t.label}`}
-                      onClick={() => setChatMode(t.key)}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setChatMode(t.key); }}
-                    >
-                      <CcTabIcon />
-                      <span className="notes-chat-cc-tab-label">{t.label}</span>
-                      <button
-                        className="notes-chat-cc-tab-close"
-                        title="Close session tab"
-                        aria-label={`Close session ${t.label}`}
-                        onClick={(e) => { e.stopPropagation(); handleCcClose(t.key); }}
-                      >
-                        ×
-                      </button>
-                    </span>
-                  ))}
-                </div>
+              // Dropdown switcher — only shown once there's something to switch
+              // BETWEEN (a CC session or an agent side chat), so the plain agent
+              // keeps its uncluttered header. The trigger reads as the pane's
+              // title (current selection); the menu lists every Walnut Agent
+              // chat + every session (named by origin, each with its own ×).
+              const tabs = (ccTabs.length > 0 || agentSideChats.length > 0) ? (
+                <NotesChatSwitcher
+                  sessions={ccTabs.map((t) => ({
+                    key: t.key,
+                    label: t.label,
+                    folder: t.folder,
+                    error: Boolean(t.error),
+                    pending: !t.sessionId && !t.error,
+                  }))}
+                  agentChats={agentSideChats.map((c) => ({ key: c.id, label: c.title }))}
+                  active={chatMode}
+                  onSelect={setChatMode}
+                  onCloseSession={handleSwitcherClose}
+                />
               ) : undefined;
 
               if (activeCcTab) {
@@ -679,7 +802,11 @@ export function NotesPage() {
                   />
                 );
               }
-              return <NotesChat activeNotePath={activeNotePath} headerLeft={tabs} />;
+              // Walnut Agent — either the main chat ('assistant') or a named
+              // side chat (chatMode = its conversation id). key remounts the
+              // pane on switch so useChat reloads the right history.
+              const agentConvId = chatMode.startsWith('conv-') ? chatMode : mainConvId;
+              return <NotesChat key={agentConvId ?? 'main'} activeNotePath={activeNotePath} headerLeft={tabs} conversationId={agentConvId} />;
             })()}
           </div>
         </>
@@ -716,16 +843,6 @@ function NotesEmptyState({ onNewNote }: { onNewNote: () => void }) {
         </button>
       </div>
     </div>
-  );
-}
-
-/** Tiny terminal glyph marking Claude Code session tabs. */
-function CcTabIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M3 5l3 3-3 3" />
-      <path d="M8 11h5" />
-    </svg>
   );
 }
 

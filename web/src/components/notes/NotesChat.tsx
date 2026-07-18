@@ -1,14 +1,12 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { type ReactNode } from 'react';
 import { useChat } from '@/hooks/useChat';
-import { listConversations } from '@/api/conversations';
 import { ChatPanel } from '@/components/chat/ChatPanel';
 import { ChatMessage } from '@/components/chat/ChatMessage';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import type { ImageAttachment } from '@/api/chat';
-import { log } from '@/utils/log';
 
-const NOTE_AGENT_ID = 'note-agent';
+export const NOTE_AGENT_ID = 'note-agent';
 
 /**
  * NotesChat — the AI assistant column on the /notes page. Talks to OUR OWN
@@ -16,34 +14,19 @@ const NOTE_AGENT_ID = 'note-agent';
  * `useChat` + ChatPanel/ChatMessage/ChatInput stack the home page uses, so the
  * agent can actually read / search / edit / create notes in the vault.
  *
- * The backend auto-creates an active conversation for any agentId, so we just
- * fetch the active one on mount. `activeNotePath` (the note currently open in the
- * editor) is surfaced to the agent as a one-line context hint on each send.
+ * The conversation to display is OWNED BY THE PAGE (NotesPage resolves it via
+ * useConversations — main chat or a named side chat started from the tree's
+ * context menu). `activeNotePath` (the note currently open in the editor) is
+ * surfaced to the agent as a one-line context hint on each send.
  */
-export function NotesChat({ activeNotePath, headerLeft }: {
+export function NotesChat({ activeNotePath, headerLeft, conversationId }: {
   activeNotePath: string | null;
   /** Replaces the "Note Assistant" title — the pane's mode tabs live here when
    *  the chat column can also host a Claude Code session. */
   headerLeft?: ReactNode;
+  /** Which note-agent conversation this pane talks to (null while the list loads). */
+  conversationId: string | null;
 }) {
-  const [conversationId, setConversationId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    listConversations(NOTE_AGENT_ID)
-      .then(({ activeConversationId }) => {
-        if (!cancelled) setConversationId(activeConversationId);
-      })
-      .catch((err) => {
-        log.warn('notes', 'NotesChat: failed to load conversation', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, []);
-
   const chat = useChat(NOTE_AGENT_ID, conversationId);
 
   const handleSend = (text: string, images?: ImageAttachment[]) => {
@@ -70,7 +53,7 @@ export function NotesChat({ activeNotePath, headerLeft }: {
         )}
       </div>
 
-      {loading || !conversationId ? (
+      {!conversationId ? (
         <div className="notes-chat-loading"><LoadingSpinner /></div>
       ) : (
         <>
@@ -120,7 +103,7 @@ export function NotesChat({ activeNotePath, headerLeft }: {
               queueCount={chat.queueCount}
               showCommands={false}
               placeholder="Ask the note assistant…"
-              draftKey="draft:note-agent"
+              draftKey={`draft:note-agent:${conversationId}`}
             />
           </div>
         </>

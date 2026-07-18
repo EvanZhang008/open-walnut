@@ -40,6 +40,10 @@ function AppShellInner({ children }: AppShellProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(readCollapsed);
   const location = useLocation();
   const isMainPage = location.pathname === '/';
+  // Full-bleed pages own their whole canvas (multi-pane layouts with internal
+  // scrolling) — no content-area padding, no outer scrollbar. Everything else
+  // keeps the default 24px page gutter.
+  const isFullBleed = isMainPage || location.pathname.startsWith('/notes');
   const focusBar = useFocusBarContext();
   const contentRef = useRef<HTMLDivElement>(null);
 
@@ -89,7 +93,7 @@ function AppShellInner({ children }: AppShellProps) {
         <div
           ref={contentRef}
           className="app-content-area"
-          style={isMainPage ? { padding: 0, overflow: 'hidden' } : undefined}
+          style={isFullBleed ? { padding: 0, overflow: 'hidden' } : undefined}
         >
           {children}
         </div>

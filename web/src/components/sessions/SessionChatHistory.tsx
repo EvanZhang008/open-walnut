@@ -1263,18 +1263,6 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             <p className="text-muted">Loading remote session...</p>
           </div>
         )}
-        {/* Initial prompt — the first user message that started this session */}
-        {initialPrompt && (
-          <div className="session-msg session-msg-user session-initial-prompt">
-            <div className="session-msg-header">
-              <span className="session-msg-role">You</span>
-              <span className="session-initial-prompt-label">Initial Prompt</span>
-            </div>
-            <div className="session-msg-content">
-              <div className="markdown-body">{initialPrompt}</div>
-            </div>
-          </div>
-        )}
         {/* Persisted history messages — truncated to tail for performance.
             Full messages[] stays in memory; only the visible slice is rendered as DOM. */}
         {(() => {
@@ -1284,6 +1272,21 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           const hiddenCount = visibleStart;
           return (
             <>
+              {/* Initial prompt — pinned copy of the session's first user
+                  message. Only useful when that message is TRUNCATED AWAY;
+                  with the full history on screen it's a pure duplicate of the
+                  first bubble (and a floating blank block in narrow panes). */}
+              {initialPrompt && hiddenCount > 0 && (
+                <div className="session-msg session-msg-user session-initial-prompt">
+                  <div className="session-msg-header">
+                    <span className="session-msg-role">You</span>
+                    <span className="session-initial-prompt-label">Initial Prompt</span>
+                  </div>
+                  <div className="session-msg-content">
+                    <div className="markdown-body">{initialPrompt}</div>
+                  </div>
+                </div>
+              )}
               {hiddenCount > 0 && (
                 <button
                   className="session-show-earlier-btn"
