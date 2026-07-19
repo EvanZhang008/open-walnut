@@ -385,6 +385,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   const port = options.port ?? DEFAULT_PORT
   const dev = options.dev ?? false
   const isEphemeral = IS_EPHEMERAL
+  // Own-server URL for agent-facing skills/tools (e.g. walnut-plugin-store curls
+  // the REST API). Sandbox/demo servers on other ports inherit the right value.
+  process.env.WALNUT_SERVER_URL = `http://localhost:${port}`
 
   // Tripwire: never serve the PRODUCTION port from a test/temp home. A shell with
   // leaked vitest env (VITEST / NODE_ENV=test / OPEN_WALNUT_HOME=…test-global) makes
