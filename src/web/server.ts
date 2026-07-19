@@ -62,10 +62,11 @@ import { usageTracker } from '../core/usage/index.js'
 import * as chatHistory from '../core/chat-history.js'
 import { gitPullWalnut, ensureRepo, commitIfDirty, autoSync, isGitAvailable, isLockContention } from '../integrations/git-sync.js'
 import { registry } from '../core/integration-registry.js'
-import { loadPlugins, migrateConfigToPlugins, runPluginMigrations } from '../core/integration-loader.js'
+import { loadPlugins, migrateConfigToPlugins, runPluginMigrations, getUnconfiguredPlugins } from '../core/integration-loader.js'
 import type { SyncPollContext } from '../core/integration-types.js'
 import { syncReconciler } from '../core/sync-reconciler.js'
 import { integrationsRouter } from './routes/integrations.js'
+import { createPluginSourcesRouter } from './routes/plugin-sources.js'
 import { systemRouter } from './routes/system.js'
 import { qmdRouter } from './routes/qmd.js'
 import { notesRouter } from './routes/notes.js'
@@ -151,6 +152,11 @@ let httpServer: HttpServer | null = null
 // Each stop() returns a Promise that resolves once any in-flight tick has settled,
 // so stopServer() can `await` it and guarantee no plugin writes happen after shutdown.
 let pluginSyncStops: Array<() => Promise<void>> = []
+// Plugin ids that already have a sync-polling loop — lets startPluginSyncPolling()
+// run again after a plugin-store soft-reload without double-polling existing plugins.
+const pollingPluginIds = new Set<string>()
+// Set during startup; invoked by the plugin-sources router after add/update.
+let pluginSoftReload: () => Promise<void> = async () => {}
 let cronServiceInstance: CronService | null = null
 let healthMonitor: SessionHealthMonitor | null = null
 let sessionReaper: SessionReaper | null = null
@@ -719,6 +725,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/notes-v2', notesV2Router)
   app.use('/api/repositories', repositoriesRouter)
   app.use('/api/integrations', integrationsRouter)
+  // Lazy indirection: pluginSoftReload is assigned later in startup, after the
+  // initial loadPlugins — the router must call the CURRENT value, not capture it.
+  app.use('/api/plugin-sources', createPluginSourcesRouter(() => pluginSoftReload()))
 
   // Plugin routes — mounted as a single router that gets populated after plugin loading.
   // This router sits before notFoundHandler, so plugin routes registered later still work.
@@ -2354,14 +2363,19 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
   // Mount plugin-registered HTTP routes AFTER plugins are loaded.
   // Routes are added to pluginRouter (already mounted at /api/plugins before notFoundHandler).
-  for (const plugin of registry.getAll()) {
-    if (plugin.httpRoutes?.length) {
+  // Idempotent (tracked by plugin id) so the plugin-store soft-reload can call it again.
+  const mountedPluginRouteIds = new Set<string>()
+  const mountPluginRoutes = () => {
+    for (const plugin of registry.getAll()) {
+      if (!plugin.httpRoutes?.length || mountedPluginRouteIds.has(plugin.id)) continue
+      mountedPluginRouteIds.add(plugin.id)
       for (const route of plugin.httpRoutes) {
         pluginRouter.use(`/${plugin.id}${route.path}`, route.handler)
         log.web.info('mounted plugin route', { plugin: plugin.id, path: `/api/plugins/${plugin.id}${route.path}` })
       }
     }
   }
+  mountPluginRoutes()
 
   // -- Run plugin data migrations (move legacy task fields to ext) --
   try {
@@ -2373,6 +2387,37 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // -- Start generic plugin sync polling --
   startPluginSyncPolling()
   startupPhase('plugin sync polling started')
+
+  // Soft-reload for the plugin store: after a source is added/updated, load any
+  // NEW plugins without a restart (loadPlugins skips already-registered ids),
+  // mount their routes, run their migrations, and start their sync polling.
+  // Already-loaded plugins keep their in-memory code until a real restart.
+  pluginSoftReload = async () => {
+    await loadPlugins(registry)
+    mountPluginRoutes()
+    try {
+      await runPluginMigrations(registry)
+    } catch (err) {
+      log.web.error('plugin data migrations failed during soft reload', { error: err instanceof Error ? err.message : String(err) })
+    }
+    startPluginSyncPolling()
+    log.web.info('plugin soft reload complete', { plugins: registry.getAll().map(p => p.id) })
+  }
+
+  // Config saves can complete a previously-unconfigured plugin (Settings →
+  // Integrations fills in a required field). Soft-reload so the plugin
+  // activates without a restart — cheap no-op when nothing new qualifies.
+  bus.subscribe('plugin-config-reload', async (event) => {
+    if (event.name !== EventNames.CONFIG_CHANGED) return
+    if (getUnconfiguredPlugins().length === 0) return
+    try {
+      await pluginSoftReload()
+    } catch (err) {
+      log.web.warn('plugin soft reload on config change failed', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  })
 
   // -- Process exit diagnostics --
   // Log WHY the server dies so we can diagnose silent crashes
@@ -2728,7 +2773,10 @@ function startPluginSyncPolling(): void {
     log.web.info('cloud mode: skipping plugin sync polling (primary box owns external sync)')
     return
   }
-  const plugins = registry.getAll().filter(p => p.id !== 'local')
+  // Idempotent: callable again after a plugin soft-reload — only plugins that
+  // don't have a polling loop yet get one (existing loops keep running).
+  const plugins = registry.getAll().filter(p => p.id !== 'local' && !pollingPluginIds.has(p.id))
+  for (const p of plugins) pollingPluginIds.add(p.id)
   const FIRST_TICK_DELAY_MS = 60_000 // boot grace — let startup quiet down first
   // Yield to the event loop every N sync iterations — a compromise between two
   // failure modes: N=1 adds needless loop overhead on every Graph call, while
@@ -3084,6 +3132,7 @@ export async function stopServer(): Promise<void> {
   bus.unsubscribe('task-outbox')
   bus.unsubscribe('main-ai')
   bus.unsubscribe('heartbeat-config')
+  bus.unsubscribe('plugin-config-reload')
   bus.unsubscribe('embedding-sync')
   bus.unsubscribe('setup-health')
   bus.unsubscribe('qmd-task-sync')

@@ -32,7 +32,7 @@ vi.mock('../../src/core/config-manager.js', () => ({
 
 import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js';
 import { IntegrationRegistry } from '../../src/core/integration-registry.js';
-import { loadPlugins, getUnconfiguredPlugins } from '../../src/core/integration-loader.js';
+import { loadPlugins, getUnconfiguredPlugins, getUnsupportedPlugins } from '../../src/core/integration-loader.js';
 import { getConfig } from '../../src/core/config-manager.js';
 
 // ── Helpers ──
@@ -299,5 +299,63 @@ export default function register(api) {
     expect(getUnconfiguredPlugins().some(p => p.id === 'now-configured')).toBe(false);
     // Loaded plugin carries its manifest schema for the settings form
     expect((registry2.get('now-configured')!.configSchema as any)?.required).toEqual(['room_id']);
+  });
+});
+
+describe('manifest v2 capabilities', () => {
+  it('loads a plugin with explicit capabilities.sync', async () => {
+    const pluginDir = path.join(tmpDir, 'plugins', 'cap-sync');
+    await writeManifest(pluginDir, {
+      id: 'cap-sync',
+      name: 'Cap Sync',
+      capabilities: { sync: {} },
+    });
+    await writePluginTs(pluginDir, `
+export default function register(api) {
+  api.registerSync(${NOOP_SYNC_SOURCE});
+}
+`);
+
+    const registry = new IntegrationRegistry();
+    await loadPlugins(registry);
+    expect(registry.has('cap-sync')).toBe(true);
+  });
+
+  it('skips a plugin declaring only unsupported capabilities, without importing it', async () => {
+    const pluginDir = path.join(tmpDir, 'plugins', 'future-only');
+    await writeManifest(pluginDir, {
+      id: 'future-only',
+      name: 'Future Only',
+      capabilities: { tools: { entry: 'tools.ts' }, ui: { entry: 'ui.tsx' } },
+    });
+    // Deliberately broken entry — must NOT be imported/bundled
+    await writePluginTs(pluginDir, 'this is not valid typescript {{{');
+
+    const registry = new IntegrationRegistry();
+    await loadPlugins(registry);
+
+    expect(registry.has('future-only')).toBe(false);
+    const entry = getUnsupportedPlugins().find(p => p.id === 'future-only');
+    expect(entry).toBeDefined();
+    expect(entry!.capabilities.sort()).toEqual(['tools', 'ui']);
+  });
+
+  it('loads a sync plugin that also declares unknown capabilities (warn + ignore)', async () => {
+    const pluginDir = path.join(tmpDir, 'plugins', 'mixed-caps');
+    await writeManifest(pluginDir, {
+      id: 'mixed-caps',
+      name: 'Mixed Caps',
+      capabilities: { sync: {}, hooks: { entry: 'hooks.ts' } },
+    });
+    await writePluginTs(pluginDir, `
+export default function register(api) {
+  api.registerSync(${NOOP_SYNC_SOURCE});
+}
+`);
+
+    const registry = new IntegrationRegistry();
+    await loadPlugins(registry);
+    expect(registry.has('mixed-caps')).toBe(true);
+    expect(getUnsupportedPlugins().some(p => p.id === 'mixed-caps')).toBe(false);
   });
 });

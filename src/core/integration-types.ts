@@ -209,6 +209,14 @@ export interface PluginManifest {
   name: string;
   description?: string;
   version?: string;
+  /** Advisory in v1 — not enforced. e.g. { walnut: ">=0.5" } */
+  engines?: { walnut?: string };
+  /** Capability declarations (manifest v2). ABSENT means { sync: {} } — every
+   *  pre-v2 manifest is a sync plugin. Only `sync` is honored today; other keys
+   *  (tools, hooks, skills, routines, ui) are reserved: a manifest declaring only
+   *  unknown capabilities is reported as `unsupported` instead of being loaded,
+   *  so plugins written for a future Walnut degrade gracefully here. */
+  capabilities?: Record<string, Record<string, unknown>>;
   configSchema?: Record<string, unknown>;
   uiHints?: Record<string, { label?: string; help?: string }>;
 }

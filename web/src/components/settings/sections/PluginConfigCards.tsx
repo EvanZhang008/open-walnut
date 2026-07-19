@@ -6,9 +6,10 @@
  * manifest configSchema + uiHints. Plugins with missing required fields get an
  * attention banner listing exactly what to fill in and where to find it.
  */
-import { useState, useEffect, Fragment } from 'react';
+import { useState, useEffect, useCallback, Fragment } from 'react';
 import type { Config } from '@open-walnut/core';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
+import { PLUGINS_CHANGED_EVENT, emitPluginsChanged } from '@/utils/plugin-events';
 
 interface PluginSettingsMeta {
   id: string;
@@ -55,17 +56,26 @@ export function PluginConfigCards({ config, onSave, excludeIds = [] }: Props) {
   const [saving, setSaving] = useState<string | null>(null);
   const [savedId, setSavedId] = useState<string | null>(null);
 
-  useEffect(() => {
+  const refresh = useCallback(() => {
     fetch('/api/integrations/settings')
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((data: PluginSettingsMeta[]) => {
         const visible = data.filter(p => !excludeIds.includes(p.id) && p.configSchema?.properties);
         setPlugins(visible);
-        setDrafts(Object.fromEntries(visible.map(p => [p.id, { ...p.values }])));
+        // Merge: keep in-flight edits, seed fields for newly-appeared plugins
+        setDrafts(d => Object.fromEntries(visible.map(p => [p.id, { ...p.values, ...d[p.id] }])));
       })
-      .catch(() => setPlugins([]));
+      .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    refresh();
+    // Refetch when the Plugin Store adds/updates/removes a source (or another
+    // card saves) so newly-discovered plugins appear without a page reload.
+    window.addEventListener(PLUGINS_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(PLUGINS_CHANGED_EVENT, refresh);
+  }, [refresh]);
 
   const setField = (pluginId: string, key: string, value: unknown) => {
     setDrafts(d => ({ ...d, [pluginId]: { ...d[pluginId], [key]: value } }));
@@ -87,6 +97,9 @@ export function PluginConfigCards({ config, onSave, excludeIds = [] }: Props) {
       } as Partial<Config>);
       setSavedId(plugin.id);
       setTimeout(() => setSavedId(null), 2500);
+      // Server soft-reloads the plugin on CONFIG_CHANGED (async) — poll a couple
+      // of echoes so the "needs setup" badge flips to active without a reload.
+      emitPluginsChanged([1200, 3500]);
     } finally {
       setSaving(null);
     }
@@ -178,7 +191,7 @@ export function PluginConfigCards({ config, onSave, excludeIds = [] }: Props) {
                 </button>
                 {needsConfig && (
                   <p className="text-xs text-muted" style={{ marginTop: 4 }}>
-                    Restart Walnut after saving for the plugin to load.
+                    The plugin activates automatically after saving.
                   </p>
                 )}
               </div>

@@ -39,6 +39,7 @@ export function createMockConstants(prefix = 'walnut-test', overrides: Record<st
     PROJECTS_MEMORY_DIR: path.join(tmpBase, 'memory', 'projects'),
     CONFIG_FILE: path.join(tmpBase, 'config.yaml'),
     SYNC_DIR: path.join(tmpBase, 'sync'),
+    PLUGIN_STORES_DIR: path.join(tmpBase, 'plugin-stores'),
     SESSIONS_FILE: path.join(tmpBase, 'sessions.json'),
     CLAUDE_HOME: path.join(tmpBase, '.claude'),
     CLAUDE_SETTINGS_FILE: path.join(tmpBase, '.claude', 'settings.json'),

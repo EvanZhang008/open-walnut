@@ -161,6 +161,25 @@ export function getUnconfiguredPlugins(): UnconfiguredPlugin[] {
   return unconfiguredPlugins;
 }
 
+/** Plugins skipped because their manifest declares only capabilities this
+ *  Walnut version doesn't implement yet (manifest v2 forward-compat). */
+const unsupportedPlugins: Array<{ id: string; name: string; capabilities: string[] }> = [];
+
+export function getUnsupportedPlugins(): Array<{ id: string; name: string; capabilities: string[] }> {
+  return unsupportedPlugins;
+}
+
+/** Plugin ids skipped because another plugin with the same id loaded first
+ *  (built-in > ~/.open-walnut/plugins/ > store clones). */
+const duplicatePluginIds: string[] = [];
+
+export function getDuplicatePluginIds(): string[] {
+  return duplicatePluginIds;
+}
+
+/** Capability types this Walnut version can load. Everything else is reserved. */
+const SUPPORTED_CAPABILITIES = new Set(['sync']);
+
 // ── Basic JSON Schema validation (type-only, no ajv needed) ──
 
 function validateConfigValue(value: unknown, schema: Record<string, unknown>, fieldPath: string): string[] {
@@ -352,6 +371,21 @@ async function discoverPluginDirs(): Promise<Array<{ dir: string; isBuiltin: boo
     });
   }
 
+  // Scan plugin-source clones (the "plugin store" feature). These are real
+  // directories (never symlinks) so the esbuild import-rebase path works
+  // unchanged. Loaded after EXTERNAL_DIR, so a manually installed plugin
+  // shadows a store copy with the same id.
+  try {
+    const { getStorePluginDirs } = await import('./plugin-sources.js');
+    for (const dir of await getStorePluginDirs()) {
+      results.push({ dir, isBuiltin: false });
+    }
+  } catch (err) {
+    log.debug('plugin-source scan failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   return results;
 }
 
@@ -373,11 +407,31 @@ function validateManifest(raw: unknown, filePath: string): PluginManifest | null
     return null;
   }
 
+  // Manifest v2: capabilities. Parsed leniently — unknown keys warn (they may
+  // be from a newer Walnut), invalid shapes are dropped.
+  let capabilities: Record<string, Record<string, unknown>> | undefined;
+  if (obj.capabilities && typeof obj.capabilities === 'object' && !Array.isArray(obj.capabilities)) {
+    capabilities = {};
+    for (const [key, val] of Object.entries(obj.capabilities as Record<string, unknown>)) {
+      capabilities[key] = (val && typeof val === 'object' && !Array.isArray(val))
+        ? val as Record<string, unknown> : {};
+      if (!SUPPORTED_CAPABILITIES.has(key)) {
+        log.warn('Manifest declares a capability this Walnut version does not support', {
+          filePath, capability: key,
+        });
+      }
+    }
+  }
+
   return {
     id: obj.id,
     name: obj.name,
     description: typeof obj.description === 'string' ? obj.description : undefined,
     version: typeof obj.version === 'string' ? obj.version : undefined,
+    engines: obj.engines && typeof obj.engines === 'object'
+      ? obj.engines as { walnut?: string }
+      : undefined,
+    capabilities,
     configSchema: obj.configSchema && typeof obj.configSchema === 'object'
       ? obj.configSchema as Record<string, unknown>
       : undefined,
@@ -416,6 +470,7 @@ async function loadPlugin(
   // Skip if already registered (built-in takes precedence over external with same id)
   if (registry.has(pluginId)) {
     log.debug('Skipping duplicate plugin', { id: pluginId, dir: pluginDir });
+    duplicatePluginIds.push(pluginId);
     return;
   }
 
@@ -423,6 +478,19 @@ async function loadPlugin(
   const configEntry = pluginConfigs[pluginId] ?? {};
   if (!isLocal && configEntry.enabled === false) {
     log.debug('Plugin disabled in config', { id: pluginId });
+    return;
+  }
+
+  // Manifest v2: absence of `capabilities` means a sync plugin (back-compat).
+  // A manifest declaring only capabilities we don't implement is skipped
+  // WITHOUT importing its code — it targets a newer Walnut.
+  const expectsSync = !manifest.capabilities || 'sync' in manifest.capabilities;
+  if (!expectsSync) {
+    const declared = Object.keys(manifest.capabilities ?? {});
+    log.warn('Plugin not loaded — requires capabilities this Walnut version does not support', {
+      id: pluginId, capabilities: declared,
+    });
+    unsupportedPlugins.push({ id: pluginId, name: manifest.name, capabilities: declared });
     return;
   }
 
@@ -570,6 +638,8 @@ async function loadPlugin(
 export async function loadPlugins(registry: IntegrationRegistry): Promise<void> {
   log.info('Loading plugins', { builtinDir: BUILTIN_DIR, externalDir: EXTERNAL_DIR });
   unconfiguredPlugins.length = 0;
+  unsupportedPlugins.length = 0;
+  duplicatePluginIds.length = 0;
 
   // Read plugin configs from config.yaml
   const config = await getConfig();
@@ -636,7 +706,7 @@ const KNOWN_NON_PLUGIN_KEYS = new Set([
   'version', 'user', 'defaults', 'provider', 'providers', 'agent', 'local',
   'favorites', 'ordering', 'session_server', 'hosts', 'session_limits', 'session',
   'heartbeat', 'tools', 'search', 'git_versioning', 'session_hooks', 'plugins', 'focus_bar',
-  'stt', 'tts', 'api_keys', 'push_tokens',
+  'stt', 'tts', 'api_keys', 'push_tokens', 'plugin_sources',
 ]);
 
 /**

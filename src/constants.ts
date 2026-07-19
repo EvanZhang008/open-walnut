@@ -131,6 +131,8 @@ export const SESSIONS_DIR = path.join(MEMORY_DIR, 'sessions');
 export const PROJECTS_DIR = path.join(MEMORY_DIR, 'projects');
 export const CONFIG_FILE = path.join(WALNUT_HOME, 'config.yaml');
 export const SYNC_DIR = path.join(WALNUT_HOME, 'sync');
+/** Git clones of plugin-source repos (the "plugin store" feature). One subdir per source slug. */
+export const PLUGIN_STORES_DIR = path.join(WALNUT_HOME, 'plugin-stores');
 export const SESSIONS_FILE = path.join(WALNUT_HOME, 'sessions.json');
 export const CLAUDE_HOME = path.join(os.homedir(), '.claude');
 export const HISTORY_CACHE_DIR = path.join(WALNUT_HOME, 'cache', 'history');
