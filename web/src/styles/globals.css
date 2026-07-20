@@ -15261,7 +15261,8 @@ a.task-kebab-info:hover {
   font-family: 'SF Mono', Menlo, monospace;
   background: var(--accent-subtle);
   border-color: var(--accent);
-  padding-right: 72px; /* room for the compact status button (widest: "+ folder") */
+  /* Reserve measured from the actual button width (set in SessionPathSelector), falling back to 72px before first measure. */
+  padding-right: calc(var(--sps-status-w, 72px) + 4px);
 }
 
 /* Compact status/confirm button — replaces the old wide "Start session ⇧↵" pill.
@@ -15505,7 +15506,8 @@ a.task-kebab-info:hover {
   position: absolute;
   inset: 0;
   padding: 7px 10px;
-  padding-right: 72px; /* mirror .sps-search-input.editing status-button room */
+  /* Mirror the input's measured status-button reserve exactly. */
+  padding-right: calc(var(--sps-status-w, 72px) + 4px);
   font-family: 'SF Mono', Menlo, monospace;
   font-size: 13px;
   /* MUST match the input's inherited line-height (body 1.5 → 19.5px). The input
@@ -15545,6 +15547,7 @@ a.task-kebab-info:hover {
 
 /* Task metadata footer — Star / Needs attention / Pin tier / Priority */
 .sps-meta-footer {
+  position: relative;
   flex-shrink: 0;
   border-top: 1px solid var(--border);
   padding: 8px 10px;
@@ -15553,18 +15556,9 @@ a.task-kebab-info:hover {
   gap: 6px;
   background: var(--bg-secondary, transparent);
 }
-/* Edit mode: collapse to one dense row — vertical space goes back to the path list */
+/* Edit mode only tightens padding; both modes share the same control layout. */
 .sps-meta-footer.compact {
   padding: 4px 10px;
-}
-.sps-meta-footer.compact .sps-meta-row {
-  flex-wrap: nowrap;
-  gap: 6px;
-  overflow-x: auto;
-}
-.sps-meta-footer.compact .sps-meta-model-select {
-  margin-left: auto;
-  max-width: 110px;
 }
 .sps-meta-row {
   display: flex;
@@ -15643,6 +15637,51 @@ a.task-kebab-info:hover {
   cursor: pointer;
 }
 .sps-meta-model-select:hover { background: var(--accent-subtle); }
+.sps-meta-more {
+  position: relative;
+  margin-left: auto;
+}
+.sps-meta-more-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.sps-meta-more-btn:hover { background: var(--accent-subtle); }
+.sps-meta-more-btn.active {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.sps-meta-more-badge {
+  font-weight: 600;
+}
+.sps-meta-more-popover {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--card-shadow-hover);
+}
+.sps-meta-more-popover .sps-meta-row {
+  flex-wrap: nowrap;
+}
 .sps-engine-toggle {
   display: inline-flex;
   border: 1px solid var(--border);
@@ -15826,13 +15865,50 @@ a.task-kebab-info:hover {
   cursor: default;
 }
 
-.model-picker-refresh-spinning {
+/* State colors carry :hover too — the base .model-picker-refresh:hover rule
+   would otherwise win on specificity and mask the state during mouse-over. */
+.model-picker-refresh.model-picker-refresh-refreshing,
+.model-picker-refresh.model-picker-refresh-refreshing:hover {
   animation: model-picker-refresh-spin 0.9s linear infinite;
+  color: var(--accent);
+}
+
+/* Success/failure flash — pop in, hold ~2s (JS returns state to idle). */
+.model-picker-refresh.model-picker-refresh-success,
+.model-picker-refresh.model-picker-refresh-success:hover {
+  color: var(--success);
+  animation: model-picker-refresh-pop 0.25s ease-out;
+}
+
+.model-picker-refresh.model-picker-refresh-failed,
+.model-picker-refresh.model-picker-refresh-failed:hover {
+  color: var(--error);
+  animation: model-picker-refresh-shake 0.4s ease-in-out;
 }
 
 @keyframes model-picker-refresh-spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+@keyframes model-picker-refresh-pop {
+  0% { transform: scale(0.5); opacity: 0.3; }
+  60% { transform: scale(1.3); }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes model-picker-refresh-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-2px); }
+  75% { transform: translateX(2px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .model-picker-refresh.model-picker-refresh-refreshing,
+  .model-picker-refresh.model-picker-refresh-success,
+  .model-picker-refresh.model-picker-refresh-failed {
+    animation: none;
+  }
 }
 
 /* ── Reasoning-effort segmented control ── */

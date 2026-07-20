@@ -7,6 +7,8 @@ import {
   modelSupportsEffort,
   modelSupportsXhighEffort,
   modelSupportsMaxEffort,
+  matchSessionModelCatalogEntry,
+  normalizeSessionModelCatalogId,
 } from '@open-walnut/core';
 import type { SessionEffort, SessionModelCatalogEntry } from '@open-walnut/core';
 import { fetchSessionLiveSettings, fetchSessionModelCatalog } from '@/api/sessions';
@@ -14,39 +16,6 @@ import type { SessionLiveSettings, SessionModelCatalog } from '@/api/sessions';
 import { useHostModelCatalog, seedHostCatalog } from '@/hooks/useModelCatalog';
 
 const EFFORTS = SESSION_EFFORTS;
-
-/** Strip decoration that differs between equivalent model strings: the [1m]
- *  context tag and provider version suffixes (-v1, -v1:0, _v2 …). Used for
- *  loose matching between a live/read-back model ID and catalog rows. */
-function stripModelDecoration(s: string): string {
-  return s.toLowerCase().replace(/\[1m\]$/, '').replace(/[-_]v\d+(:\d+)?$/, '');
-}
-
-/**
- * Find which catalog row is the ACTIVE one for a live model string.
- * Tiers (first hit wins):
- *  1. exact `value` match
- *  2. `resolvedModel` match on a NON-'default' row — a specific row beats the
- *     'default' row, which shares its resolvedModel with whatever it points at
- *  3. `resolvedModel` match on the 'default' row
- *  4. loose match ([1m]/-vN stripped) against value/resolvedModel
- *  5. null — live model is OUT of the catalog (org tightened the allowlist,
- *     refusal fallback, resumed onto something else): show truthfully, select nothing.
- */
-function matchCatalogRow(models: SessionModelCatalogEntry[], live?: string | null): SessionModelCatalogEntry | null {
-  if (!live) return null;
-  const exact = models.find((m) => m.value === live);
-  if (exact) return exact;
-  const byResolved = models.find((m) => m.value !== 'default' && m.resolvedModel === live);
-  if (byResolved) return byResolved;
-  const viaDefault = models.find((m) => m.value === 'default' && m.resolvedModel === live);
-  if (viaDefault) return viaDefault;
-  const needle = stripModelDecoration(live);
-  return models.find((m) =>
-    stripModelDecoration(m.value) === needle
-    || (m.resolvedModel ? stripModelDecoration(m.resolvedModel) === needle : false),
-  ) ?? null;
-}
 
 /** Short display form of a full runtime model ID (e.g. "us.anthropic.claude-sonnet-4-6[1m]" → "sonnet-4-6 1M"). */
 function shortModelLabel(raw?: string | null): string {
@@ -66,7 +35,7 @@ function fmtTokens(n?: number | null): string {
 
 interface ModelPickerProps {
   currentModel?: string;
-  /** Active reasoning-effort for the session (undefined = API default = 'high'). */
+  /** Explicit reasoning effort saved for the session; undefined uses the CLI's configured default. */
   currentEffort?: SessionEffort;
   /** Session to pull LIVE settings from (get_settings) when the picker opens.
    *  Omitted (e.g. in tests) → no pull, record props are all we show. */
@@ -129,23 +98,47 @@ export function ModelPicker({ currentModel, currentEffort, sessionId, host, onSw
   // machine's writer, an interrupted eager fetch). ?refresh=1 forces the CLI
   // round-trip; the response re-seeds the shared host cache directly (plus the
   // server's own push confirms it) and the live strip re-pulls too.
-  const [refreshing, setRefreshing] = React.useState(false);
+  // Tri-state feedback: spin while in flight, then a ✓/! flash — without it a
+  // fast round-trip is indistinguishable from a dead button, and a failure
+  // (or a fallback answer: CLI unreachable → NOT fresh data) looks like success.
+  const [refreshState, setRefreshState] = React.useState<'idle' | 'refreshing' | 'success' | 'failed'>('idle');
+  const refreshing = refreshState === 'refreshing';
+  // Unmount guard: the picker is routinely closed while a refresh is in
+  // flight — the settled promise must not setState on a dead component.
+  const aliveRef = React.useRef(true);
+  React.useEffect(() => () => { aliveRef.current = false; }, []);
   const refreshCatalog = () => {
     if (!sessionId || refreshing) return;
-    setRefreshing(true);
-    Promise.all([
-      fetchSessionModelCatalog(sessionId, { refresh: true })
-        .then((c) => {
-          if (c.source !== 'fallback') {
-            setFetched(c);
-            seedHostCatalog(host, c.models, c.fetchedAt);
-          }
-        }),
-      fetchSessionLiveSettings(sessionId).then(setLiveSettings),
-    ])
-      .catch(() => { /* degraded — keep current rows */ })
-      .finally(() => setRefreshing(false));
+    setRefreshState('refreshing');
+    // The live-settings re-pull rides along but is best-effort: only the
+    // CATALOG fetch decides success/failure — a settings hiccup must not
+    // report "failed" when the catalog did refresh (and vice versa the
+    // catalog answer must still seed the cache).
+    void fetchSessionLiveSettings(sessionId)
+      .then((s) => { if (aliveRef.current) setLiveSettings(s); })
+      .catch(() => {});
+    fetchSessionModelCatalog(sessionId, { refresh: true })
+      .then((c) => {
+        if (!aliveRef.current) return;
+        // Success = the CLI actually answered ('cli'). 'host' (last-known
+        // store) and 'fallback' (static registry) both mean the CLI did NOT
+        // answer — a refresh that re-read nothing must not flash ✓.
+        if (c.source !== 'cli') {
+          setRefreshState('failed');
+          return;
+        }
+        setFetched(c);
+        seedHostCatalog(host, c.models, c.fetchedAt);
+        setRefreshState('success');
+      })
+      .catch(() => { if (aliveRef.current) setRefreshState('failed'); });
   };
+  // Flash ✓/! for 2s, then return to idle. Cleared on unmount/re-trigger.
+  React.useEffect(() => {
+    if (refreshState !== 'success' && refreshState !== 'failed') return;
+    const t = setTimeout(() => setRefreshState('idle'), 2000);
+    return () => clearTimeout(t);
+  }, [refreshState]);
 
   // ── Live details: collapsed by default; expanding lazily pulls the heavier
   // reads (get_context_usage tokenizes the CLI's whole tool surface — too heavy
@@ -173,9 +166,9 @@ export function ModelPicker({ currentModel, currentEffort, sessionId, host, onSw
   // No match ⇒ the session runs a model OUTSIDE the catalog — we show that
   // truthfully (synthetic row below) instead of pretending a row is active.
   const liveModel = applied?.model ?? currentModel;
-  const activeRow = matchCatalogRow(models, liveModel);
+  const activeRow = matchSessionModelCatalogEntry(models, liveModel);
   const requestedModel = liveSettings?.requested?.model ?? currentModel;
-  const requestedRow = matchCatalogRow(models, requestedModel);
+  const requestedRow = matchSessionModelCatalogEntry(models, requestedModel);
   // Mismatch = the CLI is NOT running what was requested. Mirrors the server's
   // read-back comparator: 'default' always counts as applied (it can resolve to
   // anything), same catalog row counts, and a legacy alias counts when the live
@@ -185,8 +178,8 @@ export function ModelPicker({ currentModel, currentEffort, sessionId, host, onSw
     if (!requestedModel || !liveModel) return true;
     if (requestedModel === 'default') return true;
     if (requestedRow && activeRow && requestedRow.value === activeRow.value) return true;
-    const req = stripModelDecoration(requestedModel);
-    const liv = stripModelDecoration(liveModel);
+    const req = normalizeSessionModelCatalogId(requestedModel);
+    const liv = normalizeSessionModelCatalogId(liveModel);
     return req === liv || liv.includes(req) || req.includes(liv);
   })();
   const modelMismatch = applied !== null && !requestApplied;
@@ -202,9 +195,12 @@ export function ModelPicker({ currentModel, currentEffort, sessionId, host, onSw
   const xhighSupported = rowLevels !== undefined ? rowLevels.includes('xhigh') : modelSupportsXhighEffort(capabilityModel);
   const maxSupported = rowLevels !== undefined ? rowLevels.includes('max') : modelSupportsMaxEffort(capabilityModel);
 
-  const requestedEffort: SessionEffort = liveSettings?.requested?.effort ?? currentEffort ?? DEFAULT_SESSION_EFFORT;
+  const requestedEffort: SessionEffort = liveSettings?.requested?.effort
+    ?? currentEffort
+    ?? liveSettings?.effective?.effortLevel
+    ?? DEFAULT_SESSION_EFFORT;
   const appliedEffort = (applied?.effort ?? null) as SessionEffort | null;
-  // No explicit effort = the API default ('high'). Live value wins when present.
+  const configuredEffort = liveSettings?.effective?.effortLevel ?? DEFAULT_SESSION_EFFORT;
   const activeEffort: SessionEffort = appliedEffort ?? requestedEffort;
   const effortMismatch = applied !== null && appliedEffort !== null && appliedEffort !== requestedEffort;
 
@@ -238,15 +234,25 @@ export function ModelPicker({ currentModel, currentEffort, sessionId, host, onSw
         <span className="model-picker-current">Current: {activeRow?.displayName ?? shortModelLabel(liveModel)}</span>
         {sessionId && (
           <button
-            className={`model-picker-refresh${refreshing ? ' model-picker-refresh-spinning' : ''}`}
+            className={`model-picker-refresh model-picker-refresh-${refreshState}`}
             onClick={refreshCatalog}
             disabled={refreshing}
             type="button"
-            title="Re-read the model list and live settings from the CLI (use after editing settings.json)"
-            aria-label="Refresh model catalog"
+            title={refreshState === 'failed'
+              ? 'Refresh failed — click to retry.'
+              : refreshState === 'success'
+              ? 'Model list refreshed from the CLI'
+              : 'Re-read the model list and live settings from the CLI (use after editing settings.json)'}
+            aria-label={refreshState === 'failed'
+              ? 'Refresh model catalog — last attempt failed'
+              : refreshState === 'success'
+              ? 'Refresh model catalog — refreshed'
+              : 'Refresh model catalog'}
+            aria-busy={refreshing}
+            data-refresh-state={refreshState}
             data-testid="picker-refresh"
           >
-            ⟳
+            {refreshState === 'success' ? '✓' : refreshState === 'failed' ? '!' : '⟳'}
           </button>
         )}
         <button className="model-picker-close" onClick={onClose} type="button">&times;</button>
@@ -264,7 +270,7 @@ export function ModelPicker({ currentModel, currentEffort, sessionId, host, onSw
               <span className="model-picker-live-dot" aria-hidden>●</span>
               <span>
                 Live: <strong>{shortModelLabel(applied.model)}</strong>
-                {' · '}effort <strong>{appliedEffort ?? 'default (high)'}</strong>
+                {' · '}effort <strong>{appliedEffort ?? `default (${configuredEffort})`}</strong>
                 {applied.mode ? <>{' · '}mode <strong>{applied.mode}</strong></> : null}
               </span>
               {(modelMismatch || effortMismatch) && (

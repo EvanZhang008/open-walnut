@@ -240,6 +240,28 @@ export interface SessionModelCatalogEntry {
   supportedEffortLevels?: SessionEffort[];
 }
 
+export function normalizeSessionModelCatalogId(model: string): string {
+  return model.toLowerCase().replace(/\[1m\]$/, '').replace(/[-_]v\d+(:\d+)?$/, '');
+}
+
+export function matchSessionModelCatalogEntry(
+  models: SessionModelCatalogEntry[],
+  model?: string | null,
+): SessionModelCatalogEntry | null {
+  if (!model) return null;
+  const exact = models.find((entry) => entry.value === model);
+  if (exact) return exact;
+  const resolved = models.find((entry) => entry.value !== 'default' && entry.resolvedModel === model);
+  if (resolved) return resolved;
+  const defaultEntry = models.find((entry) => entry.value === 'default' && entry.resolvedModel === model);
+  if (defaultEntry) return defaultEntry;
+  const needle = normalizeSessionModelCatalogId(model);
+  return models.find((entry) =>
+    normalizeSessionModelCatalogId(entry.value) === needle
+    || (entry.resolvedModel ? normalizeSessionModelCatalogId(entry.resolvedModel) === needle : false),
+  ) ?? null;
+}
+
 /**
  * SESSION_MODELS rendered in catalog shape — the degraded-mode source when the
  * CLI can't answer initialize (old build / dead session / timeout). `value` is
