@@ -16,7 +16,7 @@ import { useNavigate } from 'react-router-dom';
 import { fetchWorkingDirs, prewarmWorkingDirs, type WorkingDirEntry, type ConfiguredHost } from '@/api/sessions';
 import type { TaskPriority } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
-import { classifyInput, resolveSpaceAmbiguity, deleteLastSegment, ghostSuffix, pathValidity, type InputState } from './path-selector/input-model';
+import { classifyInput, resolveSpaceAmbiguity, deleteLastSegment, ghostSuffix, segmentCompletion, pathValidity, type InputState } from './path-selector/input-model';
 import { rankCandidates, buildSections, type Candidate, type RankedItem } from './path-selector/ranking';
 import { useLiveDirs, type HostLiveState } from './path-selector/useLiveDirs';
 import { GhostTextInput } from './path-selector/GhostTextInput';
@@ -44,6 +44,8 @@ export interface QuickStartTaskMeta {
   pinTier: FocusTier | undefined;
   /** Session model alias (SESSION_MODELS id). undefined = Auto — let the CLI/config default decide. */
   model: string | undefined;
+  /** Coding-agent engine. undefined = 'claude' (native path). 'codex' → ACP-backed, local-only. */
+  engine: 'codex' | undefined;
 }
 
 interface Props {
@@ -66,6 +68,7 @@ const DEFAULT_META: QuickStartTaskMeta = {
   priority: 'none',
   pinTier: 'focus',
   model: undefined,      // Auto — Claude/config default picks the model unless user overrides
+  engine: undefined,     // Claude (native) unless the user flips the engine toggle
 };
 
 export function SessionPathSelector({ open, onClose, onSelect, initialMeta, initialPath }: Props) {
@@ -96,6 +99,15 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
   const listRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
 
+  // Programmatic path fill (Tab / click / Cmd+Backspace / seed / ~ rewrite) —
+  // marks the change so the caret-to-end effect below runs ONLY for these,
+  // never for plain typing (see comment on that effect).
+  const programmaticFillRef = useRef(false);
+  const fillPath = useCallback((p: string) => {
+    programmaticFillRef.current = true;
+    setEditingPath(p);
+  }, []);
+
   // Fetch history + pre-warm SSH connections on open
   useEffect(() => {
     if (!open) return;
@@ -110,7 +122,7 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
     const seed = initialPathRef.current;
     if (seed?.cwd) {
       setEditMode(true);
-      setEditingPath(seed.cwd);
+      fillPath(seed.cwd);
       setHostFilter(seed.host ?? '__local__');
     } else {
       setHostFilter('all');
@@ -152,11 +164,17 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
     if (dirs.length > 0 && hasHistory) return;
     seededFiltersRef.current.add(hostFilter);
     setEditMode(true);
-    setEditingPath('~/');
-  }, [open, loading, editMode, hostFilter, dirs]);
+    fillPath('~/');
+  }, [open, loading, editMode, hostFilter, dirs, fillPath]);
 
-  // Keep cursor at end of input when editingPath changes (e.g. after click or Tab)
+  // Caret-to-end ONLY after PROGRAMMATIC fills (Tab / click / Cmd+Backspace / ~
+  // rewrite). This effect used to run on EVERY editingPath change — i.e. every
+  // keystroke — which teleported the caret to the end while the user was editing
+  // mid-string, so continued Backspaces silently ate the END of the path
+  // (reported as "the whole input changed while I was deleting").
   useEffect(() => {
+    if (!programmaticFillRef.current) return;
+    programmaticFillRef.current = false;
     if (editMode && searchRef.current) {
       const len = editingPath.length;
       searchRef.current.setSelectionRange(len, len);
@@ -196,9 +214,9 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
       const typedDir = editingPath.endsWith('/') ? editingPath : editingPath.slice(0, editingPath.lastIndexOf('/') + 1);
       const partial = editingPath.slice(typedDir.length);
       const parent = state.parent.endsWith('/') ? state.parent : state.parent + '/';
-      setEditingPath(parent + partial);
+      fillPath(parent + partial);
     }
-  }, [editMode, hostFilter, editingPath, byHost]);
+  }, [editMode, hostFilter, editingPath, byHost, fillPath]);
 
   // Host tabs — union of configured hosts (config.hosts, even with zero history)
   // and any host seen in history (covers hosts removed from config but still in history).
@@ -296,16 +314,25 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
 
   const flatItems = useMemo(() => sections.flatMap(s => s.items), [sections]);
 
-  // Ghost suffix: first ranked candidate whose leaf strictly prefix-extends the
-  // typed partial (checked in ranked order so it matches the top suggestion).
+  // The first ranked candidate whose leaf prefix-extends the typed partial. This is
+  // ONLY used to decide which row auto-highlights (see effect below) — the ghost
+  // text and every completion key derive from the *highlighted* row, so the grey
+  // prediction, the highlight, and Tab/Enter/→ can never point at different things.
+  const ghostAutoIdx = useMemo(() => {
+    if (!editMode) return -1;
+    const scan = flatItems.slice(0, 10);
+    for (let i = 0; i < scan.length; i++) {
+      if (ghostSuffix(inputState, scan[i].cwd)) return i;
+    }
+    return -1;
+  }, [editMode, inputState, flatItems]);
+
+  // Ghost text = inline preview of the currently-highlighted row. Because Tab/Enter
+  // complete that same row, what you see (grey suffix) is exactly what you get.
   const ghost = useMemo(() => {
     if (!editMode) return null;
-    for (const item of flatItems.slice(0, 10)) {
-      const g = ghostSuffix(inputState, item.cwd);
-      if (g) return g;
-    }
-    return null;
-  }, [editMode, inputState, flatItems]);
+    return ghostSuffix(inputState, flatItems[selectedIdx]?.cwd ?? null);
+  }, [editMode, inputState, flatItems, selectedIdx]);
 
   // Live existence verdict for the typed path — drives the ✓ / "new" badge next
   // to the confirm button, and flips confirm into create-&-start when missing.
@@ -343,7 +370,18 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
 
   // Reset keyboard selection when the input context changes. Deliberately NOT
   // keyed on byHost — progressive per-host arrivals must not yank the cursor.
-  useEffect(() => { setSelectedIdx(0); }, [active, hostFilter, editMode]);
+  // Also clears the "user drove the cursor with ↑↓" flag so the ghost row can
+  // re-take the highlight for the freshly-typed segment.
+  const manualNavRef = useRef(false);
+  useEffect(() => { setSelectedIdx(0); manualNavRef.current = false; }, [active, hostFilter, editMode]);
+
+  // Auto-highlight the row that prefix-completes the typed segment, so the grey
+  // ghost preview lands on the row the user will Tab into. Skip once the user has
+  // manually moved with ↑↓ (their explicit pick wins until the input changes).
+  useEffect(() => {
+    if (manualNavRef.current) return;
+    if (ghostAutoIdx >= 0) setSelectedIdx(ghostAutoIdx);
+  }, [ghostAutoIdx]);
 
   // Scroll selected into view
   useEffect(() => {
@@ -407,12 +445,12 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
       setSelectedIdx(0);
     }
     if (d.source === 'live') {
-      setEditingPath(d.cwd + '/');
+      fillPath(d.cwd + '/');
       if (d.host && hostFilter === 'all') setHostFilter(d.host);
     } else {
-      setEditingPath(d.cwd);
+      fillPath(d.cwd);
     }
-  }, [editMode, hostFilter]);
+  }, [editMode, hostFilter, fillPath]);
 
   // Dismiss by clicking outside / Esc. When editing an already-confirmed selection
   // (opened via initialPath), dismissing SAVES the current edits (path + meta) instead
@@ -449,7 +487,8 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
         e.preventDefault();
         confirmCurrent();
       } else if (e.key === 'Enter') {
-        // Enter: always select/autocomplete (never sends)
+        // Enter: always select/autocomplete (never sends). Follows the highlighted
+        // row, which the ghost effect keeps on the predicted completion.
         e.preventDefault();
         if (flatItems.length > 0) {
           drillOrFill(flatItems[Math.min(selectedIdx, flatItems.length - 1)]);
@@ -461,36 +500,51 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
         setEditingPath('');
       } else if (e.key === 'ArrowDown') {
         e.preventDefault();
+        manualNavRef.current = true;
         setSelectedIdx(prev => Math.min(prev + 1, Math.max(flatItems.length - 1, 0)));
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
+        manualNavRef.current = true;
         setSelectedIdx(prev => Math.max(prev - 1, 0));
       } else if (e.key === 'ArrowRight') {
         // Ghost accept — only when the caret sits at the end of the input;
-        // otherwise let the default caret move happen.
+        // otherwise let the default caret move happen. Same one-segment descend
+        // as Tab, and same REAL-casing rule: never `editingPath + ghost` (typed
+        // 'eksai' + suffix would fabricate a wrong-cased path that doesn't exist
+        // on case-sensitive hosts) — rebuild from the candidate's actual segment.
         const input = e.currentTarget;
         if (ghost && input.selectionStart === input.value.length && input.selectionEnd === input.value.length) {
           e.preventDefault();
-          setEditingPath(editingPath + ghost);
+          const oneLevel = segmentCompletion(inputState, flatItems[selectedIdx]?.cwd ?? null);
+          if (oneLevel) fillPath(oneLevel);
         }
       } else if (e.key === 'Backspace' && e.metaKey) {
         // Cmd+Backspace: delete last path segment (overrides macOS delete-to-line-start)
         e.preventDefault();
-        setEditingPath(deleteLastSegment(editingPath));
+        fillPath(deleteLastSegment(editingPath));
       } else if (e.key === 'Tab') {
+        // Tab: shell-style — complete the CURRENT segment only and descend one
+        // level, using the candidate's REAL casing (typed 'eksai' → the actual
+        // 'EKSAI…' directory name, never `typed + ghost` concatenation, which
+        // fabricates wrong-cased paths on case-sensitive hosts). Never jumps
+        // deeper than one level, even when the highlighted row is a deep path.
+        // Full-row cwd is the last resort (fuzzy/substring hits, no segment rule).
         e.preventDefault();
-        if (flatItems[selectedIdx]) {
-          const sel = flatItems[selectedIdx];
-          setEditingPath(sel.cwd.endsWith('/') ? sel.cwd : sel.cwd + '/');
+        const sel = flatItems[selectedIdx];
+        if (sel) {
+          const oneLevel = segmentCompletion(inputState, sel.cwd);
+          fillPath(oneLevel ?? (sel.cwd.endsWith('/') ? sel.cwd : sel.cwd + '/'));
         }
       }
     } else {
       // --- BROWSE MODE ---
       if (e.key === 'ArrowDown') {
         e.preventDefault();
+        manualNavRef.current = true;
         setSelectedIdx(prev => Math.min(prev + 1, Math.max(flatItems.length - 1, 0)));
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
+        manualNavRef.current = true;
         setSelectedIdx(prev => Math.max(prev - 1, 0));
       } else if (e.key === 'Enter' && (e.shiftKey || e.metaKey)) {
         // Shift+Enter: send selected item directly (skip edit mode)
@@ -506,7 +560,7 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
         handleDismiss();
       }
     }
-  }, [editMode, flatItems, selectedIdx, handleDismiss, confirmCurrent, handleSelect, drillOrFill, hostFilter, hostTabs, ghost, editingPath]);
+  }, [editMode, flatItems, selectedIdx, handleDismiss, confirmCurrent, handleSelect, drillOrFill, hostFilter, hostTabs, ghost, editingPath, inputState, fillPath]);
 
   // Close on outside click — saves edits when editing an existing selection (see handleDismiss).
   useEffect(() => {
@@ -646,8 +700,10 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
       </div>
 
       {/* Task metadata footer — applied to the new task on quick-start.
-          Compact single row in edit mode: space goes back to the path list. */}
-      <MetaFooter meta={meta} onChange={setMeta} compact={editMode} />
+          Compact single row in edit mode: space goes back to the path list.
+          host: the active tab's host drives which catalog fills the model
+          dropdown ('all' tab → local catalog, the overwhelmingly common case). */}
+      <MetaFooter meta={meta} onChange={setMeta} compact={editMode} host={currentHost} />
     </div>
   );
 }

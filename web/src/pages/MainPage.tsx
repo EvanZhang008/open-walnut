@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useMemo, useRef, Fragment } from 'rea
 import type { NavigateFunction } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
 import { SESSION_MODELS } from '@open-walnut/core';
+import { getHostCatalog } from '@/hooks/useModelCatalog';
 import { useChat, type TaskContext, type ImageAttachment } from '@/hooks/useChat';
 import { useAgentConsole } from '@/hooks/useAgentConsole';
 import { useConversations } from '@/hooks/useConversations';
@@ -174,7 +175,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const { health, loading: healthLoading } = useSystemHealth();
   const { mode: chatMode, toggleMode, getPlanPayload } = usePlanMode();
   const { connectionState } = useWebSocket();
-  const { tasks, loading, toggleComplete, setPhase, star, create, update, reorder, moveTask, reparentTask, deleteTask, bakeOrder, clearOperationError, showOperationError, taskGroups, hiddenGroups, groupTasks, addToGroup, ungroupTasks, renameGroup, setGroupHidden } = useTasksContext();
+  const { tasks, loading, refreshing: tasksRefreshing, error: tasksError, toggleComplete, setPhase, star, create, update, reorder, moveTask, reparentTask, deleteTask, bakeOrder, clearOperationError, showOperationError, taskGroups, hiddenGroups, groupTasks, addToGroup, ungroupTasks, renameGroup, setGroupHidden } = useTasksContext();
   const favorites = useFavorites();
   const focusBar = useFocusBarContext();
   const pinnedTaskIdSet = useMemo(() => new Set(focusBar.pinnedIds), [focusBar.pinnedIds]);
@@ -282,6 +283,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   // Session columns state — up to 2 sessions displayed side by side
   const [sessionColumns, setSessionColumns] = useState<SessionSlot[]>(loadSessionColumns);
+  const sessionOpenersRef = useRef(new Map<string, HTMLElement>());
+  const pendingSessionFocusRef = useRef<{
+    opener?: HTMLElement;
+    taskId?: string;
+  } | null>(null);
   // auto-animate attaches to the sessions container and animates child reorder/add/remove
   // with the FLIP technique — same feel as a drag-drop settle, without the jank of
   // View Transitions snapshotting live chat content at the wrong scale.
@@ -482,12 +488,16 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   useEffect(() => {
     // Apply URL pending state (initial load or popstate)
     if (urlSync.pending) {
-      // On initial load, wait for tasks to arrive before applying
-      if (!restoredTaskRef.current && loading) return;
-      restoredTaskRef.current = true;
       const p = urlSync.pending;
+      const task = p.taskId ? tasks.find(t => t.id === p.taskId) : undefined;
+      if (p.taskId && !task && (loading || tasksRefreshing || tasksError)) {
+        // A transient list failure is not evidence that the deep-linked task is
+        // gone. Keep both pending state and the browser URL for the retry.
+        return;
+      }
+
+      restoredTaskRef.current = true;
       if (p.taskId) {
-        const task = tasks.find(t => t.id === p.taskId);
         if (task) setFocusedTask(task);
       }
       if (p.sessionIds.length > 0) {
@@ -511,7 +521,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       const task = tasks.find((t) => t.id === savedTaskId);
       if (task) setFocusedTask(task);
     }
-  }, [loading, tasks, focusedTask, urlSync.pending, urlSync.clearPending]);
+  }, [loading, tasksRefreshing, tasksError, tasks, focusedTask, urlSync.pending, urlSync.clearPending]);
 
   // Restore state from sessionStorage when returning from another page.
   // This is a defensive safety net: if React state was somehow lost while hidden,
@@ -647,14 +657,56 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       showOperationError('All session panels are locked. Unlock one to open a new session.');
       return;
     }
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active !== document.body) {
+      sessionOpenersRef.current.set(sessionId, active);
+    }
     setSessionColumns(next);
   }, [showOperationError]);
 
   const handleToggleSession = openSessionOrToast;
 
   const handleCloseSession = useCallback((sessionId: string) => {
+    const opener = sessionOpenersRef.current.get(sessionId);
+    sessionOpenersRef.current.delete(sessionId);
+    const task = [...taskMapRef.current.values()].find((candidate) =>
+      candidate.session_id === sessionId
+      || candidate.exec_session_id === sessionId
+      || candidate.plan_session_id === sessionId
+      || candidate.session_ids?.includes(sessionId));
+    pendingSessionFocusRef.current = {
+      opener,
+      taskId: task?.id,
+    };
     setSessionColumns(prev => removeSessionColumn(prev, sessionId));
   }, []);
+
+  useEffect(() => {
+    const pending = pendingSessionFocusRef.current;
+    if (!pending) return;
+    pendingSessionFocusRef.current = null;
+    const frame = requestAnimationFrame(() => {
+      const fallback = pending.taskId
+        ? [...document.querySelectorAll<HTMLElement>(
+          `[data-task-id="${CSS.escape(pending.taskId)}"]`,
+        )].find((element) => element.getClientRects().length > 0)
+        : null;
+      const target = pending.opener?.isConnected ? pending.opener : fallback;
+      target?.focus({ preventScroll: true });
+      target?.scrollIntoView({ block: 'nearest' });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [sessionColumns]);
+
+  useEffect(() => {
+    if (sessionColumns.length === 0 || !window.matchMedia('(max-width: 768px)').matches) return;
+    const frame = requestAnimationFrame(() => {
+      document.querySelector<HTMLButtonElement>(
+        '.main-page-session-column.is-mobile-active .session-panel-close',
+      )?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [sessionColumns]);
 
   // Lock toggle — reorders slot; auto-animate handles the smooth slide.
   const handleToggleLockSession = useCallback((sessionId: string) => {
@@ -668,11 +720,18 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   // Auto-switch session panel when "Clear Context & Execute" creates a new exec session
   useEvent('session:status-changed', (data: unknown) => {
-    const d = data as { sessionId?: string; fromPlanSessionId?: string };
-    if (d.fromPlanSessionId && d.sessionId) {
+    const d = data as {
+      sessionId?: string;
+      previousSessionId?: string;
+      fromPlanSessionId?: string;
+      status?: { sessionId?: string };
+    };
+    const nextSessionId = d.status?.sessionId ?? d.sessionId;
+    const previousSessionId = d.previousSessionId ?? d.fromPlanSessionId;
+    if (previousSessionId && nextSessionId) {
       setSessionColumns(prev =>
-        prev.some(c => c.id === d.fromPlanSessionId)
-          ? replaceSessionColumn(prev, d.fromPlanSessionId!, d.sessionId!)
+        prev.some(c => c.id === previousSessionId)
+          ? replaceSessionColumn(prev, previousSessionId, nextSessionId)
           : prev
       );
     }
@@ -880,8 +939,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   // Handle session click from chat: focus the associated task + open session column
   const handleSessionClick = useCallback(async (sessionId: string) => {
-    // Add session column
-    setSessionColumns(prev => addSessionColumn(prev, sessionId, triageOpenRef.current, maxPanelsRef.current));
+    openSessionOrToast(sessionId);
     // Fetch session to find its associated task
     try {
       const session = await fetchSession(sessionId);
@@ -891,7 +949,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         if (task) { setFocusScope('all'); setFocusedTask(task); setFocusNonce((n) => n + 1); }
       }
     } catch { /* non-critical */ }
-  }, []);
+  }, [openSessionOrToast]);
 
   const handleCreate = useCallback(async (input: { title: string; priority: string; category?: string; project?: string; starred?: boolean; pinnedTier?: 'focus' | 'satellite' | 'wait'; capture?: boolean }) => {
     const tier = input.pinnedTier;
@@ -1088,6 +1146,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // Model is a session arg, not task metadata. undefined = Auto (let the
       // CLI/config default decide) — only forwarded when the user picks one.
       const model = metaSnapshot?.model;
+      // Codex is local-only: if the user flipped to Codex and then confirmed a
+      // remote-host path (toggle disables but meta keeps the stale value), fall
+      // back to Claude instead of letting the server reject the quick-start.
+      const engine = qsp.host && qsp.host !== '__local__' ? undefined : metaSnapshot?.engine;
 
       quickStartSession({
         cwd: qsp.cwd,
@@ -1096,6 +1158,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         images,
         taskMeta,
         model,
+        engine,
         intent: qsp.intent,
         createCwd: qsp.createCwd,
       }).then((result) => {
@@ -1166,7 +1229,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         plan_session_status: focusedTask.plan_session_status,
         exec_session_id: focusedTask.exec_session_id,
         exec_session_status: focusedTask.exec_session_status,
-        subtasks: focusedTask.subtasks?.map(s => ({ id: s.id, title: s.title, done: s.done })),
+        subtasks: tasks
+          .filter((candidate) => candidate.parent_task_id && focusedTask.id.startsWith(candidate.parent_task_id))
+          .map((child) => ({
+            id: child.id,
+            title: child.title,
+            done: child.status === 'done' || child.phase === 'COMPLETE',
+          })),
       };
       const plan = getPlanPayload();
       chat.sendMessage(text, taskContext, images, undefined, plan.mode, plan.planModeFirst, plan.planModeOff);
@@ -1176,7 +1245,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       const plan = getPlanPayload();
       chat.sendMessage(text, undefined, images, undefined, plan.mode, plan.planModeFirst, plan.planModeOff);
     }
-  }, [chat, focusedTask, getPlanPayload]);
+  }, [chat, focusedTask, getPlanPayload, tasks]);
 
   const handleCommand = useCallback((cmd: SlashCommand, args?: string) => {
     const ctx: CommandContext = {
@@ -1196,7 +1265,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     : 'Chat';
 
   return (
-    <div className="main-page" style={{ position: 'relative' }}>
+    <div
+      className={`main-page${sessionColumns.length > 0 ? ' has-mobile-session' : ''}`}
+      style={{ position: 'relative' }}
+    >
 
       {/* Todo Panel (LEFT — collapsible via Sidebar toggle) */}
       <div
@@ -1235,7 +1307,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onRenameGroup={renameGroup}
           onSetGroupHidden={setGroupHidden}
           onOpenSession={handleToggleSession}
-          onTaskClick={handleFocusTaskById}
           openSessionIds={openSessionIdSet}
           openSessionTaskIds={openSessionTaskIds}
           onOpenTriageForTask={handleOpenTriageForTask}
@@ -1408,9 +1479,16 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                 <button
                   className="qsb-model-chip"
                   onClick={() => setPathSelectorOpen(true)}
-                  title="Edit launch settings (model, star, pin, priority)"
+                  title="Edit launch settings (engine, model, star, pin, priority)"
                 >
-                  {SESSION_MODELS.find(sm => sm.id === quickStartModel)?.label ?? 'Auto'}
+                  {/* Chip label: codex engine → "Codex" (its models are discovered at
+                      session start, no pre-start pick); legacy alias → static label;
+                      catalog value (full provider ID) → the catalog row's displayName. */}
+                  {quickStartMetaRef.current?.engine === 'codex'
+                    ? 'Codex'
+                    : SESSION_MODELS.find(sm => sm.id === quickStartModel)?.label
+                      ?? getHostCatalog(quickStartPath.host)?.models.find(m => m.value === quickStartModel)?.displayName
+                      ?? (quickStartModel || 'Auto')}
                 </button>
                 <button className="qsb-close" onClick={() => { setQuickStartPath(null); quickStartMetaRef.current = null; setQuickStartModel(undefined); }} aria-label="Cancel quick start">&times;</button>
               </div>
@@ -1528,7 +1606,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             : {};
           return (<Fragment key={sid}>
             {needsDivider && <div className="session-col-resize-handle" onMouseDown={handleColSplitStart} />}
-            <div className={`main-page-session-column${slot.locked ? ' is-locked' : ''}`} style={colStyle}>
+            <div
+              className={`main-page-session-column${slot.locked ? ' is-locked' : ''}${idx === sessionColumns.length - 1 ? ' is-mobile-active' : ''}`}
+              style={colStyle}
+            >
               {isPending && pendingMeta ? (
                 <PendingSessionPanel
                   taskId={sid}

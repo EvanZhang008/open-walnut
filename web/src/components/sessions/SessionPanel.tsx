@@ -18,6 +18,7 @@ import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useSessionSend } from '@/hooks/useSessionSend';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
+import { useNotesAwareFileOpen } from '@/hooks/useNotesAwareFileOpen';
 import type { ImageAttachment } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
 import { fetchSession, executePlanContinue, executePlanSession, updateSession, restartSession, terminateSession, investigateSession, setSessionEffort, setSessionModel } from '@/api/sessions';
@@ -33,6 +34,7 @@ import { ProcessStatusBadge } from './WorkStatusPicker';
 import { SessionForkButton } from './SessionForkButton';
 import { SessionKebabSection } from './SessionKebabSection';
 import { ModelPicker } from './ModelPicker';
+import { CodexModelPicker } from './CodexModelPicker';
 import { modelSupportsEffort, DEFAULT_SESSION_EFFORT } from '@open-walnut/core';
 import { TaskQuickActions } from './TaskQuickActions';
 import { useFullscreen } from '@/hooks/useFullscreen';
@@ -46,6 +48,9 @@ import type { SessionRecord, TaskPhase } from '@/types/session';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
 import { getErrorSuggestion } from '@/utils/error-suggestions';
 import { ErrorSuggestionLink } from '@/components/common/ErrorSuggestionLink';
+import { useResolvedSessionRecord } from '@/hooks/useSessionStatus';
+import { useSessionControls } from '@/hooks/useSessionControls';
+import { nextSessionControlValue, SessionControlPills } from './SessionControlPills';
 
 interface SessionPanelErrorBoundaryProps {
   sessionId: string;
@@ -134,7 +139,12 @@ interface SessionPanelProps {
 export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, locked, onToggleLock, onTaskClick, onOpenTaskDetail, onSessionClick, onSessionReplaced, onForkPending, onForkResolved, onForkFailed }: SessionPanelProps) {
   const navigate = useNavigate();
   const enabledModes = useEnabledModes();
-  const [session, setSession] = useState<SessionRecord | null>(null);
+  const [sessionRecord, setSession] = useState<SessionRecord | null>(null);
+  const session = useResolvedSessionRecord(sessionRecord);
+  const { controls: sessionControls, setControl: setSessionControl } = useSessionControls(
+    sessionId,
+    session?.engine,
+  );
   const [loading, setLoading] = useState(true);
   const { optimisticMsgs, sendError, send, interruptSend, retryFailed, dismissFailed, handleMessagesDelivered, handleBatchCompleted, handleBatchFailed, handleEditQueued, handleDeleteQueued, addExternalQueued } = useSessionSend(sessionId);
   // isStreaming is bubbled up from the single useSessionStream instance that lives
@@ -229,11 +239,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     }
   }
 
-  // FileViewer state
+  // FileViewer state — vault notes divert to the Notes page instead
   const [fileViewerState, setFileViewerState] = useState<{ path: string; line?: number } | null>(null);
-  const handleFileOpen = useCallback((path: string, line?: number) => {
+  const openFileViewer = useCallback((path: string, line?: number) => {
     setFileViewerState({ path, line });
   }, []);
+  const handleFileOpen = useNotesAwareFileOpen(openFileViewer, session?.host);
   const handleFileViewerClose = useCallback(() => setFileViewerState(null), []);
 
   // Scroll-to-message handler for UserMessagesSummary
@@ -311,23 +322,11 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     return () => { cancelled = true; };
   }, [sessionId]);
 
-  // Merge event data directly on status changes (avoids stale DB reads)
+  // Task phase is not part of SessionStatusSnapshot; keep only that sibling
+  // record synchronized from the event.
   useEvent('session:status-changed', (data) => {
-    const d = data as { sessionId?: string; process_status?: string; phase?: string; activity?: string; mode?: string; planCompleted?: boolean; errorMessage?: string };
+    const d = data as { sessionId?: string; phase?: string };
     if (d.sessionId === sessionId) {
-      setSession(prev => prev ? {
-        ...prev,
-        process_status: (d.process_status ?? prev.process_status) as SessionRecord['process_status'],
-        activity: d.activity ?? prev.activity,
-        mode: (d.mode ?? prev.mode) as SessionRecord['mode'],
-        ...(d.planCompleted ? { planCompleted: true } : {}),
-        // Surface errorMessage from status-changed event (e.g. stderr from remote process death)
-        ...(d.errorMessage ? { errorMessage: d.errorMessage } : {}),
-        // Clear stale error when session recovers from error state
-        ...(!d.errorMessage && d.process_status && d.process_status !== 'error' ? { errorMessage: undefined } : {}),
-        lastActiveAt: new Date().toISOString(),
-      } : prev);
-      // Update phase on sessionTask if present
       if (d.phase) {
         setSessionTask(prev => prev ? { ...prev, phase: d.phase as import('@open-walnut/core').Task['phase'] } : prev);
       }
@@ -358,12 +357,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   });
 
   useEvent('session:error', (data) => {
-    const d = data as { sessionId?: string; error?: string };
+    const d = data as { sessionId?: string };
     if (d.sessionId === sessionId) {
-      // Immediately show error message from event (before refetch completes)
-      if (d.error) {
-        setSession(prev => prev ? { ...prev, process_status: 'error' as const, errorMessage: d.error!.slice(0, 500) } : prev);
-      }
       fetchSession(sessionId).then((s) => { if (s) setSession(s); }).catch(() => {});
     }
   });
@@ -628,7 +623,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
           (the .session-panel root) so the `.open-walnut-fullscreen.is-changed-open`
           rule that drops the 1400px cap actually matches — otherwise the split
           view stays guttered at 1400px in this slide-out. */}
-      <div className={`session-panel${fullscreenClass}${splitOpen ? ' is-changed-open' : ''}`}>
+      <div
+        className={`session-panel${fullscreenClass}${splitOpen ? ' is-changed-open' : ''}`}
+        data-session-id={sessionId}
+      >
         <div className="session-panel-header">
           <div className="session-panel-header-top">
             <div className="session-panel-title-area">
@@ -744,7 +742,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               >
                 {isFullscreen ? ICON_COLLAPSE : ICON_EXPAND}
               </button>
-              <button className="task-action-btn session-panel-close" onClick={() => onClose(sessionId)} title="Close session panel">
+              <button
+                className="task-action-btn session-panel-close"
+                onClick={() => onClose(sessionId)}
+                title="Close session panel"
+                aria-label="Close session panel"
+              >
                 {ICON_CLOSE}
               </button>
             </div>
@@ -837,6 +840,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               sessionId={sessionId}
               cwd={session?.cwd}
               taskId={session?.taskId}
+              engine={session?.engine}
               onForkStarted={(cwd, host) => { onForkPending?.(cwd, host); }}
               onForkComplete={(newTaskId) => { onForkResolved?.(newTaskId); onTaskClick?.(newTaskId); }}
               onForkFailed={(errMsg) => onForkFailed?.(errMsg)}
@@ -862,7 +866,17 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             >
               Terminal
             </button>
-            {displayModel && (
+            {session?.engine === 'codex' && (
+              <CodexModelPicker
+                sessionId={sessionId}
+                currentModelId={session.acpModel}
+                contextPercent={contextPercent}
+                onModelChange={(acpModel) => {
+                  setSession((previous) => previous ? { ...previous, acpModel } : previous);
+                }}
+              />
+            )}
+            {displayModel && session?.engine !== 'codex' && (
               <button
                 type="button"
                 className="session-detail-model-pill session-detail-model-pill-clickable"
@@ -904,6 +918,11 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                   );
                 })()}
               </button>
+            )}
+            {session?.messageCount != null && session.messageCount > 0 && (
+              <span className="session-panel-message-count">
+                {session.messageCount} {session.messageCount === 1 ? 'turn' : 'turns'}
+              </span>
             )}
             {session?.lastActiveAt && <span className="session-panel-time">{timeAgo(session.lastActiveAt)}</span>}
           </div>
@@ -1010,6 +1029,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
           <SessionChatHistory
             key={sessionId}
             sessionId={sessionId}
+            engine={session?.engine}
             phase={taskPhase}
             initialPrompt={historyMessages.find(m => m.role === 'user')?.text}
             sessionCwd={session?.cwd}
@@ -1059,19 +1079,39 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             const icon = MODE_ICONS[currentMode] ?? '\u2699\uFE0F';
             const label = MODE_LABELS[currentMode] ?? currentMode;
             return (
+              <>
+                {/* Recap tip — one line "what just happened" (self-report) right above
+                    the mode bar, so the user re-orients on a long session without
+                    re-reading the transcript. Hidden while streaming (live output
+                    makes it redundant). */}
+                {session.recap && !isStreaming && (
+                  <div className="session-recap-tip" title={session.recap}>
+                    <span className="session-recap-tip-icon">💬</span>
+                    <span className="session-recap-tip-text">{session.recap}</span>
+                  </div>
+                )}
               <div className="session-mode-bar">
-                <button
-                  className={`mode-toggle-pill${isPlan ? ' plan-active' : ''}`}
-                  onClick={toggleMode}
-                  title={`Mode: ${currentMode}. Click or Shift+Tab to cycle → ${nextMode}`}
-                >
-                  <span className="mode-toggle-pill-label">
-                    {icon} {label}
-                  </span>
-                  <span className="mode-toggle-pill-shortcut">{'\u21E7'}Tab</span>
-                </button>
+                {session.engine === 'codex' ? (
+                  <SessionControlPills
+                    controls={sessionControls}
+                    setControl={setSessionControl}
+                    showModeShortcut
+                  />
+                ) : (
+                  <button
+                    className={`mode-toggle-pill${isPlan ? ' plan-active' : ''}`}
+                    onClick={toggleMode}
+                    title={`Mode: ${currentMode}. Click or Shift+Tab to cycle → ${nextMode}`}
+                  >
+                    <span className="mode-toggle-pill-label">
+                      {icon} {label}
+                    </span>
+                    <span className="mode-toggle-pill-shortcut">{'\u21E7'}Tab</span>
+                  </button>
+                )}
                 <SideQuestionDrawer sessionId={session?.claudeSessionId} />
               </div>
+              </>
             );
           })()}
           <ChatInput
@@ -1090,6 +1130,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             prefillText={prefillText}
             prefillNonce={prefillNonce}
             onToggleMode={session ? () => {
+              if (session.engine === 'codex') {
+                const control = sessionControls.find((candidate) => candidate.id === 'mode');
+                const next = nextSessionControlValue(control);
+                if (control && next) void setSessionControl(control.id, next);
+                return;
+              }
               const cur = session.mode || 'default';
               const next = enabledModes[(enabledModes.indexOf(cur) + 1) % enabledModes.length]!;
               setSession({ ...session, mode: next });
@@ -1104,6 +1150,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               currentModel={rawModel}
               currentEffort={session?.effectiveEffort ?? session?.effort}
               sessionId={sessionId}
+              host={session?.host}
               onSwitch={handleModelSwitch}
               onEffortSwitch={handleEffortSwitch}
               onClose={() => setModelPickerOpen(false)}

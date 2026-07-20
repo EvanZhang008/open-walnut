@@ -78,7 +78,8 @@ const SESSION_EVENT_TO_BUS: Record<SessionEventName, string | null> = {
   'session:compact': null,  // Handled via onEvent callback
   'session:result': EventNames.SESSION_RESULT,
   'session:error': EventNames.SESSION_ERROR,
-  'session:status': EventNames.SESSION_STATUS_CHANGED,
+  // Status must commit through session-tracker before publication.
+  'session:status': null,
 }
 
 export class SessionServerClient {
@@ -285,6 +286,11 @@ export class SessionServerClient {
       this.onEvent(frame)
     }
 
+    if (frame.name === 'session:status') {
+      this.commitStatusEvent(frame)
+      return
+    }
+
     // Map to bus events for standard session events
     const busEventName = SESSION_EVENT_TO_BUS[frame.name]
     if (busEventName) {
@@ -359,21 +365,35 @@ export class SessionServerClient {
       break
     }
 
-    case 'session:status': {
-      const d = data as SessionStatusData
-      bus.emit(busEventName, {
-        sessionId,
-        process_status: d.status === 'running' ? 'running' : 'stopped',
-        phase: d.status === 'running' ? 'IN_PROGRESS' : 'AGENT_COMPLETE',
-        activity: d.activity,
-      }, ['*'], { source: 'session-server', urgency: 'urgent' })
-      break
-    }
-
     default:
       // Other events are handled via onEvent callback
       break
     }
+  }
+
+  private commitStatusEvent(frame: EventFrame): void {
+    const d = frame.data as SessionStatusData
+    const processStatus = d.status === 'running' ? 'running' : 'stopped'
+    void import('../core/session-tracker.js').then(async ({
+      emitSessionStatusChanged,
+      updateSessionRecord,
+    }) => {
+      const updated = await updateSessionRecord(frame.sessionId, {
+        process_status: processStatus,
+        activity: d.activity,
+      })
+      emitSessionStatusChanged(
+        updated,
+        { phase: processStatus === 'running' ? 'IN_PROGRESS' : 'AGENT_COMPLETE' },
+        ['*'],
+        { source: 'session-server', urgency: 'urgent' },
+      )
+    }).catch((err) => {
+      log.session.warn('session-server status commit failed', {
+        sessionId: frame.sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    })
   }
 
   private handleClose(): void {

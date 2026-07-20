@@ -6,7 +6,6 @@
  */
 
 import { createServer, type Server as HttpServer } from 'node:http'
-import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -54,6 +53,14 @@ import { CLOUD_MODE, CRON_FILE, IS_EPHEMERAL, WALNUT_HOME } from '../constants.j
 import { sessionRunner } from '../providers/claude-code-session.js'
 import { SessionHealthMonitor } from '../core/session-health-monitor.js'
 import { SessionReaper } from '../core/session-reaper.js'
+import { isClaudeCliInstalled } from '../core/claude-cli-detect.js'
+import {
+  runQmdBackgroundIndex,
+  stopQmdBackgroundIndex,
+} from '../core/qmd-background-indexer.js'
+import { dispatchQmdIncrementalIndex } from '../core/qmd-dispatcher.js'
+import { createQmdIncrementalQueue } from '../core/qmd-incremental-queue.js'
+import { runQmdIndexWork, waitForQmdIndexWork } from '../core/qmd-work-queue.js'
 import { subagentRunner } from '../providers/subagent-runner.js'
 import { getTask, listTasks } from '../core/task-manager.js'
 import type { Task } from '../core/types.js'
@@ -164,9 +171,11 @@ let heartbeatHandle: HeartbeatRunnerHandle | null = null
 let recordingReaperHandle: { stop: () => void } | null = null
 let terminalReaperHandle: { stop: () => void } | null = null
 let qmdWatcherHandle: { stop: () => void } | null = null
+let qmdSyncStop: (() => Promise<void>) | null = null
 let gitAutoCommitHandle: { stop: () => void; health: GitAutoCommitHealth } | null = null
 let taskProjectionHandle: { stop: () => void } | null = null
 let sessionProjectionHandle: { stop: () => void } | null = null
+let claudeSettingsWatcherStop: (() => void) | null = null
 // Pending deferred-markDone timers from the session:status-changed handler.
 // Hoisted to module scope so stopServer() can cancel them before teardown,
 // otherwise a late-firing timer could mutate sessionStreamBuffer after the
@@ -234,14 +243,9 @@ export async function refreshSystemHealth(): Promise<SystemHealthState> {
   return systemHealth
 }
 
-/** Check if Claude Code CLI is on the PATH. */
+/** Check if Claude Code CLI is available to Walnut. */
 function checkClaudeCliAvailable(): boolean {
-  try {
-    execFileSync('which', ['claude'], { stdio: 'ignore' })
-    return true
-  } catch {
-    return false
-  }
+  return isClaudeCliInstalled()
 }
 
 /** Resolve provider readiness + where the Bedrock credential came from.
@@ -301,6 +305,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Ensure ~/.open-walnut/ directory structure exists and seed config defaults
   const { initDirectories } = await import('../core/init.js')
   await initDirectories()
+  const { initializeQmdRuntimeModel } = await import('../core/qmd-model.js')
+  await initializeQmdRuntimeModel()
 
   // Route every log.error()/log.fatal() into the notification center (deduped
   // + storm-throttled in the bridge). Installed before any subsystem starts so
@@ -314,7 +320,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // ── Setup health checks: Claude CLI + provider readiness ──
   systemHealth.claudeCliAvailable = checkClaudeCliAvailable()
   if (!systemHealth.claudeCliAvailable) {
-    log.web.warn('Claude Code CLI not found on PATH — sessions will not work')
+    log.web.warn('Claude Code CLI not found — sessions will not work')
   }
   {
     const cred = await resolveCredentialHealth()
@@ -385,7 +391,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   const port = options.port ?? DEFAULT_PORT
   const dev = options.dev ?? false
   const isEphemeral = IS_EPHEMERAL
-  // Own-server URL for agent-facing skills/tools (e.g. walnut-plugin-store curls
+  // Own-server URL for agent-facing skills/tools (e.g. the install-plugin skill curls
   // the REST API). Sandbox/demo servers on other ports inherit the right value.
   process.env.WALNUT_SERVER_URL = `http://localhost:${port}`
 
@@ -744,7 +750,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // First-boot claim flow (cloud mode) — publicly reachable by design; the
   // auth middleware exempts /api/v1/setup/* (see CLOUD_EXEMPT_PREFIXES).
   app.use('/api/v1/setup', setupRouter)
-  // Frozen REST+SSE facade for mobile clients (see docs/api-v1.md).
+  // Frozen REST+SSE facade for mobile clients (see docs/reference/api-v1.md).
   app.use('/api/v1', apiV1Router)
   // Session talk endpoints (additive): send into + stream out of CC sessions.
   app.use('/api/v1', sessionStreamV1Router)
@@ -796,6 +802,23 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // -- Error handlers (must be last) --
   app.use('/api', notFoundHandler)
   app.use(errorHandler)
+
+  // Force task-store initialization and migrations before accepting traffic.
+  // A successful but incomplete response during lazy initialization is worse
+  // than a short connection wait: the SPA can persist the bogus empty state.
+  const taskPrewarmStartedAt = Date.now()
+  try {
+    const tasks = await listTasks()
+    log.web.info('startup: task store prewarmed before listen', {
+      tasks: tasks.length,
+      durationMs: Date.now() - taskPrewarmStartedAt,
+    })
+  } catch (err) {
+    log.web.error('task store prewarm failed; refusing to listen', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+    throw err
+  }
 
   // -- HTTP + WebSocket --
   httpServer = createServer(app)
@@ -919,19 +942,27 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     log.web.info(`startup: ${name}`, { elapsedSinceListenMs: elapsed })
   }
 
-  // -- Pull latest data from git (remote hooks may have pushed new data) --
+  // Pull after listen without gating HTTP. Once any remote outbox/projection is
+  // reconciled, broadcast the existing bulk task signal so early clients fetch
+  // the post-pull source of truth.
   if (!isEphemeral) {
-    await gitPullWalnut()
-    startupPhase('git pull done')
-  }
-
-  // -- Prewarm task store: force load + migration before accepting requests --
-  // Without this, early HTTP requests can hit an uninitialized store and return [].
-  try {
-    const tasks = await listTasks()
-    startupPhase(`task store prewarmed (${tasks.length} tasks)`)
-  } catch (err) {
-    log.web.warn('task store prewarm failed', { error: err instanceof Error ? err.message : String(err) })
+    void gitPullWalnut()
+      .then(async () => {
+        startupPhase('background git pull done')
+        const { reconcileAfterPull } = await import('../core/task-outbox.js')
+        await reconcileAfterPull()
+        bus.emit(
+          EventNames.TASK_UPDATED,
+          { task: null } as any,
+          ['web-ui'],
+          { source: 'startup-git-pull' },
+        )
+      })
+      .catch((err) => {
+        log.git.warn('startup git pull failed', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      })
   }
 
   // -- Reconcile zombie sessions + identify reconnectable ones --
@@ -992,139 +1023,190 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
   // -- QMD hybrid search stores --
   // Opt-out for lean/clean-room deployments (Docker onboarding test, CI) where the
-  // ~1.16GB embedding model download is unwanted and search isn't exercised.
+  // embedding model download is unwanted and search isn't exercised.
   if (process.env.WALNUT_DISABLE_SEARCH === '1') {
     log.memory.info('QMD search disabled via WALNUT_DISABLE_SEARCH=1 — skipping embedding model init')
   } else if (CLOUD_MODE) {
     // Cloud companion: no semantic indexes (keyword/FTS search still works).
     log.memory.info('cloud mode: skipping QMD semantic index init')
   } else try {
-    const { initQmdStores } = await import('../core/qmd-store.js')
     const { startQmdWatcher } = await import('../core/qmd-watcher.js')
-    const { setQmdRouteStatus } = await import('./routes/qmd.js')
-    // Non-blocking: init stores in background (update + embed can be slow)
+    const {
+      setQmdRouteStatus,
+      setQmdEmbedProgress,
+      setQmdStoreStats,
+    } = await import('./routes/qmd.js')
     setQmdRouteStatus('indexing')
-    initQmdStores()
-      .then(() => { setQmdRouteStatus('ready') })
-      .catch(err => {
-        const msg = err instanceof Error ? err.message : String(err)
-        setQmdRouteStatus('error', msg)
-        log.memory.warn('QMD store init failed', { error: msg })
-      })
     qmdWatcherHandle = startQmdWatcher()
     log.memory.info('QMD watcher started')
 
-    // Delay the initial bulk QMD sync by 60s so startup doesn't starve the event loop
-    // with a fs.stat storm across ~2600 tasks + all sessions. Incremental sync via
-    // bus.subscribe('qmd-task-sync') / ('qmd-session-sync') continues to run normally
-    // for live writes — this only defers the startup backfill.
-    setTimeout(() => {
-      Promise.all([
-        import('../core/qmd-task-sync.js').then(m => m.syncAllTasks()),
-        import('../core/qmd-session-sync.js').then(m => m.syncAllSessions()),
-      ]).then(() => {
-        log.memory.info('Task + session QMD sync complete')
-      }).catch(err => {
-        log.memory.warn('Task/session QMD sync failed', { error: err instanceof Error ? err.message : String(err) })
+    const qmdBackfillDelayMs = options.dev ? 0 : 60_000
+    let qmdBackfillTimer: ReturnType<typeof setTimeout>
+
+    if (options.dev) {
+      // Deterministic in-process path for focused QMD tests. Production never
+      // executes these synchronous native operations in the web process.
+      const { initQmdStores } = await import('../core/qmd-store.js')
+      let qmdInitError: unknown
+      const qmdInitPromise = runQmdIndexWork('qmd:startup-init', () =>
+        initQmdStores({ onProgress: setQmdEmbedProgress }))
+        .catch(err => {
+          qmdInitError = err
+        })
+
+      qmdBackfillTimer = setTimeout(() => {
+        ;(async () => {
+          await qmdInitPromise
+          if (qmdInitError) throw qmdInitError
+          const taskSync = await import('../core/qmd-task-sync.js')
+          const sessionSync = await import('../core/qmd-session-sync.js')
+          await runQmdIndexWork('tasks:startup-sync', () => taskSync.syncAllTasks({
+            onProgress: (progress) => setQmdEmbedProgress('task', progress),
+          }))
+          await runQmdIndexWork('sessions:startup-sync', () => sessionSync.syncAllSessions({
+            onProgress: (progress) => setQmdEmbedProgress('session', progress),
+          }))
+          const { collectQmdCorpusStats } = await import('../core/qmd-stats.js')
+          const stats = await runQmdIndexWork(
+            'qmd:status-snapshot',
+            collectQmdCorpusStats,
+          )
+          setQmdStoreStats(stats)
+        })().then(() => {
+          setQmdRouteStatus('ready')
+          log.memory.info('Task + session QMD sync complete')
+        }).catch(err => {
+          const message = err instanceof Error ? err.message : String(err)
+          setQmdRouteStatus('error', message)
+          log.memory.warn('Task/session QMD sync failed', { error: message })
+        })
+      }, qmdBackfillDelayMs)
+    } else {
+      // Production indexing is isolated in a lower-priority child process.
+      // better-sqlite3/sqlite-vec and local embedding inference are synchronous;
+      // a Promise queue alone cannot keep the web event loop responsive.
+      qmdBackfillTimer = setTimeout(() => {
+        void (async () => {
+          const [
+            { resolveConfiguredQmdModel },
+            { qmdStoresRequireModelReset },
+          ] = await Promise.all([
+            import('../core/qmd-model.js'),
+            import('../core/qmd-store.js'),
+          ])
+          const model = await resolveConfiguredQmdModel()
+          const resetStores = qmdStoresRequireModelReset(model)
+          await runQmdBackgroundIndex({
+            initialize: true,
+            model,
+            resetStores,
+            onProgress: setQmdEmbedProgress,
+            onStats: setQmdStoreStats,
+          })
+        })().then(() => {
+          setQmdRouteStatus('ready')
+          log.memory.info('Background QMD corpus sync complete')
+        }).catch(err => {
+          const message = err instanceof Error ? err.message : String(err)
+          setQmdRouteStatus('error', message)
+          log.memory.warn('Background QMD corpus sync failed', { error: message })
+        })
+      }, qmdBackfillDelayMs)
+      log.memory.info('QMD corpus sync scheduled in background worker', {
+        delayMs: qmdBackfillDelayMs,
       })
-    }, 60_000)
+    }
 
     // ── Incremental QMD sync via event bus (debounced) ──
     // Collect changed task/session IDs in Sets, flush after 2s idle.
     // embed() is called once per flush (not per event) to avoid thrashing.
     {
-      const pendingTaskIds = new Set<string>();
-      const pendingDeletedTaskIds = new Set<string>();
-      const pendingSessionIds = new Set<string>();
-      let taskFlushTimer: ReturnType<typeof setTimeout> | null = null;
-      let sessionFlushTimer: ReturnType<typeof setTimeout> | null = null;
       const DEBOUNCE_MS = 2000;
-
-      async function flushTasks(): Promise<void> {
-        taskFlushTimer = null;
-        const toSync = [...pendingTaskIds];
-        const toDelete = [...pendingDeletedTaskIds];
-        pendingTaskIds.clear();
-        pendingDeletedTaskIds.clear();
-        if (toSync.length === 0 && toDelete.length === 0) return;
-        try {
-          const { syncTask, removeTask, flushTaskEmbeddings } = await import('../core/qmd-task-sync.js');
-          const { getTask } = await import('../core/task-manager.js');
-          for (const id of toDelete) {
-            await removeTask(id).catch(() => {});
-          }
-          for (const id of toSync) {
-            try {
-              const task = await getTask(id);
-              await syncTask(task);
-            } catch { /* task may have been deleted between event and flush */ }
-          }
-          await flushTaskEmbeddings();
-          log.memory.info('QMD incremental task sync', { synced: toSync.length, deleted: toDelete.length });
-        } catch (err) {
-          log.memory.warn('QMD incremental task sync failed', { error: err instanceof Error ? err.message : String(err) });
-        }
-      }
-
-      async function flushSessions(): Promise<void> {
-        sessionFlushTimer = null;
-        const toSync = [...pendingSessionIds];
-        pendingSessionIds.clear();
-        if (toSync.length === 0) return;
-        try {
-          const { syncSession, flushSessionEmbeddings } = await import('../core/qmd-session-sync.js');
-          const { getSessionByClaudeId } = await import('../core/session-tracker.js');
-          for (const id of toSync) {
-            try {
-              const session = await getSessionByClaudeId(id);
-              if (session) await syncSession(session);
-            } catch { /* session may have been removed */ }
-          }
-          await flushSessionEmbeddings();
-          log.memory.info('QMD incremental session sync', { synced: toSync.length });
-        } catch (err) {
-          log.memory.warn('QMD incremental session sync failed', { error: err instanceof Error ? err.message : String(err) });
-        }
-      }
-
-      function scheduleTaskFlush(): void {
-        if (taskFlushTimer) clearTimeout(taskFlushTimer);
-        taskFlushTimer = setTimeout(() => { flushTasks().catch(() => {}) }, DEBOUNCE_MS);
-      }
-
-      function scheduleSessionFlush(): void {
-        if (sessionFlushTimer) clearTimeout(sessionFlushTimer);
-        sessionFlushTimer = setTimeout(() => { flushSessions().catch(() => {}) }, DEBOUNCE_MS);
-      }
+      const taskQueue = createQmdIncrementalQueue({
+        debounceMs: DEBOUNCE_MS,
+        dispatch: (taskIds) => dispatchQmdIncrementalIndex(
+          { taskIds },
+          { onStats: setQmdStoreStats },
+        ),
+        onSuccess: (counts) => {
+          log.memory.info('QMD incremental task sync', counts)
+        },
+        onError: (err, retryInMs) => {
+          log.memory.warn('QMD incremental task sync failed; retry scheduled', {
+            error: err instanceof Error ? err.message : String(err),
+            retryInMs,
+          })
+        },
+      })
+      const sessionQueue = createQmdIncrementalQueue({
+        debounceMs: DEBOUNCE_MS,
+        dispatch: (sessionIds) => dispatchQmdIncrementalIndex(
+          { sessionIds },
+          { onStats: setQmdStoreStats },
+        ),
+        onSuccess: (counts) => {
+          log.memory.info('QMD incremental session sync', counts)
+        },
+        onError: (err, retryInMs) => {
+          log.memory.warn('QMD incremental session sync failed; retry scheduled', {
+            error: err instanceof Error ? err.message : String(err),
+            retryInMs,
+          })
+        },
+      })
 
       bus.subscribe('qmd-task-sync', (event) => {
         if (event.name === EventNames.TASK_CREATED || event.name === EventNames.TASK_UPDATED || event.name === EventNames.TASK_COMPLETED) {
-          const taskId = (event.data as { task?: { id?: string } })?.task?.id;
-          if (taskId) {
-            pendingTaskIds.add(taskId);
-            scheduleTaskFlush();
+          const data = event.data as {
+            task?: { id?: string } | null;
+            taskIds?: string[];
+          };
+          const taskIds = data.task?.id ? [data.task.id] : data.taskIds ?? [];
+          for (const taskId of taskIds) {
+            if (taskId) taskQueue.enqueue(taskId, 'sync')
           }
         } else if (event.name === EventNames.TASK_DELETED) {
           const taskId = (event.data as { task?: { id?: string } })?.task?.id;
           if (taskId) {
-            pendingDeletedTaskIds.add(taskId);
-            pendingTaskIds.delete(taskId);
-            scheduleTaskFlush();
+            taskQueue.enqueue(taskId, 'delete')
           }
         }
         // interest below keeps this off the high-frequency streaming fan-out
       }, { global: true, interest: ['task:created', 'task:updated', 'task:completed', 'task:deleted'] })
 
       bus.subscribe('qmd-session-sync', (event) => {
-        if (event.name === EventNames.SESSION_STARTED || event.name === EventNames.SESSION_RESULT
-          || event.name === EventNames.SESSION_ERROR || event.name === EventNames.SESSION_STATUS_CHANGED) {
+        if (event.name === EventNames.SESSION_DELETED) {
+          const sessionIds = (event.data as { sessionIds?: string[] })?.sessionIds ?? [];
+          for (const sessionId of sessionIds) {
+            sessionQueue.enqueue(sessionId, 'delete')
+          }
+        } else if (event.name === EventNames.SESSION_STARTED
+          || event.name === EventNames.SESSION_CONTENT_UPDATED
+          || event.name === EventNames.SESSION_RESULT
+          || event.name === EventNames.SESSION_ERROR) {
           const sessionId = (event.data as { sessionId?: string })?.sessionId;
           if (sessionId) {
-            pendingSessionIds.add(sessionId);
-            scheduleSessionFlush();
+            sessionQueue.enqueue(sessionId, 'sync')
           }
         }
-      }, { global: true, interest: ['session:started', 'session:result', 'session:error', 'session:status-changed'] })
+      }, {
+        global: true,
+        interest: [
+          'session:started',
+          'session:content-updated',
+          'session:deleted',
+          'session:result',
+          'session:error',
+        ],
+      })
+
+      await qmdSyncStop?.()
+      qmdSyncStop = async () => {
+        clearTimeout(qmdBackfillTimer)
+        const queueStops = [taskQueue.stop(), sessionQueue.stop()]
+        await stopQmdBackgroundIndex()
+        await Promise.all(queueStops)
+      }
     }
   } catch (err) {
     log.memory.warn('QMD startup failed', {
@@ -1141,6 +1223,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // so a slim tasks/projection.json rides git-sync to the cloud companion,
     // which serves it at GET /api/v1/tasks. Cloud mode only reads the file.
     if (!CLOUD_MODE) {
+      // Model catalog freshness: settings.json edits invisibly change the CLI
+      // model menu (live CLIs hot-reload it). Watch the file and force one
+      // live local session to refetch — that pushes the new catalog to every
+      // picker and rewrites the host store.
+      const { watchClaudeSettings } = await import('../core/claude-settings-watcher.js')
+      claudeSettingsWatcherStop = watchClaudeSettings(() => {
+        sessionRunner.refreshLocalModelCatalogs()
+      })
+
       const { startTaskProjectionExport } = await import('../core/task-projection.js')
       taskProjectionHandle = startTaskProjectionExport()
       // Session projection rides the same pipeline: sessions.json is
@@ -1456,7 +1547,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // check: live output normally rides a record flipped 'running' at send time
         // (writeMessage persists it before the first delta can arrive).
         // (replayed===true already returned above, before consuming the check.)
-        const { getSessionByClaudeId, updateSessionRecordConditionally } = await import('../core/session-tracker.js')
+        const {
+          emitSessionStatusChanged,
+          getSessionByClaudeId,
+          updateSessionRecordConditionally,
+        } = await import('../core/session-tracker.js')
         const record = await getSessionByClaudeId(sessionId)
         if (replayed === undefined) {
           if (record && record.process_status !== 'running') {
@@ -1488,9 +1583,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
             log.web.warn('streaming-evidence self-heal: error record revived by positionally-new output', {
               taskId, sessionId,
             })
-            bus.emit(EventNames.SESSION_STATUS_CHANGED, {
-              sessionId, taskId, process_status: 'running' as const,
-            }, ['*'], { source: 'server:stream-delta', urgency: 'urgent' })
+            emitSessionStatusChanged(
+              healed,
+              {},
+              ['*'],
+              { source: 'server:stream-delta', urgency: 'urgent' },
+            )
           }
         }
         const { applySessionPhase } = await import('../core/phase.js')
@@ -1625,6 +1723,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       if (sessionId) {
         sendStreamEvent(sessionId, event.name, event.data)
       }
+    } else if (event.name === 'session:model-catalog') {
+      // Eager catalog push (fetched on init / invalidation refetch). Broadcast to
+      // ALL clients, not just stream subscribers: the quick-session dropdown and
+      // host-level caches need it without being subscribed to any session.
+      broadcastEvent(event.name, event.data)
     } else if (event.name === 'session:team-info' || event.name === 'session:team-agent-delta') {
       // Team events: broadcast to all clients (frontend filters by sessionId)
       broadcastEvent(event.name, event.data)
@@ -3103,6 +3206,15 @@ export async function stopServer(): Promise<void> {
   // Always detach — sessions are detached child processes and must survive
   // server shutdown. Never kill session PIDs from stopServer().
   sessionRunner.destroy()
+  if (qmdSyncStop) {
+    await qmdSyncStop()
+    qmdSyncStop = null
+  }
+  // Also covers a worker started through the admin route in cloud mode or
+  // before startup finished assigning qmdSyncStop.
+  await stopQmdBackgroundIndex()
+  bus.unsubscribe('qmd-task-sync')
+  bus.unsubscribe('qmd-session-sync')
   if (qmdWatcherHandle) {
     qmdWatcherHandle.stop()
     qmdWatcherHandle = null
@@ -3117,8 +3229,11 @@ export async function stopServer(): Promise<void> {
   // node-llama-cpp's static destructors (SIGABRT on shutdown).
   try {
     const { closeQmdStores } = await import('../core/qmd-store.js')
+    await waitForQmdIndexWork()
     await closeQmdStores()
   } catch { /* best-effort */ }
+  const { resetQmdRuntimeModel } = await import('../core/qmd-model.js')
+  resetQmdRuntimeModel()
   if (gitAutoCommitHandle) {
     gitAutoCommitHandle.stop()
     gitAutoCommitHandle = null
@@ -3131,6 +3246,10 @@ export async function stopServer(): Promise<void> {
     sessionProjectionHandle.stop()
     sessionProjectionHandle = null
   }
+  if (claudeSettingsWatcherStop) {
+    claudeSettingsWatcherStop()
+    claudeSettingsWatcherStop = null
+  }
   bus.unsubscribe('web-ui')
   bus.unsubscribe('task-outbox')
   bus.unsubscribe('main-ai')
@@ -3138,8 +3257,6 @@ export async function stopServer(): Promise<void> {
   bus.unsubscribe('plugin-config-reload')
   bus.unsubscribe('embedding-sync')
   bus.unsubscribe('setup-health')
-  bus.unsubscribe('qmd-task-sync')
-  bus.unsubscribe('qmd-session-sync')
   import('../agent/overview-maintainer.js')
     .then(({ stopOverviewMaintainer }) => stopOverviewMaintainer())
     .catch(() => {})

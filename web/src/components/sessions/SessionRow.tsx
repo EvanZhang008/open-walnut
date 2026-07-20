@@ -1,6 +1,7 @@
 import { timeAgo } from '@/utils/time';
 import type { SessionRecord } from '@/types/session';
 import { PROCESS_COLORS, PROCESS_LABELS } from '@/utils/session-status';
+import { useResolvedSessionRecord } from '@/hooks/useSessionStatus';
 
 interface SessionRowProps {
   session: SessionRecord;
@@ -9,7 +10,8 @@ interface SessionRowProps {
 }
 
 
-export function SessionRow({ session, selected, onClick }: SessionRowProps) {
+export function SessionRow({ session: sessionRecord, selected, onClick }: SessionRowProps) {
+  const session = useResolvedSessionRecord(sessionRecord);
   const sessionId = session.claudeSessionId || '';
   const title = session.title || session.description || session.slug || sessionId || 'Untitled session';
   const processStatus = session.process_status || 'stopped';
@@ -46,6 +48,23 @@ export function SessionRow({ session, selected, onClick }: SessionRowProps) {
             }}
           >
             {modeIcon}
+          </span>
+        )}
+        {session.engine === 'codex' && (
+          <span
+            className="text-xs"
+            style={{
+              color: 'var(--fg)',
+              background: 'var(--bg-tertiary)',
+              padding: '1px 5px',
+              borderRadius: '4px',
+              fontSize: '10px',
+              fontWeight: 600,
+              flexShrink: 0,
+            }}
+            title="Codex session (via ACP)"
+          >
+            Codex
           </span>
         )}
         {session.provider === 'embedded' && (
@@ -97,6 +116,22 @@ export function SessionRow({ session, selected, onClick }: SessionRowProps) {
           </span>
         )}
       </div>
+      {/* Recap tip — one line, "what just happened here" (self-report), so a user
+          re-opening a long session re-orients without re-reading the transcript.
+          Hidden while running: the live activity line above covers that state. */}
+      {session.recap && processStatus !== 'running' && (
+        <div
+          className="text-xs truncate"
+          style={{
+            paddingLeft: '18px', marginTop: '2px', color: 'var(--fg-muted)',
+            display: 'flex', alignItems: 'center', gap: '4px',
+          }}
+          title={session.recap}
+        >
+          <span style={{ flexShrink: 0 }}>💬</span>
+          <span className="truncate">{session.recap}</span>
+        </div>
+      )}
     </div>
   );
 }

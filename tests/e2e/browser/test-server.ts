@@ -19,12 +19,47 @@ import zlib from 'node:zlib'
 // OPEN_WALNUT_HOME back to ~/.open-walnut, without anything for children to inherit.
 const tmpBase = path.join(os.tmpdir(), `walnut-pw-${Date.now()}`)
 process.env.OPEN_WALNUT_HOME = tmpBase
+process.env.WALNUT_DAEMON_DIR = path.join(tmpBase, 'daemon')
+process.env.WALNUT_STREAMS_DIR = path.join(tmpBase, 'daemon-streams')
+process.env.WALNUT_DISABLE_SEARCH = '1'
+// Keep host discovery, Claude history, credentials, and child processes inside
+// the fixture. Inheriting the developer's HOME makes browser tests probe real
+// SSH aliases and can even project unrelated ~/.claude journals.
+process.env.HOME = tmpBase
+process.env.USERPROFILE = tmpBase
 process.argv.push('--_ephemeral-child')
 
 // Ensure directories exist
 await fs.rm(tmpBase, { recursive: true, force: true })
 const tasksDir = path.join(tmpBase, 'tasks')
 await fs.mkdir(tasksDir, { recursive: true })
+
+// Quick Start asks the main agent to reorganize the newly-created task after
+// the real session route returns. Keep that process local and deterministic;
+// session/ACP processes are mocked separately below.
+const mockMainAgent = path.resolve(
+  path.dirname(new URL(import.meta.url).pathname),
+  '../../providers/mock-main-agent.mjs',
+)
+await fs.writeFile(
+  path.join(tmpBase, 'config.yaml'),
+  JSON.stringify({
+    version: 1,
+    defaults: { priority: 'none', category: 'Inbox', platform: 'local' },
+    provider: { type: 'claude-code' },
+    agent: {
+      main_provider: 'playwright-cli',
+      main_model: 'playwright-mock',
+      triage: { debounce_minutes: 0 },
+    },
+    providers: {
+      'playwright-cli': {
+        api: 'claude-cli',
+        claude_cli_command: mockMainAgent,
+      },
+    },
+  }, null, 2),
+)
 
 // Seed test data
 await fs.writeFile(
@@ -41,9 +76,53 @@ await fs.writeFile(
         category: 'Work',
         project: 'Walnut',
         source: 'ms-todo',
-        session_ids: ['pw-mode-test-session'],
+        session_ids: [
+          'pw-mode-test-session',
+          // Synthetic UUID used by the delayed semantic-search regression spec.
+          '12345678-1234-4abc-8def-1234567890ab',
+        ],
         active_session_ids: [],
         session_id: 'pw-mode-test-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
+        id: 'pw-task-codex-customer',
+        title: 'Playwright Codex customer task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'immediate',
+        category: 'Work',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-codex-customer-session'],
+        active_session_ids: [],
+        session_id: 'pw-codex-customer-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
+        id: 'pw-task-codex-order',
+        title: 'Playwright Codex order task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'immediate',
+        category: 'Work',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-codex-order-session'],
+        active_session_ids: [],
+        session_id: 'pw-codex-order-session',
         session_status: { process_status: 'stopped', mode: 'bypass' },
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -255,6 +334,102 @@ await fs.writeFile(
 const planPlanFile = path.join(tmpBase, '.claude', 'plans', 'test-plan.md')
 await fs.mkdir(path.dirname(planPlanFile), { recursive: true })
 await fs.writeFile(planPlanFile, '# Test Plan\n\nStep 1: Do the thing\nStep 2: Verify the thing\n')
+const codexModeRuntimeId = 'pw-mode-runtime'
+const codexCustomerRuntimeId = 'pw-customer-runtime'
+const codexOrderRuntimeId = 'pw-order-runtime'
+const codexModeJournalPath = path.join(tmpBase, 'daemon-streams', `${codexModeRuntimeId}.acp.jsonl`)
+const codexCustomerJournalPath = path.join(tmpBase, 'daemon-streams', `${codexCustomerRuntimeId}.acp.jsonl`)
+const codexOrderJournalPath = path.join(tmpBase, 'daemon-streams', `${codexOrderRuntimeId}.acp.jsonl`)
+await fs.mkdir(path.dirname(codexModeJournalPath), { recursive: true })
+const codexJournal = [
+  {
+    kind: 'meta',
+    ts: Date.parse('2026-07-19T12:00:00.000Z'),
+    event: {
+      type: 'prompt-accepted',
+      commandId: 'acp-prompt:qm-pw-parity',
+      walnutMessageId: 'qm-pw-parity',
+      text: 'CODEX-PARITY-USER-UNIQUE',
+    },
+  },
+  {
+    kind: 'acp',
+    ts: Date.parse('2026-07-19T12:00:01.000Z'),
+    source: 'live',
+    frame: {
+      method: 'session/update',
+      params: {
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: 'CODEX-PARITY-ASSISTANT-UNIQUE' },
+        },
+      },
+    },
+  },
+  {
+    kind: 'meta',
+    ts: Date.parse('2026-07-19T12:00:02.000Z'),
+    event: {
+      type: 'turn-ended',
+      commandId: 'acp-prompt:qm-pw-parity',
+      stopReason: 'end_turn',
+    },
+  },
+  {
+    kind: 'meta',
+    ts: Date.parse('2026-07-19T12:01:00.000Z'),
+    event: {
+      type: 'prompt-accepted',
+      commandId: 'acp-prompt:qm-pw-mobile',
+      walnutMessageId: 'qm-pw-mobile',
+      text: 'CODEX-MOBILE-USER-UNIQUE',
+    },
+  },
+  {
+    kind: 'acp',
+    ts: Date.parse('2026-07-19T12:01:01.000Z'),
+    source: 'live',
+    frame: {
+      method: 'session/update',
+      params: {
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: 'CODEX-MOBILE-ASSISTANT-UNIQUE' },
+        },
+      },
+    },
+  },
+  {
+    kind: 'meta',
+    ts: Date.parse('2026-07-19T12:01:02.000Z'),
+    event: {
+      type: 'turn-ended',
+      commandId: 'acp-prompt:qm-pw-mobile',
+      stopReason: 'end_turn',
+    },
+  },
+]
+const seededCodexJournal = codexJournal.map((record) => JSON.stringify(record)).join('\n') + '\n'
+await Promise.all([
+  fs.writeFile(codexModeJournalPath, seededCodexJournal),
+  fs.writeFile(codexCustomerJournalPath, seededCodexJournal),
+  fs.writeFile(codexOrderJournalPath, ''),
+])
+const sessionFixtureNow = Date.now()
+const oldExactTargetAt = new Date(sessionFixtureNow - 30 * 24 * 60 * 60 * 1_000).toISOString()
+const scaleSessions = Array.from({ length: 501 }, (_, index) => ({
+  claudeSessionId: `pw-scale-session-${String(index).padStart(3, '0')}`,
+  taskId: 'pw-task-001',
+  project: 'Walnut',
+  process_status: 'stopped',
+  mode: 'bypass',
+  last_status_change: new Date(sessionFixtureNow - index * 1_000).toISOString(),
+  startedAt: new Date(sessionFixtureNow - index * 1_000).toISOString(),
+  lastActiveAt: new Date(sessionFixtureNow - index * 1_000).toISOString(),
+  messageCount: 1,
+  cwd: process.cwd(),
+  title: `Scale session ${String(index).padStart(3, '0')}`,
+}))
 await fs.writeFile(
   path.join(tmpBase, 'sessions.json'),
   JSON.stringify({
@@ -305,6 +480,32 @@ await fs.writeFile(
         title: 'Normal: fix the bug',
       },
       {
+        claudeSessionId: '2532066a-e210-4702-be34-ed01008adbde',
+        project: 'URL Restoration',
+        process_status: 'stopped',
+
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(Date.now() - 210_000).toISOString(),
+        lastActiveAt: new Date(Date.now() - 180_000).toISOString(),
+        messageCount: 0,
+        cwd: process.cwd(),
+        title: 'Deep link primary session',
+      },
+      {
+        claudeSessionId: 'c520a153-6fb8-489d-b18f-c9e0d7ab9f48',
+        project: 'URL Restoration',
+        process_status: 'stopped',
+
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(Date.now() - 180_000).toISOString(),
+        lastActiveAt: new Date(Date.now() - 150_000).toISOString(),
+        messageCount: 0,
+        cwd: process.cwd(),
+        title: 'Deep link secondary session',
+      },
+      {
         // Used by model-switch.spec.ts — RUNNING session for model picker tests
         claudeSessionId: 'pw-model-switch-session',
         taskId: 'pw-task-model-switch',
@@ -327,11 +528,68 @@ await fs.writeFile(
         process_status: 'stopped',
 
         mode: 'bypass',
-        last_status_change: new Date().toISOString(),
-        startedAt: new Date(Date.now() - 300_000).toISOString(),
-        lastActiveAt: new Date(Date.now() - 240_000).toISOString(),
+        last_status_change: oldExactTargetAt,
+        startedAt: oldExactTargetAt,
+        lastActiveAt: oldExactTargetAt,
         messageCount: 2,
-        title: 'Bypass: mode change test session',
+        title: 'Codex parity session',
+        engine: 'codex',
+        acpRuntimeId: codexModeRuntimeId,
+        acpJournalPath: codexModeJournalPath,
+        acpCapabilities: {
+          loadSession: true,
+          listSessions: true,
+          closeSession: true,
+          forkSession: false,
+          promptImages: true,
+        },
+      },
+      {
+        // Isolated local-source target for the serial Codex customer matrix.
+        claudeSessionId: 'pw-codex-customer-session',
+        taskId: 'pw-task-codex-customer',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: oldExactTargetAt,
+        startedAt: oldExactTargetAt,
+        lastActiveAt: oldExactTargetAt,
+        messageCount: 2,
+        title: 'Codex customer parity session',
+        engine: 'codex',
+        acpRuntimeId: codexCustomerRuntimeId,
+        acpJournalPath: codexCustomerJournalPath,
+        acpCapabilities: {
+          loadSession: true,
+          listSessions: true,
+          closeSession: true,
+          forkSession: false,
+          promptImages: true,
+        },
+      },
+      {
+        // Mutated by codex-order-parity.spec; intentionally isolated from the
+        // stopped two-turn customer fixture asserted by parity/discovery specs.
+        claudeSessionId: 'pw-codex-order-session',
+        taskId: 'pw-task-codex-order',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: oldExactTargetAt,
+        startedAt: oldExactTargetAt,
+        lastActiveAt: oldExactTargetAt,
+        messageCount: 0,
+        title: 'Codex order parity session',
+        engine: 'codex',
+        acpRuntimeId: codexOrderRuntimeId,
+        acpJournalPath: codexOrderJournalPath,
+        acpCapabilities: {
+          loadSession: true,
+          listSessions: true,
+          closeSession: true,
+          forkSession: false,
+          promptImages: true,
+        },
       },
       {
         // Used by exec-slot bug test — task has exec_session_id but no session_id
@@ -347,6 +605,7 @@ await fs.writeFile(
         messageCount: 1,
         title: 'Exec: slot bug test session',
       },
+      ...scaleSessions,
     ],
   }),
 )
@@ -532,6 +791,14 @@ await fs.mkdir(path.join(psFixtureRoot, 'projects', 'walnut', 'web'), { recursiv
 await fs.mkdir(path.join(psFixtureRoot, 'projects', 'wallets'), { recursive: true })
 await fs.mkdir(path.join(psFixtureRoot, 'projects', 'zmarinax'), { recursive: true })
 await fs.mkdir(path.join(psFixtureRoot, 'projects', '.hiddenproj'), { recursive: true })
+// mcp bug fixture: 'mcps' leaf-prefix-matches 'mcp'; 'monorepo-context-proj' only
+// subsequence-matches it (m…c…p). A high-frecency history entry on the latter must
+// NOT outrank the exact leaf-prefix hit — relevance beats frecency.
+await fs.mkdir(path.join(psFixtureRoot, 'projects', 'mcps'), { recursive: true })
+await fs.mkdir(path.join(psFixtureRoot, 'projects', 'monorepo-context-proj'), { recursive: true })
+// Case-correction fixture: typing lowercase 'acmec' must complete to the REAL
+// casing 'AcmeCapsDev/' (fish/zsh-style), never fabricate 'acmecCapsDev'.
+await fs.mkdir(path.join(psFixtureRoot, 'projects', 'AcmeCapsDev', 'src'), { recursive: true })
 await fs.mkdir(path.join(psFixtureRoot, 'other'), { recursive: true })
 await fs.writeFile(
   path.join(tmpBase, 'frequent-directories.json'),
@@ -551,20 +818,19 @@ await fs.writeFile(
         lastUsed: new Date(Date.now() - 20 * 86400_000).toISOString(),
         categoryVotes: { Inbox: 2 },
       },
+      {
+        // Fat session count (only a SUBSEQUENCE match for 'mcp') — must lose to the
+        // 'mcps' leaf-prefix hit despite far higher frecency. Kept BELOW walnut's
+        // count (25) so it never overtakes walnut as the browse-mode #1 (which
+        // other specs assert); this row only matters under the 'mcp' needle.
+        cwd: path.join(psFixtureRoot, 'projects', 'monorepo-context-proj'),
+        host: null, count: 20,
+        lastUsed: new Date(Date.now() - 2 * 3600_000).toISOString(),
+        categoryVotes: { Passion: 20 },
+      },
     ],
   }, null, 2),
 )
-
-// Ensure src/web/static symlink exists → dist/web/static
-// When running via `npx tsx`, import.meta.url resolves to src/web/server.ts,
-// so the server looks for static files at src/web/static/ which doesn't exist.
-// This symlink makes it find the Vite-built SPA.
-const srcWebStatic = path.join(path.dirname(new URL(import.meta.url).pathname), '../../../src/web/static')
-const distWebStatic = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../../dist/web/static')
-try {
-  await fs.unlink(srcWebStatic).catch(() => {})
-  await fs.symlink(distWebStatic, srcWebStatic)
-} catch { /* already exists or permission issue — server will try dist/static fallback */ }
 
 // Now import server (it reads WALNUT_HOME from constants.ts which checks env var)
 const { startServer, stopServer } = await import('../../../src/web/server.js')
@@ -580,20 +846,58 @@ const { startServer, stopServer } = await import('../../../src/web/server.js')
 const WIRE_MOCK_DAEMON = process.env.PW_NO_MOCK_DAEMON !== '1'
 const { createMockDaemon } = await import('../../helpers/mock-daemon.js')
 const { sessionRunner } = await import('../../../src/providers/claude-code-session.js')
-const mockDaemon = WIRE_MOCK_DAEMON ? await createMockDaemon() : null
+const mockDaemon = WIRE_MOCK_DAEMON
+  ? await createMockDaemon({
+      streamsDir: path.join(process.env.WALNUT_DAEMON_DIR!, 'streams'),
+      acpStreamsDir: process.env.WALNUT_STREAMS_DIR,
+    })
+  : null
 if (mockDaemon) {
   const MOCK_CLI = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../providers/mock-claude.mjs')
   sessionRunner.setCliCommand(MOCK_CLI)
   sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${mockDaemon.port}`)
+  // Codex (ACP) sessions: real acp-worker bundle + the scripted mock ACP agent.
+  // MockDaemon embeds the real createAcpDaemon module, so quick-start with
+  // engine='codex' exercises the full worker/journal path in Playwright specs.
+  const WORKER_BUNDLE = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../../dist/daemon-binaries/acp-worker.js')
+  const MOCK_ACP_AGENT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../providers/mock-acp-agent.mjs')
+  sessionRunner.setTestAcpArtifacts({
+    workerCmd: [process.execPath, WORKER_BUNDLE],
+    adapterCmd: [process.execPath, MOCK_ACP_AGENT],
+  })
 }
 
-// Start server in production mode (serves static SPA files)
-await startServer({ port: 3457, dev: false })
-console.log('Playwright test server ready on http://localhost:3457')
+// Exercise the same real dev-server contract as route E2E tests: the API binds
+// an OS-assigned port, while Vite serves current React source and proxies REST
+// and WebSocket traffic to that real Express server. No Playwright route mocks.
+const testPort = Number(process.env.PW_TEST_PORT ?? 3457)
+const apiServer = await startServer({ port: 0, dev: true })
+const apiAddress = apiServer.address()
+if (!apiAddress || typeof apiAddress === 'string') {
+  throw new Error('Playwright API server did not bind a TCP port')
+}
+const apiTarget = `http://127.0.0.1:${apiAddress.port}`
+const { createServer: createViteServer } = await import('vite')
+const viteServer = await createViteServer({
+  root: path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../../web'),
+  server: {
+    host: '127.0.0.1',
+    port: testPort,
+    strictPort: true,
+    proxy: {
+      '/api': { target: apiTarget, changeOrigin: true },
+      '/ws': { target: apiTarget.replace(/^http/, 'ws'), ws: true },
+    },
+  },
+  logLevel: 'warn',
+})
+await viteServer.listen()
+console.log(`Playwright test server ready on http://localhost:${testPort}`)
 
 // Graceful shutdown
 const shutdown = async () => {
   sessionRunner.setTestDaemonUrl(undefined)
+  await viteServer.close().catch(() => {})
   await stopServer()
   if (mockDaemon) await mockDaemon.stop().catch(() => {})
   await fs.rm(tmpBase, { recursive: true, force: true }).catch(() => {})

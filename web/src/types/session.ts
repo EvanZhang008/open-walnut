@@ -2,6 +2,7 @@ export type ProcessStatus = 'running' | 'idle' | 'stopped' | 'error';
 export type TaskPhase = 'TODO' | 'IN_PROGRESS' | 'AGENT_COMPLETE' | 'AWAIT_HUMAN_ACTION' | 'HUMAN_VERIFIED' | 'POST_WORK_COMPLETED' | 'COMPLETE';
 export type SessionMode = 'bypass' | 'accept' | 'default' | 'plan';
 export type SessionProvider = 'cli' | 'sdk' | 'embedded';
+export type SessionEngine = 'claude' | 'codex';
 
 export interface SessionRecord {
   claudeSessionId: string;
@@ -25,6 +26,10 @@ export interface SessionRecord {
   planCompleted?: boolean;
   fromPlanSessionId?: string;
   provider?: SessionProvider;
+  /** Coding-agent CLI backing this session. Undefined = 'claude'. */
+  engine?: SessionEngine;
+  /** Current ACP base model for Codex sessions. */
+  acpModel?: string;
   human_note?: string;
   /** Claude model used by this session (e.g. "claude-opus-4-6"). */
   model?: string;
@@ -40,6 +45,15 @@ export interface SessionRecord {
   archive_reason?: string;
   /** Error message when process_status is 'error' — for clear error display. */
   errorMessage?: string;
+  /** Monotonic revision for the centralized frontend status store. */
+  statusRevision?: number;
+  /** ISO timestamp attached to statusRevision. */
+  statusUpdatedAt?: string;
+  /** ONE-LINE recap of the session's latest turn(s) — rendered as a small tip under
+   *  the session so the user can re-orient without re-reading the transcript. */
+  recap?: string;
+  /** ISO timestamp of the last recap update. */
+  recapAt?: string;
 }
 
 export interface SessionTreeTask {
@@ -65,6 +79,13 @@ export interface SessionTreeCategory {
 export interface SessionTreeResponse {
   tree: SessionTreeCategory[];
   orphanSessions: SessionRecord[];
+  /** Number of sessions matching the server query before the recent-prefix limit. */
+  total: number;
+  /** Effective server limit after validation/capping. */
+  limit: number;
+  /** Matching rows that can still be loaded before the server cap. */
+  remaining: number;
+  hasMore: boolean;
 }
 
 export interface SessionSummaryInfo {

@@ -33,7 +33,16 @@ import { isProcessAliveAsync } from '../utils/process.js'
 import { isLocalJsonlFresh } from '../utils/session-liveness.js'
 import { SESSION_STREAMS_DIR, CLAUDE_HOME } from '../constants.js'
 import { log } from '../logging/index.js'
-import { markProcessing, removeProcessed, revertToPending, loadQueue, getAllSessionsWithPending } from '../core/session-message-queue.js'
+import {
+  enqueueMessage,
+  markNextProcessing,
+  markProcessing,
+  migrateSessionQueue,
+  removeProcessed,
+  revertToPending,
+  loadQueue,
+  getAllSessionsWithPending,
+} from '../core/session-message-queue.js'
 import type { QueuedMessage } from '../core/session-message-queue.js'
 import { registerEchoClaims } from '../core/echo-claims.js'
 // Image transfer for remote sessions: RemoteSessionManager.prepareOutbound() uploads
@@ -43,6 +52,7 @@ import { createSessionManager, registerSessionManager, unregisterSessionManager 
 import type { SessionManager } from './session-manager.js'
 import type { DaemonTaskState } from './daemon-connection.js'
 import { checkCwdExists } from './cwd-check.js'
+import { AcpSession, emitAcpIdentityBoundary } from './acp-session.js'
 import { recoverStateFromJsonl, extractImageFilePathFromInput } from '../core/session-history.js'
 import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase, SessionModelCatalogEntry, SessionEffort } from '../core/types.js'
 import { SESSION_MODEL_CLI_MAP, modelSupportsEffort, VALID_SESSION_EFFORT_IDS } from '../core/types.js'
@@ -52,7 +62,13 @@ import type { WorkflowPhaseInfo, WorkflowAgentInfo } from '../core/event-types.j
 import { recordTurn } from '../core/observability/recorder.js'
 import type { SessionServerClient } from './session-server-client.js'
 import { sanitizeInitModel, CONTEXT_WINDOW_DEFAULT } from '../agent/providers/defaults.js'
-import { openTurn, settleTurn, abortTurn, getOpenTurnPromise } from './turn-ledger.js'
+import {
+  openTurn,
+  settleTurn,
+  abortTurn,
+  abortAllTurns,
+  getOpenTurnPromise,
+} from './turn-ledger.js'
 
 // ── JSONL types from `claude -p --output-format stream-json --verbose` ──
 
@@ -296,6 +312,29 @@ export { shellQuote } from './session-io.js'
 // Exported for testing
 export { outputFileCheckResult }
 
+/**
+ * Immediate fail-closed contract for ACP providers that do not advertise
+ * session.fork. Routes should call this before creating a target task; the
+ * runner calls it again as defense in depth before any provider/native start.
+ */
+export class AcpForkUnsupportedError extends Error {
+  readonly code = 'ACP_FORK_UNSUPPORTED'
+  readonly statusCode = 409
+
+  constructor(sessionId: string) {
+    super(`Fork is unavailable for Codex session ${sessionId}: the ACP provider does not advertise session.fork`)
+    this.name = 'AcpForkUnsupportedError'
+  }
+}
+
+export function assertSessionForkSupported(
+  source: Pick<SessionRecord, 'claudeSessionId' | 'engine'>,
+): void {
+  if (source.engine === 'codex') {
+    throw new AcpForkUnsupportedError(source.claudeSessionId)
+  }
+}
+
 // ── ClaudeCodeSession ──
 
 const MAX_FULL_TEXT = 100 * 1024 // 100KB cap on accumulated text
@@ -424,6 +463,8 @@ export class ClaudeCodeSession {
   private _processStatus: ProcessStatus = 'stopped'
   private _mode: SessionMode = 'default'
   private _activity: string | undefined
+  /** Preserve status-event order while each event commits its durable projection. */
+  private _statusCommit: Promise<void> = Promise.resolve()
   /** Model ID from JSONL assistant messages (e.g. "claude-opus-4-6"). */
   private _model: string | undefined
   /** Full model string from system init (e.g. "global.anthropic.claude-opus-4-6-v1[1m]"). */
@@ -941,6 +982,14 @@ export class ClaudeCodeSession {
     return this._active
   }
 
+  /** Epoch ms this server spawned the CLI process (0 = attached, spawn time
+   *  unknown). Freshness signal for catalog-source selection — an older
+   *  process runs an older binary whose model registry may lack newer
+   *  families, so its catalog answer is degraded, not authoritative. */
+  get spawnTs(): number {
+    return this._spawnTs
+  }
+
   get sessionId(): string | null {
     return this.claudeSessionId
   }
@@ -1361,6 +1410,7 @@ export class ClaudeCodeSession {
         ;(async () => {
           try {
             await this.persistSessionRecord(preassignedId, this._cwd ?? undefined)
+            this.emitStatusChanged('IN_PROGRESS')
           } catch (err) {
             log.session.error('CRITICAL: init-only spawn record persist failed', {
               sessionId: preassignedId, taskId: this.taskId,
@@ -1370,7 +1420,6 @@ export class ClaudeCodeSession {
             this._resolveSessionReady(preassignedId)
           }
         })()
-        this.emitStatusChanged('IN_PROGRESS')
       }
 
       // Spawn confirmed by the daemon (pid returned). Only now is it safe to
@@ -2173,7 +2222,7 @@ export class ClaudeCodeSession {
     this._pendingPayloadReads.clear()
     // The model catalog is a property of the CLI PROCESS (its settings snapshot
     // at spawn) — a respawn/cold-resume may see different settings, so drop it
-    // here and let the next picker open refetch from the new process.
+    // here; the new process's init event triggers the eager refetch + push.
     this._modelCatalog = null
     this._modelCatalogInflight = null
   }
@@ -2715,6 +2764,18 @@ export class ClaudeCodeSession {
             }, 1500)
           }
 
+          // Eager model-catalog fetch (ACP-style): pull list_models the moment a
+          // fresh CLI process announces itself, instead of waiting for a picker
+          // to open. getModelCatalog() is cache-guarded — init fires per TURN,
+          // but only a fresh process (spawn/respawn nulls _modelCatalog) pays a
+          // round-trip; every real fetch pushes SESSION_MODEL_CATALOG and writes
+          // the host-level store from inside getModelCatalog itself. Same 1.5s
+          // deferral as the settings read-back: the CLI must finish wiring its
+          // ask() loop before control_requests get answered.
+          if (!this._modelCatalog && !this._modelCatalogInflight) {
+            setTimeout(() => { void this.getModelCatalog().catch(() => {}) }, 1500)
+          }
+
           // Persist session record BEFORE resolving sessionReady — callers must not
           // receive the session ID until sessions.json is written.  Without this,
           // concurrent starts could return an ID that has no matching record.
@@ -2751,6 +2812,7 @@ export class ClaudeCodeSession {
                 const { updateSessionRecord } = await import('../core/session-tracker.js')
                 await updateSessionRecord(newId, { model: initModel })
               }
+              this.emitStatusChanged('IN_PROGRESS')
             } catch (err) {
               // Persist failed — log loudly but still resolve so the session isn't stuck.
               // The session process IS running, just not registered.
@@ -2763,9 +2825,6 @@ export class ClaudeCodeSession {
               this._resolveSessionReady(newId)
             }
           })()
-
-          // Re-emit status now that claudeSessionId is set (first emit at spawn had null ID)
-          this.emitStatusChanged('IN_PROGRESS')
         }
 
         // Parse permissionMode from system events.
@@ -4246,18 +4305,35 @@ export class ClaudeCodeSession {
   }
 
   private emitStatusChanged(phase: TaskPhase, errorMessage?: string): void {
-    bus.emit(EventNames.SESSION_STATUS_CHANGED, {
-      sessionId: this.claudeSessionId,
-      taskId: this.taskId,
+    const sessionId = this.claudeSessionId
+    if (!sessionId) return
+    const updates = {
       process_status: this._processStatus,
-      phase,
-      mode: this._mode,
       activity: this._activity,
-      ...(this.planCompleted ? { planCompleted: true } : {}),
-      ...(this.fromPlanSessionId ? { fromPlanSessionId: this.fromPlanSessionId } : {}),
-      ...(this.forkedFromSessionId ? { forkedFromSessionId: this.forkedFromSessionId } : {}),
-      ...(errorMessage ? { errorMessage } : {}),
-    }, ['*'], { source: 'session-runner', urgency: 'urgent' })
+      mode: this._mode,
+      planCompleted: this.planCompleted,
+      errorMessage,
+    }
+    const commit = this._statusCommit.then(async () => {
+      const {
+        emitSessionStatusChanged,
+        updateSessionRecord,
+      } = await import('../core/session-tracker.js')
+      const record = await updateSessionRecord(sessionId, updates)
+      emitSessionStatusChanged(
+        record,
+        { phase },
+        ['*'],
+        { source: 'session-runner', urgency: 'urgent' },
+      )
+    })
+    this._statusCommit = commit.catch((err) => {
+      log.session.warn('failed to commit session status event', {
+        sessionId,
+        phase,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    })
   }
 
   // ── Permission prompt tool helpers ──
@@ -4635,6 +4711,28 @@ export class ClaudeCodeSession {
         log.session.info('model catalog fetched', {
           sessionId: this.claudeSessionId, taskId: this.taskId, modelCount: models.length,
         })
+        // Every REAL fetch (cache hits returned above): write through to the
+        // host-level store, and IF the store accepts it (freshness gate — an
+        // older/attached CLI's degraded answer must not clobber a newer
+        // process's catalog) push the same rows to clients. Store decision and
+        // client push are deliberately one decision: pushing what the store
+        // rejected would poison every picker's cache with the degraded menu.
+        const catSnapshot = this._modelCatalog
+        void import('../core/host-model-catalog.js')
+          .then(({ saveHostModelCatalog }) =>
+            saveHostModelCatalog(this._host, models, this._cwd ?? undefined,
+              this._spawnTs || undefined))
+          .then((accepted) => {
+            if (!accepted || !this.claudeSessionId) return
+            bus.emit(EventNames.SESSION_MODEL_CATALOG, {
+              sessionId: this.claudeSessionId,
+              taskId: this.taskId,
+              ...(this._host ? { host: this._host } : {}),
+              models,
+              fetchedAt: new Date(catSnapshot.fetchedAt).toISOString(),
+            }, ['main-ai'], { source: 'session-runner' })
+          })
+          .catch(() => {})
         return this._modelCatalog
       }
       return null
@@ -4643,16 +4741,20 @@ export class ClaudeCodeSession {
     }
   }
 
-  /** Drop the cached catalog so the next getModelCatalog() refetches — called
-   *  when read-back truth disagrees with the cached set (allowlist/overrides
-   *  evidently changed under us) or explicitly via the route's ?refresh=1. */
+  /** Drop the cached catalog AND refetch in the background — called when
+   *  read-back truth disagrees with the cached set (allowlist/overrides
+   *  evidently changed under us) or after a failed switch. Only live-session
+   *  code paths call this (teardown nulls the field directly), so the eager
+   *  refetch is safe: it pushes the corrected catalog to clients instead of
+   *  waiting for the next picker open. */
   invalidateModelCatalog(): void {
     if (this._modelCatalog) {
-      log.session.info('model catalog invalidated', {
+      log.session.info('model catalog invalidated — refetching', {
         sessionId: this.claudeSessionId, taskId: this.taskId,
       })
     }
     this._modelCatalog = null
+    void this.getModelCatalog().catch(() => {})
   }
 
   /** Loose membership check: is `model` one of the cached catalog's rows?
@@ -5088,6 +5190,15 @@ export class ClaudeCodeSession {
 
 export class SessionRunner {
   private sessions = new Map<string, ClaudeCodeSession>()
+  /** ACP-backed sessions (engine='codex'), keyed by trackingId (providerSessionId or runtimeId). */
+  private acpSessions = new Map<string, AcpSession>()
+  /** One reattach constructor/consumer per durable session ID. */
+  private acpAttachPromises = new Map<string, Promise<AcpSession | undefined>>()
+  /** Sessions constructed by reattach but not yet published into acpSessions. */
+  private acpAttachingSessions = new Set<AcpSession>()
+  /** Fences async reattach work that completes after runner destruction. */
+  private acpLifecycleEpoch = 0
+  private acpDestroyed = false
   private cliCommand: string
   private activeProcessing = new Set<string>()
   private batchCounts = new Map<string, number>()
@@ -5097,6 +5208,15 @@ export class SessionRunner {
   private batchMessageIds = new Map<string, string[]>()
   /** Safety timers that auto-clear stuck activeProcessing entries */
   private activeProcessingTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  /** Explicit ACP interrupt barrier. A cancelled turn may emit its terminal
+   *  event before acpAbortTurn has killed the worker process group; queue drain
+   *  must wait for the operation's completion, not merely that terminal frame. */
+  private acpAbortInProgress = new Set<string>()
+  /** Prompt acceptance and its queue cleanup are separate async operations.
+   *  A very fast ACP turn can emit its terminal fact between them; terminal
+   *  drain waits on this barrier so the next oldest item cannot be stranded
+   *  behind the accepted item's still-processing queue row. */
+  private acpDeliverySettlements = new Map<string, Promise<void>>()
 
   /** SDK session server client (set via setSdkClient when session_server.enabled) */
   private sdkClient: SessionServerClient | null = null
@@ -5124,6 +5244,41 @@ export class SessionRunner {
    */
   setTestDaemonUrl(url: string | undefined): void {
     this._testDaemonUrl = url
+  }
+
+  /**
+   * Worker A transport contract consumed by the runner. Keep this structural:
+   * the lifecycle implementation stays in AcpSession, while the runner owns
+   * queue ordering and task semantics.
+   */
+  private acpContract(session: AcpSession): {
+    establish: () => Promise<string>
+    send: (message: string, walnutMessageId: string) => Promise<void>
+    abortTurn: () => Promise<void>
+    requestTurnCompleteSelfReport?: (prompt: string, timeoutMs: number) => Promise<string>
+  } {
+    const candidate = session as unknown as {
+      establish?: () => Promise<string>
+      send?: (message: string, walnutMessageId: string) => Promise<void>
+      abortTurn?: () => Promise<void>
+      requestTurnCompleteSelfReport?: (prompt: string, timeoutMs: number) => Promise<string>
+    }
+    if (typeof candidate.establish !== 'function'
+      || typeof candidate.send !== 'function'
+      || typeof candidate.abortTurn !== 'function') {
+      throw new Error(
+        'ACP lifecycle contract unavailable: AcpSession must implement establish(), send(text, walnutMessageId), and abortTurn()',
+      )
+    }
+    return {
+      establish: candidate.establish.bind(session),
+      send: candidate.send.bind(session),
+      abortTurn: candidate.abortTurn.bind(session),
+      requestTurnCompleteSelfReport:
+        typeof candidate.requestTurnCompleteSelfReport === 'function'
+          ? candidate.requestTurnCompleteSelfReport.bind(session)
+          : undefined,
+    }
   }
 
   /**
@@ -5278,8 +5433,12 @@ export class SessionRunner {
       switch (event.name) {
         case EventNames.SESSION_START: {
           const startData = eventData<'session:start'>(event)
-          log.session.info('session start requested', { taskId: startData.taskId, host: startData.host, cwd: startData.cwd, mode: startData.mode })
-          if (this.sdkClient?.connected) {
+          log.session.info('session start requested', { taskId: startData.taskId, host: startData.host, cwd: startData.cwd, mode: startData.mode, engine: startData.engine })
+          await this.assertStartRouting(startData)
+          if (startData.engine === 'codex') {
+            log.session.info('session routing', { taskId: startData.taskId, type: 'acp' })
+            await this.handleAcpStart(startData)
+          } else if (this.sdkClient?.connected) {
             log.session.info('session routing', { taskId: startData.taskId, type: 'sdk' })
             await this.handleStartSdk(startData)
           } else {
@@ -5292,8 +5451,33 @@ export class SessionRunner {
         case EventNames.SESSION_SEND: {
           const sendData = eventData<'session:send'>(event)
           log.session.info('session send requested', { sessionId: sendData.sessionId, messageLength: sendData.message.length })
-          // Route to SDK if this session is tracked as an SDK session
-          if (this.sdkSessionMap.has(sendData.sessionId)) {
+          let acpSession = this.findAcpSession(sendData.sessionId)
+          if (!acpSession && !this.sdkSessionMap.has(sendData.sessionId)) {
+            // Server restarted since this ACP session was created? Re-attach from
+            // the record (engine='codex') — journal replay restores the stream.
+            acpSession = await this.maybeAttachAcpSession(sendData.sessionId)
+          }
+          if (acpSession) {
+            // ACP prompts are one-at-a-time (the worker rejects a prompt while a
+            // turn runs, no FIFO to inject into). Mid-turn sends stay queued and
+            // drain at turn end via the SESSION_RESULT → processNext path.
+            if (sendData.interrupt) {
+              const abortIds = new Set([
+                sendData.sessionId,
+                acpSession.sessionId ?? sendData.sessionId,
+              ])
+              for (const id of abortIds) this.acpAbortInProgress.add(id)
+              try {
+                await this.acpContract(acpSession).abortTurn()
+              } finally {
+                for (const id of abortIds) this.acpAbortInProgress.delete(id)
+              }
+            }
+            const providerSessionId = acpSession.sessionId ?? sendData.sessionId
+            await this.drainAcpQueue(acpSession, providerSessionId)
+            void this.syncPhaseAfterSend(providerSessionId)
+          } else if (this.sdkSessionMap.has(sendData.sessionId)) {
+            // Route to SDK if this session is tracked as an SDK session
             await this.handleSendSdk(sendData.sessionId, sendData.message, sendData.mode as SessionMode | undefined, sendData.interrupt)
           } else {
             await this.handleSend(sendData)
@@ -5333,7 +5517,11 @@ export class SessionRunner {
               ? ((eventData<'session:error'>(event) as { error?: string }).error ?? 'Unknown error').slice(0, 1000)
               : undefined
             const cliSession = this.findSessionByClaudeId(sessionId)
-            const status = isError ? 'error' : (cliSession?.processStatus ?? 'stopped')
+            // ACP sessions: the worker stays alive between turns — a turn-end
+            // result means idle, never stopped (stopped would also wrongly
+            // clear the task's session slot below).
+            const acpSession = cliSession ? undefined : this.findAcpSession(sessionId)
+            const status = isError ? 'error' : (acpSession ? 'idle' : (cliSession?.processStatus ?? 'stopped'))
 
             import('../core/session-tracker.js').then(({ updateSessionRecord, getSessionByClaudeId }) => {
               updateSessionRecord(sessionId, {
@@ -5382,6 +5570,24 @@ export class SessionRunner {
                     taskId,
                   })
                   break
+                }
+              }
+            }
+            if (resolvedSessionId === sessionId) {
+              const acpEmitter = this.findAcpSession(sessionId)
+              if (acpEmitter && (!taskId || acpEmitter.taskId === taskId)) {
+                for (const activeId of this.activeProcessing) {
+                  if (activeId !== sessionId
+                    && this.findAcpSession(activeId) === acpEmitter) {
+                    resolvedSessionId = activeId
+                    log.session.warn('SESSION_RESULT: ACP provider ID changed — matched via runtime identity', {
+                      expectedSessionId: activeId,
+                      actualSessionId: sessionId,
+                      runtimeId: acpEmitter.runtimeId,
+                      taskId,
+                    })
+                    break
+                  }
                 }
               }
             }
@@ -5435,15 +5641,30 @@ export class SessionRunner {
 
           // Tell frontend which optimistic messages to clear (ids when known)
           bus.emit(EventNames.SESSION_BATCH_COMPLETED, {
-            sessionId,
+            sessionId: resolvedSessionId,
             count: batchCount,
             ...(batchIds && batchIds.length > 0 ? { messageIds: batchIds } : {}),
           }, ['main-ai'], { source: 'session-runner' })
 
-          // Process next batch if any new messages arrived during processing
-          this.processNext(sessionId).catch((err) => {
-            log.session.error('processNext failed after result/error', { sessionId, error: err instanceof Error ? err.message : String(err) })
-          })
+          // Process the next queued item only after an explicit ACP interrupt
+          // has finished terminating the worker process group. The terminal
+          // cancelled fact can arrive before acpAbortTurn resolves.
+          if (!this.acpAbortInProgress.has(sessionId)
+            && !this.acpAbortInProgress.has(resolvedSessionId)) {
+            const deliverySettlement = this.acpDeliverySettlements.get(sessionId)
+              ?? this.acpDeliverySettlements.get(resolvedSessionId)
+            if (deliverySettlement) await deliverySettlement
+            this.processNext(resolvedSessionId).catch((err) => {
+              log.session.error('processNext failed after result/error', {
+                sessionId: resolvedSessionId,
+                error: err instanceof Error ? err.message : String(err),
+              })
+            })
+          } else {
+            log.session.info('acp: terminal event observed during abort — replacement remains queued', {
+              sessionId,
+            })
+          }
           break
         }
       }
@@ -5451,19 +5672,56 @@ export class SessionRunner {
   }
 
   /**
+   * Force-refetch the model catalog from ONE live local session (settings.json
+   * changed — running CLIs hot-reload it, so a live process answers with the
+   * NEW menu). One fetch is enough: the catalog is a host property, and the
+   * fetch itself pushes SESSION_MODEL_CATALOG + rewrites the host store for
+   * every picker. No live local session → nothing to ask; the store refreshes
+   * on the next spawn (or the picker's manual refresh).
+   *
+   * Ask the MOST RECENTLY SPAWNED session: settings hot-reload fixes the
+   * allowlist/overrides view, but the model REGISTRY is baked into the binary
+   * — a long-lived CLI on an old binary answers with a degraded menu (missing
+   * newer families). Live-verified: an old attached process returned 2 rows
+   * where a fresh spawn returns 6.
+   */
+  refreshLocalModelCatalogs(): void {
+    let best: ClaudeCodeSession | null = null
+    for (const [, session] of this.sessions) {
+      if (session.host || !session.active) continue
+      if (!best || session.spawnTs > best.spawnTs) best = session
+    }
+    if (best) void best.getModelCatalog({ force: true }).catch(() => {})
+  }
+
+  /**
    * Detach from all sessions (they survive) and unsubscribe.
    * Use this for graceful server shutdown — sessions continue running.
    */
   destroy(): void {
+    this.acpLifecycleEpoch++
+    this.acpDestroyed = true
     for (const [, session] of this.sessions) {
       session.detach()
     }
+    for (const session of new Set([
+      ...this.acpSessions.values(),
+      ...this.acpAttachingSessions,
+    ])) {
+      session.detach()
+    }
     this.sessions.clear()
+    this.acpSessions.clear()
+    this.acpAttachPromises.clear()
+    this.acpAttachingSessions.clear()
+    abortAllTurns('session-runner-destroyed')
     this.activeProcessing.clear()
     this.batchCounts.clear()
     this.batchMessageIds.clear()
     for (const timer of this.activeProcessingTimers.values()) clearTimeout(timer)
     this.activeProcessingTimers.clear()
+    this.acpAbortInProgress.clear()
+    this.acpDeliverySettlements.clear()
     this.sdkSessionMap.clear()
     if (this.sdkClient) {
       this.sdkClient.destroy()
@@ -5481,8 +5739,17 @@ export class SessionRunner {
    * Use this for explicit "stop everything" (e.g., tests, user request).
    */
   destroyAndKill(): void {
+    this.acpLifecycleEpoch++
+    this.acpDestroyed = true
     for (const [, session] of this.sessions) {
       session.kill()
+    }
+    for (const session of new Set([
+      ...this.acpSessions.values(),
+      ...this.acpAttachingSessions,
+    ])) {
+      void session.kill().catch(() => {})
+      session.detach()
     }
     // Stop SDK sessions via session server
     if (this.sdkClient?.connected) {
@@ -5491,11 +5758,17 @@ export class SessionRunner {
       }
     }
     this.sessions.clear()
+    this.acpSessions.clear()
+    this.acpAttachPromises.clear()
+    this.acpAttachingSessions.clear()
+    abortAllTurns('session-runner-destroyed-and-killed')
     this.activeProcessing.clear()
     this.batchCounts.clear()
     this.batchMessageIds.clear()
     for (const timer of this.activeProcessingTimers.values()) clearTimeout(timer)
     this.activeProcessingTimers.clear()
+    this.acpAbortInProgress.clear()
+    this.acpDeliverySettlements.clear()
     this.sdkSessionMap.clear()
     if (this.sdkClient) {
       this.sdkClient.destroy()
@@ -5750,7 +6023,13 @@ export class SessionRunner {
     host?: string
     fromPlanSessionId?: string
     forkedFromSessionId?: string
+    engine?: import('../core/types.js').SessionEngine
   }): Promise<{ claudeSessionId: string; title: string }> {
+    await this.assertStartRouting(data)
+    if (data.engine === 'codex') {
+      return this.handleAcpStart(data)
+    }
+
     // Route to SDK session server when available and connected
     if (this.sdkClient?.connected) {
       return this.handleStartSdk(data)
@@ -5799,6 +6078,403 @@ export class SessionRunner {
       handleStartMs,
     })
     return { claudeSessionId, title }
+  }
+
+  private async assertStartRouting(data: {
+    engine?: import('../core/types.js').SessionEngine
+    forkedFromSessionId?: string
+  }): Promise<void> {
+    if (!data.forkedFromSessionId) return
+    if (data.engine === 'codex') {
+      throw new AcpForkUnsupportedError(data.forkedFromSessionId)
+    }
+    const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+    const source = await getSessionByClaudeId(data.forkedFromSessionId)
+    if (source) assertSessionForkSupported(source)
+  }
+
+  /**
+   * Re-attach an ACP session from its record after a web-server restart. The
+   * daemon worker (or at least its journal) survived us; constructing an
+   * AcpSession with the persisted runtimeId + providerSessionId lets the next
+   * send hit the live worker (or lazy-resume via session/load). Returns
+   * undefined for non-ACP records — callers fall through to the native path.
+   */
+  private async maybeAttachAcpSession(sessionId: string): Promise<AcpSession | undefined> {
+    if (this.acpDestroyed) return undefined
+    const attached = this.findAcpSession(sessionId)
+    if (attached) return attached
+    const {
+      getAcpIdentityReplacementTarget,
+      getSessionByClaudeId,
+    } = await import('../core/session-tracker.js')
+    const initialRecord = await getSessionByClaudeId(sessionId)
+    if (!initialRecord || initialRecord.engine !== 'codex') return undefined
+    const replacementTarget = getAcpIdentityReplacementTarget(initialRecord)
+    if (initialRecord.archived && !replacementTarget) return undefined
+    const runtimeKey = initialRecord.acpRuntimeId
+      ? `runtime:${initialRecord.acpRuntimeId}`
+      : `session:${sessionId}`
+    const pending = this.acpAttachPromises.get(sessionId)
+      ?? this.acpAttachPromises.get(runtimeKey)
+    if (pending) return pending
+    const epoch = this.acpLifecycleEpoch
+    const attaching = this.attachAcpSessionFromRecord(sessionId, epoch, initialRecord)
+    this.acpAttachPromises.set(sessionId, attaching)
+    this.acpAttachPromises.set(runtimeKey, attaching)
+    try {
+      return await attaching
+    } finally {
+      for (const key of [sessionId, runtimeKey]) {
+        if (this.acpAttachPromises.get(key) === attaching) {
+          this.acpAttachPromises.delete(key)
+        }
+      }
+    }
+  }
+
+  private async attachAcpSessionFromRecord(
+    sessionId: string,
+    epoch: number,
+    initialRecord?: import('../core/types.js').SessionRecord,
+  ): Promise<AcpSession | undefined> {
+    const {
+      deleteSessionRecords,
+      getAcpIdentityReplacementTarget,
+      getSessionByClaudeId,
+    } = await import('../core/session-tracker.js')
+    let record = initialRecord ?? await getSessionByClaudeId(sessionId)
+    if (!record || record.engine !== 'codex') return undefined
+    let migratedFrom: string | undefined
+    if (record.archived) {
+      const replacementId = getAcpIdentityReplacementTarget(record)
+      if (!replacementId) return undefined
+      const replacement = await getSessionByClaudeId(replacementId)
+      if (!replacement
+        || replacement.archived
+        || replacement.engine !== 'codex'
+        || replacement.acpRuntimeId !== record.acpRuntimeId
+        || replacement.taskId !== record.taskId) {
+        throw new Error(
+          `ACP identity migration ${sessionId} -> ${replacementId} is incomplete or inconsistent`,
+        )
+      }
+      const { replaceSessionIdLinks } = await import('../core/task-manager.js')
+      if (record.taskId) {
+        await replaceSessionIdLinks(record.taskId, sessionId, replacementId)
+      }
+      await migrateSessionQueue(sessionId, replacementId)
+      await deleteSessionRecords(new Set([sessionId]))
+      emitAcpIdentityBoundary(record.taskId, sessionId, replacementId)
+      migratedFrom = sessionId
+      record = replacement
+    }
+    let session: AcpSession | undefined
+    try {
+      session = new AcpSession({
+        taskId: record.taskId ?? '',
+        project: record.project ?? '',
+        cwd: record.cwd || process.env.HOME || process.cwd(),
+        mode: (record.mode as SessionMode | undefined) ?? 'default',
+        providerSessionId: record.claudeSessionId,
+        runtimeId: record.acpRuntimeId,
+        acpConfig: record.acpConfig,
+        directWsUrl: this._testDaemonUrl,
+        artifacts: this._testAcpArtifacts,
+      })
+      this.acpAttachingSessions.add(session)
+      let establishedId: string
+      try {
+        establishedId = await this.acpContract(session).establish()
+      } finally {
+        this.acpAttachingSessions.delete(session)
+      }
+      const currentRecord = await getSessionByClaudeId(establishedId)
+        ?? await getSessionByClaudeId(sessionId)
+      if (this.acpDestroyed
+        || epoch !== this.acpLifecycleEpoch
+        || !currentRecord
+        || currentRecord.archived
+        || currentRecord.engine !== 'codex'
+        || currentRecord.acpRuntimeId !== session.runtimeId) {
+        await this.retireAcpAttachment(session, establishedId, currentRecord?.taskId)
+        return undefined
+      }
+      this.acpSessions.set(session.runtimeId, session)
+      this.acpSessions.set(record.claudeSessionId, session)
+      this.acpSessions.set(establishedId, session)
+      if (migratedFrom) this.acpSessions.set(migratedFrom, session)
+      await this.linkAcpSessionToTask(
+        currentRecord.taskId,
+        establishedId,
+        currentRecord.mode,
+      )
+      const publishedRecord = await getSessionByClaudeId(establishedId)
+      if (this.acpDestroyed
+        || epoch !== this.acpLifecycleEpoch
+        || !publishedRecord
+        || publishedRecord.archived
+        || publishedRecord.engine !== 'codex'
+        || publishedRecord.acpRuntimeId !== session.runtimeId) {
+        await this.retireAcpAttachment(
+          session,
+          establishedId,
+          publishedRecord?.taskId ?? currentRecord.taskId,
+        )
+        return undefined
+      }
+      log.session.info('acp: re-attached session from record', {
+        sessionId: establishedId, runtimeId: session.runtimeId,
+      })
+      return session
+    } catch (err) {
+      if (session) {
+        this.acpAttachingSessions.delete(session)
+        for (const [key, candidate] of this.acpSessions) {
+          if (candidate === session) this.acpSessions.delete(key)
+        }
+        session.detach()
+      }
+      log.session.warn('acp: re-attach from record failed', {
+        sessionId, error: err instanceof Error ? err.message : String(err),
+      })
+      throw err
+    }
+  }
+
+  private async retireAcpAttachment(
+    session: AcpSession,
+    sessionId: string,
+    taskId?: string,
+  ): Promise<void> {
+    for (const [key, candidate] of this.acpSessions) {
+      if (candidate === session) this.acpSessions.delete(key)
+    }
+    if (taskId) {
+      const { clearSession, clearSessionSlot } = await import('../core/task-manager.js')
+      await clearSessionSlot(taskId, sessionId).catch(() => {})
+      await clearSession(taskId, sessionId).catch(() => {})
+    }
+    await session.kill().catch(() => {})
+    session.detach()
+  }
+
+  /** Lookup an ACP session by its trackingId (providerSessionId or runtimeId). */
+  findAcpSession(sessionId: string): AcpSession | undefined {
+    const direct = this.acpSessions.get(sessionId)
+    if (direct) return direct
+    for (const s of this.acpSessions.values()) {
+      if (s.sessionId === sessionId || s.runtimeId === sessionId) return s
+    }
+    return undefined
+  }
+
+  /** Find a live ACP session or lazily attach it from its durable record. */
+  async findOrAttachAcpSession(sessionId: string): Promise<AcpSession | undefined> {
+    return this.findAcpSession(sessionId) ?? await this.maybeAttachAcpSession(sessionId)
+  }
+
+  /**
+   * Provider-neutral control channel used by the turn-complete summary hook.
+   * Native Claude uses side_question; ACP provides an equivalent hidden report
+   * request so the existing merge/phase/notify policy stays provider-agnostic.
+   */
+  async requestTurnCompleteSelfReport(
+    sessionId: string,
+    prompt: string,
+    timeoutMs: number,
+  ): Promise<string> {
+    const native = this.findSessionByClaudeId(sessionId)
+    if (native) return native.askSideQuestion(prompt, timeoutMs)
+
+    const acp = this.findAcpSession(sessionId) ?? await this.maybeAttachAcpSession(sessionId)
+    if (!acp) throw new Error(`No live session found for self-report: ${sessionId}`)
+    const request = this.acpContract(acp).requestTurnCompleteSelfReport
+    if (!request) {
+      throw new Error(
+        'ACP self-report contract unavailable: AcpSession must implement requestTurnCompleteSelfReport(prompt, timeoutMs)',
+      )
+    }
+    return request(prompt, timeoutMs)
+  }
+
+  private async linkAcpSessionToTask(
+    taskId: string | undefined,
+    sessionId: string,
+    mode: SessionMode | undefined,
+  ): Promise<void> {
+    if (!taskId) return
+    const {
+      addSessionToHistory,
+      getTask,
+      linkSession,
+      linkSessionSlot,
+    } = await import('../core/task-manager.js')
+
+    const slot: 'plan' | 'exec' = mode === 'plan' ? 'plan' : 'exec'
+    let task = await getTask(taskId)
+    let changed = false
+    const slotValue = slot === 'plan' ? task.plan_session_id : task.exec_session_id
+    if (slotValue !== sessionId) {
+      task = (await linkSessionSlot(taskId, sessionId, slot)).task
+      changed = true
+    } else if (!task.session_ids?.includes(sessionId)) {
+      task = (await addSessionToHistory(taskId, sessionId)).task
+      changed = true
+    }
+    if (task.session_id !== sessionId) {
+      task = (await linkSession(taskId, sessionId)).task
+      changed = true
+    }
+
+    if (changed) {
+      bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'session-link' })
+    }
+  }
+
+  /**
+   * Start an ACP-backed session (engine='codex'). Deliberately minimal next to
+   * handleStart: no FIFO/JSONL transport, no system-prompt assembly (ACP
+   * providers self-manage context) — the daemon acp* family + AcpSession own
+   * everything. Returns once the first prompt is accepted.
+   */
+  private async handleAcpStart(data: {
+    taskId: string
+    message: string
+    host?: string
+    cwd?: string
+    mode?: string
+    project?: string
+    title?: string
+    forkedFromSessionId?: string
+  }): Promise<{ claudeSessionId: string; title: string }> {
+    if (data.forkedFromSessionId) {
+      throw new AcpForkUnsupportedError(data.forkedFromSessionId)
+    }
+    if (data.host && data.host !== '__local__') {
+      throw new Error('Codex (ACP) sessions are local-only for now — remote host support is a later phase')
+    }
+    const cwd = data.cwd || process.env.HOME || process.cwd()
+    const session = new AcpSession({
+      taskId: data.taskId,
+      project: data.project ?? '',
+      cwd,
+      mode: (data.mode as SessionMode | undefined) ?? 'default',
+      directWsUrl: this._testDaemonUrl,
+      artifacts: this._testAcpArtifacts,
+    })
+    // Key by runtimeId first; re-key to providerSessionId once known so
+    // findAcpSession hits on both (records/API use providerSessionId).
+    this.acpSessions.set(session.runtimeId, session)
+    const sid = await this.acpContract(session).establish()
+    this.acpSessions.set(sid, session)
+
+    const title = data.title ?? data.message.slice(0, 120)
+    try {
+      const { updateSessionRecord } = await import('../core/session-tracker.js')
+      await updateSessionRecord(sid, {
+        title,
+        description: data.message.slice(0, 500),
+      })
+    } catch (err) {
+      log.session.warn('acp: failed to persist session title', {
+        sessionId: sid,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+
+    try {
+      await this.linkAcpSessionToTask(
+        data.taskId,
+        sid,
+        (data.mode as SessionMode | undefined) ?? 'default',
+      )
+    } catch (err) {
+      log.session.warn('acp: failed to link session to task', {
+        sessionId: sid,
+        taskId: data.taskId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+
+    if (data.taskId) {
+      try {
+        const { updateTask } = await import('../core/task-manager.js')
+        await updateTask(data.taskId, { phase: 'IN_PROGRESS' }, { source: 'session-start' })
+      } catch { /* task update is best-effort */ }
+    }
+
+    bus.emit(EventNames.SESSION_STARTED, {
+      sessionId: sid,
+      claudeSessionId: sid,
+      taskId: data.taskId,
+      project: data.project ?? '',
+      provider: 'cli',
+    }, ['main-ai'], { source: 'session-runner' })
+
+    if (data.message) {
+      const queued = await enqueueMessage(sid, data.message)
+      bus.emit(EventNames.SESSION_MESSAGE_QUEUED, {
+        sessionId: sid,
+        messageId: queued.id,
+        message: data.message,
+        source: 'session-start',
+      }, ['main-ai'], { source: 'session-start' })
+      await this.drainAcpQueue(session, sid)
+    }
+    return { claudeSessionId: sid, title }
+  }
+
+  /** Test-only override for ACP worker/adapter command vectors (mock agent). */
+  private _testAcpArtifacts: { workerCmd: string[]; adapterCmd: string[] } | undefined
+  setTestAcpArtifacts(artifacts: { workerCmd: string[]; adapterCmd: string[] } | undefined): void {
+    this._testAcpArtifacts = artifacts
+  }
+
+  /**
+   * Drain queued messages into ONE ACP prompt. ACP is one-prompt-per-turn (the
+   * worker rejects a prompt while a turn runs; there is no FIFO to inject into),
+   * so a mid-turn send stays queued and re-drains when the turn's
+   * SESSION_RESULT lands (processNext routes back here).
+   */
+  private async drainAcpQueue(session: AcpSession, sessionId: string): Promise<void> {
+    if (session.activity === 'processing') {
+      log.session.info('acp: turn active — message stays queued until turn end', { sessionId })
+      return
+    }
+    const msgs = await markNextProcessing(sessionId)
+    if (msgs.length === 0) return
+    const [message] = msgs
+    this.setActiveProcessing(sessionId, 1, [message.id])
+
+    let releaseSettlement!: () => void
+    const settlement = new Promise<void>((resolve) => {
+      releaseSettlement = resolve
+    })
+    this.acpDeliverySettlements.set(sessionId, settlement)
+    try {
+      await this.acpContract(session).send(message.message, message.id)
+      const deliverySessionId = session.sessionId ?? sessionId
+      // The durable prompt fact now owns recovery. Remove the queue copy before
+      // releasing terminal drain; a terminal frame can race this exact await.
+      await removeProcessed(deliverySessionId, [message.id])
+      bus.emit(EventNames.SESSION_MESSAGES_DELIVERED, {
+        sessionId: deliverySessionId, count: 1, messageIds: [message.id],
+      }, ['main-ai'], { source: 'session-runner' })
+    } catch (err) {
+      this.clearActiveProcessing(sessionId, { kind: 'stopped' })
+      const deliverySessionId = session.sessionId ?? sessionId
+      await revertToPending(msgs.map((queued) => ({
+        ...queued,
+        sessionId: deliverySessionId,
+      })))
+      throw err
+    } finally {
+      releaseSettlement()
+      if (this.acpDeliverySettlements.get(sessionId) === settlement) {
+        this.acpDeliverySettlements.delete(sessionId)
+      }
+    }
   }
 
   private async handleStart(data: {
@@ -6440,7 +7116,11 @@ export class SessionRunner {
   /** Fire-and-forget phase/status bookkeeping after a send. Never blocks delivery. */
   private async syncPhaseAfterSend(sessionId: string): Promise<void> {
     try {
-      const { getSessionByClaudeId, updateSessionRecord } = await import('../core/session-tracker.js')
+      const {
+        emitSessionStatusChanged,
+        getSessionByClaudeId,
+        updateSessionRecord,
+      } = await import('../core/session-tracker.js')
       const record = await getSessionByClaudeId(sessionId)
       if (!record) return
 
@@ -6462,18 +7142,17 @@ export class SessionRunner {
       }
       // Clear stale error message and update activity on resume
       if (record.process_status === 'error' || record.errorMessage) {
-        await updateSessionRecord(sessionId, {
+        const updated = await updateSessionRecord(sessionId, {
           activity: 'Processing follow-up...',
           errorMessage: undefined,  // Clear stale error on resume
         })
         // Emit status change so frontend clears the error banner immediately
-        bus.emit(EventNames.SESSION_STATUS_CHANGED, {
-          sessionId,
-          taskId: record.taskId,
-          process_status: record.process_status,
-          phase: 'IN_PROGRESS',
-          activity: 'Processing follow-up...',
-        }, ['*'], { source: 'session-runner' })
+        emitSessionStatusChanged(
+          updated,
+          { phase: 'IN_PROGRESS' },
+          ['*'],
+          { source: 'session-runner' },
+        )
       }
     } catch (err) {
       log.session.warn('handleSend: phase/status reset failed', { sessionId, error: err instanceof Error ? err.message : String(err) })
@@ -6830,7 +7509,10 @@ export class SessionRunner {
     const pendingSessions = await getAllSessionsWithPending()
     if (pendingSessions.length === 0) return
 
-    const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+    const {
+      getAcpIdentityReplacementTarget,
+      getSessionByClaudeId,
+    } = await import('../core/session-tracker.js')
     for (const sessionId of pendingSessions) {
       // Skip sessions mid-delivery — their batch is already in flight.
       if (this.activeProcessing.has(sessionId)) continue
@@ -6840,7 +7522,7 @@ export class SessionRunner {
         // Don't resurrect an archived session on reconnect — it's been retired
         // (plan executed / user closed); resuming it would spawn a CLI for a
         // session no UI entry point points at. Leave its messages pending.
-        if (record.archived) continue
+        if (record.archived && !getAcpIdentityReplacementTarget(record)) continue
         const recordHost = record.host ?? '__local__'
         if (recordHost !== hostKey) continue
         log.session.info('daemon reconnected — redelivering pending messages', { sessionId, hostKey })
@@ -6858,6 +7540,13 @@ export class SessionRunner {
    * @param mode - Optional permission mode override for the resumed session.
    */
   private async processNext(sessionId: string, mode?: string): Promise<void> {
+    // ACP sessions have their own drain (one prompt per turn, no FIFO/--resume).
+    const acpSession = this.findAcpSession(sessionId)
+      ?? await this.maybeAttachAcpSession(sessionId)
+    if (acpSession) {
+      return this.drainAcpQueue(acpSession, acpSession.sessionId ?? sessionId)
+    }
+
     const msgs = await markProcessing(sessionId)
     if (msgs.length === 0) return
 

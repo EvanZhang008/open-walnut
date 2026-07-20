@@ -36,8 +36,11 @@ import {
   type PendingCtrl,
 } from './daemon-core.js'
 import { REQUIRED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
+import { createAcpDaemon, type AcpStartParams } from './acp-daemon.js'
 import { computeGitDiff, GitDiffError, type GitDiffBase } from './git-diff-core.js'
 import { execFile as execFileCb } from 'node:child_process'
+
+process.umask(0o077)
 
 // ── Version ──
 // Baked in at compile time via `bun build --define` (see scripts/build-daemon.sh).
@@ -76,6 +79,30 @@ const VERSION_FILE = path.join(DAEMON_DIR, 'daemon.version')
 const AGENT_POLL_INTERVAL_MS = 2000
 const AGENT_REDISCOVER_INTERVAL_MS = 10000
 const HEARTBEAT_INTERVAL_MS = 30_000
+
+function ensureOwnerOnlyStorage(): void {
+  const repair = (entryPath: string): void => {
+    let stat: fs.Stats
+    try { stat = fs.lstatSync(entryPath) } catch { return }
+    if (stat.isSymbolicLink()) return
+    if (stat.isDirectory()) {
+      fs.chmodSync(entryPath, 0o700)
+      let names: string[] = []
+      try { names = fs.readdirSync(entryPath) } catch { return }
+      for (const name of names) repair(path.join(entryPath, name))
+      return
+    }
+    fs.chmodSync(entryPath, stat.mode & 0o111 ? 0o700 : 0o600)
+  }
+
+  fs.mkdirSync(DAEMON_DIR, { recursive: true, mode: 0o700 })
+  fs.mkdirSync(STREAMS_DIR, { recursive: true, mode: 0o700 })
+  fs.chmodSync(DAEMON_DIR, 0o700)
+  fs.chmodSync(STREAMS_DIR, 0o700)
+  for (const root of [DAEMON_DIR, STREAMS_DIR]) {
+    for (const name of fs.readdirSync(root)) repair(path.join(root, name))
+  }
+}
 
 // ── Daemon Instance ID ──
 // Unique per daemon lifetime. Short hash of port+pid+startTs so it fits in log
@@ -640,6 +667,15 @@ const reapSession = core.reapSession
 const startOrphanPoll = core.startOrphanPoll
 const reconcileRegistry = core.reconcileRegistry
 
+// ── ACP worker supervision (in-process model; see acp-daemon.ts) ──
+const acp = createAcpDaemon<ServerWebSocket<WsData>>({
+  streamsDir: STREAMS_DIR,
+  daemonDir: DAEMON_DIR,
+  sendEvent,
+  isWsOpen: (ws) => ws.readyState === 1,
+  log: logMsg,
+})
+
 // Daemon NEVER auto-exits. It's a permanent process manager on the remote host.
 // Mac disconnecting should NOT cause daemon to exit — sessions keep running.
 // Session lifecycle is managed by the session idle scanner (scanIdleSessions).
@@ -698,6 +734,15 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
     case 'bridgeResume': return cmdBridgeResume(ws, id as number, cmd)
     case 'stt': return cmdSttRelay(ws, id as number, cmd)
     case 'stt-result': return cmdSttResult(ws, id as number, cmd)
+    case 'acpStart': return cmdAcpStart(ws, id as number, cmd)
+    case 'acpSend': return cmdAcpOp(ws, id as number, cmd, 'prompt')
+    case 'acpCancel': return cmdAcpOp(ws, id as number, cmd, 'cancel')
+    case 'acpRespond': return cmdAcpOp(ws, id as number, cmd, 'permissionResponse')
+    case 'acpSetConfigOption': return cmdAcpOp(ws, id as number, cmd, 'setConfigOption')
+    case 'acpState': return cmdAcpOp(ws, id as number, cmd, 'getState')
+    case 'acpNewSession': return cmdAcpOp(ws, id as number, cmd, 'newSession')
+    case 'acpStop': return cmdAcpStop(ws, id as number, cmd)
+    case 'acpSubscribe': return cmdAcpSubscribe(ws, id as number, cmd)
     case 'ping': return sendOk(ws, id as number, { pong: true })
     case 'hello': return sendOk(ws, id as number, {
       version: DAEMON_VERSION,
@@ -851,6 +896,44 @@ function cmdSttResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<strin
     sendError(pending.ws, pending.id, 'stt: ' + (error ?? 'transcription failed'))
   }
   sendOk(ws, id, {})
+}
+
+// ── ACP session commands (engine=codex etc; see acp-daemon.ts) ──
+// sid here is the Walnut runtimeId; journal = STREAMS_DIR/<sid>.acp.jsonl.
+
+function cmdAcpStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const params = cmd as unknown as AcpStartParams
+  if (!params.sid || !params.cwd) return sendError(ws, id, 'acpStart: missing sid/cwd')
+  void acp.acpStart(ws, params).then((resp) => {
+    if (resp.ok) sendOk(ws, id, resp.result ?? {})
+    else safeSend(ws, JSON.stringify({ id, ok: false, error: resp.error, errorKind: resp.errorKind }))
+  })
+}
+
+function cmdAcpOp(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>, op: string) {
+  const { sid, ...params } = cmd as { sid?: string; cmd?: string }
+  if (!sid) return sendError(ws, id, op + ': missing sid')
+  delete (params as Record<string, unknown>).cmd
+  delete (params as Record<string, unknown>).id
+  delete (params as Record<string, unknown>).traceId
+  void acp.acpOp(sid, op, params as Record<string, unknown>).then((resp) => {
+    if (resp.ok) sendOk(ws, id, { result: resp.result })
+    else safeSend(ws, JSON.stringify({ id, ok: false, error: resp.error?.message ?? 'acp op failed', errorKind: resp.error?.kind }))
+  })
+}
+
+function cmdAcpStop(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const { sid } = cmd as { sid?: string }
+  if (!sid) return sendError(ws, id, 'acpStop: missing sid')
+  void acp.acpStop(sid).then(() => sendOk(ws, id, { stopped: true }))
+}
+
+function cmdAcpSubscribe(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const { sid, fromOffset } = cmd as { sid?: string; fromOffset?: number }
+  if (!sid) return sendError(ws, id, 'acpSubscribe: missing sid')
+  const ok = acp.subscribe(ws, sid, typeof fromOffset === 'number' ? fromOffset : 0)
+  if (ok) sendOk(ws, id, { subscribed: true })
+  else safeSend(ws, JSON.stringify({ id, ok: false, error: 'no live ACP worker for ' + sid, errorKind: 'no_worker' }))
 }
 
 // ── Start a Claude session ──
@@ -2464,6 +2547,7 @@ function cleanup() {
 // ── Handle disconnect for a WebSocket client ──
 function handleDisconnect(ws: ServerWebSocket<WsData>) {
   wsClients.delete(ws)
+  acp.removeSubscriber(ws)
 
   // DUP-DEBUG: count subscriber entries removed across all sessions for this
   // ws. If a subscriber leak shows up, this number tells us how many sids
@@ -2730,8 +2814,7 @@ if (action === '--start') {
     // gets overwritten at the end of startup.
   }
 
-  fs.mkdirSync(DAEMON_DIR, { recursive: true })
-  fs.mkdirSync(STREAMS_DIR, { recursive: true })
+  ensureOwnerOnlyStorage()
 
   // Phase C: startup reconcile — adopts live orphans (1s poll) and reaps
   // any entries whose pids are gone or recycled. Runs BEFORE the legacy
@@ -2745,6 +2828,14 @@ if (action === '--start') {
     adoptedFromRegistry: sessions.size,
     sids: [...sessions.keys()],
   })
+
+  // ACP startup repair: workers from a previous daemon life are dead by
+  // definition (in-process model). Sweep stragglers + close un-ended turns /
+  // un-answered permissions in every ACP journal so the UI never shows a
+  // stuck spinner. See acp-daemon.ts startupRepair.
+  try { acp.startupRepair() } catch (err) {
+    logMsg('error', 'acp startupRepair failed', { error: (err as Error).message })
+  }
 
   // Clean up orphaned process groups from a previous daemon crash. reconcile()
   // already handled everything in sessions.json; this picks up .pgid files

@@ -12,7 +12,7 @@ import { log } from '../../logging/index.js';
 import { addTask, getTask, updateTask, togglePin, setFocusTier } from '../task-manager.js';
 import { getSessionsForTask, updateSessionRecord } from '../session-tracker.js';
 import { bus, EventNames } from '../event-bus.js';
-import type { Task } from '../types.js';
+import type { Task, SessionEngine } from '../types.js';
 import { spillLargePromptToFile } from './quick-start-spill.js';
 
 export interface QuickStartTaskMeta {
@@ -44,6 +44,8 @@ export interface QuickStartParams {
   /** Event-bus source tag, e.g. 'quick-start' | 'routine'. */
   source: string;
   requestTs?: number;
+  /** Coding-agent engine; defaults to 'claude' (native path). */
+  engine?: SessionEngine;
 }
 
 export class QuickStartError extends Error {
@@ -61,7 +63,7 @@ export class QuickStartError extends Error {
 export async function quickStartSession(params: QuickStartParams): Promise<Task> {
   const {
     message, messagePrefix, cwd, host, model, mode, existingTaskId, taskMeta,
-    source, requestTs = Date.now(),
+    source, requestTs = Date.now(), engine,
   } = params;
   const project = params.project ?? 'Quick Start';
 
@@ -173,6 +175,7 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     host,
     largePromptFile,
     requestTs,
+    engine,
   }, ['session-runner'], { source });
 
   log.web.info(`${source}: created task + started session`, {

@@ -136,6 +136,8 @@ export const PLUGIN_STORES_DIR = path.join(WALNUT_HOME, 'plugin-stores');
 export const SESSIONS_FILE = path.join(WALNUT_HOME, 'sessions.json');
 export const CLAUDE_HOME = path.join(os.homedir(), '.claude');
 export const HISTORY_CACHE_DIR = path.join(WALNUT_HOME, 'cache', 'history');
+/** Last-known model catalog per host (from any session's list_models) — feeds pickers before/without a live CLI. */
+export const HOST_MODEL_CATALOG_FILE = path.join(WALNUT_HOME, 'cache', 'host-model-catalogs.json');
 export const HOOK_LOG_FILE = path.join(WALNUT_HOME, 'hook-errors.log');
 export const DAILY_DIR = path.join(MEMORY_DIR, 'daily');
 /** Pinned global memory. Lives INSIDE memory/ (three-word model: memory / skill / history). */

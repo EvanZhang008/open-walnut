@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import type {
   SessionTreeCategory,
   SessionTreeTask,
@@ -6,6 +6,9 @@ import type {
 } from '@/types/session';
 import { PHASE_LABELS, PROCESS_LABELS, compositePhaseColor } from '@/utils/session-status';
 import type { TaskPhase } from '@/types/session';
+import { ICON_CLOSE, ICON_SEARCH } from '@/components/common/Icons';
+import { useSessionStatusEpoch } from '@/hooks/useSessionStatus';
+import { resolveSessionRecordStatus } from '@/stores/session-status-store';
 
 type ProcessFilter = 'all' | 'running' | 'idle' | 'stopped' | 'error';
 type TaskFilter = 'all' | 'starred' | 'high';
@@ -18,13 +21,20 @@ interface SessionTreePanelProps {
   hideCompleted: boolean;
   onToggleHideCompleted: () => void;
   onBack?: () => void;
+  query: string;
+  onQueryChange: (query: string) => void;
+  total: number;
+  remaining: number;
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
 }
 
 // ── localStorage persistence helpers ──
 
 const LS_COLLAPSED_CATS = 'open-walnut-session-tree-collapsed-cats';
 const LS_COLLAPSED_PROJS = 'open-walnut-session-tree-collapsed-projs';
-const LS_COLLAPSED_TASKS = 'open-walnut-session-tree-collapsed-tasks';
+const LS_EXPANDED_TASKS = 'open-walnut-session-tree-expanded-tasks-v2';
 
 function readSetFromStorage(key: string): Set<string> {
   try {
@@ -96,12 +106,33 @@ export function SessionTreePanel({
   hideCompleted,
   onToggleHideCompleted,
   onBack,
+  query,
+  onQueryChange,
+  total,
+  remaining,
+  hasMore,
+  loadingMore,
+  onLoadMore,
 }: SessionTreePanelProps) {
+  const statusEpoch = useSessionStatusEpoch();
   const [collapsedCats, setCollapsedCats] = useState<Set<string>>(() => readSetFromStorage(LS_COLLAPSED_CATS));
   const [collapsedProjs, setCollapsedProjs] = useState<Set<string>>(() => readSetFromStorage(LS_COLLAPSED_PROJS));
-  const [collapsedTasks, setCollapsedTasks] = useState<Set<string>>(() => readSetFromStorage(LS_COLLAPSED_TASKS));
+  const [expandedTasks, setExpandedTasks] = useState<Set<string>>(() => readSetFromStorage(LS_EXPANDED_TASKS));
   const [processFilter, setProcessFilter] = useState<ProcessFilter>('all');
   const [taskFilter, setTaskFilter] = useState<TaskFilter>('all');
+  const panelRef = useRef<HTMLDivElement>(null);
+  const previousExactResultRef = useRef('');
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
+  const isSearching = query.trim().length > 0;
+  const loadedCount = useMemo(() => {
+    let count = orphanSessions.length;
+    for (const category of tree) {
+      count += sessionCount(category.directTasks);
+      for (const project of category.projects) count += sessionCount(project.tasks);
+    }
+    return count;
+  }, [tree, orphanSessions]);
 
   const toggleCat = (cat: string) => {
     setCollapsedCats((prev) => {
@@ -122,21 +153,22 @@ export function SessionTreePanel({
   };
 
   const toggleTask = (key: string) => {
-    setCollapsedTasks((prev) => {
+    setExpandedTasks((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key); else next.add(key);
-      persistSet(LS_COLLAPSED_TASKS, next);
+      persistSet(LS_EXPANDED_TASKS, next);
       return next;
     });
   };
 
   // Apply filters to compute a filtered tree
-  const { filteredTree, filteredOrphans, totalCount } = useMemo(() => {
+  const { filteredTree, filteredOrphans, totalCount, filteredSessions } = useMemo(() => {
     const filterSessions = (sessions: SessionRecord[]) =>
-      sessions.filter((s) => matchesProcessFilter(s, processFilter));
+      sessions
+        .map((session) => resolveSessionRecordStatus(session))
+        .filter((session) => matchesProcessFilter(session, processFilter));
 
     const filterTasks = (tasks: SessionTreeTask[]) => {
-      if (taskFilter === 'all' && processFilter === 'all') return tasks;
       return tasks.reduce<SessionTreeTask[]>((acc, t) => {
         if (!matchesTaskFilter(t, taskFilter)) return acc;
         const filtered = filterSessions(t.sessions);
@@ -170,25 +202,127 @@ export function SessionTreePanel({
       }
     }
 
-    return { filteredTree: fTree, filteredOrphans: fOrphans, totalCount: count };
-  }, [tree, orphanSessions, processFilter, taskFilter]);
+    const allSessions = [
+      ...fTree.flatMap((category) => [
+        ...category.directTasks.flatMap((task) => task.sessions),
+        ...category.projects.flatMap((project) => project.tasks.flatMap((task) => task.sessions)),
+      ]),
+      ...fOrphans,
+    ];
 
-  const renderSession = (s: SessionRecord) => {
+    return { filteredTree: fTree, filteredOrphans: fOrphans, totalCount: count, filteredSessions: allSessions };
+  }, [tree, orphanSessions, processFilter, taskFilter, statusEpoch]);
+
+  useEffect(() => {
+    const normalized = query.trim().toLocaleLowerCase();
+    const only = filteredSessions.length === 1 ? filteredSessions[0] : undefined;
+    const exactResult = normalized
+      && only?.claudeSessionId.toLocaleLowerCase() === normalized
+      ? only
+      : undefined;
+    const selectionKey = exactResult ? `${normalized}\0${exactResult.claudeSessionId}` : '';
+    const previousKey = previousExactResultRef.current;
+    previousExactResultRef.current = selectionKey;
+
+    // Selection follows the result transition, not selectedId changes. Mobile
+    // Back clears selectedId while the exact result remains mounted; that must
+    // return to the master list instead of immediately selecting it again.
+    if (exactResult
+      && selectionKey !== previousKey
+      && selectedIdRef.current !== exactResult.claudeSessionId) {
+      onSelect(exactResult.claudeSessionId);
+    }
+  }, [query, filteredSessions, onSelect]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    const frame = requestAnimationFrame(() => {
+      const nodes = panelRef.current?.querySelectorAll<HTMLElement>('[data-session-id]');
+      const selected = nodes ? [...nodes].find((node) => node.dataset.sessionId === selectedId) : undefined;
+      const active = document.activeElement;
+      if (selected && (active === document.body || active?.hasAttribute('data-session-id'))) {
+        selected.focus({ preventScroll: true });
+      }
+      selected?.scrollIntoView({ block: 'nearest' });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [selectedId, filteredTree, filteredOrphans]);
+
+  const handleTreeKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const current = (event.target as HTMLElement).closest<HTMLElement>('[role="treeitem"]');
+    if (!current) return;
+    const items = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="treeitem"]')]
+      .filter((item) => item.getClientRects().length > 0);
+    const index = items.indexOf(current);
+    const focusAt = (nextIndex: number) => {
+      const next = items[nextIndex];
+      if (!next) return;
+      event.preventDefault();
+      next.focus();
+    };
+
+    switch (event.key) {
+      case 'ArrowDown':
+        focusAt(Math.min(items.length - 1, index + 1));
+        break;
+      case 'ArrowUp':
+        focusAt(Math.max(0, index - 1));
+        break;
+      case 'Home':
+        focusAt(0);
+        break;
+      case 'End':
+        focusAt(items.length - 1);
+        break;
+      case 'ArrowRight': {
+        const expanded = current.getAttribute('aria-expanded');
+        if (expanded === 'false') {
+          event.preventDefault();
+          current.click();
+        } else if (expanded === 'true') {
+          focusAt(index + 1);
+        }
+        break;
+      }
+      case 'ArrowLeft': {
+        const expanded = current.getAttribute('aria-expanded');
+        if (expanded === 'true') {
+          event.preventDefault();
+          current.click();
+          break;
+        }
+        const parentGroup = current.parentElement?.closest<HTMLElement>('[role="group"]');
+        const parentItem = parentGroup?.parentElement
+          ?.querySelector<HTMLElement>(':scope > [role="treeitem"]');
+        if (parentItem) {
+          event.preventDefault();
+          parentItem.focus();
+        }
+        break;
+      }
+    }
+  };
+
+  const renderSession = (s: SessionRecord, level: number) => {
     const sid = s.claudeSessionId;
     const title = s.title || s.description || sid || 'Untitled session';
     const isPlan = s.mode === 'plan' || !!s.planCompleted;
     return (
-      <div
+      <button
+        type="button"
         key={sid}
         className={`session-tree-session${sid === selectedId ? ' session-tree-session-selected' : ''}`}
         onClick={() => onSelect(sid)}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => { if (e.key === 'Enter') onSelect(sid); }}
+        role="treeitem"
+        aria-level={level}
+        aria-selected={sid === selectedId}
+        aria-label={`${title}${s.engine === 'codex' ? ', Codex' : ''}`}
+        data-session-id={sid}
       >
         <span
           className="session-status-dot"
           style={{ background: getSessionDotColor(s) }}
+          aria-hidden="true"
         />
         {isPlan && (
           <span
@@ -221,39 +355,46 @@ export function SessionTreePanel({
             🤖
           </span>
         )}
-        <span className="session-tree-session-title">{title}</span>
+        {s.engine === 'codex' && (
+          <span className="session-tree-codex-badge" title="Codex session via ACP">
+            Codex
+          </span>
+        )}
+        <span className="session-tree-session-title" title={s.recap || undefined}>{title}</span>
         <span className="session-tree-session-time text-xs text-muted">{formatShortDate(s.startedAt)}</span>
-      </div>
+      </button>
     );
   };
 
-  const renderTaskNode = (task: SessionTreeTask, keyPrefix: string) => {
+  const renderTaskNode = (task: SessionTreeTask, keyPrefix: string, level: number) => {
     const taskKey = `${keyPrefix}/${task.taskId}`;
-    const isCollapsed = collapsedTasks.has(taskKey);
+    const isCollapsed = !isSearching && !expandedTasks.has(taskKey);
     const count = task.sessions.length;
 
     const statusIcon = task.taskStatus === 'done' ? '✓' : task.taskStatus === 'in_progress' ? '●' : '○';
 
     return (
-      <div key={taskKey} className="session-tree-task">
-        <div
+      <div key={taskKey} className="session-tree-task" role="none">
+        <button
+          type="button"
           className="session-tree-task-header"
           onClick={() => toggleTask(taskKey)}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) => { if (e.key === 'Enter') toggleTask(taskKey); }}
+          role="treeitem"
+          aria-level={level}
+          aria-expanded={!isCollapsed}
+          aria-label={`${task.taskTitle}, ${count} ${count === 1 ? 'session' : 'sessions'}`}
         >
-          <span className="session-tree-arrow">{isCollapsed ? '▶' : '▼'}</span>
-          <span className="session-tree-task-status">{statusIcon}</span>
+          <span className="session-tree-arrow" aria-hidden="true">{isCollapsed ? '▶' : '▼'}</span>
+          <span className="session-tree-task-status" aria-hidden="true">{statusIcon}</span>
           <span className="session-tree-task-name truncate">
             {task.taskStarred && <span className="session-tree-star">★ </span>}
             {task.taskTitle}
           </span>
           <span className="session-tree-count">{count}</span>
-        </div>
+        </button>
         {!isCollapsed && (
-          <div className="session-tree-task-children">
-            {task.sessions.map(renderSession)}
+          <div className="session-tree-task-children" role="group">
+            {task.sessions.map((session) => renderSession(session, level + 1))}
           </div>
         )}
       </div>
@@ -261,13 +402,37 @@ export function SessionTreePanel({
   };
 
   return (
-    <div className="session-tree-panel">
+    <div className="session-tree-panel" ref={panelRef}>
       <div className="session-tree-header">
         {onBack && (
           <button className="session-tree-back-btn" onClick={onBack} title="Back" aria-label="Go back">&larr;</button>
         )}
         <span className="session-tree-header-title">Sessions</span>
-        <span className="session-tree-count">{totalCount}</span>
+        <span className="session-tree-count">
+          {processFilter === 'all' && taskFilter === 'all' ? total : totalCount}
+        </span>
+      </div>
+
+      <div className="session-tree-search">
+        <span className="session-tree-search-icon" aria-hidden="true">{ICON_SEARCH}</span>
+        <input
+          type="search"
+          value={query}
+          onChange={(event) => onQueryChange(event.target.value)}
+          placeholder="Search sessions"
+          aria-label="Search sessions"
+        />
+        {query && (
+          <button
+            type="button"
+            className="session-tree-search-clear"
+            onClick={() => onQueryChange('')}
+            aria-label="Clear session search"
+            title="Clear search"
+          >
+            {ICON_CLOSE}
+          </button>
+        )}
       </div>
 
       {/* Filter bars */}
@@ -309,71 +474,88 @@ export function SessionTreePanel({
       </div>
 
       <div className="session-tree-scroll">
+        <div role="tree" aria-label="Sessions" onKeyDown={handleTreeKeyDown}>
         {filteredTree.map((cat) => {
-          const catCollapsed = collapsedCats.has(cat.category);
+          const catCollapsed = !isSearching && collapsedCats.has(cat.category);
           const catCount = sessionCount(cat.directTasks) +
             cat.projects.reduce((sum, p) => sum + sessionCount(p.tasks), 0);
 
           return (
-            <div key={cat.category} className="session-tree-category">
-              <div
+            <div key={cat.category} className="session-tree-category" role="none">
+              <button
+                type="button"
                 className="session-tree-category-header"
                 onClick={() => toggleCat(cat.category)}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => { if (e.key === 'Enter') toggleCat(cat.category); }}
+                role="treeitem"
+                aria-level={1}
+                aria-expanded={!catCollapsed}
+                aria-label={`${cat.category}, ${catCount} ${catCount === 1 ? 'session' : 'sessions'}`}
               >
-                <span className="session-tree-arrow">{catCollapsed ? '▶' : '▼'}</span>
+                <span className="session-tree-arrow" aria-hidden="true">{catCollapsed ? '▶' : '▼'}</span>
                 <span className="session-tree-category-name">{cat.category}</span>
                 <span className="session-tree-count">{catCount}</span>
-              </div>
+              </button>
 
               {!catCollapsed && (
-                <>
-                  {cat.directTasks.map((t) => renderTaskNode(t, cat.category))}
+                <div role="group">
+                  {cat.directTasks.map((t) => renderTaskNode(t, cat.category, 2))}
 
                   {cat.projects.map((proj) => {
                     const projKey = `${cat.category}/${proj.project}`;
-                    const projCollapsed = collapsedProjs.has(projKey);
+                    const projCollapsed = !isSearching && collapsedProjs.has(projKey);
                     const projCount = sessionCount(proj.tasks);
 
                     return (
-                      <div key={projKey} className="session-tree-project">
-                        <div
+                      <div key={projKey} className="session-tree-project" role="none">
+                        <button
+                          type="button"
                           className="session-tree-project-header"
                           onClick={() => toggleProj(projKey)}
-                          role="button"
-                          tabIndex={0}
-                          onKeyDown={(e) => { if (e.key === 'Enter') toggleProj(projKey); }}
+                          role="treeitem"
+                          aria-level={2}
+                          aria-expanded={!projCollapsed}
+                          aria-label={`${proj.project}, ${projCount} ${projCount === 1 ? 'session' : 'sessions'}`}
                         >
-                          <span className="session-tree-arrow">{projCollapsed ? '▶' : '▼'}</span>
+                          <span className="session-tree-arrow" aria-hidden="true">{projCollapsed ? '▶' : '▼'}</span>
                           <span className="session-tree-project-name">{proj.project}</span>
                           <span className="session-tree-count">{projCount}</span>
-                        </div>
+                        </button>
 
-                        {!projCollapsed && proj.tasks.map((t) => renderTaskNode(t, projKey))}
+                        {!projCollapsed && (
+                          <div role="group">
+                            {proj.tasks.map((t) => renderTaskNode(t, projKey, 3))}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
-                </>
+                </div>
               )}
             </div>
           );
         })}
 
         {filteredOrphans.length > 0 && (
-          <div className="session-tree-category">
+          <div className="session-tree-category" role="none">
             <div className="session-tree-category-header session-tree-orphan-header">
               <span className="session-tree-category-name">Unlinked Sessions</span>
               <span className="session-tree-count">{filteredOrphans.length}</span>
             </div>
-            {filteredOrphans.map(renderSession)}
+            {filteredOrphans.map((session) => renderSession(session, 1))}
           </div>
         )}
 
         {filteredTree.length === 0 && filteredOrphans.length === 0 && (
           <div className="session-tree-empty">
             <p className="text-muted text-sm">No sessions match filters</p>
+          </div>
+        )}
+        </div>
+        {hasMore && remaining > 0 && total > loadedCount && (
+          <div className="session-tree-load-more">
+            <button type="button" onClick={onLoadMore} disabled={loadingMore}>
+              {loadingMore ? 'Loading...' : `Load more (${remaining} remaining)`}
+            </button>
           </div>
         )}
       </div>

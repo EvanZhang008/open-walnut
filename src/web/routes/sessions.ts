@@ -4,7 +4,20 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { log } from '../../logging/index.js'
-import { listSessions, getRecentSessions, getSessionSummaries, getSessionsForTask, getSessionByClaudeId, updateSessionRecord, isTriageSession, isEnvironmentSession } from '../../core/session-tracker.js'
+import {
+  emitSessionStatusChanged,
+  getRecentSessions,
+  getSessionByClaudeId,
+  getSessionStatusSnapshots,
+  getSessionSummaries,
+  getSessionsForTask,
+  isEnvironmentSession,
+  isTriageSession,
+  listSessions,
+  toSessionStatusSnapshot,
+  updateSessionRecord,
+  updateSessionRecordConditionally,
+} from '../../core/session-tracker.js'
 import { readSessionHistory, readSingleSubagentHistory, reconstructWorkflowProgress, extractPlanContent, rewriteHistoryRemoteImages } from '../../core/session-history.js'
 import { computeSessionChanges } from '../../core/session-changes.js'
 import { computeSessionGitDiff, type GitDiffBase } from '../../core/session-git-diff.js'
@@ -20,9 +33,11 @@ import { findLocalJsonlPath } from '../../core/session-file-reader.js'
 import { getFrequentDirs, compileFromSessions } from '../../core/frequent-dirs.js'
 import type { SessionRecord, SessionMode, Task, SessionEffort } from '../../core/types.js'
 import { VALID_SESSION_MODEL_IDS, SESSION_MODEL_CLI_MAP, VALID_SESSION_EFFORT_IDS, modelSupportsEffort, modelSupportsXhighEffort, modelSupportsMaxEffort, resolveModelSwitchValue, sessionModelsAsCatalog } from '../../core/types.js'
+import { getHostModelCatalog, listHostModelCatalogs } from '../../core/host-model-catalog.js'
 import type { SessionHistoryMessage } from '../../core/session-history.js'
 import { processAndSaveImages, buildSessionImageContext } from './images.js'
 import { sessionRunner } from '../../providers/claude-code-session.js'
+import { readAcpSessionHistoryState } from '../../providers/acp-session-history.js'
 import { listSideQuestions, addSideQuestion, getSideQuestion, markPromoted, deleteSideQuestion } from '../../core/side-questions.js'
 import type { ImagePayload } from './images.js'
 import { quickStartSession, QuickStartError } from '../../core/sessions/quick-start.js'
@@ -31,7 +46,7 @@ import { listLocalDirs, listRemoteDirs } from '../../core/sessions/dir-listing.j
 import { QUICK_START_MESSAGE_HARD_LIMIT } from '../../constants.js'
 
 /** Diagnose message ordering — logs whether user text messages are interleaved or bunched at end. */
-function logMessageOrdering(phase: string, sessionId: string, messages: SessionHistoryMessage[], host?: string): void {
+function logMessageOrdering(phase: string, sessionId: string, messages: SessionHistoryMessage[], host?: string | null): void {
   const userIndices: number[] = []
   for (let i = 0; i < messages.length; i++) {
     if (messages[i].role === 'user' && messages[i].text?.trim()) userIndices.push(i)
@@ -69,13 +84,45 @@ async function enrichWithLiveStatus(sessions: SessionRecord[]): Promise<SessionR
     const results = await Promise.allSettled(
       needsCheck.map(i => isSessionProcessAlive(sessions[i]))
     )
+    const corrections: Promise<void>[] = []
     for (let j = 0; j < needsCheck.length; j++) {
       const r = results[j]
       const alive = r.status === 'fulfilled' && r.value === true
       if (!alive) {
-        sessions[needsCheck[j]].process_status = 'stopped'
+        const index = needsCheck[j]
+        const checked = sessions[index]
+        // A failed remote liveness check can mean only that the daemon/tunnel
+        // is unreachable. GET must not turn transport uncertainty into durable
+        // process death; the health monitor owns remote reconciliation.
+        if (checked.host) continue
+        const checkedStatus = toSessionStatusSnapshot(checked)
+        corrections.push((async () => {
+          const updated = await updateSessionRecordConditionally(
+            checked.claudeSessionId,
+            {
+              process_status: 'stopped',
+              activity: undefined,
+              last_status_change: new Date().toISOString(),
+              status_reason: 'liveness_check_failed',
+              status_changed_by: 'system',
+            },
+            (current) => {
+              const status = toSessionStatusSnapshot(current)
+              return status.statusRevision === checkedStatus.statusRevision
+                && status.process_status === checkedStatus.process_status
+                && (status.process_status === 'running' || status.process_status === 'idle')
+            },
+          )
+          if (!updated) return
+          sessions[index] = updated
+          emitSessionStatusChanged(updated, {}, ['*'], {
+            source: 'sessions-route:liveness',
+            urgency: 'urgent',
+          })
+        })())
       }
     }
+    await Promise.all(corrections)
   }
 
   return sessions
@@ -308,7 +355,7 @@ function buildFixWalnutMessage(userReport: string): string {
 sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: NextFunction) => {
   const requestTs = Date.now()
   try {
-    const { cwd, host, message, model: rawModel, mode, images, taskId: existingTaskId, taskMeta, intent, createCwd } = req.body as {
+    const { cwd, host, message, model: rawModel, mode, images, taskId: existingTaskId, taskMeta, intent, createCwd, engine } = req.body as {
       cwd: string
       host?: string
       message: string
@@ -326,6 +373,8 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       intent?: string
       /** User opted into "create & start": mkdir the cwd (recursive) before starting. */
       createCwd?: boolean
+      /** Coding-agent engine ('claude' default | 'codex' via ACP). */
+      engine?: string
     }
 
     if (!cwd || typeof cwd !== 'string') {
@@ -344,9 +393,21 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       return
     }
 
-    // Normalize model against the SESSION_MODELS allowlist (same as the session:start
-    // RPC). Unknown/absent → undefined = Auto: send() falls back to config/CLI default.
-    const model = typeof rawModel === 'string' && VALID_SESSION_MODEL_IDS.has(rawModel) ? rawModel : undefined
+    // Normalize model through the shared switch validator (same ruleset as
+    // POST /:sessionId/model): legacy alias ids map to their CLI form, catalog
+    // values (full provider IDs from the host catalog dropdown) pass verbatim,
+    // and 'default'/'' mean Auto. Garbage is an explicit 400 — the old
+    // VALID_SESSION_MODEL_IDS check silently downgraded unknown strings to
+    // Auto, which read as "my model choice was ignored".
+    let model: string | undefined
+    if (typeof rawModel === 'string' && rawModel && rawModel !== 'default') {
+      const resolved = resolveModelSwitchValue(rawModel)
+      if (!resolved) {
+        res.status(400).json({ error: `Invalid model: ${rawModel}. Use a catalog value (GET /api/sessions/host-model-catalogs) or one of: ${[...VALID_SESSION_MODEL_IDS].join('/')}` })
+        return
+      }
+      model = resolved
+    }
 
     if (mode) {
       const validModes = ['bypass', 'accept', 'default', 'plan']
@@ -421,6 +482,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       const updatedTask = await quickStartSession({
         message: sessionMessage, messagePrefix, cwd, host, model, mode,
         existingTaskId, taskMeta, source: 'quick-start', requestTs,
+        engine: engine === 'codex' ? 'codex' : undefined,
         ...fixWalnutExtras,
       })
       res.json({ taskId: updatedTask.id, task: updatedTask })
@@ -436,38 +498,129 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
   }
 })
 
-// GET /api/sessions/tree — sessions grouped by task hierarchy
+const SESSION_TREE_DEFAULT_LIMIT = 100
+const SESSION_TREE_MAX_LIMIT = 500
+
+function sessionTreeLimit(value: unknown): number {
+  if (typeof value !== 'string') return SESSION_TREE_DEFAULT_LIMIT
+  const parsed = Number.parseInt(value, 10)
+  if (!Number.isFinite(parsed)) return SESSION_TREE_DEFAULT_LIMIT
+  return Math.min(SESSION_TREE_MAX_LIMIT, Math.max(1, parsed))
+}
+
+function sessionRecentTime(session: SessionRecord): number {
+  const value = Date.parse(session.lastActiveAt || session.startedAt)
+  return Number.isFinite(value) ? value : 0
+}
+
+function compareSessionsRecentFirst(a: SessionRecord, b: SessionRecord): number {
+  return sessionRecentTime(b) - sessionRecentTime(a)
+    || a.claudeSessionId.localeCompare(b.claudeSessionId)
+}
+
+async function readProviderSessionHistory(
+  sessionId: string,
+  record: SessionRecord | null | undefined,
+  nativeHost: string | null | undefined,
+  skipSubagents = true,
+): Promise<{ messages: SessionHistoryMessage[]; sourceAvailable: boolean }> {
+  if (record?.engine === 'codex') {
+    const state = await readAcpSessionHistoryState(record)
+    return { messages: state.messages, sourceAvailable: state.journalExists }
+  }
+  const messages = await readSessionHistory(
+    sessionId,
+    record?.cwd,
+    nativeHost ?? undefined,
+    record?.outputFile,
+    { skipSubagents },
+  )
+  return { messages, sourceAvailable: messages.length > 0 }
+}
+
+function unavailableHistoryReason(record: SessionRecord): string {
+  if (record.engine === 'codex') {
+    if (!record.acpRuntimeId) {
+      return 'Codex session has no ACP runtime ID, so its history journal cannot be located'
+    }
+    return record.host
+      ? `Codex session history journal is unavailable on remote host "${record.host}"`
+      : 'Codex session history journal not found'
+  }
+  return record.host
+    ? `Remote host "${record.host}" is unreachable — session history is stored on that machine`
+    : 'Session history file not found'
+}
+
+// GET /api/sessions/tree — bounded, searchable sessions grouped by task hierarchy
 sessionsRouter.get('/tree', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const hideCompleted = req.query.hideCompleted === 'true'
-    const sessions = await enrichWithHostnames(await enrichWithLiveStatus(await listSessions()))
+    const limit = sessionTreeLimit(req.query.limit)
+    const query = typeof req.query.q === 'string' ? req.query.q.trim().toLocaleLowerCase() : ''
+    const allSessions = await listSessions()
     const tasks = await listTasks()
     const config = await getConfig()
     const favCats: string[] = config.favorites?.categories ?? []
     const favProjs: string[] = config.favorites?.projects ?? []
 
-    // Build taskId → sessions map
-    const taskSessionMap = new Map<string, SessionRecord[]>()
-    const orphanSessions: SessionRecord[] = []
     const taskMap = new Map<string, Task>()
-
     for (const t of tasks) {
       taskMap.set(t.id, t)
     }
 
-    for (const s of sessions) {
-      // Environment sessions (triage, hook, cron, embedded subagent) are system housekeeping —
-      // exclude from session tree. Non-embedded subagent sessions (user-created) are shown.
-      if (isEnvironmentSession(s)) continue
-      if (s.archived) continue
-      // hideCompleted now uses task.phase (checked at display layer) — sessions no longer carry work_status
-      if (!s.taskId || !taskMap.has(s.taskId)) {
-        orphanSessions.push(s)
+    const eligible = allSessions.filter((session) => {
+      if (isEnvironmentSession(session) || session.archived) return false
+      const task = session.taskId ? taskMap.get(session.taskId) : undefined
+      if (hideCompleted && task && (task.phase === 'COMPLETE' || task.status === 'done')) return false
+      return true
+    })
+
+    let matching: SessionRecord[]
+    if (!query) {
+      matching = eligible
+    } else {
+      const exact = eligible.find((session) => session.claudeSessionId.toLocaleLowerCase() === query)
+      if (exact) {
+        // An exact ID is navigation, not fuzzy discovery. Returning only that
+        // record prevents unrelated semantic-looking matches from obscuring it.
+        matching = [exact]
       } else {
-        const list = taskSessionMap.get(s.taskId) ?? []
-        list.push(s)
-        taskSessionMap.set(s.taskId, list)
+        matching = eligible.filter((session) => {
+          const task = session.taskId ? taskMap.get(session.taskId) : undefined
+          return [
+            session.claudeSessionId,
+            session.title,
+            session.description,
+            session.recap,
+            task?.title,
+          ].some((value) => value?.toLocaleLowerCase().includes(query))
+        })
       }
+    }
+
+    matching.sort(compareSessionsRecentFirst)
+    const total = matching.length
+    const selected = matching.slice(0, limit)
+    const remaining = Math.max(
+      0,
+      Math.min(total, SESSION_TREE_MAX_LIMIT) - selected.length,
+    )
+    // Liveness checks can involve daemon round-trips. Bound first so a page load
+    // never fans out across the entire historical store.
+    const sessions = await enrichWithHostnames(await enrichWithLiveStatus(selected))
+
+    // Build taskId → sessions map
+    const taskSessionMap = new Map<string, SessionRecord[]>()
+    const orphanSessions: SessionRecord[] = []
+    for (const session of sessions) {
+      if (!session.taskId || !taskMap.has(session.taskId)) {
+        orphanSessions.push(session)
+        continue
+      }
+      const list = taskSessionMap.get(session.taskId) ?? []
+      list.push(session)
+      taskSessionMap.set(session.taskId, list)
     }
 
     // Build hierarchy from tasks that have sessions
@@ -487,7 +640,7 @@ sessionsRouter.get('/tree', async (req: Request, res: Response, next: NextFuncti
         taskStarred: !!task.starred
           || favCats.some(c => c.toLowerCase() === (task.category || '').toLowerCase())
           || favProjs.some(p => p.toLowerCase() === (task.project || '').toLowerCase()),
-        sessions: taskSessions.sort((a, b) => b.startedAt.localeCompare(a.startedAt)),
+        sessions: taskSessions.sort(compareSessionsRecentFirst),
       }
 
       const cat = task.category || 'Uncategorized'
@@ -505,20 +658,52 @@ sessionsRouter.get('/tree', async (req: Request, res: Response, next: NextFuncti
       }
     }
 
-    // Convert to array
+    const taskLatest = (task: TreeTask): number =>
+      task.sessions.reduce((latest, session) => Math.max(latest, sessionRecentTime(session)), 0)
+
+    // Convert to array, retaining recent-first ordering at every hierarchy level.
     const tree: TreeCategory[] = []
     for (const [cat, entry] of categoryMap) {
       const projects: TreeProject[] = []
       for (const [proj, projTasks] of entry.projects) {
-        projects.push({ project: proj, tasks: projTasks })
+        projects.push({ project: proj, tasks: projTasks.sort((a, b) => taskLatest(b) - taskLatest(a)) })
       }
-      tree.push({ category: cat, projects, directTasks: entry.directTasks })
+      projects.sort((a, b) => {
+        const aLatest = a.tasks.reduce((latest, task) => Math.max(latest, taskLatest(task)), 0)
+        const bLatest = b.tasks.reduce((latest, task) => Math.max(latest, taskLatest(task)), 0)
+        return bLatest - aLatest || a.project.localeCompare(b.project)
+      })
+      tree.push({
+        category: cat,
+        projects,
+        directTasks: entry.directTasks.sort((a, b) => taskLatest(b) - taskLatest(a)),
+      })
     }
 
-    // Sort categories alphabetically
-    tree.sort((a, b) => a.category.localeCompare(b.category))
+    tree.sort((a, b) => {
+      const latest = (category: TreeCategory): number => {
+        const directLatest = category.directTasks.reduce((value, task) => Math.max(value, taskLatest(task)), 0)
+        return category.projects.reduce(
+          (value, project) => project.tasks.reduce(
+            (projectValue, task) => Math.max(projectValue, taskLatest(task)),
+            value,
+          ),
+          directLatest,
+        )
+      }
+      return latest(b) - latest(a) || a.category.localeCompare(b.category)
+    })
 
-    res.json({ tree, orphanSessions })
+    res.json({
+      tree,
+      orphanSessions: orphanSessions.sort(compareSessionsRecentFirst),
+      total,
+      limit,
+      remaining,
+      // This endpoint exposes a bounded recent prefix, not an unbounded cursor.
+      // `remaining` counts only rows that can still be loaded before the cap.
+      hasMore: remaining > 0,
+    })
   } catch (err) {
     next(err)
   }
@@ -558,6 +743,46 @@ sessionsRouter.get('/summaries', async (req: Request, res: Response, next: NextF
   }
 })
 
+// GET /api/sessions/host-model-catalogs — last-known CLI model catalog per host
+// (written every time any session's list_models succeeds). Feeds the surfaces
+// that have NO session yet: the quick-session model dropdown and host pickers.
+// Keys: host alias, or '__local__' for the local machine.
+// MUST be registered before the '/:sessionId' catch-all below.
+sessionsRouter.get('/host-model-catalogs', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    res.json({ catalogs: await listHostModelCatalogs() })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/sessions/status?ids=<provider-id,...> — bounded snapshot hydration.
+// Registered before /:sessionId so "status" is never interpreted as an ID.
+sessionsRouter.get('/status', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const raw = Array.isArray(req.query.ids)
+      ? req.query.ids.join(',')
+      : req.query.ids
+    if (typeof raw !== 'string' || raw.trim() === '') {
+      res.status(400).json({ error: 'ids is required' })
+      return
+    }
+    const ids = raw.split(',').map((id) => id.trim())
+    if (ids.some((id) => id.length === 0 || id.length > 256)) {
+      res.status(400).json({ error: 'ids contains an invalid provider session ID' })
+      return
+    }
+    const uniqueIds = [...new Set(ids)]
+    if (uniqueIds.length > 100) {
+      res.status(400).json({ error: 'ids supports at most 100 provider session IDs' })
+      return
+    }
+    res.json({ statuses: await getSessionStatusSnapshots(uniqueIds) })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // GET /api/sessions/task/:taskId
 sessionsRouter.get('/task/:taskId', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -585,14 +810,250 @@ sessionsRouter.get('/:sessionId', async (req: Request, res: Response, next: Next
       return
     }
     const [enriched] = await enrichWithHostnames(await enrichWithLiveStatus([session]))
-    // Include live pending permissions from the in-memory session (if running)
-    const liveSession = sessionRunner.findByClaudeId(String(req.params.sessionId))
-    const pendingPermissions = liveSession?.hasPendingPermission
-      ? liveSession.getPendingPermissionRequests()
-      : []
+    // Include provider-neutral live pending permissions. ACP sessions attach
+    // lazily after a server restart, restoring pending state from the worker.
+    let pendingPermissions: Array<{
+      requestId: string
+      toolName?: string
+      input?: Record<string, unknown>
+      reason?: string
+    }> = []
+    try {
+      const sessionId = String(req.params.sessionId)
+      const liveSession = session.engine === 'codex'
+        ? await sessionRunner.findOrAttachAcpSession(sessionId)
+        : sessionRunner.findByClaudeId(sessionId)
+      pendingPermissions = liveSession?.hasPendingPermission
+        ? liveSession.getPendingPermissionRequests()
+        : []
+    } catch (err) {
+      log.web.warn('failed to restore pending session permissions', {
+        sessionId: String(req.params.sessionId),
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
     res.json({ session: enriched, pendingPermissions })
   } catch (err) {
     next(err)
+  }
+})
+
+async function clearArchivedSessionTaskLinks(
+  sessionId: string,
+  taskId: string,
+  eventSource: string,
+  requireAuthoritativeArchive = false,
+): Promise<boolean> {
+  if (requireAuthoritativeArchive) {
+    const authoritative = await getSessionByClaudeId(sessionId)
+    if (!authoritative?.archived) return false
+  }
+
+  const { clearSession, clearSessionSlot } = await import('../../core/task-manager.js')
+  await clearSession(taskId, sessionId)
+  const { task } = await clearSessionSlot(taskId, sessionId)
+  bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: eventSource })
+  return true
+}
+
+function sendSessionNotFound(res: Response): void {
+  res.status(404).json({
+    code: 'SESSION_NOT_FOUND',
+    error: 'session not found',
+  })
+}
+
+const CLAUDE_SESSION_MODES = ['default', 'plan', 'bypass', 'accept'] as const
+
+async function applySessionModeControl(
+  record: SessionRecord,
+  sessionId: string,
+  mode: SessionMode,
+): Promise<void> {
+  if (record.engine === 'codex') {
+    const session = await sessionRunner.findOrAttachAcpSession(sessionId).catch((err) => {
+      log.web.warn('Codex mode compatibility update could not attach; persisting record only', {
+        sessionId,
+        mode,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      return undefined
+    })
+    if (!session) return
+    const collaborationMode = mode === 'plan' ? 'plan' : 'default'
+    if (!await session.setConfigOption('collaboration_mode', collaborationMode)) {
+      throw new Error('Codex collaboration mode change was rejected')
+    }
+    return
+  }
+
+  const application = await sessionRunner.changePermissionMode(sessionId, mode)
+  const expectedLive = record.pid != null
+    && record.process_status !== 'stopped'
+    && record.process_status !== 'error'
+  if (application === 'not-live' && expectedLive) {
+    throw new Error('Live session is unavailable; permission mode was not changed')
+  }
+}
+
+async function persistSessionModeChange(
+  existingRecord: SessionRecord,
+  sessionId: string,
+  mode: SessionMode,
+  updates: Partial<SessionRecord> = {},
+): Promise<SessionRecord> {
+  const updated = await updateSessionRecord(sessionId, { ...updates, mode })
+  emitSessionStatusChanged(updated, {}, ['*'])
+
+  if (updated.taskId && existingRecord.mode !== mode) {
+    try {
+      const { getTask, linkSessionSlot, clearSessionSlot } = await import('../../core/task-manager.js')
+      const task = await getTask(updated.taskId)
+      if (mode === 'plan') {
+        if (!task.plan_session_id || task.plan_session_id === sessionId) {
+          if (task.exec_session_id === sessionId) await clearSessionSlot(updated.taskId, sessionId, 'exec')
+          await linkSessionSlot(updated.taskId, sessionId, 'plan')
+          const updatedTask = await getTask(updated.taskId)
+          bus.emit(EventNames.TASK_UPDATED, { task: updatedTask }, ['web-ui'], { source: 'session-mode-change' })
+        }
+      } else if (task.plan_session_id === sessionId) {
+        await clearSessionSlot(updated.taskId, sessionId, 'plan')
+        if (!task.exec_session_id) await linkSessionSlot(updated.taskId, sessionId, 'exec')
+        const updatedTask = await getTask(updated.taskId)
+        bus.emit(EventNames.TASK_UPDATED, { task: updatedTask }, ['web-ui'], { source: 'session-mode-change' })
+      }
+
+      const compensated = await clearArchivedSessionTaskLinks(
+        sessionId,
+        updated.taskId,
+        'session-mode-archive-compensation',
+        true,
+      )
+      if (compensated) {
+        log.web.info('cleared task slots relinked during session archive', {
+          sessionId,
+          taskId: updated.taskId,
+        })
+      }
+    } catch { /* task not found or lock contention — ignore */ }
+  }
+  return updated
+}
+
+async function changeSessionMode(
+  existingRecord: SessionRecord,
+  sessionId: string,
+  mode: SessionMode,
+  updates: Partial<SessionRecord> = {},
+): Promise<SessionRecord> {
+  await applySessionModeControl(existingRecord, sessionId, mode)
+  return persistSessionModeChange(existingRecord, sessionId, mode, updates)
+}
+
+// GET /api/sessions/:sessionId/controls — provider-neutral selectable session controls.
+sessionsRouter.get('/:sessionId/controls', async (req: Request, res: Response, next: NextFunction) => {
+  const sessionId = String(req.params.sessionId)
+  try {
+    const record = await getSessionByClaudeId(sessionId)
+    if (!record) {
+      sendSessionNotFound(res)
+      return
+    }
+    if (record.engine === 'codex') {
+      const session = await sessionRunner.findOrAttachAcpSession(sessionId).catch(() => undefined)
+      if (!session) {
+        res.status(409).json({ error: 'Codex ACP session is not available' })
+        return
+      }
+      res.json({
+        engine: 'codex',
+        controls: session.sessionControls.filter((control) => control.id !== 'model'),
+      })
+      return
+    }
+    res.json({
+      engine: 'claude',
+      controls: [{
+        id: 'mode',
+        name: 'Mode',
+        type: 'select',
+        currentValue: record.mode || 'default',
+        options: CLAUDE_SESSION_MODES.map((value) => ({
+          value,
+          name: value[0].toUpperCase() + value.slice(1),
+        })),
+      }],
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/sessions/:sessionId/controls — apply one provider-advertised control.
+sessionsRouter.post('/:sessionId/controls', async (req: Request, res: Response, next: NextFunction) => {
+  const sessionId = String(req.params.sessionId)
+  const { id, value } = req.body as { id?: unknown; value?: unknown }
+  try {
+    if (typeof id !== 'string' || typeof value !== 'string' || !id || !value) {
+      res.status(400).json({ error: 'id and value must be non-empty strings' })
+      return
+    }
+    const record = await getSessionByClaudeId(sessionId)
+    if (!record) {
+      sendSessionNotFound(res)
+      return
+    }
+
+    if (record.engine === 'codex') {
+      const session = await sessionRunner.findOrAttachAcpSession(sessionId).catch(() => undefined)
+      if (!session) {
+        res.status(409).json({ error: 'Codex ACP session is not available' })
+        return
+      }
+      const control = session.sessionControls.find((candidate) => candidate.id === id)
+      if (!control || !control.options.some((option) => option.value === value)) {
+        res.status(400).json({ error: 'unknown control or value' })
+        return
+      }
+      if (!await session.setConfigOption(id, value)) {
+        res.status(409).json({ error: 'Codex ACP control change failed' })
+        return
+      }
+      if (id === 'collaboration_mode') {
+        const mirroredMode: SessionMode = value === 'plan'
+          ? 'plan'
+          : record.mode === 'plan' ? 'default' : record.mode
+        await persistSessionModeChange(record, sessionId, mirroredMode)
+      }
+      res.json({
+        engine: 'codex',
+        controls: session.sessionControls.filter((candidate) => candidate.id !== 'model'),
+      })
+      return
+    }
+
+    if (id !== 'mode' || !CLAUDE_SESSION_MODES.includes(value as typeof CLAUDE_SESSION_MODES[number])) {
+      res.status(400).json({ error: 'Claude sessions only support the mode control' })
+      return
+    }
+    const updated = await changeSessionMode(record, sessionId, value as SessionMode)
+    res.json({
+      engine: 'claude',
+      controls: [{
+        id: 'mode',
+        name: 'Mode',
+        type: 'select',
+        currentValue: updated.mode,
+        options: CLAUDE_SESSION_MODES.map((optionValue) => ({
+          value: optionValue,
+          name: optionValue[0].toUpperCase() + optionValue.slice(1),
+        })),
+      }],
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    log.web.warn('session control change rejected', { sessionId, id, value, error: message })
+    res.status(409).json({ error: message })
   }
 })
 
@@ -623,110 +1084,66 @@ sessionsRouter.patch('/:sessionId', async (req: Request, res: Response, next: Ne
     }
 
     const sessionId = String(req.params.sessionId)
+    // Route IDs are provider session IDs. ACP runtime IDs are transport-local
+    // identities and must never select or implicitly create a durable record.
+    const existingRecord = await getSessionByClaudeId(sessionId)
+    if (!existingRecord) {
+      sendSessionNotFound(res)
+      return
+    }
 
     // Archive/unarchive: validate session is in a terminal state before archiving
     if (archived === true) {
-      const existing = await getSessionByClaudeId(sessionId)
-      if (!existing) {
-        res.status(404).json({ error: 'session not found' })
-        return
-      }
-      if (existing.process_status !== 'stopped' && existing.process_status !== 'error') {
+      if (existingRecord.process_status !== 'stopped' && existingRecord.process_status !== 'error') {
         res.status(400).json({ error: 'Stop session before archiving' })
         return
       }
     }
 
-    // Read existing record for mode-change slot promotion logic
-    const existingRecord = mode !== undefined ? await getSessionByClaudeId(sessionId) : undefined
-
     const updates: Partial<SessionRecord> = {}
     if (title !== undefined) updates.title = title
     if (activity !== undefined) updates.activity = activity
     if (human_note !== undefined) updates.human_note = human_note
-    if (mode !== undefined) updates.mode = mode as SessionMode
     if (archived !== undefined) {
       updates.archived = archived
       if (archived && archive_reason) updates.archive_reason = archive_reason
       if (!archived) updates.archive_reason = undefined  // clear reason on unarchive
     }
 
-    // A live mode is persisted only after the CLI confirms it. For stopped
-    // records, persistence remains the desired mode for the next cold resume.
-    if (mode !== undefined && existingRecord) {
+    let updated: SessionRecord
+    if (mode !== undefined) {
       try {
-        const application = await sessionRunner.changePermissionMode(sessionId, mode as SessionMode)
-        const expectedLive = existingRecord.pid != null
-          && existingRecord.process_status !== 'stopped'
-          && existingRecord.process_status !== 'error'
-        if (application === 'not-live' && expectedLive) {
-          res.status(409).json({ error: 'Live session is unavailable; permission mode was not changed' })
-          return
-        }
+        updated = await changeSessionMode(existingRecord, sessionId, mode as SessionMode, updates)
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         log.web.warn('live permission mode change rejected', { sessionId, mode, error: message })
         res.status(409).json({ error: message })
         return
       }
+    } else {
+      updated = await updateSessionRecord(sessionId, updates)
     }
-
-    const updated = await updateSessionRecord(sessionId, updates)
     log.web.info('session updated via REST', { sessionId, fields: Object.keys(updates) })
 
     // Emit status change so frontend updates in real time
-    if (archived !== undefined || mode !== undefined) {
-      bus.emit(EventNames.SESSION_STATUS_CHANGED, {
-        sessionId,
-        taskId: updated.taskId,
-        process_status: updated.process_status,
-        activity: updated.activity,
-        mode: updated.mode,
-        ...(updated.planCompleted ? { planCompleted: true } : {}),
-        ...(archived !== undefined ? { archived } : {}),
-      }, ['web-ui'])
-    }
-
-    // Mode change: promote/demote task session slot when switching to/from plan
-    if (mode !== undefined && existingRecord && updated.taskId && existingRecord.mode !== mode) {
-      try {
-        const { getTask, linkSessionSlot, clearSessionSlot } = await import('../../core/task-manager.js')
-        const task = await getTask(updated.taskId)
-        if (mode === 'plan') {
-          // Promote to plan slot (if plan slot is free)
-          if (!task.plan_session_id || task.plan_session_id === sessionId) {
-            if (task.exec_session_id === sessionId) await clearSessionSlot(updated.taskId, sessionId, 'exec')
-            await linkSessionSlot(updated.taskId, sessionId, 'plan')
-            const updatedTask = await getTask(updated.taskId)
-            bus.emit(EventNames.TASK_UPDATED, { task: updatedTask }, ['web-ui'], { source: 'session-mode-change' })
-          }
-        } else {
-          // Demote from plan slot to exec
-          if (task.plan_session_id === sessionId) {
-            await clearSessionSlot(updated.taskId, sessionId, 'plan')
-            if (!task.exec_session_id) await linkSessionSlot(updated.taskId, sessionId, 'exec')
-            const updatedTask = await getTask(updated.taskId)
-            bus.emit(EventNames.TASK_UPDATED, { task: updatedTask }, ['web-ui'], { source: 'session-mode-change' })
-          }
-        }
-      } catch { /* task not found or lock contention — ignore */ }
+    if (archived !== undefined && mode === undefined) {
+      emitSessionStatusChanged(updated, {}, ['*'])
     }
 
     // Archive: clear task session slot to free it for new sessions
     if (archived === true && updated.taskId) {
       try {
-        const { clearSession, clearSessionSlot } = await import('../../core/task-manager.js')
-        await clearSession(updated.taskId, sessionId)
-        const { task } = await clearSessionSlot(updated.taskId, sessionId)
-        bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'session-archived' })
+        await clearArchivedSessionTaskLinks(sessionId, updated.taskId, 'session-archived')
       } catch { /* task may not exist */ }
     }
 
-    res.json({ session: updated })
+    // Task-slot work can await behind a concurrent PATCH. Return current state
+    // so the caller cannot optimistically merge stale archive/mode fields.
+    res.json({ session: await getSessionByClaudeId(sessionId) ?? updated })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    if (message.includes('not found')) {
-      res.status(404).json({ error: message })
+    if (/^Session not found:/.test(message)) {
+      sendSessionNotFound(res)
       return
     }
     next(err)
@@ -745,9 +1162,15 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
 
     // Look up session record to get cwd
     const record = await getSessionByClaudeId(sessionId)
-    const cwd = record?.cwd
 
     if (source === 'streams') {
+      if (record?.engine === 'codex') {
+        const { messages } = await readProviderSessionHistory(sessionId, record, record.host)
+        logMessageOrdering('P1:streams', sessionId, messages, record.host)
+        const sliced = tail && tail > 0 ? messages.slice(-tail) : messages
+        res.json({ messages: sliced, total: messages.length })
+        return
+      }
       // Fast path: host=undefined forces local-only reads (canonical JSONL + streams fallback).
       // Skips SSH entirely. For local sessions this returns full data (~1ms).
       //
@@ -767,7 +1190,7 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
         return
       }
       // skipSubagents: frontend lazy-loads each subagent via /subagent/:agentId/history on demand
-      const messages = await readSessionHistory(sessionId, cwd, undefined, record?.outputFile, { skipSubagents: true })
+      const { messages } = await readProviderSessionHistory(sessionId, record, undefined)
       logMessageOrdering('P1:streams', sessionId, messages, record?.host)
       const sliced = tail && tail > 0 ? messages.slice(-tail) : messages
       res.json({ messages: sliced, total: messages.length })
@@ -776,9 +1199,12 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
 
     // Full path: reads from source of truth (SSH for remote sessions)
     let messages: Awaited<ReturnType<typeof readSessionHistory>>
+    let historySourceAvailable = false
     try {
       // skipSubagents: frontend lazy-loads each subagent via /subagent/:agentId/history on demand
-      messages = await readSessionHistory(sessionId, cwd, record?.host, record?.outputFile, { skipSubagents: true })
+      const history = await readProviderSessionHistory(sessionId, record, record?.host)
+      messages = history.messages
+      historySourceAvailable = history.sourceAvailable
     } catch (err) {
       // Surface remote read errors (SSH auth, daemon connection, etc.) to the frontend
       const msg = err instanceof Error ? err.message : String(err)
@@ -822,7 +1248,10 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
     // Disk cache fallback: when the live read returned empty (remote JSONL gone,
     // daemon just restarted, etc.) but the session record exists, serve the last
     // successfully cached history so the user doesn't see "No history found".
-    if (messages.length === 0 && record) {
+    // Delta requests must continue to the cursor logic below: a stale cache has
+    // a different cursor space, and ?since=0 on a genuinely empty archive is a
+    // valid empty delta rather than a full history-unavailable response.
+    if (messages.length === 0 && record && !historySourceAvailable && req.query.since === undefined) {
       const { readHistoryCache } = await import('../../core/history-disk-cache.js')
       const diskCached = await readHistoryCache(sessionId)
       if (diskCached && diskCached.messages.length > 0) {
@@ -841,9 +1270,7 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       }
       // No disk cache either — return a meaningful reason so the UI can show
       // "host unreachable" instead of generic "No conversation history found".
-      const reason = record.host
-        ? `Remote host "${record.host}" is unreachable — session history is stored on that machine`
-        : 'Session history file not found'
+      const reason = unavailableHistoryReason(record)
       res.json({ messages: [], total: 0, cursor: 0, delta: false, historyUnavailable: reason })
       return
     }
@@ -887,8 +1314,10 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
         const ordered = [...ancestors].reverse()
         const fetched = await Promise.all(
           ordered.map(async (sourceRecord) => {
-            let sourceMessages = await readSessionHistory(
-              sourceRecord.claudeSessionId, sourceRecord.cwd, sourceRecord.host, sourceRecord.outputFile, { skipSubagents: true },
+            let { messages: sourceMessages } = await readProviderSessionHistory(
+              sourceRecord.claudeSessionId,
+              sourceRecord,
+              sourceRecord.host,
             )
             if (sourceRecord.host) {
               sourceMessages = await rewriteHistoryRemoteImages(sourceMessages, sourceRecord.host, sourceRecord.claudeSessionId, sourceRecord.cwd)
@@ -914,17 +1343,23 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
     const total = messages.length
 
     // ── Delta mode (?since=<N>) — the turn-boundary incremental path ──
-    // N = count of combined messages the client has already rendered. Because a
-    // completed turn's messages never mutate afterwards (tool_result always
-    // back-fills within the same turn, fork ancestors are immutable), slicing
-    // messages[N..] is a lossless "what's new since you last synced" and avoids
-    // re-serializing/re-transmitting the full 6.4MB payload every turn.
+    // N = count of combined messages the client has already rendered. Native
+    // history messages are immutable by the time this endpoint exposes them, so
+    // slicing messages[N..] is a lossless "what's new since you last synced".
+    //
+    // ACP journals are different: several text chunks project into one assistant
+    // message. A client can therefore mint cursor N after the first chunk, then
+    // observe the same total N after later chunks complete that message. A
+    // count-only delta would return [] and strand the partial text forever.
+    // Codex cursor requests consequently fall through to a full replacement.
     //
     // Contract:
-    //   since valid (0 <= since <= total) → { messages: slice(since), cursor: total, delta: true }
+    //   native + since valid (0 <= since <= total)
+    //     → { messages: slice(since), cursor: total, delta: true }
     //     · slice is empty when nothing new yet (archive hasn't flushed the turn) —
     //       client treats empty delta as "not caught up", keeps streaming blocks, retries.
-    //   since > total (file rewritten/rotated, or client ahead) → full payload + delta:false
+    //   Codex, or since > total (file rewritten/rotated, or client ahead)
+    //     → full payload + delta:false
     //     so the client rebuilds from scratch. Never silently drop.
     const sinceRaw = req.query.since as string | undefined
     if (sinceRaw !== undefined) {
@@ -941,7 +1376,8 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
         res.status(503).json({ error: 'fork ancestor history unavailable (transient) — retry' })
         return
       }
-      if (Number.isFinite(since) && since >= 0 && since <= total) {
+      if (record?.engine !== 'codex'
+        && Number.isFinite(since) && since >= 0 && since <= total) {
         res.json({
           messages: messages.slice(since),
           cursor: total,
@@ -1194,6 +1630,17 @@ sessionsRouter.post('/:sessionId/permission', async (req: Request, res: Response
       res.status(400).json({ error: 'requestId (string) and allow (boolean) are required' })
       return
     }
+    // ACP sessions answer permissions via the daemon acpRespond RPC (async).
+    const acpSession = sessionRunner.findAcpSession(sessionId)
+    if (acpSession) {
+      const ok = await acpSession.resolvePermissionRequest(requestId, allow)
+      if (!ok) {
+        res.status(404).json({ error: 'Permission request not found or already resolved' })
+        return
+      }
+      res.json({ status: 'resolved', requestId, allow })
+      return
+    }
     const session = sessionRunner.findByClaudeId(sessionId)
     if (!session) {
       res.status(404).json({ error: 'Live session not found' })
@@ -1299,15 +1746,41 @@ sessionsRouter.post('/:sessionId/model', async (req: Request, res: Response, nex
   const sessionId = req.params.sessionId as string
   const { model: rawModel } = req.body as { model?: string }
   try {
-    const cliModel = typeof rawModel === 'string' ? resolveModelSwitchValue(rawModel) : null
-    if (!cliModel) {
-      res.status(400).json({ error: `model must be a catalog value from GET /:sessionId/models or one of: ${[...VALID_SESSION_MODEL_IDS].join('/')}` })
+    if (typeof rawModel !== 'string' || !rawModel.trim()) {
+      res.status(400).json({ error: 'model must be a non-empty string' })
       return
     }
 
     const record = await getSessionByClaudeId(sessionId)
     if (!record) {
       res.status(404).json({ error: 'session not found' })
+      return
+    }
+
+    if (record.engine === 'codex') {
+      const session = await sessionRunner.findOrAttachAcpSession(sessionId).catch(() => undefined)
+      const applied = session
+        ? await session.setModel(rawModel).catch((err) => {
+            log.web.warn('ACP session model switch failed', {
+              sessionId,
+              model: rawModel,
+              error: err instanceof Error ? err.message : String(err),
+            })
+            return false
+          })
+        : false
+      if (!applied) {
+        res.status(409).json({ error: 'model switch failed' })
+        return
+      }
+      log.web.info('ACP session model changed', { sessionId, model: rawModel })
+      res.json({ applied: true, model: rawModel })
+      return
+    }
+
+    const cliModel = resolveModelSwitchValue(rawModel)
+    if (!cliModel) {
+      res.status(400).json({ error: `model must be a catalog value from GET /:sessionId/models or one of: ${[...VALID_SESSION_MODEL_IDS].join('/')}` })
       return
     }
 
@@ -1350,6 +1823,35 @@ sessionsRouter.post('/:sessionId/model', async (req: Request, res: Response, nex
   }
 })
 
+// GET /api/sessions/:sessionId/model-catalog — live ACP-discovered Codex models.
+sessionsRouter.get('/:sessionId/model-catalog', async (req: Request, res: Response, next: NextFunction) => {
+  const sessionId = req.params.sessionId as string
+  try {
+    const record = await getSessionByClaudeId(sessionId)
+    if (!record) {
+      res.status(404).json({ error: 'session not found' })
+      return
+    }
+    if (record.engine !== 'codex') {
+      res.status(409).json({ error: 'model catalog is only available for Codex ACP sessions' })
+      return
+    }
+    const session = await sessionRunner.findOrAttachAcpSession(sessionId).catch(() => undefined)
+    if (!session) {
+      res.status(409).json({ error: 'Codex ACP session is not available' })
+      return
+    }
+    const catalog = session.modelCatalog
+    res.json({
+      models: catalog.availableModels,
+      currentModelId: catalog.currentModelId ?? record.acpModel,
+      source: 'acp',
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
 /** Does the get_settings read-back string plausibly equal what we switched to?
  *  Tolerates decoration differences: 'global.anthropic.claude-opus-4-6-v1[1m]'
  *  vs 'claude-opus-4-6[1m]' vs 'opus[1m]' all describe the same runtime model.
@@ -1374,9 +1876,12 @@ function modelReadBackMatches(requested: string, effective: string): boolean {
 // modelOverrides). Each row's `value` is what the picker must send back to
 // POST /:sessionId/model. Degrades, never 5xxs:
 //   source:'cli'      → live catalog (row values are full provider IDs)
+//   source:'host'     → the host's last-known CLI catalog (same rows/shape as
+//                       'cli' — the catalog is a host property) when THIS
+//                       session can't answer (dead/unreachable/old CLI).
 //   source:'fallback' → static SESSION_MODELS registry rendered in catalog
-//                       shape (row values are legacy alias ids) — old CLI that
-//                       can't answer initialize, or session not reachable.
+//                       shape (row values are legacy alias ids) — host never
+//                       produced a catalog (first install).
 // ?refresh=1 bypasses the session's cache (e.g. after a failed switch).
 sessionsRouter.get('/:sessionId/models', async (req: Request, res: Response, next: NextFunction) => {
   const sessionId = req.params.sessionId as string
@@ -1386,14 +1891,24 @@ sessionsRouter.get('/:sessionId/models', async (req: Request, res: Response, nex
       res.status(404).json({ error: 'session not found' })
       return
     }
+    // Same-shape degradation: prefer the host's last-known CLI catalog over the
+    // static registry so pickers never flash between two row shapes.
+    const hostFallback = async (live: boolean) => {
+      const hostCatalog = await getHostModelCatalog(record.host).catch(() => null)
+      if (hostCatalog) {
+        res.json({ source: 'host', live, models: hostCatalog.models, fetchedAt: hostCatalog.fetchedAt })
+      } else {
+        res.json({ source: 'fallback', live, models: sessionModelsAsCatalog() })
+      }
+    }
     const session = await sessionRunner.getOrAttachLiveSession(sessionId).catch(() => undefined)
     if (!session) {
-      res.json({ source: 'fallback', live: false, models: sessionModelsAsCatalog() })
+      await hostFallback(false)
       return
     }
     const catalog = await session.getModelCatalog({ force: req.query.refresh === '1' }).catch(() => null)
     if (!catalog) {
-      res.json({ source: 'fallback', live: true, models: sessionModelsAsCatalog() })
+      await hostFallback(true)
       return
     }
     res.json({
@@ -1812,8 +2327,9 @@ sessionsRouter.post('/:sessionId/execute', async (req: Request, res: Response, n
 
     // ── New session confirmed — now archive the old plan session ──
     const archiveReason = sourceRecord.planCompleted ? 'plan_executed' : 'plan_re_executed'
+    let archivedPlanRecord = sourceRecord
     if (!sourceRecord.archived) {
-      await updateSessionRecord(planSessionId, {
+      archivedPlanRecord = await updateSessionRecord(planSessionId, {
         archived: true,
         archive_reason: archiveReason,
         ...(sourceRecord.planCompleted ? { planContent: planResult.content } : {}),
@@ -1851,11 +2367,7 @@ sessionsRouter.post('/:sessionId/execute', async (req: Request, res: Response, n
     }
 
     // Notify frontend about the archive
-    bus.emit(EventNames.SESSION_STATUS_CHANGED, {
-      sessionId: planSessionId,
-      taskId: taskId ?? '',
-      archived: true,
-    }, ['web-ui'])
+    emitSessionStatusChanged(archivedPlanRecord, {}, ['*'])
 
     res.json({ status: 'started', planSessionId, taskId, mode: execMode, sessionId: newSessionId, ...(execHost ? { host: execHost } : {}) })
   } catch (err) {
@@ -1891,8 +2403,13 @@ sessionsRouter.post('/:sessionId/retry', async (req: Request, res: Response, nex
 
       if (alive) {
         // Case 2 — process alive, connection dropped: just clear error state
-        await updateSessionRecord(sessionId, { process_status: 'running', errorMessage: undefined, status_reason: 'retry_reconnect', status_changed_by: 'user' } as any)
-        bus.emit(EventNames.SESSION_STATUS_CHANGED, { sessionId, process_status: 'running', taskId: record.taskId }, ['web-ui'])
+        const updated = await updateSessionRecord(sessionId, {
+          process_status: 'running',
+          errorMessage: undefined,
+          status_reason: 'retry_reconnect',
+          status_changed_by: 'user',
+        } as any)
+        emitSessionStatusChanged(updated, {}, ['*'])
         log.web.info('session retry: reconnected (process alive)', { sessionId, taskId: record.taskId })
         res.json({ status: 'reconnected', sessionId })
         return
@@ -1940,7 +2457,7 @@ sessionsRouter.post('/:sessionId/retry', async (req: Request, res: Response, nex
 
     let retryMessage = 'Retry session'
     try {
-      const messages = await readSessionHistory(sessionId, record.cwd, record.host, record.outputFile)
+      const { messages } = await readProviderSessionHistory(sessionId, record, record.host, false)
       const firstUser = messages.find(m => m.role === 'user')
       if (firstUser?.text) retryMessage = firstUser.text
     } catch { /* history may be unavailable */ }
@@ -2067,6 +2584,18 @@ sessionsRouter.post('/:sessionId/terminate', async (req: Request, res: Response,
     // FIFO and marks the process stopped. Falls back to a raw process-group SIGTERM
     // if no in-memory session/manager is registered (e.g. after a server restart).
     const { sessionRunner } = await import('../../providers/claude-code-session.js')
+    const acpLive = sessionRunner.findAcpSession(sessionId)
+    if (acpLive) {
+      log.web.info('session terminate: stopping ACP session', { sessionId })
+      await acpLive.gracefulStop()
+      await updateSessionRecord(sessionId, {
+        process_status: 'stopped', activity: undefined,
+        last_status_change: new Date().toISOString(),
+        status_reason: 'user_stopped', status_changed_by: 'user',
+      }).catch(() => {})
+      res.json({ status: 'terminated', sessionId, tookMs: Date.now() - startedAt })
+      return
+    }
     const live = sessionRunner.findSessionByClaudeId(sessionId)
     if (live) {
       log.web.info('session terminate: interrupting live session', { sessionId, host: record.host })
@@ -2096,7 +2625,7 @@ sessionsRouter.post('/:sessionId/terminate', async (req: Request, res: Response,
     sessionRunner.settleInFlightTurn(sessionId)
 
     // Persist stopped state + notify the UI so the status flips immediately.
-    await updateSessionRecord(sessionId, {
+    const updated = await updateSessionRecord(sessionId, {
       process_status: 'stopped',
       errorMessage: undefined,
       activity: undefined,
@@ -2104,12 +2633,7 @@ sessionsRouter.post('/:sessionId/terminate', async (req: Request, res: Response,
       status_reason: 'user_terminated',
       status_changed_by: 'user',
     } as Record<string, unknown>)
-    const { bus, EventNames } = await import('../../core/event-bus.js')
-    bus.emit(EventNames.SESSION_STATUS_CHANGED, {
-      sessionId,
-      taskId: record.taskId,
-      process_status: 'stopped',
-    }, ['*'], { source: 'terminate' })
+    emitSessionStatusChanged(updated, {}, ['*'], { source: 'terminate' })
 
     log.web.info('session terminate: complete', { sessionId, durationMs: Date.now() - startedAt })
     res.json({ status: 'terminated', sessionId })
@@ -2150,6 +2674,18 @@ sessionsRouter.post('/:sessionId/fork', async (req: Request, res: Response, next
     const sourceRecord = await getSessionByClaudeId(sourceSessionId)
     if (!sourceRecord) {
       res.status(404).json({ error: 'Source session not found' })
+      return
+    }
+
+    // Codex sessions run through ACP. The installed adapter does not advertise
+    // ACP session.fork, and falling through to Claude's native --fork-session
+    // creates an orphan task before failing to find the conversation. Fail
+    // before validating or mutating any target task.
+    if (sourceRecord.engine === 'codex') {
+      res.status(409).json({
+        code: 'ACP_FORK_UNSUPPORTED',
+        error: 'Fork is unavailable for this Codex session',
+      })
       return
     }
 

@@ -143,6 +143,7 @@ const hideOnImgError = (e: React.SyntheticEvent<HTMLImageElement>) => {
 
 interface SessionMessageProps {
   message: SessionHistoryMessage;
+  assistantLabel?: string;
   sessionId?: string;
   sessionCwd?: string;
   sessionHost?: string;
@@ -295,8 +296,11 @@ export function GenericToolCall({ tool, status: statusProp = 'done', result: res
   }, [safeInput, open]);
 
   // Result rendering with image detection (base64 content blocks + file paths)
-  const { resultImages, resultTextHtml } = useMemo(() => {
-    if (!open || !result) return { resultImages: null as null | { src: string; key: string; caption?: string }[], resultTextHtml: '' };
+  const { resultImages, resultTextHtml } = useMemo<{
+    resultImages: { src: string; key: string; caption?: string }[] | null;
+    resultTextHtml: string;
+  }>(() => {
+    if (!open || !result) return { resultImages: null, resultTextHtml: '' };
 
     // 1. Check for Anthropic content blocks with base64 images
     const extracted = extractContentBlockImages(result);
@@ -419,6 +423,7 @@ function getExitPlanContent(tool: { input: Record<string, unknown>; planContent?
 
 interface SessionToolCallProps {
   tool: SessionHistoryTool;
+  assistantLabel: string;
   sessionId?: string;
   sessionCwd?: string;
   sessionHost?: string;
@@ -474,7 +479,7 @@ export function TaskGroupPrompt({ input }: { input?: Record<string, unknown> }) 
 const TASK_GROUP_INITIAL = 10;
 const TASK_GROUP_LOAD_MORE = 20;
 
-function TaskGroup({ tool, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: SessionToolCallProps) {
+function TaskGroup({ tool, assistantLabel, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: SessionToolCallProps) {
   const [open, setOpen] = useState(false);
   const [lazyChildren, setLazyChildren] = useState<SessionHistoryMessage[] | null>(null);
   const [loadingChildren, setLoadingChildren] = useState(false);
@@ -557,7 +562,7 @@ function TaskGroup({ tool, sessionId, sessionCwd, sessionHost, onTaskClick, onSe
                 </button>
               )}
               {visibleChildren.map((child, ci) => (
-                <SessionMessage key={innerStart + ci} message={child} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+                <SessionMessage key={innerStart + ci} message={child} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
               ))}
             </>
           ) : tool.result ? (
@@ -576,10 +581,10 @@ function TaskGroup({ tool, sessionId, sessionCwd, sessionHost, onTaskClick, onSe
   );
 }
 
-function SessionToolCall({ tool, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: SessionToolCallProps) {
+function SessionToolCall({ tool, assistantLabel, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: SessionToolCallProps) {
   // Task/Agent tool with childMessages or agentId → render as collapsible group
   if (GROUPABLE_HISTORY_TOOLS.has(tool.name) && (tool.childMessages || tool.agentId || tool.result)) {
-    return <TaskGroup tool={tool} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
+    return <TaskGroup tool={tool} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
   }
 
   // ExitPlanMode with plan content → render PlanCard
@@ -614,7 +619,7 @@ function SessionToolCall({ tool, sessionId, sessionCwd, sessionHost, onTaskClick
   return <GenericToolCall tool={tool} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen ? (p) => onFileOpen(p) : undefined} />;
 }
 
-export const SessionMessage = memo(function SessionMessage({ message, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: SessionMessageProps) {
+export const SessionMessage = memo(function SessionMessage({ message, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: SessionMessageProps) {
   const { role, text, timestamp, tools, thinking, model, usage } = message;
   const time = formatTime(timestamp);
   const isUser = role === 'user';
@@ -663,14 +668,14 @@ export const SessionMessage = memo(function SessionMessage({ message, sessionId,
   return (
     <div className={`session-msg ${isUser ? 'session-msg-user' : 'session-msg-assistant'}`}>
       <div className="session-msg-header">
-        <span className="session-msg-role">{isUser ? 'You' : 'Walnut'}</span>
+        <span className="session-msg-role">{isUser ? 'You' : assistantLabel}</span>
         {time && <span className="session-msg-time">{time}</span>}
         {!isUser && model && <span className="session-msg-model">{model}</span>}
       </div>
       <div className="session-msg-content" onClick={handleContentClick}>
         {thinking && <SessionThinking text={thinking} />}
         {tools && tools.length > 0 && tools.map((t, i) => (
-          <SessionToolCall key={i} tool={t} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+          <SessionToolCall key={i} tool={t} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
         ))}
         {text && (
           <div

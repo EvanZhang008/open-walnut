@@ -17,6 +17,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { createServer } from 'node:net'
+import { createAcpDaemon, type AcpStartParams } from '../../src/providers/acp-daemon.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -33,6 +34,13 @@ interface DaemonSession {
 
 /** Types of send fault that can be injected per-session. */
 export type SendFault = 'ENXIO' | 'EAGAIN' | 'session_dead' | 'not_found' | null
+
+export interface MockDaemonOptions {
+  /** Mirror CLI capture files into the server's local stream fallback directory. */
+  streamsDir?: string
+  /** Reuse a fixture's durable ACP journals across daemon attach/restart. */
+  acpStreamsDir?: string
+}
 
 /**
  * MockDaemon — implements the daemon WebSocket protocol locally.
@@ -53,12 +61,31 @@ export class MockDaemon {
   private _deadSessions = new Map<string, number>()
   /** Command log for test assertions. */
   private _commandHistory: Array<{ cmd: string; payload: Record<string, unknown>; timestamp: number }> = []
+  private readonly streamsDir: string
+  /** Real ACP supervision (same module the standalone daemon embeds) so tests
+   *  can drive acp* sessions through MockDaemon with real workers + mock agent. */
+  private _acp: ReturnType<typeof createAcpDaemon<WebSocket>>
 
   get port(): number { return this._port }
 
-  constructor() {
+  constructor(options: MockDaemonOptions = {}) {
     this.tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mock-daemon-'))
-    fs.mkdirSync(path.join(this.tmpDir, 'streams'), { recursive: true })
+    this.streamsDir = options.streamsDir ?? path.join(this.tmpDir, 'streams')
+    fs.mkdirSync(this.streamsDir, { recursive: true })
+    this._acp = createAcpDaemon<WebSocket>({
+      streamsDir: options.acpStreamsDir ?? this.streamsDir,
+      daemonDir: this.tmpDir,
+      sendEvent: (ws, ev, data) => this.sendEvent(ws, ev, data),
+      isWsOpen: (ws) => ws.readyState === WebSocket.OPEN,
+      log: () => {},
+      // In-process in vitest: the idle-sweep interval must not keep the
+      // process alive after tests finish.
+      setIntervalFn: ((fn: () => void, ms: number) => {
+        const t = setInterval(fn, ms)
+        t.unref()
+        return t
+      }) as typeof setInterval,
+    })
   }
 
   /** Override the CLI command used for sessions (default: mock-claude.mjs) */
@@ -110,6 +137,12 @@ export class MockDaemon {
       }
     }
     this.sessions.clear()
+
+    // Kill ACP workers (ordinary children — SIGKILL is fine, tests don't need
+    // graceful journal closure here).
+    for (const [, entry] of this._acp.workers) {
+      try { entry.proc.kill('SIGKILL') } catch { /* already dead */ }
+    }
 
     // Close WebSocket server — terminate all client connections first
     if (this.wss) {
@@ -175,6 +208,33 @@ export class MockDaemon {
       case 'fs.mkdir': return this.cmdFsMkdir(ws, id, cmd)
       case 'fs.ls': return this.cmdFsLs(ws, id, cmd)
       case 'list': return this.cmdList(ws, id)
+      // ── ACP command family: forwarded to the REAL createAcpDaemon module
+      //    (same code the standalone daemon embeds) — real workers, mock agent.
+      case 'acpStart': {
+        // Response shapes mirror daemon-standalone's cmdAcpStart exactly.
+        void this._acp.acpStart(ws, cmd as unknown as AcpStartParams).then((resp) => {
+          if (ws.readyState !== WebSocket.OPEN) return
+          if (resp.ok) this.sendOk(ws, id, resp.result ?? {})
+          else ws.send(JSON.stringify({ id, ok: false, error: resp.error, errorKind: resp.errorKind }))
+        })
+        return
+      }
+      case 'acpSend': return this.cmdAcpOp(ws, id, cmd, 'prompt')
+      case 'acpCancel': return this.cmdAcpOp(ws, id, cmd, 'cancel')
+      case 'acpRespond': return this.cmdAcpOp(ws, id, cmd, 'permissionResponse')
+      case 'acpState': return this.cmdAcpOp(ws, id, cmd, 'getState')
+      case 'acpNewSession': return this.cmdAcpOp(ws, id, cmd, 'newSession')
+      case 'acpSetConfigOption': return this.cmdAcpOp(ws, id, cmd, 'setConfigOption')
+      case 'acpStop': {
+        void this._acp.acpStop(cmd.sid as string).then(() => this.sendOk(ws, id, { stopped: true }))
+        return
+      }
+      case 'acpSubscribe': {
+        const ok = this._acp.subscribe(ws, cmd.sid as string, (cmd.fromOffset as number) ?? 0)
+        if (ok) return this.sendOk(ws, id, { subscribed: true })
+        ws.send(JSON.stringify({ id, ok: false, error: 'no live ACP worker for ' + cmd.sid, errorKind: 'no_worker' }))
+        return
+      }
       default: return this.sendError(ws, id, `unknown command: ${cmd.cmd}`)
     }
   }
@@ -188,7 +248,7 @@ export class MockDaemon {
     const message = cmd.message as string || ''
     const resume = cmd.resume as boolean ?? false
 
-    const streamsDir = path.join(this.tmpDir, 'streams')
+    const streamsDir = this.streamsDir
     const pipePath = path.join(streamsDir, `${sid}.pipe`)
     const jsonlPath = path.join(streamsDir, `${sid}.jsonl`)
 
@@ -384,7 +444,7 @@ export class MockDaemon {
     session.sid = newSid
     this.sessions.set(newSid, session)
     // Rename files
-    const streamsDir = path.join(this.tmpDir, 'streams')
+    const streamsDir = this.streamsDir
     try { fs.renameSync(session.pipePath, path.join(streamsDir, `${newSid}.pipe`)); session.pipePath = path.join(streamsDir, `${newSid}.pipe`) } catch {}
     try { fs.renameSync(session.jsonlPath, path.join(streamsDir, `${newSid}.jsonl`)); session.jsonlPath = path.join(streamsDir, `${newSid}.jsonl`) } catch {}
     this.sendOk(ws, id, {})
@@ -547,7 +607,7 @@ export class MockDaemon {
 
   /** Seed a session entry without spawning a real CLI — for orphan/adoption tests. */
   seedSession(sid: string, opts: { pid?: number; alive?: boolean; jsonlContent?: string } = {}): void {
-    const streamsDir = path.join(this.tmpDir, 'streams')
+    const streamsDir = this.streamsDir
     const pipePath = path.join(streamsDir, `${sid}.pipe`)
     const jsonlPath = path.join(streamsDir, `${sid}.jsonl`)
     if (opts.jsonlContent) fs.writeFileSync(jsonlPath, opts.jsonlContent)
@@ -604,7 +664,7 @@ export class MockDaemon {
 
   /** Absolute path of a session's stream file (for marker-line assertions). */
   streamFilePath(sid: string): string {
-    return path.join(this.tmpDir, 'streams', `${sid}.jsonl`)
+    return path.join(this.streamsDir, `${sid}.jsonl`)
   }
 
   /** Commands matching `cmd` name. */
@@ -631,6 +691,20 @@ export class MockDaemon {
     }
   }
 
+  /** ACP op forwarding — mirrors daemon-standalone's cmdAcpOp response shapes. */
+  private cmdAcpOp(ws: WebSocket, id: number, cmd: Record<string, unknown>, op: string): void {
+    const { sid, ...params } = cmd as { sid?: string }
+    if (!sid) return this.sendError(ws, id, op + ': missing sid')
+    delete (params as Record<string, unknown>).cmd
+    delete (params as Record<string, unknown>).id
+    delete (params as Record<string, unknown>).traceId
+    void this._acp.acpOp(sid, op, params as Record<string, unknown>).then((resp) => {
+      if (ws.readyState !== WebSocket.OPEN) return
+      if (resp.ok) this.sendOk(ws, id, { result: resp.result })
+      else ws.send(JSON.stringify({ id, ok: false, error: resp.error?.message ?? 'acp op failed', errorKind: resp.error?.kind }))
+    })
+  }
+
   private sendOk(ws: WebSocket, id: number, data: Record<string, unknown>): void {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ id, ok: true, ...data }))
@@ -653,8 +727,8 @@ export class MockDaemon {
 /**
  * Create and start a MockDaemon. Caller must call stop() when done.
  */
-export async function createMockDaemon(): Promise<MockDaemon> {
-  const daemon = new MockDaemon()
+export async function createMockDaemon(options: MockDaemonOptions = {}): Promise<MockDaemon> {
+  const daemon = new MockDaemon(options)
   await daemon.start()
   return daemon
 }

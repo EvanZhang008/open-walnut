@@ -473,7 +473,11 @@ export class DaemonConnection {
    * ID that outlives one `send()` (e.g. the whole turn — send → jsonl → result)
    * should supply their own.
    */
-  async send(cmd: string, params: Record<string, unknown> = {}): Promise<DaemonCommandResult> {
+  async send(
+    cmd: string,
+    params: Record<string, unknown> = {},
+    timeoutMs: number = DaemonConnection.COMMAND_TIMEOUT_MS,
+  ): Promise<DaemonCommandResult> {
     if (!this._connected || !this.ws) {
       throw new Error(`DaemonConnection not connected to ${this.hostKey}`)
     }
@@ -503,8 +507,8 @@ export class DaemonConnection {
     return new Promise<DaemonCommandResult>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingCommands.delete(id)
-        reject(new Error(`daemon command timeout: ${cmd} (${DaemonConnection.COMMAND_TIMEOUT_MS}ms) [traceId=${traceId}]`))
-      }, DaemonConnection.COMMAND_TIMEOUT_MS)
+        reject(new Error(`daemon command timeout: ${cmd} (${timeoutMs}ms) [traceId=${traceId}]`))
+      }, timeoutMs)
 
       this.pendingCommands.set(id, { resolve, reject, timer, cmd, startedAt, traceId })
       this.ws!.send(message)
@@ -2012,8 +2016,11 @@ export class DaemonConnection {
   /** After successful reconnect, recover sessions marked error due to connection loss. */
   private async recoverDisconnectedSessions(): Promise<void> {
     try {
-      const { listSessions, updateSessionRecord } = await import('../core/session-tracker.js')
-      const { bus, EventNames } = await import('../core/event-bus.js')
+      const {
+        emitSessionStatusChanged,
+        listSessions,
+        updateSessionRecord,
+      } = await import('../core/session-tracker.js')
       const sessions = await listSessions()
 
       for (const s of sessions) {
@@ -2044,6 +2051,95 @@ export class DaemonConnection {
           && !s.errorMessage?.includes('Connection lost')
         if (isTerminal || isNonRecoverableError) continue
 
+        if (s.engine === 'codex') {
+          if (!s.acpRuntimeId) {
+            log.session.warn('DaemonConnection: cannot recover ACP session without runtime ID', {
+              sessionId: s.claudeSessionId,
+              host: this.hostKey,
+            })
+            continue
+          }
+
+          try {
+            const result = await this.send('acpState', { sid: s.acpRuntimeId })
+            if (result.ok) {
+              const recoveredStatus = s.process_status === 'idle' ? 'idle' : 'running'
+              const updated = await updateSessionRecord(s.claudeSessionId, {
+                process_status: recoveredStatus,
+                errorMessage: undefined,
+                activity: undefined,
+                last_status_change: new Date().toISOString(),
+                status_reason: 'daemon_reconnected',
+                status_changed_by: 'daemon',
+              } as any)
+              emitSessionStatusChanged(
+                updated,
+                {},
+                ['*'],
+                { source: 'daemon-reconnect', urgency: 'urgent' },
+              )
+              log.session.info('DaemonConnection: auto-recovered ACP session after reconnect', {
+                sessionId: s.claudeSessionId,
+                runtimeId: s.acpRuntimeId,
+                host: this.hostKey,
+                priorStatus: s.process_status,
+                recoveredStatus,
+              })
+
+              try {
+                const { sessionRunner } = await import('./claude-code-session.js')
+                const session = sessionRunner.findAcpSession(s.claudeSessionId)
+                  ?? sessionRunner.findAcpSession(s.acpRuntimeId)
+                if (session) {
+                  await session.reattachWatcher()
+                } else {
+                  log.session.debug('DaemonConnection: no ACP session to re-subscribe', {
+                    sessionId: s.claudeSessionId,
+                    runtimeId: s.acpRuntimeId,
+                    host: this.hostKey,
+                  })
+                }
+              } catch (err) {
+                log.session.warn('DaemonConnection: ACP re-subscribe failed (recovery continued)', {
+                  sessionId: s.claudeSessionId,
+                  runtimeId: s.acpRuntimeId,
+                  host: this.hostKey,
+                  error: err instanceof Error ? err.message : String(err),
+                })
+              }
+            } else {
+              const updated = await updateSessionRecord(s.claudeSessionId, {
+                process_status: 'idle',
+                errorMessage: undefined,
+                activity: undefined,
+                last_status_change: new Date().toISOString(),
+                status_reason: 'daemon_reported_exit',
+                status_changed_by: 'daemon',
+              } as any)
+              emitSessionStatusChanged(
+                updated,
+                {},
+                ['*'],
+                { source: 'daemon-reconnect', urgency: 'urgent' },
+              )
+              log.session.info('DaemonConnection: ACP worker gone after reconnect', {
+                sessionId: s.claudeSessionId,
+                runtimeId: s.acpRuntimeId,
+                host: this.hostKey,
+                priorStatus: s.process_status,
+              })
+            }
+          } catch (err) {
+            log.session.debug('DaemonConnection: failed to probe ACP session during recovery', {
+              sessionId: s.claudeSessionId,
+              runtimeId: s.acpRuntimeId,
+              host: this.hostKey,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          }
+          continue
+        }
+
         // Ask daemon if this session's process is still alive
         try {
           const result = await this.send('status', { sid: s.claudeSessionId })
@@ -2052,7 +2148,7 @@ export class DaemonConnection {
             // FIFO sessions sit in 'idle' between turns and forcing 'running'
             // would lie to the UI (no turn actually in flight).
             const recoveredStatus = s.process_status === 'idle' ? 'idle' : 'running'
-            await updateSessionRecord(s.claudeSessionId, {
+            const updated = await updateSessionRecord(s.claudeSessionId, {
               process_status: recoveredStatus,
               errorMessage: undefined,
               activity: undefined,
@@ -2060,11 +2156,12 @@ export class DaemonConnection {
               status_reason: 'daemon_reconnected',
               status_changed_by: 'daemon',
             } as any)
-            bus.emit(EventNames.SESSION_STATUS_CHANGED, {
-              sessionId: s.claudeSessionId,
-              taskId: s.taskId,
-              process_status: recoveredStatus,
-            }, ['*'], { source: 'daemon-reconnect', urgency: 'urgent' })
+            emitSessionStatusChanged(
+              updated,
+              {},
+              ['*'],
+              { source: 'daemon-reconnect', urgency: 'urgent' },
+            )
             log.session.info('DaemonConnection: auto-recovered session after reconnect', {
               sessionId: s.claudeSessionId, host: this.hostKey,
               priorStatus: s.process_status,
@@ -2103,7 +2200,7 @@ export class DaemonConnection {
             // For stuck-running case: emitting 'stopped' triggers server.ts
             // belt-and-suspenders → sessionStreamBuffer.markDone+clear → UI Streaming
             // badge clears. JSONL history API serves full turn content independently.
-            await updateSessionRecord(s.claudeSessionId, {
+            const updated = await updateSessionRecord(s.claudeSessionId, {
               process_status: 'stopped',
               errorMessage: undefined,
               activity: undefined,
@@ -2111,11 +2208,12 @@ export class DaemonConnection {
               status_reason: 'daemon_reported_exit',
               status_changed_by: 'daemon',
             } as any)
-            bus.emit(EventNames.SESSION_STATUS_CHANGED, {
-              sessionId: s.claudeSessionId,
-              taskId: s.taskId,
-              process_status: 'stopped',
-            }, ['*'], { source: 'daemon-reconnect', urgency: 'urgent' })
+            emitSessionStatusChanged(
+              updated,
+              {},
+              ['*'],
+              { source: 'daemon-reconnect', urgency: 'urgent' },
+            )
             log.session.info('DaemonConnection: cleared error on dead session after reconnect', {
               sessionId: s.claudeSessionId, host: this.hostKey,
               priorStatus: s.process_status,

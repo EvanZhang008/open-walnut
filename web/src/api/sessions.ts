@@ -3,15 +3,22 @@ import type { SessionSummary, SessionRecord, SessionEffort, SessionModelCatalogE
 import type { ImageAttachment } from './chat';
 import type { SessionHistoryMessage } from '@/types/session';
 import { log } from '@/utils/log';
+import {
+  seedSessionStatus,
+  seedTaskSessionStatuses,
+  sessionStatusStore,
+} from '@/stores/session-status-store';
 
 export async function fetchSessions(): Promise<SessionSummary[]> {
   const res = await apiGet<{ sessions: SessionSummary[] }>('/api/sessions');
+  for (const session of res.sessions) seedSessionStatus(session, 'rest:session-list');
   return res.sessions;
 }
 
 export async function fetchRecentSessions(limit?: number): Promise<SessionSummary[]> {
   const params = limit ? { limit: String(limit) } : undefined;
   const res = await apiGet<{ sessions: SessionSummary[] }>('/api/sessions/recent', params);
+  for (const session of res.sessions) seedSessionStatus(session, 'rest:session-list');
   return res.sessions;
 }
 
@@ -19,6 +26,32 @@ export async function fetchSessionSummaries(limit?: number): Promise<SessionSumm
   const params = limit ? { limit: String(limit) } : undefined;
   const res = await apiGet<{ summaries: SessionSummary[] }>('/api/sessions/summaries', params);
   return res.summaries;
+}
+
+const STATUS_HYDRATION_BATCH_SIZE = 100;
+
+export async function hydrateSessionStatuses(sessionIds: Iterable<string>): Promise<void> {
+  const uniqueIds = [...new Set(sessionIds)]
+    .filter((sessionId) => sessionId && !sessionId.startsWith('pending:'));
+  for (let index = 0; index < uniqueIds.length; index += STATUS_HYDRATION_BATCH_SIZE) {
+    const ids = uniqueIds.slice(index, index + STATUS_HYDRATION_BATCH_SIZE);
+    try {
+      const res = await apiGet<{ statuses: Record<string, unknown> }>(
+        '/api/sessions/status',
+        { ids: ids.join(',') },
+      );
+      for (const snapshot of Object.values(res.statuses ?? {})) {
+        sessionStatusStore.applyVersioned(snapshot, 'rest:session-list');
+      }
+    } catch (error) {
+      // Mixed-version servers may not expose the hydration endpoint yet. The
+      // task payload's legacy status remains available as a fallback.
+      log.warn('session-status', 'task status hydration failed', {
+        sessionIds: ids,
+        error: String(error),
+      });
+    }
+  }
 }
 
 // Re-export from canonical types
@@ -57,10 +90,28 @@ export async function fetchSessionHistory(
   // server ceiling) legitimately exceeds the old 60s; aborting client-side just wasted
   // the transfer and re-requested from zero (inc-1783532915925).
   const timeoutMs = opts?.source === 'streams' ? 15_000 : 150_000;
-  const res = await apiGet<{ messages: SessionHistoryMessage[]; forkBoundaryIndex?: number; cursor?: number; delta?: boolean; stale?: boolean; staleReason?: string }>(
+  const res = await apiGet<{
+    messages: SessionHistoryMessage[];
+    forkBoundaryIndex?: number;
+    cursor?: number;
+    delta?: boolean;
+    stale?: boolean;
+    staleReason?: string;
+    historyUnavailable?: string;
+  }>(
     `/api/sessions/${sessionId}/history`, params, { signal: opts?.signal, timeoutMs },
   );
-  return { messages: res.messages, forkBoundaryIndex: res.forkBoundaryIndex, cursor: res.cursor, delta: res.delta, stale: res.stale, staleReason: res.staleReason };
+  if (res.historyUnavailable) {
+    throw new Error(`HISTORY_UNAVAILABLE:${res.historyUnavailable}`);
+  }
+  return {
+    messages: res.messages,
+    forkBoundaryIndex: res.forkBoundaryIndex,
+    cursor: res.cursor,
+    delta: res.delta,
+    stale: res.stale,
+    staleReason: res.staleReason,
+  };
 }
 
 export async function fetchSubagentHistory(
@@ -110,31 +161,54 @@ export interface WorkflowProgressSnapshot {
 
 export async function updateSession(sessionId: string, updates: { title?: string; human_note?: string; archived?: boolean; archive_reason?: string; mode?: string }): Promise<SessionRecord> {
   const res = await apiPatch<{ session: SessionRecord }>(`/api/sessions/${sessionId}`, updates);
+  seedSessionStatus(res.session, 'rest:session');
   return res.session;
 }
 
 export async function fetchSessionsForTask(taskId: string): Promise<SessionRecord[]> {
   const res = await apiGet<{ sessions: SessionRecord[] }>(`/api/sessions/task/${taskId}`);
+  for (const session of res.sessions) seedSessionStatus(session, 'rest:session-list');
   return res.sessions;
 }
 
 import type { SessionTreeResponse } from '@/types/session';
 
-export async function fetchSessionTree(hideCompleted?: boolean): Promise<SessionTreeResponse> {
-  const params = hideCompleted ? { hideCompleted: 'true' } : undefined;
+export async function fetchSessionTree(opts?: {
+  hideCompleted?: boolean;
+  q?: string;
+  limit?: number;
+}): Promise<SessionTreeResponse> {
+  const params: Record<string, string> = {};
+  if (opts?.hideCompleted) params.hideCompleted = 'true';
+  if (opts?.q?.trim()) params.q = opts.q.trim();
+  if (opts?.limit != null) params.limit = String(opts.limit);
   const res = await apiGet<SessionTreeResponse>('/api/sessions/tree', params);
   if (!res || typeof res !== 'object') {
-    return { tree: [], orphanSessions: [] };
+    return {
+      tree: [],
+      orphanSessions: [],
+      total: 0,
+      limit: opts?.limit ?? 100,
+      remaining: 0,
+      hasMore: false,
+    };
   }
-  return {
+  const result = {
     tree: Array.isArray(res.tree) ? res.tree : [],
     orphanSessions: Array.isArray(res.orphanSessions) ? res.orphanSessions : [],
+    total: Number.isFinite(res.total) ? res.total : 0,
+    limit: Number.isFinite(res.limit) ? res.limit : (opts?.limit ?? 100),
+    remaining: Number.isFinite(res.remaining) ? Math.max(0, res.remaining) : 0,
+    hasMore: res.hasMore === true,
   };
+  sessionStatusStore.seedSessionTree(result);
+  return result;
 }
 
 export async function fetchSession(sessionId: string): Promise<SessionRecord | null> {
   try {
     const res = await apiGet<{ session: SessionRecord }>(`/api/sessions/${sessionId}`);
+    seedSessionStatus(res.session, 'rest:session');
     return res.session;
   } catch {
     return null;
@@ -184,6 +258,58 @@ export async function setSessionModel(
   model: string,
 ): Promise<{ model: string; cliModel: string; appliedLive: boolean; effectiveModel?: string }> {
   return apiPost(`/api/sessions/${sessionId}/model`, { model });
+}
+
+export interface CodexModelInfo {
+  modelId: string;
+  name: string;
+  description?: string;
+}
+
+export async function fetchCodexModelCatalog(
+  sessionId: string,
+): Promise<{ models: CodexModelInfo[]; currentModelId?: string; source: 'acp' }> {
+  return apiGet(`/api/sessions/${sessionId}/model-catalog`);
+}
+
+export async function setCodexSessionModel(
+  sessionId: string,
+  model: string,
+): Promise<{ applied: true; model: string }> {
+  return apiPost(`/api/sessions/${sessionId}/model`, { model });
+}
+
+export interface SessionControlOption {
+  value: string;
+  name: string;
+  description?: string;
+}
+
+export interface SessionControl {
+  id: string;
+  name: string;
+  description?: string;
+  category?: string;
+  type: 'select';
+  currentValue: string;
+  options: SessionControlOption[];
+}
+
+export interface SessionControlsResponse {
+  engine: 'claude' | 'codex';
+  controls: SessionControl[];
+}
+
+export async function fetchSessionControls(sessionId: string): Promise<SessionControlsResponse> {
+  return apiGet(`/api/sessions/${sessionId}/controls`);
+}
+
+export async function postSessionControl(
+  sessionId: string,
+  id: string,
+  value: string,
+): Promise<SessionControlsResponse> {
+  return apiPost(`/api/sessions/${sessionId}/controls`, { id, value });
 }
 
 /** LIVE runtime settings pulled straight from the CLI (get_settings), paired with
@@ -417,6 +543,8 @@ export async function quickStartSession(opts: {
   intent?: 'fix-walnut';
   /** User opted into "create & start": server mkdirs the cwd before starting. */
   createCwd?: boolean;
+  /** Coding-agent engine. undefined = 'claude'; 'codex' → ACP-backed session (local-only). */
+  engine?: 'codex';
 }): Promise<{ taskId: string; task: unknown }> {
   // Convert ImageAttachment[] to the backend ImagePayload format (data + mediaType only)
   const payload: Record<string, unknown> = { ...opts };
@@ -426,6 +554,7 @@ export async function quickStartSession(opts: {
     delete payload.images;
   }
   const result = await apiPost<{ taskId: string; task: unknown }>('/api/sessions/quick-start', payload);
+  seedTaskSessionStatuses(result.task, 'rest:task');
   invalidateWorkingDirsCache(); // new session → new path entry
   if (opts.createCwd) invalidateLiveDirCache(); // the dir now exists — stale "missing" entries lie
   return result;

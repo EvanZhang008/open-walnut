@@ -58,28 +58,9 @@ export const SESSION_MODEL_FAMILIES: readonly SessionModelFamily[] = ['opus', 's
 // Walnut passes no --model and Claude Code resolves its own settings-layer default.
 // A session's model is a runtime (picker) choice, never a Walnut config-time default.
 
-// ── Codex CLI models (for engine='codex' sessions) ──
-// Parallel to SESSION_MODELS. Codex CLI accepts `--model <id>` (e.g. gpt-5.5).
-// Ref: https://developers.openai.com/codex/config-reference (model setting).
-export type CodexModelFamily = 'gpt-5' | 'gpt-4o';
-export interface CodexModelEntry {
-  id: string;
-  label: string;
-  description: string;
-  /** Value passed to `codex exec --model`, e.g. 'gpt-5.5'. */
-  cliModel: string;
-  family: CodexModelFamily;
-}
-export const CODEX_SESSION_MODELS: readonly CodexModelEntry[] = [
-  { id: 'gpt-5.5',    label: 'GPT-5.5',    description: 'Most capable Codex model',   cliModel: 'gpt-5.5',    family: 'gpt-5'  },
-  { id: 'gpt-4o',     label: 'GPT-4o',     description: 'Fast & cost-effective',      cliModel: 'gpt-4o',     family: 'gpt-4o' },
-  { id: 'gpt-4o-mini', label: 'GPT-4o Mini', description: 'Fastest, lowest latency',  cliModel: 'gpt-4o-mini', family: 'gpt-4o' },
-] as const;
-/** Codex alias id → CLI --model value. */
-export const CODEX_MODEL_CLI_MAP: Record<string, string> =
-  Object.fromEntries(CODEX_SESSION_MODELS.map((m) => [m.id, m.cliModel]));
-export const VALID_CODEX_MODEL_IDS: ReadonlySet<string> =
-  new Set(CODEX_SESSION_MODELS.map((m) => m.id));
+// NOTE: Codex (engine='codex') has NO hard-coded model catalog by design —
+// models/modes are discovered at runtime from ACP capabilities. See
+// docs/plan/coding-agent-acp-provider.md.
 
 // ── Reasoning effort (maps to the `claude -p --effort <level>` CLI flag) ──
 // The CLI accepts low/medium/high/xhigh/max (verified against binary 2.1.170:
@@ -401,6 +382,7 @@ export interface Task {
     activity?: string;
     mode?: SessionMode;
     provider?: SessionProvider;
+    engine?: SessionEngine;
     planCompleted?: boolean;
   };
   /** @deprecated Use session_id instead. Kept for backward compat during migration. */
@@ -408,9 +390,9 @@ export interface Task {
   /** @deprecated Use session_id instead. Kept for backward compat during migration. */
   exec_session_id?: string;
   /** @deprecated Use session_status instead. Kept for backward compat during migration. */
-  plan_session_status?: { process_status: ProcessStatus; activity?: string; mode?: SessionMode; provider?: SessionProvider; planCompleted?: boolean };
+  plan_session_status?: { process_status: ProcessStatus; activity?: string; mode?: SessionMode; provider?: SessionProvider; engine?: SessionEngine; planCompleted?: boolean };
   /** @deprecated Use session_status instead. Kept for backward compat during migration. */
-  exec_session_status?: { process_status: ProcessStatus; activity?: string; mode?: SessionMode; provider?: SessionProvider };
+  exec_session_status?: { process_status: ProcessStatus; activity?: string; mode?: SessionMode; provider?: SessionProvider; engine?: SessionEngine };
   parent_task_id?: string;     // If set, this is a child task of the parent
   /** Local-only virtual grouping. Tasks sharing a group_id render as ONE visual
    *  group in the list (boxed together, ordered after the group's lead task) —
@@ -1000,6 +982,7 @@ export type StatusReason =
   | 'retry_reconnect'
   | 'reconciled_authoritative'
   | 'streaming_evidence_self_heal'
+  | 'turn_interrupted'
   | 'user_stopped';
 
 export type StatusChangedBy =
@@ -1019,6 +1002,42 @@ export interface StatusTransition {
   message?: string | null;
 }
 
+/**
+ * Complete, versioned session status projection.
+ *
+ * `sessionId` is the provider session ID (`claudeSessionId` on SessionRecord).
+ * Every session:status-changed event and status hydration response carries this
+ * full shape so clients can compare revisions instead of merging partial state.
+ */
+export interface SessionStatusSnapshot {
+  sessionId: string;
+  taskId: string | null;
+  process_status: ProcessStatus;
+  activity: string | null;
+  mode: SessionMode;
+  planCompleted: boolean;
+  archived: boolean;
+  errorMessage: string | null;
+  provider: SessionProvider;
+  engine: SessionEngine;
+  statusRevision: number;
+  statusUpdatedAt: string;
+}
+
+/** Stable subset of ACP initialize capabilities used by routes and UI guards. */
+export interface AcpSessionCapabilities {
+  loadSession: boolean;
+  promptImages: boolean;
+  promptAudio: boolean;
+  promptEmbeddedContext: boolean;
+  listSessions: boolean;
+  deleteSession: boolean;
+  additionalDirectories: boolean;
+  forkSession: boolean;
+  resumeSession: boolean;
+  closeSession: boolean;
+}
+
 export interface SessionRecord {
   claudeSessionId: string;
   taskId: string;
@@ -1028,6 +1047,21 @@ export interface SessionRecord {
   provider?: SessionProvider;
   /** Which coding-agent CLI backs this session. Only set when provider='cli'. Undefined = 'claude' (default). */
   engine?: SessionEngine;
+  /** ACP sessions only: immutable runtime id keying the daemon worker + journal
+   *  (claudeSessionId holds the provider's ACP session id, which is what
+   *  session/load needs — both are required to re-attach after a restart). */
+  acpRuntimeId?: string;
+  /** ACP journal location on the execution host. Persisted because test/demo
+   *  daemons may use an isolated streams directory instead of the default. */
+  acpJournalPath?: string;
+  /** Capability snapshot from the adapter's initialize response. */
+  acpCapabilities?: AcpSessionCapabilities;
+  /** ACP sessions only: current base model selected through session/set_config_option. */
+  acpModel?: string;
+  /** ACP sessions only: last values successfully applied through session/set_config_option. */
+  acpConfig?: Record<string, string>;
+  /** Idempotency key of the most recently committed ACP prompt acceptance. */
+  lastAcceptedAcpCommandId?: string;
   /** Session type — determines lifecycle and cleanup behavior. Undefined = 'interactive'. */
   type?: SessionType;
   activity?: string;
@@ -1093,6 +1127,10 @@ export interface SessionRecord {
   status_changed_by?: StatusChangedBy;
   /** Recent status transitions, newest first. Max 10 entries. */
   status_history?: StatusTransition[];
+  /** Monotonic version of the canonical SessionStatusSnapshot projection. */
+  statusRevision?: number;
+  /** ISO timestamp at which statusRevision last changed. */
+  statusUpdatedAt?: string;
   /** Pending permission request — persisted so it survives server crashes.
    *  Set when Claude Code emits control_request, cleared on resolve. */
   pendingPermission?: {

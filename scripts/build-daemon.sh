@@ -23,6 +23,11 @@ SOURCES=(
   src/providers/daemon-standalone.ts
   src/providers/daemon-core.ts
   src/providers/daemon-source.ts
+  src/providers/acp-daemon.ts
+  src/providers/acp-worker/worker.ts
+  src/providers/acp-worker/worker-main.ts
+  src/providers/acp-worker/journal.ts
+  src/providers/acp-worker/protocol.ts
 )
 
 # sha256 of daemon source files, per-file path + NUL + content + NUL, then
@@ -72,6 +77,16 @@ bun build --compile --target=bun-darwin-arm64 --minify \
   --outfile "$OUTDIR/daemon-darwin-arm64" \
   src/providers/daemon-standalone.ts
 echo "$VERSION" > "$OUTDIR/daemon-darwin-arm64.version"
+
+# ACP worker artifact — a plain JS bundle (NOT bun-compiled): the daemon spawns
+# it with the system `node`, and one bundle serves every platform. The ACP SDK
+# and codex-acp adapter resolve from the walnut install's node_modules at
+# runtime on the LOCAL host (MVP scope); the remote deploy phase will bundle
+# the adapter too.
+bun build --minify --target=node \
+  --outfile "$OUTDIR/acp-worker.js" \
+  src/providers/acp-worker/worker-main.ts
+echo "$VERSION" > "$OUTDIR/acp-worker.js.version"
 
 # Invalidate stale .gz caches — DaemonConnection.deployBinary reuses them
 # if present, which would ship an old binary under a new version label.

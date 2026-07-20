@@ -5,12 +5,28 @@
  * `eventData<'event:name'>(event)` instead of manual `as { ... }` casts.
  */
 
-import type { Task, TaskPhase, SessionMode, ProcessStatus, SessionProvider, ConversationMeta } from './types.js';
+import type {
+  Task,
+  TaskPhase,
+  SessionMode,
+  ProcessStatus,
+  SessionProvider,
+  ConversationMeta,
+  SessionStatusSnapshot,
+} from './types.js';
 
 // ── Task events ──
 
 export interface TaskCreatedEvent { task: Task }
-export interface TaskUpdatedEvent { task: Task }
+export interface TaskUpdatedEvent {
+  /** Null denotes a bulk mutation that requires consumers to refetch. */
+  task: Task | null;
+  /** Stable IDs affected by a bulk mutation, used by incremental indexers. */
+  taskIds?: string[];
+  oldCategory?: string;
+  newCategory?: string;
+  count?: number;
+}
 export interface TaskCompletedEvent { task: Task }
 export interface TaskStarredEvent { task: Task; starred: boolean }
 export interface TaskDeletedEvent { id?: string; task: Task }
@@ -34,6 +50,8 @@ export interface SessionStartEvent {
   mode?: string;
   model?: string;
   effort?: import('./types.js').SessionEffort;
+  /** Coding-agent engine ('claude' default, 'codex' → ACP worker backend). */
+  engine?: import('./types.js').SessionEngine;
   project?: string;
   title?: string;
   appendSystemPrompt?: string;
@@ -76,6 +94,15 @@ export interface SessionEndedEvent {
   sessionId?: string;
   taskId?: string;
   autoCompleted?: number;
+}
+
+export interface SessionDeletedEvent {
+  sessionIds: string[];
+}
+
+/** A persisted session field included in the QMD document changed. */
+export interface SessionContentUpdatedEvent {
+  sessionId: string;
 }
 
 export interface SessionResultEvent {
@@ -215,17 +242,14 @@ export interface SessionUnknownEventPayload {
   snippet: string;
 }
 
-export interface SessionStatusChangedEvent {
-  sessionId: string;
-  taskId?: string;
+export interface SessionStatusChangedEvent extends SessionStatusSnapshot {
+  /** Canonical versioned wire contract. Top-level fields are compatibility mirrors. */
+  status: SessionStatusSnapshot;
   phase?: TaskPhase;
-  process_status?: ProcessStatus;
-  activity?: string;
-  mode?: SessionMode;
-  planCompleted?: boolean;
   fromPlanSessionId?: string;
   forkedFromSessionId?: string;
-  archived?: boolean;
+  /** Present when an ACP provider replaces its externally visible session ID. */
+  previousSessionId?: string;
 }
 
 export interface SessionMessagesDeliveredEvent {
@@ -364,6 +388,19 @@ export interface SessionUsageUpdateEvent {
   contextPercent?: number;
   /** Total input tokens for the latest API call (incl. cache). */
   inputTokens?: number;
+}
+
+/** Eager model-catalog push: emitted after the CLI answers list_models (on init
+ *  and on invalidation refetches) so pickers render CLI truth without a
+ *  per-open round-trip. Rows are post-allowlist/post-overrides — `value` is
+ *  the verbatim switch string. */
+export interface SessionModelCatalogEvent {
+  sessionId: string;
+  taskId?: string;
+  /** Host the catalog belongs to (undefined = local) — clients may cache per host. */
+  host?: string;
+  models: import('./types.js').SessionModelCatalogEntry[];
+  fetchedAt: string;
 }
 
 // ── Subagent events ──
@@ -620,6 +657,8 @@ export interface EventPayloadMap {
   'session:send': SessionSendEvent;
   'session:started': SessionStartedEvent;
   'session:ended': SessionEndedEvent;
+  'session:deleted': SessionDeletedEvent;
+  'session:content-updated': SessionContentUpdatedEvent;
   'session:result': SessionResultEvent;
   'session:error': SessionErrorEvent;
 
@@ -636,6 +675,7 @@ export interface EventPayloadMap {
   'session:system-event': SessionSystemEventPayload;
   'session:background-tasks': SessionBackgroundTasksPayload;
   'session:usage-update': SessionUsageUpdateEvent;
+  'session:model-catalog': SessionModelCatalogEvent;
   'session:side-question-done': SessionSideQuestionDoneEvent;
   'session:side-question-error': SessionSideQuestionErrorEvent;
 

@@ -14,6 +14,7 @@ interface SessionForkButtonProps {
   sessionId: string;
   cwd?: string;
   taskId?: string;
+  engine?: 'claude' | 'codex';
   onForkStarted?: (cwd: string, host?: string) => void;
   onForkComplete?: (taskId: string) => void;
   onForkFailed?: (errorMessage?: string) => void;
@@ -23,7 +24,7 @@ const ALLOWED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'im
 const MAX_FORK_IMAGES = 5;
 const POPOVER_WIDTH = 320; // keep in sync with .session-fork-popover width in globals.css
 
-export function SessionForkButton({ sessionId, cwd, taskId, onForkStarted, onForkComplete, onForkFailed }: SessionForkButtonProps) {
+export function SessionForkButton({ sessionId, cwd, taskId, engine, onForkStarted, onForkComplete, onForkFailed }: SessionForkButtonProps) {
   const [showForkInput, setShowForkInput] = useState(false);
   const [forkMessage, setForkMessage] = useState('');
   const [images, setImages] = useState<ImageAttachment[]>([]);
@@ -162,7 +163,7 @@ export function SessionForkButton({ sessionId, cwd, taskId, onForkStarted, onFor
 
   const handleForkClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (forking || forkResult === 'success') return;
+    if (engine === 'codex' || forking || forkResult === 'success') return;
     setShowForkInput(true);
   };
 
@@ -183,6 +184,9 @@ export function SessionForkButton({ sessionId, cwd, taskId, onForkStarted, onFor
 
   // Fork creates a child task — only meaningful when this session has a task.
   if (!sessionId || !taskId) return null;
+  const unsupportedReason = engine === 'codex'
+    ? 'Fork is unavailable because this Codex adapter does not support session forking'
+    : null;
   const cdPrefix = cwd ? `cd ${cwd} && ` : '';
   const btnLabel = forking ? 'Forking...' : forkResult === 'success' ? 'Forked!' : forkResult === 'error' ? 'Error' : 'Fork';
 
@@ -192,8 +196,9 @@ export function SessionForkButton({ sessionId, cwd, taskId, onForkStarted, onFor
         ref={btnRef}
         className={`session-action-chip${forkResult === 'success' ? ' session-fork-btn-success' : ''}`}
         onClick={handleForkClick}
-        disabled={forking || forkResult === 'success'}
-        title={forkError ?? `Fork session into a child task`}
+        disabled={!!unsupportedReason || forking || forkResult === 'success'}
+        title={unsupportedReason ?? forkError ?? 'Fork session into a child task'}
+        aria-label={unsupportedReason ?? 'Fork session into a child task'}
       >
         {btnLabel}
       </button>

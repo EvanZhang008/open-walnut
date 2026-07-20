@@ -4,9 +4,21 @@ import { SESSIONS_DIR } from '../constants.js';
 import { ensureDir } from '../utils/fs.js';
 import { isSessionProcessAlive } from '../utils/session-liveness.js';
 import { log } from '../logging/index.js';
-import type { SessionSummary, SessionRecord, SessionMode, SessionType, TaskPhase, ProcessStatus, StatusTransition } from './types.js';
+import type {
+  AcpSessionCapabilities,
+  SessionSummary,
+  SessionRecord,
+  SessionMode,
+  SessionType,
+  TaskPhase,
+  ProcessStatus,
+  StatusTransition,
+  SessionStatusSnapshot,
+} from './types.js';
 import { getDb, rowToSession, sessionToRow, SESSION_COLUMNS, transaction as sessionDbTx } from './session-db.js';
 import { runSessionMigrationIfNeeded } from './session-db-migration.js';
+import { bus, EventNames, type EmitOptions } from './event-bus.js';
+import type { SessionStatusChangedEvent } from './event-types.js';
 
 let sessionInitialized = false;
 
@@ -35,19 +47,180 @@ async function ensureSessionInit(): Promise<void> {
 // (enrichWithLiveStatus) and stays fresh. Env-gated for instant prod revert.
 const STORE_CACHE_ENABLED = process.env.WALNUT_STORE_CACHE !== '0';
 let sessionStoreCache: SessionRecord[] | null = null;
+let sessionStoreCacheDataVersion: number | null = null;
 
 /** Drop the cached whole-store snapshot. Called from withWriteLock.finally. */
 function invalidateSessionStoreCache(): void {
   sessionStoreCache = null;
+  sessionStoreCacheDataVersion = null;
 }
 
 /** Reset module-level state for test isolation. */
 export function _resetSessionTrackerForTesting(): void {
   sessionInitialized = false;
   sessionStoreCache = null;
+  sessionStoreCacheDataVersion = null;
 }
 
 const MAX_STATUS_HISTORY = 10;
+
+type SessionRecordUpdates = Partial<
+  Omit<SessionRecord, 'claudeSessionId' | 'statusRevision' | 'statusUpdatedAt'>
+>;
+
+type CanonicalStatusProjection = Omit<
+  SessionStatusSnapshot,
+  'sessionId' | 'statusRevision' | 'statusUpdatedAt'
+>;
+
+function qmdContentProjection(record: SessionRecord): string {
+  // Keep this list aligned with qmd-session-sync.ts serialization. Status,
+  // activity, PID, usage, and transport fields deliberately do not reindex.
+  return JSON.stringify([
+    record.title,
+    record.description,
+    record.summary,
+    record.planContent,
+    record.project,
+    record.cwd,
+    record.host,
+    record.taskId,
+    record.outputFile,
+  ]);
+}
+
+function canonicalStatusProjection(
+  record: Pick<
+    SessionRecord,
+    | 'process_status'
+    | 'activity'
+    | 'mode'
+    | 'planCompleted'
+    | 'archived'
+    | 'errorMessage'
+    | 'provider'
+    | 'engine'
+    | 'taskId'
+  >,
+): CanonicalStatusProjection {
+  return {
+    process_status: record.process_status ?? 'stopped',
+    activity: record.activity ?? null,
+    mode: record.mode ?? 'default',
+    planCompleted: record.planCompleted ?? false,
+    archived: record.archived ?? false,
+    errorMessage: record.errorMessage ?? null,
+    provider: record.provider ?? 'cli',
+    engine: record.engine ?? 'claude',
+    taskId: record.taskId || null,
+  };
+}
+
+function normalizedStatusRevision(record: Pick<SessionRecord, 'statusRevision'>): number {
+  return Number.isInteger(record.statusRevision) && record.statusRevision! > 0
+    ? record.statusRevision!
+    : 1;
+}
+
+function normalizedStatusUpdatedAt(
+  record: Pick<
+    SessionRecord,
+    'statusUpdatedAt' | 'last_status_change' | 'lastActiveAt' | 'startedAt'
+  >,
+): string {
+  return record.statusUpdatedAt
+    || record.last_status_change
+    || record.lastActiveAt
+    || record.startedAt
+    || new Date().toISOString();
+}
+
+function statusProjectionEquals(
+  left: CanonicalStatusProjection,
+  right: CanonicalStatusProjection,
+): boolean {
+  return left.process_status === right.process_status
+    && left.activity === right.activity
+    && left.mode === right.mode
+    && left.planCompleted === right.planCompleted
+    && left.archived === right.archived
+    && left.errorMessage === right.errorMessage
+    && left.provider === right.provider
+    && left.engine === right.engine
+    && left.taskId === right.taskId;
+}
+
+function initializeStatusVersion(record: SessionRecord, now?: string): void {
+  record.statusRevision = normalizedStatusRevision(record);
+  record.statusUpdatedAt = record.statusUpdatedAt
+    || now
+    || normalizedStatusUpdatedAt(record);
+}
+
+function withoutStatusVersionOverrides(
+  updates: SessionRecordUpdates,
+): SessionRecordUpdates {
+  if (!('statusRevision' in updates) && !('statusUpdatedAt' in updates)) {
+    return updates;
+  }
+  const sanitized = { ...updates } as Partial<SessionRecord>;
+  delete sanitized.statusRevision;
+  delete sanitized.statusUpdatedAt;
+  return sanitized;
+}
+
+function commitStatusVersion(
+  record: SessionRecord,
+  before: CanonicalStatusProjection,
+  now: string,
+): void {
+  const currentRevision = normalizedStatusRevision(record);
+  if (statusProjectionEquals(before, canonicalStatusProjection(record))) {
+    record.statusRevision = currentRevision;
+    record.statusUpdatedAt = normalizedStatusUpdatedAt(record);
+    return;
+  }
+  record.statusRevision = currentRevision + 1;
+  record.statusUpdatedAt = now;
+}
+
+/** Convert a durable record into the complete public status contract. */
+export function toSessionStatusSnapshot(record: SessionRecord): SessionStatusSnapshot {
+  return {
+    sessionId: record.claudeSessionId,
+    ...canonicalStatusProjection(record),
+    statusRevision: normalizedStatusRevision(record),
+    statusUpdatedAt: normalizedStatusUpdatedAt(record),
+  };
+}
+
+/**
+ * Publish one complete committed snapshot while retaining additive legacy data.
+ * Callers must pass the SessionRecord returned by the successful write.
+ */
+export function emitSessionStatusChanged(
+  record: SessionRecord,
+  legacyFields: Partial<SessionStatusChangedEvent> = {},
+  _destinations: string[] = ['*'],
+  options: EmitOptions = {},
+): void {
+  const status = toSessionStatusSnapshot(record);
+  const data: SessionStatusChangedEvent = {
+    ...legacyFields,
+    ...(record.fromPlanSessionId
+      ? { fromPlanSessionId: record.fromPlanSessionId }
+      : {}),
+    ...(record.forkedFromSessionId
+      ? { forkedFromSessionId: record.forkedFromSessionId }
+      : {}),
+    ...status,
+    status,
+  };
+  // Status is a global convergence signal consumed by the web UI, health
+  // monitor, hooks, and projections. Keep routing centralized so a caller
+  // cannot accidentally publish a revision to only one subscriber.
+  bus.emit(EventNames.SESSION_STATUS_CHANGED, data, ['*'], options);
+}
 
 // ── Triage detection ──
 
@@ -133,13 +306,28 @@ async function readStore(): Promise<{ sessions: SessionRecord[] }> {
     const rows = db.prepare('SELECT * FROM sessions').all() as Record<string, any>[];
     return { sessions: rows.map(rowToSession) };
   }
-  if (sessionStoreCache === null) {
-    const db = getDb();
-    if (!db) {
-      throw new Error('readStore: SQLite handle is null');
-    }
-    const rows = db.prepare('SELECT * FROM sessions').all() as Record<string, any>[];
+  const db = getDb();
+  if (!db) {
+    throw new Error('readStore: SQLite handle is null');
+  }
+  const dataVersion = () =>
+    db.pragma('data_version', { simple: true }) as number;
+  const currentDataVersion = dataVersion();
+  if (sessionStoreCache === null
+    || sessionStoreCacheDataVersion !== currentDataVersion) {
+    // An on-stop hook writes through a separate SQLite connection. Retry if
+    // that external commit races this SELECT so the cached rows and version
+    // always describe the same database state.
+    let before = currentDataVersion;
+    let rows: Record<string, any>[];
+    let after: number;
+    do {
+      before = dataVersion();
+      rows = db.prepare('SELECT * FROM sessions').all() as Record<string, any>[];
+      after = dataVersion();
+    } while (before !== after);
     sessionStoreCache = rows.map(rowToSession);
+    sessionStoreCacheDataVersion = after;
   }
   return { sessions: sessionStoreCache.map((s) => ({ ...s })) };
 }
@@ -203,6 +391,63 @@ function isNoOpUpdate(
 export async function listSessions(): Promise<SessionRecord[]> {
   const store = await readStore();
   return store.sessions;
+}
+
+export interface SessionQueryOptions {
+  query?: string;
+  limit?: number;
+  includeArchived?: boolean;
+}
+
+export interface SessionQueryResult {
+  sessions: SessionRecord[];
+  total: number;
+  limit: number;
+  hasMore: boolean;
+}
+
+const DEFAULT_SESSION_QUERY_LIMIT = 100;
+const MAX_SESSION_QUERY_LIMIT = 500;
+
+/**
+ * Bounded recent-session query with full-store text matching. The result is
+ * always newest-first except that an exact session ID is deterministically
+ * rank 1, including when it falls outside the recent prefix.
+ */
+export async function querySessions(options: SessionQueryOptions = {}): Promise<SessionQueryResult> {
+  const store = await readStore();
+  const limit = Math.max(1, Math.min(
+    Number.isFinite(options.limit) ? Math.floor(options.limit!) : DEFAULT_SESSION_QUERY_LIMIT,
+    MAX_SESSION_QUERY_LIMIT,
+  ));
+  const query = options.query?.trim().toLowerCase() ?? '';
+  const matching = store.sessions.filter((session) => {
+    if (!options.includeArchived && session.archived) return false;
+    if (!query) return true;
+    return [
+      session.claudeSessionId,
+      session.acpRuntimeId,
+      session.taskId,
+      session.project,
+      session.title,
+      session.description,
+      session.summary,
+      session.recap,
+    ].some((value) => typeof value === 'string' && value.toLowerCase().includes(query));
+  });
+  matching.sort((a, b) => {
+    const aExact = query && a.claudeSessionId.toLowerCase() === query ? 1 : 0;
+    const bExact = query && b.claudeSessionId.toLowerCase() === query ? 1 : 0;
+    if (aExact !== bExact) return bExact - aExact;
+    const active = Date.parse(b.lastActiveAt) - Date.parse(a.lastActiveAt);
+    return active || a.claudeSessionId.localeCompare(b.claudeSessionId);
+  });
+  return {
+    sessions: matching.slice(0, limit),
+    total: matching.length,
+    limit,
+    hasMore: matching.length > limit,
+  };
 }
 
 /** A session is terminal if process_status is 'error' OR the task's phase is 'COMPLETE'. */
@@ -447,6 +692,34 @@ export async function getSessionByClaudeId(claudeSessionId: string): Promise<Ses
   return row ? rowToSession(row) : null;
 }
 
+/** Bounded callers can hydrate full status snapshots without loading history rows. */
+export async function getSessionStatusSnapshots(
+  providerSessionIds: string[],
+): Promise<Record<string, SessionStatusSnapshot>> {
+  if (providerSessionIds.length === 0) return {};
+  await ensureSessionInit();
+  const db = getDb();
+  if (!db) return {};
+  const ids = [...new Set(providerSessionIds)];
+  const placeholders = ids.map(() => '?').join(', ');
+  const rows = db.prepare(`
+    SELECT * FROM sessions
+    WHERE claude_session_id IN (${placeholders})
+  `).all(...ids) as Record<string, any>[];
+  const byId = new Map(
+    rows.map((row) => {
+      const record = rowToSession(row);
+      return [record.claudeSessionId, toSessionStatusSnapshot(record)] as const;
+    }),
+  );
+  const statuses = Object.create(null) as Record<string, SessionStatusSnapshot>;
+  for (const id of ids) {
+    const status = byId.get(id);
+    if (status) statuses[id] = status;
+  }
+  return statuses;
+}
+
 /**
  * Get all sessions linked to a task.
  */
@@ -517,7 +790,28 @@ export async function createSessionRecord(
   taskId: string,
   project: string,
   cwd?: string,
-  extra?: { pid?: number; outputFile?: string; title?: string; description?: string; mode?: SessionMode; planFile?: string; planCompleted?: boolean; host?: string; provider?: import('./types.js').SessionProvider; type?: SessionType; fromPlanSessionId?: string; forkedFromSessionId?: string; cliModel?: string; effort?: import('./types.js').SessionEffort; initialProcessStatus?: SessionRecord['process_status'] },
+  extra?: {
+    pid?: number;
+    outputFile?: string;
+    title?: string;
+    description?: string;
+    mode?: SessionMode;
+    planFile?: string;
+    planCompleted?: boolean;
+    host?: string;
+    provider?: import('./types.js').SessionProvider;
+    type?: SessionType;
+    fromPlanSessionId?: string;
+    forkedFromSessionId?: string;
+    cliModel?: string;
+    effort?: import('./types.js').SessionEffort;
+    initialProcessStatus?: SessionRecord['process_status'];
+    messageCount?: number;
+    engine?: import('./types.js').SessionEngine;
+    acpRuntimeId?: string;
+    acpJournalPath?: string;
+    acpCapabilities?: AcpSessionCapabilities;
+  },
 ): Promise<SessionRecord> {
   await ensureSessionInit();
   return withWriteLock(async () => {
@@ -525,99 +819,163 @@ export async function createSessionRecord(
     if (!db) {
       throw new Error('createSessionRecord: SQLite handle is null');
     }
-    const now = new Date().toISOString();
-    const row = db.prepare('SELECT * FROM sessions WHERE claude_session_id = ?').get(claudeSessionId) as
-      | Record<string, any>
-      | undefined;
+    return sessionDbTx((handle) => {
+      const now = new Date().toISOString();
+      const row = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?').get(claudeSessionId) as
+        | Record<string, any>
+        | undefined;
 
-    if (row) {
-      const existing = rowToSession(row);
-      // Detect whether anything material would actually change. Remote daemon replays
-      // and resume paths can re-invoke persistSessionRecord() 9× with identical values;
-      // skipping the write avoids starving readers on the write lock.
-      let materialChange = false;
-      if (cwd && existing.cwd !== cwd) materialChange = true;
-      if (extra?.pid != null && existing.pid !== extra.pid) materialChange = true;
-      if (extra?.outputFile && existing.outputFile !== extra.outputFile) materialChange = true;
-      if (extra?.mode && existing.mode !== extra.mode) materialChange = true;
-      if (extra?.planFile && existing.planFile !== extra.planFile) materialChange = true;
-      if (extra?.planCompleted != null && existing.planCompleted !== extra.planCompleted) materialChange = true;
-      if (extra?.host && existing.host !== extra.host) materialChange = true;
-      if (extra?.fromPlanSessionId && existing.fromPlanSessionId !== extra.fromPlanSessionId) materialChange = true;
-      if (extra?.forkedFromSessionId && existing.forkedFromSessionId !== extra.forkedFromSessionId) materialChange = true;
-      if (extra?.cliModel && existing.cliModel !== extra.cliModel) materialChange = true;
-      if (extra?.effort && existing.effort !== extra.effort) materialChange = true;
+      if (row) {
+        const existing = rowToSession(row);
+        initializeStatusVersion(existing);
+        const beforeStatus = canonicalStatusProjection(existing);
+        // Detect whether anything material would actually change. Remote daemon replays
+        // and resume paths can re-invoke persistSessionRecord() 9× with identical values;
+        // skipping the write avoids starving readers on the write lock.
+        let materialChange = false;
+        if (cwd && existing.cwd !== cwd) materialChange = true;
+        if (extra?.pid != null && existing.pid !== extra.pid) materialChange = true;
+        if (extra?.outputFile && existing.outputFile !== extra.outputFile) materialChange = true;
+        if (extra?.mode && existing.mode !== extra.mode) materialChange = true;
+        if (extra?.planFile && existing.planFile !== extra.planFile) materialChange = true;
+        if (extra?.planCompleted != null && existing.planCompleted !== extra.planCompleted) materialChange = true;
+        if (extra?.host && existing.host !== extra.host) materialChange = true;
+        if (extra?.fromPlanSessionId && existing.fromPlanSessionId !== extra.fromPlanSessionId) materialChange = true;
+        if (extra?.forkedFromSessionId && existing.forkedFromSessionId !== extra.forkedFromSessionId) materialChange = true;
+        if (extra?.cliModel && existing.cliModel !== extra.cliModel) materialChange = true;
+        if (extra?.effort && existing.effort !== extra.effort) materialChange = true;
 
-      if (!materialChange) {
+        if (!materialChange) {
+          return existing;
+        }
+
+        existing.lastActiveAt = now;
+        existing.messageCount++;
+        if (cwd) existing.cwd = cwd;
+        if (extra?.pid != null) {
+          // persistSessionRecord is called from the result handler to persist metadata
+          // (title, mode, cliModel) that only becomes available at result time, not at spawn.
+          // Only reset status when the PID actually CHANGES (new process started).
+          // persistSessionRecord() is called from both the transport callback (new PID)
+          // AND the result handler (same PID). Without this guard, the result handler's
+          // call races with the session-runner's updateSessionRecord('agent_complete'),
+          // and the createSessionRecord overwrites agent_complete → in_progress.
+          const pidChanged = extra.pid !== existing.pid;
+          existing.pid = extra.pid;
+          if (pidChanged) {
+            if (existing.process_status !== 'running') {
+              existing.process_status = 'running';
+              existing.last_status_change = now;
+            }
+          }
+        }
+        if (extra?.outputFile) existing.outputFile = extra.outputFile;
+        if (extra?.mode) existing.mode = extra.mode;
+        if (extra?.planFile) existing.planFile = extra.planFile;
+        if (extra?.planCompleted != null) existing.planCompleted = extra.planCompleted;
+        if (extra?.host) existing.host = extra.host;
+        if (extra?.fromPlanSessionId) existing.fromPlanSessionId = extra.fromPlanSessionId;
+        if (extra?.forkedFromSessionId) existing.forkedFromSessionId = extra.forkedFromSessionId;
+        if (extra?.cliModel) existing.cliModel = extra.cliModel;
+        if (extra?.effort) existing.effort = extra.effort;
+
+        commitStatusVersion(existing, beforeStatus, now);
+        writeSessionRowSqlite(handle, existing);
         return existing;
       }
 
-      existing.lastActiveAt = now;
-      existing.messageCount++;
-      if (cwd) existing.cwd = cwd;
-      if (extra?.pid != null) {
-        // persistSessionRecord is called from the result handler to persist metadata
-        // (title, mode, cliModel) that only becomes available at result time, not at spawn.
-        // Only reset status when the PID actually CHANGES (new process started).
-        // persistSessionRecord() is called from both the transport callback (new PID)
-        // AND the result handler (same PID). Without this guard, the result handler's
-        // call races with the session-runner's updateSessionRecord('agent_complete'),
-        // and the createSessionRecord overwrites agent_complete → in_progress.
-        const pidChanged = extra.pid !== existing.pid;
-        existing.pid = extra.pid;
-        if (pidChanged) {
-          if (existing.process_status !== 'running') {
-            existing.process_status = 'running';
-            existing.last_status_change = now;
-          }
-        }
+      const record: SessionRecord = {
+        claudeSessionId,
+        taskId,
+        project,
+        // init-only spawns pass 'idle': the CLI initialized then parked on its
+        // FIFO — no turn is running, and defaulting to 'running' left a
+        // permanent Running badge until the first real turn ended.
+        process_status: extra?.initialProcessStatus ?? 'running',
+        mode: extra?.mode ?? 'default',
+        last_status_change: now,
+        startedAt: now,
+        lastActiveAt: now,
+        messageCount: extra?.messageCount ?? 1,
+        ...(cwd ? { cwd } : {}),
+        ...(extra?.pid != null ? { pid: extra.pid } : {}),
+        ...(extra?.outputFile ? { outputFile: extra.outputFile } : {}),
+        ...(extra?.title ? { title: extra.title } : {}),
+        ...(extra?.description ? { description: extra.description } : {}),
+        ...(extra?.planFile ? { planFile: extra.planFile } : {}),
+        ...(extra?.planCompleted != null ? { planCompleted: extra.planCompleted } : {}),
+        ...(extra?.host ? { host: extra.host } : {}),
+        ...(extra?.provider ? { provider: extra.provider } : {}),
+        type: extra?.type ?? 'interactive',
+        ...(extra?.fromPlanSessionId ? { fromPlanSessionId: extra.fromPlanSessionId } : {}),
+        ...(extra?.forkedFromSessionId ? { forkedFromSessionId: extra.forkedFromSessionId } : {}),
+        ...(extra?.cliModel ? { cliModel: extra.cliModel } : {}),
+        ...(extra?.effort ? { effort: extra.effort } : {}),
+        ...(extra?.engine ? { engine: extra.engine } : {}),
+        ...(extra?.acpRuntimeId ? { acpRuntimeId: extra.acpRuntimeId } : {}),
+        ...(extra?.acpJournalPath ? { acpJournalPath: extra.acpJournalPath } : {}),
+        ...(extra?.acpCapabilities ? { acpCapabilities: extra.acpCapabilities } : {}),
+        statusRevision: 1,
+        statusUpdatedAt: now,
+      };
+
+      writeSessionRowSqlite(handle, record);
+      log.session.info('session record created', { sessionId: claudeSessionId, taskId, project, mode: extra?.mode, host: extra?.host });
+      return record;
+    });
+  });
+}
+
+export interface AcpPromptAcceptanceResult {
+  accepted: boolean;
+  record: SessionRecord;
+}
+
+/**
+ * Atomically commit one durable ACP prompt acceptance. Duplicate command IDs
+ * are no-ops, so a lost ACK/retry cannot increment the user-turn count twice.
+ */
+export async function acceptAcpPrompt(
+  claudeSessionId: string,
+  commandId: string,
+  options?: { preserveTerminalState?: boolean },
+): Promise<AcpPromptAcceptanceResult> {
+  await ensureSessionInit();
+  return withWriteLock(async () => {
+    const db = getDb();
+    if (!db) throw new Error('acceptAcpPrompt: SQLite handle is null');
+    return sessionDbTx((handle) => {
+      const row = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?')
+        .get(claudeSessionId) as Record<string, any> | undefined;
+      if (!row) throw new Error(`Session not found: ${claudeSessionId}`);
+      const record = rowToSession(row);
+      if (record.lastAcceptedAcpCommandId === commandId) {
+        return { accepted: false, record };
       }
-      if (extra?.outputFile) existing.outputFile = extra.outputFile;
-      if (extra?.mode) existing.mode = extra.mode;
-      if (extra?.planFile) existing.planFile = extra.planFile;
-      if (extra?.planCompleted != null) existing.planCompleted = extra.planCompleted;
-      if (extra?.host) existing.host = extra.host;
-      if (extra?.fromPlanSessionId) existing.fromPlanSessionId = extra.fromPlanSessionId;
-      if (extra?.forkedFromSessionId) existing.forkedFromSessionId = extra.forkedFromSessionId;
-      if (extra?.cliModel) existing.cliModel = extra.cliModel;
-      if (extra?.effort) existing.effort = extra.effort;
 
-      writeSessionRowSqlite(db, existing);
-      return existing;
-    }
-
-    const record: SessionRecord = {
-      claudeSessionId,
-      taskId,
-      project,
-      // init-only spawns pass 'idle': the CLI initialized then parked on its
-      // FIFO — no turn is running, and defaulting to 'running' left a
-      // permanent Running badge until the first real turn ended.
-      process_status: extra?.initialProcessStatus ?? 'running',
-      mode: extra?.mode ?? 'default',
-      last_status_change: now,
-      startedAt: now,
-      lastActiveAt: now,
-      messageCount: 1,
-      ...(cwd ? { cwd } : {}),
-      ...(extra?.pid != null ? { pid: extra.pid } : {}),
-      ...(extra?.outputFile ? { outputFile: extra.outputFile } : {}),
-      ...(extra?.title ? { title: extra.title } : {}),
-      ...(extra?.description ? { description: extra.description } : {}),
-      ...(extra?.planFile ? { planFile: extra.planFile } : {}),
-      ...(extra?.planCompleted != null ? { planCompleted: extra.planCompleted } : {}),
-      ...(extra?.host ? { host: extra.host } : {}),
-      ...(extra?.provider ? { provider: extra.provider } : {}),
-      type: extra?.type ?? 'interactive',
-      ...(extra?.fromPlanSessionId ? { fromPlanSessionId: extra.fromPlanSessionId } : {}),
-      ...(extra?.forkedFromSessionId ? { forkedFromSessionId: extra.forkedFromSessionId } : {}),
-      ...(extra?.cliModel ? { cliModel: extra.cliModel } : {}),
-      ...(extra?.effort ? { effort: extra.effort } : {}),
-    };
-
-    writeSessionRowSqlite(db, record);
-    log.session.info('session record created', { sessionId: claudeSessionId, taskId, project, mode: extra?.mode, host: extra?.host });
-    return record;
+      const now = new Date().toISOString();
+      applyUpdateToSession(record, {
+        lastAcceptedAcpCommandId: commandId,
+        messageCount: record.messageCount + 1,
+        ...(options?.preserveTerminalState
+          ? {}
+          : {
+              process_status: 'running' as const,
+              activity: 'processing' as const,
+              last_status_change: now,
+              status_reason: 'message_sent',
+              status_changed_by: 'session-runner',
+              errorMessage: undefined,
+            }),
+      }, 'ACP prompt acceptance');
+      writeSessionRowSqlite(handle, record);
+      log.session.info('ACP prompt accepted', {
+        sessionId: claudeSessionId,
+        commandId,
+        messageCount: record.messageCount,
+      });
+      return { accepted: true, record };
+    });
   });
 }
 
@@ -635,9 +993,7 @@ function writeSessionRowSqlite(db: import('better-sqlite3').Database, session: S
   for (const col of insertCols) {
     bound[col] = partial[col] === undefined ? null : partial[col];
   }
-  sessionDbTx((handle) => {
-    handle.prepare(insertSql).run(bound);
-  });
+  db.prepare(insertSql).run(bound);
 }
 
 /**
@@ -662,40 +1018,44 @@ export async function importSessionRecord(opts: {
     if (!db) {
       throw new Error('importSessionRecord: SQLite handle is null');
     }
-    const now = new Date().toISOString();
-    const record: SessionRecord = {
-      claudeSessionId: opts.claudeSessionId,
-      taskId: opts.taskId,
-      project: opts.project,
-      process_status: 'stopped',
-      mode: 'default',
-      last_status_change: now,
-      startedAt: opts.startedAt ?? now,
-      lastActiveAt: opts.lastActiveAt ?? now,
-      messageCount: opts.messageCount ?? 0,
-      type: 'interactive',
-      ...(opts.cwd ? { cwd: opts.cwd } : {}),
-      ...(opts.host ? { host: opts.host } : {}),
-      ...(opts.title ? { title: opts.title } : {}),
-    };
+    return sessionDbTx((handle) => {
+      const now = new Date().toISOString();
+      const record: SessionRecord = {
+        claudeSessionId: opts.claudeSessionId,
+        taskId: opts.taskId,
+        project: opts.project,
+        process_status: 'stopped',
+        mode: 'default',
+        last_status_change: now,
+        startedAt: opts.startedAt ?? now,
+        lastActiveAt: opts.lastActiveAt ?? now,
+        messageCount: opts.messageCount ?? 0,
+        type: 'interactive',
+        ...(opts.cwd ? { cwd: opts.cwd } : {}),
+        ...(opts.host ? { host: opts.host } : {}),
+        ...(opts.title ? { title: opts.title } : {}),
+        statusRevision: 1,
+        statusUpdatedAt: now,
+      };
 
-    const row = db.prepare('SELECT task_id FROM sessions WHERE claude_session_id = ?')
-      .get(opts.claudeSessionId) as { task_id?: string } | undefined;
-    if (row) {
-      throw new Error(
-        `Session ${opts.claudeSessionId} is already tracked (task: ${row.task_id ?? ''}). ` +
-        `Use session_send to interact with it.`,
-      );
-    }
-    writeSessionRowSqlite(db, record);
+      const row = handle.prepare('SELECT task_id FROM sessions WHERE claude_session_id = ?')
+        .get(opts.claudeSessionId) as { task_id?: string } | undefined;
+      if (row) {
+        throw new Error(
+          `Session ${opts.claudeSessionId} is already tracked (task: ${row.task_id ?? ''}). ` +
+          `Use session_send to interact with it.`,
+        );
+      }
+      writeSessionRowSqlite(handle, record);
 
-    log.session.info('imported external session', {
-      sessionId: opts.claudeSessionId,
-      taskId: opts.taskId,
-      project: opts.project,
-      host: opts.host,
+      log.session.info('imported external session', {
+        sessionId: opts.claudeSessionId,
+        taskId: opts.taskId,
+        project: opts.project,
+        host: opts.host,
+      });
+      return record;
     });
-    return record;
   });
 }
 
@@ -709,9 +1069,12 @@ export async function importSessionRecord(opts: {
  */
 function applyUpdateToSession(
   session: SessionRecord,
-  updates: Partial<Omit<SessionRecord, 'claudeSessionId'>>,
+  updates: SessionRecordUpdates,
   logLabel: string,
 ): boolean {
+  updates = withoutStatusVersionOverrides(updates);
+  initializeStatusVersion(session);
+  const beforeStatus = canonicalStatusProjection(session);
   // ── consumedOffset monotonic arbitration (single write choke point) ──
   // The watermark is a byte position in the session's append-only stream file:
   // it only ever moves forward. A stale writer (older event, concurrent
@@ -744,11 +1107,12 @@ function applyUpdateToSession(
   if (isNoOpUpdate(session, updates)) return false;
 
   const prevStatus = session.process_status;
+  const now = new Date().toISOString();
   Object.assign(session, updates);
 
   if (updates.process_status && updates.process_status !== prevStatus) {
     const transition: StatusTransition = {
-      timestamp: new Date().toISOString(),
+      timestamp: now,
       process_status: updates.process_status as ProcessStatus,
       reason: (updates as any).status_reason ?? 'unknown',
       changed_by: (updates as any).status_changed_by ?? 'unknown',
@@ -768,7 +1132,8 @@ function applyUpdateToSession(
     });
     session.pid = undefined;
   }
-  session.lastActiveAt = new Date().toISOString();
+  session.lastActiveAt = now;
+  commitStatusVersion(session, beforeStatus, now);
   return true;
 }
 
@@ -777,33 +1142,48 @@ function applyUpdateToSession(
  */
 export async function updateSessionRecord(
   claudeSessionId: string,
-  updates: Partial<Omit<SessionRecord, 'claudeSessionId'>>,
+  updates: SessionRecordUpdates,
 ): Promise<SessionRecord> {
   await ensureSessionInit();
-  return withWriteLock(async () => {
+  let qmdContentChanged = false;
+  const updated = await withWriteLock(async () => {
     const db = getDb();
     if (!db) {
       throw new Error('updateSessionRecord: SQLite handle is null');
     }
 
-    const row = db.prepare('SELECT * FROM sessions WHERE claude_session_id = ?').get(claudeSessionId) as
-      | Record<string, any>
-      | undefined;
-    if (!row) {
-      throw new Error(`Session not found: ${claudeSessionId}`);
-    }
-    const session = rowToSession(row);
+    return sessionDbTx((handle) => {
+      const row = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?').get(claudeSessionId) as
+        | Record<string, any>
+        | undefined;
+      if (!row) {
+        throw new Error(`Session not found: ${claudeSessionId}`);
+      }
+      const session = rowToSession(row);
+      const qmdContentBefore = qmdContentProjection(session);
 
-    // No-op guard BEFORE any UPDATE SQL — critical to avoid write-lock storms
-    // when the daemon replays identical init/model/pid updates.
-    if (!applyUpdateToSession(session, updates, 'clearing stale PID on terminal transition')) {
+      // No-op guard BEFORE any UPDATE SQL — critical to avoid write-lock storms
+      // when the daemon replays identical init/model/pid updates.
+      if (!applyUpdateToSession(session, updates, 'clearing stale PID on terminal transition')) {
+        return session;
+      }
+
+      writeSessionRowSqlite(handle, session);
+      qmdContentChanged =
+        qmdContentBefore !== qmdContentProjection(session);
+      log.session.info('session record updated', { sessionId: claudeSessionId, fields: Object.keys(updates) });
       return session;
-    }
-
-    writeSessionRowSqlite(db, session);
-    log.session.info('session record updated', { sessionId: claudeSessionId, fields: Object.keys(updates) });
-    return session;
+    });
   });
+  if (qmdContentChanged) {
+    bus.emit(
+      EventNames.SESSION_CONTENT_UPDATED,
+      { sessionId: claudeSessionId },
+      ['*'],
+      { source: 'session-tracker' },
+    );
+  }
+  return updated;
 }
 
 /**
@@ -824,7 +1204,7 @@ export async function updateSessionRecord(
  */
 export async function batchUpdateSessionRecords(
   claudeSessionIds: string[],
-  updates: Partial<Omit<SessionRecord, 'claudeSessionId'>>,
+  updates: SessionRecordUpdates,
 ): Promise<string[]> {
   if (claudeSessionIds.length === 0) return [];
   await ensureSessionInit();
@@ -879,7 +1259,7 @@ export async function batchUpdateSessionRecords(
  */
 export async function updateSessionRecordConditionally(
   claudeSessionId: string,
-  updates: Partial<Omit<SessionRecord, 'claudeSessionId'>>,
+  updates: SessionRecordUpdates,
   shouldUpdate: (current: SessionRecord) => boolean,
 ): Promise<SessionRecord | null> {
   await ensureSessionInit();
@@ -889,20 +1269,22 @@ export async function updateSessionRecordConditionally(
       throw new Error('updateSessionRecordConditionally: SQLite handle is null');
     }
 
-    const row = db.prepare('SELECT * FROM sessions WHERE claude_session_id = ?').get(claudeSessionId) as
-      | Record<string, any>
-      | undefined;
-    if (!row) return null;
-    const session = rowToSession(row);
+    return sessionDbTx((handle) => {
+      const row = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?').get(claudeSessionId) as
+        | Record<string, any>
+        | undefined;
+      if (!row) return null;
+      const session = rowToSession(row);
 
-    if (!shouldUpdate(session)) return null;
+      if (!shouldUpdate(session)) return null;
 
-    if (!applyUpdateToSession(session, updates, 'clearing stale PID on terminal transition (conditional)')) {
+      if (!applyUpdateToSession(session, updates, 'clearing stale PID on terminal transition (conditional)')) {
+        return session;
+      }
+      writeSessionRowSqlite(handle, session);
+      log.session.info('session record updated (conditional)', { sessionId: claudeSessionId, fields: Object.keys(updates) });
       return session;
-    }
-    writeSessionRowSqlite(db, session);
-    log.session.info('session record updated (conditional)', { sessionId: claudeSessionId, fields: Object.keys(updates) });
-    return session;
+    });
   });
 }
 
@@ -914,7 +1296,7 @@ export async function updateSessionRecordConditionally(
 export async function renameSessionId(
   oldClaudeSessionId: string,
   newClaudeSessionId: string,
-  updates?: Partial<Omit<SessionRecord, 'claudeSessionId'>>,
+  updates?: SessionRecordUpdates,
 ): Promise<SessionRecord | null> {
   await ensureSessionInit();
   return withWriteLock(async () => {
@@ -922,37 +1304,41 @@ export async function renameSessionId(
     if (!db) {
       throw new Error('renameSessionId: SQLite handle is null');
     }
-    const oldRow = db.prepare('SELECT * FROM sessions WHERE claude_session_id = ?').get(oldClaudeSessionId) as
-      | Record<string, any> | undefined;
-    if (!oldRow) return null;
+    return sessionDbTx((handle) => {
+      const oldRow = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?').get(oldClaudeSessionId) as
+        | Record<string, any> | undefined;
+      if (!oldRow) return null;
 
-    const conflict = db.prepare('SELECT 1 FROM sessions WHERE claude_session_id = ?').get(newClaudeSessionId);
-    if (conflict) {
-      log.session.warn('renameSessionId: new ID already exists, skipping rename to avoid collision', {
-        oldId: oldClaudeSessionId, newId: newClaudeSessionId,
-      });
-      return null;
-    }
+      const conflict = handle.prepare('SELECT 1 FROM sessions WHERE claude_session_id = ?').get(newClaudeSessionId);
+      if (conflict) {
+        log.session.warn('renameSessionId: new ID already exists, skipping rename to avoid collision', {
+          oldId: oldClaudeSessionId, newId: newClaudeSessionId,
+        });
+        return null;
+      }
 
-    const session = rowToSession(oldRow);
-    session.claudeSessionId = newClaudeSessionId;
-    // NOTE: this bypasses the consumedOffset monotonic arbitration that
-    // applyUpdateToSession() enforces (NaN/negative/regression/MAX_SAFE_INTEGER
-    // rejection) — `updates` is applied directly via Object.assign, with no
-    // sanitization at all. The ONLY safe value for `updates.consumedOffset`
-    // here is `undefined` — the rename-reset semantic: a new claudeSessionId
-    // means a new stream file with its own byte-offset coordinate space, so
-    // there is no watermark to carry over. A future caller passing a concrete
-    // number through here would skip every sanitization check and could
-    // poison the watermark (e.g. wedge it at a stale or bogus offset that
-    // silently suppresses real future convergence writes).
-    if (updates) Object.assign(session, updates);
-    session.lastActiveAt = new Date().toISOString();
+      const session = rowToSession(oldRow);
+      initializeStatusVersion(session);
+      const beforeStatus = canonicalStatusProjection(session);
+      session.claudeSessionId = newClaudeSessionId;
+      // NOTE: this bypasses the consumedOffset monotonic arbitration that
+      // applyUpdateToSession() enforces (NaN/negative/regression/MAX_SAFE_INTEGER
+      // rejection) — `updates` is applied directly via Object.assign, with no
+      // sanitization at all. The ONLY safe value for `updates.consumedOffset`
+      // here is `undefined` — the rename-reset semantic: a new claudeSessionId
+      // means a new stream file with its own byte-offset coordinate space, so
+      // there is no watermark to carry over. A future caller passing a concrete
+      // number through here would skip every sanitization check and could
+      // poison the watermark (e.g. wedge it at a stale or bogus offset that
+      // silently suppresses real future convergence writes).
+      if (updates) Object.assign(session, withoutStatusVersionOverrides(updates));
+      const now = new Date().toISOString();
+      session.lastActiveAt = now;
+      commitStatusVersion(session, beforeStatus, now);
 
-    // Delete old PK + insert under new PK in one transaction so a crash mid-rename
-    // can't leave both rows orphaned. INSERT OR REPLACE with the new PK won't
-    // clean up the old row on its own.
-    sessionDbTx((handle) => {
+      // Delete old PK + insert under new PK in one transaction so a crash mid-rename
+      // can't leave both rows orphaned. INSERT OR REPLACE with the new PK won't
+      // clean up the old row on its own.
       handle.prepare('DELETE FROM sessions WHERE claude_session_id = ?').run(oldClaudeSessionId);
       const insertCols = [...SESSION_COLUMNS, 'payload'];
       const insertSql =
@@ -964,9 +1350,132 @@ export async function renameSessionId(
         bound[col] = partial[col] === undefined ? null : partial[col];
       }
       handle.prepare(insertSql).run(bound);
+      log.session.info('session ID renamed', { oldId: oldClaudeSessionId, newId: newClaudeSessionId });
+      return session;
     });
-    log.session.info('session ID renamed', { oldId: oldClaudeSessionId, newId: newClaudeSessionId });
-    return session;
+  });
+}
+
+const ACP_IDENTITY_REPLACEMENT_PREFIX = 'acp_identity_replaced:';
+
+/** Return the replacement provider ID recorded by an interrupted ACP migration. */
+export function getAcpIdentityReplacementTarget(
+  record: Pick<SessionRecord, 'archived' | 'archive_reason'>,
+): string | null {
+  if (!record.archived
+    || !record.archive_reason?.startsWith(ACP_IDENTITY_REPLACEMENT_PREFIX)) {
+    return null;
+  }
+  const target = record.archive_reason.slice(ACP_IDENTITY_REPLACEMENT_PREFIX.length);
+  return target || null;
+}
+
+/**
+ * Stage an ACP provider-ID replacement without creating a cross-store crash
+ * window. The replacement row and archived redirect row commit in one SQLite
+ * transaction; task links can then move before the redirect is deleted.
+ */
+export async function stageAcpSessionIdMigration(
+  oldClaudeSessionId: string,
+  newClaudeSessionId: string,
+  updates?: SessionRecordUpdates,
+): Promise<SessionRecord | null> {
+  await ensureSessionInit();
+  return withWriteLock(async () => {
+    const db = getDb();
+    if (!db) throw new Error('stageAcpSessionIdMigration: SQLite handle is null');
+    return sessionDbTx((handle) => {
+      const oldRow = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?')
+        .get(oldClaudeSessionId) as Record<string, any> | undefined;
+      if (!oldRow) return null;
+      const conflict = handle.prepare('SELECT 1 FROM sessions WHERE claude_session_id = ?')
+        .get(newClaudeSessionId);
+      if (conflict) return null;
+
+      const oldRecord = rowToSession(oldRow);
+      initializeStatusVersion(oldRecord);
+      const now = new Date().toISOString();
+      const replacement: SessionRecord = {
+        ...oldRecord,
+        ...withoutStatusVersionOverrides(updates ?? {}),
+        claudeSessionId: newClaudeSessionId,
+        archived: false,
+        archive_reason: undefined,
+        lastActiveAt: now,
+      };
+      const redirect: SessionRecord = {
+        ...oldRecord,
+        archived: true,
+        archive_reason: ACP_IDENTITY_REPLACEMENT_PREFIX + newClaudeSessionId,
+        lastActiveAt: now,
+      };
+      commitStatusVersion(
+        redirect,
+        canonicalStatusProjection(oldRecord),
+        now,
+      );
+      // A client may hydrate the archived redirect before receiving the
+      // replacement event. The replacement must therefore be newer than both
+      // the original and redirect snapshots or alias promotion can retain the
+      // archived state and reject the replacement as stale.
+      replacement.statusRevision = normalizedStatusRevision(redirect) + 1;
+      replacement.statusUpdatedAt = now;
+
+      writeSessionRowSqlite(handle, redirect);
+      writeSessionRowSqlite(handle, replacement);
+      log.session.info('ACP session ID migration staged', {
+        oldSessionId: oldClaudeSessionId,
+        newSessionId: newClaudeSessionId,
+        runtimeId: replacement.acpRuntimeId,
+      });
+      return replacement;
+    });
+  });
+}
+
+/** Roll back a staged ACP replacement after an ordinary task-link failure. */
+export async function rollbackAcpSessionIdMigration(
+  oldClaudeSessionId: string,
+  newClaudeSessionId: string,
+): Promise<boolean> {
+  await ensureSessionInit();
+  return withWriteLock(async () => {
+    const db = getDb();
+    if (!db) throw new Error('rollbackAcpSessionIdMigration: SQLite handle is null');
+    return sessionDbTx((handle) => {
+      const oldRow = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?')
+        .get(oldClaudeSessionId) as Record<string, any> | undefined;
+      const newRow = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?')
+        .get(newClaudeSessionId) as Record<string, any> | undefined;
+      if (!oldRow || !newRow) return false;
+
+      const oldRecord = rowToSession(oldRow);
+      const replacement = rowToSession(newRow);
+      if (getAcpIdentityReplacementTarget(oldRecord) !== newClaudeSessionId
+        || oldRecord.engine !== 'codex'
+        || replacement.engine !== 'codex'
+        || oldRecord.acpRuntimeId !== replacement.acpRuntimeId
+        || oldRecord.taskId !== replacement.taskId) {
+        return false;
+      }
+
+      initializeStatusVersion(oldRecord);
+      const beforeStatus = canonicalStatusProjection(oldRecord);
+      oldRecord.archived = false;
+      oldRecord.archive_reason = undefined;
+      const now = new Date().toISOString();
+      oldRecord.lastActiveAt = now;
+      commitStatusVersion(oldRecord, beforeStatus, now);
+      handle.prepare('DELETE FROM sessions WHERE claude_session_id = ?')
+        .run(newClaudeSessionId);
+      writeSessionRowSqlite(handle, oldRecord);
+      log.session.info('ACP session ID migration rolled back', {
+        oldSessionId: oldClaudeSessionId,
+        newSessionId: newClaudeSessionId,
+        runtimeId: oldRecord.acpRuntimeId,
+      });
+      return true;
+    });
   });
 }
 
@@ -1008,6 +1517,8 @@ export async function completeTaskSessions(sessionIds: string[]): Promise<number
         const row = sel.get(sid) as Record<string, any> | undefined;
         if (!row) continue;
         const session = rowToSession(row);
+        initializeStatusVersion(session);
+        const beforeStatus = canonicalStatusProjection(session);
         if (isTerminalSession(session)) continue;
         // Already-converged record: stopped with no PID — rewriting it is pure
         // churn. 'stopped' is not terminal per isTerminalSession (only 'error'
@@ -1026,6 +1537,7 @@ export async function completeTaskSessions(sessionIds: string[]): Promise<number
         session.pid = undefined;
         session.last_status_change = now;
         session.lastActiveAt = now;
+        commitStatusVersion(session, beforeStatus, now);
         const partial = sessionToRow(session);
         const bound: Record<string, unknown> = {};
         for (const col of insertCols) {
@@ -1060,7 +1572,8 @@ export async function completeTaskSessions(sessionIds: string[]): Promise<number
 export async function deleteSessionRecords(ids: Set<string>): Promise<number> {
   if (ids.size === 0) return 0;
   await ensureSessionInit();
-  return withWriteLock(async () => {
+  const removedIds: string[] = [];
+  const removed = await withWriteLock(async () => {
     const db = getDb();
     if (!db) {
       throw new Error('deleteSessionRecords: SQLite handle is null');
@@ -1071,10 +1584,20 @@ export async function deleteSessionRecords(ids: Set<string>): Promise<number> {
       for (const id of ids) {
         const res = del.run(id);
         removed += res.changes;
+        if (res.changes > 0) removedIds.push(id);
       }
     });
     return removed;
   });
+  if (removedIds.length > 0) {
+    bus.emit(
+      EventNames.SESSION_DELETED,
+      { sessionIds: removedIds },
+      ['*'],
+      { source: 'session-tracker', urgency: 'normal' },
+    );
+  }
+  return removed;
 }
 
 /**

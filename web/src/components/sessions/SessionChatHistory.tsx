@@ -12,7 +12,7 @@ import { TeamCard } from './TeamCard';
 import { WorkflowProgress } from './WorkflowProgress';
 import { LoadingSpinner } from '../common/LoadingSpinner';
 import { Lightbox } from '../common/Lightbox';
-import type { SessionHistoryMessage } from '@/types/session';
+import type { SessionEngine, SessionHistoryMessage } from '@/types/session';
 import type { ImageAttachment } from '@/api/chat';
 import { respondToPermission } from '@/api/sessions';
 import { renderMarkdownWithRefs, findImagePaths, resolveImagePath } from '@/utils/markdown';
@@ -108,6 +108,8 @@ function OptimisticImagePreviews({ images }: { images?: ImageAttachment[] }) {
 
 interface SessionChatHistoryProps {
   sessionId: string;
+  /** Coding agent backing this session. Legacy records without one are Claude Code. */
+  engine?: SessionEngine;
   phase?: string;
   /** Initial prompt text to display at the top of the timeline (first user message). */
   initialPrompt?: string;
@@ -581,8 +583,9 @@ function buildTimeline(
 // ── Auto-scroll constant ──
 const NEAR_BOTTOM_PX = 80;  // px from bottom to consider "at bottom"
 
-export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onTaskClick, onSessionClick, onFileOpen, onStreamingChange }: SessionChatHistoryProps) {
+export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onTaskClick, onSessionClick, onFileOpen, onStreamingChange }: SessionChatHistoryProps) {
   const [historyVersion, setHistoryVersion] = useState(0);
+  const assistantLabel = engine === 'codex' ? 'Codex' : 'Claude Code';
   // Turn watermark: history length when the CURRENT turn started streaming.
   // Content matching (id-less blocks + bubble text fallback) only trusts
   // messages[watermark..] — identical short texts recur across turns, and the
@@ -622,6 +625,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   }, [openLightbox]);
 
   const { messages, loading, phase2Pending, error, stale, forkBoundaryIndex } = useSessionHistory(sessionId, historyVersion);
+  const historyUnavailable = error?.startsWith('HISTORY_UNAVAILABLE:')
+    ? error.slice('HISTORY_UNAVAILABLE:'.length)
+    : null;
   const { blocks, isStreaming, resetIfAbsorbed } = useSessionStream(sessionId);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -1240,9 +1246,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       <div className="session-history" ref={containerRef} onClick={handleContainerClick} style={activeTeamTab ? { display: 'none' } : undefined}>
         {/* Loading / empty / error states rendered INSIDE the scroll container */}
         {loading && messages.length === 0 && blocks.length === 0 && <LoadingSpinner />}
-        {error && (
+        {error && !historyUnavailable && (
           <div className="session-history-empty">
             <p className="text-muted">Failed to load history: {error}</p>
+          </div>
+        )}
+        {historyUnavailable && (
+          <div className="session-history-unavailable" role="status">
+            <strong>History unavailable</strong>
+            <span>{historyUnavailable}</span>
           </div>
         )}
         {/* Degraded connectivity: content below is the last-good parse; the
@@ -1302,13 +1314,17 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
               {visibleMessages.map((m, i) => {
                 const globalIndex = visibleStart + i;
                 return (
-                  <div key={globalIndex} data-msg-index={globalIndex}>
+                  <div
+                    key={m.msgId ?? m.walnutMessageId ?? `${m.role}:${m.timestamp}:${globalIndex}`}
+                    data-msg-index={globalIndex}
+                    data-message-id={m.msgId ?? m.walnutMessageId}
+                  >
                     {forkBoundaryIndex != null && globalIndex === forkBoundaryIndex && (
                       <div className="session-fork-divider">
                         <span className="session-fork-divider-label">Forked session starts here</span>
                       </div>
                     )}
-                    <SessionMessage message={m} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+                    <SessionMessage message={m} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
                   </div>
                 );
               })}
@@ -1344,7 +1360,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 return (
                   <div key={`ind-${item.type}`} className="session-streaming-indicator">
                     <span className="session-streaming-dot" />
-                    {item.type === 'resuming' ? 'Resuming session...' : 'Walnut is working...'}
+                    {item.type === 'resuming' ? 'Resuming session...' : `${assistantLabel} is working...`}
                   </div>
                 );
               }
@@ -1361,7 +1377,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                     <div key={`tg-${item.index}`} className={isFirst ? 'session-msg session-msg-assistant' : ''}>
                       {isFirst && (
                         <div className="session-msg-header">
-                          <span className="session-msg-role">Walnut</span>
+                          <span className="session-msg-role">{assistantLabel}</span>
                           {isStreaming && isInLastGroup && <span className="session-streaming-badge">Streaming</span>}
                         </div>
                       )}
@@ -1400,7 +1416,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 const blockWantsBubble = item.block.type === 'text' || item.block.type === 'system';
                 const headerEl = isFirst && (
                   <div className="session-msg-header">
-                    <span className="session-msg-role">Walnut</span>
+                    <span className="session-msg-role">{assistantLabel}</span>
                     {isStreaming && isInLastGroup && <span className="session-streaming-badge">Streaming</span>}
                   </div>
                 );

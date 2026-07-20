@@ -2,11 +2,19 @@
  * Unified ranking for the session path selector — ONE scorer for all input
  * states (browse / dir-browse / segment / scoped-search).
  *
- * Sort keys, in priority order:
- *   1. history/frequent hit → top, ordered by frecency (recency-decayed count)
- *   2. match position: leaf-segment hit > mid-path hit
- *   3. match quality: prefix > contiguous substring > subsequence
+ * Sort keys, in priority order — RELEVANCE dominates, history only tiebreaks:
+ *   1. match position: leaf-segment hit > mid-path hit
+ *   2. match quality: prefix > contiguous substring > subsequence
+ *   3. history/frequent hit, ordered by frecency (recency-decayed count)
  *   4. shallower depth first, then alphabetical
+ *
+ * "What you typed" outranks "where you've been": an exact leaf-prefix hit
+ * (e.g. typing 'mcp' → 'mcps') must beat a high-frecency history entry that
+ * only matches as a mid-path subsequence — otherwise the top row (and the
+ * ghost completion) points at an unrelated frequent dir. History/frecency
+ * still decides order AMONG equally-relevant candidates. When the needle is
+ * empty (browse / dir-browse) every candidate is leafHit+prefix, so keys 1–2
+ * are uniform and this degenerates to the old frecency-first browse ordering.
  *
  * Admission rule (user-verified "Marina" example): a LIVE deep candidate whose
  * only match is a middle segment (leafHit=false) is shown ONLY if it's in
@@ -89,13 +97,13 @@ export function rankCandidates(state: InputState, candidates: Candidate[], now: 
   }
 
   ranked.sort((a, b) => {
+    if (a.leafHit !== b.leafHit) return Number(b.leafHit) - Number(a.leafHit);       // 1. leaf > mid
+    const qd = qualityRank(b.quality) - qualityRank(a.quality);
+    if (qd !== 0) return qd;                                         // 2. prefix > substring > subseq
     const aHist = a.history ? 1 : 0;
     const bHist = b.history ? 1 : 0;
-    if (aHist !== bHist) return bHist - aHist;                       // 1. history hits on top
+    if (aHist !== bHist) return bHist - aHist;                       // 3. history breaks quality ties
     if (aHist && bHist && a.frecency !== b.frecency) return b.frecency - a.frecency; //    ...by frecency
-    if (a.leafHit !== b.leafHit) return Number(b.leafHit) - Number(a.leafHit);       // 2. leaf > mid
-    const qd = qualityRank(b.quality) - qualityRank(a.quality);
-    if (qd !== 0) return qd;                                         // 3. prefix > substring > subseq
     if (a.depth !== b.depth) return a.depth - b.depth;               // 4. shallower first
     return a.cwd.localeCompare(b.cwd);                               //    then alphabetical
   });
@@ -168,5 +176,14 @@ export function buildSections(ranked: RankedItem[], opts: BuildSectionsOpts): Se
       items: liveItems,
     });
   }
+  // Order sections by their best (top-ranked) member's global rank, NOT a fixed
+  // history-first rule. `ranked` is already globally sorted, so the section whose
+  // items[0] appears earliest in `ranked` leads. This keeps the overall relevance
+  // order intact across the section split: with an empty needle, history's
+  // frecency floats it first (old browse behavior); when the typed needle hits a
+  // live dir exactly (leaf prefix) it leads over a history-only subsequence match.
+  const rankPos = new Map<RankedItem, number>();
+  ranked.forEach((r, i) => rankPos.set(r, i));
+  sections.sort((a, b) => (rankPos.get(a.items[0]) ?? 0) - (rankPos.get(b.items[0]) ?? 0));
   return sections;
 }

@@ -11,6 +11,7 @@ import {
 import type { SessionEffort, SessionModelCatalogEntry } from '@open-walnut/core';
 import { fetchSessionLiveSettings, fetchSessionModelCatalog } from '@/api/sessions';
 import type { SessionLiveSettings, SessionModelCatalog } from '@/api/sessions';
+import { useHostModelCatalog, seedHostCatalog } from '@/hooks/useModelCatalog';
 
 const EFFORTS = SESSION_EFFORTS;
 
@@ -70,6 +71,9 @@ interface ModelPickerProps {
   /** Session to pull LIVE settings from (get_settings) when the picker opens.
    *  Omitted (e.g. in tests) → no pull, record props are all we show. */
   sessionId?: string;
+  /** Session's host (undefined = local) — selects the host-level catalog cache
+   *  so the picker renders CLI-truth rows instantly, before any live pull. */
+  host?: string;
   /** Switch model — applied live via apply_flag_settings (no respawn); the NEXT
    *  turn uses the new model. No Now/Next-turn split needed anymore. */
   onSwitch: (model: string) => void;
@@ -78,7 +82,7 @@ interface ModelPickerProps {
   onClose: () => void;
 }
 
-export function ModelPicker({ currentModel, currentEffort, sessionId, onSwitch, onEffortSwitch, onClose }: ModelPickerProps) {
+export function ModelPicker({ currentModel, currentEffort, sessionId, host, onSwitch, onEffortSwitch, onClose }: ModelPickerProps) {
   // ── LIVE pull: the moment the picker opens, ask the CLI what it's ACTUALLY
   // using (get_settings → applied). Until it answers (or when the session isn't
   // live), fall back to the record props — but never present those as CLI truth.
@@ -95,25 +99,53 @@ export function ModelPicker({ currentModel, currentEffort, sessionId, onSwitch, 
     return () => { cancelled = true; };
   }, [sessionId]);
 
-  // ── Catalog pull (parallel to the live-settings pull): the session's TRUE
-  // selectable models from the CLI's initialize response — already filtered by
-  // the host's availableModels and mapped through modelOverrides. Until it
-  // answers (or with no sessionId, e.g. tests), render the static registry in
-  // catalog shape — identical rows to the pre-catalog picker.
-  const [catalog, setCatalog] = React.useState<SessionModelCatalog | null>(null);
+  // ── Catalog: instant from the host-level cache (localStorage-seeded, WS-live
+  // via useHostModelCatalog — the server pushes session:model-catalog on every
+  // real list_models fetch, incl. the eager one at session init). The per-open
+  // HTTP fetch remains only as a REPAIR path for the cold case (host cache
+  // empty — e.g. first run) and its response feeds the same rows. Because the
+  // host cache and the CLI answer are the same catalog (host property), the
+  // old two-shape flash (static registry → CLI rows) is gone: static rows only
+  // ever render when this host has NEVER produced a catalog.
+  const hostCatalog = useHostModelCatalog(host);
+  const [fetched, setFetched] = React.useState<SessionModelCatalog | null>(null);
   React.useEffect(() => {
-    if (!sessionId) return;
+    if (!sessionId || hostCatalog) return; // cache hit → no round-trip needed
     let cancelled = false;
     fetchSessionModelCatalog(sessionId)
-      .then((c) => { if (!cancelled) setCatalog(c); })
+      .then((c) => { if (!cancelled && c.source !== 'fallback') setFetched(c); })
       .catch(() => { /* keep fallback rows — degraded, never broken */ });
     return () => { cancelled = true; };
-  }, [sessionId]);
-  const models: SessionModelCatalogEntry[] = catalog?.models ?? sessionModelsAsCatalog();
-  const catalogIsLive = catalog?.source === 'cli';
+  }, [sessionId, hostCatalog]);
+  const models: SessionModelCatalogEntry[] = hostCatalog?.models ?? fetched?.models ?? sessionModelsAsCatalog();
+  const catalogIsLive = !!hostCatalog || fetched?.source === 'cli';
   // NOTE on switch failure: the panel closes the picker on Switch, so staleness
   // recovery lives SERVER-side — the /model route invalidates the session's
-  // catalog cache on a read-back mismatch, and the next picker open refetches.
+  // catalog cache on a read-back mismatch, which refetches + pushes the
+  // corrected catalog to this cache.
+
+  // ── Manual refresh: the cached host catalog can go stale in ways no event
+  // catches (settings.json edited/clobbered while no session respawned, another
+  // machine's writer, an interrupted eager fetch). ?refresh=1 forces the CLI
+  // round-trip; the response re-seeds the shared host cache directly (plus the
+  // server's own push confirms it) and the live strip re-pulls too.
+  const [refreshing, setRefreshing] = React.useState(false);
+  const refreshCatalog = () => {
+    if (!sessionId || refreshing) return;
+    setRefreshing(true);
+    Promise.all([
+      fetchSessionModelCatalog(sessionId, { refresh: true })
+        .then((c) => {
+          if (c.source !== 'fallback') {
+            setFetched(c);
+            seedHostCatalog(host, c.models, c.fetchedAt);
+          }
+        }),
+      fetchSessionLiveSettings(sessionId).then(setLiveSettings),
+    ])
+      .catch(() => { /* degraded — keep current rows */ })
+      .finally(() => setRefreshing(false));
+  };
 
   // ── Live details: collapsed by default; expanding lazily pulls the heavier
   // reads (get_context_usage tokenizes the CLI's whole tool surface — too heavy
@@ -204,6 +236,19 @@ export function ModelPicker({ currentModel, currentEffort, sessionId, onSwitch, 
       <div className="model-picker-header">
         <span className="model-picker-title">Switch Model</span>
         <span className="model-picker-current">Current: {activeRow?.displayName ?? shortModelLabel(liveModel)}</span>
+        {sessionId && (
+          <button
+            className={`model-picker-refresh${refreshing ? ' model-picker-refresh-spinning' : ''}`}
+            onClick={refreshCatalog}
+            disabled={refreshing}
+            type="button"
+            title="Re-read the model list and live settings from the CLI (use after editing settings.json)"
+            aria-label="Refresh model catalog"
+            data-testid="picker-refresh"
+          >
+            ⟳
+          </button>
+        )}
         <button className="model-picker-close" onClick={onClose} type="button">&times;</button>
       </div>
 

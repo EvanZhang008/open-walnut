@@ -69,6 +69,12 @@ export async function isSessionProcessAlive(session: SessionRecord): Promise<boo
   // Embedded/SDK: managed by their respective providers, not by PID
   if (session.provider === 'embedded' || session.provider === 'sdk') return true
 
+  // ACP-backed sessions (engine='codex'): no PID in the record — the worker is a
+  // daemon child keyed by acpRuntimeId, and a reaped worker is still resumable
+  // (lazy session/load). Record-level liveness is therefore not PID/daemon-CLI
+  // based; treat like embedded (the acp daemon family owns real lifecycle).
+  if (session.engine === 'codex') return true
+
   // If the session was already marked stopped (e.g. by health monitor idle timeout),
   // it's definitively dead — no need to probe PIDs or daemon connections.
   if (session.process_status === 'stopped' || session.process_status === 'error') return false

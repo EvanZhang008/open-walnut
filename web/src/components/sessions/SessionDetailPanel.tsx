@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo, type KeyboardEvent } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { SessionChatHistory } from './SessionChatHistory';
 import { SessionNotes } from './SessionNotes';
@@ -9,6 +9,7 @@ import { UserMessagesSummary } from './UserMessagesSummary';
 import { ProcessStatusBadge } from './WorkStatusPicker';
 import { SessionForkButton } from './SessionForkButton';
 import { SessionKebabSection } from './SessionKebabSection';
+import { CodexModelPicker } from './CodexModelPicker';
 import { TaskQuickActions } from './TaskQuickActions';
 import { updateSession, executePlanSession, executePlanContinue, restartSession, terminateSession, investigateSession } from '@/api/sessions';
 import { terminalPrewarm } from '@/api/terminal';
@@ -18,6 +19,7 @@ import { fetchTask, updateTask } from '@/api/tasks';
 import type { FocusTier } from '@/api/focus';
 import { useFocusBarContext } from '@/contexts/FocusBarContext';
 import { SessionRetryButton } from './SessionRetryButton';
+import { useNotesAwareFileOpen } from '@/hooks/useNotesAwareFileOpen';
 import { SideQuestionDrawer } from './SideQuestionDrawer';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
 import { useSessionPlan } from '@/hooks/useSessionPlan';
@@ -25,12 +27,15 @@ import { useSessionUsage, formatModelName, getContextWindowSize } from '@/hooks/
 import { modelSupportsEffort, DEFAULT_SESSION_EFFORT } from '@open-walnut/core';
 import { useEvent } from '@/hooks/useWebSocket';
 import { PlanContentContext } from '@/contexts/PlanContentContext';
-import type { SessionRecord, TaskPhase } from '@/types/session';
+import type { SessionMode, SessionRecord, TaskPhase } from '@/types/session';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
 import { timeAgo } from '@/utils/time';
 import { wsClient } from '@/api/ws';
 import { ICON_CLIPBOARD, ICON_LIGHTNING, ICON_WARNING, ICON_LOCATE } from '@/components/common/Icons';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
+import { useResolvedSessionRecord } from '@/hooks/useSessionStatus';
+import type { SessionControl } from '@/api/sessions';
+import { SessionControlPills } from './SessionControlPills';
 
 interface SessionDetailPanelProps {
   session: SessionRecord | null;
@@ -61,6 +66,8 @@ interface SessionDetailPanelProps {
   /** Click on the model/effort pill — page opens its ModelPicker (it owns the
    *  picker instance next to ChatInput, same as the /model slash command). */
   onModelPillClick?: () => void;
+  sessionControls: SessionControl[];
+  setSessionControl: (id: string, value: string) => Promise<void>;
 }
 
 /** Renders plan markdown content inside the plan popover with scrollable area */
@@ -112,7 +119,7 @@ function EditableTitle({ sessionId, taskId, title, onSaved }: { sessionId: strin
       .finally(() => setSaving(false));
   };
 
-  const handleKeyDown = (e: KeyboardEvent) => {
+  const handleKeyDown = (e: ReactKeyboardEvent) => {
     if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (e.key === 'Enter') { e.preventDefault(); save(); }
     if (e.key === 'Escape') { setValue(title); setEditing(false); }
@@ -144,9 +151,10 @@ function EditableTitle({ sessionId, taskId, title, onSaved }: { sessionId: strin
   );
 }
 
-export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged, onSessionReplaced, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onStreamingChange, activeView, onSelectView, onModelPillClick }: SessionDetailPanelProps) {
+export function SessionDetailPanel({ session: sessionRecord, taskTitle, summary, onTitleChanged, onSessionReplaced, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onStreamingChange, activeView, onSelectView, onModelPillClick, sessionControls, setSessionControl }: SessionDetailPanelProps) {
   const navigate = useNavigate();
   const enabledModes = useEnabledModes();
+  const session = useResolvedSessionRecord(sessionRecord);
   const [executing, setExecuting] = useState(false);
   const [executeError, setExecuteError] = useState<string | null>(null);
   const [executeStarted, setExecuteStarted] = useState(false);
@@ -194,7 +202,7 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
   sessionIdRef.current = session?.claudeSessionId;
 
   // Local mode override — applied after user clicks mode toggle (session prop doesn't update immediately)
-  const [modeOverride, setModeOverride] = useState<string | null>(null);
+  const [modeOverride, setModeOverride] = useState<SessionMode | null>(null);
   // Reset override when session changes
   const prevSessionId = useRef(session?.claudeSessionId);
   if (session?.claudeSessionId !== prevSessionId.current) {
@@ -234,7 +242,7 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
   // Close plan modal on Escape
   useEffect(() => {
     if (!planPopoverOpen) return;
-    const handleKey = (e: KeyboardEvent) => {
+    const handleKey = (e: globalThis.KeyboardEvent) => {
       if (e.key === 'Escape') setPlanPopoverOpen(false);
     };
     document.addEventListener('keydown', handleKey);
@@ -366,9 +374,11 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
     }
   });
 
-  const handleFileOpen = useCallback((path: string, line?: number) => {
+  const openFileViewer = useCallback((path: string, line?: number) => {
     setFileViewerState({ path, line });
   }, []);
+  // Vault notes divert to the Notes page instead of the FileViewer overlay
+  const handleFileOpen = useNotesAwareFileOpen(openFileViewer, session?.host);
   const handleFileViewerClose = useCallback(() => setFileViewerState(null), []);
 
   // Scroll-to-message: find the message element in SessionChatHistory by data-msg-index
@@ -533,6 +543,15 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
                   {session.mode === 'plan' ? <>{ICON_CLIPBOARD}{' Plan'}</> : <>{ICON_LIGHTNING}{' Bypass'}</>}
                 </span>
               )}
+              {session.engine === 'codex' && (
+                <span
+                  className="session-detail-badge"
+                  style={{ color: 'var(--fg)', background: 'var(--bg-tertiary)', fontWeight: 600, fontSize: '11px' }}
+                  title="Codex session (via ACP)"
+                >
+                  Codex
+                </span>
+              )}
               {session.archived && (
                 <span
                   className="session-detail-badge"
@@ -558,7 +577,14 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
 
           {/* Compact meta bar */}
           <div className="session-detail-meta-bar">
-            {displayModel && (
+            {session?.engine === 'codex' && (
+              <CodexModelPicker
+                sessionId={session.claudeSessionId}
+                currentModelId={session.acpModel}
+                contextPercent={contextPercent}
+              />
+            )}
+            {displayModel && session?.engine !== 'codex' && (
               <button
                 type="button"
                 className="session-detail-model-pill session-detail-model-pill-clickable"
@@ -602,7 +628,7 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
               </button>
             )}
             {session.messageCount != null && session.messageCount > 0 && (
-              <span>{session.messageCount} msgs</span>
+              <span>{session.messageCount} {session.messageCount === 1 ? 'turn' : 'turns'}</span>
             )}
             {session.lastActiveAt && (
               <span title={new Date(session.lastActiveAt).toLocaleString()}>{timeAgo(session.lastActiveAt)}</span>
@@ -721,6 +747,7 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
               sessionId={sessionId}
               cwd={session.cwd}
               taskId={session.taskId}
+              engine={session.engine}
             />
             {onSelectView && (
               <>
@@ -748,6 +775,14 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
               </>
             )}
             {(() => {
+              if (session.engine === 'codex') {
+                return (
+                  <SessionControlPills
+                    controls={sessionControls}
+                    setControl={setSessionControl}
+                  />
+                );
+              }
               const LABELS: Record<string, string> = { default: 'Default', bypass: 'Bypass', plan: 'Plan', accept: 'Accept' };
               const ICONS: Record<string, string> = { default: '\u2699\uFE0F', bypass: '\u26A1', plan: '\uD83D\uDCCB', accept: '\u2705' };
               const currentMode = (modeOverride ?? session.mode) || 'default';
@@ -777,6 +812,14 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
               );
             })()}
           </div>
+
+          {/* Recap tip — one line "what just happened" (self-report). */}
+          {session.recap && (
+            <div className="session-recap-tip" title={session.recap}>
+              <span className="session-recap-tip-icon">💬</span>
+              <span className="session-recap-tip-text">{session.recap}</span>
+            </div>
+          )}
 
           {/* Collapsible details */}
           {hasDetails && (
@@ -905,6 +948,7 @@ export function SessionDetailPanel({ session, taskTitle, summary, onTitleChanged
         <SessionChatHistory
           key={sessionId}
           sessionId={sessionId}
+          engine={session.engine}
           phase={taskPhase}
           initialPrompt={historyMessages.find(m => m.role === 'user')?.text}
           sessionCwd={session.cwd}

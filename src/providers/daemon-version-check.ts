@@ -31,6 +31,13 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/daemon-standalone.ts',
   'src/providers/daemon-core.ts',
   'src/providers/daemon-source.ts',
+  // ACP worker stack — compiled into the daemon deploy unit (worker artifact
+  // ships with the daemon; version skew impossible by construction).
+  'src/providers/acp-daemon.ts',
+  'src/providers/acp-worker/worker.ts',
+  'src/providers/acp-worker/worker-main.ts',
+  'src/providers/acp-worker/journal.ts',
+  'src/providers/acp-worker/protocol.ts',
 ] as const
 
 /**

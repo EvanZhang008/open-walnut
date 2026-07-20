@@ -146,15 +146,61 @@ export function pathValidity(state: InputState, hosts: Iterable<HostListingLite>
   return sawVerdict ? 'missing' : 'unknown';
 }
 
-/** Ghost-text suffix: non-null only when the top candidate's leaf strictly
- *  prefix-extends the typed partial (case-insensitive compare, original casing
- *  returned). E.g. typed '/a/b/wal', top '/a/b/walnut' → 'nut'. */
-export function ghostSuffix(state: InputState, topCandidateCwd: string | null): string | null {
-  if (!topCandidateCwd) return null;
+/** Ghost-text suffix — PATH-AWARE next-segment completion.
+ *
+ *  Completes the candidate's NEXT path segment relative to the typed dir, not
+ *  its leaf. Two things this buys:
+ *   - A deep history candidate ('/a/b/mcps/amazon-eks-mcp') yields 'cps' for
+ *     typed '/a/b/m' the INSTANT history renders — the prediction never waits
+ *     on the (slow, SSH) live listing whose direct child would carry the leaf.
+ *   - A deep row's leaf can no longer fabricate a nonexistent direct child
+ *     (old leaf-based code ghosted 'agic-string' from '…/node_modules/magic-string'
+ *     for partial 'm' → '/a/b/magic-string', which doesn't exist).
+ *
+ *  Falls back to the leaf only when the candidate doesn't sit under the typed
+ *  dir (e.g. unresolved '~/x' input vs resolved absolute candidates).
+ *  Case-insensitive compare, original casing returned. */
+export function ghostSuffix(state: InputState, candidateCwd: string | null): string | null {
+  if (!candidateCwd) return null;
   if (state.kind !== 'segment') return null;
   if (!state.partial) return null;
-  const leaf = topCandidateCwd.slice(topCandidateCwd.lastIndexOf('/') + 1);
-  if (leaf.length <= state.partial.length) return null;
-  if (!leaf.toLowerCase().startsWith(state.partial.toLowerCase())) return null;
-  return leaf.slice(state.partial.length);
+  let seg: string;
+  if (candidateCwd.toLowerCase().startsWith(state.dir.toLowerCase())) {
+    seg = candidateCwd.slice(state.dir.length).split('/')[0] ?? '';
+  } else {
+    seg = candidateCwd.slice(candidateCwd.lastIndexOf('/') + 1);
+  }
+  if (seg.length <= state.partial.length) return null;
+  if (!seg.toLowerCase().startsWith(state.partial.toLowerCase())) return null;
+  return seg.slice(state.partial.length);
+}
+
+/** Tab completion target — shell-style ONE-segment descend with REAL casing.
+ *
+ *  Returns `dir + segment + '/'` where `segment` is the candidate's actual
+ *  next path segment (original casing) — never the candidate's full depth,
+ *  and never a concatenation of the user's typed text. This matters because
+ *  ghost matching is case-INSENSITIVE: typed 'marina' matches candidate
+ *  'MarinaCapabilities-development', and accepting must produce
+ *  '…/MarinaCapabilities-development/' (like fish/zsh case-correcting
+ *  completion) — NOT '…/marina' + suffix, which fabricates a path that does
+ *  not exist on case-sensitive (Linux) hosts.
+ *
+ *  Also covers the exact-match case ghostSuffix can't (typed 'mcps',
+ *  candidate '…/mcps/acme-mcp' → '…/mcps/', not the whole deep path).
+ *  Candidates not under the typed dir (unresolved ~ input vs absolute
+ *  candidates) fall back to the leaf, mirroring ghostSuffix.
+ *  Returns null when the rule doesn't apply (caller falls back to the row's cwd). */
+export function segmentCompletion(state: InputState, candidateCwd: string | null): string | null {
+  if (!candidateCwd) return null;
+  if (state.kind !== 'segment') return null;
+  let seg: string;
+  if (candidateCwd.toLowerCase().startsWith(state.dir.toLowerCase())) {
+    seg = candidateCwd.slice(state.dir.length).split('/')[0] ?? '';
+  } else {
+    seg = candidateCwd.slice(candidateCwd.lastIndexOf('/') + 1);
+  }
+  if (!seg) return null;
+  if (!seg.toLowerCase().startsWith(state.partial.toLowerCase())) return null;
+  return state.dir + seg + '/';
 }

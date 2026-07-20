@@ -49,6 +49,7 @@ export function registerSessionChatRpc(): void {
       effort: typeof data.effort === 'string' && VALID_SESSION_EFFORT_IDS.has(data.effort)
         ? (data.effort as SessionEffort) : undefined,
       host: typeof data.host === 'string' ? data.host : undefined,
+      engine: data.engine === 'codex' ? 'codex' : undefined,
     }, ['session-runner'], { source: 'web-ui' })
   })
 

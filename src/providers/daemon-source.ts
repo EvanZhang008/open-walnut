@@ -112,6 +112,8 @@ const http = require('http');
 const { spawn, execSync } = require('child_process');
 const crypto = require('crypto');
 
+process.umask(0o077);
+
 // ── PATH setup ──
 // Same logic the compiled binary uses: bun/node may launch the daemon with a
 // minimal PATH that lacks claude/node/etc. Source ~/.zshrc or ~/.bashrc to pick
@@ -196,6 +198,30 @@ const AGENT_POLL_INTERVAL_MS = 2000;
 const AGENT_REDISCOVER_INTERVAL_MS = 10000;
 const PING_INTERVAL_MS = 15000;
 const HEARTBEAT_INTERVAL_MS = 30000;
+
+function ensureOwnerOnlyStorage() {
+  function repair(entryPath) {
+    let stat;
+    try { stat = fs.lstatSync(entryPath); } catch { return; }
+    if (stat.isSymbolicLink()) return;
+    if (stat.isDirectory()) {
+      fs.chmodSync(entryPath, 0o700);
+      let names = [];
+      try { names = fs.readdirSync(entryPath); } catch { return; }
+      for (const name of names) repair(path.join(entryPath, name));
+      return;
+    }
+    fs.chmodSync(entryPath, stat.mode & 0o111 ? 0o700 : 0o600);
+  }
+
+  fs.mkdirSync(DAEMON_DIR, { recursive: true, mode: 0o700 });
+  fs.mkdirSync(STREAMS_DIR, { recursive: true, mode: 0o700 });
+  fs.chmodSync(DAEMON_DIR, 0o700);
+  fs.chmodSync(STREAMS_DIR, 0o700);
+  for (const root of [DAEMON_DIR, STREAMS_DIR]) {
+    for (const name of fs.readdirSync(root)) repair(path.join(root, name));
+  }
+}
 
 // ── Daemon Instance ID ──
 // Must mirror daemon-standalone.ts exactly (CLAUDE.md: keep in sync).
@@ -874,6 +900,22 @@ function handleCommand(ws, msg) {
     case 'bridgeResume': return cmdBridgeResume(ws, id, cmd);
     case 'stt': return cmdSttRelay(ws, id, cmd);
     case 'stt-result': return cmdSttResult(ws, id, cmd);
+    // ACP worker commands: not implemented in the source-template daemon yet
+    // (MVP = local Mac binary daemon only). Answer with a structured errorKind
+    // so walnut can distinguish "host can't do ACP" from a transient failure.
+    // Keep this case list in sync with daemon-standalone.ts + daemon-capabilities.ts.
+    case 'acpStart':
+    case 'acpSend':
+    case 'acpCancel':
+    case 'acpRespond':
+    case 'acpSetConfigOption':
+    case 'acpState':
+    case 'acpNewSession':
+    case 'acpStop':
+    case 'acpSubscribe': {
+      try { ws.send(JSON.stringify({ id, ok: false, error: 'ACP sessions are not supported on this host yet', errorKind: 'acp_unsupported' })); } catch {}
+      return;
+    }
     case 'ping': return sendOk(ws, id, { pong: true });
     case 'hello': return sendOk(ws, id, {
       version: DAEMON_VERSION,
@@ -2809,8 +2851,7 @@ if (action === '--start') {
     // Not running, continue to start
   }
 
-  fs.mkdirSync(DAEMON_DIR, { recursive: true });
-  fs.mkdirSync(STREAMS_DIR, { recursive: true });
+  ensureOwnerOnlyStorage();
 
   // Write-ahead registry reconcile: load sessions.json, probe liveness,
   // adopt or reap. This is source-of-truth for cross-daemon handoff.

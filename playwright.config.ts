@@ -1,5 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 
+const testPort = Number(process.env.PW_TEST_PORT ?? 3457)
+
 export default defineConfig({
   testDir: 'tests/e2e/browser',
   fullyParallel: true,
@@ -10,7 +12,7 @@ export default defineConfig({
   timeout: 30_000,
 
   use: {
-    baseURL: 'http://localhost:3457',
+    baseURL: `http://localhost:${testPort}`,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
   },
@@ -24,7 +26,7 @@ export default defineConfig({
 
   webServer: {
     command: 'npx tsx tests/e2e/browser/test-server.ts',
-    url: 'http://localhost:3457/api/dashboard',
+    url: `http://localhost:${testPort}/api/dashboard`,
     reuseExistingServer: !process.env.CI,
     timeout: 30_000,
     stdout: 'pipe',
