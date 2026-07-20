@@ -4,10 +4,16 @@
 phase lifecycle, session monitoring, message queue, JSONL patterns, compaction). Load that skill
 before non-trivial work in `src/core/`.
 
-**Decision records: `.claude/skills/decision-*` skills** — one skill per load-bearing design
-decision, with the evidence (e.g. `decision-summarizer-self-report`,
-`decision-no-session-end-gist`). Read the relevant one BEFORE rebuilding or "fixing" anything
-it says was deliberately removed; new learnings/decisions get their own `decision-<slug>` skill.
+**Decision records live in [`docs/decision/`](../../docs/decision/).** Read the relevant record
+before rebuilding or "fixing" anything it says was deliberately removed. In particular, read
+the [self-report](../../docs/decision/summarizer-self-report.md) and
+[session-end](../../docs/decision/no-session-end-gist.md) decisions before changing
+turn-complete task updates or session lifecycle hooks.
+
+**QMD search/indexing:** read
+[`docs/investigation/qmd-search-performance/README.md`](../../docs/investigation/qmd-search-performance/README.md) before
+changing interactive search, embedding models, reranking, indexing workers, cleanup, or
+compaction.
 
 ## Invariants you must not break (even without reading the skill)
 

@@ -3,7 +3,7 @@
  *
  * SECURITY RED LINE: this module NEVER reads the value of any OAuth/subscription
  * token. It only answers yes/no questions:
- *   - Is the `claude` binary on PATH?
+ *   - Is the `claude` binary available on PATH or in a standard user bin dir?
  *   - Does a subscription credential EXIST (keychain item on macOS, or the
  *     `.credentials.json` file elsewhere)?
  * We mirror the credential-resolver's `probeAwsFiles` pattern (best-effort
@@ -14,6 +14,7 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
 import { CLAUDE_CREDENTIALS_FILE } from '../constants.js';
 
 /** Keychain service name Claude Code stores its OAuth (subscription) token under.
@@ -21,14 +22,39 @@ import { CLAUDE_CREDENTIALS_FILE } from '../constants.js';
  *  where the default (production) OAUTH_FILE_SUFFIX is ''. */
 const KEYCHAIN_OAUTH_SERVICE = 'Claude Code-credentials';
 
-/** True when the `claude` binary resolves on PATH. Cheap `which` probe. */
-export function isClaudeCliInstalled(): boolean {
-  try {
-    execFileSync('which', ['claude'], { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
+/** Resolve the CLI exactly as Walnut's daemon does: inherited PATH first, then
+ * standard per-user install directories that service processes often omit. */
+export function resolveClaudeCliExecutable(
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const home = env.HOME || os.homedir();
+  const pathDirs = (env.PATH ?? '').split(path.delimiter).filter(Boolean);
+  const fallbackDirs = [
+    path.join(home, '.toolbox', 'bin'),
+    path.join(home, '.local', 'bin'),
+    path.join(home, '.npm-global', 'bin'),
+    path.join(home, '.bun', 'bin'),
+    '/usr/local/bin',
+    '/opt/homebrew/bin',
+    '/usr/bin',
+    '/bin',
+  ];
+
+  for (const dir of [...new Set([...pathDirs, ...fallbackDirs])]) {
+    const candidate = path.join(dir, 'claude');
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      // Try the next candidate.
+    }
   }
+  return null;
+}
+
+/** True when the `claude` binary is available to Walnut. */
+export function isClaudeCliInstalled(): boolean {
+  return resolveClaudeCliExecutable() !== null;
 }
 
 /**
@@ -75,7 +101,7 @@ function fileCredentialExists(): boolean {
  * provider (Phase 2).
  */
 export interface ClaudeCliCapabilities {
-  /** `claude` binary is on PATH. */
+  /** `claude` binary is available on PATH or in a standard user install directory. */
   installed: boolean;
   /** A subscription OAuth credential exists (existence only, value never read). */
   subscriptionAuth: boolean;

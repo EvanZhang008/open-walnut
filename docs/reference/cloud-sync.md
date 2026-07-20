@@ -20,7 +20,7 @@ Mac ~/.open-walnut  ──push/pull https://<domain>/git/data──▶  Caddy :4
   `WALNUT_GIT_HUB_DIR` (default `/var/lib/walnut/git`), repo name fixed
   `walnut-data.git`.
 - Auth: a **device token** (same one the iOS app / API uses, from the claim
-  flow in `docs/api-v1.md`). The endpoint accepts it as `Bearer` or as the
+  flow in [`api-v1.md`](api-v1.md)). The endpoint accepts it as `Bearer` or as the
   **password** half of HTTP Basic — the git CLI's native scheme. The username
   is ignored (use anything, e.g. `walnut`).
 - Pushes require `http.receivepack=true` on the hub repo —
@@ -92,7 +92,7 @@ cloud_bridge:
 - Cloud-side registry: `src/web/ws/bridge-registry.ts` (one connection per
   host, newer dial replaces older). Phone-facing endpoints:
   `POST /api/v1/sessions/:id/messages` + `GET /api/v1/sessions/:id/stream`
-  (see `docs/api-v1.md`). `GET /api/v1/status` lists live `bridgeHosts`.
+  (see [`api-v1.md`](api-v1.md)). `GET /api/v1/status` lists live `bridgeHosts`.
 
 ## Troubleshooting
 

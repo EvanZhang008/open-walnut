@@ -4263,7 +4263,9 @@ export class ClaudeCodeSession {
             }, ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
           } else if (deltaType === 'thinking_delta') {
             const text = delta?.thinking ?? ''
-            if (!text) break
+            // trim(): a whitespace-only delta would otherwise create a new
+            // (empty-looking) thinking block in the UI stream.
+            if (!text.trim()) break
             bus.emit(EventNames.SESSION_THINKING_DELTA, {
               sessionId: this.claudeSessionId,
               taskId: this.taskId,

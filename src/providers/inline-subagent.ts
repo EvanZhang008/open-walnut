@@ -20,6 +20,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { bus, EventNames } from '../core/event-bus.js';
 import { log } from '../logging/index.js';
+import { resolveClaudeCliExecutable } from '../core/claude-cli-detect.js';
 import {
   parseClaudeJsonlLine,
   accumulateBlock,
@@ -134,7 +135,7 @@ export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<In
 
   // Note: we do NOT set CLAUDE_CODE_DISABLE_BACKGROUND_TASKS — background Bash tasks
   // are a useful capability and there's no reason to disable them for subagents.
-  const proc = spawn('claude', args, {
+  const proc = spawn(resolveClaudeCliExecutable() ?? 'claude', args, {
     stdio: ['pipe', 'pipe', 'pipe'],
     cwd: cwd ?? process.cwd(),
     env: cleanEnv,

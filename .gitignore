@@ -5,6 +5,8 @@ dist/
 coverage/
 *.png
 !docs/*.png
+!docs/assets/*.png
+!docs/assets/**/*.png
 !web/public/*.png
 !site/assets/*.png
 .playwright-mcp/
@@ -30,12 +32,22 @@ src/web/static
 .tasks/
 .plan
 
-# Claude local data (keep skills only — commands are local/private)
+# Claude local data. Existing public skills are tracked; explicitly allowlist
+# new skills so local/private skills cannot be swept into this public repo.
+.agents/
+!.claude/
 .claude/*
 !.claude/skills/
+.claude/skills/*
 
 # Generated snapshots
 todo-snapshot.md
+
+# Local browser inspection captures (may contain session or user data)
+original-deeplink-*
+selector-open.yml
+task-partial-*
+.codex/hooks.json
 
 # Playwright report artifacts
 playwright-report/
@@ -60,7 +72,6 @@ test-*-temp.*
 test-*-tmp.*
 sessions-list-*.md
 playwright-responses/
-docs/plan/
 tests/MEMORY_V2_*_PLAN.md
 # repo-root scratch dir ONLY — a bare `tools/` would swallow src/agent/tools/ additions
 /tools/

@@ -1,6 +1,6 @@
 import Foundation
 
-/// REST client for the frozen /api/v1 contract (docs/api-v1.md).
+/// REST client for the frozen /api/v1 contract (docs/reference/api-v1.md).
 /// Every request carries `Authorization: Bearer <token>`.
 struct WalnutAPI {
     /// Posted when any request gets a 401 — the app returns to setup.

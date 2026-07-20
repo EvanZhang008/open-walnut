@@ -1,6 +1,6 @@
 import Foundation
 
-// MARK: - Models for the frozen /api/v1 REST+SSE contract (docs/api-v1.md)
+// MARK: - Models for the frozen /api/v1 REST+SSE contract (docs/reference/api-v1.md)
 
 struct ServerStatus: Codable, Equatable {
     enum Mode: String, Codable {

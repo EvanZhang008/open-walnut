@@ -454,7 +454,7 @@ heartbeat:
   activeHours: [8, 22]   # Only during these hours (optional)
 ```
 
-See [docs/HEARTBEAT-example.md](docs/HEARTBEAT-example.md) for a full example.
+See the [heartbeat example](docs/reference/heartbeat-example.md) for a full example.
 
 ### Slash Commands
 
@@ -635,6 +635,6 @@ See [Search & Embedding Setup](#search--embedding-setup) for all model options.
 - **[README.md](README.md)** — Feature overview and screenshots
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — Deep technical documentation of every subsystem
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — How to contribute to the project
-- **[docs/HEARTBEAT-example.md](docs/HEARTBEAT-example.md)** — Full heartbeat checklist example
+- **[Heartbeat example](docs/reference/heartbeat-example.md)** — Full heartbeat checklist example
 
 Have questions? [Open an issue](https://github.com/EvanZhang008/open-walnut/issues) on GitHub.

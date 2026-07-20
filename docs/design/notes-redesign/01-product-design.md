@@ -194,4 +194,4 @@ The user wants **both** search modes working **together**, not as an either/or t
 ---
 
 ## 9. Out of Scope for THIS document
-Technical design (extension architecture, index schema, identity scheme, Markdown serialization contracts, API changes), data-model details, and rollout/migration sequencing are deferred to follow-up docs in `docs/notes-redesign/`. This document fixes the **product intent, scope, scenarios, and success bar** — with the editing experience as the explicit, unmovable #1 priority.
+Technical design (extension architecture, index schema, identity scheme, Markdown serialization contracts, API changes), data-model details, and rollout/migration sequencing are deferred to follow-up docs in `docs/design/notes-redesign/`. This document fixes the **product intent, scope, scenarios, and success bar** — with the editing experience as the explicit, unmovable #1 priority.

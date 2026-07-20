@@ -42,6 +42,8 @@ export const EventNames = {
   SESSION_SEND: 'session:send',
   SESSION_STARTED: 'session:started',
   SESSION_ENDED: 'session:ended',
+  SESSION_DELETED: 'session:deleted',
+  SESSION_CONTENT_UPDATED: 'session:content-updated',
   SESSION_RESULT: 'session:result',
   SESSION_ERROR: 'session:error',
 
@@ -59,6 +61,7 @@ export const EventNames = {
   SESSION_SYSTEM_EVENT: 'session:system-event',
   SESSION_BACKGROUND_TASKS: 'session:background-tasks',
   SESSION_USAGE_UPDATE: 'session:usage-update',
+  SESSION_MODEL_CATALOG: 'session:model-catalog',
   SESSION_PERMISSION_REQUEST: 'session:permission-request',
   SESSION_PERMISSION_RESOLVED: 'session:permission-resolved',
 
@@ -194,7 +197,8 @@ export function getEventHistory(): readonly BusEvent[] {
 
 const KEY_BUS_EVENTS = new Set([
   'session:start', 'session:send', 'session:started', 'session:ended',
-  'session:result', 'session:error', 'session:status-changed',
+  'session:deleted', 'session:content-updated', 'session:result', 'session:error',
+  'session:status-changed',
   'subagent:start', 'subagent:result', 'subagent:error',
   'task:created', 'task:updated', 'task:completed', 'task:deleted', 'task:unblocked',
 ]);

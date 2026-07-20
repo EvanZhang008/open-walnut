@@ -1,0 +1,254 @@
+{
+  "studyDate": "2026-07-19",
+  "privacy": {
+    "containsRawQueries": false,
+    "containsTaskText": false,
+    "containsTaskOrSessionIds": false,
+    "containsAggregateMetricsOnly": true
+  },
+  "environment": {
+    "hardware": "Apple M4 Pro",
+    "memoryGiB": 48,
+    "architecture": "arm64",
+    "os": "macOS 15.7.4",
+    "node": "25.9.0",
+    "qmd": "2.1.0",
+    "nodeLlamaCpp": "3.18.1"
+  },
+  "corpus": {
+    "activeTaskPaths": 3549,
+    "uniqueTaskBodies": 3266,
+    "qwen3Chunks": 7299,
+    "embeddingGemmaChunks": 7256
+  },
+  "queries": {
+    "total": 58,
+    "observedManualQrels": 10,
+    "controlledTargetDerived": 48,
+    "english": 33,
+    "chinese": 12,
+    "mixed": 13,
+    "short": 20,
+    "natural": 38
+  },
+  "modelComparison": {
+    "metricUnit": "fractions except latencyMs",
+    "bgeM3": {
+      "model": "hf:CompendiumLabs/bge-m3-gguf/bge-m3-f16.gguf",
+      "dimensions": 1024,
+      "all": {
+        "successAt1": 0.2586206897,
+        "successAt5": 0.3620689655,
+        "successAt10": 0.3620689655,
+        "recallAt10": 0.3477011494,
+        "mrr": 0.2924173679,
+        "ndcgAt10": 0.2920156426,
+        "latencyMs": {
+          "p50": 149.44,
+          "p90": 440.27
+        }
+      },
+      "controlled": {
+        "successAt1": 0.1666666667,
+        "successAt5": 0.25,
+        "successAt10": 0.25,
+        "successAt20": 0.2916666667,
+        "mrr": 0.1942550505,
+        "ndcgAt10": 0.2054448566
+      },
+      "slicesSuccessAt10": {
+        "english": 0.5757575758,
+        "chinese": 0,
+        "mixed": 0.1538461538,
+        "short": 0.75,
+        "natural": 0.1578947368
+      },
+      "warmupMs": {
+        "cold": 3349.7,
+        "warm": 194.21
+      }
+    },
+    "embeddingGemma": {
+      "model": "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf",
+      "dimensions": 768,
+      "all": {
+        "successAt1": 0.3793103448,
+        "successAt5": 0.6379310345,
+        "successAt10": 0.7586206897,
+        "recallAt10": 0.7528735632,
+        "mrr": 0.4960424374,
+        "ndcgAt10": 0.5472148388,
+        "latencyMs": {
+          "p50": 55.4,
+          "p90": 98
+        }
+      },
+      "controlled": {
+        "successAt1": 0.3541666667,
+        "successAt5": 0.5833333333,
+        "successAt10": 0.7291666667,
+        "successAt20": 0.75,
+        "mrr": 0.4568656725,
+        "ndcgAt10": 0.518609306
+      },
+      "slicesSuccessAt10": {
+        "english": 0.8181818182,
+        "chinese": 0.6666666667,
+        "mixed": 0.6923076923,
+        "short": 0.9,
+        "natural": 0.6842105263
+      },
+      "warmupMs": {
+        "cold": 1175.82,
+        "warm": 75.51
+      },
+      "indexBuild": {
+        "wallMs": 232475,
+        "documents": 3266,
+        "chunks": 7256,
+        "errors": 0,
+        "cleanArtifactApproxMiB": 313
+      }
+    },
+    "qwen3": {
+      "model": "hf:Qwen/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q8_0.gguf",
+      "dimensions": 1024,
+      "all": {
+        "successAt1": 0.5689655172,
+        "successAt5": 0.7931034483,
+        "successAt10": 0.8793103448,
+        "recallAt10": 0.8649425287,
+        "mrr": 0.6578880889,
+        "ndcgAt10": 0.6943236151,
+        "latencyMs": {
+          "p50": 55.98,
+          "p90": 74.19
+        }
+      },
+      "controlled": {
+        "successAt1": 0.5208333333,
+        "successAt5": 0.7708333333,
+        "successAt10": 0.875,
+        "successAt20": 0.9166666667,
+        "mrr": 0.6216842186,
+        "ndcgAt10": 0.6791925199
+      },
+      "slicesSuccessAt10": {
+        "english": 0.9090909091,
+        "chinese": 0.75,
+        "mixed": 0.9230769231,
+        "short": 0.9,
+        "natural": 0.8684210526
+      },
+      "warmupMs": {
+        "cold": 1995.86,
+        "warm": 79.33
+      },
+      "indexBuild": {
+        "wallMs": 1088997,
+        "documents": 3266,
+        "chunks": 7299,
+        "errors": 0,
+        "cleanArtifactApproxMiB": 610
+      }
+    }
+  },
+  "reranker": {
+    "model": "hf:ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/qwen3-reranker-0.6b-q8_0.gguf",
+    "all58": {
+      "none": {
+        "successAt10": 0.8793103448,
+        "recallAt10": 0.8649425287,
+        "mrr": 0.6578880889,
+        "ndcgAt10": 0.6943236151,
+        "latencyP50Ms": 55.98
+      },
+      "depth10": {
+        "successAt10": 0.8620689655,
+        "recallAt10": 0.8477011494,
+        "mrr": 0.6612753147,
+        "ndcgAt10": 0.6975859205,
+        "latencyP50Ms": 3064.69
+      }
+    },
+    "observed10": {
+      "none": {
+        "successAt10": 0.9,
+        "recallAt10": 0.8166666667,
+        "mrr": 0.8316666667,
+        "ndcgAt10": 0.7669528719,
+        "latencyP50Ms": 70.72
+      },
+      "depth10": {
+        "successAt10": 0.9,
+        "recallAt10": 0.8166666667,
+        "mrr": 0.8333333333,
+        "ndcgAt10": 0.778513544,
+        "latencyP50Ms": 2799.13
+      },
+      "depth20": {
+        "successAt10": 1,
+        "recallAt10": 0.8166666667,
+        "mrr": 0.8476190476,
+        "ndcgAt10": 0.7800294709,
+        "latencyP50Ms": 4401.7
+      },
+      "depth40": {
+        "successAt10": 1,
+        "recallAt10": 0.9166666667,
+        "mrr": 0.8476190476,
+        "ndcgAt10": 0.8209701882,
+        "latencyP50Ms": 9285.84
+      }
+    }
+  },
+  "historicalProduction": {
+    "windowDays": 4,
+    "requests": 38,
+    "completed": 23,
+    "timedOut": 15,
+    "completedLatencyMs": {
+      "p50": 3105,
+      "p90": 9286,
+      "max": 12069
+    },
+    "maxOverlappingRequestsFromOneInput": 8
+  },
+  "isolatedApiExamplesMs": {
+    "english": 73,
+    "chinese": 25,
+    "mixed": 23
+  },
+  "verification": {
+    "serverBuild": "pass",
+    "frontendBuild": "pass",
+    "focusedUnit": {
+      "passed": 38,
+      "total": 38
+    },
+    "focusedIntegration": {
+      "passed": 14,
+      "total": 14
+    },
+    "browserScenarios": {
+      "passed": 2,
+      "total": 2
+    },
+    "finalNonGpuContracts": {
+      "passed": 22,
+      "total": 22
+    },
+    "realQmdOriginalSuite": {
+      "passed": 22,
+      "total": 22
+    },
+    "newSessionMetadataCaseIsolated": {
+      "passed": 1,
+      "total": 1
+    },
+    "realQmdAll23SingleRun": {
+      "status": "not-green",
+      "reason": "Metal GPU out of memory after repeated model experiments"
+    }
+  }
+}

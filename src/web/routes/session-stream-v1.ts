@@ -18,7 +18,7 @@
  * coordination. A dead CLI is 409 session_dead (resume/respawn stays a
  * Mac-side responsibility); no bridge is 503 bridge_offline.
  *
- * Frozen-contract note: everything here is additive (docs/api-v1.md).
+ * Frozen-contract note: everything here is additive (docs/reference/api-v1.md).
  */
 
 import crypto from 'node:crypto'

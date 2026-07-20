@@ -1,5 +1,5 @@
 /**
- * REST client for /api/v1 (docs/api-v1.md). Bearer auth on every request.
+ * REST client for /api/v1 (docs/reference/api-v1.md). Bearer auth on every request.
  */
 
 import { getBaseUrl, getToken, normalizeServerUrl } from './config'

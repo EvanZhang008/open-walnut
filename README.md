@@ -6,20 +6,20 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue.svg)](https://www.typescriptlang.org/)
 [![GitHub stars](https://img.shields.io/github/stars/EvanZhang008/open-walnut?style=social)](https://github.com/EvanZhang008/open-walnut)
 
-[![Open Walnut — the open-source home for all your Claude Code sessions, tasks, notes, and memory (click to watch the demo)](docs/demo-video-thumb.png)](https://youtu.be/uN4WCZ-n2mw)
+[![Open Walnut — the open-source home for all your Claude Code sessions, tasks, notes, and memory (click to watch the demo)](docs/assets/demo-video-thumb.png)](https://youtu.be/uN4WCZ-n2mw)
 
 <p align="center"><b>▶️ <a href="https://youtu.be/uN4WCZ-n2mw">Watch the 3-minute demo on YouTube</a></b></p>
 
 <p align="center"><sub><b>USED BY ENGINEERS AT</b></sub></p>
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/logo-amazon-white.svg" />
-    <img src="docs/logo-amazon-dark.svg" alt="Amazon" height="26" />
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-amazon-white.svg" />
+    <img src="docs/assets/logo-amazon-dark.svg" alt="Amazon" height="26" />
   </picture>
   &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/logo-doordash-white.svg" />
-    <img src="docs/logo-doordash-dark.svg" alt="DoorDash" height="26" />
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-doordash-white.svg" />
+    <img src="docs/assets/logo-doordash-dark.svg" alt="DoorDash" height="26" />
   </picture>
 </p>
 
@@ -83,31 +83,31 @@ Open Walnut replaces all of that with one system:
 
 ### Describe the work, pick a directory → a live Claude Code session
 
-![Open Walnut spawns a Claude Code session from a prompt and a working directory](docs/gifs/01-task-to-session.gif)
+![Open Walnut spawns a Claude Code session from a prompt and a working directory](docs/assets/gifs/01-task-to-session.gif)
 
 > Type what you want, pick a working directory, and Walnut spawns a real Claude Code session there — streaming its tool calls live, with the task pinned alongside.
 
 ### A full session panel: chat, terminal, files, history, fork
 
-![Open Walnut Claude Code session panel with chat, terminal, files and fork](docs/gifs/02-session-panel.gif)
+![Open Walnut Claude Code session panel with chat, terminal, files and fork](docs/assets/gifs/02-session-panel.gif)
 
 > Chat, switch modes like the CLI, open a real terminal, browse files, or fork into a sub-session — one click each.
 
 ### One home: tasks on the left, agent chat in the middle, Claude Code on the right
 
-![Open Walnut home page — tasks, main agent chat, and Claude Code session side by side](docs/gifs/04-home-three-pane.gif)
+![Open Walnut home page — tasks, main agent chat, and Claude Code session side by side](docs/assets/gifs/04-home-three-pane.gif)
 
 > The main agent drives every task and session with full context from your memory and notes — all on one screen.
 
 ### Focus, Satellite, Wait — drag tasks into the tier that matches your day
 
-![Open Walnut pinned task tiers — drag tasks between Focus, Satellite, and Wait](docs/gifs/03-focus-tiers.gif)
+![Open Walnut pinned task tiers — drag tasks between Focus, Satellite, and Wait](docs/assets/gifs/03-focus-tiers.gif)
 
 > Pin active work to **Focus**, park secondary work in **Satellite**, hold blocked work in **Wait**. Status updates as the AI works.
 
 ### Notes + memory the AI can actually search
 
-![Open Walnut notes and memory — ask the AI to find something across your local notes](docs/gifs/05-notes-memory.gif)
+![Open Walnut notes and memory — ask the AI to find something across your local notes](docs/assets/gifs/05-notes-memory.gif)
 
 > An Obsidian-style notes vault, indexed locally. Ask *"what is my health routine?"* and the agent finds it across your notes — nothing leaves your disk.
 
@@ -115,7 +115,7 @@ Open Walnut replaces all of that with one system:
 
 **One console runs Claude Code on your laptop *and* on any number of SSH hosts — and the main agent can drive both.**
 
-![Open Walnut topology: one console driving local and many remote hosts over SSH](docs/remote-topology.svg)
+![Open Walnut topology: one console driving local and many remote hosts over SSH](docs/assets/remote-topology.svg)
 
 - **Crash-resilient** — if the SSH tunnel or daemon dies, your sessions don't: the daemon re-adopts the still-running `claude -p` processes on reconnect, and the remote log stays the source of truth.
 - **Zero-setup remotes** — point at a host; Walnut auto-detects its node version and deploys its own daemon over SSH (gzipped + chunked to beat corporate proxies). No manual `scp`.
@@ -137,20 +137,20 @@ See **[GETTING_STARTED.md](GETTING_STARTED.md#remote-sessions-via-ssh)** for the
 
 **A GitHub-style, per-session diff — see exactly what each session touched.**
 
-![A per-session diff in Open Walnut: a GitHub-style view of exactly what one Claude Code session changed](docs/gifs/06-changed-review.gif)
+![A per-session diff in Open Walnut: a GitHub-style view of exactly what one Claude Code session changed](docs/assets/gifs/06-changed-review.gif)
 
 Click a session's **Changed** chip for a full-screen diff: every file it edited, split or unified, grouped by repo. The before/after is rebuilt from the session's **own history** (not git), so edits stay attributed per session even when several agents share a repo.
 
 - **Select code → "Ask about this"** drops it into the same agent's chat with full context.
 - **Click a line → a PR-style comment box** that batches into one review you hand back to the agent.
 
-![Click a line in the diff to leave a PR-style comment and hand it back to the agent](docs/session-changed-comment.png)
+![Click a line in the diff to leave a PR-style comment and hand it back to the agent](docs/assets/session-changed-comment.png)
 
 ## See dynamic workflows as a live flow-graph
 
 **Claude Code can fan out into a dynamic multi-agent workflow — Open Walnut is the place you actually *watch* it run.**
 
-![Open Walnut visualizing a Claude Code dynamic workflow as a phase flow-graph: a FAN OUT stage of 4 parallel subagents feeding a SYNTHESIZE stage, each agent showing its model, tokens, and duration](docs/workflow-viz.png)
+![Open Walnut visualizing a Claude Code dynamic workflow as a phase flow-graph: a FAN OUT stage of 4 parallel subagents feeding a SYNTHESIZE stage, each agent showing its model, tokens, and duration](docs/assets/workflow-viz.png)
 
 When a session spawns a dynamic workflow, Walnut renders it as a **phase flow-graph** in real time — each phase (fan-out, synthesize, …) as a column, each subagent as a node with its live status, model, token spend, and duration. No more guessing what the parallel agents are doing from a wall of interleaved text.
 
@@ -197,7 +197,7 @@ Real-time                          Background                      Always availa
 
 Working Memory ◄─── updated        Dream Agent                     Hybrid Search
   7 sections:       every ~5K        wakes every ~24h               ┌─ BM25 keyword
-  focus, decisions,  tokens          reads daily logs +             ├─ vector (BGE-M3)
+  focus, decisions,  tokens          reads daily logs +             ├─ vector (Qwen3)
   struggles, ...                     working memory                 ├─ LLM re-ranking
        │                                    │                       └─ query expansion
        ▼                                    ▼
@@ -217,7 +217,7 @@ Session Summaries   ──────────►    Memory Index (table of 
 
 - **Temporal decay** — not all memories are equal. Search results are weighted by freshness: recent daily logs rank higher than month-old ones (30-day half-life). Session summaries decay faster (14-day half-life). But topic files, project memory, and your notes are **evergreen** — they never decay, because distilled knowledge doesn't expire. The formula: `score = relevance × source_weight × exp(-ln2 / halflife × age_days)`.
 
-- **Hybrid search with source isolation** — powered by [QMD](https://github.com/tobi/qmd) with local multilingual embeddings (BGE-M3, strong Chinese + English). Two separate indexes — memory and notes — prevent noisy-neighbor effects. Each source type (topic, daily, project, repo, notes) is searched independently with its own weight and guaranteed minimum slots, then results are merged by final score. The AI searches on demand, not by dumping everything into the system prompt.
+- **Hybrid search with source isolation** — powered by [QMD](https://github.com/tobi/qmd) with local multilingual embeddings (Qwen3-Embedding by default; compact EmbeddingGemma and BGE-M3 presets are available). Separate memory, notes, task, and session indexes prevent noisy-neighbor effects. Results are weighted by source and merged by final score. The AI searches on demand, not by dumping everything into the system prompt.
 
 ### AI Agent (30+ Tools)
 - **Task management**: create, query, update, complete, delete tasks — with full hierarchy awareness
@@ -314,7 +314,7 @@ See **[skills/setup-walnut/SKILL.md](skills/setup-walnut/SKILL.md)** for exactly
   see the [manual setup guide](GETTING_STARTED.md#provider-configuration)). *Coding sessions
   work with zero config* — they reuse your logged-in `claude`; only the home-page butler needs
   a credential.
-- **Embedding model** — BGE-M3 (~1.16 GB) auto-downloads on first start; configurable via `QMD_EMBED_MODEL` env var
+- **Embedding model** — Qwen3-Embedding-0.6B (~640 MB) auto-downloads on first start; configurable in Settings, with `QMD_EMBED_MODEL` as an environment override
 
 ## Configuration
 
@@ -393,10 +393,13 @@ src/
   utils/          # Shared utilities
   web/            # Express server, REST API (15 route files), WebSocket
 web/              # React SPA (Vite + TypeScript)
+docs/             # Plans, investigations, decisions, designs, references, assets
 tests/            # Unit, integration, e2e, and Playwright browser tests
 ```
 
-See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full system design.
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for the system design and the
+[documentation index](docs/README.md) for plans, investigations, decisions,
+design records, and references.
 
 ## Development
 
@@ -421,7 +424,7 @@ npm test              # All tests (parallel)
 - **Frontend**: React, Vite, TypeScript
 - **AI**: Anthropic Claude (Opus / Sonnet / Haiku) via Anthropic API or AWS Bedrock
 - **Sessions**: Claude Code CLI (`claude -p`) with stream-json I/O
-- **Search**: QMD hybrid search (BM25 + vector + re-ranking) with local BGE-M3 embeddings
+- **Search**: QMD hybrid search (BM25 + vector + optional re-ranking) with local Qwen3 embeddings
 - **Testing**: Vitest, Playwright
 - **Integrations**: Microsoft Graph API, plugin system
 

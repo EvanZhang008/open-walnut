@@ -505,8 +505,11 @@ export class SubagentRunner {
         // Update SessionRecord on cancel — auto-archive triage sessions
         try {
           const isTriage = TRIAGE_AGENT_IDS.has(run.agentId);
-          const { updateSessionRecord } = await import('../core/session-tracker.js');
-          await updateSessionRecord(run.runId, {
+          const {
+            emitSessionStatusChanged,
+            updateSessionRecord,
+          } = await import('../core/session-tracker.js');
+          const updated = await updateSessionRecord(run.runId, {
             process_status: 'stopped',
             activity: undefined,
             last_status_change: new Date().toISOString(),
@@ -514,13 +517,18 @@ export class SubagentRunner {
             status_changed_by: 'subagent-runner',
             ...(isTriage ? { archived: true, archive_reason: 'triage_cancelled' } : {}),
           } as any);
-        } catch {}
-
-        bus.emit(EventNames.SESSION_STATUS_CHANGED, {
-          sessionId: run.runId,
-          taskId: data.taskId,
-          process_status: 'stopped',
-        }, ['*'], { source: 'subagent-runner', urgency: 'urgent' });
+          emitSessionStatusChanged(
+            updated,
+            {},
+            ['*'],
+            { source: 'subagent-runner', urgency: 'urgent' },
+          );
+        } catch (err) {
+          log.subagent.warn('failed to commit cancellation status', {
+            runId: run.runId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
 
         return; // Don't emit subagent:result — the run was cancelled
       }
@@ -538,8 +546,11 @@ export class SubagentRunner {
       // to prevent ghost session accumulation that blocks session_import.
       try {
         const isTriage = TRIAGE_AGENT_IDS.has(run.agentId);
-        const { updateSessionRecord } = await import('../core/session-tracker.js');
-        await updateSessionRecord(run.runId, {
+        const {
+          emitSessionStatusChanged,
+          updateSessionRecord,
+        } = await import('../core/session-tracker.js');
+        const updated = await updateSessionRecord(run.runId, {
           process_status: 'stopped',
           activity: undefined,
           last_status_change: new Date().toISOString(),
@@ -547,6 +558,12 @@ export class SubagentRunner {
           status_changed_by: 'subagent-runner',
           ...(isTriage ? { archived: true, archive_reason: 'triage_complete' } : {}),
         } as any);
+        emitSessionStatusChanged(
+          updated,
+          { phase: 'AGENT_COMPLETE' },
+          ['*'],
+          { source: 'subagent-runner', urgency: 'urgent' },
+        );
       } catch (err) {
         log.subagent.warn('failed to update session record on completion', {
           runId: run.runId,
@@ -563,13 +580,6 @@ export class SubagentRunner {
         result: result.response.slice(0, 2000),
         usage: totalUsage,
       }, ['main-ai'], { source: 'subagent-runner' });
-
-      bus.emit(EventNames.SESSION_STATUS_CHANGED, {
-        sessionId: run.runId,
-        taskId: data.taskId,
-        process_status: 'stopped',
-        phase: 'AGENT_COMPLETE',
-      }, ['*'], { source: 'subagent-runner', urgency: 'urgent' });
 
       // Notify UI to clear optimistic messages (the turn consumed 1 queued message)
       if (isResume) {
@@ -609,8 +619,11 @@ export class SubagentRunner {
       // Update SessionRecord on error — auto-archive triage sessions
       try {
         const isTriage = TRIAGE_AGENT_IDS.has(run.agentId);
-        const { updateSessionRecord } = await import('../core/session-tracker.js');
-        await updateSessionRecord(run.runId, {
+        const {
+          emitSessionStatusChanged,
+          updateSessionRecord,
+        } = await import('../core/session-tracker.js');
+        const updated = await updateSessionRecord(run.runId, {
           process_status: 'error',
           errorMessage: run.error,
           activity: undefined,
@@ -619,13 +632,18 @@ export class SubagentRunner {
           status_changed_by: 'subagent-runner',
           ...(isTriage ? { archived: true, archive_reason: 'triage_error' } : {}),
         } as any);
-      } catch {}
-
-      bus.emit(EventNames.SESSION_STATUS_CHANGED, {
-        sessionId: run.runId,
-        taskId: data.taskId,
-        process_status: 'error',
-      }, ['*'], { source: 'subagent-runner', urgency: 'urgent' });
+        emitSessionStatusChanged(
+          updated,
+          {},
+          ['*'],
+          { source: 'subagent-runner', urgency: 'urgent' },
+        );
+      } catch (statusErr) {
+        log.subagent.warn('failed to commit error status', {
+          runId: run.runId,
+          error: statusErr instanceof Error ? statusErr.message : String(statusErr),
+        });
+      }
 
       // Clear optimistic messages on error too
       if (isResume) {
@@ -680,25 +698,32 @@ export class SubagentRunner {
 
     // Update session record back to running
     try {
-      const { updateSessionRecord } = await import('../core/session-tracker.js');
-      await updateSessionRecord(data.runId, {
+      const {
+        emitSessionStatusChanged,
+        updateSessionRecord,
+      } = await import('../core/session-tracker.js');
+      const updated = await updateSessionRecord(data.runId, {
         process_status: 'running',
         last_status_change: new Date().toISOString(),
       });
-    } catch {}
+      emitSessionStatusChanged(
+        updated,
+        { phase: 'IN_PROGRESS' },
+        ['*'],
+        { source: 'subagent-runner', urgency: 'urgent' },
+      );
+    } catch (err) {
+      log.subagent.warn('failed to commit resume status', {
+        runId: data.runId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
 
     // Notify UI that the queued message has been picked up
     bus.emit(EventNames.SESSION_MESSAGES_DELIVERED, {
       sessionId: data.runId,
       count: 1,
     }, ['*'], { source: 'subagent-runner' });
-
-    bus.emit(EventNames.SESSION_STATUS_CHANGED, {
-      sessionId: data.runId,
-      taskId: run.taskId,
-      process_status: 'running',
-      phase: 'IN_PROGRESS',
-    }, ['*'], { source: 'subagent-runner', urgency: 'urgent' });
 
     await this.acquireSemaphore();
 

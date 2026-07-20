@@ -4,6 +4,10 @@
 model, optimistic dedup, UX patterns, file structure). **Load that skill BEFORE touching session
 chat, turn boundaries, or streaming block rendering** — that area has an incident history.
 
+**Task/session search:** read
+[`docs/investigation/qmd-search-performance/README.md`](../../docs/investigation/qmd-search-performance/README.md) before
+changing search requests, provisional results, stale-response handling, or result merging.
+
 ## Invariants you must not break (even without reading the skill)
 
 - **Streaming blocks are APPEND-ONLY.** No event handler deletes blocks. Absorption is a

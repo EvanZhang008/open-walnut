@@ -66,6 +66,10 @@ export function openTurn(sessionId: string): { turnId: string; promise: Promise<
   let resolve!: (outcome: TurnOutcome) => void;
   let reject!: (err: Error) => void;
   const promise = new Promise<TurnOutcome>((res, rej) => { resolve = res; reject = rej; });
+  // A runner can own turns whose callers never requested currentTurn().
+  // Teardown must still reject them promptly without creating a process-level
+  // unhandled rejection; attached callers continue to observe the rejection.
+  void promise.catch(() => {});
 
   const timer = setTimeout(() => {
     const turn = openTurns.get(sessionId);
@@ -109,6 +113,15 @@ export function abortTurn(sessionId: string, reason: string): boolean {
   openTurns.delete(sessionId);
   turn.reject(new Error(reason));
   return true;
+}
+
+/** Abort every open promise owned by this process (runner teardown). */
+export function abortAllTurns(reason: string): number {
+  let aborted = 0;
+  for (const sessionId of [...openTurns.keys()]) {
+    if (abortTurn(sessionId, reason)) aborted++;
+  }
+  return aborted;
 }
 
 /** The currently open (unsettled) turn id for a session, if any. */

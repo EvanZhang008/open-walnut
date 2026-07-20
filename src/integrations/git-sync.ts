@@ -547,7 +547,7 @@ const LAST_SYNC_CACHE_MS = 30_000;
 /** ISO timestamp of the most recent sync commit, or null if no repo/commits. */
 /**
  * Derive cloud-companion credentials from the data repo's cloud remote
- * (`https://walnut:<device-token>@<domain>/git/data`, see docs/cloud-sync.md).
+ * (`https://walnut:<device-token>@<domain>/git/data`, see docs/reference/cloud-sync.md).
  * Zero-config source for the daemon bridge: if cloud sync works, the bridge
  * knows where to dial. Returns null when no cloud remote is configured.
  *

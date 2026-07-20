@@ -1,5 +1,5 @@
 /**
- * Types for the frozen /api/v1 REST+SSE contract (docs/api-v1.md).
+ * Types for the frozen /api/v1 REST+SSE contract (docs/reference/api-v1.md).
  */
 
 // ── Errors ──

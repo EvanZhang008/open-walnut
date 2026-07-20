@@ -1,7 +1,8 @@
 # Walnut iOS (native SwiftUI)
 
 Native SwiftUI companion app for a Walnut server — chat with your butler,
-browse and edit notes, all over the frozen [`/api/v1` REST+SSE contract](../docs/api-v1.md).
+browse and edit notes, all over the frozen
+[`/api/v1` REST+SSE contract](../docs/reference/api-v1.md).
 
 Replaces the Expo app in `../ios/` (kept as reference until this one is fully verified).
 

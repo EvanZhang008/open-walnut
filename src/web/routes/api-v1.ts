@@ -2,7 +2,7 @@
  * /api/v1 — frozen REST+SSE facade for mobile clients (iOS app).
  *
  * Design goals:
- * - FROZEN CONTRACT: additive-only changes; see docs/api-v1.md.
+ * - FROZEN CONTRACT: additive-only changes; see docs/reference/api-v1.md.
  * - Reuses the exact same per-agent turn queue as the WebSocket chat
  *   (enqueueAgentTurn('general', …)) so a REST turn and a WS turn on the same
  *   conversation can never interleave — one serialization path, not two.

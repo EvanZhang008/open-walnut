@@ -6,11 +6,8 @@
 > load on demand): `walnut-core-internals` (src/core/), `walnut-agent-loop` (src/agent/),
 > `walnut-web-frontend` (web/src/), `walnut-testing` (tests/), `walnut-logging` (src/logging/).
 > Load the matching skill before non-trivial work in that area.
-> **Learnings & decisions also live in skills** — one subject per skill, `decision-<slug>`
-> for design decisions (Summary + Context + Evidence + Decision + do-not-rebuild + References);
-> keep the frontmatter description SHORT (one line: what was decided + when to read it). Read
-> the relevant one BEFORE rebuilding/"fixing" anything it marks as deliberately removed; write
-> one whenever a choice rests on evidence a future reader couldn't rederive from the code.
+> **Important docs:** browse [`docs/`](./docs/README.md) first; model work starts with
+> [Claude model configuration](./docs/reference/claude-model-configuration.md).
 
 ## Ownership: You Are the CTO
 
@@ -147,10 +144,10 @@ death).
 | Sessions (local + SSH) | `src/providers/` | [ARCHITECTURE.md](./ARCHITECTURE.md) |
 | Session daemon (twins) | `src/providers/daemon-standalone.ts` + `daemon-source.ts` | "Remote Session Daemon" section above |
 | Web GUI | `src/web/`, `web/src/` | skill `walnut-web-frontend` + [web/src/AGENTS.md](./web/src/AGENTS.md) |
-| iOS app | `ios-native/` (xcodegen; `project.yml`) | frozen contract [docs/api-v1.md](./docs/api-v1.md) |
+| iOS app | `ios-native/` (xcodegen; `project.yml`) | frozen contract [API v1](./docs/reference/api-v1.md) |
 | Cloud companion | `src/web/ws/bridge-registry.ts`, `scripts/cloud/setup.sh` | infra: `infra/` (CDK); deploy = bundle→S3→SSM |
 | Voice input (STT) | `src/core/stt/`, `src/web/routes/stt-v1.ts` | routes primary/bridge/openai by reachability |
-| Memory & search | `src/core/memory-*.ts` | [ARCHITECTURE.md](./ARCHITECTURE.md) |
+| Memory & search | `src/core/memory-*.ts`, `src/core/qmd-*.ts` | [QMD search and indexing](./docs/investigation/qmd-search-performance/README.md) |
 | Event bus | `src/core/event-bus.ts` | [ARCHITECTURE.md](./ARCHITECTURE.md) |
 | Subagents | `src/providers/` | [ARCHITECTURE.md](./ARCHITECTURE.md) |
 | Cron | `src/core/cron/` | [ARCHITECTURE.md](./ARCHITECTURE.md) |
@@ -176,6 +173,7 @@ npm test                      # All tests (parallel)
 
 - Bug fix: Playwright repro → fix → verify same flow → commit
 - Feature: define E2E scenarios → implement → build → Playwright verify → commit
+- Test UI changes as a real user with Playwright; for load bugs, test `/` and the reported URL 5× and report worst full-load time/errors.
 - **NEVER** commit UI changes without Playwright verification
 - **NEVER** use `page.goto()` — use real UI clicks (SPA navigation)
 - Use `/verify` after implementation

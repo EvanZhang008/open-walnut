@@ -14,7 +14,7 @@
  * Whisper API using the companion's own key. Neither available → 503 with a
  * clear message, so the phone can tell the user why voice input is offline.
  *
- * Frozen-contract note: additive (docs/api-v1.md).
+ * Frozen-contract note: additive (docs/reference/api-v1.md).
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
