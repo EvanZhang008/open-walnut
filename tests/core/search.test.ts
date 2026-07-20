@@ -1,9 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import fs from 'node:fs';
-import fsp from 'node:fs/promises';
-import path from 'node:path';
-import os from 'node:os';
-import { scoreMatch, extractSnippet, normalizedFuse, type SearchResult } from '../../src/core/search.js';
+import {
+  scoreMatch,
+  extractSnippet,
+  searchSessionReferences,
+  searchSessionTaskReferences,
+  searchTaskReferences,
+} from '../../src/core/search.js';
+import type { SessionRecord, Task } from '../../src/core/types.js';
 
 describe('scoreMatch', () => {
   it('returns 0 for empty query', () => {
@@ -91,235 +94,179 @@ describe('extractSnippet', () => {
   });
 });
 
-describe('FTS5 integration', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+describe('searchTaskReferences', () => {
+  const sessionId = '12345678-1234-4abc-8def-1234567890ab';
+  const baseTask = {
+    id: 'task-reference-target',
+    title: 'Reference target',
+    status: 'todo',
+    phase: 'TODO',
+    priority: 'none',
+    category: 'Inbox',
+    project: 'Quick Start',
+    source: 'local',
+    session_id: 'legacy-session-reference',
+    session_ids: [sessionId],
+    plan_session_id: 'plan-session-reference',
+    exec_session_id: 'exec-session-reference',
+    external_url: 'https://example.test/tasks/reference-target',
+    description: '',
+    summary: '',
+    note: '',
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+  } as Task;
 
-  it('search() integrates FTS results when memory-index is available', async () => {
-    // Dynamically import search to test the FTS integration path
-    // We mock memory-index to return controlled results
-    const mockSearchIndex = vi.fn().mockReturnValue([
-      { text: 'Some content about TypeScript patterns', path: 'memory/notes.md', score: 5.0 },
-      { text: 'Another chunk about TypeScript', path: 'memory/other.md', score: 3.0 },
+  it('returns an exact session ID as a top-scored keyword result', () => {
+    expect(searchTaskReferences([baseTask], sessionId)).toEqual([
+      expect.objectContaining({
+        taskId: baseTask.id,
+        matchField: 'session_id',
+        score: 1,
+      }),
     ]);
-
-    vi.doMock('../../src/core/memory-index.js', () => ({
-      searchIndex: mockSearchIndex,
-    }));
-
-    // Also mock task-manager and memory to avoid file system access
-    vi.doMock('../../src/core/task-manager.js', () => ({
-      listTasks: vi.fn().mockResolvedValue([]),
-    }));
-    vi.doMock('../../src/core/memory.js', () => ({
-      listMemories: vi.fn().mockReturnValue([]),
-    }));
-
-    const { search } = await import('../../src/core/search.js');
-    // Use keyword mode to test FTS5 integration without Ollama dependency
-    const results = await search('TypeScript', { types: ['memory'], mode: 'keyword' });
-
-    expect(results.length).toBe(2);
-    expect(results[0].type).toBe('memory');
-    expect(results[0].matchField).toBe('content');
-    expect(mockSearchIndex).toHaveBeenCalledWith('TypeScript', 20);
-
-    vi.doUnmock('../../src/core/memory-index.js');
-    vi.doUnmock('../../src/core/task-manager.js');
-    vi.doUnmock('../../src/core/memory.js');
   });
 
-  it('falls back to brute-force when FTS is unavailable', async () => {
-    // Reset modules to ensure fresh imports
-    vi.resetModules();
+  it('supports a meaningful session ID substring but ignores short noise', () => {
+    expect(searchTaskReferences([baseTask], '12345678')[0]?.taskId).toBe(baseTask.id);
+    expect(searchTaskReferences([baseTask], '1234')).toEqual([]);
+  });
 
-    // Mock searchIndex to throw, simulating FTS unavailability
-    vi.doMock('../../src/core/memory-index.js', () => ({
-      searchIndex: () => {
-        throw new Error('Database not available');
-      },
-    }));
+  it('does not treat a natural-language URL slug as an opaque reference', () => {
+    const taskWithReadableUrl = {
+      ...baseTask,
+      external_url: 'https://example.test/tasks/deployment-review',
+    };
 
-    vi.doMock('../../src/core/task-manager.js', () => ({
-      listTasks: vi.fn().mockResolvedValue([]),
-    }));
-    vi.doMock('../../src/core/memory.js', () => ({
-      listMemories: vi.fn().mockReturnValue([
-        {
-          title: 'Test Memory',
-          content: 'Content about TypeScript patterns and best practices',
-          path: 'memory/test.md',
-          updatedAt: new Date().toISOString(),
-        },
-      ]),
-    }));
+    expect(searchTaskReferences([taskWithReadableUrl], 'deployment')).toEqual([]);
+  });
 
-    const { search } = await import('../../src/core/search.js');
-    // Use keyword mode — this test verifies the brute-force fallback, not vector search
-    const results = await search('TypeScript', { types: ['memory'], mode: 'keyword' });
-
-    expect(results.length).toBeGreaterThan(0);
-    expect(results[0].type).toBe('memory');
-
-    vi.doUnmock('../../src/core/memory-index.js');
-    vi.doUnmock('../../src/core/task-manager.js');
-    vi.doUnmock('../../src/core/memory.js');
+  it.each([
+    [baseTask.id, 'id'],
+    ['task-ref', 'id'],
+    [baseTask.session_id, 'session_id'],
+    [baseTask.plan_session_id, 'session_id'],
+    [baseTask.exec_session_id, 'session_id'],
+    [baseTask.external_url, 'external_url'],
+  ] as const)('resolves structured reference %s from %s', (query, matchField) => {
+    expect(searchTaskReferences([baseTask], query)[0]).toEqual(
+      expect.objectContaining({
+        taskId: baseTask.id,
+        matchField,
+      }),
+    );
   });
 });
 
-// ── normalizedFuse unit tests ──
+describe('searchSessionReferences', () => {
+  const sessionId = '12345678-1234-4abc-8def-1234567890ab';
+  const session = {
+    claudeSessionId: sessionId,
+    title: 'Reference session',
+  } as SessionRecord;
 
-function makeResult(taskId: string, score: number, matchField = 'title'): SearchResult {
-  return { type: 'task', title: taskId, snippet: '', taskId, score, matchField };
-}
+  it('resolves exact and meaningful partial session IDs without QMD', () => {
+    expect(searchSessionReferences([session], sessionId)[0]).toEqual(
+      expect.objectContaining({
+        sessionId,
+        matchField: 'session_id',
+        score: 1,
+      }),
+    );
+    expect(searchSessionReferences([session], '12345678')[0]?.sessionId).toBe(sessionId);
+    expect(searchSessionReferences([session], '1234')).toEqual([]);
+  });
+});
 
-describe('normalizedFuse', () => {
-  it('merges and ranks by weighted min-max scores', () => {
-    const bm25 = [
-      makeResult('A', 10),  // BM25 norm: 1.0
-      makeResult('B', 5),   // BM25 norm: 0.0
-    ];
-    const vector = [
-      makeResult('B', 0.9, 'semantic'),  // Vec norm: 1.0
-      makeResult('A', 0.7, 'semantic'),  // Vec norm: 0.0
-    ];
+describe('searchSessionTaskReferences', () => {
+  const sessionId = '87654321-1234-4abc-8def-1234567890ab';
+  const task = {
+    id: 'task-owned-by-session-record',
+    title: 'Session-owned task',
+    status: 'todo',
+    phase: 'TODO',
+    priority: 'none',
+    category: 'Inbox',
+    project: 'Quick Start',
+    source: 'local',
+    session_ids: [],
+  } as Task;
 
-    const fused = normalizedFuse(bm25, vector);
-    expect(fused).toHaveLength(2);
-    // A: 0.4*1.0 + 0.6*0.0 = 0.4
-    // B: 0.4*0.0 + 0.6*1.0 = 0.6
-    // B should rank first (higher semantic score dominates with 60% weight)
-    expect(fused[0].taskId).toBe('B');
-    expect(fused[0].score).toBeCloseTo(0.6, 2);
-    expect(fused[1].taskId).toBe('A');
-    expect(fused[1].score).toBeCloseTo(0.4, 2);
+  it('joins SessionRecord.taskId when the task has no session link fields', () => {
+    const results = searchSessionTaskReferences([task], [{
+      claudeSessionId: sessionId,
+      taskId: task.id,
+      title: 'Codex session',
+    } as SessionRecord], sessionId);
+
+    expect(results).toEqual([
+      expect.objectContaining({
+        type: 'task',
+        taskId: task.id,
+        sessionId,
+        matchField: 'session_id',
+        score: 1,
+      }),
+    ]);
   });
 
-  it('handles disjoint result sets (no overlap)', () => {
-    const bm25 = [makeResult('A', 5)];
-    const vector = [makeResult('Z', 0.8, 'semantic')];
+  it('ignores dangling SessionRecord.taskId values', () => {
+    expect(searchSessionTaskReferences([task], [{
+      claudeSessionId: sessionId,
+      taskId: 'deleted-task',
+    } as SessionRecord], sessionId)).toEqual([]);
+  });
+});
 
-    const fused = normalizedFuse(bm25, vector);
-    expect(fused).toHaveLength(2);
-    // A: keyword only → 0.4 * 1.0 = 0.4 (single item normalizes to 1.0)
-    // Z: semantic only → 0.6 * 1.0 = 0.6
-    expect(fused[0].taskId).toBe('Z');
-    expect(fused[0].score).toBeCloseTo(0.6, 2);
-    expect(fused[1].taskId).toBe('A');
-    expect(fused[1].score).toBeCloseTo(0.4, 2);
+describe('QMD memory search integration', () => {
+  beforeEach(() => {
+    vi.resetModules();
   });
 
-  it('single result in each list normalizes to 1.0', () => {
-    const bm25 = [makeResult('X', 3.14)];
-    const vector = [makeResult('X', 0.42, 'semantic')];
-
-    const fused = normalizedFuse(bm25, vector);
-    expect(fused).toHaveLength(1);
-    // Single-item lists both normalize to 1.0
-    // 0.4 * 1.0 + 0.6 * 1.0 = 1.0
-    expect(fused[0].score).toBeCloseTo(1.0, 2);
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.doUnmock('../../src/core/memory-search.js');
   });
 
-  it('all-same BM25 scores normalize correctly (range=0 → fallback)', () => {
-    const bm25 = [
-      makeResult('A', 5),
-      makeResult('B', 5),
-      makeResult('C', 5),
-    ];
-    const vector: SearchResult[] = [];
+  it('search() maps results from the QMD memory search lane', async () => {
+    const mockMemoryNotesSearch = vi.fn().mockResolvedValue([
+      {
+        title: 'TypeScript patterns',
+        snippet: 'Some content about TypeScript patterns',
+        filepath: 'memory/notes.md',
+        finalScore: 0.9,
+        source: 'memory',
+      },
+      {
+        title: 'More TypeScript',
+        snippet: 'Another chunk about TypeScript',
+        filepath: 'memory/other.md',
+        finalScore: 0.7,
+        source: 'memory',
+      },
+    ]);
 
-    const fused = normalizedFuse(bm25, vector);
-    expect(fused).toHaveLength(3);
-    // All BM25 same → bm25Range = 0 → fallback || 1 → (5-5)/1 = 0
-    // keyword only: 0.4 * 0 = 0
-    for (const r of fused) {
-      expect(r.score).toBeCloseTo(0, 5);
-    }
+    vi.doMock('../../src/core/memory-search.js', () => ({
+      memoryNotesSearch: mockMemoryNotesSearch,
+    }));
+
+    const { search } = await import('../../src/core/search.js');
+    const results = await search('TypeScript', { types: ['memory'] });
+
+    expect(results.length).toBe(2);
+    expect(results[0].type).toBe('memory');
+    expect(results[0].matchField).toBe('memory');
+    expect(results[0].path).toBe('memory/notes.md');
+    expect(mockMemoryNotesSearch).toHaveBeenCalledWith('TypeScript', undefined, 20);
   });
 
-  it('preserves keywordScore and semanticScore on output', () => {
-    const bm25 = [makeResult('A', 10), makeResult('B', 4)];
-    const vector = [makeResult('A', 0.8, 'semantic')];
+  it('surfaces a total QMD failure instead of returning an authoritative empty set', async () => {
+    vi.doMock('../../src/core/memory-search.js', () => ({
+      memoryNotesSearch: vi.fn().mockRejectedValue(new Error('Database not available')),
+    }));
 
-    const fused = normalizedFuse(bm25, vector);
-    const a = fused.find(r => r.taskId === 'A')!;
-    const b = fused.find(r => r.taskId === 'B')!;
-
-    expect(a.keywordScore).toBeDefined();
-    expect(a.semanticScore).toBeDefined();
-    expect(a.keywordScore).toBe(1); // max BM25 → normalized 1.0
-    expect(a.semanticScore).toBe(1); // single vec item → 1.0
-
-    expect(b.keywordScore).toBeDefined();
-    expect(b.semanticScore).toBeUndefined(); // not in vector results
-  });
-
-  it('respects alpha parameter', () => {
-    const bm25 = [makeResult('A', 10)];
-    const vector = [makeResult('B', 0.9, 'semantic')];
-
-    // alpha=0.9 → heavy keyword weight
-    const kwHeavy = normalizedFuse(bm25, vector, 0.9);
-    expect(kwHeavy[0].taskId).toBe('A'); // keyword-only wins
-    expect(kwHeavy[0].score).toBeCloseTo(0.9, 2);
-
-    // alpha=0.1 → heavy semantic weight
-    const semHeavy = normalizedFuse(bm25, vector, 0.1);
-    expect(semHeavy[0].taskId).toBe('B'); // semantic-only wins
-    expect(semHeavy[0].score).toBeCloseTo(0.9, 2);
-  });
-
-  it('min-max adapts to narrow cosine range (cross-language scenario)', () => {
-    // Cross-language: all cosine scores are in a narrow band [0.31, 0.35]
-    // With old hardcoded floor=0.5, ALL of these would normalize to 0
-    // With result-set min-max, they spread across [0, 1]
-    const bm25 = [makeResult('A', 5)]; // unrelated keyword match
-    const vector = [
-      makeResult('X', 0.35, 'semantic'), // best cross-lang match
-      makeResult('Y', 0.33, 'semantic'),
-      makeResult('Z', 0.31, 'semantic'), // worst cross-lang match
-    ];
-
-    const fused = normalizedFuse(bm25, vector);
-    const x = fused.find(r => r.taskId === 'X')!;
-    const z = fused.find(r => r.taskId === 'Z')!;
-
-    // X should have highest semantic norm (1.0), Z should have lowest (0.0)
-    expect(x.semanticScore).toBe(1);
-    expect(z.semanticScore).toBe(0);
-    // X's combined score should be meaningful, not near-zero
-    expect(x.score).toBeGreaterThan(0.5);
-  });
-
-  it('title matches outrank semantic-only junk with default alpha', () => {
-    // BM25 finds "Bug: fix login" with title match
-    const bm25 = [
-      makeResult('bug-1', 4.5),
-      makeResult('bug-2', 4.5),
-      makeResult('note-1', 1.5),
-    ];
-    // Vector returns random irrelevant high-similarity results
-    const vector = [
-      makeResult('junk-1', 0.47, 'semantic'),
-      makeResult('junk-2', 0.45, 'semantic'),
-      makeResult('bug-1', 0.52, 'semantic'),
-    ];
-
-    const fused = normalizedFuse(bm25, vector);
-    // bug-1 should be #1 (has both keyword top + semantic top)
-    expect(fused[0].taskId).toBe('bug-1');
-    // bug-2 should be #2 (strong keyword, no semantic)
-    expect(fused[1].taskId).toBe('bug-2');
-    // note-1 has BM25 min (normalizes to 0) — with min-max, it falls below
-    // semantic-only results that have non-zero normalized scores.
-    // This is correct: min-max normalization reflects relative relevance within
-    // each result set, not absolute importance of keyword vs semantic.
-    const ids = fused.map(r => r.taskId);
-    // 3 BM25 + 3 vector - 1 overlap (bug-1) = 5 unique results
-    expect(ids).toHaveLength(5);
-    // Top 2 are the keyword matches that also have high BM25 scores
-    expect(ids[0]).toBe('bug-1');
-    expect(ids[1]).toBe('bug-2');
+    const { search } = await import('../../src/core/search.js');
+    await expect(search('TypeScript', { types: ['memory'] }))
+      .rejects.toThrow('Database not available');
   });
 });

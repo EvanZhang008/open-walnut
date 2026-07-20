@@ -21,6 +21,7 @@ let nextId = 1;
 const fakeStore = {
   internal: {
     findActiveDocument: (_coll: string, docPath: string) => docs.get(docPath) ?? null,
+    getHashesNeedingEmbedding: () => 0,
     insertContent: (hash: string, content: string) => { contentByHash.set(hash, content); },
     insertDocument: (_coll: string, docPath: string, title: string, hash: string) => {
       docs.set(docPath, { id: nextId++, path: docPath, title, hash });
@@ -35,6 +36,11 @@ const fakeStore = {
 vi.mock('../../src/core/qmd-store.js', () => ({
   getSessionStore: vi.fn(async () => fakeStore),
   DEFAULT_QMD_MODEL: 'test-model',
+  embedQmdStore: vi.fn(async (
+    store: { embed: (options: unknown) => Promise<unknown> },
+    _label: string,
+    options: unknown,
+  ) => store.embed(options)),
 }));
 
 vi.mock('../../src/core/task-manager.js', () => ({
@@ -57,6 +63,17 @@ vi.mock('../../src/core/session-history.js', () => ({
     if (sid === 'empty') return [];
     return localMessages;
   }),
+}));
+
+vi.mock('../../src/providers/acp-session-history.js', () => ({
+  readAcpSessionHistoryState: vi.fn(async () => ({
+    journalExists: true,
+    messages: [{
+      role: 'user',
+      text: 'codex journal semantic sentinel',
+      timestamp: '2026-07-19T10:00:00.000Z',
+    }],
+  })),
 }));
 
 import { syncSession } from '../../src/core/qmd-session-sync.js';
@@ -120,14 +137,30 @@ describe('qmd-session-sync v2 content indexing', () => {
   });
 
   it('does not overwrite an existing doc when JSONL read fails', async () => {
-    // First: good local sync creates a content-rich doc.
-    await syncSession(sess({ claudeSessionId: 'good' }));
-    // Now simulate that same session id failing to read — use the "boom" sid but
-    // it must already have a doc; re-run with a session whose read throws.
-    await syncSession(sess({ claudeSessionId: 'boom', title: 'Boom' }));
-    // boom read threw → body null → only metadata; doc still created (metadata is useful),
-    // but crucially it must not crash and must contain metadata.
-    const content = docContent('sess-boom');
-    expect(content).toContain('# Session Metadata');
+    await syncSession(sess({ claudeSessionId: 'boom' }), undefined, {
+      includeContent: false,
+    });
+    const original = docContent('sess-boom');
+
+    await syncSession(sess({
+      claudeSessionId: 'boom',
+      title: 'Must not replace the rich document',
+    }));
+
+    expect(docContent('sess-boom')).toBe(original);
+    expect(docContent('sess-boom'))
+      .not.toContain('Must not replace the rich document');
+  });
+
+  it('indexes Codex conversation content from the ACP journal', async () => {
+    await syncSession(sess({
+      claudeSessionId: 'codex-session',
+      engine: 'codex',
+      acpRuntimeId: 'runtime-1',
+      acpJournalPath: '/tmp/codex-session.acp.jsonl',
+    }));
+
+    expect(docContent('sess-codex-session'))
+      .toContain('codex journal semantic sentinel');
   });
 });

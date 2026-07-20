@@ -15,15 +15,27 @@
  *   for incremental syncs. syncAllTasks() calls embed() directly for bulk init.
  */
 import { createHash } from 'node:crypto';
-import { getTaskStore, DEFAULT_QMD_MODEL } from './qmd-store.js';
+import {
+  embedQmdStore,
+  getTaskStore,
+  DEFAULT_QMD_MODEL,
+} from './qmd-store.js';
 import { listTasks } from './task-manager.js';
 import { log } from '../logging/index.js';
+import { pruneStaleQmdDocuments } from './qmd-sync-utils.js';
 import type { Task } from './types.js';
 
 const COLLECTION = 'tasks';
 
-/** Serialize a task into searchable text for embedding. */
-function serializeTask(task: Task): string {
+/**
+ * Serialize human-language task content for QMD.
+ *
+ * Opaque task/session IDs deliberately stay in the structured task store and
+ * are resolved by searchTaskReferences(). Including them here changes the
+ * content hash whenever a session is linked, forcing an expensive semantic
+ * re-embed without improving the vector representation.
+ */
+export function serializeTaskForSearch(task: Task): string {
   const parts = [task.title];
   if (task.description) parts.push(task.description);
   if (task.summary) parts.push(task.summary);
@@ -48,7 +60,17 @@ function taskDocPath(taskId: string): string {
  * Full sync: read all tasks, insert/update in QMD, then embed.
  * Skips tasks whose content hash hasn't changed.
  */
-export async function syncAllTasks(): Promise<void> {
+export interface SyncAllTaskOptions {
+  force?: boolean;
+  onProgress?: (progress: {
+    chunksEmbedded: number;
+    totalChunks: number;
+    bytesProcessed: number;
+    totalBytes: number;
+  }) => void;
+}
+
+export async function syncAllTasks(opts?: SyncAllTaskOptions): Promise<void> {
   const store = await getTaskStore();
   const tasks = await listTasks();
   const now = new Date().toISOString();
@@ -58,7 +80,7 @@ export async function syncAllTasks(): Promise<void> {
   let skipped = 0;
 
   for (const task of tasks) {
-    const text = serializeTask(task);
+    const text = serializeTaskForSearch(task);
     const hash = contentHash(text);
     const docPath = taskDocPath(task.id);
 
@@ -83,27 +105,41 @@ export async function syncAllTasks(): Promise<void> {
     }
   }
 
+  // Re-read the source of truth at prune time so a task created during the
+  // initial loop is not mistaken for a stale QMD document.
+  const currentTasks = await listTasks();
+  const expectedPaths = new Set(currentTasks.map((task) => taskDocPath(task.id)));
+  const pruned = pruneStaleQmdDocuments(store, COLLECTION, expectedPaths);
+
   // Embed any new/updated content
   const model = process.env.QMD_EMBED_MODEL || DEFAULT_QMD_MODEL;
-  await store.embed({ model });
+  await embedQmdStore(store, 'task', {
+    ...(opts?.force ? { force: true } : {}),
+    model,
+    onProgress: opts?.onProgress,
+  });
 
-  log.agent.info(`QMD task sync: ${inserted} inserted, ${updated} updated, ${skipped} skipped (${tasks.length} total)`);
+  log.agent.info(`QMD task sync: ${inserted} inserted, ${updated} updated, ${skipped} skipped, ${pruned.deactivated} stale removed (${tasks.length} total)`, {
+    pruned,
+  });
 }
 
 /**
  * Incremental sync: upsert a single task (insert/update only, no embed).
  * Call flushTaskEmbeddings() after batching multiple syncs.
  */
-export async function syncTask(task: Task): Promise<void> {
+export async function syncTask(task: Task): Promise<boolean> {
   const store = await getTaskStore();
-  const text = serializeTask(task);
+  const text = serializeTaskForSearch(task);
   const hash = contentHash(text);
   const docPath = taskDocPath(task.id);
   const now = new Date().toISOString();
 
   const existing = store.internal.findActiveDocument(COLLECTION, docPath);
 
-  if (existing && existing.hash === hash) return; // unchanged
+  if (existing && existing.hash === hash) {
+    return store.internal.getHashesNeedingEmbedding() > 0;
+  }
 
   store.internal.insertContent(hash, text, now);
 
@@ -112,6 +148,7 @@ export async function syncTask(task: Task): Promise<void> {
   } else {
     store.internal.insertDocument(COLLECTION, docPath, task.title, hash, now, now);
   }
+  return true;
 }
 
 /**
@@ -120,7 +157,7 @@ export async function syncTask(task: Task): Promise<void> {
 export async function flushTaskEmbeddings(): Promise<void> {
   const store = await getTaskStore();
   const model = process.env.QMD_EMBED_MODEL || DEFAULT_QMD_MODEL;
-  await store.embed({ model });
+  await embedQmdStore(store, 'task', { model });
 }
 
 /**

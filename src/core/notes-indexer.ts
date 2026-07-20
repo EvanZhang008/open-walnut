@@ -20,10 +20,8 @@
 import fsp from 'node:fs/promises'
 import fs from 'node:fs'
 import path from 'node:path'
-import { createHash } from 'node:crypto'
 import { NOTES_DIR, CLOUD_MODE } from '../constants.js'
 import { withFileLock } from '../utils/file-lock.js'
-import { getNotesStore, DEFAULT_QMD_MODEL } from './qmd-store.js'
 import {
   NOTES_INDEX_PATH,
   upsertNote,
@@ -47,8 +45,10 @@ import {
 import { computeContentHash } from '../utils/file-ops.js'
 import { bus, EventNames } from './event-bus.js'
 import { log } from '../logging/index.js'
-
-const QMD_COLLECTION = 'vault'
+import {
+  dispatchQmdIncrementalIndex,
+  usesQmdIndexWorker,
+} from './qmd-dispatcher.js'
 
 // Wiki-link: [[target]] or [[target|label]]. We resolve on `target` (the part
 // before a real `|alias`), matching the on-disk Obsidian-native form (§2.2).
@@ -155,42 +155,26 @@ function isIndexableRelPath(relPath: string): boolean {
   return true
 }
 
-function virtualPathFor(relPath: string): string {
-  // QMD virtual path within the 'vault' collection — basename-independent key.
-  return relPath.replace(/\\/g, '/')
-}
-
-function qmdBodyHash(body: string): string {
-  return createHash('sha256').update(body).digest('hex')
-}
-
 /**
- * Drive the QMD semantic store for ONE changed note (the qmd-task-sync two-call
- * shape). insertContent is content-addressable by hash; insertDocument/updateDocument
- * maps collection↔path↔hash; hash-skip is the caller's job via findActiveDocument.
- * embed() is already incremental. NEVER calls store.update() here.
+ * Queue one semantic note update. Production returns after enqueue so a note
+ * save never waits for native SQLite/vector work; tests use the inline mode and
+ * retain deterministic completion.
  */
-async function reconcileSemantic(relPath: string, title: string, body: string): Promise<void> {
-  // Cloud companion: no semantic index (same gate as server.ts initQmdStores).
-  // Without this, a full rebuild embeds every note and pins the 2-vCPU box.
+async function reconcileSemantic(relPath: string): Promise<void> {
   if (CLOUD_MODE) return
+  const pending = dispatchQmdIncrementalIndex({ notePaths: [relPath] })
+  if (usesQmdIndexWorker()) {
+    void pending.catch((err) => {
+      log.memory.debug('notes-indexer: semantic reconcile failed', {
+        path: relPath,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    })
+    return
+  }
   try {
-    const store = await getNotesStore()
-    const docPath = virtualPathFor(relPath)
-    const hash = qmdBodyHash(body)
-    const existing = store.internal.findActiveDocument(QMD_COLLECTION, docPath)
-    if (existing && existing.hash === hash) return // up to date
-    const now = new Date().toISOString()
-    store.internal.insertContent(hash, body, now)
-    if (existing) {
-      store.internal.updateDocument(existing.id, title, hash, now)
-    } else {
-      store.internal.insertDocument(QMD_COLLECTION, docPath, title, hash, now, now)
-    }
-    const model = process.env.QMD_EMBED_MODEL || DEFAULT_QMD_MODEL
-    await store.embed({ model })
+    await pending
   } catch (err) {
-    // Semantic is best-effort; structural index is authoritative for exact search.
     log.memory.debug('notes-indexer: semantic reconcile failed', {
       path: relPath,
       error: err instanceof Error ? err.message : String(err),
@@ -199,18 +183,21 @@ async function reconcileSemantic(relPath: string, title: string, body: string): 
 }
 
 async function removeSemantic(relPath: string): Promise<void> {
-  if (CLOUD_MODE) return
-  try {
-    const store = await getNotesStore()
-    store.internal.deactivateDocument(QMD_COLLECTION, virtualPathFor(relPath))
-  } catch { /* best-effort */ }
+  await reconcileSemantic(relPath)
+}
+
+interface ReconcileNoteOptions {
+  deferSemantic?: boolean
 }
 
 /**
  * Reconcile a single note path: structural index (always) + semantic store (best-effort).
  * Returns the note id, or null on deletion / skip.
  */
-export async function reconcileNote(relPath: string): Promise<string | null> {
+async function reconcileNoteInternal(
+  relPath: string,
+  options?: ReconcileNoteOptions,
+): Promise<string | null> {
   if (!isIndexableRelPath(relPath)) return null
   const abs = path.join(NOTES_DIR, relPath)
 
@@ -223,7 +210,7 @@ export async function reconcileNote(relPath: string): Promise<string | null> {
     if (err?.code === 'ENOENT') {
       // Deletion.
       await withFileLock(NOTES_INDEX_PATH, async () => { deleteNoteByPath(relPath) })
-      await removeSemantic(relPath)
+      if (!options?.deferSemantic) await removeSemantic(relPath)
       return null
     }
     throw err
@@ -306,8 +293,12 @@ export async function reconcileNote(relPath: string): Promise<string | null> {
   await withFileLock(NOTES_INDEX_PATH, async () => {
     upsertNote(row, links, tags)
   })
-  await reconcileSemantic(relPath, title, body)
+  if (!options?.deferSemantic) await reconcileSemantic(relPath)
   return id
+}
+
+export async function reconcileNote(relPath: string): Promise<string | null> {
+  return reconcileNoteInternal(relPath)
 }
 
 // ── Coalescing queue (per-path, single drain) ───────────────────────────────
@@ -317,6 +308,7 @@ let drainTimer: ReturnType<typeof setTimeout> | null = null
 let draining = false
 let stopped = false
 let rebuilding = false
+let rebuildPromise: Promise<void> | null = null
 const DEBOUNCE_MS = 300
 
 /**
@@ -391,6 +383,19 @@ export function isRebuilding(): boolean {
   return rebuilding
 }
 
+export interface RebuildIndexOptions {
+  /** Recompute every note vector even when its content hash is unchanged. */
+  forceSemantic?: boolean
+  /** Surface semantic failures to callers such as the QMD recovery endpoint. */
+  strictSemantic?: boolean
+  onProgress?: (progress: {
+    chunksEmbedded: number
+    totalChunks: number
+    bytesProcessed: number
+    totalBytes: number
+  }) => void
+}
+
 /** Recursively collect indexable .md relpaths under NOTES_DIR. Exported for the
  * id migration (notes-identity.ts) so it walks the exact same set as a rebuild. */
 export async function collectIndexableNotePaths(): Promise<string[]> {
@@ -426,8 +431,23 @@ export async function collectIndexableNotePaths(): Promise<string[]> {
  * re-resolves links now that all targets are present (the upsert's re-resolve
  * step handles most, but a clean rebuild benefits from a settle pass).
  */
-export async function rebuildIndex(): Promise<void> {
-  if (rebuilding || stopped) return
+async function rebuildSemanticIndex(
+  options: RebuildIndexOptions,
+): Promise<void> {
+  if (CLOUD_MODE || stopped) return
+
+  await dispatchQmdIncrementalIndex({
+    notesFull: true,
+    forceNotes: options.forceSemantic,
+  }, {
+    onProgress: options.onProgress
+      ? (_store, progress) => options.onProgress!(progress)
+      : undefined,
+  })
+  log.memory.info('notes-index: semantic rebuild complete')
+}
+
+async function performRebuild(options: RebuildIndexOptions): Promise<void> {
   rebuilding = true
   const startedAt = Date.now()
   try {
@@ -438,7 +458,7 @@ export async function rebuildIndex(): Promise<void> {
     for (let i = 0; i < relPaths.length; i++) {
       if (stopped) return // shutdown mid-rebuild — don't write to a torn-down dir
       try {
-        await reconcileNote(relPaths[i])
+        await reconcileNoteInternal(relPaths[i], { deferSemantic: true })
       } catch (err) {
         log.memory.debug('notes-indexer: rebuild reconcile failed', {
           path: relPaths[i],
@@ -454,6 +474,14 @@ export async function rebuildIndex(): Promise<void> {
     // (resolved / ambiguous / unresolved) against the complete notes table.
     await withFileLock(NOTES_INDEX_PATH, async () => { reresolveAllEdges() })
     setIndexMeta('last_full_rebuild', new Date().toISOString())
+    try {
+      await rebuildSemanticIndex(options)
+    } catch (err) {
+      log.memory.warn('notes-index: semantic rebuild failed', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+      if (options.strictSemantic) throw err
+    }
     log.memory.info('notes-index: full rebuild complete', {
       notes: relPaths.length,
       ms: Date.now() - startedAt,
@@ -461,6 +489,22 @@ export async function rebuildIndex(): Promise<void> {
   } finally {
     rebuilding = false
   }
+}
+
+export function rebuildIndex(options: RebuildIndexOptions = {}): Promise<void> {
+  if (rebuildPromise) {
+    const requiresOwnSemanticPass =
+      options.forceSemantic || options.strictSemantic || options.onProgress
+    return requiresOwnSemanticPass
+      ? rebuildPromise.then(() => rebuildIndex(options))
+      : rebuildPromise
+  }
+  if (stopped) return Promise.resolve()
+
+  rebuildPromise = performRebuild(options).finally(() => {
+    rebuildPromise = null
+  })
+  return rebuildPromise
 }
 
 /**

@@ -3,7 +3,7 @@
  * QMD remote benchmark — gating experiment for session-content indexing.
  *
  * Decides remote architecture: A (filter on remote, embed on local) vs
- * B (run QMD + BGE-M3 fully on the remote host). Measures the two unknowns
+ * B (run QMD + its configured embedding model on the remote host). Measures the two unknowns
  * that hardware specs can't answer: embed throughput and search latency.
  *
  * Run on the remote host (Node >= 22):
@@ -17,7 +17,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const MODEL = process.env.QMD_EMBED_MODEL || 'hf:CompendiumLabs/bge-m3-gguf/bge-m3-f16.gguf';
+const MODEL = process.env.QMD_EMBED_MODEL
+  || 'hf:Qwen/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q8_0.gguf';
 
 function now() { return Number(process.hrtime.bigint() / 1_000_000n); }
 function mb(bytes) { return (bytes / 1024 / 1024).toFixed(1); }
@@ -108,7 +109,12 @@ async function main() {
     const tStore = now();
     const store = await createStore({
       dbPath,
-      config: { collections: { bench: { path: collDir, pattern: '__qmd_programmatic_only__' } } },
+      config: {
+        models: { embed: MODEL },
+        collections: {
+          bench: { path: collDir, pattern: '__qmd_programmatic_only__' },
+        },
+      },
     });
     result.storeInitMs = now() - tStore;
 

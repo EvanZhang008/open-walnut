@@ -23,7 +23,7 @@ const locations = [
   resolve(__dirname, '../web/node_modules/@tobilu/qmd'),
 ];
 
-let anyPatched = false;
+let anyVerified = false;
 
 for (const qmdDir of locations) {
   const storeFile = resolve(qmdDir, 'dist/store.js');
@@ -31,17 +31,20 @@ for (const qmdDir of locations) {
 
   // ── Version guard ──
   const pkgFile = resolve(qmdDir, 'package.json');
+  let pkg;
   try {
-    const pkg = JSON.parse(readFileSync(pkgFile, 'utf8'));
-    if (pkg.version !== '2.1.0') {
-      console.warn(`patch-qmd: WARNING — expected @tobilu/qmd@2.1.0 but found @${pkg.version} at ${qmdDir}. Skipping.`);
-      continue;
-    }
-  } catch {
-    console.warn(`patch-qmd: WARNING — could not read ${pkgFile}, skipping version check`);
+    pkg = JSON.parse(readFileSync(pkgFile, 'utf8'));
+  } catch (error) {
+    throw new Error(`patch-qmd: could not read ${pkgFile}: ${error}`);
+  }
+  if (pkg.version !== '2.1.0') {
+    throw new Error(
+      `patch-qmd: expected @tobilu/qmd@2.1.0 but found @${pkg.version} at ${qmdDir}`,
+    );
   }
 
-  let src = readFileSync(storeFile, 'utf8');
+  const originalSrc = readFileSync(storeFile, 'utf8');
+  let src = originalSrc;
   let applied = 0;
   const expected = 6;
 
@@ -121,20 +124,33 @@ ${dottedInsertion}
     applied++;
   }
 
-  if (applied === expected) {
+  const requiredSnippets = [
+    'store.searchFTS(query, candidateLimit, collection)',
+    'store.searchFTS(q.query, candidateLimit, collection)',
+    'store.searchVec(vecQueries[i].text, DEFAULT_EMBED_MODEL, candidateLimit, collection',
+    'store.searchFTS(search.query, candidateLimit, coll)',
+    'store.searchVec(vecSearches[i].query, DEFAULT_EMBED_MODEL, candidateLimit, coll',
+    'Handle dotted version tokens:',
+    "term.split('.').map",
+  ];
+  const missing = requiredSnippets.filter((snippet) => !src.includes(snippet));
+  if (missing.length > 0) {
+    throw new Error(
+      `patch-qmd: patch contract incomplete at ${qmdDir} `
+      + `(${applied}/${expected} replacements applied); missing: ${missing.join(', ')}`,
+    );
+  }
+
+  if (src !== originalSrc) {
     writeFileSync(storeFile, src, 'utf8');
     console.log(`patch-qmd: patched ${storeFile} \u2714`);
-    anyPatched = true;
-  } else if (applied > 0 && applied < expected) {
-    writeFileSync(storeFile, src, 'utf8');
-    console.warn(`patch-qmd: WARNING \u2014 partial patch (${applied}/${expected}) at ${storeFile}. Review scripts/patch-qmd.mjs.`);
-    anyPatched = true;
   } else {
-    console.log(`patch-qmd: ${storeFile} \u2014 no patches needed (already applied or source changed)`);
+    console.log(`patch-qmd: ${storeFile} \u2014 patch contract verified`);
   }
+  anyVerified = true;
 }
 
-if (!anyPatched) {
+if (!anyVerified) {
   // Check if we found any QMD at all
   const found = locations.some(d => existsSync(resolve(d, 'dist/store.js')));
   if (!found) {

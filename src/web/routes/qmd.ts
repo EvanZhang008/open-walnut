@@ -17,7 +17,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { log } from '../../logging/index.js'
-import { getMemoryStore, getNotesStore, getTaskStore, getSessionStore, initQmdStores, DEFAULT_QMD_MODEL } from '../../core/qmd-store.js'
+import { resolveConfiguredQmdModel } from '../../core/qmd-model.js'
+import { runQmdBackgroundIndex } from '../../core/qmd-background-indexer.js'
+import type { QmdCorpusStats } from '../../core/qmd-stats.js'
 
 export const qmdRouter = Router()
 
@@ -27,6 +29,13 @@ type QmdStatus = 'ready' | 'indexing' | 'downloading' | 'error'
 
 let currentStatus: QmdStatus = 'ready'
 let currentError: string | null = null
+let currentStoreStats: QmdCorpusStats = {
+  memory: null,
+  notes: null,
+  tasks: null,
+  sessions: null,
+}
+let stopDownloadModelPoll: (() => void) | null = null
 
 // Embedding progress — updated via onProgress callback during embed()
 interface EmbedProgressInfo {
@@ -34,7 +43,7 @@ interface EmbedProgressInfo {
   totalChunks: number
   bytesProcessed: number
   totalBytes: number
-  store: string // 'memory' | 'notes'
+  store: string // 'memory' | 'notes' | 'task' | 'session'
 }
 let currentProgress: EmbedProgressInfo | null = null
 
@@ -43,8 +52,17 @@ let currentProgress: EmbedProgressInfo | null = null
  * where the module may persist across restarts.
  */
 export function resetQmdRouteState(): void {
+  stopDownloadModelPoll?.()
+  stopDownloadModelPoll = null
   currentStatus = 'ready'
   currentError = null
+  currentProgress = null
+  currentStoreStats = {
+    memory: null,
+    notes: null,
+    tasks: null,
+    sessions: null,
+  }
 }
 
 /**
@@ -64,6 +82,10 @@ export function setQmdEmbedProgress(store: string, progress: { chunksEmbedded: n
   currentProgress = { ...progress, store }
 }
 
+export function setQmdStoreStats(stats: QmdCorpusStats): void {
+  currentStoreStats = stats
+}
+
 // TODO: cancel endpoint — would need to abort the underlying embed() / update()
 // operations, which QMD SDK doesn't currently support.
 
@@ -78,25 +100,23 @@ function formatBytes(bytes: number): string {
 }
 
 /**
- * Parse QMD_EMBED_MODEL env var to determine expected GGUF filename and path.
+ * Parse a selected model URI to determine its expected GGUF filename and path.
  * Format: "hf:org/repo/filename.gguf" → file "hf_org_repo_filename.gguf"
  *
  * For non-hf: URIs, returns the raw URI as the file field with downloaded: null.
  */
-function getModelInfo(): {
+function getModelInfo(modelUri: string): {
   name: string
   file: string
   size: string | null
   path: string | null
   downloaded: boolean | null
 } {
-  const envModel = process.env.QMD_EMBED_MODEL || DEFAULT_QMD_MODEL
-
   // Non-hf: URIs — we don't know the local path or download status
-  if (!envModel.startsWith('hf:')) {
+  if (!modelUri.startsWith('hf:')) {
     return {
-      name: envModel,
-      file: envModel,
+      name: modelUri,
+      file: modelUri,
       size: null,
       path: null,
       downloaded: null,
@@ -105,14 +125,14 @@ function getModelInfo(): {
 
   // Parse hf:org/repo/filename.gguf → hf_org_filename.gguf
   // QMD/node-llama-cpp naming convention: hf_{org}_{filename} (repo name is skipped)
-  const parts3 = envModel.slice(3).split('/')
+  const parts3 = modelUri.slice(3).split('/')
   const file = parts3.length >= 3
     ? `hf_${parts3[0]}_${parts3[parts3.length - 1]}`
-    : 'hf_' + envModel.slice(3).replace(/\//g, '_')
+    : 'hf_' + modelUri.slice(3).replace(/\//g, '_')
 
   // Parse model name from URI: hf:org/repo/filename.gguf → "repo (org/repo)"
-  const parts = envModel.slice(3).split('/')
-  const name = parts.length >= 2 ? `${parts[1]} (${parts[0]}/${parts[1]})` : envModel
+  const parts = modelUri.slice(3).split('/')
+  const name = parts.length >= 2 ? `${parts[1]} (${parts[0]}/${parts[1]})` : modelUri
 
   // Respect XDG_CACHE_HOME if set
   const cacheBase = process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache')
@@ -141,84 +161,14 @@ function getModelInfo(): {
   }
 }
 
-/**
- * Build collection stats from a QMD store — indexed docs, embedded docs, chunks.
- *
- * - indexed: files scanned into the DB (from store.listCollections)
- * - embedded: docs that have vector embeddings (from content_vectors)
- * - chunks: total embedding chunks (each doc is split into multiple chunks)
- */
-async function getStoreStats(storeFn: () => Promise<import('@tobilu/qmd').QMDStore>): Promise<{
-  collections: Record<string, { indexed: number; embedded: number; chunks: number }>
-  totalIndexed: number
-  totalEmbedded: number
-  totalChunks: number
-} | null> {
-  try {
-    const store = await storeFn()
-    const collections = await store.listCollections()
-
-    // Query embedding stats per collection from SQLite (source of truth)
-    // Note: multiple docs can share the same content hash — count docs, not distinct hashes
-    const embeddingStats = new Map<string, { embedded: number; chunks: number }>()
-    try {
-      const rows = store.internal.db.prepare(`
-        SELECT d.collection,
-          SUM(CASE WHEN d.hash IN (SELECT hash FROM content_vectors) THEN 1 ELSE 0 END) as embedded,
-          (SELECT COUNT(*) FROM content_vectors cv2
-           WHERE cv2.hash IN (SELECT hash FROM documents WHERE collection=d.collection AND active=1)
-          ) as chunks
-        FROM documents d
-        WHERE d.active=1
-        GROUP BY d.collection
-      `).all() as Array<{ collection: string; embedded: number; chunks: number }>
-      for (const row of rows) {
-        embeddingStats.set(row.collection, { embedded: row.embedded, chunks: row.chunks })
-      }
-    } catch {
-      // content_vectors may not exist yet — leave counts at 0
-    }
-
-    const collMap: Record<string, { indexed: number; embedded: number; chunks: number }> = {}
-    let totalIndexed = 0
-    let totalEmbedded = 0
-    let totalChunks = 0
-    for (const col of collections) {
-      const emb = embeddingStats.get(col.name) ?? { embedded: 0, chunks: 0 }
-      collMap[col.name] = { indexed: col.doc_count, embedded: emb.embedded, chunks: emb.chunks }
-      totalIndexed += col.doc_count
-      totalEmbedded += emb.embedded
-      totalChunks += emb.chunks
-    }
-    return { collections: collMap, totalIndexed, totalEmbedded, totalChunks }
-  } catch (err) {
-    log.memory.warn('getStoreStats failed', {
-      error: err instanceof Error ? err.message : String(err),
-    })
-    return null
-  }
-}
-
 // GET /api/qmd/status
 qmdRouter.get('/status', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const model = getModelInfo()
-
-    const [memoryStats, notesStats, tasksStats, sessionsStats] = await Promise.all([
-      getStoreStats(getMemoryStore),
-      getStoreStats(getNotesStore),
-      getStoreStats(getTaskStore).catch(() => null),
-      getStoreStats(getSessionStore).catch(() => null),
-    ])
+    const model = getModelInfo(await resolveConfiguredQmdModel())
 
     res.json({
       model,
-      stores: {
-        memory: memoryStats,
-        notes: notesStats,
-        tasks: tasksStats,
-        sessions: sessionsStats,
-      },
+      stores: currentStoreStats,
       status: currentStatus,
       error: currentError,
       progress: currentStatus === 'indexing' ? currentProgress : null,
@@ -244,47 +194,75 @@ qmdRouter.post('/download', async (_req: Request, res: Response, next: NextFunct
 
     currentStatus = 'downloading'
     currentError = null
+    const modelUri = await resolveConfiguredQmdModel()
 
-    // Fire-and-forget: initQmdStores triggers download via embed(), then indexes.
-    // State transitions: downloading → indexing → ready (or error at any point).
-    initQmdStores()
+    // Fire-and-forget: initialization downloads the model, then the same
+    // recovery path reconciles notes, tasks, and sessions before reporting ready.
+    const indexRun = runQmdBackgroundIndex({
+      initialize: true,
+      force: true,
+      model: modelUri,
+      resetStores: true,
+      onProgress: setQmdEmbedProgress,
+      onStats: setQmdStoreStats,
+    })
+    let pollForModel: ReturnType<typeof setInterval> | null = null
+    let pollTimeout: ReturnType<typeof setTimeout> | null = null
+    const stopPolling = () => {
+      if (pollForModel) clearInterval(pollForModel)
+      if (pollTimeout) clearTimeout(pollTimeout)
+      pollForModel = null
+      pollTimeout = null
+      if (stopDownloadModelPoll === stopPolling) stopDownloadModelPoll = null
+    }
+    stopDownloadModelPoll?.()
+    stopDownloadModelPoll = stopPolling
+
+    void indexRun
       .then(() => {
         currentStatus = 'ready'
         currentError = null
-        log.memory.info('QMD model download + init complete')
+        log.memory.info('QMD model download + corpus sync complete')
       })
       .catch((err) => {
         currentStatus = 'error'
         currentError = err instanceof Error ? err.message : String(err)
+        currentProgress = null
         log.memory.error('QMD model download failed', { error: currentError })
       })
+      .finally(stopPolling)
 
     // Transition to 'indexing' once the model file appears on disk.
-    // initQmdStores calls createStore (downloads model) then update+embed (indexing).
+    // Store initialization downloads the model during its first embed pass.
     // We poll briefly to detect when the download phase is done.
-    const model = getModelInfo()
+    const model = getModelInfo(modelUri)
     if (model.path) {
-      const pollForModel = setInterval(() => {
+      pollForModel = setInterval(() => {
         if (currentStatus !== 'downloading') {
-          clearInterval(pollForModel)
+          stopPolling()
           return
         }
         try {
           if (fs.existsSync(model.path!)) {
             currentStatus = 'indexing'
             log.memory.info('QMD model downloaded, transitioning to indexing')
-            clearInterval(pollForModel)
+            stopPolling()
           }
         } catch {
           // Ignore — keep polling
         }
       }, 2000)
       // Safety: stop polling after 30 minutes even if model never appears
-      setTimeout(() => clearInterval(pollForModel), 30 * 60 * 1000)
+      pollTimeout = setTimeout(stopPolling, 30 * 60 * 1000)
+      ;(pollForModel as { unref?: () => void }).unref?.()
+      ;(pollTimeout as { unref?: () => void }).unref?.()
     }
 
     res.status(202).json({ status: 'downloading' })
   } catch (err) {
+    currentStatus = 'error'
+    currentError = err instanceof Error ? err.message : String(err)
+    currentProgress = null
     next(err)
   }
 })
@@ -305,23 +283,18 @@ qmdRouter.post('/reindex', async (_req: Request, res: Response, next: NextFuncti
 
     currentStatus = 'indexing'
     currentError = null
+    const modelUri = await resolveConfiguredQmdModel()
 
-    // Fire-and-forget: update + embed on both stores sequentially (MEDIUM-4).
-    // Sequential avoids concurrent embed() calls which can cause memory pressure
-    // from loading two model instances simultaneously.
-    const embedModel = process.env.QMD_EMBED_MODEL || DEFAULT_QMD_MODEL
-    ;(async () => {
-      const mem = await getMemoryStore()
-      await mem.update()
-      await mem.embed({ force: true, model: embedModel, onProgress: (p) => {
-        currentProgress = { ...p, store: 'memory' }
-      }})
-      const notes = await getNotesStore()
-      await notes.update()
-      await notes.embed({ force: true, model: embedModel, onProgress: (p) => {
-        currentProgress = { ...p, store: 'notes' }
-      }})
-    })()
+    // Rebuild all stores through their canonical source adapters. Notes use
+    // their programmatic QMD sync rather than store.update(), which would
+    // create duplicate virtual paths.
+    runQmdBackgroundIndex({
+      force: true,
+      model: modelUri,
+      resetStores: true,
+      onProgress: setQmdEmbedProgress,
+      onStats: setQmdStoreStats,
+    })
       .then(() => {
         currentStatus = 'ready'
         currentError = null
@@ -338,6 +311,9 @@ qmdRouter.post('/reindex', async (_req: Request, res: Response, next: NextFuncti
     // Use 'indexing' consistently (CRITICAL-3)
     res.status(202).json({ status: 'indexing' })
   } catch (err) {
+    currentStatus = 'error'
+    currentError = err instanceof Error ? err.message : String(err)
+    currentProgress = null
     next(err)
   }
 })

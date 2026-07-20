@@ -13,12 +13,17 @@
  *   for incremental syncs. syncAllSessions() calls embed() directly for bulk init.
  */
 import { createHash } from 'node:crypto';
-import { getSessionStore, DEFAULT_QMD_MODEL } from './qmd-store.js';
+import {
+  embedQmdStore,
+  getSessionStore,
+  DEFAULT_QMD_MODEL,
+} from './qmd-store.js';
 import { listSessions } from './session-tracker.js';
 import { listTasks } from './task-manager.js';
 import { readSessionHistory } from './session-history.js';
 import { buildIndexedContent } from './session-content-indexer.js';
 import { log } from '../logging/index.js';
+import { pruneStaleQmdDocuments } from './qmd-sync-utils.js';
 import type { SessionRecord, Task } from './types.js';
 
 const COLLECTION = 'sessions';
@@ -31,6 +36,16 @@ const CONTENT_READ_TIMEOUT_MS = 20_000;
 export interface SerializeOptions {
   /** Read + filter JSONL conversation body and append it. Default true. */
   includeContent?: boolean;
+}
+
+interface ConversationBodyRead {
+  body: string | null;
+  failed: boolean;
+}
+
+interface SerializedSession {
+  text: string | null;
+  contentReadFailed: boolean;
 }
 
 /** Metadata + linked-task header (always cheap, no I/O). */
@@ -52,9 +67,9 @@ function serializeMetadata(session: SessionRecord, task?: Task): string {
 }
 
 /**
- * Read and filter the session's JSONL conversation body. Returns null on
- * failure (read timeout, parse error, missing file) so the caller can keep the
- * previous doc rather than overwrite it with metadata-only.
+ * Read and filter the provider-native conversation history. Failure is
+ * explicit so an existing content-rich document is never replaced by a
+ * metadata-only transient read.
  *
  * LOCAL SESSIONS ONLY: remote sessions are skipped here because reading their
  * JSONL means pulling the full (up to ~14MB) file over the SSH tunnel, which
@@ -62,23 +77,52 @@ function serializeMetadata(session: SessionRecord, task?: Task): string {
  * a daemon-side filter RPC (filter on the remote host, ship back ~50KB) — that
  * is a separate, larger change. Until then remote sessions stay metadata-only.
  */
-async function readConversationBody(session: SessionRecord): Promise<string | null> {
-  if (session.host) return null; // remote — see note above
+async function readConversationBody(
+  session: SessionRecord,
+): Promise<ConversationBodyRead> {
+  if (session.engine === 'codex') {
+    try {
+      const { readAcpSessionHistoryState } =
+        await import('../providers/acp-session-history.js');
+      const state = await readAcpSessionHistoryState(session);
+      if (!state.journalExists) return { body: null, failed: true };
+      if (state.messages.length === 0) return { body: null, failed: false };
+      const { body } = buildIndexedContent(state.messages);
+      return { body: body || null, failed: false };
+    } catch (err) {
+      log.agent.debug('ACP session content read failed during indexing', {
+        sessionId: session.claudeSessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return { body: null, failed: true };
+    }
+  }
+
+  if (session.host) return { body: null, failed: false }; // remote Claude session
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     const messages = await Promise.race([
       readSessionHistory(session.claudeSessionId, session.cwd, session.host, session.outputFile, { skipSubagents: true }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('content read timeout')), CONTENT_READ_TIMEOUT_MS)),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error('content read timeout')),
+          CONTENT_READ_TIMEOUT_MS,
+        );
+      }),
     ]);
-    if (!messages || messages.length === 0) return null;
+    if (!messages || messages.length === 0) {
+      return { body: null, failed: false };
+    }
     const { body } = buildIndexedContent(messages);
-    return body || null;
+    return { body: body || null, failed: false };
   } catch (err) {
     log.agent.debug('session content read failed during indexing', {
       sessionId: session.claudeSessionId,
       error: err instanceof Error ? err.message : String(err),
     });
-    return null;
+    return { body: null, failed: true };
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
 }
 
@@ -97,9 +141,10 @@ async function serializeSession(
   session: SessionRecord,
   task?: Task,
   opts?: SerializeOptions,
-): Promise<string | null> {
+): Promise<SerializedSession> {
   const includeContent = opts?.includeContent !== false;
   const sections: string[] = [];
+  let contentReadFailed = false;
 
   if (session.summary) sections.push(`# Session Gist\n${session.summary}`);
 
@@ -107,11 +152,16 @@ async function serializeSession(
   if (meta) sections.push(`# Session Metadata\n${meta}`);
 
   if (includeContent) {
-    const body = await readConversationBody(session);
+    const content = await readConversationBody(session);
+    contentReadFailed = content.failed;
+    const body = content.body;
     if (body) sections.push(body);
   }
 
-  return sections.length ? sections.join('\n\n') : null;
+  return {
+    text: sections.length ? sections.join('\n\n') : null,
+    contentReadFailed,
+  };
 }
 
 /** SHA256 hash of serialized content. */
@@ -127,6 +177,13 @@ function sessionDocPath(sessionId: string): string {
 export interface SyncAllOptions {
   /** Max concurrent JSONL reads (content embedding I/O). Default 4. */
   concurrency?: number;
+  force?: boolean;
+  onProgress?: (progress: {
+    chunksEmbedded: number;
+    totalChunks: number;
+    bytesProcessed: number;
+    totalBytes: number;
+  }) => void;
 }
 
 /**
@@ -152,15 +209,20 @@ export async function syncAllSessions(opts?: SyncAllOptions): Promise<void> {
     while (cursor < sessions.length) {
       const session = sessions[cursor++];
       const task = session.taskId ? taskMap.get(session.taskId) : undefined;
-      const text = await serializeSession(session, task);
-      const now = new Date().toISOString();
-
-      if (!text || !text.trim()) { skipped++; continue; }
-
-      const hash = contentHash(text);
       const docPath = sessionDocPath(session.claudeSessionId);
       const title = session.title || session.claudeSessionId.slice(0, 12);
       const existing = store.internal.findActiveDocument(COLLECTION, docPath);
+      const serialized = await serializeSession(session, task);
+      const text = serialized.text;
+      const now = new Date().toISOString();
+
+      if (serialized.contentReadFailed && existing) {
+        skipped++;
+        continue;
+      }
+      if (!text || !text.trim()) { skipped++; continue; }
+
+      const hash = contentHash(text);
 
       if (existing && existing.hash === hash) { skipped++; continue; }
 
@@ -177,10 +239,24 @@ export async function syncAllSessions(opts?: SyncAllOptions): Promise<void> {
 
   await Promise.all(Array.from({ length: concurrency }, () => worker()));
 
-  const model = process.env.QMD_EMBED_MODEL || DEFAULT_QMD_MODEL;
-  await store.embed({ model });
+  // Re-read at prune time so sessions created while workers were indexing are
+  // retained even if their incremental sync won the race with this bulk pass.
+  const currentSessions = await listSessions();
+  const expectedPaths = new Set(
+    currentSessions.map((session) => sessionDocPath(session.claudeSessionId)),
+  );
+  const pruned = pruneStaleQmdDocuments(store, COLLECTION, expectedPaths);
 
-  log.agent.info(`QMD session sync: ${inserted} inserted, ${updated} updated, ${skipped} skipped (${sessions.length} total)`);
+  const model = process.env.QMD_EMBED_MODEL || DEFAULT_QMD_MODEL;
+  await embedQmdStore(store, 'session', {
+    ...(opts?.force ? { force: true } : {}),
+    model,
+    onProgress: opts?.onProgress,
+  });
+
+  log.agent.info(`QMD session sync: ${inserted} inserted, ${updated} updated, ${skipped} skipped, ${pruned.deactivated} stale removed (${sessions.length} total)`, {
+    pruned,
+  });
 }
 
 /**
@@ -192,7 +268,11 @@ export async function syncAllSessions(opts?: SyncAllOptions): Promise<void> {
  * conversation body. We never DELETE an existing doc here — if serialization
  * yields nothing, we leave the prior (good) doc in place.
  */
-export async function syncSession(session: SessionRecord, task?: Task, opts?: SerializeOptions): Promise<void> {
+export async function syncSession(
+  session: SessionRecord,
+  task?: Task,
+  opts?: SerializeOptions,
+): Promise<boolean> {
   const store = await getSessionStore();
 
   // If task not provided, try to load it
@@ -204,16 +284,20 @@ export async function syncSession(session: SessionRecord, task?: Task, opts?: Se
     } catch { /* task may have been deleted */ }
   }
 
-  const text = await serializeSession(session, linkedTask, opts);
-  if (!text || !text.trim()) return;
-
-  const hash = contentHash(text);
   const docPath = sessionDocPath(session.claudeSessionId);
   const title = session.title || session.claudeSessionId.slice(0, 12);
   const now = new Date().toISOString();
 
   const existing = store.internal.findActiveDocument(COLLECTION, docPath);
-  if (existing && existing.hash === hash) return;
+  const serialized = await serializeSession(session, linkedTask, opts);
+  const text = serialized.text;
+  if (serialized.contentReadFailed && existing) return false;
+  if (!text || !text.trim()) return false;
+
+  const hash = contentHash(text);
+  if (existing && existing.hash === hash) {
+    return store.internal.getHashesNeedingEmbedding() > 0;
+  }
 
   store.internal.insertContent(hash, text, now);
 
@@ -222,6 +306,7 @@ export async function syncSession(session: SessionRecord, task?: Task, opts?: Se
   } else {
     store.internal.insertDocument(COLLECTION, docPath, title, hash, now, now);
   }
+  return true;
 }
 
 /**
@@ -230,5 +315,11 @@ export async function syncSession(session: SessionRecord, task?: Task, opts?: Se
 export async function flushSessionEmbeddings(): Promise<void> {
   const store = await getSessionStore();
   const model = process.env.QMD_EMBED_MODEL || DEFAULT_QMD_MODEL;
-  await store.embed({ model });
+  await embedQmdStore(store, 'session', { model });
+}
+
+/** Remove a deleted session from the QMD store. */
+export async function removeSession(sessionId: string): Promise<void> {
+  const store = await getSessionStore();
+  store.internal.deactivateDocument(COLLECTION, sessionDocPath(sessionId));
 }

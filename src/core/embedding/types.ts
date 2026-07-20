@@ -3,7 +3,7 @@
 export interface EmbeddingConfig {
   /** Enable/disable embedding-based search. Default: true. */
   enabled?: boolean;
-  /** QMD model URI (e.g. 'hf:CompendiumLabs/bge-m3-gguf/bge-m3-f16.gguf'). */
+  /** QMD model URI (e.g. 'hf:Qwen/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q8_0.gguf'). */
   qmd_model?: string;
   /** RRF alpha (BM25 weight). Default: 0.4. Range: 0-1. */
   rrf_alpha?: number;

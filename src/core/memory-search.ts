@@ -9,6 +9,7 @@
  * query says "trip"). The caller (Claude) generates focused 2-4 word queries.
  */
 import { getMemoryStore, getNotesStore, getTaskStore, getSessionStore } from './qmd-store.js';
+import { runQmdReadWork } from './qmd-work-queue.js';
 import { temporalDecay } from './temporal-decay.js';
 import { log } from '../logging/index.js';
 import type { HybridQueryResult } from '@tobilu/qmd';
@@ -36,8 +37,11 @@ const SOURCE_WEIGHTS: Record<string, { weight: number; decays: boolean; halfLife
   session:           { weight: 0.9, decays: true, halfLife: 30 },
 };
 
-// Minimum QMD score to include a result (filters out noise)
-const MIN_SCORE = 0.15;
+// Minimum QMD reranked score to include a result. This is QMD's blend of RRF
+// position and reranker relevance, not a standalone confidence probability.
+// No-rerank mode uses 1 / rank, so applying this threshold there would silently
+// cap every interactive result set at six rows.
+const MIN_RERANKED_BLEND_SCORE = 0.15;
 
 export interface MemorySearchResult {
   filepath: string;
@@ -51,6 +55,13 @@ export interface MemorySearchResult {
   sessionId?: string;
 }
 
+export interface MemorySearchOptions {
+  /** Local reranker quality pass. Disable for latency-sensitive interactive UI. */
+  rerank?: boolean;
+  /** Candidate over-fetch before source/path filtering. Default 3. */
+  overfetchMultiplier?: number;
+}
+
 /**
  * Search memory and/or notes using multiple focused queries.
  *
@@ -58,11 +69,12 @@ export interface MemorySearchResult {
  * RRF fusion pipeline. This gives much better recall than a single long query
  * because BM25 uses AND — missing one word excludes the document entirely.
  */
-export async function memoryNotesSearch(
+async function memoryNotesSearchUnlocked(
   queries: string | string[],
   sources?: string[],
   limit: number = 15,
   pathPrefix?: string,
+  options: MemorySearchOptions = {},
 ): Promise<MemorySearchResult[]> {
   const queryList = Array.isArray(queries) ? queries : [queries];
   if (queryList.length === 0) return [];
@@ -131,8 +143,8 @@ export async function memoryNotesSearch(
         queries: expandedQueries,
         // Over-fetch to allow post-filtering; a narrow path prefix discards
         // most hits, so fetch deeper when one is set.
-        limit: storeLimit * (normalizedPrefix ? 8 : 3),
-        rerank: true,
+        limit: storeLimit * (normalizedPrefix ? 8 : (options.overfetchMultiplier ?? 3)),
+        rerank: options.rerank ?? true,
       });
       log.agent.info(`memory search ${storeLabel}: ${raw.length} results, queries=${queryList.length}`, {
         queries: queryList,
@@ -141,7 +153,7 @@ export async function memoryNotesSearch(
 
       const collectionSet = new Set(collections);
       return raw
-        .filter(r => r.score >= MIN_SCORE)
+        .filter(r => options.rerank === false || r.score >= MIN_RERANKED_BLEND_SCORE)
         .filter(r => {
           // Post-filter to requested collections
           const m = r.file?.match(/^qmd:\/\/([^/]+)\//);
@@ -196,8 +208,8 @@ export async function memoryNotesSearch(
       const store = await storeFn();
       const raw: HybridQueryResult[] = await store.search({
         queries: expandedQueries,
-        limit: storeLimit * 3,
-        rerank: true,
+        limit: storeLimit * (options.overfetchMultiplier ?? 3),
+        rerank: options.rerank ?? true,
       });
       log.agent.info(`memory search ${sourceLabel}: ${raw.length} results, queries=${queryList.length}`, {
         queries: queryList,
@@ -208,7 +220,7 @@ export async function memoryNotesSearch(
       const weight = config?.weight ?? 1.0;
 
       return raw
-        .filter(r => r.score >= MIN_SCORE)
+        .filter(r => options.rerank === false || r.score >= MIN_RERANKED_BLEND_SCORE)
         .filter(r => matchesPathPrefix(r.file ?? ''))
         .map((r) => {
           const virtualFile = r.file ?? '';
@@ -282,4 +294,15 @@ export async function memoryNotesSearch(
   return results
     .sort((a, b) => b.finalScore - a.finalScore)
     .slice(0, limit);
+}
+
+export function memoryNotesSearch(
+  queries: string | string[],
+  sources?: string[],
+  limit: number = 15,
+  pathPrefix?: string,
+  options: MemorySearchOptions = {},
+): Promise<MemorySearchResult[]> {
+  return runQmdReadWork(() =>
+    memoryNotesSearchUnlocked(queries, sources, limit, pathPrefix, options));
 }

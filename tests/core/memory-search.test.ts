@@ -21,6 +21,7 @@ type MockResult = { file: string; title: string; bestChunk: string; score: numbe
 vi.mock('../../src/core/qmd-store.js', () => {
   let mockMemoryResults: MockResult[] = [];
   let mockNotesResults: MockResult[] = [];
+  let mockTaskResults: MockResult[] = [];
 
   const makeStore = (getResults: () => MockResult[], root: string) => ({
     search: vi.fn(async ({ limit }: { limit: number }) => getResults().slice(0, limit)),
@@ -32,34 +33,43 @@ vi.mock('../../src/core/qmd-store.js', () => {
 
   const mockStore = makeStore(() => mockMemoryResults, '/abs/memory');
   const mockNotesStore = makeStore(() => mockNotesResults, '/abs/notes');
+  const mockTaskStore = makeStore(() => mockTaskResults, '/abs/task');
+  const mockSessionStore = makeStore(() => [], '/abs/session');
 
   return {
     getMemoryStore: vi.fn(async () => mockStore),
     getNotesStore: vi.fn(async () => mockNotesStore),
-    getTaskStore: vi.fn(async () => makeStore(() => [], '/abs/task')),
-    getSessionStore: vi.fn(async () => makeStore(() => [], '/abs/session')),
+    getTaskStore: vi.fn(async () => mockTaskStore),
+    getSessionStore: vi.fn(async () => mockSessionStore),
     closeQmdStores: vi.fn(),
     __setMockMemoryResults: (r: MockResult[]) => { mockMemoryResults = r; },
     __setMockNotesResults: (r: MockResult[]) => { mockNotesResults = r; },
+    __setMockTaskResults: (r: MockResult[]) => { mockTaskResults = r; },
     __getMockStore: () => mockStore,
     __getMockNotesStore: () => mockNotesStore,
+    __getMockTaskStore: () => mockTaskStore,
   };
 });
 
 import { memoryNotesSearch } from '../../src/core/memory-search.js';
+import { reserveQmdIndexWork } from '../../src/core/qmd-work-queue.js';
 
 const qmdStore = await import('../../src/core/qmd-store.js') as unknown as {
   __setMockMemoryResults: (r: MockResult[]) => void;
   __setMockNotesResults: (r: MockResult[]) => void;
+  __setMockTaskResults: (r: MockResult[]) => void;
   __getMockStore: () => { search: ReturnType<typeof vi.fn> };
   __getMockNotesStore: () => { search: ReturnType<typeof vi.fn> };
+  __getMockTaskStore: () => { search: ReturnType<typeof vi.fn> };
 };
 
 beforeEach(() => {
   qmdStore.__setMockMemoryResults([]);
   qmdStore.__setMockNotesResults([]);
+  qmdStore.__setMockTaskResults([]);
   qmdStore.__getMockStore().search.mockClear();
   qmdStore.__getMockNotesStore().search.mockClear();
+  qmdStore.__getMockTaskStore().search.mockClear();
 });
 
 /** Helper: virtual path in the daily collection dated N days ago. */
@@ -200,6 +210,78 @@ describe('memoryNotesSearch', () => {
       expect(typeof r.finalScore).toBe('number');
       expect(typeof r.source).toBe('string');
       expect(typeof r.collection).toBe('string');
+    }
+  });
+
+  it('enables QMD reranking by default for ordinary memory search', async () => {
+    await memoryNotesSearch('deployment history', ['memory_daily']);
+
+    expect(qmdStore.__getMockStore().search).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rerank: true,
+      }),
+    );
+  });
+
+  it('uses the requested low-latency QMD options for interactive task search', async () => {
+    await memoryNotesSearch(
+      'career accomplishments',
+      ['task'],
+      40,
+      undefined,
+      { rerank: false, overfetchMultiplier: 1 },
+    );
+
+    expect(qmdStore.__getMockTaskStore().search).toHaveBeenCalledWith(
+      expect.objectContaining({
+        limit: 40,
+        rerank: false,
+      }),
+    );
+  });
+
+  it('keeps lower-ranked results when reranking is disabled', async () => {
+    qmdStore.__setMockTaskResults(Array.from({ length: 10 }, (_, index) => ({
+      file: `qmd://tasks/task-semantic-rank-${index + 1}`,
+      title: `Semantic result ${index + 1}`,
+      bestChunk: 'Conceptually related content',
+      score: 1 / (index + 1),
+    })));
+
+    const results = await memoryNotesSearch(
+      'conceptual query',
+      ['task'],
+      10,
+      undefined,
+      { rerank: false, overfetchMultiplier: 1 },
+    );
+
+    expect(results).toHaveLength(10);
+    expect(results.at(-1)?.taskId).toBe('semantic-rank-10');
+  });
+
+  it('searches the committed snapshot while an ordinary worker is reserved', async () => {
+    qmdStore.__setMockTaskResults([{
+      file: 'qmd://tasks/task-existing-result',
+      title: 'Existing result',
+      bestChunk: 'Already committed semantic content',
+      score: 1,
+    }]);
+    const reservation = reserveQmdIndexWork();
+
+    try {
+      await reservation.drained;
+      const results = await memoryNotesSearch(
+        'committed semantic content',
+        ['task'],
+        10,
+        undefined,
+        { rerank: false },
+      );
+      expect(results.map((result) => result.taskId))
+        .toContain('existing-result');
+    } finally {
+      reservation.release();
     }
   });
 });

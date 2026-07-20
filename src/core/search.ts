@@ -1,6 +1,8 @@
 import { log } from '../logging/index.js';
+import { CLOUD_MODE } from '../constants.js';
 import { listTasks } from './task-manager.js';
-import type { Task } from './types.js';
+import { listSessions } from './session-tracker.js';
+import type { SessionRecord, Task } from './types.js';
 
 export interface SearchResult {
   type: 'task' | 'memory' | 'session';
@@ -11,16 +13,13 @@ export interface SearchResult {
   sessionId?: string;
   parentTaskId?: string;  // populated for child tasks
   isAutoExpanded?: boolean; // true if included because parent matched (not direct hit)
-  score: number;        // combined normalized score
+  score: number;
   matchField: string;   // field name of best keyword match
-  keywordScore?: number;  // normalized BM25 contribution [0,1], undefined if no keyword match
-  semanticScore?: number; // normalized cosine contribution [0,1], undefined if no vector match
 }
 
 export interface SearchOptions {
   limit?: number;
   types?: ('task' | 'memory' | 'session')[];
-  category?: string;
 }
 
 export function extractSnippet(
@@ -117,83 +116,6 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// ── Reciprocal Rank Fusion (kept for backward compatibility — used by tests) ──
-
-/**
- * Merge two ranked result lists using normalized weighted average.
- * alpha = BM25 weight (0-1).
- * @deprecated No longer used in search(). Kept for test backward compatibility.
- */
-export function normalizedFuse(
-  bm25Results: SearchResult[],
-  vectorResults: SearchResult[],
-  alpha: number = 0.4,
-): SearchResult[] {
-  // Build score maps
-  const bm25Scores = new Map(bm25Results.map((r) => [resultKey(r), r.score]));
-  const vecScores = new Map(vectorResults.map((r) => [resultKey(r), r.score]));
-
-  // Min-max normalize BM25 scores to [0, 1]
-  const bm25Vals = [...bm25Scores.values()];
-  const bm25Min = Math.min(...bm25Vals);
-  const bm25Max = Math.max(...bm25Vals);
-  const bm25Range = bm25Max - bm25Min || 1;
-  const bm25Norm = new Map<string, number>();
-  for (const [k, v] of bm25Scores) {
-    bm25Norm.set(k, bm25Vals.length === 1 ? 1.0 : (v - bm25Min) / bm25Range);
-  }
-
-  // Min-max normalize cosine scores to [0, 1] using result set min/max
-  const vecVals = [...vecScores.values()];
-  const vecMin = Math.min(...vecVals);
-  const vecMax = Math.max(...vecVals);
-  const vecRange = vecMax - vecMin || 1;
-  const vecNorm = new Map<string, number>();
-  for (const [k, v] of vecScores) {
-    vecNorm.set(k, vecVals.length === 1 ? 1.0 : (v - vecMin) / vecRange);
-  }
-
-  // Collect all unique results; prefer BM25 object (richer snippets from keyword match)
-  const allKeys = new Set([...bm25Scores.keys(), ...vecScores.keys()]);
-  const resultMap = new Map<string, SearchResult>();
-  for (const r of bm25Results) resultMap.set(resultKey(r), r);
-  for (const r of vectorResults) {
-    if (!resultMap.has(resultKey(r))) resultMap.set(resultKey(r), r);
-  }
-
-  // Weighted average: both lists contribute their normalized score
-  const scored: Array<{ key: string; score: number; bn?: number; vn?: number }> = [];
-  for (const key of allKeys) {
-    const bn = bm25Norm.get(key);
-    const vn = vecNorm.get(key);
-    let score: number;
-    if (bn != null && vn != null) {
-      score = alpha * bn + (1 - alpha) * vn;
-    } else if (bn != null) {
-      score = alpha * bn;
-    } else {
-      score = (1 - alpha) * vn!;
-    }
-    scored.push({ key, score, bn, vn });
-  }
-
-  scored.sort((a, b) => b.score - a.score);
-
-  return scored.map((s) => {
-    const result = resultMap.get(s.key)!;
-    return {
-      ...result,
-      score: s.score,
-      keywordScore: s.bn != null ? Math.round(s.bn * 1000) / 1000 : undefined,
-      semanticScore: s.vn != null ? Math.round(s.vn * 1000) / 1000 : undefined,
-    };
-  });
-}
-
-function resultKey(r: SearchResult): string {
-  return r.taskId ?? r.path ?? r.title;
-}
-
 // ── BM25 keyword scoring — fallback when QMD task store is unavailable ──
 
 export function bm25ScoreTasks(tasks: Task[], query: string): SearchResult[] {
@@ -277,6 +199,205 @@ export function bm25ScoreTasks(tasks: Task[], query: string): SearchResult[] {
   return results;
 }
 
+export function bm25ScoreSessions(
+  sessions: SessionRecord[],
+  query: string,
+): SearchResult[] {
+  const results: SearchResult[] = [];
+  for (const session of sessions) {
+    const candidates: Array<[string, string | undefined, number]> = [
+      ['title', session.title, 3],
+      ['description', session.description, 2.5],
+      ['summary', session.summary, 2],
+      ['planContent', session.planContent, 1.5],
+      ['project', session.project, 1],
+      ['cwd', session.cwd, 0.75],
+    ];
+    let bestScore = 0;
+    let matchField = '';
+    let snippetSource = '';
+    for (const [field, value, weight] of candidates) {
+      if (!value) continue;
+      const score = scoreMatch(value, query, weight);
+      if (score > bestScore) {
+        bestScore = score;
+        matchField = field;
+        snippetSource = value;
+      }
+    }
+    if (bestScore === 0) continue;
+    results.push({
+      type: 'session',
+      title: session.title || session.claudeSessionId,
+      snippet: extractSnippet(snippetSource, query),
+      sessionId: session.claudeSessionId,
+      score: bestScore,
+      matchField,
+    });
+  }
+  return results.sort((a, b) => b.score - a.score);
+}
+
+const MIN_PARTIAL_REFERENCE_LENGTH = 8;
+
+function referenceMatchScore(
+  value: string | undefined,
+  query: string,
+  kind: 'id' | 'url' = 'id',
+): number {
+  if (!value) return 0;
+  const normalizedValue = value.toLowerCase();
+  if (normalizedValue === query) return 1;
+  if (query.length < MIN_PARTIAL_REFERENCE_LENGTH) return 0;
+  if (/\s/.test(query)) return 0;
+  if (kind === 'url' && !/^https?:\/\//.test(query)) return 0;
+  return normalizedValue.startsWith(query) ? 0.99 : 0;
+}
+
+/**
+ * Deterministic identifier lane beside QMD. Opaque task/session IDs and URLs
+ * are poor embedding inputs, but copied references must always resolve.
+ */
+export function searchTaskReferences(tasks: Task[], rawQuery: string): SearchResult[] {
+  const query = rawQuery.trim().toLowerCase();
+  if (!query) return [];
+
+  const results: SearchResult[] = [];
+  for (const task of tasks) {
+    const candidates: Array<{ field: 'id' | 'session_id' | 'external_url'; value?: string }> = [
+      { field: 'id', value: task.id },
+      { field: 'session_id', value: task.session_id },
+      ...(task.session_ids ?? []).map((value) => ({ field: 'session_id' as const, value })),
+      { field: 'session_id', value: task.plan_session_id },
+      { field: 'session_id', value: task.exec_session_id },
+      { field: 'external_url', value: task.external_url },
+    ];
+
+    let best: { field: 'id' | 'session_id' | 'external_url'; value: string; score: number } | undefined;
+    for (const candidate of candidates) {
+      const score = referenceMatchScore(
+        candidate.value,
+        query,
+        candidate.field === 'external_url' ? 'url' : 'id',
+      );
+      if (candidate.value && score > (best?.score ?? 0)) {
+        best = { ...candidate, value: candidate.value, score };
+      }
+    }
+    if (!best) continue;
+
+    results.push({
+      type: 'task',
+      title: task.title,
+      snippet: extractSnippet(best.value, rawQuery),
+      taskId: task.id,
+      ...(best.field === 'session_id' ? { sessionId: best.value } : {}),
+      parentTaskId: task.parent_task_id,
+      score: best.score,
+      matchField: best.field,
+    });
+  }
+
+  return results.sort((a, b) => b.score - a.score);
+}
+
+export function searchSessionReferences(
+  sessions: SessionRecord[],
+  rawQuery: string,
+): SearchResult[] {
+  const query = rawQuery.trim().toLowerCase();
+  if (!query) return [];
+
+  return sessions
+    .map((session): SearchResult | null => {
+      const score = referenceMatchScore(session.claudeSessionId, query);
+      if (score === 0) return null;
+      return {
+        type: 'session',
+        title: session.title || session.claudeSessionId,
+        snippet: session.claudeSessionId,
+        sessionId: session.claudeSessionId,
+        score,
+        matchField: 'session_id',
+      };
+    })
+    .filter((result): result is SearchResult => result !== null)
+    .sort((a, b) => b.score - a.score);
+}
+
+/**
+ * Resolve a copied session reference back to its owning task from the
+ * authoritative SessionRecord.taskId relation. This repairs discovery for
+ * legacy or partially-linked tasks whose session slot/history fields are empty.
+ */
+export function searchSessionTaskReferences(
+  tasks: Task[],
+  sessions: SessionRecord[],
+  rawQuery: string,
+): SearchResult[] {
+  const query = rawQuery.trim().toLowerCase();
+  if (!query) return [];
+
+  const tasksById = new Map(tasks.map((task) => [task.id, task]));
+  const bestByTask = new Map<string, SearchResult>();
+  for (const session of sessions) {
+    const score = referenceMatchScore(session.claudeSessionId, query);
+    if (score === 0 || !session.taskId) continue;
+    const task = tasksById.get(session.taskId);
+    if (!task) continue;
+
+    const existing = bestByTask.get(task.id);
+    if (existing && existing.score >= score) continue;
+    bestByTask.set(task.id, {
+      type: 'task',
+      title: task.title,
+      snippet: session.claudeSessionId,
+      taskId: task.id,
+      sessionId: session.claudeSessionId,
+      parentTaskId: task.parent_task_id,
+      score,
+      matchField: 'session_id',
+    });
+  }
+
+  return [...bestByTask.values()].sort((a, b) => b.score - a.score);
+}
+
+/**
+ * Resolve task IDs, task URLs, and task-owning session IDs consistently across
+ * HTTP and agent search. SessionRecord.taskId wins over stale task-side links.
+ */
+export function searchTaskAndSessionReferences(
+  tasks: Task[],
+  sessions: SessionRecord[],
+  rawQuery: string,
+): SearchResult[] {
+  const taskReferences = searchTaskReferences(tasks, rawQuery);
+  const sessionOwners = searchSessionTaskReferences(tasks, sessions, rawQuery);
+  const authoritativeSessionIds = new Set(
+    sessionOwners
+      .map((result) => result.sessionId?.toLowerCase())
+      .filter((sessionId): sessionId is string => Boolean(sessionId)),
+  );
+  const merged = [
+    ...taskReferences.filter((result) =>
+      result.matchField !== 'session_id'
+      || !result.sessionId
+      || !authoritativeSessionIds.has(result.sessionId.toLowerCase())),
+    ...sessionOwners,
+  ];
+
+  const bestByTask = new Map<string, SearchResult>();
+  for (const result of merged) {
+    if (!result.taskId) continue;
+    const existing = bestByTask.get(result.taskId);
+    if (!existing || result.score > existing.score) {
+      bestByTask.set(result.taskId, result);
+    }
+  }
+  return [...bestByTask.values()].sort((a, b) => b.score - a.score);
+}
+
 // ── Main search function ──
 
 export async function search(
@@ -290,6 +411,10 @@ export async function search(
   if (normalizedQuery.length === 0) return [];
 
   const results: SearchResult[] = [];
+  let qmdFailure: unknown;
+  const qmdEnabled =
+    process.env.WALNUT_DISABLE_SEARCH !== '1'
+    && !CLOUD_MODE;
 
   // Tasks loaded lazily — only when needed for BM25 fallback or child expansion
   let tasks: Task[] | null = null;
@@ -298,13 +423,71 @@ export async function search(
     return tasks;
   }
 
-  // Task search: fully delegated to QMD (BM25 + vector + reranking internally)
+  let sessions: SessionRecord[] | null = null;
+  async function getSessions(): Promise<SessionRecord[]> {
+    if (!sessions) sessions = await listSessions();
+    return sessions;
+  }
+
+  // Exact copied references are navigation commands, not semantic queries.
+  // Resolve them before QMD/memory search so unrelated high-similarity content
+  // cannot displace or surround the authoritative target.
   if (types.includes('task')) {
-    try {
+    const allTasks = await getTasks();
+    const exactTasks = searchTaskAndSessionReferences(
+      allTasks,
+      await getSessions(),
+      normalizedQuery,
+    ).filter((result) => result.score === 1);
+    if (exactTasks.length > 0) {
+      return exactTasks.slice(0, limit);
+    }
+  }
+  if (types.includes('session')) {
+    const exactSessions = searchSessionReferences(await getSessions(), normalizedQuery)
+      .filter((result) => result.score === 1);
+    if (exactSessions.length > 0) return exactSessions.slice(0, limit);
+  }
+
+  // Task search: deterministic references take precedence over QMD's BM25 +
+  // vector ranking. QMD intentionally indexes human-readable task content, not
+  // opaque IDs, so an identifier hit should not trigger semantic noise.
+  if (types.includes('task')) {
+    const taskResults: SearchResult[] = [];
+    const seenTaskIds = new Set<string>();
+    const appendTaskResult = (result: SearchResult) => {
+      if (result.taskId && seenTaskIds.has(result.taskId)) return;
+      if (result.taskId) seenTaskIds.add(result.taskId);
+      taskResults.push(result);
+    };
+
+    const allTasks = await getTasks();
+    const referenceResults = searchTaskAndSessionReferences(
+      allTasks,
+      await getSessions(),
+      normalizedQuery,
+    );
+    for (const result of referenceResults) {
+      appendTaskResult(result);
+    }
+
+    // Exact references returned above. Partial references remain pinned first,
+    // but still merge semantic matches instead of suppressing the whole result set.
+    if (!qmdEnabled) {
+      for (const result of bm25ScoreTasks(allTasks, normalizedQuery)) {
+        appendTaskResult(result);
+      }
+    } else try {
       const { memoryNotesSearch } = await import('./memory-search.js');
-      const qmdResults = await memoryNotesSearch(normalizedQuery, ['task'], limit);
+      const qmdResults = await memoryNotesSearch(
+        normalizedQuery,
+        ['task'],
+        limit,
+        undefined,
+        { rerank: false, overfetchMultiplier: 1 },
+      );
       for (const r of qmdResults) {
-        results.push({
+        appendTaskResult({
           type: 'task',
           title: r.title,
           snippet: r.snippet,
@@ -315,22 +498,35 @@ export async function search(
       }
     } catch (err) {
       // QMD task search failed — fall back to BM25 keyword search.
-      // This should not happen in normal operation (sanitizeForVec + model mismatch
-      // detection at startup prevent the known failure modes). If this fires,
-      // investigate the root cause rather than relying on the fallback.
       const msg = err instanceof Error ? err.message : String(err);
       log.agent.warn('QMD task search failed — falling back to BM25 keyword search', { query: normalizedQuery, error: msg });
-      const allTasks = await getTasks();
-      results.push(...bm25ScoreTasks(allTasks, normalizedQuery));
+      qmdFailure ??= err;
+      for (const result of bm25ScoreTasks(allTasks, normalizedQuery)) {
+        appendTaskResult(result);
+      }
     }
+    results.push(...taskResults);
   }
 
   // Session search: delegate to QMD
   if (types.includes('session')) {
-    try {
+    const referenceResults = searchSessionReferences(await getSessions(), normalizedQuery);
+    results.push(...referenceResults);
+    if (!qmdEnabled) {
+      const seenSessionIds = new Set(referenceResults.map((result) => result.sessionId));
+      results.push(...bm25ScoreSessions(await getSessions(), normalizedQuery)
+        .filter((result) => !seenSessionIds.has(result.sessionId)));
+    } else try {
       const { memoryNotesSearch } = await import('./memory-search.js');
-      const qmdResults = await memoryNotesSearch(normalizedQuery, ['session'], limit);
+      const qmdResults = await memoryNotesSearch(
+        normalizedQuery,
+        ['session'],
+        limit,
+        undefined,
+        { rerank: false, overfetchMultiplier: 1 },
+      );
       for (const r of qmdResults) {
+        if (referenceResults.some((result) => result.sessionId === r.sessionId)) continue;
         results.push({
           type: 'session',
           title: r.title,
@@ -342,12 +538,19 @@ export async function search(
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      log.agent.warn('QMD session search failed — no session results', { query: normalizedQuery, error: msg });
+      log.agent.warn('QMD session search failed — falling back to metadata keyword search', {
+        query: normalizedQuery,
+        error: msg,
+      });
+      qmdFailure ??= err;
+      const seenSessionIds = new Set(referenceResults.map((result) => result.sessionId));
+      results.push(...bm25ScoreSessions(await getSessions(), normalizedQuery)
+        .filter((result) => !seenSessionIds.has(result.sessionId)));
     }
   }
 
   // Memory search: delegate to QMD
-  if (types.includes('memory')) {
+  if (types.includes('memory') && qmdEnabled) {
     try {
       const { memoryNotesSearch } = await import('./memory-search.js');
       const qmdResults = await memoryNotesSearch(normalizedQuery, undefined, limit);
@@ -364,10 +567,21 @@ export async function search(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.agent.warn('QMD memory search failed — no memory results', { query: normalizedQuery, error: msg });
+      qmdFailure ??= err;
     }
   }
 
-  results.sort((a, b) => b.score - a.score);
+  // A total QMD outage must not look like an authoritative empty result. The
+  // browser preserves its immediate local matches when this request fails.
+  if (results.length === 0 && qmdFailure) throw qmdFailure;
+
+  const isReference = (result: SearchResult): boolean =>
+    result.matchField === 'id'
+    || result.matchField === 'session_id'
+    || result.matchField === 'external_url';
+  results.sort((a, b) =>
+    Number(isReference(b)) - Number(isReference(a))
+    || b.score - a.score);
   const sliced = results.slice(0, limit);
 
   // Keep child task expansion for task results (lazy-loads tasks only if needed)

@@ -3,7 +3,16 @@
  * Hybrid search across memory and notes via QMD.
  */
 import type { ToolDefinition } from '../tools.js';
-import { memoryNotesSearch } from '../../core/memory-search.js';
+import {
+  memoryNotesSearch,
+  type MemorySearchResult,
+} from '../../core/memory-search.js';
+import {
+  searchSessionReferences,
+  searchTaskAndSessionReferences,
+} from '../../core/search.js';
+import { listTasks } from '../../core/task-manager.js';
+import { listSessions } from '../../core/session-tracker.js';
 
 export const memoryNotesSearchTool: ToolDefinition = {
   name: 'memory_notes_search',
@@ -90,11 +99,69 @@ The search uses keyword matching (BM25, AND logic) + vector similarity (semantic
     required: ['queries'],
   },
   async execute(params) {
-    const queries = params.queries as string[];
+    const queries = Array.isArray(params.queries)
+      ? (params.queries as string[]).map((query) => query.trim()).filter(Boolean)
+      : [];
+    if (queries.length === 0) {
+      return 'Error: queries is required (non-empty array of strings).';
+    }
     const limit = (params.limit as number) ?? 15;
     const sources = params.sources as string[] | undefined;
     const pathPrefix = params.path as string | undefined;
-    const results = await memoryNotesSearch(queries, sources, limit, pathPrefix);
+    const wantsTask = sources?.includes('task') === true;
+    const wantsSession = sources?.includes('session') === true;
+
+    const references: MemorySearchResult[] = [];
+    const semanticQueries: string[] = [];
+    if (wantsTask || wantsSession) {
+      const [tasks, sessions] = await Promise.all([listTasks(), listSessions()]);
+      for (const query of queries) {
+        const matches = [
+          ...(wantsTask
+            ? searchTaskAndSessionReferences(tasks, sessions, query)
+            : []),
+          ...(wantsSession ? searchSessionReferences(sessions, query) : []),
+        ];
+        for (const match of matches) {
+          const source = match.type === 'task' ? 'task' : 'session';
+          const id = match.taskId ?? match.sessionId!;
+          references.push({
+            filepath: source === 'task'
+              ? `qmd://tasks/task-${id}`
+              : `qmd://sessions/sess-${id}`,
+            title: match.title,
+            snippet: match.snippet,
+            score: match.score,
+            finalScore: match.score,
+            source,
+            collection: source,
+            ...(match.taskId ? { taskId: match.taskId } : {}),
+            ...(match.sessionId ? { sessionId: match.sessionId } : {}),
+          });
+        }
+        if (!matches.some((match) => match.score === 1)) {
+          semanticQueries.push(query);
+        }
+      }
+    } else {
+      semanticQueries.push(...queries);
+    }
+
+    const semanticResults = semanticQueries.length > 0
+      ? await memoryNotesSearch(semanticQueries, sources, limit, pathPrefix)
+      : [];
+    const resultKey = (result: MemorySearchResult): string =>
+      result.taskId
+        ? `task:${result.taskId}`
+        : result.sessionId
+          ? `session:${result.sessionId}`
+          : `${result.source}:${result.filepath}`;
+    const deduped = new Map<string, MemorySearchResult>();
+    for (const result of [...references, ...semanticResults]) {
+      const key = resultKey(result);
+      if (!deduped.has(key)) deduped.set(key, result);
+    }
+    const results = [...deduped.values()].slice(0, limit);
     if (results.length === 0) return 'No results found.';
     return JSON.stringify(results.map(r => ({
       source: r.source,

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * E2E verify: index a real local session JSONL via the production filter +
- * the real BGE-M3 QMD pipeline (temp DB, does NOT touch prod), then search for
+ * the real default QMD embedding pipeline (temp DB, does NOT touch prod), then search for
  * a phrase that appears in the conversation. Prints PASS/FAIL.
  *
  *   node scripts/verify-session-search.mjs <sessionId.jsonl> "<search phrase>"
@@ -15,7 +15,8 @@ import path from 'node:path';
 //   npx esbuild src/core/session-content-indexer.ts --bundle --format=esm --platform=node --outfile=/tmp/sci.mjs
 import { buildIndexedContent } from '/tmp/sci.mjs';
 
-const MODEL = process.env.QMD_EMBED_MODEL || 'hf:CompendiumLabs/bge-m3-gguf/bge-m3-f16.gguf';
+const MODEL = process.env.QMD_EMBED_MODEL
+  || 'hf:Qwen/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q8_0.gguf';
 
 // Minimal raw-JSONL → SessionHistoryMessage[] (Claude Code schema): each line
 // has { type:'user'|'assistant', message:{ role, content }, timestamp }.
@@ -53,7 +54,15 @@ async function main() {
   const dbPath = path.join(os.tmpdir(), `verify-${Date.now()}.sqlite`);
   const collDir = path.join(os.tmpdir(), `verify-coll-${Date.now()}`);
   fs.mkdirSync(collDir, { recursive: true });
-  const store = await createStore({ dbPath, config: { collections: { sessions: { path: collDir, pattern: '__qmd_programmatic_only__' } } } });
+  const store = await createStore({
+    dbPath,
+    config: {
+      models: { embed: MODEL },
+      collections: {
+        sessions: { path: collDir, pattern: '__qmd_programmatic_only__' },
+      },
+    },
+  });
 
   const sid = path.basename(file, '.jsonl');
   const docText = `# Session Metadata\nProject: walnut\n\n${body}`;

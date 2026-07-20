@@ -3,8 +3,13 @@
  * Replaces memory-watcher.ts for QMD-backed search.
  */
 import fs from 'node:fs';
-import { MEMORY_DIR, WALNUT_HOME, NOTES_DIR } from '../constants.js';
-import { getMemoryStore, getNotesStore } from './qmd-store.js';
+import { MEMORY_DIR, NOTES_DIR } from '../constants.js';
+import { dispatchQmdIncrementalIndex } from './qmd-dispatcher.js';
+import {
+  resetNotesIndexer,
+  scheduleNotesIndexUpdate,
+  stopNotesIndexer,
+} from './notes-indexer.js';
 import { log } from '../logging/index.js';
 
 function debounce(fn: () => void, ms: number): { call: () => void; cancel: () => void } {
@@ -28,12 +33,11 @@ function notifyGitVersioning(filename: string): void {
 
 export function startQmdWatcher(): { stop: () => void } {
   const watchers: fs.FSWatcher[] = [];
+  resetNotesIndexer();
 
   const scheduleMemoryUpdate = debounce(async () => {
     try {
-      const store = await getMemoryStore();
-      await store.update();
-      await store.embed();
+      await dispatchQmdIncrementalIndex({ memory: true });
     } catch (err) {
       log.agent.debug('QMD memory update failed', { error: err instanceof Error ? err.message : String(err) });
     }
@@ -45,7 +49,7 @@ export function startQmdWatcher(): { stop: () => void } {
   // files, ~5.8s @20k) — the exact starvation class this project was burned by.
   // Instead, the structural reconciler (notes-indexer.ts) drives the semantic
   // store ONE changed file at a time (insertContent/insertDocument + incremental
-  // embed). store.update() is reserved for cold rebuild / startup (initQmdStores).
+  // embed). Full rebuilds use the same path over every note.
 
   try {
     if (fs.existsSync(MEMORY_DIR)) {
@@ -65,9 +69,7 @@ export function startQmdWatcher(): { stop: () => void } {
       // per-path coalescing queue + debounce, so we hand it the changed path.
       watchers.push(fs.watch(NOTES_DIR, { recursive: true }, (_event, filename) => {
         if (filename && filename.endsWith('.md')) {
-          import('./notes-indexer.js')
-            .then(({ scheduleNotesIndexUpdate }) => scheduleNotesIndexUpdate(filename))
-            .catch(() => {});
+          scheduleNotesIndexUpdate(filename);
         }
       }));
     }
@@ -78,9 +80,7 @@ export function startQmdWatcher(): { stop: () => void } {
       scheduleMemoryUpdate.cancel();
       // Stop the notes reconciler's debounce timer so no reconcile fires after
       // the watcher is torn down (ephemeral-server isolation / clean shutdown).
-      import('./notes-indexer.js')
-        .then(({ stopNotesIndexer }) => stopNotesIndexer())
-        .catch(() => {});
+      stopNotesIndexer();
       for (const w of watchers) { try { w.close(); } catch {} }
       watchers.length = 0;
     },
