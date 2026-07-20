@@ -160,6 +160,9 @@ function formatTime(ts: string): string {
 
 function SessionThinking({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
+  // Signature-only thinking has no displayable text — render nothing rather
+  // than an expandable-but-blank row.
+  if (!text.trim()) return null;
   return (
     <div className="chat-thinking">
       <button className="chat-thinking-toggle" onClick={() => setOpen((p) => !p)}>

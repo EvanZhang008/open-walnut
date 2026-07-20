@@ -256,6 +256,9 @@ const StreamingBlockView = memo(function StreamingBlockView({ block, sessionId, 
   }
 
   if (block.type === 'thinking') {
+    // Defensive: never render an empty/whitespace-only thinking block as an
+    // expandable-but-blank row (signature-only or whitespace-delta artifacts).
+    if (!block.content.trim()) return null;
     // `open` by default so the user sees thinking tokens stream in live.
     // Once the turn ends the user can collapse it manually; collapsing by
     // default defeats the whole point of --include-partial-messages for

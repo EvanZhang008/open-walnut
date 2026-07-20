@@ -4,9 +4,27 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { usageTracker, DEFAULT_PRICING, PRICING_VERSION } from '../../core/usage/index.js'
-import type { UsagePeriod } from '../../core/usage/types.js'
+import type { UsagePeriod, UsageFilter } from '../../core/usage/types.js'
 
 export const usageRouter = Router()
+
+// GET /api/usage/overview — every aggregate under one cross-filter, in one call.
+// Query params (all optional, ANDed): start, end (YYYY-MM-DD), source, model, agent.
+// This is the endpoint the interactive dashboard uses; the older per-view
+// endpoints below stay for back-compat.
+usageRouter.get('/overview', (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const filter: UsageFilter = {
+      startDate: parseDate(req.query.start),
+      endDate: parseDate(req.query.end),
+      source: parseTok(req.query.source),
+      model: parseTok(req.query.model),
+      agentId: parseTok(req.query.agent),
+    }
+    const limit = Math.min(Math.max(parseInt(req.query.limit as string, 10) || 100, 1), 500)
+    res.json(usageTracker.getOverview(filter, limit))
+  } catch (err) { next(err) }
+})
 
 // GET /api/usage/summary — all period summaries
 usageRouter.get('/summary', (_req: Request, res: Response, next: NextFunction) => {
@@ -69,4 +87,16 @@ usageRouter.get('/pricing', (_req: Request, res: Response) => {
 function parsePeriod(raw: string | undefined): UsagePeriod {
   if (raw === 'today' || raw === '7d' || raw === '30d' || raw === 'all') return raw
   return '30d'
+}
+
+/** Accept only well-formed YYYY-MM-DD; anything else is ignored (undefined). */
+function parseDate(raw: unknown): string | undefined {
+  return typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : undefined
+}
+
+/** A non-empty string token, trimmed; empty/absent → undefined. */
+function parseTok(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined
+  const t = raw.trim()
+  return t.length > 0 ? t : undefined
 }

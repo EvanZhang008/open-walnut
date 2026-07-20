@@ -34,8 +34,8 @@ test.beforeEach(async ({ page }) => {
     window.WebSocket = class PatchedWebSocket extends OrigWebSocket {
       constructor(url: string | URL, protocols?: string | string[]) {
         super(url, protocols)
-        // Store the first WS connection (the app's main connection)
-        if (!(window as any).__capturedWs) {
+        const socketUrl = new URL(String(url), window.location.href)
+        if (socketUrl.pathname === '/ws' && !(window as any).__capturedWs) {
           ;(window as any).__capturedWs = this
         }
       }

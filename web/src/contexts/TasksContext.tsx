@@ -7,6 +7,7 @@ import type { CreateTaskInput, UpdateTaskInput } from '@/api/tasks';
 export interface TasksContextValue {
   tasks: Task[];
   loading: boolean;
+  refreshing: boolean;
   error: string | null;
   operationError: string | null;
   clearOperationError: () => void;
@@ -45,7 +46,7 @@ export function TasksProvider({ children }: { children: ReactNode }) {
   // useTasks callbacks are already stable (useCallback), so only data fields trigger updates.
   const value = useMemo<TasksContextValue>(() => t,
     // eslint-disable-next-line react-hooks/exhaustive-deps -- t's callbacks are stable via useCallback
-    [t.tasks, t.taskGroups, t.hiddenGroups, t.loading, t.error, t.operationError]);
+    [t.tasks, t.taskGroups, t.hiddenGroups, t.loading, t.refreshing, t.error, t.operationError]);
 
   return <TasksContext.Provider value={value}>{children}</TasksContext.Provider>;
 }

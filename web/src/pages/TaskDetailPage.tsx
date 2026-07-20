@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
 import { renderNoteMarkdown } from '@/utils/markdown';
-import { fetchTask, toggleCompleteTask, starTask, addNote, updateNote, updateDescription, deleteTask, addTag, removeTag, addDependency, removeDependency, updateTask } from '@/api/tasks';
+import { fetchTask, toggleCompleteTask, starTask, addNote, updateNote, updateDescription, deleteTask, addTag, removeTag, addDependency, removeDependency, updateTask, type TaskDetail } from '@/api/tasks';
 import { TaskFieldEditor } from '@/components/tasks/TaskFieldEditor';
 import { SprintPicker } from '@/components/tasks/SprintPicker';
 import { DatePicker } from '@/components/common/DatePicker';
@@ -23,6 +23,8 @@ import { useTasksContext } from '@/contexts/TasksContext';
 import { useConfirm, useAlert } from '@/hooks/useConfirm';
 import { openPopout } from '@/popout/openPopout';
 import { ICON_NEW_TAB } from '@/components/common/Icons';
+import { useSessionStatusEpoch } from '@/hooks/useSessionStatus';
+import { resolveSessionRecordStatus } from '@/stores/session-status-store';
 
 /**
  * Route entry. Resolves the task id and the operation-error reporter from
@@ -77,7 +79,7 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
   const integrations = useIntegrations();
   const confirm = useConfirm();
   const alert = useAlert();
-  const [task, setTask] = useState<Task | null>(null);
+  const [task, setTask] = useState<TaskDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [newNote, setNewNote] = useState('');
@@ -88,6 +90,7 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
   const [depSearchResults, setDepSearchResults] = useState<Task[]>([]);
   const [archivedOpen, setArchivedOpen] = useState(false);
   const sessionSend = useSessionSend(activeSessionId);
+  const statusEpoch = useSessionStatusEpoch();
 
   const handleBack = useCallback(() => {
     location.key === 'default' ? navigate('/') : navigate(-1);
@@ -216,20 +219,13 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
       refetchSessions();
     }
   });
-  useEvent('session:status-changed', (data) => {
-    const d = data as { sessionId?: string; taskId?: string };
-    if (isMyTask(d.taskId)) {
-      refetchSessions();
-    }
-  });
-
   // Auto-select the most recent active session
   useEffect(() => {
     const activeIds = [task?.plan_session_id, task?.exec_session_id].filter(Boolean) as string[];
     if (activeIds.length > 0) {
       // If current selection is still active, keep it; otherwise pick the last
       if (!activeSessionId || !activeIds.includes(activeSessionId)) {
-        setActiveSessionId(activeIds.at(-1)!);
+        setActiveSessionId(activeIds[activeIds.length - 1]);
       }
     } else {
       setActiveSessionId(null);
@@ -287,8 +283,12 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
 
   const activeSessionIds = useMemo(
     () => [task?.plan_session_id, task?.exec_session_id]
-      .filter((sid): sid is string => !!sid && !sessionRecords.get(sid)?.archived),
-    [task?.plan_session_id, task?.exec_session_id, sessionRecords],
+      .filter((sid): sid is string => {
+        if (!sid) return false;
+        const record = sessionRecords.get(sid);
+        return !record || !resolveSessionRecordStatus(record).archived;
+      }),
+    [task?.plan_session_id, task?.exec_session_id, sessionRecords, statusEpoch],
   );
   // Merge task.session_ids with API-returned sessions (embedded sessions may not be in session_ids)
   const { otherSessionIds, archivedSessionIds } = useMemo(() => {
@@ -299,27 +299,13 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
     const archived: string[] = [];
     const other: string[] = [];
     for (const sid of nonActive) {
-      const rec = sessionRecords.get(sid);
+      const baseRecord = sessionRecords.get(sid);
+      const rec = baseRecord ? resolveSessionRecordStatus(baseRecord) : undefined;
       if (rec?.archived) archived.push(sid);
       else other.push(sid);
     }
     return { otherSessionIds: other, archivedSessionIds: archived };
-  }, [task?.session_ids, sessionRecords, activeSessionIds]);
-
-  const renderedSummary = useMemo(
-    () => task?.summary ? renderNoteMarkdown(task.summary) : '',
-    [task?.summary],
-  );
-
-  // Milestones replace the verbose conversation_log (kept server-side, no longer
-  // rendered). One compact line per major phase transition; newest first.
-  const renderedMilestones = useMemo(() => {
-    const ms = (task as Record<string, unknown> | null)?.milestones as string | undefined;
-    if (!ms) return '';
-    const entries = ms.split(/(?=^### \d{4}-\d{2}-\d{2} \d{2}:\d{2})/m).filter(Boolean);
-    const reversed = entries.length > 1 ? entries.reverse().join('\n\n') : ms;
-    return renderNoteMarkdown(reversed);
-  }, [task]);
+  }, [task?.session_ids, sessionRecords, activeSessionIds, statusEpoch]);
 
   if (loading) return <LoadingSpinner />;
   if (error) return <div className="empty-state"><p>Error: {error}</p></div>;
@@ -359,7 +345,7 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
         <div style={{ marginBottom: '1rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
             <h3 style={{ margin: 0, fontSize: '0.85rem', fontWeight: 600, opacity: 0.7 }}>Dependencies</h3>
-            {(task as Record<string, unknown>).is_blocked && (
+            {task.is_blocked && (
               <span style={{ fontSize: '0.7rem', padding: '1px 6px', borderRadius: '4px', background: '#f59e0b20', color: '#f59e0b', fontWeight: 500 }}>blocked</span>
             )}
             <button
@@ -400,7 +386,7 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
           )}
           {task.depends_on && task.depends_on.length > 0 ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              {((task as Record<string, unknown>).resolved_dependencies as Array<{ id: string; title: string; phase: string }> | undefined)?.map((dep) => (
+              {task.resolved_dependencies?.map((dep) => (
                 <div key={dep.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', padding: '4px 8px', borderRadius: '4px', background: 'var(--bg-secondary)' }}>
                   <span style={{ color: dep.phase === 'COMPLETE' ? '#34c759' : '#f59e0b' }}>
                     {dep.phase === 'COMPLETE' ? '\u2713' : '\u25CB'}
@@ -437,10 +423,10 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
             !showDepPicker && <span style={{ fontSize: '0.8rem', opacity: 0.4 }}>No dependencies</span>
           )}
           {/* Reverse: dependents */}
-          {((task as Record<string, unknown>).dependents as Array<{ id: string; title: string; phase: string }> | undefined)?.length ? (
+          {task.dependents?.length ? (
             <div style={{ marginTop: '0.75rem' }}>
               <h4 style={{ margin: '0 0 4px', fontSize: '0.8rem', fontWeight: 500, opacity: 0.5 }}>Dependents (waiting on this task)</h4>
-              {((task as Record<string, unknown>).dependents as Array<{ id: string; title: string; phase: string }>).map((dep) => (
+              {task.dependents.map((dep) => (
                 <div key={dep.id} style={{ fontSize: '0.8rem', padding: '2px 0' }}>
                   <span
                     style={{ cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'var(--border)' }}
@@ -499,7 +485,7 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
 
       {/* Parent Task */}
       {(() => {
-        const parent = (task as Record<string, unknown>).parent as { id: string; title: string; phase: string; status: string } | undefined;
+        const parent = task.parent;
         if (!parent) return null;
         return (
           <div className="card mb-4" style={{ padding: '12px 16px' }}>
@@ -523,16 +509,16 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
       })()}
 
       {/* Child Tasks */}
-      {((task as Record<string, unknown>).children as Array<{ id: string; title: string; phase: string; status: string; priority: string }> | undefined)?.length ? (
+      {task.children?.length ? (
         <div className="card mb-4">
           <h2 className="mb-2" style={{ fontSize: '16px', fontWeight: 600 }}>
             Child Tasks
             <span style={{ marginLeft: 8, fontSize: '0.75rem', fontWeight: 400, opacity: 0.5 }}>
-              {((task as Record<string, unknown>).children as Array<unknown>).length}
+              {task.children.length}
             </span>
           </h2>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            {((task as Record<string, unknown>).children as Array<{ id: string; title: string; phase: string; status: string; priority: string }>).map((child) => (
+            {task.children.map((child) => (
               <div
                 key={child.id}
                 style={{
@@ -583,7 +569,8 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
           {activeSessionIds.length > 1 && (
             <div className="task-session-tabs">
               {activeSessionIds.map((sid) => {
-                const record = sessionRecords.get(sid);
+                const baseRecord = sessionRecords.get(sid);
+                const record = baseRecord ? resolveSessionRecordStatus(baseRecord) : undefined;
                 const label = record?.title || sid.slice(0, 12) + '\u2026';
                 return (
                   <button
@@ -602,6 +589,7 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
             <div className="task-session-chat-container">
               <SessionChatHistory
                 sessionId={activeSessionId}
+                engine={sessionRecords.get(activeSessionId)?.engine}
                 optimisticMessages={sessionSend.optimisticMsgs}
                 onMessagesDelivered={sessionSend.handleMessagesDelivered}
                 onBatchCompleted={sessionSend.handleBatchCompleted}
@@ -635,7 +623,8 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
           </h2>
           <div className="flex flex-col gap-2">
             {otherSessionIds.map((sid) => {
-              const record = sessionRecords.get(sid);
+              const baseRecord = sessionRecords.get(sid);
+              const record = baseRecord ? resolveSessionRecordStatus(baseRecord) : undefined;
               const label = record?.title || sid.slice(0, 12) + '\u2026';
               const dotClass = record?.process_status === 'error' ? 'dot-error' : 'dot-completed';
               return (
@@ -655,15 +644,7 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
                     <button
                       className="btn btn-sm"
                       style={{ fontSize: '0.7rem', padding: '1px 6px', opacity: 0.7 }}
-                      onClick={() => updateSession(sid, { archived: true }).then(() => {
-                        setSessionRecords(prev => {
-                          const m = new Map(prev);
-                          const r = m.get(sid);
-                          if (r) m.set(sid, { ...r, archived: true });
-                          return m;
-                        });
-                        loadTask();
-                      })}
+                      onClick={() => updateSession(sid, { archived: true }).then(loadTask)}
                     >
                       Archive
                     </button>
@@ -690,7 +671,8 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
               <div className="session-detail-collapse-body">
                 <div className="flex flex-col gap-2">
                   {archivedSessionIds.map((sid) => {
-                    const record = sessionRecords.get(sid);
+                    const baseRecord = sessionRecords.get(sid);
+                    const record = baseRecord ? resolveSessionRecordStatus(baseRecord) : undefined;
                     const label = record?.title || sid.slice(0, 12) + '\u2026';
                     return (
                       <div key={sid} className="flex items-center gap-2" style={{ opacity: 0.6 }}>
@@ -710,14 +692,7 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
                         <button
                           className="btn btn-sm"
                           style={{ fontSize: '0.7rem', padding: '1px 6px' }}
-                          onClick={() => updateSession(sid, { archived: false }).then(() => {
-                            setSessionRecords(prev => {
-                              const m = new Map(prev);
-                              const r = m.get(sid);
-                              if (r) m.set(sid, { ...r, archived: false });
-                              return m;
-                            });
-                          })}
+                          onClick={() => updateSession(sid, { archived: false })}
                         >
                           Unarchive
                         </button>
@@ -731,34 +706,10 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
         </div>
       )}
 
-      {/* Summary (AI-maintained) */}
-      {task.summary && (
-        <div className="card mb-4">
-          <div className="flex items-center gap-2 mb-2">
-            <h2 style={{ fontSize: '16px', fontWeight: 600 }}>Summary</h2>
-            <span style={{
-              fontSize: 10,
-              padding: '1px 6px',
-              borderRadius: 4,
-              background: 'var(--accent)',
-              color: '#fff',
-              fontWeight: 500,
-            }}>
-              AI-maintained
-            </span>
-          </div>
-          <div className="markdown-body" dangerouslySetInnerHTML={{ __html: renderedSummary }} />
-        </div>
-      )}
-
-      {/* Milestones (replaces the old verbose Conversation Log) */}
-      {renderedMilestones && (
-        <div className="card mb-4">
-          <h2 className="mb-2" style={{ fontSize: '16px', fontWeight: 600 }}>Milestones</h2>
-          <div className="markdown-body conversation-log" dangerouslySetInnerHTML={{ __html: renderedMilestones }} />
-        </div>
-      )}
-
+      {/* Summary (AI) + Milestones cards were retired 2026-07-18: the NOTE below is
+          the single AI-maintained living document (Executive Summary / Goal /
+          Context / Progress / Work Log); task.summary is derived from its Executive
+          Summary and shown only in list views. */}
 
       {/* Description — shared rich editor, always-on autosave. */}
       <div className="card mb-4">

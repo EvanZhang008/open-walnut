@@ -61,6 +61,35 @@ export interface PricingEntry {
 
 export type Period = 'today' | '7d' | '30d' | 'all';
 
+/** Cross-filter for the interactive dashboard — all fields optional, ANDed. */
+export interface UsageFilter {
+  startDate?: string;   // YYYY-MM-DD inclusive
+  endDate?: string;     // YYYY-MM-DD inclusive
+  source?: string;
+  model?: string;
+  agentId?: string;
+}
+
+export interface UsageOverview {
+  summary: UsageSummary;
+  daily: DailyCost[];
+  bySource: UsageByGroup[];
+  byModel: UsageByGroup[];
+  byAgent: UsageByGroup[];
+  recent: UsageRecord[];
+  dateBounds: { min: string | null; max: string | null };
+}
+
+export async function fetchUsageOverview(filter: UsageFilter, limit = 100): Promise<UsageOverview> {
+  const q: Record<string, string> = { limit: String(limit) };
+  if (filter.startDate) q.start = filter.startDate;
+  if (filter.endDate) q.end = filter.endDate;
+  if (filter.source) q.source = filter.source;
+  if (filter.model) q.model = filter.model;
+  if (filter.agentId) q.agent = filter.agentId;
+  return apiGet('/api/usage/overview', q);
+}
+
 export async function fetchUsageSummary(): Promise<Record<string, UsageSummary>> {
   return apiGet('/api/usage/summary');
 }

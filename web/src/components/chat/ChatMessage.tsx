@@ -6,6 +6,7 @@ import type { Task } from '@open-walnut/core';
 import type { MessageBlock, ThinkingBlock, ToolCallBlock, ImageBlock, TaskContext, ImageAttachment } from '@/hooks/useChat';
 import { useLightbox } from '@/hooks/useLightbox';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
+import { useNotesAwareFileOpen } from '@/hooks/useNotesAwareFileOpen';
 import { Lightbox } from '@/components/common/Lightbox';
 import { FileViewer } from '@/components/common/FileViewer';
 import { entityRefsToHtml, renderToolResultWithRefs, extractMarkdownFields, renderMarkdownWithRefs } from '@/utils/markdown';
@@ -481,6 +482,9 @@ function RouteInfoSection({ info, taskLookup, onTaskClick, onSessionClick }: Rou
 
 export function ThinkingSection({ block }: { block: ThinkingBlock }) {
   const [open, setOpen] = useState(false);
+  // Signature-only thinking blocks have no displayable text — render nothing
+  // rather than an expandable-but-blank row.
+  if (!block.content || !block.content.trim()) return null;
   return (
     <div className="chat-thinking">
       <button className="chat-thinking-toggle" onClick={() => setOpen((p) => !p)}>
@@ -947,10 +951,12 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
   // File path click → open the shared FileViewer overlay. Self-contained so every
   // page that renders ChatMessage (MainPage chat + session columns, ChatPage) gets
   // clickable file paths without threading a callback through the props chain.
+  // Vault notes divert to the Notes page instead of the overlay.
   const [fileViewerState, setFileViewerState] = useState<{ path: string; line?: number } | null>(null);
-  const handleFileOpen = useCallback((path: string, line?: number) => {
+  const openFileViewer = useCallback((path: string, line?: number) => {
     setFileViewerState({ path, line });
   }, []);
+  const handleFileOpen = useNotesAwareFileOpen(openFileViewer);
 
   const isCron = source === 'cron';
   const isHeartbeat = source === 'heartbeat';
@@ -1110,8 +1116,17 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
   // Quick Start local echoes and any long plain user message also auto-collapse so they
   // don't fill the viewport — the full content is still available behind the chevron.
   const shouldAutoCollapse =
-    (isNotification && !isErrorNotification) || isTriage || isQuickStartEcho || isLongPlainUser;
+    isCron || (isNotification && !isErrorNotification) || isTriage || isQuickStartEcho || isLongPlainUser;
   const [isCollapsed, setIsCollapsed] = useState(shouldAutoCollapse);
+  // Streaming cron/heartbeat responses get their source tag AFTER the message is
+  // created (agent:response retro-tags it), so the initial useState saw false.
+  // Sync the collapse state when auto-collapse turns on late (render-time state
+  // adjustment — React re-renders immediately, before painting the expanded body).
+  const [prevAutoCollapse, setPrevAutoCollapse] = useState(shouldAutoCollapse);
+  if (shouldAutoCollapse !== prevAutoCollapse) {
+    setPrevAutoCollapse(shouldAutoCollapse);
+    if (shouldAutoCollapse) setIsCollapsed(true);
+  }
 
   // CSS class: cron, heartbeat, notification, and triage messages get their own style
   const messageClass = isHeartbeat
@@ -1172,7 +1187,7 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
   }, [content, shouldAutoCollapse, isTriage, isQuickStartEcho]);
 
   // Notification header with optional UI Only badge + collapse toggle + collapsed summary
-  const notificationHeader = (isNotification || isTriage || isQuickStartEcho || isLongPlainUser) ? (
+  const notificationHeader = (isCron || isNotification || isTriage || isQuickStartEcho || isLongPlainUser) ? (
     <div className="chat-message-header chat-notification-header" onClick={shouldAutoCollapse ? () => setIsCollapsed(c => !c) : undefined} style={shouldAutoCollapse ? { cursor: 'pointer' } : undefined}>
       <div className="chat-message-role">
         {roleLabel}

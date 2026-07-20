@@ -11,7 +11,6 @@
 
 import { log } from '../logging/index.js'
 import { isSessionProcessAlive } from '../utils/session-liveness.js'
-import { bus, EventNames } from './event-bus.js'
 import type { SessionRecord, Task } from './types.js'
 
 export interface ReconcileResult {
@@ -28,7 +27,13 @@ export interface ReconcileResult {
  *   - Otherwise → mark process_status='stopped' and clean up task references
  */
 export async function reconcileSessions(): Promise<ReconcileResult> {
-  const { listSessions, updateSessionRecord, updateSessionRecordConditionally, isTerminalSession } = await import('./session-tracker.js')
+  const {
+    emitSessionStatusChanged,
+    listSessions,
+    updateSessionRecord,
+    updateSessionRecordConditionally,
+    isTerminalSession,
+  } = await import('./session-tracker.js')
   // Captured before listSessions() so any concurrent write that occurs after our snapshot
   // is detectable: if current.last_status_change > reconcilerStartedAt, the record was
   // modified after we read it and we must skip our stale update.
@@ -165,11 +170,12 @@ export async function reconcileSessions(): Promise<ReconcileResult> {
 
       reconciled++
 
-      bus.emit(EventNames.SESSION_STATUS_CHANGED, {
-        sessionId: session.claudeSessionId,
-        taskId: session.taskId,
-        process_status: 'stopped',
-      }, ['*'], { source: 'reconciler', urgency: 'urgent' })
+      emitSessionStatusChanged(
+        updated,
+        {},
+        ['*'],
+        { source: 'reconciler', urgency: 'urgent' },
+      )
 
       log.session.info('session reconciler: marked zombie session stopped', {
         sessionId: session.claudeSessionId,

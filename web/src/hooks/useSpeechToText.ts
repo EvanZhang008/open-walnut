@@ -303,7 +303,8 @@ export function useSpeechToText({ onTranscribe, language }: UseSpeechToTextOptio
       recorder.onerror = (e: Event) => {
         stopStream();
         setIsRecording(false);
-        const errMsg = (e as MediaRecorderErrorEvent)?.error?.message ?? 'Recording error';
+        const recorderError = 'error' in e ? e.error : undefined;
+        const errMsg = recorderError instanceof Error ? recorderError.message : 'Recording error';
         setError(errMsg);
       };
 

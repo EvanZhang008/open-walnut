@@ -4,13 +4,15 @@ import { formatTokens } from '@/utils/format';
 interface Props {
   summary: UsageSummary | null;
   loading: boolean;
+  /** When true, the numbers reflect an active drill-in/date filter (not the whole preset). */
+  filtered?: boolean;
 }
 
-export function UsageSummaryCards({ summary, loading }: Props) {
+export function UsageSummaryCards({ summary, loading, filtered }: Props) {
   // Walnut's own spend only. Claude Code CLI session costs (summary.session_cost)
   // are external pass-through numbers — intentionally not shown here.
   const cards = [
-    { label: 'Walnut Cost', value: summary ? `$${summary.total_cost.toFixed(2)}` : '--', accent: true },
+    { label: filtered ? 'Filtered Cost' : 'Walnut Cost', value: summary ? `$${summary.total_cost.toFixed(2)}` : '--', accent: true },
     { label: 'Input Tokens', value: summary ? formatTokens(summary.input_tokens) : '--' },
     { label: 'Output Tokens', value: summary ? formatTokens(summary.output_tokens) : '--' },
     { label: 'Cache Read', value: summary ? formatTokens(summary.cache_read_tokens) : '--' },

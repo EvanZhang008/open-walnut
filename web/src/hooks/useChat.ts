@@ -85,7 +85,9 @@ function parseContentBlocks(content: unknown): { text: string; blocks: MessageBl
   let text = '';
 
   for (const block of content) {
-    if (block.type === 'thinking' && block.thinking) {
+    if (block.type === 'thinking' && block.thinking?.trim()) {
+      // Trim check: providers can persist signature-only thinking blocks whose
+      // text is empty/whitespace — never render those as expandable rows.
       blocks.push({ type: 'thinking', content: block.thinking });
     } else if (block.type === 'text' && block.text) {
       blocks.push({ type: 'text', content: block.text });
@@ -312,7 +314,7 @@ function closeStaleToolCalls(prev: ChatMessage[], finalStatus: 'done' | 'error' 
       ...msg,
       blocks: msg.blocks.map(b =>
         b.type === 'tool_call' && b.status === 'calling'
-          ? { ...b, status: finalStatus as const }
+          ? { ...b, status: finalStatus }
           : b
       ),
     };
@@ -371,7 +373,7 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
   // Track the current agent turn's source so streaming handlers can separate heartbeat/cron/chat
   const currentSourceRef = useRef<ChatMessage['source'] | undefined>(undefined);
   // Forward ref for sendRpc to break circular dependency with drainOrStop
-  const sendRpcRef = useRef<(text: string, taskContext?: TaskContext, images?: ImageAttachment[], source?: string) => void>(undefined);
+  const sendRpcRef = useRef<UseChatReturn['sendMessage'] | undefined>(undefined);
 
   // Keep refs in sync with state
   isStreamingRef.current = isStreaming;
@@ -446,6 +448,9 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
   useEvent('agent:thinking', (data) => {
     if (!isMine(data)) return;
     const { text } = data as { text: string };
+    // Some providers emit thinking blocks that carry only a signature (empty or
+    // whitespace-only text) — those must not create an expandable-but-blank row.
+    if (!text || !text.trim()) return;
     const src = currentSourceRef.current;
     setMessages((prev) =>
       upsertLastAssistant(prev, (blocks, content) => {

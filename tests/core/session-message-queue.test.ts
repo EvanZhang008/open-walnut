@@ -12,6 +12,7 @@ vi.mock('../../src/constants.js', () => createMockConstants());
 import {
   loadQueue,
   enqueueMessage,
+  markNextProcessing,
   markProcessing,
   removeProcessed,
   revertToPending,
@@ -19,6 +20,8 @@ import {
   deleteMessage,
   getQueue,
   getAllSessionsWithPending,
+  migrateSessionQueue,
+  rollbackSessionQueueMigration,
   resetCache,
 } from '../../src/core/session-message-queue.js';
 import { WALNUT_HOME } from '../../src/constants.js';
@@ -90,6 +93,51 @@ describe('markProcessing', () => {
   it('returns empty array for unknown session', async () => {
     const batch = await markProcessing('nonexistent');
     expect(batch).toEqual([]);
+  });
+});
+
+describe('markNextProcessing', () => {
+  it('marks only the oldest pending message and preserves exact text and ID', async () => {
+    const first = await enqueueMessage('sess-acp', 'first\n\nexact');
+    const second = await enqueueMessage('sess-acp', 'second');
+
+    const selected = await markNextProcessing('sess-acp');
+
+    expect(selected).toEqual([
+      expect.objectContaining({
+        id: first.id,
+        message: 'first\n\nexact',
+        status: 'processing',
+      }),
+    ]);
+    expect(await getQueue('sess-acp')).toEqual([
+      expect.objectContaining({ id: first.id, status: 'processing' }),
+      expect.objectContaining({ id: second.id, status: 'pending' }),
+    ]);
+  });
+
+  it('advances one item at a time after scoped removal', async () => {
+    const first = await enqueueMessage('sess-acp', 'first');
+    const second = await enqueueMessage('sess-acp', 'second');
+
+    expect((await markNextProcessing('sess-acp')).map((m) => m.id)).toEqual([first.id]);
+    expect(await markNextProcessing('sess-acp')).toEqual([]);
+
+    await removeProcessed('sess-acp', [first.id]);
+    expect((await markNextProcessing('sess-acp')).map((m) => m.id)).toEqual([second.id]);
+  });
+
+  it('reverts only the selected item without disturbing later pending messages', async () => {
+    const first = await enqueueMessage('sess-acp', 'first');
+    const second = await enqueueMessage('sess-acp', 'second');
+    const selected = await markNextProcessing('sess-acp');
+
+    await revertToPending(selected);
+
+    expect(await getQueue('sess-acp')).toEqual([
+      expect.objectContaining({ id: first.id, status: 'pending' }),
+      expect.objectContaining({ id: second.id, status: 'pending' }),
+    ]);
   });
 });
 
@@ -223,6 +271,52 @@ describe('loadQueue', () => {
     const queue = await getQueue('sess-1');
     expect(queue).toHaveLength(1);
     expect(queue[0].status).toBe('pending');
+  });
+});
+
+describe('provider identity queue migration', () => {
+  it('moves pending and in-flight messages durably while preserving stable IDs', async () => {
+    const inFlight = await enqueueMessage('provider-old', 'already selected');
+    await markNextProcessing('provider-old');
+    const pending = await enqueueMessage('provider-old', 'still pending');
+    const existing = await enqueueMessage('provider-new', 'already on target');
+
+    const migration = await migrateSessionQueue('provider-old', 'provider-new');
+
+    expect(migration.movedIds).toEqual([inFlight.id, pending.id]);
+    expect(await getQueue('provider-old')).toEqual([]);
+    expect(await getQueue('provider-new')).toEqual([
+      expect.objectContaining({ id: inFlight.id, sessionId: 'provider-new', status: 'processing' }),
+      expect.objectContaining({ id: pending.id, sessionId: 'provider-new', status: 'pending' }),
+      expect.objectContaining({ id: existing.id, sessionId: 'provider-new', status: 'pending' }),
+    ]);
+
+    resetCache();
+    await loadQueue();
+    expect(await getQueue('provider-new')).toEqual([
+      expect.objectContaining({ id: inFlight.id, status: 'pending' }),
+      expect.objectContaining({ id: pending.id, status: 'pending' }),
+      expect.objectContaining({ id: existing.id, status: 'pending' }),
+    ]);
+  });
+
+  it('rolls back only messages moved by the failed identity publication', async () => {
+    const moved = await enqueueMessage('provider-old', 'move me');
+    const target = await enqueueMessage('provider-new', 'leave me');
+    const migration = await migrateSessionQueue('provider-old', 'provider-new');
+
+    await rollbackSessionQueueMigration(
+      'provider-old',
+      'provider-new',
+      migration.movedIds,
+    );
+
+    expect(await getQueue('provider-old')).toEqual([
+      expect.objectContaining({ id: moved.id, sessionId: 'provider-old' }),
+    ]);
+    expect(await getQueue('provider-new')).toEqual([
+      expect.objectContaining({ id: target.id, sessionId: 'provider-new' }),
+    ]);
   });
 });
 

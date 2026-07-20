@@ -32,6 +32,7 @@ import type {
 import { parseClaudeJsonlLine, type ClaudeStreamResult } from '../../providers/claude-stream-parser.js';
 import { abortedResult } from './retry.js';
 import { log } from '../../logging/index.js';
+import { resolveClaudeCliExecutable } from '../../core/claude-cli-detect.js';
 
 /** Env vars we must NOT let reach the spawn — any of these would divert the CLI
  *  away from the subscription (Bedrock/Vertex routing) or leak a static key. */
@@ -85,7 +86,9 @@ export class ClaudeCliAdapter implements ProtocolAdapter {
   ): Promise<ModelResult> {
     const args = buildArgs(opts);
     const env = buildSpawnEnv();
-    const command = opts.providerConfig.claude_cli_command || 'claude';
+    const command = opts.providerConfig.claude_cli_command
+      || resolveClaudeCliExecutable()
+      || 'claude';
     const prompt = serializePrompt(opts.messages);
 
     return new Promise<ModelResult>((resolve, reject) => {

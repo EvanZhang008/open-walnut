@@ -25,14 +25,14 @@ export const SubagentBlock = memo(function SubagentBlock({ block }: SubagentBloc
   const streamBlocks = block.streamBlocks ?? EMPTY_BLOCKS;
 
   // Extract prompt from input for header summary
-  const promptSummary = useMemo(() => {
-    const prompt = block.input?.prompt;
-    if (typeof prompt !== 'string') return '';
-    return prompt.length > 80 ? prompt.slice(0, 80) + '...' : prompt;
-  }, [block.input?.prompt]);
+  const prompt = typeof block.input?.prompt === 'string' ? block.input.prompt : '';
+  const promptSummary = useMemo(
+    () => prompt.length > 80 ? prompt.slice(0, 80) + '...' : prompt,
+    [prompt],
+  );
 
   // Extract model and background from input
-  const model = (block.input?.model as string) ?? 'opus';
+  const model = typeof block.input?.model === 'string' ? block.input.model : 'opus';
   const background = block.input?.background === true;
 
   // Extract cost/duration from result text (format: "\n[Cost: $X.XXXX | Duration: X.Xs]")
@@ -67,10 +67,10 @@ export const SubagentBlock = memo(function SubagentBlock({ block }: SubagentBloc
       {open && (
         <div className="chat-tool-block-body subagent-block-body">
           {/* Show full prompt when expanded */}
-          {block.input?.prompt && (
+          {prompt && (
             <div className="subagent-prompt">
               <div className="chat-tool-block-section-label">Prompt</div>
-              <pre className="chat-tool-block-pre">{block.input.prompt as string}</pre>
+              <pre className="chat-tool-block-pre">{prompt}</pre>
             </div>
           )}
           {/* Stream content or fallback to plain result */}

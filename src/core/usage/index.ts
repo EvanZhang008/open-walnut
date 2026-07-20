@@ -15,6 +15,8 @@ export type {
   UsageByGroup,
   UsageSource,
   UsagePeriod,
+  UsageFilter,
+  UsageOverview,
   RecordParams,
 } from './types.js';
 

@@ -1,4 +1,4 @@
-import { marked } from 'marked';
+import { marked, Marked } from 'marked';
 import DOMPurify from 'dompurify';
 
 /** Task-ref regex: matches <task-ref id="..." label="..."/> or <task-ref id="..."/> */
@@ -165,6 +165,25 @@ const CODE_EXTENSIONS = new Set([
   'mp4', 'm4v', 'webm', 'mov', 'mp3', 'wav', 'm4a', 'ogg',
 ]);
 
+// ── Path segments that may contain SPACES (e.g. notes: "H1 2026 Overview.md") ──
+// A segment is word-chunks joined by single spaces (CJK chars allowed — note
+// filenames are often Chinese). Space-joined chunks are only trusted when:
+//  - the whole match is anchored by a final `.ext`, AND
+//  - each chunk after a space starts with an uppercase letter / digit / CJK char
+//    (Title Case or year-prefixed note names), AND
+//  - the chunk quantifier is LAZY: the shortest match that still reaches `.ext`
+//    wins, so a real path followed by Title-Case prose ("see /a/b.md See
+//    Section 2.5") stops at `b.md` instead of swallowing the sentence.
+const PATH_CH = '[\\w@.+\\-\\u4e00-\\u9fff\\u3040-\\u30ff]';
+const PATH_SEG = `${PATH_CH}+`;
+// {0,6} bounds backtracking (a 7+-word segment is prose, not a filename); lazy so
+// the shortest expansion that reaches `.ext` wins.
+const PATH_SEG_SP = `${PATH_SEG}(?: (?=[A-Z0-9\\u4e00-\\u9fff\\u3040-\\u30ff])${PATH_SEG}){0,6}?`;
+/** Absolute FILE path source, spaces allowed: /dir/My Dir/H1 2026 File.md(:line).
+ * Build a fresh `new RegExp(ABS_FILE_RE_SRC, 'g')` per use — shared global regexes
+ * carry lastIndex state across callers. */
+const ABS_FILE_RE_SRC = `(?<![\\/\\w])(~?\\/(?:${PATH_SEG_SP}\\/)+${PATH_SEG_SP}\\.[\\w]+)(?::(\\d+))?`;
+
 /**
  * Convert file paths in text to clickable <a class="file-link"> elements.
  * Runs as a preprocessing step before marked.parse().
@@ -217,7 +236,8 @@ export function filePathsToHtml(text: string, sessionCwd?: string): string {
   // This prevents matching mid-path substrings like `/providers/foo.ts` from `src/providers/foo.ts`.
   // The optional `~/` prefix keeps home-relative paths intact (`~` would otherwise be
   // dropped, both visually and from data-file-path — backend expands `~`).
-  const absRe = /(?<![\/\w])(~?\/(?:[\w@.+-]+\/)+[\w@.+-]+\.[\w]+)(?::(\d+))?/g;
+  // Segments may contain spaces (Title Case chunks) — see ABS_FILE_RE_SRC.
+  const absRe = new RegExp(ABS_FILE_RE_SRC, 'g');
   let m: RegExpExecArray | null;
   while ((m = absRe.exec(text)) !== null) {
     const fullMatch = m[0];
@@ -335,8 +355,8 @@ function linkifyPathsInCode(html: string, sessionCwd?: string): string {
     while ((um = urlRe.exec(inner)) !== null) urlRanges.push([um.index, um.index + um[0].length]);
     const inUrl = (idx: number) => urlRanges.some(([s, e]) => idx >= s && idx < e);
 
-    // Absolute paths: /dir/file.ext(:line)
-    const absRe = /(?<![\/\w])(~?\/(?:[\w@.+-]+\/)+[\w@.+-]+\.[\w]+)(?::(\d+))?/g;
+    // Absolute paths: /dir/file.ext(:line) — space-in-segment rules per ABS_FILE_RE_SRC
+    const absRe = new RegExp(ABS_FILE_RE_SRC, 'g');
     let out = inner.replace(absRe, (m, filePath: string, lineNum: string | undefined, offset: number) => {
       if (inUrl(offset)) return m;
       const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
@@ -347,12 +367,24 @@ function linkifyPathsInCode(html: string, sessionCwd?: string): string {
       return `<a class="file-link" data-file-path="${filePath}"${lineAttr} href="#">${display}</a>`;
     });
 
+    // Anchors created by earlier passes contain the path in BOTH the attr and the
+    // display text; spaced paths break mid-anchor for the dir/rel regexes, so any
+    // match inside an existing <a>…</a> must be skipped (nested anchors = broken DOM).
+    const anchorRanges = (s: string): [number, number][] => {
+      const ranges: [number, number][] = [];
+      const aRe = /<a\b[^>]*>[\s\S]*?<\/a>/g;
+      let am: RegExpExecArray | null;
+      while ((am = aRe.exec(s)) !== null) ranges.push([am.index, am.index + am[0].length]);
+      return ranges;
+    };
+
     // Absolute DIRECTORY paths (no extension, ≥3 segments) — open the folder.
     {
       const urlR: [number, number][] = [];
       urlRe.lastIndex = 0;
       while ((um = urlRe.exec(out)) !== null) urlR.push([um.index, um.index + um[0].length]);
-      const inU = (idx: number) => urlR.some(([s, e]) => idx >= s && idx < e);
+      const aR = anchorRanges(out);
+      const inU = (idx: number) => urlR.some(([s, e]) => idx >= s && idx < e) || aR.some(([s, e]) => idx >= s && idx < e);
       const absDirRe = /(?<![\/\w])(~?\/(?:[\w@.+-]+\/){2,}[\w@.+-]+)\/?(?=[\s,;)"'`\]<]|$)/g;
       out = out.replace(absDirRe, (m, dirPath: string, offset: number) => {
         if (inU(offset)) return m;
@@ -370,7 +402,8 @@ function linkifyPathsInCode(html: string, sessionCwd?: string): string {
       const urlRanges2: [number, number][] = [];
       urlRe.lastIndex = 0;
       while ((um = urlRe.exec(out)) !== null) urlRanges2.push([um.index, um.index + um[0].length]);
-      const inUrl2 = (idx: number) => urlRanges2.some(([s, e]) => idx >= s && idx < e);
+      const aR2 = anchorRanges(out);
+      const inUrl2 = (idx: number) => urlRanges2.some(([s, e]) => idx >= s && idx < e) || aR2.some(([s, e]) => idx >= s && idx < e);
 
       const relRe = /(^|[\s"'`(>])((?:\.\/|[\w@][\w@.+-]*\/)+[\w@.+-]+\.(\w+))(?::(\d+))?/g;
       out = out.replace(relRe, (m, lead: string, pathPart: string, ext: string, lineNum: string | undefined, offset: number) => {
@@ -643,6 +676,40 @@ export function resolveImagePath(path: string, cwd?: string): string | null {
 }
 
 /**
+ * Isolated marked instance for note rendering. Task NOTEs are agent-written
+ * technical prose full of literal `~`, `<tag>`, and URL fragments, so two GFM
+ * behaviors are retuned (matching how GitHub itself renders):
+ * - del (strikethrough) requires DOUBLE tildes: a lone `~100 commits … ~25 CRs`
+ *   pair otherwise strikes everything between them across the whole paragraph.
+ * - raw inline HTML is escaped to visible text instead of parsed: an example
+ *   `<a href="…">` in prose otherwise swallows the rest of the line as a live
+ *   link (DOMPurify keeps anchors, so sanitizing doesn't neutralize it).
+ *
+ * ⚠️ Do NOT adopt this instance for the chat path (renderMarkdownWithRefs): chat
+ * pre-injects raw HTML (entityRefsToHtml task-ref anchors, filePathsToHtml links)
+ * that the html-escaping renderer here would turn into visible escaped text.
+ */
+const noteMarked = new Marked({ breaks: true, gfm: true });
+noteMarked.use({
+  tokenizer: {
+    del(src: string) {
+      const m = /^~~(?=\S)([\s\S]*?\S)~~/.exec(src);
+      // undefined = "no token here" (leading ~ falls through to inlineText, stays
+      // literal). Returning `false` instead would fall back to marked's DEFAULT
+      // del tokenizer — resurrecting exactly the single-tilde behavior this
+      // override removes. Don't "fix" undefined to false.
+      if (!m) return undefined;
+      return { type: 'del', raw: m[0], text: m[1], tokens: this.lexer.inlineTokens(m[1]) };
+    },
+  },
+  renderer: {
+    html({ text }: { text: string }) {
+      return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    },
+  },
+});
+
+/**
  * Isolated DOMPurify instance for note rendering.
  * Hooks are added once at module init — no global mutations, no race conditions.
  */
@@ -743,7 +810,7 @@ export function renderNoteMarkdown(text: string): string {
   let html: string;
   try {
     const preprocessed = bareImagePathsToMarkdown(text);
-    const raw = marked.parse(preprocessed, { breaks: true, gfm: true });
+    const raw = noteMarked.parse(preprocessed);
     html = typeof raw === 'string' ? raw : '';
   } catch {
     // Fallback: escape and return raw text in a <p> tag

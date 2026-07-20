@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { log } from '../logging/index.js';
+import { markSessionStoppedInSqlite } from './session-status-store.js';
 
 // Local copy of SESSION_DB_PATH to keep the hook bundle free of session-db.ts
 // (which would drag in types + logger). Keep in sync with src/core/session-db.ts:30.
@@ -95,31 +96,9 @@ function getFilesChanged(): string[] {
 function updateSessionStore(sessionId: string): void {
   try {
     if (!fs.existsSync(SESSION_DB_PATH)) return;
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const Database = require('better-sqlite3') as typeof import('better-sqlite3');
-    const db = new Database(SESSION_DB_PATH);
-    try {
-      db.pragma('journal_mode = WAL');
-      db.pragma('busy_timeout = 5000');
-
-      const now = new Date().toISOString();
-      // Don't overwrite 'error' status: if the server already marked the
-      // session as error (OOM kill, stream parse failure), the hook must not
-      // downgrade it back to 'stopped' or the UI loses the error indicator.
-      const stmt = db.prepare(
-        `UPDATE sessions SET
-           process_status = 'stopped',
-           last_status_change = ?,
-           last_active_at = ?,
-           activity = NULL
-         WHERE claude_session_id = ? AND (process_status IS NULL OR process_status <> 'error')`,
-      );
-      db.transaction(() => {
-        stmt.run(now, now, sessionId);
-      })();
-    } finally {
-      try { db.close(); } catch { /* ignore */ }
-    }
+    // Don't overwrite error, and increment the status version only when the
+    // canonical projection actually changes.
+    markSessionStoppedInSqlite(SESSION_DB_PATH, sessionId);
   } catch (err) {
     log.hook.warn('on-stop: session store update failed', { sessionId, error: String(err) });
   }

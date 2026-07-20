@@ -361,6 +361,22 @@ export function NotesPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
+  // ── Inbound URL navigation while already MOUNTED: hydrateTabs only runs once,
+  //    so a navigate('/notes?path=…') fired from inside this page (note link
+  //    clicked in a chat-column session panel) must be handled here. The mirror
+  //    effect above keeps the URL equal to the active tab, so only a param that
+  //    points elsewhere is a real navigation. ──
+  useEffect(() => {
+    const urlAttachment = searchParams.get('attachment');
+    const urlPath = searchParams.get('path');
+    const target = urlAttachment ?? urlPath;
+    if (target && target !== activePath) {
+      openInTab(target, urlAttachment ? 'attachment' : 'note', { newTab: true });
+    }
+  // Only react to URL changes — activePath churn is the mirror effect's domain.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
   // ── Single source of truth for opening a path (§1.3). All programmatic opens
   //    (tree click, Cmd+K, bookmark click, create, rename follow) funnel here. ──
   const openInTab = useCallback((path: string, kind: TabKind, opts?: { newTab?: boolean }) => {

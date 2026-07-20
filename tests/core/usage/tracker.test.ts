@@ -290,6 +290,71 @@ describe('UsageTracker', () => {
     });
   });
 
+  describe('getOverview (cross-filter)', () => {
+    it('returns every aggregate under one unfiltered call', () => {
+      tracker.record({ source: 'agent', model: 'model-a', input_tokens: 1000, agentId: 'general' });
+      tracker.record({ source: 'subagent', model: 'model-b', input_tokens: 500, agentId: 'note-agent' });
+
+      const ov = tracker.getOverview({});
+      expect(ov.summary.api_calls).toBe(2);
+      expect(ov.bySource.length).toBe(2);
+      expect(ov.byModel.length).toBe(2);
+      expect(ov.byAgent.length).toBe(2);
+      expect(ov.recent.length).toBe(2);
+      expect(ov.daily.length).toBeGreaterThanOrEqual(1);
+      expect(ov.dateBounds.min).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    });
+
+    it('scopes the summary to a source drill-in', () => {
+      tracker.record({ source: 'agent', model: 'model-a', input_tokens: 1000, agentId: 'general' });
+      tracker.record({ source: 'subagent', model: 'model-a', input_tokens: 400, agentId: 'note-agent' });
+      tracker.record({ source: 'subagent', model: 'model-b', input_tokens: 600, agentId: 'note-agent' });
+
+      const ov = tracker.getOverview({ source: 'subagent' });
+      // Summary only counts the two subagent rows.
+      expect(ov.summary.api_calls).toBe(2);
+      expect(ov.summary.input_tokens).toBe(1000);
+      // Recent + byModel are scoped to subagent...
+      expect(ov.recent.every(r => r.source === 'subagent')).toBe(true);
+      expect(ov.byModel.reduce((n, m) => n + m.api_calls, 0)).toBe(2);
+      // ...but bySource still lists ALL sources (its own predicate is stripped)
+      // so the user can pivot to another source without losing context.
+      expect(ov.bySource.length).toBe(2);
+    });
+
+    it('ANDs multiple drill-in dimensions together', () => {
+      tracker.record({ source: 'subagent', model: 'model-a', input_tokens: 100, agentId: 'note-agent' });
+      tracker.record({ source: 'subagent', model: 'model-b', input_tokens: 200, agentId: 'note-agent' });
+      tracker.record({ source: 'agent', model: 'model-a', input_tokens: 300, agentId: 'general' });
+
+      const ov = tracker.getOverview({ source: 'subagent', model: 'model-a' });
+      expect(ov.summary.api_calls).toBe(1);
+      expect(ov.summary.input_tokens).toBe(100);
+    });
+
+    it('filters by an explicit date range', () => {
+      const db = (tracker as unknown as { getDb: () => import('better-sqlite3').Database }).getDb();
+      // Insert two rows on fixed dates directly (record() always stamps "now").
+      const ins = db.prepare(`INSERT INTO usage (id, timestamp, date, source, model, input_tokens, cost_usd)
+        VALUES (?, ?, ?, 'agent', 'model-a', ?, ?)`);
+      ins.run('r1', '2026-01-01T00:00:00.000Z', '2026-01-01', 1000, 1.0);
+      ins.run('r2', '2026-06-15T00:00:00.000Z', '2026-06-15', 2000, 2.0);
+
+      const ov = tracker.getOverview({ startDate: '2026-06-01', endDate: '2026-06-30' });
+      expect(ov.summary.api_calls).toBe(1);
+      expect(ov.summary.input_tokens).toBe(2000);
+    });
+
+    it('always excludes Claude Code session rows regardless of filter', () => {
+      tracker.record({ source: 'session', model: 'claude-code-cli', external_cost_usd: 100 });
+      tracker.record({ source: 'agent', model: 'model-a', input_tokens: 1000, agentId: 'general' });
+
+      const ov = tracker.getOverview({});
+      expect(ov.summary.total_cost).toBeLessThan(100);
+      expect(ov.recent.some(r => r.source === 'session')).toBe(false);
+    });
+  });
+
   describe('prune', () => {
     it('returns 0 for empty database', () => {
       const deleted = tracker.prune(30);

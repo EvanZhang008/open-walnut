@@ -9,6 +9,7 @@ import {
   deleteLastSegment,
   parentDirOf,
   ghostSuffix,
+  segmentCompletion,
   pathValidity,
 } from '../../../web/src/components/sessions/path-selector/input-model';
 
@@ -122,6 +123,61 @@ describe('ghostSuffix', () => {
     const state = classifyInput('/a/b/walnut');
     expect(ghostSuffix(state, null)).toBeNull();
     expect(ghostSuffix(state, '/a/b/walnut')).toBeNull();
+  });
+  it('DEEP candidate under the typed dir completes only the NEXT segment', () => {
+    // The mcp report: typed '…/m', deep history row '…/mcps/amazon-eks-mcp'.
+    // Ghost must predict 'cps' (next segment 'mcps'), NOT the leaf 'amazon-eks-mcp' —
+    // so the prediction works the instant history renders, without waiting for the
+    // (slow, SSH) live listing to surface the direct child.
+    const state = classifyInput('/a/b/m');
+    expect(ghostSuffix(state, '/a/b/mcps/amazon-eks-mcp')).toBe('cps');
+  });
+  it('deep candidate whose next segment does not extend the partial → no ghost', () => {
+    // '…/node_modules/magic-string' under typed '/a/b/m': next segment is
+    // 'node_modules' (doesn't start with 'm') — the old leaf-based compare wrongly
+    // ghosted 'agic-string', fabricating a nonexistent '/a/b/magic-string'.
+    const state = classifyInput('/a/b/m');
+    expect(ghostSuffix(state, '/a/b/node_modules/magic-string')).toBeNull();
+  });
+  it('candidate not under the typed dir falls back to leaf compare', () => {
+    // ~-typed input vs resolved absolute candidate: leaf still completes.
+    const state = classifyInput('~/proj/wal');
+    expect(ghostSuffix(state, '/home/me/proj/walnut')).toBe('nut');
+  });
+});
+
+describe('segmentCompletion (Tab — one-segment descend, real casing)', () => {
+  it('descends ONE level even when the row is a deep path (exact typed segment)', () => {
+    // Typed 'mcps' exactly (no ghost); highlighted row is the deep history path
+    // '…/mcps/acme-mcp'. Tab must give '…/mcps/', NOT jump to the row's leaf.
+    const state = classifyInput('/a/b/mcps');
+    expect(segmentCompletion(state, '/a/b/mcps/acme-mcp')).toBe('/a/b/mcps/');
+  });
+  it('completes a partial to its next segment', () => {
+    const state = classifyInput('/a/b/m');
+    expect(segmentCompletion(state, '/a/b/mcps/acme-mcp')).toBe('/a/b/mcps/');
+    expect(segmentCompletion(state, '/a/b/mcps')).toBe('/a/b/mcps/');
+  });
+  it('CASE-CORRECTS: lowercase typed partial completes to the real-cased dir name', () => {
+    // Typed 'acmec' (all lowercase) against real dir 'AcmeCapsDev' — accepting must
+    // produce the REAL casing, never typed-text + suffix ('acmecapsDev' doesn't
+    // exist on case-sensitive hosts and triggered a bogus create-folder prompt).
+    const state = classifyInput('/a/b/acmec');
+    expect(segmentCompletion(state, '/a/b/AcmeCapsDev')).toBe('/a/b/AcmeCapsDev/');
+    expect(segmentCompletion(state, '/a/b/AcmeCapsDev/deep/child')).toBe('/a/b/AcmeCapsDev/');
+  });
+  it('candidate not under the typed dir falls back to leaf (mirrors ghostSuffix ~ case)', () => {
+    const state = classifyInput('~/proj/wal');
+    expect(segmentCompletion(state, '/home/me/proj/walnut')).toBe('~/proj/walnut/');
+  });
+  it('null when the segment does not extend the partial', () => {
+    const state = classifyInput('/a/b/m');
+    expect(segmentCompletion(state, '/a/b/node_modules/magic-string')).toBeNull();
+    expect(segmentCompletion(state, null)).toBeNull();
+  });
+  it('null for non-segment states', () => {
+    expect(segmentCompletion(classifyInput('/a/b/'), '/a/b/mcps')).toBeNull();
+    expect(segmentCompletion(classifyInput('walnut'), '/a/b/mcps')).toBeNull();
   });
 });
 

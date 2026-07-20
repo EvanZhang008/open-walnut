@@ -12,12 +12,11 @@
  *   cd web && npx vite build    (builds SPA to dist/web/static/)
  *   npx playwright test          (runs these tests)
  *
- * Test server is started by playwright.config.ts webServer
- * (tests/e2e/browser/test-server.ts) on port 3457.
+ * Test server is started by playwright.config.ts webServer.
  */
 import { test, expect } from '@playwright/test'
 
-const API = 'http://localhost:3457'
+const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
 // ═══════════════════════════════════════════════════════════════════
 //  Helpers

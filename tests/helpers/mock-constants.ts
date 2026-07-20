@@ -85,6 +85,7 @@ export function createMockConstants(prefix = 'walnut-test', overrides: Record<st
     LOG_DIR: path.join(tmpBase, 'logs'),
     LOG_PREFIX: 'open-walnut-test-',
     FREQUENT_DIRS_FILE: path.join(tmpBase, 'frequent-directories.json'),
+    HOST_MODEL_CATALOG_FILE: path.join(tmpBase, 'cache', 'host-model-catalogs.json'),
     NOTES_DIR: path.join(tmpBase, 'notes'),
     GLOBAL_NOTES_FILE: path.join(tmpBase, 'notes', 'global-notes.md'),
     NOTES_AGENTS_FILE: path.join(tmpBase, 'notes', 'AGENTS.md'),

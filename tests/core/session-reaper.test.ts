@@ -44,6 +44,7 @@ import {
 import { closeDb } from '../../src/core/session-db.js';
 import { SessionReaper } from '../../src/core/session-reaper.js';
 import { WALNUT_HOME, SESSION_STREAMS_DIR } from '../../src/constants.js';
+import { bus, EventNames } from '../../src/core/event-bus.js';
 
 // Mirror the path derivation in session-reaper.ts so assertions read the same
 // files the reaper writes.
@@ -68,6 +69,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  bus.unsubscribe('session-reaper-deletion-test');
   closeDb();
   _resetSessionTrackerForTesting();
   for (let i = 0; i < 3; i++) {
@@ -104,6 +106,26 @@ async function seedTerminalEnvSession(
 }
 
 describe('SessionReaper — reaps terminal environment sessions past retention', () => {
+  it('emits deleted session IDs so QMD can remove reaped documents', async () => {
+    await seedTerminalEnvSession('triage-qmd-cleanup', { ageDays: 31 });
+    const deletedBatches: string[][] = [];
+    bus.subscribe(
+      'session-reaper-deletion-test',
+      (event) => {
+        if (event.name === EventNames.SESSION_DELETED) {
+          deletedBatches.push(
+            (event.data as { sessionIds: string[] }).sessionIds,
+          );
+        }
+      },
+      { global: true, interest: [EventNames.SESSION_DELETED] },
+    );
+
+    await new SessionReaper().reap();
+
+    expect(deletedBatches).toEqual([['triage-qmd-cleanup']]);
+  });
+
   it('archives + removes a stopped triage session older than 30 days', async () => {
     await seedTerminalEnvSession('triage-old', { ageDays: 31 });
 

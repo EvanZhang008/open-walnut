@@ -4,10 +4,17 @@ import type { Task } from '@open-walnut/core';
 import { PriorityBadge } from '../common/PriorityBadge';
 import { StarButton } from '../common/StarButton';
 import { TagChip } from './TagChip';
-import { SessionPill } from './SessionPill';
+import { TaskSessionPill } from './SessionPill';
 import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
 import { useConfirm } from '@/hooks/useConfirm';
 import { ICON_TRASH } from '../common/Icons';
+
+type TaskListProjection = Task & {
+  /** Precomputed by fields=list because that projection intentionally omits ext. */
+  has_synced?: boolean;
+  /** Legacy MS To-Do sync marker retained for pre-ext task records. */
+  ms_todo_id?: string;
+};
 
 /** Virtual-group render metadata for a card (mirrors TodoPanel's GroupRenderInfo). */
 export interface CardGroupInfo {
@@ -18,10 +25,11 @@ export interface CardGroupInfo {
 }
 
 interface TaskCardProps {
-  task: Task;
+  task: TaskListProjection;
   onComplete: (id: string) => void;
   onStar: (id: string) => void;
   onDelete?: (id: string) => void;
+  childStats?: { done: number; total: number };
   /** Virtual-group treatment: tinted rail on every member, chip above the lead. */
   groupInfo?: CardGroupInfo;
   /** True while this card is part of an in-progress multi-select. */
@@ -34,23 +42,17 @@ interface TaskCardProps {
   onUngroup?: (taskId: string) => void;
 }
 
-/** Legacy field lookup for backward compat before ext migration. */
-const LEGACY_SYNC_FIELDS: Record<string, string> = {
-  'ms-todo': 'ms_todo_id',
-};
-
 /** Check if a task is synced to its integration (ext first, then legacy fields). */
-function isSynced(task: Task): boolean {
+function isSynced(task: TaskListProjection): boolean {
   const source = task.source;
+  if (task.has_synced) return true;
   // Check ext (new plugin system)
   if (task.ext?.[source]) return true;
-  // Backward compat: check legacy dynamic fields
-  const legacyField = LEGACY_SYNC_FIELDS[source];
-  if (legacyField && (task as unknown as Record<string, unknown>)[legacyField]) return true;
-  return false;
+  // Backward compat: check the legacy field from before ext migration.
+  return source === 'ms-todo' && Boolean(task.ms_todo_id);
 }
 
-function SyncIndicator({ task }: { task: Task }) {
+function SyncIndicator({ task }: { task: TaskListProjection }) {
   const integrations = useIntegrations();
   const source = task.source;
   const meta = getIntegrationMeta(integrations, source);
@@ -95,11 +97,9 @@ function SyncIndicator({ task }: { task: Task }) {
   );
 }
 
-export function TaskCard({ task, onComplete, onStar, onDelete, groupInfo, isSelected, onSelectToggle, onRenameGroup, onUngroup }: TaskCardProps) {
+export function TaskCard({ task, onComplete, onStar, onDelete, childStats, groupInfo, isSelected, onSelectToggle, onRenameGroup, onUngroup }: TaskCardProps) {
   const navigate = useNavigate();
   const confirm = useConfirm();
-  const subtasksDone = task.subtasks?.filter((s) => s.done).length ?? 0;
-  const subtasksTotal = task.subtasks?.length ?? 0;
 
   const className = [
     'task-card',
@@ -194,16 +194,7 @@ export function TaskCard({ task, onComplete, onStar, onDelete, groupInfo, isSele
         </span>
         <div className="task-card-meta">
           <PriorityBadge priority={task.priority} />
-          <SessionPill
-            sessionId={task.session_id}
-            sessionStatus={task.session_status}
-            planSessionId={task.plan_session_id}
-            execSessionId={task.exec_session_id}
-            planStatus={task.plan_session_status}
-            execStatus={task.exec_session_status}
-            sessionIds={task.session_ids}
-            mode={task.session_status?.mode ?? task.plan_session_status?.mode}
-          />
+          <TaskSessionPill task={task} />
           <span className="task-card-project text-xs text-muted">{task.project}</span>
           {task.tags && task.tags.length > 0 && (
             <span className="task-card-tags">
@@ -218,9 +209,9 @@ export function TaskCard({ task, onComplete, onStar, onDelete, groupInfo, isSele
           {task.due_date && (
             <span className="task-card-due text-xs text-muted">{formatDue(task.due_date)}</span>
           )}
-          {subtasksTotal > 0 && (
+          {!!childStats?.total && (
             <span className="task-card-subtasks text-xs text-muted">
-              {subtasksDone}/{subtasksTotal}
+              {childStats.done}/{childStats.total}
             </span>
           )}
         </div>

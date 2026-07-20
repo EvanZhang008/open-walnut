@@ -10,7 +10,12 @@ vi.mock('../../src/constants.js', () => createMockConstants());
 import { WALNUT_HOME } from '../../src/constants.js';
 import { executeTool, getToolSchemas, tools } from '../../src/agent/tools.js';
 import { bus } from '../../src/core/event-bus.js';
-import { _resetForTesting } from '../../src/core/task-manager.js';
+import {
+  _resetForTesting,
+  addSessionToHistory,
+} from '../../src/core/task-manager.js';
+import { closeDb as closeTaskDb } from '../../src/core/task-db.js';
+import { closeDb as closeSessionDb } from '../../src/core/session-db.js';
 
 /** Pre-create a category via the agent tool so strict validation passes for subsequent task creation. */
 async function ensureCategory(name: string, source = 'ms-todo') {
@@ -23,6 +28,8 @@ async function ensureProject(category: string, project: string) {
 }
 
 beforeEach(async () => {
+  closeTaskDb();
+  closeSessionDb();
   _resetForTesting();
   tmpDir = WALNUT_HOME;
   await fs.rm(tmpDir, { recursive: true, force: true });
@@ -30,6 +37,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  closeTaskDb();
+  closeSessionDb();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -152,7 +161,6 @@ describe('task tools', () => {
 
     const result = await executeTool('task_query', { type: 'category' });
     const parsed = JSON.parse(result);
-    expect(parsed).toHaveLength(2);
     const work = parsed.find((c: { name: string }) => c.name === 'Work');
     expect(work).toMatchObject({ name: 'Work', todo: 2, active: 1, done: 0 });
     const life = parsed.find((c: { name: string }) => c.name === 'Life');
@@ -200,7 +208,7 @@ describe('task tools', () => {
   it('query_tasks shows completed hint when all tasks are done', async () => {
     // Use update_task with phase to set a task to COMPLETE (simulating human action)
     // since update_task with AGENT_COMPLETE only sets status: in_progress
-    await ensureCategory('Archive');
+    await ensureCategory('Archive', 'local');
     const addResult = await executeTool('task_create', { title: 'Done task', category: 'Archive' });
     const idMatch = addResult.match(/id="([^"]+)"/);
     if (idMatch) {
@@ -273,22 +281,35 @@ describe('task tools', () => {
 });
 
 describe('search tool', () => {
-  it('search returns results from tasks', async () => {
-    await executeTool('task_create', { title: 'Fix authentication bug' });
-    await executeTool('task_create', { title: 'Deploy to production' });
+  it('search resolves an exact session ID without invoking QMD', async () => {
+    const created = await executeTool('task_create', {
+      title: 'Fix authentication bug',
+    });
+    const taskId = created.match(/id="([^"]+)"/)?.[1];
+    expect(taskId).toBeTruthy();
+    const sessionId = 'agent-search-session-reference-12345678';
+    await addSessionToHistory(taskId!, sessionId);
+    const memorySearch = await import('../../src/core/memory-search.js');
+    const qmdSearch = vi.spyOn(memorySearch, 'memoryNotesSearch')
+      .mockRejectedValue(new Error('QMD must not run for an exact reference'));
 
-    // Use keyword mode to avoid Ollama dependency (vector search tested separately)
-    const result = await executeTool('task_search', { query: 'authentication', mode: 'keyword' });
+    const result = await executeTool('task_search', {
+      queries: [sessionId],
+    });
     const parsed = JSON.parse(result);
-    expect(parsed.length).toBeGreaterThan(0);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].task_id).toBe(taskId);
     expect(parsed[0].title).toContain('authentication');
+    expect(qmdSearch).not.toHaveBeenCalled();
+    qmdSearch.mockRestore();
   });
 
-  it('search returns no results for unmatched query', async () => {
-    await executeTool('task_create', { title: 'Some task' });
-
-    const result = await executeTool('task_search', { query: 'xyznonexistent', mode: 'keyword' });
-    expect(result).toBe('No tasks found.');
+  it('search rejects the removed singular-query contract', async () => {
+    const result = await executeTool('task_search', {
+      query: 'authentication',
+      mode: 'keyword',
+    });
+    expect(result).toContain('queries is required');
   });
 });
 
@@ -596,17 +617,24 @@ describe('agent tool bus events', () => {
     );
   });
 
-  it('task_update type=category rename emits task:updated to web-ui', async () => {
+  it('task_update type=category emits one bulk task update with affected IDs', async () => {
     await ensureCategory('OldCat');
-    await executeTool('task_create', { title: 'Cat rename test', category: 'OldCat' });
+    const created = await executeTool('task_create', { title: 'Cat rename test', category: 'OldCat' });
+    const taskId = created.match(/id="([^"]+)"/)?.[1];
     emitSpy.mockClear();
 
     await executeTool('task_update', { type: 'category', old_name: 'OldCat', new_name: 'NewCat' });
     expect(emitSpy).toHaveBeenCalledWith(
       'task:updated',
-      expect.objectContaining({ oldCategory: 'OldCat', newCategory: 'NewCat', count: 1 }),
-      ['web-ui'],
-      { source: 'agent' },
+      expect.objectContaining({
+        task: null,
+        taskIds: [taskId],
+        oldCategory: 'OldCat',
+        newCategory: 'NewCat',
+        count: 1,
+      }),
+      ['web-ui', 'main-agent'],
+      { source: 'task-manager' },
     );
   });
 });

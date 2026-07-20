@@ -463,7 +463,8 @@ export async function runAgentLoop(
 
     for (const block of result.content) {
       if (block.type === 'thinking') {
-        callbacks?.onThinking?.((block as { type: 'thinking'; thinking: string }).thinking);
+        const thinking = (block as { type: 'thinking'; thinking: string }).thinking;
+        if (thinking.trim()) callbacks?.onThinking?.(thinking);
       } else if (block.type === 'text') {
         textParts.push(block.text);
         callbacks?.onText?.(block.text);

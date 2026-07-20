@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import Database from 'better-sqlite3';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-session-db'));
@@ -32,6 +33,7 @@ import {
 import { runSessionMigrationIfNeeded } from '../../src/core/session-db-migration.js';
 import { _resetSessionTrackerForTesting } from '../../src/core/session-tracker.js';
 import { WALNUT_HOME, SESSIONS_FILE } from '../../src/constants.js';
+import { SESSION_DB_PATH } from '../../src/core/session-db.js';
 import type { SessionRecord } from '../../src/core/types.js';
 
 async function resetAll(): Promise<void> {
@@ -94,6 +96,51 @@ describe('session-db: schema idempotency', () => {
       .get('s1') as { claude_session_id: string; task_id: string } | undefined;
     expect(row?.task_id).toBe('t1');
   });
+
+  it('adds and backfills versioned status columns on an existing database', () => {
+    const initial = getDb()!;
+    initial.prepare(`
+      INSERT INTO sessions (
+        claude_session_id, task_id, project, process_status, mode,
+        last_status_change, started_at, last_active_at, message_count
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'legacy-status-row',
+      'task-legacy',
+      'project-legacy',
+      'idle',
+      'default',
+      '2026-07-18T12:00:00.000Z',
+      '2026-07-18T10:00:00.000Z',
+      '2026-07-18T11:00:00.000Z',
+      1,
+    );
+    closeDb();
+
+    const legacy = new Database(SESSION_DB_PATH);
+    legacy.exec('ALTER TABLE sessions DROP COLUMN status_revision');
+    legacy.exec('ALTER TABLE sessions DROP COLUMN status_updated_at');
+    legacy.close();
+
+    const migrated = getDb()!;
+    const columns = migrated.pragma('table_info(sessions)') as Array<{ name: string }>;
+    expect(columns.map((column) => column.name)).toEqual(expect.arrayContaining([
+      'status_revision',
+      'status_updated_at',
+    ]));
+    const row = migrated.prepare(`
+      SELECT status_revision, status_updated_at
+      FROM sessions
+      WHERE claude_session_id = ?
+    `).get('legacy-status-row') as {
+      status_revision: number;
+      status_updated_at: string;
+    };
+    expect(row).toEqual({
+      status_revision: 1,
+      status_updated_at: '2026-07-18T12:00:00.000Z',
+    });
+  });
 });
 
 // ── 2. CRUD round-trip ─────────────────────────────────────────────────────
@@ -138,6 +185,8 @@ describe('session-db: rowToSession / sessionToRow round trip', () => {
       errorMessage: undefined,
       status_reason: 'turn_completed',
       status_changed_by: 'session-runner',
+      statusRevision: 7,
+      statusUpdatedAt: '2026-01-02T00:00:01Z',
       // Non-column fields that must spill into payload:
       status_history: [
         {
@@ -190,6 +239,8 @@ describe('session-db: rowToSession / sessionToRow round trip', () => {
     expect(session.status_history).toHaveLength(1);
     expect(session.status_history?.[0]?.reason).toBe('session_started');
     expect(session.pendingPermission?.requestId).toBe('req-1');
+    expect(session.statusRevision).toBe(7);
+    expect(session.statusUpdatedAt).toBe('2026-01-02T00:00:01Z');
   });
 
   it('hostname is runtime-only — never persisted to row or payload', () => {
@@ -445,4 +496,3 @@ describe('session-db migration: correctness', () => {
     expect(session.type).toBe('triage');
   });
 });
-

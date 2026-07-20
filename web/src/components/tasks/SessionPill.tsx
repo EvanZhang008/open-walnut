@@ -12,14 +12,17 @@
  */
 import { PHASE_LABELS, PROCESS_LABELS, pillPhaseClassSuffix } from '@/utils/session-status';
 import type { TaskPhase, ProcessStatus } from '@/types/session';
+import type { Task } from '@open-walnut/core';
 import { ICON_ROBOT } from '@/components/common/Icons';
+import { useCanonicalSessionId, useSessionStatus } from '@/hooks/useSessionStatus';
+import { resolveTaskSessionId } from '@/utils/session-status';
 
 interface SessionStatus {
   process_status: string;
-  activity?: string;
-  provider?: string;
+  activity?: string | null;
+  provider?: string | null;
   planCompleted?: boolean;
-  mode?: string;
+  mode?: string | null;
 }
 
 interface SessionPillProps {
@@ -64,6 +67,12 @@ function stateClassFromPhase(phase: TaskPhase | undefined): string {
   return pillPhaseClassSuffix(phase);
 }
 
+function stateClass(status: SessionStatus | undefined, phase: TaskPhase | undefined): string {
+  if (status?.process_status === 'running') return 'running';
+  if (status?.process_status === 'error') return 'error';
+  return stateClassFromPhase(phase);
+}
+
 /** CSS class suffix from two legacy statuses — picks the most important. */
 function stateClassLegacy(plan: SessionStatus | undefined, exec: SessionStatus | undefined, phase: TaskPhase | undefined): string {
   const ps = (s: SessionStatus | undefined) => s?.process_status;
@@ -73,6 +82,12 @@ function stateClassLegacy(plan: SessionStatus | undefined, exec: SessionStatus |
 }
 
 export function SessionPill({ sessionId, sessionStatus, phase, planSessionId, execSessionId, planStatus, execStatus, sessionIds, mode, onClick, isActive }: SessionPillProps) {
+  const storedSessionStatus = useSessionStatus(sessionId);
+  const storedPlanStatus = useSessionStatus(planSessionId);
+  const storedExecStatus = useSessionStatus(execSessionId);
+  const resolvedSessionStatus = storedSessionStatus ?? sessionStatus;
+  const resolvedPlanStatus = storedPlanStatus ?? planStatus;
+  const resolvedExecStatus = storedExecStatus ?? execStatus;
   const clickable = !!onClick;
   const clickClass = clickable ? ' task-session-pill-clickable' : '';
   const activeClass = isActive ? ' task-session-pill-active' : '';
@@ -80,13 +95,16 @@ export function SessionPill({ sessionId, sessionStatus, phase, planSessionId, ex
 
   // Resolve mode label: Plan or Bypass (only these two matter to the user)
   // planCompleted on the session_status indicates a plan was produced even if mode !== 'plan'
-  const isPlanSession = mode === 'plan' || !!sessionStatus?.planCompleted || !!planStatus?.planCompleted;
+  const resolvedMode = resolvedSessionStatus?.mode ?? resolvedPlanStatus?.mode ?? mode;
+  const isPlanSession = resolvedMode === 'plan'
+    || !!resolvedSessionStatus?.planCompleted
+    || !!resolvedPlanStatus?.planCompleted;
   const modeLabel = isPlanSession ? 'Plan' : 'Bypass';
 
   // New single-slot model: prefer sessionId + sessionStatus
   if (sessionId || sessionStatus) {
-    const status = sessionStatus;
-    const cls = stateClassFromPhase(phase);
+    const status = resolvedSessionStatus;
+    const cls = stateClass(status, phase);
     const wl = phaseLabel(phase);
     const pl = processLabel(status);
     const isEmbedded = status?.provider === 'embedded';
@@ -103,8 +121,8 @@ export function SessionPill({ sessionId, sessionStatus, phase, planSessionId, ex
   }
 
   // Legacy 2-slot fallback
-  const hasPlan = !!(planSessionId || planStatus);
-  const hasExec = !!(execSessionId || execStatus);
+  const hasPlan = !!(planSessionId || resolvedPlanStatus);
+  const hasExec = !!(execSessionId || resolvedExecStatus);
 
   // No active slots — fall back to historical session count
   if (!hasPlan && !hasExec) {
@@ -118,10 +136,10 @@ export function SessionPill({ sessionId, sessionStatus, phase, planSessionId, ex
     return null;
   }
 
-  const cls = stateClassLegacy(planStatus, execStatus, phase);
+  const cls = stateClassLegacy(resolvedPlanStatus, resolvedExecStatus, phase);
 
   // Pick the primary session for the process label (prefer exec over plan)
-  const primary = hasExec ? execStatus : planStatus;
+  const primary = hasExec ? resolvedExecStatus : resolvedPlanStatus;
   const wl = phaseLabel(phase);
   const pl = processLabel(primary);
 
@@ -129,13 +147,13 @@ export function SessionPill({ sessionId, sessionStatus, phase, planSessionId, ex
   const isEmbedded = primary?.provider === 'embedded';
 
   // Resolve legacy mode label from slot presence
-  const legacyMode = hasPlan ? 'plan' : mode;
+  const legacyMode = hasPlan ? 'plan' : resolvedMode;
   const legacyModeLabel = legacyMode === 'plan' ? 'Plan' : 'Bypass';
 
   // Build title with full details for both slots
   const titleParts: string[] = [];
-  if (hasPlan && planStatus) titleParts.push(`plan: ${phase ?? 'unknown'} / ${planStatus.process_status}${planStatus.provider === 'embedded' ? ' (embedded)' : ''}`);
-  if (hasExec && execStatus) titleParts.push(`exec: ${phase ?? 'unknown'} / ${execStatus.process_status}${execStatus.provider === 'embedded' ? ' (embedded)' : ''}`);
+  if (hasPlan && resolvedPlanStatus) titleParts.push(`plan: ${phase ?? 'unknown'} / ${resolvedPlanStatus.process_status}${resolvedPlanStatus.provider === 'embedded' ? ' (embedded)' : ''}`);
+  if (hasExec && resolvedExecStatus) titleParts.push(`exec: ${phase ?? 'unknown'} / ${resolvedExecStatus.process_status}${resolvedExecStatus.provider === 'embedded' ? ' (embedded)' : ''}`);
   const title = titleParts.join('  |  ') || 'Session';
 
   return (
@@ -143,5 +161,44 @@ export function SessionPill({ sessionId, sessionStatus, phase, planSessionId, ex
       <span className={`task-session-dot task-session-dot-${cls}`} />
       {isEmbedded ? <>{ICON_ROBOT}{' '}</> : ''}Session · {legacyModeLabel} · {wl} / {pl}
     </span>
+  );
+}
+
+interface TaskSessionPillProps {
+  task: Task;
+  onOpenSession?: (sessionId: string) => void;
+  isActive?: boolean;
+}
+
+/**
+ * Task-aware adapter used by every task surface. It keeps session-link fallback
+ * and provider-ID alias handling in one place while SessionPill owns display.
+ */
+export function TaskSessionPill({ task, onOpenSession, isActive }: TaskSessionPillProps) {
+  const sessionId = resolveTaskSessionId(task);
+  const canonicalSessionId = useCanonicalSessionId(sessionId);
+  if (!sessionId) return null;
+
+  const displaySessionId = canonicalSessionId ?? sessionId;
+  const sessionStatus = task.session_id === sessionId
+    ? task.session_status
+    : task.exec_session_id === sessionId
+      ? task.exec_session_status
+      : task.plan_session_id === sessionId
+        ? task.plan_session_status
+        : undefined;
+
+  return (
+    <SessionPill
+      sessionId={displaySessionId}
+      sessionStatus={sessionStatus}
+      phase={task.phase}
+      mode={sessionStatus?.mode
+        ?? task.session_status?.mode
+        ?? task.exec_session_status?.mode
+        ?? task.plan_session_status?.mode}
+      onClick={onOpenSession ? () => onOpenSession(displaySessionId) : undefined}
+      isActive={isActive}
+    />
   );
 }

@@ -57,7 +57,6 @@
  */
 
 import { log } from '../logging/index.js'
-import { bus, EventNames } from './event-bus.js'
 import type { SessionRecord, ProcessStatus, TaskPhase } from './types.js'
 
 // ── Stream-file tail fold (pure) ──
@@ -456,7 +455,10 @@ export async function reconcileProcessStatus(
   let convergedRecord = false
   if (recordDebt) {
     // ── Converge the record (conditional: skip if it changed since our snapshot) ──
-    const { updateSessionRecordConditionally } = await import('./session-tracker.js')
+    const {
+      emitSessionStatusChanged,
+      updateSessionRecordConditionally,
+    } = await import('./session-tracker.js')
     const updated = await updateSessionRecordConditionally(
       sid,
       {
@@ -499,12 +501,12 @@ export async function reconcileProcessStatus(
       host: record.host ?? '__local__',
     })
 
-    bus.emit(EventNames.SESSION_STATUS_CHANGED, {
-      sessionId: sid,
-      taskId: record.taskId,
-      process_status: to,
-      activity: undefined,
-    }, ['*'], { source: 'session-reconcile', urgency: 'urgent' })
+    emitSessionStatusChanged(
+      updated,
+      {},
+      ['*'],
+      { source: 'session-reconcile', urgency: 'urgent' },
+    )
 
     // Free the task's session slot on terminal converge (mirrors the live result path
     // in session-runner which clears on stopped/error). Without this, a reconciled

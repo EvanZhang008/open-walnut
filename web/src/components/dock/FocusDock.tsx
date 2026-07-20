@@ -10,6 +10,7 @@ import type { ImageAttachment } from '@/api/chat';
 import type { UseFocusBarReturn } from '@/hooks/useFocusBar';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { ICON_CHAT } from '@/components/common/Icons';
+import { useSessionStatus } from '@/hooks/useSessionStatus';
 
 // ── Custom events for Dock ↔ MainPage communication ──
 
@@ -60,7 +61,9 @@ interface DockTaskCardProps {
 
 const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, onUnpin }: DockTaskCardProps) {
   const sessionId = resolveTaskSessionId(task);
-  const isStreaming = task.session_status?.process_status === 'running';
+  const storedStatus = useSessionStatus(sessionId);
+  const effectiveStatus = storedStatus ?? task.session_status;
+  const isStreaming = effectiveStatus?.process_status === 'running';
 
   // Scroll the card into view when it becomes active (e.g. just added to Focus),
   // so the user sees where the task landed even if the dock scrolls horizontally.
@@ -104,6 +107,7 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
     <div
       ref={cardRef}
       className={`dock-task-card${isActive ? ' dock-task-active' : ''}${needsAttention ? ' dock-task-attention' : ''}${fullscreenClass}`}
+      data-task-id={task.id}
       onClick={(e) => { if (!isFullscreen && (e.target === e.currentTarget || (e.target as HTMLElement).closest('.dock-task-header'))) handleClick(); }}
       role="button"
       tabIndex={0}
@@ -154,6 +158,7 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
           <SessionChatHistory
             key={sessionId}
             sessionId={sessionId}
+            engine={effectiveStatus?.engine}
             optimisticMessages={optimisticMsgs}
             onMessagesDelivered={handleMessagesDelivered}
             onBatchCompleted={handleBatchCompleted}

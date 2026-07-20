@@ -1,6 +1,6 @@
 /**
  * ErrorSuggestionLink — Renders an actionable suggestion with a Settings deep-link
- * and optional install button.
+ * and optional install-command button.
  *
  * Usage:
  *   const sug = getErrorSuggestion(errorText, { host, provider });
@@ -26,7 +26,7 @@ export function ErrorSuggestionLink({ suggestion, settingsHash, settingsLabel, i
         </button>
       )}
       {installTarget && (
-        <InstallButton target={installTarget} label="Install" className="error-suggestion-install" />
+        <InstallButton target={installTarget} label="Copy install command" className="error-suggestion-install" />
       )}
     </div>
   );

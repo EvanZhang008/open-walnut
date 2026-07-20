@@ -17,13 +17,23 @@ vi.mock('../../../src/core/memory-search.js', () => ({
 // not under test here (the structural sidecar is what these tests assert).
 vi.mock('../../../src/core/qmd-store.js', () => ({
   DEFAULT_QMD_MODEL: 'test-model',
+  embedQmdStore: vi.fn(async (
+    store: { embed: (options: unknown) => Promise<unknown> },
+    _label: string,
+    options: unknown,
+  ) => store.embed(options)),
   getNotesStore: vi.fn(async () => ({
     internal: {
       findActiveDocument: () => undefined,
       insertContent: () => {},
       insertDocument: () => {},
+      updateDocumentTitle: () => {},
       updateDocument: () => {},
       deactivateDocument: () => {},
+      getActiveDocumentPaths: () => [],
+      cleanupOrphanedVectors: () => 0,
+      deleteInactiveDocuments: () => 0,
+      cleanupOrphanedContent: () => 0,
     },
     embed: async () => {},
     getStatus: async () => ({ needsEmbedding: 0 }),

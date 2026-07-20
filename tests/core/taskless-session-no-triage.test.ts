@@ -59,15 +59,18 @@ const SID_WITHTASK_MSG = 'withtask-message-send';
 // A non-empty id that does NOT exist in tasks.json (dangling reference).
 const DANGLING_TASK_ID = 'task-deleted-deadbeef';
 
-const SAMPLE_REPORT = `WHAT_I_DID: Touched nothing important.
+const SAMPLE_REPORT = `EXEC_SUMMARY: Trivial conversational task; nothing to do.
+GOAL: Request: "answer my question". Objective: Answer the user's question.
+CONTEXT: One-off Q&A session.
+PROGRESS: DONE answer — done
+WORK_LOG: append: Answered the question; no code touched.
+WHAT_I_DID: Touched nothing important.
 STATUS: succeeded — trivially.
-CHANGES_TRIED: none.
 PHASE_SIGNAL: conversational(user-asked-question)
 NEXT_STEPS: none.
 BLOCKERS: none
 USER_INTENT: question-pending — user just asked a question.
-VERIFIED: not-applicable.
-ARTIFACTS: none`;
+VERIFIED: not-applicable.`;
 
 /** Register a fake live session so the turn-complete hook's askSideQuestion path
  *  has something to call (only reached once taskId is present). */

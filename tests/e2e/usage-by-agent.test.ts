@@ -70,3 +70,40 @@ describe('GET /api/usage/by-agent', () => {
     expect(totalPct).toBeCloseTo(100, 0);
   });
 });
+
+describe('GET /api/usage/overview (interactive dashboard)', () => {
+  it('returns every aggregate in one call', async () => {
+    const res = await fetch(apiUrl('/api/usage/overview'));
+    expect(res.status).toBe(200);
+    const body = await res.json() as {
+      summary: { api_calls: number };
+      bySource: ByGroupRow[]; byModel: ByGroupRow[]; byAgent: ByGroupRow[];
+      recent: unknown[]; daily: unknown[]; dateBounds: { min: string | null; max: string | null };
+    };
+    // 3 walnut rows have agentId, 1 legacy row does not — session rows excluded.
+    expect(body.summary.api_calls).toBe(4);
+    expect(body.bySource.length).toBeGreaterThan(0);
+    expect(body.byAgent.length).toBeGreaterThan(0);
+    expect(body.recent.length).toBe(4);
+    expect(body.dateBounds.min).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('scopes every aggregate to a source drill-in', async () => {
+    const res = await fetch(apiUrl('/api/usage/overview?source=subagent'));
+    const body = await res.json() as {
+      summary: { api_calls: number; input_tokens: number };
+      bySource: ByGroupRow[];
+    };
+    // Only the two subagent (turn-complete-triage) rows.
+    expect(body.summary.api_calls).toBe(2);
+    expect(body.summary.input_tokens).toBe(1500);
+    // bySource still lists all sources so the user can pivot.
+    expect(body.bySource.length).toBeGreaterThan(1);
+  });
+
+  it('ANDs a source + agent drill-in', async () => {
+    const res = await fetch(apiUrl('/api/usage/overview?source=subagent&agent=turn-complete-triage'));
+    const body = await res.json() as { summary: { api_calls: number } };
+    expect(body.summary.api_calls).toBe(2);
+  });
+});

@@ -1,5 +1,57 @@
-import { apiGet, apiPost, apiPatch, apiPut, apiDelete } from './client';
+import { ApiError, apiGet, apiPost, apiPatch, apiPut, apiDelete } from './client';
 import type { Task, DashboardData } from '@open-walnut/core';
+import {
+  seedTaskSessionStatuses,
+  sessionStatusStore,
+} from '@/stores/session-status-store';
+import { hydrateSessionStatuses } from './sessions';
+
+function taskSessionIds(tasks: Task[]): string[] {
+  const ids = new Set<string>();
+  for (const task of tasks) {
+    if (task.session_id) ids.add(task.session_id);
+    if (task.plan_session_id) ids.add(task.plan_session_id);
+    if (task.exec_session_id) ids.add(task.exec_session_id);
+    const historicalIds = task.session_ids ?? [];
+    const latestHistoricalId = historicalIds[historicalIds.length - 1];
+    if (latestHistoricalId) ids.add(latestHistoricalId);
+  }
+  return [...ids];
+}
+
+async function seedTask<T extends Task>(task: T): Promise<T> {
+  seedTaskSessionStatuses(task, 'rest:task');
+  await hydrateSessionStatuses(taskSessionIds([task]));
+  return task;
+}
+
+async function seedTasks<T extends Task>(tasks: T[]): Promise<T[]> {
+  sessionStatusStore.seedTaskList(tasks, 'rest:task-list');
+  await hydrateSessionStatuses(taskSessionIds(tasks));
+  return tasks;
+}
+
+export interface TaskDependencyReference {
+  id: string;
+  title: string;
+  phase: string;
+}
+
+export interface TaskFamilyReference {
+  id: string;
+  title: string;
+  phase: Task['phase'];
+  status: Task['status'];
+  priority?: Task['priority'];
+}
+
+export interface TaskDetail extends Task {
+  is_blocked?: boolean;
+  resolved_dependencies?: TaskDependencyReference[];
+  dependents?: TaskDependencyReference[];
+  parent?: TaskFamilyReference;
+  children?: TaskFamilyReference[];
+}
 
 export interface TaskFilter {
   status?: string;
@@ -59,75 +111,74 @@ export async function fetchTasks(filter?: TaskFilter, opts?: { slim?: boolean; m
   }
   const res = await apiGet<{ tasks: Task[] }>('/api/tasks', Object.keys(params).length ? params : undefined);
   if (!Array.isArray(res?.tasks)) {
-    console.error('[api] /api/tasks returned unexpected shape', { keys: Object.keys(res ?? {}) });
-    return [];
+    throw new ApiError(200, 'Task list response is malformed');
   }
-  return res.tasks;
+  return seedTasks(res.tasks);
 }
 
 export async function fetchEnrichedTasks(): Promise<Task[]> {
   const res = await apiGet<{ tasks: Task[] }>('/api/tasks/enriched');
-  return res.tasks;
+  return seedTasks(res.tasks);
 }
 
-export async function fetchTask(id: string): Promise<Task> {
-  const res = await apiGet<{ task: Task }>(`/api/tasks/${id}`);
-  return res.task;
+export async function fetchTask(id: string): Promise<TaskDetail> {
+  const res = await apiGet<{ task: TaskDetail }>(`/api/tasks/${id}`);
+  return seedTask(res.task);
 }
 
 export async function createTask(input: CreateTaskInput): Promise<Task> {
   const res = await apiPost<{ task: Task }>('/api/tasks', input);
-  return res.task;
+  return seedTask(res.task);
 }
 
 export async function updateTask(id: string, updates: UpdateTaskInput): Promise<Task> {
   const res = await apiPatch<{ task: Task }>(`/api/tasks/${id}`, updates);
-  return res.task;
+  return seedTask(res.task);
 }
 
 export async function completeTask(id: string): Promise<Task> {
   const res = await apiPost<{ task: Task }>(`/api/tasks/${id}/complete`);
-  return res.task;
+  return seedTask(res.task);
 }
 
 export async function toggleCompleteTask(id: string): Promise<Task> {
   const res = await apiPost<{ task: Task }>(`/api/tasks/${id}/toggle-complete`);
-  return res.task;
+  return seedTask(res.task);
 }
 
 export async function starTask(id: string): Promise<Task> {
   const res = await apiPost<{ task: Task; starred: boolean }>(`/api/tasks/${id}/star`);
-  return res.task;
+  return seedTask(res.task);
 }
 
 export async function addNote(id: string, content: string): Promise<Task> {
   const res = await apiPost<{ task: Task }>(`/api/tasks/${id}/notes`, { content });
-  return res.task;
+  return seedTask(res.task);
 }
 
 export async function updateNote(id: string, content: string): Promise<Task> {
   const res = await apiPut<{ task: Task }>(`/api/tasks/${id}/note`, { content });
-  return res.task;
+  return seedTask(res.task);
 }
 
 export async function updateDescription(id: string, content: string): Promise<Task> {
   const res = await apiPut<{ task: Task }>(`/api/tasks/${id}/description`, { content });
-  return res.task;
+  return seedTask(res.task);
 }
 
 export async function updateSummary(id: string, content: string): Promise<Task> {
   const res = await apiPut<{ task: Task }>(`/api/tasks/${id}/summary`, { content });
-  return res.task;
+  return seedTask(res.task);
 }
 
 export async function addSubtask(id: string, title: string): Promise<Task> {
   const res = await apiPost<{ task: Task }>(`/api/tasks/${id}/subtasks`, { title });
-  return res.task;
+  return seedTask(res.task);
 }
 
 export async function toggleSubtask(taskId: string, subtaskId: string): Promise<Task> {
   const res = await apiPost<{ task: Task }>(`/api/tasks/${taskId}/subtasks/${subtaskId}/toggle`);
-  return res.task;
+  return seedTask(res.task);
 }
 
 export function deleteTask(taskId: string, opts?: { force?: boolean }): Promise<void> {
@@ -144,7 +195,15 @@ export async function reorderTasks(category: string, project: string, taskIds: s
 }
 
 export async function fetchDashboard(): Promise<DashboardData> {
-  return apiGet<DashboardData>('/api/dashboard');
+  const dashboard = await apiGet<DashboardData>('/api/dashboard');
+  const tasks = [
+    ...dashboard.urgent_tasks,
+    ...dashboard.today_tasks,
+    ...dashboard.recent_tasks,
+  ];
+  sessionStatusStore.seedTaskList(tasks, 'rest:dashboard');
+  await hydrateSessionStatuses(taskSessionIds(tasks));
+  return dashboard;
 }
 
 // ── Sprint helpers ──
@@ -216,7 +275,7 @@ export async function removeTag(taskId: string, tag: string): Promise<Task> {
 
 export async function setDependsOn(taskId: string, dependsOn: string[]): Promise<Task> {
   const res = await apiPut<{ task: Task }>(`/api/tasks/${taskId}/depends-on`, { depends_on: dependsOn });
-  return res.task;
+  return seedTask(res.task);
 }
 
 export async function addDependency(taskId: string, depId: string): Promise<Task> {

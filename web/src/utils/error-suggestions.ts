@@ -11,7 +11,7 @@ export interface ErrorSuggestion {
   settingsHash?: string;
   /** Human label for the settings link, e.g. "AI Provider" */
   settingsLabel?: string;
-  /** If set, renders an inline InstallButton for this target */
+  /** If set, renders an inline button that copies the install command. */
   installTarget?: 'claude-cli' | 'ollama';
 }
 

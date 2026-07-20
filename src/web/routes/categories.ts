@@ -15,7 +15,6 @@ import {
   setProjectMetadata,
 } from '../../core/task-manager.js'
 import { getProjectSummary } from '../../core/project-memory.js'
-import { bus, EventNames } from '../../core/event-bus.js'
 import type { TaskSource } from '../../core/types.js'
 
 export const categoriesRouter = Router()
@@ -100,7 +99,6 @@ categoriesRouter.post('/rename', async (req: Request, res: Response, next: NextF
     }
 
     const result = await renameCategory(oldCategory, newCategory)
-    bus.emit(EventNames.TASK_UPDATED, { oldCategory, newCategory, count: result.count }, ['web-ui', 'main-agent'], { source: 'api' })
     res.json(result)
   } catch (err) {
     if (err instanceof CategorySourceConflictError) {

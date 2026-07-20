@@ -33,13 +33,18 @@ import {
   listGroups,
 } from '../core/task-manager.js';
 import { VALID_PHASES } from '../core/phase.js';
-import { bm25ScoreTasks, expandChildTasks } from '../core/search.js';
+import {
+  bm25ScoreTasks,
+  expandChildTasks,
+  searchTaskAndSessionReferences,
+} from '../core/search.js';
 import {
   listSessions,
   getSessionSummaries,
   getSessionsForTask,
   getSessionByClaudeId,
   updateSessionRecord,
+  emitSessionStatusChanged,
   importSessionRecord,
   checkSessionLimit,
   TRIAGE_AGENTS,
@@ -739,7 +744,6 @@ For categories (type='category'): rename a category across all tasks (requires o
         if (!oldName || !newName) return 'Error: old_name and new_name are required for type=category.';
         try {
           const { count } = await renameCategory(oldName, newName);
-          bus.emit(EventNames.TASK_UPDATED, { oldCategory: oldName, newCategory: newName, count }, ['web-ui'], { source: 'agent' });
           return `Renamed category "${oldName}" to "${newName}" (${count} tasks updated)`;
         } catch (err) {
           return `Error: ${err instanceof Error ? err.message : String(err)}`;
@@ -982,7 +986,7 @@ Actions:
   // ── Search Tools ──
   {
     name: 'task_search',
-    description: `Search tasks via hybrid search (QMD: BM25 + vector + reranking) with BM25 keyword fallback. Indexed fields: title, description, summary, note, conversation_log, tags, category, project, IDs, external URLs. Auto-expands child tasks of matched parents.
+    description: `Search tasks via hybrid search (QMD: BM25 + vector + reranking) with BM25 keyword fallback. QMD indexes human-readable fields: title, description, summary, note, conversation_log, tags, category, and project. Task IDs, session IDs, and external URLs are resolved directly from structured records before QMD. Auto-expands child tasks of matched parents.
 
 ## How matching works
 
@@ -1034,36 +1038,69 @@ queries: ["pipeline API allowlisting", "PAPINS SigV4", "pipeline allowlist"]  �
       if (queries.length === 0) return 'Error: queries is required (non-empty array of strings).';
       const limit = (params.limit as number) ?? 20;
 
-      let results: import('../core/search.js').SearchResult[];
+      const [allTasks, allSessions] = await Promise.all([
+        listTasks(),
+        listSessions(),
+      ]);
+      const referenceResults: import('../core/search.js').SearchResult[] = [];
+      const semanticQueries: string[] = [];
+      for (const query of queries) {
+        const references = searchTaskAndSessionReferences(
+          allTasks,
+          allSessions,
+          query,
+        );
+        referenceResults.push(...references);
+        // Exact copied references are navigation commands. Partial references
+        // stay pinned first but still receive semantic expansion.
+        if (!references.some((result) => result.score === 1)) {
+          semanticQueries.push(query);
+        }
+      }
+
+      const bestByTask = new Map<string, import('../core/search.js').SearchResult>();
+      const appendResult = (result: import('../core/search.js').SearchResult) => {
+        if (!result.taskId || bestByTask.has(result.taskId)) return;
+        bestByTask.set(result.taskId, result);
+      };
+      for (const result of referenceResults) appendResult(result);
+
       try {
-        // Primary path: QMD hybrid search (BM25 + vector + reranking), multi-query RRF fusion
-        const { memoryNotesSearch } = await import('../core/memory-search.js');
-        const qmdResults = await memoryNotesSearch(queries, ['task'], limit);
-        results = qmdResults.map(r => ({
-          type: 'task' as const,
-          title: r.title,
-          snippet: r.snippet,
-          taskId: r.taskId,
-          score: r.finalScore,
-          matchField: 'task',
-        }));
+        if (semanticQueries.length > 0) {
+          // Agent search intentionally retains QMD's reranker.
+          const { memoryNotesSearch } = await import('../core/memory-search.js');
+          const qmdResults = await memoryNotesSearch(semanticQueries, ['task'], limit);
+          for (const result of qmdResults) {
+            appendResult({
+              type: 'task',
+              title: result.title,
+              snippet: result.snippet,
+              taskId: result.taskId,
+              score: result.finalScore,
+              matchField: 'task',
+            });
+          }
+        }
       } catch {
         // Graceful degradation: QMD unavailable — fallback to BM25 keyword search
         // Run each query, keep best score per task
-        const tasks = (await listTasks()).filter(t => !t.title.startsWith('.metadata'));
         const merged = new Map<string, import('../core/search.js').SearchResult>();
-        for (const q of queries) {
-          for (const r of bm25ScoreTasks(tasks, q)) {
+        for (const q of semanticQueries) {
+          for (const r of bm25ScoreTasks(allTasks, q)) {
             const prev = merged.get(r.taskId!);
             if (!prev || r.score > prev.score) merged.set(r.taskId!, r);
           }
         }
-        results = [...merged.values()].sort((a, b) => b.score - a.score).slice(0, limit);
+        for (const result of [...merged.values()].sort((a, b) => b.score - a.score)) {
+          appendResult(result);
+        }
       }
 
       // Auto-expand child tasks of matched parents
-      const allTasks = (await listTasks()).filter(t => !t.title.startsWith('.metadata'));
-      results = expandChildTasks(results.slice(0, limit), allTasks);
+      let results = expandChildTasks(
+        [...bestByTask.values()].slice(0, limit),
+        allTasks.filter(t => !t.title.startsWith('.metadata')),
+      );
       if (results.length === 0) return 'No tasks found.';
       return json(results.map((r) => ({
         task_id: r.taskId,
@@ -2057,7 +2094,7 @@ defaults (same resolution chain as session_start).`,
             if (session.process_status !== 'stopped' && session.process_status !== 'error') {
               return `Error: Stop session before archiving. Session ${sessionId} process is still alive (${session.process_status}).`;
             }
-            await updateSessionRecord(sessionId, {
+            const updated = await updateSessionRecord(sessionId, {
               archived: true,
               ...(archiveReason ? { archive_reason: archiveReason } : {}),
             });
@@ -2069,22 +2106,15 @@ defaults (same resolution chain as session_start).`,
                 await clearSessionSlot(session.taskId, sessionId);
               } catch { /* task may not exist */ }
             }
-            bus.emit(EventNames.SESSION_STATUS_CHANGED, {
-              sessionId,
-              taskId: session.taskId,
-              process_status: session.process_status,
-              archived: true,
-            }, ['*'], { source: 'agent' });
+            emitSessionStatusChanged(updated, {}, ['*'], { source: 'agent' });
             const sRef = sessionRef(sessionId, session.title ?? sessionId.slice(0, 16));
             return `Session ${sRef} archived${archiveReason ? ` (${archiveReason})` : ''}. Task session slot freed — you can now start a new session for this task.`;
           } else {
-            await updateSessionRecord(sessionId, { archived: false, archive_reason: undefined });
-            bus.emit(EventNames.SESSION_STATUS_CHANGED, {
+            const updated = await updateSessionRecord(
               sessionId,
-              taskId: session.taskId,
-              process_status: session.process_status,
-              archived: false,
-            }, ['*'], { source: 'agent' });
+              { archived: false, archive_reason: undefined },
+            );
+            emitSessionStatusChanged(updated, {}, ['*'], { source: 'agent' });
             const sRef = sessionRef(sessionId, session.title ?? sessionId.slice(0, 16));
             return `Session ${sRef} unarchived.`;
           }
@@ -2112,12 +2142,8 @@ defaults (same resolution chain as session_start).`,
 
           if (newTaskId === '') {
             // Dissociate from task entirely
-            await updateSessionRecord(sessionId, { taskId: undefined });
-            bus.emit(EventNames.SESSION_STATUS_CHANGED, {
-              sessionId,
-              taskId: undefined,
-              process_status: session.process_status,
-            }, ['*'], { source: 'agent' });
+            const updated = await updateSessionRecord(sessionId, { taskId: undefined });
+            emitSessionStatusChanged(updated, {}, ['*'], { source: 'agent' });
             const sRef = sessionRef(sessionId, session.title ?? sessionId.slice(0, 16));
             return `Session ${sRef} dissociated from task. Session is now unlinked.`;
           } else {
@@ -2133,9 +2159,13 @@ defaults (same resolution chain as session_start).`,
                 `Use session_send to interact with the existing session, or create a subtask for a new session.`;
             }
 
-            await updateSessionRecord(sessionId, { taskId: newTask.id, project: newTask.project });
+            const updated = await updateSessionRecord(
+              sessionId,
+              { taskId: newTask.id, project: newTask.project },
+            );
             await linkSession(newTask.id, sessionId);
             bus.emit(EventNames.TASK_UPDATED, { taskId: newTask.id }, [], { source: 'agent' });
+            emitSessionStatusChanged(updated, {}, ['*'], { source: 'agent' });
             const sRef = sessionRef(sessionId, session.title ?? sessionId.slice(0, 16));
             return `Session ${sRef} moved to task ${taskRef(newTask.id, newTask.title)}.`;
           }
@@ -2153,7 +2183,10 @@ defaults (same resolution chain as session_start).`,
         // Look up session for the ref tag label (no prior fetch in this branch)
         const session = await getSessionByClaudeId(sessionId);
         if (!session) return `Error: Session not found: ${sessionId}`;
-        await updateSessionRecord(sessionId, updates as Partial<SessionRecord>);
+        const updated = await updateSessionRecord(sessionId, updates as Partial<SessionRecord>);
+        if (activity !== undefined) {
+          emitSessionStatusChanged(updated, {}, ['*'], { source: 'agent' });
+        }
         const sRef = sessionRef(sessionId, title ?? session.title ?? sessionId.slice(0, 16));
         const parts = [];
         if (title) parts.push(`title="${title}"`);

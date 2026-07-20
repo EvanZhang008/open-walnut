@@ -195,6 +195,17 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     expect(standaloneSrc).toContain('--dangerously-skip-permissions')
     expect(templateSrc).toContain('--dangerously-skip-permissions')
   })
+
+  it('both daemon twins enforce owner-only umask and repair existing storage modes', () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/process\.umask\(0o077\)/)
+      expect(src).toMatch(/function ensureOwnerOnlyStorage/)
+      expect(src).toMatch(/chmodSync\(DAEMON_DIR,\s*0o700\)/)
+      expect(src).toMatch(/chmodSync\(STREAMS_DIR,\s*0o700\)/)
+      expect(src).toMatch(/stat\.mode\s*&\s*0o111\s*\?\s*0o700\s*:\s*0o600/)
+    }
+  })
 })
 
 // ── L1/L2 parity: versioned events + daemon-authoritative task state ──

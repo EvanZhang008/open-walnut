@@ -57,7 +57,8 @@ test.beforeEach(async ({ page }) => {
       constructor(url: string | URL, protocols?: string | string[]) {
         super(url, protocols);
 
-        if (!(window as any).__capturedWs) {
+        const socketUrl = new URL(String(url), window.location.href);
+        if (socketUrl.pathname === '/ws' && !(window as any).__capturedWs) {
           (window as any).__capturedWs = this;
 
           // Intercept outgoing messages to auto-respond to specific RPCs.
@@ -79,7 +80,7 @@ test.beforeEach(async ({ page }) => {
                       type: 'res',
                       id: parsed.id,
                       ok: true,
-                      data: { messageId: 'mock-msg-' + (++mockMsgCounter) },
+                      payload: { messageId: 'mock-msg-' + (++mockMsgCounter) },
                     });
                     this.dispatchEvent(new MessageEvent('message', { data: response }));
                   }, 10);
@@ -93,7 +94,7 @@ test.beforeEach(async ({ page }) => {
                       type: 'res',
                       id: parsed.id,
                       ok: true,
-                      data: { blocks: [], isStreaming: false },
+                      payload: { blocks: [], isStreaming: false },
                     });
                     this.dispatchEvent(new MessageEvent('message', { data: response }));
                   }, 10);

@@ -1,122 +1,297 @@
 /**
  * Unit tests for the session self-report parsing in session-hooks/builtins.ts.
  *
- * These cover the pure helpers that turn a side_question self-report into a
- * Tier-1 task.summary: extractField (label extraction, tolerant of bold markers
- * and missing fields) and summaryFromSelfReport (field selection + formatting).
+ * These cover the pure helpers of the NOTE-based self-report (2026-07-18 redesign:
+ * the task NOTE is the single living document — five sections, per-section answers):
+ * extractField (label extraction), parseNoteSections (note → sections),
+ * parseSectionAnswer (per-section unchanged/append/rewrite), assembleNote
+ * (existing note + report → new note), and noteShrinkRejected (fact-loss guard).
  */
 import { describe, it, expect } from 'vitest';
-import { extractField, summaryFromSelfReport, milestoneFromSelfReport } from '../../src/core/session-hooks/builtins.js';
+import {
+  extractField, parseNoteSections, parseSectionAnswer, assembleNote,
+  noteShrinkRejected, buildSelfReportPrompt, NOTE_REORG_CAP,
+} from '../../src/core/session-hooks/builtins.js';
 
-const SAMPLE = `WHAT_I_DID: Added READ_ONLY_TOOL_NAMES allowlist in tools.ts and wired triage to use it.
+const SAMPLE = `EXEC_SUMMARY: unchanged
+GOAL: unchanged
+CONTEXT: unchanged
+PROGRESS: DONE parser — done
+WIP e2e verify — in progress
+WORK_LOG: append: Added READ_ONLY_TOOL_NAMES allowlist in tools.ts; found denylist approach fails open for new tools; committed abc123.
 STATUS: succeeded — build passes, triage can no longer create tasks.
-CHANGES_TRIED: First tried a denylist, abandoned it because new tools would default to writable.
 PHASE_SIGNAL: implement-done
-NEXT_STEPS: Run /verify on an ephemeral server to confirm no write tools leak.
+WHAT_I_DID: Added READ_ONLY_TOOL_NAMES allowlist in tools.ts.
+NEXT_STEPS: Run /verify on an ephemeral server.
 BLOCKERS: none
 USER_INTENT: workflow-command — user said "proceed".
-VERIFIED: assumed — have not run the e2e test yet.
-ARTIFACTS: src/agent/tools.ts, src/web/server.ts`;
+VERIFIED: assumed — have not run the e2e test yet.`;
+
+const STRUCTURED_NOTE = `## Executive Summary
+Migrating the session store to SQLite. Dual-write shipped; cutover pending.
+
+## Goal
+All session reads/writes go through SQLite with zero data loss; done when the 48h parity check passes.
+
+## Context
+sessions.json hit lock contention at ~1400 sessions. SQLite chosen over LMDB for tooling.
+
+## Progress
+DONE dual-write — done
+WIP parity check — in progress
+
+## Work Log
+- Implemented dual-write behind WALNUT_SQLITE=1; found EXDEV pitfall (tmp must be same-dir); committed def456.`;
 
 describe('extractField', () => {
   it('extracts a single-line field', () => {
     expect(extractField(SAMPLE, 'PHASE_SIGNAL')).toBe('implement-done');
   });
 
-  it('extracts a field that contains an em-dash and punctuation', () => {
-    expect(extractField(SAMPLE, 'STATUS')).toBe('succeeded — build passes, triage can no longer create tasks.');
-  });
-
-  it('returns empty string for an absent field', () => {
-    expect(extractField(SAMPLE, 'NONEXISTENT')).toBe('');
+  it('captures a multi-line field up to the next known label', () => {
+    expect(extractField(SAMPLE, 'PROGRESS')).toBe('DONE parser — done\nWIP e2e verify — in progress');
   });
 
   it('tolerates **bold** label markers', () => {
-    const bolded = `**WHAT_I_DID**: Fixed the parser.\n**STATUS**: succeeded — ok.`;
-    expect(extractField(bolded, 'WHAT_I_DID')).toBe('Fixed the parser.');
-    expect(extractField(bolded, 'STATUS')).toBe('succeeded — ok.');
-  });
-
-  it('stops at the next ALL-CAPS label (does not bleed into following field)', () => {
-    expect(extractField(SAMPLE, 'BLOCKERS')).toBe('none');
-  });
-
-  it('captures a multi-line field up to the next label', () => {
-    const multi = `WHAT_I_DID: line one\nline two continues here.\nSTATUS: succeeded — done.`;
-    expect(extractField(multi, 'WHAT_I_DID')).toBe('line one\nline two continues here.');
+    const bolded = `**WORK_LOG**: append: Fixed the parser.\n**STATUS**: succeeded — ok.`;
+    expect(extractField(bolded, 'WORK_LOG')).toBe('append: Fixed the parser.');
   });
 
   it('does NOT truncate at an unrelated ALL-CAPS WORD: line (only known labels terminate)', () => {
-    // "API:" / "TODO:" are not self-report labels — a wrapped field must keep them.
-    const wrapped = `NEXT_STEPS: Update the sender.\nAPI: must bump the version too.\nTODO: write docs.\nBLOCKERS: none`;
-    expect(extractField(wrapped, 'NEXT_STEPS')).toBe(
-      'Update the sender.\nAPI: must bump the version too.\nTODO: write docs.',
-    );
-    // The real next label still terminates correctly.
+    const wrapped = `NEXT_STEPS: Update the sender.\nAPI: must bump the version too.\nBLOCKERS: none`;
+    expect(extractField(wrapped, 'NEXT_STEPS')).toBe('Update the sender.\nAPI: must bump the version too.');
     expect(extractField(wrapped, 'BLOCKERS')).toBe('none');
   });
 });
 
-describe('summaryFromSelfReport', () => {
-  it('builds ONE single-paragraph summary (no labelled sub-sections)', () => {
-    const out = summaryFromSelfReport(SAMPLE);
-    // Single paragraph: WHAT_I_DID is the spine + a trailing "Next: …" clause.
-    expect(out).toContain('READ_ONLY_TOOL_NAMES allowlist');
-    expect(out).toContain('Next: Run /verify');
-    // No multi-section bold field labels — this is the core of the "one summary" fix.
-    expect(out).not.toContain('**Session Summary**');
-    expect(out).not.toContain('**Current Agent Status**');
-    expect(out).not.toContain('**Next Steps**');
-    // It's one line (no embedded newlines).
-    expect(out).not.toContain('\n');
+describe('parseNoteSections', () => {
+  it('splits a structured note into its five sections', () => {
+    const { sections, preamble } = parseNoteSections(STRUCTURED_NOTE);
+    expect(preamble).toBe('');
+    expect(sections['Executive Summary']).toContain('Migrating the session store');
+    expect(sections['Goal']).toContain('48h parity check');
+    expect(sections['Work Log']).toContain('def456');
   });
 
-  it('appends a status qualifier only for failed/blocked/waiting (not "succeeded")', () => {
-    const blocked = `WHAT_I_DID: Wired the FIFO reader.\nSTATUS: blocked — port conflict.\nPHASE_SIGNAL: verify-fail`;
-    const out = summaryFromSelfReport(blocked);
-    expect(out).toContain('Wired the FIFO reader.');
-    expect(out).toContain('(blocked — port conflict.)');
-    // A "succeeded" status is implied by progress and should NOT be appended.
-    const succeeded = `WHAT_I_DID: Shipped the parser.\nSTATUS: succeeded — all good.`;
-    expect(summaryFromSelfReport(succeeded)).toBe('Shipped the parser.');
+  it('returns a free-form (pre-migration) note entirely as preamble', () => {
+    const { sections, preamble } = parseNoteSections('Goal: do X\nsome free-form notes here');
+    expect(Object.keys(sections)).toHaveLength(0);
+    expect(preamble).toContain('free-form notes');
   });
 
-  it('falls back to STATUS when WHAT_I_DID is absent', () => {
-    const partial = `STATUS: blocked — port conflict.\nPHASE_SIGNAL: verify-fail`;
-    expect(summaryFromSelfReport(partial)).toBe('blocked — port conflict.');
+  it('recognizes a header at end-of-string (empty last section, no trailing newline)', () => {
+    // Regression: headerRe required `\n` after the name, so a trimmed note ending
+    // `## Work Log` left that header inside Progress's body and the next assemble
+    // fabricated a SECOND `## Work Log` header — corruption compounding per fire.
+    const note = '## Progress\nWIP thing\n\n## Work Log';
+    const { sections } = parseNoteSections(note);
+    expect(sections['Work Log']).toBe('');
+    expect(sections['Progress']).toBe('WIP thing');
+    expect(sections['Progress']).not.toContain('## Work Log');
   });
 
-  it('returns empty string when the report has no usable fields', () => {
-    expect(summaryFromSelfReport('garbage with no labels')).toBe('');
+  it('merges duplicate-header bodies instead of last-wins dropping the earlier one', () => {
+    const { sections } = parseNoteSections('## Work Log\n- A\n\n## Work Log\n- B');
+    expect(sections['Work Log']).toContain('- A');
+    expect(sections['Work Log']).toContain('- B');
   });
 });
 
-describe('milestoneFromSelfReport', () => {
-  it('builds a one-line milestone for a real PHASE_SIGNAL transition', () => {
-    const m = milestoneFromSelfReport(SAMPLE);
-    expect(m).not.toBeNull();
-    expect(m!.signal).toBe('implement-done');
-    expect(m!.line).toBe('🔧 Implemented — Added READ_ONLY_TOOL_NAMES allowlist in tools.ts and wired triage to use it.');
+describe('parseSectionAnswer', () => {
+  it('parses unchanged / append / plain content', () => {
+    expect(parseSectionAnswer(SAMPLE, 'Goal')).toEqual({ kind: 'unchanged' });
+    expect(parseSectionAnswer(SAMPLE, 'Work Log').kind).toBe('append');
+    expect(parseSectionAnswer(SAMPLE, 'Progress')).toEqual({
+      kind: 'rewrite', text: 'DONE parser — done\nWIP e2e verify — in progress',
+    });
   });
 
-  it('matches the bare keyword inside committed(<hash>)', () => {
-    const report = `WHAT_I_DID: Closed the session with a commit.\nPHASE_SIGNAL: committed(abc1234)`;
-    const m = milestoneFromSelfReport(report);
-    expect(m).not.toBeNull();
-    expect(m!.signal).toBe('committed');
-    expect(m!.line).toBe('📦 Committed — Closed the session with a commit.');
+  it('an absent label is none (treated as unchanged downstream)', () => {
+    expect(parseSectionAnswer('STATUS: ok', 'Context')).toEqual({ kind: 'none' });
   });
 
-  it('returns null for noise signals (conversational / reconfirmed)', () => {
-    expect(milestoneFromSelfReport(`WHAT_I_DID: Answered a question.\nPHASE_SIGNAL: conversational(user-asked-question)`)).toBeNull();
-    expect(milestoneFromSelfReport(`WHAT_I_DID: Re-checked the plan.\nPHASE_SIGNAL: reconfirmed`)).toBeNull();
+  it('tolerates backtick wrapping and casing on markers', () => {
+    expect(parseSectionAnswer('GOAL: `unchanged`', 'Goal')).toEqual({ kind: 'unchanged' });
+    expect(parseSectionAnswer('WORK_LOG: APPEND: entry here', 'Work Log'))
+      .toEqual({ kind: 'append', text: 'entry here' });
   });
 
-  it('returns null when WHAT_I_DID is missing even on a real signal', () => {
-    expect(milestoneFromSelfReport(`PHASE_SIGNAL: verify-pass`)).toBeNull();
+  it('marker-less Work Log content defaults to append, never rewrite (append-only log)', () => {
+    // A session that forgets the `append:` prefix must not wipe the whole log
+    // with one turn's entry; other sections keep marker-less = rewrite.
+    expect(parseSectionAnswer('WORK_LOG: fixed the parser, commit abc123.', 'Work Log'))
+      .toEqual({ kind: 'append', text: 'fixed the parser, commit abc123.' });
+    expect(parseSectionAnswer('CONTEXT: new background here.', 'Context'))
+      .toEqual({ kind: 'rewrite', text: 'new background here.' });
+  });
+});
+
+describe('assembleNote', () => {
+  it('applies per-section answers: append adds a bullet, rewrite replaces, unchanged keeps', () => {
+    const out = assembleNote(STRUCTURED_NOTE, SAMPLE);
+    expect(out).not.toBeNull();
+    expect(out!.changed).toEqual(['Progress', 'Work Log']);
+    // Unchanged sections preserved verbatim.
+    expect(out!.note).toContain('Migrating the session store');
+    expect(out!.note).toContain('EXDEV pitfall');
+    // Work Log appended as a new bullet.
+    expect(out!.note).toContain('- Added READ_ONLY_TOOL_NAMES allowlist');
+    // Progress replaced.
+    expect(out!.note).toContain('WIP e2e verify — in progress');
+    expect(out!.note).not.toContain('WIP parity check');
   });
 
-  it('returns null when there is no PHASE_SIGNAL at all', () => {
-    expect(milestoneFromSelfReport(`WHAT_I_DID: did stuff.`)).toBeNull();
+  it('returns null when every section is unchanged/absent (skip persist)', () => {
+    const allUnchanged = 'EXEC_SUMMARY: unchanged\nGOAL: unchanged\nCONTEXT: unchanged\nPROGRESS: unchanged\nWORK_LOG: unchanged\nSTATUS: ok';
+    expect(assembleNote(STRUCTURED_NOTE, allUnchanged)).toBeNull();
+  });
+
+  it('a full five-section answer supersedes a free-form note (migration)', () => {
+    const freeform = 'Goal: roll out READMEs\nProgress so far: pilot done';
+    const migration = `EXEC_SUMMARY: Rolling out READMEs; pilot done.
+GOAL: Roll out READMEs to all teams.
+CONTEXT: Cloud copies drifted from local AGENTS.md.
+PROGRESS: DONE pilot — done
+WORK_LOG: append: Pilot synced 49 READMEs.`;
+    const out = assembleNote(freeform, migration);
+    expect(out).not.toBeNull();
+    expect(out!.note).toContain('## Executive Summary');
+    // Old free-form body dropped ONLY because all five sections were provided.
+    expect(out!.note).not.toContain('Progress so far');
+  });
+
+  it('an INCOMPLETE structured answer keeps the free-form body as preamble (nothing dropped)', () => {
+    const freeform = 'Important fact: cron 108e42e5 must stay deleted.';
+    const partial = 'PROGRESS: WIP investigating\nWORK_LOG: append: started digging.';
+    const out = assembleNote(freeform, partial);
+    expect(out).not.toBeNull();
+    expect(out!.note).toContain('cron 108e42e5');
+  });
+
+  it('a preamble above a fully-structured note survives a single-section append', () => {
+    // Regression: `migrated` was computed from the merged RESULT (all five present),
+    // so once the note had five headers, any human text above the first header was
+    // silently dropped by the very next append. Must be judged on THIS report.
+    const withPreamble = `HUMAN PREAMBLE: keep me.\n\n${STRUCTURED_NOTE}`;
+    const out = assembleNote(withPreamble, 'WORK_LOG: append: one more entry.');
+    expect(out).not.toBeNull();
+    expect(out!.note).toContain('HUMAN PREAMBLE: keep me.');
+  });
+
+  it('appends to an empty Work Log section without a stray blank bullet', () => {
+    const noLogNote = STRUCTURED_NOTE.replace(/## Work Log[\s\S]*$/, '## Work Log\n');
+    const out = assembleNote(noLogNote.trim(), 'WORK_LOG: append: first entry, commit aaa111.');
+    expect(out!.note).toMatch(/## Work Log\n- first entry/);
+    // The EOF-header fix: exactly ONE Work Log header in the result.
+    expect(out!.note.match(/## Work Log/g)).toHaveLength(1);
+  });
+});
+
+describe('noteShrinkRejected', () => {
+  it('small notes rewrite freely', () => {
+    expect(noteShrinkRejected('short note', '')).toBe(false);
+  });
+
+  it('rejects a large note shrinking below 40%', () => {
+    const oldNote = 'x'.repeat(2000);
+    expect(noteShrinkRejected(oldNote, 'y'.repeat(700))).toBe(true);
+    expect(noteShrinkRejected(oldNote, 'y'.repeat(900))).toBe(false);
+  });
+
+  it('over-cap notes use an ABSOLUTE floor so a compliant mandatory reorganize is never rejected', () => {
+    // Deadlock regression: for old ≥ 15000, 0.4×old ≥ NOTE_REORG_CAP, so the
+    // proportional floor rejected every reorganize that landed under the cap as
+    // instructed — the note could never shrink. Over-cap fires floor at cap×0.4.
+    const big = 'x'.repeat(20000);
+    expect(noteShrinkRejected(big, 'y'.repeat(5900))).toBe(false); // compliant reorg passes
+    expect(noteShrinkRejected(big, 'y'.repeat(2000))).toBe(true);  // real fact-dump still caught
+    expect(noteShrinkRejected('x'.repeat(15001), 'y'.repeat(5999))).toBe(false);
+  });
+
+  it('protects each durable summary section even when Work Log keeps total length high', () => {
+    const protectedSections = ['Executive Summary', 'Goal', 'Context', 'Progress'] as const;
+    const oldNote = protectedSections
+      .map((section) => `## ${section}\n${section} ${'important fact '.repeat(20)}`)
+      .concat(`## Work Log\n${'historical evidence '.repeat(200)}`)
+      .join('\n\n');
+
+    for (const section of protectedSections) {
+      const newNote = oldNote.replace(
+        new RegExp(`(## ${section}\\n)[\\s\\S]*?(?=\\n\\n## )`),
+        `$1tiny`,
+      );
+      expect(noteShrinkRejected(oldNote, newNote), section).toBe(true);
+    }
+  });
+
+  it('rejects deleting any mandatory section even when its body is short', () => {
+    const oldNote = `## Executive Summary
+Short summary.
+
+## Goal
+Keep the goal.
+
+## Context
+Keep context.
+
+## Progress
+WIP audit.
+
+## Work Log
+- ${'evidence '.repeat(250)}`;
+
+    for (const section of ['Executive Summary', 'Goal', 'Context', 'Progress'] as const) {
+      const newNote = oldNote.replace(
+        new RegExp(`(?:^|\\n\\n)## ${section}\\n[\\s\\S]*?(?=\\n\\n## |$)`),
+        '',
+      );
+      expect(noteShrinkRejected(oldNote, newNote), section).toBe(true);
+    }
+  });
+});
+
+describe('buildSelfReportPrompt', () => {
+  it('empty note → asks for all five sections', () => {
+    expect(buildSelfReportPrompt('')).toContain('NOTE is EMPTY');
+  });
+
+  it('feeds the existing note back and offers per-section unchanged', () => {
+    const p = buildSelfReportPrompt(STRUCTURED_NOTE);
+    expect(p).toContain('<existing_note>');
+    expect(p).toContain('EXDEV pitfall');
+    expect(p).not.toContain('REORGANIZE');
+  });
+
+  it('over the cap → unlocks the Work Log reorganize path with the ID-preservation rule', () => {
+    const p = buildSelfReportPrompt('x'.repeat(NOTE_REORG_CAP + 1));
+    expect(p).toContain('REORGANIZE');
+    expect(p).toContain('keep every ID');
+  });
+
+  it('always shows the note budget; over the cap the reorganize is mandatory with a shrink target', () => {
+    const under = buildSelfReportPrompt('x'.repeat(100));
+    expect(under).toContain(`NOTE BUDGET: 100/${NOTE_REORG_CAP} chars`);
+    const overLen = NOTE_REORG_CAP + 1;
+    const over = buildSelfReportPrompt('x'.repeat(overLen));
+    expect(over).toContain(`NOTE BUDGET: ${overLen}/${NOTE_REORG_CAP} chars`);
+    expect(over).toContain('MANDATORY REORGANIZE');
+    expect(over).toContain('SHORTER than it went in');
+  });
+
+  it('Progress uses plain-text status labels, never emoji', () => {
+    const p = buildSelfReportPrompt('');
+    expect(p).toContain('DONE');
+    expect(p).toContain('WIP');
+    expect(p).toContain('TODO');
+    expect(p).toContain('BLOCKED/WAIT');
+    // No emoji status board leaked into the instructions.
+    expect(p).not.toMatch(/[✅🔄👀🚀🚧]/u);
+  });
+
+  it('Goal leads with the user\'s actual request, then the derived objective', () => {
+    const p = buildSelfReportPrompt('');
+    expect(p).toContain('Request:');
+    expect(p).toContain('Objective:');
+    expect(p).toMatch(/user knows their intent best/i);
   });
 });

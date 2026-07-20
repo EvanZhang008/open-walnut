@@ -7,6 +7,7 @@ import { ApiError } from '@/api/client';
 import { perf } from '@/utils/perf-logger';
 import { log } from '@/utils/log';
 import { scrollLog } from '@/utils/scroll-debug';
+import { isRetryableTaskFetchError } from '@/utils/task-fetch-errors';
 
 /**
  * Optimistic default status for a newly-linked session (before the first
@@ -66,7 +67,7 @@ function mergeTask(existing: Task, incoming: Task): Task {
   // but WS events send the raw task where session_id may be unset.
   // Don't preserve when the task is completed — applyPhase('COMPLETE') explicitly
   // clears all session slots and we must honor that.
-  const completed = incoming.phase === 'COMPLETE' || incoming.status === 'completed';
+  const completed = incoming.phase === 'COMPLETE' || incoming.status === 'done';
   const mergedSessionId = incoming.session_id ?? (completed ? undefined : existing.session_id);
 
   return {
@@ -235,6 +236,7 @@ export interface CreateHooks {
 interface UseTasksReturn {
   tasks: Task[];
   loading: boolean;
+  refreshing: boolean;
   error: string | null;
   operationError: string | null;
   clearOperationError: () => void;
@@ -284,9 +286,12 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
   const [taskGroups, setTaskGroups] = useState<Record<string, string>>({});
   const [hiddenGroups, setHiddenGroups] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
   const opErrorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fetchGeneration = useRef(0);
   // True once the first fetch has populated the list — gates the loading spinner so
   // later background re-syncs (WS / post-mutation) don't blank the list into a spinner.
   const hasLoadedRef = useRef(false);
@@ -321,7 +326,11 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
 
   // Clean up timer on unmount
   useEffect(() => {
-    return () => { if (opErrorTimer.current) clearTimeout(opErrorTimer.current); };
+    return () => {
+      fetchGeneration.current++;
+      if (opErrorTimer.current) clearTimeout(opErrorTimer.current);
+      if (retryTimer.current) clearTimeout(retryTimer.current);
+    };
   }, []);
 
   // Suppress WS echoes of our own optimistic operations.
@@ -354,10 +363,16 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
   // when we're just reconciling after a group/ungroup/bulk edit. So only show the
   // spinner until the first successful load; afterwards re-sync silently and let
   // the new data swap in place (the "natural, in-place" update the user expects).
-  const refetch = useCallback((attempt = 0) => {
+  const refetch = useCallback((attempt = 0, existingGeneration?: number) => {
     const MAX_RETRIES = 3;
+    const generation = existingGeneration ?? ++fetchGeneration.current;
     if (attempt === 0) {
+      if (retryTimer.current) {
+        clearTimeout(retryTimer.current);
+        retryTimer.current = null;
+      }
       if (!hasLoadedRef.current) setLoading(true);
+      setRefreshing(true);
       setError(null);
       // Reset WS event counters on fresh fetch
       wsEventCounts.current = { created: 0, updated: 0, completed: 0, sessionChanged: 0, lastLogAt: 0 };
@@ -369,25 +384,34 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
     // pane lazy-loads them on focus. Cuts the list payload ~4MB -> ~0.4MB.
     tasksApi.fetchTasks(filter, { minimal: true })
       .then((tasks) => {
+        if (generation !== fetchGeneration.current) return;
         const elapsed = Math.round(performance.now() - t0);
         endPerf?.(`${tasks.length} tasks`);
         log.info('tasks', 'fetch complete', { count: tasks.length, elapsed, attempt });
         setTasks(tasks);
         hasLoadedRef.current = true;
         setLoading(false);
+        setRefreshing(false);
       })
       .catch((e: Error) => {
+        if (generation !== fetchGeneration.current) return;
         const elapsed = Math.round(performance.now() - t0);
         endPerf?.('error');
-        const isRetryable = e.name === 'TimeoutError' || e.name === 'TypeError' || (e instanceof ApiError && e.status >= 500);
+        const isRetryable = isRetryableTaskFetchError(e);
         log.error('tasks', 'fetch FAILED', { error: e.message, elapsed, attempt, isRetryable, isTimeout: e.name === 'TimeoutError' });
         if (isRetryable && attempt < MAX_RETRIES) {
           const delayMs = 2000 * (attempt + 1);
           log.info('tasks', `auto-retry in ${delayMs}ms`, { attempt: attempt + 1 });
-          setTimeout(() => refetch(attempt + 1), delayMs);
+          retryTimer.current = setTimeout(() => {
+            retryTimer.current = null;
+            if (generation === fetchGeneration.current) {
+              refetch(attempt + 1, generation);
+            }
+          }, delayMs);
         } else {
           setError(e.message);
           setLoading(false);
+          setRefreshing(false);
         }
       });
   }, [filter]);
@@ -541,32 +565,23 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
     refetchGroups();
   });
 
-  // When a session's status changes, update the enriched session status on the affected task
+  // Session status is owned by the centralized store. Task phase remains a
+  // separate task field, so only apply that part of the compatibility event.
   useEvent('session:status-changed', (data) => {
     wsEventCounts.current.sessionChanged++;
-    const { sessionId, taskId, phase, process_status, mode, activity, planCompleted } = data as {
-      sessionId?: string; taskId?: string; phase?: string; process_status?: string;
-      mode?: string; activity?: string; planCompleted?: boolean;
+    const { sessionId, phase, status } = data as {
+      sessionId?: string;
+      phase?: string;
+      status?: { sessionId?: string };
     };
-    if (!sessionId) return;
+    const providerSessionId = status?.sessionId ?? sessionId;
+    if (!providerSessionId || !phase) return;
     setTasks((prev) => prev.map((t) => {
-      const matchesSingle = t.session_id === sessionId;
-      const matchesPlan = t.plan_session_id === sessionId;
-      const matchesExec = t.exec_session_id === sessionId;
+      const matchesSingle = t.session_id === providerSessionId;
+      const matchesPlan = t.plan_session_id === providerSessionId;
+      const matchesExec = t.exec_session_id === providerSessionId;
       if (!matchesSingle && !matchesPlan && !matchesExec) return t;
-      const updated = { ...t };
-      const statusInfo = {
-        process_status: (process_status ?? 'stopped') as NonNullable<Task['plan_session_status']>['process_status'],
-        ...(activity ? { activity } : {}),
-        ...(mode ? { mode: mode as NonNullable<Task['session_status']>['mode'] } : {}),
-        ...(planCompleted ? { planCompleted: true } : {}),
-      };
-      if (matchesSingle) updated.session_status = { ...updated.session_status, ...statusInfo };
-      if (matchesPlan) updated.plan_session_status = { ...updated.plan_session_status, ...statusInfo };
-      if (matchesExec) updated.exec_session_status = { ...updated.exec_session_status, ...statusInfo };
-      // Update task phase if provided in the event
-      if (phase) updated.phase = phase as Task['phase'];
-      return updated;
+      return t.phase === phase ? t : { ...t, phase: phase as Task['phase'] };
     }));
   });
 
@@ -878,5 +893,5 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
       .catch((err) => { onOpError(err); refetchGroups(); });
   }, [onOpError, refetchGroups]);
 
-  return { tasks, taskGroups, hiddenGroups, loading, error, operationError, clearOperationError, showOperationError, refetch, create, update, toggleComplete, setPhase, star, reorder, moveTask, reparentTask, bakeOrder, deleteTask, patchTasksLocal, guardEcho, groupTasks: groupTasksCb, addToGroup: addToGroupCb, ungroupTasks: ungroupTasksCb, renameGroup: renameGroupCb, setGroupHidden: setGroupHiddenCb };
+  return { tasks, taskGroups, hiddenGroups, loading, refreshing, error, operationError, clearOperationError, showOperationError, refetch, create, update, toggleComplete, setPhase, star, reorder, moveTask, reparentTask, bakeOrder, deleteTask, patchTasksLocal, guardEcho, groupTasks: groupTasksCb, addToGroup: addToGroupCb, ungroupTasks: ungroupTasksCb, renameGroup: renameGroupCb, setGroupHidden: setGroupHiddenCb };
 }

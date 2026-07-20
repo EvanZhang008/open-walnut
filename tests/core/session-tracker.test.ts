@@ -34,7 +34,11 @@ import {
   getSessionByClaudeId,
   getSessionsForTask,
   updateSessionRecord,
+  updateSessionRecordConditionally,
   batchUpdateSessionRecords,
+  toSessionStatusSnapshot,
+  emitSessionStatusChanged,
+  stageAcpSessionIdMigration,
   linkSessionToTask,
   getRecentSessions,
   getActiveSessionsByHost,
@@ -43,8 +47,10 @@ import {
   isTerminalSession,
   _resetSessionTrackerForTesting,
 } from '../../src/core/session-tracker.js';
-import { closeDb } from '../../src/core/session-db.js';
+import { closeDb, SESSION_DB_PATH } from '../../src/core/session-db.js';
+import { bus, EventNames, type BusEvent } from '../../src/core/event-bus.js';
 import { WALNUT_HOME } from '../../src/constants.js';
+import { markSessionStoppedInSqlite } from '../../src/hooks/session-status-store.js';
 
 beforeEach(async () => {
   tmpDir = WALNUT_HOME;
@@ -57,6 +63,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  bus.unsubscribe('session-status-contract-test');
   closeDb();
   _resetSessionTrackerForTesting();
   // Retry cleanup to handle macOS ENOTEMPTY race (concurrent file writes during rm)
@@ -70,6 +77,105 @@ afterEach(async () => {
   }
 });
 
+describe('emitSessionStatusChanged', () => {
+  it('publishes the full committed snapshot with additive legacy fields and routing metadata', async () => {
+    const created = await createSessionRecord(
+      'status-event',
+      'task-status',
+      'proj',
+      undefined,
+      {
+        mode: 'plan',
+        provider: 'sdk',
+        engine: 'codex',
+        fromPlanSessionId: 'plan-parent',
+        forkedFromSessionId: 'fork-parent',
+      },
+    );
+    const committed = await updateSessionRecord(created.claudeSessionId, {
+      process_status: 'error',
+      activity: 'failed',
+      planCompleted: true,
+      archived: true,
+      errorMessage: 'provider failed',
+    });
+    let received: BusEvent | undefined;
+    bus.subscribe('session-status-contract-test', (event) => {
+      received = event;
+    });
+
+    emitSessionStatusChanged(
+      committed,
+      {
+        phase: 'AGENT_COMPLETE',
+        previousSessionId: 'status-event-old',
+      },
+      ['*'],
+      { source: 'contract-test', urgency: 'urgent' },
+    );
+
+    expect(received).toEqual(expect.objectContaining({
+      name: EventNames.SESSION_STATUS_CHANGED,
+      destinations: ['*'],
+      source: 'contract-test',
+      urgency: 'urgent',
+    }));
+    const status = {
+      sessionId: 'status-event',
+      taskId: 'task-status',
+      process_status: 'error',
+      activity: 'failed',
+      mode: 'plan',
+      planCompleted: true,
+      archived: true,
+      errorMessage: 'provider failed',
+      provider: 'sdk',
+      engine: 'codex',
+      statusRevision: committed.statusRevision,
+      statusUpdatedAt: committed.statusUpdatedAt,
+    };
+    expect(received?.data).toEqual({
+      phase: 'AGENT_COMPLETE',
+      previousSessionId: 'status-event-old',
+      fromPlanSessionId: 'plan-parent',
+      forkedFromSessionId: 'fork-parent',
+      ...status,
+      status,
+    });
+  });
+
+  it('normalizes an incomplete legacy record into a full snapshot', () => {
+    const snapshot = toSessionStatusSnapshot({
+      claudeSessionId: 'legacy-status',
+      taskId: '',
+      project: 'legacy',
+      process_status: undefined,
+      mode: 'default',
+      startedAt: '2026-07-19T10:00:00.000Z',
+      lastActiveAt: '2026-07-19T10:00:00.000Z',
+      messageCount: 0,
+    } as unknown as Parameters<typeof toSessionStatusSnapshot>[0]);
+
+    expect(snapshot.process_status).toBe('stopped');
+    expect(Object.keys(snapshot)).toHaveLength(12);
+    expect(Object.keys(snapshot)).toEqual(expect.arrayContaining([
+      'sessionId',
+      'taskId',
+      'process_status',
+      'activity',
+      'mode',
+      'planCompleted',
+      'archived',
+      'errorMessage',
+      'provider',
+      'engine',
+      'statusRevision',
+      'statusUpdatedAt',
+    ]));
+    expect(snapshot.taskId).toBeNull();
+  });
+});
+
 describe('createSessionRecord', () => {
   it('creates a session with correct fields', async () => {
     const session = await createSessionRecord('claude-sess-1', 'task-1', 'walnut');
@@ -80,6 +186,8 @@ describe('createSessionRecord', () => {
     expect(session.startedAt).toBeDefined();
     expect(session.lastActiveAt).toBeDefined();
     expect(session.messageCount).toBe(1);
+    expect(session.statusRevision).toBe(1);
+    expect(session.statusUpdatedAt).toBeDefined();
   });
 
   it('increments messageCount on duplicate claudeSessionId when extras change', async () => {
@@ -206,6 +314,76 @@ describe('updateSessionRecord', () => {
     const changed = await updateSessionRecord('noop-1', { process_status: 'stopped' });
     expect(changed.lastActiveAt).not.toBe(firstActive);
     expect(changed.process_status).toBe('stopped');
+  });
+
+  it('increments the status revision exactly once for a canonical projection change', async () => {
+    const created = await createSessionRecord('revision-change', 'task-1', 'proj');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const updated = await updateSessionRecord('revision-change', {
+      process_status: 'idle',
+      activity: 'waiting',
+    });
+
+    expect(updated.statusRevision).toBe(created.statusRevision + 1);
+    expect(updated.statusUpdatedAt).not.toBe(created.statusUpdatedAt);
+    expect(toSessionStatusSnapshot(updated)).toEqual({
+      sessionId: 'revision-change',
+      taskId: 'task-1',
+      process_status: 'idle',
+      activity: 'waiting',
+      mode: 'default',
+      planCompleted: false,
+      archived: false,
+      errorMessage: null,
+      provider: 'cli',
+      engine: 'claude',
+      statusRevision: 2,
+      statusUpdatedAt: updated.statusUpdatedAt,
+    });
+  });
+
+  it('keeps status version stable for metadata-only writes and exact no-ops', async () => {
+    const created = await createSessionRecord('revision-stable', 'task-1', 'proj');
+    const metadata = await updateSessionRecord('revision-stable', {
+      title: 'Metadata only',
+    });
+    const noOp = await updateSessionRecord('revision-stable', {
+      title: 'Metadata only',
+      process_status: 'running',
+    });
+
+    expect(metadata.statusRevision).toBe(created.statusRevision);
+    expect(metadata.statusUpdatedAt).toBe(created.statusUpdatedAt);
+    expect(noOp.statusRevision).toBe(created.statusRevision);
+    expect(noOp.statusUpdatedAt).toBe(created.statusUpdatedAt);
+  });
+
+  it('does not increment on a stale conditional write', async () => {
+    const created = await createSessionRecord('revision-conditional', 'task-1', 'proj');
+    const skipped = await updateSessionRecordConditionally(
+      'revision-conditional',
+      { process_status: 'stopped' },
+      (current) => current.statusRevision === created.statusRevision + 1,
+    );
+    const stored = await getSessionByClaudeId('revision-conditional');
+
+    expect(skipped).toBeNull();
+    expect(stored?.statusRevision).toBe(created.statusRevision);
+    expect(stored?.statusUpdatedAt).toBe(created.statusUpdatedAt);
+    expect(stored?.process_status).toBe('running');
+  });
+
+  it('keeps revision fields storage-owned when an untyped caller tries to override them', async () => {
+    const created = await createSessionRecord('revision-owned', 'task-1', 'proj');
+    const updated = await updateSessionRecord('revision-owned', {
+      process_status: 'idle',
+      statusRevision: 999,
+      statusUpdatedAt: '2000-01-01T00:00:00.000Z',
+    } as Parameters<typeof updateSessionRecord>[1]);
+
+    expect(updated.statusRevision).toBe(created.statusRevision + 1);
+    expect(updated.statusUpdatedAt).not.toBe('2000-01-01T00:00:00.000Z');
   });
 });
 
@@ -749,6 +927,34 @@ describe('session store read cache', () => {
     expect(sessions[0].process_status).toBe('stopped');
   });
 
+  it('detects an on-stop write committed through another SQLite connection', async () => {
+    const created = await createSessionRecord(
+      'external-write-1',
+      'task-1',
+      'proj',
+      undefined,
+      { pid: 1001 },
+    );
+    await updateSessionRecord('external-write-1', { activity: 'processing' });
+    const before = (await listSessions())[0];
+    expect(before.process_status).toBe('running');
+    expect(before.activity).toBe('processing');
+
+    expect(markSessionStoppedInSqlite(
+      SESSION_DB_PATH,
+      'external-write-1',
+      '2026-07-19T12:00:00.000Z',
+    )).toBe(true);
+
+    const after = (await listSessions())[0];
+    expect(after).toMatchObject({
+      process_status: 'stopped',
+      statusRevision: created.statusRevision! + 2,
+      statusUpdatedAt: '2026-07-19T12:00:00.000Z',
+    });
+    expect(after.activity).toBeUndefined();
+  });
+
   it('hands out isolated clones — mutating a read result never poisons the cache', async () => {
     await createSessionRecord('clone-1', 'task-1', 'proj', undefined, { pid: 1001 });
 
@@ -764,6 +970,39 @@ describe('session store read cache', () => {
     expect(second[0].process_status).toBe('running');
     expect((second[0] as { activity?: string }).activity).toBeUndefined();
     expect(second[0]).not.toBe(first[0]); // distinct object instances
+  });
+});
+
+describe('ACP provider identity migration status versions', () => {
+  it('makes the replacement newer than the archived redirect', async () => {
+    const original = await createSessionRecord(
+      'provider-old',
+      'task-1',
+      'proj',
+      undefined,
+      {
+        initialProcessStatus: 'idle',
+        engine: 'codex',
+        acpRuntimeId: 'acp-runtime',
+      },
+    );
+
+    const replacement = await stageAcpSessionIdMigration(
+      'provider-old',
+      'provider-new',
+    );
+    const redirect = await getSessionByClaudeId('provider-old');
+
+    expect(redirect).toMatchObject({
+      archived: true,
+      statusRevision: original.statusRevision! + 1,
+    });
+    expect(replacement).toMatchObject({
+      claudeSessionId: 'provider-new',
+      archived: false,
+      statusRevision: original.statusRevision! + 2,
+      statusUpdatedAt: redirect?.statusUpdatedAt,
+    });
   });
 });
 

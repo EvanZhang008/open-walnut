@@ -13,7 +13,7 @@
  */
 
 import { createPortal } from 'react-dom';
-import type { Task } from '@walnut/core';
+import type { Task } from '@open-walnut/core';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { TaskDetailPane } from './TodoPanel';
 

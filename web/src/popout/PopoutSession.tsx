@@ -95,6 +95,7 @@ export function PopoutSession() {
         <SessionChatHistory
           key={id}
           sessionId={id}
+          engine={session?.engine}
           sessionCwd={resolvedCwd}
           sessionHost={resolvedHost}
         />

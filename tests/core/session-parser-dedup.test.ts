@@ -256,4 +256,86 @@ describe('parseSessionMessages — Pattern A/B mid-turn dedup', () => {
     expect(userTexts(jsonl)).toEqual(['hello']);
     expect(parseSessionMessages('')).toEqual([]);
   });
+
+  // ── Batched twin (inc-1784349380504): queue drained into ONE '\n'-joined prompt ──
+  // When ≥2 sends are queued at turn start, the CLI logs a SINGLE user line whose
+  // content is the '\n'-join of the queued messages. Neither message alone matches,
+  // so without the merged pass each enqueue re-emits as Pattern B AND the joined
+  // line renders → everything in the batch shows twice.
+  describe('batched twin (queue drained into one prompt)', () => {
+    it('two queued sends drained into one joined user line → each shows ONCE (as the merged line)', () => {
+      const msgA = '我想的有两个方法第一个是能在Plugin里面paste一个configuration';
+      const msgB = '而且我们可以借鉴Cloud Code的Plugin他们是怎么做的呢';
+      const jsonl = build(
+        userStr('start'),
+        assistantText('long answer streaming...', 'a1'),
+        enqueue(msgA),
+        enqueue(msgB),
+        dequeue(),
+        dequeue(),
+        userStr(`${msgA}\n${msgB}`), // CLI logs the drained batch as ONE joined line
+        assistantText('answering both', 'a2'),
+      );
+      const texts = userTexts(jsonl);
+      // The joined line renders once; the individual enqueues must NOT re-emit.
+      expect(texts).toEqual(['start', `${msgA}\n${msgB}`]);
+    });
+
+    it('three queued sends drained into one joined line (corpus max run) → no duplicates', () => {
+      const parts = ['first queued', 'second queued', 'third queued'];
+      const jsonl = build(
+        userStr('start'),
+        assistantText('busy', 'a1'),
+        enqueue(parts[0]),
+        enqueue(parts[1]),
+        enqueue(parts[2]),
+        userStr(parts.join('\n')),
+        assistantText('done', 'a2'),
+      );
+      expect(userTexts(jsonl)).toEqual(['start', parts.join('\n')]);
+    });
+
+    it('exact twins still win over the merged pass (mixed batch + solo send)', () => {
+      // solo send re-logged exactly + a later 2-batch: the exact pass must claim the
+      // solo twin first; the merged pass only consumes the true batch enqueues.
+      const jsonl = build(
+        userStr('start'),
+        assistantText('turn 1', 'a1'),
+        enqueue('solo message'),
+        userStr('solo message'), // exact twin
+        assistantText('turn 2', 'a2'),
+        enqueue('batch one'),
+        enqueue('batch two'),
+        userStr('batch one\nbatch two'),
+        assistantText('turn 3', 'a3'),
+      );
+      expect(userTexts(jsonl)).toEqual(['start', 'solo message', 'batch one\nbatch two']);
+    });
+
+    it('a genuine Pattern B enqueue near a batch is NOT eaten by the merged pass', () => {
+      // Only a contiguous run whose join EXACTLY equals the user line may be claimed.
+      // An unrelated Pattern B enqueue (never re-logged) must still emit as synthetic.
+      const jsonl = build(
+        userStr('start'),
+        assistantText('busy', 'a1'),
+        enqueue('cancelled mid-stream'), // Pattern B — no twin anywhere
+        enqueue('batch one'),
+        enqueue('batch two'),
+        userStr('batch one\nbatch two'),
+        assistantText('done', 'a2'),
+      );
+      const texts = userTexts(jsonl);
+      expect(texts).toContain('cancelled mid-stream'); // synthetic survives
+      expect(texts.filter(t => t.includes('batch one'))).toHaveLength(1); // merged line only
+    });
+
+    it('joined-looking user line with NO matching enqueues is untouched', () => {
+      // A user genuinely typing a multi-line message must not be affected.
+      const jsonl = build(
+        userStr('line one\nline two'),
+        assistantText('reply', 'a1'),
+      );
+      expect(userTexts(jsonl)).toEqual(['line one\nline two']);
+    });
+  });
 });

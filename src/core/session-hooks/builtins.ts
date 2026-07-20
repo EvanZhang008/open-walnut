@@ -47,6 +47,13 @@ const lastNotifiedSignal = new Map<string, string>();
 export function __resetTriageRateLimiter(): void {
   triageLastDispatch.clear();
   lastNotifiedSignal.clear();
+  selfReportInFlight.clear();
+}
+
+/** Test-only: clear ONLY the dispatch cooldown, keeping the in-flight set —
+ *  lets tests fire back-to-back runTriage calls to assert single-flight. */
+export function __clearTriageCooldown(): void {
+  triageLastDispatch.clear();
 }
 
 /** Cancel a pending debounced triage for a session — used when the user resumes
@@ -68,57 +75,109 @@ function cancelPendingTriage(sessionId: string): void {
 //
 // There is deliberately NO fallback summarizer agent — the session writes the summary
 // and the deterministic PHASE_SIGNAL lookup below decides phase/notify. Full rationale
-// + the 4-model eval evidence: skill `decision-summarizer-self-report`.
+// + the 4-model eval evidence: docs/decision/summarizer-self-report.md.
 // Do not re-introduce a summarizer/notify-deciding model without reading it. If the
 // session is dead when the quiet-period fires, we skip; the next turn's report (which
 // merges against the fed-back summary) covers the gap.
-const SELF_REPORT_TIMEOUT_MS = 20_000;
+//
+// TIMEOUT IS A LEAK GUARD, NOT A QOS KNOB. Nothing is held while we await the answer
+// (no lock, no event-loop time) — the only reason to time out at all is to not leak a
+// pending promise on a CLI that died mid-question. Measured answer latency is 6-18s
+// with a long tail when the CLI is mid-turn (it answers control requests only between
+// turns, and the answer then reflects the LATEST context — strictly better). A tight
+// timeout here silently starved sessions of summaries (2026-07: 20s cut off ~60% of
+// fires on remote hosts). Keep this in MINUTES.
+const SELF_REPORT_TIMEOUT_MS = 10 * 60_000;
 
-/** Past this length, append is no longer offered — the session must either say
- *  `unchanged` or consolidate with a full `rewrite:`. Deterministic cap so appends
- *  can't grow the summary without bound. */
-export const SUMMARY_APPEND_CAP = 600; // chars
+// Single-flight: at most ONE pending self-report question per session. If the previous
+// ask is still awaiting an answer when a new debounce fires, asking again is pointless —
+// the pending one will be answered from the session's newest context anyway (covers the
+// new turns), and double-asking just queues duplicate control requests on the FIFO.
+const selfReportInFlight = new Set<string>();
 
-/** Build the self-report prompt. `existingSummary` is injected so the session works
- *  DELTA-FIRST against the running task summary — this is what survives multi-day
- *  sessions and compactions: the prior summary is re-fed every time, so the session
- *  never needs to remember the task's beginning. Cheap-by-default protocol:
- *  `unchanged` (no output) > `append:` (one short sentence) > `rewrite:` (full
- *  paragraph, only when the summary drifted from reality or needs consolidating). */
-export function buildSelfReportPrompt(existingSummary?: string): string {
-  const existing = existingSummary?.trim() ?? '';
-  let summaryBlock: string;
+/** Past this NOTE length the fire becomes a MANDATORY REORGANIZE pass: the session
+ *  must merge the oldest Work Log entries and bring the note back under the cap
+ *  (preserving every ID and decision). MANDATORY, not advisory: a day of prod data
+ *  (2026-07-18) showed the earlier "you may consolidate" wording NEVER produced a net
+ *  shrink — notes grew monotonically to 12.5k+. Do not soften the prompt wording back.
+ *  6000 ≈ a screenful of dense context; it also bounds the per-fire prompt cost since
+ *  the full note is re-fed on every fire. */
+export const NOTE_REORG_CAP = 6000; // chars
+
+/** The five canonical NOTE sections, in render order. The NOTE is the task's single
+ *  living document (design session 2026-07-18, replaces the summary+milestones pair):
+ *  Executive Summary = for the human scanning; Goal = the user's OWN request verbatim
+ *  first, then the derived objective + acceptance (search entry point; rewritten on
+ *  pivot with a "(pivoted from: …)" trace); Context = self-contained background, frozen
+ *  once right; Progress = high-level per-workitem status lines with a plain-text status
+ *  label (DONE/WIP/TODO/BLOCKED/WAIT); Work Log = append-only did/found/result entries
+ *  carrying every ID and decision (no timestamps). */
+export const NOTE_SECTIONS = [
+  'Executive Summary', 'Goal', 'Context', 'Progress', 'Work Log',
+] as const;
+export type NoteSection = (typeof NOTE_SECTIONS)[number];
+
+/** Report label per note section (what the session answers with). */
+const NOTE_LABELS: Record<NoteSection, string> = {
+  'Executive Summary': 'EXEC_SUMMARY',
+  'Goal': 'GOAL',
+  'Context': 'CONTEXT',
+  'Progress': 'PROGRESS',
+  'Work Log': 'WORK_LOG',
+};
+
+/** Build the self-report prompt. `existingNote` is injected so the session works
+ *  DELTA-FIRST against the task's living NOTE — this is what survives multi-day
+ *  sessions and compactions: the prior note is re-fed every time, so the session
+ *  never needs to remember the task's beginning. Cheap-by-default protocol: most
+ *  sections answer `unchanged`; Work Log appends one entry; Progress is rewritten
+ *  only when a workitem's status actually moved. */
+export function buildSelfReportPrompt(existingNote?: string): string {
+  const existing = existingNote?.trim() ?? '';
+  const reorg = existing.length > NOTE_REORG_CAP;
+
+  let noteBlock: string;
   if (!existing) {
-    summaryBlock = `(no summary exists yet — write the FIRST one: one paragraph, ≤3 sentences: what the task is about + where it stands now + immediate next step)`;
-  } else if (existing.length > SUMMARY_APPEND_CAP) {
-    summaryBlock = `<existing_summary>\n${existing}\n</existing_summary>\nAnswer with ONE of:
-- \`unchanged\` — the summary above is still accurate for where the task stands NOW.
-- \`rewrite: <full paragraph>\` — the summary is long/stale; consolidate everything (old + this turn) into a fresh ≤3-sentence paragraph. Keep still-true context (goal, key decisions), drop what's obsolete.`;
+    noteBlock = `The task NOTE is EMPTY. Write ALL five sections now (label + content each).`;
   } else {
-    summaryBlock = `<existing_summary>\n${existing}\n</existing_summary>\nAnswer with ONE of (cheapest that fits):
-- \`unchanged\` — the summary above is still accurate for where the task stands NOW.
-- \`append: <one short sentence>\` — the usual case: just the NEW progress/state since that summary. It will be appended verbatim.
-- \`rewrite: <full paragraph>\` — ONLY if the summary no longer reflects reality (direction change, plan invalidated): a fresh ≤3-sentence paragraph.`;
+    noteBlock = `<existing_note>\n${existing}\n</existing_note>
+For EACH of the five labels answer \`unchanged\` OR the new content. If the note above is NOT yet in this five-section structure, this is a MIGRATION: answer all five with content, preserving EVERY fact from the note above (facts may move between sections; none may be dropped).
+NOTE BUDGET: ${existing.length}/${NOTE_REORG_CAP} chars used.${reorg ? `
+The note is ${existing.length} chars — OVER the ${NOTE_REORG_CAP}-char budget. This fire is a MANDATORY REORGANIZE: answer WORK_LOG with \`rewrite: <full section>\` that merges the OLDEST entries into consolidated ones (several old entries → one), and rewrite any other section that carries superseded or duplicated detail. Target: bring the FULL note back under ${NOTE_REORG_CAP} chars — the note must come back SHORTER than it went in. HARD RULE: keep every ID (commits, tickets, hosts, URLs) and every decision+reason; only drop process narration, dead-end play-by-play, and detail already superseded.` : ''}`;
   }
-  return `You just finished a turn. Give a structured self-report of THIS session so the task dashboard can be updated WITHOUT re-reading your transcript. You have the full context — be the authoritative source. Use EXACTLY these labels, plain text, English only, self-contained (no "this bug"/"the feature"):
 
-TASK_SUMMARY: The task's one-glance dashboard line. ${summaryBlock}
-WHAT_I_DID: Concrete changes this turn — which files/functions changed and WHY (1-3 sentences).
-STATUS: <succeeded|failed|blocked|waiting> — one human sentence on what works / what doesn't.
+  return `You just finished a turn. Update this task's NOTE — the single living document that lets a human (or a fresh AI with zero context) pick the task up. You have the full context — be the authoritative source. ${noteBlock}
+
+Section contract (plain text under each label, English, self-contained — never "this bug"/"the feature"). Style rules for ALL sections: any name a zero-context reader wouldn't know (project codenames, internal tools, niche libraries, team jargon) gets a FEW-WORDS parenthetical on first use — "walnut (a personal task butler)" — not a sentence of background; well-known public things (React, S3, GitHub) need none. Reference code by file path only, NEVER line numbers (they drift). Terse beats thorough-sounding.
+EXEC_SUMMARY: For the HUMAN scanning: 2-3 plain sentences — what this task is + where it stands. No jargon.
+GOAL: Lead with the user's ACTUAL request in their own words — a "Request: <what the user literally asked for, staying close to their phrasing>" line — because the user knows their intent best and the exact ask is what matters most. Then an "Objective: <the derived goal + acceptance criteria>" line, detailed enough to be the search entry point. If the user changed direction, rewrite and keep a "(pivoted from: <old> — <why>)" trace inline.
+CONTEXT: Background a newcomer needs: where the problem came from, why it matters, constraints, systems involved. Write once, keep frozen; only add when genuinely new background surfaced.
+PROGRESS: HIGH-LEVEL status board, one line per workitem/component: "<STATUS> <workitem> — <detail>". STATUS is one of the plain-text labels — DONE (finished), WIP (in progress), TODO (not started yet), BLOCKED/WAIT (blocked, or waiting on a human / review / deployment). Use the label text, NOT emoji. Simple and concise — details belong in WORK_LOG, not here.
+WORK_LOG: \`append: <one entry>\` — what you DID, what you FOUND (conclusions, gotchas, dead ends), the RESULT (commit hashes, ticket/PR ids, key decisions + why). No timestamps. \`unchanged\` only if this turn produced nothing worth tracing.
+NEVER delete facts: when something is superseded, update it in place and keep an "(was: …)" trace.
+
+Then these status fields (same plain-label format):
+RECAP: ONE line, as simple as possible — what just happened in your latest turn(s), for a user re-opening this session ("Fixed the timeout bug, tests green, awaiting commit approval"). Always answer this; never "unchanged".
 PHASE_SIGNAL: one of — plan-written | implement-done | reconfirmed | verify-pass | verify-fail | review-done | committed(<hash>) | conversational(user-asked-question).
-NEXT_STEPS: What you'd do next, or what you need from the human to proceed.
+STATUS: <succeeded|failed|blocked|waiting> — one sentence on what works / what doesn't.
+WHAT_I_DID: 1-2 sentences, this turn's concrete change (used verbatim in notifications).
+NEXT_STEPS: What you'd do next, or what you need from the human.
 BLOCKERS: Anything blocking, or "none".
 USER_INTENT: <question-pending | workflow-command | autonomous> — gist of user's last message.
-VERIFIED: <ran-and-saw-pass | assumed | not-applicable> — what evidence you have.
-ARTIFACTS: commit hash / PR url / plan file path / key files / screenshot paths, or "none".`;
+VERIFIED: <ran-and-saw-pass | assumed | not-applicable>.`;
 }
 
 /** The exact labels emitted by buildSelfReportPrompt. Used to anchor extractField's
  *  field terminator so a wrapped value containing an unrelated ALL-CAPS "WORD:"
  *  line (e.g. "API:", "TODO:", "NOTE:") doesn't prematurely cut the field.
- *  CHANGES_TRIED is retired from the prompt but kept here so old buffered reports
- *  still parse. */
+ *  TASK_SUMMARY / CHANGES_TRIED / ARTIFACTS are retired from the prompt but kept
+ *  here as terminators so old buffered reports still parse.
+ *  ⚠️ Adding a NOTE section requires syncing FIVE places: NOTE_SECTIONS,
+ *  NOTE_LABELS, the header regex in parseNoteSections, this list, and the prompt
+ *  text — missing the regex silently dumps the new section into `preamble`;
+ *  missing this list makes the new label bleed into the previous field. */
 const SELF_REPORT_LABELS = [
+  'EXEC_SUMMARY', 'GOAL', 'CONTEXT', 'PROGRESS', 'WORK_LOG', 'RECAP',
   'TASK_SUMMARY', 'WHAT_I_DID', 'STATUS', 'CHANGES_TRIED', 'PHASE_SIGNAL', 'NEXT_STEPS',
   'BLOCKERS', 'USER_INTENT', 'VERIFIED', 'ARTIFACTS',
 ] as const;
@@ -141,101 +200,130 @@ export function extractField(report: string, label: string): string {
   return m ? m[1].trim() : '';
 }
 
-/** How the session answered the TASK_SUMMARY field. Exported for unit tests. */
-export type SummaryDirective =
+/** Split an existing NOTE into its five canonical sections. Content before the
+ *  first known "## <Section>" header (or a note with no headers at all — the
+ *  pre-migration free-form case) is returned under `preamble`. Exported for tests. */
+export function parseNoteSections(note: string): { sections: Partial<Record<NoteSection, string>>; preamble: string } {
+  const sections: Partial<Record<NoteSection, string>> = {};
+  // Header must be recognized at end-of-string too (`(?:\n|$)`): a note ending with
+  // an empty section (`…\n## Work Log` after trim) otherwise leaves that header text
+  // inside the previous section's body, and the next assemble fabricates a SECOND
+  // `## Work Log` header — corruption that compounds on every fire.
+  const headerRe = /(?:^|\n)##\s+(Executive Summary|Goal|Context|Progress|Work Log)[^\S\n]*(?:\n|$)/g;
+  const hits: { name: NoteSection; start: number; bodyStart: number }[] = [];
+  for (let m = headerRe.exec(note); m; m = headerRe.exec(note)) {
+    hits.push({ name: m[1] as NoteSection, start: m.index, bodyStart: m.index + m[0].length });
+  }
+  const preamble = note.slice(0, hits.length ? hits[0].start : note.length).trim();
+  for (let i = 0; i < hits.length; i++) {
+    const end = i + 1 < hits.length ? hits[i + 1].start : note.length;
+    const body = note.slice(hits[i].bodyStart, end).trim();
+    // Duplicate headers (e.g. produced by the pre-fix EOF bug above): merge bodies
+    // instead of last-wins, so the earlier section's content is never dropped.
+    const prev = sections[hits[i].name];
+    sections[hits[i].name] = prev && body ? `${prev}\n${body}` : (prev || body);
+  }
+  return { sections, preamble };
+}
+
+/** Per-section answer from a self-report: unchanged | append (Work Log) | new content. */
+export type SectionAnswer =
   | { kind: 'unchanged' }
   | { kind: 'append'; text: string }
   | { kind: 'rewrite'; text: string }
-  | { kind: 'none' }; // field absent/empty — legacy report or parse miss
+  | { kind: 'none' }; // label absent — treat as unchanged, but track for observability
 
-/** Parse the TASK_SUMMARY field's three-way directive. Tolerant of markdown wrapping
- *  (backticks/quotes/bold) and marker casing, but the markers themselves are strict
- *  prefixes — `append:` / `rewrite:` / `unchanged`. A non-empty answer WITHOUT a
- *  marker is treated as `rewrite` (the model forgot the marker; losing its paragraph
- *  would be worse than accepting it). Exported for unit tests. */
-export function parseSummaryDirective(report: string): SummaryDirective {
-  let raw = extractField(report, 'TASK_SUMMARY').trim();
+/** Parse one section's answer out of a self-report. Tolerant of markdown wrapping
+ *  and casing on the markers; a marker-less non-empty answer is new content
+ *  (losing it would be worse than accepting it) — EXCEPT for Work Log, whose
+ *  contract is append-only ("carries every ID and decision"): a session that
+ *  forgets the `append:` prefix must not wipe the whole log with one turn's
+ *  entry, so marker-less Work Log content defaults to append. Exported for unit tests. */
+export function parseSectionAnswer(report: string, section: NoteSection): SectionAnswer {
+  let raw = extractField(report, NOTE_LABELS[section]).trim();
   if (!raw) return { kind: 'none' };
-  // Strip symmetric markdown wrapping the model may add around the whole answer.
   raw = raw.replace(/^[`*"']+/, '').replace(/[`*"']+$/, '').trim();
   if (/^unchanged\b[.!]?$/i.test(raw)) return { kind: 'unchanged' };
   const append = raw.match(/^append\s*:\s*([\s\S]+)$/i);
-  if (append) return { kind: 'append', text: append[1].replace(/\s+/g, ' ').trim() };
+  if (append) return { kind: 'append', text: append[1].trim() };
   const rewrite = raw.match(/^rewrite\s*:\s*([\s\S]+)$/i);
-  if (rewrite) return { kind: 'rewrite', text: rewrite[1].replace(/\s+/g, ' ').trim() };
-  // No marker but real content → safest interpretation is a full rewrite.
-  return { kind: 'rewrite', text: raw.replace(/\s+/g, ' ').trim() };
+  if (rewrite) return { kind: 'rewrite', text: rewrite[1].trim() };
+  return section === 'Work Log' ? { kind: 'append', text: raw } : { kind: 'rewrite', text: raw };
 }
 
-/** Resolve the new task.summary from a self-report + the current summary.
- *  Returns '' when nothing should be persisted (unchanged / empty report).
+/** Assemble the new NOTE from the existing one + the report's per-section answers.
+ *  Returns null when NOTHING changed (all sections unchanged/none — skip persist).
+ *  A pre-structure free-form note is preserved: if the report did not provide
+ *  content for all sections (migration incomplete), the old free-form body is kept
+ *  as the preamble so no fact is ever dropped by the assembler itself.
  *  Exported for unit tests. */
-export function summaryFromSelfReport(report: string, existingSummary = ''): string {
-  const directive = parseSummaryDirective(report);
-  switch (directive.kind) {
-    case 'unchanged':
-      return '';
-    case 'append': {
-      const base = existingSummary.replace(/\s+/g, ' ').trim();
-      if (!base) return directive.text; // nothing to append to — the sentence IS the summary
-      return `${base}${/[.!?]$/.test(base) ? '' : '.'} ${directive.text}`;
+export function assembleNote(existingNote: string, report: string): { note: string; changed: NoteSection[] } | null {
+  const { sections: old, preamble } = parseNoteSections(existingNote);
+  const changed: NoteSection[] = [];
+  const next: Partial<Record<NoteSection, string>> = { ...old };
+  let reportAnsweredAll = true;
+
+  for (const s of NOTE_SECTIONS) {
+    const ans = parseSectionAnswer(report, s);
+    if (ans.kind === 'unchanged' || ans.kind === 'none') {
+      reportAnsweredAll = false;
+      continue;
     }
-    case 'rewrite':
-      return directive.text;
-    case 'none':
-      break; // legacy report without TASK_SUMMARY — compose from the other fields
+    if (ans.kind === 'append') {
+      next[s] = old[s] ? `${old[s]}\n- ${ans.text.replace(/^-\s*/, '')}` : `- ${ans.text.replace(/^-\s*/, '')}`;
+    } else {
+      next[s] = ans.text;
+    }
+    changed.push(s);
   }
-  const status = extractField(report, 'STATUS');
-  const did = extractField(report, 'WHAT_I_DID');
-  const next = extractField(report, 'NEXT_STEPS');
-  // Single-paragraph summary: WHAT_I_DID is the spine; append the NEXT_STEPS as a
-  // trailing "Next: …" clause when present, and a short status qualifier only when
-  // it adds signal (failed / blocked / waiting — "succeeded" is implied by progress).
-  // No multi-section **labels** — one task summary, not a stack of sub-headers.
-  const base = did || status;
-  if (!base) return '';
-  let summary = base.trim();
-  const lowStatus = status.toLowerCase();
-  if (status && /(fail|block|wait)/.test(lowStatus) && !summary.toLowerCase().includes(status.trim().toLowerCase())) {
-    summary += ` (${status.trim()})`;
+  if (changed.length === 0) return null;
+
+  // The preamble (free-form text above the first header) is dropped ONLY when THIS
+  // report answered all five sections with content — i.e. an actual migration pass
+  // that was instructed to fold every preamble fact into the sections. Checking the
+  // merged result (`next`) instead would drop a preamble on any single-section
+  // append once the note has all five headers — silent fact loss.
+  const migrated = reportAnsweredAll;
+  const parts: string[] = [];
+  if (preamble && !migrated) parts.push(preamble);
+  for (const s of NOTE_SECTIONS) {
+    if (next[s]) parts.push(`## ${s}\n${next[s]}`);
   }
-  if (next) summary += ` Next: ${next.trim()}`;
-  return summary.replace(/\s+/g, ' ').trim();
+  return { note: parts.join('\n\n'), changed };
 }
 
-/** PHASE_SIGNAL values that mark a real, milestone-worthy transition. The noise
- *  values (reconfirmed / conversational) are intentionally excluded so the
- *  milestone log stays one-line-per-meaningful-step, not per-turn. */
-const MILESTONE_PHASE_SIGNALS = [
-  'plan-written', 'implement-done', 'verify-pass', 'verify-fail', 'review-done', 'committed',
-] as const;
+/** Shrink guard: a new note dramatically shorter than the old one means the session
+ *  dropped facts (the assembler never shrinks on its own — only rewrites can).
+ *
+ *  COUPLING INVARIANT (do not "tighten" the ratio without re-deriving this): a
+ *  MANDATORY REORGANIZE (old > NOTE_REORG_CAP) is INSTRUCTED to land under
+ *  NOTE_REORG_CAP, so for old ≥ cap/0.4 (=15000) a proportional floor rejects every
+ *  compliant reorganize — deadlock: the note can never shrink, every fire re-runs a
+ *  doomed reorganize. Reorganize fires therefore use an ABSOLUTE floor (cap × 0.4)
+ *  instead of the proportional one. Exported for tests. */
+export function noteShrinkRejected(oldNote: string, newNote: string): boolean {
+  const oldSections = parseNoteSections(oldNote).sections;
+  const newSections = parseNoteSections(newNote).sections;
+  for (const section of ['Executive Summary', 'Goal', 'Context', 'Progress'] as const) {
+    const oldPresent = Object.prototype.hasOwnProperty.call(oldSections, section);
+    const newPresent = Object.prototype.hasOwnProperty.call(newSections, section);
+    if (oldPresent && !newPresent) return true;
+    const oldBody = oldSections[section]?.trim() ?? '';
+    const newBody = newSections[section]?.trim() ?? '';
+    if (oldBody && !newBody) return true;
+    if (oldBody.length >= 100 && newBody.length < oldBody.length * 0.4) return true;
+  }
 
-/** Friendly label per milestone phase, prefixed to the WHAT_I_DID line. */
-const MILESTONE_LABELS: Record<string, string> = {
-  'plan-written': '📝 Plan written',
-  'implement-done': '🔧 Implemented',
-  'verify-pass': '✅ Verified',
-  'verify-fail': '❌ Verify failed',
-  'review-done': '🔎 Reviewed',
-  'committed': '📦 Committed',
-};
-
-/**
- * Build a ONE-LINE milestone string from a self-report, or null if this turn's
- * PHASE_SIGNAL isn't a real milestone. The line is `<label> — <WHAT_I_DID>`; the
- * matched signal is returned so callers can log/test it. Exported for unit tests.
- */
-export function milestoneFromSelfReport(report: string): { signal: string; line: string } | null {
-  const rawSignal = extractField(report, 'PHASE_SIGNAL').toLowerCase();
-  if (!rawSignal) return null;
-  // PHASE_SIGNAL may be `committed(abc1234)` or `conversational(user-asked-question)`
-  // — match on the bare keyword prefix.
-  const signal = MILESTONE_PHASE_SIGNALS.find((s) => rawSignal.startsWith(s));
-  if (!signal) return null;
-  const did = extractField(report, 'WHAT_I_DID').replace(/\s+/g, ' ').trim();
-  if (!did) return null;
-  return { signal, line: `${MILESTONE_LABELS[signal]} — ${did}` };
+  if (oldNote.length < 1500) return false; // small unstructured notes rewrite freely
+  if (oldNote.length > NOTE_REORG_CAP) return newNote.length < NOTE_REORG_CAP * 0.4;
+  return newNote.length < oldNote.length * 0.4;
 }
+
+// NOTE: the legacy three-way TASK_SUMMARY directive (parseSummaryDirective /
+// summaryFromSelfReport) and the milestones log (milestoneFromSelfReport) were
+// RETIRED 2026-07-18 — the NOTE is now the single living document (five sections,
+// per-section answers above); task.summary is derived from Executive Summary and
+// the Work Log section replaced milestones. See docs/decision/summarizer-self-report.md.
 
 /** Signals that warrant waking the user, and their notification headlines. Everything
  *  else (implement-done / verify-pass / review-done / reconfirmed / conversational)
@@ -301,12 +389,12 @@ export function decideNotify(report: string, dedupKey: string): string | null {
  * collapses into one run.
  *
  * Single-tier design (the expensive triage subagent was deleted 2026-07): the
- * SESSION writes its own merged summary via side_question (it re-receives the
- * existing task.summary each time, so multi-day / post-compaction sessions never
- * lose the task's origin), and code deterministically persists summary + milestone,
- * decides notify via the PHASE_SIGNAL lookup (decideNotify), and syncs the phase.
- * Session dead / no answer → skip silently; the next turn's merged report covers
- * the gap.
+ * SESSION writes its own merged NOTE via side_question (it re-receives the
+ * existing task.note each time, so multi-day / post-compaction sessions never
+ * lose the task's origin), and code deterministically persists the note (deriving
+ * task.summary from Executive Summary), decides notify via the PHASE_SIGNAL
+ * lookup (decideNotify), and syncs the phase. Session dead / no answer → skip
+ * silently; the next turn's merged report covers the gap.
  *
  * The TRIAGE_COOLDOWN_MS guard is checked HERE (fire time), not at arm time: the
  * debounce re-arms on every turn-complete during an interactive burst, and checking
@@ -345,114 +433,217 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
   triageLastDispatch.set(dedupKey, now);
 
   try {
-    // ── Ask the session for a structured self-report (side_question) ──
-    // The session answers from its own in-cache context (cost rides the session's
-    // prompt cache, not Walnut). The existing task.summary is fed INTO the prompt
-    // so the session merges rather than rewrites-from-memory — this is what keeps
-    // summaries complete across multi-day sessions and compactions. Session dead /
-    // timeout → skip; the next turn's merged report covers the gap.
+    // ── Ask the provider session for a structured self-report ──
+    // Native Claude uses side_question; ACP uses its provider-native hidden
+    // report request. The merge/phase/notify policy below is provider-neutral.
     const { sessionRunner } = await import('../../providers/claude-code-session.js');
-    const session = sessionRunner.findByClaudeId(p.sessionId);
-    if (!session) {
-      log.session.info('turn-complete-summary: session not live — skipped (next turn will merge)', {
+
+    // Single-flight: a previous ask still awaiting its answer already covers this
+    // fire — when it resolves, the session answers from its LATEST context, which
+    // includes whatever turns re-armed this debounce. Asking again would only queue
+    // a duplicate control request.
+    if (selfReportInFlight.has(p.sessionId)) {
+      log.session.info('turn-complete-summary: previous ask still in flight — skipped (its answer covers this turn)', {
         sessionId: p.sessionId, taskId: p.taskId,
       });
       return;
     }
 
-    let existingSummary = '';
-    try {
-      const { getTask } = await import('../task-manager.js');
-      existingSummary = (await getTask(taskId)).summary ?? '';
-    } catch { /* task readable failures already guarded upstream */ }
+    // Claim the single-flight slot BEFORE the async getTask below — checking at
+    // line-of-ask leaves a TOCTOU window where two concurrent fires (same session,
+    // different tasks — dedupKey differs so the cooldown doesn't gate) both pass
+    // the has() check and double-ask.
+    selfReportInFlight.add(p.sessionId);
 
+    let existingNote = '';
     let selfReport = '';
+    const askedAt = Date.now();
     try {
-      selfReport = (await session.askSideQuestion(
-        buildSelfReportPrompt(existingSummary), SELF_REPORT_TIMEOUT_MS,
+      try {
+        const { getTask } = await import('../task-manager.js');
+        // Trimmed at the source: the prompt (NOTE BUDGET + reorg gate) trims
+        // internally, so the accountability/shrink checks below must measure the
+        // SAME string or a 6006-raw/5992-trimmed note logs spurious reorg warns.
+        existingNote = ((await getTask(taskId)).note ?? '').trim();
+      } catch (err) {
+        // Do NOT degrade to an empty note: the prompt would say "NOTE is EMPTY,
+        // write ALL five sections", the model rewrites from scratch, the shrink
+        // guard compares against '' (never rejects), and a transient read failure
+        // becomes a full overwrite of the real note. Skip; next fire covers it.
+        log.session.warn('turn-complete-summary: task note read failed — skipped (next turn will merge)', {
+          sessionId: p.sessionId, taskId: p.taskId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return;
+      }
+
+      selfReport = (await sessionRunner.requestTurnCompleteSelfReport(
+        p.sessionId,
+        buildSelfReportPrompt(existingNote), SELF_REPORT_TIMEOUT_MS,
       )).trim();
     } catch (err) {
-      log.session.warn('turn-complete-summary: side_question failed — skipped (next turn will merge)', {
-        sessionId: p.sessionId, taskId: p.taskId, error: err instanceof Error ? err.message : String(err),
+      log.session.warn('turn-complete-summary: provider self-report failed — skipped (next turn will merge)', {
+        sessionId: p.sessionId, taskId: p.taskId,
+        error: err instanceof Error ? err.message : String(err),
+        elapsedMs: Date.now() - askedAt,
+        host: p.session?.host ?? '__local__',
       });
       return;
+    } finally {
+      selfReportInFlight.delete(p.sessionId);
     }
     if (!selfReport) return;
 
+    // The ask can take minutes (the CLI answers control requests between turns).
+    // The note may have been written meanwhile — by a human in the Note editor, or
+    // by another session on the same task (in-flight is keyed per-session, notes
+    // are per-task). Re-read and merge against the FRESH copy: answers are
+    // per-section, so re-assembly is cheap, and appends replay cleanly. Without
+    // this, updateNote() below writes an assembly built on the stale base and
+    // silently reverts the concurrent write.
+    try {
+      const { getTask } = await import('../task-manager.js');
+      const freshNote = ((await getTask(taskId)).note ?? '').trim();
+      if (freshNote !== existingNote) {
+        log.session.info('turn-complete-summary: note changed during ask — merging against fresh copy', {
+          sessionId: p.sessionId, taskId: p.taskId,
+          staleLen: existingNote.length, freshLen: freshNote.length,
+        });
+        existingNote = freshNote;
+      }
+    } catch { /* keep the pre-ask copy; better than dropping the report */ }
+
     log.session.info('turn-complete-summary: got session self-report', {
       sessionId: p.sessionId, taskId: p.taskId, reportLen: selfReport.length,
+      elapsedMs: Date.now() - askedAt,
     });
 
-    // (a) Persist the summary per the session's directive: `unchanged` → '' (skip),
-    // `append:` → existing + one sentence, `rewrite:` → replace. updateSummary runs
-    // plugin content validation and can reject (e.g. CJK drift on externally-synced
-    // tasks) — log and move on; the milestone/notify decisions below don't depend
+    // (a) Persist the NOTE per the session's per-section answers (unchanged /
+    // append / new content per section). updateNote runs plugin content validation
+    // and can reject — log and move on; the notify decision below doesn't depend
     // on the persist.
     //
     // Observability contract: parse outcomes are NEVER silent. Every fire logs the
-    // resolved directive; a report that parses to NOTHING (no directive AND no
-    // legacy-composable fields) is a format regression → ERROR with a report head
-    // so `walnut-logs.sh errors` surfaces it immediately.
-    const directive = parseSummaryDirective(selfReport);
-    const summary = summaryFromSelfReport(selfReport, existingSummary);
-    log.session.info('turn-complete-summary: directive parsed', {
+    // changed sections; a report where NO note label parsed at all is a format
+    // regression → ERROR with a report head so `walnut-logs.sh errors` surfaces it.
+    let assembled = assembleNote(existingNote, selfReport);
+    const anyLabelPresent = NOTE_SECTIONS.some((s) => parseSectionAnswer(selfReport, s).kind !== 'none');
+    log.session.info('turn-complete-summary: note sections parsed', {
       sessionId: p.sessionId, taskId: p.taskId,
-      directive: directive.kind, summaryLen: summary.length,
+      changed: assembled?.changed ?? [], noteLen: assembled?.note.length ?? existingNote.length,
     });
-    if (directive.kind === 'none' && !summary) {
-      log.session.error('turn-complete-summary: self-report UNPARSEABLE — no TASK_SUMMARY directive and no legacy fields; prompt/format regression?', {
+    // Reorganize accountability: the over-budget prompt DEMANDS a net shrink —
+    // a reorg fire that comes back same-or-longer means the session ignored it.
+    if (existingNote.length > NOTE_REORG_CAP) {
+      const newLen = assembled?.note.length ?? existingNote.length;
+      if (newLen >= existingNote.length) {
+        log.session.warn('turn-complete-summary: REORGANIZE fire did not shrink the note', {
+          sessionId: p.sessionId, taskId: p.taskId,
+          oldLen: existingNote.length, newLen, cap: NOTE_REORG_CAP,
+        });
+      } else {
+        log.session.info('turn-complete-summary: reorganize shrank the note', {
+          sessionId: p.sessionId, taskId: p.taskId,
+          oldLen: existingNote.length, newLen, cap: NOTE_REORG_CAP,
+        });
+      }
+    }
+    if (!anyLabelPresent) {
+      log.session.error('turn-complete-summary: self-report UNPARSEABLE — no note section labels found; prompt/format regression?', {
         sessionId: p.sessionId, taskId: p.taskId,
         reportHead: selfReport.slice(0, 300),
       });
     }
-    if (summary) {
-      try {
-        const { updateSummary } = await import('../task-manager.js');
-        await updateSummary(taskId, summary);
-      } catch (err) {
-        log.session.debug('turn-complete-summary: summary persist skipped', {
-          taskId: p.taskId, error: err instanceof Error ? err.message : String(err),
-        });
+    if (assembled) {
+      let notePersisted = false;
+      let persistedNote = '';
+      for (let attempt = 0; attempt < 3 && assembled; attempt++) {
+        if (noteShrinkRejected(existingNote, assembled.note)) {
+          log.session.error('turn-complete-summary: note persist REJECTED — new note dropped too much content (shrink guard)', {
+            sessionId: p.sessionId, taskId: p.taskId,
+            oldLen: existingNote.length, newLen: assembled.note.length,
+          });
+          break;
+        }
+        try {
+          const { compareAndSetNote } = await import('../task-manager.js');
+          const persisted = await compareAndSetNote(taskId, existingNote, assembled.note);
+          if (persisted.updated) {
+            notePersisted = true;
+            persistedNote = assembled.note;
+            break;
+          }
+          existingNote = (persisted.task.note ?? '').trim();
+          assembled = assembleNote(existingNote, selfReport);
+          log.session.info('turn-complete-summary: note CAS missed — reassembled against concurrent edit', {
+            sessionId: p.sessionId,
+            taskId: p.taskId,
+            attempt: attempt + 1,
+            freshLen: existingNote.length,
+          });
+        } catch (err) {
+          log.session.warn('turn-complete-summary: note persist failed', {
+            taskId: p.taskId, error: err instanceof Error ? err.message : String(err),
+          });
+          break;
+        }
       }
-      // Backfill SessionRecord.summary for free — this replaces the removed
-      // session-summary-gist hook (which paid a full-transcript LLM pass for
-      // the same field). QMD prepends it as the highest-signal search chunk.
+      // Derive the short task.summary + SessionRecord.summary only from the
+      // exact note version that won the CAS.
+      const exec = notePersisted
+        ? parseNoteSections(persistedNote).sections['Executive Summary']
+        : undefined;
+      if (exec) {
+        const shortSummary = exec.replace(/\s+/g, ' ').trim();
+        try {
+          const { updateSummary } = await import('../task-manager.js');
+          await updateSummary(taskId, shortSummary);
+        } catch (err) {
+          log.session.debug('turn-complete-summary: summary derive skipped', {
+            taskId: p.taskId, error: err instanceof Error ? err.message : String(err),
+          });
+        }
+        try {
+          const { updateSessionRecord } = await import('../session-tracker.js');
+          await updateSessionRecord(p.sessionId, {
+            summary: shortSummary,
+            summaryGeneratedAt: new Date().toISOString(),
+          });
+        } catch (err) {
+          log.session.debug('turn-complete-summary: session summary backfill skipped', {
+            sessionId: p.sessionId, error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+
+    // (a2) Session recap — one line, "what just happened here", shown as a tip
+    // under the session in the UI. Independent of the note persist: even an
+    // all-unchanged report carries a fresh recap of the latest turn.
+    const recap = extractField(selfReport, 'RECAP').replace(/\s+/g, ' ').trim();
+    if (recap && !/^unchanged\b[.!]?$/i.test(recap)) {
       try {
         const { updateSessionRecord } = await import('../session-tracker.js');
         await updateSessionRecord(p.sessionId, {
-          summary,
-          summaryGeneratedAt: new Date().toISOString(),
+          // 300-char cap: the composer recap tip (.session-recap-tip in
+          // web/src/styles/globals.css) renders the FULL recap with wrapping —
+          // this server-side cap is what bounds it to ~5 lines worst case.
+          recap: recap.slice(0, 300),
+          recapAt: new Date().toISOString(),
         });
       } catch (err) {
-        log.session.debug('turn-complete-summary: session summary backfill skipped', {
+        log.session.debug('turn-complete-summary: recap persist skipped', {
           sessionId: p.sessionId, error: err instanceof Error ? err.message : String(err),
         });
       }
     }
 
-    // (b) Append a compact milestone line — only on a real PHASE_SIGNAL transition
-    // (plan-written / implement-done / verify-* / review-done / committed). One
-    // line per meaningful step, sourced from the session's own WHAT_I_DID.
-    // PHASE_SIGNAL drives both milestone AND notify — a missing field silently
+    // (b) PHASE_SIGNAL drives phase-sync AND notify — a missing field silently
     // degrades both, so warn when it's absent (format drift indicator).
     if (!extractField(selfReport, 'PHASE_SIGNAL')) {
-      log.session.warn('turn-complete-summary: report has NO PHASE_SIGNAL field — milestone/notify skipped this turn (format drift?)', {
+      log.session.warn('turn-complete-summary: report has NO PHASE_SIGNAL field — notify skipped this turn (format drift?)', {
         sessionId: p.sessionId, taskId: p.taskId,
       });
-    }
-    const milestone = milestoneFromSelfReport(selfReport);
-    if (milestone) {
-      try {
-        const { appendMilestone } = await import('../task-manager.js');
-        await appendMilestone(taskId, milestone.line);
-        log.session.info('turn-complete-summary: milestone recorded', {
-          taskId: p.taskId, sessionId: p.sessionId, signal: milestone.signal,
-        });
-      } catch (err) {
-        log.session.debug('turn-complete-summary: milestone persist skipped', {
-          taskId: p.taskId, error: err instanceof Error ? err.message : String(err),
-        });
-      }
     }
 
     // (c) Phase sync — deterministic, replaces the triage subagent's Step 3 AND the
@@ -482,7 +673,10 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
         agentId: 'turn-complete-triage',
         agentName: 'Session Summary',
         taskId: p.taskId,
-        result: selfReport,
+        // The full report is a private control response already persisted into
+        // task/session fields above. Only the compact decision may enter the
+        // main-chat notification path.
+        result: notifyMessage,
         notification: notifyMessage,
       }, ['main-ai'], { source: 'turn-complete-summary' });
 
@@ -507,13 +701,13 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
  * pending timer (see messageSendTriageHook) — interaction resumed, no mid-chat fire.
  *
  * The fired work (see runTriage) is a single free pass: session self-report via
- * side_question → code persists summary/milestone + PHASE_SIGNAL lookup decides
- * phase/notify. No subagent is dispatched.
+ * side_question → code persists the note (+ derived summary) + PHASE_SIGNAL
+ * lookup decides phase/notify. No subagent is dispatched.
  */
 export const turnCompleteTriageHook: SessionHookDefinition = {
   id: 'turn-complete-triage',
   name: 'Turn Complete Summary (onTurnComplete)',
-  description: 'Collects a session self-report and persists summary/milestone/phase when a turn completes.',
+  description: 'Collects a session self-report and persists the task note/summary/phase when a turn completes.',
   hooks: ['onTurnComplete'],
   priority: 50,
   source: 'builtin',

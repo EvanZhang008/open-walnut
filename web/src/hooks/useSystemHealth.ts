@@ -23,7 +23,7 @@ export type CredentialSource = 'config' | 'claude-settings' | 'env' | 'aws-files
 
 export interface SystemHealth {
   daemons?: DaemonHealth[];
-  /** True when the Claude Code CLI is on the server's PATH (coding sessions work). */
+  /** True when the Claude Code CLI is available to the server (coding sessions work). */
   claudeCliAvailable?: boolean;
   /** True when at least one AI provider has a usable credential (the butler can talk). */
   hasReadyProvider?: boolean;

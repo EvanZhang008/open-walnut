@@ -6,11 +6,22 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
 
+const qmdMocks = vi.hoisted(() => ({
+  update: vi.fn(async () => {}),
+  embed: vi.fn(async () => {}),
+}));
+
 // QMD store pulls in native embedding deps — mock the refresh path entirely.
 vi.mock('../../src/core/qmd-store.js', () => ({
+  DEFAULT_QMD_MODEL: 'test-model',
+  embedQmdStore: vi.fn(async (
+    store: { embed: (options: unknown) => Promise<unknown> },
+    _label: string,
+    options: unknown,
+  ) => store.embed(options)),
   getMemoryStore: vi.fn(async () => ({
-    update: vi.fn(async () => {}),
-    embed: vi.fn(async () => {}),
+    update: qmdMocks.update,
+    embed: qmdMocks.embed,
   })),
 }));
 
@@ -18,11 +29,22 @@ import { skillManageTool } from '../../src/agent/tools/skill-manage-tool.js';
 import { skillViewTool } from '../../src/agent/tools/skill-view-tool.js';
 import { loadSkillUsage } from '../../src/core/skill-usage.js';
 import { clearSkillsCache } from '../../src/core/skill-loader.js';
+import { waitForQmdIndexWork } from '../../src/core/qmd-work-queue.js';
 import { WALNUT_HOME, GLOBAL_SKILLS_DIR } from '../../src/constants.js';
 
 let originalCwd: string;
 
+async function settleQmdRefreshes(): Promise<void> {
+  // dispatchQmdIncrementalIndex() loads the inline worker through a dynamic
+  // import in tests. Resolve that same module first so earlier dispatch
+  // continuations enter the shared QMD queue before waiting for its tail.
+  await import('../../src/core/qmd-maintenance.js');
+  await waitForQmdIndexWork();
+}
+
 beforeEach(async () => {
+  await settleQmdRefreshes();
+  vi.clearAllMocks();
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
   await fsp.mkdir(WALNUT_HOME, { recursive: true });
   originalCwd = process.cwd();
@@ -31,8 +53,17 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await settleQmdRefreshes();
   process.chdir(originalCwd);
-  await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
+      break;
+    } catch {
+      if (attempt === 2) throw new Error(`Failed to remove test directory: ${WALNUT_HOME}`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
 });
 
 const create = (over: Record<string, unknown> = {}) =>
@@ -71,6 +102,30 @@ describe('skill_manage create', () => {
     const usage = loadSkillUsage();
     expect(usage['tax-filing']?.created_by).toBe('agent');
     expect(usage['tax-filing']?.created_at).toBeDefined();
+  });
+
+  it('serializes repeated skill refreshes through the global QMD queue', async () => {
+    let releaseFirst!: () => void;
+    qmdMocks.update.mockImplementationOnce(() =>
+      new Promise<void>((resolve) => { releaseFirst = resolve; }));
+
+    await create();
+    await skillManageTool.execute({
+      action: 'patch',
+      name: 'tax-filing',
+      old_string: 'Deadline: April 15.',
+      new_string: 'Deadline: April 15 (Oct 15 with extension).',
+    });
+
+    await vi.waitFor(() => {
+      expect(qmdMocks.update).toHaveBeenCalledTimes(1);
+    });
+
+    releaseFirst();
+    await settleQmdRefreshes();
+
+    expect(qmdMocks.update).toHaveBeenCalledTimes(2);
+    expect(qmdMocks.embed).toHaveBeenCalledTimes(2);
   });
 
   it('rejects duplicate names', async () => {

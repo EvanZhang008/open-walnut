@@ -73,6 +73,8 @@ const EXPLICIT_SESSION_COLUMNS = [
   'error_message',
   'status_reason',
   'status_changed_by',
+  'status_revision',
+  'status_updated_at',
 ] as const;
 
 /**
@@ -116,6 +118,8 @@ const FIELD_TO_COLUMN: Record<string, string> = {
   errorMessage: 'error_message',
   status_reason: 'status_reason',
   status_changed_by: 'status_changed_by',
+  statusRevision: 'status_revision',
+  statusUpdatedAt: 'status_updated_at',
 };
 
 const COLUMN_TO_FIELD: Record<string, string> = Object.fromEntries(
@@ -176,6 +180,7 @@ export function getDb(): DatabaseType | null {
     handle.pragma('foreign_keys = ON');
 
     handle.exec(SCHEMA_SQL);
+    ensureSessionStatusColumns(handle);
 
     // Truncate the WAL on open (see task-db.ts:128 — same rationale).
     let checkpoint: unknown = null;
@@ -222,6 +227,45 @@ export function transaction<T>(fn: (db: DatabaseType) => T): T {
   }
   const tx = handle.transaction(fn);
   return tx(handle);
+}
+
+/**
+ * Idempotently add/backfill the versioned status projection columns.
+ * Kept explicit because CREATE TABLE IF NOT EXISTS never alters old tables.
+ */
+export function ensureSessionStatusColumns(
+  handle: DatabaseType,
+  now = new Date().toISOString(),
+): void {
+  const columns = handle.pragma('table_info(sessions)') as Array<{ name: string }>;
+  const names = new Set(columns.map((column) => column.name));
+  const migrate = handle.transaction(() => {
+    if (!names.has('status_revision')) {
+      handle.exec(
+        'ALTER TABLE sessions ADD COLUMN status_revision INTEGER NOT NULL DEFAULT 1',
+      );
+    }
+    if (!names.has('status_updated_at')) {
+      handle.exec('ALTER TABLE sessions ADD COLUMN status_updated_at TEXT');
+    }
+    handle.prepare(`
+      UPDATE sessions
+      SET status_revision = 1
+      WHERE status_revision IS NULL OR status_revision < 1
+    `).run();
+    handle.prepare(`
+      UPDATE sessions
+      SET status_updated_at = COALESCE(
+        NULLIF(status_updated_at, ''),
+        NULLIF(last_status_change, ''),
+        NULLIF(last_active_at, ''),
+        NULLIF(started_at, ''),
+        ?
+      )
+      WHERE status_updated_at IS NULL OR status_updated_at = ''
+    `).run(now);
+  });
+  migrate();
 }
 
 // ── (De)serialization ──────────────────────────────────────────────────────
@@ -325,6 +369,20 @@ export function sessionToRow(session: Partial<SessionRecord>): Record<string, an
     row.payload = null;
   }
 
+  // Full legacy records may reach bulk INSERT helpers without the versioned
+  // fields. Bind safe initial values instead of NULL (status_revision is
+  // NOT NULL); partial UPDATE patches do not carry claudeSessionId and are
+  // intentionally left untouched.
+  if (typeof session.claudeSessionId === 'string') {
+    if (row.status_revision === undefined) row.status_revision = 1;
+    if (row.status_updated_at === undefined) {
+      row.status_updated_at = session.last_status_change
+        ?? session.lastActiveAt
+        ?? session.startedAt
+        ?? new Date().toISOString();
+    }
+  }
+
   return row;
 }
 
@@ -368,6 +426,8 @@ const SCHEMA_SQL = `
     error_message TEXT,
     status_reason TEXT,
     status_changed_by TEXT,
+    status_revision INTEGER NOT NULL DEFAULT 1,
+    status_updated_at TEXT,
     payload TEXT
   );
   CREATE INDEX IF NOT EXISTS sessions_task_id ON sessions(task_id);
@@ -376,4 +436,3 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS sessions_updated_at ON sessions(last_active_at);
   CREATE INDEX IF NOT EXISTS sessions_last_status_change ON sessions(last_status_change);
 `;
-

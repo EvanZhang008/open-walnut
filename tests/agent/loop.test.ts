@@ -147,6 +147,32 @@ describe('runAgentLoop', () => {
     expect(texts).toEqual(['Response text']);
   });
 
+  it('ignores whitespace-only thinking blocks', async () => {
+    const onThinking = vi.fn();
+    mockSendMessage
+      .mockResolvedValueOnce({
+        content: [
+          { type: 'thinking', thinking: '  ', signature: 'sig' },
+          { type: 'text', text: 'First response' },
+        ],
+        stopReason: 'end_turn',
+      })
+      .mockResolvedValueOnce({
+        content: [
+          { type: 'thinking', thinking: 'real reasoning', signature: 'sig' },
+          { type: 'text', text: 'Second response' },
+        ],
+        stopReason: 'end_turn',
+      });
+
+    await runAgentLoop('First', [], { onThinking });
+    expect(onThinking).not.toHaveBeenCalled();
+
+    await runAgentLoop('Second', [], { onThinking });
+    expect(onThinking).toHaveBeenCalledOnce();
+    expect(onThinking).toHaveBeenCalledWith('real reasoning');
+  });
+
   it('preserves conversation history', async () => {
     mockSendMessage.mockResolvedValueOnce({
       content: [{ type: 'text', text: 'First reply' }],

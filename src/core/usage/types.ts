@@ -70,6 +70,33 @@ export interface UsageByGroup {
 
 export type UsagePeriod = 'today' | '7d' | '30d' | 'all';
 
+/**
+ * Unified cross-filter for the usage dashboard. Every field is optional and
+ * ANDed together, so the UI can drill in on any combination (e.g. "subagent
+ * spend, on the opus model, between two dates"). Dates are inclusive YYYY-MM-DD.
+ */
+export interface UsageFilter {
+  startDate?: string;   // YYYY-MM-DD inclusive
+  endDate?: string;     // YYYY-MM-DD inclusive
+  source?: string;      // exact source column match
+  model?: string;       // exact model column match
+  agentId?: string;     // matched against the canonical agent-name expression
+}
+
+/**
+ * One-shot payload for the dashboard: every aggregate computed under the same
+ * filter, plus the DB's overall date bounds for the date-range picker.
+ */
+export interface UsageOverview {
+  summary: UsageSummary;
+  daily: DailyCost[];
+  bySource: UsageByGroup[];
+  byModel: UsageByGroup[];
+  byAgent: UsageByGroup[];
+  recent: UsageRecord[];
+  dateBounds: { min: string | null; max: string | null };
+}
+
 export interface RecordParams {
   source: UsageSource;
   model: string;

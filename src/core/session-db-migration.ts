@@ -73,6 +73,16 @@ function applyLegacyFixups(session: SessionRecord): SessionRecord {
     }
   }
 
+  const statusTimestamp = out.statusUpdatedAt
+    || out.last_status_change
+    || out.lastActiveAt
+    || out.startedAt
+    || new Date().toISOString();
+  out.statusRevision = Number.isInteger(out.statusRevision) && out.statusRevision > 0
+    ? out.statusRevision
+    : 1;
+  out.statusUpdatedAt = statusTimestamp;
+
   return out as SessionRecord;
 }
 

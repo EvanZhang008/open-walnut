@@ -1,6 +1,6 @@
 /**
  * useTaskSearch — debounced search hook for the TODO panel.
- * Any non-empty query triggers debounced server-side hybrid search.
+ * Any non-empty query triggers debounced server-side QMD search.
  */
 
 import { useState, useRef, useCallback, useEffect } from 'react';
@@ -8,22 +8,11 @@ import { apiGet } from '@/api/client';
 
 export interface TaskSearchResult {
   taskId: string;
-  score: number;
-  matchField: string;
-  keywordScore?: number;  // normalized BM25 [0,1], undefined if no keyword match
-  semanticScore?: number; // normalized cosine [0,1], undefined if no vector match
 }
 
 interface ServerSearchItem {
   type: 'task' | 'memory';
-  title: string;
-  snippet: string;
-  path?: string;
   taskId?: string;
-  score: number;
-  matchField: string;
-  keywordScore?: number;
-  semanticScore?: number;
 }
 
 export interface UseTaskSearchReturn {
@@ -34,12 +23,10 @@ export interface UseTaskSearchReturn {
   clearSearch: () => void;
 }
 
-// Keystroke debouncing happens upstream in TodoSearchBar (~0.5s buffer), so
-// setQuery is only ever called after the user pauses. Keep this at 0 to avoid
-// stacking a second debounce on top (which would push backend latency to ~0.8s).
-// A 0ms setTimeout still defers the fetch one tick so the isSearching spinner
-// can render first.
-const DEBOUNCE_MS = 0;
+// Update query/generation immediately on every keystroke, but wait before the
+// HTTP request. Debouncing in the input component left a 500ms window where an
+// older response could be accepted under newly typed text.
+const DEBOUNCE_MS = 500;
 
 export function useTaskSearch(): UseTaskSearchReturn {
   const [query, setQueryState] = useState('');
@@ -47,12 +34,17 @@ export function useTaskSearch(): UseTaskSearchReturn {
   const [isSearching, setIsSearching] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestGenerationRef = useRef(0);
 
   const clearSearch = useCallback(() => {
+    requestGenerationRef.current++;
     setQueryState('');
     setResults(null);
     setIsSearching(false);
     if (abortRef.current) {
+      // QMD does not expose inference cancellation, so this only stops the
+      // browser from waiting. The generation check below is the correctness
+      // guard when an older server computation still finishes later.
       abortRef.current.abort();
       abortRef.current = null;
     }
@@ -63,7 +55,20 @@ export function useTaskSearch(): UseTaskSearchReturn {
   }, []);
 
   const setQuery = useCallback((q: string) => {
+    const generation = ++requestGenerationRef.current;
     setQueryState(q);
+
+    if (abortRef.current) {
+      // QMD does not expose inference cancellation, so this only stops the
+      // browser from waiting. The generation check below is the correctness
+      // guard when an older server computation still finishes later.
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+    }
 
     if (!q.trim()) {
       setResults(null);
@@ -72,17 +77,16 @@ export function useTaskSearch(): UseTaskSearchReturn {
     }
 
     // Clear stale QMD results immediately so the UI falls back to client-side
-    // BM25 (zero-latency keyword match in TodoPanel's filteredTasks) while the
+    // substring/reference matches in TodoPanel while the
     // debounced QMD request is in flight. Without this, the old query's results
     // linger and the list looks stale.
     setResults(null);
 
     // Debounced server-side QMD search — fires in background, merges in when ready.
-    if (debounceRef.current) clearTimeout(debounceRef.current);
     setIsSearching(true);
 
     debounceRef.current = setTimeout(async () => {
-      if (abortRef.current) abortRef.current.abort();
+      debounceRef.current = null;
       const controller = new AbortController();
       abortRef.current = controller;
 
@@ -90,32 +94,43 @@ export function useTaskSearch(): UseTaskSearchReturn {
         const params: Record<string, string> = {
           q: q.trim(),
           types: 'task',
-          mode: 'hybrid',
-          limit: '100',
+          // QMD 2.1 caps its fused candidate pool at 40.
+          limit: '40',
         };
-        const res = await apiGet<{ results: ServerSearchItem[] }>('/api/search', params);
+        const res = await apiGet<{ results: ServerSearchItem[] }>(
+          '/api/search',
+          params,
+          { signal: controller.signal, timeoutMs: 30_000 },
+        );
 
-        if (controller.signal.aborted) return;
+        if (
+          controller.signal.aborted
+          || generation !== requestGenerationRef.current
+        ) return;
 
         const taskResults: TaskSearchResult[] = res.results
           .filter((r) => r.type === 'task' && r.taskId)
           .map((r) => ({
             taskId: r.taskId!,
-            score: r.score,
-            matchField: r.matchField,
-            keywordScore: r.keywordScore,
-            semanticScore: r.semanticScore,
           }));
 
         setResults(taskResults);
       } catch (err) {
-        if (err instanceof DOMException && err.name === 'AbortError') return;
+        if (
+          controller.signal.aborted
+          || generation !== requestGenerationRef.current
+          || (err instanceof DOMException && err.name === 'AbortError')
+        ) return;
         // On error, clear results (graceful degradation)
         setResults(null);
       } finally {
-        if (!controller.signal.aborted) {
+        if (
+          generation === requestGenerationRef.current
+          && !controller.signal.aborted
+        ) {
           setIsSearching(false);
         }
+        if (abortRef.current === controller) abortRef.current = null;
       }
     }, DEBOUNCE_MS);
   }, []);

@@ -25,6 +25,8 @@ interface FormData {
   architecture: string;
 }
 
+type MultilineKey = 'description' | 'overview' | 'architecture' | 'architecture_notes' | 'common_commands';
+
 const EMPTY_FORM: FormData = {
   name: '',
   description: '',
@@ -106,7 +108,7 @@ function yamlToForm(content: string): FormData {
 
   let currentSection: string | null = null;
   let currentHost: string | null = null;
-  let multilineKey: string | null = null;
+  let multilineKey: MultilineKey | null = null;
   const multilineLines: string[] = [];
 
   for (let i = 0; i < lines.length; i++) {
@@ -115,7 +117,7 @@ function yamlToForm(content: string): FormData {
 
     // Flush multiline when we hit a non-indented line
     if (multilineKey && trimmed && !line.startsWith(' ') && !line.startsWith('\t')) {
-      (data as Record<string, string>)[multilineKey] = multilineLines.join('\n');
+      data[multilineKey] = multilineLines.join('\n');
       multilineKey = null;
       multilineLines.length = 0;
     }
@@ -202,7 +204,7 @@ function yamlToForm(content: string): FormData {
 
   // Flush trailing multiline
   if (multilineKey) {
-    (data as Record<string, string>)[multilineKey] = multilineLines.join('\n');
+    data[multilineKey] = multilineLines.join('\n');
   }
 
   // Ensure at least one host entry

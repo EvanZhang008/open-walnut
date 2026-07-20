@@ -2,14 +2,79 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import { createMockConstants } from '../../helpers/mock-constants.js';
 
+const taskSlotInterleave = vi.hoisted(() => ({
+  beforeLink: undefined as undefined | ((
+    taskId: string,
+    sessionId: string,
+    slot: 'plan' | 'exec',
+  ) => Promise<void>),
+}));
+
 vi.mock('../../../src/constants.js', () => createMockConstants());
+vi.mock('../../../src/core/task-manager.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/core/task-manager.js')>();
+  return {
+    ...actual,
+    linkSessionSlot: async (
+      taskId: string,
+      sessionId: string,
+      slot: 'plan' | 'exec',
+    ) => {
+      await taskSlotInterleave.beforeLink?.(taskId, sessionId, slot);
+      return actual.linkSessionSlot(taskId, sessionId, slot);
+    },
+  };
+});
+vi.mock('../../../src/core/ssh-config-scanner.js', () => ({
+  scanSshConfig: async () => new Map(),
+}));
+vi.mock('../../../src/core/daemon-file-reader.js', async () => {
+  const fsp = await import('node:fs/promises');
+  return {
+    DaemonFileReader: class {
+      async readFile(filePath: string): Promise<string | null> {
+        try {
+          return await fsp.readFile(filePath, 'utf-8');
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+          throw error;
+        }
+      }
+
+      async findSession(): Promise<null> {
+        return null;
+      }
+    },
+  };
+});
 
 import express from 'express';
 import request from 'supertest';
 import { sessionsRouter } from '../../../src/web/routes/sessions.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
-import { createSessionRecord } from '../../../src/core/session-tracker.js';
+import {
+  createSessionRecord,
+  listSessions,
+  importSessionRecord,
+  updateSessionRecord,
+  _resetSessionTrackerForTesting,
+} from '../../../src/core/session-tracker.js';
+import {
+  addTask,
+  getTask,
+  linkSession,
+  linkSessionSlot,
+  listTasks,
+  _resetForTesting as resetTaskManager,
+} from '../../../src/core/task-manager.js';
+import { closeDb as closeSessionDb } from '../../../src/core/session-db.js';
+import { closeDb as closeTaskDb } from '../../../src/core/task-db.js';
+import { bus } from '../../../src/core/event-bus.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
+import {
+  registerSessionManager,
+  unregisterSessionManager,
+} from '../../../src/providers/session-manager.js';
 
 function createApp() {
   const app = express();
@@ -20,10 +85,25 @@ function createApp() {
 }
 
 beforeEach(async () => {
+  taskSlotInterleave.beforeLink = undefined;
+  // This router-only fixture deliberately has no SessionRunner. A prior
+  // startServer() in the same Vitest worker must not turn its failure-path
+  // execute tests into real session starts.
+  bus.unsubscribe('session-runner');
+  closeSessionDb();
+  closeTaskDb();
+  _resetSessionTrackerForTesting();
+  resetTaskManager();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
 afterEach(async () => {
+  taskSlotInterleave.beforeLink = undefined;
+  bus.unsubscribe('session-runner');
+  closeSessionDb();
+  closeTaskDb();
+  _resetSessionTrackerForTesting();
+  resetTaskManager();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
@@ -45,6 +125,113 @@ describe('GET /api/sessions', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.sessions).toHaveLength(2);
+  });
+
+  it('persists a dead-process liveness correction with a new revision', async () => {
+    const created = await createSessionRecord('dead-live-overlay', 'task-1', 'project-a');
+    const app = createApp();
+
+    const res = await request(app).get('/api/sessions');
+
+    expect(res.status).toBe(200);
+    expect(res.body.sessions[0]).toMatchObject({
+      claudeSessionId: 'dead-live-overlay',
+      process_status: 'stopped',
+      statusRevision: created.statusRevision + 1,
+    });
+    const stored = (await listSessions())
+      .find((session) => session.claudeSessionId === 'dead-live-overlay');
+    expect(stored).toMatchObject({
+      process_status: 'stopped',
+      statusRevision: created.statusRevision + 1,
+    });
+    expect(stored?.activity).toBeUndefined();
+    expect(stored?.statusUpdatedAt).toBe(res.body.sessions[0].statusUpdatedAt);
+  });
+
+  it('does not persist remote transport uncertainty as stopped', async () => {
+    const created = await createSessionRecord(
+      'remote-unreachable-overlay',
+      'task-1',
+      'project-a',
+      undefined,
+      { host: 'remote-test' },
+    );
+    registerSessionManager('remote-unreachable-overlay', {
+      isAlive: async () => false,
+      detach: () => {},
+    } as never);
+    const app = createApp();
+
+    try {
+      const res = await request(app).get('/api/sessions');
+
+      expect(res.status).toBe(200);
+      expect(res.body.sessions[0]).toMatchObject({
+        claudeSessionId: 'remote-unreachable-overlay',
+        process_status: 'running',
+        statusRevision: created.statusRevision,
+      });
+      const stored = (await listSessions())
+        .find((session) => session.claudeSessionId === 'remote-unreachable-overlay');
+      expect(stored).toMatchObject({
+        process_status: 'running',
+        statusRevision: created.statusRevision,
+      });
+    } finally {
+      unregisterSessionManager('remote-unreachable-overlay');
+    }
+  });
+});
+
+describe('GET /api/sessions/status', () => {
+  it('returns full snapshots keyed by provider session ID', async () => {
+    await createSessionRecord('status-a', 'task-a', 'project-a', undefined, {
+      initialProcessStatus: 'idle',
+      engine: 'codex',
+    });
+    await createSessionRecord('status-b', '', 'project-b', undefined, {
+      initialProcessStatus: 'stopped',
+    });
+    const app = createApp();
+
+    const res = await request(app).get('/api/sessions/status?ids=status-a,status-b,missing');
+
+    expect(res.status).toBe(200);
+    expect(Object.keys(res.body.statuses)).toEqual(['status-a', 'status-b']);
+    expect(res.body.statuses['status-a']).toEqual(expect.objectContaining({
+      sessionId: 'status-a',
+      taskId: 'task-a',
+      process_status: 'idle',
+      activity: null,
+      mode: 'default',
+      planCompleted: false,
+      archived: false,
+      errorMessage: null,
+      provider: 'cli',
+      engine: 'codex',
+      statusRevision: 1,
+      statusUpdatedAt: expect.any(String),
+    }));
+    expect(res.body.statuses['status-b'].taskId).toBeNull();
+  });
+
+  it('rejects empty and over-limit hydration requests', async () => {
+    const app = createApp();
+    expect((await request(app).get('/api/sessions/status')).status).toBe(400);
+    const ids = Array.from({ length: 101 }, (_, index) => `status-${index}`).join(',');
+    expect((await request(app).get(`/api/sessions/status?ids=${ids}`)).status).toBe(400);
+  });
+
+  it('keys snapshots safely for any provider session ID', async () => {
+    await createSessionRecord('__proto__', 'task-special', 'project-a');
+    const app = createApp();
+
+    const res = await request(app).get('/api/sessions/status?ids=__proto__');
+
+    expect(res.status).toBe(200);
+    expect(Object.prototype.hasOwnProperty.call(res.body.statuses, '__proto__')).toBe(true);
+    expect(res.body.statuses.__proto__.sessionId).toBe('__proto__');
   });
 });
 
@@ -113,6 +300,115 @@ describe('GET /api/sessions/recent', () => {
   });
 });
 
+describe('GET /api/sessions/tree', () => {
+  it('returns a bounded recent-first prefix with total and hasMore', async () => {
+    const base = Date.parse('2026-07-19T12:00:00.000Z');
+    for (let i = 0; i < 105; i++) {
+      const id = `tree-session-${String(i).padStart(3, '0')}`;
+      const timestamp = new Date(base - i * 1_000).toISOString();
+      await importSessionRecord({
+        claudeSessionId: id,
+        taskId: `missing-task-${i}`,
+        project: 'Scale',
+        cwd: '/tmp',
+        title: `Tree session ${i}`,
+        startedAt: timestamp,
+        lastActiveAt: timestamp,
+      });
+    }
+
+    const app = createApp();
+    const res = await request(app).get('/api/sessions/tree');
+
+    expect(res.status).toBe(200);
+    expect(res.body.limit).toBe(100);
+    expect(res.body.total).toBe(105);
+    expect(res.body.hasMore).toBe(true);
+    expect(res.body.remaining).toBe(5);
+    expect(res.body.tree).toEqual([]);
+    expect(res.body.orphanSessions).toHaveLength(100);
+    const returnedTimes = res.body.orphanSessions.map((s: { lastActiveAt: string }) => Date.parse(s.lastActiveAt));
+    expect(returnedTimes).toEqual([...returnedTimes].sort((a, b) => b - a));
+    expect(res.body.orphanSessions.map((s: { claudeSessionId: string }) => s.claudeSessionId))
+      .toEqual(Array.from({ length: 100 }, (_, i) => `tree-session-${String(i).padStart(3, '0')}`));
+    expect(res.body.orphanSessions.some((s: { claudeSessionId: string }) => s.claudeSessionId === 'tree-session-104'))
+      .toBe(false);
+  });
+
+  it('searches the full store and makes an exact out-of-window ID the sole result', async () => {
+    const base = Date.parse('2026-07-19T12:00:00.000Z');
+    for (let i = 0; i < 105; i++) {
+      const id = `exact-session-${String(i).padStart(3, '0')}`;
+      const timestamp = new Date(base - i * 1_000).toISOString();
+      await importSessionRecord({
+        claudeSessionId: id,
+        taskId: `missing-task-${i}`,
+        project: 'Scale',
+        cwd: '/tmp',
+        title: i === 104 ? 'Old exact target' : `Recent ${i}`,
+        startedAt: timestamp,
+        lastActiveAt: timestamp,
+      });
+    }
+
+    const app = createApp();
+    const res = await request(app)
+      .get('/api/sessions/tree')
+      .query({ q: 'exact-session-104', limit: 25 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.limit).toBe(25);
+    expect(res.body.total).toBe(1);
+    expect(res.body.hasMore).toBe(false);
+    expect(res.body.remaining).toBe(0);
+    expect(res.body.orphanSessions.map((s: { claudeSessionId: string }) => s.claudeSessionId))
+      .toEqual(['exact-session-104']);
+  });
+
+  it('stops pagination at the 500-row cap instead of advertising an endless next page', async () => {
+    for (let i = 0; i < 501; i++) {
+      await createSessionRecord(`cap-session-${i}`, `missing-cap-task-${i}`, 'Scale', '/tmp', {
+        initialProcessStatus: 'stopped',
+      });
+    }
+
+    const app = createApp();
+    const res = await request(app).get('/api/sessions/tree').query({ limit: 500 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(501);
+    expect(res.body.limit).toBe(500);
+    expect(res.body.orphanSessions).toHaveLength(500);
+    expect(res.body.hasMore).toBe(false);
+    expect(res.body.remaining).toBe(0);
+  });
+
+  it('searches session metadata and owning task title', async () => {
+    const { task } = await addTask({
+      title: 'Customer parity investigation',
+      category: 'Work',
+      project: 'Walnut',
+      source: 'local',
+    });
+    await createSessionRecord('metadata-session', task.id, 'Walnut', '/tmp', {
+      initialProcessStatus: 'stopped',
+      title: 'ACP transcript repair',
+      description: 'Restore stopped history',
+      engine: 'codex',
+    });
+    await updateSessionRecord('metadata-session', { recap: 'Recovered canonical journal output' });
+
+    const app = createApp();
+    for (const query of ['transcript repair', 'stopped history', 'canonical journal', 'customer parity']) {
+      const res = await request(app).get('/api/sessions/tree').query({ q: query });
+      expect(res.status, query).toBe(200);
+      expect(res.body.total, query).toBe(1);
+      expect(res.body.tree[0].projects[0].tasks[0].sessions[0].claudeSessionId, query)
+        .toBe('metadata-session');
+    }
+  });
+});
+
 describe('GET /api/sessions/summaries', () => {
   it('returns summaries array', async () => {
     const app = createApp();
@@ -159,13 +455,50 @@ describe('PATCH /api/sessions/:sessionId', () => {
     expect(res.body.session.claudeSessionId).toBe('patch-sess');
   });
 
-  it('returns 404 for unknown session', async () => {
-    const app = createApp();
-    const res = await request(app)
-      .patch('/api/sessions/nonexistent')
-      .send({ title: 'test' });
+  it('returns typed 404s for unknown provider/runtime IDs without mutation', async () => {
+    const { task } = await addTask({
+      title: 'Session identity guard',
+      category: 'Work',
+      project: 'Walnut',
+      source: 'local',
+    });
+    const providerSessionId = 'known-provider-session';
+    const runtimeId = 'known-acp-runtime';
+    await createSessionRecord(providerSessionId, task.id, task.project, '/tmp', {
+      initialProcessStatus: 'stopped',
+      engine: 'codex',
+      acpRuntimeId: runtimeId,
+      mode: 'bypass',
+    });
+    await linkSession(task.id, providerSessionId);
+    await linkSessionSlot(task.id, providerSessionId, 'exec');
 
-    expect(res.status).toBe(404);
+    const sessionsBefore = await listSessions();
+    const tasksBefore = await listTasks();
+    const app = createApp();
+
+    for (const id of ['unknown-provider-session', runtimeId]) {
+      const res = await request(app)
+        .patch(`/api/sessions/${id}`)
+        .send({
+          title: 'must not be written',
+          human_note: 'must not be written',
+          mode: 'plan',
+        });
+
+      expect(res.status, id).toBe(404);
+      expect(res.body, id).toEqual({
+        code: 'SESSION_NOT_FOUND',
+        error: 'session not found',
+      });
+    }
+
+    expect(await listSessions()).toEqual(sessionsBefore);
+    expect(await listTasks()).toEqual(tasksBefore);
+    const persistedTask = await getTask(task.id);
+    expect(persistedTask.session_id).toBe(providerSessionId);
+    expect(persistedTask.exec_session_id).toBe(providerSessionId);
+    expect(persistedTask.plan_session_id).toBeUndefined();
   });
 
   it('rejects non-string title with 400', async () => {
@@ -191,9 +524,302 @@ describe('PATCH /api/sessions/:sessionId', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('max 500 chars');
   });
+
+  it('compensates when a stale mode change relinks a task after archive cleanup', async () => {
+    const { task } = await addTask({
+      title: 'Archive slot race',
+      category: 'Work',
+      project: 'Walnut',
+      source: 'local',
+    });
+    const sessionId = 'archive-mode-race';
+    await createSessionRecord(sessionId, task.id, 'Walnut', '/tmp', {
+      initialProcessStatus: 'stopped',
+      mode: 'bypass',
+    });
+    await linkSession(task.id, sessionId);
+    await linkSessionSlot(task.id, sessionId, 'exec');
+
+    let releasePlanLink!: () => void;
+    const planLinkReleased = new Promise<void>((resolve) => {
+      releasePlanLink = resolve;
+    });
+    let markPlanLinkReached!: () => void;
+    const planLinkReached = new Promise<void>((resolve) => {
+      markPlanLinkReached = resolve;
+    });
+    taskSlotInterleave.beforeLink = async (taskId, linkedSessionId, slot) => {
+      if (taskId === task.id && linkedSessionId === sessionId && slot === 'plan') {
+        markPlanLinkReached();
+        await planLinkReleased;
+      }
+    };
+
+    const app = createApp();
+    const modeRequest = request(app)
+      .patch(`/api/sessions/${sessionId}`)
+      .send({ mode: 'plan' })
+      .then((response) => response);
+
+    await planLinkReached;
+    const archiveResponse = await request(app)
+      .patch(`/api/sessions/${sessionId}`)
+      .send({ archived: true, archive_reason: 'test-race' });
+    expect(archiveResponse.status).toBe(200);
+
+    // Archive has committed and cleared every slot. Let the stale mode request
+    // perform its delayed plan link; the authoritative recheck must clear it.
+    releasePlanLink();
+    const modeResponse = await modeRequest;
+
+    expect(modeResponse.status).toBe(200);
+    expect(modeResponse.body.session).toEqual(expect.objectContaining({
+      claudeSessionId: sessionId,
+      archived: true,
+      mode: 'plan',
+    }));
+    const persistedTask = await getTask(task.id);
+    expect(persistedTask.session_id).toBeUndefined();
+    expect(persistedTask.plan_session_id).toBeUndefined();
+    expect(persistedTask.exec_session_id).toBeUndefined();
+    expect(persistedTask.session_ids).toContain(sessionId);
+  });
 });
 
 describe('GET /api/sessions/:sessionId/history', () => {
+  it('uses the ACP journal projection for both Codex history phases with stable IDs', async () => {
+    const journalPath = `${WALNUT_HOME}/journals/runtime-history.acp.jsonl`;
+    await fs.mkdir(`${WALNUT_HOME}/journals`, { recursive: true });
+    await fs.writeFile(journalPath, [
+      JSON.stringify({
+        kind: 'meta',
+        ts: Date.parse('2026-07-19T12:00:00.000Z'),
+        event: {
+          type: 'prompt-accepted',
+          commandId: 'acp-prompt:qm-history-1',
+          walnutMessageId: 'qm-history-1',
+          text: 'first exact prompt',
+        },
+      }),
+      JSON.stringify({
+        kind: 'acp',
+        ts: Date.parse('2026-07-19T12:00:01.000Z'),
+        source: 'live',
+        frame: {
+          method: 'session/update',
+          params: {
+            update: {
+              sessionUpdate: 'agent_message_chunk',
+              content: { type: 'text', text: 'first exact answer' },
+            },
+          },
+        },
+      }),
+      JSON.stringify({
+        kind: 'meta',
+        ts: Date.parse('2026-07-19T12:00:02.000Z'),
+        event: {
+          type: 'turn-ended',
+          commandId: 'acp-prompt:qm-history-1',
+          stopReason: 'end_turn',
+        },
+      }),
+      '',
+    ].join('\n'));
+    await createSessionRecord('codex-history', 'task-1', 'project-a', '/tmp', {
+      initialProcessStatus: 'stopped',
+      engine: 'codex',
+      acpRuntimeId: 'runtime-history',
+      acpJournalPath: journalPath,
+      messageCount: 2,
+    });
+    const projected = [
+      {
+        role: 'user',
+        text: 'first exact prompt',
+        timestamp: '2026-07-19T12:00:00.000Z',
+        msgId: 'acp:runtime-history:acp-prompt:qm-history-1:user',
+        walnutMessageId: 'qm-history-1',
+      },
+      {
+        role: 'assistant',
+        text: 'first exact answer',
+        timestamp: '2026-07-19T12:00:01.000Z',
+        msgId: 'acp:runtime-history:acp-prompt:qm-history-1:segment:0',
+      },
+    ];
+    const app = createApp();
+    const streams = await request(app).get('/api/sessions/codex-history/history?source=streams');
+    const full = await request(app).get('/api/sessions/codex-history/history');
+
+    expect(streams.status).toBe(200);
+    expect(streams.body).toEqual({ messages: projected, total: 2 });
+    expect(full.status).toBe(200);
+    expect(full.body.messages).toEqual(projected);
+    expect(full.body.total).toBe(2);
+    expect(full.body.cursor).toBe(2);
+    expect(full.body.delta).toBe(false);
+  });
+
+  it('full-rebuilds a Codex cursor when later chunks grow the same assistant message', async () => {
+    const journalPath = `${WALNUT_HOME}/journals/runtime-growing.acp.jsonl`;
+    await fs.mkdir(`${WALNUT_HOME}/journals`, { recursive: true });
+    const records = [
+      {
+        kind: 'meta',
+        ts: Date.parse('2026-07-19T12:00:00.000Z'),
+        event: {
+          type: 'prompt-accepted',
+          commandId: 'acp-prompt:qm-growing',
+          walnutMessageId: 'qm-growing',
+          text: 'slow reply',
+        },
+      },
+      {
+        kind: 'acp',
+        ts: Date.parse('2026-07-19T12:00:01.000Z'),
+        source: 'live',
+        frame: {
+          method: 'session/update',
+          params: {
+            update: {
+              sessionUpdate: 'agent_message_chunk',
+              content: { type: 'text', text: 'thinking...' },
+            },
+          },
+        },
+      },
+    ];
+    await fs.writeFile(
+      journalPath,
+      records.map((record) => JSON.stringify(record)).join('\n') + '\n',
+    );
+    await createSessionRecord('codex-history-growing', 'task-1', 'project-a', '/tmp', {
+      initialProcessStatus: 'running',
+      engine: 'codex',
+      acpRuntimeId: 'runtime-growing',
+      acpJournalPath: journalPath,
+      messageCount: 1,
+    });
+
+    const app = createApp();
+    const partial = await request(app).get('/api/sessions/codex-history-growing/history');
+    expect(partial.status).toBe(200);
+    expect(partial.body.cursor).toBe(2);
+    expect(partial.body.messages[1].text).toBe('thinking...');
+
+    const completion = [
+      {
+        kind: 'acp',
+        ts: Date.parse('2026-07-19T12:00:02.000Z'),
+        source: 'live',
+        frame: {
+          method: 'session/update',
+          params: {
+            update: {
+              sessionUpdate: 'agent_message_chunk',
+              content: { type: 'text', text: 'still working...' },
+            },
+          },
+        },
+      },
+      {
+        kind: 'acp',
+        ts: Date.parse('2026-07-19T12:00:03.000Z'),
+        source: 'live',
+        frame: {
+          method: 'session/update',
+          params: {
+            update: {
+              sessionUpdate: 'agent_message_chunk',
+              content: { type: 'text', text: 'done: slow reply' },
+            },
+          },
+        },
+      },
+      {
+        kind: 'meta',
+        ts: Date.parse('2026-07-19T12:00:04.000Z'),
+        event: {
+          type: 'turn-ended',
+          commandId: 'acp-prompt:qm-growing',
+          stopReason: 'end_turn',
+        },
+      },
+    ];
+    await fs.appendFile(
+      journalPath,
+      completion.map((record) => JSON.stringify(record)).join('\n') + '\n',
+    );
+    await updateSessionRecord('codex-history-growing', { process_status: 'idle' });
+
+    const converged = await request(app)
+      .get('/api/sessions/codex-history-growing/history')
+      .query({ since: partial.body.cursor });
+
+    expect(converged.status).toBe(200);
+    expect(converged.body.delta).toBe(false);
+    expect(converged.body.cursor).toBe(2);
+    expect(converged.body.messages).toHaveLength(2);
+    expect(converged.body.messages[1]).toEqual(expect.objectContaining({
+      role: 'assistant',
+      text: 'thinking...still working...done: slow reply',
+      msgId: 'acp:runtime-growing:acp-prompt:qm-growing:segment:0',
+    }));
+  });
+
+  it('reports an unavailable Codex journal without claiming a Claude file is missing', async () => {
+    await createSessionRecord('codex-history-missing', 'task-1', 'project-a', '/tmp', {
+      initialProcessStatus: 'stopped',
+      engine: 'codex',
+      acpRuntimeId: 'runtime-missing',
+      acpJournalPath: `${WALNUT_HOME}/journals/runtime-missing.acp.jsonl`,
+    });
+
+    const app = createApp();
+    const res = await request(app).get('/api/sessions/codex-history-missing/history');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      messages: [],
+      total: 0,
+      cursor: 0,
+      delta: false,
+      historyUnavailable: 'Codex session history journal not found',
+    });
+  });
+
+  it('returns a valid full rebuild for an existing empty Codex journal', async () => {
+    const journalPath = `${WALNUT_HOME}/journals/runtime-empty.acp.jsonl`;
+    await fs.mkdir(`${WALNUT_HOME}/journals`, { recursive: true });
+    await fs.writeFile(journalPath, '');
+    await createSessionRecord('codex-history-empty', 'task-1', 'project-a', '/tmp', {
+      initialProcessStatus: 'stopped',
+      engine: 'codex',
+      acpRuntimeId: 'runtime-empty',
+      acpJournalPath: journalPath,
+    });
+
+    const app = createApp();
+    const full = await request(app).get('/api/sessions/codex-history-empty/history');
+    const delta = await request(app).get('/api/sessions/codex-history-empty/history?since=0');
+
+    expect(full.status).toBe(200);
+    expect(full.body).toEqual({
+      messages: [],
+      total: 0,
+      cursor: 0,
+      delta: false,
+    });
+    expect(delta.status).toBe(200);
+    expect(delta.body).toEqual({
+      messages: [],
+      total: 0,
+      cursor: 0,
+      delta: false,
+    });
+  });
+
   it('returns 404 for unknown session with no JSONL file', async () => {
     const app = createApp();
     const res = await request(app).get('/api/sessions/nonexistent-session/history');
@@ -250,6 +876,37 @@ describe('GET /api/sessions/:sessionId/history', () => {
   });
 });
 
+describe('POST /api/sessions/:sessionId/fork', () => {
+  it('fails closed for Codex before creating a child task', async () => {
+    const { task } = await addTask({
+      title: 'Codex fork source',
+      category: 'Work',
+      project: 'Walnut',
+      source: 'local',
+    });
+    await createSessionRecord('codex-no-fork', task.id, 'Walnut', '/tmp', {
+      initialProcessStatus: 'stopped',
+      engine: 'codex',
+      acpRuntimeId: 'acp-no-fork',
+    });
+    const beforeIds = (await listTasks()).map((t) => t.id).sort();
+    const beforeSessions = (await listSessions()).map((session) => session.claudeSessionId).sort();
+
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/sessions/codex-no-fork/fork')
+      .send({ create_child_task: true, message: 'Do not mutate tasks' });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({
+      code: 'ACP_FORK_UNSUPPORTED',
+      error: 'Fork is unavailable for this Codex session',
+    });
+    expect((await listTasks()).map((t) => t.id).sort()).toEqual(beforeIds);
+    expect((await listSessions()).map((session) => session.claudeSessionId).sort()).toEqual(beforeSessions);
+  });
+});
+
 describe('POST /api/sessions/:sessionId/execute', () => {
   it('does not throw "record is not defined" for plan sessions', async () => {
     // Create a plan session with planCompleted + planFile
@@ -267,6 +924,7 @@ describe('POST /api/sessions/:sessionId/execute', () => {
     await updateSessionRecord('plan-sess-1', { process_status: 'stopped' });
 
     const app = createApp();
+    expect(bus.has('session-runner')).toBe(false);
     const res = await request(app)
       .post('/api/sessions/plan-sess-1/execute')
       .send({})
@@ -303,6 +961,7 @@ describe('POST /api/sessions/:sessionId/execute', () => {
     await updateSessionRecord('exec-sess-1', { process_status: 'stopped' });
 
     const app = createApp();
+    expect(bus.has('session-runner')).toBe(false);
     const res = await request(app)
       .post('/api/sessions/exec-sess-1/execute')
       .send({})

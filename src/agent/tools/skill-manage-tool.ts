@@ -18,7 +18,7 @@ import {
 } from '../../core/skill-store.js';
 import { clearSkillsCache } from '../../core/skill-loader.js';
 import { recordSkillCreated, recordSkillPatched, removeSkillUsage } from '../../core/skill-usage.js';
-import { getMemoryStore } from '../../core/qmd-store.js';
+import { dispatchQmdIncrementalIndex } from '../../core/qmd-dispatcher.js';
 import { appendOverviewLog, appendSkillHistoryLog } from '../../core/overview-log.js';
 import { log } from '../../logging/index.js';
 
@@ -26,17 +26,11 @@ export const MAX_SKILL_DESC_CHARS = 60;
 
 /** Refresh the QMD skill collection in the background (best-effort). */
 function refreshSkillIndex(): void {
-  void (async () => {
-    try {
-      const store = await getMemoryStore();
-      await store.update();
-      await store.embed({ model: process.env.QMD_EMBED_MODEL });
-    } catch (err) {
-      log.agent.debug('skill_manage: QMD skill index refresh failed', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  })();
+  void dispatchQmdIncrementalIndex({ memory: true }).catch((err) => {
+    log.agent.debug('skill_manage: QMD skill index refresh failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
 }
 
 function validateDescription(description: string): string | null {

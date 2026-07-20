@@ -41,17 +41,21 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Register a fake live session. runTriage's fire path calls its askSideQuestion —
  *  that call IS the observable "the debounced work ran" signal now (no subagent is
- *  dispatched anymore). Returning a full self-report keeps the fire path realistic
- *  (summary persist + milestone), though these tests only count the asks. */
-const FAKE_REPORT = `TASK_SUMMARY: Debounce test task summary.
+ *  dispatched anymore). Returning a full five-section self-report keeps the fire
+ *  path realistic (note assemble + persist), though these tests only count the asks. */
+const FAKE_REPORT = `EXEC_SUMMARY: Debounce test task summary.
+GOAL: unchanged
+CONTEXT: unchanged
+PROGRESS: unchanged
+WORK_LOG: append: debounce test fire
+RECAP: Debounce test fired.
 WHAT_I_DID: nothing real.
 STATUS: succeeded
 PHASE_SIGNAL: reconfirmed
 NEXT_STEPS: none
 BLOCKERS: none
 USER_INTENT: autonomous
-VERIFIED: not-applicable
-ARTIFACTS: none`;
+VERIFIED: not-applicable`;
 
 const fakeSessions = new Map<string, { askSideQuestion: ReturnType<typeof vi.fn> }>();
 

@@ -6,15 +6,23 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import type { Task, TaskPriority } from '@walnut/core';
+import type { Task, TaskPriority } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
 import * as ICONS from '../common/Icons';
 import { getIntegrationMeta, useIntegrations } from '@/hooks/useIntegrations';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { DatePicker, formatDateDisplay } from '../common/DatePicker';
+import { useSessionStatus } from '@/hooks/useSessionStatus';
+
+type TaskListProjection = Task & {
+  /** Precomputed by fields=list because that projection intentionally omits ext. */
+  has_synced?: boolean;
+  /** Legacy MS To-Do sync marker retained for pre-ext task records. */
+  ms_todo_id?: string;
+};
 
 interface TaskKebabMenuProps {
-  task: Task;
+  task: TaskListProjection;
   isFocused: boolean;
   /** Whether the detail pane is actually visible (not just focused/selected). */
   isDetailOpen?: boolean;
@@ -190,6 +198,8 @@ export function TaskActionMenuItems({
 
 export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedTier, isDone, onExpandDetail, onClearFocus, onSetPriority, onStar, onPinTask, onUnpinTask, onSetTier, onOpenSession, onSetDate, onUnparent, onMoveUp, onUngroup, isGroupHidden, onUnhideGroup, onStartSelect, onDelete }: TaskKebabMenuProps) {
   const integrations = useIntegrations();
+  const sessionId = resolveTaskSessionId(task);
+  const storedSessionStatus = useSessionStatus(sessionId);
   const [open, setOpen] = useState(false);
   const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -232,7 +242,10 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
   const badgeColor = sourceMeta?.badgeColor;
   // has_synced is the server-precomputed `!!task.ext?.[task.source]` for the
   // minimal list payload (ext is dropped there); fall back to it when ext isn't inlined.
-  const synced = task.source && task.source !== 'local' && (!!task.ext?.[task.source] || !!(task as unknown as Record<string, unknown>).has_synced || !!((task as unknown as Record<string, unknown>)[({ 'ms-todo': 'ms_todo_id' } as Record<string, string>)[task.source] ?? '']));
+  const legacySynced = task.source === 'ms-todo' && Boolean(task.ms_todo_id);
+  const synced = task.source
+    && task.source !== 'local'
+    && (Boolean(task.ext?.[task.source]) || Boolean(task.has_synced) || legacySynced);
 
   return (
     <div className="task-kebab-wrapper">
@@ -253,8 +266,7 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
         >
           {/* Session status */}
           {(() => {
-            const sessionId = resolveTaskSessionId(task);
-            const ss = task.session_status;
+            const ss = storedSessionStatus ?? task.session_status;
             if (!sessionId && !ss) return null;
             const isRunning = ss?.process_status === 'running';
             const isError = ss?.process_status === 'error';

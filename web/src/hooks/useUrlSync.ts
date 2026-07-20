@@ -80,6 +80,9 @@ export function useUrlSync(opts: UseUrlSyncOpts): {
   useEffect(() => {
     if (!visible) return;
     if (window.location.pathname !== '/') return;
+    // The URL is the source of truth until MainPage either restores the pending
+    // state or conclusively determines that the target no longer exists.
+    if (pending) return;
 
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
@@ -94,7 +97,7 @@ export function useUrlSync(opts: UseUrlSyncOpts): {
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [focusedTaskId, sessionColumns, activeCategory, visible]);
+  }, [focusedTaskId, sessionColumns, activeCategory, visible, pending]);
 
   // Popstate listener — browser back/forward (rare on SPA, but handle gracefully)
   useEffect(() => {

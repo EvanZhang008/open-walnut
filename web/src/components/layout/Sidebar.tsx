@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type RefObject } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
 import { useAudioCapture } from '@/hooks/useAudioCapture';
@@ -15,12 +15,22 @@ const LS_OTHER_OPEN_KEY = 'open-walnut-sidebar-other-open';
 const OTHER_ROUTES = ['/tasks', '/sessions', '/memory', '/commands'];
 
 interface SidebarProps {
+  asideRef: RefObject<HTMLElement | null>;
   open: boolean;
   collapsed: boolean;
+  isMobile: boolean;
+  onNavigate: () => void;
   onToggleCollapse: () => void;
 }
 
-export function Sidebar({ open, collapsed, onToggleCollapse }: SidebarProps) {
+export function Sidebar({
+  asideRef,
+  open,
+  collapsed,
+  isMobile,
+  onNavigate,
+  onToggleCollapse,
+}: SidebarProps) {
   const cls = `sidebar${open ? ' open' : ''}${collapsed ? ' collapsed' : ''}`;
   const { hasIssues } = useSystemHealth();
   const audio = useAudioCapture();
@@ -95,9 +105,21 @@ export function Sidebar({ open, collapsed, onToggleCollapse }: SidebarProps) {
   const handleToggleTodo = () => {
     window.dispatchEvent(new CustomEvent('sidebar:toggle-todo'));
   };
+  const handleNavClick = (event: React.MouseEvent<HTMLElement>) => {
+    if ((event.target as Element).closest('a[href]')) onNavigate();
+  };
 
   return (
-    <aside className={cls}>
+    <aside
+      id="primary-sidebar"
+      ref={asideRef}
+      className={cls}
+      role={isMobile ? 'dialog' : undefined}
+      aria-label={isMobile ? 'Primary navigation' : undefined}
+      aria-modal={isMobile ? open : undefined}
+      aria-hidden={isMobile && !open ? true : undefined}
+      inert={isMobile && !open}
+    >
       <div className="sidebar-header">
         <button
           className="sidebar-collapse-btn"
@@ -111,7 +133,7 @@ export function Sidebar({ open, collapsed, onToggleCollapse }: SidebarProps) {
           <WalnutIcon /> Walnut
         </span>
       </div>
-      <nav className="sidebar-nav">
+      <nav className="sidebar-nav" onClick={handleNavClick}>
         {/* Panel toggle buttons */}
         <button
           className={`sidebar-link sidebar-panel-toggle${chatVisible ? ' active' : ''}`}
@@ -479,4 +501,3 @@ function formatDuration(seconds: number): string {
   if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   return `${m}:${String(s).padStart(2, '0')}`;
 }
-

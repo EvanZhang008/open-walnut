@@ -1883,42 +1883,8 @@ export async function appendConversationLog(idPrefix: string, entry: string): Pr
   return { task };
 }
 
-/**
- * Append a ONE-LINE milestone to a task's compact milestone log by partial ID match.
- * Auto-prepends the same `### YYYY-MM-DD HH:MM` heading as conversation_log (via
- * logTimestampHeading) so the UI can reuse the same reverse/render helper.
- *
- * Unlike appendConversationLog this is LOCAL UI metadata: it runs no plugin content
- * validation and does not push to external sync — the self-report it's built from can
- * drift to CJK (see CLAUDE.md Opus note) and a milestone is a nice-to-have dashboard
- * line, not something worth failing a turn over. It DOES still throw on empty/no-match/
- * ambiguous input (programmer errors); the best-effort guarantee is the CALLER's job —
- * the sole caller (session-hooks/builtins.ts) wraps it in try/catch + debug-log, so a
- * bad milestone never breaks the flow. New callers must do the same.
- */
-export async function appendMilestone(idPrefix: string, entry: string): Promise<{ task: Task }> {
-  const oneLine = entry.replace(/\s+/g, ' ').trim();
-  if (!oneLine) throw new Error('appendMilestone: empty entry');
-  const task = await withWriteLock(async () => {
-    const store = await readStore();
-    const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
-    if (matches.length === 0) throw new Error(`No task found matching ID prefix "${idPrefix}"`);
-    if (matches.length > 1) throw new Error(`Ambiguous ID prefix "${idPrefix}" matches ${matches.length} tasks. Be more specific.`);
-
-    const t = matches[0];
-    const now = new Date();
-    const fullEntry = `${logTimestampHeading(now)}\n${oneLine}`;
-
-    t.milestones = t.milestones ? t.milestones + '\n\n' + fullEntry : fullEntry;
-    t.updated_at = now.toISOString();
-
-    await writeStore(store);
-    return t;
-  });
-
-  bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'internal' });
-  return { task };
-}
+// appendMilestone was removed 2026-07-18: the note's Work Log section (session
+// self-report) replaced the milestones field. See docs/decision/summarizer-self-report.md.
 
 /**
  * Replace the entire note blob on a task by partial ID match.
@@ -1953,6 +1919,53 @@ export async function updateNote(idPrefix: string, content: string): Promise<{ t
   }
   bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'internal' });
   return { task };
+}
+
+export interface CompareAndSetNoteResult {
+  updated: boolean;
+  task: Task;
+}
+
+/**
+ * Replace a task note only when it still equals the caller's merge base.
+ * The comparison and write happen under the task-store lock so self-report
+ * persistence cannot overwrite a human or another session's concurrent edit.
+ */
+export async function compareAndSetNote(
+  idPrefix: string,
+  expectedContent: string,
+  content: string,
+): Promise<CompareAndSetNoteResult> {
+  const result = await withWriteLock(async () => {
+    const store = await readStore();
+    const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
+    if (matches.length === 0) {
+      throw new Error(`No task found matching ID prefix "${idPrefix}"`);
+    }
+    if (matches.length > 1) {
+      throw new Error(
+        `Ambiguous ID prefix "${idPrefix}" matches ${matches.length} tasks. Be more specific.`,
+      );
+    }
+
+    const task = matches[0];
+    if ((task.note ?? '').trim() !== expectedContent.trim()) {
+      return { updated: false, task };
+    }
+    runPluginContentValidation(task, 'note', content);
+    task.note = content;
+    task.updated_at = new Date().toISOString();
+    await writeStore(store);
+    return { updated: true, task };
+  });
+
+  if (!result.updated) return result;
+  const syncResult = await autoPushIfConfigured(result.task);
+  if (!syncResult.success) {
+    throw new Error(`Sync to ${result.task.source} failed: ${syncResult.error ?? 'unknown error'}`);
+  }
+  bus.emit(EventNames.TASK_UPDATED, { task: result.task }, ['web-ui'], { source: 'internal' });
+  return result;
 }
 
 /**
@@ -2549,15 +2562,13 @@ export async function renameCategory(
     );
   }
 
-  // Collect old list names for remote rename
-  const oldListNames = new Set<string>();
+  const renamedTaskIds: string[] = [];
 
   for (const task of store.tasks) {
     if (task.category.toLowerCase() === oldCategory.toLowerCase()) {
-      const oldListName = buildListName(task.category, task.project);
-      oldListNames.add(oldListName);
       task.category = newCategory;
       task.updated_at = now;
+      renamedTaskIds.push(task.id);
       count++;
     }
   }
@@ -2600,6 +2611,16 @@ export async function renameCategory(
         // Silent — local rename succeeded, remote rename is best-effort
       });
     }
+  }
+
+  if (renamedTaskIds.length > 0) {
+    bus.emit(EventNames.TASK_UPDATED, {
+      task: null,
+      taskIds: renamedTaskIds,
+      oldCategory,
+      newCategory,
+      count,
+    }, ['web-ui', 'main-agent'], { source: 'task-manager' });
   }
 
   return { count };
@@ -2722,6 +2743,47 @@ export async function addSessionToHistory(
     }
     task.updated_at = new Date().toISOString();
 
+    await writeStore(store);
+    return { task };
+  });
+}
+
+/**
+ * Replace one logical session's provider ID across every task link atomically.
+ * Used when ACP session/load fails and the provider issues a fresh thread ID.
+ */
+export async function replaceSessionIdLinks(
+  idPrefix: string,
+  oldSessionId: string,
+  newSessionId: string,
+): Promise<{ task: Task }> {
+  return withWriteLock(async () => {
+    const store = await readStore();
+    const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
+    if (matches.length === 0) {
+      throw new Error(`No task found matching ID prefix "${idPrefix}"`);
+    }
+    if (matches.length > 1) {
+      throw new Error(
+        `Ambiguous ID prefix "${idPrefix}" matches ${matches.length} tasks. Be more specific.`,
+      );
+    }
+
+    const task = matches[0];
+    const linked = task.session_id === oldSessionId
+      || task.plan_session_id === oldSessionId
+      || task.exec_session_id === oldSessionId
+      || (task.session_ids ?? []).includes(oldSessionId);
+    if (task.session_id === oldSessionId) task.session_id = newSessionId;
+    if (task.plan_session_id === oldSessionId) task.plan_session_id = newSessionId;
+    if (task.exec_session_id === oldSessionId) task.exec_session_id = newSessionId;
+    task.session_ids = [...new Set(
+      (task.session_ids ?? []).map((id) => id === oldSessionId ? newSessionId : id),
+    )];
+    if (linked && !task.session_ids.includes(newSessionId)) {
+      task.session_ids.push(newSessionId);
+    }
+    task.updated_at = new Date().toISOString();
     await writeStore(store);
     return { task };
   });

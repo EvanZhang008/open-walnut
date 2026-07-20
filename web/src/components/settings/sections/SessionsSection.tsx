@@ -242,9 +242,9 @@ export function SessionsSection({ config, onSave }: Props) {
 
       <div className="settings-divider" />
 
-      {/* Task Summary — a TASK concern (updates the task's summary/milestones/phase and
-          decides task notifications), merely triggered by a session turn. The session
-          itself writes the summary (side_question self-report, ~free); phase/notify is a
+      {/* Task Summary — a TASK concern (updates the task's note/phase and decides task
+          notifications), merely triggered by a session turn. The session itself
+          writes the note (side_question self-report, ~free); phase/notify is a
           deterministic PHASE_SIGNAL lookup — no summarizer agent runs. Grouped here under
           "Tasks & Sessions" rather than buried in the session-runtime knobs above. */}
       <div className="form-group">

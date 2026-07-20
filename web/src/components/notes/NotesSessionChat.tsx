@@ -220,6 +220,7 @@ export function NotesSessionChat({ taskId, sessionId: knownSessionId, onResolved
           <SessionChatHistory
             key={sessionId}
             sessionId={sessionId!}
+            engine={session?.engine}
             sessionCwd={session?.cwd}
             sessionHost={session?.host}
             optimisticMessages={optimisticMsgs}

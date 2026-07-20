@@ -53,12 +53,28 @@ describe('rankCandidates — the Marina example (user-verified)', () => {
     expect(ranked.map(r => r.cwd)).toEqual([base + 'Marina']);
   });
 
-  it('deep mid-path candidate WITH history outranks the leaf hit', () => {
+  it('a LEAF-prefix hit outranks a history-only mid-path match (relevance > frecency)', () => {
+    // Typing 'Marina' means the user wants the folder literally named Marina —
+    // not a frequently-visited child whose only tie to 'Marina' is a parent-path
+    // (mid-path) match. History decides order only AMONG equally-relevant hits,
+    // so it must NOT resurrect a mid-path match above a leaf-prefix one. (This is
+    // the same shape as the real 'mcp' → 'mcps' bug: the leaf hit must lead.)
     const state = classifyInput(base + 'Marina');
     const deepWithHist = live(base + 'Marina/NestedSubproject', 2, hist(base + 'Marina/NestedSubproject', 5, 1));
     const ranked = rankCandidates(state, [marinaLeaf, deepWithHist], NOW);
-    expect(ranked[0].cwd).toBe(base + 'Marina/NestedSubproject');
-    expect(ranked[1].cwd).toBe(base + 'Marina');
+    expect(ranked[0].cwd).toBe(base + 'Marina');
+    expect(ranked[1].cwd).toBe(base + 'Marina/NestedSubproject');
+  });
+
+  it('among two leaf-prefix hits, the history one wins (frecency tiebreak)', () => {
+    // Both leaf-hit 'mcp': history breaks the tie, so a frequently-used sibling
+    // still floats above a never-visited one of equal match quality.
+    const state = classifyInput(base + 'mcp');
+    const fresh = live(base + 'mcp-a', 1);
+    const known = live(base + 'mcp-b', 1, hist(base + 'mcp-b', 5, 1));
+    const ranked = rankCandidates(state, [fresh, known], NOW);
+    expect(ranked[0].cwd).toBe(base + 'mcp-b');
+    expect(ranked[1].cwd).toBe(base + 'mcp-a');
   });
 });
 
@@ -73,6 +89,18 @@ describe('rankCandidates — sort keys', () => {
     expect(ranked[0].cwd).toBe('/p/xen');       // frecency 2*decay(1d) ≈ 1.8
     expect(ranked[1].cwd).toBe('/p/xact');      // frecency 100*decay(60d) ≈ 0.26
     expect(ranked[2].cwd).toBe('/p/xylophone'); // no history
+  });
+
+  it('exact leaf-prefix hit beats a high-frecency history subsequence match (the mcp bug)', () => {
+    // Real report: typing '/root/mcp' surfaced '/root/software/virtual-shadow-employee'
+    // (26 sessions, high frecency, but 'mcp' only a mid-path subsequence) ABOVE
+    // '/root/mcps' (leaf prefix). Relevance must win: the leaf hit leads.
+    const state = classifyInput('/root/mcp');
+    const ranked = rankCandidates(state, [
+      live('/root/software/virtual-shadow-employee', 2, hist('/root/software/virtual-shadow-employee', 26, 1)),
+      live('/root/mcps', 1, hist('/root/mcps', 2, 0)),
+    ], NOW);
+    expect(ranked[0].cwd).toBe('/root/mcps');
   });
 
   it('quality bands: prefix > substring > subsequence', () => {

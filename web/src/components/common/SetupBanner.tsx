@@ -15,7 +15,6 @@
  */
 import { useState, useCallback, useEffect } from 'react';
 import type { SystemHealth } from '@/hooks/useSystemHealth';
-import { InstallButton } from './InstallButton';
 
 const LS_DISMISS_KEY = 'walnut-setup-dismissed';
 /** Separate key so dismissing the small "auto-detected" note doesn't hide the real checklist later. */
@@ -182,7 +181,6 @@ export function SetupBanner({ health, loading, onNavigateSettings, onStartSessio
       {!cliOk && (
         <div className="setup-banner-steps" style={{ marginTop: 10 }}>
           <SetupStep done={false} label="Install Claude Code CLI (for coding sessions)" required={false}>
-            <InstallButton target="claude-cli" />
             <CopyCommand command="npm install -g @anthropic-ai/claude-code" />
           </SetupStep>
         </div>

@@ -30,6 +30,7 @@ async function ensureCategory(name: string, source = 'ms-todo') {
 
 let server: HttpServer;
 let port: number;
+const previousDisableSearch = process.env.WALNUT_DISABLE_SEARCH;
 
 interface WsFrame {
   type: string;
@@ -65,7 +66,8 @@ function delay(ms: number): Promise<void> {
 }
 
 function extractId(toolResult: string): string {
-  const match = toolResult.match(/\[([^\]]+)\]/);
+  const match = toolResult.match(/<task-ref id="([^"]+)"/)
+    ?? toolResult.match(/\[([^\]]+)\]/);
   if (!match) throw new Error(`No ID found in: ${toolResult}`);
   return match[1];
 }
@@ -73,6 +75,7 @@ function extractId(toolResult: string): string {
 // ── Setup / Teardown ──
 
 beforeAll(async () => {
+  process.env.WALNUT_DISABLE_SEARCH = '1';
   _resetForTesting();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
   await fs.mkdir(WALNUT_HOME, { recursive: true });
@@ -84,6 +87,11 @@ beforeAll(async () => {
 afterAll(async () => {
   await stopServer();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
+  if (previousDisableSearch === undefined) {
+    delete process.env.WALNUT_DISABLE_SEARCH;
+  } else {
+    process.env.WALNUT_DISABLE_SEARCH = previousDisableSearch;
+  }
 });
 
 // ── Tests ──
@@ -159,7 +167,11 @@ describe('Agent tool → WS event E2E', () => {
 
   it('rename_category tool emits task:updated to WS clients', async () => {
     await ensureCategory('OldCat');
-    await executeTool('task_create', { title: 'Rename test task', category: 'OldCat' });
+    const addResult = await executeTool('task_create', {
+      title: 'Rename test task',
+      category: 'OldCat',
+    });
+    const taskId = extractId(addResult);
 
     const ws = await connectWs();
     const eventPromise = waitForWsEvent(ws, 'task:updated');
@@ -168,17 +180,25 @@ describe('Agent tool → WS event E2E', () => {
 
     const frame = await eventPromise;
     expect(frame.name).toBe('task:updated');
-    expect((frame.data as any).oldCategory).toBe('OldCat');
-    expect((frame.data as any).newCategory).toBe('NewCat');
-    expect((frame.data as any).count).toBe(1);
+    expect(frame.data).toMatchObject({
+      task: null,
+      taskIds: [taskId],
+      oldCategory: 'OldCat',
+      newCategory: 'NewCat',
+      count: 1,
+    });
 
     ws.close();
     await delay(50);
   });
 
-  it('rename_category event has no task field (bulk operation)', async () => {
+  it('rename_category bulk event requests a refetch and carries affected IDs', async () => {
     await ensureCategory('BulkOld');
-    await executeTool('task_create', { title: 'Bulk test', category: 'BulkOld' });
+    const addResult = await executeTool('task_create', {
+      title: 'Bulk test',
+      category: 'BulkOld',
+    });
+    const taskId = extractId(addResult);
 
     const ws = await connectWs();
     const eventPromise = waitForWsEvent(ws, 'task:updated');
@@ -186,10 +206,11 @@ describe('Agent tool → WS event E2E', () => {
     await executeTool('task_update', { type: 'category', old_name: 'BulkOld', new_name: 'BulkNew' });
 
     const frame = await eventPromise;
-    // The rename payload does NOT contain a `task` field — the frontend
-    // must handle this gracefully (refetch instead of crashing).
-    expect((frame.data as any).task).toBeUndefined();
-    expect((frame.data as any).oldCategory).toBe('BulkOld');
+    expect(frame.data).toMatchObject({
+      task: null,
+      taskIds: [taskId],
+      oldCategory: 'BulkOld',
+    });
 
     ws.close();
     await delay(50);

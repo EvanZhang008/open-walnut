@@ -19,6 +19,7 @@ import { withFileLock } from '../../utils/file-lock.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { log } from '../../logging/index.js'
 import { memoryNotesSearch } from '../../core/memory-search.js'
+import { isQmdBackgroundIndexRunning } from '../../core/qmd-background-indexer.js'
 import {
   parseFrontmatter,
   readId,
@@ -788,7 +789,7 @@ notesV2Router.get('/search', async (req: Request, res: Response, next: NextFunct
 
     // Run both legs; allSettled so one failing never zeroes the other.
     // Cloud companion has no QMD store — the semantic leg would lazily init
-    // the embedding model (1GB+ download, pins the small instance). String/FTS
+    // the embedding model (hundreds of MB, pins the small instance). String/FTS
     // search is the cloud answer (same gate as initQmdStores in server.ts).
     const wantString = mode === 'hybrid' || mode === 'string'
     const wantSemantic = !CLOUD_MODE && (mode === 'hybrid' || mode === 'semantic')
@@ -1141,13 +1142,10 @@ notesV2Router.get('/index/status', async (_req: Request, res: Response, next: Ne
     if (CLOUD_MODE) {
       // No QMD store on the companion — don't lazy-init it just to report status.
       embedState = 'unavailable'
-    } else try {
-      const { getNotesStore } = await import('../../core/qmd-store.js')
-      const store = await getNotesStore()
-      const status = await store.getStatus()
-      embedState = status.needsEmbedding > 0 ? 'embedding' : 'idle'
-    } catch {
-      embedState = 'unavailable'
+    } else {
+      // Never open SQLite from a status request. During a worker pass that can
+      // synchronously wait on the writer lock and freeze every HTTP request.
+      embedState = isQmdBackgroundIndexRunning() ? 'embedding' : 'idle'
     }
     res.json({
       docCount: docCount(),

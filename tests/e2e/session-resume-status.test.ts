@@ -2,7 +2,7 @@
  * E2E tests for session resume status changes.
  *
  * Verifies the fixes for:
- *   RC1: createSessionRecord upsert resets status on resume (new PID for stopped session)
+ *   RC1: createSessionRecord upsert resets status on cold resume
  *   RC2: session:status-changed WS event carries correct status data
  *
  * What's real: Express server, WebSocket, event bus, session-tracker, task-manager.
@@ -12,6 +12,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { Server as HttpServer } from 'node:http'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { WebSocket } from 'ws'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
@@ -21,12 +22,13 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 
-const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
+const MOCK_DAEMON_SCRIPT = path.resolve(import.meta.dirname, '../helpers/mock-daemon-process.mjs')
 
 // ── Helpers ──
 
 let server: HttpServer
 let port: number
+let daemonProc: ChildProcess | null = null
 
 function apiUrl(p: string): string {
   return `http://localhost:${port}${p}`
@@ -103,7 +105,24 @@ function delay(ms: number): Promise<void> {
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
 
-  sessionRunner.setCliCommand(MOCK_CLI)
+  const daemonPort = await new Promise<number>((resolve, reject) => {
+    daemonProc = spawn(process.execPath, [MOCK_DAEMON_SCRIPT], { stdio: ['pipe', 'pipe', 'inherit'] })
+    let output = ''
+    const timer = setTimeout(() => reject(new Error('MockDaemon startup timeout')), 10_000)
+    daemonProc.stdout!.on('data', (chunk: Buffer) => {
+      output += chunk.toString()
+      const match = output.match(/PORT=(\d+)/)
+      if (match) {
+        clearTimeout(timer)
+        resolve(Number(match[1]))
+      }
+    })
+    daemonProc.on('error', reject)
+    daemonProc.on('exit', (code) => {
+      if (!output.includes('PORT=')) reject(new Error(`MockDaemon exited with code ${code}`))
+    })
+  })
+  sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${daemonPort}`)
 
   // Seed tasks
   const tasksDir = path.join(WALNUT_HOME, 'tasks')
@@ -139,14 +158,17 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  sessionRunner.setTestDaemonUrl(undefined)
   await stopServer()
+  daemonProc?.kill('SIGTERM')
+  daemonProc = null
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 
 // ── Tests ──
 
 describe('Session resume status changes', () => {
-  it('session:status-changed events reflect running→stopped→running lifecycle during resume', async () => {
+  it('session:status-changed events reflect running→stopped→running lifecycle during cold resume', async () => {
     const ws = await connectWs()
     const statusEvents = collectWsEvents(ws, ['session:status-changed'])
 
@@ -172,7 +194,7 @@ describe('Session resume status changes', () => {
     )
     expect(firstRunEvents.length).toBeGreaterThanOrEqual(1)
 
-    // The last status event should show agent_complete or stopped
+    // This mock CLI exits after each turn, exercising the cold-resume fallback.
     const lastFirstStatus = firstRunEvents[firstRunEvents.length - 1]
     expect(lastFirstStatus.data?.process_status).toBe('stopped')
 
@@ -207,7 +229,7 @@ describe('Session resume status changes', () => {
     const newStatusEvents = statusEvents.slice(statusCountBefore).filter(
       e => (e.data as { sessionId?: string })?.sessionId === sessionId,
     )
-    // Should have at least one in_progress status (when resuming) and one agent_complete (when done)
+    // The resumed process must publish running and then return to stopped.
     const runningEvents = newStatusEvents.filter(e => e.data?.process_status === 'running')
     const stoppedEvents = newStatusEvents.filter(e => e.data?.process_status === 'stopped')
     expect(runningEvents.length).toBeGreaterThanOrEqual(1)
@@ -215,14 +237,13 @@ describe('Session resume status changes', () => {
 
     // At least one in_progress event should carry process_status: 'running'
     // (the first may have 'stopped' from handleSend before the new process starts)
-    const hasRunning = inProgressEvents.some(e => e.data?.process_status === 'running')
-    expect(hasRunning).toBe(true)
+    expect(runningEvents.length).toBeGreaterThanOrEqual(1)
 
     ws.close()
     await delay(50)
   })
 
-  it('DB record resets to running/in_progress during resume then back to stopped/agent_complete', async () => {
+  it('DB record resets to running during cold resume then returns to stopped', async () => {
     const ws = await connectWs()
 
     // Start a session
@@ -262,7 +283,7 @@ describe('Session resume status changes', () => {
     await resumeResultPromise
     await delay(500)
 
-    // After completion — should be stopped/agent_complete again
+    // After completion the short-lived mock process is stopped again.
     const res3 = await fetch(apiUrl(`/api/sessions/${sessionId}`))
     const data3 = (await res3.json()) as { session: { process_status: string } }
     expect(data3.session.process_status).toBe('stopped')
@@ -284,13 +305,24 @@ describe('Session resume status changes', () => {
     await resultPromise
     await delay(200)
 
-    // Every status-changed event must carry the fields SessionPanel merges
+    // Every event carries the canonical nested snapshot plus additive mirrors.
     for (const evt of statusEvents) {
-      expect(evt.data).toHaveProperty('sessionId')
-      expect(evt.data).toHaveProperty('process_status')
-      expect(evt.data).toHaveProperty('process_status')
-      expect(evt.data).toHaveProperty('mode')
-      // activity can be undefined, but the key should not break the merge
+      const status = evt.data?.status as Record<string, unknown>
+      expect(status).toBeDefined()
+      expect(status.sessionId).toEqual(expect.any(String))
+      expect(status.taskId).toBe('resume-task-001')
+      expect(status.process_status).toEqual(expect.stringMatching(/^(running|idle|stopped|error)$/))
+      expect(status.statusRevision).toEqual(expect.any(Number))
+      expect(status.mode).toEqual(expect.any(String))
+      expect(status.provider).toEqual(expect.any(String))
+      expect(status.engine).toEqual(expect.any(String))
+      expect(status).toHaveProperty('activity')
+      expect(status.activity === null || typeof status.activity === 'string').toBe(true)
+      expect(status).toHaveProperty('errorMessage')
+      expect(status.errorMessage === null || typeof status.errorMessage === 'string').toBe(true)
+      expect(evt.data?.sessionId).toBe(status.sessionId)
+      expect(evt.data?.process_status).toBe(status.process_status)
+      expect(evt.data?.statusRevision).toBe(status.statusRevision)
     }
 
     ws.close()

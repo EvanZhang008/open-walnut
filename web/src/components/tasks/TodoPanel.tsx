@@ -1,7 +1,6 @@
 import { useState, useMemo, useCallback, useEffect, useRef, memo, Fragment, type FormEvent, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { Task } from '@walnut/core';
-import type { SessionRecord } from '@walnut/core';
+import type { Task as CoreTask, SessionRecord } from '@open-walnut/core';
 import { renderNoteMarkdown } from '@/utils/markdown';
 import { fetchSessionsForTask } from '@/api/sessions';
 import { fetchTask, updateTask as apiUpdateTask } from '@/api/tasks';
@@ -12,14 +11,18 @@ import { usePrompt } from '@/hooks/useConfirm';
 import { useNotifications } from '@/contexts/notifications';
 import { timeAgo } from '@/utils/time';
 import { scrollLog } from '@/utils/scroll-debug';
-import type { ProcessStatus } from '@walnut/core';
+import type { ProcessStatus } from '@open-walnut/core';
 import type { TaskPhase } from '@/types/session';
 import { PHASE_LABELS, PHASE_COLORS, PROCESS_COLORS, resolveTaskSessionId } from '@/utils/session-status';
 import type { UseFavoritesReturn } from '@/hooks/useFavorites';
 import type { UseOrderingReturn } from '@/hooks/useOrdering';
 import * as ICONS from '../common/Icons';
-import type { TaskPriority } from '@walnut/core';
+import type { TaskPriority } from '@open-walnut/core';
 import { TodoSearchBar } from './TodoSearchBar';
+import {
+  mapServerTaskSearchResults,
+  taskReferenceMatchField,
+} from './search-results';
 import { useTaskSearch } from '@/hooks/useTaskSearch';
 import { usePhaseHooks } from '@/hooks/usePhaseHooks';
 import {
@@ -60,6 +63,19 @@ import { GlobalNotesSection } from '../notes/GlobalNotesSection';
 import { useGlobalNotes } from '@/hooks/useGlobalNotes';
 import { SortableTierCard, TierDropZone, GroupChip, groupSortableId } from './FocusSatelliteCards';
 import type { FocusTier } from '@/api/focus';
+import { useSessionStatusEpoch } from '@/hooks/useSessionStatus';
+import {
+  resolveSessionRecordStatus,
+  sessionStatusStore,
+} from '@/stores/session-status-store';
+
+type Task = CoreTask & {
+  has_description?: boolean;
+  has_summary?: boolean;
+  has_ext?: boolean;
+  has_note?: boolean;
+  is_blocked?: boolean;
+};
 
 const DATE_LABELS: Record<string, string> = { now: 'Now', overdue: 'Overdue', 'this-week': 'This Week', 'no-date': 'No Date' } as const;
 
@@ -275,10 +291,6 @@ interface SortableTaskItemProps {
   isPinned?: boolean;
   pinnedTier?: FocusTier;
   searchContext?: string; // Category/Project context pill shown in search mode
-  searchMatchField?: string;  // Best keyword field ('title','note',etc.) or 'semantic'
-  searchScore?: number;       // Combined normalized score [0,1]
-  searchKeywordScore?: number;  // Normalized keyword contribution [0,1]
-  searchSemanticScore?: number; // Normalized semantic contribution [0,1]
   filterOverrideReason?: string;  // Why this task is outside current filters (focus override)
   isFadingOverride?: boolean;     // Task is fading out after focus moved away
   /** Virtual-group rendering: present when this task is part of a multi-member group. */
@@ -359,7 +371,7 @@ function buildTierGroupMeta(displayed: Task[], labels?: Record<string, string>):
   return map;
 }
 
-function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isNestTarget, isGroupTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, selectMode, onSelectToggle, onStartSelect, onSetPhase, onStar, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onUnparent, onMoveUp, isPinned, pinnedTier, searchContext, searchMatchField, searchScore, searchKeywordScore, searchSemanticScore, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask, onDissolveGroup, isGroupHidden, onUnhideGroup }: SortableTaskItemProps) {
+function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isNestTarget, isGroupTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, selectMode, onSelectToggle, onStartSelect, onSetPhase, onStar, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onUnparent, onMoveUp, isPinned, pinnedTier, searchContext, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask, onDissolveGroup, isGroupHidden, onUnhideGroup }: SortableTaskItemProps) {
   const hookPhases = usePhaseHooks();
   const {
     attributes,
@@ -593,7 +605,7 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isNes
       )}
 
       {/* Chevron — absolutely positioned in left padding area (only for parent tasks) */}
-      {childCount > 0 && (
+      {(childCount ?? 0) > 0 && (
         <button
           className={`collapse-chevron${isExpanded ? ' expanded' : ''}`}
           title={isExpanded ? 'Collapse child tasks' : `Expand ${childCount} child task(s)`}
@@ -670,7 +682,7 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isNes
               {dueDateLabel}
             </span>
           )}
-          {!!(task as Record<string, unknown>).is_blocked && !isDone && (
+          {!!task.is_blocked && !isDone && (
             <span className="task-blocked-badge" title="Blocked by dependencies">
               blocked
             </span>
@@ -715,40 +727,11 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isNes
             </span>
           </div>
         )}
-        {/* Search result scores (only visible during search) */}
-        {(searchScore != null || searchContext) && (
+        {searchContext && (
           <div className="todo-item-meta-row">
-            {searchScore != null && (() => {
-              const kwW = (searchKeywordScore ?? 0) * 0.4;
-              const semW = (searchSemanticScore ?? 0) * 0.6;
-              const kwDominant = kwW >= semW;
-              return (
-                <span className={`todo-search-score-pill todo-search-score-${kwDominant ? 'keyword' : 'semantic'}`}>
-                  {searchScore.toFixed(2)}
-                  <span className="todo-search-score-tooltip">
-                    <span className={`todo-search-score-row${kwDominant ? ' is-dominant' : ''}`}>
-                      <span className="todo-search-score-label keyword-label">Keyword</span>
-                      {kwW > 0
-                        ? <><span className="todo-search-score-val">{kwW.toFixed(2)}</span><span className="todo-search-score-field">{searchMatchField && searchMatchField !== 'semantic' ? searchMatchField : ''}</span></>
-                        : <span className="todo-search-score-none">—</span>
-                      }
-                    </span>
-                    <span className={`todo-search-score-row${!kwDominant ? ' is-dominant' : ''}`}>
-                      <span className="todo-search-score-label semantic-label">Semantic</span>
-                      {semW > 0
-                        ? <span className="todo-search-score-val">{semW.toFixed(2)}</span>
-                        : <span className="todo-search-score-none">—</span>
-                      }
-                    </span>
-                  </span>
-                </span>
-              );
-            })()}
-            {searchContext && (
-              <span className="todo-search-context-pill" title={searchContext}>
-                {searchContext}
-              </span>
-            )}
+            <span className="todo-search-context-pill" title={searchContext}>
+              {searchContext}
+            </span>
           </div>
         )}
       </div>
@@ -1041,17 +1024,6 @@ function truncateCwd(p: string): string {
   return segments.length > 0 ? segments.slice(-2).join('/') : p;
 }
 
-/**
- * Reverse conversation log entries so newest appear first.
- * Splits on `### YYYY-MM-DD HH:MM` headings (one per entry), reverses, and rejoins.
- * Storage stays append-only — reversal is render-time only.
- */
-function reverseConversationLogEntries(log: string): string {
-  const entries = log.split(/(?=^### \d{4}-\d{2}-\d{2} \d{2}:\d{2})/m).filter(Boolean);
-  if (entries.length <= 1) return log;
-  return entries.reverse().join('\n\n');
-}
-
 // ── TaskDetailPane ──
 // Exported so it can be hosted in a full-screen modal (TaskDetailModal) rather than
 // only the cramped inline split-pane. The home page renders it via the modal; the
@@ -1060,22 +1032,18 @@ function reverseConversationLogEntries(log: string): string {
 export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenTriageForTask, onFocusChild, style }: { task: Task; allTasks?: Task[]; onClose?: () => void; onOpenSession?: (sessionId: string) => void; onOpenTriageForTask?: (taskId: string) => void; onFocusChild?: (task: Task) => void; style?: CSSProperties }) {
   const navigate = useNavigate();
   const integrations = useIntegrations();
-  const taskRec = task as Record<string, unknown>;
+  const statusEpoch = useSessionStatusEpoch();
   // Support slim/minimal mode: has_* flags are set when content was stripped
   // server-side. The minimal home-list payload drops summary/description/ext
   // too, so derive presence from the flag OR the inlined value.
-  const hasDescription = !!task.description || !!taskRec.has_description;
-  const hasSummary = !!task.summary || !!taskRec.has_summary;
-  const hasExt = !!(task.ext && Object.keys(task.ext).length > 0) || !!taskRec.has_ext;
-  const hasNote = !!task.note || !!taskRec.has_note;
-  // conversation_log is retained server-side but no longer rendered (too verbose).
-  // Milestones (one compact line per major phase transition) replace it in the UI.
-  const milestonesContent = (task as Record<string, unknown>).milestones as string | undefined;
-  const hasMilestones = !!milestonesContent;
+  const hasDescription = !!task.description || !!task.has_description;
+  const hasSummary = !!task.summary || !!task.has_summary;
+  const hasExt = !!(task.ext && Object.keys(task.ext).length > 0) || !!task.has_ext;
+  const hasNote = !!task.note || !!task.has_note;
 
   // Lazy-load full task when any stripped field's content is needed (slim or
   // minimal mode). One fetchTask(id) call rehydrates summary/description/ext/note
-  // together. (milestones rides in the always-selected payload — no lazy-load.)
+  // together.
   const [fullTask, setFullTask] = useState<Task | null>(null);
   useEffect(() => { setFullTask(null); }, [task.id]); // Reset on task change
   const needsFullLoad =
@@ -1091,10 +1059,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
   }, [needsFullLoad, fullTask, task.id]);
   // Use full task data when available for stripped-field rendering
   const noteContent = task.note ?? fullTask?.note;
-  const summaryContent = task.summary ?? fullTask?.summary;
   const descriptionContent = task.description ?? fullTask?.description;
-  const hasSubtasks = task.subtasks && task.subtasks.length > 0;
-
   const handleSprintChange = async (sprintName: string | null) => {
     await apiUpdateTask(task.id, { sprint: sprintName ?? '' });
   };
@@ -1135,18 +1100,20 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
     const visible: string[] = [];
     let archived = 0;
     for (const sid of allSessionIds) {
-      const rec = sessionRecords.get(sid);
+      const baseRecord = sessionRecords.get(sid);
+      const rec = baseRecord ? resolveSessionRecordStatus(baseRecord) : undefined;
       if (rec?.archived) { archived++; continue; }
       // Keep IDs that either have a non-archived record or haven't been fetched yet
       if (rec || !sessionRecords.size) visible.push(sid);
     }
     // Also include API-returned non-archived sessions not in allSessionIds (e.g. embedded)
-    for (const [sid, rec] of sessionRecords) {
+    for (const [sid, baseRecord] of sessionRecords) {
+      const rec = resolveSessionRecordStatus(baseRecord);
       if (rec.archived) continue;
       if (!allSessionIds.includes(sid)) visible.push(sid);
     }
     return { visibleSessionIds: visible, archivedCount: archived };
-  }, [allSessionIds, sessionRecords]);
+  }, [allSessionIds, sessionRecords, statusEpoch]);
 
   // Show sessions section based on task data (allSessionIds) — not on the async API result.
   // This prevents the section from disappearing/flickering when the fetch is in progress or fails.
@@ -1178,26 +1145,6 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
     });
     return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
   }, [task.id, allSessionIds.join(',')]);
-
-  // Live-update session records when status/mode changes via WebSocket
-  useEvent('session:status-changed', (data) => {
-    const { sessionId, taskId, mode, process_status, planCompleted } = data as {
-      sessionId?: string; taskId?: string; mode?: string;
-      process_status?: string; planCompleted?: boolean;
-    };
-    if (taskId !== task.id || !sessionId) return;
-    setSessionRecords((prev) => {
-      const record = prev.get(sessionId);
-      if (!record) return prev;
-      const updated = new Map(prev);
-      const patched = { ...record };
-      if (mode !== undefined) patched.mode = mode as SessionRecord['mode'];
-      if (process_status !== undefined) patched.process_status = process_status as SessionRecord['process_status'];
-      if (planCompleted !== undefined) patched.planCompleted = planCompleted;
-      updated.set(sessionId, patched);
-      return updated;
-    });
-  });
 
   // Fetch triage count for this task
   const [triageTotal, setTriageTotal] = useState(0);
@@ -1288,7 +1235,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
             {sessionsLoading && sessionRecords.size === 0 ? (
               // While loading, show a placeholder using task-level session status (available immediately)
               allSessionIds.map((sid) => {
-                const taskStatus = task.session_status;
+                const taskStatus = sessionStatusStore.getStatus(sid) ?? task.session_status;
                 const processStatus = taskStatus?.process_status || 'stopped';
                 const taskPhase = (task.phase || 'TODO') as TaskPhase;
                 const isPlan = taskStatus?.mode === 'plan' || !!taskStatus?.planCompleted;
@@ -1319,7 +1266,8 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
               })
             ) : (
               visibleSessionIds.filter((sid) => sessionRecords.has(sid)).map((sid) => {
-                const record = sessionRecords.get(sid);
+                const baseRecord = sessionRecords.get(sid);
+                const record = baseRecord ? resolveSessionRecordStatus(baseRecord) : undefined;
                 const processStatus = record?.process_status || 'stopped';
                 const sessionPhase = (task.phase || 'TODO') as TaskPhase;
                 const label = record?.title || 'Untitled session';
@@ -1380,6 +1328,17 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
                         </span>
                       )}
                     </div>
+                    {/* Recap tip — one line "what just happened" (self-report); hidden
+                        while running (live activity above covers that state). */}
+                    {record?.recap && processStatus !== 'running' && (
+                      <div
+                        className="text-xs truncate"
+                        style={{ color: 'var(--fg-muted)', marginTop: '2px' }}
+                        title={record.recap}
+                      >
+                        💬 {record.recap}
+                      </div>
+                    )}
                     {/* Row 3: cwd (conditional) */}
                     {record?.cwd && (
                       <div className="todo-detail-session-cwd">
@@ -1432,22 +1391,9 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
         </div>
       )}
 
-      {hasSummary && (
-        <div className="todo-detail-section">
-          <div className="todo-detail-section-label">Summary <span className="text-xs text-muted">(AI)</span></div>
-          {summaryContent
-            ? <div className="todo-detail-note markdown-body" dangerouslySetInnerHTML={{ __html: renderNoteMarkdown(summaryContent) }} />
-            : <div className="text-sm text-muted">Loading...</div>
-          }
-        </div>
-      )}
-
-      {hasMilestones && (
-        <div className="todo-detail-section">
-          <div className="todo-detail-section-label">Milestones</div>
-          <div className="todo-detail-note markdown-body conversation-log" dangerouslySetInnerHTML={{ __html: renderNoteMarkdown(reverseConversationLogEntries(milestonesContent!)) }} />
-        </div>
-      )}
+      {/* Summary (AI) + Milestones sections retired 2026-07-18 — the Note below is
+          the single AI-maintained living document; task.summary is derived from
+          its Executive Summary (list views only). */}
 
       {triageTotal > 0 && onOpenTriageForTask && (
         <div className="todo-detail-section">
@@ -1470,20 +1416,6 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
         </div>
       )}
 
-      {hasSubtasks && (
-        <div className="todo-detail-section">
-          <div className="todo-detail-section-label">Subtasks ({task.subtasks!.filter(s => s.done).length}/{task.subtasks!.length})</div>
-          <ul className="todo-detail-subtasks">
-            {task.subtasks!.map((st) => (
-              <li key={st.id} className={st.done ? 'done' : ''}>
-                <span className="todo-detail-subtask-check">{st.done ? '\u2713' : '\u25CB'}</span>
-                {st.title}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
       {hasNote && (
         <div className="todo-detail-section">
           <div className="todo-detail-section-label">Note</div>
@@ -1494,7 +1426,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
         </div>
       )}
 
-      {!hasDescription && !hasSummary && !hasNote && !hasMilestones && !hasSubtasks && !hasSessions && triageTotal === 0 && (
+      {!hasDescription && !hasSummary && !hasNote && childTasks.length === 0 && !hasSessions && triageTotal === 0 && (
         <div className="todo-detail-empty text-sm text-muted">No details</div>
       )}
     </div>
@@ -1682,6 +1614,7 @@ function SortableRecentCard({ task, isFocused, isSessionOpen, isDetailOpen, onCl
     <div
       ref={setNodeRef}
       style={style}
+      data-task-id={task.id}
       className={`todo-pinned-card${isFocused ? ' todo-pinned-card-active' : ''}${needsAttention ? ' todo-pinned-card-attention' : ''}${isSessionOpen ? ' todo-pinned-card-session-open' : ''}${isDone ? ' todo-pinned-card-done' : ''}`}
       onClick={(e) => {
         if (isEditing) return;
@@ -2010,7 +1943,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Scroll to a task by ID inside .todo-panel-list.
   // Uses double-RAF + retry to wait for React commit + browser paint + layout settle
   // after state changes (expand/filter-clear, detail panel open).
-  const scrollTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const scrollToTask = useCallback((taskId: string) => {
     cancelAnimationFrame(scrollRafRef.current);
     clearTimeout(scrollTimerRef.current);
@@ -2062,7 +1995,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Separate from scrollToTask (which targets the lower .todo-panel-list) so the PIN region
   // jumps + highlights too — not just the list below. Double-RAF waits for tier re-render.
   const pinnedScrollRafRef = useRef<number>(0);
-  const pinnedScrollTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const pinnedScrollTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const scrollToPinnedTask = useCallback((taskId: string) => {
     cancelAnimationFrame(pinnedScrollRafRef.current);
     clearTimeout(pinnedScrollTimerRef.current);
@@ -3121,34 +3054,28 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       return true;
     };
 
+    const eligibleTasks = tasks.filter(applySearchFilters);
+
     // While API results haven't arrived yet, show client-side matches as a placeholder.
     if (!searchResults) {
-      const lowerQuery = searchQuery.toLowerCase();
-      return tasks.filter((t) =>
-        applySearchFilters(t) && (
+      const lowerQuery = searchQuery.trim().toLowerCase();
+      return eligibleTasks.filter((t) =>
           t.title.toLowerCase().includes(lowerQuery) ||
           (t.description && t.description.toLowerCase().includes(lowerQuery)) ||
           (t.summary && t.summary.toLowerCase().includes(lowerQuery)) ||
           t.category.toLowerCase().includes(lowerQuery) ||
           t.project.toLowerCase().includes(lowerQuery) ||
           (t.tags && t.tags.some(tag => tag.toLowerCase().includes(lowerQuery))) ||
-          t.id.toLowerCase().includes(lowerQuery) ||
-          (t.session_id && t.session_id.toLowerCase().includes(lowerQuery)) ||
-          (t.session_ids && t.session_ids.some(sid => sid.toLowerCase().includes(lowerQuery))) ||
-          (t.external_url && t.external_url.toLowerCase().includes(lowerQuery))
-        )
+          taskReferenceMatchField(t, searchQuery) !== null
       );
     }
 
-    // Server-side results: filter to respect active view context.
-    const taskMap = new Map(tasks.map((t) => [t.id, t]));
-
-    return searchResults
-      .map((r) => taskMap.get(r.taskId))
-      .filter((t): t is NonNullable<typeof t> => {
-        if (!t) return false;
-        return applySearchFilters(t);
-      });
+    // Once the API responds, its task ownership and ranking are authoritative.
+    // Local reference fields above are only an in-flight placeholder.
+    return mapServerTaskSearchResults(
+      eligibleTasks,
+      searchResults.map((result) => result.taskId),
+    );
   // eslint-disable-next-line react-hooks/exhaustive-deps -- activeCategory/favorites/isDescendantVisibleInStarred intentionally omitted: search bypasses category tab; showCompleted intentionally omitted: search always shows completed tasks
   }, [tasks, filtered, isSearchMode, searchQuery, searchResults, priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter]);
 
@@ -4626,7 +4553,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         {!loading && isSearchMode && searchFiltered.length > 0 && (
           <div className="todo-search-results">
             {(() => {
-              const searchMeta = new Map(searchResults?.map(r => [r.taskId, r]) ?? []);
               // Compute child maps from searchFiltered (cross-category)
               const searchChildIds = new Set<string>();
               const searchChildCount = new Map<string, number>();
@@ -4661,25 +4587,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
               for (const task of searchFiltered) {
                 if (!emitted.has(task.id)) ordered.push(task);
               }
-              let relevanceDividerShown = false;
               return ordered.map((task) => {
                 // Hide children of collapsed parents
                 const searchParentId = searchChildParent.get(task.id);
                 if (searchParentId && !expandedParents.has(searchParentId)) return null;
-                // Relevance divider: show once when score drops below 0.4
-                const score = searchMeta.get(task.id)?.score;
-                let divider: ReactNode = null;
-                if (!relevanceDividerShown && score != null && score < 0.4 && !searchChildIds.has(task.id)) {
-                  relevanceDividerShown = true;
-                  divider = (
-                    <div key="__relevance-divider" className="search-relevance-divider">
-                      <span>Less relevant</span>
-                    </div>
-                  );
-                }
                 return (
                   <Fragment key={task.id}>
-                  {divider}
                   <SortableTaskItem
                     key={task.id}
                     task={task}
@@ -4713,10 +4626,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     isPinned={pinnedTaskIds?.has(task.id)}
                     pinnedTier={getTier(task.id)}
                     searchContext={`${task.category}${task.project && task.project !== task.category ? ` / ${task.project}` : ''}`}
-                    searchMatchField={searchMeta.get(task.id)?.matchField}
-                    searchScore={searchMeta.get(task.id)?.score}
-                    searchKeywordScore={searchMeta.get(task.id)?.keywordScore}
-                    searchSemanticScore={searchMeta.get(task.id)?.semanticScore}
                     filterOverrideReason={(task.id === filterOverrideId || task.id === fadingOverrideId) ? filterOverrideReason : undefined}
                     isFadingOverride={fadingOverrideId === task.id}
                   />

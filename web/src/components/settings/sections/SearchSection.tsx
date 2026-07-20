@@ -13,13 +13,13 @@ interface Props {
 // ── Model presets ──
 
 const MODEL_PRESETS = [
+  { label: 'Qwen3-Embedding-0.6B (Default, multilingual, ~640 MB)', value: 'hf:Qwen/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q8_0.gguf' },
+  { label: 'EmbeddingGemma (Compact, ~300 MB)', value: 'hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf' },
   { label: 'BGE-M3 (Multilingual, ~1.16 GB)', value: 'hf:CompendiumLabs/bge-m3-gguf/bge-m3-f16.gguf' },
-  { label: 'Qwen3-Embedding-0.6B (Multilingual, ~640 MB)', value: 'hf:Qwen/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q8_0.gguf' },
-  { label: 'EmbeddingGemma (English, ~300 MB)', value: 'hf:ggml-org/embeddinggemma-300M-Q8_0/embeddinggemma-300M-Q8_0.gguf' },
   { label: 'Custom...', value: 'custom' },
 ];
 
-// Server default is defined in src/core/qmd.ts — keep in sync
+// Server default is defined in src/core/qmd-model.ts - keep in sync.
 const DEFAULT_MODEL = MODEL_PRESETS[0].value;
 
 // ── Types for API responses ──
@@ -27,9 +27,9 @@ const DEFAULT_MODEL = MODEL_PRESETS[0].value;
 interface QmdModelInfo {
   name: string;
   file: string;
-  size: string;
-  path: string;
-  downloaded: boolean;
+  size: string | null;
+  path: string | null;
+  downloaded: boolean | null;
 }
 
 interface StoreStats {
@@ -203,6 +203,7 @@ export function SearchSection({ config, onSave }: Props) {
         qmd_model: modelValue || undefined,
       },
     });
+    await fetchStatus();
     // Reset user-edited flag after successful save
     userEditedRef.current = false;
   };

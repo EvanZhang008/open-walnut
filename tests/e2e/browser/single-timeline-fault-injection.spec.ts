@@ -73,7 +73,8 @@ test.beforeEach(async ({ page }) => {
     window.WebSocket = class PatchedWebSocket extends OrigWebSocket {
       constructor(url: string | URL, protocols?: string | string[]) {
         super(url, protocols);
-        if (!(window as any).__capturedWs) {
+        const socketUrl = new URL(String(url), window.location.href);
+        if (socketUrl.pathname === '/ws' && !(window as any).__capturedWs) {
           (window as any).__capturedWs = this;
           const origSend = this.send.bind(this);
           this.send = (data: string | ArrayBufferLike | Blob | ArrayBufferView) => {
@@ -84,7 +85,7 @@ test.beforeEach(async ({ page }) => {
                 intercepted = true;
                 setTimeout(() => {
                   this.dispatchEvent(new MessageEvent('message', {
-                    data: JSON.stringify({ type: 'res', id: parsed.id, ok: true, data: { blocks: [], isStreaming: false } }),
+                    data: JSON.stringify({ type: 'res', id: parsed.id, ok: true, payload: { blocks: [], isStreaming: false } }),
                   }));
                 }, 10);
               }

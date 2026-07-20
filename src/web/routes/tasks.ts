@@ -44,17 +44,19 @@ interface SessionInfo {
   activity?: string
   mode: SessionMode
   provider?: import('../../core/types.js').SessionProvider
+  engine?: import('../../core/types.js').SessionEngine
   planCompleted?: boolean
   archived?: boolean
 }
 
 /** Map SessionInfo to the enriched status shape attached to tasks. */
-function toSlotStatus(info: SessionInfo, slot?: 'plan' | 'exec'): { process_status: ProcessStatus; activity?: string; mode?: SessionMode; provider?: import('../../core/types.js').SessionProvider; planCompleted?: boolean } {
+function toSlotStatus(info: SessionInfo, slot?: 'plan' | 'exec'): { process_status: ProcessStatus; activity?: string; mode?: SessionMode; provider?: import('../../core/types.js').SessionProvider; engine?: import('../../core/types.js').SessionEngine; planCompleted?: boolean } {
   return {
     process_status: info.process_status,
     activity: info.activity,
     mode: info.mode,
     provider: info.provider,
+    engine: info.engine,
     ...(info.planCompleted ? { planCompleted: true } : {}),
   }
 }
@@ -114,6 +116,7 @@ export async function enrichTasksWithSessionStatus(tasks: Task[]): Promise<Task[
         activity: rec.activity,
         mode: rec.mode,
         provider: rec.provider,
+        engine: rec.engine,
         planCompleted: rec.planCompleted,
         archived: rec.archived,
       })
@@ -194,6 +197,7 @@ export async function enrichTasksWithSessionStatus(tasks: Task[]): Promise<Task[
         activity: singleInfo.activity,
         mode: singleInfo.mode,
         provider: singleInfo.provider,
+        engine: singleInfo.engine,
         ...(singleInfo.planCompleted ? { planCompleted: true } : {}),
       }
     }
@@ -862,4 +866,3 @@ tasksRouter.put('/:id/depends-on', async (req: Request, res: Response, next: Nex
     next(err)
   }
 })
-

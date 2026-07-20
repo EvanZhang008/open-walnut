@@ -2385,6 +2385,77 @@ describe('ClaudeCodeSession.getModelCatalog', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect((session as any)._modelCatalog).toBeNull();
   });
+
+  // ── Eager catalog side effects: every REAL fetch emits SESSION_MODEL_CATALOG
+  // (clients render without a per-open pull) and writes the host-level store
+  // (feeds the quick-session dropdown / dead-session pickers). Cache hits do
+  // neither — the push would be redundant.
+  it('a real fetch emits session:model-catalog and writes the host store; a cache hit does not re-emit', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any).claudeSessionId = 'sid-cat-push';
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any)._cwd = '/tmp/proj';
+
+    const events: BusEvent[] = [];
+    bus.subscribe('main-ai', (e) => { if (e.name === EventNames.SESSION_MODEL_CATALOG) events.push(e); });
+
+    await fetchWithReply(session, writes, CLI_MODELS);
+    await new Promise((r) => setTimeout(r, 50)); // dynamic import + write chain
+
+    expect(events).toHaveLength(1);
+    const data = events[0]!.data as { sessionId: string; host?: string; models: unknown[]; fetchedAt: string };
+    expect(data.sessionId).toBe('sid-cat-push');
+    expect(data.host).toBeUndefined(); // local session → no host field
+    expect(data.models).toHaveLength(3);
+    expect(typeof data.fetchedAt).toBe('string');
+
+    // Host store written under the local key, cwd recorded.
+    const { getHostModelCatalog, _resetHostModelCatalogCache } = await import('../../src/core/host-model-catalog.js');
+    _resetHostModelCatalogCache(); // force a disk read — proves persistence, not just memory
+    const stored = await getHostModelCatalog(null);
+    expect(stored?.models).toHaveLength(3);
+    expect(stored?.cwd).toBe('/tmp/proj');
+
+    // Cache hit → no second emit, no extra write.
+    await session.getModelCatalog();
+    expect(events).toHaveLength(1);
+    expect(writes).toHaveLength(1);
+  });
+
+  it('handleStreamLine init event triggers ONE deferred eager fetch (list_models write)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { session, writes } = makeSessionWithStubTransport();
+      // The init branch renames the transport's stream file to the real session
+      // id — the minimal stub needs those members or the branch throws before
+      // reaching the eager-fetch scheduling.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      Object.assign((session as any)._transport, {
+        renameForSession: () => {},
+        outputFile: '/tmp/stub-output.jsonl',
+      });
+      // Init event: the CLI announcing itself — must schedule the eager fetch.
+      feed(session, { type: 'system', subtype: 'init', session_id: 'sid-eager-1', model: 'claude-fable-5' });
+      expect(writes).toHaveLength(0); // deferred, not immediate (CLI still wiring ask())
+      await vi.advanceTimersByTimeAsync(1600);
+      const lm = writes.map((w) => JSON.parse(w)).filter((e) => e.request?.subtype === 'list_models');
+      expect(lm).toHaveLength(1);
+
+      // A second init (new TURN, same process, catalog cached) must NOT refetch.
+      feed(session, {
+        type: 'control_response',
+        response: { subtype: 'success', request_id: JSON.parse(writes[writes.length - 1]!).request_id, response: { models: CLI_MODELS } },
+      });
+      await vi.advanceTimersByTimeAsync(10)
+      feed(session, { type: 'system', subtype: 'init', session_id: 'sid-eager-1', model: 'claude-fable-5' });
+      await vi.advanceTimersByTimeAsync(1600);
+      const lmAfter = writes.map((w) => JSON.parse(w)).filter((e) => e.request?.subtype === 'list_models');
+      expect(lmAfter).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════

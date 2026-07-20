@@ -46,7 +46,7 @@ export function RemoteHostsSection({ config, onSave }: Props) {
     setHosts(entries);
   }, [config]);
 
-  const updateHost = (idx: number, field: keyof HostEntry, value: string | number | undefined) => {
+  const updateHost = <K extends keyof HostEntry>(idx: number, field: K, value: HostEntry[K]) => {
     setHosts((prev) => prev.map((h, i) => (i === idx ? { ...h, [field]: value } : h)));
   };
 

@@ -23,6 +23,7 @@ vi.mock('../../src/utils/process.js', () => ({
 vi.mock('../../src/providers/daemon-connection.js', () => ({
   isDaemonConnected: () => false,
   getDaemonDisconnectedSince: () => null,
+  probeDaemonSession: async () => null,
 }));
 
 // Mock session-manager registry — returns null (no active manager registered)
@@ -46,6 +47,12 @@ vi.mock('../../src/core/task-manager.js', () => ({
     { id: 'task-3', phase: 'IN_PROGRESS' },
     { id: 'task-4', phase: 'TODO' },
   ],
+  listTasksByIds: async (ids: string[]) => [
+    { id: 'task-1', phase: 'IN_PROGRESS' },
+    { id: 'task-2', phase: 'IN_PROGRESS' },
+    { id: 'task-3', phase: 'IN_PROGRESS' },
+    { id: 'task-4', phase: 'TODO' },
+  ].filter((task) => ids.includes(task.id)),
 }));
 
 // Mock event bus — we don't need to verify events in these unit tests

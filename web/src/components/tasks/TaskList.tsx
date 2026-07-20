@@ -105,6 +105,22 @@ export function TaskList({
     return map;
   }, [grouped, taskGroups]);
 
+  const childStats = useMemo(() => {
+    const taskById = new Map(tasks.map((task) => [task.id, task]));
+    const stats = new Map<string, { done: number; total: number }>();
+    for (const child of tasks) {
+      if (!child.parent_task_id) continue;
+      const parent = taskById.get(child.parent_task_id)
+        ?? tasks.find((candidate) => candidate.id.startsWith(child.parent_task_id!));
+      if (!parent) continue;
+      const current = stats.get(parent.id) ?? { done: 0, total: 0 };
+      current.total++;
+      if (child.status === 'done' || child.phase === 'COMPLETE') current.done++;
+      stats.set(parent.id, current);
+    }
+    return stats;
+  }, [tasks]);
+
   const onSelectToggle = useCallback((taskId: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -164,6 +180,7 @@ export function TaskList({
       onComplete={onComplete}
       onStar={onStar}
       onDelete={onDelete}
+      childStats={childStats.get(task.id)}
       groupInfo={groupRenderMap.get(task.id)}
       isSelected={selectedIds.has(task.id)}
       onSelectToggle={onGroupTasks ? onSelectToggle : undefined}

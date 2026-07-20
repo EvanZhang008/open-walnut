@@ -8,10 +8,14 @@ import { initAppInfo } from './utils/app-info';
 import { initBrowserLogger } from './utils/browser-logger';
 import { initLongTaskMonitor } from './utils/longtask-monitor';
 import { initUiPrefsSync } from './utils/ui-prefs-sync';
+import { initSessionStatusStore } from './stores/init-session-status-store';
 import './styles/globals.css';
 
 // Persist browser console logs to disk (view with: open-walnut logs -s browser)
 initBrowserLogger();
+// Subscribe before React mounts so the first WS status event cannot race ahead
+// of component hooks.
+initSessionStatusStore();
 // Report main-thread blocks >200ms with attribution (rate-limited) — makes
 // starvation windows self-identify in the server log.
 initLongTaskMonitor();

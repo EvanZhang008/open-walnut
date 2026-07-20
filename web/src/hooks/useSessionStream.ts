@@ -24,6 +24,8 @@ import {
   type StreamingBlock,
   type StreamingPermissionBlock,
 } from '@/stream/stream-reducer';
+import { useSessionStatus } from './useSessionStatus';
+import { seedSessionStatus } from '@/stores/session-status-store';
 
 // Block types + accumulation semantics live in stream-reducer — the SINGLE copy
 // shared with session-cache (formerly three divergent mirrors). Re-exported so
@@ -65,6 +67,7 @@ interface UseSessionStreamReturn {
 export function useSessionStream(sessionId: string | null): UseSessionStreamReturn {
   const [blocks, setBlocks] = useState<StreamingBlock[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
+  const sessionStatus = useSessionStatus(sessionId);
   const streamBuffer = useRef('');
   const activeSessionId = useRef<string | null>(null);
   const seenPermissionIds = useRef(new Set<string>());
@@ -195,8 +198,17 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     // Fallback: fetch pending permissions from REST (covers cases where buffer was pruned)
     fetch(`/api/sessions/${sessionId}`)
       .then(r => r.ok ? r.json() : null)
-      .then((data: { pendingPermissions?: Array<{ requestId: string; toolName?: string; input?: Record<string, unknown>; reason?: string }> } | null) => {
+      .then((data: {
+        session?: unknown;
+        pendingPermissions?: Array<{
+          requestId: string;
+          toolName?: string;
+          input?: Record<string, unknown>;
+          reason?: string;
+        }>;
+      } | null) => {
         if (activeSessionId.current !== sessionId) return;
+        if (data?.session) seedSessionStatus(data.session, 'rest:session');
         const perms = data?.pendingPermissions;
         if (!perms?.length) return;
         setBlocks(prev => {
@@ -260,66 +272,6 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
       });
   }, []);
 
-  useEvent('session:status-changed', (data) => {
-    const { sessionId: sid, phase, process_status } = data as {
-      sessionId: string; phase?: string; process_status?: string;
-    };
-    if (!sessionId || sid !== sessionId) return;
-    // Re-subscribe when session transitions to running (IN_PROGRESS phase or running process)
-    const isActive = phase === 'IN_PROGRESS' || process_status === 'running';
-    if (!isActive) {
-      // Backstop: when the process reaches a non-active state (stopped/error/idle),
-      // force-clear isStreaming. This covers cases where session:result was missed
-      // (WS disconnect, sessionId mismatch, process crash). session:status-changed
-      // is broadcast with ['*'] destinations so it's the most reliable termination signal.
-      // 'idle' is terminal for streaming: FIFO sessions stay alive between turns in
-      // 'idle', with no deltas until the next user send — so clearing here matches the
-      // actual "not streaming" state. A new turn will flip isStreaming back to true via
-      // the text-delta / tool-use handlers before any visible lag.
-      if (process_status === 'stopped' || process_status === 'error' || process_status === 'idle') {
-        // Ordering: flush BEFORE clearing isStreaming. A pending rAF text frame may
-        // still be queued from the last delta; if we flipped isStreaming first, the UI
-        // could render the "done" state before the final text chunk lands. flushPendingTextRaf
-        // drains the buffer synchronously.
-        flushPendingTextRaf();
-        setIsStreaming((prev) => {
-          if (prev) log.info('stream', `status-changed ps=${process_status} → isStreaming true→false`, { sessionId: sid });
-          return false;
-        });
-        // Backstop turn boundary: if session:result was missed (WS drop), stamp
-        // the merge boundary so the next turn's deltas open a new block.
-        setBlocks((prev) => {
-          completedLen.current = Math.max(completedLen.current, prev.length);
-          return prev;
-        });
-      } else {
-        log.info('stream', `status-changed → phase=${phase} ps=${process_status} (not active, skipping)`, { sessionId: sid });
-      }
-      return;
-    }
-
-    // Session just transitioned to in_progress — re-subscribe to ensure
-    // the server-side subscription mapping is fresh and get any buffered data.
-    doResubscribe(sid);
-
-    // Safety-net: if isStreaming is still false after 3s, force one more re-subscribe.
-    // Clear any existing timer first.
-    if (safetyTimerRef.current) clearTimeout(safetyTimerRef.current);
-    safetyTimerRef.current = setTimeout(() => {
-      safetyTimerRef.current = null;
-      if (activeSessionId.current !== sid) return;
-      // Check latest isStreaming via functional setState trick (read without extra ref)
-      setIsStreaming((current) => {
-        if (!current) {
-          // Still not streaming — force one more re-subscribe
-          resubscribePending.current = false; // reset so doResubscribe proceeds
-          doResubscribe(sid);
-        }
-        return current;
-      });
-    }, 3000);
-  });
-
   // Cancel safety timer when isStreaming becomes true or sessionId changes
   useEffect(() => {
     if (isStreaming && safetyTimerRef.current) {
@@ -365,6 +317,46 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
       }
     }
   }, []);
+
+  // Status events are reduced before React listeners run. This effect consumes
+  // the accepted store value, so stale REST and equal-revision conflicts cannot
+  // stop a live stream.
+  useEffect(() => {
+    const processStatus = sessionStatus?.process_status;
+    if (!sessionId || !processStatus) return;
+
+    if (processStatus !== 'running') {
+      flushPendingTextRaf();
+      setIsStreaming((previous) => {
+        if (previous) {
+          log.info('stream', `status-store ps=${processStatus} → isStreaming true→false`, {
+            sessionId,
+            revision: sessionStatus.statusRevision,
+          });
+        }
+        return false;
+      });
+      setBlocks((previous) => {
+        completedLen.current = Math.max(completedLen.current, previous.length);
+        return previous;
+      });
+      return;
+    }
+
+    doResubscribe(sessionId);
+    if (safetyTimerRef.current) clearTimeout(safetyTimerRef.current);
+    safetyTimerRef.current = setTimeout(() => {
+      safetyTimerRef.current = null;
+      if (activeSessionId.current !== sessionId) return;
+      setIsStreaming((current) => {
+        if (!current) {
+          resubscribePending.current = false;
+          doResubscribe(sessionId);
+        }
+        return current;
+      });
+    }, 3000);
+  }, [sessionId, sessionStatus?.process_status, doResubscribe, flushPendingTextRaf]);
 
   // Cancel pending rAF on unmount to avoid setState on unmounted component
   useEffect(() => {

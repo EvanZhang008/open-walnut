@@ -1,9 +1,9 @@
 ---
-name: walnut-plugin-store
+name: install-plugin
 description: >-
-  Register, configure, verify, update, and remove plugin sources (git repos)
-  through the Walnut Plugin Store REST API. Use when the user pastes a plugin
-  share snippet ({"walnut_plugin_source": ...}) or a git repo URL and wants the
+  Install, configure, verify, update, and remove Walnut plugins from git repos
+  through the Plugin Store REST API. Use when the user pastes a plugin share
+  snippet ({"walnut_plugin_source": ...}) or a git repo URL and wants the
   plugin installed, or says "install plugin", "add plugin source",
   "update/remove a plugin", or asks why a plugin is not active.
 ---

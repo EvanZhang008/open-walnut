@@ -27,12 +27,14 @@ vi.mock('../../src/agent/tools/files/index.js', () => ({
 import { WALNUT_HOME } from '../../src/constants.js';
 import { memoryNotesSearchTool } from '../../src/agent/tools/memory-notes-search-tool.js';
 import { memoryNotesSearch } from '../../src/core/memory-search.js';
+import { addTask, _resetForTesting } from '../../src/core/task-manager.js';
 
 /**
  * Suite 9: Agent Tools (Unit)
  */
 
 beforeEach(async () => {
+  _resetForTesting();
   tmpDir = WALNUT_HOME;
   await fsp.rm(tmpDir, { recursive: true, force: true });
   await fsp.mkdir(tmpDir, { recursive: true });
@@ -66,7 +68,10 @@ describe('memory_notes_search tool', () => {
       },
     ]);
 
-    const result = await memoryNotesSearchTool.execute({ query: 'test', limit: 5 });
+    const result = await memoryNotesSearchTool.execute({
+      queries: ['test'],
+      limit: 5,
+    });
     expect(typeof result).toBe('string');
     const parsed = JSON.parse(result as string);
     expect(parsed).toHaveLength(2);
@@ -85,7 +90,9 @@ describe('memory_notes_search tool', () => {
 
   it('9.2: returns "No results found." for empty results', async () => {
     vi.mocked(memoryNotesSearch).mockResolvedValue([]);
-    const result = await memoryNotesSearchTool.execute({ query: 'nonexistent' });
+    const result = await memoryNotesSearchTool.execute({
+      queries: ['nonexistent'],
+    });
     expect(result).toBe('No results found.');
   });
 
@@ -103,5 +110,28 @@ describe('memory_notes_search tool', () => {
       'walnut/overview/history/',
     );
   });
-});
 
+  it('9.4: resolves an exact task ID without invoking QMD', async () => {
+    const { task } = await addTask({
+      title: 'Structured agent memory result',
+      category: 'Local',
+      project: 'Quick Start',
+      source: 'local',
+      _skipPluginOps: true,
+    });
+
+    const result = await memoryNotesSearchTool.execute({
+      queries: [task.id],
+      sources: ['task'],
+    });
+
+    expect(memoryNotesSearch).not.toHaveBeenCalled();
+    expect(JSON.parse(result as string)).toEqual([
+      expect.objectContaining({
+        source: 'task',
+        taskId: task.id,
+        title: task.title,
+      }),
+    ]);
+  });
+});

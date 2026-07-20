@@ -20,12 +20,17 @@ import { useSlashCommands } from '@/hooks/useSlashCommands';
 import type { ImageAttachment } from '@/api/chat';
 import type { SessionTreeResponse, SessionTreeTask, SessionRecord } from '@/types/session';
 import type { SessionEffort } from '@open-walnut/core';
+import { useResolvedSessionRecord } from '@/hooks/useSessionStatus';
+import { useSessionControls } from '@/hooks/useSessionControls';
+import { nextSessionControlValue } from '@/components/sessions/SessionControlPills';
 
 const LS_HIDE_COMPLETED = 'open-walnut-session-tree-hide-completed';
 const LS_LIST_WIDTH_KEY = 'open-walnut-session-list-width-v2';
 const LIST_WIDTH_MIN = 260;
 const LIST_WIDTH_MAX_PCT = 0.45;
 const LIST_WIDTH_DEFAULT = 380;
+const SESSION_PAGE_SIZE = 100;
+const SESSION_PAGE_MAX = 500;
 
 function clampWidth(w: number): number {
   const maxPx = typeof window !== 'undefined' ? window.innerWidth * LIST_WIDTH_MAX_PCT : 800;
@@ -57,8 +62,29 @@ export function SessionsPage() {
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(() => searchParams.get('id'));
   const [hideCompleted, setHideCompleted] = useState(readHideCompleted);
+  const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [limit, setLimit] = useState(SESSION_PAGE_SIZE);
+  const [treeRefreshing, setTreeRefreshing] = useState(false);
+  const treeRequestRef = useRef(0);
+  const directRequestRef = useRef(0);
+  const mobileBackSessionRef = useRef<string | null>(null);
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
   // Fallback session fetched directly when URL has ?id= but the session isn't in the tree
   const [directSession, setDirectSession] = useState<SessionRecord | null>(null);
+  const [selectedCache, setSelectedCache] = useState<{
+    id: string;
+    session: SessionRecord;
+    taskTitle?: string;
+  } | null>(null);
+
+  const refreshDirectSession = useCallback(async (sessionId: string) => {
+    const requestId = ++directRequestRef.current;
+    const session = await fetchSession(sessionId);
+    if (requestId !== directRequestRef.current || selectedIdRef.current !== sessionId) return;
+    if (session?.claudeSessionId === sessionId) setDirectSession(session);
+  }, []);
 
   const sessionSend = useSessionSend(selectedId);
   // isStreaming bubbles up from SessionDetailPanel → SessionChatHistory's single
@@ -113,6 +139,11 @@ export function SessionsPage() {
     try { localStorage.setItem(LS_LIST_WIDTH_KEY, String(listWidth)); } catch { /* ignore */ }
   }, [listWidth]);
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedQuery(query.trim()), 180);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
   // Re-clamp list width when window resizes (e.g. zoom change, small screen)
   useEffect(() => {
     const onResize = () => setListWidth((w) => clampWidth(w));
@@ -121,11 +152,23 @@ export function SessionsPage() {
   }, []);
 
   const loadTree = useCallback(() => {
-    fetchSessionTree(hideCompleted)
-      .then((data) => setTreeData(data))
-      .catch((e: Error) => setError(e.message))
-      .finally(() => setLoading(false));
-  }, [hideCompleted]);
+    const requestId = ++treeRequestRef.current;
+    setTreeRefreshing(true);
+    setError(null);
+    fetchSessionTree({ hideCompleted, q: debouncedQuery, limit })
+      .then((data) => {
+        if (requestId === treeRequestRef.current) setTreeData(data);
+      })
+      .catch((e: Error) => {
+        if (requestId === treeRequestRef.current) setError(e.message);
+      })
+      .finally(() => {
+        if (requestId === treeRequestRef.current) {
+          setLoading(false);
+          setTreeRefreshing(false);
+        }
+      });
+  }, [hideCompleted, debouncedQuery, limit]);
 
   useEffect(() => { loadTree(); }, [loadTree]);
 
@@ -135,80 +178,22 @@ export function SessionsPage() {
   // Re-fetch tree on WebSocket reconnect — events during disconnect are lost
   useEvent('_ws:reconnected', () => { loadTree(); });
   useEvent('session:error', (data: unknown) => {
-    // Optimistically patch errorMessage so SessionDetailPanel shows it immediately
-    const d = data as { sessionId?: string; error?: string };
-    if (d.sessionId && d.error && treeData) {
-      setTreeData((prev) => {
-        if (!prev) return prev;
-        const patch = (sessions: SessionRecord[]) => {
-          for (const s of sessions) {
-            if (s.claudeSessionId === d.sessionId) {
-              s.process_status = 'error';
-              s.errorMessage = d.error!.slice(0, 500);
-              return true;
-            }
-          }
-          return false;
-        };
-        for (const cat of prev.tree) {
-          for (const t of cat.directTasks) { if (patch(t.sessions)) return { ...prev }; }
-          for (const proj of cat.projects) {
-            for (const t of proj.tasks) { if (patch(t.sessions)) return { ...prev }; }
-          }
-        }
-        if (patch(prev.orphanSessions)) return { ...prev };
-        return prev;
-      });
-    }
-    loadTree();
-    // Re-fetch directSession if it's the one that errored (not in tree → tree patch misses it)
+    const d = data as { sessionId?: string };
     if (d.sessionId && d.sessionId === selectedId && !treeSession) {
-      fetchSession(d.sessionId).then((s) => setDirectSession(s)).catch(() => {});
+      void refreshDirectSession(d.sessionId);
     }
   });
   useEvent('session:status-changed', (data: unknown) => {
-    // Auto-switch to new exec session when "Clear Context & Execute" creates one
-    const d = data as { sessionId?: string; fromPlanSessionId?: string; process_status?: string; phase?: string; activity?: string; errorMessage?: string };
-    if (d.fromPlanSessionId && d.sessionId && d.fromPlanSessionId === selectedId) {
-      setSelectedId(d.sessionId);
-    }
-
-    // Optimistically apply status fields to in-memory tree data so the UI updates
-    // immediately — without waiting for the loadTree() API round-trip.
-    // This fixes the stale-status bug where FIFO sessions show Idle/Agent Complete
-    // even though they transitioned to Running/In Progress.
-    if (d.sessionId && treeData && d.process_status) {
-      setTreeData((prev) => {
-        if (!prev) return prev;
-        const patch = (sessions: SessionRecord[]) => {
-          for (const s of sessions) {
-            if (s.claudeSessionId === d.sessionId) {
-              if (d.process_status) s.process_status = d.process_status as SessionRecord['process_status'];
-              if ('activity' in d) s.activity = d.activity;
-              // Surface errorMessage from status-changed event (e.g. stderr from remote process death)
-              if (d.errorMessage) s.errorMessage = d.errorMessage;
-              // Clear stale error when session recovers from error state
-              else if (d.process_status && d.process_status !== 'error') s.errorMessage = undefined;
-              return true;
-            }
-          }
-          return false;
-        };
-        for (const cat of prev.tree) {
-          for (const t of cat.directTasks) { if (patch(t.sessions)) return { ...prev }; }
-          for (const proj of cat.projects) {
-            for (const t of proj.tasks) { if (patch(t.sessions)) return { ...prev }; }
-          }
-        }
-        if (patch(prev.orphanSessions)) return { ...prev };
-        return prev;
-      });
-    }
-
-    loadTree();
-    // Re-fetch directSession for status updates on sessions not in tree
-    if (d.sessionId && d.sessionId === selectedId && !treeSession) {
-      fetchSession(d.sessionId).then((s) => setDirectSession(s)).catch(() => {});
+    const d = data as {
+      sessionId?: string;
+      previousSessionId?: string;
+      fromPlanSessionId?: string;
+      status?: { sessionId?: string };
+    };
+    const nextSessionId = d.status?.sessionId ?? d.sessionId;
+    const previousSessionId = d.previousSessionId ?? d.fromPlanSessionId;
+    if (previousSessionId && nextSessionId && previousSessionId === selectedId) {
+      setSelectedId(nextSessionId);
     }
   });
 
@@ -218,7 +203,13 @@ export function SessionsPage() {
       localStorage.setItem(LS_HIDE_COMPLETED, String(next));
       return next;
     });
+    setLimit(SESSION_PAGE_SIZE);
   };
+
+  const handleSearchChange = useCallback((value: string) => {
+    setQuery(value);
+    setLimit(SESSION_PAGE_SIZE);
+  }, []);
 
   // Keep URL search param in sync with selected session
   useEffect(() => {
@@ -265,13 +256,69 @@ export function SessionsPage() {
   // When a session ID is in the URL but not found in the tree (e.g. filtered out),
   // fetch it directly so the detail panel still works.
   useEffect(() => {
-    if (!selectedId) { setDirectSession(null); return; }
-    if (treeSession) { setDirectSession(null); return; }
+    if (!selectedId) {
+      directRequestRef.current++;
+      setDirectSession(null);
+      setSelectedCache(null);
+      return;
+    }
+    if (treeSession) {
+      directRequestRef.current++;
+      setDirectSession(null);
+      return;
+    }
     // Not in tree — fetch directly
-    fetchSession(selectedId).then((s) => setDirectSession(s));
-  }, [selectedId, treeSession]);
+    void refreshDirectSession(selectedId);
+  }, [selectedId, treeSession, refreshDirectSession]);
 
-  const selectedSession = treeSession ?? directSession;
+  useEffect(() => {
+    const session = treeSession
+      ?? (directSession?.claudeSessionId === selectedId ? directSession : null);
+    if (!selectedId || !session) return;
+    setSelectedCache((previous) => {
+      const taskTitle = selectedTaskTitle
+        ?? (previous?.id === selectedId ? previous.taskTitle : undefined);
+      if (previous?.id === selectedId
+        && previous.session === session
+        && previous.taskTitle === taskTitle) return previous;
+      return { id: selectedId, session, taskTitle };
+    });
+  }, [selectedId, treeSession, directSession, selectedTaskTitle]);
+
+  const selectedSessionRecord = treeSession
+    ?? (directSession?.claudeSessionId === selectedId ? directSession : null)
+    ?? (selectedCache?.id === selectedId ? selectedCache.session : null);
+  const selectedSession = useResolvedSessionRecord(selectedSessionRecord);
+  const { controls: sessionControls, setControl: setSessionControl } = useSessionControls(
+    selectedSession?.claudeSessionId,
+    selectedSession?.engine,
+  );
+  const resolvedTaskTitle = selectedTaskTitle
+    ?? (selectedCache?.id === selectedId ? selectedCache.taskTitle : undefined);
+  const handleMobileDetailBack = useCallback(() => {
+    mobileBackSessionRef.current = selectedId;
+    setSelectedId(null);
+  }, [selectedId]);
+
+  useEffect(() => {
+    if (selectedSession && window.matchMedia('(max-width: 768px)').matches) {
+      const frame = requestAnimationFrame(() => {
+        document.querySelector<HTMLButtonElement>('.sessions-mobile-detail-back')?.focus();
+      });
+      return () => cancelAnimationFrame(frame);
+    }
+    if (!selectedId && mobileBackSessionRef.current) {
+      const sessionId = mobileBackSessionRef.current;
+      mobileBackSessionRef.current = null;
+      const frame = requestAnimationFrame(() => {
+        const rows = listPaneRef.current?.querySelectorAll<HTMLButtonElement>('[data-session-id]');
+        const row = rows ? [...rows].find((candidate) => candidate.dataset.sessionId === sessionId) : undefined;
+        row?.focus({ preventScroll: true });
+        row?.scrollIntoView({ block: 'nearest' });
+      });
+      return () => cancelAnimationFrame(frame);
+    }
+  }, [selectedId, selectedSession]);
 
   // Slash command autocomplete for session input — pass host so REMOTE sessions
   // get the remote host's skills, not the Mac's local ones.
@@ -402,7 +449,7 @@ export function SessionsPage() {
   if (error) return <div className="empty-state"><p>Error: {error}</p></div>;
 
   return (
-    <div className="sessions-split-view">
+    <div className={`sessions-split-view${selectedSession ? ' has-selection' : ''}`}>
       <div
         className="sessions-list-pane"
         ref={listPaneRef}
@@ -416,11 +463,28 @@ export function SessionsPage() {
           hideCompleted={hideCompleted}
           onToggleHideCompleted={handleToggleHideCompleted}
           onBack={handleBack}
+          query={query}
+          onQueryChange={handleSearchChange}
+          total={treeData?.total ?? 0}
+          remaining={treeData?.remaining ?? 0}
+          hasMore={treeData?.hasMore ?? false}
+          loadingMore={treeRefreshing && !loading}
+          onLoadMore={() => setLimit((current) => Math.min(SESSION_PAGE_MAX, current + SESSION_PAGE_SIZE))}
         />
       </div>
       <div className="sessions-resize-handle" onMouseDown={handleResizeStart} />
       {FullscreenBackdrop}
       <div className={`sessions-detail-pane${fullscreenClass}${splitOpen ? ' is-changed-open' : ''}`}>
+        {selectedSession && (
+          <button
+            type="button"
+            className="sessions-mobile-detail-back"
+            onClick={handleMobileDetailBack}
+            aria-label="Back to sessions"
+          >
+            &larr; Sessions
+          </button>
+        )}
         {/* Split: when a view (Changed/Files/Terminal) is open, that panel is the
             left column, the existing detail+chat on the right. Closed →
             display:contents (no layout change). */}
@@ -469,7 +533,7 @@ export function SessionsPage() {
             )}
         <SessionDetailPanel
           session={selectedSession}
-          taskTitle={selectedTaskTitle}
+          taskTitle={resolvedTaskTitle}
           onTitleChanged={loadTree}
           onSessionReplaced={handleSessionReplaced}
           optimisticMessages={sessionSend.optimisticMsgs}
@@ -485,6 +549,8 @@ export function SessionsPage() {
           activeView={activeView}
           onSelectView={selectedSession ? selectView : undefined}
           onModelPillClick={() => setModelPickerOpen((v) => !v)}
+          sessionControls={sessionControls}
+          setSessionControl={setSessionControl}
         />
         {selectedSession && (
           <div className="session-chat-input-wrapper">
@@ -506,12 +572,18 @@ export function SessionsPage() {
               draftKey={selectedId ? `draft:session:${selectedId}` : undefined}
               prefillText={prefillText}
               prefillNonce={prefillNonce}
+              onToggleMode={selectedSession.engine === 'codex' ? () => {
+                const control = sessionControls.find((candidate) => candidate.id === 'mode');
+                const next = nextSessionControlValue(control);
+                if (control && next) void setSessionControl(control.id, next);
+              } : undefined}
             />
             {modelPickerOpen && (
               <ModelPicker
                 currentModel={selectedSession?.model}
                 currentEffort={selectedSession?.effectiveEffort ?? selectedSession?.effort}
                 sessionId={selectedId ?? undefined}
+                host={selectedSession?.host}
                 onSwitch={handleModelSwitch}
                 onEffortSwitch={handleEffortSwitch}
                 onClose={() => setModelPickerOpen(false)}

@@ -143,7 +143,7 @@ export function buildMaintainerPrompt(task: Task, eventName: string, category: s
     `- Status: ${task.status}  Phase: ${task.phase}`,
     task.description?.trim() ? `- Description: ${trim(task.description, 500)}` : '',
     task.summary?.trim() ? `- Summary: ${trim(task.summary, 500)}` : '',
-    task.milestones?.trim() ? `- Milestones:\n${trim(task.milestones, 800)}` : '',
+    task.note?.trim() ? `- Note:\n${trim(task.note, 1200)}` : '',
     event === 'completed' && task.completed_at ? `- Completed at: ${task.completed_at}` : `- Created at: ${task.created_at}`,
   ].filter(Boolean).join('\n');
 

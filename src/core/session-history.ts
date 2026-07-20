@@ -430,6 +430,48 @@ export function parseSessionMessages(content: string): SessionHistoryMessage[] {
     }
   }
 
+  // ── Batched-twin pass (inc-1784349380504) ──
+  // When ≥2 sends sit in the CLI's queue at turn start, the CLI drains them into ONE
+  // next-turn prompt and logs a SINGLE user line whose content is the '\n'-join of the
+  // queued messages (real corpus: 9 occurrences across 1762 sessions, runs of 2-3,
+  // separator always exactly '\n'). Neither message alone equals the join, so the exact
+  // pass above leaves every enqueue in the batch unmatched → each re-emits as a Pattern B
+  // synthetic AND the merged line renders → every message in the batch shows TWICE.
+  // Claim the merged line as the twin of the whole run and skip its enqueues. A failed
+  // match degrades to today's duplicate — a message can never be lost here.
+  const pendingEnqueues: Array<{ index: number; content: string }> = [];
+  for (let i = 0; i < rawMessages.length; i++) {
+    const raw = rawMessages[i];
+    if (raw.type !== 'queue-operation' || raw.operation !== 'enqueue' || !raw.content) continue;
+    if (skipEnqueueIndices.has(i)) continue;
+    pendingEnqueues.push({ index: i, content: raw.content });
+  }
+  if (pendingEnqueues.length >= 2) {
+    for (const twin of userTwinTexts) {
+      if (twin.claimed) continue;
+      const wanted = twin.content.trim();
+      // Unclaimed enqueues before this user line, within the same lookahead window,
+      // in queue (line) order. The CLI drains contiguously, so only contiguous runs
+      // of length ≥2 can form the merged prompt (length 1 = the exact pass above).
+      const cands = pendingEnqueues.filter(
+        e => !skipEnqueueIndices.has(e.index) && e.index < twin.index && twin.index - e.index <= PATTERN_A_LOOKAHEAD,
+      );
+      let matched = false;
+      for (let s = 0; s < cands.length - 1 && !matched; s++) {
+        let joined = cands[s].content;
+        for (let e = s + 1; e < cands.length; e++) {
+          joined += '\n' + cands[e].content;
+          if (joined.trim() === wanted) {
+            twin.claimed = true;
+            for (let k = s; k <= e; k++) skipEnqueueIndices.add(cands[k].index);
+            matched = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+
   // ── Background-agent completion proof (inc-1783612454903) ──
   // The CLI injects a <task-notification> user line each time an async Agent/Task
   // STOPS. The line itself is hidden from chat (transformInjectedUserText), but

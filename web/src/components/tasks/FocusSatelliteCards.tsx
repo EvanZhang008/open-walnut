@@ -3,7 +3,7 @@
  * Each tier gets a SortableTierCard with a kebab menu (same as regular task items).
  */
 import { useState, useRef, useCallback, useEffect, memo, type CSSProperties, type ReactNode } from 'react';
-import type { Task } from '@walnut/core';
+import type { Task } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
 import { useSortable } from '@dnd-kit/sortable';
 import { useDroppable, useDraggable } from '@dnd-kit/core';

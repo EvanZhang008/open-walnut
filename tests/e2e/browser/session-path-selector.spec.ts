@@ -11,15 +11,18 @@
  */
 import { test, expect, type Page } from '@playwright/test'
 
-const API = 'http://localhost:3457'
+const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
 let fixtureRoot = '' // .../ps-fixture (parent of 'projects')
 
 test.beforeAll(async () => {
   const res = await fetch(`${API}/api/sessions/working-dirs`)
   const body = (await res.json()) as { dirs: Array<{ cwd: string }> }
-  const walnut = body.dirs.find(d => d.cwd.includes('ps-fixture'))
-  if (!walnut) throw new Error('ps-fixture seed missing from working-dirs')
+  // Match the walnut seed specifically — other ps-fixture history entries exist
+  // (e.g. monorepo-context-proj) and one may sort ahead of it, so `.includes`
+  // alone would grab the wrong row and derive a bogus fixtureRoot.
+  const walnut = body.dirs.find(d => /\/ps-fixture\/projects\/walnut$/.test(d.cwd))
+  if (!walnut) throw new Error('ps-fixture/projects/walnut seed missing from working-dirs')
   // .../ps-fixture/projects/walnut → .../ps-fixture
   fixtureRoot = walnut.cwd.replace(/\/projects\/walnut$/, '')
 })
@@ -74,9 +77,110 @@ test('segment fuzzy: prefix hit beats substring hit; ghost text; ArrowRight acce
   // Ghost text renders the completion of the top candidate
   await expect(page.locator('.sps-ghost-text')).toHaveText('nut')
 
-  // ArrowRight at end-of-input accepts the ghost
+  // ArrowRight at end-of-input accepts the ghost and descends (trailing slash —
+  // same one-segment complete as Tab, ready to keep typing the next level)
   await input(page).press('ArrowRight')
-  await expect(input(page)).toHaveValue(`${fixtureRoot}/projects/walnut`)
+  await expect(input(page)).toHaveValue(`${fixtureRoot}/projects/walnut/`)
+})
+
+test('exact leaf-prefix hit ranks first, above a high-frecency history subsequence match', async ({ page }) => {
+  await openPicker(page)
+  const localTab = page.locator('.sps-host-tab', { hasText: 'Local' })
+  if (await localTab.isVisible()) await localTab.click()
+
+  // 'mcp' leaf-prefix-hits 'mcps'; it only subsequence-hits the high-frecency
+  // history dir 'monorepo-context-proj' (m…c…p). Relevance must beat frecency:
+  // the FIRST row is 'mcps', and the ghost predicts its completion ('s').
+  await input(page).fill(`${fixtureRoot}/projects/mcp`)
+  const items = page.locator('.sps-path-list .sps-path-item')
+  await expect(items.first()).toContainText('projects/mcps')
+  await expect(page.locator('.sps-ghost-text')).toHaveText('s')
+
+  // Tab lands on the exact-match dir, not the frequent unrelated one.
+  await input(page).press('Tab')
+  await expect(input(page)).toHaveValue(`${fixtureRoot}/projects/mcps/`)
+})
+
+test('exact typed segment + deep highlighted row: Tab descends ONE level, never the full path', async ({ page }) => {
+  await openPicker(page)
+  const localTab = page.locator('.sps-host-tab', { hasText: 'Local' })
+  if (await localTab.isVisible()) await localTab.click()
+
+  // 'walnut' typed exactly — no ghost (nothing left to complete). The fixture's
+  // deep history row (…/projects/walnut, whose subdir web/ exists) may be
+  // highlighted; Tab must produce '…/projects/walnut/' and stay in the picker,
+  // NOT jump to any deeper row's full path.
+  await input(page).fill(`${fixtureRoot}/projects/walnut`)
+  await expect(page.locator('.sps-path-list .sps-path-item').first()).toBeVisible()
+  await input(page).press('Tab')
+  await expect(input(page)).toHaveValue(`${fixtureRoot}/projects/walnut/`)
+  // Now browsing walnut/'s children — its real subdir shows
+  await expect(page.locator('.sps-path-list .sps-path-item', { hasText: 'walnut/web' })).toBeVisible()
+})
+
+test('Tab case-corrects: lowercase typed segment completes to the REAL-cased dir', async ({ page }) => {
+  await openPicker(page)
+  const localTab = page.locator('.sps-host-tab', { hasText: 'Local' })
+  if (await localTab.isVisible()) await localTab.click()
+
+  // Fixture has 'AcmeCapsDev/'. Type it all-lowercase; ghost shows the remainder;
+  // Tab must produce the REAL casing (…/AcmeCapsDev/), never 'acmec' + suffix —
+  // that fabricated path doesn't exist on case-sensitive hosts and used to flip
+  // the picker into a bogus "create folder" prompt.
+  await input(page).fill(`${fixtureRoot}/projects/acmec`)
+  await expect(page.locator('.sps-ghost-text')).toHaveText('apsDev')
+  await input(page).press('Tab')
+  await expect(input(page)).toHaveValue(`${fixtureRoot}/projects/AcmeCapsDev/`)
+  // We're now correctly inside it — its real child lists
+  await expect(page.locator('.sps-path-list .sps-path-item', { hasText: 'AcmeCapsDev/src' })).toBeVisible()
+
+  // Backspacing after the completion must not teleport the caret / rewrite the
+  // input: delete one char → exactly one char shorter, caret stays put.
+  await input(page).press('Backspace')
+  await expect(input(page)).toHaveValue(`${fixtureRoot}/projects/AcmeCapsDev`)
+})
+
+test('Tab completes to the SAME candidate the ghost predicts (not the highlighted history row)', async ({ page }) => {
+  await openPicker(page)
+  const localTab = page.locator('.sps-host-tab', { hasText: 'Local' })
+  if (await localTab.isVisible()) await localTab.click()
+
+  // 'wallet' prefix-extends only 'wallets' (a live sibling), NOT the high-frecency
+  // history entry 'walnut' — yet unified ranking floats history to the top, so the
+  // highlighted row (walnut) and the ghost prediction (wallets) diverge. Regression:
+  // Tab used to complete the highlighted row, contradicting the grey prediction.
+  await input(page).fill(`${fixtureRoot}/projects/wallet`)
+  await expect(page.locator('.sps-ghost-text')).toHaveText('s')
+
+  await input(page).press('Tab')
+  await expect(input(page)).toHaveValue(`${fixtureRoot}/projects/wallets/`)
+})
+
+test('Enter also drills into the ghost candidate, matching the prediction', async ({ page }) => {
+  await openPicker(page)
+  const localTab = page.locator('.sps-host-tab', { hasText: 'Local' })
+  if (await localTab.isVisible()) await localTab.click()
+
+  await input(page).fill(`${fixtureRoot}/projects/wallet`)
+  await expect(page.locator('.sps-ghost-text')).toHaveText('s')
+
+  await input(page).press('Enter')
+  await expect(input(page)).toHaveValue(new RegExp('projects/wallets/?$'))
+})
+
+test('ArrowDown overrides the ghost highlight — explicit navigation wins for Tab', async ({ page }) => {
+  await openPicker(page)
+  const localTab = page.locator('.sps-host-tab', { hasText: 'Local' })
+  if (await localTab.isVisible()) await localTab.click()
+
+  await input(page).fill(`${fixtureRoot}/projects/wal`)
+  await expect(page.locator('.sps-ghost-text')).toHaveText('nut') // ghost = walnut (first row)
+
+  // Manually move down to the next candidate (wallets). Once the user drives the
+  // cursor, Tab must honor the highlighted row, not snap back to the ghost.
+  await input(page).press('ArrowDown')
+  await input(page).press('Tab')
+  await expect(input(page)).toHaveValue(`${fixtureRoot}/projects/wallets/`)
 })
 
 test('fuzzy (non-prefix) match still finds substring candidates', async ({ page }) => {
@@ -170,10 +274,20 @@ test('keyboard matrix: Enter drills into a live dir, Esc backs out, ⇧Enter con
 
 test('status button stays clickable while ghost text is visible', async ({ page }) => {
   await openPicker(page)
+  // In multi-host mode, pin to Local so a slow/dead SSH host cannot keep validity
+  // unknown. Single-host mode is already local and intentionally renders no tabs.
+  const localTab = page.locator('.sps-host-tab', { hasText: 'Local' })
+  if (await localTab.isVisible()) {
+    await localTab.click()
+    await expect(localTab).toHaveClass(/active/)
+  }
+
   // 'wal' has sibling completions (walnut/wallets) so the ghost overlay renders,
   // which flips the input to has-ghost mode (transparent bg + z-index lift).
   await input(page).fill(`${fixtureRoot}/projects/wal`)
   await expect(page.locator('.sps-ghost-text')).toBeVisible()
+  // Button must have settled to a clickable (non-disabled) verdict on Local.
+  await expect(page.locator('.sps-status-btn')).toBeEnabled()
 
   // The status button must still receive the click (regression: the z-index-
   // lifted transparent input painted over it, swallowing every click).

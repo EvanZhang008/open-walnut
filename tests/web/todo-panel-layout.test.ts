@@ -10,48 +10,72 @@ const CSS_SRC = fs.readFileSync(
   path.resolve(import.meta.dirname, '../../web/src/styles/globals.css'),
   'utf8'
 );
+const FOCUS_CARDS_SRC = fs.readFileSync(
+  path.resolve(import.meta.dirname, '../../web/src/components/tasks/FocusSatelliteCards.tsx'),
+  'utf8'
+);
+const TASK_CARD_SRC = fs.readFileSync(
+  path.resolve(import.meta.dirname, '../../web/src/components/tasks/TaskCard.tsx'),
+  'utf8'
+);
+const SESSION_PILL_SRC = fs.readFileSync(
+  path.resolve(import.meta.dirname, '../../web/src/components/tasks/SessionPill.tsx'),
+  'utf8'
+);
 
-describe('TodoPanel layout: actions in bottom row', () => {
-  it('todo-item-actions is inside todo-item-content, not a sibling', () => {
-    // In the new layout, within the SortableTaskItem return JSX,
-    // "todo-item-actions" appears BETWEEN "todo-item-content" open and its closing
+describe('TodoPanel layout: task controls preserve title space', () => {
+  it('keeps the title row controls inside todo-item-content', () => {
     const contentIdx = TODO_PANEL_SRC.indexOf('"todo-item-content"');
-    const actionsIdx = TODO_PANEL_SRC.indexOf('"todo-item-actions"');
+    const titleRowIdx = TODO_PANEL_SRC.indexOf('"todo-item-title-row"', contentIdx);
+    const kebabIdx = TODO_PANEL_SRC.indexOf('<TaskKebabMenu', titleRowIdx);
+    const metaRowIdx = TODO_PANEL_SRC.indexOf('"todo-item-meta-row"', kebabIdx);
     expect(contentIdx).toBeGreaterThan(-1);
-    expect(actionsIdx).toBeGreaterThan(-1);
-    expect(actionsIdx).toBeGreaterThan(contentIdx);
-
-    // Verify actions is NOT a direct child of todo-panel-item at the same level
-    // Old pattern: </div>\n\n      {/* — action badges */}\n      <div className="todo-item-actions">
-    // New pattern: actions is indented deeper (inside content)
-    const lines = TODO_PANEL_SRC.split('\n');
-    const contentLine = lines.findIndex(l => l.includes('"todo-item-content"'));
-    const actionsLine = lines.findIndex(l => l.includes('"todo-item-actions"'));
-    const contentIndent = lines[contentLine].match(/^\s*/)?.[0].length ?? 0;
-    const actionsIndent = lines[actionsLine].match(/^\s*/)?.[0].length ?? 0;
-    // Actions should be MORE indented than content (it's a child, not a sibling)
-    expect(actionsIndent).toBeGreaterThan(contentIndent);
+    expect(titleRowIdx).toBeGreaterThan(contentIdx);
+    expect(kebabIdx).toBeGreaterThan(titleRowIdx);
+    expect(metaRowIdx).toBeGreaterThan(kebabIdx);
   });
 
-  it('TaskStatusDot is in actions row, not meta-row', () => {
+  it('keeps the phase status control in the title row, not the search meta row', () => {
+    const titleRowIdx = TODO_PANEL_SRC.indexOf('"todo-item-title-row"');
+    const phaseStatusIdx = TODO_PANEL_SRC.indexOf('className={`task-phase-icon-btn', titleRowIdx);
     const metaRowIdx = TODO_PANEL_SRC.indexOf('"todo-item-meta-row"');
-    const actionsIdx = TODO_PANEL_SRC.indexOf('"todo-item-actions"');
-    // Find TaskStatusDot usage in the SortableTaskItem function
-    const taskStatusDotIdx = TODO_PANEL_SRC.indexOf('<TaskStatusDot', actionsIdx);
-    expect(taskStatusDotIdx).toBeGreaterThan(actionsIdx);
-    // TaskStatusDot should NOT appear between meta-row open and actions open
-    const metaRegion = TODO_PANEL_SRC.slice(metaRowIdx, actionsIdx);
-    expect(metaRegion).not.toContain('TaskStatusDot');
+    const ordinaryItemEnd = TODO_PANEL_SRC.indexOf('// ── Static task item', metaRowIdx);
+    expect(phaseStatusIdx).toBeGreaterThan(titleRowIdx);
+    expect(metaRowIdx).toBeGreaterThan(phaseStatusIdx);
+    expect(TODO_PANEL_SRC.slice(metaRowIdx, ordinaryItemEnd))
+      .not.toContain('className={`task-phase-icon-btn');
   });
 
-  it('CSS: .todo-item-actions has margin-top, no flex-shrink: 0', () => {
-    // Extract the .todo-item-actions CSS block
-    const blockStart = CSS_SRC.indexOf('.todo-item-actions {');
-    expect(blockStart).toBeGreaterThan(-1);
-    const blockEnd = CSS_SRC.indexOf('}', blockStart);
-    const block = CSS_SRC.slice(blockStart, blockEnd + 1);
-    expect(block).toContain('margin-top');
-    expect(block).not.toContain('flex-shrink: 0');
-    expect(block).toContain('display: flex');
+  it('CSS lets task content and titles consume the available row width', () => {
+    const contentStart = CSS_SRC.indexOf('.todo-item-content {');
+    const content = CSS_SRC.slice(contentStart, CSS_SRC.indexOf('}', contentStart) + 1);
+    const titleStart = CSS_SRC.indexOf('\n.todo-item-title {') + 1;
+    const title = CSS_SRC.slice(titleStart, CSS_SRC.indexOf('}', titleStart) + 1);
+    expect(content).toContain('flex: 1');
+    expect(content).toContain('min-width: 0');
+    expect(content).toContain('display: flex');
+    expect(title).toContain('flex: 1');
+    expect(title).toContain('min-width: 0');
+  });
+});
+
+describe('Task linked-session pill visibility', () => {
+  it('keeps linked-session pills off Home while preserving the dedicated tasks card', () => {
+    expect(SESSION_PILL_SRC).toContain('export function TaskSessionPill');
+    expect(SESSION_PILL_SRC).toContain('resolveTaskSessionId(task)');
+    expect(TODO_PANEL_SRC).not.toContain('<TaskSessionPill');
+    expect(FOCUS_CARDS_SRC).not.toContain('<TaskSessionPill');
+    expect(TASK_CARD_SRC.match(/<TaskSessionPill/g)).toHaveLength(1);
+  });
+
+  it('the shared wrapper preserves tasks without linked sessions', () => {
+    expect(SESSION_PILL_SRC).toMatch(
+      /const sessionId = resolveTaskSessionId\(task\);[\s\S]*if \(!sessionId\) return null;/,
+    );
+  });
+
+  it('has no Home-only session pill placement rules', () => {
+    expect(CSS_SRC).not.toContain('.todo-pinned-card-content .task-session-pill {');
+    expect(CSS_SRC).not.toContain('.todo-item-content > .task-session-pill {');
   });
 });

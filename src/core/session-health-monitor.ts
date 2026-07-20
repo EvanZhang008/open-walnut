@@ -17,6 +17,7 @@ import { isSessionProcessAlive, isLocalJsonlFresh } from '../utils/session-liven
 import { bus, EventNames } from './event-bus.js'
 import { runPeriodic, type PeriodicHandle, type TickContext } from './periodic-task.js'
 import type { SessionRecord, Task, TaskPhase } from './types.js'
+import { emitSessionStatusChanged } from './session-tracker.js'
 const HEALTH_CHECK_INTERVAL_MS = 30_000
 /** Adaptive slow-down: with an empty active set there is nothing to watch. */
 const HEALTH_CHECK_IDLE_INTERVAL_MS = 5 * 60_000
@@ -186,6 +187,10 @@ export class SessionHealthMonitor {
     sessions = sessions.filter((s) => {
       const isOrphan =
         s.host == null && s.pid == null &&
+        // ACP-backed sessions (engine='codex') NEVER carry a PID — the worker is
+        // a daemon child keyed by acpRuntimeId, and even a reaped worker stays
+        // resumable via session/load. pid==null is their normal state, not orphanhood.
+        s.engine !== 'codex' &&
         s.process_status !== 'stopped' && s.process_status !== 'error' &&
         (nowMs - new Date(s.last_status_change ?? s.startedAt ?? 0).getTime()) > ORPHAN_GRACE_MS
       if (isOrphan) { orphanIds.push(s.claudeSessionId); return false }
@@ -285,7 +290,7 @@ export class SessionHealthMonitor {
         // process_status or task phase, so recoverConnectionLostSessions() can
         // probe and restore the session after the daemon reconnects.
         if (session.host) {
-          await updateSessionRecord(session.claudeSessionId, {
+          const updated = await updateSessionRecord(session.claudeSessionId, {
             process_status: 'error',
             errorMessage: 'Connection lost — unable to reach remote host',
             activity: undefined,
@@ -299,12 +304,12 @@ export class SessionHealthMonitor {
             previousProcessStatus: session.process_status,
             taskPhase,
           })
-          bus.emit(EventNames.SESSION_STATUS_CHANGED, {
-            sessionId: session.claudeSessionId,
-            taskId: session.taskId,
-            process_status: 'error',
-            errorMessage: 'Connection lost — unable to reach remote host',
-          }, ['*'], { source: 'health-monitor', urgency: 'urgent' })
+          emitSessionStatusChanged(
+            updated,
+            {},
+            ['*'],
+            { source: 'health-monitor', urgency: 'urgent' },
+          )
           continue
         }
 
@@ -316,9 +321,10 @@ export class SessionHealthMonitor {
           // Local sessions: read the last 8KB of the JSONL file to check for a result event.
           const hasResult = session.outputFile ? await this.outputFileHasResult(session.outputFile) : false
 
+          let updated: SessionRecord
           if (hasResult) {
             // Normal completion — process_status 'stopped'
-            await updateSessionRecord(session.claudeSessionId, {
+            updated = await updateSessionRecord(session.claudeSessionId, {
               process_status: 'stopped',
               activity: undefined,
               last_status_change: now,
@@ -327,7 +333,7 @@ export class SessionHealthMonitor {
             } as any)
           } else {
             // Error — process_status 'error' with detail
-            await updateSessionRecord(session.claudeSessionId, {
+            updated = await updateSessionRecord(session.claudeSessionId, {
               process_status: 'error',
               errorMessage: 'Process exited without result',
               activity: undefined,
@@ -375,11 +381,12 @@ export class SessionHealthMonitor {
             newProcessStatus,
           })
 
-          bus.emit(EventNames.SESSION_STATUS_CHANGED, {
-            sessionId: session.claudeSessionId,
-            taskId: session.taskId,
-            process_status: newProcessStatus,
-          }, ['*'], { source: 'health-monitor', urgency: 'urgent' })
+          emitSessionStatusChanged(
+            updated,
+            {},
+            ['*'],
+            { source: 'health-monitor', urgency: 'urgent' },
+          )
         } else {
           // Process died while idle or in non-in_progress state (local only).
           const updates: Record<string, unknown> = {
@@ -405,7 +412,7 @@ export class SessionHealthMonitor {
             updates.status_changed_by = 'health-monitor'
           }
 
-          await updateSessionRecord(session.claudeSessionId, updates)
+          const updated = await updateSessionRecord(session.claudeSessionId, updates)
 
           log.session.info('health monitor: process status updated', {
             sessionId: session.claudeSessionId,
@@ -417,11 +424,12 @@ export class SessionHealthMonitor {
           })
 
           if (isWorkInProgress) {
-            bus.emit(EventNames.SESSION_STATUS_CHANGED, {
-              sessionId: session.claudeSessionId,
-              taskId: session.taskId,
-              process_status: updates.process_status as string,
-            }, ['*'], { source: 'health-monitor', urgency: 'urgent' })
+            emitSessionStatusChanged(
+              updated,
+              {},
+              ['*'],
+              { source: 'health-monitor', urgency: 'urgent' },
+            )
             // Phase sync for idle process death with work in progress
             if (session.taskId) {
               const hasResult = updates.status_reason === 'normal_completion'
@@ -507,7 +515,7 @@ export class SessionHealthMonitor {
    */
   private async checkHungSessions(
     sessions: SessionRecord[],
-    updateSessionRecord: (id: string, update: Record<string, unknown>) => Promise<unknown>,
+    updateSessionRecord: (id: string, update: Record<string, unknown>) => Promise<SessionRecord>,
   ): Promise<Set<string>> {
     const WARN_THRESHOLD_MS = 5 * 60 * 1000  // log warning after 5 min with no Claude output
     const flaggedIds = new Set<string>()
@@ -552,16 +560,11 @@ export class SessionHealthMonitor {
       })
 
       // Update activity so UI shows a yellow warning banner
-      await updateSessionRecord(session.claudeSessionId, {
+      const updated = await updateSessionRecord(session.claudeSessionId, {
         activity: `Waiting for response (${waitingMin} min)...`,
       })
 
-      bus.emit(EventNames.SESSION_STATUS_CHANGED, {
-        sessionId: session.claudeSessionId,
-        taskId: session.taskId,
-        process_status: 'running',
-        activity: `Waiting for response (${waitingMin} min)...`,
-      }, ['*'], { source: 'health-monitor' })
+      emitSessionStatusChanged(updated, {}, ['*'], { source: 'health-monitor' })
 
       flaggedIds.add(session.claudeSessionId)
     }
@@ -582,7 +585,7 @@ export class SessionHealthMonitor {
    */
   private async checkIdleTimeout(
     sessions: SessionRecord[],
-    updateSessionRecord: (id: string, update: Record<string, unknown>) => Promise<unknown>,
+    updateSessionRecord: (id: string, update: Record<string, unknown>) => Promise<SessionRecord>,
     taskMap: Map<string, Task>,
     cachedIsAlive: (s: SessionRecord) => Promise<boolean>,
   ): Promise<Set<string>> {
@@ -739,7 +742,7 @@ export class SessionHealthMonitor {
       killedIds.add(session.claudeSessionId)
 
       const updateNow = new Date().toISOString()
-      await updateSessionRecord(session.claudeSessionId, {
+      const updated = await updateSessionRecord(session.claudeSessionId, {
         process_status: 'stopped',
         errorMessage: `No output for ${idleMinutes} min`,
         activity: undefined,
@@ -748,11 +751,7 @@ export class SessionHealthMonitor {
         status_changed_by: 'health-monitor',
       } as any)
 
-      bus.emit(EventNames.SESSION_STATUS_CHANGED, {
-        sessionId: session.claudeSessionId,
-        taskId: session.taskId,
-        process_status: 'stopped',
-      }, ['*'], { source: 'health-monitor' })
+      emitSessionStatusChanged(updated, {}, ['*'], { source: 'health-monitor' })
 
       // Phase sync: idle timeout → AWAIT_HUMAN_ACTION (we killed the session, not a normal completion)
       if (session.taskId) {
@@ -781,7 +780,7 @@ export class SessionHealthMonitor {
    */
   private async checkStaleAwaitingSessions(
     sessions: SessionRecord[],
-    updateSessionRecord: (id: string, update: Record<string, unknown>) => Promise<unknown>,
+    updateSessionRecord: (id: string, update: Record<string, unknown>) => Promise<SessionRecord>,
     taskMap: Map<string, Task>,
   ): Promise<void> {
     const STALE_THRESHOLD_MS = 60 * 60 * 1000  // 1 hour with no output = stale
@@ -821,18 +820,17 @@ export class SessionHealthMonitor {
         staleMinutes,
       })
 
-      await updateSessionRecord(session.claudeSessionId, {
+      const updated = await updateSessionRecord(session.claudeSessionId, {
         activity: `Possibly stuck — no output for ${staleMinutes} min`,
         last_status_change: new Date().toISOString(),
       })
 
-      bus.emit(EventNames.SESSION_STATUS_CHANGED, {
-        sessionId: session.claudeSessionId,
-        taskId: session.taskId,
-        process_status: session.process_status,
-        phase: 'AWAIT_HUMAN_ACTION' as TaskPhase,
-        activity: `Possibly stuck — no output for ${staleMinutes} min`,
-      }, ['*'], { source: 'health-monitor' })
+      emitSessionStatusChanged(
+        updated,
+        { phase: 'AWAIT_HUMAN_ACTION' as TaskPhase },
+        ['*'],
+        { source: 'health-monitor' },
+      )
     }
   }
 
@@ -1050,7 +1048,7 @@ export class SessionHealthMonitor {
    */
   private async recoverConnectionLostSessions(
     sessions: SessionRecord[],
-    updateSessionRecord: (id: string, update: Record<string, unknown>) => Promise<unknown>,
+    updateSessionRecord: (id: string, update: Record<string, unknown>) => Promise<SessionRecord>,
   ): Promise<void> {
     try {
       const { isDaemonConnected, probeDaemonSession } = await import('../providers/daemon-connection.js')
@@ -1083,7 +1081,7 @@ export class SessionHealthMonitor {
             const now = new Date().toISOString()
             if (probe.alive) {
               // Process still running — restore session
-              await updateSessionRecord(s.claudeSessionId, {
+              const updated = await updateSessionRecord(s.claudeSessionId, {
                 process_status: 'running',
                 errorMessage: undefined,
                 activity: undefined,
@@ -1091,17 +1089,18 @@ export class SessionHealthMonitor {
                 status_reason: 'auto_recovered',
                 status_changed_by: 'health-monitor',
               } as any)
-              bus.emit(EventNames.SESSION_STATUS_CHANGED, {
-                sessionId: s.claudeSessionId,
-                taskId: s.taskId,
-                process_status: 'running',
-              }, ['*'], { source: 'health-monitor', urgency: 'urgent' })
+              emitSessionStatusChanged(
+                updated,
+                {},
+                ['*'],
+                { source: 'health-monitor', urgency: 'urgent' },
+              )
               log.session.info('health monitor: auto-recovered connection-lost session', {
                 sessionId: s.claudeSessionId, host: s.host, alive: true,
               })
             } else {
               // Process dead — mark stopped (user's next message will --resume)
-              await updateSessionRecord(s.claudeSessionId, {
+              const updated = await updateSessionRecord(s.claudeSessionId, {
                 process_status: 'stopped',
                 errorMessage: undefined,
                 activity: undefined,
@@ -1109,11 +1108,12 @@ export class SessionHealthMonitor {
                 status_reason: 'auto_recovered_dead',
                 status_changed_by: 'health-monitor',
               } as any)
-              bus.emit(EventNames.SESSION_STATUS_CHANGED, {
-                sessionId: s.claudeSessionId,
-                taskId: s.taskId,
-                process_status: 'stopped',
-              }, ['*'], { source: 'health-monitor', urgency: 'urgent' })
+              emitSessionStatusChanged(
+                updated,
+                {},
+                ['*'],
+                { source: 'health-monitor', urgency: 'urgent' },
+              )
               log.session.info('health monitor: auto-recovered connection-lost session (process dead)', {
                 sessionId: s.claudeSessionId, host: s.host, alive: false,
               })
@@ -1139,15 +1139,10 @@ export class SessionHealthMonitor {
             // Daemon not connected — update activity so UI shows "Reconnecting..." banner
             // Only update if not already showing reconnecting message (avoid churn)
             if (s.activity !== 'Reconnecting to remote host...') {
-              await updateSessionRecord(s.claudeSessionId, {
+              const updated = await updateSessionRecord(s.claudeSessionId, {
                 activity: 'Reconnecting to remote host...',
               })
-              bus.emit(EventNames.SESSION_STATUS_CHANGED, {
-                sessionId: s.claudeSessionId,
-                taskId: s.taskId,
-                process_status: 'error',
-                activity: 'Reconnecting to remote host...',
-              }, ['*'], { source: 'health-monitor' })
+              emitSessionStatusChanged(updated, {}, ['*'], { source: 'health-monitor' })
             }
           }
         } catch (err) {

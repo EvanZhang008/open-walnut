@@ -406,7 +406,14 @@ describe('B6: recoverDisconnectedSessions host normalization (local sessions)', 
   async function runRecoverWith(sessionRecords: Array<Record<string, unknown>>) {
     vi.doMock('../../src/core/session-tracker.js', () => ({
       listSessions: vi.fn().mockResolvedValue(sessionRecords),
-      updateSessionRecord: vi.fn().mockResolvedValue(undefined),
+      updateSessionRecord: vi.fn(async (
+        sessionId: string,
+        updates: Record<string, unknown>,
+      ) => ({
+        ...sessionRecords.find((record) => record.claudeSessionId === sessionId),
+        ...updates,
+      })),
+      emitSessionStatusChanged: vi.fn(),
     }))
     vi.doMock('../../src/core/event-bus.js', () => ({
       bus: { emit: vi.fn() },

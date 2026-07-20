@@ -695,7 +695,7 @@ function ProviderCard({
                     <code style={{ fontSize: 11 }}>claude login</code> to use your subscription.
                   </p>
                   <div style={{ marginTop: 8 }}>
-                    <InstallButton target="claude-cli" label="Install Claude Code CLI" />
+                    <InstallButton target="claude-cli" label="Copy install command" />
                   </div>
                 </>
               )}
@@ -725,7 +725,7 @@ function ProviderCard({
               </p>
               {def.api === 'ollama' && statusDot === 'error' && (
                 <div style={{ marginTop: 8 }}>
-                  <InstallButton target="ollama" label="Install Ollama" />
+                  <InstallButton target="ollama" label="Copy install command" />
                 </div>
               )}
             </div>

@@ -56,17 +56,18 @@ async function getStore(): Promise<QueueStore> {
  * Persist the current in-memory store to disk.
  * Serializes writes to avoid concurrent file corruption.
  */
-async function persist(): Promise<void> {
+async function persist(strict = false): Promise<void> {
   const s = store;
   if (!s) return;
   // Chain writes so they don't interleave
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     try {
       await writeJsonFile(SESSION_QUEUE_FILE, s);
     } catch (err) {
       log.session.error('failed to persist session message queue', {
         error: err instanceof Error ? err.message : String(err),
       });
+      if (strict) throw err;
     }
   });
   await writeLock;
@@ -184,6 +185,32 @@ export async function markProcessing(sessionId: string): Promise<QueuedMessage[]
   await persist();
   log.session.info('messages batched for delivery', { sessionId, count: pending.length });
   return pending;
+}
+
+/**
+ * Mark only the oldest pending message for a session as processing.
+ *
+ * ACP providers accept one prompt per turn, so their runner uses this instead
+ * of the native Claude batching contract above. Returning an array keeps the
+ * scoped remove/revert APIs identical while guaranteeing a cardinality of 0–1.
+ */
+export async function markNextProcessing(sessionId: string): Promise<QueuedMessage[]> {
+  const s = await getStore();
+  const queue = s.queues[sessionId];
+  if (!queue) return [];
+  if (queue.some((message) => message.status === 'processing')) return [];
+
+  const next = queue.find((message) => message.status === 'pending');
+  if (!next) return [];
+
+  next.status = 'processing';
+  await persist();
+  log.session.info('next message selected for delivery', {
+    sessionId,
+    messageId: next.id,
+    queueDepth: queue.length,
+  });
+  return [next];
 }
 
 /**
@@ -307,6 +334,94 @@ export async function getAllSessionsWithPending(): Promise<string[]> {
     }
   }
   return result;
+}
+
+export interface SessionQueueMigration {
+  movedIds: string[];
+}
+
+/**
+ * Move every durable queue row to a replacement provider identity.
+ *
+ * The queue write must commit before an ACP identity redirect is deleted.
+ * Stable message IDs survive the move, so worker command-id dedup still gives
+ * exactly-once provider submission after a crash resets `processing` rows.
+ */
+export async function migrateSessionQueue(
+  oldSessionId: string,
+  newSessionId: string,
+): Promise<SessionQueueMigration> {
+  if (oldSessionId === newSessionId) return { movedIds: [] };
+  const s = await getStore();
+  const source = s.queues[oldSessionId] ?? [];
+  if (source.length === 0) return { movedIds: [] };
+
+  const oldSource = source;
+  const oldTarget = s.queues[newSessionId];
+  const target = oldTarget ?? [];
+  const existingIds = new Set(target.map((message) => message.id));
+  const moved = source
+    .filter((message) => !existingIds.has(message.id))
+    .map((message) => ({ ...message, sessionId: newSessionId }));
+  const movedIds = moved.map((message) => message.id);
+
+  s.queues[newSessionId] = [...target, ...moved]
+    .sort((a, b) => a.enqueuedAt.localeCompare(b.enqueuedAt));
+  delete s.queues[oldSessionId];
+  try {
+    await persist(true);
+  } catch (error) {
+    s.queues[oldSessionId] = oldSource;
+    if (oldTarget) s.queues[newSessionId] = oldTarget;
+    else delete s.queues[newSessionId];
+    throw error;
+  }
+  log.session.info('session message queue identity migrated', {
+    oldSessionId,
+    newSessionId,
+    movedCount: movedIds.length,
+  });
+  return { movedIds };
+}
+
+/**
+ * Compensate a staged identity migration that failed after its queue move.
+ * Target messages that predated the migration are left untouched.
+ */
+export async function rollbackSessionQueueMigration(
+  oldSessionId: string,
+  newSessionId: string,
+  movedIds: string[],
+): Promise<void> {
+  if (oldSessionId === newSessionId || movedIds.length === 0) return;
+  const s = await getStore();
+  const oldSource = s.queues[oldSessionId];
+  const oldTarget = s.queues[newSessionId];
+  const target = oldTarget ?? [];
+  const movedSet = new Set(movedIds);
+  const returning = target
+    .filter((message) => movedSet.has(message.id))
+    .map((message) => ({ ...message, sessionId: oldSessionId }));
+  if (returning.length === 0) return;
+
+  const source = oldSource ?? [];
+  const sourceIds = new Set(source.map((message) => message.id));
+  s.queues[oldSessionId] = [
+    ...source,
+    ...returning.filter((message) => !sourceIds.has(message.id)),
+  ].sort((a, b) => a.enqueuedAt.localeCompare(b.enqueuedAt));
+  const remaining = target.filter((message) => !movedSet.has(message.id));
+  if (remaining.length > 0) s.queues[newSessionId] = remaining;
+  else delete s.queues[newSessionId];
+  try {
+    await persist(true);
+  } catch (error) {
+    if (oldSource) s.queues[oldSessionId] = oldSource;
+    else delete s.queues[oldSessionId];
+    if (oldTarget) s.queues[newSessionId] = oldTarget;
+    else delete s.queues[newSessionId];
+    throw error;
+  }
 }
 
 /**
