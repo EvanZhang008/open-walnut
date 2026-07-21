@@ -2353,19 +2353,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const satelliteIds_arr = useMemo(() => dragSatelliteIds ?? clusterTierByGroup(satelliteTasksLocal), [dragSatelliteIds, satelliteTasksLocal]);
   const waitIds_arr = useMemo(() => dragWaitIds ?? clusterTierByGroup(waitTasksLocal), [dragWaitIds, waitTasksLocal]);
 
-  // Resolve tier ID arrays to Task objects (uses drag overrides when active)
   const pinnedTaskMap = useMemo(() => new Map(pinnedTasks.map((t) => [t.id, t])), [pinnedTasks]);
-  const focusTasksDisplay = useMemo(() => focusIds_arr.map((id) => pinnedTaskMap.get(id)).filter(Boolean) as Task[], [focusIds_arr, pinnedTaskMap]);
-  const satelliteTasksDisplay = useMemo(() => satelliteIds_arr.map((id) => pinnedTaskMap.get(id)).filter(Boolean) as Task[], [satelliteIds_arr, pinnedTaskMap]);
-  const waitTasksDisplay = useMemo(() => waitIds_arr.map((id) => pinnedTaskMap.get(id)).filter(Boolean) as Task[], [waitIds_arr, pinnedTaskMap]);
-
-  // Per-tier group render metadata (chip on the lead, rail on every member, rounded
-  // ends). Each tier boxes independently: a group split across tiers (e.g. 2 pins in
-  // Focus, 1 in Satellite) only clusters where ≥2 of its members live — so the lone
-  // Satellite member shows no box. Mirrors the main list's grouped look in the pins.
-  const focusGroupMeta = useMemo(() => buildTierGroupMeta(focusTasksDisplay, taskGroups), [focusTasksDisplay, taskGroups]);
-  const satelliteGroupMeta = useMemo(() => buildTierGroupMeta(satelliteTasksDisplay, taskGroups), [satelliteTasksDisplay, taskGroups]);
-  const waitGroupMeta = useMemo(() => buildTierGroupMeta(waitTasksDisplay, taskGroups), [waitTasksDisplay, taskGroups]);
 
   // Snapshot of original tier arrays at drag start (for revert on cancel)
   const dragStartSnapshot = useRef<{ focus: string[]; satellite: string[]; wait: string[]; recent?: string[] } | null>(null);
@@ -2398,7 +2386,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const recentStaticId = useCallback((t: Task) =>
     (t.status === 'done' || t.phase === 'COMPLETE' || pinnedTaskIds?.has(t.id)) ? `recent-static:${t.id}` : t.id,
   [pinnedTaskIds]);
-  const recentIds = useMemo(() => recentTasks.map(recentStaticId), [recentTasks, recentStaticId]);
   // Only genuinely draggable Recent ids — feeds the drag-start snapshot and
   // pinnedCardIds. A pinned task now ALSO appears in Recent; if its raw id were in
   // snap.recent, dragging its TIER card would be misrouted through the
@@ -2820,13 +2807,32 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       return;
     }
 
-    // Same-container reorder
-    const oldIndex = pinnedTaskIds_arr.indexOf(activeId);
-    const newIndex = pinnedTaskIds_arr.indexOf(overId);
+    // Same-container reorder. DnD Kit exposes the rendered subset; replace only
+    // those slots so a filter cannot silently move hidden pins.
+    const visibleIds = (active.data.current?.sortable as { items?: string[] } | undefined)?.items;
+    if (!visibleIds) return;
+    const oldIndex = visibleIds.indexOf(activeId);
+    const newIndex = visibleIds.indexOf(overId);
     if (oldIndex === -1 || newIndex === -1) return;
-    const newOrder = [...pinnedTaskIds_arr];
-    newOrder.splice(oldIndex, 1);
-    newOrder.splice(newIndex, 0, activeId);
+    const reorderedVisible = [...visibleIds];
+    reorderedVisible.splice(oldIndex, 1);
+    reorderedVisible.splice(newIndex, 0, activeId);
+
+    const completeTier = origTier === 'focus'
+      ? snap.focus
+      : origTier === 'wait'
+        ? snap.wait
+        : snap.satellite;
+    const visibleSet = new Set(visibleIds);
+    let visibleIndex = 0;
+    const reorderedTier = completeTier.map((id) =>
+      visibleSet.has(id) ? reorderedVisible[visibleIndex++] : id
+    );
+    const newOrder = [
+      ...(origTier === 'focus' ? reorderedTier : snap.focus),
+      ...(origTier === 'satellite' ? reorderedTier : snap.satellite),
+      ...(origTier === 'wait' ? reorderedTier : snap.wait),
+    ];
     onReorderPinned?.(newOrder);
   }, [pinnedTaskIds_arr, onReorderPinned, onSetTier, onPinTask, clearDragState, onAddToGroup, onGroupTasks, onUngroupTask, pinnedCardIds, tasks]);
 
@@ -3024,7 +3030,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // point of search is to find things you can't see in the current view).
   // Explicit toolbar filters (priority, phase, source, tag, session) are
   // still respected because the user toggled those intentionally.
-  const searchFiltered = useMemo(() => {
+  const searchMatches = useMemo(() => {
     if (!isSearchMode) return filtered;
 
     const applySearchFilters = (t: Task): boolean => {
@@ -3055,32 +3061,106 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     };
 
     const eligibleTasks = tasks.filter(applySearchFilters);
+    const lowerQuery = searchQuery.trim().toLowerCase();
+    // Keep the urgent pass on small metadata fields; descriptions and summaries can
+    // contain enough text to block an input frame across a large task collection.
+    const metadataMatches = eligibleTasks.filter((t) =>
+      t.title.toLowerCase().includes(lowerQuery) ||
+      t.category.toLowerCase().includes(lowerQuery) ||
+      t.project.toLowerCase().includes(lowerQuery) ||
+      (t.tags && t.tags.some(tag => tag.toLowerCase().includes(lowerQuery)))
+    );
 
-    // While API results haven't arrived yet, show client-side matches as a placeholder.
     if (!searchResults) {
-      const lowerQuery = searchQuery.trim().toLowerCase();
-      return eligibleTasks.filter((t) =>
-          t.title.toLowerCase().includes(lowerQuery) ||
-          (t.description && t.description.toLowerCase().includes(lowerQuery)) ||
-          (t.summary && t.summary.toLowerCase().includes(lowerQuery)) ||
-          t.category.toLowerCase().includes(lowerQuery) ||
-          t.project.toLowerCase().includes(lowerQuery) ||
-          (t.tags && t.tags.some(tag => tag.toLowerCase().includes(lowerQuery))) ||
-          taskReferenceMatchField(t, searchQuery) !== null
-      );
+      const metadataTaskIds = new Set(metadataMatches.map((task) => task.id));
+      return [
+        ...metadataMatches,
+        ...eligibleTasks.filter((task) =>
+          !metadataTaskIds.has(task.id)
+          && taskReferenceMatchField(task, searchQuery) !== null
+        ),
+      ];
     }
 
-    // Once the API responds, its task ownership and ranking are authoritative.
-    // Local reference fields above are only an in-flight placeholder.
-    return mapServerTaskSearchResults(
+    // Preserve direct metadata matches after the semantic pass. The search service caps
+    // its global candidate pool before these client-only filters are applied. Reference
+    // ownership remains server-authoritative because local session fields can be stale.
+    const serverMatches = mapServerTaskSearchResults(
       eligibleTasks,
       searchResults.map((result) => result.taskId),
     );
+    const serverTaskIds = new Set(serverMatches.map((task) => task.id));
+    return [
+      ...serverMatches,
+      ...metadataMatches.filter((task) => !serverTaskIds.has(task.id)),
+    ];
   // eslint-disable-next-line react-hooks/exhaustive-deps -- activeCategory/favorites/isDescendantVisibleInStarred intentionally omitted: search bypasses category tab; showCompleted intentionally omitted: search always shows completed tasks
   }, [tasks, filtered, isSearchMode, searchQuery, searchResults, priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter]);
 
+  // Counts and cross-section visibility use the complete match set, but the main
+  // list mounts a bounded number of rows so neither search phase can stall typing.
+  const searchFiltered = useMemo(
+    () => searchMatches.slice(0, 40),
+    [searchMatches],
+  );
+
   // Count of search results (for display)
-  const searchResultCount = isSearchMode ? searchFiltered.length : null;
+  const searchResultCount = isSearchMode ? searchMatches.length : null;
+
+  // Pinned membership and ordering stay based on the complete tier arrays. Filters only
+  // constrain the rendered IDs so hidden cards keep their stable pin position.
+  const visibleTaskIds = useMemo(
+    () => new Set((isSearchMode ? searchMatches : filtered).map((task) => task.id)),
+    [filtered, isSearchMode, searchMatches],
+  );
+  const visiblePinnedTasks = useMemo(
+    () => pinnedTasks.filter((task) => visibleTaskIds.has(task.id)),
+    [pinnedTasks, visibleTaskIds],
+  );
+  const visibleRecentTasks = useMemo(
+    () => recentTasks.filter((task) => visibleTaskIds.has(task.id)),
+    [recentTasks, visibleTaskIds],
+  );
+  const visibleRecentIds = useMemo(
+    () => visibleRecentTasks.map(recentStaticId),
+    [recentStaticId, visibleRecentTasks],
+  );
+  const visibleFocusIds = useMemo(
+    () => focusIds_arr.filter((id) => id.startsWith('group:') || visibleTaskIds.has(id)),
+    [focusIds_arr, visibleTaskIds],
+  );
+  const visibleSatelliteIds = useMemo(
+    () => satelliteIds_arr.filter((id) => id.startsWith('group:') || visibleTaskIds.has(id)),
+    [satelliteIds_arr, visibleTaskIds],
+  );
+  const visibleWaitIds = useMemo(
+    () => waitIds_arr.filter((id) => id.startsWith('group:') || visibleTaskIds.has(id)),
+    [waitIds_arr, visibleTaskIds],
+  );
+  const focusTasksDisplay = useMemo(
+    () => visibleFocusIds.map((id) => pinnedTaskMap.get(id)).filter((task): task is Task => !!task),
+    [pinnedTaskMap, visibleFocusIds],
+  );
+  const satelliteTasksDisplay = useMemo(
+    () => visibleSatelliteIds.map((id) => pinnedTaskMap.get(id)).filter((task): task is Task => !!task),
+    [pinnedTaskMap, visibleSatelliteIds],
+  );
+  const waitTasksDisplay = useMemo(
+    () => visibleWaitIds.map((id) => pinnedTaskMap.get(id)).filter((task): task is Task => !!task),
+    [pinnedTaskMap, visibleWaitIds],
+  );
+  const focusGroupMeta = useMemo(
+    () => buildTierGroupMeta(focusTasksDisplay, taskGroups),
+    [focusTasksDisplay, taskGroups],
+  );
+  const satelliteGroupMeta = useMemo(
+    () => buildTierGroupMeta(satelliteTasksDisplay, taskGroups),
+    [satelliteTasksDisplay, taskGroups],
+  );
+  const waitGroupMeta = useMemo(
+    () => buildTierGroupMeta(waitTasksDisplay, taskGroups),
+    [waitTasksDisplay, taskGroups],
+  );
 
   // --- Parent-anchored sort with child grouping ---
   // Produces a sorted ID order where children always follow their parent.
@@ -4243,8 +4323,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // shrink-wraps its header rows instead of holding the splitter ratio — no
   // dead blank region pushing the task list down.
   const pinnedAreaCollapsed =
-    (pinnedTasks.length === 0 || collapsedSections.has('pinned')) &&
-    (recentTasks.length === 0 || collapsedSections.has('recent'));
+    (visiblePinnedTasks.length === 0 || collapsedSections.has('pinned')) &&
+    (visibleRecentTasks.length === 0 || collapsedSections.has('recent'));
 
   return (
     <div className={`todo-panel${splitterResizing ? ' splitter-resizing' : ''}`} ref={splitterContainerRef}>
@@ -4294,7 +4374,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       </div>
 
       {/* Unified DndContext wrapping both Pinned + Recent — enables drag from Recent to Pin */}
-      {(pinnedTasks.length > 0 || recentTasks.length > 0 || hiddenPinnedGroups.length > 0) && (
+      {(visiblePinnedTasks.length > 0 || visibleRecentTasks.length > 0 || hiddenPinnedGroups.length > 0) && (
         <DndContext sensors={pinnedSensors} collisionDetection={closestCenter} onDragStart={handlePinnedDragStart} onDragOver={handlePinnedDragOver} onDragEnd={handlePinnedDragEnd} onDragCancel={handlePinnedDragCancel}>
           <div
             className="todo-pinned-wrapper"
@@ -4308,12 +4388,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             }
           >
           {/* PINNED section — Focus + Satellite + Wait sub-groups */}
-          {pinnedTasks.length > 0 && (
+          {visiblePinnedTasks.length > 0 && (
             <div className="todo-pinned-section">
               <div className="todo-pinned-header" onClick={() => toggleSection('pinned')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('pinned'); }} style={{ cursor: 'pointer' }}>
                 <span className={`todo-pinned-chevron${collapsedSections.has('pinned') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
                 <span className="todo-pinned-label">Pinned</span>
-                <span className="todo-pinned-count">{pinnedTasks.length}</span>
+                <span className="todo-pinned-count">{visiblePinnedTasks.length}</span>
               </div>
               {!collapsedSections.has('pinned') && (
                 <>
@@ -4326,10 +4406,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                       <span className="todo-pinned-sublabel-count">{focusTasksDisplay.length}</span>
                     </div>
                     {!collapsedSections.has('focus') && (
-                      <SortableContext items={focusIds_arr} strategy={verticalListSortingStrategy}>
+                      <SortableContext items={visibleFocusIds} strategy={verticalListSortingStrategy}>
                         <div className="todo-pinned-list-scroll" style={focusResize.height != null ? { maxHeight: focusResize.height } : undefined}>
                           <TierDropZone id="focus-drop-zone" isEmpty={focusTasksDisplay.length === 0}>
-                            {renderTierItems(focusIds_arr, 'focus', focusGroupMeta)}
+                            {renderTierItems(visibleFocusIds, 'focus', focusGroupMeta)}
                           </TierDropZone>
                           <InlineAdd label="Add to Focus…" onAdd={async (title) => {
                             // capture:true → routes to configured Default Platform/Category (fast local Inbox by default).
@@ -4359,9 +4439,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         <span className="todo-pinned-sublabel-count">{satelliteTasksDisplay.length}</span>
                       </div>
                       {!collapsedSections.has('satellite') && (
-                        <SortableContext items={satelliteIds_arr} strategy={verticalListSortingStrategy}>
+                        <SortableContext items={visibleSatelliteIds} strategy={verticalListSortingStrategy}>
                           <div className="todo-pinned-list todo-pinned-list-scroll" style={satelliteResize.height != null ? { maxHeight: satelliteResize.height } : undefined}>
-                            {renderTierItems(satelliteIds_arr, 'satellite', satelliteGroupMeta)}
+                            {renderTierItems(visibleSatelliteIds, 'satellite', satelliteGroupMeta)}
                             <InlineAdd label="Add to Satellite…" onAdd={async (title) => {
                               // handleCreate locates with scope 'pinned' — see the Focus InlineAdd note.
                               await onCreate({ title, priority: 'none', pinnedTier: 'satellite', capture: true });
@@ -4386,10 +4466,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                       <span className="todo-pinned-sublabel-count">{waitTasksDisplay.length}</span>
                     </div>
                     {!collapsedSections.has('wait') && (
-                      <SortableContext items={waitIds_arr} strategy={verticalListSortingStrategy}>
+                      <SortableContext items={visibleWaitIds} strategy={verticalListSortingStrategy}>
                         <div className="todo-pinned-list-scroll" style={waitResize.height != null ? { maxHeight: waitResize.height } : undefined}>
                           <TierDropZone id="wait-drop-zone" isEmpty={waitTasksDisplay.length === 0}>
-                            {renderTierItems(waitIds_arr, 'wait', waitGroupMeta)}
+                            {renderTierItems(visibleWaitIds, 'wait', waitGroupMeta)}
                           </TierDropZone>
                           <InlineAdd label="Add to Wait…" onAdd={async (title) => {
                             // handleCreate locates with scope 'pinned' — see the Focus InlineAdd note.
@@ -4434,15 +4514,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           {/* Recent tasks section — draggable cards, drop on Pinned tiers to pin.
               When expanded it flex-grows to fill the wrapper's leftover space (no
               dead gap above TASKS); the list scrolls once items exceed that space. */}
-          {recentTasks.length > 0 && (
+          {visibleRecentTasks.length > 0 && (
             <div className={`todo-pinned-section${!collapsedSections.has('recent') ? ' todo-pinned-section-recent' : ''}`}>
               <div className="todo-pinned-header" onClick={() => toggleSection('recent')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('recent'); }} style={{ cursor: 'pointer' }}>
                 <span className={`todo-pinned-chevron${collapsedSections.has('recent') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
                 <span className="todo-pinned-label">Recent</span>
-                <span className="todo-pinned-count">{recentTasks.length}</span>
+                <span className="todo-pinned-count">{visibleRecentTasks.length}</span>
               </div>
               {!collapsedSections.has('recent') && (
-                <SortableContext items={recentIds} strategy={verticalListSortingStrategy}>
+                <SortableContext items={visibleRecentIds} strategy={verticalListSortingStrategy}>
                   {/* Undragged: flex-grow fills the wrapper's leftover space (no dead gap
                       above TASKS), with a ~3-row min so it stays compact when there's
                       little room. Once dragged, an explicit maxHeight pins the height and
@@ -4453,7 +4533,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                       ? { maxHeight: recentResize.height, flex: 'none' }
                       : { minHeight: RECENT_VISIBLE_MAX * 30 }}
                   >
-                    {recentTasks.map((task) => (
+                    {visibleRecentTasks.map((task) => (
                       <SortableRecentCard
                         key={task.id}
                         task={task}
@@ -4520,7 +4600,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       {/* Draggable divider between PINNED+RECENT and the main task list.
           Task detail now opens in a full-screen modal (hosted by MainPage), so only
           the inline project/category pane (detailTarget) compresses the list here. */}
-      {(pinnedTasks.length > 0 || recentTasks.length > 0) && !detailTarget && !tasksCollapsed && !pinnedAreaCollapsed && (
+      {(visiblePinnedTasks.length > 0 || visibleRecentTasks.length > 0) && !detailTarget && !tasksCollapsed && !pinnedAreaCollapsed && (
         <div className="todo-pinned-splitter" onMouseDown={pinnedSplitterMouseDown} />
       )}
 
@@ -4529,11 +4609,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       <div className="todo-pinned-header todo-tasks-header" onClick={() => toggleSection('tasks')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('tasks'); }} style={{ cursor: 'pointer' }}>
         <span className={`todo-pinned-chevron${tasksCollapsed ? '' : ' todo-pinned-chevron-open'}`}>{'▸'}</span>
         <span className="todo-pinned-label">Tasks</span>
-        <span className="todo-pinned-count">{isSearchMode ? searchFiltered.length : filtered.length}</span>
+        <span className="todo-pinned-count">{isSearchMode ? searchMatches.length : filtered.length}</span>
       </div>
 
       {!tasksCollapsed && (
-      <div className={`todo-panel-list${!detailTarget && listCollapsed ? ' todo-panel-list-collapsed' : ''}`} style={detailTarget ? { flex: `${1 - detailRatio} 1 0%` } : (pinnedTasks.length > 0 || recentTasks.length > 0) && !pinnedAreaCollapsed ? { flex: `${listRatio} 1 0%` } : undefined}>
+      <div className={`todo-panel-list${!detailTarget && listCollapsed ? ' todo-panel-list-collapsed' : ''}`} style={detailTarget ? { flex: `${1 - detailRatio} 1 0%` } : (visiblePinnedTasks.length > 0 || visibleRecentTasks.length > 0) && !pinnedAreaCollapsed ? { flex: `${listRatio} 1 0%` } : undefined}>
         {loading && (
           <div className="empty-state" style={{ padding: '24px 8px' }}>
             <div className="spinner" style={{ width: 20, height: 20, borderWidth: 2, margin: '0 auto' }} />

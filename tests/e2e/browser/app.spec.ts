@@ -45,6 +45,27 @@ async function createTaskViaApi(
   return body.task
 }
 
+async function pinTaskViaApi(taskId: string, tier = 'focus'): Promise<void> {
+  const pinRes = await fetch(`${API}/api/focus/tasks/${taskId}`, { method: 'POST' })
+  if (!pinRes.ok) throw new Error(`Pin API call failed: ${pinRes.status} ${await pinRes.text()}`)
+
+  const tierRes = await fetch(`${API}/api/focus/tasks/${taskId}/tier`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tier }),
+  })
+  if (!tierRes.ok) throw new Error(`Tier API call failed: ${tierRes.status} ${await tierRes.text()}`)
+}
+
+async function groupTasksViaApi(taskIds: string[]): Promise<void> {
+  const res = await fetch(`${API}/api/tasks/groups`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ task_ids: taskIds, label: 'Search filter drag test' }),
+  })
+  if (!res.ok) throw new Error(`Group API call failed: ${res.status} ${await res.text()}`)
+}
+
 // ── App loads ──
 
 test('app loads and shows main page elements', async ({ page }) => {
@@ -68,6 +89,124 @@ test('todo panel shows seeded test task', async ({ page }) => {
   // The test server seeds "Playwright test task"
   const taskItem = page.locator('.todo-panel-item', { hasText: 'Playwright test task' })
   await expect(taskItem).toBeVisible({ timeout: 5000 })
+})
+
+test('search and filters apply across pinned, recent, and task sections', async ({ page }) => {
+  const query = `shared-query-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const matchingPinned = await createTaskViaApi(`Pinned ${query} match`, {
+    category: 'Work',
+    priority: 'immediate',
+  })
+  const priorityMismatch = await createTaskViaApi(`Pinned ${query} priority mismatch`, {
+    category: 'Work',
+    priority: 'important',
+  })
+  const searchMismatch = await createTaskViaApi('Pinned unrelated search target', {
+    category: 'Work',
+    priority: 'immediate',
+  })
+  const unpinnedMatch = await createTaskViaApi(`Unpinned ${query} match`, {
+    category: 'Work',
+    priority: 'immediate',
+  })
+  await pinTaskViaApi(matchingPinned.id)
+  await pinTaskViaApi(priorityMismatch.id)
+  await pinTaskViaApi(searchMismatch.id)
+  await groupTasksViaApi([matchingPinned.id, priorityMismatch.id, searchMismatch.id])
+
+  await page.goto('/')
+  await page.waitForLoadState('networkidle')
+  await showAllTasks(page)
+
+  const pinnedHeader = page.locator('.todo-pinned-label').filter({ hasText: /^Pinned$/ }).locator('..')
+  const pinnedSection = pinnedHeader.locator('..')
+  const pinnedCard = (taskId: string) => pinnedSection.locator(`[data-task-id="${taskId}"]`)
+  const pinnedCount = pinnedHeader.locator('.todo-pinned-count')
+  const recentHeader = page.locator('.todo-pinned-label').filter({ hasText: /^Recent$/ }).locator('..')
+  const recentSection = recentHeader.locator('..')
+  const recentCard = (taskId: string) => recentSection.locator(`[data-task-id="${taskId}"]`)
+  const recentCount = recentHeader.locator('.todo-pinned-count')
+  const taskList = page.locator('.todo-panel-list')
+  const searchInput = page.locator('.todo-search-input')
+
+  await expect(pinnedCard(matchingPinned.id)).toBeVisible({ timeout: 5000 })
+  await expect(pinnedCard(priorityMismatch.id)).toBeVisible()
+  await expect(pinnedCard(searchMismatch.id)).toBeVisible()
+  await expect(recentCard(searchMismatch.id)).toBeVisible()
+
+  // Hold the semantic response so the assertions below exercise the urgent local pass.
+  let releaseServerSearch!: () => void
+  let markServerSearchStarted!: () => void
+  const serverSearchStarted = new Promise<void>((resolve) => { markServerSearchStarted = resolve })
+  const serverSearchRelease = new Promise<void>((resolve) => { releaseServerSearch = resolve })
+  await page.route('**/api/search?**', async (route) => {
+    markServerSearchStarted()
+    await serverSearchRelease
+    await route.fulfill({ json: { results: [] } })
+  })
+
+  await searchInput.pressSequentially(query)
+  await expect(searchInput).toHaveValue(query)
+  await expect(pinnedCard(matchingPinned.id)).toBeVisible()
+  await expect(pinnedCard(priorityMismatch.id)).toBeVisible()
+  await expect(pinnedCard(searchMismatch.id)).toBeHidden()
+  await expect(pinnedCount).toHaveText('2')
+  await expect(recentCard(matchingPinned.id)).toBeVisible()
+  await expect(recentCard(priorityMismatch.id)).toBeVisible()
+  await expect(recentCard(unpinnedMatch.id)).toBeVisible()
+  await expect(recentCard(searchMismatch.id)).toBeHidden()
+  await expect(recentCount).toHaveText('3')
+  await expect(taskList.locator('.todo-panel-item', { hasText: unpinnedMatch.title })).toBeVisible()
+
+  await serverSearchStarted
+  releaseServerSearch()
+  await expect(page.locator('.todo-search-spinner')).toBeHidden()
+  await expect(pinnedCard(matchingPinned.id)).toBeVisible()
+  await expect(pinnedCard(priorityMismatch.id)).toBeVisible()
+  await expect(recentCard(unpinnedMatch.id)).toBeVisible()
+
+  await page.getByRole('button', { name: 'View options' }).click()
+  await page.locator('.vd-field').filter({ hasText: /^Priority/ }).locator('select').selectOption('immediate')
+  await page.keyboard.press('Escape')
+
+  await expect(pinnedCard(matchingPinned.id)).toBeVisible()
+  await expect(pinnedCard(priorityMismatch.id)).toBeHidden()
+  await expect(pinnedCard(searchMismatch.id)).toBeHidden()
+  await expect(pinnedCount).toHaveText('1')
+  await expect(recentCard(matchingPinned.id)).toBeVisible()
+  await expect(recentCard(priorityMismatch.id)).toBeHidden()
+  await expect(recentCard(searchMismatch.id)).toBeHidden()
+  await expect(recentCard(unpinnedMatch.id)).toBeVisible()
+  await expect(recentCount).toHaveText('2')
+  await expect(taskList.locator('.todo-panel-item', { hasText: unpinnedMatch.title })).toBeVisible()
+
+  await page.getByTitle('Clear search (Esc)').click()
+  await expect(pinnedCard(matchingPinned.id)).toBeVisible()
+  await expect(pinnedCard(priorityMismatch.id)).toBeHidden()
+  await expect(pinnedCard(searchMismatch.id)).toBeVisible()
+  await expect(recentCard(matchingPinned.id)).toBeVisible()
+  await expect(recentCard(priorityMismatch.id)).toBeHidden()
+  await expect(recentCard(searchMismatch.id)).toBeVisible()
+
+  const sourceHandle = pinnedCard(matchingPinned.id).locator('.todo-pinned-drag-handle')
+  const targetCard = pinnedCard(searchMismatch.id)
+  const sourceBox = await sourceHandle.boundingBox()
+  const targetBox = await targetCard.boundingBox()
+  expect(sourceBox).not.toBeNull()
+  expect(targetBox).not.toBeNull()
+  await page.mouse.move(sourceBox!.x + sourceBox!.width / 2, sourceBox!.y + sourceBox!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(sourceBox!.x + sourceBox!.width / 2, sourceBox!.y + sourceBox!.height / 2 + 8)
+  await page.mouse.move(targetBox!.x + targetBox!.width / 2, targetBox!.y + targetBox!.height / 2, { steps: 8 })
+  await page.mouse.up()
+
+  await expect.poll(async () => {
+    const res = await fetch(`${API}/api/focus/tasks`)
+    const body = (await res.json()) as { pinned_tasks: string[] }
+    return body.pinned_tasks.filter((id) =>
+      id === matchingPinned.id || id === priorityMismatch.id || id === searchMismatch.id
+    )
+  }).toEqual([searchMismatch.id, priorityMismatch.id, matchingPinned.id])
 })
 
 // ── Create task ──

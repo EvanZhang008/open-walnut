@@ -3,7 +3,7 @@
  * Renders between category tabs and filter toolbar.
  */
 
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useEffect, useCallback, useState, startTransition } from 'react';
 import { ICON_SEARCH } from '@/components/common/Icons';
 import { MicButton } from '../common/MicButton';
 
@@ -23,6 +23,18 @@ export function TodoSearchBar({
   resultCount,
 }: TodoSearchBarProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+  // Keep keystrokes urgent while the parent list update runs as interruptible work.
+  const [draftQuery, setDraftQuery] = useState(query);
+
+  const updateQuery = useCallback((nextQuery: string) => {
+    setDraftQuery(nextQuery);
+    startTransition(() => onQueryChange(nextQuery));
+  }, [onQueryChange]);
+
+  const clear = useCallback(() => {
+    setDraftQuery('');
+    startTransition(onClear);
+  }, [onClear]);
 
   // Keyboard shortcut: Cmd+K or / to focus
   useEffect(() => {
@@ -45,10 +57,10 @@ export function TodoSearchBar({
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
-      onClear();
+      clear();
       inputRef.current?.blur();
     }
-  }, [onClear]);
+  }, [clear]);
 
   return (
     <div className="todo-search-bar">
@@ -58,26 +70,24 @@ export function TodoSearchBar({
         type="text"
         className="todo-search-input"
         placeholder="Search tasks...  &#x2318;K"
-        value={query}
-        onChange={(e) => onQueryChange(e.target.value)}
+        value={draftQuery}
+        onChange={(e) => updateQuery(e.target.value)}
         onKeyDown={handleKeyDown}
       />
       {isSearching && <span className="todo-search-spinner" />}
-      {query && !isSearching && resultCount != null && (
-        <span className="todo-search-count">{resultCount}</span>
+      {draftQuery && resultCount != null && (
+        <span className="todo-search-count" title={isSearching ? 'Quick results — refining…' : undefined}>{resultCount}</span>
       )}
-      {query && (
+      {draftQuery && (
         <button
           className="todo-search-clear"
-          onClick={() => {
-            onClear();
-          }}
+          onClick={clear}
           title="Clear search (Esc)"
         >
           &#x2715;
         </button>
       )}
-      <MicButton size="sm" onTranscribe={onQueryChange} />
+      <MicButton size="sm" onTranscribe={updateQuery} />
     </div>
   );
 }
