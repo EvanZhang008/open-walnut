@@ -262,6 +262,12 @@ If it has an API, you can sync Walnut tasks with it.
 - **Portable** — copy `~/.open-walnut/` to another machine and you're running
 - **Integrations are optional** — Microsoft To-Do, Jira, and custom plugins are all opt-in
 
+### iOS Companion App (beta)
+- **Native SwiftUI app** — check tasks, browse sessions, and read/edit notes from your phone, with an Apple Notes / Apple Reminders-style interface
+- **QR-code pairing** — scan a code from the web console to connect; no manual tokens to type
+- **Live sessions on the go** — open any machine's Claude Code session, watch it stream, and chat with the agent from your phone
+- **Optional self-hosted cloud companion** — a small EC2 relay (AWS CDK infra included) bridges your phone to your machines over HTTPS; you own it, opt-in
+
 ## Multi-Agent — But Human-Centered
 
 Yes, Open Walnut supports multi-session and embedded subagents. You can run parallel Claude Code sessions, spawn triage agents, and automate workflows across tasks.
@@ -391,8 +397,10 @@ src/
   logging/        # Structured JSON logging with redaction
   providers/      # Claude Code session runner, subagent runner
   utils/          # Shared utilities
-  web/            # Express server, REST API (15 route files), WebSocket
+  web/            # Express server, REST API (51 route files), WebSocket
 web/              # React SPA (Vite + TypeScript)
+ios-native/       # Native SwiftUI companion app (iOS)
+infra/            # Cloud companion infrastructure (AWS CDK)
 docs/             # Plans, investigations, decisions, designs, references, assets
 tests/            # Unit, integration, e2e, and Playwright browser tests
 ```

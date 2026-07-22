@@ -4,6 +4,70 @@ All notable changes to Open Walnut are documented here. This project follows
 [Semantic Versioning](https://semver.org/) (pre-1.0: minor versions may include
 breaking changes).
 
+## [0.3.0] — 2026-07-16
+
+Walnut goes mobile. **71 commits** since 0.2.0 add a native iOS companion app and the
+self-hosted cloud relay that powers it, plus a hardened cloud-exposed surface and a
+rebuilt single-timeline session chat.
+
+### Highlights
+
+- **Native iOS companion app** — a SwiftUI app (TestFlight beta) to check tasks, browse
+  sessions, and read/edit notes from your phone, with Apple Notes / Apple Reminders-style
+  interfaces, QR-code pairing (scan from the console, zero typing), and a live view of any
+  machine's Claude Code session with in-app chat.
+- **Self-hosted cloud companion** — an optional EC2 relay (AWS CDK infra included) with
+  device auth and a versioned `/api/v1` facade that bridges your phone to your machines over
+  HTTPS, including a git smart-HTTP endpoint so data-repo sync runs over 443.
+- **Single-timeline session chat** — session chat is now one append-only timeline of blocks
+  (system events and tool-failure state included), replacing the previous multi-stream view.
+- **Hardened cloud surface** — the cloud-exposed bridge tightens CORS and secret exposure,
+  with authoritative session-status reconciliation across the direct-connect bridge.
+
+### Added
+
+#### iOS companion app
+- Native SwiftUI companion app with a primary-side auto-sync loop.
+- QR-code pairing — scan from the web console to connect, no manual tokens.
+- Sessions tab: browse and open any machine's session, with transcript tails and a live
+  talk / conversation view.
+- Tasks tab (Apple Reminders style) and Apple Notes-class WYSIWYG note editing (in-place
+  table editing, Format drawer, floating glass accessory bar, keyboard avoidance).
+- In-app log capture + auto-upload for TestFlight debugging.
+
+#### Cloud companion & sync
+- EC2 cloud companion: CDK infrastructure, device auth, and a read-only `/api/v1` facade.
+- Git smart-HTTP endpoint for data-repo sync over 443; task projection export and
+  read-only `GET /api/v1/tasks`.
+- Cloud direct-connect bridge with authoritative session-status reconciliation.
+
+#### Sessions & focus
+- Read-only session projection and a Sessions tab in the task panel.
+- Focus Bar state derived from tasks with UI-preferences sync; whole-group drag with a
+  floating stacked preview and target-tier highlight.
+- ACP-dialect id threading (msgId / messageIds / seq) and a stream-convergence sentinel
+  with post-compact usage re-seed.
+
+#### Memory & skills
+- Bounded global memory with a unified skill system.
+
+### Changed
+- Session chat rebuilt as a single append-only timeline of blocks.
+- Default-model config dropped — "Auto" now means no `--model` flag.
+- History view delivers system events and tool-failure state; CLI-injected
+  task-notification echoes are hidden from the main chat.
+
+### Fixed
+- **Security:** hardened the cloud-exposed surface (bridge, CORS, secret exposure) and
+  scrubbed PII test fixtures and an internal proxy codename.
+- iOS chat freeze after the first reply (stall watchdogs + queued SSE event); 90s bridge
+  flap eliminated for fast conversation open.
+- Idle-debt conservation so a late companion idle can't complete the next turn.
+- Atomic JSON writes rename within the target dir (fixes `EXDEV` on Linux tmpfs).
+- Cloud mode no longer lazy-inits the QMD store on search/index-status; per-note semantic
+  embedding gated off in cloud mode.
+- README star-chart embed fix.
+
 ## [0.2.0] — 2026-06-25
 
 The first major update since the initial release: **503 commits** that turn Walnut
@@ -115,5 +179,6 @@ First public release — a personal AI butler powered by Claude.
 - Multi-session orchestration, local-first storage, self-hosted, CLI + Web, heartbeat,
   cron jobs, plugin system, and git-sync.
 
+[0.3.0]: https://github.com/EvanZhang008/open-walnut/releases/tag/v0.3.0
 [0.2.0]: https://github.com/EvanZhang008/open-walnut/releases/tag/v0.2.0
 [0.1.0]: https://github.com/EvanZhang008/open-walnut/releases/tag/v0.1.0
