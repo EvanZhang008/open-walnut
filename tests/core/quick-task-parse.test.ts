@@ -1,0 +1,214 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const sendMessageMock = vi.fn();
+const config = { agent: { main_provider: 'bedrock', fast_model: undefined as string | undefined } };
+vi.mock('../../src/agent/model.js', () => ({
+  sendMessage: (...args: unknown[]) => sendMessageMock(...args),
+}));
+vi.mock('../../src/core/config-manager.js', () => ({
+  getConfig: async () => config,
+}));
+
+import { parseQuickTask, type QuickTaskParse } from '../../src/core/quick-task-parse.js';
+
+function textResult(text: string) {
+  return { content: [{ type: 'text', text }], stopReason: 'end_turn' };
+}
+
+function parseOnly(parse: QuickTaskParse) {
+  return expect.objectContaining({ parse, parseMs: expect.any(Number) });
+}
+
+function lastCall() {
+  return sendMessageMock.mock.calls.at(-1)![0] as {
+    messages: Array<{ role: string; content: string }>;
+    config: { maxTokens: number; model?: string };
+  };
+}
+
+describe('parseQuickTask', () => {
+  beforeEach(() => {
+    sendMessageMock.mockReset();
+    config.agent.fast_model = undefined;
+  });
+
+  it('returns every valid parsed field in an envelope', async () => {
+    sendMessageMock.mockResolvedValue(textResult(
+      '{"title":"File my tax","due_date":"2026-07-15T10:00:00","pinTier":"focus","priority":"important","starred":true}',
+    ));
+
+    const result = await parseQuickTask('file my tax tomorrow at 10am pinned focus important and starred');
+    expect(result).toEqual(parseOnly({
+      title: 'File my tax',
+      due_date: '2026-07-15T10:00:00',
+      pinTier: 'focus',
+      priority: 'important',
+      starred: true,
+    }));
+    expect(result.model).toContain('haiku');
+  });
+
+  it('parses JSON wrapped in markdown fences', async () => {
+    sendMessageMock.mockResolvedValue(textResult(
+      '```json\n{"title":"File my tax","priority":"important"}\n```',
+    ));
+    await expect(parseQuickTask('file my tax important')).resolves.toEqual(
+      parseOnly({ title: 'File my tax', priority: 'important' }),
+    );
+  });
+
+  it('falls back to the original text for garbage model output', async () => {
+    sendMessageMock.mockResolvedValue(textResult('not valid JSON'));
+    await expect(parseQuickTask('Schedule dentist visit')).resolves.toEqual(
+      parseOnly({ title: 'Schedule dentist visit' }),
+    );
+  });
+
+  it('falls back without rejecting when the model throws', async () => {
+    sendMessageMock.mockRejectedValue(new Error('model unavailable'));
+    await expect(parseQuickTask('Prepare monthly budget')).resolves.toEqual(
+      parseOnly({ title: 'Prepare monthly budget' }),
+    );
+  });
+
+  it('drops invalid enum and due date values while keeping the title', async () => {
+    sendMessageMock.mockResolvedValue(textResult(
+      '{"title":"Plan website","due_date":"next week","pinTier":"top","priority":"high"}',
+    ));
+    await expect(parseQuickTask('plan website')).resolves.toEqual(
+      parseOnly({ title: 'Plan website' }),
+    );
+  });
+
+  it('rejects impossible calendar dates and non-local datetime forms', async () => {
+    for (const dueDate of [
+      '2026-02-31',
+      '2026-07-15T25:00:00',
+      '2026-07-15T10:00:00Z',
+      '2026-07-15T10:00:00-07:00',
+    ]) {
+      sendMessageMock.mockResolvedValueOnce(textResult(
+        JSON.stringify({ title: 'Plan website', due_date: dueDate }),
+      ));
+      await expect(parseQuickTask('plan website')).resolves.toEqual(
+        parseOnly({ title: 'Plan website' }),
+      );
+    }
+  });
+
+  it('accepts valid local date and local datetime forms', async () => {
+    sendMessageMock.mockResolvedValueOnce(textResult(
+      '{"title":"Plan website","due_date":"2026-07-15"}',
+    ));
+    await expect(parseQuickTask('plan website')).resolves.toEqual(
+      parseOnly({ title: 'Plan website', due_date: '2026-07-15' }),
+    );
+
+    sendMessageMock.mockResolvedValueOnce(textResult(
+      '{"title":"Plan website","due_date":"2026-07-15T10:30:00"}',
+    ));
+    await expect(parseQuickTask('plan website')).resolves.toEqual(
+      parseOnly({ title: 'Plan website', due_date: '2026-07-15T10:30:00' }),
+    );
+  });
+
+  it('returns empty input without calling the model', async () => {
+    await expect(parseQuickTask('')).resolves.toEqual({ parse: { title: '' }, parseMs: 0 });
+    await expect(parseQuickTask('   ')).resolves.toEqual({ parse: { title: '   ' }, parseMs: 0 });
+    expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  it('round-trips a valid category and project with canonical casing', async () => {
+    sendMessageMock.mockResolvedValue(textResult(
+      '{"title":"Buy groceries","category":"personal","project":"errands"}',
+    ));
+    const result = await parseQuickTask('buy groceries', {
+      knownCategories: ['Personal', 'Work'],
+      knownProjects: { Personal: ['Errands'], Work: ['Website'] },
+    });
+    expect(result.parse).toEqual({ title: 'Buy groceries', category: 'Personal', project: 'Errands' });
+  });
+
+  it('drops both fields when project has no valid category', async () => {
+    sendMessageMock.mockResolvedValue(textResult(
+      '{"title":"Buy groceries","category":"Unknown","project":"Errands"}',
+    ));
+    const result = await parseQuickTask('buy groceries', {
+      knownCategories: ['Personal'], knownProjects: { Personal: ['Errands'] },
+    });
+    expect(result.parse).toEqual({ title: 'Buy groceries' });
+  });
+
+  it('drops a project answered without a category', async () => {
+    sendMessageMock.mockResolvedValue(textResult('{"title":"Buy groceries","project":"Errands"}'));
+    const result = await parseQuickTask('buy groceries', {
+      knownCategories: ['Personal'], knownProjects: { Personal: ['Errands'] },
+    });
+    expect(result.parse).toEqual({ title: 'Buy groceries' });
+  });
+
+  it('drops a project not under the answered category but keeps category', async () => {
+    sendMessageMock.mockResolvedValue(textResult(
+      '{"title":"Buy groceries","category":"Personal","project":"Website"}',
+    ));
+    const result = await parseQuickTask('buy groceries', {
+      knownCategories: ['Personal', 'Work'],
+      knownProjects: { Personal: ['Errands'], Work: ['Website'] },
+    });
+    expect(result.parse).toEqual({ title: 'Buy groceries', category: 'Personal' });
+  });
+
+  it('drops category when it is not in knownCategories', async () => {
+    sendMessageMock.mockResolvedValue(textResult('{"title":"Buy groceries","category":"Finance"}'));
+    const result = await parseQuickTask('buy groceries', { knownCategories: ['Personal'] });
+    expect(result.parse).toEqual({ title: 'Buy groceries' });
+  });
+
+  it('drops category when knownCategories is omitted', async () => {
+    sendMessageMock.mockResolvedValue(textResult('{"title":"Buy groceries","category":"Personal"}'));
+    const result = await parseQuickTask('buy groceries');
+    expect(result.parse).toEqual({ title: 'Buy groceries' });
+  });
+
+  it('places a non-empty digest before the Note block', async () => {
+    sendMessageMock.mockResolvedValue(textResult('{"title":"Buy groceries"}'));
+    await parseQuickTask('buy groceries', { categoryDigest: '- Personal (2 open tasks): "Call dentist"' });
+    const content = lastCall().messages[0].content;
+    expect(content).toContain('Your categories and projects (name, open task count, recent task titles):');
+    expect(content.indexOf('- Personal')).toBeLessThan(content.indexOf('Note:\n'));
+  });
+
+  it('omits the digest header when categoryDigest is empty', async () => {
+    sendMessageMock.mockResolvedValue(textResult('{"title":"Buy groceries"}'));
+    await parseQuickTask('buy groceries', { categoryDigest: '  ' });
+    expect(lastCall().messages[0].content).not.toContain('Your categories and projects');
+  });
+
+  it('uses the configured fast_model override', async () => {
+    config.agent.fast_model = 'custom-fast-model';
+    sendMessageMock.mockResolvedValue(textResult('{"title":"Pay invoice"}'));
+    const result = await parseQuickTask('pay invoice');
+    expect(lastCall().config.model).toBe('custom-fast-model');
+    expect(result.model).toBe('custom-fast-model');
+  });
+
+  it('lets modelOverride win over config and the provider catalog', async () => {
+    config.agent.fast_model = 'custom-fast-model';
+    sendMessageMock.mockResolvedValue(textResult('{"title":"Pay invoice"}'));
+    const result = await parseQuickTask('pay invoice', { modelOverride: 'request-fast-model' });
+    expect(lastCall().config.model).toBe('request-fast-model');
+    expect(result.model).toBe('request-fast-model');
+  });
+
+  it('uses 320 max tokens and includes a weekday in the datetime line', async () => {
+    sendMessageMock.mockResolvedValue(textResult('{"title":"Pay invoice"}'));
+    await parseQuickTask('pay invoice tomorrow', {
+      now: new Date('2026-07-23T21:00:00.000Z'),
+      timeZone: 'America/Los_Angeles',
+    });
+    expect(lastCall().config.maxTokens).toBe(320);
+    expect(lastCall().messages[0].content).toContain(
+      'Current local datetime: 2026-07-23T14:00:00 (Thursday)',
+    );
+  });
+});

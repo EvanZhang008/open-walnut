@@ -32,7 +32,7 @@ test.beforeAll(async () => {
 async function openCodexQuickStart(page: Page): Promise<void> {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
-  await page.locator('.quick-access-pill', { hasText: 'Quick session' }).click()
+  await page.locator('.quick-access-pill', { hasText: /Quick session|\+ Session/ }).click()
   await expect(page.locator('.session-path-selector')).toBeVisible()
   const localTab = page.locator('.sps-host-tab', { hasText: 'Local' })
   if (await localTab.isVisible()) await localTab.click()

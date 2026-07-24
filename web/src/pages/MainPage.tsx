@@ -9,6 +9,7 @@ import { useConversations } from '@/hooks/useConversations';
 import { usePlanMode } from '@/hooks/usePlanMode';
 import { useWebSocket, useEvent } from '@/hooks/useWebSocket';
 import { useTasksContext } from '@/contexts/TasksContext';
+import { useNotifications } from '@/contexts/notifications';
 import { useFavorites } from '@/hooks/useFavorites';
 import { useFocusBarContext } from '@/contexts/FocusBarContext';
 import { useOrdering } from '@/hooks/useOrdering';
@@ -17,6 +18,7 @@ import { ChatPanel } from '@/components/chat/ChatPanel';
 import { ChatMessage, type RouteInfo } from '@/components/chat/ChatMessage';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { TodoPanel } from '@/components/tasks/TodoPanel';
+import { QuickTaskComposer } from '@/components/tasks/QuickTaskComposer';
 import { RoutinesView } from '@/components/routines/RoutinesView';
 import { TaskDetailModal } from '@/components/tasks/TaskDetailModal';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
@@ -25,6 +27,7 @@ import { SessionPathSelector, type QuickStartPath, type QuickStartTaskMeta } fro
 import { QuestionPopover, parseAskQuestionInput } from '@/components/chat/QuestionPopover';
 import { TriagePanel } from '@/components/triage/TriagePanel';
 import { fetchSession, fetchSessionsForTask, quickStartSession } from '@/api/sessions';
+import { deleteTask as deleteTaskApi } from '@/api/tasks';
 import { fetchConfig, fetchInstallDir } from '@/api/config';
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
 import { QuickAccessBar } from '@/components/chat/QuickAccessBar';
@@ -161,6 +164,21 @@ function loadSessionColumns(): SessionSlot[] {
   return [];
 }
 
+
+function formatQuickTaskDate(iso: string): string {
+  const dateOnly = !iso.includes('T');
+  const [year, month, day] = dateOnly ? iso.split('-').map(Number) : [];
+  const date = dateOnly ? new Date(year, month - 1, day) : new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dueDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const days = Math.round((dueDay.getTime() - today.getTime()) / 86_400_000);
+  const dayLabel = days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : `${date.getMonth() + 1}-${date.getDate()}`;
+  if (dateOnly) return dayLabel;
+  return `${dayLabel} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+}
+
 interface MainPageProps {
   /** Whether MainPage is currently visible (route is /) */
   visible?: boolean;
@@ -175,12 +193,28 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const { health, loading: healthLoading } = useSystemHealth();
   const { mode: chatMode, toggleMode, getPlanPayload } = usePlanMode();
   const { connectionState } = useWebSocket();
+  const { notify } = useNotifications();
   const { tasks, loading, refreshing: tasksRefreshing, error: tasksError, toggleComplete, setPhase, star, create, update, reorder, moveTask, reparentTask, deleteTask, bakeOrder, clearOperationError, showOperationError, taskGroups, hiddenGroups, groupTasks, addToGroup, ungroupTasks, renameGroup, setGroupHidden } = useTasksContext();
   const favorites = useFavorites();
   const focusBar = useFocusBarContext();
   const pinnedTaskIdSet = useMemo(() => new Set(focusBar.pinnedIds), [focusBar.pinnedIds]);
   const focusTaskIdSet = useMemo(() => new Set(focusBar.focusIds), [focusBar.focusIds]);
   const waitTaskIdSet = useMemo(() => new Set(focusBar.waitIds), [focusBar.waitIds]);
+  const quickTaskProjectOptions = useMemo(() => {
+    const options = new Map<string, Set<string>>();
+    for (const task of tasks) {
+      if (task.title.startsWith('.metadata') || task.project === task.category) continue;
+      let projects = options.get(task.category);
+      if (!projects) {
+        projects = new Set();
+        options.set(task.category, projects);
+      }
+      projects.add(task.project);
+    }
+    return Object.fromEntries(
+      [...options.entries()].map(([category, projects]) => [category, [...projects].sort((a, b) => a.localeCompare(b))]),
+    );
+  }, [tasks]);
   const ordering = useOrdering();
   // Configured task defaults (platform/category/project) for quick-add capture. Fetched
   // once; refreshed on config:changed. Quick-add ("Add to Focus") routes to these instead
@@ -345,8 +379,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     });
   }, [effectiveMaxPanels]);
 
-  // Session quick-start state (opened via /session command)
+  // Session/task quick-entry popovers above the chat input.
   const [pathSelectorOpen, setPathSelectorOpen] = useState(false);
+  const [quickTaskOpen, setQuickTaskOpen] = useState(false);
   const [quickStartPath, setQuickStartPath] = useState<QuickStartPath | null>(null);
   // Walnut's own source checkout (null on npm installs / cloud) — drives the
   // fix-walnut pill. Fetched once; the API layer caches for the page lifetime.
@@ -594,7 +629,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // Toggle main chat panel visibility
       setChatVisible(prev => !prev);
     };
-    const handleSessionLauncher = () => setPathSelectorOpen(true);
+    const handleSessionLauncher = () => {
+      setPathSelectorOpen(true);
+      setQuickTaskOpen(false);
+    };
+    const handleTaskComposer = () => {
+      setQuickTaskOpen(true);
+      setPathSelectorOpen(false);
+    };
     const handleToggleTodo = () => setTodoVisible(prev => !prev);
     const handleToggleRoutines = () => setRoutinesVisible(prev => !prev);
     // openSessionOnHome (utils/open-session.ts) — deep links (e.g. notification
@@ -606,6 +648,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     window.addEventListener('dock:activate-task', handleDockTask);
     window.addEventListener('dock:activate-chat', handleDockChat);
     window.addEventListener('session-launcher:open', handleSessionLauncher);
+    window.addEventListener('task-composer:open', handleTaskComposer);
     window.addEventListener('sidebar:toggle-todo', handleToggleTodo);
     window.addEventListener('sidebar:toggle-routines', handleToggleRoutines);
     window.addEventListener('main:open-session', handleOpenSession);
@@ -613,6 +656,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       window.removeEventListener('dock:activate-task', handleDockTask);
       window.removeEventListener('dock:activate-chat', handleDockChat);
       window.removeEventListener('session-launcher:open', handleSessionLauncher);
+      window.removeEventListener('task-composer:open', handleTaskComposer);
       window.removeEventListener('sidebar:toggle-todo', handleToggleTodo);
       window.removeEventListener('sidebar:toggle-routines', handleToggleRoutines);
       window.removeEventListener('main:open-session', handleOpenSession);
@@ -808,6 +852,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     const dir = walnutInstallDirRef.current;
     if (!dir) return; // pill is hidden when null; belt-and-braces
     setPathSelectorOpen(false);
+    setQuickTaskOpen(false); // launcher popovers are mutually exclusive
     setQuickStartPath({ cwd: dir, host: null, category: 'Local', intent: 'fix-walnut' });
     quickStartMetaRef.current = null; // DEFAULT_META semantics (starred + focus) applied server-side defaults
     setQuickStartModel(undefined);
@@ -951,7 +996,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     } catch { /* non-critical */ }
   }, [openSessionOrToast]);
 
-  const handleCreate = useCallback(async (input: { title: string; priority: string; category?: string; project?: string; starred?: boolean; pinnedTier?: 'focus' | 'satellite' | 'wait'; capture?: boolean }) => {
+  const handleCreate = useCallback(async (input: { title: string; priority: string; category?: string; project?: string; due_date?: string; starred?: boolean; pinnedTier?: 'focus' | 'satellite' | 'wait'; capture?: boolean }) => {
     const tier = input.pinnedTier;
     // Quick-capture ("Add to Focus/Satellite/Wait", Focus Dock) routes to the user's
     // configured Default Platform + Category instead of the active tab's category — so a
@@ -964,9 +1009,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     const task = await create(
       {
         title: input.title,
-        priority: input.priority as 'high' | 'low' | 'none',
+        priority: input.priority,
         category: input.capture ? captureCategory : input.category,
         project: input.capture ? taskDefaults.project : input.project,
+        due_date: input.due_date,
         ...(input.capture ? { source: captureSource } : {}),
       },
       tier
@@ -1478,7 +1524,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                     overflow and saves a row of controls. */}
                 <button
                   className="qsb-model-chip"
-                  onClick={() => setPathSelectorOpen(true)}
+                  onClick={() => { setPathSelectorOpen(true); setQuickTaskOpen(false); }}
                   title="Edit launch settings (engine, model, star, pin, priority)"
                 >
                   {/* Chip label: codex engine → "Codex" (its models are discovered at
@@ -1516,6 +1562,44 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               initialPath={quickStartPath ? { cwd: quickStartPath.cwd, host: quickStartPath.host } : undefined}
             />
 
+            <QuickTaskComposer
+              open={quickTaskOpen && !pendingQuestion}
+              onClose={() => setQuickTaskOpen(false)}
+              projectOptions={quickTaskProjectOptions}
+              onCreate={async (input) => {
+                const created = await handleCreate(input);
+                // LOCATE the new task: open the todo panel if hidden and select+scroll
+                // to the row. Without this the task lands invisibly ("where did it
+                // go?") — and it also puts the late AI backfill (title cleanup, due
+                // badge) right where the user is already looking.
+                setTodoVisible(true);
+                if (!input.pinnedTier) {
+                  // Pinned creates already locate via handleCreate's dock:activate-task
+                  // path (scope 'pinned'); calling handleFocusTask here would clobber
+                  // that scope back to 'all'.
+                  handleFocusTask(created, { openDetail: false });
+                }
+                const summary = [
+                  input.pinnedTier ? `${input.pinnedTier[0].toUpperCase()}${input.pinnedTier.slice(1)}` : undefined,
+                  input.due_date ? formatQuickTaskDate(input.due_date) : undefined,
+                  input.priority !== 'none' ? `${input.priority[0].toUpperCase()}${input.priority.slice(1)}` : undefined,
+                  input.category,
+                  input.project,
+                ].filter((value): value is string => !!value);
+                notify({
+                  kind: 'sort',
+                  severity: 'success',
+                  title: `Task created: ${created.title}`,
+                  ...(summary.length > 0 ? { body: summary.join(' · ') } : {}),
+                  dedupKey: created.id,
+                  persistent: false,
+                  action: { label: 'Undo', kind: 'callback' },
+                  onAction: () => { deleteTaskApi(created.id).catch(() => {}); },
+                });
+                return created;
+              }}
+            />
+
             {/* Ask Question popover (above the input, mutually exclusive with path selector) */}
             <QuestionPopover
               open={!!pendingQuestion}
@@ -1524,7 +1608,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             />
 
             <QuickAccessBar
-              onSessionClick={() => setPathSelectorOpen(true)}
+              onTaskClick={() => {
+                setQuickTaskOpen(true);
+                setPathSelectorOpen(false);
+              }}
+              onSessionClick={() => {
+                setPathSelectorOpen(true);
+                setQuickTaskOpen(false);
+              }}
               onFixWalnutClick={walnutInstallDir ? handleFixWalnut : undefined}
               mode={chatMode}
               onModeToggle={toggleMode}

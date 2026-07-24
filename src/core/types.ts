@@ -12,6 +12,16 @@ export type TaskPriority = 'immediate' | 'important' | 'backlog' | 'none';
 export const VALID_PRIORITIES: readonly TaskPriority[] = ['immediate', 'important', 'backlog', 'none'] as const;
 export type TaskSource = string;
 
+export interface QuickTaskParse {
+  title: string;
+  due_date?: string;
+  pinTier?: 'focus' | 'satellite' | 'wait';
+  priority?: Exclude<TaskPriority, 'none'>;
+  starred?: boolean;
+  category?: string;
+  project?: string;
+}
+
 // ── Session model registry ────────────────────────────────────────────────
 // Single source of truth for the set of selectable Claude Code session models.
 // Both backend (CLI --model mapping, web RPC allowlist) and frontend (picker,
@@ -615,6 +625,8 @@ export interface AgentConfig {
   session_effort?: SessionEffort;
   /** Model ID for the main AI agent. Defaults to DEFAULT_MODEL (Opus 4.6). */
   main_model?: string;
+  /** Model ID for cheap background parses (quick-task parse, fork/conversation titles); unset = first haiku in the provider catalog. */
+  fast_model?: string;
   /** Default provider name for the main agent. Maps to config.providers[name]. */
   main_provider?: string;
   /**

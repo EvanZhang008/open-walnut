@@ -12,6 +12,7 @@ const CONTEXT_WINDOW_DEFAULT = 200_000; // fallback when backend doesn't provide
 
 interface QuickAccessBarProps {
   onSessionClick: () => void;
+  onTaskClick?: () => void;
   /** Fix Walnut pill — omit to hide (e.g. npm installs / cloud, where installDir is unknown). */
   onFixWalnutClick?: () => void;
   mode?: ChatMode;
@@ -20,7 +21,7 @@ interface QuickAccessBarProps {
   stats?: ChatStats | null;
 }
 
-export function QuickAccessBar({ onSessionClick, onFixWalnutClick, mode, onModeToggle, stats }: QuickAccessBarProps) {
+export function QuickAccessBar({ onSessionClick, onTaskClick, onFixWalnutClick, mode, onModeToggle, stats }: QuickAccessBarProps) {
   const isPlan = mode === 'plan';
 
   const contextWindow = stats?.contextWindow ?? CONTEXT_WINDOW_DEFAULT;
@@ -30,13 +31,21 @@ export function QuickAccessBar({ onSessionClick, onFixWalnutClick, mode, onModeT
 
   return (
     <div className="quick-access-bar-row">
+      {onTaskClick && (
+        <button
+          className="quick-access-pill"
+          onClick={onTaskClick}
+          title="Add a task — AI fills in date, pin and priority (/task)"
+        >
+          <span className="quick-access-pill-label">+ Task</span>
+        </button>
+      )}
       <button
         className="quick-access-pill"
         onClick={onSessionClick}
         title="Type a path and start a Claude Code session there directly (/session)"
       >
-        <span className="quick-access-pill-icon">{'\u{1F4BB}'}</span>
-        <span className="quick-access-pill-label">Quick session</span>
+        <span className="quick-access-pill-label">+ Session</span>
       </button>
       {onFixWalnutClick && (
         <button
@@ -44,8 +53,7 @@ export function QuickAccessBar({ onSessionClick, onFixWalnutClick, mode, onModeT
           onClick={onFixWalnutClick}
           title="Something wrong with Walnut? Describe it (paste a screenshot too) and a session will fix it"
         >
-          <span className="quick-access-pill-icon">{'\u{1F527}'}</span>
-          <span className="quick-access-pill-label">fix-walnut</span>
+          <span className="quick-access-pill-label">fix walnut</span>
         </button>
       )}
       {onModeToggle && (

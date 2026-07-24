@@ -24,3 +24,11 @@ export const PRIORITY_OPTIONS: { value: TaskPriority; icon: string; label: strin
   { value: 'backlog', icon: '~', label: 'Backlog' },
   { value: 'none', icon: '--', label: 'None' },
 ];
+
+export const PIN_CYCLE: Array<FocusTier | undefined> = [undefined, 'focus', 'satellite', 'wait'];
+export const PRIORITY_CYCLE: Array<TaskPriority | undefined> = [undefined, 'immediate', 'important', 'backlog'];
+
+export function nextValue<T>(values: T[], current: T): T {
+  const index = values.indexOf(current);
+  return values[(index + 1) % values.length];
+}

@@ -1,0 +1,265 @@
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+
+interface ApiTask {
+  id: string
+  title: string
+  priority: string
+  category: string
+  project: string
+  due_date?: string
+  starred?: boolean
+}
+
+async function openComposer(page: Page): Promise<void> {
+  await page.goto('/')
+  await page.waitForLoadState('networkidle')
+  await page.locator('.quick-access-pill').first().click()
+  await expect(page.locator('.quick-task-composer')).toBeVisible()
+}
+
+async function listTasks(request: APIRequestContext): Promise<ApiTask[]> {
+  const response = await request.get('/api/tasks')
+  expect(response.ok()).toBe(true)
+  const body = await response.json() as { tasks: ApiTask[] }
+  return body.tasks
+}
+
+async function waitForNewTask(
+  request: APIRequestContext,
+  title: string,
+  existingIds: Set<string>,
+): Promise<ApiTask> {
+  let created: ApiTask | undefined
+  await expect.poll(async () => {
+    created = (await listTasks(request)).find((task) => task.title === title && !existingIds.has(task.id))
+    return created?.id ?? null
+  }, { timeout: 10_000 }).not.toBeNull()
+  return created!
+}
+
+async function createCategory(request: APIRequestContext, name: string): Promise<void> {
+  const response = await request.post('/api/categories', { data: { name, source: 'local' } })
+  expect([201, 409]).toContain(response.status())
+}
+
+function unique(prefix: string): string {
+  return `${prefix} ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function tomorrowAtTwoIso(): string {
+  const tomorrow = new Date()
+  tomorrow.setDate(tomorrow.getDate() + 1)
+  tomorrow.setHours(2, 0, 0, 0)
+  const year = tomorrow.getFullYear()
+  const month = String(tomorrow.getMonth() + 1).padStart(2, '0')
+  const day = String(tomorrow.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}T02:00:00`
+}
+
+test('two-stage review creates parsed task in chosen category', async ({ page, request }) => {
+  const category = unique('Finance')
+  const project = unique('Taxes')
+  const title = unique('File annual return')
+  const dueDate = tomorrowAtTwoIso()
+  await createCategory(request, category)
+  await page.route('**/api/tasks/quick-parse', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ title, due_date: dueDate, pinTier: 'satellite', category, project }),
+  }))
+  const existingIds = new Set((await listTasks(request)).map((task) => task.id))
+
+  await openComposer(page)
+  await page.locator('.qtc-input').fill('file the annual return tomorrow at 2am')
+  const parseRequestPromise = page.waitForRequest('**/api/tasks/quick-parse')
+  await page.locator('.qtc-input').press('Enter')
+  const parseRequest = await parseRequestPromise
+  const parseBody = parseRequest.postDataJSON() as { text?: string; timeZone?: string }
+  expect(parseBody.text).toBe('file the annual return tomorrow at 2am')
+  expect(typeof parseBody.timeZone).toBe('string')
+  expect(() => new Intl.DateTimeFormat('en-US', { timeZone: parseBody.timeZone })).not.toThrow()
+
+  const panel = page.locator('.qtc-confirm-panel')
+  await expect(panel).toBeVisible()
+  await expect(panel.locator('.qtc-confirm-title')).toHaveValue(title)
+  await expect(panel.locator('.qtc-chip').first()).toContainText('Tomorrow 2:00')
+  await expect(panel.locator('.qtc-chip').nth(1)).toContainText('Pin: Satellite')
+  await expect(panel.locator('.qtc-confirm-select')).toHaveValue(category)
+  await expect(panel.locator('.qtc-confirm-project')).toHaveValue(project)
+  await panel.locator('.qtc-confirm-title').press('Enter')
+
+  const created = await waitForNewTask(request, title, existingIds)
+  expect(created.category).toBe(category)
+  expect(created.project).toBe(project)
+  expect(created.due_date).toBe(dueDate)
+})
+
+test('plain note reviews defaults and creates in the default category', async ({ page, request }) => {
+  const rawTitle = unique('Buy milk')
+  await page.route('**/api/tasks/quick-parse', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ title: rawTitle }),
+  }))
+  const existingIds = new Set((await listTasks(request)).map((task) => task.id))
+
+  await openComposer(page)
+  await page.locator('.qtc-input').fill(rawTitle)
+  await page.locator('.qtc-input').press('Enter')
+  const panel = page.locator('.qtc-confirm-panel')
+  await expect(panel.locator('.qtc-confirm-title')).toHaveValue(rawTitle)
+  await expect(panel.locator('.qtc-confirm-select')).toHaveValue('')
+  await panel.locator('.qtc-confirm-title').press('Enter')
+
+  const created = await waitForNewTask(request, rawTitle, existingIds)
+  expect(created.category).toBe('Inbox')
+  expect(created.project).toBe('Inbox')
+})
+
+test('panel overrides pin, category, project, priority, and star before create', async ({ page, request }) => {
+  const parsedCategory = unique('Personal')
+  const selectedCategory = unique('Errands')
+  const selectedProject = unique('Groceries')
+  const title = unique('Plan shopping trip')
+  await createCategory(request, parsedCategory)
+  await createCategory(request, selectedCategory)
+  await page.route('**/api/tasks/quick-parse', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ title, pinTier: 'focus', category: parsedCategory, project: 'Old project' }),
+  }))
+  const existingIds = new Set((await listTasks(request)).map((task) => task.id))
+
+  await openComposer(page)
+  await page.locator('.qtc-input').fill('plan shopping trip')
+  await page.locator('.qtc-input').press('Enter')
+  const panel = page.locator('.qtc-confirm-panel')
+  await expect(panel.locator('.qtc-confirm-title')).toHaveValue(title)
+  await panel.locator('.qtc-chip').nth(1).click()
+  await expect(panel.locator('.qtc-chip').nth(1)).toContainText('Pin: Satellite')
+  await panel.locator('.qtc-chip').nth(2).click()
+  await expect(panel.locator('.qtc-chip').nth(2)).toContainText('Immediate')
+  await panel.locator('.qtc-chip').nth(3).click()
+  await expect(panel.locator('.qtc-chip').nth(3)).toContainText('Starred')
+  await panel.locator('.qtc-confirm-select').selectOption(selectedCategory)
+  await expect(panel.locator('.qtc-confirm-project')).toHaveValue('')
+  await panel.locator('.qtc-confirm-project').fill(selectedProject)
+  await panel.locator('.qtc-confirm-primary').click()
+
+  const created = await waitForNewTask(request, title, existingIds)
+  expect(created.category).toBe(selectedCategory)
+  expect(created.project).toBe(selectedProject)
+  expect(created.priority).toBe('immediate')
+  await expect.poll(async () => (await listTasks(request)).find((task) => task.id === created.id)?.starred).toBe(true)
+  await expect.poll(async () => {
+    const response = await request.get('/api/focus/tasks')
+    const body = await response.json() as { satellite_tasks?: string[] }
+    return body.satellite_tasks?.includes(created.id) ?? false
+  }).toBe(true)
+})
+
+test('slow parse keeps Enter inert, then supports parsed and no-AI create paths', async ({ page, request }) => {
+  const parsedTitle = unique('Structured slow task')
+  const rawNoAi = unique('Raw slow task')
+  let parseCalls = 0
+  await page.route('**/api/tasks/quick-parse', async (route) => {
+    parseCalls += 1
+    await new Promise((resolve) => setTimeout(resolve, 900))
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ title: parsedTitle, priority: 'important' }),
+    })
+  })
+  const existingIds = new Set((await listTasks(request)).map((task) => task.id))
+
+  await openComposer(page)
+  await page.locator('.qtc-input').fill('structure this slow task')
+  await page.locator('.qtc-input').press('Enter')
+  const skeleton = page.locator('.qtc-confirm-skeleton')
+  await expect(skeleton).toBeVisible()
+  await skeleton.press('Enter')
+  expect((await listTasks(request)).some((task) => task.title === parsedTitle && !existingIds.has(task.id))).toBe(false)
+  await expect(page.locator('.qtc-confirm-title')).toHaveValue(parsedTitle)
+  await page.locator('.qtc-confirm-title').press('Enter')
+  await waitForNewTask(request, parsedTitle, existingIds)
+
+  await page.locator('.qtc-input').fill(rawNoAi)
+  await page.locator('.qtc-input').press('Enter')
+  await expect(page.locator('.qtc-confirm-skeleton')).toBeVisible()
+  await page.locator('.qtc-confirm-skeleton .qtc-confirm-primary').click()
+  const rawCreated = await waitForNewTask(request, rawNoAi, existingIds)
+  expect(rawCreated.title).toBe(rawNoAi)
+  expect(parseCalls).toBe(2)
+})
+
+test('due chip displays absolute wall-clock time', async ({ page }) => {
+  const dueDate = tomorrowAtTwoIso()
+  await page.route('**/api/tasks/quick-parse', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ title: 'Absolute due check', due_date: dueDate }),
+  }))
+
+  await openComposer(page)
+  await page.locator('.qtc-input').fill('absolute due check tomorrow 2am')
+  await page.locator('.qtc-input').press('Enter')
+  const dueChip = page.locator('.qtc-confirm-panel .qtc-chip').first()
+  await expect(dueChip).toContainText('Tomorrow 2:00')
+  await expect(dueChip).not.toContainText(/\b\d+h\b/)
+})
+
+test('same-tick double create fires exactly one task', async ({ page, request }) => {
+  const title = unique('Single create')
+  await page.route('**/api/tasks/quick-parse', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ title }),
+  }))
+  const existingIds = new Set((await listTasks(request)).map((task) => task.id))
+
+  await openComposer(page)
+  await page.locator('.qtc-input').fill('single create race check')
+  await page.locator('.qtc-input').press('Enter')
+  await expect(page.locator('.qtc-confirm-title')).toHaveValue(title)
+  // Two synchronous clicks in one tick — the submit guard must be synchronous
+  // (ref set before onCreate), otherwise both pass and two tasks persist.
+  await page.locator('.qtc-confirm-primary').evaluate((button: HTMLButtonElement) => {
+    button.click()
+    button.click()
+  })
+
+  await waitForNewTask(request, title, existingIds)
+  // Give a straggler create time to land, then assert exactly one.
+  await page.waitForTimeout(1_000)
+  const matches = (await listTasks(request)).filter((task) => task.title === title && !existingIds.has(task.id))
+  expect(matches).toHaveLength(1)
+})
+
+test('Escape returns to preserved input, reuses parse, then closes', async ({ page }) => {
+  const rawText = unique('Review reusable parse')
+  const parsedTitle = unique('Reusable parsed title')
+  let calls = 0
+  await page.route('**/api/tasks/quick-parse', async (route) => {
+    calls += 1
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ title: parsedTitle, priority: 'backlog' }),
+    })
+  })
+
+  await openComposer(page)
+  await page.locator('.qtc-input').fill(rawText)
+  await page.locator('.qtc-input').press('Enter')
+  await expect(page.locator('.qtc-confirm-title')).toHaveValue(parsedTitle)
+  await page.locator('.qtc-confirm-title').press('Escape')
+  await expect(page.locator('.qtc-input')).toHaveValue(rawText)
+
+  await page.locator('.qtc-input').press('Enter')
+  await expect(page.locator('.qtc-confirm-title')).toHaveValue(parsedTitle)
+  expect(calls).toBe(1)
+  await page.locator('.qtc-confirm-title').press('Escape')
+  await page.locator('.qtc-input').press('Escape')
+  await expect(page.locator('.quick-task-composer')).toBeHidden()
+})

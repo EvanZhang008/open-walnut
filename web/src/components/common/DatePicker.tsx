@@ -73,6 +73,28 @@ export function formatDateDisplay(iso: string | undefined | null): string {
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
+/**
+ * Format a due_date for confirmation contexts (e.g. Quick Task chips) —
+ * absolute clock time with a friendly day name, so the user can verify what
+ * the AI actually understood ("Tomorrow 10:00", not "19h").
+ */
+export function formatDateTimeDisplay(iso: string | undefined | null): string {
+  if (!iso) return '';
+  const d = parseDateLocal(iso);
+  if (isNaN(d.getTime())) return iso;
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dueDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const diffDays = Math.round((dueDay.getTime() - todayStart.getTime()) / 86_400_000);
+  const day =
+    diffDays === 0 ? 'Today'
+    : diffDays === 1 ? 'Tomorrow'
+    : diffDays > 1 && diffDays <= 7 ? DOW[d.getDay()]
+    : `${d.getMonth() + 1}/${d.getDate()}`;
+  if (!iso.includes('T')) return day;
+  return `${day} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
 /** Check if a due_date is overdue. */
 export function isOverdue(iso: string | undefined | null): boolean {
   if (!iso) return false;

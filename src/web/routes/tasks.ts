@@ -37,6 +37,8 @@ import {
 import { listSessions } from '../../core/session-tracker.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { VALID_PRIORITIES, type Task, type ProcessStatus, type SessionMode } from '../../core/types.js'
+import { parseQuickTask } from '../../core/quick-task-parse.js'
+import { buildCategoryDigest, type CategoryDigest } from '../../core/quick-task-digest.js'
 
 /** Session info used during enrichment (includes mode for slot inference). */
 interface SessionInfo {
@@ -394,6 +396,57 @@ tasksRouter.get('/enriched', async (_req: Request, res: Response, next: NextFunc
 tasksRouter.get('/groups', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     res.json({ groups: await listGroups() })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/tasks/quick-parse — parse natural-language task metadata
+tasksRouter.post('/quick-parse', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { text, timeZone } = req.body as { text?: unknown; timeZone?: unknown }
+    if (typeof text !== 'string' || text.trim() === '') {
+      res.status(400).json({ error: 'text must be a non-empty string' })
+      return
+    }
+    if (text.length > 500) {
+      res.status(400).json({ error: 'text must be at most 500 characters' })
+      return
+    }
+    if (typeof timeZone !== 'string' || timeZone.length === 0 || timeZone.length > 64) {
+      res.status(400).json({ error: 'timeZone must be a valid IANA timezone' })
+      return
+    }
+    // Relative dates resolve against the browser's timezone, not the server's.
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone })
+    } catch {
+      res.status(400).json({ error: 'timeZone must be a valid IANA timezone' })
+      return
+    }
+
+    const startedAt = Date.now()
+    let categoryDigest: CategoryDigest = { digest: '', categories: [], projectsByCategory: {} }
+    try {
+      categoryDigest = await buildCategoryDigest()
+    } catch (err) {
+      log.web.warn('quick-parse category digest unavailable', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+    const { parse, parseMs, model } = await parseQuickTask(text, {
+      timeZone,
+      categoryDigest: categoryDigest.digest,
+      knownCategories: categoryDigest.categories,
+      knownProjects: categoryDigest.projectsByCategory,
+    })
+    log.web.info('quick-parse', {
+      parseMs,
+      totalMs: Date.now() - startedAt,
+      model,
+      textLen: text.length,
+    })
+    res.json(parse)
   } catch (err) {
     next(err)
   }

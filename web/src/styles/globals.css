@@ -15237,6 +15237,208 @@ a.task-kebab-info:hover {
   line-height: 1.35;
 }
 
+/* ── Quick Task Composer ── */
+.quick-task-composer {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin-bottom: 4px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--card-shadow-hover);
+  overflow: hidden;
+  z-index: 50;
+  animation: commandPaletteIn 0.15s ease-out;
+}
+.qtc-header {
+  padding: 8px 10px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.qtc-header-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.qtc-header-hint {
+  font-size: 11px;
+  color: var(--fg-muted);
+  line-height: 1.35;
+}
+.qtc-input {
+  width: calc(100% - 20px);
+  margin: 8px 10px 4px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 13px;
+  outline: none;
+}
+.qtc-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-subtle);
+}
+.qtc-input-status {
+  min-height: 24px;
+  padding: 2px 10px 8px;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+.qtc-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 10px;
+}
+.qtc-chip {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+.qtc-chip-ai {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+.qtc-chip-manual {
+  background: var(--bg-secondary, transparent);
+  color: var(--fg);
+}
+.qtc-date-picker {
+  padding: 0 10px 10px;
+}
+/* Live AI parse status inside the chips row */
+.qtc-parsing {
+  font-size: 11px;
+  color: var(--fg-muted);
+  align-self: center;
+  animation: qtcPulse 1.2s ease-in-out infinite;
+}
+.qtc-parsed {
+  font-size: 11px;
+  color: var(--accent);
+  align-self: center;
+}
+.qtc-confirm-panel {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.qtc-confirm-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+.qtc-confirm-label {
+  color: var(--fg-muted);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.qtc-confirm-input,
+.qtc-confirm-select {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+.qtc-confirm-input:focus,
+.qtc-confirm-select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-subtle);
+}
+.qtc-confirm-title {
+  font-size: 13px;
+}
+.qtc-confirm-was {
+  overflow: hidden;
+  color: var(--fg-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qtc-confirm-ai {
+  color: var(--accent);
+  font-size: 10px;
+}
+.qtc-confirm-chips {
+  padding: 0;
+}
+.qtc-confirm-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.qtc-confirm-footer {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-top: 2px;
+}
+.qtc-confirm-primary,
+.qtc-confirm-back {
+  padding: 5px 11px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.qtc-confirm-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-contrast, white);
+  font-weight: 600;
+}
+.qtc-confirm-back {
+  background: transparent;
+  color: var(--fg-muted);
+}
+.qtc-confirm-primary:disabled,
+.qtc-confirm-back:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.qtc-confirm-key-hint {
+  margin-left: auto;
+  color: var(--fg-muted);
+  font-size: 10px;
+}
+.qtc-confirm-analyzing {
+  color: var(--fg-muted);
+  font-size: 11px;
+  animation: qtcPulse 1.2s ease-in-out infinite;
+}
+.qtc-confirm-skeleton-row {
+  height: 28px;
+  border-radius: 6px;
+  background: var(--bg-secondary, var(--border));
+  opacity: 0.55;
+  animation: qtcPulse 1.2s ease-in-out infinite;
+}
+.qtc-confirm-skeleton-title {
+  height: 34px;
+}
+@keyframes qtcPulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+
 .sps-search {
   padding: 8px 8px 4px;
   flex-shrink: 0;

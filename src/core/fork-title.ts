@@ -19,8 +19,8 @@
  */
 
 import { sendMessage } from '../agent/model.js';
-import { MODEL_CATALOG } from '../agent/providers/model-catalog.js';
 import { log } from '../logging/index.js';
+import { fastModelFor } from './cheap-model.js';
 
 const MAX_WORDS = 4;
 const MAX_LABEL_LEN = 40; // keep the prefix short; the full title also carries "- fork of <parent>"
@@ -29,18 +29,6 @@ const SUMMARIZE_SYSTEM =
   'You label coding tasks. Given a prompt, reply with a 2-4 word English title in ' +
   'Title Case. No quotes, no punctuation, no trailing period, English only. ' +
   'Examples: "Fix Login Redirect", "Add Retry Backoff", "Refactor Stream Parser".';
-
-/**
- * Pick a cheap labeling model for the given provider. Prefers a Haiku-tier entry
- * (fast, no extended thinking); returns undefined to let model.ts use the
- * configured main model when the provider has no obvious cheap option.
- */
-function cheapModelFor(providerName: string): string | undefined {
-  const entries = MODEL_CATALOG[providerName];
-  if (!entries?.length) return undefined;
-  const haiku = entries.find((m) => m.id.toLowerCase().includes('haiku'));
-  return haiku?.id;
-}
 
 /**
  * Normalize an LLM (or fallback) string into a clean 2-4 word English label.
@@ -94,8 +82,7 @@ export async function summarizeForkPrompt(prompt: string, timeoutMs = 15_000): P
   try {
     const { getConfig } = await import('./config-manager.js');
     const config = await getConfig();
-    const providerName = config.agent?.main_provider ?? 'bedrock';
-    const model = cheapModelFor(providerName); // undefined → model.ts uses main_model
+    const model = fastModelFor(config); // undefined → model.ts uses main_model
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -152,8 +139,7 @@ export async function summarizeGroupLabel(titles: string[], timeoutMs = 15_000):
   try {
     const { getConfig } = await import('./config-manager.js');
     const config = await getConfig();
-    const providerName = config.agent?.main_provider ?? 'bedrock';
-    const model = cheapModelFor(providerName);
+    const model = fastModelFor(config);
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);

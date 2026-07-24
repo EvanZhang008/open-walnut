@@ -1,5 +1,5 @@
 import { ApiError, apiGet, apiPost, apiPatch, apiPut, apiDelete } from './client';
-import type { Task, DashboardData } from '@open-walnut/core';
+import type { Task, DashboardData, QuickTaskParse } from '@open-walnut/core';
 import {
   seedTaskSessionStatuses,
   sessionStatusStore,
@@ -60,6 +60,27 @@ export interface TaskFilter {
   project?: string;
 }
 
+export type { QuickTaskParse } from '@open-walnut/core';
+
+export interface CategorySummary {
+  name: string;
+  source: string;
+  todo: number;
+  active: number;
+  done: number;
+}
+
+export async function quickParseTask(text: string): Promise<QuickTaskParse> {
+  // Browser timezone rides along so relative dates ("tomorrow 10am") resolve in the
+  // user's zone even when the server runs elsewhere (e.g. a UTC cloud instance).
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return apiPost<QuickTaskParse>('/api/tasks/quick-parse', { text, timeZone });
+}
+
+export function listCategories(): Promise<CategorySummary[]> {
+  return apiGet<CategorySummary[]>('/api/categories');
+}
+
 export interface CreateTaskInput {
   title: string;
   priority?: string;
@@ -82,6 +103,8 @@ export interface UpdateTaskInput {
   category?: string;
   project?: string;
   due_date?: string | null;
+  /** Idempotent star set (unlike POST /:id/star which toggles). */
+  starred?: boolean;
   needs_attention?: boolean;
   parent_task_id?: string;  // Set parent (task ID) or '' to remove parent
   sprint?: string;  // Set sprint name or '' to clear

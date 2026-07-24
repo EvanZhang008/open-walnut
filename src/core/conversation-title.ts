@@ -18,8 +18,8 @@
  */
 
 import { sendMessage } from '../agent/model.js';
-import { MODEL_CATALOG } from '../agent/providers/model-catalog.js';
 import { log } from '../logging/index.js';
+import { fastModelFor } from './cheap-model.js';
 import { listConversations, renameConversation } from './conversations.js';
 import { bus, EventNames } from './event-bus.js';
 import * as chatHistory from './chat-history.js';
@@ -38,14 +38,6 @@ const TITLE_SYSTEM =
   'the title — no quotes, no punctuation, no trailing period, no preamble. Match ' +
   'the language the user is chatting in (e.g. a Chinese conversation gets a Chinese ' +
   'title). Examples: "Weekend Travel", "TypeScript Types", "报销流程".';
-
-/** Pick a cheap labeling model for the given provider (Haiku-tier); undefined → main model. */
-function cheapModelFor(providerName: string): string | undefined {
-  const entries = MODEL_CATALOG[providerName];
-  if (!entries?.length) return undefined;
-  const haiku = entries.find((m) => m.id.toLowerCase().includes('haiku'));
-  return haiku?.id;
-}
 
 /** Normalize an LLM title: strip wrapping quotes, collapse whitespace, drop a trailing
  *  period, and cap length. Keeps non-ASCII (CJK titles are intended). */
@@ -120,8 +112,7 @@ export async function generateConversationTitle(
 
     const { getConfig } = await import('./config-manager.js');
     const config = await getConfig();
-    const providerName = config.agent?.main_provider ?? 'bedrock';
-    const model = cheapModelFor(providerName); // undefined → model.ts uses main_model
+    const model = fastModelFor(config); // undefined → model.ts uses main_model
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 15_000);

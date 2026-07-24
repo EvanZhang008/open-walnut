@@ -4,6 +4,7 @@ import { helpCommand } from './help.js';
 import { checkTasksCommand } from './check-tasks.js';
 import { planCommand } from './plan.js';
 import { sessionCommand } from './session.js';
+import { taskCommand } from './task.js';
 import { sessionsCommand } from './sessions.js';
 import { tasksCommand } from './tasks.js';
 import { loadMarkdownCommands } from './markdown-bridge.js';
@@ -16,6 +17,7 @@ register({ ...helpCommand, source: 'hardcoded' });
 register({ ...checkTasksCommand, source: 'hardcoded' });
 register({ ...planCommand, source: 'hardcoded' });
 register({ ...sessionCommand });
+register({ ...taskCommand });
 register({ ...sessionsCommand, source: 'hardcoded' });
 register({ ...tasksCommand, source: 'hardcoded' });
 
