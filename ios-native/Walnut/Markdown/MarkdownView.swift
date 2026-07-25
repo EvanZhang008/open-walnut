@@ -135,9 +135,23 @@ struct MarkdownView: View {
         }
     }
 
+    /// Max body rows rendered in a chat/notes markdown table.
+    ///
+    /// `Grid` lays out EVERY row eagerly (nothing lazy about it), so cost is
+    /// linear in rows and is paid even for rows scrolled off-screen. A verbose
+    /// model reply with a 150-row table pinned the main thread near 100% CPU and
+    /// blew the enclosing scroll container's geometry far past the viewport. Chat
+    /// is a live surface: cap it and point at the full table instead. (The
+    /// TextKit editor path has its own cap — TableAttachment.maxRenderedRows.)
+    private static let maxRenderedTableRows = 60
+
     /// Simple horizontal-scrolling grid — graceful for the occasional table.
     private func tableView(header: [AttributedString], rows: [[AttributedString]]) -> some View {
         let columns = max(header.count, rows.map(\.count).max() ?? 0)
+        let rendered = rows.count > Self.maxRenderedTableRows
+            ? Array(rows.prefix(Self.maxRenderedTableRows))
+            : rows
+        let omitted = rows.count - rendered.count
         return ScrollView(.horizontal, showsIndicators: false) {
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
                 GridRow {
@@ -147,12 +161,21 @@ struct MarkdownView: View {
                     }
                 }
                 Divider()
-                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                ForEach(Array(rendered.enumerated()), id: \.offset) { _, row in
                     GridRow {
                         ForEach(0..<columns, id: \.self) { c in
                             Text(c < row.count ? row[c] : AttributedString(""))
                                 .font(.subheadline)
                         }
+                    }
+                }
+                if omitted > 0 {
+                    Divider()
+                    GridRow {
+                        Text("… \(omitted) more row\(omitted == 1 ? "" : "s")")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .gridCellColumns(max(1, columns))
                     }
                 }
             }

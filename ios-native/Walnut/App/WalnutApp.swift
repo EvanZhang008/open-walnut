@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 @main
 struct WalnutApp: App {
@@ -41,14 +42,35 @@ struct WalnutApp: App {
 }
 
 /// Setup gate: first run (or after disconnect) shows setup; otherwise the tabs.
+/// Lifecycle fan-out lives HERE, not on MainTabView: during SetupView (first
+/// run / after disconnect) MainTabView doesn't exist, and a hub that never
+/// hears about background would leave its suspended flag stale for stores
+/// created later.
 struct RootView: View {
     @Environment(ConnectionStore.self) private var connection
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        if connection.isConfigured {
-            MainTabView()
-        } else {
-            SetupView()
+        Group {
+            if connection.isConfigured {
+                MainTabView()
+            } else {
+                SetupView()
+            }
+        }
+        // `.background` is the ONLY suspend trigger. `willResignActive` also
+        // fires for transient interruptions the app never leaves for — the
+        // control center swipe, an incoming call banner, the app switcher, any
+        // system alert — and suspending there tore down live work (voice
+        // recording, streaming) mid-use with no matching resume, because
+        // `.active` only comes back if the scene actually left it.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                LifecycleHub.shared.resumeAll()
+                Task { await connection.refreshStatus() }
+            } else if phase == .background {
+                LifecycleHub.shared.suspendAll()
+            }
         }
     }
 }
@@ -58,7 +80,6 @@ struct MainTabView: View {
     @Environment(ChatStore.self) private var chat
     @Environment(NotesStore.self) private var notes
     @Environment(TasksStore.self) private var tasks
-    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         TabView {
@@ -76,15 +97,6 @@ struct MainTabView: View {
             await chat.initialize()
             await notes.initialize()
             await tasks.initialize()
-        }
-        .onChange(of: scenePhase) { _, phase in
-            // Foregrounding: revive the SSE stream and refresh status.
-            if phase == .active {
-                chat.connectStream()
-                Task { await connection.refreshStatus() }
-            } else if phase == .background {
-                chat.closeStream()
-            }
         }
     }
 }

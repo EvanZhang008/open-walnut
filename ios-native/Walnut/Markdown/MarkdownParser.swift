@@ -31,7 +31,37 @@ struct MarkdownBlock: Identifiable, Equatable {
 /// Small hand-rolled block parser: splits a note into blocks, then uses
 /// AttributedString(markdown:) for inline styling within each block.
 enum MarkdownParser {
+    // Block parsing is expensive: several regex passes plus a per-block
+    // AttributedString(markdown:) inline parse. Chat re-evaluates EVERY visible
+    // row's body each time the streaming text ticks (~8Hz) — without
+    // memoization every tick re-parsed all on-screen history on the main
+    // thread, saturating it enough to freeze the UI and trip the 0x8BADF00D
+    // watchdog kill on long threads. Cache by exact content so a stable row
+    // parses exactly once; NSCache bounds growth (live streaming feeds a fresh
+    // string each tick) and purges under memory pressure. parse is a pure
+    // function of `content`, so caching can never go stale.
+    private final class Parsed { let blocks: [MarkdownBlock]; init(_ b: [MarkdownBlock]) { blocks = b } }
+    private static let cache: NSCache<NSString, Parsed> = {
+        let c = NSCache<NSString, Parsed>()
+        c.countLimit = 256
+        // countLimit alone is not enough: streaming feeds a fresh (growing) string
+        // each tick, so 256 entries can each hold a near-full parse of a long
+        // message — unbounded in bytes. Cost = source UTF-16 length (proxy for the
+        // parsed blocks' retained size); 4M chars ≈ 8MB of source keeps the cache
+        // far below memory-pressure territory while still covering every visible row.
+        c.totalCostLimit = 4_000_000
+        return c
+    }()
+
     static func parse(_ content: String) -> [MarkdownBlock] {
+        let key = content as NSString
+        if let hit = cache.object(forKey: key) { return hit.blocks }
+        let blocks = parseUncached(content)
+        cache.setObject(Parsed(blocks), forKey: key, cost: key.length)
+        return blocks
+    }
+
+    private static func parseUncached(_ content: String) -> [MarkdownBlock] {
         let lines = content.components(separatedBy: "\n")
         var blocks: [MarkdownBlock] = []
         var nextID = 0
@@ -241,7 +271,40 @@ enum MarkdownParser {
                 attributed[lower..<upper].underlineStyle = .single
             }
         }
+        linkifyBareURLs(&attributed)
         return attributed
+    }
+
+    /// AttributedString(markdown:) only links `[text](url)` — a bare
+    /// "https://example.com" in agent output stayed dead text, so websites
+    /// couldn't be opened from chat. Mark plain http(s) runs as tappable links.
+    /// Internal (not private): the chat `Text(inline:)` fast path applies it
+    /// too — short plain messages never reach the block parser.
+    private static let bareURLRegex = try? NSRegularExpression(
+        pattern: #"https?://[^\s<>()\[\]{}"']+"#
+    )
+
+    static func linkifyBareURLs(_ attributed: inout AttributedString) {
+        guard let regex = bareURLRegex else { return }
+        let plain = String(attributed.characters)
+        let ns = plain as NSString
+        for match in regex.matches(in: plain, range: NSRange(location: 0, length: ns.length)) {
+            guard let range = Range(match.range, in: plain),
+                  let lower = AttributedString.Index(range.lowerBound, within: attributed),
+                  let upper = AttributedString.Index(range.upperBound, within: attributed) else { continue }
+            // Skip runs the markdown parser already linked ([text](url)).
+            if attributed[lower..<upper].runs.contains(where: { $0.link != nil }) { continue }
+            // Trim trailing punctuation that reads as prose, not URL.
+            var urlText = ns.substring(with: match.range)
+            while let last = urlText.last, ".,;:!?".contains(last) { urlText.removeLast() }
+            guard let url = URL(string: urlText),
+                  let trimmedUpper = AttributedString.Index(
+                    plain.index(range.lowerBound, offsetBy: urlText.count), within: attributed
+                  ) else { continue }
+            attributed[lower..<trimmedUpper].link = url
+            attributed[lower..<trimmedUpper].foregroundColor = .accentColor
+            attributed[lower..<trimmedUpper].underlineStyle = .single
+        }
     }
 
     // MARK: - Line classification helpers
@@ -327,17 +390,22 @@ enum MarkdownParser {
         imageExtensions.contains((raw as NSString).pathExtension.lowercased())
     }
 
-    /// Split a text run around `![[embed]]` and `![alt](url)` images.
+    /// Split a text run around `![[embed]]` and `![alt](url)` images, plus
+    /// bare absolute image paths ("/tmp/x/shot.png" — agents write these
+    /// constantly; the web console inlines them, so must we).
     static func splitImages(_ text: String) -> [TextOrImage] {
         let pattern = #"!\[\[([^\]]+)\]\]|!\[([^\]]*)\]\(([^)]+)\)"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [.text(text)] }
         let ns = text as NSString
         var pieces: [TextOrImage] = []
+        func appendText(_ t: String) {
+            guard !t.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+            pieces.append(contentsOf: splitBarePathImages(t))
+        }
         var cursor = 0
         for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
             if match.range.location > cursor {
-                let before = ns.substring(with: NSRange(location: cursor, length: match.range.location - cursor))
-                if !before.trimmingCharacters(in: .whitespaces).isEmpty { pieces.append(.text(before)) }
+                appendText(ns.substring(with: NSRange(location: cursor, length: match.range.location - cursor)))
             }
             if match.range(at: 1).location != NSNotFound {
                 // ![[inner]] — inner may carry an Obsidian size suffix like "|300"
@@ -353,6 +421,47 @@ enum MarkdownParser {
                 let url = ns.substring(with: match.range(at: 3))
                 pieces.append(.image(raw: url, alt: alt))
             }
+            cursor = match.range.location + match.range.length
+        }
+        if cursor < ns.length {
+            appendText(ns.substring(from: cursor))
+        }
+        return pieces.isEmpty ? [.text(text)] : pieces
+    }
+
+    /// Bare absolute Unix path ending in an image extension (2+ segments,
+    /// optionally wrapped in backticks) — mirrors the web console's
+    /// IMAGE_PATH_RE so "/tmp/demo/shot.png" inlines instead of reading as text.
+    private static let barePathRegex = try? NSRegularExpression(
+        pattern: #"`?(/[\w.\-]+(?:/[\w.\- ]*[\w.\-])+\.(?:png|jpe?g|gif|webp))`?"#,
+        options: [.caseInsensitive]
+    )
+
+    private static func splitBarePathImages(_ text: String) -> [TextOrImage] {
+        guard let regex = barePathRegex else { return [.text(text)] }
+        let ns = text as NSString
+        var pieces: [TextOrImage] = []
+        var cursor = 0
+        for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            // Boundary guard (mirrors the web console's IMAGE_PATH_RE check):
+            // only fire at start-of-text or after whitespace/backtick. Without
+            // it the path portion of "https://example.com/logo.png" matches
+            // (the URL's "//" supplies the leading "/") and a valid remote
+            // image link becomes a broken local /api/v1/media request.
+            if match.range.location > 0 {
+                let prev = ns.character(at: match.range.location - 1)
+                let prevScalar = Unicode.Scalar(prev)
+                let isBoundary = prevScalar.map {
+                    CharacterSet.whitespacesAndNewlines.contains($0) || $0 == "`" || $0 == "(" || $0 == "["
+                } ?? false
+                if !isBoundary { continue }
+            }
+            if match.range.location > cursor {
+                let before = ns.substring(with: NSRange(location: cursor, length: match.range.location - cursor))
+                if !before.trimmingCharacters(in: .whitespaces).isEmpty { pieces.append(.text(before)) }
+            }
+            let raw = ns.substring(with: match.range(at: 1))
+            pieces.append(.image(raw: raw, alt: (raw as NSString).lastPathComponent))
             cursor = match.range.location + match.range.length
         }
         if cursor < ns.length {

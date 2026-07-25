@@ -31,6 +31,10 @@ enum DiskCache {
         return try? JSONDecoder().decode(type, from: data)
     }
 
+    static func remove(key: String) {
+        try? FileManager.default.removeItem(at: url(for: key))
+    }
+
     static func clearAll() {
         try? FileManager.default.removeItem(at: directory)
     }

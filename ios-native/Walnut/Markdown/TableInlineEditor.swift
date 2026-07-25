@@ -10,9 +10,16 @@ final class TableInlineEditor: UIView, UITextFieldDelegate {
     private let attachment: TableAttachment
     private let charIndex: Int
     private weak var textView: UITextView?
-    /// Working copy — the source of truth while editing; pushed back to the
-    /// attachment on structural changes (live reflow) and on commit.
+    /// Working copy of the EDITABLE (rendered) part of the table — the source of
+    /// truth while editing; pushed back to the attachment on structural changes
+    /// (live reflow) and on commit.
     private var table: EditableTable
+    /// Rows past the render cap. They have no cells on screen, so they are kept
+    /// verbatim and re-appended on every push back to the attachment — without
+    /// this, editing one cell of a 150-row table deleted rows 101+ on autosave.
+    /// Cell coordinates therefore map 1:1 to absolute row indices (visible rows
+    /// are always the first `TableAttachment.maxRenderedRows`).
+    private var hiddenRows: [[String]]
 
     /// Re-render the attachment for a size change WITHOUT triggering autosave.
     private let onLiveResize: (EditableTable) -> Void
@@ -40,7 +47,10 @@ final class TableInlineEditor: UIView, UITextFieldDelegate {
         self.attachment = attachment
         self.charIndex = charIndex
         self.textView = textView
-        self.table = attachment.table
+        let full = attachment.table
+        let cap = TableAttachment.maxRenderedRows
+        self.table = EditableTable(header: full.header, rows: Array(full.rows.prefix(cap)))
+        self.hiddenRows = full.rows.count > cap ? Array(full.rows.dropFirst(cap)) : []
         self.onLiveResize = onLiveResize
         self.onCommit = onCommit
         self.savedBottomInset = textView.contentInset.bottom
@@ -104,12 +114,18 @@ final class TableInlineEditor: UIView, UITextFieldDelegate {
         target.becomeFirstResponder()
     }
 
+    /// Edited visible rows plus the untouched rows past the render cap — the
+    /// only value that may be written back to the attachment.
+    private var merged: EditableTable {
+        EditableTable(header: table.header, rows: table.rows + hiddenRows)
+    }
+
     /// Commit whatever is in the cells and hand control back to the coordinator.
     func commit() {
         syncFieldsToTable()
         restoreHostInset()
         endEditing(true)
-        onCommit(table)
+        onCommit(merged)
     }
 
     private func restoreHostInset() {
@@ -243,7 +259,14 @@ final class TableInlineEditor: UIView, UITextFieldDelegate {
 
     @objc private func addRow() {
         syncFieldsToTable()
-        table.rows.append(Array(repeating: "", count: table.columnCount))
+        let blank = Array(repeating: "", count: table.columnCount)
+        // Append at the END of the merged model: with rows past the render cap
+        // the new row goes behind them, otherwise it becomes the last visible row.
+        if hiddenRows.isEmpty {
+            table.rows.append(blank)
+        } else {
+            hiddenRows.append(blank)
+        }
         applyStructureChange(focus: (rowCount - 1) * table.columnCount)
     }
 
@@ -251,13 +274,19 @@ final class TableInlineEditor: UIView, UITextFieldDelegate {
         syncFieldsToTable()
         table.header.append("Column \(table.columnCount + 1)")
         for r in table.rows.indices { table.rows[r].append("") }
+        // Structure changes apply to hidden rows too — they share the header.
+        for r in hiddenRows.indices { hiddenRows[r].append("") }
         applyStructureChange(focus: table.columnCount - 1)
     }
 
     @objc private func removeRow() {
-        guard table.rows.count > 1 else { return }
         syncFieldsToTable()
-        table.rows.removeLast()
+        if !hiddenRows.isEmpty {
+            hiddenRows.removeLast()
+        } else {
+            guard table.rows.count > 1 else { return }
+            table.rows.removeLast()
+        }
         applyStructureChange(focus: 0)
     }
 
@@ -266,6 +295,7 @@ final class TableInlineEditor: UIView, UITextFieldDelegate {
         syncFieldsToTable()
         table.header.removeLast()
         for r in table.rows.indices { table.rows[r].removeLast() }
+        for r in hiddenRows.indices where !hiddenRows[r].isEmpty { hiddenRows[r].removeLast() }
         applyStructureChange(focus: 0)
     }
 
@@ -283,7 +313,7 @@ final class TableInlineEditor: UIView, UITextFieldDelegate {
     /// rebuild the cell grid and re-anchor the overlay to the new glyph rect.
     private func applyStructureChange(focus: Int) {
         let wasEditing = fields.contains { $0.isFirstResponder }
-        onLiveResize(table)
+        onLiveResize(merged)
         rebuildCells()
         layoutToAttachment()
         setNeedsLayout()

@@ -21,7 +21,14 @@ final class VoiceRecorder: NSObject {
     private var recorder: AVAudioRecorder?
     private var tickTask: Task<Void, Never>?
     private var fileURL: URL?
+    /// In-flight transcription upload; cancelled on background suspension.
+    @ObservationIgnored private var transcriptionTask: Task<String, Error>?
     private let api = WalnutAPI()
+
+    override init() {
+        super.init()
+        LifecycleHub.shared.register(self)
+    }
 
     /// ~90s of speech is plenty for a chat message and keeps the upload well
     /// under the bridge relay frame cap.
@@ -140,7 +147,13 @@ final class VoiceRecorder: NSObject {
                 errorMessage = "Recording too short"
                 return nil
             }
-            let text = try await api.transcribe(audio: data, format: "m4a")
+            // Held in a cancellable handle so backgrounding can stop the
+            // (up to 120s) upload instead of letting it run suspended.
+            let apiRef = api
+            let task = Task { try await apiRef.transcribe(audio: data, format: "m4a") }
+            transcriptionTask = task
+            defer { transcriptionTask = nil }
+            let text = try await task.value
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty {
                 errorMessage = "No speech recognized"
@@ -149,8 +162,13 @@ final class VoiceRecorder: NSObject {
             AppLog.info("voice", "transcribed", ["chars": "\(trimmed.count)", "bytes": "\(data.count)"])
             return trimmed
         } catch let error as APIError {
+            // Backgrounding cancels the upload — that's lifecycle, not an
+            // error the user should see.
+            if error.isCancelled { return nil }
             errorMessage = error.voiceNotice
             AppLog.error("voice", "transcribe failed", ["error": error.localizedDescription])
+            return nil
+        } catch is CancellationError {
             return nil
         } catch {
             errorMessage = Self.diagnosticMessage(prefix: "Transcription failed", error)
@@ -235,6 +253,21 @@ final class VoiceRecorder: NSObject {
         if !stage.isEmpty { meta["stage"] = stage }
         return meta
     }
+}
+
+extension VoiceRecorder: LifecycleSuspendable {
+    func suspendForBackground() {
+        if state == .recording {
+            cancel()
+        } else if state == .transcribing {
+            // Cancel the in-flight upload (up to 120s) instead of letting it
+            // burn network/CPU while suspended; the audio file is deleted by
+            // stopAndTranscribe's defer as it unwinds.
+            transcriptionTask?.cancel()
+        }
+    }
+
+    func resumeForForeground() {}
 }
 
 extension VoiceRecorder: AVAudioRecorderDelegate {

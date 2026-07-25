@@ -66,7 +66,8 @@ struct WalnutAPI {
         struct Accepted: Codable { let turnId: String }
         let accepted: Accepted = try await send(
             "POST", "/conversations/\(escape(conversationID))/messages",
-            body: Body(text: text, agentId: agentID, images: images.isEmpty ? nil : images)
+            body: Body(text: text, agentId: agentID, images: images.isEmpty ? nil : images),
+            timeout: images.isEmpty ? nil : 180
         )
         return accepted.turnId
     }
@@ -102,7 +103,8 @@ struct WalnutAPI {
         struct Accepted: Codable { let messageId: String }
         let accepted: Accepted = try await send(
             "POST", "/sessions/\(escape(id))/messages",
-            body: Body(text: text, images: images.isEmpty ? nil : images)
+            body: Body(text: text, images: images.isEmpty ? nil : images),
+            timeout: images.isEmpty ? nil : 180
         )
         return accepted.messageId
     }
@@ -232,14 +234,32 @@ struct WalnutAPI {
         return components?.url
     }
 
+    /// Authenticated URL for an absolute-path image (chat/session pictures,
+    /// screenshots the agent saved). GET /api/v1/media serves it from local
+    /// disk, the session's exec host (daemon), or over the cloud bridge.
+    /// Callers must attach the Bearer header themselves.
+    static func mediaURL(absolutePath: String, sessionID: String? = nil) -> URL? {
+        guard let base = AppConfig.serverURL else { return nil }
+        var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        components?.path = "/api/v1/media"
+        var items = [URLQueryItem(name: "path", value: absolutePath)]
+        if let sessionID, !sessionID.isEmpty {
+            items.append(URLQueryItem(name: "session", value: sessionID))
+        }
+        components?.queryItems = items
+        return components?.url
+    }
+
     // MARK: - Plumbing
 
     private func get<T: Decodable>(_ path: String) async throws -> T {
         try await send("GET", path, body: nil as [String: String]?)
     }
 
-    private func send<T: Decodable, B: Encodable>(_ method: String, _ path: String, body: B?) async throws -> T {
-        try await sendAbsolute(method, "/api/v1" + path, body: body)
+    private func send<T: Decodable, B: Encodable>(
+        _ method: String, _ path: String, body: B?, timeout: TimeInterval? = nil
+    ) async throws -> T {
+        try await sendAbsolute(method, "/api/v1" + path, body: body, timeout: timeout)
     }
 
     private func sendAbsolute<T: Decodable, B: Encodable>(
@@ -264,11 +284,37 @@ struct WalnutAPI {
     }
 
     private func perform(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        let started = Date()
         do {
             return try await session.data(for: request)
         } catch {
+            let nsError = error as NSError
+            // Classify BEFORE logging: view-lifecycle cancellations are normal
+            // behavior — error-logging them pollutes the connectivity dump and
+            // (via AppLog's error-debounce) schedules pointless uploads.
+            if error is CancellationError
+                || (error as? URLError)?.code == .cancelled
+                || (nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled) {
+                throw APIError.cancelled
+            }
+            let latency = Int(Date().timeIntervalSince(started) * 1_000)
+            AppLog.error("network", "request failed", [
+                "path": Self.sanitizedPath(request.url),
+                "method": request.httpMethod ?? "GET",
+                "errorDomain": nsError.domain,
+                "errorCode": String(nsError.code),
+                "latencyMs": String(latency),
+            ])
             throw APIError.network(underlying: error)
         }
+    }
+
+    /// Keep only a coarse endpoint template; note paths and record ids never
+    /// enter client diagnostics uploaded to the server.
+    private static func sanitizedPath(_ url: URL?) -> String {
+        guard let url else { return "/" }
+        let segments = url.path.split(separator: "/")
+        return "/" + segments.prefix(2).joined(separator: "/")
     }
 
     static func decode<T: Decodable>(_ type: T.Type, data: Data, response: URLResponse) throws -> T {

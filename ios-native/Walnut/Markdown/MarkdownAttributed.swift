@@ -10,6 +10,19 @@ extension NSAttributedString.Key {
     /// from the source so `_x_` doesn't get rewritten to `*x*` on save.
     static let walnutDelimOpen = NSAttributedString.Key("walnutDelimOpen")
     static let walnutDelimClose = NSAttributedString.Key("walnutDelimClose")
+    /// Oversized tables render as bounded plain text while preserving the full
+    /// source for an unedited round trip. All four keys are carried on EVERY
+    /// line of the block, not just the first: attributes vanish with the line
+    /// that held them, so a single-line deletion used to take the whole table's
+    /// source with it.
+    static let walnutTableFallbackID = NSAttributedString.Key("walnutTableFallbackID")
+    static let walnutTableFallbackSource = NSAttributedString.Key("walnutTableFallbackSource")
+    /// The exact text the block was rendered with. When the block's live text
+    /// differs the user edited it, so the edited text wins over the source.
+    static let walnutTableFallbackDisplay = NSAttributedString.Key("walnutTableFallbackDisplay")
+    /// Source rows past the render cap — re-appended after an edited block so
+    /// editing a visible row can't delete the hidden ones.
+    static let walnutTableFallbackTail = NSAttributedString.Key("walnutTableFallbackTail")
 }
 
 /// One line's block-level identity. `prefix` (when present) is always a literal
@@ -166,18 +179,29 @@ enum MarkdownAttributed {
             }
             // Table → real grid attachment (tap to edit), not literal pipes.
             if trimmed.contains("|"), index + 1 < lines.count, isTableSeparator(lines[index + 1]) {
-                var tableLines = [lines[index], lines[index + 1]]
+                var allTableLines = [lines[index], lines[index + 1]]
                 index += 2
                 while index < lines.count {
                     let t = lines[index].trimmingCharacters(in: .whitespaces)
                     guard t.contains("|"), !t.isEmpty else { break }
-                    tableLines.append(lines[index])
+                    allTableLines.append(lines[index])
                     index += 1
                 }
-                if let table = EditableTable.parse(lines: tableLines) {
+                let totalBodyRows = max(0, allTableLines.count - 2)
+                let omittedRows = max(0, totalBodyRows - TableAttachment.maxRenderedRows)
+                let fullSource = allTableLines.joined(separator: "\n")
+                // Parse the FULL table. The attachment draws only the first
+                // `maxRenderedRows` rows but must RETAIN every row: it is the
+                // serialization source, so handing it a truncated model meant a
+                // single cell edit (which drops `originalSource`) rewrote the
+                // note with rows 101+ silently deleted.
+                if let table = EditableTable.parse(lines: allTableLines),
+                   !TableAttachment.wouldExceedBitmapLimit(
+                       table: table, width: maxImageWidth, omittedRows: omittedRows
+                   ) {
                     let attachment = TableAttachment(
                         table: table, maxWidth: maxImageWidth,
-                        originalSource: tableLines.joined(separator: "\n")
+                        originalSource: fullSource
                     )
                     result.append(NSAttributedString(attachment: attachment))
                     result.addAttributes(
@@ -185,10 +209,14 @@ enum MarkdownAttributed {
                         range: NSRange(location: result.length - 1, length: 1)
                     )
                 } else {
-                    for (i, tl) in tableLines.enumerated() {
-                        if i > 0 { result.append(NSAttributedString(string: "\n", attributes: typingAttributes(for: .verbatim))) }
-                        appendVerbatim(tl, to: result)
-                    }
+                    let renderedLines = Array(allTableLines.prefix(TableAttachment.maxRenderedRows + 2))
+                    appendTableFallback(
+                        renderedLines,
+                        omittedRows: omittedRows,
+                        tail: Array(allTableLines.dropFirst(renderedLines.count)),
+                        originalSource: fullSource,
+                        to: result
+                    )
                 }
                 appendNewlineIfNeeded(index, lines.count, to: result)
                 continue
@@ -215,6 +243,33 @@ enum MarkdownAttributed {
 
     private static func appendVerbatim(_ line: String, to result: NSMutableAttributedString) {
         result.append(NSAttributedString(string: line, attributes: typingAttributes(for: .verbatim)))
+    }
+
+    /// A table too large to rasterize renders as bounded plain text. Every line
+    /// carries the block's id, its full source, the display text and the row tail
+    /// beyond the render cap, so the serializer can (a) still find the source
+    /// after any single line is deleted and (b) tell an edited block from an
+    /// untouched one.
+    private static func appendTableFallback(
+        _ lines: [String], omittedRows: Int, tail: [String], originalSource: String,
+        to result: NSMutableAttributedString
+    ) {
+        let fallbackID = UUID().uuidString
+        let displayLines = lines + (omittedRows > 0 ? ["… \(omittedRows) more rows"] : [])
+        let display = displayLines.joined(separator: "\n")
+        for (lineIndex, line) in displayLines.enumerated() {
+            if lineIndex > 0 {
+                var newlineAttrs = typingAttributes(for: .verbatim)
+                newlineAttrs[.walnutTableFallbackID] = fallbackID
+                result.append(NSAttributedString(string: "\n", attributes: newlineAttrs))
+            }
+            var attrs = typingAttributes(for: .verbatim)
+            attrs[.walnutTableFallbackID] = fallbackID
+            attrs[.walnutTableFallbackSource] = originalSource
+            attrs[.walnutTableFallbackDisplay] = display
+            if !tail.isEmpty { attrs[.walnutTableFallbackTail] = tail.joined(separator: "\n") }
+            result.append(NSAttributedString(string: line, attributes: attrs))
+        }
     }
 
     private static func appendClassified(_ line: String, to result: NSMutableAttributedString, maxImageWidth: CGFloat) {

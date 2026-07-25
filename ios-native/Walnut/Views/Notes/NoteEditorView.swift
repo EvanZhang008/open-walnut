@@ -1,5 +1,14 @@
 import SwiftUI
 
+/// A local draft saved when a final save couldn't complete (backgrounded
+/// mid-PUT). `baseHash` is the server hash the draft was derived FROM: adopting
+/// a draft whose base no longer matches the server would silently revert
+/// whatever else changed there, so a mismatch asks the user instead.
+struct NoteDraft: Codable {
+    let content: String
+    let baseHash: String?
+}
+
 /// Note screen — Apple Notes-style: the WYSIWYG editor IS the note, always.
 /// No separate "rendered" vs "raw editor" mode; tapping anywhere just moves
 /// the caret there. A ••• menu item drops to a plain-markdown sheet for the
@@ -20,6 +29,8 @@ struct NoteDetailView: View {
     @State private var saving = false
     @State private var dirty = false
     @State private var conflict: (serverHash: String?, serverContent: String?)?
+    /// A recovered local draft whose baseline no longer matches the server.
+    @State private var draftConflict: NoteDraft?
     @State private var saveTask: Task<Void, Never>?
     @State private var showDeleteConfirm = false
     @State private var showRawEditor = false
@@ -52,7 +63,14 @@ struct NoteDetailView: View {
         .onDisappear {
             saveTask?.cancel()
             if dirty {
-                // Fire-and-forget final save on screen pop.
+                // Persist a local draft FIRST: the fire-and-forget final save
+                // can be cancelled by backgrounding (now classified .cancelled
+                // and rethrown), which silently lost the text. The draft is
+                // adopted on next open and cleared on any successful save.
+                DiskCache.save(
+                    NoteDraft(content: currentMarkdown(), baseHash: contentHash),
+                    key: Self.draftKey(path)
+                )
                 Task { await flushSave() }
             }
         }
@@ -90,6 +108,33 @@ struct NoteDetailView: View {
             }
         } message: {
             Text("This note was changed on the server while you were editing.")
+        }
+        .alert(
+            "Unsaved Draft Recovered",
+            isPresented: .init(
+                get: { draftConflict != nil },
+                set: { if !$0 { draftConflict = nil } }
+            )
+        ) {
+            Button("Use My Draft") {
+                if let draft = draftConflict {
+                    adopt(content: draft.content, hash: contentHash)
+                    dirty = true
+                    scheduleAutosave()
+                }
+                draftConflict = nil
+            }
+            Button("Keep Server Version", role: .cancel) {
+                // Never delete the draft here: it stays under a recovery key so
+                // the text is still retrievable if the user changes their mind.
+                if let draft = draftConflict {
+                    DiskCache.save(draft, key: "note-draft-recovered-\(path)")
+                }
+                DiskCache.remove(key: Self.draftKey(path))
+                draftConflict = nil
+            }
+        } message: {
+            Text("A draft from an interrupted save doesn't match the current server version — the note changed elsewhere too. Keeping the server version stores your draft for recovery.")
         }
     }
 
@@ -169,16 +214,47 @@ struct NoteDetailView: View {
 
     // MARK: - Load / parse / save
 
+    static func draftKey(_ path: String) -> String { "note-draft-\(path)" }
+
     private func load() async {
         guard !loaded else { return }
         do {
             let note = try await notes.loadNote(path: path)
             contentHash = note.contentHash
-            adopt(content: note.content, hash: note.contentHash)
+            // A leftover draft means the last final save never landed
+            // (backgrounded mid-PUT).
+            let draft = Self.loadDraft(path: path)
+            if let draft, draft.content != note.content {
+                if draft.baseHash == note.contentHash {
+                    // Server is still exactly what the draft was based on — the
+                    // draft is a pure superset of it, adopt silently.
+                    adopt(content: draft.content, hash: note.contentHash)
+                    dirty = true
+                    scheduleAutosave()
+                } else {
+                    // The note ALSO changed elsewhere (agent, web console,
+                    // another device). Auto-adopting would revert those edits
+                    // invisibly, so show the server copy and let the user choose.
+                    adopt(content: note.content, hash: note.contentHash)
+                    draftConflict = draft
+                }
+            } else {
+                adopt(content: note.content, hash: note.contentHash)
+            }
             loaded = true
         } catch {
             loadFailed = true
         }
+    }
+
+    /// Reads the current draft record, transparently upgrading the legacy
+    /// bare-string format (no baseline hash → treated as unknown baseline).
+    private static func loadDraft(path: String) -> NoteDraft? {
+        if let draft = DiskCache.load(NoteDraft.self, key: draftKey(path)) { return draft }
+        if let legacy = DiskCache.load(String.self, key: draftKey(path)) {
+            return NoteDraft(content: legacy, baseHash: nil)
+        }
+        return nil
     }
 
     private func adopt(content: String, hash: String?) {
@@ -230,6 +306,7 @@ struct NoteDetailView: View {
                 // Adopt the server's hash — it may stamp frontmatter into new notes.
                 contentHash = result.contentHash
                 dirty = false
+                DiskCache.remove(key: Self.draftKey(path))
             case .conflict(let serverHash, let serverContent):
                 conflict = (serverHash, serverContent)
             }

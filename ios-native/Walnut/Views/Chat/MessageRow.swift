@@ -1,5 +1,70 @@
 import SwiftUI
 
+/// Decoded bubble thumbnails, keyed by the IMAGE BYTES rather than by message
+/// id: the optimistic `local-…` bubble is replaced by the canonical server row a
+/// moment after a send, and an id-keyed entry would be missed on that swap, so
+/// the thumbnail re-decoded (a visible flicker) on every history refresh.
+@MainActor
+private final class BubbleThumbCache {
+    static let shared = BubbleThumbCache()
+
+    private let images = NSCache<NSString, UIImage>()
+
+    private init() {
+        images.totalCostLimit = 32 * 1024 * 1024
+    }
+
+    static func key(for data: Data) -> NSString {
+        "\(data.count):\(data.hashValue)" as NSString
+    }
+
+    func cached(_ data: Data) -> UIImage? {
+        images.object(forKey: Self.key(for: data))
+    }
+
+    func store(_ image: UIImage, for data: Data) {
+        let cost = Int(image.size.width * image.scale * image.size.height * image.scale * 4)
+        images.setObject(image, forKey: Self.key(for: data), cost: cost)
+    }
+}
+
+/// One attached-image thumbnail. The JPEG decode is a ~10-30ms ImageIO call per
+/// image; running it inside `body` (as this used to) put it on the MainActor
+/// during layout, so a bubble with several photos stalled the first frame of the
+/// chat list. Decoding happens in a detached task and the row shows a
+/// placeholder until it lands. A cache hit still renders synchronously, so a
+/// scroll back over an already-decoded image never flashes the placeholder.
+private struct BubbleThumb: View {
+    let data: Data
+
+    @State private var image: UIImage?
+
+    var body: some View {
+        Group {
+            if let image = image ?? BubbleThumbCache.shared.cached(data) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: 200, maxHeight: 200)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            } else {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color(.tertiarySystemFill))
+                    .frame(width: 120, height: 120)
+            }
+        }
+        .task(id: BubbleThumbCache.key(for: data)) {
+            if BubbleThumbCache.shared.cached(data) != nil { return }
+            let decoded = await Task.detached(priority: .userInitiated) {
+                SelectedImage.thumbnail(from: data)
+            }.value
+            guard let decoded, !Task.isCancelled else { return }
+            BubbleThumbCache.shared.store(decoded, for: data)
+            image = decoded
+        }
+    }
+}
+
 /// One chat entry — user bubble (right, walnut tint), assistant rich markdown
 /// (left), a system-notification card, or a small grey chip for tool/thinking
 /// history rows. Failed sends render as a red-outlined bubble with a retry
@@ -12,7 +77,7 @@ struct MessageRow: View {
     var body: some View {
         switch message.kind {
         case .tool:
-            chip(icon: "wrench.and.screwdriver", text: message.text)
+            ToolChip(name: message.text, detail: message.detail, resultPreview: message.resultPreview)
         case .thinking:
             chip(icon: "sparkles", text: message.text)
         case .notification:
@@ -99,13 +164,7 @@ struct MessageRow: View {
         HStack(alignment: .top, spacing: 6) {
             Spacer(minLength: 48)
             ForEach(Array(datas.enumerated()), id: \.offset) { _, data in
-                if let image = UIImage(data: data) {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: 200, maxHeight: 200)
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                }
+                BubbleThumb(data: data)
             }
         }
         .opacity(dimmed ? 0.65 : 1)
@@ -116,6 +175,7 @@ struct MessageRow: View {
     private var assistantText: some View {
         HStack {
             ChatMarkdownBody(text: message.text)
+                .equatable()
             Spacer(minLength: 32)
         }
         .padding(.horizontal, 16)
@@ -139,13 +199,82 @@ struct MessageRow: View {
     }
 }
 
-/// Block-level markdown body for chat. Short plain texts skip the parser and
-/// render as a single inline-markdown Text (cheaper for the common case).
-struct ChatMarkdownBody: View {
-    let text: String
+/// Claude-app style tool row: "🔧 Bash — ls docs/" collapsed; when the server
+/// sent a result preview, tapping expands a monospace output card. Rows
+/// without detail render exactly like the old plain chip.
+struct ToolChip: View {
+    let name: String
+    let detail: String?
+    let resultPreview: String?
+
+    @State private var expanded = false
+
+    private var isExpandable: Bool { resultPreview?.isEmpty == false }
 
     var body: some View {
-        if Self.isBlockMarkdown(text) {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
+                Image(systemName: "wrench.and.screwdriver")
+                    .font(.caption2)
+                Text(name)
+                    .font(.caption.weight(.medium))
+                if let detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                if isExpandable {
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(Color(.tertiarySystemFill), in: Capsule())
+            .contentShape(Capsule())
+            .onTapGesture {
+                guard isExpandable else { return }
+                withAnimation(.snappy(duration: 0.2)) { expanded.toggle() }
+            }
+
+            if expanded, let resultPreview {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    Text(resultPreview)
+                        .font(.system(.caption2, design: .monospaced))
+                        .textSelection(.enabled)
+                        .padding(10)
+                }
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 1)
+    }
+}
+
+/// Block-level markdown body for chat. Short plain texts skip the parser and
+/// render as a single inline-markdown Text (cheaper for the common case).
+///
+/// `Equatable` (its only input is `text`) so callers can wrap it in
+/// `.equatable()`: while the live turn streams, the chat list re-evaluates
+/// every visible row's body ~8x/second, but a stable history row's text never
+/// changes — EquatableView lets SwiftUI skip re-rendering (and re-parsing) that
+/// whole markdown subtree, leaving only the one changing `__live__` row to
+/// re-render. Without this the per-tick re-render storm froze the main thread
+/// on long threads and tripped the 0x8BADF00D watchdog kill.
+struct ChatMarkdownBody: View, Equatable {
+    let text: String
+
+    static func == (lhs: ChatMarkdownBody, rhs: ChatMarkdownBody) -> Bool {
+        lhs.text == rhs.text
+    }
+
+    var body: some View {
+        if Self.isBlockMarkdown(text) || Self.containsImageRef(text) {
             MarkdownView(blocks: MarkdownParser.parse(text))
         } else {
             Text(inline: text)
@@ -162,6 +291,19 @@ struct ChatMarkdownBody: View {
                 || t.hasPrefix("```") || t.hasPrefix("|") || t.hasPrefix("1. ") {
                 return true
             }
+        }
+        return false
+    }
+
+    /// Cheap pre-filter: images must reach the block parser even in otherwise
+    /// plain text (single-line "here: /tmp/x/shot.png" or "![](…)"), or they
+    /// render as dead text. Extension check keeps ordinary paths cheap.
+    static func containsImageRef(_ text: String) -> Bool {
+        guard text.contains("![") || text.contains("/") else { return false }
+        if text.contains("![") { return true }
+        let lower = text.lowercased()
+        for ext in [".png", ".jpg", ".jpeg", ".gif", ".webp"] {
+            if lower.contains(ext) { return true }
         }
         return false
     }
@@ -229,6 +371,7 @@ struct NotificationCard: View {
                 .foregroundStyle(.secondary)
         } else {
             ChatMarkdownBody(text: displayText)
+                .equatable()
                 .font(.subheadline)
         }
     }
@@ -301,12 +444,15 @@ struct NotificationCard: View {
 
 extension Text {
     /// Render text as inline-styled markdown; fall back to plain text
-    /// (AttributedString throws on some malformed markdown).
+    /// (AttributedString throws on some malformed markdown). Bare http(s)
+    /// URLs become tappable links here too — short plain messages take this
+    /// fast path and never reach the block parser's linkifier.
     init(inline: String) {
-        if let attributed = try? AttributedString(
+        if var attributed = try? AttributedString(
             markdown: inline,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         ) {
+            MarkdownParser.linkifyBareURLs(&attributed)
             self.init(attributed)
         } else {
             self.init(verbatim: inline)

@@ -16,10 +16,19 @@ final class MainThreadWatchdog: @unchecked Sendable {
     private let queue = DispatchQueue(label: "walnut.watchdog", qos: .utility)
     private var timer: DispatchSourceTimer?
     private let lock = NSLock()
-    private var lastPong = Date()
+    private var lastPong = MainThreadWatchdog.uptimeNow()
     private var pingInFlight = false
     private var backgrounded = false
-    private var hangStart: Date?
+    private var hangStart: TimeInterval?
+
+    /// CLOCK_UPTIME_RAW pauses while the host sleeps. Wall-clock Date() does
+    /// not: a simulator riding a Mac through clamshell sleep wakes up with a
+    /// minutes-long Date() gap and no didEnterBackground (that guard only
+    /// covers iOS app backgrounding), which reported the entire nap as a
+    /// "main thread unresponsive" hang. Stall time must count awake time only.
+    private static func uptimeNow() -> TimeInterval {
+        TimeInterval(clock_gettime_nsec_np(CLOCK_UPTIME_RAW)) / 1_000_000_000
+    }
 
     private static let pingInterval: TimeInterval = 2
     private static let hangThreshold: TimeInterval = 5
@@ -47,7 +56,7 @@ final class MainThreadWatchdog: @unchecked Sendable {
     private func setBackgrounded(_ value: Bool) {
         lock.lock()
         backgrounded = value
-        lastPong = Date() // reset the clock across suspend/resume boundaries
+        lastPong = Self.uptimeNow() // reset the clock across suspend/resume boundaries
         pingInFlight = false
         lock.unlock()
     }
@@ -67,13 +76,13 @@ final class MainThreadWatchdog: @unchecked Sendable {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.lock.lock()
-                self.lastPong = Date()
+                self.lastPong = Self.uptimeNow()
                 self.pingInFlight = false
                 self.lock.unlock()
             }
         }
 
-        let stalled = Date().timeIntervalSince(last)
+        let stalled = Self.uptimeNow() - last
         if stalled > Self.hangThreshold, ongoingHang == nil {
             lock.lock(); hangStart = last; lock.unlock()
             // All main-thread-free: AppLog's lock append, file write, and
@@ -83,13 +92,19 @@ final class MainThreadWatchdog: @unchecked Sendable {
                 "build": Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?",
             ])
             AppLog.shared.persistNow()
-            AppLog.shared.uploadIfNeeded(force: true)
+            // Field freezes were invisible: a user who force-quits (or a freeze
+            // that starts as the app suspends) hit AppLog's inBackground gate and
+            // the report never left the device. uploadCritical bypasses the gate
+            // once and holds a background task so the OS grants time to finish.
+            AppLog.shared.uploadCritical()
         } else if stalled < Self.pingInterval * 1.5, let began = ongoingHang {
             lock.lock(); hangStart = nil; lock.unlock()
             AppLog.error("freeze", "main thread recovered", [
-                "hangSeconds": String(format: "%.1f", Date().timeIntervalSince(began)),
+                "hangSeconds": String(format: "%.1f", Self.uptimeNow() - began),
+                "build": Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?",
             ])
-            AppLog.shared.uploadIfNeeded(force: true)
+            AppLog.shared.persistNow()
+            AppLog.shared.uploadCritical()
         }
     }
 }

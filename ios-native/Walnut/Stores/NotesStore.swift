@@ -42,9 +42,10 @@ final class NotesStore {
         defer { loadingTree = false }
         do {
             tree = try await api.notesTree()
-            connection?.reportReachability(true)
+            connection?.reportReachability(true, source: "notes-rest")
             DiskCache.save(tree, key: "notes-tree")
         } catch {
+            if let apiError = error as? APIError, apiError.isCancelled { return }
             reportIfNetwork(error)
             if tree.isEmpty { errorMessage = error.localizedDescription }
         }
@@ -57,6 +58,7 @@ final class NotesStore {
             pinned = try await api.favoriteNotes()
             DiskCache.save(pinned, key: "notes-pinned")
         } catch {
+            if let apiError = error as? APIError, apiError.isCancelled { return }
             reportIfNetwork(error)
         }
     }
@@ -79,6 +81,16 @@ final class NotesStore {
                 : try await api.addFavoriteNote(path: path)
             DiskCache.save(pinned, key: "notes-pinned")
         } catch {
+            if let apiError = error as? APIError, apiError.isCancelled {
+                // Silent, but never leave the optimistic flip standing: no
+                // authoritative answer arrived, so restore the prior state.
+                if wasPinned && !pinned.contains(path) {
+                    pinned.append(path)
+                } else if !wasPinned {
+                    pinned.removeAll { $0 == path }
+                }
+                return
+            }
             reportIfNetwork(error)
             await refreshPinned() // roll back to server truth
         }
@@ -119,9 +131,11 @@ final class NotesStore {
     func search(query: String, limit: Int = 30) async -> [NoteSearchResult] {
         do {
             let response = try await api.searchNotes(query: query, limit: limit, mode: "hybrid", timeout: 8)
-            connection?.reportReachability(true)
+            connection?.reportReachability(true, source: "notes-rest")
             return response.results
         } catch is CancellationError {
+            return []
+        } catch let error as APIError where error.isCancelled {
             return []
         } catch {
             if let fallback = try? await api.searchNotes(query: query, limit: limit, mode: "string", timeout: 8) {
@@ -137,11 +151,12 @@ final class NotesStore {
     func loadNote(path: String) async throws -> NoteContent {
         do {
             let note = try await api.noteContent(path: path)
-            connection?.reportReachability(true)
+            connection?.reportReachability(true, source: "notes-rest")
             DiskCache.save(note, key: "note-\(path)")
             rowMeta[path] = Self.meta(from: note)
             return note
         } catch {
+            if let apiError = error as? APIError, apiError.isCancelled { throw error }
             reportIfNetwork(error)
             // Offline fallback: serve the cached copy if we have one.
             if let cached: NoteContent = DiskCache.load(NoteContent.self, key: "note-\(path)") {
@@ -170,6 +185,7 @@ final class NotesStore {
             }
             return .conflict(serverHash: nil, serverContent: nil)
         } catch {
+            if let apiError = error as? APIError, apiError.isCancelled { throw error }
             reportIfNetwork(error)
             throw error
         }
@@ -186,6 +202,7 @@ final class NotesStore {
             errorMessage = "A note with that name already exists."
             return false
         } catch {
+            if let apiError = error as? APIError, apiError.isCancelled { return false }
             reportIfNetwork(error)
             errorMessage = error.localizedDescription
             return false
@@ -201,6 +218,7 @@ final class NotesStore {
             await refreshTree()
             return true
         } catch {
+            if let apiError = error as? APIError, apiError.isCancelled { return false }
             reportIfNetwork(error)
             errorMessage = error.localizedDescription
             return false
@@ -239,8 +257,11 @@ final class NotesStore {
     }
 
     private func reportIfNetwork(_ error: Error) {
-        if let apiError = error as? APIError, case .network = apiError {
-            connection?.reportReachability(false)
+        if let apiError = error as? APIError {
+            if apiError.isCancelled { return }
+            if case .network = apiError {
+                connection?.reportReachability(false, source: "notes-rest", error: error)
+            }
         }
     }
 }

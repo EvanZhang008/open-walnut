@@ -49,7 +49,7 @@ final class TasksStore {
             syncedAt = WalnutTask.parseISO(response.syncedAt)
             notSyncedYet = false
             errorMessage = nil
-            connection?.reportReachability(true)
+            connection?.reportReachability(true, source: "tasks-rest")
             DiskCache.save(response.tasks, key: "tasks-list")
             DiskCache.save(response.syncedAt, key: "tasks-syncedAt")
         } catch let error as APIError where error.isUnavailable {
@@ -57,6 +57,7 @@ final class TasksStore {
             notSyncedYet = true
             if tasks.isEmpty { errorMessage = nil }
         } catch {
+            if let apiError = error as? APIError, apiError.isCancelled { return }
             reportIfNetwork(error)
             if tasks.isEmpty { errorMessage = error.localizedDescription }
         }
@@ -68,11 +69,12 @@ final class TasksStore {
             sessions = response.sessions
             sessionsSyncedAt = WalnutTask.parseISO(response.syncedAt)
             sessionsNotSyncedYet = false
-            connection?.reportReachability(true)
+            connection?.reportReachability(true, source: "tasks-rest")
             DiskCache.save(response.sessions, key: "sessions-list")
         } catch let error as APIError where error.isUnavailable {
             sessionsNotSyncedYet = true
         } catch {
+            if let apiError = error as? APIError, apiError.isCancelled { return }
             reportIfNetwork(error)
         }
     }
@@ -137,8 +139,11 @@ final class TasksStore {
     }
 
     private func reportIfNetwork(_ error: Error) {
-        if let apiError = error as? APIError, case .network = apiError {
-            connection?.reportReachability(false)
+        if let apiError = error as? APIError {
+            if apiError.isCancelled { return }
+            if case .network = apiError {
+                connection?.reportReachability(false, source: "tasks-rest", error: error)
+            }
         }
     }
 }

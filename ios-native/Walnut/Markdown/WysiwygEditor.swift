@@ -916,15 +916,40 @@ extension WysiwygEditor.Coordinator {
     /// server path — mirrors the web UI's paste-to-attachment flow.
     func uploadAndInsert(_ image: UIImage, into textView: UITextView) {
         let notePath = parent.notePath
+        let presentError: @MainActor (String) -> Void = { [weak textView] message in
+            UINotificationFeedbackGenerator().notificationOccurred(.error)
+            guard let presenter = textView?.window?.rootViewController else { return }
+            var top = presenter
+            while let presented = top.presentedViewController { top = presented }
+            top.present(UIAlertController.mediaUploadError(message), animated: true)
+        }
         Task { @MainActor in
-            guard let data = image.jpegData(compressionQuality: 0.85) else { return }
+            let prepared = await Task.detached(priority: .userInitiated) {
+                SelectedImage.make(from: image)
+            }.value
+            guard case .ok(let selected) = prepared,
+                  SelectedImage.base64Length(selected.jpegData) <= SelectedImage.maxUploadBase64Length
+            else {
+                presentError("The image could not be prepared within the 10 MB upload limit.")
+                return
+            }
             do {
-                let result = try await WalnutAPI().uploadAttachment(notePath: notePath, data: data, mediaType: "image/jpeg")
-                insertImage(image, into: textView, uploadedPath: result.path)
+                let result = try await WalnutAPI().uploadAttachment(
+                    notePath: notePath, data: selected.jpegData, mediaType: "image/jpeg"
+                )
+                insertImage(selected.thumbnail, into: textView, uploadedPath: result.path)
             } catch {
-                // Silent failure is acceptable here — paste is best-effort and
-                // the user still has the image on their pasteboard to retry.
+                // The user still has the image on the pasteboard to retry.
+                presentError(error.localizedDescription)
             }
         }
+    }
+}
+
+private extension UIAlertController {
+    static func mediaUploadError(_ message: String) -> UIAlertController {
+        let alert = UIAlertController(title: "Image Upload Failed", message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        return alert
     }
 }

@@ -51,6 +51,10 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     let kind: Kind?
     /// Notification provenance ("session-error", "cron", …) — drives card styling.
     let source: String?
+    /// kind == .tool only — one-line input summary ("ls docs/"), additive.
+    let detail: String?
+    /// kind == .tool only — clipped tool output for the expanded card, additive.
+    let resultPreview: String?
 
     // Client-only flags for optimistic user bubbles (not part of the wire format).
     var pending: Bool? = nil
@@ -64,16 +68,19 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     var localImages: [Data]? = nil
 
     private enum CodingKeys: String, CodingKey {
-        case id, role, text, createdAt, kind, source
+        case id, role, text, createdAt, kind, source, detail, resultPreview
     }
 
-    init(id: String, role: String, text: String, createdAt: String, kind: Kind?, source: String? = nil) {
+    init(id: String, role: String, text: String, createdAt: String, kind: Kind?, source: String? = nil,
+         detail: String? = nil, resultPreview: String? = nil) {
         self.id = id
         self.role = role
         self.text = text
         self.createdAt = createdAt
         self.kind = kind
         self.source = source
+        self.detail = detail
+        self.resultPreview = resultPreview
     }
 
     var isUser: Bool { role == "user" }
@@ -315,6 +322,10 @@ struct SessionTranscript: Codable {
         let text: String
         let timestamp: String
         let kind: String? // "tool" | "thinking" | nil
+        /// kind == "tool" only — one-line input summary, additive.
+        let detail: String?
+        /// kind == "tool" only — clipped tool output, additive.
+        let resultPreview: String?
     }
 
     let sessionId: String
@@ -419,6 +430,8 @@ struct APIErrorEnvelope: Codable {
 
 enum APIError: Error, LocalizedError {
     case notConfigured
+    /// Expected URLSession/task cancellation, never a reachability failure.
+    case cancelled
     case network(underlying: Error)
     case unauthorized
     case rateLimited
@@ -429,6 +442,7 @@ enum APIError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .notConfigured: return "Server not configured"
+        case .cancelled: return "Request cancelled"
         case .network(let underlying): return underlying.localizedDescription
         case .unauthorized: return "Unauthorized — check your device token"
         case .rateLimited: return "Too many requests — try again in a moment"
@@ -442,6 +456,10 @@ enum APIError: Error, LocalizedError {
         return nil
     }
 
+    var isCancelled: Bool {
+        if case .cancelled = self { return true }
+        return false
+    }
     var isTurnActive: Bool { code == "turn_active" }
     var isConflict: Bool { code == "conflict" }
     /// 503 — the task projection hasn't synced yet on a fresh companion.

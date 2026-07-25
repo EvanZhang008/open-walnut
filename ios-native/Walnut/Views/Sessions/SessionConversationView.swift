@@ -13,7 +13,10 @@ struct SessionConversationView: View {
 
     @State private var store: SessionConversationStore
     @State private var showInfo = false
-    @Environment(\.scenePhase) private var scenePhase
+    @State private var scrollPos = ScrollPosition(edge: .bottom)
+    @State private var keyboardGeometryFrozen = false
+    @State private var programmaticGeometryFrozen = false
+    @State private var programmaticFreezeTask: Task<Void, Never>?
 
     init(session: WalnutSession) {
         self.session = session
@@ -67,17 +70,18 @@ struct SessionConversationView: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
-        .task { await store.open() }
-        .onDisappear { store.close() }
-        .onChange(of: scenePhase) { _, phase in
-            // Kill the SSE stream + poll loop on background — live URLSession
-            // tasks block graceful termination and get the app watchdog-killed
-            // (0x8BADF00D). Revive and catch up on foreground.
-            if phase == .background {
-                store.suspend()
-            } else if phase == .active {
-                store.resume()
-            }
+        .task {
+            // Route image fetches (/api/v1/media) to this session's exec host.
+            MediaContext.currentSessionID = session.id
+            await store.open()
+        }
+        .onDisappear {
+            if MediaContext.currentSessionID == session.id { MediaContext.currentSessionID = nil }
+            // Clear the flag too: cancelling the reset task alone would leave
+            // a retained (nav-stacked) view permanently geometry-frozen.
+            programmaticFreezeTask?.cancel()
+            programmaticGeometryFrozen = false
+            store.close()
         }
     }
 
@@ -95,60 +99,66 @@ struct SessionConversationView: View {
         return status.isEmpty ? host : "\(status) · \(host)"
     }
 
-    /// Bottom-pinned transcript. `defaultScrollAnchor(.bottom)` handles the
-    /// initial position and streaming growth, but stops pinning after the
-    /// user's first manual scroll — so turn-end reconciles (rows swapped for
-    /// canonical ids/heights) yanked the viewport up and stranded the reader.
-    /// A bottom sentinel tracks whether the user IS at the bottom; the store
-    /// bumps `scrollToBottomSignal` after layout-shifting mutations and the
-    /// view re-pins via ScrollViewReader — only when they were at the bottom.
+    /// ScrollPosition is the sole authority: its bottom edge association follows
+    /// streaming growth while sticky user intent decides mutation re-pins.
     private var messageList: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    if store.messages.isEmpty && !store.streaming {
-                        // Loading until the first transcript answer; empty state
-                        // for BOTH "no tail exported" (404) and "tail exists but
-                        // has zero renderable rows" — otherwise a 200-with-empty
-                        // transcript painted a fully blank page.
-                        if store.loadedOnce || store.transcriptMissing {
-                            emptyState
-                        } else {
-                            loadingState
-                        }
-                    }
-                    ForEach(store.messages) { message in
-                        MessageRow(
-                            message: message,
-                            onRetry: { Task { await store.retry(message) } },
-                            onDiscard: { store.discardFailed(message) }
-                        )
-                    }
-                    if store.streaming {
-                        liveRow
-                    }
-                    // Sentinel: its on-screen visibility IS the "user is at the
-                    // bottom" state the store consults before re-pinning.
-                    Color.clear
-                        .frame(height: 1)
-                        .id("bottom-sentinel")
-                        .onAppear { store.viewIsAtBottom = true }
-                        .onDisappear { store.viewIsAtBottom = false }
-                }
-                .padding(.vertical, 12)
-            }
-            .defaultScrollAnchor(.bottom)
-            .scrollDismissesKeyboard(.interactively)
-            .refreshable { await store.open() }
-            .onChange(of: store.scrollToBottomSignal) {
-                // Next runloop tick so the mutated rows have laid out; animated
-                // to read as "settling", not a teleport.
-                Task { @MainActor in
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        proxy.scrollTo("bottom-sentinel", anchor: .bottom)
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 10) {
+                if store.messages.isEmpty && !store.streaming {
+                    // Loading until the first transcript answer; empty state
+                    // for BOTH "no tail exported" (404) and "tail exists but
+                    // has zero renderable rows" — otherwise a 200-with-empty
+                    // transcript painted a fully blank page.
+                    if store.loadedOnce || store.transcriptMissing {
+                        emptyState
+                    } else {
+                        loadingState
                     }
                 }
+                ForEach(store.messages) { message in
+                    MessageRow(
+                        message: message,
+                        onRetry: { Task { await store.retry(message) } },
+                        onDiscard: { store.discardFailed(message) }
+                    )
+                }
+                if store.streaming {
+                    // Leaf view so the 8Hz liveText/activity flush
+                    // re-renders ONLY this row, never the sibling ForEach
+                    // of stable history rows (see ChatView.LiveTurnRow).
+                    SessionLiveTurnRow(store: store)
+                }
             }
+            .padding(.vertical, 12)
+        }
+        .scrollPosition($scrollPos, anchor: .bottom)
+        .scrollDismissesKeyboard(.interactively)
+        .refreshable { await store.open() }
+        .modifier(ScrollBottomTracking(
+            isPinned: { store.bottomPinned },
+            setPinned: { store.bottomPinned = $0 },
+            geometryFrozen: { keyboardGeometryFrozen || programmaticGeometryFrozen }
+        ))
+        .modifier(KeyboardBottomRepin(
+            keyboardGeometryFrozen: $keyboardGeometryFrozen,
+            isPinned: { store.bottomPinned },
+            repin: { scrollToBottom() }
+        ))
+        .onChange(of: store.scrollToBottomSignal) {
+            scrollToBottom()
+        }
+    }
+
+    /// Freeze geometry briefly so this programmatic move cannot masquerade as
+    /// a user drag and clear the sticky bottom intent.
+    private func scrollToBottom() {
+        programmaticGeometryFrozen = true
+        scrollPos.scrollTo(edge: .bottom)
+        programmaticFreezeTask?.cancel()
+        programmaticFreezeTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            programmaticGeometryFrozen = false
         }
     }
 
@@ -161,18 +171,6 @@ struct SessionConversationView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 120)
-    }
-
-    /// Live turn: streamed text so far + the current tool/thinking activity.
-    private var liveRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if !store.liveText.isEmpty {
-                MessageRow(message: ChatMessage(
-                    id: "__live__", role: "assistant", text: store.liveText, createdAt: "", kind: nil
-                ))
-            }
-            ThinkingRow(activity: store.activity)
-        }
     }
 
     private var emptyState: some View {
@@ -190,5 +188,23 @@ struct SessionConversationView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 100)
         .padding(.horizontal, 32)
+    }
+}
+
+/// Live turn for a session: streamed text so far + current tool/thinking
+/// activity. Standalone leaf so the high-frequency liveText/activity updates
+/// re-render only this row, never the sibling ForEach of history rows.
+private struct SessionLiveTurnRow: View {
+    let store: SessionConversationStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !store.liveText.isEmpty {
+                MessageRow(message: ChatMessage(
+                    id: "__live__", role: "assistant", text: store.liveText, createdAt: "", kind: nil
+                ))
+            }
+            ThinkingRow(activity: store.activity)
+        }
     }
 }

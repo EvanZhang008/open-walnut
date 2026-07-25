@@ -40,6 +40,8 @@ final class SSEClient: @unchecked Sendable {
     private let stallLock = NSLock()
     private var lastActivity = Date()
     private var stallTripped = false
+    private var generation: UInt64 = 0
+    private var liveSession: URLSession?
     private static let stallThreshold: TimeInterval = 50
 
     private func touchActivity() {
@@ -70,6 +72,41 @@ final class SSEClient: @unchecked Sendable {
         return tripped
     }
 
+    private func currentGeneration() -> UInt64 {
+        stallLock.lock()
+        defer { stallLock.unlock() }
+        return generation
+    }
+
+    private func isCurrent(_ candidate: UInt64) -> Bool {
+        stallLock.lock()
+        defer { stallLock.unlock() }
+        return generation == candidate
+    }
+
+    private func installSession(_ session: URLSession, generation candidate: UInt64) -> Bool {
+        stallLock.lock()
+        defer { stallLock.unlock() }
+        guard generation == candidate else { return false }
+        liveSession = session
+        return true
+    }
+
+    private func clearSession(_ session: URLSession) {
+        stallLock.lock()
+        if liveSession === session { liveSession = nil }
+        stallLock.unlock()
+    }
+
+    private func advanceGenerationAndTakeSession() -> URLSession? {
+        stallLock.lock()
+        generation &+= 1
+        let session = liveSession
+        liveSession = nil
+        stallLock.unlock()
+        return session
+    }
+
     init(
         url: URL,
         token: String,
@@ -86,21 +123,27 @@ final class SSEClient: @unchecked Sendable {
 
     func start() {
         guard task == nil else { return }
+        let startGeneration = currentGeneration()
         task = Task { [weak self] in
-            await self?.runLoop()
+            await self?.runLoop(generation: startGeneration)
         }
     }
 
     func stop() {
+        let session = advanceGenerationAndTakeSession()
         task?.cancel()
         task = nil
+        // URLSession cancellation is synchronous here; no late delegate work can
+        // keep the app alive after stores enter their closed state.
+        session?.invalidateAndCancel()
     }
 
-    private func runLoop() async {
+    private func runLoop(generation runGeneration: UInt64) async {
         var backoff: Double = 1
         while !Task.isCancelled {
             do {
-                try await streamOnce()
+                try await streamOnce(generation: runGeneration)
+                guard isCurrent(runGeneration) else { return }
                 backoff = 1 // clean EOF — server closed; reconnect promptly
             } catch is CancellationError {
                 return
@@ -114,15 +157,15 @@ final class SSEClient: @unchecked Sendable {
                 backoff = 1
             } catch {
                 AppLog.error("sse", "stream error — backing off", ["error": String(describing: error), "backoff": "\(backoff)s"])
-                onConnectionChange(false)
+                if isCurrent(runGeneration) { onConnectionChange(false) }
             }
-            if Task.isCancelled { return }
+            if Task.isCancelled || !isCurrent(runGeneration) { return }
             try? await Task.sleep(for: .seconds(backoff))
             backoff = min(backoff * 2, 30)
         }
     }
 
-    private func streamOnce() async throws {
+    private func streamOnce(generation streamGeneration: UInt64) async throws {
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
@@ -136,17 +179,25 @@ final class SSEClient: @unchecked Sendable {
         config.timeoutIntervalForRequest = 3600
         config.timeoutIntervalForResource = 86_400
         let session = URLSession(configuration: config)
-        defer { session.invalidateAndCancel() }
+        guard installSession(session, generation: streamGeneration) else {
+            session.invalidateAndCancel()
+            throw CancellationError()
+        }
+        defer {
+            clearSession(session)
+            session.invalidateAndCancel()
+        }
 
         let (bytes, response) = try await session.bytes(for: request)
+        guard isCurrent(streamGeneration) else { throw CancellationError() }
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-            onHTTPError?(status)
+            if isCurrent(streamGeneration) { onHTTPError?(status) }
             // 404 = route absent (older server) — terminal, don't retry.
             if status == 404 { throw CancellationError() }
             throw APIError.badResponse
         }
-        onConnectionChange(true)
+        if isCurrent(streamGeneration) { onConnectionChange(true) }
         touchActivity()
 
         // Watchdog: any byte (data OR ping comment) counts as activity. If the
@@ -176,13 +227,19 @@ final class SSEClient: @unchecked Sendable {
                 lineBuffer.removeAll(keepingCapacity: true)
                 if let frame = parser.consume(line: String(decoding: line, as: UTF8.self)) {
                     if let id = frame.id { lastEventID = id }
-                    onEvent(frame)
+                    if isCurrent(streamGeneration) { onEvent(frame) }
                 }
             } else {
                 lineBuffer.append(byte)
+                // A newline-free stream (captive portal, proxy garbage) would
+                // grow this buffer forever — and the stall watchdog never trips
+                // because bytes keep arriving. Real SSE lines are tiny; anything
+                // past 4MB is not our server. Bail out and let the run loop
+                // reconnect with backoff.
+                if lineBuffer.count > 4_194_304 { throw APIError.badResponse }
             }
         }
-        onConnectionChange(false)
+        if isCurrent(streamGeneration) { onConnectionChange(false) }
     }
 }
 

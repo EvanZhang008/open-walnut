@@ -49,13 +49,23 @@ struct EditableTable: Equatable {
 /// cells, bold header) instead of literal pipe text. Tapping it opens the
 /// in-place TableInlineEditor. `table` is mutable: the editor rewrites it in
 /// place and re-renders, and the serializer emits `table.serialize()`.
+///
+/// `table` always holds EVERY parsed row even when only the first
+/// `maxRenderedRows` are drawn — the attachment is the serialization source, so
+/// a truncated model would make the next autosave delete the hidden rows.
 final class TableAttachment: NSTextAttachment {
+    static let maxRenderedRows = 100
+    private static let maxBitmapBytes: CGFloat = 64 * 1024 * 1024
+
     var table: EditableTable
     private(set) var renderWidth: CGFloat
     /// Exact source text this table was parsed from. Serialized verbatim
     /// while the table is untouched (round-trip byte-identity); cleared on
     /// the first real edit, after which canonical `serialize()` is used.
     private(set) var originalSource: String?
+
+    /// Rows held in the model but not drawn (the render cap).
+    var hiddenRowCount: Int { max(0, table.rows.count - Self.maxRenderedRows) }
 
     init(table: EditableTable, maxWidth: CGFloat, originalSource: String? = nil) {
         self.table = table
@@ -85,7 +95,19 @@ final class TableAttachment: NSTextAttachment {
     }
 
     private func rerender() {
-        let image = Self.render(table: table, width: renderWidth)
+        let effectiveOmittedRows = hiddenRowCount
+        let renderTable: EditableTable
+        if Self.wouldExceedBitmapLimit(
+            table: table, width: renderWidth, omittedRows: effectiveOmittedRows
+        ) {
+            renderTable = EditableTable(
+                header: ["Table too large to render"],
+                rows: Array(table.serialize().split(separator: "\n").prefix(Self.maxRenderedRows)).map { [String($0)] }
+            )
+        } else {
+            renderTable = table
+        }
+        let image = Self.render(table: renderTable, width: renderWidth, omittedRows: effectiveOmittedRows)
         self.image = image
         self.bounds = CGRect(x: 0, y: 0, width: image.size.width, height: image.size.height)
     }
@@ -94,10 +116,20 @@ final class TableAttachment: NSTextAttachment {
     /// rendered image cell-for-cell.
     static let rowHeight: CGFloat = 34
 
-    private static func render(table: EditableTable, width: CGFloat) -> UIImage {
+    static func wouldExceedBitmapLimit(
+        table: EditableTable, width: CGFloat, omittedRows: Int = 0
+    ) -> Bool {
+        let rows = min(table.rows.count, maxRenderedRows) + 1 + (omittedRows > 0 ? 1 : 0)
+        let height = rowHeight * CGFloat(rows)
+        let scale = UITraitCollection.current.displayScale > 0 ? UITraitCollection.current.displayScale : UIScreen.main.scale
+        return width * height * scale * scale * 4 > maxBitmapBytes
+    }
+
+    private static func render(table: EditableTable, width: CGFloat, omittedRows: Int) -> UIImage {
         let cols = max(table.columnCount, 1)
         let rowHeight = Self.rowHeight
-        let rowCount = table.rows.count + 1
+        let visibleRows = Array(table.rows.prefix(maxRenderedRows))
+        let rowCount = visibleRows.count + 1 + (omittedRows > 0 ? 1 : 0)
         let height = rowHeight * CGFloat(rowCount)
         let colWidth = width / CGFloat(cols)
         let headerFont = UIFont.systemFont(ofSize: 14, weight: .semibold)
@@ -144,10 +176,13 @@ final class TableAttachment: NSTextAttachment {
             for (c, text) in table.header.enumerated() {
                 draw(text, row: 0, col: c, font: headerFont)
             }
-            for (r, row) in table.rows.enumerated() {
+            for (r, row) in visibleRows.enumerated() {
                 for (c, text) in row.enumerated() {
                     draw(text, row: r + 1, col: c, font: bodyFont)
                 }
+            }
+            if omittedRows > 0 {
+                draw("… \(omittedRows) more rows", row: visibleRows.count + 1, col: 0, font: bodyFont)
             }
         }
     }

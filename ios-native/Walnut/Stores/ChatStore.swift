@@ -11,6 +11,11 @@ import Observation
 final class ChatStore {
     private let api = WalnutAPI()
     private var sse: SSEClient?
+    @ObservationIgnored private var trackedTasks: [UUID: Task<Void, Never>] = [:]
+    /// In-flight send()s. Kept separate from `trackedTasks` only because they
+    /// return a value; they are cancelled by the same teardown path.
+    @ObservationIgnored private var trackedSends: [UUID: Task<Bool, Never>] = [:]
+    private var isActive = true
     weak var connection: ConnectionStore?
 
     /// Last time ANY SSE event arrived — feeds the turn-stall reconciler.
@@ -42,20 +47,19 @@ final class ChatStore {
         activeAgent?.name ?? (activeAgentID == "general" ? "Walnut" : activeAgentID)
     }
 
-    /// Whether the view's bottom sentinel is on screen — written by the view.
-    /// Read before layout-shifting mutations to decide if the list should
-    /// re-pin to the bottom (never hijack a reader scrolled up in history).
-    var viewIsAtBottom = true
-    /// Bumped when a mutation may have displaced the viewport while the user
-    /// was at the bottom; the view answers by scrolling to its sentinel.
+    /// Sticky USER intent; geometry changes caused by content or keyboard do
+    /// not alter it unless a user scroll phase crosses the hysteresis bounds.
+    ///
+    /// NOT observed on purpose: it is written from inside the scroll view's own
+    /// layout pass (`ScrollBottomTracking`) and is only ever read imperatively —
+    /// never from a view body. Observing it made every geometry sample invalidate
+    /// the timeline that produced it, which spun the main thread forever (P0-2).
+    @ObservationIgnored var bottomPinned = true
+    /// Bumped after layout-shifting mutations that should restore pinned intent.
     private(set) var scrollToBottomSignal = 0
-    /// First-paint pin guard. `defaultScrollAnchor(.bottom)` alone positions
-    /// the viewport at the LazyVStack's ESTIMATED bottom; with variable-height
-    /// markdown rows the estimate is far off and the rows at the real offset
-    /// are never instantiated — the list renders BLANK until any gesture
-    /// forces a layout pass (QA-confirmed, intermittent). The first load must
-    /// therefore always fire the scroll signal: scrollTo(sentinel) runs after
-    /// real layout, clamps to content bounds, and forces the bottom rows in.
+
+    /// First-paint pin guard. The first canonical load asks ScrollPosition to
+    /// establish its bottom edge after variable-height rows have laid out.
     private var initialPaintDone = false
 
     var loadingList = false
@@ -73,6 +77,13 @@ final class ChatStore {
     /// and flush on a ~8Hz cadence instead.
     @ObservationIgnored private var pendingDelta = ""
     @ObservationIgnored private var deltaFlushTask: Task<Void, Never>?
+    /// Images attached to messages sent in THIS app session, keyed by message
+    /// text. Server history carries no image bytes, so when a canonical row
+    /// replaces the optimistic bubble the thumbnails would otherwise vanish
+    /// mid-conversation. Re-attached in `loadMessages`; bounded so a long
+    /// session can't accumulate photo data.
+    @ObservationIgnored private var sentImages: [(text: String, datas: [Data])] = []
+    private static let maxRememberedSentImages = 12
     /// Latest tool/thinking status, e.g. "Read" — shown as an activity row.
     var activity: String?
     var errorMessage: String?
@@ -82,8 +93,17 @@ final class ChatStore {
 
     // MARK: - Lifecycle
 
+    init() {
+        LifecycleHub.shared.register(self)
+    }
+
     /// Load cache, pick the most recent conversation, refresh from network.
     func initialize() async {
+        // Reactivate explicitly: Settings disconnect calls closeStream()
+        // (isActive=false) and re-pairing runs initialize() in the SAME
+        // foreground session — without this the chat tab is dead until the
+        // next background/foreground cycle.
+        isActive = true
         if let savedAgent = UserDefaults.standard.string(forKey: "walnut.activeAgent") {
             activeAgentID = savedAgent
         }
@@ -108,8 +128,10 @@ final class ChatStore {
     private var conversationsCacheKey: String { "conversations-\(activeAgentID)" }
 
     func refreshAgents() async {
+        guard isActive else { return }
         do {
             let fetched = try await api.agents()
+            guard isActive, !Task.isCancelled else { return }
             if !fetched.isEmpty {
                 agents = fetched
                 DiskCache.save(agents, key: "agents")
@@ -138,21 +160,24 @@ final class ChatStore {
         } else {
             select(conversations.first?.id)
         }
-        Task {
-            await refreshConversations()
-            if activeID == nil || !conversations.contains(where: { $0.id == activeID }) {
-                select(conversations.first?.id)
+        trackTask { [weak self] in
+            guard let self else { return }
+            await self.refreshConversations()
+            if self.activeID == nil || !self.conversations.contains(where: { $0.id == self.activeID }) {
+                self.select(self.conversations.first?.id)
             }
         }
     }
 
     func refreshConversations() async {
+        guard isActive else { return }
         loadingList = true
         defer { loadingList = false }
         do {
             let agentID = activeAgentID
             let fetched = try await api.conversations(agentID: agentID)
-            connection?.reportReachability(true)
+            guard isActive, !Task.isCancelled else { return }
+            connection?.reportReachability(true, source: "chat-rest")
             guard agentID == activeAgentID else { return }
             conversations = fetched
             DiskCache.save(conversations, key: conversationsCacheKey)
@@ -181,12 +206,12 @@ final class ChatStore {
         // Cached rows landed — force the bottom rows to instantiate (the
         // blank-list bug hits the cold-launch cache path hardest). Deferred a
         // tick so the view is attached and observing before the signal moves.
-        if !messages.isEmpty {
-            Task { @MainActor in self.scrollToBottomSignal += 1 }
+        if !messages.isEmpty, isActive {
+            scrollToBottomSignal += 1
         }
         connectStream()
         if let id {
-            Task { await self.loadMessages(id) }
+            trackTask { [weak self] in await self?.loadMessages(id) }
         }
     }
 
@@ -204,27 +229,29 @@ final class ChatStore {
     // MARK: - Messages
 
     func loadMessages(_ id: String) async {
+        guard isActive else { return }
         loadingMessages = true
         defer { loadingMessages = false }
         do {
             let agentID = activeAgentID
             let fetched = try await api.messages(conversationID: id, agentID: agentID, limit: Self.pageSize)
-            connection?.reportReachability(true)
+            guard isActive, !Task.isCancelled else { return }
+            connection?.reportReachability(true, source: "chat-rest", endpoint: "/api/v1/conversations/messages")
             guard id == activeID, agentID == activeAgentID else { return }
             // Carry local-only bubbles (failed sends, in-flight optimistic)
             // across the replace — server history doesn't know about them and
             // a refetch must never erase the user's unsent text.
             let localOnly = messages.filter { $0.failed == true || $0.pending == true }
-            let wasAtBottom = viewIsAtBottom
+            let wasAtBottom = bottomPinned
             let changed = fetched.count + localOnly.count != messages.count
                 || fetched.last?.id != messages.dropLast(localOnly.count).last?.id
-            messages = fetched + localOnly
+            messages = Self.reattachSentImages(to: fetched, from: sentImages) + localOnly
             hasOlder = fetched.count >= Self.pageSize
             // Replacing rows with canonical ids/heights displaces the viewport
             // once the bottom anchor's auto-pin has lapsed (any manual scroll)
             // — glue the reader back only if they were already at the bottom.
             // The FIRST load always pins: see initialPaintDone (blank-list fix).
-            if !initialPaintDone || (changed && wasAtBottom) { scrollToBottomSignal += 1 }
+            if isActive && (!initialPaintDone || (changed && wasAtBottom)) { scrollToBottomSignal += 1 }
             initialPaintDone = true
             DiskCache.save(Array(fetched.suffix(Self.cacheTail)), key: "messages-\(id)")
         } catch {
@@ -233,14 +260,14 @@ final class ChatStore {
     }
 
     func loadOlder() async {
-        guard let id = activeID, hasOlder, !loadingMessages,
+        guard isActive, let id = activeID, hasOlder, !loadingMessages,
               let oldest = messages.first(where: { $0.pending != true })
         else { return }
         loadingMessages = true
         defer { loadingMessages = false }
         do {
             let older = try await api.messages(conversationID: id, agentID: activeAgentID, limit: Self.pageSize, before: oldest.id)
-            guard id == activeID else { return }
+            guard isActive, !Task.isCancelled, id == activeID else { return }
             messages.insert(contentsOf: older, at: 0)
             hasOlder = older.count >= Self.pageSize
         } catch {
@@ -250,13 +277,38 @@ final class ChatStore {
 
     // MARK: - Send flow (POST → 202 {turnId} → SSE deltas)
 
+    /// Public entry point. The actual work runs inside a TRACKED task so
+    /// `closeStream()` (backgrounding, disconnect) cancels it like every other
+    /// store task — an untracked send kept a network round-trip alive across
+    /// suspension and then wrote UI state into a store that had already been
+    /// torn down.
     @discardableResult
     func send(_ text: String, images: [SelectedImage] = []) async -> Bool {
-        guard !sending, !streaming else { return false }
+        guard isActive, !sending, !streaming else { return false }
+        let id = UUID()
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return false }
+            return await self.performSend(text, images: images)
+        }
+        trackedSends[id] = task
+        let ok = await task.value
+        trackedSends[id] = nil
+        return ok
+    }
+
+    /// Mark the optimistic bubble as a failed one (tap to retry) — the text and
+    /// its images must never disappear, whatever went wrong.
+    private func markSendFailed(_ messageID: String) {
+        guard let idx = messages.firstIndex(where: { $0.id == messageID }) else { return }
+        messages[idx].pending = false
+        messages[idx].failed = true
+    }
+
+    private func performSend(_ text: String, images: [SelectedImage]) async -> Bool {
         sending = true
         errorMessage = nil
 
-        let payloads = images.map { ImagePayload(data: $0.jpegData.base64EncodedString(), mediaType: "image/jpeg") }
+        let jpegDatas = images.map(\.jpegData)
         var convID = activeID
         var optimistic = ChatMessage(
             id: "local-\(Date().timeIntervalSince1970)",
@@ -265,17 +317,34 @@ final class ChatStore {
         optimistic.pending = true
         // Carry thumbnails so the bubble shows them immediately and a failed
         // send retains them for retry (the store owns no-loss preservation).
-        if !images.isEmpty { optimistic.localImages = images.map(\.jpegData) }
+        if !jpegDatas.isEmpty { optimistic.localImages = jpegDatas }
 
-        // Append FIRST — even a createConversation failure must leave the
-        // text + images on screen as a failed bubble, never lose them.
+        // Append FIRST — even payload preparation or createConversation failure
+        // must leave the text + images on screen as a failed bubble, never lose them.
         messages.append(optimistic)
-        // Sending always jumps to the bottom — the user wants to see their own
-        // message land even if they were scrolled up reading history.
-        scrollToBottomSignal += 1
+        // Sending explicitly accepts a re-pin: the user wants to see their own
+        // message land even if they were reading history.
+        bottomPinned = true
+        if isActive { scrollToBottomSignal += 1 }
         do {
+            let payloads = await Self.buildImagePayloads(jpegDatas)
+            // Every await is a suspension point where the store can be torn
+            // down (background / disconnect). Writing `streaming = true` after
+            // that teardown is exactly what leaves the composer frozen on
+            // resume, so bail out at each hop instead — the bubble stays as a
+            // retryable failed one.
+            guard isActive, !Task.isCancelled else {
+                sending = false
+                markSendFailed(optimistic.id)
+                return false
+            }
             if convID == nil {
                 let created = try await api.createConversation(agentID: activeAgentID)
+                guard isActive, !Task.isCancelled else {
+                    sending = false
+                    markSendFailed(optimistic.id)
+                    return false
+                }
                 convID = created
                 activeID = created
                 UserDefaults.standard.set(created, forKey: activeConversationKey)
@@ -283,18 +352,24 @@ final class ChatStore {
             }
             guard let convID else {
                 sending = false
-                if let idx = messages.firstIndex(where: { $0.id == optimistic.id }) {
-                    messages[idx].pending = false
-                    messages[idx].failed = true
-                }
+                markSendFailed(optimistic.id)
                 return false
             }
             _ = try await api.sendMessage(conversationID: convID, agentID: activeAgentID, text: text, images: payloads)
-            connection?.reportReachability(true)
-            // Accepted — solidify the bubble; message-start arrives on SSE shortly.
+            // Accepted by the server. If the store went inactive meanwhile the
+            // turn is genuinely running — do NOT mark it failed (that would
+            // duplicate the message on retry); just skip the local UI state,
+            // which resumeStream() rebuilds from canonical history.
+            guard isActive, !Task.isCancelled else {
+                sending = false
+                return true
+            }
+            connection?.reportReachability(true, source: "chat-rest")
+            // Solidify the bubble; message-start arrives on SSE shortly.
             if let idx = messages.firstIndex(where: { $0.id == optimistic.id }) {
                 messages[idx].pending = false
             }
+            rememberSentImages(text: text, datas: jpegDatas)
             sending = false
             streaming = true
             streamText = ""
@@ -304,14 +379,18 @@ final class ChatStore {
             return true
         } catch {
             sending = false
+            // Cancelled/suspended sends settle silently but must NOT leave a
+            // forever-pending bubble: the draft is already cleared, so the
+            // failed bubble (tap to retry) is the only copy of the text.
+            if !isActive || (error as? APIError)?.isCancelled == true {
+                markSendFailed(optimistic.id)
+                return false
+            }
             if let apiError = error as? APIError, apiError.isTurnActive {
                 // Another turn is running — keep the text as a failed bubble
                 // (the draft is already cleared) so it can be retried after
                 // message-end, and gate sends until then.
-                if let idx = messages.firstIndex(where: { $0.id == optimistic.id }) {
-                    messages[idx].pending = false
-                    messages[idx].failed = true
-                }
+                markSendFailed(optimistic.id)
                 streaming = true
                 watchedUserText = nil
                 if let convID { startTurnWatchdog(conversationID: convID) }
@@ -319,15 +398,46 @@ final class ChatStore {
             } else {
                 // KEEP the bubble, marked failed — the user's text must never
                 // vanish on a network error. Tap to retry / copy / delete.
-                if let idx = messages.firstIndex(where: { $0.id == optimistic.id }) {
-                    messages[idx].pending = false
-                    messages[idx].failed = true
-                }
+                markSendFailed(optimistic.id)
                 reportIfNetwork(error)
                 errorMessage = error.localizedDescription
             }
             return false
         }
+    }
+
+    /// Remember a sent message's image bytes so the canonical server row that
+    /// replaces the optimistic bubble can still show its thumbnails.
+    private func rememberSentImages(text: String, datas: [Data]) {
+        guard !datas.isEmpty else { return }
+        sentImages.removeAll { $0.text == text }
+        sentImages.append((text: text, datas: datas))
+        if sentImages.count > Self.maxRememberedSentImages {
+            sentImages.removeFirst(sentImages.count - Self.maxRememberedSentImages)
+        }
+    }
+
+    /// Re-attach remembered image bytes to canonical user rows. Matched on text
+    /// because the server assigns its own id — the optimistic `local-…` id never
+    /// survives the swap.
+    private nonisolated static func reattachSentImages(
+        to fetched: [ChatMessage], from remembered: [(text: String, datas: [Data])]
+    ) -> [ChatMessage] {
+        guard !remembered.isEmpty else { return fetched }
+        var out = fetched
+        for index in out.indices where out[index].isUser && out[index].localImages == nil {
+            let text = out[index].text
+            if let match = remembered.last(where: { $0.text == text }) {
+                out[index].localImages = match.datas
+            }
+        }
+        return out
+    }
+
+    private nonisolated static func buildImagePayloads(_ datas: [Data]) async -> [ImagePayload] {
+        await Task.detached(priority: .userInitiated) {
+            datas.map { ImagePayload(data: $0.base64EncodedString(), mediaType: "image/jpeg") }
+        }.value
     }
 
     // MARK: - Failed-bubble actions
@@ -357,6 +467,7 @@ final class ChatStore {
     // MARK: - SSE
 
     func connectStream() {
+        guard isActive else { return }
         sse?.stop()
         sse = nil
         guard let convID = activeID,
@@ -375,7 +486,9 @@ final class ChatStore {
             },
             onConnectionChange: { [weak self] ok in
                 Task { @MainActor in
-                    self?.connection?.reportReachability(ok)
+                    // SSE churn is diagnostic only; ConnectionStore never counts
+                    // it toward the REST transport failure gate.
+                    self?.connection?.reportReachability(ok, source: "chat-sse")
                 }
             }
         )
@@ -383,19 +496,36 @@ final class ChatStore {
     }
 
     func closeStream() {
+        isActive = false
         sse?.stop()
         sse = nil
         turnWatchdog?.cancel()
         turnWatchdog = nil
+        deltaFlushTask?.cancel()
+        deltaFlushTask = nil
+        pendingDelta = ""
+        cancelTrackedTasks()
+        sending = false
+        streaming = false
+        activity = nil
+    }
+
+    private func resumeStream() {
+        guard !isActive else { return }
+        isActive = true
+        connectStream()
+        if let id = activeID {
+            trackTask { [weak self] in await self?.loadMessages(id) }
+        }
     }
 
     private struct DeltaPayload: Codable { let delta: String }
-    private struct ToolPayload: Codable { let name: String }
+    private struct ToolPayload: Codable { let name: String; let detail: String? }
     private struct EndPayload: Codable { let turnId: String; let fullText: String }
     private struct ErrorPayload: Codable { let message: String }
 
     private func handle(_ event: SSEEvent, conversationID: String) {
-        guard conversationID == activeID else { return }
+        guard isActive, conversationID == activeID else { return }
         lastSSEEventAt = Date()
         let data = Data(event.data.utf8)
         switch event.event {
@@ -410,7 +540,7 @@ final class ChatStore {
             }
         case "tool":
             if let payload = try? JSONDecoder().decode(ToolPayload.self, from: data) {
-                activity = payload.name
+                activity = payload.detail.map { "\(payload.name) · \($0)" } ?? payload.name
             }
         case "thinking":
             activity = "Thinking"
@@ -428,10 +558,25 @@ final class ChatStore {
             AppLog.error("chat", "turn failed", ["message": payload?.message ?? "?"])
             streaming = false
             activity = nil
-            errorMessage = payload?.message ?? "The turn failed."
+            errorMessage = Self.readableTurnError(payload?.message)
         default:
             break
         }
+    }
+
+    /// Turn out a human-readable banner for a provider rejection. A raw
+    /// `400 messages.62.content.3.image.source.base64.data: …` string tells the
+    /// user nothing and, worse, hides the fact that it is an ATTACHMENT problem
+    /// they can act on. The server now clamps image dimensions on both ingest
+    /// and replay, so this path should be unreachable for new uploads; the
+    /// friendly text exists for old servers / other provider image rejections.
+    static func readableTurnError(_ raw: String?) -> String {
+        guard let raw, !raw.isEmpty else { return "The turn failed." }
+        let lower = raw.lowercased()
+        if lower.contains("image") && (lower.contains("dimension") || lower.contains("exceed") || lower.contains("too large")) {
+            return "An attached image was rejected by the model (too large). Update the server so it downscales attachments, then try again."
+        }
+        return raw
     }
 
     /// Buffer a streamed text delta and schedule a coalesced flush. SwiftUI
@@ -466,7 +611,7 @@ final class ChatStore {
         turnWatchdog = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(15))
-                guard let self, !Task.isCancelled else { return }
+                guard let self, self.isActive, !Task.isCancelled else { return }
                 guard self.streaming, self.activeID == conversationID else { return }
                 guard Date().timeIntervalSince(self.lastSSEEventAt) > 30 else { continue }
                 // Silent too long — reconcile against server history.
@@ -509,7 +654,7 @@ final class ChatStore {
         deltaFlushTask?.cancel()
         deltaFlushTask = nil
         pendingDelta = ""
-        let wasAtBottom = viewIsAtBottom
+        let wasAtBottom = bottomPinned
         streaming = false
         streamText = ""
         activity = nil
@@ -526,17 +671,42 @@ final class ChatStore {
         }
         // Live row → provisional row shifts layout; keep the reader glued to
         // the end of the reply they were watching.
-        if wasAtBottom { scrollToBottomSignal += 1 }
+        if isActive && wasAtBottom { scrollToBottomSignal += 1 }
         // Reconcile with server history (real ids + tool/thinking rows).
-        Task {
-            await self.loadMessages(conversationID)
-            await self.refreshConversations()
+        trackTask { [weak self] in
+            await self?.loadMessages(conversationID)
+            await self?.refreshConversations()
         }
     }
 
     private func reportIfNetwork(_ error: Error) {
-        if let apiError = error as? APIError, case .network = apiError {
-            connection?.reportReachability(false)
+        guard isActive else { return }
+        if let apiError = error as? APIError {
+            if apiError.isCancelled { return }
+            if case .network = apiError {
+                connection?.reportReachability(false, source: "chat-rest", error: error)
+            }
         }
     }
+
+    private func trackTask(_ operation: @escaping @MainActor () async -> Void) {
+        guard isActive else { return }
+        let id = UUID()
+        trackedTasks[id] = Task { [weak self] in
+            await operation()
+            self?.trackedTasks[id] = nil
+        }
+    }
+
+    private func cancelTrackedTasks() {
+        for task in trackedTasks.values { task.cancel() }
+        trackedTasks.removeAll()
+        for task in trackedSends.values { task.cancel() }
+        trackedSends.removeAll()
+    }
+}
+
+extension ChatStore: LifecycleSuspendable {
+    func suspendForBackground() { closeStream() }
+    func resumeForForeground() { resumeStream() }
 }

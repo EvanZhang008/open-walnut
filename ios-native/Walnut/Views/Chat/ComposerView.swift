@@ -289,6 +289,7 @@ struct ComposerBar: View {
 /// Pulsing red dot + elapsed time while the mic is live.
 private struct RecordingIndicator: View {
     let elapsed: TimeInterval
+    @Environment(\.scenePhase) private var scenePhase
     @State private var phase = false
 
     var body: some View {
@@ -297,14 +298,20 @@ private struct RecordingIndicator: View {
                 .fill(Theme.danger)
                 .frame(width: 10, height: 10)
                 .opacity(phase ? 0.35 : 1)
-                .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: phase)
+                .animation(
+                    scenePhase == .active ? .easeInOut(duration: 0.7).repeatForever(autoreverses: true) : nil,
+                    value: phase
+                )
             Text(timeString)
                 .font(.callout.monospacedDigit().weight(.medium))
             Text("Recording…")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
-        .onAppear { phase = true }
+        .onAppear { phase = scenePhase == .active }
+        .onChange(of: scenePhase) { _, phaseState in
+            phase = phaseState == .active
+        }
     }
 
     private var timeString: String {

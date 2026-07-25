@@ -27,6 +27,11 @@ final class SessionConversationStore {
     let hostLabel: String
     private var sse: SSEClient?
     private var pollTask: Task<Void, Never>?
+    @ObservationIgnored private var trackedTasks: [UUID: Task<Void, Never>] = [:]
+    private var isActive = true
+    /// Set by close() (view gone), cleared by open(). Blocks LifecycleHub
+    /// resumeAll from reviving a store whose screen was dismissed.
+    private var viewClosed = false
 
     /// Persisted transcript (completed turns), mapped to ChatMessage rows.
     private(set) var historyMessages: [ChatMessage] = []
@@ -44,16 +49,12 @@ final class SessionConversationStore {
     @ObservationIgnored private var deltaFlushTask: Task<Void, Never>?
 
     var processStatus: String
-    /// Whether the view's bottom sentinel is currently on screen — written by
-    /// the view, read here to decide if a transcript reconcile should re-pin
-    /// the scroll position. Captured BEFORE mutating `historyMessages` so the
-    /// jump caused by the mutation can't corrupt the answer.
-    var viewIsAtBottom = true
-    /// Bumped when a content change may have displaced the scroll position
-    /// while the user was reading the bottom; the view responds by scrolling
-    /// back to its bottom sentinel. `defaultScrollAnchor(.bottom)` alone stops
-    /// pinning once the user has scrolled, so turn-end reconciles (which tear
-    /// down and rebuild tail rows) visibly yanked the list upward.
+    /// Sticky USER intent, independent of transient geometry changes from
+    /// streaming, keyboard resizing, or canonical history reconciliation.
+    /// `@ObservationIgnored` for the same reason as ChatStore's: it is written
+    /// from inside the scroll view's layout pass and never read by a view body.
+    @ObservationIgnored var bottomPinned = true
+    /// Bumped when a layout-shifting mutation should restore pinned intent.
     private(set) var scrollToBottomSignal = 0
     /// No live bridge to this session's host (503 / bridge-offline event).
     var offline = false
@@ -64,11 +65,16 @@ final class SessionConversationStore {
     var loadedOnce = false
 
     private static let pollSeconds: Double = 5
+    /// Hard cap on rows kept for rendering (see reconcile() — unbounded merge
+    /// growth was the root cause of the watchdog freeze-kills on builds 16-20).
+    private static let maxRenderedRows = 150
+    private static let hardMaxRenderedRows = 400
 
     init(session: WalnutSession) {
         self.sessionId = session.id
         self.hostLabel = session.isLocal ? "Mac" : session.host
         self.processStatus = session.processStatus
+        LifecycleHub.shared.register(self)
     }
 
     // MARK: - Derived
@@ -100,43 +106,64 @@ final class SessionConversationStore {
     /// attach the stream immediately, and reconcile with fresh in the
     /// background. Called from `.task`.
     func open() async {
+        // Re-opening is an explicit user action: reactivate a store that a
+        // pop-away onDisappear (close → isActive=false) left closed, or the
+        // page comes back permanently dead (guards block every reconnect).
+        viewClosed = false
+        isActive = true
         connectStream()
         await loadTranscript(fresh: false)
         await loadTranscript(fresh: true)
     }
 
+    /// View-close is TERMINAL until the next open(): unlike a background
+    /// suspend, a foreground resumeAll must NOT revive this store — a store
+    /// retained by a dismissed screen would otherwise reconnect its SSE
+    /// stream off-screen (the leak this batch exists to kill).
     func close() {
+        viewClosed = true
+        suspend()
+    }
+
+    /// Backgrounding enters a closed state before cancelling work, so late URL
+    /// callbacks and fetch completions cannot revive polling or mutate the UI.
+    func suspend() {
+        isActive = false
         sse?.stop()
         sse = nil
         pollTask?.cancel()
         pollTask = nil
-    }
-
-    /// Backgrounding MUST tear down the SSE stream and the poll loop: live
-    /// URLSession tasks hold a process assertion, so iOS can't terminate the
-    /// app gracefully and the watchdog SIGKILLs it after 5s (0x8BADF00D —
-    /// seen in the field via MetricKit). ChatStore already did this via
-    /// MainTabView's scenePhase hook; this page was the gap.
-    func suspend() {
-        close()
+        deltaFlushTask?.cancel()
+        deltaFlushTask = nil
+        pendingDelta = ""
+        cancelTrackedTasks()
+        streaming = false
+        activity = nil
     }
 
     /// Foregrounding revives the stream and catches up on missed turns.
+    /// Never revives a view-closed store (see close()).
     func resume() {
-        guard sse == nil else { return }
+        guard !isActive, !viewClosed else { return }
+        isActive = true
         connectStream()
-        Task { await loadTranscript(fresh: true) }
+        trackTask { [weak self] in await self?.loadTranscript(fresh: true) }
     }
 
     // MARK: - Transcript
 
     private func loadTranscript(fresh: Bool) async {
+        guard isActive else { return }
         do {
             let next = try await api.sessionTranscript(id: sessionId, fresh: fresh)
+            guard isActive, !Task.isCancelled else { return }
             reconcile(next)
             transcriptMissing = false
             loadedOnce = true
+        } catch let error as APIError where error.isCancelled {
+            return
         } catch {
+            guard isActive, !Task.isCancelled else { return }
             if !loadedOnce { transcriptMissing = true }
         }
     }
@@ -151,16 +178,20 @@ final class SessionConversationStore {
     /// fresh result wholesale ERASED already-rendered history (blank page).
     /// Keep existing rows older than the incoming window, append the rest.
     private func reconcile(_ transcript: SessionTranscript) {
+        guard isActive else { return }
+        let wasPinned = bottomPinned
         let incoming = transcript.messages.map { m in
             ChatMessage(
                 id: "", // positional ids assigned after the merge (must be unique across it)
                 role: m.role,
                 text: m.text,
                 createdAt: m.timestamp,
-                kind: Self.mapKind(m.kind)
+                kind: Self.mapKind(m.kind),
+                detail: m.detail,
+                resultPreview: m.resultPreview
             )
         }
-        let merged: [ChatMessage]
+        var merged: [ChatMessage]
         if incoming.isEmpty && !historyMessages.isEmpty {
             merged = historyMessages // a zero-row tail never beats shown content
         } else if let firstIncoming = transcript.messages.first?.timestamp,
@@ -171,27 +202,26 @@ final class SessionConversationStore {
         } else {
             merged = incoming
         }
+        // A 150-row head trim is invisible only while pinned at the bottom.
+        // Defer it for a history reader; retain a 400-row hard cap so a page
+        // cannot grow without bound if it remains unpinned for hours.
+        let renderCap = wasPinned ? Self.maxRenderedRows : Self.hardMaxRenderedRows
+        if merged.count > renderCap {
+            merged = Array(merged.suffix(renderCap))
+        }
         // STABLE ids, not positional. A positional "t-<i>" scheme changes every
         // row's identity whenever the list length shifts (turn-end refetch, 5s
         // poll), so SwiftUI tears down and rebuilds EVERY row — the visible
         // flash + the "one message at a time" feel (the smooth live bubble gets
         // yanked and the whole list re-renders). A content-derived id keeps
         // unchanged rows identical across fetches, so only the tail diffs.
-        let wasAtBottom = viewIsAtBottom
         let next = Self.assignStableIDs(merged)
         let changed = next.count != historyMessages.count || next.last?.id != historyMessages.last?.id
         let firstPaint = !loadedOnce
         historyMessages = next
-        // Re-pin after the reconcile: swapping the provisional turn bubble for
-        // canonical rows (different heights/ids) displaces the viewport, and
-        // the bottom anchor stops auto-pinning once the user has ever
-        // scrolled. Fire when the user was already reading the bottom — and
-        // ALWAYS on the first paint: `defaultScrollAnchor(.bottom)` positions
-        // by the LazyVStack's height ESTIMATE, which with variable-height rows
-        // leaves the real bottom rows un-instantiated (intermittent blank
-        // list, QA-confirmed); scrollTo(sentinel) after real layout forces
-        // them in.
-        if firstPaint || (changed && wasAtBottom) { scrollToBottomSignal += 1 }
+        // Canonical row heights can displace the viewport; restore only sticky
+        // intent captured before mutation. First paint always establishes bottom.
+        if isActive && (firstPaint || (changed && wasPinned)) { scrollToBottomSignal += 1 }
         let seen = Set(transcript.messages.filter { $0.role == "user" }.map(\.text))
         // Failed bubbles are exempt: their text was NOT delivered — a match
         // here is an older identical message, and absorbing the failed bubble
@@ -209,7 +239,8 @@ final class SessionConversationStore {
             let n = counts[base, default: 0]
             counts[base] = n + 1
             return ChatMessage(id: "\(base)#\(n)", role: m.role, text: m.text,
-                               createdAt: m.createdAt, kind: m.kind)
+                               createdAt: m.createdAt, kind: m.kind,
+                               detail: m.detail, resultPreview: m.resultPreview)
         }
     }
 
@@ -228,9 +259,9 @@ final class SessionConversationStore {
     /// failed (tap to retry / copy / delete) — the user's text never vanishes.
     @discardableResult
     func send(_ text: String, images: [SelectedImage] = []) async -> Bool {
-        guard canSend else { return false }
+        guard isActive, canSend else { return false }
         errorMessage = nil
-        let payloads = images.map { ImagePayload(data: $0.jpegData.base64EncodedString(), mediaType: "image/jpeg") }
+        let jpegDatas = images.map(\.jpegData)
         var optimistic = ChatMessage(
             id: "pending-\(Date().timeIntervalSince1970)",
             role: "user", text: text,
@@ -239,11 +270,13 @@ final class SessionConversationStore {
         optimistic.pending = true
         // Carry thumbnails so the bubble shows them at once and a failed send
         // retains them for retry (the user's attachments never vanish).
-        if !images.isEmpty { optimistic.localImages = images.map(\.jpegData) }
+        if !jpegDatas.isEmpty { optimistic.localImages = jpegDatas }
         pendingUser.append(optimistic)
-        // Sending always jumps to the bottom — the user wants to see their own
-        // message land even if they were scrolled up reading history.
-        scrollToBottomSignal += 1
+        // Sending explicitly accepts a re-pin: the user wants to see their own
+        // message land even if they were reading history.
+        bottomPinned = true
+        if isActive { scrollToBottomSignal += 1 }
+        let payloads = await Self.buildImagePayloads(jpegDatas)
         do {
             _ = try await api.sendSessionMessage(id: sessionId, text: text, images: payloads)
             if let idx = pendingUser.firstIndex(where: { $0.id == optimistic.id }) {
@@ -251,6 +284,16 @@ final class SessionConversationStore {
             }
             return true
         } catch {
+            // Cancelled/suspended sends settle silently but must NOT leave a
+            // forever-pending bubble: the draft is already cleared, so the
+            // failed bubble (tap to retry) is the only copy of the text.
+            if !isActive || (error as? APIError)?.isCancelled == true {
+                if let idx = pendingUser.firstIndex(where: { $0.id == optimistic.id }) {
+                    pendingUser[idx].pending = false
+                    pendingUser[idx].failed = true
+                }
+                return false
+            }
             if let idx = pendingUser.firstIndex(where: { $0.id == optimistic.id }) {
                 pendingUser[idx].pending = false
                 pendingUser[idx].failed = true
@@ -267,6 +310,12 @@ final class SessionConversationStore {
             }
             return false
         }
+    }
+
+    private nonisolated static func buildImagePayloads(_ datas: [Data]) async -> [ImagePayload] {
+        await Task.detached(priority: .userInitiated) {
+            datas.map { ImagePayload(data: $0.base64EncodedString(), mediaType: "image/jpeg") }
+        }.value
     }
 
     // MARK: - Failed-bubble actions
@@ -291,6 +340,7 @@ final class SessionConversationStore {
     // MARK: - SSE
 
     private func connectStream() {
+        guard isActive else { return }
         sse?.stop()
         sse = nil
         guard let url = WalnutAPI.sessionStreamURL(id: sessionId),
@@ -316,7 +366,7 @@ final class SessionConversationStore {
     }
 
     private struct DeltaPayload: Codable { let delta: String }
-    private struct ToolPayload: Codable { let name: String }
+    private struct ToolPayload: Codable { let name: String; let detail: String? }
     private struct StatusPayload: Codable { let processStatus: String }
     private struct ErrorPayload: Codable { let message: String }
     private struct SnapshotPayload: Codable {
@@ -335,6 +385,7 @@ final class SessionConversationStore {
     }
 
     private func handle(_ event: SSEEvent) {
+        guard isActive else { return }
         let data = Data(event.data.utf8)
         switch event.event {
         case "snapshot":
@@ -357,7 +408,7 @@ final class SessionConversationStore {
         case "tool":
             if let p = try? JSONDecoder().decode(ToolPayload.self, from: data) {
                 streaming = true
-                activity = p.name
+                activity = p.detail.map { "\(p.name) · \($0)" } ?? p.name
             }
         case "tool-result":
             activity = nil
@@ -382,7 +433,7 @@ final class SessionConversationStore {
         case "bridge-online":
             offline = false
             stopPolling()
-            Task { await loadTranscript(fresh: true) }
+            trackTask { [weak self] in await self?.loadTranscript(fresh: true) }
         default:
             break
         }
@@ -395,8 +446,10 @@ final class SessionConversationStore {
         applyStatus(snap.processStatus)
         streaming = snap.isStreaming
         pendingDelta = "" // snapshot resets the live region wholesale
-        let live = snap.completedLen < snap.blocks.count
-            ? Array(snap.blocks[snap.completedLen...]) : []
+        // completedLen is server-supplied — clamp both ends so a malformed
+        // (negative / oversized) value can't index-crash the slice.
+        let liveStart = max(0, min(snap.completedLen, snap.blocks.count))
+        let live = Array(snap.blocks[liveStart...])
         // Main lane only (no parentToolUseId) — subagent lanes aren't shown here.
         liveText = live
             .filter { $0.type == "text" && $0.parentToolUseId == nil }
@@ -447,7 +500,7 @@ final class SessionConversationStore {
         flushPendingDelta() // `finished` below must include the delta tail
         deltaFlushTask?.cancel()
         deltaFlushTask = nil
-        let wasAtBottom = viewIsAtBottom
+        let wasPinned = bottomPinned
         streaming = false
         activity = nil
         let finished = liveText
@@ -464,8 +517,8 @@ final class SessionConversationStore {
         }
         // The live row disappearing + provisional row appearing shifts layout;
         // keep the reader glued to the end of the reply they were watching.
-        if wasAtBottom { scrollToBottomSignal += 1 }
-        Task { await loadTranscript(fresh: true) }
+        if isActive && wasPinned { scrollToBottomSignal += 1 }
+        trackTask { [weak self] in await self?.loadTranscript(fresh: true) }
     }
 
     // MARK: - Polling fallback
@@ -474,14 +527,15 @@ final class SessionConversationStore {
     /// drop the stream for good) and bridge-offline (keep the stream: it's the
     /// carrier for bridge-online). Idempotent: a second call is a no-op.
     private func startPolling(keepStream: Bool = false) {
-        guard pollTask == nil else { return }
+        guard isActive, pollTask == nil else { return }
         if !keepStream {
             sse?.stop()
             sse = nil
         }
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
-                await self?.loadTranscript(fresh: true)
+                guard let self, self.isActive else { return }
+                await self.loadTranscript(fresh: true)
                 try? await Task.sleep(for: .seconds(Self.pollSeconds))
             }
         }
@@ -491,4 +545,23 @@ final class SessionConversationStore {
         pollTask?.cancel()
         pollTask = nil
     }
+
+    private func trackTask(_ operation: @escaping @MainActor () async -> Void) {
+        guard isActive else { return }
+        let id = UUID()
+        trackedTasks[id] = Task { [weak self] in
+            await operation()
+            self?.trackedTasks[id] = nil
+        }
+    }
+
+    private func cancelTrackedTasks() {
+        for task in trackedTasks.values { task.cancel() }
+        trackedTasks.removeAll()
+    }
+}
+
+extension SessionConversationStore: LifecycleSuspendable {
+    func suspendForBackground() { suspend() }
+    func resumeForForeground() { resume() }
 }

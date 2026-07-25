@@ -108,83 +108,85 @@ struct ChatView: View {
     }
 }
 
-/// Scrollable message list, newest pinned at the visual bottom.
-///
-/// `defaultScrollAnchor(.bottom)` handles the initial position and streaming
-/// growth, but its auto-pin lapses after the user's first manual scroll — so
-/// the turn-end reconcile (provisional row swapped for canonical history)
-/// yanked the viewport upward. A bottom sentinel tracks whether the user is
-/// at the bottom; the store bumps `scrollToBottomSignal` after layout-shifting
-/// mutations and the view re-pins via ScrollViewReader — only when they were
-/// already at the bottom, never while reading history.
+/// Scrollable message list whose ScrollPosition is the sole bottom authority.
+/// Sticky user intent prevents canonical reconciles from yanking history readers.
 private struct MessageListView: View {
     @Environment(ChatStore.self) private var chat
+    @State private var scrollPos = ScrollPosition(edge: .bottom)
+    @State private var keyboardGeometryFrozen = false
+    @State private var programmaticGeometryFrozen = false
+    @State private var programmaticFreezeTask: Task<Void, Never>?
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    if chat.hasOlder {
-                        Button("Load earlier messages") {
-                            Task { await chat.loadOlder() }
-                        }
-                        .font(.footnote)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 10) {
+                if chat.hasOlder {
+                    Button("Load earlier messages") {
+                        Task { await chat.loadOlder() }
                     }
-                    if chat.messages.isEmpty && !chat.loadingMessages && !chat.streaming {
-                        emptyState
-                    }
-                    ForEach(chat.messages) { message in
-                        MessageRow(
-                            message: message,
-                            onRetry: { Task { await chat.retry(message) } },
-                            onDiscard: { chat.discardFailed(message) }
-                        )
-                    }
-                    if chat.streaming {
-                        liveRow
-                    }
-                    // Sentinel: its on-screen visibility IS the "user is at
-                    // the bottom" state the store consults before re-pinning.
-                    Color.clear
-                        .frame(height: 1)
-                        .id("bottom-sentinel")
-                        .onAppear { chat.viewIsAtBottom = true }
-                        .onDisappear { chat.viewIsAtBottom = false }
+                    .font(.footnote)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
                 }
-                .padding(.vertical, 12)
-            }
-            .defaultScrollAnchor(.bottom)
-            .redacted(reason: chat.loadingMessages && chat.messages.isEmpty ? .placeholder : [])
-            .scrollDismissesKeyboard(.interactively)
-            .refreshable {
-                if let id = chat.activeID {
-                    await chat.loadMessages(id)
+                if chat.messages.isEmpty && !chat.loadingMessages && !chat.streaming {
+                    emptyState
                 }
-                await chat.refreshConversations()
-            }
-            .onChange(of: chat.scrollToBottomSignal) {
-                // Next runloop tick so mutated rows have laid out; animated to
-                // read as "settling", not a teleport.
-                Task { @MainActor in
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        proxy.scrollTo("bottom-sentinel", anchor: .bottom)
-                    }
+                ForEach(chat.messages) { message in
+                    MessageRow(
+                        message: message,
+                        onRetry: { Task { await chat.retry(message) } },
+                        onDiscard: { chat.discardFailed(message) }
+                    )
+                }
+                if chat.streaming {
+                    // Leaf view so the 8Hz streamText/activity flush
+                    // re-renders ONLY this row — reading those @Observable
+                    // fields inside LiveTurnRow (not here) keeps them off
+                    // MessageListView's dependency set, so the ForEach of
+                    // stable history rows is never rebuilt mid-stream.
+                    LiveTurnRow()
                 }
             }
+            .padding(.vertical, 12)
+        }
+        .scrollPosition($scrollPos, anchor: .bottom)
+        .redacted(reason: chat.loadingMessages && chat.messages.isEmpty ? .placeholder : [])
+        .scrollDismissesKeyboard(.interactively)
+        .modifier(ScrollBottomTracking(
+            isPinned: { chat.bottomPinned },
+            setPinned: { chat.bottomPinned = $0 },
+            geometryFrozen: { keyboardGeometryFrozen || programmaticGeometryFrozen }
+        ))
+        .modifier(KeyboardBottomRepin(
+            keyboardGeometryFrozen: $keyboardGeometryFrozen,
+            isPinned: { chat.bottomPinned },
+            repin: { scrollToBottom() }
+        ))
+        .refreshable {
+            if let id = chat.activeID {
+                await chat.loadMessages(id)
+            }
+            await chat.refreshConversations()
+        }
+        .onChange(of: chat.scrollToBottomSignal) {
+            scrollToBottom()
+        }
+        .onDisappear {
+            // Clear the flag too: cancelling the reset task alone would leave
+            // a retained (tab-switched) view permanently geometry-frozen.
+            programmaticFreezeTask?.cancel()
+            programmaticGeometryFrozen = false
         }
     }
 
-    /// Live turn: streamed text so far + the current tool/thinking activity.
-    private var liveRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if !chat.streamText.isEmpty {
-                MessageRow(message: ChatMessage(
-                    id: "__live__", role: "assistant", text: chat.streamText, createdAt: "", kind: nil
-                ))
-            }
-            ThinkingRow(activity: chat.activity)
+    private func scrollToBottom() {
+        programmaticGeometryFrozen = true
+        scrollPos.scrollTo(edge: .bottom)
+        programmaticFreezeTask?.cancel()
+        programmaticFreezeTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            programmaticGeometryFrozen = false
         }
     }
 
@@ -204,9 +206,28 @@ private struct MessageListView: View {
     }
 }
 
+/// Live turn: streamed text so far + the current tool/thinking activity.
+/// A standalone leaf so the high-frequency streamText/activity updates
+/// re-render only this row, never the sibling ForEach of history rows.
+private struct LiveTurnRow: View {
+    @Environment(ChatStore.self) private var chat
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !chat.streamText.isEmpty {
+                MessageRow(message: ChatMessage(
+                    id: "__live__", role: "assistant", text: chat.streamText, createdAt: "", kind: nil
+                ))
+            }
+            ThinkingRow(activity: chat.activity)
+        }
+    }
+}
+
 /// Shimmering ellipsis row shown while the agent thinks / runs tools.
 struct ThinkingRow: View {
     let activity: String?
+    @Environment(\.scenePhase) private var scenePhase
     @State private var phase = false
 
     var body: some View {
@@ -218,8 +239,14 @@ struct ThinkingRow: View {
         }
         .foregroundStyle(.secondary)
         .opacity(phase ? 0.35 : 1)
-        .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: phase)
-        .onAppear { phase = true }
+        .animation(
+            scenePhase == .active ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true) : nil,
+            value: phase
+        )
+        .onAppear { phase = scenePhase == .active }
+        .onChange(of: scenePhase) { _, phaseState in
+            phase = phaseState == .active
+        }
         .padding(.horizontal, 16)
         .padding(.vertical, 4)
     }
