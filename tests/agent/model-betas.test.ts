@@ -81,6 +81,17 @@ describe('beta header assembly (Thing 1: Bedrock 1h extended cache TTL)', () => 
     expect(lastOpts?.betas ?? []).not.toContain(EXTENDED_CACHE_TTL_BETA);
   });
 
+  it('does NOT send the 1M-context beta for natively-1M models (Opus 5)', async () => {
+    await sendMessage({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'hi' }],
+      config: { provider: 'bedrock', model: 'global.anthropic.claude-opus-5' },
+    });
+    // Opus 5's 1M window is the default and only size — no beta header needed.
+    expect(lastOpts?.betas ?? []).not.toContain(BETA_CONTEXT_1M);
+    expect(lastOpts?.model).toBe('global.anthropic.claude-opus-5');
+  });
+
   it('does NOT add the cache-ttl beta for non-Anthropic providers (e.g. openrouter)', async () => {
     await sendMessage({
       system: 'sys',

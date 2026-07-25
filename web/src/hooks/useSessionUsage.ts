@@ -65,6 +65,9 @@ export function formatModelName(model: string | undefined): string {
 /** Detect context window size from model string and observed token usage. Returns tokens. */
 export function getContextWindowSize(model: string | undefined, totalInput?: number): number {
   if (model?.toLowerCase().includes('[1m]')) return 1_000_000;
+  // NB: no natively-1M special case here (e.g. Opus 5) — the Claude CLI generates
+  // separate plain (200K auto-compact) and "[1m]" rows for opus-5, so a plain
+  // opus-5 session string really does mean a 200K effective window.
   // Claude CLI resumes sometimes drop the [1m] suffix — if tokens exceed 200K,
   // the session must be using 1M context (you can't exceed the window).
   if (totalInput != null && totalInput > 200_000) return 1_000_000;

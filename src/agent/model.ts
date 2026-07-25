@@ -111,7 +111,9 @@ async function resolveForCall(config?: ModelConfig) {
 
   // 1M context beta — driven by catalog context_window, not [1m] suffix.
   // Guard is bedrock/anthropic only: other providers (OpenRouter, Gemini) have native 1M support without beta headers.
+  // native_1m models (Opus 5+) get 1M by default with no beta — skip the flag.
   if (catalogEntry?.context_window && catalogEntry.context_window >= 1_000_000
+      && !catalogEntry.compat?.native_1m
       && ['bedrock', 'anthropic'].includes(providerName)) {
     betas.push(BETA_CONTEXT_1M);
   }
@@ -126,7 +128,10 @@ async function resolveForCall(config?: ModelConfig) {
   let thinking: ThinkingConfig | undefined;
   if (catalogEntry?.compat?.thinking_format === 'anthropic') {
     if (catalogEntry.compat.supports_adaptive) {
-      thinking = { type: 'adaptive' };
+      // display:'summarized' — Opus 4.7/4.8+ default to 'omitted' (empty thinking
+      // text, signature only). Requesting summarized restores visible thinking;
+      // full thinking tokens are billed either way.
+      thinking = { type: 'adaptive', display: 'summarized' };
     } else {
       const budget = Math.min((catalogEntry.max_tokens ?? 64_000) - 1, 64_000);
       thinking = { type: 'enabled', budget_tokens: budget };

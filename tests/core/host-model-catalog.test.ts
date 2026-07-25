@@ -74,6 +74,24 @@ describe('saveHostModelCatalog / getHostModelCatalog', () => {
     expect(cat?.models).toHaveLength(2);
   });
 
+  it('rejects a catalog whose source transport became stale during async load', async () => {
+    await saveHostModelCatalog('devbox', MODELS);
+    await waitForFile();
+    _resetHostModelCatalogCache();
+    const replacement = [{ value: 'stale-only', displayName: 'Stale' }];
+
+    const accepted = await saveHostModelCatalog(
+      'devbox',
+      replacement,
+      '/old/process',
+      undefined,
+      () => false,
+    );
+
+    expect(accepted).toBe(false);
+    expect((await getHostModelCatalog('devbox'))?.models).toEqual(MODELS);
+  });
+
   it('persists to disk and survives a cache reset (server-restart shape)', async () => {
     await saveHostModelCatalog('devbox', MODELS, '/w');
     await waitForFile();

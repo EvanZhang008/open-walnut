@@ -44,6 +44,15 @@ describe('pricing', () => {
       expect(entry!.output).toBe(15.00);
     });
 
+    it('matches Opus 5 (base vs fast tier)', () => {
+      const base = findPricing('global.anthropic.claude-opus-5');
+      const fast = findPricing('claude-opus-5-fast');
+      expect(base!.input).toBe(5.00);
+      expect(base!.output).toBe(25.00);
+      expect(fast!.input).toBe(10.00);
+      expect(fast!.output).toBe(50.00);
+    });
+
     it('prefers more specific patterns (opus-4-6 over opus-4)', () => {
       const entry46 = findPricing('claude-opus-4-6-v1');
       const entry4 = findPricing('claude-opus-4-v1');

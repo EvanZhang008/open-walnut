@@ -103,9 +103,13 @@ export async function saveHostModelCatalog(
   models: SessionModelCatalogEntry[],
   cwd?: string,
   sourceSpawnTs?: number,
+  stillCurrent?: () => boolean,
 ): Promise<boolean> {
   if (!models.length) return false;
   const store = await load();
+  // Check after the asynchronous load. Once this passes, store mutation is
+  // synchronous, so a transport replacement cannot interleave before assignment.
+  if (stillCurrent && !stillCurrent()) return false;
   const key = hostCatalogKey(host);
   const prev = store[key];
   // Freshness matrix (unknown spawn time = ATTACHED process = long-lived old

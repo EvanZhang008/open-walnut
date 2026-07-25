@@ -121,7 +121,7 @@ beforeAll(async () => {
     path.join(tasksDir, 'tasks.json'),
     JSON.stringify({
       version: 1,
-      tasks: ['001', '002', '003', '004', '005', '006', '007', '008', '009'].map(n => ({
+      tasks: ['001', '002', '003', '004', '005', '006', '007', '008', '009', '010'].map(n => ({
         id: `effort-task-${n}`,
         title: `Effort test task ${n}`,
         status: 'todo',
@@ -400,6 +400,90 @@ describe('session --effort plumbing: E2E', () => {
 
     ws.close()
     await delay(50)
+  })
+
+  it('uses the live catalog as effort authority and exposes the configured default', async () => {
+    const ws = await connectWs()
+    const resultPromise = waitForWsEvent(ws, 'session:result')
+    await sendWsRpc(ws, 'session:start', {
+      taskId: 'effort-task-010',
+      message: 'live catalog authority test',
+      project: 'Walnut',
+      mode: 'bypass',
+      model: 'opus',
+    })
+    const sessionId = ((await resultPromise).data as { sessionId: string }).sessionId
+    await delay(400)
+
+    const originalGetOrAttach = sessionRunner.getOrAttachLiveSession.bind(sessionRunner)
+    const liveSession = {
+      mode: 'bypass',
+      getSettingsSnapshot: vi.fn().mockResolvedValue({
+        applied: { model: 'openai.gpt-5.6-sol', effort: 'xhigh' },
+        effective: { effortLevel: 'xhigh' },
+      }),
+      getModelCatalog: vi.fn().mockResolvedValue({
+        models: [{
+          value: 'gpt-5.6-sol',
+          resolvedModel: 'openai.gpt-5.6-sol',
+          displayName: 'GPT-5.6 Sol',
+          supportsEffort: true,
+          supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+        }],
+        fetchedAt: Date.now(),
+      }),
+      applyEffort: vi.fn().mockResolvedValue(true),
+      refreshEffectiveEffort: vi.fn().mockResolvedValue('xhigh'),
+      refreshAppliedSettings: vi.fn().mockResolvedValue({ model: 'openai.gpt-5.6-sol', effort: 'xhigh' }),
+    }
+    const attachSpy = vi.spyOn(sessionRunner, 'getOrAttachLiveSession').mockImplementation(async (id) => (
+      id === sessionId ? liveSession as never : originalGetOrAttach(id)
+    ))
+
+    try {
+      const accepted = await fetch(`http://localhost:${port}/api/sessions/${sessionId}/effort`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ effort: 'xhigh' }),
+      })
+      expect(accepted.status).toBe(200)
+      expect(liveSession.applyEffort).toHaveBeenCalledWith('xhigh')
+
+      const settings = await fetch(`http://localhost:${port}/api/sessions/${sessionId}/settings`)
+      expect(settings.status).toBe(200)
+      const settingsBody = await settings.json() as {
+        live: boolean
+        applied: { model: string | null; effort: string | null } | null
+        effective: { effortLevel: string | null } | null
+      }
+      expect(settingsBody.live).toBe(true)
+      expect(settingsBody.applied).toMatchObject({ model: 'openai.gpt-5.6-sol', effort: 'xhigh' })
+      expect(settingsBody.effective).toEqual({ effortLevel: 'xhigh' })
+
+      liveSession.getSettingsSnapshot.mockResolvedValue({
+        applied: { model: 'global.anthropic.claude-opus-4-8', effort: 'high' },
+        effective: { effortLevel: 'xhigh' },
+      })
+      liveSession.getModelCatalog.mockResolvedValue({
+        models: [{
+          value: 'global.anthropic.claude-opus-4-8',
+          resolvedModel: 'global.anthropic.claude-opus-4-8',
+          displayName: 'Opus',
+          supportsEffort: true,
+          supportedEffortLevels: ['low', 'medium', 'high', 'xhigh'],
+        }],
+        fetchedAt: Date.now(),
+      })
+      const rejected = await fetch(`http://localhost:${port}/api/sessions/${sessionId}/effort`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ effort: 'max' }),
+      })
+      expect(rejected.status).toBe(409)
+      expect(liveSession.applyEffort).toHaveBeenCalledTimes(1)
+    } finally {
+      attachSpy.mockRestore()
+      ws.close()
+      await delay(50)
+    }
   })
 
   // Test 5: effort persists across turns — a later turn that does NOT specify

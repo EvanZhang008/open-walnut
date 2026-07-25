@@ -28,6 +28,10 @@ export interface ModelCompat {
   thinking_format?: 'anthropic' | 'openai' | 'deepseek' | 'qwen';
   /** True for models that support adaptive thinking (Opus 4.6, Sonnet 4.6). */
   supports_adaptive?: boolean;
+  /** True for models whose context window is natively 1M with no beta header
+   *  (e.g. Opus 5 — 1M is the default AND the only size). Suppresses the
+   *  context-1m beta push that context_window >= 1M would otherwise trigger. */
+  native_1m?: boolean;
   max_tokens_field?: 'max_tokens' | 'max_completion_tokens';
   supports_cache?: boolean;
   supports_vision?: boolean;
@@ -40,7 +44,11 @@ export interface ModelCompat {
 
 /** Thinking config passed to Claude API. */
 export type ThinkingConfig =
-  | { type: 'adaptive' }
+  // display: newer models (Opus 4.7/4.8+) default to 'omitted' — thinking blocks
+  // come back with empty text + encrypted signature only. Explicitly requesting
+  // 'summarized' restores visible thinking summaries (verified live on Bedrock;
+  // full thinking is billed either way, so this costs nothing extra).
+  | { type: 'adaptive'; display?: 'summarized' | 'omitted' }
   | { type: 'enabled'; budget_tokens: number }
   | { type: 'disabled' };
 

@@ -94,14 +94,20 @@ async function interceptCatalog(page: import('@playwright/test').Page, body: unk
 }
 
 /** Intercept the live-settings pull so the "live" model is deterministic. */
-async function interceptLiveSettings(page: import('@playwright/test').Page, appliedModel: string | null) {
+async function interceptLiveSettings(
+  page: import('@playwright/test').Page,
+  appliedModel: string | null,
+  appliedEffort: string | null = null,
+  configuredEffort: string | null = null,
+) {
   await page.route(`**/api/sessions/${SESSION_ID}/settings*`, (route) =>
     route.fulfill({
       status: 200, contentType: 'application/json',
       body: JSON.stringify({
         live: appliedModel !== null,
         requested: { model: appliedModel ?? undefined },
-        applied: appliedModel !== null ? { model: appliedModel, effort: null, mode: null } : null,
+        applied: appliedModel !== null ? { model: appliedModel, effort: appliedEffort, mode: null } : null,
+        effective: configuredEffort !== null ? { effortLevel: configuredEffort } : null,
       }),
     }))
 }
@@ -247,6 +253,42 @@ test.describe('ModelPicker CLI catalog', () => {
     await expect(segs.nth(2)).toBeEnabled()   // high
     await expect(segs.nth(3)).toBeDisabled()  // xhigh — not in supportedEffortLevels
     await expect(segs.nth(4)).toBeDisabled()  // max   — not in supportedEffortLevels
+  })
+
+  test('GPT live capabilities enable all effort levels and use configured xhigh', async ({ page }) => {
+    const gptCatalog = {
+      source: 'cli',
+      live: true,
+      fetchedAt: new Date(0).toISOString(),
+      models: [{
+        value: 'gpt-5.6-sol',
+        resolvedModel: 'gpt-5.6-sol',
+        displayName: 'GPT-5.6 Sol',
+        description: 'OpenAI GPT-5.6 Sol via Bedrock Mantle',
+        supportsEffort: true,
+        supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+      }],
+    }
+    await interceptCatalog(page, gptCatalog)
+    await interceptLiveSettings(page, 'gpt-5.6-sol', null, 'xhigh')
+
+    const input = await openSessionPanel(page)
+    const picker = await openModelPicker(page, input)
+
+    await expect(picker.locator('.model-picker-current')).toContainText('Current: GPT-5.6 Sol')
+    await expect(picker.locator('[data-testid="picker-live-strip"]')).toContainText('effort default (xhigh)')
+    const segs = picker.locator('.model-picker-effort-seg')
+    await expect(segs).toHaveCount(5)
+    for (const seg of await segs.all()) await expect(seg).toBeEnabled()
+    await expect(segs.nth(3)).toHaveClass(/model-picker-effort-seg-active/)
+
+    await page.screenshot({ path: '/tmp/walnut-effort/gpt-live-xhigh.png', fullPage: true })
+
+    const [req] = await Promise.all([
+      page.waitForRequest((r) => r.url().includes(`/api/sessions/${SESSION_ID}/effort`) && r.method() === 'POST'),
+      segs.nth(0).click(),
+    ])
+    expect(req.postDataJSON()).toEqual({ effort: 'low' })
   })
 
   test('custom model input sends an out-of-catalog ID verbatim (terminal /model parity)', async ({ page }) => {

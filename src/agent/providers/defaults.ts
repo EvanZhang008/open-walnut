@@ -26,7 +26,7 @@ export const KNOWN_PROVIDERS: Record<string, Omit<ProviderConfig, 'api_key'>> = 
 };
 
 /** Default model constant — backward compat. */
-export const DEFAULT_MODEL = 'global.anthropic.claude-opus-4-8';
+export const DEFAULT_MODEL = 'global.anthropic.claude-opus-5';
 /**
  * Conservative default — works with every known model.
  * Users wanting more output (e.g. Opus 4 supports 32768) set agent.maxTokens in config.

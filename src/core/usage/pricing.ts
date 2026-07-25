@@ -7,7 +7,7 @@
  * - Perplexity: docs.perplexity.ai (Feb 2025)
  */
 
-export const PRICING_VERSION = '2025-02-10';
+export const PRICING_VERSION = '2026-07-24';
 
 export interface PricingEntry {
   /** Substring pattern matched against model ID. First match wins. */
@@ -28,6 +28,8 @@ export interface PricingEntry {
  */
 export const DEFAULT_PRICING: PricingEntry[] = [
   // ── Claude models (Anthropic/Bedrock on-demand) ──
+  { pattern: 'claude-opus-5-fast',  input: 10.00, output: 50.00, cacheWrite: 12.50,  cacheRead: 1.00 },
+  { pattern: 'claude-opus-5',       input: 5.00,  output: 25.00, cacheWrite: 6.25,   cacheRead: 0.50 },
   { pattern: 'claude-opus-4-8',     input: 5.00,  output: 25.00, cacheWrite: 6.25,   cacheRead: 0.50 },
   { pattern: 'claude-opus-4-7',     input: 5.00,  output: 25.00, cacheWrite: 6.25,   cacheRead: 0.50 },
   { pattern: 'claude-opus-4-6',     input: 5.00,  output: 25.00, cacheWrite: 6.25,   cacheRead: 0.50 },

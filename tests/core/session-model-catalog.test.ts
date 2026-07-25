@@ -9,6 +9,7 @@ import {
   SESSION_MODELS,
   SESSION_MODEL_CLI_MAP,
   sessionModelsAsCatalog,
+  matchSessionModelCatalogEntry,
   resolveModelSwitchValue,
 } from '../../src/core/types.js'
 
@@ -39,6 +40,33 @@ describe('sessionModelsAsCatalog', () => {
     expect(byValue['fable'].supportedEffortLevels).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
     // 'opus' alias resolves to family default (flagship: all levels)
     expect(byValue['opus'].supportedEffortLevels).toContain('max')
+  })
+})
+
+describe('matchSessionModelCatalogEntry', () => {
+  const models = [
+    { value: 'default', resolvedModel: 'global.anthropic.claude-fable-5', displayName: 'Default' },
+    { value: 'global.anthropic.claude-fable-5', resolvedModel: 'global.anthropic.claude-fable-5', displayName: 'Fable' },
+    { value: 'global.anthropic.claude-opus-4-8[1m]', resolvedModel: 'global.anthropic.claude-opus-4-8[1m]', displayName: 'Opus 1M' },
+    { value: 'haiku', resolvedModel: 'global.anthropic.claude-haiku-4-5-20251001-v1:0', displayName: 'Haiku' },
+  ]
+
+  it('matches exact values and prefers a specific resolved row over default', () => {
+    expect(matchSessionModelCatalogEntry(models, 'global.anthropic.claude-opus-4-8[1m]')?.displayName).toBe('Opus 1M')
+    expect(matchSessionModelCatalogEntry(models, 'global.anthropic.claude-fable-5')?.displayName).toBe('Fable')
+  })
+
+  it('matches the default resolved row when no specific row exists', () => {
+    expect(matchSessionModelCatalogEntry([models[0]], 'global.anthropic.claude-fable-5')?.displayName).toBe('Default')
+  })
+
+  it('loosely matches context and provider version decorations', () => {
+    expect(matchSessionModelCatalogEntry(models, 'global.anthropic.claude-opus-4-8')?.displayName).toBe('Opus 1M')
+    expect(matchSessionModelCatalogEntry(models, 'global.anthropic.claude-haiku-4-5-20251001')?.displayName).toBe('Haiku')
+  })
+
+  it('returns null when no row matches', () => {
+    expect(matchSessionModelCatalogEntry(models, 'gpt-unknown')).toBeNull()
   })
 })
 
