@@ -7,6 +7,7 @@ import { ConfirmProvider } from './hooks/useConfirm';
 import { initAppInfo } from './utils/app-info';
 import { initBrowserLogger } from './utils/browser-logger';
 import { initLongTaskMonitor } from './utils/longtask-monitor';
+import { initMainThreadTracer, startPhase, endPhase, tracePhase } from './utils/main-thread-tracer';
 import { initUiPrefsSync } from './utils/ui-prefs-sync';
 import { initSessionStatusStore } from './stores/init-session-status-store';
 import './styles/globals.css';
@@ -15,10 +16,13 @@ import './styles/globals.css';
 initBrowserLogger();
 // Subscribe before React mounts so the first WS status event cannot race ahead
 // of component hooks.
-initSessionStatusStore();
+tracePhase('boot:session-status-store', initSessionStatusStore);
 // Report main-thread blocks >200ms with attribution (rate-limited) — makes
 // starvation windows self-identify in the server log.
 initLongTaskMonitor();
+// Firefox has no `longtask` observer — the lag-sampler tracer covers it and
+// attributes blocks to the boot/render phases active at the time.
+initMainThreadTracer();
 // Cache server version/mode for crash reports (survives to server-down crashes).
 initAppInfo();
 
@@ -31,7 +35,13 @@ document.addEventListener('mousedown', () => {
 // Seed layout prefs (collapse states, splitter positions) from the server
 // BEFORE first render — components read them in useState initializers.
 // Never throws; offline just falls back to plain localStorage.
+startPhase('boot:ui-prefs-sync');
 initUiPrefsSync().finally(() => {
+  endPhase('boot:ui-prefs-sync');
+  startPhase('boot:react-mount');
+  // react-mount phase ends on the first post-render macrotask — everything
+  // between is the synchronous initial render + effects of the whole tree.
+  setTimeout(() => endPhase('boot:react-mount'), 0);
   // onUncaughtError / onCaughtError: React 19 reports render errors via
   // window.reportError by default — which bypasses the console monkey-patch, so
   // crashes never reached the server log. Route them through console.error.

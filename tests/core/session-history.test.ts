@@ -270,6 +270,34 @@ describe('readSessionHistory', () => {
     ]);
   });
 
+  it('stamps injected on CLI-flagged user lines (isMeta / isSynthetic / isCompactSummary)', async () => {
+    // The CLI marks user lines the human did NOT type: canonical JSONL uses
+    // isMeta (Skill dumps, image metadata) and isCompactSummary +
+    // isVisibleInTranscriptOnly (compaction continuation); stream-json stdout
+    // folds all of those into isSynthetic. The UI collapses injected lines
+    // instead of rendering a giant "You" bubble.
+    await writeJsonl('s-meta', '/test', [
+      msg('u1', 'user', 'run the demo skill'),
+      // canonical Skill-content dump
+      { type: 'user', timestamp: '2025-01-01T00:01:00Z', uuid: 'm1', isMeta: true, message: { role: 'user', content: [{ type: 'text', text: 'Base directory for this skill: /Users/me/.claude/skills/record-webapp-video\n\n# Record a Web App Demo Video\n…8000 chars of instructions…' }] } },
+      // stream-json shape of the same thing (daemon stream files)
+      { type: 'user', timestamp: '2025-01-01T00:02:00Z', uuid: 'm2', isSynthetic: true, message: { role: 'user', content: [{ type: 'text', text: 'Base directory for this skill: /Users/me/.claude/skills/apple-dev\n\n# Apple Dev…' }] } },
+      // compaction continuation summary
+      { type: 'user', timestamp: '2025-01-01T00:03:00Z', uuid: 'm3', isCompactSummary: true, isVisibleInTranscriptOnly: true, message: { role: 'user', content: [{ type: 'text', text: 'This session is being continued from a previous conversation…' }] } },
+      // real human line — no flags
+      { type: 'user', timestamp: '2025-01-01T00:04:00Z', uuid: 'u2', message: { role: 'user', content: 'looks good, ship it' } },
+      msg('a1', 'assistant', 'Done.'),
+    ]);
+
+    const messages = await readSessionHistory('s-meta', '/test');
+    const byText = (prefix: string) => messages.find(m => m.text.startsWith(prefix));
+    expect(byText('Base directory for this skill: /Users/me/.claude/skills/record-webapp-video')?.injected).toBe(true);
+    expect(byText('Base directory for this skill: /Users/me/.claude/skills/apple-dev')?.injected).toBe(true);
+    expect(byText('This session is being continued')?.injected).toBe(true);
+    expect(byText('run the demo skill')?.injected).toBeUndefined();
+    expect(byText('looks good, ship it')?.injected).toBeUndefined();
+  });
+
   it('surfaces meaningful system lines (compact/api_error/informational); hides noise subtypes', async () => {
     await writeJsonl('s-system', '/test', [
       msg('u1', 'user', 'question'),

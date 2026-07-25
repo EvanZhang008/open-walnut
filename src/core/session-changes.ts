@@ -369,7 +369,7 @@ function reconstructFile(
 
 /** Find the nearest ancestor dir containing a `.git` entry (file or dir). Async,
  *  bounded walk. Returns null if none found before the filesystem root. */
-async function findGitRoot(startDir: string, reader: { readFile: (p: string) => Promise<string | null>; listDir: (p: string) => Promise<string[]> }, isRemote: boolean): Promise<string | null> {
+export async function findGitRoot(startDir: string, reader: { readFile: (p: string) => Promise<string | null>; listDir: (p: string) => Promise<string[]> }, isRemote: boolean): Promise<string | null> {
   let dir = startDir;
   // Bound the walk to avoid pathological deep paths.
   for (let i = 0; i < 40; i++) {
@@ -497,9 +497,44 @@ interface CacheEntry {
    *  encodings). Without this, such sessions could never stat → never cache →
    *  full re-read on EVERY request (the 46s Changed-tab pain). */
   resolvedPath?: string;
+  /** Chars accounted against the cache byte budget, frozen at insert time.
+   *  Stored (not recomputed on delete) because `inc.mainFileMap` grows in place
+   *  between recomputes — recomputing at delete would drift cacheChars negative. */
+  chars?: number;
 }
 const changesCache = new Map<string, CacheEntry>();
 const MAX_CACHE = 30;
+// Byte budget across all entries. Entry count alone is not a bound: each entry
+// retains full before+after content for every changed file PLUS the incremental
+// mainFileMap's op payloads (Edit old/new, Write content) — a whale session can
+// hold the same text 3-4×. 30 such entries once contributed hundreds of MB of
+// retained heap and multi-second major-GC pauses (the "Quick Session not
+// loading" incident). Newest entry is exempt so a single whale still caches
+// (its incremental state is what makes Changed-tab polls cheap).
+// 64 Mi-chars ≈ 128 MB retained (UTF-16) — same figure as session-history.ts
+// but an INDEPENDENT pool with its own budget; tune each on its own evidence.
+const MAX_CACHE_CHARS = 64 * 1024 * 1024;
+/** Live budget — only tests override it (so eviction tests don't have to
+ *  allocate real multi-hundred-MB strings and OOM parallel vitest workers). */
+let maxCacheChars = MAX_CACHE_CHARS;
+let cacheChars = 0;
+
+/** Approx retained chars of an entry: file before/after + incremental op payloads. */
+function entryChars(entry: CacheEntry): number {
+  let n = 0;
+  for (const group of entry.result.groups) {
+    for (const f of group.files) n += f.before.length + f.after.length;
+  }
+  if (entry.inc) {
+    for (const accum of entry.inc.mainFileMap.values()) {
+      for (const op of accum.ops) {
+        if (op.kind === 'edit') n += op.oldString.length + op.newString.length;
+        else if (op.kind === 'write') n += op.content.length;
+      }
+    }
+  }
+  return n;
+}
 
 /** Shallow-clone a fileMap: new accums + new ops arrays, shared (immutable) op
  *  objects. The cached map must stay main-JSONL-only; per-request additions
@@ -515,15 +550,70 @@ function cacheKey(sessionId: string, host?: string): string {
 }
 
 function cacheGet(key: string): CacheEntry | undefined {
-  return changesCache.get(key);
+  const entry = changesCache.get(key);
+  if (entry) {
+    changesCache.delete(key);
+    changesCache.set(key, entry);
+  }
+  return entry;
+}
+
+function cacheDelete(key: string): void {
+  const prev = changesCache.get(key);
+  if (prev) {
+    cacheChars -= prev.chars ?? 0;
+    changesCache.delete(key);
+  }
+}
+
+/** Test-only: byte-budget accounting + eviction are otherwise unobservable. */
+export function _changesCacheStateForTesting(): { size: number; chars: number; keys: string[] } {
+  return { size: changesCache.size, chars: cacheChars, keys: [...changesCache.keys()] };
+}
+export function _changesCacheSetForTesting(key: string, entry: CacheEntry): void {
+  cacheSet(key, entry);
+}
+export function _changesCacheGetForTesting(key: string): CacheEntry | undefined {
+  return cacheGet(key);
+}
+export function _resetChangesCacheForTesting(): void {
+  changesCache.clear();
+  cacheChars = 0;
+  maxCacheChars = MAX_CACHE_CHARS;
+}
+/** Test-only: shrink the byte budget so eviction tests use KB-scale strings
+ *  instead of allocating real 20-200MB payloads (OOM risk in parallel workers). */
+export function _setChangesCacheBudgetForTesting(chars: number): void {
+  maxCacheChars = chars;
 }
 
 function cacheSet(key: string, entry: CacheEntry): void {
-  changesCache.delete(key);
+  cacheDelete(key);
+  entry.chars = entryChars(entry);
   changesCache.set(key, entry);
-  if (changesCache.size > MAX_CACHE) {
-    const oldest = changesCache.keys().next().value;
-    if (oldest) changesCache.delete(oldest);
+  cacheChars += entry.chars;
+  // Evict LRU until BOTH bounds hold; the just-inserted entry is exempt.
+  for (const oldest of changesCache.keys()) {
+    if (changesCache.size <= MAX_CACHE && cacheChars <= maxCacheChars) break;
+    if (oldest === key) continue;
+    cacheDelete(oldest);
+  }
+}
+
+/** Re-sync one LIVE entry's chars after its `inc.mainFileMap` grew in place
+ *  mid-recompute. Without this, a throw before the request's final cacheSet
+ *  leaves the entry under-accounted against MAX_CACHE_CHARS indefinitely.
+ *  No-op if the entry was concurrently evicted (its chars left the budget
+ *  with it — re-accounting then would corrupt cacheChars). */
+function cacheReaccount(key: string, entry: CacheEntry): void {
+  if (changesCache.get(key) !== entry) return;
+  cacheChars -= entry.chars ?? 0;
+  entry.chars = entryChars(entry);
+  cacheChars += entry.chars;
+  for (const oldest of changesCache.keys()) {
+    if (cacheChars <= maxCacheChars) break;
+    if (oldest === key) continue;
+    cacheDelete(oldest);
   }
 }
 
@@ -679,6 +769,12 @@ async function computeSessionChangesInner(
                 - Buffer.byteLength(lastLine, 'utf-8') - 1;
               prior.lastLineCheck = lineCheckOf(lastLine);
               prior.parsedBytes += Buffer.byteLength(complete, 'utf-8');
+              // The cached entry just grew IN PLACE while it stays live in the
+              // cache. Re-account immediately: a throw later in this request
+              // (subagent/current-file reads) skips the final cacheSet, and a
+              // stale `chars` would under-count this entry against the byte
+              // budget for as long as it lives.
+              if (cached) cacheReaccount(key, cached);
             }
             inc = prior;
             fileMap = cloneFileMap(prior.mainFileMap);

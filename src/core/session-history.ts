@@ -15,12 +15,14 @@ import {
   encodeProjectPath,
   findLocalJsonlPath,
   isSafeForProjectEncoding,
+  mergeSyntheticUserEvents,
   readSessionJsonlContent,
   readSubagentContents,
   readSingleSubagentContent,
   readWorkflowManifest,
   readWorkflowSubagentContent,
   remoteJsonlPath,
+  type ReadSessionResult,
 } from './session-file-reader.js';
 import { accumulateWorkflowProgress, sortedPhases, sortedAgents } from './workflow-progress.js';
 import type { SessionBackgroundTasksPayload, WorkflowPhaseInfo, WorkflowAgentInfo } from './event-types.js';
@@ -37,10 +39,95 @@ const LOCAL_HOME = os.homedir();
 interface ParsedHistoryCacheEntry {
   mtimeMs: number;
   messages: SessionHistoryMessage[];
+  /** Approx retained chars (raw JSONL length proxy) — drives the byte budget. */
+  approxChars: number;
+  /** Incremental append-read state (see readSessionHistory). Absent when the
+   *  last read couldn't establish it (no resolvable path / stat failed). */
+  inc?: HistoryIncrementalState;
+}
+
+/**
+ * Incremental append-read state. The canonical JSONL is append-only in normal
+ * operation (/compact rewrites it — detected and handled), so instead of
+ * re-reading + re-parsing the whole file on every mtime change (7,230 reads /
+ * 167 GB / day observed; the 233 MB whale alone was fully re-read 467×,
+ * culminating in a V8-heap-OOM crash loop), we remember where parsing stopped
+ * and read only the appended bytes.
+ *
+ * SEGMENTED PARSE MODEL: parseSessionMessages has cross-line passes (Pattern
+ * A/B enqueue matching, batched-twin joins, message.id block merging, tool
+ * result pairing), so an appended region can NOT be parsed alone. Instead the
+ * file is split at a line boundary into a frozen PREFIX and a live TAIL; the
+ * tail segment is re-parsed as one unit on every delta:
+ *   messages = prefixMessages ++ parse(tailText + appendedBytes)
+ *
+ * Seeding is SELF-VALIDATING: after a normal full read+parse, the candidate
+ * tail segment is parsed separately and its messages are matched (by msgId,
+ * pairwise) against the tail of the full-parse result. Only when segmented ==
+ * full is the state kept — any cross-boundary hazard (an enqueue whose
+ * Pattern-A twin sits across the boundary, a message.id merged across it)
+ * fails the comparison and seeding is skipped for this round; the next full
+ * read retries at a different (grown) boundary.
+ *
+ * When the tail grows past TAIL_SEGMENT_ROLL_BYTES, the state is dropped and
+ * the next read is a normal full read that re-seeds — a full re-read every
+ * ~3 MB of appended content instead of on every mtime change (measured before
+ * this fix: 7,230 full reads / 167 GB / day; the 233 MB whale re-read 467×).
+ *
+ * Rewrite safety: shrink (size < parsedBytes) invalidates outright; a
+ * same-or-grown rewrite (/compact) is caught by re-reading from the last
+ * known line start and verifying the line still matches `lastLineCheck`
+ * (same trick as session-changes.ts). Mismatch → full re-parse.
+ */
+interface HistoryIncrementalState {
+  /** Absolute path used for range reads (tilde form ok — daemon expands). */
+  filePath: string;
+  /** Byte offset of the START of the frozen-prefix/tail boundary line. */
+  tailStartByte: number;
+  /** Messages parsed from bytes [0, tailStartByte) — never re-parsed. */
+  prefixMessages: SessionHistoryMessage[];
+  /** Byte offset just past the last parsed '\n' (never mid-line). */
+  parsedBytes: number;
+  /** Start byte of the last parsed line (re-read for rewrite verification). */
+  lastLineStart: number;
+  /** Cheap identity check of the last parsed line. */
+  lastLineCheck: { len: number; head: string; tail: string } | null;
+  /** Raw text of the current tail segment [tailStartByte, parsedBytes). */
+  tailText: string;
+  /** tool_use ids in the FROZEN PREFIX that still lack a result (long-running
+   *  tools, background Task agents). If an appended line references one (its
+   *  tool_result finally arrived, or a <task-notification> proves the agent
+   *  stopped), the segmented parse can't attach it across the boundary —
+   *  incremental bails to a full read for that (rare) event. */
+  pendingToolIds: string[];
+}
+
+/** Tail segment re-parsed on every delta; rolled into the prefix past this. */
+const TAIL_SEGMENT_ROLL_BYTES = 4 * 1024 * 1024;
+/** After a roll, keep this much as the new tail (fresh lookbehind window). */
+const TAIL_SEGMENT_KEEP_BYTES = 1 * 1024 * 1024;
+
+function historyLineCheckOf(line: string): { len: number; head: string; tail: string } {
+  return { len: line.length, head: line.slice(0, 64), tail: line.slice(-64) };
+}
+function historyLineMatches(line: string, check: { len: number; head: string; tail: string }): boolean {
+  return line.length === check.len && line.slice(0, 64) === check.head && line.slice(-64) === check.tail;
 }
 
 const MAX_HISTORY_CACHE = 30;
+// Byte budget across ALL entries. Entry count alone is not a bound: transcripts
+// range 4 KB → 164 MB, so 30 whale sessions once held ~600 MB of parsed messages
+// and the resulting major-GC pauses froze the event loop for 8-50s (the
+// "Quick Session not loading" incident). A whale bigger than the whole budget is
+// still cached (evicting everything else) — the active session is polled
+// repeatedly and re-reading 164 MB per poll would be worse than caching it.
+// 64 Mi-chars ≈ 128 MB retained (UTF-16) — small enough that a full major GC
+// stays sub-second, large enough for one whale + a few normal sessions. The
+// same figure appears INDEPENDENTLY in session-changes.ts (its own cache, its
+// own budget); they don't share a pool, so tune each on its own evidence.
+const MAX_HISTORY_CACHE_CHARS = 64 * 1024 * 1024;
 const parsedHistoryCache = new Map<string, ParsedHistoryCacheEntry>();
+let historyCacheChars = 0;
 
 /**
  * Resolved remote path cache — sessionId@host → full remote path of the JSONL
@@ -71,7 +158,13 @@ function cacheKey(sessionId: string, host?: string): string {
 }
 
 function cacheGet(sessionId: string, host?: string): ParsedHistoryCacheEntry | undefined {
-  return parsedHistoryCache.get(cacheKey(sessionId, host));
+  const key = cacheKey(sessionId, host);
+  const entry = parsedHistoryCache.get(key);
+  if (entry) {
+    parsedHistoryCache.delete(key);
+    parsedHistoryCache.set(key, entry);
+  }
+  return entry;
 }
 
 /**
@@ -84,13 +177,40 @@ export function getCachedSessionHistory(sessionId: string, host?: string): Sessi
   return cacheGet(sessionId, host)?.messages;
 }
 
+function cacheDelete(key: string): void {
+  const prev = parsedHistoryCache.get(key);
+  if (prev) {
+    historyCacheChars -= prev.approxChars;
+    parsedHistoryCache.delete(key);
+  }
+}
+
+/** Test-only: byte-budget accounting + eviction are otherwise unobservable. */
+export function _historyCacheStateForTesting(): { size: number; chars: number; keys: string[] } {
+  return { size: parsedHistoryCache.size, chars: historyCacheChars, keys: [...parsedHistoryCache.keys()] };
+}
+export function _historyCacheSetForTesting(sessionId: string, entry: ParsedHistoryCacheEntry, host?: string): void {
+  cacheSet(sessionId, entry, host);
+}
+export function _historyCacheGetForTesting(sessionId: string, host?: string): ParsedHistoryCacheEntry | undefined {
+  return cacheGet(sessionId, host);
+}
+export function _resetHistoryCacheForTesting(): void {
+  parsedHistoryCache.clear();
+  historyCacheChars = 0;
+}
+
 function cacheSet(sessionId: string, entry: ParsedHistoryCacheEntry, host?: string): void {
   const key = cacheKey(sessionId, host);
-  parsedHistoryCache.delete(key);
+  cacheDelete(key);
   parsedHistoryCache.set(key, entry);
-  if (parsedHistoryCache.size > MAX_HISTORY_CACHE) {
-    const oldest = parsedHistoryCache.keys().next().value;
-    if (oldest) parsedHistoryCache.delete(oldest);
+  historyCacheChars += entry.approxChars;
+  // Evict LRU until BOTH bounds hold. The just-inserted entry is exempt (it may
+  // alone exceed the budget — see MAX_HISTORY_CACHE_CHARS comment).
+  for (const oldest of parsedHistoryCache.keys()) {
+    if (parsedHistoryCache.size <= MAX_HISTORY_CACHE && historyCacheChars <= MAX_HISTORY_CACHE_CHARS) break;
+    if (oldest === key) continue;
+    cacheDelete(oldest);
   }
 }
 
@@ -169,6 +289,13 @@ export interface SessionHistoryMessage {
   /** Walnut-generated message ID for deterministic dedup of optimistic user messages.
    *  Present on synthetic user events written by writeSyntheticUserEvent(). */
   walnutMessageId?: string;
+  /** True for CLI-injected user lines the human did NOT type (skill content
+   *  dumps, compaction continuation summaries, image-read metadata, auto
+   *  "Continue" prompts). Detected via the CLI's own flags — canonical JSONL
+   *  marks them isMeta/isCompactSummary/isVisibleInTranscriptOnly, stream-json
+   *  stdout maps all of those to isSynthetic (QueryEngine emit path). The UI
+   *  renders these as a collapsed context row, never a "You" bubble. */
+  injected?: boolean;
 }
 
 export interface PaginationMeta {
@@ -188,6 +315,14 @@ interface RawJsonlLine {
   parent_tool_use_id?: string | null;
   /** Walnut-generated message ID on synthetic user events (subtype='walnut-injected'). */
   walnutMessageId?: string;
+  // CLI-injected user-line flags. Canonical JSONL writes isMeta (skill dumps,
+  // image metadata, agent continuations) and isCompactSummary/
+  // isVisibleInTranscriptOnly (compaction summaries); the CLI's stream-json
+  // stdout (daemon stream files) folds all of them into isSynthetic.
+  isMeta?: boolean;
+  isSynthetic?: boolean;
+  isCompactSummary?: boolean;
+  isVisibleInTranscriptOnly?: boolean;
   // queue-operation fields (FIFO-injected user messages)
   operation?: string;
   content?: string;
@@ -266,6 +401,16 @@ export function transformInjectedUserText(text: string): string | null | undefin
     return `[Teammate${id ? ` ${id}` : ''}] ${body}`;
   }
   return undefined;
+}
+
+/** CLI-flagged injected user line (not typed by the human). Canonical JSONL:
+ *  isMeta / isCompactSummary / isVisibleInTranscriptOnly; stream-json stdout
+ *  folds all of those into isSynthetic. walnut-injected synthetic events are
+ *  handled separately (walnutMessageId dedup) — excluded here. */
+function isInjectedLine(raw: RawJsonlLine): boolean {
+  if (raw.subtype === 'walnut-injected') return false;
+  return raw.isMeta === true || raw.isSynthetic === true
+    || raw.isCompactSummary === true || raw.isVisibleInTranscriptOnly === true;
 }
 
 /**
@@ -348,6 +493,7 @@ export function parseSessionMessages(content: string): SessionHistoryMessage[] {
     usage?: { input_tokens: number; output_tokens: number };
     parentToolUseId?: string;
     walnutMessageId?: string;
+    injected?: boolean;
     systemVariant?: 'compact' | 'error' | 'info';
     contentBlocks: Array<{
       type: string;
@@ -611,6 +757,7 @@ export function parseSessionMessages(content: string): SessionHistoryMessage[] {
       if (raw.parent_tool_use_id && !existing.parentToolUseId) {
         existing.parentToolUseId = raw.parent_tool_use_id;
       }
+      if (isInjectedLine(raw)) existing.injected = true;
     } else {
       messageMap.set(msgId, {
         role: raw.message.role,
@@ -619,6 +766,7 @@ export function parseSessionMessages(content: string): SessionHistoryMessage[] {
         usage: raw.message.usage,
         parentToolUseId: raw.parent_tool_use_id ?? undefined,
         walnutMessageId: raw.walnutMessageId ?? undefined,
+        injected: isInjectedLine(raw) || undefined,
         contentBlocks: raw.message.content
           ? (typeof raw.message.content === 'string'
             ? [{ type: 'text' as const, text: raw.message.content }]
@@ -822,6 +970,7 @@ export function parseSessionMessages(content: string): SessionHistoryMessage[] {
       ...(msg.model ? { model: msg.model } : {}),
       ...(msg.usage ? { usage: msg.usage } : {}),
       ...(msg.walnutMessageId ? { walnutMessageId: msg.walnutMessageId } : {}),
+      ...(msg.injected && msg.role === 'user' ? { injected: true } : {}),
       ...(msg.systemVariant ? { systemVariant: msg.systemVariant } : {}),
     });
     resultParentIds.push(msg.parentToolUseId);
@@ -960,6 +1109,255 @@ export interface ReadHistoryOptions {
   skipSubagents?: boolean;
 }
 
+/**
+ * Incremental append-read (see HistoryIncrementalState). Reads only the bytes
+ * appended since the last parse, re-parses the tail segment, and splices the
+ * result onto the frozen prefix. Returns null (and clears the state) on any
+ * hazard — rewrite detected, transport failure, tail overgrown — so the caller
+ * falls back to a normal full read.
+ */
+async function tryIncrementalHistoryRead(
+  sessionId: string,
+  host: string | undefined,
+  cached: ParsedHistoryCacheEntry,
+  newMtimeMs: number,
+  reader: InstanceType<(typeof import('./daemon-file-reader.js'))['DaemonFileReader']>,
+): Promise<SessionHistoryMessage[] | null> {
+  const inc = cached.inc!;
+  try {
+    // Re-read from the last parsed line's start: verifies the file wasn't
+    // rewritten in place (/compact) AND picks up the appended bytes in one RPC.
+    const res = await reader.readFileRange(inc.filePath, inc.lastLineStart);
+    if (res === null) { cached.inc = undefined; return null; }
+    const reread = res.content;
+    // The re-read starts at the last parsed LINE's start, so its first line is
+    // that line (byte offsets vs char offsets: slicing at the first '\n' is
+    // char-safe; a byte-difference slice would corrupt on multi-byte chars).
+    const firstLineEnd = reread.indexOf('\n');
+    const firstLine = firstLineEnd >= 0 ? reread.slice(0, firstLineEnd) : reread;
+    if (inc.lastLineCheck && !historyLineMatches(firstLine, inc.lastLineCheck)) {
+      // Rewrite (or offset drift) — full re-parse next.
+      cached.inc = undefined;
+      return null;
+    }
+    // Appended region = everything past that verified line.
+    const appended = firstLineEnd >= 0 ? reread.slice(firstLineEnd + 1) : '';
+    // Only complete (newline-terminated) lines advance the parse state; a
+    // trailing partial line is included in THIS response's parse but not in
+    // the persisted offsets (it will be re-read complete next time).
+    const lastNl = appended.lastIndexOf('\n');
+    const completePart = lastNl >= 0 ? appended.slice(0, lastNl + 1) : '';
+    const partialTail = lastNl >= 0 ? appended.slice(lastNl + 1) : appended;
+
+    const newTailText = inc.tailText + completePart;
+    if (Buffer.byteLength(newTailText, 'utf-8') > TAIL_SEGMENT_ROLL_BYTES) {
+      // Tail overgrown — drop the state; next read is a full read that re-seeds
+      // with a fresh boundary. (One full read per ~TAIL_SEGMENT_ROLL_BYTES of
+      // appended content, vs one per mtime change before this existed.)
+      cached.inc = undefined;
+      return null;
+    }
+
+    // Cross-boundary tool completion: a prefix tool_use finally got its result
+    // (or its background agent stopped). The segmented parse can't attach it —
+    // bail to a full read for this (rare) event.
+    if (inc.pendingToolIds.length && appended) {
+      for (const id of inc.pendingToolIds) {
+        if (appended.includes(id)) {
+          cached.inc = undefined;
+          return null;
+        }
+      }
+    }
+
+    // Parse tail segment (+ any partial line + synthetic user events) fresh.
+    const tailWithPartial = partialTail ? newTailText + partialTail : newTailText;
+    const merged = await mergeSyntheticUserEvents(sessionId, tailWithPartial);
+    const tailMessages = parseSessionMessages(merged);
+    const messages = [...inc.prefixMessages, ...tailMessages];
+
+    try {
+      const { bindEchoClaims } = await import('./echo-claims.js');
+      bindEchoClaims(sessionId, messages);
+    } catch { /* best-effort */ }
+
+    // Advance persisted state (complete lines only).
+    if (completePart) {
+      const lastLineStartInPart = completePart.lastIndexOf('\n', completePart.length - 2) + 1;
+      const lastLine = completePart.slice(lastLineStartInPart, -1);
+      // parsedBytes previously ended just past the verified line's '\n';
+      // completePart begins right after it.
+      inc.parsedBytes += Buffer.byteLength(completePart, 'utf-8');
+      inc.lastLineStart = inc.parsedBytes - Buffer.byteLength(lastLine, 'utf-8') - 1;
+      inc.lastLineCheck = historyLineCheckOf(lastLine);
+      inc.tailText = newTailText;
+    }
+    const approxChars = inc.prefixMessages.reduce((n, m) => n + (m.text?.length ?? 0), 0) + newTailText.length;
+    cacheSet(sessionId, { mtimeMs: newMtimeMs, messages, approxChars, inc }, host);
+
+    // Keep the restart-survival disk cache fresh (same as the full-read path).
+    if (messages.length > 0) {
+      import('./history-disk-cache.js').then(({ writeHistoryCache }) => {
+        writeHistoryCache(sessionId, messages);
+      }).catch(() => {});
+    }
+    return messages;
+  } catch (err) {
+    log.session.debug('incremental history read failed — falling back to full read', {
+      sessionId, error: err instanceof Error ? err.message : String(err),
+    });
+    cached.inc = undefined;
+    return null;
+  }
+}
+
+/**
+ * Seed incremental state after a successful full read+parse. Self-validating:
+ * the candidate tail segment is parsed separately and compared (by msgId,
+ * pairwise) against the tail of the full parse — mismatch means a cross-line
+ * pass spanned the boundary, so seeding is skipped (correctness first; a later
+ * full read retries with a different boundary).
+ */
+function seedIncrementalState(
+  sessionId: string,
+  result: ReadSessionResult,
+  fullMessages: SessionHistoryMessage[],
+  statPath: string | undefined,
+): HistoryIncrementalState | undefined {
+  const filePath = result.resolvedRemotePath ?? statPath;
+  if (!filePath) return undefined;
+  // Byte offsets only map into the canonical prefix of `content` (synthetic
+  // stream events are appended past it).
+  const canonical = result.canonicalChars !== undefined
+    ? result.content.slice(0, result.canonicalChars)
+    : result.content;
+  if (!canonical.endsWith('\n') && canonical.length > 0) {
+    // Trailing partial line — boundaries would be ambiguous; skip this round.
+    // (Rare: the CLI writes whole lines; a mid-write race lands here.)
+    return undefined;
+  }
+  // Candidate boundary: start of the line region occupying the last
+  // TAIL_SEGMENT_KEEP_BYTES (in chars as a proxy; exact byte math done below).
+  const keepFrom = Math.max(0, canonical.length - TAIL_SEGMENT_KEEP_BYTES);
+  const boundaryChar = keepFrom === 0 ? 0 : canonical.indexOf('\n', keepFrom) + 1;
+  if (boundaryChar <= 0 && keepFrom > 0) return undefined; // no newline past keepFrom
+  const tailText = canonical.slice(boundaryChar);
+  const prefixText = canonical.slice(0, boundaryChar);
+
+  // Self-validation: prefix-parse ++ tail-parse must equal the full parse.
+  // fullMessages includes synthetic events parsed from the merged content; the
+  // segmented model reproduces that by re-merging synthetics into the tail.
+  let prefixMessages: SessionHistoryMessage[];
+  let tailMessages: SessionHistoryMessage[];
+  try {
+    prefixMessages = boundaryChar > 0 ? parseSessionMessages(prefixText) : [];
+    const syntheticSuffix = result.canonicalChars !== undefined
+      ? result.content.slice(result.canonicalChars)
+      : '';
+    tailMessages = parseSessionMessages(tailText + syntheticSuffix);
+  } catch {
+    return undefined;
+  }
+  if (prefixMessages.length + tailMessages.length !== fullMessages.length) return undefined;
+  for (let i = 0; i < fullMessages.length; i++) {
+    const seg = i < prefixMessages.length ? prefixMessages[i] : tailMessages[i - prefixMessages.length];
+    const full = fullMessages[i];
+    if (seg.msgId !== full.msgId || seg.role !== full.role || seg.text !== full.text) return undefined;
+    // Tools must match too — a tool_use in the prefix whose tool_result line
+    // sits in the tail would silently lose its result in the segmented parse
+    // (same text, different tool state). Compare name/result/error pairwise.
+    const segTools = seg.tools ?? [];
+    const fullTools = full.tools ?? [];
+    if (segTools.length !== fullTools.length) return undefined;
+    for (let j = 0; j < fullTools.length; j++) {
+      if (segTools[j].name !== fullTools[j].name
+        || segTools[j].result !== fullTools[j].result
+        || segTools[j].isError !== fullTools[j].isError
+        || segTools[j].bgTaskFinished !== fullTools[j].bgTaskFinished) return undefined;
+    }
+  }
+
+  // Prefix tool_use ids with no result yet — appended lines mentioning one
+  // force a full re-read (see HistoryIncrementalState.pendingToolIds).
+  const pendingToolIds: string[] = [];
+  for (const m of prefixMessages) {
+    for (const t of m.tools ?? []) {
+      if (t.toolUseId && t.result === undefined) pendingToolIds.push(t.toolUseId);
+    }
+  }
+
+  const parsedBytes = Buffer.byteLength(canonical, 'utf-8');
+  const lastLineStartChar = canonical.lastIndexOf('\n', canonical.length - 2) + 1;
+  const lastLine = canonical.slice(lastLineStartChar, -1);
+  return {
+    filePath,
+    tailStartByte: Buffer.byteLength(prefixText, 'utf-8'),
+    // Frozen prefix comes from the SEGMENTED parse (validated identical) so the
+    // cached array is internally consistent with future tail re-parses.
+    prefixMessages,
+    parsedBytes,
+    lastLineStart: parsedBytes - Buffer.byteLength(lastLine, 'utf-8') - 1,
+    lastLineCheck: canonical.length > 0 ? historyLineCheckOf(lastLine) : null,
+    tailText,
+    pendingToolIds,
+  };
+}
+
+/**
+ * Tail-bounded history read for consumers that only need RECENT messages
+ * (QMD content indexing keeps ≤50 KB; the phone transcript sweep keeps the
+ * last 100 messages). For files ≤ maxTailBytes this is a plain
+ * readSessionHistory (shares its cache + incremental path). For whales it
+ * range-reads ONLY the last maxTailBytes and parses that window — a 233 MB
+ * session costs one 4 MB read instead of a full transfer (the pre-fix sweep
+ * pulled 167 GB/day through full reads).
+ *
+ * Messages that started before the window are absent — acceptable by contract
+ * (callers slice the tail anyway). Returns null when the tail read fails
+ * (caller decides whether to fall back to the full read).
+ */
+export async function readSessionHistoryTail(
+  sessionId: string,
+  cwd?: string,
+  host?: string,
+  outputFile?: string,
+  maxTailBytes = 4 * 1024 * 1024,
+): Promise<SessionHistoryMessage[] | null> {
+  const daemonHost = host ?? '__local__';
+  let statPath: string | undefined;
+  if (cwd && isSafeForProjectEncoding(cwd)) {
+    statPath = remoteJsonlPath(sessionId, cwd);
+  } else {
+    statPath = getResolvedRemotePath(sessionId, daemonHost);
+  }
+  if (statPath) {
+    try {
+      const { DaemonFileReader } = await import('./daemon-file-reader.js');
+      const reader = new DaemonFileReader(daemonHost);
+      const st = await reader.stat(statPath);
+      if (st && st.size > maxTailBytes) {
+        // Serve from the shared cache when fresh — same data, zero I/O.
+        const cached = cacheGet(sessionId, host);
+        if (cached && cached.mtimeMs === st.mtimeMs) return cached.messages;
+        const res = await reader.readFileRange(statPath, st.size - maxTailBytes);
+        if (res === null) return null;
+        // Skip the first (almost certainly partial) line.
+        const nl = res.content.indexOf('\n');
+        const windowText = nl >= 0 ? res.content.slice(nl + 1) : '';
+        const merged = await mergeSyntheticUserEvents(sessionId, windowText);
+        return parseSessionMessages(merged);
+      }
+    } catch (err) {
+      log.session.debug('tail history stat/read failed — falling back to full read', {
+        sessionId, host: daemonHost,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  // Small file (or no stat path): the normal cached/incremental path is cheap.
+  return readSessionHistory(sessionId, cwd, host, outputFile, { skipSubagents: true });
+}
+
 export async function readSessionHistory(sessionId: string, cwd?: string, host?: string, outputFile?: string, options?: ReadHistoryOptions): Promise<SessionHistoryMessage[]> {
   let messages: SessionHistoryMessage[] | null = null;
 
@@ -977,9 +1375,9 @@ export async function readSessionHistory(sessionId: string, cwd?: string, host?:
   //   2. Otherwise (cwd missing or hashed by Claude Code) → a previously resolved
   //      full path discovered via a prior full read.
   let mtimeMs: number | undefined;
+  let statPath: string | undefined;
   {
     const daemonHost = host ?? '__local__';
-    let statPath: string | undefined;
     if (cwd && isSafeForProjectEncoding(cwd)) {
       statPath = remoteJsonlPath(sessionId, cwd);
     } else {
@@ -998,6 +1396,19 @@ export async function readSessionHistory(sessionId: string, cwd?: string, host?:
             // now, so cached messages don't include childMessages; no mutation concern).
             return cached.messages;
           }
+          // mtime CHANGED but incremental state exists and the file only grew:
+          // read + parse just the appended bytes instead of the whole file.
+          if (cached?.inc && options?.skipSubagents && statResult.size >= cached.inc.parsedBytes) {
+            const incMessages = await tryIncrementalHistoryRead(
+              sessionId, host, cached, statResult.mtimeMs, reader,
+            );
+            if (incMessages) return incMessages;
+            // Incremental failed (rewrite detected / transport) — state was
+            // dropped; fall through to a normal full read that re-seeds.
+          } else if (cached?.inc && statResult.size < cached.inc.parsedBytes) {
+            // Shrink = /compact rewrote the file. Invalidate incremental state.
+            cached.inc = undefined;
+          }
         }
       } catch (err) {
         // stat failed (old daemon without fs.stat, transport error, or local
@@ -1012,6 +1423,8 @@ export async function readSessionHistory(sessionId: string, cwd?: string, host?:
   }
 
   const result = await readSessionJsonlContent(sessionId, cwd, host, outputFile);
+  // Raw JSONL length — the cache's byte-budget proxy for the parsed messages.
+  const sourceChars = result?.content.length ?? 0;
   if (result) {
     // Remember the resolved path so the next read can use the mtime fast-path
     // even when cwd is unsafe for our canonical path encoding. Keyed by the
@@ -1120,7 +1533,14 @@ export async function readSessionHistory(sessionId: string, cwd?: string, host?:
   // Only cache when skipSubagents — attachSubagentMessages mutates tool.childMessages
   // in place, so caching with children attached would share mutable state across consumers.
   if (mtimeMs !== undefined && options?.skipSubagents) {
-    cacheSet(sessionId, { mtimeMs, messages }, host);
+    // Seed incremental append-read state so future mtime changes read only the
+    // appended bytes (self-validating; undefined on any boundary hazard).
+    // Only canonical daemon reads qualify — stream/outputFile fallbacks have no
+    // stable byte-offset mapping to the canonical file.
+    const inc = (result && (result.source === 'local' || result.source === 'remote'))
+      ? seedIncrementalState(sessionId, result, messages, statPath)
+      : undefined;
+    cacheSet(sessionId, { mtimeMs, messages, approxChars: sourceChars, ...(inc ? { inc } : {}) }, host);
   }
 
   // Persist to disk cache (fire-and-forget) so history survives app restarts

@@ -103,4 +103,93 @@ describe('QMD incremental retry queue', () => {
 
     await queue.stop();
   });
+
+  it('holds re-syncs of the same ID until minIntervalMs elapses, then flushes the latest change', async () => {
+    vi.useFakeTimers();
+    try {
+      const dispatch = vi.fn(async () => undefined);
+      const queue = createQmdIncrementalQueue({
+        debounceMs: 10,
+        minIntervalMs: 1_000,
+        dispatch,
+      });
+
+      // First sync of an ID dispatches at debounce cadence (no prior sync).
+      queue.enqueue('session-a', 'sync');
+      await vi.advanceTimersByTimeAsync(10);
+      expect(dispatch).toHaveBeenCalledTimes(1);
+
+      // Re-syncs inside the cooldown are held, not dispatched and not lost.
+      queue.enqueue('session-a', 'sync');
+      await vi.advanceTimersByTimeAsync(500);
+      expect(dispatch).toHaveBeenCalledTimes(1);
+
+      // Cooldown expiry flushes the held change exactly once.
+      await vi.advanceTimersByTimeAsync(600);
+      expect(dispatch).toHaveBeenCalledTimes(2);
+      expect(dispatch).toHaveBeenLastCalledWith(['session-a']);
+
+      await queue.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cooldown holds one ID without delaying other IDs in the same batch', async () => {
+    vi.useFakeTimers();
+    try {
+      const dispatch = vi.fn(async () => undefined);
+      const queue = createQmdIncrementalQueue({
+        debounceMs: 10,
+        minIntervalMs: 1_000,
+        dispatch,
+      });
+
+      queue.enqueue('session-a', 'sync');
+      await vi.advanceTimersByTimeAsync(10);
+      expect(dispatch).toHaveBeenCalledTimes(1);
+
+      // session-a is cooling; a fresh session-b must not be blocked by it.
+      queue.enqueue('session-a', 'sync');
+      queue.enqueue('session-b', 'sync');
+      await vi.advanceTimersByTimeAsync(10);
+      expect(dispatch).toHaveBeenCalledTimes(2);
+      expect(dispatch).toHaveBeenLastCalledWith(['session-b']);
+
+      // session-a still flushes after its cooldown.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(dispatch).toHaveBeenCalledTimes(3);
+      expect(dispatch).toHaveBeenLastCalledWith(['session-a']);
+
+      await queue.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('deletes bypass the cooldown', async () => {
+    vi.useFakeTimers();
+    try {
+      const dispatch = vi.fn(async () => undefined);
+      const queue = createQmdIncrementalQueue({
+        debounceMs: 10,
+        minIntervalMs: 60_000,
+        dispatch,
+      });
+
+      queue.enqueue('session-a', 'sync');
+      await vi.advanceTimersByTimeAsync(10);
+      expect(dispatch).toHaveBeenCalledTimes(1);
+
+      // Delete of a just-synced ID must not wait a minute.
+      queue.enqueue('session-a', 'delete');
+      await vi.advanceTimersByTimeAsync(10);
+      expect(dispatch).toHaveBeenCalledTimes(2);
+      expect(dispatch).toHaveBeenLastCalledWith(['session-a']);
+
+      await queue.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

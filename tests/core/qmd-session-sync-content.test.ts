@@ -57,13 +57,16 @@ const localMessages: SessionHistoryMessage[] = [
   { role: 'assistant', text: 'use buildIndexedContent then embed', timestamp: '2026-05-05T10:01:00.000Z',
     tools: [{ name: 'Read', input: { file_path: '/x' }, result: 'SECRET_TOOL_RESULT' }] },
 ];
-vi.mock('../../src/core/session-history.js', () => ({
-  readSessionHistory: vi.fn(async (sid: string) => {
+vi.mock('../../src/core/session-history.js', () => {
+  const read = vi.fn(async (sid: string) => {
     if (sid === 'boom') throw new Error('jsonl read failed');
     if (sid === 'empty') return [];
     return localMessages;
-  }),
-}));
+  });
+  // syncSession reads via the tail-bounded variant (whale-safe); same contract
+  // here since fixtures are tiny.
+  return { readSessionHistory: read, readSessionHistoryTail: read };
+});
 
 vi.mock('../../src/providers/acp-session-history.js', () => ({
   readAcpSessionHistoryState: vi.fn(async () => ({

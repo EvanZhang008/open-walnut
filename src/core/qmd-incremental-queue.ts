@@ -9,6 +9,16 @@ export interface QmdIncrementalQueueOptions {
   debounceMs?: number;
   retryBaseMs?: number;
   retryMaxMs?: number;
+  /** Per-ID cooldown: after a successful sync of an ID, further syncs of that
+   *  SAME ID are held until the cooldown elapses (they are never dropped — the
+   *  latest change flushes once the window opens). Deletes bypass the cooldown.
+   *  0 (default) = flush at debounce cadence, the pre-cooldown behavior.
+   *
+   *  Why: an active session emits session:result every turn; each flush makes
+   *  the index worker re-read + re-embed the whole conversation (observed: one
+   *  46MB session re-embedded 62×/day with 5GB worker RSS peaks). Search
+   *  freshness doesn't need turn-level granularity. */
+  minIntervalMs?: number;
   dispatch: (ids: string[]) => Promise<void>;
   onSuccess?: (counts: { synced: number; deleted: number }) => void;
   onError?: (error: unknown, retryInMs: number) => void;
@@ -31,7 +41,9 @@ export function createQmdIncrementalQueue(
   const debounceMs = Math.max(0, options.debounceMs ?? 2_000);
   const retryBaseMs = Math.max(0, options.retryBaseMs ?? 1_000);
   const retryMaxMs = Math.max(retryBaseMs, options.retryMaxMs ?? 30_000);
+  const minIntervalMs = Math.max(0, options.minIntervalMs ?? 0);
   const pending = new Map<string, PendingChange>();
+  const lastSyncedAt = new Map<string, number>();
   let generation = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let inFlight: Promise<void> | null = null;
@@ -46,13 +58,36 @@ export function createQmdIncrementalQueue(
     }, delayMs);
   }
 
+  /** Cooldown remaining for an ID; 0 = dispatchable now. Deletes always pass —
+   *  removing a deleted entity from the index must not wait. */
+  function holdMsFor(id: string, change: PendingChange, now: number): number {
+    if (minIntervalMs === 0 || change.operation === 'delete') return 0;
+    const last = lastSyncedAt.get(id);
+    if (last === undefined) return 0;
+    return Math.max(0, last + minIntervalMs - now);
+  }
+
   async function flush(): Promise<void> {
     if (stopped || inFlight || pending.size === 0) {
       await inFlight;
       return;
     }
 
-    const snapshot = new Map(pending);
+    // Partition by cooldown: dispatch ready IDs now, leave held IDs pending
+    // (their latest generation is preserved) and wake when the earliest
+    // cooldown expires.
+    const now = Date.now();
+    const snapshot = new Map<string, PendingChange>();
+    let earliestHold = Infinity;
+    for (const [id, change] of pending) {
+      const hold = holdMsFor(id, change, now);
+      if (hold <= 0) snapshot.set(id, change);
+      else earliestHold = Math.min(earliestHold, hold);
+    }
+    if (snapshot.size === 0) {
+      if (earliestHold !== Infinity) schedule(earliestHold);
+      return;
+    }
     let retryDelay = debounceMs;
     const run = (async () => {
       // Yield once so inFlight is assigned before a synchronously throwing
@@ -60,7 +95,10 @@ export function createQmdIncrementalQueue(
       await Promise.resolve();
       try {
         await options.dispatch([...snapshot.keys()]);
+        const syncedAt = Date.now();
         for (const [id, sent] of snapshot) {
+          if (sent.operation === 'sync') lastSyncedAt.set(id, syncedAt);
+          else lastSyncedAt.delete(id);
           if (pending.get(id)?.generation === sent.generation) {
             pending.delete(id);
           }

@@ -49,6 +49,32 @@ export class DaemonFileReader implements SessionFileReader {
   /** Per-chunk request size for fs.readRange (well under any proxy limit). */
   private static CHUNK_SIZE = 1024 * 1024
 
+  /** Global gate on concurrent WHOLE-FILE chunked reads. A single whale JSONL
+   *  (233MB observed) transiently allocates ~4× its size on the event loop
+   *  (base64 chunks + Buffer.concat + utf-8 string); several in flight at once
+   *  is exactly the V8 heap OOM crash loop of 2026-07-24 (7 SIGABRTs in 11min,
+   *  FatalProcessOutOfMemory). Two at a time keeps the worst transient bounded
+   *  while still letting a slow remote read overlap a local one. Range/tail
+   *  reads are NOT gated — they're bounded by their window size. */
+  private static readonly MAX_CONCURRENT_FULL_READS = 2
+  private static fullReadsInFlight = 0
+  private static fullReadWaiters: Array<() => void> = []
+
+  private static async acquireFullReadSlot(): Promise<void> {
+    if (DaemonFileReader.fullReadsInFlight < DaemonFileReader.MAX_CONCURRENT_FULL_READS) {
+      DaemonFileReader.fullReadsInFlight++
+      return
+    }
+    await new Promise<void>((resolve) => DaemonFileReader.fullReadWaiters.push(resolve))
+    DaemonFileReader.fullReadsInFlight++
+  }
+
+  private static releaseFullReadSlot(): void {
+    DaemonFileReader.fullReadsInFlight--
+    const next = DaemonFileReader.fullReadWaiters.shift()
+    if (next) next()
+  }
+
   async readFile(remotePath: string): Promise<string | null> {
     await this.resolve()
     const conn = await getDaemonConnection(this.host, this.sshTarget!)
@@ -147,12 +173,17 @@ export class DaemonFileReader implements SessionFileReader {
   }
 
   private async readFileChunked(remotePath: string, size: number): Promise<string | null> {
-    const result = await this.readFileRange(remotePath, 0)
-    if (result === null) return null
-    log.session.info('DaemonFileReader: chunked read complete', {
-      host: this.host, path: remotePath, fileSize: result.fileSize, chars: result.content.length, statSize: size,
-    })
-    return result.content
+    await DaemonFileReader.acquireFullReadSlot()
+    try {
+      const result = await this.readFileRange(remotePath, 0)
+      if (result === null) return null
+      log.session.info('DaemonFileReader: chunked read complete', {
+        host: this.host, path: remotePath, fileSize: result.fileSize, chars: result.content.length, statSize: size,
+      })
+      return result.content
+    } finally {
+      DaemonFileReader.releaseFullReadSlot()
+    }
   }
 
   /**

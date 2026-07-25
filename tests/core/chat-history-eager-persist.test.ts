@@ -21,6 +21,7 @@ import {
 } from '../../src/core/chat-history.js';
 import { WALNUT_HOME, conversationFile } from '../../src/constants.js';
 import { getActiveConversationId } from '../../src/core/conversations.js';
+import { listNotifications } from '../../src/core/notifications/store.js';
 import type { MessageParam } from '../../src/agent/model.js';
 
 // Chat storage is conversation-scoped: inject the General agent's active
@@ -107,23 +108,25 @@ describe('addAIMessages — dedup guard', () => {
 });
 
 describe('recoverOrphanedUserMessage', () => {
-  it('adds a notification when last AI entry is an orphaned user message with turnId', async () => {
+  it('adds a feed notification without polluting chat when the last AI entry is orphaned', async () => {
     const turnId = crypto.randomUUID();
     await addUserMessage('Interrupted', { turnId });
 
     await recoverOrphanedUserMessage();
 
-    // Display entries include both 'ai' and 'ui' tagged entries
+    // The interrupted user turn stays in chat, but no error card is appended.
     const { messages } = await getDisplayEntries(1, 100);
-    expect(messages).toHaveLength(2);
+    expect(messages).toHaveLength(1);
+    expect(messages[0].content).toBe('Interrupted');
 
-    const notification = messages.find(
-      (m) => (m as Record<string, unknown>).notification === true,
-    ) as Record<string, unknown> | undefined;
-    expect(notification).toBeDefined();
-    expect(notification!.source).toBe('agent-error');
-    expect(typeof notification!.content).toBe('string');
-    expect((notification!.content as string).toLowerCase()).toContain('restart');
+    const { feed } = await listNotifications();
+    expect(feed).toHaveLength(1);
+    expect(feed[0].title).toBe('Chat Interrupted');
+    expect(feed[0].body?.toLowerCase()).toContain('restart');
+
+    // Startup may run recovery more than once; the turn id keeps it idempotent.
+    await recoverOrphanedUserMessage();
+    expect((await listNotifications()).feed).toHaveLength(1);
   });
 
   it('is a no-op when the last AI entry is an assistant message (no orphan)', async () => {

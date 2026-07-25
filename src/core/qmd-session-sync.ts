@@ -20,7 +20,7 @@ import {
 } from './qmd-store.js';
 import { listSessions } from './session-tracker.js';
 import { listTasks } from './task-manager.js';
-import { readSessionHistory } from './session-history.js';
+import { readSessionHistoryTail } from './session-history.js';
 import { buildIndexedContent } from './session-content-indexer.js';
 import { log } from '../logging/index.js';
 import { pruneStaleQmdDocuments } from './qmd-sync-utils.js';
@@ -101,8 +101,12 @@ async function readConversationBody(
   if (session.host) return { body: null, failed: false }; // remote Claude session
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
+    // Tail-bounded read: indexing keeps ≤50 KB of cleaned text, so pulling a
+    // whole whale JSONL to index its tail was pure waste (167 GB/day of full
+    // re-reads pre-fix). The tail window (4 MB) exceeds the index budget by
+    // orders of magnitude even after cleaning.
     const messages = await Promise.race([
-      readSessionHistory(session.claudeSessionId, session.cwd, session.host, session.outputFile, { skipSubagents: true }),
+      readSessionHistoryTail(session.claudeSessionId, session.cwd, session.host, session.outputFile),
       new Promise<never>((_, reject) => {
         timeout = setTimeout(
           () => reject(new Error('content read timeout')),
@@ -110,7 +114,10 @@ async function readConversationBody(
         );
       }),
     ]);
-    if (!messages || messages.length === 0) {
+    // null = tail read FAILED (vs []: file exists but no messages). Propagate
+    // as failed so an existing content-rich doc isn't replaced by metadata-only.
+    if (messages === null) return { body: null, failed: true };
+    if (messages.length === 0) {
       return { body: null, failed: false };
     }
     const { body } = buildIndexedContent(messages);

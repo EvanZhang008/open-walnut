@@ -152,6 +152,41 @@ describe('getDisplayHistory', () => {
     expect(messages[0].content).toBe('b');
     expect(messages[1].content).toBe('c');
   });
+
+  it('filters legacy runtime errors before pagination while retaining AI errors in model context', async () => {
+    await addTurn(
+      [{ role: 'user', content: 'before' }],
+      [{ role: 'user', content: 'before', timestamp: '2025-01-01T00:00:00Z' }],
+    );
+    await addAIMessages(
+      [{ role: 'assistant', content: [{ type: 'text', text: '[Error: provider unavailable]' }] }],
+    );
+    await addNotification({
+      role: 'assistant',
+      content: '**Session Error**: worker failed',
+      source: 'session-error',
+      notification: true,
+    });
+    await addTurn(
+      [{ role: 'user', content: 'after' }],
+      [{ role: 'user', content: 'after', timestamp: '2025-01-01T00:01:00Z' }],
+    );
+
+    const firstPage = await getDisplayEntries(1, 1);
+    expect(firstPage.messages.map((message) => message.content)).toEqual(['after']);
+    expect(firstPage.pagination).toMatchObject({
+      totalMessages: 2,
+      totalPages: 2,
+      hasMore: true,
+    });
+
+    const secondPage = await getDisplayEntries(2, 1);
+    expect(secondPage.messages.map((message) => message.content)).toEqual(['before']);
+
+    const modelContext = await getModelContext();
+    expect(JSON.stringify(modelContext)).toContain('[Error: provider unavailable]');
+    expect(JSON.stringify(modelContext)).not.toContain('worker failed');
+  });
 });
 
 describe('addTurn', () => {

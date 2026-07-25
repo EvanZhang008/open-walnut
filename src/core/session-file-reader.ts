@@ -198,7 +198,51 @@ export type ReadSessionResult = {
    * skip the search on the next read.
    */
   resolvedRemotePath?: string;
+  /**
+   * Char length of the CANONICAL file portion of `content` — i.e. before any
+   * synthetic walnut-injected lines were appended. Byte offsets into the
+   * on-disk JSONL only map to char offsets within this prefix; the segmented
+   * history cache (session-history.ts) must never place a segment boundary
+   * past it. Set for 'local'/'remote' sources only.
+   */
+  canonicalChars?: number;
 };
+
+/**
+ * Append synthetic walnut-injected user events (from the local streams capture
+ * file) to canonical JSONL content. Local sessions write synthetic events to
+ * their streams file, but the canonical JSONL (owned by Claude Code) never sees
+ * them. Remote sessions have no local streams file — content returns unmodified.
+ * Exported for the incremental/tail history readers, which re-read only a byte
+ * range of the canonical file and must re-apply the same merge.
+ */
+export async function mergeSyntheticUserEvents(sessionId: string, content: string): Promise<string> {
+  const { SESSION_STREAMS_DIR } = await import('../constants.js');
+  const streamFilePath = path.join(SESSION_STREAMS_DIR, `${sessionId}.jsonl`);
+  try {
+    const streamContent = await fsp.readFile(streamFilePath, 'utf-8');
+    const syntheticLines: string[] = [];
+    for (const line of streamContent.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const evt = JSON.parse(line);
+        if (evt.type === 'user' && evt.subtype === 'walnut-injected') {
+          syntheticLines.push(line);
+        }
+      } catch (err) {
+        log.session.debug('failed to parse stream event line', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    if (syntheticLines.length > 0) {
+      return content + '\n' + syntheticLines.join('\n');
+    }
+  } catch {
+    // File doesn't exist or can't be read — no synthetic events to merge
+  }
+  return content;
+}
 
 /**
  * Read session JSONL content using the appropriate reader.
@@ -216,49 +260,23 @@ export async function readSessionJsonlContent(
 ): Promise<ReadSessionResult | null> {
   const { SESSION_STREAMS_DIR } = await import('../constants.js');
 
-  // Helper: attach foundCwd from JSONL content
-  const withFoundCwd = (content: string, source: ReadSessionResult['source'], resolvedRemotePath?: string): ReadSessionResult => {
+  // Helper: attach foundCwd from JSONL content. `canonicalChars` records where
+  // the on-disk file ends inside `content` (before synthetic-event append) so
+  // byte-offset-based incremental readers know the safe prefix.
+  const withFoundCwd = (content: string, source: ReadSessionResult['source'], resolvedRemotePath?: string, canonicalChars?: number): ReadSessionResult => {
     const foundCwd = extractCwdFromJsonlContent(content);
     return {
       content, source,
       ...(foundCwd ? { foundCwd } : {}),
       ...(resolvedRemotePath ? { resolvedRemotePath } : {}),
+      ...(canonicalChars !== undefined ? { canonicalChars } : {}),
     };
   };
 
-  // Helper: extract synthetic walnut-injected user events from the local streams file.
-  // Local sessions write synthetic events (walnut-injected user messages) to their
-  // streams capture file, but the canonical JSONL (owned by Claude Code) never sees them.
-  // This merges them into remote-fetched content so user messages appear in history.
-  // NOTE: Remote sessions do NOT have a local streams file (RemoteSessionManager.outputFile
-  // returns null, writeSyntheticUserEvent is a no-op). This helper silently returns
-  // unmodified content when no local streams file exists.
-  const mergeSyntheticFromLocalStreams = async (remoteContent: string): Promise<string> => {
-    const streamFilePath = path.join(SESSION_STREAMS_DIR, `${sessionId}.jsonl`);
-    try {
-      const streamContent = await fsp.readFile(streamFilePath, 'utf-8');
-      const syntheticLines: string[] = [];
-      for (const line of streamContent.split('\n')) {
-        if (!line.trim()) continue;
-        try {
-          const evt = JSON.parse(line);
-          if (evt.type === 'user' && evt.subtype === 'walnut-injected') {
-            syntheticLines.push(line);
-          }
-        } catch (err) {
-          log.session.debug('failed to parse stream event line', {
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-      if (syntheticLines.length > 0) {
-        return remoteContent + '\n' + syntheticLines.join('\n');
-      }
-    } catch {
-      // File doesn't exist or can't be read — no synthetic events to merge
-    }
-    return remoteContent;
-  };
+  // Synthetic walnut-injected user events live in the local streams capture —
+  // merge them into canonical content (see mergeSyntheticUserEvents).
+  const mergeSyntheticFromLocalStreams = (content: string): Promise<string> =>
+    mergeSyntheticUserEvents(sessionId, content);
 
   // 1. Canonical JSONL — source of truth.
   //    UNIFIED PASS: both local (__local__) and remote sessions read through the
@@ -297,7 +315,7 @@ export async function readSessionJsonlContent(
           // Try exact encoded path first.
           if (exactPath) {
             const content = await reader.readFile(exactPath);
-            if (content) return withFoundCwd(await mergeSyntheticFromLocalStreams(content), srcLabel, exactPath);
+            if (content) return withFoundCwd(await mergeSyntheticFromLocalStreams(content), srcLabel, exactPath, content.length);
             // Exact path missed — fall through to glob/find. This happens when
             // the cwd in the session record is a symlink (e.g. /home/user →
             // /local/home/user) and Claude Code stored the file under the
@@ -306,9 +324,9 @@ export async function readSessionJsonlContent(
           // cwd unknown OR unsafe-for-encoding (>200 chars, hashed by Claude Code):
           // fall back to glob, then find.
           const content = await reader.readFile(globPath);
-          if (content) return withFoundCwd(await mergeSyntheticFromLocalStreams(content), srcLabel);
+          if (content) return withFoundCwd(await mergeSyntheticFromLocalStreams(content), srcLabel, undefined, content.length);
           const findResult = await reader.findSession(sessionId);
-          if (findResult) return withFoundCwd(await mergeSyntheticFromLocalStreams(findResult.content), srcLabel, findResult.path);
+          if (findResult) return withFoundCwd(await mergeSyntheticFromLocalStreams(findResult.content), srcLabel, findResult.path, findResult.content.length);
           return null;
         })(),
         new Promise<never>((_, reject) =>

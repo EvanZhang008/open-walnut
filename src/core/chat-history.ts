@@ -21,6 +21,7 @@ import { log } from '../logging/index.js';
 import fsp from 'node:fs/promises';
 import { compressForApi, MAX_BASE64_BYTES } from '../utils/image-compress.js';
 import { indexChatEntries } from './history-db.js';
+import { addNotification as addFeedNotification } from './notifications/store.js';
 
 /** Compaction triggers at 80% of the model's context window. */
 const COMPACTION_PERCENT = 0.80;
@@ -89,8 +90,17 @@ function withWriteLock<T>(fn: () => Promise<T>, agentId = 'general', conversatio
   const key = lockKey(agentId, conversationId);
   const prev = getWriteLock(key);
   let resolve: () => void;
-  writeLocks.set(key, new Promise<void>((r) => { resolve = r; }));
-  return prev.then(fn).finally(() => resolve!());
+  const tail = new Promise<void>((r) => { resolve = r; });
+  writeLocks.set(key, tail);
+  return prev.then(fn).finally(() => {
+    resolve!();
+    // Delete only if WE are still the tail. Race guarded: A finishes while B is
+    // already chained on A's tail — an unconditional delete here would let a
+    // newly-arriving C start a FRESH chain concurrent with B (read-modify-write
+    // overlap = lost writes). Same pattern in conversations.ts/side-questions.ts
+    // — keep all three in sync.
+    if (writeLocks.get(key) === tail) writeLocks.delete(key);
+  });
 }
 
 /** Detect test/dev so a missing conversationId fails LOUD instead of silently
@@ -368,7 +378,14 @@ export async function hydrateImagePaths(msgs: MessageParam[]): Promise<MessagePa
           (b.type === 'image' && typeof b.path === 'string') ||
           // Defense: detect corrupted source-based blocks (data replaced with '[compacted]')
           (b.type === 'image' && b.source && typeof b.source === 'object' &&
-            (b.source as Record<string, unknown>).data === '[compacted]'),
+            (b.source as Record<string, unknown>).data === '[compacted]') ||
+          // Recovery: legacy rows may hold raw base64 that predates the
+          // dimension clamp. Those replay verbatim on EVERY later turn, so one
+          // oversized image would 400 the whole conversation forever. Route
+          // them through the clamp too.
+          (b.type === 'image' && b.source && typeof b.source === 'object' &&
+            typeof (b.source as Record<string, unknown>).data === 'string' &&
+            (b.source as Record<string, unknown>).data !== '[compacted]'),
       );
       if (needsHydration) {
         const hydrated = await Promise.all(
@@ -403,6 +420,23 @@ export async function hydrateImagePaths(msgs: MessageParam[]): Promise<MessagePa
             if (block.type === 'image' && block.source && typeof block.source === 'object' &&
               (block.source as Record<string, unknown>).data === '[compacted]') {
               return { type: 'text', text: '[image: data unavailable — compacted]' };
+            }
+            // Recovery for inline base64 stored before the dimension clamp existed.
+            if (block.type === 'image' && block.source && typeof block.source === 'object') {
+              const src = block.source as Record<string, unknown>;
+              if (typeof src.data === 'string') {
+                try {
+                  const raw = Buffer.from(src.data, 'base64');
+                  const { buffer, mimeType } = await compressForApi(raw, (src.media_type as string) ?? 'image/png');
+                  const base64 = buffer.toString('base64');
+                  if (base64.length > MAX_BASE64_BYTES) {
+                    return { type: 'text', text: `[image: ${mimeType} — too large even after compression]` };
+                  }
+                  return { type: 'image', source: { type: 'base64', media_type: mimeType, data: base64 } };
+                } catch {
+                  return { type: 'text', text: '[image: unreadable]' };
+                }
+              }
             }
             return block;
           }),
@@ -465,6 +499,22 @@ export interface PaginatedEntries {
   pagination: PaginationInfo;
 }
 
+function isLegacySyntheticAgentError(entry: ChatEntry): boolean {
+  if (entry.tag !== 'ai' || entry.role !== 'assistant' || entry.source) return false;
+  if (!Array.isArray(entry.content) || entry.content.length !== 1) return false;
+  const block = entry.content[0] as { type?: unknown; text?: unknown };
+  return block?.type === 'text'
+    && typeof block.text === 'string'
+    && /^\[Error:\s[\s\S]*\]$/.test(block.text.trim());
+}
+
+/** Runtime errors live in the notification center, never the chat timeline. */
+export function isNotificationOnlyError(entry: ChatEntry): boolean {
+  return entry.source === 'agent-error'
+    || entry.source === 'session-error'
+    || isLegacySyntheticAgentError(entry);
+}
+
 /**
  * Get display entries for the browser with page-based pagination.
  *
@@ -482,7 +532,9 @@ export async function getDisplayEntries(
   conversationId?: string,
 ): Promise<PaginatedEntries> {
   const store = await readStore(agentId, conversationId);
-  const allEntries = store.entries ?? [];
+  // Keep legacy error entries on disk for model context/forensics, but exclude
+  // them before pagination so they neither render nor consume chat page slots.
+  const allEntries = (store.entries ?? []).filter((entry) => !isNotificationOnlyError(entry));
 
   // Build an index of logical message positions
   const logicalIndices: number[] = [];
@@ -698,7 +750,7 @@ export async function addUserMessage(
 /**
  * Check for orphaned user messages left by a server crash during processing.
  * If the last AI entry is a user message with no assistant response following,
- * add a recovery notification so the user knows to resend.
+ * add a notification-center entry so the user knows to resend.
  * Call once at server startup.
  */
 export async function recoverOrphanedUserMessage(agentId?: string, conversationId?: string): Promise<void> {
@@ -722,15 +774,13 @@ export async function recoverOrphanedUserMessage(agentId?: string, conversationI
       timestamp: lastAi.timestamp,
     });
 
-    store.entries!.push({
-      tag: 'ui',
-      role: 'assistant',
-      content: 'Your previous message was saved, but the response was interrupted by a server restart. You may want to resend it.',
-      timestamp: new Date().toISOString(),
-      source: 'agent-error',
-      notification: true,
+    await addFeedNotification({
+      kind: 'operation-error',
+      severity: 'error',
+      title: 'Chat Interrupted',
+      body: 'Your previous message was saved, but the response was interrupted by a server restart. You may want to resend it.',
+      dedupKey: `chat-interrupted:${agentId ?? 'general'}:${conversationId ?? 'unknown'}:${lastAi.turnId}`,
     });
-    await writeStore(store, agentId, conversationId);
   }, agentId, conversationId);
 }
 
