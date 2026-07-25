@@ -254,6 +254,13 @@ export function normalizeSessionModelCatalogId(model: string): string {
   return model.toLowerCase().replace(/\[1m\]$/, '').replace(/[-_]v\d+(:\d+)?$/, '');
 }
 
+/** Find the catalog row for a runtime model id. Match ORDER is load-bearing:
+ *  exact value → concrete row by resolvedModel → 'default' row by resolvedModel
+ *  → normalized (strips '[1m]' + provider version suffixes, which the CLI's
+ *  runtime id carries but catalog values may not). A concrete row must beat the
+ *  'default' row that shares its resolvedModel — 'default' means "CLI picks",
+ *  and reporting it as the active row would hide the real row's effort
+ *  capabilities. Reordering these steps selects the wrong active picker row. */
 export function matchSessionModelCatalogEntry(
   models: SessionModelCatalogEntry[],
   model?: string | null,
@@ -623,7 +630,7 @@ export interface AgentConfig {
   /** Default reasoning-effort passed as --effort to claude CLI sessions (low/medium/high/max).
    *  Unset = let the CLI/API pick its default (resolves to 'high'). */
   session_effort?: SessionEffort;
-  /** Model ID for the main AI agent. Defaults to DEFAULT_MODEL (Opus 4.6). */
+  /** Model ID for the main AI agent. Defaults to DEFAULT_MODEL (Opus 5). */
   main_model?: string;
   /** Model ID for cheap background parses (quick-task parse, fork/conversation titles); unset = first haiku in the provider catalog. */
   fast_model?: string;
@@ -792,15 +799,6 @@ export interface Config {
     /** How many session panels to show side-by-side: '1', '2', or 'auto' (breakpoint-driven).
      *  Default: '2'. */
     session_panels?: '1' | '2' | 'auto';
-    /** Per-tier control of "chatting with a pinned task bumps it to the front of its tier".
-     *  Each tier independently configurable. Defaults (when a key is undefined):
-     *  focus=false (preserve the manually ordered current sprint), next/satellite/wait=true. */
-    bump_tiers?: {
-      focus?: boolean;
-      next?: boolean;
-      satellite?: boolean;
-      wait?: boolean;
-    };
   };
   /** Audio capture configuration (system audio recording) */
   audio?: {

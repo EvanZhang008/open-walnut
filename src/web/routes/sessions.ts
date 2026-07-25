@@ -32,7 +32,7 @@ import { injectCompactBoundary, buildCompactSummary } from '../../utils/compact-
 import { findLocalJsonlPath } from '../../core/session-file-reader.js'
 import { getFrequentDirs, compileFromSessions, recordLaunchPrefs } from '../../core/frequent-dirs.js'
 import type { SessionRecord, SessionMode, Task, SessionEffort } from '../../core/types.js'
-import { VALID_SESSION_MODEL_IDS, SESSION_MODEL_CLI_MAP, VALID_SESSION_EFFORT_IDS, modelSupportsEffort, modelSupportsXhighEffort, modelSupportsMaxEffort, resolveModelSwitchValue, sessionModelsAsCatalog } from '../../core/types.js'
+import { VALID_SESSION_MODEL_IDS, SESSION_MODEL_CLI_MAP, VALID_SESSION_EFFORT_IDS, modelSupportsEffort, modelSupportsXhighEffort, modelSupportsMaxEffort, matchSessionModelCatalogEntry, resolveModelSwitchValue, sessionModelsAsCatalog } from '../../core/types.js'
 import { getHostModelCatalog, listHostModelCatalogs } from '../../core/host-model-catalog.js'
 import type { SessionHistoryMessage } from '../../core/session-history.js'
 import { processAndSaveImages, buildSessionImageContext } from './images.js'
@@ -42,6 +42,7 @@ import { listSideQuestions, addSideQuestion, getSideQuestion, markPromoted, dele
 import type { ImagePayload } from './images.js'
 import { quickStartSession, QuickStartError } from '../../core/sessions/quick-start.js'
 import { ensureCwd } from '../../core/sessions/ensure-cwd.js'
+import { buildSessionVscodeUri, SessionVscodeUriError } from '../../core/session-vscode-uri.js'
 import { listLocalDirs, listRemoteDirs } from '../../core/sessions/dir-listing.js'
 import { QUICK_START_MESSAGE_HARD_LIMIT } from '../../constants.js'
 
@@ -634,6 +635,20 @@ sessionsRouter.get('/task/:taskId', async (req: Request, res: Response, next: Ne
     const sessions = all.filter(s => !isEnvironmentSession(s))
     res.json({ sessions: await enrichWithHostnames(await enrichWithLiveStatus(sessions)) })
   } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/sessions/:sessionId/vscode-uri
+sessionsRouter.get('/:sessionId/vscode-uri', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const session = await getSessionByClaudeId(String(req.params.sessionId))
+    res.json({ uri: await buildSessionVscodeUri(session) })
+  } catch (err) {
+    if (err instanceof SessionVscodeUriError) {
+      res.status(err.status).json({ error: err.message })
+      return
+    }
     next(err)
   }
 })
@@ -1502,8 +1517,12 @@ sessionsRouter.post('/:sessionId/permission', async (req: Request, res: Response
 // POST /api/sessions/:sessionId/effort — change reasoning effort mid-session.
 // Delivers via apply_flag_settings control_request (no respawn) when the CLI is live;
 // always persists record.effort so the badge reflects it and a cold --resume re-applies
-// --effort. Validates the level and gates `max` to max-capable models (the CLI itself
-// silently accepts an invalid `max`, so the guard MUST live here — verified against 2.1.170).
+// --effort. Validates the level (the CLI itself silently accepts an invalid `max`, so
+// the guard MUST live here — verified against 2.1.170). Capability authority order:
+// (1) the LIVE catalog row's supportedEffortLevels when present, (2) its
+// supportsEffort boolean (can veto, but xhigh/max still need the static
+// per-family gate), (3) the static model-family tables as the last resort when
+// no live capability data exists.
 sessionsRouter.post('/:sessionId/effort', async (req: Request, res: Response, next: NextFunction) => {
   const sessionId = req.params.sessionId as string
   const { effort: rawEffort } = req.body as { effort?: string }
@@ -1519,18 +1538,42 @@ sessionsRouter.post('/:sessionId/effort', async (req: Request, res: Response, ne
       res.status(404).json({ error: 'session not found' })
       return
     }
-    // Capability gates (the CLI does NOT enforce these — see route header).
-    const model = record.cliModel || record.model
-    if (!modelSupportsEffort(model)) {
-      res.status(409).json({ error: `Model "${model ?? 'unknown'}" does not support reasoning effort` })
-      return
+    const session = await sessionRunner.getOrAttachLiveSession(sessionId).catch(() => undefined)
+    const recordModel = record.cliModel || record.model
+    let model = recordModel
+    let liveRow: ReturnType<typeof matchSessionModelCatalogEntry> = null
+    if (session) {
+      const [settings, catalog] = await Promise.all([
+        session.getSettingsSnapshot().catch(() => null),
+        session.getModelCatalog().catch(() => null),
+      ])
+      model = settings?.applied.model || recordModel
+      liveRow = matchSessionModelCatalogEntry(catalog?.models ?? [], model)
     }
-    if (effort === 'xhigh' && !modelSupportsXhighEffort(model)) {
-      res.status(409).json({ error: `Model "${model ?? 'unknown'}" does not support "xhigh" effort (Fable 5, Opus 4.7/4.8, Sonnet 5 only)` })
-      return
+    if (!liveRow) {
+      // Live catalog unavailable (dead session / CLI timeout): consult the
+      // persisted host catalog — the SAME source the picker renders from — so
+      // a level the UI shows enabled can't 409 here on static-table grounds.
+      const hostCatalog = await getHostModelCatalog(record.host).catch(() => null)
+      liveRow = matchSessionModelCatalogEntry(hostCatalog?.models ?? [], model)
     }
-    if (effort === 'max' && !modelSupportsMaxEffort(model)) {
-      res.status(409).json({ error: `Model "${model ?? 'unknown'}" does not support "max" effort (Fable 5, Opus 4.6+, Sonnet 4.6)` })
+
+    // Effort-capability authority, most→least trusted: (1) the catalog row's
+    // explicit supportedEffortLevels list, (2) its supportsEffort boolean (can
+    // veto but not grant xhigh/max — those need the static per-family gate too),
+    // (3) the static model tables as last resort (no catalog row anywhere).
+    // Simplifying this nesting either rejects new provider models or allows
+    // levels the CLI will silently downgrade.
+    const liveLevels = liveRow?.supportedEffortLevels
+    const supported = liveLevels !== undefined
+      ? liveLevels.includes(effort)
+      : effort === 'xhigh'
+        ? liveRow?.supportsEffort !== false && modelSupportsXhighEffort(model)
+        : effort === 'max'
+          ? liveRow?.supportsEffort !== false && modelSupportsMaxEffort(model)
+          : liveRow?.supportsEffort ?? modelSupportsEffort(model)
+    if (!supported) {
+      res.status(409).json({ error: `Model "${model ?? 'unknown'}" does not support "${effort}" reasoning effort` })
       return
     }
 
@@ -1543,7 +1586,6 @@ sessionsRouter.post('/:sessionId/effort', async (req: Request, res: Response, ne
     // the reconciler didn't map doesn't falsely report "not live".
     let applied = false
     let effectiveEffort: string | undefined
-    const session = await sessionRunner.getOrAttachLiveSession(sessionId).catch(() => undefined)
     if (session) {
       try {
         applied = await session.applyEffort(effort)
@@ -1789,6 +1831,7 @@ sessionsRouter.get('/:sessionId/settings', async (req: Request, res: Response, n
     // Attach-on-demand (same as /effort and /model) so a live-but-unmapped session
     // still answers. getSettings() resolves null on timeout/old CLI — never throws.
     let applied: { model: string | null; effort: string | null; mode: string | null } | null = null
+    let effective: { effortLevel: SessionEffort | null } | null = null
     let details: {
       contextUsage: import('../../providers/claude-code-session.js').CliContextUsage | null
       usage: Record<string, unknown> | null
@@ -1796,26 +1839,34 @@ sessionsRouter.get('/:sessionId/settings', async (req: Request, res: Response, n
     } | undefined
     const session = await sessionRunner.getOrAttachLiveSession(sessionId).catch(() => undefined)
     if (session) {
-      const [settings, contextUsage, usage, binaryVersion] = await Promise.all([
-        session.getSettings().catch(() => null),
+      const [settingsSnapshot, contextUsage, usage, binaryVersion] = await Promise.all([
+        session.getSettingsSnapshot().catch(() => null),
         wantDetails ? session.getContextUsage().catch(() => null) : Promise.resolve(null),
         wantDetails ? session.getUsage().catch(() => null) : Promise.resolve(null),
         wantDetails ? session.getBinaryVersion().catch(() => null) : Promise.resolve(null),
       ])
-      if (settings) {
+      if (settingsSnapshot) {
+        const settings = settingsSnapshot.applied
         // Mode has no field in get_settings' applied block — the live session's
         // _mode IS the runtime truth (reconciled from the CLI's system/status
         // events, incl. our set_permission_mode echoes and in-CLI EnterPlanMode).
         applied = { model: settings.model ?? null, effort: settings.effort ?? null, mode: session.mode ?? null }
+        const configuredEffort = settingsSnapshot.effective?.effortLevel
+        effective = {
+          effortLevel: typeof configuredEffort === 'string' && VALID_SESSION_EFFORT_IDS.has(configuredEffort)
+            ? configuredEffort as SessionEffort
+            : null,
+        }
         // Opportunistically reconcile record/badge state from this same read —
-        // one round-trip serves both the picker and the persisted truth.
-        void session.refreshAppliedSettings('picker-pull').catch(() => null)
+        // one round-trip serves both the picker and the persisted truth
+        // (pass the snapshot so refresh doesn't issue a second get_settings).
+        void session.refreshAppliedSettings('picker-pull', settingsSnapshot.applied).catch(() => null)
       }
       if (wantDetails) details = { contextUsage, usage, binaryVersion }
     } else if (wantDetails) {
       details = { contextUsage: null, usage: null, binaryVersion: null }
     }
-    res.json({ live: applied !== null, requested, applied, ...(details !== undefined ? { details } : {}) })
+    res.json({ live: applied !== null, requested, applied, effective, ...(details !== undefined ? { details } : {}) })
   } catch (err) {
     next(err)
   }
