@@ -19,6 +19,7 @@ import type { UseOrderingReturn } from '@/hooks/useOrdering';
 import * as ICONS from '../common/Icons';
 import type { TaskPriority } from '@open-walnut/core';
 import { TodoSearchBar } from './TodoSearchBar';
+import { NewLauncherButton } from './NewLauncherButton';
 import {
   mapServerTaskSearchResults,
   taskReferenceMatchField,
@@ -134,6 +135,9 @@ interface TodoPanelProps {
   externalCategory?: string;
   /** Fires whenever the active category tab changes (for URL sync). */
   onCategoryChange?: (cat: string) => void;
+  /** Toolbar "+" — opens the todo-anchored launcher popover (Session | Task
+   *  tabs, Session default) rendered by MainPage inside the task panel. */
+  onOpenLauncher?: () => void;
   /** Virtual-group name registry: group_id → label. */
   taskGroups?: Record<string, string>;
   /** Group ids hidden from the Focus (pinned) area — their cards are skipped there. */
@@ -153,6 +157,24 @@ interface TodoPanelProps {
 }
 
 const STARRED_TAB = '\u2605';
+
+/**
+ * Freeze a derived value while `frozen` is true: returns the last value computed
+ * while NOT frozen. Invariant #5 of the pinned-drag stability contract (see the
+ * drag-freeze comment above handlePinnedDragStart): during a pinned drag the
+ * DndContext subtree's render model must be immune to EXTERNAL store churn
+ * (task:updated WS echoes, refetches, last_session_update touches) \u2014 otherwise
+ * cards remount/re-sort mid-drag, dnd-kit's useRect sees a new element identity
+ * every commit, and its layout-effect setState loops into React #185. The
+ * previous invariants (8ac5bb7) froze only the tier ORDER refs; every new
+ * derived layer added downstream (visibleTaskIds filter, recentTasks sort)
+ * silently escaped the freeze \u2014 this hook freezes at the model level instead.
+ */
+function useFrozenWhile<T>(value: T, frozen: boolean): T {
+  const ref = useRef(value);
+  if (!frozen) ref.current = value;
+  return ref.current;
+}
 
 const PHASE_ICON: Record<string, ReactNode> = {
   TODO: ICONS.ICON_PHASE_TODO,
@@ -1630,9 +1652,11 @@ function SortableRecentCard({ task, isFocused, isSessionOpen, isDetailOpen, onCl
       {!isStatic && <span className="todo-pinned-drag-handle" {...attributes} {...listeners}>{'\u2261'}</span>}
       {isPinned && pinnedTier && (
         <span
-          className={`todo-icon-${pinnedTier} todo-recent-tier-dot`}
+          className={`todo-recent-tier-dot todo-tier-icon-${pinnedTier}`}
           title={`Pinned \u2014 ${pinnedTier === 'focus' ? 'Focus' : pinnedTier === 'wait' ? 'Wait' : 'Satellite'}`}
-        />
+        >
+          {ICONS.tierIcon(pinnedTier)}
+        </span>
       )}
       {/* Phase icon with picker */}
       <div className="phase-picker-wrapper phase-picker-inline pinned-phase-picker" ref={phaseWrapperRef}>
@@ -1724,7 +1748,7 @@ function SortableRecentCard({ task, isFocused, isSessionOpen, isDetailOpen, onCl
 
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, pinnedTaskIds, focusTaskIds, waitTaskIds, suppressDetail, openSessionIds, openSessionTaskIds, onClearOperationError, onOperationError, externalCategory, onCategoryChange, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, pinnedTaskIds, focusTaskIds, waitTaskIds, suppressDetail, openSessionIds, openSessionTaskIds, onClearOperationError, onOperationError, externalCategory, onCategoryChange, onOpenLauncher, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden }: TodoPanelProps) {
   // TEMP drag-flash trace — remove after diagnosis
   const __renderCountRef = useRef(0);
   __renderCountRef.current += 1;
@@ -2199,12 +2223,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     }
   });
 
+  // Active pinned-drag id — declared BEFORE the pinned render-model memos below so
+  // they can freeze on it (useFrozenWhile) while a drag is live.
+  const [activeDragPinnedId, setActiveDragPinnedId] = useState<string | null>(null);
+  const isPinnedDragActive = activeDragPinnedId !== null;
+
   // Resolve pinned task IDs to Task objects for the pinned section
   // Filter out completed tasks (status=done or phase=COMPLETE) for display, and
   // members of a HIDDEN group — hiding collapses the whole cluster out of the Focus
   // area (membership untouched; unhide via a member's kebab / the /tasks page). This
   // single filter propagates to all three tiers + clustering + drag for free.
-  const pinnedTasks = useMemo(() => {
+  // FROZEN during a pinned drag: external churn must not add/remove/replace pinned
+  // Task objects mid-drag (cards would remount → dnd-kit useRect loop → React #185).
+  const pinnedTasksLive = useMemo(() => {
     if (!pinnedTaskIds || pinnedTaskIds.size === 0) return [];
     const taskMap = new Map(tasks.map((t) => [t.id, t]));
     return [...pinnedTaskIds]
@@ -2212,13 +2243,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       .filter((t): t is Task => !!t && t.status !== 'done' && t.phase !== 'COMPLETE'
         && !(t.group_id && hiddenGroups?.has(t.group_id)));
   }, [tasks, pinnedTaskIds, hiddenGroups]);
+  const pinnedTasks = useFrozenWhile(pinnedTasksLive, isPinnedDragActive);
 
   // Hidden groups that HAVE pinned members — these were collapsed out of the tiers
   // above, so we surface them as a compact "hidden" strip at the bottom of the Pinned
   // section with an unhide affordance. Without this the user has no in-Focus way to
   // bring a hidden group back (its cards vanish from every tier). Each entry carries
   // the group's label + live member count (for the chip text).
-  const hiddenPinnedGroups = useMemo(() => {
+  // FROZEN during a pinned drag (renders chips inside the pinned DndContext and
+  // gates its mount condition — see useFrozenWhile).
+  const hiddenPinnedGroupsLive = useMemo(() => {
     if (!pinnedTaskIds || pinnedTaskIds.size === 0 || !hiddenGroups || hiddenGroups.size === 0) return [];
     const counts = new Map<string, number>();
     const taskMap = new Map(tasks.map((t) => [t.id, t]));
@@ -2235,6 +2269,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       label: taskGroups?.[groupId] ?? 'Hidden group',
     }));
   }, [tasks, pinnedTaskIds, hiddenGroups, taskGroups]);
+  const hiddenPinnedGroups = useFrozenWhile(hiddenPinnedGroupsLive, isPinnedDragActive);
 
   // Split pinned into Focus / Next / Satellite
   const focusTasksLocal = useMemo(() => {
@@ -2265,7 +2300,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // here, INCLUDING pinned ones (they render in their tier AND here; the Recent
   // card shows a tier dot and isn't draggable — it's already placed). When "Show
   // completed" is on, recently completed tasks surface too, ranked by completion.
-  const recentTasks = useMemo(() => {
+  // FROZEN during a pinned drag: Recent sorts by last_session_update/updated_at and
+  // shares the pinned DndContext — a mid-drag re-sort moves/remounts cards and
+  // feeds the useRect #185 loop. Converges to live order on drop.
+  const recentTasksLive = useMemo(() => {
     // Most recent of creation / any update / session activity / completion
     const recentTime = (t: Task) => {
       let m = t.created_at ?? '';
@@ -2282,6 +2320,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       .sort((a, b) => recentTime(b).localeCompare(recentTime(a)))
       .slice(0, 50);
   }, [tasks, showCompleted]);
+  const recentTasks = useFrozenWhile(recentTasksLive, isPinnedDragActive);
 
   // Stable sensor config — inline objects in useSensor destabilize dnd-kit's internal
   // memoization (Object.values({distance:5}) produces new ref each render → sensors
@@ -2356,8 +2395,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const pinnedTaskMap = useMemo(() => new Map(pinnedTasks.map((t) => [t.id, t])), [pinnedTasks]);
 
   // Snapshot of original tier arrays at drag start (for revert on cancel)
+  // (activeDragPinnedId state lives above the pinned render-model memos — they
+  // freeze on it via useFrozenWhile.)
   const dragStartSnapshot = useRef<{ focus: string[]; satellite: string[]; wait: string[]; recent?: string[] } | null>(null);
-  const [activeDragPinnedId, setActiveDragPinnedId] = useState<string | null>(null);
   const activeDragPinnedTask = useMemo(
     () => {
       if (!activeDragPinnedId || activeDragPinnedId.startsWith('group:')) return null;
@@ -3025,42 +3065,33 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return reasons.length > 0 ? reasons.join(' · ') : undefined;
   }, [overrideReasonTaskId, tasks, showCompleted, phaseFilter, priorityFilter, sessionFilter, sourceFilter, dateFilter, tagFilter]);
 
+  // Explicit toolbar filters ONLY (priority, phase, session, source, tag, date) —
+  // deliberately excludes the category and Starred tabs, which are navigation
+  // affordances rather than refinement choices. Used by both search (which spans
+  // all categories) and the Pinned/Recent visibility set below, so a pin/recent
+  // card is never hidden merely because the user navigated to a different category
+  // tab — pins are a cross-category focus view by design.
+  const passesExplicitFilters = useCallback((t: Task): boolean => {
+    if (priorityFilter && effectivePriority(t.priority) !== priorityFilter) return false;
+    if (phaseFilter && t.phase !== phaseFilter) return false;
+    if (sessionFilter && t.phase !== sessionFilter) return false;
+    if (sourceFilter !== 'all' && (t.source || 'ms-todo') !== sourceFilter) return false;
+    if (tagFilter && (!t.tags || !t.tags.includes(tagFilter))) return false;
+    if (dateFilter && t.status !== 'done' && !matchesDateFilter(t, dateFilter, tasks)) return false;
+    return true;
+  }, [priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, dateFilter, tasks]);
+
   // --- Search filtering: intersect search results with active filters ---
   // Search bypasses category tab so results span ALL categories (the whole
   // point of search is to find things you can't see in the current view).
-  // Explicit toolbar filters (priority, phase, source, tag, session) are
+  // Explicit toolbar filters (priority, phase, source, tag, session, date) are
   // still respected because the user toggled those intentionally.
   const searchMatches = useMemo(() => {
     if (!isSearchMode) return filtered;
 
-    const applySearchFilters = (t: Task): boolean => {
-      // In search mode, always show completed tasks — the user is explicitly
-      // searching and wants to find tasks regardless of completion state.
-      // Only non-search filtered views respect showCompleted.
-      // Priority
-      if (priorityFilter && effectivePriority(t.priority) !== priorityFilter) return false;
-      // Phase
-      if (phaseFilter && t.phase !== phaseFilter) return false;
-      // Session work status
-      if (sessionFilter) {
-        if (t.phase !== sessionFilter) return false;
-      }
-      // Source/provider
-      if (sourceFilter !== 'all') {
-        const taskSource = t.source || 'ms-todo';
-        if (taskSource !== sourceFilter) return false;
-      }
-      // Tag
-      if (tagFilter && (!t.tags || !t.tags.includes(tagFilter))) return false;
-      // NOTE: category tab filter is intentionally skipped in search mode.
-      // Search should find tasks across ALL categories — scoping to the
-      // active tab defeats the purpose of searching. Other filters (priority,
-      // phase, source, tag, session) are kept because they are explicit user
-      // refinement choices rather than navigation affordances.
-      return true;
-    };
-
-    const eligibleTasks = tasks.filter(applySearchFilters);
+    // In search mode always show completed tasks (the user is explicitly searching)
+    // — passesExplicitFilters intentionally omits showCompleted for that reason.
+    const eligibleTasks = tasks.filter(passesExplicitFilters);
     const lowerQuery = searchQuery.trim().toLowerCase();
     // Keep the urgent pass on small metadata fields; descriptions and summaries can
     // contain enough text to block an input frame across a large task collection.
@@ -3082,20 +3113,23 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       ];
     }
 
-    // Preserve direct metadata matches after the semantic pass. The search service caps
-    // its global candidate pool before these client-only filters are applied. Reference
-    // ownership remains server-authoritative because local session fields can be stale.
+    // Direct metadata matches (literal substring of what the user typed) rank BEFORE
+    // the semantic pass: the search service caps its global candidate pool before these
+    // client-only filters run, so an appended exact-title hit could land past the
+    // slice(0,40) render cap and never mount. Metadata-first also matches the
+    // no-server fallback above, so arriving semantic results refine the tail instead
+    // of reshuffling the head. Reference ownership remains server-authoritative
+    // because local session fields can be stale.
     const serverMatches = mapServerTaskSearchResults(
       eligibleTasks,
       searchResults.map((result) => result.taskId),
     );
-    const serverTaskIds = new Set(serverMatches.map((task) => task.id));
+    const metadataTaskIds = new Set(metadataMatches.map((task) => task.id));
     return [
-      ...serverMatches,
-      ...metadataMatches.filter((task) => !serverTaskIds.has(task.id)),
+      ...metadataMatches,
+      ...serverMatches.filter((task) => !metadataTaskIds.has(task.id)),
     ];
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- activeCategory/favorites/isDescendantVisibleInStarred intentionally omitted: search bypasses category tab; showCompleted intentionally omitted: search always shows completed tasks
-  }, [tasks, filtered, isSearchMode, searchQuery, searchResults, priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter]);
+  }, [tasks, filtered, isSearchMode, searchQuery, searchResults, passesExplicitFilters]);
 
   // Counts and cross-section visibility use the complete match set, but the main
   // list mounts a bounded number of rows so neither search phase can stall typing.
@@ -3109,10 +3143,26 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   // Pinned membership and ordering stay based on the complete tier arrays. Filters only
   // constrain the rendered IDs so hidden cards keep their stable pin position.
-  const visibleTaskIds = useMemo(
-    () => new Set((isSearchMode ? searchMatches : filtered).map((task) => task.id)),
-    [filtered, isSearchMode, searchMatches],
+  //
+  // Crucially, the NON-search set here applies ONLY the explicit toolbar filters
+  // (passesExplicitFilters) and NOT the category tab — Pinned/Recent are a
+  // cross-category focus view: pinning a task means "keep this in front of me no
+  // matter which category tab I'm on". Reusing `filtered` (which scopes to
+  // activeCategory) would make pins/recent vanish whenever the user navigated off
+  // the "All" tab, then reappear on search (which already bypasses the tab). The
+  // main task list below still uses `filtered`/`searchFiltered` and stays tab-scoped.
+  // FROZEN during a pinned drag: this membership set derives from the live
+  // `tasks` array, so external churn (WS echoes / refetches) would otherwise
+  // change the SortableContext items / remount cards mid-drag (→ React #185 via
+  // dnd-kit useRect). Tier ORDER is separately frozen by the drag refs
+  // (dragFocusIdsRef etc.) — freezing membership here completes the invariant.
+  const visibleTaskIdsLive = useMemo(
+    () => new Set(
+      (isSearchMode ? searchMatches : tasks.filter(passesExplicitFilters)).map((task) => task.id),
+    ),
+    [tasks, isSearchMode, searchMatches, passesExplicitFilters],
   );
+  const visibleTaskIds = useFrozenWhile(visibleTaskIdsLive, isPinnedDragActive);
   const visiblePinnedTasks = useMemo(
     () => pinnedTasks.filter((task) => visibleTaskIds.has(task.id)),
     [pinnedTasks, visibleTaskIds],
@@ -4337,6 +4387,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           isSearching={isSearching}
           resultCount={searchResultCount}
         />
+        {onOpenLauncher && <NewLauncherButton onOpen={onOpenLauncher} />}
         <ViewDropdown
           categories={categories}
           activeCategory={activeCategory}
@@ -4401,7 +4452,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   <div className="todo-pinned-subgroup">
                     <div className="todo-pinned-sublabel" onClick={() => toggleSection('focus')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('focus'); }} style={{ cursor: 'pointer' }} title="Current sprint — finish these first">
                       <span className={`todo-pinned-chevron todo-pinned-sub-chevron${collapsedSections.has('focus') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
-                      <span className="todo-pinned-sublabel-icon todo-icon-focus" />
+                      <span className="todo-pinned-sublabel-icon todo-tier-icon-focus">{ICONS.ICON_TIER_FOCUS}</span>
                       <span className="todo-pinned-sublabel-text">Focus</span>
                       <span className="todo-pinned-sublabel-count">{focusTasksDisplay.length}</span>
                     </div>
@@ -4434,7 +4485,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     <div className="todo-pinned-subgroup">
                       <div className="todo-pinned-sublabel" onClick={() => toggleSection('satellite')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('satellite'); }} style={{ cursor: 'pointer' }} title="Backlog — other pinned tasks">
                         <span className={`todo-pinned-chevron todo-pinned-sub-chevron${collapsedSections.has('satellite') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
-                        <span className="todo-pinned-sublabel-icon todo-icon-satellite" />
+                        <span className="todo-pinned-sublabel-icon todo-tier-icon-satellite">{ICONS.ICON_TIER_SATELLITE}</span>
                         <span className="todo-pinned-sublabel-text">Satellite</span>
                         <span className="todo-pinned-sublabel-count">{satelliteTasksDisplay.length}</span>
                       </div>
@@ -4461,7 +4512,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   <div className="todo-pinned-subgroup">
                     <div className="todo-pinned-sublabel" onClick={() => toggleSection('wait')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('wait'); }} style={{ cursor: 'pointer' }} title="Wait — parked tasks, pinned but not actively worked on">
                       <span className={`todo-pinned-chevron todo-pinned-sub-chevron${collapsedSections.has('wait') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
-                      <span className="todo-pinned-sublabel-icon todo-icon-wait" />
+                      <span className="todo-pinned-sublabel-icon todo-tier-icon-wait">{ICONS.ICON_TIER_WAIT}</span>
                       <span className="todo-pinned-sublabel-text">Wait</span>
                       <span className="todo-pinned-sublabel-count">{waitTasksDisplay.length}</span>
                     </div>

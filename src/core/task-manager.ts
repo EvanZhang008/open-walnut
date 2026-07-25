@@ -2828,47 +2828,13 @@ export async function linkSession(
 }
 
 /**
- * Whether chatting with a pinned task in the given tier should bump it to the
- * front of that tier. Per-tier configurable via ui.bump_tiers.
- * Defaults when unset: focus=false (keep the hand-ordered current sprint),
- * satellite/wait=true.
- */
-function isBumpEnabledForTier(
-  config: { ui?: { bump_tiers?: { focus?: boolean; satellite?: boolean; wait?: boolean } } },
-  tier: 'focus' | 'satellite' | 'wait',
-): boolean {
-  const configured = config.ui?.bump_tiers?.[tier];
-  if (configured !== undefined) return configured;
-  return tier !== 'focus'; // default: focus off, others on
-}
-
-/**
- * Move a pinned task to the front of its own tier by reassigning pin_order.
- * Tiers are derived by filtering pinned tasks on focus_tier, so only the target
- * task's own tier reorders — other tiers keep their relative order untouched.
- * Returns true if the order actually changed.
- */
-function bumpPinnedTaskWithinTier(store: TaskStore, task: Task): boolean {
-  const tierOf = (t: Task) => t.focus_tier ?? 'satellite';
-  const targetTier = tierOf(task);
-  const ordered = store.tasks
-    .filter((t) => t.pinned && t.phase !== 'COMPLETE' && t.status !== 'done')
-    .sort((a, b) => (a.pin_order ?? 0) - (b.pin_order ?? 0));
-  const firstIdx = ordered.findIndex((t) => tierOf(t) === targetTier);
-  if (firstIdx < 0 || ordered[firstIdx].id === task.id) return false; // already at tier front
-  const curIdx = ordered.findIndex((t) => t.id === task.id);
-  if (curIdx < 0) return false;
-  const [moved] = ordered.splice(curIdx, 1);
-  ordered.splice(firstIdx, 0, moved);
-  ordered.forEach((t, i) => { t.pin_order = i; });
-  return true;
-}
-
-/**
  * Lightweight touch: update last_session_update without full updateTask() validation.
  * Used on session resume (handleSend) to keep "Recent" sort accurate.
- * If the task is pinned, also bump it to the front of its tier so chatting with
- * a task surfaces it in the Focus bar.
+ *
+ * INVARIANT: session activity updates ONLY this timestamp — it must never
+ * change pin_order or focus_tier. Pinned order is the user's hand ordering;
+ * the old "chatting bumps the task to its tier front" behavior was removed
+ * deliberately (it kept shuffling the manually-ordered sprint). Don't re-add it.
  */
 export async function touchLastSessionUpdate(taskIdPrefix: string): Promise<void> {
   return withWriteLock(async () => {
@@ -2876,18 +2842,8 @@ export async function touchLastSessionUpdate(taskIdPrefix: string): Promise<void
     const task = store.tasks.find((t) => t.id.startsWith(taskIdPrefix));
     if (!task) return;
     task.last_session_update = new Date().toISOString();
-    // Per-tier opt-out: chatting bumps a pinned task to the front of its tier,
-    // configurable per tier. Defaults preserve the manually ordered current sprint
-    // (focus=false) while surfacing recent activity in the other tiers.
-    const config = await getConfig();
-    const focusBarChanged = task.pinned && isBumpEnabledForTier(config, task.focus_tier ?? 'satellite')
-      ? bumpPinnedTaskWithinTier(store, task)
-      : false;
     await writeStore(store);
     bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'session-touch' });
-    if (focusBarChanged) {
-      bus.emit(EventNames.CONFIG_CHANGED, { key: 'focus_bar' }, ['web-ui']);
-    }
   });
 }
 

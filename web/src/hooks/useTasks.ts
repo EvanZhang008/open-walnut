@@ -38,6 +38,10 @@ function tasksShallowEqual(a: Task, b: Task): boolean {
     'parent_task_id', 'group_id', 'starred', 'due_date', 'completed_at', 'updated_at',
     'sync_error', 'external_url', 'needs_attention', 'source', 'sprint',
     'cwd', 'session_id', 'plan_session_id', 'exec_session_id',
+    // Session-resume touch updates ONLY this field now (the pin-bump side
+    // effect was removed), so it must count as a UI-visible diff — without it
+    // the Recent sort never refreshes live after chatting with a task.
+    'last_session_update',
     // Focus Bar state is now DERIVED from task objects (useFocusBar), so pin
     // changes must count as UI-visible diffs — without these keys a task:updated
     // echo whose only change is pin/tier would bail as "shallow equal".

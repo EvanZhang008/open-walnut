@@ -5,7 +5,7 @@
  * into a single kebab button to reduce visual noise per task row.
  */
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, type ReactNode } from 'react';
 import type { Task, TaskPriority } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
 import * as ICONS from '../common/Icons';
@@ -53,16 +53,18 @@ interface TaskKebabMenuProps {
   onDelete?: (id: string) => void;
 }
 
-const TIER_OPTIONS: { value: FocusTier; label: string; icon: string }[] = [
-  { value: 'focus', label: 'Focus', icon: '●' },
-  { value: 'satellite', label: 'Satellite', icon: '○' },
-  { value: 'wait', label: 'Wait', icon: '◐' },
+const TIER_OPTIONS: { value: FocusTier; label: string; icon: ReactNode }[] = [
+  { value: 'focus', label: 'Focus', icon: ICONS.ICON_TIER_FOCUS },
+  { value: 'satellite', label: 'Satellite', icon: ICONS.ICON_TIER_SATELLITE },
+  { value: 'wait', label: 'Wait', icon: ICONS.ICON_TIER_WAIT },
 ];
 
+// Wait is amber (paused/blocked) — the old grey half-circle was indistinguishable
+// from Satellite's grey outline at a glance.
 const TIER_COLORS: Record<FocusTier, string> = {
   focus: 'var(--accent)',
   satellite: 'var(--fg-muted)',
-  wait: '#8e8e93',
+  wait: 'var(--tier-wait, #ff9f0a)',
 };
 
 const PRIORITY_OPTIONS: { value: TaskPriority; icon: string; label: string }[] = [
@@ -142,6 +144,7 @@ export function TaskActionMenuItems({
                     afterAction();
                   }}
                 >
+                  <span className="task-kebab-tier-btn-icon">{t.icon}</span>
                   {t.label}
                 </button>
               ))}
@@ -222,6 +225,34 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
       window.removeEventListener('scroll', handleScroll);
     };
   }, [open, closeMenu]);
+
+  // Right-click anywhere on the task row opens this kebab menu at the cursor —
+  // the row is an app object, not a document, so the browser context menu is
+  // replaced. The row element is found via the [data-task-id] ancestor every
+  // task surface (list row, pinned/tier/recent card) already carries.
+  useEffect(() => {
+    const row = btnRef.current?.closest<HTMLElement>('[data-task-id]');
+    if (!row) return;
+    const handleContextMenu = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      // Keep the native menu inside text-editing surfaces (inline title edit).
+      if (target.isContentEditable) return;
+      // Nested/overlapping rows: only the innermost row owns the right-click.
+      if (target.closest('[data-task-id]') !== row) return;
+      e.preventDefault();
+      const menuWidth = 268;
+      const menuHeight = 350; // approximate max height (same as kebab toggle)
+      const top = window.innerHeight - e.clientY < menuHeight
+        ? Math.max(8, e.clientY - menuHeight)
+        : e.clientY + 2;
+      // Anchor the menu's right edge at the cursor, clamped so it stays on-screen.
+      const right = Math.max(8, Math.min(window.innerWidth - e.clientX, window.innerWidth - menuWidth - 8));
+      setMenuPos({ top, right });
+      setOpen(true);
+    };
+    row.addEventListener('contextmenu', handleContextMenu);
+    return () => row.removeEventListener('contextmenu', handleContextMenu);
+  }, []);
 
   const handleToggle = (e: React.MouseEvent) => {
     e.stopPropagation();
