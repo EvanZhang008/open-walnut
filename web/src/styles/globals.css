@@ -22117,6 +22117,9 @@ a.file-link:hover {
   flex-direction: column;
   overflow: hidden;
   position: relative;
+  /* Always-visible separator between the main (files/diff/terminal) area and
+     the chat — the drag handle itself stays transparent at rest. */
+  border-left: 1px solid var(--border);
 }
 /* When the chat is collapsed, the diff column takes the whole width. */
 .session-panel-split.is-chat-collapsed .session-panel-chat-col {
@@ -22817,102 +22820,195 @@ a.file-link:hover {
    Dark under the dark theme. The add/del row backgrounds still come from
    react-diff-view; these only color the foreground text. */
 .session-diff-table .token.comment,
+.file-viewer-code .token.comment,
 .session-diff-table .token.prolog,
+.file-viewer-code .token.prolog,
 .session-diff-table .token.doctype,
-.session-diff-table .token.cdata { color: #6e7781; font-style: italic; }
-.session-diff-table .token.punctuation { color: #24292f; }
-.session-diff-table .token.namespace { opacity: 0.7; }
+.file-viewer-code .token.doctype,
+.session-diff-table .token.cdata,
+.file-viewer-code .token.cdata { color: #6e7781; font-style: italic; }
+.session-diff-table .token.punctuation,
+.file-viewer-code .token.punctuation { color: #24292f; }
+.session-diff-table .token.namespace,
+.file-viewer-code .token.namespace { opacity: 0.7; }
 .session-diff-table .token.property,
+.file-viewer-code .token.property,
 .session-diff-table .token.tag,
+.file-viewer-code .token.tag,
 .session-diff-table .token.boolean,
+.file-viewer-code .token.boolean,
 .session-diff-table .token.number,
+.file-viewer-code .token.number,
 .session-diff-table .token.constant,
+.file-viewer-code .token.constant,
 .session-diff-table .token.symbol,
-.session-diff-table .token.deleted { color: #0550ae; }
+.file-viewer-code .token.symbol,
+.session-diff-table .token.deleted,
+.file-viewer-code .token.deleted { color: #0550ae; }
 .session-diff-table .token.selector,
+.file-viewer-code .token.selector,
 .session-diff-table .token.attr-name,
+.file-viewer-code .token.attr-name,
 .session-diff-table .token.string,
+.file-viewer-code .token.string,
 .session-diff-table .token.char,
+.file-viewer-code .token.char,
 .session-diff-table .token.builtin,
-.session-diff-table .token.inserted { color: #0a3069; }
+.file-viewer-code .token.builtin,
+.session-diff-table .token.inserted,
+.file-viewer-code .token.inserted { color: #0a3069; }
 .session-diff-table .token.operator,
+.file-viewer-code .token.operator,
 .session-diff-table .token.entity,
+.file-viewer-code .token.entity,
 .session-diff-table .token.url,
+.file-viewer-code .token.url,
 .session-diff-table .language-css .token.string,
-.session-diff-table .style .token.string { color: #0550ae; }
+.file-viewer-code .language-css .token.string,
+.session-diff-table .style .token.string,
+.file-viewer-code .style .token.string { color: #0550ae; }
 .session-diff-table .token.atrule,
+.file-viewer-code .token.atrule,
 .session-diff-table .token.attr-value,
-.session-diff-table .token.keyword { color: #cf222e; }
+.file-viewer-code .token.attr-value,
+.session-diff-table .token.keyword,
+.file-viewer-code .token.keyword { color: #cf222e; }
 .session-diff-table .token.function,
-.session-diff-table .token.class-name { color: #8250df; }
+.file-viewer-code .token.function,
+.session-diff-table .token.class-name,
+.file-viewer-code .token.class-name { color: #8250df; }
 .session-diff-table .token.regex,
+.file-viewer-code .token.regex,
 .session-diff-table .token.important,
-.session-diff-table .token.variable { color: #953800; }
+.file-viewer-code .token.important,
+.session-diff-table .token.variable,
+.file-viewer-code .token.variable { color: #953800; }
 .session-diff-table .token.important,
-.session-diff-table .token.bold { font-weight: 600; }
-.session-diff-table .token.italic { font-style: italic; }
+.file-viewer-code .token.important,
+.session-diff-table .token.bold,
+.file-viewer-code .token.bold { font-weight: 600; }
+.session-diff-table .token.italic,
+.file-viewer-code .token.italic { font-style: italic; }
 
 [data-theme="dark"] .session-diff-table .token.comment,
+[data-theme="dark"] .file-viewer-code .token.comment,
 [data-theme="dark"] .session-diff-table .token.prolog,
+[data-theme="dark"] .file-viewer-code .token.prolog,
 [data-theme="dark"] .session-diff-table .token.doctype,
-[data-theme="dark"] .session-diff-table .token.cdata { color: #8b949e; }
-[data-theme="dark"] .session-diff-table .token.punctuation { color: #c9d1d9; }
+[data-theme="dark"] .file-viewer-code .token.doctype,
+[data-theme="dark"] .session-diff-table .token.cdata,
+[data-theme="dark"] .file-viewer-code .token.cdata { color: #8b949e; }
+[data-theme="dark"] .session-diff-table .token.punctuation,
+[data-theme="dark"] .file-viewer-code .token.punctuation { color: #c9d1d9; }
 [data-theme="dark"] .session-diff-table .token.property,
+[data-theme="dark"] .file-viewer-code .token.property,
 [data-theme="dark"] .session-diff-table .token.tag,
+[data-theme="dark"] .file-viewer-code .token.tag,
 [data-theme="dark"] .session-diff-table .token.boolean,
+[data-theme="dark"] .file-viewer-code .token.boolean,
 [data-theme="dark"] .session-diff-table .token.number,
+[data-theme="dark"] .file-viewer-code .token.number,
 [data-theme="dark"] .session-diff-table .token.constant,
+[data-theme="dark"] .file-viewer-code .token.constant,
 [data-theme="dark"] .session-diff-table .token.symbol,
-[data-theme="dark"] .session-diff-table .token.deleted { color: #79c0ff; }
+[data-theme="dark"] .file-viewer-code .token.symbol,
+[data-theme="dark"] .session-diff-table .token.deleted,
+[data-theme="dark"] .file-viewer-code .token.deleted { color: #79c0ff; }
 [data-theme="dark"] .session-diff-table .token.selector,
+[data-theme="dark"] .file-viewer-code .token.selector,
 [data-theme="dark"] .session-diff-table .token.attr-name,
+[data-theme="dark"] .file-viewer-code .token.attr-name,
 [data-theme="dark"] .session-diff-table .token.string,
+[data-theme="dark"] .file-viewer-code .token.string,
 [data-theme="dark"] .session-diff-table .token.char,
+[data-theme="dark"] .file-viewer-code .token.char,
 [data-theme="dark"] .session-diff-table .token.builtin,
-[data-theme="dark"] .session-diff-table .token.inserted { color: #a5d6ff; }
+[data-theme="dark"] .file-viewer-code .token.builtin,
+[data-theme="dark"] .session-diff-table .token.inserted,
+[data-theme="dark"] .file-viewer-code .token.inserted { color: #a5d6ff; }
 [data-theme="dark"] .session-diff-table .token.operator,
+[data-theme="dark"] .file-viewer-code .token.operator,
 [data-theme="dark"] .session-diff-table .token.entity,
-[data-theme="dark"] .session-diff-table .token.url { color: #79c0ff; }
+[data-theme="dark"] .file-viewer-code .token.entity,
+[data-theme="dark"] .session-diff-table .token.url,
+[data-theme="dark"] .file-viewer-code .token.url { color: #79c0ff; }
 [data-theme="dark"] .session-diff-table .token.atrule,
+[data-theme="dark"] .file-viewer-code .token.atrule,
 [data-theme="dark"] .session-diff-table .token.attr-value,
-[data-theme="dark"] .session-diff-table .token.keyword { color: #ff7b72; }
+[data-theme="dark"] .file-viewer-code .token.attr-value,
+[data-theme="dark"] .session-diff-table .token.keyword,
+[data-theme="dark"] .file-viewer-code .token.keyword { color: #ff7b72; }
 [data-theme="dark"] .session-diff-table .token.function,
-[data-theme="dark"] .session-diff-table .token.class-name { color: #d2a8ff; }
+[data-theme="dark"] .file-viewer-code .token.function,
+[data-theme="dark"] .session-diff-table .token.class-name,
+[data-theme="dark"] .file-viewer-code .token.class-name { color: #d2a8ff; }
 [data-theme="dark"] .session-diff-table .token.regex,
+[data-theme="dark"] .file-viewer-code .token.regex,
 [data-theme="dark"] .session-diff-table .token.important,
-[data-theme="dark"] .session-diff-table .token.variable { color: #ffa657; }
+[data-theme="dark"] .file-viewer-code .token.important,
+[data-theme="dark"] .session-diff-table .token.variable,
+[data-theme="dark"] .file-viewer-code .token.variable { color: #ffa657; }
 
 /* Honor the OS dark preference when no explicit theme is set. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) .session-diff-table .token.comment,
+.file-viewer-code .token.comment,
   :root:not([data-theme]) .session-diff-table .token.prolog,
+.file-viewer-code .token.prolog,
   :root:not([data-theme]) .session-diff-table .token.doctype,
-  :root:not([data-theme]) .session-diff-table .token.cdata { color: #8b949e; }
-  :root:not([data-theme]) .session-diff-table .token.punctuation { color: #c9d1d9; }
+.file-viewer-code .token.doctype,
+  :root:not([data-theme]) .session-diff-table .token.cdata,
+.file-viewer-code .token.cdata { color: #8b949e; }
+  :root:not([data-theme]) .session-diff-table .token.punctuation,
+.file-viewer-code .token.punctuation { color: #c9d1d9; }
   :root:not([data-theme]) .session-diff-table .token.property,
+.file-viewer-code .token.property,
   :root:not([data-theme]) .session-diff-table .token.tag,
+.file-viewer-code .token.tag,
   :root:not([data-theme]) .session-diff-table .token.boolean,
+.file-viewer-code .token.boolean,
   :root:not([data-theme]) .session-diff-table .token.number,
+.file-viewer-code .token.number,
   :root:not([data-theme]) .session-diff-table .token.constant,
+.file-viewer-code .token.constant,
   :root:not([data-theme]) .session-diff-table .token.symbol,
-  :root:not([data-theme]) .session-diff-table .token.deleted { color: #79c0ff; }
+.file-viewer-code .token.symbol,
+  :root:not([data-theme]) .session-diff-table .token.deleted,
+.file-viewer-code .token.deleted { color: #79c0ff; }
   :root:not([data-theme]) .session-diff-table .token.selector,
+.file-viewer-code .token.selector,
   :root:not([data-theme]) .session-diff-table .token.attr-name,
+.file-viewer-code .token.attr-name,
   :root:not([data-theme]) .session-diff-table .token.string,
+.file-viewer-code .token.string,
   :root:not([data-theme]) .session-diff-table .token.char,
+.file-viewer-code .token.char,
   :root:not([data-theme]) .session-diff-table .token.builtin,
-  :root:not([data-theme]) .session-diff-table .token.inserted { color: #a5d6ff; }
+.file-viewer-code .token.builtin,
+  :root:not([data-theme]) .session-diff-table .token.inserted,
+.file-viewer-code .token.inserted { color: #a5d6ff; }
   :root:not([data-theme]) .session-diff-table .token.operator,
+.file-viewer-code .token.operator,
   :root:not([data-theme]) .session-diff-table .token.entity,
-  :root:not([data-theme]) .session-diff-table .token.url { color: #79c0ff; }
+.file-viewer-code .token.entity,
+  :root:not([data-theme]) .session-diff-table .token.url,
+.file-viewer-code .token.url { color: #79c0ff; }
   :root:not([data-theme]) .session-diff-table .token.atrule,
+.file-viewer-code .token.atrule,
   :root:not([data-theme]) .session-diff-table .token.attr-value,
-  :root:not([data-theme]) .session-diff-table .token.keyword { color: #ff7b72; }
+.file-viewer-code .token.attr-value,
+  :root:not([data-theme]) .session-diff-table .token.keyword,
+.file-viewer-code .token.keyword { color: #ff7b72; }
   :root:not([data-theme]) .session-diff-table .token.function,
-  :root:not([data-theme]) .session-diff-table .token.class-name { color: #d2a8ff; }
+.file-viewer-code .token.function,
+  :root:not([data-theme]) .session-diff-table .token.class-name,
+.file-viewer-code .token.class-name { color: #d2a8ff; }
   :root:not([data-theme]) .session-diff-table .token.regex,
+.file-viewer-code .token.regex,
   :root:not([data-theme]) .session-diff-table .token.important,
-  :root:not([data-theme]) .session-diff-table .token.variable { color: #ffa657; }
+.file-viewer-code .token.important,
+  :root:not([data-theme]) .session-diff-table .token.variable,
+.file-viewer-code .token.variable { color: #ffa657; }
 }
 
 /* Commentable diff: gutter + code show a pointer + hover highlight so it's

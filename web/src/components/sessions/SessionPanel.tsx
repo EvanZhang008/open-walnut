@@ -7,7 +7,6 @@ import { SessionTerminal } from './SessionTerminal';
 import { SessionDiffView } from './SessionDiffView';
 import { buildSelectionPrefill } from './diffPrefill';
 import type { SessionSplitView } from './sessionSplitView';
-import { FileViewer } from '../common/FileViewer';
 import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_LOCK, ICON_UNLOCK, ICON_LOCATE, ICON_NEW_TAB, ICON_VSCODE } from '../common/Icons';
 import { openPopout } from '@/popout/openPopout';
 import { UserMessagesSummary } from './UserMessagesSummary';
@@ -242,13 +241,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     }
   }
 
-  // FileViewer state — vault notes divert to the Notes page instead
-  const [fileViewerState, setFileViewerState] = useState<{ path: string; line?: number } | null>(null);
-  const openFileViewer = useCallback((path: string, line?: number) => {
-    setFileViewerState({ path, line });
-  }, []);
-  const handleFileOpen = useNotesAwareFileOpen(openFileViewer, session?.host);
-  const handleFileViewerClose = useCallback(() => setFileViewerState(null), []);
 
   // Scroll-to-message handler for UserMessagesSummary
   const handleMessageClick = useCallback((messageIndex: number) => {
@@ -423,16 +415,36 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     return true;
   }, [send, sessionId]);
   // Chat column in the split: resizable width (% of viewport) + collapse.
-  const chatPanel = useResizablePanel('open-walnut-changed-chat-w', 30, 'right');
+  // Fresh storage key (v3): re-baseline everyone at the new default. The middle
+  // content pane (file preview / diff) is the priority — chat is a side column.
+  const chatPanel = useResizablePanel('open-walnut-split-chat-w3', 30, 'right');
   const [chatCollapsed, setChatCollapsed] = useState(false);
+  // File-path click target for the Files split view. When set, the explorer roots
+  // at the clicked file (backend lists its parent + preselects it, VS Code style)
+  // instead of the session cwd. Cleared when the split closes / view switches.
+  const [fileViewTarget, setFileViewTarget] = useState<{ path: string; line?: number } | null>(null);
   // Toggle a split view: same view → close (exit fullscreen); other/none → open it.
+  // Exception: Files opened via a file-path click (fileViewTarget set) — the chip
+  // first re-roots the explorer back to the session cwd, second click closes.
   const toggleView = useCallback((view: SessionSplitView) => {
+    const rerooting = view === 'files' && fileViewTarget !== null && activeView === 'files';
+    setFileViewTarget(null);
+    if (rerooting) return; // stay open, explorer re-roots to the session cwd
     setActiveView((cur) => {
       const next = cur === view ? null : view;
       if (next) enterFullscreen(); else { exitFullscreen(); setChatCollapsed(false); }
       return next;
     });
-  }, [enterFullscreen, exitFullscreen]);
+  }, [enterFullscreen, exitFullscreen, fileViewTarget, activeView]);
+  // Clicking a file path in the chat opens it in the SAME split layout as
+  // Changed/Files/Terminal — file explorer + preview on the left, the live chat
+  // in the resizable right column (replaces the old full-screen FileViewer modal).
+  const openFileViewer = useCallback((path: string, line?: number) => {
+    setFileViewTarget({ path, line });
+    setActiveView('files');
+    enterFullscreen();
+  }, [enterFullscreen]);
+  const handleFileOpen = useNotesAwareFileOpen(openFileViewer, session?.host);
   // planPopoverRef removed — modal uses backdrop click
 
   // Auto-refresh plan content when modal opens
@@ -468,13 +480,14 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     setNotesOpen(false);
     setMessagesOpen(false);
     setActiveView(null);
+    setFileViewTarget(null);
     exitFullscreen();
   }, [sessionId, exitFullscreen]);
 
   // If the user exits fullscreen (ESC / backdrop) while a split view is open, close
   // it too so the body returns to the normal single-column chat.
   useEffect(() => {
-    if (!isFullscreen && splitOpen) setActiveView(null);
+    if (!isFullscreen && splitOpen) { setActiveView(null); setFileViewTarget(null); }
   }, [isFullscreen, splitOpen]);
 
   // planCompleted=true means the plan is definitively done — show Execute even if session is still running
@@ -1099,7 +1112,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                 <SessionDiffView sessionId={sessionId} sessionCwd={session?.cwd} sessionHost={session?.host} onSelectCode={handleSelectCode} onComment={handleDiffComment} />
               )}
               {activeView === 'files' && (
-                <SessionFileExplorer cwd={session?.cwd} host={session?.host} sessionId={sessionId} />
+                <SessionFileExplorer
+                  cwd={fileViewTarget?.path ?? session?.cwd}
+                  host={session?.host}
+                  sessionId={sessionId}
+                  initialLine={fileViewTarget?.line}
+                />
               )}
               {activeView === 'terminal' && (
                 <SessionTerminal
@@ -1278,14 +1296,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
         </div>
           </div>{/* .session-panel-chat-col */}
         </div>{/* .session-panel-split */}
-        {fileViewerState && (
-          <FileViewer
-            path={fileViewerState.path}
-            line={fileViewerState.line}
-            host={session?.host}
-            onClose={handleFileViewerClose}
-          />
-        )}
       </div>
     </SessionPanelErrorBoundary>
     </PlanContentContext.Provider>

@@ -5,10 +5,11 @@
  * it with line numbers + optional line highlight/scroll-to. Used by both the
  * full-screen FileViewer overlay and the inline right pane of SessionFileExplorer.
  */
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { fetchFileContent, rawFileContentUrl, downloadFileUrl, type FileContentResponse } from '@/api/files';
 import { formatSize } from '@/utils/format';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
+import { highlightLines } from '@/utils/code-highlight';
 import { ICON_NEW_TAB } from '@/components/common/Icons';
 import { openPopout } from '@/popout/openPopout';
 
@@ -20,17 +21,19 @@ interface FileContentViewProps {
   hidePopout?: boolean;
 }
 
-/** Build line-numbered HTML from raw file content. */
-function buildLineNumberedHtml(content: string, highlightLine?: number): string {
+/** Build line-numbered HTML from raw file content. Lines get Prism syntax
+ *  coloring when the language is known (highlightLines); plain escape otherwise. */
+function buildLineNumberedHtml(content: string, path: string, highlightLine?: number): string {
   const lines = content.split('\n');
+  const colored = highlightLines(content, path);
   const rows = lines.map((lineText, i) => {
     const lineNum = i + 1;
     const isHighlighted = lineNum === highlightLine;
-    const escaped = lineText
+    const html = colored ? colored[i]! : lineText
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;');
-    return `<div class="fv-line${isHighlighted ? ' fv-line-highlight' : ''}" data-line="${lineNum}"><span class="fv-line-num">${lineNum}</span><span class="fv-line-text">${escaped}</span></div>`;
+    return `<div class="fv-line${isHighlighted ? ' fv-line-highlight' : ''}" data-line="${lineNum}"><span class="fv-line-num">${lineNum}</span><span class="fv-line-text">${html}</span></div>`;
   });
   return rows.join('');
 }
@@ -160,13 +163,32 @@ export function FileContentView({ path: filePath, line, host, hidePopout }: File
 
   const lineNumberedHtml = useMemo(() => {
     if (!data?.content) return '';
-    return buildLineNumberedHtml(data.content, line);
-  }, [data, line]);
+    return buildLineNumberedHtml(data.content, filePath, line);
+  }, [data, filePath, line]);
 
   const isHtml = data?.content != null && isHtmlExt(data.extension, filePath);
   const isMarkdown = data?.content != null && isMarkdownExt(data.extension, filePath);
   const isRenderable = isHtml || isMarkdown;
   const showPreview = isRenderable && !showSource;
+
+  const [pathCopied, setPathCopied] = useState(false);
+  const handleCopyPath = useCallback(() => {
+    navigator.clipboard.writeText(filePath).then(() => {
+      setPathCopied(true);
+      setTimeout(() => setPathCopied(false), 1500);
+    }).catch(() => {});
+  }, [filePath]);
+
+  const copyPathBtn = (
+    <button
+      type="button"
+      className="fv-html-tab fv-copy-path-btn"
+      onClick={handleCopyPath}
+      title={`Copy path: ${filePath}`}
+    >
+      {pathCopied ? '✓ Copied' : 'Copy Path'}
+    </button>
+  );
 
   const downloadBtn = (
     <a
@@ -206,7 +228,7 @@ export function FileContentView({ path: filePath, line, host, hidePopout }: File
       {!loading && data?.error && <div className="file-viewer-error">{data.error}</div>}
       {!loading && !media && data?.binary && (
         <>
-          <div className="fv-html-toolbar fv-toolbar-popout-only">{downloadBtn}{popoutBtn}</div>
+          <div className="fv-html-toolbar fv-toolbar-popout-only">{copyPathBtn}{downloadBtn}{popoutBtn}</div>
           <div className="file-viewer-error">
             Binary file ({formatSize(data.size)}) — cannot display. Use Download to save it.
           </div>
@@ -215,6 +237,7 @@ export function FileContentView({ path: filePath, line, host, hidePopout }: File
       {!loading && media && (
         <>
           <div className="fv-html-toolbar">
+            {copyPathBtn}
             {downloadBtn}
             <button
               type="button"
@@ -294,6 +317,7 @@ export function FileContentView({ path: filePath, line, host, hidePopout }: File
           >
             Source
           </button>
+          {copyPathBtn}
           {downloadBtn}
           <button
             className="fv-html-tab fv-fullscreen-btn"
@@ -308,7 +332,7 @@ export function FileContentView({ path: filePath, line, host, hidePopout }: File
       {/* Non-renderable files (plain code) have no preview/source toolbar — give them
           a minimal one for Download + pop-out. Media/binary render their own. */}
       {!loading && !isRenderable && !media && !data?.binary && !data?.error && (
-        <div className="fv-html-toolbar fv-toolbar-popout-only">{downloadBtn}{popoutBtn}</div>
+        <div className="fv-html-toolbar fv-toolbar-popout-only">{copyPathBtn}{downloadBtn}{popoutBtn}</div>
       )}
       {!loading && showPreview && isHtml && (
         <iframe

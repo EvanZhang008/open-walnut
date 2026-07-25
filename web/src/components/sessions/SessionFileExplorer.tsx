@@ -49,8 +49,10 @@ interface RootSection {
 
 const LS_EXPANDED = 'open-walnut-file-explorer-expanded';
 const LS_OPEN_ROOTS = 'open-walnut-file-explorer-open-roots';
-const LS_TREE_WIDTH = 'open-walnut-file-explorer-tree-width';
-const TREE_WIDTH_DEFAULT = 240;
+// v2 key: re-baseline everyone — old persisted drags left the tree eating half
+// the panel; the preview pane is the star, the tree is navigation chrome.
+const LS_TREE_WIDTH = 'open-walnut-file-explorer-tree-width2';
+const TREE_WIDTH_DEFAULT = 200;
 const TREE_WIDTH_MIN = 140;
 const TREE_WIDTH_MAX = 600;
 
