@@ -3,25 +3,52 @@ import type { Request, Response } from 'express'
 // ─── Generic SSE channel: per-key ring buffer + replay ─────────────────────
 //
 // Extracted from the api-v1 conversation stream so session streams (and any
-// future SSE surface) share one implementation. Semantics are unchanged:
-// monotonic seq per channel, ring-capped replay window, Last-Event-ID replay,
-// periodic comment pings, explicit flush past the compression middleware.
+// future SSE surface) share one implementation: process-global monotonic seq,
+// ring-capped replay window, Last-Event-ID replay, periodic comment pings,
+// explicit flush past the compression middleware.
 
 interface SseEvent { seq: number; event: string; data: unknown }
 interface SseConn { res: Response; ping: NodeJS.Timeout }
-interface Channel { events: SseEvent[]; nextSeq: number; conns: Set<SseConn> }
+interface Channel { events: SseEvent[]; conns: Set<SseConn>; lastActiveAt: number }
 
 /** Ring cap per channel — a turn rarely exceeds a few hundred events. */
 const RING_MAX = 512
 const PING_INTERVAL_MS = 25_000
+/** Drop a channel's replay window after this long with no subscribers AND no
+ *  emits. Long enough for a page reload / brief tunnel blip to still replay;
+ *  without it every session/conversation key ever streamed keeps up to 512
+ *  events (unbounded bytes) for the life of the process. */
+const IDLE_CHANNEL_TTL_MS = 10 * 60_000
+const SWEEP_INTERVAL_MS = 60_000
 
 const channels = new Map<string, Channel>()
+// PROCESS-GLOBAL, not per-channel: the idle sweeper deletes and re-creates
+// channels, and a per-channel counter restarting at 0 would collide with the
+// browser's held Last-Event-ID — the reconnect would silently filter out every
+// new event as "already seen". Global seq means a rebuilt channel's ids are
+// always larger than anything a client has.
+let nextSeq = 0
+
+let sweepTimer: NodeJS.Timeout | null = null
+function ensureSweeper(): void {
+  if (sweepTimer) return
+  sweepTimer = setInterval(() => {
+    const cutoff = Date.now() - IDLE_CHANNEL_TTL_MS
+    for (const [key, ch] of channels) {
+      if (ch.conns.size === 0 && ch.lastActiveAt < cutoff) channels.delete(key)
+    }
+  }, SWEEP_INTERVAL_MS)
+  sweepTimer.unref?.()
+}
 
 function getChannel(key: string): Channel {
   let ch = channels.get(key)
   if (!ch) {
-    ch = { events: [], nextSeq: 0, conns: new Set() }
+    ch = { events: [], conns: new Set(), lastActiveAt: Date.now() }
     channels.set(key, ch)
+    ensureSweeper()
+  } else {
+    ch.lastActiveAt = Date.now()
   }
   return ch
 }
@@ -40,7 +67,7 @@ function writeSseEvent(res: Response, ev: SseEvent): void {
 export function emitSse(key: string, event: string, data: unknown, opts?: { reset?: boolean }): void {
   const ch = getChannel(key)
   if (opts?.reset) ch.events = []
-  const ev: SseEvent = { seq: ch.nextSeq++, event, data }
+  const ev: SseEvent = { seq: nextSeq++, event, data }
   ch.events.push(ev)
   if (ch.events.length > RING_MAX) ch.events.splice(0, ch.events.length - RING_MAX)
   for (const conn of ch.conns) {
@@ -109,8 +136,20 @@ export function attachSse(
   req.on('close', () => {
     clearInterval(conn.ping)
     ch.conns.delete(conn)
+    ch.lastActiveAt = Date.now() // idle TTL counts from last disconnect
     opts?.onClose?.()
   })
+}
+
+/** Test-only: remove one idle channel without resetting the process sequence. */
+export function _deleteSseChannelForTesting(key: string): void {
+  const ch = channels.get(key)
+  if (ch?.conns.size === 0) channels.delete(key)
+}
+
+/** Test-only: inspect the buffered IDs for one channel. */
+export function _sseEventIdsForTesting(key: string): number[] {
+  return channels.get(key)?.events.map(event => event.seq) ?? []
 }
 
 /** Close all live SSE connections (server shutdown / tests). */
@@ -122,4 +161,6 @@ export function closeAllSseChannels(): void {
     }
     ch.conns.clear()
   }
+  channels.clear()
+  if (sweepTimer) { clearInterval(sweepTimer); sweepTimer = null }
 }

@@ -89,9 +89,12 @@ import { setupRouter } from './routes/setup.js'
 import { apiV1Router, closeApiV1Streams } from './routes/api-v1.js'
 import { sessionStreamV1Router } from './routes/session-stream-v1.js'
 import { sttV1Router } from './routes/stt-v1.js'
+import { mediaV1Router } from './routes/media-v1.js'
 import { incidentsRouter } from './routes/incidents.js'
 import { notificationsRouter } from './routes/notifications.js'
 import { addNotification as addFeedNotification, resolvePermissionNotification } from '../core/notifications/store.js'
+import { djb2 as notificationHash } from '../core/notifications/log-error-bridge.js'
+import { redactSensitiveText } from '../logging/redact.js'
 import { stripEntityRefs, extractFirstRefs } from '../utils/entity-refs.js'
 import { registerAuthRpc } from './routes/auth-rpc.js'
 import { initPushNotifications } from '../core/push-notification.js'
@@ -123,6 +126,53 @@ async function resolveTaskRef(taskId: string): Promise<string> {
 
 const DEFAULT_PORT = 3456
 const SYNC_INTERVAL_MS = 30_000 // Default plugin sync interval (30s)
+const MAX_ERROR_NOTIFICATION_BODY = 600
+
+
+async function publishErrorNotification(input: {
+  title: string
+  body: string
+  dedupScope: string
+  sessionId?: string
+  taskId?: string
+}): Promise<boolean> {
+  const timestamp = Date.now()
+  // Session stderr / provider errors can embed tokens or keys; the log-error
+  // bridge redacts its own path, but this hand-published path writes to the
+  // durable store directly — redact BEFORE hashing/truncating/persisting.
+  const plainBody = redactSensitiveText(stripEntityRefs(input.body))
+  const body = plainBody.length > MAX_ERROR_NOTIFICATION_BODY
+    ? `${plainBody.slice(0, MAX_ERROR_NOTIFICATION_BODY)}…`
+    : plainBody
+  const dedupKey = `error:${input.dedupScope}:${notificationHash(plainBody)}`
+
+  try {
+    const record = await addFeedNotification({
+      kind: 'operation-error',
+      severity: 'error',
+      title: input.title,
+      body,
+      timestamp,
+      dedupKey,
+      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+      ...(input.taskId ? { taskId: input.taskId } : {}),
+    })
+    // Insert detection via cross-module contract: on a dedup hit the store
+    // returns the EXISTING record unchanged, so record.timestamp only equals
+    // our timestamp when this call actually created it — repeats must not
+    // re-toast connected UIs. (Same trick as log-error-bridge.)
+    if (record.timestamp === timestamp) {
+      broadcastEvent('notification:new', record)
+    }
+    return true
+  } catch (err) {
+    log.web.warn('failed to publish error notification', {
+      title: input.title,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return false
+  }
+}
 
 /**
  * CORS origin gate. Allows requests with no `Origin` (native apps, curl,
@@ -175,6 +225,7 @@ let qmdSyncStop: (() => Promise<void>) | null = null
 let gitAutoCommitHandle: { stop: () => void; health: GitAutoCommitHealth } | null = null
 let taskProjectionHandle: { stop: () => void } | null = null
 let sessionProjectionHandle: { stop: () => void } | null = null
+let autoContinueHandle: { stop: () => void } | null = null
 let claudeSettingsWatcherStop: (() => void) | null = null
 // Pending deferred-markDone timers from the session:status-changed handler.
 // Hoisted to module scope so stopServer() can cancel them before teardown,
@@ -415,6 +466,16 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
   const app = express()
 
+  // Never auto-generate ETags for API JSON. Express's default weak ETag let the
+  // browser turn concurrent duplicate GETs into If-None-Match revalidations; a
+  // cache race then surfaced the empty-body 304 to fetch() as "200 with no JSON"
+  // (inc-1784686852150 / inc-1784752220440: session panel opened as "Untitled
+  // session" + "History unavailable" until refresh). API payloads are dynamic
+  // session/task state — conditional caching buys nothing here, and hashing
+  // multi-MB JSON bodies per response was pure waste. Static assets are NOT
+  // affected: express.static/res.sendFile use their own etag option.
+  app.set('etag', false)
+
   // Cloud mode sits behind a local reverse proxy (Caddy) — trust loopback so
   // req.ip reflects the real client (X-Forwarded-For) for auth rate limiting.
   // NOT set in trusted-LAN mode: there, honoring X-Forwarded-For would let a
@@ -454,6 +515,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     app.use(compression({ threshold: 1024 }))
   }
   app.use(express.json({ limit: '15mb' }))
+  // Default API responses to no-store so the browser HTTP cache never
+  // revalidates/synthesizes them (see the etag note above — same incident).
+  // Routes that WANT caching (images, media, timeline …) set their own
+  // Cache-Control inside the handler, which overwrites this default.
+  app.use('/api', (_req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store')
+    next()
+  })
   // Auth middleware: localhost passthrough, remote requires Bearer token
   app.use('/api', authMiddleware)
   app.use('/api', requestLogger)
@@ -551,14 +620,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           log.cron.error('cron runMainAgentWithPrompt failed', { jobName, error: errMsg })
           // Broadcast error so the UI clears streaming state
           broadcastEvent('agent:error', { error: `Cron job "${jobName}" agent failed: ${errMsg}`, conversationId })
-          // Persist error to chat history so it survives page refresh
-          await chatHistory.addNotification({
-            role: 'assistant',
-            content: `**Cron Error** (${jobName}): ${errMsg}`,
-            source: 'agent-error',
-            notification: true,
-            agentId: 'general', conversationId,
-          })
           throw err // Re-throw so the cron system records the error status
         }
       })
@@ -756,6 +817,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/v1', sessionStreamV1Router)
   // Voice input (additive): phone audio → text, works on primary AND cloud.
   app.use('/api/v1', sttV1Router)
+  // Image bytes for mobile (additive): local file, daemon, or bridge proxy.
+  app.use('/api/v1', mediaV1Router)
   app.use('/api/browser-logs', browserLogsRouter)
   // One-shot diagnostic bundle (Settings → Bug Report; also curl-able).
   app.use('/api/bug-report', bugReportRouter)
@@ -1122,6 +1185,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // embed() is called once per flush (not per event) to avoid thrashing.
     {
       const DEBOUNCE_MS = 2000;
+      // Session cooldown: an ACTIVE session fires session:result every turn,
+      // and each flush re-reads + re-embeds its whole conversation in the
+      // worker (observed 62 re-embeds/day of one 46MB session, 5GB worker RSS
+      // peaks). 10min staleness is fine for search; deletes bypass the hold.
+      // Tasks stay uncooled — their docs are tiny (title/description).
+      const SESSION_REEMBED_MIN_INTERVAL_MS = 10 * 60_000;
       const taskQueue = createQmdIncrementalQueue({
         debounceMs: DEBOUNCE_MS,
         dispatch: (taskIds) => dispatchQmdIncrementalIndex(
@@ -1140,6 +1209,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       })
       const sessionQueue = createQmdIncrementalQueue({
         debounceMs: DEBOUNCE_MS,
+        minIntervalMs: SESSION_REEMBED_MIN_INTERVAL_MS,
         dispatch: (sessionIds) => dispatchQmdIncrementalIndex(
           { sessionIds },
           { onStats: setQmdStoreStats },
@@ -1239,6 +1309,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // companion for the read-only GET /api/v1/sessions.
       const { startSessionProjectionExport } = await import('../core/session-projection.js')
       sessionProjectionHandle = startSessionProjectionExport()
+
+      // Auto-continue: recover a turn that died to upstream retry exhaustion by
+      // scheduling one delayed `continue` nudge (b12 retry hardening). Primary box
+      // only — the cloud replica proxies sessions and must not double-fire.
+      const { startSessionAutoContinue } = await import('../core/session-auto-continue.js')
+      autoContinueHandle = startSessionAutoContinue()
     } else {
       // Cloud box: two-way task sync over git (see task-outbox.ts).
       // Writer half — every local task mutation drops an op file that rides
@@ -1495,12 +1571,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // session-tracker.ts persisting status changes asynchronously.
   const MARK_DONE_DEDUP_MS = 500
 
-  // Dedup window for delivery-failure chat notifications. During an SSH outage
-  // each send fast-fails (~400ms against the connection failure cache); without
-  // dedup every failure persisted a permanent red box to the main chat
-  // (150+ during the 2026-06-10 incident). One notification per session per
-  // window is enough — the per-message state lives on the optimistic messages
-  // (failed + Retry) in the session panel.
+  // Short-circuit repeated delivery-failure notification writes during an outage.
+  // The durable notification store also de-dupes by session + error text, while
+  // the per-message retry state remains in the session panel.
   const deliveryFailureNotifiedAt = new Map<string, number>()
   const DELIVERY_FAILURE_NOTIFY_WINDOW_MS = 5 * 60_000
 
@@ -1929,6 +2002,42 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
             log.ws.info('markDone suppressed (stale idle within dedup window)', {
               sessionId: sid, ageMs: Date.now() - lastRun, dedupMs: MARK_DONE_DEDUP_MS,
             })
+            // A genuine instantaneous turn can also reach idle inside this
+            // window. Re-check durable state after the window so suppression
+            // delays markDone instead of permanently dropping it.
+            const timer = setTimeout(() => {
+              deferredMarkDoneTimers.delete(timer)
+              void (async () => {
+                try {
+                  const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+                  const rec = await getSessionByClaudeId(sid)
+                  const isStillDone = rec?.process_status === 'idle'
+                    || rec?.process_status === 'stopped'
+                    || rec?.process_status === 'error'
+                  if (isStillDone && sessionStreamBuffer.getSnapshot(sid).isStreaming) {
+                    sessionStreamBuffer.markDone(sid)
+                    if (rec.process_status === 'stopped' || rec.process_status === 'error') {
+                      sessionStreamBuffer.clear(sid)
+                      lastMarkStreamingAt.delete(sid)
+                    }
+                    log.ws.info('markDone applied after idle deferral (session is still done)', {
+                      sessionId: sid, process_status: rec.process_status,
+                    })
+                  } else {
+                    log.ws.info('markDone skipped after idle deferral (session recovered or buffer done)', {
+                      sessionId: sid,
+                      process_status: rec?.process_status,
+                      isStreaming: sessionStreamBuffer.getSnapshot(sid).isStreaming,
+                    })
+                  }
+                } catch (err) {
+                  log.ws.warn('deferred idle markDone check failed', {
+                    sessionId: sid, error: err instanceof Error ? err.message : String(err),
+                  })
+                }
+              })()
+            }, MARK_DONE_DEDUP_MS + 100)
+            deferredMarkDoneTimers.add(timer)
           } else {
             sessionStreamBuffer.markDone(sid)
           }
@@ -1981,21 +2090,26 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
       const taskRef = taskId ? await resolveTaskRef(taskId) : null
 
-      // For successful sessions with a taskId, the triage agent will produce a compact
-      // notification — don't write the full session result to main chat.
-      // For errors or sessions without a taskId (no triage), persist directly.
+      // Successful task sessions are summarized by triage. Taskless successful
+      // results stay in chat; errors belong exclusively in Notifications.
       const willBeTriage = !isError && !!taskId
-      if (result && !willBeTriage) {
-        const prefix = isError ? '**Session Error**' : '**Session Result**'
+      if (isError) {
+        await publishErrorNotification({
+          title: 'Session Error',
+          body: `${taskRef ? `${taskRef}: ` : ''}${result || 'Session ended with an error.'}`,
+          dedupScope: `session:${sessionId ?? taskId ?? 'unknown'}:runtime`,
+          sessionId,
+          taskId,
+        })
+      } else if (result && !willBeTriage) {
         const content = taskRef
-          ? `${prefix} (${taskRef}):\n\n${result}`
-          : `${prefix}:\n\n${result}`
-        // Background notification → general's stable MAIN conversation.
+          ? `**Session Result** (${taskRef}):\n\n${result}`
+          : `**Session Result**:\n\n${result}`
         const { getMainConversationId } = await import('../core/conversations.js')
         const conversationId = await getMainConversationId('general')
         await chatHistory.addNotification({
           role: 'assistant', content,
-          source: isError ? 'session-error' : 'session',
+          source: 'session',
           notification: true, taskId,
           agentId: 'general', conversationId,
         })
@@ -2071,25 +2185,24 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       return
     }
 
-    // Persist session:error to chat history
+    // Route session errors to Notifications. Session panels retain their own
+    // contextual error/retry state; the general chat must remain conversational.
     if (event.name === 'session:error') {
       const { error, taskId, sessionId, errorKind } = eventData<'session:error'>(event)
       const isDeliveryFailure = errorKind === 'delivery_failed'
+      let shouldPublish = true
 
       // delivery_failed = connectivity status, not a turn outcome. The session is
-      // still valid and the message batch is safely back in 'pending'. Dedup the
-      // chat notification (one per session per window) — during an SSH outage every
-      // send fails fast against the failure cache, and persisting each occurrence
-      // flooded the main chat with 150+ permanent red boxes (2026-06-10 incident).
+      // still valid and the message batch is safely back in 'pending'. Avoid
+      // hammering the durable store while repeated sends hit the same outage.
       if (isDeliveryFailure) {
         const key = `${sessionId ?? taskId ?? 'unknown'}`
         const now = Date.now()
         const lastAt = deliveryFailureNotifiedAt.get(key) ?? 0
         if (now - lastAt < DELIVERY_FAILURE_NOTIFY_WINDOW_MS) {
-          log.web.info('session delivery failure suppressed (deduped)', { sessionId, taskId })
-          return
+          shouldPublish = false
+          log.web.info('session delivery notification suppressed (deduped)', { sessionId, taskId })
         }
-        deliveryFailureNotifiedAt.set(key, now)
         // Opportunistic sweep so the map can't grow unbounded
         if (deliveryFailureNotifiedAt.size > 200) {
           for (const [k, t] of deliveryFailureNotifiedAt) {
@@ -2111,17 +2224,23 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
       log.web.info('session error received', { sessionId, taskId, error: error?.slice(0, 200), errorKind })
       const errorTaskRef = taskId ? await resolveTaskRef(taskId) : null
-      const content = isDeliveryFailure
-        ? `**Session Delivery Failed**${errorTaskRef ? ` (${errorTaskRef})` : ''}: ${error}\n\n_Your message was NOT lost — it stays queued and will be re-sent when you press Retry, send another message, or the connection recovers._`
-        : `**Session Error**${errorTaskRef ? ` (${errorTaskRef})` : ''}: ${error}`
-      // Background notification → general's stable MAIN conversation.
-      const { getMainConversationId } = await import('../core/conversations.js')
-      const conversationId = await getMainConversationId('general')
-      await chatHistory.addNotification({
-        role: 'assistant', content,
-        source: 'session-error', notification: true, taskId,
-        agentId: 'general', conversationId,
-      })
+      if (shouldPublish) {
+        const body = isDeliveryFailure
+          ? `${errorTaskRef ? `${errorTaskRef}: ` : ''}${error}\n\nYour message was not lost. It stays queued and will be re-sent when you press Retry, send another message, or the connection recovers.`
+          : `${errorTaskRef ? `${errorTaskRef}: ` : ''}${error}`
+        const published = await publishErrorNotification({
+          title: isDeliveryFailure ? 'Session Delivery Failed' : 'Session Error',
+          body,
+          dedupScope: `session:${sessionId ?? taskId ?? 'unknown'}:${isDeliveryFailure ? 'delivery' : 'runtime'}`,
+          sessionId,
+          taskId,
+        })
+        // Arm the suppression window only after the write actually landed — a
+        // failed persist must not silence this outage for the next 5 minutes.
+        if (published && isDeliveryFailure) {
+          deliveryFailureNotifiedAt.set(`${sessionId ?? taskId ?? 'unknown'}`, Date.now())
+        }
+      }
 
       // Delivery failure: session is intact (batch back in pending) — do NOT clear
       // the task slot, do NOT flip the phase, do NOT announce session:ended.
@@ -2366,12 +2485,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
               const errMsg = err instanceof Error ? err.message : String(err)
               log.web.error('triage main agent failed', { taskId, error: errMsg })
               broadcastEvent('agent:error', { error: `Triage notify failed for task ${taskId}: ${errMsg}`, conversationId })
-              await chatHistory.addNotification({
-                role: 'assistant',
-                content: `**Triage Error** (${taskId}): ${errMsg}`,
-                source: 'agent-error', notification: true,
-                agentId: 'general', conversationId,
-              })
             }
           })
         } else {
@@ -2435,18 +2548,16 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       return
     }
 
-    // Persist subagent:error to chat history
+    // Subagent failures are operational events, not conversation turns.
     if (event.name === 'subagent:error') {
-      const { agentId, taskId, error } = eventData<'subagent:error'>(event)
+      const { runId, agentId, taskId, error } = eventData<'subagent:error'>(event)
       const subErrTaskRef = taskId ? await resolveTaskRef(taskId) : null
-      const content = `**Subagent Error**${agentId ? ` (${agentId})` : ''}${subErrTaskRef ? ` for task ${subErrTaskRef}` : ''}: ${error}`
-      // Background notification → general's stable MAIN conversation.
-      const { getMainConversationId } = await import('../core/conversations.js')
-      const conversationId = await getMainConversationId('general')
-      await chatHistory.addNotification({
-        role: 'assistant', content,
-        source: 'subagent', notification: true, taskId,
-        agentId: 'general', conversationId,
+      await publishErrorNotification({
+        title: 'Subagent Error',
+        body: `${agentId ? `${agentId}${subErrTaskRef ? ` for ${subErrTaskRef}` : ''}: ` : ''}${error}`,
+        dedupScope: `subagent:${runId ?? agentId ?? taskId ?? 'unknown'}`,
+        sessionId: runId,
+        taskId,
       })
     }
   })
@@ -2576,7 +2687,7 @@ const GIT_POLL_INTERVAL_MS = 30_000
 
 function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth } {
   const health: GitAutoCommitHealth = { protected: false, consecutiveFailures: 0 }
-  let notifiedForEpisode = false // only send chat notification once per failure episode
+  let notifiedForEpisode = false // only send one feed notification per failure episode
   let lockContentionCount = 0
 
   const emitStatus = () => {
@@ -2666,29 +2777,16 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
           consecutiveFailures: health.consecutiveFailures,
         })
         emitStatus()
-        // Send a one-time chat notification when failures first reach the threshold
+        // Surface a persistent notification when failures first reach the threshold.
         if (health.consecutiveFailures >= 3 && !notifiedForEpisode) {
-          const notifContent = `Data backup failing \u2014 git auto-commit has failed ${health.consecutiveFailures}+ times consecutively. Check logs: \`open-walnut logs -s git\``
           notifiedForEpisode = true
-          // Background notification \u2192 general's stable MAIN conversation.
-          import('../core/conversations.js')
-            .then(({ getMainConversationId }) => getMainConversationId('general'))
-            .then((conversationId) =>
-              chatHistory.addNotification({
-                role: 'assistant',
-                content: notifContent,
-                source: 'agent-error',
-                notification: true,
-                agentId: 'general', conversationId,
-              }).then(() => {
-                bus.emit(EventNames.CHAT_HISTORY_UPDATED, {
-                  conversationId,
-                  entry: { role: 'assistant', content: notifContent, source: 'agent-error', notification: true, timestamp: new Date().toISOString() },
-                }, ['web-ui'])
-              })
-            ).catch(() => {
-              notifiedForEpisode = false // reset so next cycle retries
-            })
+          void publishErrorNotification({
+            title: 'Data Backup Failing',
+            body: `Git auto-commit has failed ${health.consecutiveFailures}+ times consecutively. Check logs with open-walnut logs -s git.`,
+            dedupScope: 'git:auto-commit',
+          }).then((published) => {
+            if (!published) notifiedForEpisode = false // reset so next cycle retries
+          })
         }
       }
     } finally {
@@ -3245,6 +3343,10 @@ export async function stopServer(): Promise<void> {
   if (sessionProjectionHandle) {
     sessionProjectionHandle.stop()
     sessionProjectionHandle = null
+  }
+  if (autoContinueHandle) {
+    autoContinueHandle.stop()
+    autoContinueHandle = null
   }
   if (claudeSettingsWatcherStop) {
     claudeSettingsWatcherStop()

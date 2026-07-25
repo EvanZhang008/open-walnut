@@ -51,9 +51,10 @@ test('session errors appear only in Notifications, never in main chat', async ({
   await expect.poll(async () => {
     const response = await page.request.get('/api/notifications')
     const data = await response.json() as {
-      feed: Array<{ title: string; body?: string; sessionId?: string }>
+      feed: Array<{ title: string; body?: string; sessionId?: string; taskId?: string }>
     }
-    return data.feed.some((item) => item.title === 'Session Error' && !!item.sessionId)
+    return data.feed.some((item) =>
+      item.title === 'Session Error' && !!(item.sessionId || item.taskId))
   }, { timeout: 15_000 }).toBe(true)
 
   const mainChat = page.locator('.main-page-chat')
@@ -61,8 +62,27 @@ test('session errors appear only in Notifications, never in main chat', async ({
   await expect(mainChat).not.toContainText('Session Error')
   await expect(mainChat).not.toContainText('Session Delivery Failed')
 
+  // Error context and recovery controls remain where they are actionable.
+  const pendingSession = page.locator('.pending-session-panel')
+  await expect(pendingSession).toBeVisible()
+  await expect(pendingSession.locator('.pending-session-label')).toContainText('Process exited')
+  await expect(pendingSession.getByRole('button', { name: 'Retry' })).toBeVisible()
+
   await page.getByRole('button', { name: 'Notifications' }).click()
   const panel = page.locator('.notification-panel')
+  await expect(panel).toBeVisible()
+  await expect(panel.locator('.notification-feed-item-title', { hasText: 'Session Error' }).first()).toBeVisible()
+
+  // A refresh reloads persisted chat history and the durable notification feed.
+  // The error must stay out of chat and remain available in Notifications.
+  await page.reload()
+  await expect(page.locator('.main-page')).toBeVisible()
+  const reloadedMainChat = page.locator('.main-page-chat')
+  await expect(reloadedMainChat.locator('.chat-message-notification-error')).toHaveCount(0)
+  await expect(reloadedMainChat).not.toContainText('Session Error')
+  await expect(reloadedMainChat).not.toContainText('Session Delivery Failed')
+
+  await page.getByRole('button', { name: 'Notifications' }).click()
   await expect(panel).toBeVisible()
   await expect(panel.locator('.notification-feed-item-title', { hasText: 'Session Error' }).first()).toBeVisible()
 

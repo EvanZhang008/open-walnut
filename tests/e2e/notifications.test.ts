@@ -21,9 +21,11 @@ vi.mock('../../src/constants.js', () => createMockConstants());
 import { WALNUT_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
+import { dismissNotifications } from '../../src/core/notifications/store.js';
 
 let server: HttpServer;
 let port: number;
+const previousDisableSearch = process.env.WALNUT_DISABLE_SEARCH;
 
 function apiUrl(path: string): string {
   return `http://localhost:${port}${path}`;
@@ -34,7 +36,16 @@ function delay(ms: number): Promise<void> {
 }
 
 interface FeedResponse {
-  feed: Array<{ id: string; kind: string; title: string; read: boolean; dedupKey: string }>;
+  feed: Array<{
+    id: string;
+    kind: string;
+    title: string;
+    body?: string;
+    read: boolean;
+    dedupKey: string;
+    sessionId?: string;
+    taskId?: string;
+  }>;
   unreadCount: number;
 }
 
@@ -56,16 +67,26 @@ async function pollFeed(pred: (f: FeedResponse) => boolean, timeoutMs = 3000): P
 }
 
 beforeAll(async () => {
-  await fs.rm(WALNUT_HOME, { recursive: true, force: true });
+  process.env.WALNUT_DISABLE_SEARCH = '1';
+  await fs.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
   await fs.mkdir(WALNUT_HOME, { recursive: true });
   server = await startServer({ port: 0, dev: true });
   const addr = server.address();
   port = typeof addr === 'object' && addr ? addr.port : 0;
+
+  // Vitest deliberately blocks the production local-daemon directory. The
+  // resulting startup safety alert is unrelated to notification routing.
+  await dismissNotifications();
 });
 
 afterAll(async () => {
   await stopServer();
-  await fs.rm(WALNUT_HOME, { recursive: true, force: true });
+  await fs.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+  if (previousDisableSearch === undefined) {
+    delete process.env.WALNUT_DISABLE_SEARCH;
+  } else {
+    process.env.WALNUT_DISABLE_SEARCH = previousDisableSearch;
+  }
 });
 
 describe('Notification feed API', () => {
@@ -101,6 +122,48 @@ describe('Notification feed API', () => {
     await delay(200);
     const body = await getFeed();
     expect(body.feed.filter((n) => n.dedupKey === 'perm:req-e2e-1')).toHaveLength(1);
+  });
+
+  it('routes repeated delivery failures to one notification and keeps them out of chat', async () => {
+    const sessionId = 'sess-delivery-failed-e2e';
+    const error = 'No active session found for session ID: sess-delivery-failed-e2e';
+    const payload = {
+      sessionId,
+      error,
+      errorKind: 'delivery_failed' as const,
+    };
+
+    // Reproduce the repeated outage events that previously accumulated as
+    // permanent red cards in the main conversation.
+    bus.emit(EventNames.SESSION_ERROR, payload, ['main-ai', 'session-runner'], {
+      source: 'session-runner',
+    });
+    bus.emit(EventNames.SESSION_ERROR, payload, ['main-ai', 'session-runner'], {
+      source: 'session-runner',
+    });
+
+    await pollFeed((feed) => feed.feed.some((n) =>
+      n.title === 'Session Delivery Failed' && n.sessionId === sessionId));
+    await delay(100);
+
+    const feed = await getFeed();
+    const deliveryFailures = feed.feed.filter((n) =>
+      n.title === 'Session Delivery Failed' && n.sessionId === sessionId);
+    expect(deliveryFailures).toHaveLength(1);
+    expect(deliveryFailures[0]).toMatchObject({
+      kind: 'operation-error',
+      body: expect.stringContaining(error),
+      sessionId,
+    });
+
+    const historyRes = await fetch(apiUrl('/api/chat/history'));
+    expect(historyRes.status).toBe(200);
+    const history = await historyRes.json() as {
+      messages: Array<{ content: unknown; source?: string }>;
+    };
+    expect(history.messages.filter((entry) => entry.source === 'session-error')).toHaveLength(0);
+    expect(JSON.stringify(history.messages)).not.toContain('Session Delivery Failed');
+    expect(JSON.stringify(history.messages)).not.toContain(error);
   });
 
   it('marks all read, clearing the unread count', async () => {

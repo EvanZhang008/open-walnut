@@ -1082,14 +1082,8 @@ export function registerChatRpc(): void {
           [
             { role: 'assistant', content: [{ type: 'text', text: `[Error: ${errMsg}]` }] },
           ] as MessageParam[],
-          { agentId, conversationId },
+          { source: 'agent-error', agentId, conversationId },
         )
-        await chatHistory.addNotification({
-          role: 'assistant', content: `Error: ${errMsg}`,
-          source: 'agent-error', notification: true,
-          agentId,
-          conversationId,
-        })
 
         // Auto-append to conversation_log for error turns (General only)
         if (taskContext?.id && agentId === 'general') {

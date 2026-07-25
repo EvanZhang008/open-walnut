@@ -70,6 +70,10 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
   // Assign a short request ID (8 hex chars — enough for local correlation)
   const reqId = crypto.randomBytes(4).toString('hex')
   req.reqId = reqId
+  // Echo it to the client so browser-side logs (e.g. the api client's JSON
+  // parse-failure forensics) can name the exact server request they observed —
+  // without this, concurrent duplicate GETs to the same URL are unpairable.
+  res.setHeader('X-Request-Id', reqId)
 
   const start = Date.now()
 
@@ -90,6 +94,17 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
     if (['POST', 'PUT', 'PATCH'].includes(method)) {
       const cl = req.headers['content-length']
       if (cl) meta.bodyBytes = Number(cl)
+    }
+
+    // Response body size when known (compression streams are chunked → absent).
+    // A 200 with respBytes:0 or a surprise 304 is the cache-race fingerprint
+    // behind "Untitled session" (inc-1784686852150) — keep this visible.
+    const respCl = res.getHeader('content-length')
+    if (respCl !== undefined) meta.respBytes = Number(respCl)
+    // A 304 can only come from conditional-request handling; record what the
+    // client sent so we can tell browser-cache revalidation from proxies.
+    if (status === 304 && req.headers['if-none-match']) {
+      meta.ifNoneMatch = String(req.headers['if-none-match'])
     }
 
     const line = `${method} ${url} → ${status} (${duration}ms)`

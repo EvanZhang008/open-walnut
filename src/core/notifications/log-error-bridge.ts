@@ -7,9 +7,9 @@
  * and external-plugin auth errors historically never surfaced outside the log file).
  *
  * Noise control (an error that repeats 1300×/day must be ONE feed entry):
- *   - dedupKey = `logerr:<subsystem>:<djb2(message)>` — identical errors
- *     collapse into a single feed record (store-level dedup). Dismissing the
- *     entry re-arms it: the next occurrence re-adds a fresh record.
+ *   - dedupKey hashes the log title plus stable entity/error context. Identical
+ *     failures collapse, while a later failure with a different root cause gets
+ *     its own record even when both logs use the same fixed title.
  *   - a short in-memory TTL cache absorbs storms (600 errors/hour) without
  *     re-reading notifications.json on every repeat.
  *
@@ -38,8 +38,10 @@ function pruneRecent(now: number): void {
   }
 }
 
-/** djb2 — same cheap non-crypto hash external sync plugins use for comment dedup. */
-function djb2(s: string): string {
+/** djb2 — same cheap non-crypto hash external sync plugins use for comment dedup.
+ *  Shared by every notification dedupKey producer (this bridge + server.ts's
+ *  hand-published error notifications) so identical bodies hash identically. */
+export function djb2(s: string): string {
   let h = 5381;
   for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
   return h.toString(36);
@@ -59,6 +61,28 @@ function buildBody(payload: ErrorNotifyPayload): string | undefined {
   return clean.length > MAX_BODY ? `${clean.slice(0, MAX_BODY)}…` : clean;
 }
 
+const DEDUP_META_KEYS = [
+  'error', 'err', 'reason', 'cause', 'code', 'status',
+  'sessionId', 'taskId', 'runId', 'conversationId', 'agentId',
+  'pluginId', 'jobName', 'host',
+] as const;
+
+function dedupFingerprint(payload: ErrorNotifyPayload): string {
+  const stableMeta: Record<string, unknown> = {};
+  for (const key of DEDUP_META_KEYS) {
+    const value = payload.meta?.[key];
+    if (value !== undefined) stableMeta[key] = value;
+  }
+
+  let meta = '';
+  try {
+    meta = JSON.stringify(stableMeta);
+  } catch {
+    meta = '[unserializable]';
+  }
+  return redactSensitiveText(`${payload.message}\n${meta}`);
+}
+
 /**
  * Install the bridge. `broadcast` pushes the new record to connected UIs so the
  * bell updates live (the durable write alone only shows up after a refresh).
@@ -68,12 +92,19 @@ export function installLogErrorNotifications(
 ): void {
   recentKeys.clear();
   setErrorNotificationSink((payload) => {
+    // Producers that hand-publish a richer notification for the same failure
+    // (e.g. server.ts's 'Subagent Error' with task ref + deep links) opt out
+    // with `skipNotify: true` in the log meta — otherwise every such failure
+    // lands in the feed TWICE under two different dedup keys.
+    if (payload.meta?.skipNotify === true) return;
     const now = Date.now();
-    const dedupKey = `logerr:${payload.subsystem}:${djb2(payload.message)}`;
+    const dedupKey = `logerr:${payload.subsystem}:${djb2(dedupFingerprint(payload))}`;
 
     const last = recentKeys.get(dedupKey);
     if (last && now - last < REPEAT_TTL_MS) return;
     pruneRecent(now);
+    // Optimistically armed here (async persist below); re-armed OFF in the
+    // catch so a failed write doesn't silence this error for a full TTL.
     recentKeys.set(dedupKey, now);
 
     const title = payload.message.length > 120
@@ -96,6 +127,9 @@ export function installLogErrorNotifications(
         broadcast('notification:new', record);
       }
     }).catch((err) => {
+      // Persist failed → drop the TTL entry so the next occurrence retries
+      // instead of being suppressed for a full window with nothing durable.
+      if (recentKeys.get(dedupKey) === now) recentKeys.delete(dedupKey);
       // notif-subsystem logs are excluded from the sink, so this cannot loop.
       log.notif.warn('log-error bridge: failed to persist notification', {
         dedupKey, error: err instanceof Error ? err.message : String(err),

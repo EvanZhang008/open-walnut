@@ -10,7 +10,7 @@ class ApiError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown, extra?: { signal?: AbortSignal; timeoutMs?: number }): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, extra?: { signal?: AbortSignal; timeoutMs?: number; cacheBypass?: boolean }): Promise<T> {
   const timeoutMs = extra?.timeoutMs ?? 15_000;
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const signal = extra?.signal
@@ -26,6 +26,9 @@ async function request<T>(method: string, path: string, body?: unknown, extra?: 
     headers,
     signal,
   };
+  // Retry path for the empty-body cache race: skip the HTTP cache entirely so
+  // a poisoned/entity-less cached entry cannot be replayed (see catch below).
+  if (extra?.cacheBypass) opts.cache = 'no-store';
   if (body !== undefined) {
     opts.body = JSON.stringify(body);
   }
@@ -64,20 +67,65 @@ async function request<T>(method: string, path: string, body?: unknown, extra?: 
   const jsonT0 = performance.now();
   let data: T;
   try {
-    data = await res.json();
+    // Read text first so a parse failure can log WHAT arrived (empty vs
+    // truncated) — res.json() destroys that evidence.
+    const raw = await res.text();
+    data = JSON.parse(raw) as T;
   } catch (jsonErr) {
-    // Server may return a truncated or empty body (e.g. killed mid-response,
-    // partial write through a proxy, or stale static asset). Surface it as an
-    // ApiError so callers' existing .catch() paths handle it gracefully instead
-    // of an uncaught exception crashing React.
-    console.error(`[api] ${method} ${path} → ${res.status} JSON parse failed in ${Math.round(performance.now() - jsonT0)}ms`, jsonErr);
+    // An aborted body read is caller cleanup, not the 304 empty-body cache race
+    // this retry exists for. Propagate it quietly without logging or retrying.
+    if (
+      typeof jsonErr === 'object'
+      && jsonErr !== null
+      && 'name' in jsonErr
+      && jsonErr.name === 'AbortError'
+    ) {
+      throw jsonErr;
+    }
+    // Empty/truncated body on a GET is (in practice) the browser-cache 304
+    // race: two concurrent GETs to the same URL, the second revalidates and
+    // fetch() surfaces "200" with no usable entity (inc-1784686852150,
+    // inc-1784752220440). One retry with cache:'no-store' goes straight to
+    // the network and resolves it. Non-GET or second failure → ApiError so
+    // callers' existing .catch() paths handle it (never crash React).
+    const reqId = res.headers.get('x-request-id') ?? '?';
+    const detail = {
+      status: res.status,
+      reqId,
+      etag: res.headers.get('etag') ?? undefined,
+      contentLength: res.headers.get('content-length') ?? undefined,
+      retrying: method === 'GET' && !extra?.cacheBypass,
+    };
+    console.error(`[api] ${method} ${path} → ${res.status} JSON parse failed in ${Math.round(performance.now() - jsonT0)}ms`, jsonErr, JSON.stringify(detail));
+    if (method === 'GET' && !extra?.cacheBypass) {
+      return request<T>(method, path, body, { ...extra, cacheBypass: true });
+    }
     throw new ApiError(res.status, `Response body is not valid JSON (${(jsonErr as Error).message ?? 'parse error'})`);
   }
   const jsonMs = Math.round(performance.now() - jsonT0);
-  // Log slow requests (>500ms network or >100ms JSON parse)
+  // Log slow requests (>500ms wall or >100ms JSON parse). `elapsed` is WALL
+  // time (request issued → our callback ran) — on a blocked main thread it
+  // includes queueing, so it lies about the network. Pull the browser's
+  // Resource Timing entry for the REAL network duration and log both: a big
+  // wall-vs-net gap means "main thread was blocked", not "server was slow"
+  // (the 2026-07-23 investigation burned hours on exactly that misread).
   if (elapsed > 500 || jsonMs > 100) {
     const size = res.headers.get('content-length') ?? '?';
-    console.warn(`[api] ${method} ${path} → 200 in ${elapsed}ms (json parse: ${jsonMs}ms, size: ${size})`);
+    let netMs: number | undefined;
+    try {
+      const entries = performance.getEntriesByType('resource') as PerformanceResourceTiming[];
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const e = entries[i];
+        if (e.responseEnd >= t0 && e.name.includes(path.split('?')[0])) {
+          netMs = Math.round(e.responseEnd - e.startTime);
+          break;
+        }
+      }
+    } catch { /* resource timing unavailable — wall time only */ }
+    const blockedHint = netMs !== undefined && elapsed - netMs > 1_000
+      ? ` ⚠ main-thread queued ${elapsed - netMs}ms`
+      : '';
+    console.warn(`[api] ${method} ${path} → 200 in ${elapsed}ms (net: ${netMs ?? '?'}ms, json parse: ${jsonMs}ms, size: ${size})${blockedHint}`);
   }
   return data;
 }

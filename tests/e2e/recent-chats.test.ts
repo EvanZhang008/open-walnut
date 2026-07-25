@@ -25,7 +25,6 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-e2e-recent')
 import { WALNUT_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
 import { linkSession, touchLastSessionUpdate, getTask } from '../../src/core/task-manager.js';
-import { updateConfig } from '../../src/core/config-manager.js';
 
 // ── Types ──
 
@@ -250,8 +249,10 @@ describe('API returns last_session_update', () => {
   });
 });
 
-describe('touchLastSessionUpdate bumps a pinned task within its tier', () => {
-  async function pinToTier(id: string, tier: string): Promise<void> {
+describe('touchLastSessionUpdate preserves manual pinned order', () => {
+  type Tier = 'focus' | 'satellite' | 'wait';
+
+  async function pinToTier(id: string, tier: Tier): Promise<void> {
     const pinRes = await fetch(apiUrl(`/api/focus/tasks/${id}`), { method: 'POST' });
     expect(pinRes.status).toBe(200);
     const tierRes = await fetch(apiUrl(`/api/focus/tasks/${id}/tier`), {
@@ -262,110 +263,73 @@ describe('touchLastSessionUpdate bumps a pinned task within its tier', () => {
     expect(tierRes.status).toBe(200);
   }
 
-  async function tierOrder(tier: 'focus' | 'satellite' | 'wait', ids: string[]): Promise<string[]> {
+  async function focusOrder(ids: string[]): Promise<Record<'pinned_tasks' | `${Tier}_tasks`, string[]>> {
     const res = await fetch(apiUrl('/api/focus/tasks'));
-    const body = (await res.json()) as Record<string, string[]>;
-    return (body[`${tier}_tasks`] ?? []).filter((id) => ids.includes(id));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<'pinned_tasks' | `${Tier}_tasks`, string[]>;
+    return {
+      pinned_tasks: body.pinned_tasks.filter((id) => ids.includes(id)),
+      focus_tasks: body.focus_tasks.filter((id) => ids.includes(id)),
+      satellite_tasks: body.satellite_tasks.filter((id) => ids.includes(id)),
+      wait_tasks: body.wait_tasks.filter((id) => ids.includes(id)),
+    };
   }
 
-  it('chatting with a SATELLITE task (default-on tier) moves it to the front, preserving the rest', async () => {
-    const t1 = await createTask('Bump satellite — t1');
-    const t2 = await createTask('Bump satellite — t2');
-    const t3 = await createTask('Bump satellite — t3');
+  it('updates activity without changing pin_order or focus_tier in any tier', async () => {
+    const focusA = await createTask('Manual order — focus A');
+    const focusB = await createTask('Manual order — focus B');
+    const satelliteA = await createTask('Manual order — satellite A');
+    const satelliteB = await createTask('Manual order — satellite B');
+    const waitA = await createTask('Manual order — wait A');
+    const waitB = await createTask('Manual order — wait B');
 
-    await pinToTier(t1.id, 'satellite');
-    await pinToTier(t2.id, 'satellite');
-    await pinToTier(t3.id, 'satellite');
+    await pinToTier(focusA.id, 'focus');
+    await pinToTier(focusB.id, 'focus');
+    await pinToTier(satelliteA.id, 'satellite');
+    await pinToTier(satelliteB.id, 'satellite');
+    await pinToTier(waitA.id, 'wait');
+    await pinToTier(waitB.id, 'wait');
 
-    const ids = [t1.id, t2.id, t3.id];
-    const before = await tierOrder('satellite', ids);
-    expect(before.length).toBe(3);
+    const ids = [focusA.id, focusB.id, satelliteA.id, satelliteB.id, waitA.id, waitB.id];
+    const manualOrder = [focusB.id, satelliteB.id, waitB.id, focusA.id, satelliteA.id, waitA.id];
+    const reorderRes = await fetch(apiUrl('/api/focus/reorder'), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_ids: manualOrder }),
+    });
+    expect(reorderRes.status).toBe(200);
 
-    // Chat with whichever task is currently last among our three.
-    const last = before[2];
-    await touchLastSessionUpdate(last);
+    const orderBefore = await focusOrder(ids);
+    expect(orderBefore).toEqual({
+      pinned_tasks: manualOrder,
+      focus_tasks: [focusB.id, focusA.id],
+      satellite_tasks: [satelliteB.id, satelliteA.id],
+      wait_tasks: [waitB.id, waitA.id],
+    });
 
-    const after = await tierOrder('satellite', ids);
-    // Touched task jumps to the front; the other two keep their relative order.
-    expect(after[0]).toBe(last);
-    expect(after.slice(1)).toEqual(before.slice(0, 2));
-  });
+    const stateBefore = new Map(
+      await Promise.all(ids.map(async (id) => {
+        const task = await getTask(id);
+        return [id, { pin_order: task.pin_order, focus_tier: task.focus_tier }] as const;
+      })),
+    );
 
-  it('FOCUS tier does NOT bump by default (preserves manual sprint order)', async () => {
-    const f1 = await createTask('Focus no-bump — f1');
-    const f2 = await createTask('Focus no-bump — f2');
-    const f3 = await createTask('Focus no-bump — f3');
+    const touchedIds = [focusA.id, satelliteA.id, waitA.id];
+    for (const id of touchedIds) {
+      expect((await getTask(id)).last_session_update).toBeUndefined();
+      await touchLastSessionUpdate(id);
+    }
 
-    await pinToTier(f1.id, 'focus');
-    await pinToTier(f2.id, 'focus');
-    await pinToTier(f3.id, 'focus');
-
-    const ids = [f1.id, f2.id, f3.id];
-    const before = await tierOrder('focus', ids);
-    expect(before.length).toBe(3);
-
-    // Chat with the last FOCUS task — default config keeps FOCUS order fixed.
-    await touchLastSessionUpdate(before[2]);
-
-    const after = await tierOrder('focus', ids);
-    expect(after).toEqual(before);
-    // Timestamp still updates even when this tier's bump is off.
-    const touched = await getTask(before[2]);
-    expect(touched.last_session_update).toBeDefined();
-  });
-
-  it('only reorders within the same tier, leaving other tiers untouched', async () => {
-    const s1 = await createTask('Tier isolation — sat 1');
-    const s2 = await createTask('Tier isolation — sat 2');
-    const w1 = await createTask('Tier isolation — wait A');
-    const w2 = await createTask('Tier isolation — wait B');
-
-    await pinToTier(s1.id, 'satellite');
-    await pinToTier(s2.id, 'satellite');
-    await pinToTier(w1.id, 'wait');
-    await pinToTier(w2.id, 'wait');
-
-    const satIds = [s1.id, s2.id];
-    const satBefore = await tierOrder('satellite', satIds);
-
-    // Chat with the second WAIT task — it should jump to the front of WAIT only.
-    await touchLastSessionUpdate(w2.id);
-
-    // SATELLITE tier (a different default-on tier) must keep its relative order.
-    const satAfter = await tierOrder('satellite', satIds);
-    expect(satAfter).toEqual(satBefore);
-
-    // WAIT tier: w2 bubbled to the front.
-    const waitAfter = await tierOrder('wait', [w1.id, w2.id]);
-    expect(waitAfter[0]).toBe(w2.id);
-  });
-
-  it('respects per-tier config: disabling a tier stops its bump', async () => {
-    const a = await createTask('Per-tier off — a');
-    const b = await createTask('Per-tier off — b');
-    const c = await createTask('Per-tier off — c');
-
-    await pinToTier(a.id, 'wait');
-    await pinToTier(b.id, 'wait');
-    await pinToTier(c.id, 'wait');
-
-    const ids = [a.id, b.id, c.id];
-    const before = await tierOrder('wait', ids);
-    expect(before.length).toBe(3);
-
-    try {
-      // Turn OFF the wait tier (default would be on).
-      await updateConfig({ ui: { bump_tiers: { wait: false } } });
-      await touchLastSessionUpdate(before[2]);
-      expect(await tierOrder('wait', ids)).toEqual(before);
-
-      // Turn it back ON — now the bump applies.
-      await updateConfig({ ui: { bump_tiers: { wait: true } } });
-      await touchLastSessionUpdate(before[2]);
-      const after = await tierOrder('wait', ids);
-      expect(after[0]).toBe(before[2]);
-    } finally {
-      await updateConfig({ ui: { bump_tiers: undefined } });
+    expect(await focusOrder(ids)).toEqual(orderBefore);
+    for (const id of ids) {
+      const task = await getTask(id);
+      expect({ pin_order: task.pin_order, focus_tier: task.focus_tier }).toEqual(stateBefore.get(id));
+      if (touchedIds.includes(id)) {
+        expect(task.last_session_update).toBeDefined();
+        expect(new Date(task.last_session_update!).getTime()).toBeGreaterThan(0);
+      } else {
+        expect(task.last_session_update).toBeUndefined();
+      }
     }
   });
 });

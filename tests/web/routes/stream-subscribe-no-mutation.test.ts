@@ -146,6 +146,29 @@ describe('session:stream-subscribe RPC — read-only invariant', () => {
     }
   })
 
+  it('returns isStreaming=false for idle between turns without mutating the buffer', async () => {
+    const sid = 'sid-idle-between-turns-1'
+    const taskId = 'task-idle-between-turns-1'
+    await seedTask(taskId)
+
+    await createSessionRecord(sid, taskId, 'StreamSubscribe', undefined, {
+      mode: 'bypass',
+      initialProcessStatus: 'idle',
+    })
+    sessionStreamBuffer.markStreaming(sid)
+
+    const ws = await openWs()
+    try {
+      const resp = await rpcCall(ws, 'session:stream-subscribe', { sessionId: sid })
+      const snapshot = resp as { blocks: unknown[]; isStreaming: boolean }
+
+      expect(snapshot.isStreaming).toBe(false)
+      expect((sessionStreamBuffer as unknown as { streaming: Set<string> }).streaming.has(sid)).toBe(true)
+    } finally {
+      ws.close()
+    }
+  })
+
   it('does NOT mutate buffer isStreaming when stale-running (>5min since last change)', async () => {
     const sid = 'sid-stale-running-1'
     const taskId = 'task-stale-run-1'
