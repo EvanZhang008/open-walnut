@@ -30,7 +30,7 @@ import { isSessionProcessAlive } from '../../utils/session-liveness.js'
 import { readPlanFromSession, buildPlanExecutionMessage } from '../../utils/plan-message.js'
 import { injectCompactBoundary, buildCompactSummary } from '../../utils/compact-inject.js'
 import { findLocalJsonlPath } from '../../core/session-file-reader.js'
-import { getFrequentDirs, compileFromSessions } from '../../core/frequent-dirs.js'
+import { getFrequentDirs, compileFromSessions, recordLaunchPrefs } from '../../core/frequent-dirs.js'
 import type { SessionRecord, SessionMode, Task, SessionEffort } from '../../core/types.js'
 import { VALID_SESSION_MODEL_IDS, SESSION_MODEL_CLI_MAP, VALID_SESSION_EFFORT_IDS, modelSupportsEffort, modelSupportsXhighEffort, modelSupportsMaxEffort, resolveModelSwitchValue, sessionModelsAsCatalog } from '../../core/types.js'
 import { getHostModelCatalog, listHostModelCatalogs } from '../../core/host-model-catalog.js'
@@ -191,6 +191,7 @@ sessionsRouter.get('/working-dirs', async (_req: Request, res: Response, next: N
         category: bestCat,
         count: d.count,
         lastUsed: d.lastUsed,
+        lastLaunch: d.lastLaunch,
         score,
       }
     })
@@ -485,6 +486,19 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         engine: engine === 'codex' ? 'codex' : undefined,
         ...fixWalnutExtras,
       })
+      // Remember this folder's launch config for next time (fire-and-forget).
+      // Stores the RAW picker value (not the CLI-normalized `model`) so the
+      // launcher dropdown can re-select it verbatim. Retries keep the original
+      // memory (existingTaskId set → the user didn't re-pick anything), and
+      // fix-walnut launches don't count — that's a repair intent with no
+      // model pick, not a preference for the Walnut checkout dir.
+      if (!existingTaskId && !isFixWalnut) {
+        const rawPickerModel = typeof rawModel === 'string' && rawModel && rawModel !== 'default' ? rawModel : undefined
+        recordLaunchPrefs(cwd, host ?? null, {
+          model: rawPickerModel,
+          engine: engine === 'codex' ? 'codex' : undefined,
+        }).catch(() => {})
+      }
       res.json({ taskId: updatedTask.id, task: updatedTask })
     } catch (err) {
       if (err instanceof QuickStartError) {

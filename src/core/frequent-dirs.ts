@@ -22,6 +22,16 @@ export interface FrequentDirEntry {
   count: number
   lastUsed: string // ISO timestamp
   categoryVotes: Record<string, number>
+  /** Last launch config the user picked in Quick Start for this directory.
+   *  `model` stores the picker's RAW value (catalog full provider ID or legacy
+   *  alias id) — NOT the CLI-normalized form — so the launcher dropdown can
+   *  re-select it verbatim. Absent = user last launched with Auto + Claude. */
+  lastLaunch?: LaunchPrefs
+}
+
+export interface LaunchPrefs {
+  model?: string
+  engine?: 'codex'
 }
 
 interface FrequentDirsStore {
@@ -120,6 +130,42 @@ export async function recordDirectory(cwd: string, host: string | null, category
 }
 
 /**
+ * Record the launch config picked for a directory (called on quick-start).
+ * Always overwrites: launching with Auto/Claude (all-undefined prefs) CLEARS
+ * the memory — "remember last time" includes remembering the reset.
+ * Creates a placeholder entry (count 0) when the dir has no history yet;
+ * recordDirectory() at spawn time increments it to a real entry.
+ */
+export async function recordLaunchPrefs(cwd: string, host: string | null, prefs: LaunchPrefs): Promise<void> {
+  return withWriteLock(async () => {
+    let store = readStore()
+    if (!store) {
+      await compileFromSessionsInternal()
+      store = readStore()
+      if (!store) {
+        store = { version: 1, compiledAt: new Date().toISOString(), directories: [] }
+      }
+    }
+
+    const key = `${cwd}::${host ?? '__local__'}`
+    let entry = store.directories.find(d => `${d.cwd}::${d.host ?? '__local__'}` === key)
+    if (!entry) {
+      entry = { cwd, host, count: 0, lastUsed: new Date().toISOString(), categoryVotes: {} }
+      store.directories.push(entry)
+    }
+
+    const hasPrefs = prefs.model !== undefined || prefs.engine !== undefined
+    if (hasPrefs) {
+      entry.lastLaunch = { ...(prefs.model !== undefined && { model: prefs.model }), ...(prefs.engine !== undefined && { engine: prefs.engine }) }
+    } else {
+      delete entry.lastLaunch
+    }
+
+    writeStore(store)
+  })
+}
+
+/**
  * One-time compile from sessions.json. Rebuilds the entire store.
  */
 export async function compileFromSessions(): Promise<void> {
@@ -131,6 +177,13 @@ export async function compileFromSessions(): Promise<void> {
  */
 async function compileFromSessionsInternal(): Promise<void> {
   try {
+    // lastLaunch prefs only live in this store (sessions.json doesn't carry
+    // them) — carry them across the rebuild or a manual recompile wipes them.
+    const prevLaunch = new Map<string, LaunchPrefs>()
+    for (const d of readStore()?.directories ?? []) {
+      if (d.lastLaunch) prevLaunch.set(`${d.cwd}::${d.host ?? '__local__'}`, d.lastLaunch)
+    }
+
     const { listSessions, isTriageSession } = await import('./session-tracker.js')
     const { listTasks } = await import('./task-manager.js')
 
@@ -174,10 +227,35 @@ async function compileFromSessionsInternal(): Promise<void> {
       }
     }
 
+    const directories = Array.from(dirMap.values())
+    const rebuiltKeys = new Set<string>()
+    for (const d of directories) {
+      const key = `${d.cwd}::${d.host ?? '__local__'}`
+      rebuiltKeys.add(key)
+      const launch = prevLaunch.get(key)
+      if (launch) d.lastLaunch = launch
+    }
+    // A dir with launch memory but no session record yet (spawn failed, or the
+    // session hasn't landed in sessions.json) must survive the rebuild as a
+    // count-0 placeholder — recompile is maintenance, not a memory wipe.
+    for (const [key, launch] of prevLaunch) {
+      if (rebuiltKeys.has(key)) continue
+      const sep = key.lastIndexOf('::')
+      const host = key.slice(sep + 2)
+      directories.push({
+        cwd: key.slice(0, sep),
+        host: host === '__local__' ? null : host,
+        count: 0,
+        lastUsed: new Date().toISOString(),
+        categoryVotes: {},
+        lastLaunch: launch,
+      })
+    }
+
     const store: FrequentDirsStore = {
       version: 1,
       compiledAt: new Date().toISOString(),
-      directories: Array.from(dirMap.values()),
+      directories,
     }
 
     writeStore(store)

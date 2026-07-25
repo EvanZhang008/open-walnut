@@ -87,6 +87,17 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
 
   // Task metadata the user picks in the footer — applied to the new task when the session starts.
   const [meta, setMeta] = useState<QuickStartTaskMeta>(initialMeta ?? DEFAULT_META);
+  // True once the user touches the model/engine controls during THIS open —
+  // their explicit pick (including an explicit reset to Auto) beats the
+  // per-directory launch memory applied at confirm time.
+  const launchTouchedRef = useRef(false);
+  const handleMetaChange = useCallback((updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta) => {
+    setMeta(prev => {
+      const next = updater(prev);
+      if (next.model !== prev.model || next.engine !== prev.engine) launchTouchedRef.current = true;
+      return next;
+    });
+  }, []);
   // Read latest initialMeta inside the open effect without adding it to that effect's
   // deps (which would re-trigger the history fetch/pre-warm on every parent re-render).
   const initialMetaRef = useRef(initialMeta);
@@ -116,6 +127,7 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
     setQuery('');
     setSelectedIdx(0);
     setMeta(initialMetaRef.current ?? DEFAULT_META);
+    launchTouchedRef.current = false;
     // Re-opening to edit a confirmed selection: open straight into edit mode with the
     // path pre-filled and its host tab active — an "edit this selection" view. Without
     // a seed path, fall back to the blank browse view (fresh /session invocation).
@@ -390,12 +402,46 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
     items[selectedIdx]?.scrollIntoView({ block: 'nearest' });
   }, [selectedIdx]);
 
+  // Per-directory launch memory: merge the remembered model/engine of the picked
+  // directory into the footer meta — unless the user explicitly touched those
+  // controls this open (their pick wins, including an explicit reset to Auto),
+  // or the picker was seeded with a prior confirmed meta (re-edit flow).
+  // No memory on the picked dir → reset to Auto/Claude so a preview from a
+  // previously highlighted row can't leak onto an unrelated directory.
+  const withLaunchMemory = useCallback((launch: { model?: string; engine?: 'codex' } | undefined): QuickStartTaskMeta => {
+    if (launchTouchedRef.current || initialMetaRef.current) return meta;
+    return { ...meta, model: launch?.model, engine: launch?.engine };
+  }, [meta]);
+
+  // Live preview: the footer shows the remembered launch config of the CURRENT
+  // TARGET directory — what you see is what will launch. The target is:
+  //  - browse mode: the highlighted row
+  //  - edit mode: the typed path itself (clicking a history row drills into
+  //    edit mode where the highlight moves to live CHILD dirs — previewing
+  //    those would wrongly reset the footer to Auto; the launch target is the
+  //    typed path, so its memory drives the preview).
+  useEffect(() => {
+    if (!open || launchTouchedRef.current || initialMetaRef.current) return;
+    let launch: { model?: string; engine?: 'codex' } | undefined;
+    if (editMode) {
+      const trimmed = editingPath.replace(/\/+$/, '') || '/';
+      const match = hostFilter === 'all'
+        ? dirs.find(d => d.cwd === trimmed)
+        : dirs.find(d => d.cwd === trimmed && (d.host ?? null) === currentHost);
+      launch = match?.lastLaunch;
+    } else {
+      launch = flatItems[selectedIdx]?.history?.lastLaunch;
+    }
+    setMeta(m => (m.model === launch?.model && m.engine === launch?.engine)
+      ? m : { ...m, model: launch?.model, engine: launch?.engine });
+  }, [open, editMode, editingPath, dirs, hostFilter, currentHost, flatItems, selectedIdx]);
+
   const handleSelect = useCallback((d: RankedItem) => {
     onSelect({
       cwd: d.cwd, host: d.host, hostLabel: d.hostLabel,
       category: d.history?.category ?? 'Inbox',
-    }, meta);
-  }, [onSelect, meta]);
+    }, withLaunchMemory(d.history?.lastLaunch));
+  }, [onSelect, withLaunchMemory]);
 
   // Confirm the current editingPath (Shift+Enter or the Start-session button)
   const handleConfirm = useCallback((opts?: { createCwd?: boolean }) => {
@@ -408,8 +454,8 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
       hostLabel: match?.hostLabel ?? currentHostLabel,
       category: match?.category ?? 'Inbox',
       ...(opts?.createCwd ? { createCwd: true } : {}),
-    }, meta);
-  }, [editingPath, dirs, onSelect, currentHost, currentHostLabel, meta]);
+    }, withLaunchMemory(match?.lastLaunch));
+  }, [editingPath, dirs, onSelect, currentHost, currentHostLabel, withLaunchMemory]);
 
   // "Create & start" row: confirm the missing path with the createCwd flag.
   // Host comes from createTarget (not hostFilter) so All-tab-with-one-host works.
@@ -423,8 +469,10 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
       hostLabel: hostTabs.find(t => t.key === createTarget)?.label,
       category: 'Inbox',
       createCwd: true,
-    }, meta);
-  }, [createOption, createTarget, onSelect, hostTabs, meta]);
+      // Brand-new dir → no launch memory; withLaunchMemory(undefined) clears any
+      // leaked highlight preview (user-touched picks still win inside it).
+    }, withLaunchMemory(undefined));
+  }, [createOption, createTarget, onSelect, hostTabs, withLaunchMemory]);
 
   // Single confirm entry (⇧Enter + the status button): a path the live listing
   // says is MISSING never silently starts — it routes to create-&-start when a
@@ -452,19 +500,21 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
     }
   }, [editMode, hostFilter, fillPath]);
 
-  // Dismiss by clicking outside / Esc. When editing an already-confirmed selection
-  // (opened via initialPath), dismissing SAVES the current edits (path + meta) instead
-  // of discarding them — the user is editing an existing pick, not cancelling, so a
-  // model change must persist even without pressing Go. A fresh /session (no
-  // initialPath) keeps cancel-on-dismiss so an outside click doesn't conjure a
-  // quick-start bar out of nothing.
+  // Dismiss by clicking outside / Esc.
   const handleDismiss = useCallback(() => {
-    if (initialPathRef.current?.cwd && editingPath) {
+    // A picked path IS the decision — dismissing (outside click / Esc) confirms
+    // it as the Quick Start target instead of throwing the pick away; the user
+    // shouldn't have to also hit ✓/⇧Enter. Applies to the re-edit flow
+    // (initialPath) AND a fresh pick. Only exceptions: no path typed yet
+    // (browse mode → plain close), or the live listing PROVED the path missing
+    // (never silently target a nonexistent dir from a dismiss — create-&-start
+    // stays an explicit button).
+    if (editingPath && validity !== 'missing') {
       handleConfirm();
     } else {
       onClose();
     }
-  }, [editingPath, handleConfirm, onClose]);
+  }, [editingPath, validity, handleConfirm, onClose]);
 
   // Keyboard navigation
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -703,7 +753,7 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
           Compact single row in edit mode: space goes back to the path list.
           host: the active tab's host drives which catalog fills the model
           dropdown ('all' tab → local catalog, the overwhelmingly common case). */}
-      <MetaFooter meta={meta} onChange={setMeta} compact={editMode} host={currentHost} />
+      <MetaFooter meta={meta} onChange={handleMetaChange} compact={editMode} host={currentHost} />
     </div>
   );
 }

@@ -15209,7 +15209,10 @@ a.task-kebab-info:hover {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   box-shadow: var(--card-shadow-hover);
-  max-height: min(72vh, 720px);
+  /* FIXED height (not max-height): browse mode (long history) and edit mode
+     (few live children) must render the SAME panel size — a shrinking panel
+     moves the path input + footer under the cursor between interactions. */
+  height: min(44vh, 460px);
   overflow: hidden;
   display: flex;
   flex-direction: column;

@@ -412,6 +412,9 @@ export interface WorkingDirEntry {
   category: string;
   count: number;
   lastUsed: string;
+  /** Launch config remembered from the last Quick Start on this dir. `model`
+   *  is the raw picker value (catalog ID or legacy alias). Absent = Auto/Claude. */
+  lastLaunch?: { model?: string; engine?: 'codex' };
 }
 
 /** A host from config.hosts — shown as a launcher tab even with zero session history. */
