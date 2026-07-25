@@ -11,6 +11,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'integrations', label: 'Integrations' },
   { id: 'plugin-store', label: 'Plugin Store' },
   { id: 'search', label: 'Search & Embeddings' },
+  { id: 'memory', label: 'Memory' },
   { id: 'stt', label: 'Speech-to-Text' },
   { id: 'audio-capture', label: 'Audio Capture' },
   { id: 'heartbeat', label: 'Heartbeat' },

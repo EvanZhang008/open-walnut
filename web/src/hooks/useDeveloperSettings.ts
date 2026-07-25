@@ -7,10 +7,8 @@ import { useSyncExternalStore } from 'react';
 export const UI_ONLY_CATEGORIES = [
   { key: 'triage', label: 'Triage results', description: 'Session triage analysis notifications', defaultOn: false },
   { key: 'session', label: 'Session results', description: 'Completed session output summaries', defaultOn: false },
-  { key: 'session-error', label: 'Session errors', description: 'Session error notifications', defaultOn: true },
   { key: 'subagent', label: 'Subagent results', description: 'Embedded subagent result notifications', defaultOn: false },
   { key: 'heartbeat', label: 'Heartbeat "all clear"', description: 'Routine check-ins when nothing needs attention (issues always shown)', defaultOn: false },
-  { key: 'agent-error', label: 'Agent errors', description: 'Agent and cron error notifications', defaultOn: true },
 ] as const;
 
 export type UiOnlyCategory = typeof UI_ONLY_CATEGORIES[number]['key'];
@@ -91,6 +89,9 @@ export function setShowUiOnlyTriage(value: boolean): void {
  * (which lack the notification flag) are always shown.
  */
 export function shouldHideUiOnlyMessage(source?: string, notification?: boolean): boolean {
+  // Runtime errors have a dedicated durable notification surface. Always hide
+  // legacy error entries even if a developer enabled other UI-only categories.
+  if (source === 'agent-error' || source === 'session-error') return true;
   if (!notification) return false;
   const category = source as UiOnlyCategory | undefined;
   if (!category) return false;

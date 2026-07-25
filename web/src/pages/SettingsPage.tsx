@@ -32,6 +32,7 @@ import { SessionsSection } from '@/components/settings/sections/SessionsSection'
 import { IntegrationsSection } from '@/components/settings/sections/IntegrationsSection';
 import { PluginStoreSection } from '@/components/settings/sections/PluginStoreSection';
 import { SearchSection } from '@/components/settings/sections/SearchSection';
+import { MemorySection } from '@/components/settings/sections/MemorySection';
 import { HeartbeatSection } from '@/components/settings/sections/HeartbeatSection';
 import { RemoteHostsSection } from '@/components/settings/sections/RemoteHostsSection';
 import { AdvancedSection } from '@/components/settings/sections/AdvancedSection';
@@ -46,7 +47,7 @@ import { BugReportSection } from '@/components/settings/sections/BugReportSectio
 
 const SECTION_IDS = [
   'providers', 'general', 'sessions',
-  'integrations', 'plugin-store', 'search', 'stt', 'audio-capture', 'heartbeat', 'remote-hosts', 'devices', 'advanced',
+  'integrations', 'plugin-store', 'search', 'memory', 'stt', 'audio-capture', 'heartbeat', 'remote-hosts', 'devices', 'advanced',
   'repositories', 'hooks', 'usage', 'timeline', 'bug-report',
 ];
 
@@ -128,6 +129,7 @@ export function SettingsPage() {
           <SectionErrorBoundary name="Integrations"><IntegrationsSection config={config} onSave={saveSection} /></SectionErrorBoundary>
           <SectionErrorBoundary name="Plugin Store"><PluginStoreSection /></SectionErrorBoundary>
           <SectionErrorBoundary name="Search"><SearchSection config={config} onSave={saveSection} /></SectionErrorBoundary>
+          <SectionErrorBoundary name="Memory"><MemorySection /></SectionErrorBoundary>
           <SectionErrorBoundary name="Speech-to-Text"><SttSection config={config} onSave={saveSection} onReload={reload} /></SectionErrorBoundary>
           <SectionErrorBoundary name="Audio Capture"><AudioCaptureSection config={config} onSave={saveSection} /></SectionErrorBoundary>
           <SectionErrorBoundary name="Heartbeat"><HeartbeatSection config={config} onSave={saveSection} /></SectionErrorBoundary>
