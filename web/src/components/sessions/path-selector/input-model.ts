@@ -78,7 +78,7 @@ export function resolveSpaceAmbiguity(state: InputState, childrenOfBase: string[
   return state;
 }
 
-/** Cmd+Backspace: delete the last path segment, keeping the trailing slash.
+/** Option+Backspace: delete the last path segment, keeping the trailing slash.
  *  '/a/b/c' → '/a/b/', '/a/b/c/' → '/a/b/', '/a' → '/', '/' → '/', '~/x' → '~/'. */
 export function deleteLastSegment(path: string): string {
   if (!path) return path;

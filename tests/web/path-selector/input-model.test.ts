@@ -79,7 +79,7 @@ describe('resolveSpaceAmbiguity', () => {
   });
 });
 
-describe('deleteLastSegment (Cmd+Backspace)', () => {
+describe('deleteLastSegment (Option+Backspace)', () => {
   it('deletes the last segment keeping trailing slash', () => {
     expect(deleteLastSegment('/a/b/c')).toBe('/a/b/');
     expect(deleteLastSegment('/a/b/c/')).toBe('/a/b/');

@@ -190,10 +190,10 @@ test('fuzzy (non-prefix) match still finds substring candidates', async ({ page 
   await expect(page.locator('.sps-path-list .sps-path-item', { hasText: 'zmarinax' })).toBeVisible()
 })
 
-test('Cmd+Backspace deletes the last path segment', async ({ page }) => {
+test('Option+Backspace deletes the last path segment', async ({ page }) => {
   await openPicker(page)
   await input(page).fill(`${fixtureRoot}/projects/walnut`)
-  await input(page).press('Meta+Backspace')
+  await input(page).press('Alt+Backspace')
   await expect(input(page)).toHaveValue(`${fixtureRoot}/projects/`)
 })
 

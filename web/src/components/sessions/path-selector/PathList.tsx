@@ -7,25 +7,40 @@
  * History matches never impersonate live results — each lives under its own
  * section label.
  */
-import { forwardRef } from 'react';
+import { forwardRef, useRef } from 'react';
 import type { Section, RankedItem } from './ranking';
 import type { HostLiveState } from './useLiveDirs';
 
-function timeAgo(iso: string): string {
-  const ms = Math.max(0, Date.now() - new Date(iso).getTime());
-  const mins = Math.floor(ms / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  return `${days}d ago`;
+interface PathParts {
+  parent: string;
+  leaf: string;
+}
+
+function splitPath(cwd: string): PathParts {
+  const normalized = cwd.replace(/\/+$/, '') || '/';
+  const slash = normalized.lastIndexOf('/');
+  if (slash < 0) return { parent: '', leaf: normalized };
+  if (slash === 0) return { parent: '/', leaf: normalized.slice(1) };
+  return { parent: normalized.slice(0, slash), leaf: normalized.slice(slash + 1) };
+}
+
+function withTrailingSlash(parent: string): string {
+  if (!parent) return '';
+  return parent === '/' ? '/' : `${parent}/`;
+}
+
+function shortenHomePath(path: string): string {
+  return path.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, '~');
 }
 
 interface Props {
   sections: Section[];
   /** Flat index of the keyboard-selected item across all sections. */
   selectedIdx: number;
+  /** True when the highlight was placed by keyboard/default (not mouse hover) —
+   *  only then does the selected row expand to its full multi-line path.
+   *  Hover must never reflow the row under the pointer. */
+  expandSelected: boolean;
   loading: boolean;
   loadError: string | null;
   /** Live listing state per host — drives empty states and host-down rows. */
@@ -44,7 +59,7 @@ interface Props {
 
 export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
   {
-    sections, selectedIdx, loading, loadError, hostStates, pathMode,
+    sections, selectedIdx, expandSelected, loading, loadError, hostStates, pathMode,
     activeHostLabel, createOption, emptyHint, onItemClick, onItemHover, onCreate,
   },
   ref,
@@ -66,7 +81,10 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
   return (
     <div className="sps-path-list" ref={ref}>
       {loading && totalItems === 0 && <div className="sps-empty">Loading paths...</div>}
-      {loadError && <div className="sps-error">{loadError}</div>}
+      {/* A stale history error next to a live "Loading paths..." reads as a
+          contradiction (both rendered in the 2026-07-19 freeze incident) —
+          suppress the error while a load is in flight. */}
+      {loadError && !loading && <div className="sps-error">{loadError}</div>}
 
       {sections.map(section => (
         <div className="sps-section" key={section.id}>
@@ -74,33 +92,64 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
           {section.items.map(item => {
             flatIdx++;
             const idx = flatIdx;
+            const isActive = idx === selectedIdx;
             const isLive = item.source === 'live';
             const fullCwd = `${item.cwd}${isLive ? '/' : ''}`;
+            const hostLabel = item.host ? (item.hostLabel ?? item.host) : 'local';
+            const { parent, leaf } = splitPath(item.cwd);
+            // Path mode admits only candidates under the typed parent (live AND
+            // history), so rows render just their relative segments — the typed
+            // prefix already sits in the input. depth > 0 marks path-mode rows;
+            // browse-mode history has depth 0 and keeps the full path. The
+            // KEYBOARD-highlighted row expands to the full multi-line path so the
+            // selection is unambiguous before Enter; hover never expands (the row
+            // reflowing under the pointer reads as flicker).
+            const expanded = isActive && expandSelected;
+            const relative = item.depth > 0 && !expanded;
+            const relSegments = relative
+              ? item.cwd.replace(/\/+$/, '').split('/').filter(Boolean).slice(-item.depth)
+              : [];
+            const relLeaf = relSegments[relSegments.length - 1] ?? leaf;
+            const relParent = relSegments.slice(0, -1).join('/');
             return (
               <div
                 key={`${item.cwd}::${item.host ?? ''}::${item.source}`}
-                className={`sps-path-item${idx === selectedIdx ? ' active' : ''}${isLive ? ' sps-live' : ''}`}
+                className={`sps-path-item${isActive ? ' active' : ''}${expanded ? ' sps-expanded' : ''}${isLive ? ' sps-live' : ''}`}
                 onClick={() => onItemClick(item)}
                 onMouseEnter={() => onItemHover(idx)}
               >
                 <div className="sps-path-main">
-                  {/* title is the only way to read the full path once it wraps in a narrow popover */}
-                  <span className="sps-path-cwd" title={fullCwd}>{fullCwd}</span>
-                </div>
-                <div className="sps-path-meta">
-                  <span className={`sps-path-host-tag${isLive ? ' sps-tag-live' : ''}`}>
-                    {item.host ? (item.hostLabel ?? item.host) : 'local'}
+                  <span className="sps-path-cwd" title={fullCwd}>
+                    <bdi dir="ltr">
+                      {relative ? (
+                        <>
+                          {/* "…/" = continues from the typed prefix in the input */}
+                          <span className="sps-path-ghost">…/{relParent && `${relParent}/`}</span>
+                          <span className="sps-path-leaf">{relLeaf}</span>
+                          {isLive && <span className="sps-path-ghost">/</span>}
+                        </>
+                      ) : (
+                        <>
+                          <span className="sps-path-ghost">{shortenHomePath(withTrailingSlash(parent))}</span>
+                          <span className="sps-path-leaf">{leaf}</span>
+                          {isLive && <span className="sps-path-ghost">/</span>}
+                        </>
+                      )}
+                    </bdi>
                   </span>
-                  {/* live dir that's also in history gets the marker */}
-                  {isLive && item.history && <span className="sps-hist-marker" title="In your session history">🕘 recent</span>}
-                  {item.history && (
-                    <>
-                      <span className="sps-path-category">{item.history.category}</span>
-                      <span>{item.history.count} session{item.history.count !== 1 ? 's' : ''}</span>
-                      {item.history.lastUsed && <span>{timeAgo(item.history.lastUsed)}</span>}
-                    </>
-                  )}
                 </div>
+                {(hostLabel || (isLive && item.history)) && (
+                  <div className="sps-path-meta">
+                    {hostLabel && (
+                      <span className={`sps-path-host-tag${isLive ? ' sps-tag-live' : ''}`} title={hostLabel}>
+                        {hostLabel.slice(0, 10)}
+                      </span>
+                    )}
+                    {isLive && item.history && (
+                      <span className="sps-hist-marker" title="In your session history">🕘</span>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}

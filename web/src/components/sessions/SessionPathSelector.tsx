@@ -7,11 +7,11 @@
  * leaf-hit > mid-hit, prefix > substring > subsequence. All-tab fans out live
  * listings to every host in parallel (path-selector/useLiveDirs.ts).
  *
- * Extras: ghost-text inline completion (ArrowRight accepts), Cmd+Backspace
+ * Extras: ghost-text inline completion (ArrowRight accepts), Option+Backspace
  * deletes the last path segment, "create & start" for nonexistent leaf dirs,
  * hidden dirs shown only when the typed segment starts with '.'.
  */
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { fetchWorkingDirs, prewarmWorkingDirs, type WorkingDirEntry, type ConfiguredHost } from '@/api/sessions';
 import type { TaskPriority } from '@open-walnut/core';
@@ -22,6 +22,7 @@ import { useLiveDirs, type HostLiveState } from './path-selector/useLiveDirs';
 import { GhostTextInput } from './path-selector/GhostTextInput';
 import { PathList } from './path-selector/PathList';
 import { MetaFooter } from './path-selector/MetaFooter';
+import { DEFAULT_META } from './task-meta-constants';
 
 export interface QuickStartPath {
   cwd: string;
@@ -60,18 +61,15 @@ interface Props {
    *  When set, the picker opens directly in edit mode with this cwd pre-filled and the
    *  host tab selected — an "edit this selection" view, not a blank search. */
   initialPath?: { cwd: string; host: string | null };
+  /** Whether dismissing (outside click / Esc) with a picked path CONFIRMS it
+   *  (default true — chat flow, where confirm just sets an undoable Quick Start
+   *  bar). Pass false when onSelect has an irreversible effect (todo launcher:
+   *  select immediately creates a task + spawns a CLI) so dismiss = cancel. */
+  confirmOnDismiss?: boolean;
 }
 
-const DEFAULT_META: QuickStartTaskMeta = {
-  starred: true,         // mirrors existing quick-start behavior (task.starred = true)
-  needs_attention: false,
-  priority: 'none',
-  pinTier: 'focus',
-  model: undefined,      // Auto — Claude/config default picks the model unless user overrides
-  engine: undefined,     // Claude (native) unless the user flips the engine toggle
-};
 
-export function SessionPathSelector({ open, onClose, onSelect, initialMeta, initialPath }: Props) {
+export function SessionPathSelector({ open, onClose, onSelect, initialMeta, initialPath, confirmOnDismiss = true }: Props) {
   const navigate = useNavigate();
   const [dirs, setDirs] = useState<WorkingDirEntry[]>([]);
   // All hosts from config.hosts — a freshly added remote host must show as a tab
@@ -81,6 +79,10 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [selectedIdx, setSelectedIdx] = useState(0);
+  // How the current highlight was placed. Mouse hover must NOT expand the row
+  // (content jumping under the pointer reads as flicker) — only keyboard/default
+  // selection shows the full multi-line path.
+  const [selectionByHover, setSelectionByHover] = useState(false);
   const [hostFilter, setHostFilter] = useState<string>('all');
   const [editMode, setEditMode] = useState(false);
   const [editingPath, setEditingPath] = useState('');
@@ -109,8 +111,10 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
+  const statusBtnRef = useRef<HTMLButtonElement>(null);
+  const [statusBtnWidth, setStatusBtnWidth] = useState(0);
 
-  // Programmatic path fill (Tab / click / Cmd+Backspace / seed / ~ rewrite) —
+  // Programmatic path fill (Tab / click / Option+Backspace / seed / ~ rewrite) —
   // marks the change so the caret-to-end effect below runs ONLY for these,
   // never for plain typing (see comment on that effect).
   const programmaticFillRef = useRef(false);
@@ -179,7 +183,7 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
     fillPath('~/');
   }, [open, loading, editMode, hostFilter, dirs, fillPath]);
 
-  // Caret-to-end ONLY after PROGRAMMATIC fills (Tab / click / Cmd+Backspace / ~
+  // Caret-to-end ONLY after PROGRAMMATIC fills (Tab / click / Option+Backspace / ~
   // rewrite). This effect used to run on EVERY editingPath change — i.e. every
   // keystroke — which teleported the caret to the end while the user was editing
   // mid-string, so continued Backspaces silently ate the END of the path
@@ -380,19 +384,29 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
     return null;
   }, [createTarget, pathMode, inputState, byHost]);
 
+  useLayoutEffect(() => {
+    const el = statusBtnRef.current;
+    if (!el) { setStatusBtnWidth(0); return; }
+    const measure = () => setStatusBtnWidth(el.offsetWidth);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [validity, createOption, editMode, editingPath]);
+
   // Reset keyboard selection when the input context changes. Deliberately NOT
   // keyed on byHost — progressive per-host arrivals must not yank the cursor.
   // Also clears the "user drove the cursor with ↑↓" flag so the ghost row can
   // re-take the highlight for the freshly-typed segment.
   const manualNavRef = useRef(false);
-  useEffect(() => { setSelectedIdx(0); manualNavRef.current = false; }, [active, hostFilter, editMode]);
+  useEffect(() => { setSelectedIdx(0); setSelectionByHover(false); manualNavRef.current = false; }, [active, hostFilter, editMode]);
 
   // Auto-highlight the row that prefix-completes the typed segment, so the grey
   // ghost preview lands on the row the user will Tab into. Skip once the user has
   // manually moved with ↑↓ (their explicit pick wins until the input changes).
   useEffect(() => {
     if (manualNavRef.current) return;
-    if (ghostAutoIdx >= 0) setSelectedIdx(ghostAutoIdx);
+    if (ghostAutoIdx >= 0) { setSelectedIdx(ghostAutoIdx); setSelectionByHover(false); }
   }, [ghostAutoIdx]);
 
   // Scroll selected into view
@@ -419,7 +433,8 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
   //  - edit mode: the typed path itself (clicking a history row drills into
   //    edit mode where the highlight moves to live CHILD dirs — previewing
   //    those would wrongly reset the footer to Auto; the launch target is the
-  //    typed path, so its memory drives the preview).
+  //    typed path, so its memory drives the preview). Host match mirrors
+  //    handleConfirm: the explicit tab is host authority, All infers.
   useEffect(() => {
     if (!open || launchTouchedRef.current || initialMetaRef.current) return;
     let launch: { model?: string; engine?: 'codex' } | undefined;
@@ -443,19 +458,27 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
     }, withLaunchMemory(d.history?.lastLaunch));
   }, [onSelect, withLaunchMemory]);
 
-  // Confirm the current editingPath (Shift+Enter or the Start-session button)
+  // Confirm the current editingPath (Shift+Enter or the Start-session button).
+  // The explicitly selected tab is the HOST AUTHORITY: a history row with the
+  // same cwd on a different host (dotfiles, mirrored workspace layouts) must
+  // never override it — history only supplies the category. Host inference
+  // from a history match is allowed only under the All tab, where no host was
+  // explicitly chosen.
   const handleConfirm = useCallback((opts?: { createCwd?: boolean }) => {
     if (!editingPath) return;
     const trimmed = editingPath.replace(/\/+$/, '') || '/';
-    const match = dirs.find(d => d.cwd === trimmed);
+    const anyTab = hostFilter === 'all';
+    const match = anyTab
+      ? dirs.find(d => d.cwd === trimmed)
+      : dirs.find(d => d.cwd === trimmed && (d.host ?? null) === currentHost);
     onSelect({
       cwd: trimmed,
-      host: match?.host ?? currentHost,
-      hostLabel: match?.hostLabel ?? currentHostLabel,
+      host: anyTab ? (match?.host ?? null) : currentHost,
+      hostLabel: anyTab ? match?.hostLabel : currentHostLabel,
       category: match?.category ?? 'Inbox',
       ...(opts?.createCwd ? { createCwd: true } : {}),
     }, withLaunchMemory(match?.lastLaunch));
-  }, [editingPath, dirs, onSelect, currentHost, currentHostLabel, withLaunchMemory]);
+  }, [editingPath, dirs, onSelect, hostFilter, currentHost, currentHostLabel, withLaunchMemory]);
 
   // "Create & start" row: confirm the missing path with the createCwd flag.
   // Host comes from createTarget (not hostFilter) so All-tab-with-one-host works.
@@ -509,12 +532,12 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
     // (browse mode → plain close), or the live listing PROVED the path missing
     // (never silently target a nonexistent dir from a dismiss — create-&-start
     // stays an explicit button).
-    if (editingPath && validity !== 'missing') {
+    if (confirmOnDismiss && editingPath && validity !== 'missing') {
       handleConfirm();
     } else {
       onClose();
     }
-  }, [editingPath, validity, handleConfirm, onClose]);
+  }, [confirmOnDismiss, editingPath, validity, handleConfirm, onClose]);
 
   // Keyboard navigation
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -551,10 +574,12 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
       } else if (e.key === 'ArrowDown') {
         e.preventDefault();
         manualNavRef.current = true;
+        setSelectionByHover(false);
         setSelectedIdx(prev => Math.min(prev + 1, Math.max(flatItems.length - 1, 0)));
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
         manualNavRef.current = true;
+        setSelectionByHover(false);
         setSelectedIdx(prev => Math.max(prev - 1, 0));
       } else if (e.key === 'ArrowRight') {
         // Ghost accept — only when the caret sits at the end of the input;
@@ -568,8 +593,11 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
           const oneLevel = segmentCompletion(inputState, flatItems[selectedIdx]?.cwd ?? null);
           if (oneLevel) fillPath(oneLevel);
         }
-      } else if (e.key === 'Backspace' && e.metaKey) {
-        // Cmd+Backspace: delete last path segment (overrides macOS delete-to-line-start)
+      } else if (e.key === 'Backspace' && e.altKey) {
+        // Option+Backspace: delete last path segment. Native word-delete already
+        // treats '/' as a boundary, so this matches user intuition — we override
+        // only to guarantee the trailing slash stays ('/a/b/c/' → '/a/b/').
+        // Cmd+Backspace keeps its native delete-to-line-start.
         e.preventDefault();
         fillPath(deleteLastSegment(editingPath));
       } else if (e.key === 'Tab') {
@@ -591,10 +619,12 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         manualNavRef.current = true;
+        setSelectionByHover(false);
         setSelectedIdx(prev => Math.min(prev + 1, Math.max(flatItems.length - 1, 0)));
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
         manualNavRef.current = true;
+        setSelectionByHover(false);
         setSelectedIdx(prev => Math.max(prev - 1, 0));
       } else if (e.key === 'Enter' && (e.shiftKey || e.metaKey)) {
         // Shift+Enter: send selected item directly (skip edit mode)
@@ -646,7 +676,7 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
           Runs Claude Code in the folder you pick — a task is created automatically to track it.
         </span>
       </div>
-      <div className="sps-search">
+      <div className="sps-search" style={{ '--sps-status-w': statusBtnWidth ? `${statusBtnWidth + 20}px` : '0px' } as React.CSSProperties}>
         <GhostTextInput
           ref={searchRef}
           value={editMode ? editingPath : query}
@@ -656,7 +686,7 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
           onChange={v => {
             if (editMode) { setEditingPath(v); return; }
             // Path-like input flips straight into edit mode (shell mental model) —
-            // ghost text / Cmd+Backspace / create-row all live there.
+            // ghost text / Option+Backspace / create-row all live there.
             if (v.startsWith('/') || v.startsWith('~')) {
               setEditMode(true);
               setEditingPath(v);
@@ -674,6 +704,7 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
             Label says "folder" explicitly — "+ new" read as "new session" to users. */}
         {editMode && editingPath && (
           <button
+            ref={statusBtnRef}
             className={`sps-status-btn sps-status-${validity}`}
             disabled={validity === 'missing' && !createOption}
             onClick={confirmCurrent}
@@ -731,6 +762,7 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
         ref={listRef}
         sections={sections}
         selectedIdx={selectedIdx}
+        expandSelected={!selectionByHover}
         loading={loading || (anyLoading && flatItems.length === 0)}
         loadError={error}
         hostStates={visibleHostStates}
@@ -739,7 +771,7 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
         createOption={createOption}
         emptyHint={emptyHint}
         onItemClick={drillOrFill}
-        onItemHover={setSelectedIdx}
+        onItemHover={(idx) => { setSelectionByHover(true); setSelectedIdx(idx); }}
         onCreate={handleCreate}
       />
 
