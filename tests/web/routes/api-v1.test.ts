@@ -50,6 +50,11 @@ vi.mock('../../../src/agent/loop.js', () => ({
 import { WALNUT_HOME, IMAGES_DIR, conversationFile } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
 import { resetIndexBootstrap } from '../../../src/web/routes/notes-v2.js'
+import {
+  _deleteSseChannelForTesting,
+  _sseEventIdsForTesting,
+  emitSse,
+} from '../../../src/web/sse-channels.js'
 
 // 1×1 red PNG — small enough that compressForApi early-exits (stays PNG).
 const TINY_PNG_BASE64 =
@@ -157,6 +162,17 @@ afterAll(async () => {
   resetIndexBootstrap()
   await stopServer()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
+})
+
+describe('SSE channel lifecycle', () => {
+  it('keeps event IDs monotonic after an idle channel is recreated', () => {
+    const key = 'gc-recreated-channel'
+    emitSse(key, 'first', {})
+    const firstId = _sseEventIdsForTesting(key)[0]
+    _deleteSseChannelForTesting(key)
+    emitSse(key, 'second', {})
+    expect(_sseEventIdsForTesting(key)[0]).toBeGreaterThan(firstId)
+  })
 })
 
 describe('GET /api/v1/status', () => {
@@ -740,9 +756,11 @@ describe('message normalization: notifications + entity refs', () => {
       { tag: 'ui', role: 'assistant', content: '**Session Result**: done', timestamp: '2026-07-10T00:00:01Z', source: 'session', notification: true },
       { tag: 'ui', role: 'assistant', content: '**Subagent Result** (triage): …', timestamp: '2026-07-10T00:00:02Z', source: 'subagent', notification: true },
       { tag: 'ui', role: 'assistant', content: 'All clear', timestamp: '2026-07-10T00:00:03Z', source: 'heartbeat', notification: true },
-      // Errors: surface as notification cards, refs resolved to labels
-      // (both the XML form and the legacy [id|label] bracket form).
+      // Runtime errors are notification-center records, never conversation cards.
       { tag: 'ui', role: 'assistant', content: '**Session Error** (<task-ref id="t2" label="Deploy fix"/>): boom in [mr9i88ys-87a4|Quick Start / Website]', timestamp: '2026-07-10T00:00:04Z', source: 'session-error', notification: true },
+      { tag: 'ai', role: 'assistant', content: [{ type: 'text', text: '[Error: provider unavailable]' }], timestamp: '2026-07-10T00:00:04Z' },
+      // A non-error UI notification survives, with both reference forms resolved.
+      { tag: 'ui', role: 'assistant', content: 'Review <task-ref id="t2" label="Deploy fix"/> in [mr9i88ys-87a4|Quick Start / Website]', timestamp: '2026-07-10T00:00:04Z', source: 'cron', notification: true },
       // Quick Start machine banners (both shapes) are dropped entirely,
       // like the web console.
       { tag: 'ui', role: 'user', content: 'Quick Start on `~/repo`:\n> do the thing', timestamp: '2026-07-10T00:00:05Z', source: 'quick-start' },
@@ -758,10 +776,10 @@ describe('message normalization: notifications + entity refs', () => {
     const out = normalizeEntries(entries as any)
     expect(out).toHaveLength(4)
     expect(out[0].kind).toBe('notification')
-    expect(out[0].source).toBe('session-error')
+    expect(out[0].source).toBe('cron')
     expect(out[0].text).toContain('Deploy fix')
     expect(out[0].text).not.toContain('<task-ref')
-    expect(out[0].text).toContain('boom in Quick Start / Website')
+    expect(out[0].text).toContain('Quick Start / Website')
     expect(out[0].text).not.toContain('mr9i88ys-87a4|')
     expect(out[1].text).toBe('real user question')
     expect(out[2].kind).toBe('notification')
@@ -770,6 +788,74 @@ describe('message normalization: notifications + entity refs', () => {
     const all = JSON.stringify(out)
     expect(all).not.toContain('Please update the task')
     expect(all).not.toContain('[Current:')
+    expect(all).not.toContain('Session Error')
+    expect(all).not.toContain('provider unavailable')
+  })
+})
+
+describe('message normalization: tool detail + result preview (additive)', () => {
+  it('tool rows carry a one-line input summary and a clipped result preview', async () => {
+    const { normalizeEntries } = await import('../../../src/web/routes/api-v1.js')
+    const entries = [
+      { tag: 'ai', role: 'user', content: [{ type: 'text', text: 'run it' }], timestamp: '2026-07-10T00:00:00Z' },
+      {
+        tag: 'ai', role: 'assistant', timestamp: '2026-07-10T00:00:01Z',
+        content: [
+          { type: 'tool_use', id: 'tu-1', name: 'Bash', input: { command: 'ls docs/', description: 'List docs' } },
+          { type: 'tool_use', id: 'tu-2', name: 'Read', input: { file_path: '/tmp/demo/report.md' } },
+          // No usable input → no detail field at all.
+          { type: 'tool_use', id: 'tu-3', name: 'Mystery', input: { count: 3 } },
+        ],
+      },
+      {
+        tag: 'ai', role: 'user', timestamp: '2026-07-10T00:00:02Z',
+        content: [
+          { type: 'tool_result', tool_use_id: 'tu-1', content: 'a.md\nb.md\n' + 'x'.repeat(2000) },
+          { type: 'tool_result', tool_use_id: 'tu-2', content: [{ type: 'text', text: 'file body' }] },
+        ],
+      },
+      { tag: 'ai', role: 'assistant', content: [{ type: 'text', text: 'done' }], timestamp: '2026-07-10T00:00:03Z' },
+    ]
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const out = normalizeEntries(entries as any)
+    const tools = out.filter((m) => m.kind === 'tool')
+    expect(tools).toHaveLength(3)
+    expect(tools[0].text).toBe('Bash')
+    expect(tools[0].detail).toBe('List docs') // description preferred over command
+    expect(tools[0].resultPreview).toContain('a.md')
+    expect(tools[0].resultPreview!.length).toBeLessThanOrEqual(701) // 700 + ellipsis
+    expect(tools[1].detail).toBe('/tmp/demo/report.md')
+    expect(tools[1].resultPreview).toBe('file body')
+    expect(tools[2].detail).toBeUndefined()
+    expect(tools[2].resultPreview).toBeUndefined()
+  })
+})
+
+describe('GET /api/v1/media (additive)', () => {
+  it('serves a local absolute-path image with correct Content-Type', async () => {
+    const dir = `${WALNUT_HOME}/media-test`
+    await fs.mkdir(dir, { recursive: true })
+    const file = `${dir}/pic.png`
+    await fs.writeFile(file, Buffer.from(TINY_PNG_BASE64, 'base64'))
+    const res = await fetch(apiUrl(`/api/v1/media?path=${encodeURIComponent(file)}`))
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('image/png')
+    const bytes = Buffer.from(await res.arrayBuffer())
+    expect(bytes.equals(Buffer.from(TINY_PNG_BASE64, 'base64'))).toBe(true)
+  })
+
+  it('rejects non-image extensions, relative paths and traversal', async () => {
+    const secret = await fetch(apiUrl(`/api/v1/media?path=${encodeURIComponent('/etc/passwd')}`))
+    expect(secret.status).toBe(400) // extension not allowed
+    const rel = await fetch(apiUrl('/api/v1/media?path=pic.png'))
+    expect(rel.status).toBe(400)
+    const traversal = await fetch(apiUrl(`/api/v1/media?path=${encodeURIComponent('/tmp/../etc/x.png')}`))
+    expect(traversal.status).toBe(400)
+  })
+
+  it('404s for a missing file', async () => {
+    const res = await fetch(apiUrl(`/api/v1/media?path=${encodeURIComponent('/tmp/definitely-not-here-9c2f.png')}`))
+    expect(res.status).toBe(404)
   })
 })
 

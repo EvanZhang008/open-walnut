@@ -16,6 +16,7 @@
 
 import type { WebSocket } from 'ws'
 import { emitSse, sseConnCount } from '../sse-channels.js'
+import { toolDetail } from '../../core/tool-summary.js'
 import { log } from '../../logging/index.js'
 
 interface PendingRequest {
@@ -104,9 +105,10 @@ function forwardJsonlLine(sessionId: string, line: string): void {
     const content = (parsed.message as { content?: unknown[] } | undefined)?.content
     if (!Array.isArray(content)) return
     for (const block of content) {
-      const b = block as { type?: string; id?: string; name?: string }
+      const b = block as { type?: string; id?: string; name?: string; input?: Record<string, unknown> }
       if (b.type === 'tool_use') {
-        emitSse(key, 'tool', { name: b.name ?? 'unknown', toolUseId: b.id ?? '' })
+        const detail = toolDetail(b.name ?? '', b.input)
+        emitSse(key, 'tool', { name: b.name ?? 'unknown', toolUseId: b.id ?? '', ...(detail ? { detail } : {}) })
       }
     }
     return

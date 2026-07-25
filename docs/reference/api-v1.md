@@ -116,7 +116,10 @@ Returns the most recent `limit` messages, **oldest-first**, normalized for mobil
 ]
 ```
 
-- `kind: "tool"` — a tool call; `text` is the tool name.
+- `kind: "tool"` — a tool call; `text` is the tool name. Additive: `detail`
+  (one-line input summary, e.g. `"ls docs/"`) and `resultPreview` (≤700 char
+  clipped output) when available — clients render a collapsed
+  `Bash — ls docs/` row that expands to the output.
 - `kind: "thinking"` — a reasoning step; `text` is a short (≤160 char) excerpt.
 - `kind: "notification"` — a system-generated card (additive); `source` says
   which system produced it (`"session-error"`, `"agent-error"`, `"cron"`,
@@ -236,8 +239,10 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   `503 unavailable` on a fresh companion).
 - `GET /api/v1/sessions/:id/transcript?fresh=1` →
   `{ "sessionId", "exportedAt", "truncated", "messages": [ { role, text,
-  timestamp, kind? } ] }` — a slim transcript tail (last ~100 entries; text
-  capped at 4 KB/row; `kind: "tool"` rows carry the tool name). The primary
+  timestamp, kind?, detail?, resultPreview? } ] }` — a slim transcript tail
+  (last ~100 entries; text capped at 4 KB/row; `kind: "tool"` rows carry the
+  tool name, plus additive `detail` (input summary) / `resultPreview`
+  (clipped output) when available). The primary
   box exports tails for every session it can reach — local from disk, remote
   over its SSH channel — so this works for sessions on ANY machine without
   the phone talking to that machine. `404 not_found` when no tail was
@@ -283,7 +288,8 @@ primary box the same endpoints serve directly — no bridge involved.
     once on attach (primary box only; carries no id).
   - `turn-start {}` — a new turn began (resets the replay window).
   - `text-delta { delta }` / `thinking { delta }` — main-lane streaming text.
-  - `tool { name, toolUseId }` / `tool-result { toolUseId }`
+  - `tool { name, toolUseId, detail? }` / `tool-result { toolUseId }` —
+    `detail` (additive) is the one-line input summary.
   - `status { processStatus }` — running | idle | stopped | error.
   - `turn-end {}` — refetch the transcript here to reconcile.
   - `error { message }`
@@ -295,6 +301,20 @@ primary box the same endpoints serve directly — no bridge involved.
   `bridgeHosts: [ { hostAlias, since } ]` — hosts with a live daemon bridge.
   A session is talkable when its `ProjectedSession.host` (`""` maps to the
   primary's local daemon `__local__`) has an entry here.
+
+### GET /api/v1/media?path=/absolute/file.png[&session=sid] (additive)
+
+Image bytes for pictures referenced in chats/transcripts by absolute path
+(agent screenshots, attached photos). Resolution order: the serving box's own
+disk → the session's exec host (SSH daemon channel on the primary; the
+`/bridge` WS on a cloud companion, via the narrow `fs.readImage` daemon
+command) → a previously-fetched cache. So the same URL works on LAN and
+through the cloud companion.
+
+- Extension allowlist png/jpg/jpeg/gif/webp (no SVG), absolute paths only,
+  no `..`, 50 MB cap. Auth: standard Bearer.
+- `200` image bytes with correct `Content-Type`; `404 not_found` when no
+  source can produce the file; `400 bad_request` for disallowed paths/types.
 
 ### POST /api/v1/client-logs
 

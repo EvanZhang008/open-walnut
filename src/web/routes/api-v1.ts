@@ -35,6 +35,7 @@ import { usageTracker } from '../../core/usage/index.js'
 import { getLastSyncAt } from '../../integrations/git-sync.js'
 import { computeContentHash } from '../../utils/file-ops.js'
 import { parseFrontmatter, readId, generateNoteId, stampId } from '../../core/parse-frontmatter.js'
+import { toolDetail, toolResultPreview, toolResultText } from '../../core/tool-summary.js'
 import { scheduleNotesIndexUpdate } from '../../core/notes-indexer.js'
 import {
   ensureIndexBootstrap,
@@ -204,6 +205,10 @@ interface ApiV1Message {
   kind?: 'tool' | 'thinking' | 'notification'
   /** notification provenance, e.g. 'session-error' | 'cron' — drives card styling. */
   source?: string
+  /** kind:'tool' only (additive) — one-line input summary, e.g. "ls docs/". */
+  detail?: string
+  /** kind:'tool' only (additive) — clipped tool output for the expanded card. */
+  resultPreview?: string
 }
 
 function shortText(s: string): string {
@@ -212,10 +217,18 @@ function shortText(s: string): string {
 
 /**
  * UI-only notification categories hidden from the mobile feed by default —
- * mirrors the web console's developer-settings defaults (only session/agent
- * errors surface; triage/session-result/subagent/heartbeat are dev noise).
+ * mirrors the web console: background diagnostics and runtime errors do not
+ * belong in the conversation timeline. Errors live in Notifications.
  */
-const HIDDEN_NOTIFICATION_SOURCES = new Set(['triage', 'session', 'subagent', 'heartbeat'])
+// NOTE: 'session-error'/'agent-error' entries are dropped EARLIER by
+// chatHistory.isNotificationOnlyError() in normalizeEntries — they never
+// reach this set, so don't list them here.
+const HIDDEN_NOTIFICATION_SOURCES = new Set([
+  'triage',
+  'session',
+  'subagent',
+  'heartbeat',
+])
 
 /**
  * Drop machine banners prefixed onto user turns before the real message:
@@ -247,8 +260,8 @@ function stripLeadingBanners(text: string): string {
  * text blocks of one entry join into a single plain assistant message.
  * Tool-result-only user entries are skipped (they ride with the tool call).
  * UI-tagged notification entries become kind:'notification' + source (rendered
- * as cards); noisy dev categories (triage/session/subagent/heartbeat with
- * notification:true) are dropped entirely, matching the web console defaults.
+ * as cards); background diagnostics and errors are dropped entirely, matching
+ * the web console and leaving errors to the notification API.
  * ids are positional ("m<index>") — stable for a given read, used as the
  * `before` cursor. Compaction can rewrite history, so treat cursors as
  * ephemeral: on a cursor miss, re-fetch from the tail.
@@ -259,8 +272,24 @@ export function normalizeEntries(entries: ChatEntry[]): ApiV1Message[] {
     out.push({ id: `m${out.length}`, ...m })
   }
 
+  // Pre-scan tool_result carriers (user entries skipped below) so tool rows
+  // can carry a clipped output preview alongside the input summary.
+  const resultsById = new Map<string, string>()
+  for (const entry of entries) {
+    if (entry.role !== 'user' || !Array.isArray(entry.content)) continue
+    for (const block of entry.content as Array<Record<string, unknown>>) {
+      if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
+        const text = toolResultText(block.content)
+        if (text) resultsById.set(block.tool_use_id, text)
+      }
+    }
+  }
+
   for (const entry of entries) {
     const createdAt = entry.timestamp
+    // Legacy runtime errors may be either ui-tagged cards or ai-tagged
+    // synthetic responses. Neither belongs in the conversation feed.
+    if (chatHistory.isNotificationOnlyError(entry)) continue
     // Machine-generated Quick Start banners ("[Quick Start] Session created…
     // Please update the task…") are agent instructions, not conversation —
     // the web console hides them entirely (ChatMessage.tsx); so do we. They
@@ -313,7 +342,13 @@ export function normalizeEntries(entries: ChatEntry[]): ApiV1Message[] {
       if (block.type === 'thinking' && typeof block.thinking === 'string' && block.thinking) {
         push({ role: 'assistant', text: shortText(block.thinking), createdAt, kind: 'thinking' })
       } else if (block.type === 'tool_use' && typeof block.name === 'string') {
-        push({ role: 'assistant', text: block.name, createdAt, kind: 'tool' })
+        const detail = toolDetail(block.name, block.input as Record<string, unknown> | undefined)
+        const result = typeof block.id === 'string' ? resultsById.get(block.id) : undefined
+        push({
+          role: 'assistant', text: block.name, createdAt, kind: 'tool',
+          ...(detail ? { detail } : {}),
+          ...(result ? { resultPreview: toolResultPreview(result) } : {}),
+        })
       } else if (block.type === 'text' && typeof block.text === 'string' && block.text) {
         textParts.push(block.text)
       }
@@ -599,7 +634,8 @@ async function runApiV1Turn(
           broadcastEvent(EventNames.AGENT_THINKING, { text: thinkingText, agentId, conversationId })
         },
         onToolCall: (toolName, input, toolUseId) => {
-          emitSse(conversationId, 'tool', { name: toolName })
+          const detail = toolDetail(toolName, input as Record<string, unknown> | undefined)
+          emitSse(conversationId, 'tool', { name: toolName, ...(detail ? { detail } : {}) })
           broadcastEvent(EventNames.AGENT_TOOL_CALL, { toolName, input, toolUseId, agentId, conversationId })
         },
         onUsage: (usage) => {
@@ -650,7 +686,7 @@ async function runApiV1Turn(
       log.web.error('api-v1 turn error', { conversationId, turnId, agentId, error: errMsg })
       await chatHistory.addAIMessages(
         [{ role: 'assistant', content: [{ type: 'text', text: `[Error: ${errMsg}]` }] }] as MessageParam[],
-        { agentId, conversationId },
+        { source: 'agent-error', agentId, conversationId },
       ).catch(() => { /* best-effort */ })
       emitSse(conversationId, 'error', { message: errMsg })
       broadcastEvent(EventNames.AGENT_ERROR, { error: errMsg, agentId, conversationId })

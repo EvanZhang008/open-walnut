@@ -145,6 +145,10 @@ export interface ProjectedTranscriptMessage {
   timestamp: string
   /** "tool" rows carry the tool name in text; "thinking" a short excerpt. */
   kind?: 'tool' | 'thinking'
+  /** kind:'tool' only (additive) — one-line input summary, e.g. "ls docs/". */
+  detail?: string
+  /** kind:'tool' only (additive) — clipped tool output for the expanded card. */
+  resultPreview?: string
 }
 
 export interface SessionTranscript {
@@ -168,16 +172,30 @@ let transcriptSweepRunning = false
  * freshness for a single session without paying for a full sweep.
  */
 export async function buildSessionTranscript(sessionId: string): Promise<SessionTranscript> {
-  const { readSessionHistory } = await import('./session-history.js')
+  const { readSessionHistoryTail } = await import('./session-history.js')
   const { getSessionByClaudeId } = await import('./session-tracker.js')
+  const { toolDetail, toolResultPreview } = await import('./tool-summary.js')
   const record = await getSessionByClaudeId(sessionId)
-  const history = await readSessionHistory(sessionId, record?.cwd, record?.host, record?.outputFile, { skipSubagents: true })
+  // Tail-bounded: this export keeps only the last TRANSCRIPT_TAIL messages, so
+  // whales must not be fully transferred per sweep (pre-fix: the 60s sweep
+  // full-read every alive session — dominant share of 167 GB/day of reads).
+  const history = await readSessionHistoryTail(sessionId, record?.cwd, record?.host, record?.outputFile) ?? []
   const tail = history.slice(-TRANSCRIPT_TAIL)
   const messages: ProjectedTranscriptMessage[] = []
   for (const m of tail) {
     if (m.role === 'system') continue
+    // CLI-injected user lines (skill content dumps, compaction summaries) are
+    // not something the human typed — Claude Code hides them entirely; the
+    // slim phone tail drops them too (a 4K skill dump would eat the preview).
+    if (m.role === 'user' && m.injected) continue
     for (const t of m.tools ?? []) {
-      messages.push({ role: 'assistant', text: t.name, timestamp: m.timestamp, kind: 'tool' })
+      const detail = toolDetail(t.name, t.input)
+      const resultPreview = toolResultPreview(t.result)
+      messages.push({
+        role: 'assistant', text: t.name, timestamp: m.timestamp, kind: 'tool',
+        ...(detail ? { detail } : {}),
+        ...(resultPreview ? { resultPreview } : {}),
+      })
     }
     const text = (m.text || '').trim()
     if (text) {

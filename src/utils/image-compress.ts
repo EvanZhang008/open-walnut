@@ -8,9 +8,54 @@ import sharp from 'sharp';
 export const MAX_BASE64_BYTES = 5_000_000;
 
 /**
+ * Model providers reject a multi-image request when ANY image exceeds this many
+ * pixels on either dimension ("At least one of the image dimensions exceed max
+ * allowed size for many-image requests: 2000 pixels"). Byte-size compression
+ * alone does NOT protect against it — a 1 MB 2048px JPEG is small enough to
+ * skip compression entirely and still poisons the request. Because a stored
+ * image is replayed with every later turn in the same conversation, one
+ * oversized image permanently bricks the thread, so this clamp runs on both
+ * ingest and replay.
+ */
+export const MAX_IMAGE_DIMENSION = 1568;
+
+/**
+ * Downscale so the longest side is at most MAX_IMAGE_DIMENSION, leaving smaller
+ * images byte-identical. Returns the input unchanged if sharp can't read it.
+ */
+export async function clampImageDimensions(
+  buffer: Buffer,
+  mimeType: string,
+): Promise<{ buffer: Buffer; mimeType: string }> {
+  try {
+    const meta = await sharp(buffer).metadata();
+    const longest = Math.max(meta.width ?? 0, meta.height ?? 0);
+    if (longest <= MAX_IMAGE_DIMENSION) return { buffer, mimeType };
+    // GIFs keep their format (animation) — everything else re-encodes as JPEG,
+    // which is what the byte-compression path below would produce anyway.
+    if (mimeType === 'image/gif') {
+      const resized = await sharp(buffer, { animated: true })
+        .resize({ width: MAX_IMAGE_DIMENSION, height: MAX_IMAGE_DIMENSION, fit: 'inside' })
+        .gif()
+        .toBuffer();
+      return { buffer: resized, mimeType };
+    }
+    const resized = await sharp(buffer)
+      .resize({ width: MAX_IMAGE_DIMENSION, height: MAX_IMAGE_DIMENSION, fit: 'inside' })
+      .jpeg({ quality: 80 })
+      .toBuffer();
+    return { buffer: resized, mimeType: 'image/jpeg' };
+  } catch {
+    // Unsupported/corrupt input — leave it to the caller's existing fallbacks.
+    return { buffer, mimeType };
+  }
+}
+
+/**
  * Compress an image buffer so its base64 representation fits under Bedrock's 5 MB limit.
  *
  * Strategy:
+ *   0. Clamp dimensions to MAX_IMAGE_DIMENSION (provider hard limit, independent of bytes).
  *   1. Early-exit if already small enough.
  *   2. GIFs: try WebP (preserves animation), then static JPEG frame as last resort.
  *   3. PNG/JPEG/WebP: convert to JPEG, step quality 85→30 in steps of 10.
@@ -20,9 +65,15 @@ export const MAX_BASE64_BYTES = 5_000_000;
  * Returns { buffer, mimeType } — mimeType may change (e.g. image/png → image/jpeg).
  */
 export async function compressForApi(
-  buffer: Buffer,
-  mimeType: string,
+  inputBuffer: Buffer,
+  inputMimeType: string,
 ): Promise<{ buffer: Buffer; mimeType: string }> {
+  // Dimension clamp FIRST: it is a hard provider limit, not a byte budget, so
+  // it must apply even to images that are already small enough byte-wise.
+  const clamped = await clampImageDimensions(inputBuffer, inputMimeType);
+  const buffer = clamped.buffer;
+  const mimeType = clamped.mimeType;
+
   // Already small enough — no work needed
   if (buffer.toString('base64').length <= MAX_BASE64_BYTES) {
     return { buffer, mimeType };

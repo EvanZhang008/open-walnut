@@ -129,7 +129,9 @@ function ensureBusSubscriber(): void {
       }
       case 'session:tool-use': {
         if (d.parentToolUseId) return
-        emitSse(key, 'tool', { name: d.toolName ?? '', toolUseId: d.toolUseId ?? '' })
+        const { toolDetail } = await import('../../core/tool-summary.js')
+        const detail = toolDetail(String(d.toolName ?? ''), d.input as Record<string, unknown> | undefined)
+        emitSse(key, 'tool', { name: d.toolName ?? '', toolUseId: d.toolUseId ?? '', ...(detail ? { detail } : {}) })
         return
       }
       case 'session:tool-result': {
@@ -257,14 +259,33 @@ export async function buildTranscriptViaBridge(sessionId: string): Promise<Recor
   if (!host) return null
   const { bridgeRequest, bridgeForHost } = await import('../ws/bridge-registry.js')
   if (!bridgeForHost(host).connected) return null
+  const { toolDetail, toolResultPreview, toolResultText } = await import('../../core/tool-summary.js')
   const res = await bridgeRequest(host, 'read-history', { sid: sessionId, tailBytes: TRANSCRIPT_TAIL_BYTES })
   if (res.ok !== true || typeof res.main !== 'string' || res.main === '') return null
 
-  const messages: Array<{ role: string; text: string; timestamp: string; kind?: 'tool' | 'thinking' }> = []
+  const lines: Array<Record<string, unknown>> = []
   for (const line of res.main.split('\n')) {
     if (!line.trim()) continue
-    let parsed: Record<string, unknown>
-    try { parsed = JSON.parse(line) } catch { continue }
+    try { lines.push(JSON.parse(line)) } catch { continue }
+  }
+
+  // Pre-scan tool_result carrier lines so tool rows can attach output previews.
+  const resultsById = new Map<string, string>()
+  for (const parsed of lines) {
+    if (parsed.type !== 'user') continue
+    const content = (parsed.message as { content?: unknown } | undefined)?.content
+    if (!Array.isArray(content)) continue
+    for (const block of content) {
+      const b = block as { type?: string; tool_use_id?: string; content?: unknown }
+      if (b.type === 'tool_result' && typeof b.tool_use_id === 'string') {
+        const text = toolResultText(b.content)
+        if (text) resultsById.set(b.tool_use_id, text)
+      }
+    }
+  }
+
+  const messages: Array<{ role: string; text: string; timestamp: string; kind?: 'tool' | 'thinking'; detail?: string; resultPreview?: string }> = []
+  for (const parsed of lines) {
     if (parsed.parent_tool_use_id) continue // subagent lane
     const timestamp = typeof parsed.timestamp === 'string' ? parsed.timestamp : new Date().toISOString()
     const type = parsed.type as string
@@ -286,11 +307,17 @@ export async function buildTranscriptViaBridge(sessionId: string): Promise<Recor
       }
     } else if (type === 'assistant' && Array.isArray(content)) {
       for (const block of content) {
-        const b = block as { type?: string; text?: string; name?: string }
+        const b = block as { type?: string; text?: string; name?: string; id?: string; input?: Record<string, unknown> }
         if (b.type === 'text' && b.text?.trim()) {
           messages.push({ role: 'assistant', text: clip(b.text.trim()), timestamp })
         } else if (b.type === 'tool_use') {
-          messages.push({ role: 'assistant', text: b.name ?? 'tool', timestamp, kind: 'tool' })
+          const detail = toolDetail(b.name ?? '', b.input)
+          const result = typeof b.id === 'string' ? resultsById.get(b.id) : undefined
+          messages.push({
+            role: 'assistant', text: b.name ?? 'tool', timestamp, kind: 'tool',
+            ...(detail ? { detail } : {}),
+            ...(result ? { resultPreview: toolResultPreview(result) } : {}),
+          })
         }
       }
     }
