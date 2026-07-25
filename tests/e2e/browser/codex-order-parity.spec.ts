@@ -6,7 +6,7 @@ const SCREENSHOT_DIR = '/tmp/codex-customer-matrix-gap-final'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const SESSION_ID = 'pw-codex-order-session'
 const TASK_ID = 'pw-task-codex-order'
-const PROMPT = 'ordered-tool dedicated Sessions parity'
+const PROMPT = 'ordered-tool homepage transcript order'
 const BEFORE_TOOL = 'before tool'
 const TOOL_NAME = 'Ordered tool'
 const TOOL_RESULT = 'ordered result'
@@ -21,18 +21,16 @@ test.beforeAll(async () => {
   await fs.mkdir(SCREENSHOT_DIR, { recursive: true })
 })
 
-async function navigateToSessions(page: Page): Promise<void> {
-  const other = page.getByRole('button', { name: /Other/i })
-  if (await other.getAttribute('aria-expanded') !== 'true') await other.click()
-  await page.locator('a[href="/sessions"]').click()
-  await expect(page).toHaveURL(/\/sessions$/)
-  await expect(page.locator('.session-tree-panel')).toBeVisible()
-}
-
 async function expectOrderedTranscript(surface: Locator): Promise<void> {
   const before = surface.getByText(BEFORE_TOOL, { exact: true })
-  const tool = surface.locator('.chat-tool-block').filter({ hasText: TOOL_NAME })
   const after = surface.getByText(AFTER_TOOL, { exact: true })
+
+  // Persisted generic tools render collapsed into a muted run row
+  // ("Used a tool ›") — expand it to reach the tool card.
+  const runRow = surface.locator('.tool-run-row')
+  await expect(runRow).toHaveCount(1)
+  await runRow.locator('.tool-run-toggle').click()
+  const tool = surface.locator('.chat-tool-block').filter({ hasText: TOOL_NAME })
 
   await expect(before).toHaveCount(1)
   await expect(tool).toHaveCount(1)
@@ -74,42 +72,13 @@ async function expectSurfaceGeometry(
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
 }
 
-test('keeps mixed tool/text order from Sessions to Home at 1024x768', async ({ page }) => {
+test('keeps mixed tool/text order on the Homepage at 1024x768', async ({ page }) => {
   test.setTimeout(45_000)
   await page.setViewportSize({ width: 1024, height: 768 })
   const audit = await installBrowserAudit(page, walnutHome)
 
   await page.goto('/')
   await page.waitForLoadState('networkidle')
-  await navigateToSessions(page)
-
-  const search = page.getByRole('searchbox', { name: 'Search sessions' })
-  await search.fill(SESSION_ID)
-  const sessionRow = page.locator(`.session-tree-session[data-session-id="${SESSION_ID}"]`)
-  await expect(sessionRow).toBeVisible()
-  await sessionRow.focus()
-  await expect(sessionRow).toBeFocused()
-  await sessionRow.press('Enter')
-
-  const detail = page.locator('.sessions-detail-pane')
-  const detailInput = detail.locator('.chat-input-textarea')
-  await expect(detailInput).toBeVisible()
-  await detailInput.click()
-  await expect(detailInput).toBeFocused()
-  await page.keyboard.type(PROMPT)
-  await page.keyboard.press('Enter')
-
-  await expect(detail.getByText(PROMPT, { exact: true })).toHaveCount(1)
-  await expect(detail.getByText(AFTER_TOOL, { exact: true }))
-    .toHaveCount(1, { timeout: 20_000 })
-  await expectOrderedTranscript(detail)
-  await expectSurfaceGeometry(page, detail, detailInput)
-  await page.screenshot({
-    path: `${SCREENSHOT_DIR}/order-parity-sessions-1024x768.png`,
-  })
-
-  await page.getByRole('link', { name: 'Home', exact: true }).click()
-  await expect(page).toHaveURL(/\/$/)
   await page.locator('.todo-search-input').fill(SESSION_ID)
   const task = page.locator(`.todo-panel-item[data-task-id="${TASK_ID}"]`)
   await expect(task).toBeVisible()
@@ -118,11 +87,16 @@ test('keeps mixed tool/text order from Sessions to Home at 1024x768', async ({ p
   const homePanel = page.locator('.main-page-session-column .session-panel')
   const homeInput = homePanel.locator('.chat-input-textarea')
   await expect(homePanel).toBeVisible()
-  await expect(homePanel.getByText(PROMPT, { exact: true })).toHaveCount(1)
-  await expectOrderedTranscript(homePanel)
   await expect(homeInput).toBeVisible()
   await homeInput.click()
   await expect(homeInput).toBeFocused()
+  await page.keyboard.type(PROMPT)
+  await page.keyboard.press('Enter')
+
+  await expect(homePanel.getByText(PROMPT, { exact: true })).toHaveCount(1)
+  await expect(homePanel.getByText(AFTER_TOOL, { exact: true }))
+    .toHaveCount(1, { timeout: 20_000 })
+  await expectOrderedTranscript(homePanel)
   await expectSurfaceGeometry(page, homePanel, homeInput)
   await page.screenshot({
     path: `${SCREENSHOT_DIR}/order-parity-home-1024x768.png`,

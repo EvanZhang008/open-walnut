@@ -56,47 +56,6 @@ export interface SessionRecord {
   recapAt?: string;
 }
 
-export interface SessionTreeTask {
-  taskId: string;
-  taskTitle: string;
-  taskStatus: string;
-  taskPriority: string;
-  taskStarred: boolean;
-  sessions: SessionRecord[];
-}
-
-export interface SessionTreeProject {
-  project: string;
-  tasks: SessionTreeTask[];
-}
-
-export interface SessionTreeCategory {
-  category: string;
-  projects: SessionTreeProject[];
-  directTasks: SessionTreeTask[];
-}
-
-export interface SessionTreeResponse {
-  tree: SessionTreeCategory[];
-  orphanSessions: SessionRecord[];
-  /** Number of sessions matching the server query before the recent-prefix limit. */
-  total: number;
-  /** Effective server limit after validation/capping. */
-  limit: number;
-  /** Matching rows that can still be loaded before the server cap. */
-  remaining: number;
-  hasMore: boolean;
-}
-
-export interface SessionSummaryInfo {
-  slug: string;
-  project: string;
-  summary: string;
-  status: string;
-  date: string;
-  task_ids: string[];
-}
-
 export interface SessionHistoryTool {
   name: string;
   input: Record<string, unknown>;

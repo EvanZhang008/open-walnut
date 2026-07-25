@@ -24,7 +24,7 @@ interface UseSessionSendReturn {
 
 /**
  * Shared hook for sending messages to Claude Code sessions with optimistic UI.
- * Used by both SessionsPage and TaskDetailPage.
+ * Used by SessionPanel and TaskDetailPage.
  *
  * ## State machine: optimisticMsgs[]
  *

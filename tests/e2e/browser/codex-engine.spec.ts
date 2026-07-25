@@ -47,17 +47,6 @@ async function sessionIdForTask(page: Page, taskId: string): Promise<string> {
   return sessionId
 }
 
-async function navigateToSession(page: Page, sessionId: string): Promise<void> {
-  const other = page.getByRole('button', { name: /Other/i })
-  if (await other.getAttribute('aria-expanded') !== 'true') await other.click()
-  await page.locator('a[href="/sessions"]').click()
-  await expect(page.locator('.session-tree-panel')).toBeVisible()
-  await page.getByRole('searchbox', { name: 'Search sessions' }).fill(sessionId)
-  const row = page.locator(`.session-tree-session[data-session-id="${sessionId}"]`)
-  await expect(row).toBeVisible()
-  await row.click()
-}
-
 test('engine toggle renders in the footer; Codex click hides the Claude model select', async ({ page }) => {
   const audit = await installBrowserAudit(page, walnutHome)
   await openPicker(page)
@@ -145,8 +134,8 @@ test('live Codex session: quick-start streams the mock-acp reply into the sessio
 
   // ACP discovery replaces the generic Codex label with the current short model name.
   await expect(panel.locator('.session-detail-model-pill', { hasText: 'GPT Best' })).toBeVisible({ timeout: 10_000 })
-  await expect(panel.locator('.session-msg-role').filter({ hasText: /^Codex$/ }).first()).toBeVisible()
-  await expect(panel.locator('.session-msg-role').filter({ hasText: /^Walnut$/ })).toHaveCount(0)
+  await expect(panel.locator('.session-msg-role')).toHaveCount(0)
+  await expect(panel.getByText('Walnut', { exact: true })).toHaveCount(0)
   await expect(panel).toBeInViewport()
   await fs.mkdir(SCREENSHOT_DIR, { recursive: true })
   await page.screenshot({
@@ -156,7 +145,7 @@ test('live Codex session: quick-start streams the mock-acp reply into the sessio
   await audit.assertClean()
 })
 
-test('Codex session controls cycle on Homepage and stay in sync on Sessions', async ({ page }) => {
+test('Codex session controls cycle on Homepage', async ({ page }) => {
   test.setTimeout(60_000)
   const audit = await installBrowserAudit(page, walnutHome)
   await openPicker(page)
@@ -206,21 +195,9 @@ test('Codex session controls cycle on Homepage and stay in sync on Sessions', as
   expect((await collaborationResponse).status()).toBe(200)
   await expect(panel.locator('.mode-toggle-pill').filter({ hasText: 'Plan' })).toBeVisible()
 
-  await navigateToSession(page, sessionId)
-  const detail = page.locator('.sessions-detail-pane')
-  await expect(detail.locator('.mode-toggle-pill').filter({ hasText: 'Read only' })).toBeVisible({ timeout: 15_000 })
-  await expect(detail.locator('.mode-toggle-pill').filter({ hasText: 'Plan' })).toBeVisible()
-
-  const detailShortcutResponse = page.waitForResponse((candidate) =>
-    candidate.request().method() === 'POST'
-      && new URL(candidate.url()).pathname === `/api/sessions/${sessionId}/controls`)
-  await page.locator('.session-chat-input-wrapper .chat-input-textarea').press('Shift+Tab')
-  expect((await detailShortcutResponse).status()).toBe(200)
-  await expect(detail.locator('.mode-toggle-pill').filter({ hasText: 'Agent' })).toBeVisible()
-
   await fs.mkdir(SESSION_CONTROLS_SCREENSHOT_DIR, { recursive: true })
   await page.screenshot({
-    path: `${SESSION_CONTROLS_SCREENSHOT_DIR}/sessions-controls.png`,
+    path: `${SESSION_CONTROLS_SCREENSHOT_DIR}/homepage-controls.png`,
     fullPage: true,
   })
   const expectedMissingPlan = (url: string) =>
@@ -235,7 +212,7 @@ test('Codex session controls cycle on Homepage and stay in sync on Sessions', as
   })
 })
 
-test('Codex model picker switches models identically on Homepage and Sessions', async ({ page }) => {
+test('Codex model picker switches models on Homepage', async ({ page }) => {
   test.setTimeout(60_000)
   const audit = await installBrowserAudit(page, walnutHome)
   await openPicker(page)
@@ -269,37 +246,26 @@ test('Codex model picker switches models identically on Homepage and Sessions', 
       && new URL(candidate.url()).pathname === `/api/sessions/${sessionId}/model`)
   await homeMenu.getByRole('option', { name: /Mock GPT Fast/ }).click()
   expect((await homeSwitchResponse).status()).toBe(200)
-  await expect(panel.getByRole('button', { name: /GPT Fast/ })).toBeVisible()
+  const switchedPill = panel.getByRole('button', { name: /GPT Fast/ })
+  await expect(switchedPill).toBeVisible()
+
+  // Re-open the picker and confirm the switched model is marked selected.
+  await switchedPill.click()
+  const reopenedMenu = panel.getByRole('listbox', { name: 'Codex models' })
+  await expect(reopenedMenu).toBeVisible()
+  await expect(reopenedMenu.getByRole('option', { name: /Mock GPT Fast/ }))
+    .toHaveAttribute('aria-selected', 'true')
+  await page.keyboard.press('Escape')
 
   await fs.mkdir(MODEL_PICKER_SCREENSHOT_DIR, { recursive: true })
   await page.screenshot({
     path: `${MODEL_PICKER_SCREENSHOT_DIR}/homepage-selected-fast.png`,
     fullPage: true,
   })
-
-  await navigateToSession(page, sessionId)
-  const detail = page.locator('.sessions-detail-pane')
-  const detailPill = detail.getByRole('button', { name: /GPT Fast/ })
-  await expect(detailPill).toBeVisible({ timeout: 15_000 })
-  await detailPill.click()
-  const detailMenu = detail.getByRole('listbox', { name: 'Codex models' })
-  await expect(detailMenu).toBeVisible()
-  await expect(detailMenu.getByRole('option', { name: /Mock GPT Fast/ }))
-    .toHaveAttribute('aria-selected', 'true')
-  const detailSwitchResponse = page.waitForResponse((candidate) =>
-    candidate.request().method() === 'POST'
-      && new URL(candidate.url()).pathname === `/api/sessions/${sessionId}/model`)
-  await detailMenu.getByRole('option', { name: /Mock GPT Best/ }).click()
-  expect((await detailSwitchResponse).status()).toBe(200)
-  await expect(detail.getByRole('button', { name: /GPT Best/ })).toBeVisible()
-  await page.screenshot({
-    path: `${MODEL_PICKER_SCREENSHOT_DIR}/sessions-selected-best.png`,
-    fullPage: true,
-  })
   await audit.assertClean()
 })
 
-test('live Claude Code session uses its engine name on Homepage and Sessions', async ({ page }) => {
+test('live Claude Code session uses its engine name on Homepage', async ({ page }) => {
   test.setTimeout(90_000)
   const audit = await installBrowserAudit(page, walnutHome)
   await openPicker(page)
@@ -323,16 +289,9 @@ test('live Claude Code session uses its engine name on Homepage and Sessions', a
 
   const panel = page.locator('.session-panel:not(.pending-session-panel)')
   await expect(panel).toBeVisible({ timeout: 15_000 })
-  await expect(panel.locator('.session-msg-role').filter({ hasText: /^Claude Code$/ }).first())
-    .toBeVisible({ timeout: 20_000 })
-  await expect(panel.locator('.session-msg-role').filter({ hasText: /^Walnut$/ })).toHaveCount(0)
-
-  const sessionId = await sessionIdForTask(page, taskId)
-  await navigateToSession(page, sessionId)
-  const detail = page.locator('.sessions-detail-pane')
-  await expect(detail.locator('.session-msg-role').filter({ hasText: /^Claude Code$/ }).first())
-    .toBeVisible({ timeout: 10_000 })
-  await expect(detail.locator('.session-msg-role').filter({ hasText: /^Walnut$/ })).toHaveCount(0)
+  await expect(panel.locator('.session-msg-role')).toHaveCount(0, { timeout: 20_000 })
+  await expect(panel.getByText('Walnut', { exact: true })).toHaveCount(0)
+  await sessionIdForTask(page, taskId) // session is registered for the task
 
   await fs.mkdir(ENGINE_LABEL_SCREENSHOT_DIR, { recursive: true })
   await page.screenshot({
@@ -342,7 +301,7 @@ test('live Claude Code session uses its engine name on Homepage and Sessions', a
   await audit.assertClean()
 })
 
-test('persisted Codex session uses its engine name on Homepage and Sessions', async ({ page }) => {
+test('persisted Codex session uses its engine name on Homepage', async ({ page }) => {
   test.setTimeout(60_000)
   const audit = await installBrowserAudit(page, walnutHome)
   const sessionId = 'pw-codex-customer-session'
@@ -355,15 +314,8 @@ test('persisted Codex session uses its engine name on Homepage and Sessions', as
   await task.locator('.todo-item-title').click()
 
   const panel = page.locator('.main-page-session-column .session-panel')
-  await expect(panel.locator('.session-msg-role').filter({ hasText: /^Codex$/ }).first())
-    .toBeVisible({ timeout: 15_000 })
-  await expect(panel.locator('.session-msg-role').filter({ hasText: /^Walnut$/ })).toHaveCount(0)
-
-  await navigateToSession(page, sessionId)
-  const detail = page.locator('.sessions-detail-pane')
-  await expect(detail.locator('.session-msg-role').filter({ hasText: /^Codex$/ }).first())
-    .toBeVisible({ timeout: 15_000 })
-  await expect(detail.locator('.session-msg-role').filter({ hasText: /^Walnut$/ })).toHaveCount(0)
+  await expect(panel.locator('.session-msg-role')).toHaveCount(0, { timeout: 15_000 })
+  await expect(panel.getByText('Walnut', { exact: true })).toHaveCount(0)
 
   await fs.mkdir(ENGINE_LABEL_SCREENSHOT_DIR, { recursive: true })
   await page.screenshot({

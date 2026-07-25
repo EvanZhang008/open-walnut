@@ -4,7 +4,7 @@
  * (tabs, backlinks, editing) instead of the read-only FileViewer overlay.
  *
  * Every component that owns FileViewer state (ChatMessage, SessionPanel,
- * SessionDetailPanel) should wrap its `handleFileOpen` with this.
+ * SessionPanel) should wrap its `handleFileOpen` with this.
  */
 import { useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';

@@ -171,40 +171,6 @@ export async function fetchSessionsForTask(taskId: string): Promise<SessionRecor
   return res.sessions;
 }
 
-import type { SessionTreeResponse } from '@/types/session';
-
-export async function fetchSessionTree(opts?: {
-  hideCompleted?: boolean;
-  q?: string;
-  limit?: number;
-}): Promise<SessionTreeResponse> {
-  const params: Record<string, string> = {};
-  if (opts?.hideCompleted) params.hideCompleted = 'true';
-  if (opts?.q?.trim()) params.q = opts.q.trim();
-  if (opts?.limit != null) params.limit = String(opts.limit);
-  const res = await apiGet<SessionTreeResponse>('/api/sessions/tree', params);
-  if (!res || typeof res !== 'object') {
-    return {
-      tree: [],
-      orphanSessions: [],
-      total: 0,
-      limit: opts?.limit ?? 100,
-      remaining: 0,
-      hasMore: false,
-    };
-  }
-  const result = {
-    tree: Array.isArray(res.tree) ? res.tree : [],
-    orphanSessions: Array.isArray(res.orphanSessions) ? res.orphanSessions : [],
-    total: Number.isFinite(res.total) ? res.total : 0,
-    limit: Number.isFinite(res.limit) ? res.limit : (opts?.limit ?? 100),
-    remaining: Number.isFinite(res.remaining) ? Math.max(0, res.remaining) : 0,
-    hasMore: res.hasMore === true,
-  };
-  sessionStatusStore.seedSessionTree(result);
-  return result;
-}
-
 export async function fetchSession(sessionId: string): Promise<SessionRecord | null> {
   try {
     const res = await apiGet<{ session: SessionRecord }>(`/api/sessions/${sessionId}`);

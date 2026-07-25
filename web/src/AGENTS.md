@@ -19,7 +19,8 @@ changing search requests, provisional results, stale-response handling, or resul
 - Optimistic bubble dedup is two-tier (`optimistic-dedup.ts`): non-committed messages only dedup
   against history since the turn watermark; committed against all. Id-first
   (`walnutMessageId`), then count-based multiset text matching.
-- Sessions render in TWO surfaces — home slide-out `SessionPanel.tsx` (primary) AND `/sessions`
-  `SessionDetailPanel.tsx`. Any session UI change updates BOTH.
+- Sessions render in ONE surface — the home session columns (`SessionPanel.tsx`). The dedicated
+  `/sessions` page was removed; `/sessions?id=…` deep links reroute to the home columns
+  (`SessionsRedirect` in `App.tsx` + `utils/open-session.ts`).
 - Use the structured logger `import { log } from '@/utils/log'` — never raw `console.log`;
   never `console.debug` (invisible to the disk forwarder). IDs full, never truncated.

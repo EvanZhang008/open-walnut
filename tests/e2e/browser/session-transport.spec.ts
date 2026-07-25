@@ -1,9 +1,11 @@
 /**
  * Playwright UI tests for the SessionManager layer.
  *
- * Tests the user-visible behavior of sessions through the real web UI:
- * - Session creation and streaming in SessionPanel (home page slide-out)
- * - Session creation and streaming in SessionDetailPanel (/sessions page)
+ * Tests the user-visible behavior of sessions through the real web UI.
+ * The dedicated /sessions page was removed — the homepage session column
+ * (`.main-page-session-column .session-panel`) is the only session surface;
+ * /sessions?id=<sid> deep links redirect to '/' and open the column.
+ * - Session visibility and streaming in SessionPanel (home page column)
  * - Follow-up message delivery and response rendering
  * - Session stop/resume lifecycle with history preservation
  * - Multiple session column display
@@ -44,23 +46,19 @@ async function createTaskViaApi(
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  1. Sessions page — navigate and view session list
+//  1. /sessions?id= deep link — redirects home and opens the session column
 // ═══════════════════════════════════════════════════════════════════
 
-test('sessions page loads and shows session list', async ({ page }) => {
-  await page.goto('/')
+test('session deep link redirects to home and opens the session column', async ({ page }) => {
+  // The dedicated /sessions page was removed — /sessions?id=<sid> now
+  // replace-navigates to '/' and opens the session in a home-page column.
+  await page.goto('/sessions?id=pw-normal-session')
   await page.waitForLoadState('networkidle')
 
-  // Navigate to sessions page via sidebar
-  const sessionsLink = page.locator('a[href="/sessions"], .sidebar-item', { hasText: /sessions/i })
-  if (await sessionsLink.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await sessionsLink.click()
-    await page.waitForLoadState('networkidle')
+  await page.waitForURL((url) => url.pathname === '/', { timeout: 5000 })
 
-    // Sessions page should show a session list or empty state
-    const sessionContent = page.locator('.sessions-page, .session-tree-panel, .empty-state')
-    await expect(sessionContent).toBeVisible({ timeout: 5000 })
-  }
+  const panel = page.locator('.main-page-session-column .session-panel[data-session-id="pw-normal-session"]')
+  await expect(panel).toBeVisible({ timeout: 10_000 })
 })
 
 // ═══════════════════════════════════════════════════════════════════
@@ -72,13 +70,13 @@ test('session panel renders for a task with session', async ({ page }) => {
   await page.waitForLoadState('networkidle')
 
   // Look for any task with a session pill (from seeded test data)
-  const sessionPill = page.locator('.session-pill, .task-session-badge').first()
+  const sessionPill = page.locator('.task-session-pill, .session-pill').first()
   if (await sessionPill.isVisible({ timeout: 3000 }).catch(() => false)) {
-    // Click on the session pill to open the session panel
+    // Click on the session pill to open the session panel (home page column)
     await sessionPill.click()
 
     // Session panel should open
-    const sessionPanel = page.locator('.session-panel, .session-detail-panel')
+    const sessionPanel = page.locator('.main-page-session-column .session-panel')
     await expect(sessionPanel).toBeVisible({ timeout: 5000 })
   }
 })
@@ -98,12 +96,12 @@ test('session chat history shows messages after opening session', async ({ page 
     await taskItem.click()
 
     // Look for session pill on the task
-    const sessionPill = taskItem.locator('.session-pill, .task-session-badge').first()
+    const sessionPill = taskItem.locator('.task-session-pill, .session-pill').first()
     if (await sessionPill.isVisible({ timeout: 2000 }).catch(() => false)) {
       await sessionPill.click()
 
       // Wait for session panel to load
-      const sessionPanel = page.locator('.session-panel, .session-detail-panel')
+      const sessionPanel = page.locator('.main-page-session-column .session-panel')
       await expect(sessionPanel).toBeVisible({ timeout: 5000 })
 
       // Session chat area should exist
@@ -125,12 +123,12 @@ test('session chat input is present when session panel is open', async ({ page }
   await page.waitForLoadState('networkidle')
 
   // Open a session panel for any task with a session
-  const sessionPill = page.locator('.session-pill, .task-session-badge').first()
+  const sessionPill = page.locator('.task-session-pill, .session-pill').first()
   if (await sessionPill.isVisible({ timeout: 3000 }).catch(() => false)) {
     await sessionPill.click()
 
     // Look for the session chat input
-    const chatInput = page.locator('.session-panel .chat-input-textarea, .session-detail-panel .chat-input-textarea, .session-panel textarea')
+    const chatInput = page.locator('.session-panel .chat-input-textarea, .session-panel textarea')
     if (await chatInput.isVisible({ timeout: 3000 }).catch(() => false)) {
       // Type a test message (but don't send it)
       await chatInput.fill('test message for session transport')
@@ -177,34 +175,25 @@ test('session shows correct status badges', async ({ page }) => {
 })
 
 // ═══════════════════════════════════════════════════════════════════
-//  7. Sessions page — session detail panel shows history
+//  7. Homepage session panel shows session metadata
 // ═══════════════════════════════════════════════════════════════════
 
-test('sessions page detail panel shows session metadata', async ({ page }) => {
-  // Navigate directly to sessions page
-  await page.goto('/sessions')
+test('homepage session panel shows session metadata', async ({ page }) => {
+  // Seed the home column queue so the SessionPanel mounts on load
+  await page.addInitScript(() => {
+    sessionStorage.setItem('open-walnut-home-session-columns', JSON.stringify([{ id: 'pw-normal-session', locked: false }]))
+  })
+  await page.goto('/')
   await page.waitForLoadState('networkidle')
 
-  // Session tree should be visible with at least one session
-  const sessionTree = page.locator('.session-tree-panel, .sessions-list')
-  if (await sessionTree.isVisible({ timeout: 5000 }).catch(() => false)) {
-    // Click the first session in the tree
-    const firstSession = sessionTree.locator('.session-row, .session-item').first()
-    if (await firstSession.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await firstSession.click()
+  const panel = page.locator('.main-page-session-column .session-panel[data-session-id="pw-normal-session"]')
+  await expect(panel).toBeVisible({ timeout: 10_000 })
 
-      // Detail panel should show session info
-      const detailPanel = page.locator('.session-detail-panel')
-      if (await detailPanel.isVisible({ timeout: 5000 }).catch(() => false)) {
-        // Should show session ID or title
-        const sessionInfo = detailPanel.locator('.session-header, .session-title, .session-id')
-        if (await sessionInfo.isVisible({ timeout: 3000 }).catch(() => false)) {
-          const text = await sessionInfo.textContent()
-          expect(text).toBeTruthy()
-        }
-      }
-    }
-  }
+  // Panel header should show the session (or linked task) title
+  const title = panel.locator('.session-panel-title')
+  await expect(title).toBeVisible({ timeout: 5000 })
+  const text = await title.textContent()
+  expect(text).toBeTruthy()
 })
 
 // ═══════════════════════════════════════════════════════════════════
@@ -216,7 +205,7 @@ test('session panel can be closed', async ({ page }) => {
   await page.waitForLoadState('networkidle')
 
   // Open a session panel
-  const sessionPill = page.locator('.session-pill, .task-session-badge').first()
+  const sessionPill = page.locator('.task-session-pill, .session-pill').first()
   if (await sessionPill.isVisible({ timeout: 3000 }).catch(() => false)) {
     await sessionPill.click()
 
@@ -241,26 +230,23 @@ test('session panel can be closed', async ({ page }) => {
 // ═══════════════════════════════════════════════════════════════════
 
 test('tool calls in session history render with expand/collapse', async ({ page }) => {
-  // Navigate to sessions page where we can see full history
-  await page.goto('/sessions')
+  // Open a seeded session in the homepage session column (full history surface)
+  await page.addInitScript(() => {
+    sessionStorage.setItem('open-walnut-home-session-columns', JSON.stringify([{ id: 'pw-normal-session', locked: false }]))
+  })
+  await page.goto('/')
   await page.waitForLoadState('networkidle')
 
-  // Find and click a session that has tool calls (seeded data)
-  const sessionTree = page.locator('.session-tree-panel, .sessions-list')
-  if (await sessionTree.isVisible({ timeout: 5000 }).catch(() => false)) {
-    const sessionRow = sessionTree.locator('.session-row, .session-item').first()
-    if (await sessionRow.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await sessionRow.click()
-
-      // Look for tool call blocks in the detail panel
-      const toolCall = page.locator('.tool-call, .generic-tool-call, .tool-use-block').first()
-      if (await toolCall.isVisible({ timeout: 5000 }).catch(() => false)) {
-        // Tool call should have a header showing the tool name
-        const toolName = toolCall.locator('.tool-name, .tool-header')
-        if (await toolName.isVisible({ timeout: 2000 }).catch(() => false)) {
-          const text = await toolName.textContent()
-          expect(text).toBeTruthy()
-        }
+  const panel = page.locator('.main-page-session-column .session-panel[data-session-id="pw-normal-session"]')
+  if (await panel.isVisible({ timeout: 10_000 }).catch(() => false)) {
+    // Look for tool call blocks in the session panel
+    const toolCall = panel.locator('.tool-call, .generic-tool-call, .tool-use-block').first()
+    if (await toolCall.isVisible({ timeout: 5000 }).catch(() => false)) {
+      // Tool call should have a header showing the tool name
+      const toolName = toolCall.locator('.tool-name, .tool-header')
+      if (await toolName.isVisible({ timeout: 2000 }).catch(() => false)) {
+        const text = await toolName.textContent()
+        expect(text).toBeTruthy()
       }
     }
   }
@@ -308,11 +294,11 @@ test('fork button is visible in session panel', async ({ page }) => {
   await page.waitForLoadState('networkidle')
 
   // Open a session panel
-  const sessionPill = page.locator('.session-pill, .task-session-badge').first()
+  const sessionPill = page.locator('.task-session-pill, .session-pill').first()
   if (await sessionPill.isVisible({ timeout: 3000 }).catch(() => false)) {
     await sessionPill.click()
 
-    const sessionPanel = page.locator('.session-panel, .session-detail-panel')
+    const sessionPanel = page.locator('.main-page-session-column .session-panel')
     if (await sessionPanel.isVisible({ timeout: 3000 }).catch(() => false)) {
       // Look for the fork button
       const forkBtn = sessionPanel.locator('.session-fork-btn, button', { hasText: /fork/i }).first()
@@ -333,11 +319,11 @@ test('typing / in session input shows command palette', async ({ page }) => {
   await page.waitForLoadState('networkidle')
 
   // Open a session panel
-  const sessionPill = page.locator('.session-pill, .task-session-badge').first()
+  const sessionPill = page.locator('.task-session-pill, .session-pill').first()
   if (await sessionPill.isVisible({ timeout: 3000 }).catch(() => false)) {
     await sessionPill.click()
 
-    const sessionPanel = page.locator('.session-panel, .session-detail-panel')
+    const sessionPanel = page.locator('.main-page-session-column .session-panel')
     if (await sessionPanel.isVisible({ timeout: 3000 }).catch(() => false)) {
       const chatInput = sessionPanel.locator('.chat-input-textarea, textarea').first()
       if (await chatInput.isVisible({ timeout: 3000 }).catch(() => false)) {

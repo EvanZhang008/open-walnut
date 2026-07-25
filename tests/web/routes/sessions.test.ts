@@ -55,7 +55,6 @@ import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 import {
   createSessionRecord,
   listSessions,
-  importSessionRecord,
   updateSessionRecord,
   _resetSessionTrackerForTesting,
 } from '../../../src/core/session-tracker.js';
@@ -297,115 +296,6 @@ describe('GET /api/sessions/recent', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.sessions).toHaveLength(2);
-  });
-});
-
-describe('GET /api/sessions/tree', () => {
-  it('returns a bounded recent-first prefix with total and hasMore', async () => {
-    const base = Date.parse('2026-07-19T12:00:00.000Z');
-    for (let i = 0; i < 105; i++) {
-      const id = `tree-session-${String(i).padStart(3, '0')}`;
-      const timestamp = new Date(base - i * 1_000).toISOString();
-      await importSessionRecord({
-        claudeSessionId: id,
-        taskId: `missing-task-${i}`,
-        project: 'Scale',
-        cwd: '/tmp',
-        title: `Tree session ${i}`,
-        startedAt: timestamp,
-        lastActiveAt: timestamp,
-      });
-    }
-
-    const app = createApp();
-    const res = await request(app).get('/api/sessions/tree');
-
-    expect(res.status).toBe(200);
-    expect(res.body.limit).toBe(100);
-    expect(res.body.total).toBe(105);
-    expect(res.body.hasMore).toBe(true);
-    expect(res.body.remaining).toBe(5);
-    expect(res.body.tree).toEqual([]);
-    expect(res.body.orphanSessions).toHaveLength(100);
-    const returnedTimes = res.body.orphanSessions.map((s: { lastActiveAt: string }) => Date.parse(s.lastActiveAt));
-    expect(returnedTimes).toEqual([...returnedTimes].sort((a, b) => b - a));
-    expect(res.body.orphanSessions.map((s: { claudeSessionId: string }) => s.claudeSessionId))
-      .toEqual(Array.from({ length: 100 }, (_, i) => `tree-session-${String(i).padStart(3, '0')}`));
-    expect(res.body.orphanSessions.some((s: { claudeSessionId: string }) => s.claudeSessionId === 'tree-session-104'))
-      .toBe(false);
-  });
-
-  it('searches the full store and makes an exact out-of-window ID the sole result', async () => {
-    const base = Date.parse('2026-07-19T12:00:00.000Z');
-    for (let i = 0; i < 105; i++) {
-      const id = `exact-session-${String(i).padStart(3, '0')}`;
-      const timestamp = new Date(base - i * 1_000).toISOString();
-      await importSessionRecord({
-        claudeSessionId: id,
-        taskId: `missing-task-${i}`,
-        project: 'Scale',
-        cwd: '/tmp',
-        title: i === 104 ? 'Old exact target' : `Recent ${i}`,
-        startedAt: timestamp,
-        lastActiveAt: timestamp,
-      });
-    }
-
-    const app = createApp();
-    const res = await request(app)
-      .get('/api/sessions/tree')
-      .query({ q: 'exact-session-104', limit: 25 });
-
-    expect(res.status).toBe(200);
-    expect(res.body.limit).toBe(25);
-    expect(res.body.total).toBe(1);
-    expect(res.body.hasMore).toBe(false);
-    expect(res.body.remaining).toBe(0);
-    expect(res.body.orphanSessions.map((s: { claudeSessionId: string }) => s.claudeSessionId))
-      .toEqual(['exact-session-104']);
-  });
-
-  it('stops pagination at the 500-row cap instead of advertising an endless next page', async () => {
-    for (let i = 0; i < 501; i++) {
-      await createSessionRecord(`cap-session-${i}`, `missing-cap-task-${i}`, 'Scale', '/tmp', {
-        initialProcessStatus: 'stopped',
-      });
-    }
-
-    const app = createApp();
-    const res = await request(app).get('/api/sessions/tree').query({ limit: 500 });
-
-    expect(res.status).toBe(200);
-    expect(res.body.total).toBe(501);
-    expect(res.body.limit).toBe(500);
-    expect(res.body.orphanSessions).toHaveLength(500);
-    expect(res.body.hasMore).toBe(false);
-    expect(res.body.remaining).toBe(0);
-  });
-
-  it('searches session metadata and owning task title', async () => {
-    const { task } = await addTask({
-      title: 'Customer parity investigation',
-      category: 'Work',
-      project: 'Walnut',
-      source: 'local',
-    });
-    await createSessionRecord('metadata-session', task.id, 'Walnut', '/tmp', {
-      initialProcessStatus: 'stopped',
-      title: 'ACP transcript repair',
-      description: 'Restore stopped history',
-      engine: 'codex',
-    });
-    await updateSessionRecord('metadata-session', { recap: 'Recovered canonical journal output' });
-
-    const app = createApp();
-    for (const query of ['transcript repair', 'stopped history', 'canonical journal', 'customer parity']) {
-      const res = await request(app).get('/api/sessions/tree').query({ q: query });
-      expect(res.status, query).toBe(200);
-      expect(res.body.total, query).toBe(1);
-      expect(res.body.tree[0].projects[0].tasks[0].sessions[0].claudeSessionId, query)
-        .toBe('metadata-session');
-    }
   });
 });
 

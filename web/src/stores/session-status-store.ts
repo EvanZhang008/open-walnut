@@ -35,7 +35,6 @@ export type SessionStatusSource =
   | 'ws:error'
   | 'rest:session'
   | 'rest:session-list'
-  | 'rest:session-tree'
   | 'rest:task'
   | 'rest:task-list'
   | 'rest:dashboard'
@@ -408,29 +407,6 @@ export class SessionStatusStore {
         }, source);
       }
     }
-  }
-
-  seedSessionTree(tree: unknown): void {
-    if (!isRecord(tree)) return;
-    const seedSessions = (value: unknown) => {
-      if (!Array.isArray(value)) return;
-      for (const session of value) this.seedSessionRecord(session, 'rest:session-tree');
-    };
-    const categories = Array.isArray(tree.tree) ? tree.tree : [];
-    for (const category of categories) {
-      if (!isRecord(category)) continue;
-      const tasks = [
-        ...(Array.isArray(category.directTasks) ? category.directTasks : []),
-        ...(Array.isArray(category.projects)
-          ? category.projects.flatMap((project) =>
-              isRecord(project) && Array.isArray(project.tasks) ? project.tasks : [])
-          : []),
-      ];
-      for (const task of tasks) {
-        if (isRecord(task)) seedSessions(task.sessions);
-      }
-    }
-    seedSessions(tree.orphanSessions);
   }
 
   seedTaskList(tasks: unknown, source: SessionStatusSource = 'rest:task-list'): void {

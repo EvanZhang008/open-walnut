@@ -49,7 +49,7 @@ async function sessionForTask(page: Page, taskId: string): Promise<{
   return sessions[0]
 }
 
-test('fresh and warm Codex turns render once and agree with history on both surfaces', async ({ page }) => {
+test('fresh and warm Codex turns render once and agree with history on the Homepage', async ({ page }) => {
   test.setTimeout(45_000)
   const audit = await installBrowserAudit(page, walnutHome)
 
@@ -137,51 +137,15 @@ test('fresh and warm Codex turns render once and agree with history on both surf
     return `${body.session.messageCount}:${body.session.process_status}`
   }, { timeout: 15_000 }).toBe('2:idle')
   await expect(reloadedPanel.getByText('2 turns', { exact: true })).toHaveCount(1)
-  await page.screenshot({
-    path: `${SCREENSHOT_DIR}/conversation-homepage-fresh-warm-exact.png`,
-    fullPage: true,
-  })
-
-  const other = page.getByRole('button', { name: /Other/i })
-  if (await other.getAttribute('aria-expanded') !== 'true') await other.click()
-  await page.locator('a[href="/sessions"]').click()
-  await expect(page.locator('.session-tree-panel')).toBeVisible()
-  const search = page.getByRole('searchbox', { name: 'Search sessions' })
-  const exactTreeResponse = page.waitForResponse((response) => {
-    const url = new URL(response.url())
-    return response.request().method() === 'GET'
-      && url.pathname === '/api/sessions/tree'
-      && url.searchParams.get('q') === initial.claudeSessionId
-      && url.searchParams.get('limit') === '100'
-  })
-  await search.fill(initial.claudeSessionId)
-  await page.locator(`.session-tree-session[data-session-id="${initial.claudeSessionId}"]`).click()
-
-  const detail = page.locator('.sessions-detail-pane')
-  await expect(detail.getByText(FIRST_PROMPT, { exact: true })).toHaveCount(1)
-  await expect(detail.getByText(FIRST_REPLY, { exact: true })).toHaveCount(1)
-  await expect(detail.getByText(WARM_PROMPT, { exact: true })).toHaveCount(1)
-  await expect(detail.getByText(WARM_REPLY, { exact: true })).toHaveCount(1)
-  await expect(detail.getByText('2 turns', { exact: true })).toHaveCount(1)
-  const timelineText = await detail.locator('.session-history').innerText()
+  // Message order in the Homepage panel timeline must match history order.
+  const timelineText = await reloadedPanel.locator('.session-history').innerText()
   expect(timelineText.indexOf(FIRST_PROMPT)).toBeLessThan(timelineText.indexOf(FIRST_REPLY))
   expect(timelineText.indexOf(FIRST_REPLY)).toBeLessThan(timelineText.indexOf(WARM_PROMPT))
   expect(timelineText.indexOf(WARM_PROMPT)).toBeLessThan(timelineText.indexOf(WARM_REPLY))
   await page.screenshot({
-    path: `${SCREENSHOT_DIR}/conversation-sessions-parity-exact.png`,
+    path: `${SCREENSHOT_DIR}/conversation-homepage-fresh-warm-exact.png`,
     fullPage: true,
   })
-
-  // Let the exact-search tree request settle before reloading. Otherwise the
-  // reload itself can cancel healthy tree or persisted-selection requests and
-  // muddy the audit.
-  await exactTreeResponse
-  await page.waitForLoadState('networkidle')
-  await page.reload()
-  await expect(page.locator('.sessions-detail-pane').getByText(FIRST_PROMPT, { exact: true })).toHaveCount(1)
-  await expect(page.locator('.sessions-detail-pane').getByText(FIRST_REPLY, { exact: true })).toHaveCount(1)
-  await expect(page.locator('.sessions-detail-pane').getByText(WARM_PROMPT, { exact: true })).toHaveCount(1)
-  await expect(page.locator('.sessions-detail-pane').getByText(WARM_REPLY, { exact: true })).toHaveCount(1)
 
   await audit.assertClean({
     requestFailure: (failure) => {

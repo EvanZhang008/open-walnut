@@ -14,7 +14,7 @@ This skill explains the Walnut web UI so you can operate it confidently via Play
 These principles are universal — they apply to any single-page app, not just Walnut.
 
 ### 1. Stay on one page — panels, not pages
-SPAs show everything through panels that open/close on the same page. Don't navigate away to find something. The session panel opens inline when you click a session link — you don't need the `/sessions` page.
+SPAs show everything through panels that open/close on the same page. Don't navigate away to find something. The session panel opens inline when you click a session link. (The dedicated `/sessions` page was removed — `/sessions?id=…` links reroute to the home session columns.)
 
 ### 2. Disambiguate inputs by placeholder
 Multiple input boxes coexist on screen. They look identical in the DOM. **Placeholder text** is the reliable discriminator. Check it before typing.
@@ -141,7 +141,6 @@ After an action, check **three places**:
 | `/` | Home — main chat + SessionPanel + TodoPanel (most common) |
 | `/tasks` | Full task board |
 | `/tasks/:id` | Task detail page (standalone, different from TodoDetailPanel) |
-| `/sessions` | Session tree browser (rarely needed from home) |
 | `/search` | Full-text search |
 
 Most of the time, `/` gives you everything you need.

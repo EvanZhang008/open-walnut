@@ -1,13 +1,13 @@
-import { memo, useRef } from 'react';
-import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { memo, useEffect, useRef } from 'react';
+import { Routes, Route, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import type { NavigateFunction } from 'react-router-dom';
+import { openSessionOnHome } from './utils/open-session';
 import { AppShell } from './components/layout/AppShell';
 import { DebugCrashProbe } from './components/common/AppErrorBoundary';
 import { MainPage } from './pages/MainPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { TaskDetailPage } from './pages/TaskDetailPage';
 
-import { SessionsPage } from './pages/SessionsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { RoutinesPage } from './pages/RoutinesPage';
 
@@ -27,6 +27,24 @@ import { PopoutRoot } from './popout/PopoutRoot';
  * Uses React.memo to prevent re-renders from parent route changes.
  */
 const StableMainPage = memo(MainPage);
+
+/**
+ * Legacy /sessions?id=… deep links (notifications, session-ref markdown,
+ * bookmarks) reroute to the home page's session columns. MainPage is always
+ * mounted, so the open-session event is received even before navigation.
+ */
+function SessionsRedirect() {
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const id = searchParams.get('id');
+  useEffect(() => {
+    // replace:true — a push here would trap the back button in the redirect.
+    if (id) openSessionOnHome(id, (to) => navigate(to, { replace: true }));
+    else navigate('/', { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return null;
+}
 
 export function App() {
   const location = useLocation();
@@ -61,7 +79,9 @@ export function App() {
         <Route path="/tasks" element={<DashboardPage />} />
         <Route path="/tasks/:id" element={<TaskDetailPage />} />
         <Route path="/search" element={<Navigate to="/" replace />} />
-        <Route path="/sessions" element={<SessionsPage />} />
+        {/* Dedicated sessions page removed — session deep links open on the
+            home page's session columns (the primary surface). */}
+        <Route path="/sessions" element={<SessionsRedirect />} />
         <Route path="/memory" element={<MemoryPage />} />
         <Route path="/notes" element={<NotesPage />} />
         <Route path="/routines" element={<RoutinesPage />} />

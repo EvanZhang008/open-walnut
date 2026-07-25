@@ -15,8 +15,7 @@
  * streaming): show a spinner card, then the full answer. See web/src/api/sideQuestions.ts
  * and backend ClaudeCodeSession.askSideQuestion.
  *
- * Mounted in BOTH SessionPanel.tsx (home slide-out) and SessionDetailPanel.tsx
- * (/sessions page) — per project convention, sessions render in two places.
+ * Mounted in SessionPanel.tsx (home session column — the only session surface).
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { renderMarkdown } from '@/components/chat/ChatMessage';

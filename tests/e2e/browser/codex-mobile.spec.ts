@@ -30,18 +30,6 @@ async function expectFullWidth(page: Page, selector: string): Promise<void> {
   expect(box!.height).toBeGreaterThan(page.viewportSize()!.height * 0.7)
 }
 
-async function navigateToSessionsOnMobile(page: Page): Promise<void> {
-  const toggle = page.getByRole('button', { name: 'Toggle sidebar' })
-  await toggle.click()
-  const other = page.getByRole('button', { name: /Other/i })
-  if (await other.getAttribute('aria-expanded') !== 'true') await other.click()
-  await page.locator('a[href="/sessions"]').click()
-  await expect(page).toHaveURL(/\/sessions$/)
-  await expect(page.locator('.sidebar-overlay')).toHaveCount(0)
-  await expect(page.locator('.sidebar')).not.toHaveClass(/\bopen\b/)
-  await expect(page.locator('.session-tree-panel')).toBeVisible()
-}
-
 async function chooseCodexQuickStart(page: Page): Promise<void> {
   await page.locator('.quick-access-pill', { hasText: /Quick session|\+ Session/ }).click()
   await expect(page.locator('.session-path-selector')).toBeVisible()
@@ -69,7 +57,7 @@ for (const viewport of [
   { width: 390, height: 844, slug: '390x844' },
   { width: 768, height: 1024, slug: '768x1024' },
 ]) {
-  test(`Homepage and Sessions use mobile master/detail at ${viewport.slug}`, async ({ page }) => {
+  test(`Homepage uses mobile session master/detail at ${viewport.slug}`, async ({ page }) => {
     await fs.mkdir(SCREENSHOT_DIR, { recursive: true })
     await page.setViewportSize({ width: viewport.width, height: viewport.height })
     const audit = await installBrowserAudit(page, walnutHome)
@@ -96,7 +84,8 @@ for (const viewport of [
     await expectFullWidth(page, '.main-page.has-mobile-session .main-page-sessions-area')
     await expect(homePanel.getByText(USER_TEXT, { exact: true })).toHaveCount(1)
     await expect(homePanel.getByText(ASSISTANT_TEXT, { exact: true })).toHaveCount(1)
-    await expect(homePanel.getByText('2 turns', { exact: true })).toHaveCount(1)
+    // The shared customer-session journal holds 2 parity + 2 mobile messages.
+    await expect(homePanel.getByText('4 turns', { exact: true })).toHaveCount(1)
     const close = homePanel.getByRole('button', { name: 'Close session panel' })
     await expect(close).toBeFocused()
     const closeBox = await close.boundingBox()
@@ -137,7 +126,7 @@ for (const viewport of [
     await expect(realPanel.getByText(prompt, { exact: true })).toHaveCount(1)
     await expect(realPanel.getByText(reply, { exact: true }))
       .toHaveCount(1, { timeout: 20_000 })
-    const sessionId = await sessionIdForTask(page, taskId)
+    await sessionIdForTask(page, taskId)
     await page.screenshot({
       path: `${SCREENSHOT_DIR}/mobile-${viewport.slug}-real-create-send.png`,
     })
@@ -147,43 +136,6 @@ for (const viewport of [
     await realClose.press('Enter')
     const createdTask = page.locator(`[data-task-id="${taskId}"]:visible`).first()
     await expect(createdTask).toBeFocused()
-
-    await navigateToSessionsOnMobile(page)
-
-    const search = page.getByRole('searchbox', { name: 'Search sessions' })
-    await search.fill(sessionId)
-
-    // An exact sole result auto-selects and moves mobile to detail. The row is
-    // intentionally hidden once master/detail navigation completes.
-    await expect(page.locator('.sessions-list-pane')).toBeHidden()
-    const detail = page.locator('.sessions-detail-pane')
-    await expect(detail).toBeVisible()
-    await expectFullWidth(page, '.sessions-split-view.has-selection .sessions-detail-pane')
-    await expect(detail.getByText(prompt, { exact: true })).toHaveCount(1)
-    await expect(detail.getByText(reply, { exact: true })).toHaveCount(1)
-    await expect(detail.getByText('1 turn', { exact: true })).toHaveCount(1)
-    await expect(detail.locator('.chat-input-textarea')).toBeVisible()
-    const back = page.getByRole('button', { name: 'Back to sessions' })
-    await expect(back).toBeFocused()
-    const backBox = await back.boundingBox()
-    expect(backBox!.height).toBeGreaterThanOrEqual(44)
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
-    await page.screenshot({
-      path: `${SCREENSHOT_DIR}/mobile-${viewport.slug}-sessions-detail.png`,
-    })
-
-    await back.press('Enter')
-    await expect(page.locator('.sessions-list-pane')).toBeVisible()
-    await expect(page.locator('.sessions-detail-pane')).toBeHidden()
-    await expect(page.getByRole('searchbox', { name: 'Search sessions' })).toHaveValue(sessionId)
-    const selectedRow = page.locator(`.session-tree-session[data-session-id="${sessionId}"]`)
-    await expect(selectedRow).toBeFocused()
-    await page.waitForTimeout(250)
-    await expect(page.locator('.sessions-list-pane')).toBeVisible()
-    await selectedRow.press('Enter')
-    await expect(back).toBeFocused()
-    await back.press('Enter')
-    await expect(selectedRow).toBeFocused()
 
     await audit.assertClean()
   })
@@ -200,7 +152,7 @@ async function persistedQueueMessages(sessionId: string): Promise<string[]> {
   }
 }
 
-test('mobile creates, queues, reloads, interrupts, and finds a real Codex session', async ({ page }) => {
+test('mobile creates, queues, reloads, and interrupts a real Codex session', async ({ page }) => {
   test.setTimeout(70_000)
   await fs.mkdir(SCREENSHOT_DIR, { recursive: true })
   await page.setViewportSize({ width: 390, height: 844 })
@@ -340,15 +292,6 @@ test('mobile creates, queues, reloads, interrupts, and finds a real Codex sessio
   await close.press('Enter')
   const sourceTask = page.locator(`[data-task-id="${taskId}"]:visible`).first()
   await expect(sourceTask).toBeFocused()
-  await navigateToSessionsOnMobile(page)
-  const search = page.getByRole('searchbox', { name: 'Search sessions' })
-  await search.fill(sessionId)
-  const back = page.getByRole('button', { name: 'Back to sessions' })
-  await expect(back).toBeFocused()
-  await expect(page.locator('.sessions-detail-pane').getByText(initialPrompt, { exact: true })).toHaveCount(1)
-  await expect(page.locator('.sessions-detail-pane').getByText(replacementPrompt, { exact: true })).toHaveCount(1)
-  await back.press('Enter')
-  await expect(page.locator(`[data-session-id="${sessionId}"]`)).toBeFocused()
 
   await audit.assertClean()
 })

@@ -514,42 +514,6 @@ describe('GET /api/sessions — archived filtering', () => {
     expect(ids).not.toContain('archived-recent');
   });
 
-  it('excludes archived sessions from session tree', async () => {
-    const task = await createTestTask('Tree Task');
-
-    await createSessionRecord('archived-tree', task.id, 'proj');
-    await updateSessionRecord('archived-tree', {
-      archived: true,
-      archive_reason: 'retry',
-    });
-
-    await createSessionRecord('visible-tree', task.id, 'proj');
-
-    const app = createApp();
-    const res = await request(app).get('/api/sessions/tree');
-
-    expect(res.status).toBe(200);
-
-    // Flatten all sessions from the tree
-    const allSessions: any[] = [];
-    for (const cat of res.body.tree ?? []) {
-      for (const proj of cat.projects ?? []) {
-        for (const t of proj.tasks ?? []) {
-          allSessions.push(...(t.sessions ?? []));
-        }
-      }
-      for (const t of cat.directTasks ?? []) {
-        allSessions.push(...(t.sessions ?? []));
-      }
-    }
-    for (const s of res.body.orphanSessions ?? []) {
-      allSessions.push(s);
-    }
-
-    const ids = allSessions.map((s: any) => s.claudeSessionId);
-    expect(ids).not.toContain('archived-tree');
-    expect(ids).toContain('visible-tree');
-  });
 });
 
 // ── Test 5: Error sessions remain visible until explicitly retried ──

@@ -162,19 +162,6 @@ async function openTaskDetail(page: Page, task: Locator): Promise<Locator> {
   return modal
 }
 
-async function navigateToSessions(page: Page, mobile = false): Promise<void> {
-  if (mobile) await page.getByRole('button', { name: 'Toggle sidebar' }).click()
-  const other = page.getByRole('button', { name: /Other/i })
-  if (await other.getAttribute('aria-expanded') !== 'true') await other.click()
-  await page.locator('a[href="/sessions"]').click()
-  await expect(page).toHaveURL(/\/sessions$/)
-  if (mobile) {
-    await expect(page.locator('.sidebar-overlay')).toHaveCount(0)
-    await expect(page.locator('.sidebar')).not.toHaveClass(/\bopen\b/)
-  }
-  await expect(page.locator('.session-tree-panel')).toBeVisible()
-}
-
 async function navigateToTasks(page: Page, mobile = false): Promise<void> {
   if (mobile) await page.getByRole('button', { name: 'Toggle sidebar' }).click()
   const other = page.getByRole('button', { name: /Other/i })
@@ -186,18 +173,6 @@ async function navigateToTasks(page: Page, mobile = false): Promise<void> {
     await expect(page.locator('.sidebar')).not.toHaveClass(/\bopen\b/)
   }
   await expect(page.locator('.task-list')).toBeVisible()
-}
-
-async function selectSession(page: Page, id: string): Promise<{
-  row: Locator
-  detail: Locator
-}> {
-  await page.getByRole('searchbox', { name: 'Search sessions' }).fill(id)
-  const row = page.locator(`.session-tree-session[data-session-id="${id}"]`)
-  const detail = page.locator('.sessions-detail-pane')
-  if (await row.isVisible()) await row.click()
-  await expect(detail).toBeVisible()
-  return { row, detail }
 }
 
 test('rejects delayed REST N after WS N+1 across every desktop status surface', async ({ page }) => {
@@ -343,24 +318,15 @@ test('rejects delayed REST N after WS N+1 across every desktop status surface', 
   await expectNoTaskPill(reloadedModal)
   await reloadedModal.getByRole('button', { name: 'Close detail panel' }).click()
 
-  await navigateToSessions(page)
-  const { row, detail } = await selectSession(page, sessionId)
-  await expect(row.locator('.session-status-dot'))
-    .toHaveCSS('background-color', 'rgb(245, 158, 11)')
-  await expect(detail.locator('.session-detail-badge', { hasText: 'Running' })).toHaveCount(1)
-  await expect(detail.locator('.chat-tool-block-calling').filter({ hasText: TOOL_NAME }))
-    .toBeVisible()
-
   await expect.poll(
     async () => (await statusFor(page, sessionId)).process_status,
     { timeout: 30_000 },
   ).toBe('idle')
   const completed = await statusFor(page, sessionId)
   expect(completed.statusRevision).toBeGreaterThan(running.statusRevision)
-  await expect(detail.locator('.session-detail-badge', { hasText: 'Idle' })).toHaveCount(1)
+  const idlePanel = page.locator(`.session-panel[data-session-id="${sessionId}"]`)
+  await expect(idlePanel.locator('.session-panel-badge', { hasText: 'Idle' })).toHaveCount(1)
 
-  await page.getByRole('link', { name: 'Home', exact: true }).click()
-  await expect(page).toHaveURL(/\/$/)
   const idleTask = await findHomeTask(page, taskId)
   await expectNoTaskPill(idleTask)
   await expectTaskMenuStatus(page, idleTask, 'Needs your attention')
@@ -457,12 +423,6 @@ test('keeps the same provider identity and running state on mobile surfaces', as
   const taskCard = page.locator(`.task-card[data-task-id="${taskId}"]`)
   await expect(taskCard).toBeVisible()
   await expect(taskCard.locator('.task-session-pill')).toContainText('Running')
-
-  await navigateToSessions(page, true)
-  const { detail } = await selectSession(page, sessionId)
-  await expect(detail.locator('.session-detail-badge', { hasText: 'Running' })).toHaveCount(1)
-  await expect(detail.locator('.chat-tool-block-calling').filter({ hasText: TOOL_NAME }))
-    .toBeVisible()
   await page.screenshot({
     path: `${SCREENSHOT_DIR}/mobile-running-parity.png`,
     fullPage: true,
@@ -474,6 +434,6 @@ test('keeps the same provider identity and running state on mobile surfaces', as
   ).toBe('idle')
   const completed = await statusFor(page, sessionId)
   expect(completed.statusRevision).toBeGreaterThan(running.statusRevision)
-  await expect(detail.locator('.session-detail-badge', { hasText: 'Idle' })).toHaveCount(1)
+  await expect(taskCard.locator('.task-session-pill')).toContainText('Idle')
   await audit.assertClean()
 })

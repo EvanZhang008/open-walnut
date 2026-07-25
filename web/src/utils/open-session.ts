@@ -1,6 +1,6 @@
 /**
- * Open a session on the HOME page's session columns — the primary session
- * surface (the dedicated /sessions page is secondary). MainPage is always
+ * Open a session on the HOME page's session columns — the ONLY session
+ * surface (the dedicated /sessions page was removed). MainPage is always
  * mounted (App.tsx keeps it alive behind other routes), so the custom event
  * reaches its listener even when another page is active; navigating home then
  * reveals the opened column. Same window-event bridge pattern as

@@ -202,7 +202,7 @@ export function PlanCard({ content }: { content: string }) {
   const html = useMemo(() => renderMarkdownWithRefs(displayContent), [displayContent]);
 
   const handleExpandClick = useCallback(() => {
-    // Open the unified plan modal (listened by SessionPanel / SessionDetailPanel)
+    // Open the unified plan modal (listened by SessionPanel)
     window.dispatchEvent(new CustomEvent('open-plan-modal'));
   }, []);
 

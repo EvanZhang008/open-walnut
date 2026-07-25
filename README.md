@@ -355,8 +355,7 @@ External plugins go in `~/.open-walnut/plugins/{plugin-name}/`.
 
 | Route | Page | What it does |
 |---|---|---|
-| `/` | **Home** | Chat (left) + Session panels (middle) + Todo panel (right) + Focus Bar (bottom) |
-| `/sessions` | **Sessions** | Task tree browser + full session detail with chat, model picker, plan preview, and the per-session Changed diff view |
+| `/` | **Home** | Chat (left) + Session panels (middle) + Todo panel (right) + Focus Bar (bottom) — sessions open here with chat, model picker, plan preview, and the per-session Changed diff view |
 | `/tasks` | **Task Board** | Full task management with filters, search, drag-and-drop |
 | `/tasks/:id` | **Task Detail** | Single task view with subtasks, sessions, notes, dependencies |
 | `/notes` | **Notes** | Obsidian-style knowledge vault with wiki-links, backlinks, tree navigation, and rich editor |

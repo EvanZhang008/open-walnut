@@ -5,7 +5,6 @@ import { checkTasksCommand } from './check-tasks.js';
 import { planCommand } from './plan.js';
 import { sessionCommand } from './session.js';
 import { taskCommand } from './task.js';
-import { sessionsCommand } from './sessions.js';
 import { tasksCommand } from './tasks.js';
 import { loadMarkdownCommands } from './markdown-bridge.js';
 import { loadSkillCommands } from './skill-bridge.js';
@@ -18,7 +17,6 @@ register({ ...checkTasksCommand, source: 'hardcoded' });
 register({ ...planCommand, source: 'hardcoded' });
 register({ ...sessionCommand });
 register({ ...taskCommand });
-register({ ...sessionsCommand, source: 'hardcoded' });
 register({ ...tasksCommand, source: 'hardcoded' });
 
 // Load markdown-based commands, then skills (async, non-blocking).

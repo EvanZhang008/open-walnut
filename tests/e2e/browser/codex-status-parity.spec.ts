@@ -35,14 +35,6 @@ async function openCodexQuickStart(page: Page): Promise<void> {
   await page.locator('.sps-search-input').press('Shift+Enter')
 }
 
-async function navigateToSessions(page: Page): Promise<void> {
-  const other = page.getByRole('button', { name: /Other/i })
-  if (await other.getAttribute('aria-expanded') !== 'true') await other.click()
-  await page.locator('a[href="/sessions"]').click()
-  await expect(page).toHaveURL(/\/sessions$/)
-  await expect(page.locator('.session-tree-panel')).toBeVisible()
-}
-
 async function navigateToTasks(page: Page): Promise<void> {
   const other = page.getByRole('button', { name: /Other/i })
   if (await other.getAttribute('aria-expanded') !== 'true') await other.click()
@@ -63,7 +55,7 @@ async function expectQueued(surface: Locator, message: string): Promise<void> {
   await expect(bubble.getByText('Queued', { exact: true })).toBeVisible()
 }
 
-test('broadcasts active Codex status across Home, Sessions, task pill, and reload', async ({ page }) => {
+test('broadcasts active Codex status across Home, task pill, and reload', async ({ page }) => {
   test.setTimeout(60_000)
   const audit = await installBrowserAudit(page, walnutHome)
 
@@ -129,46 +121,6 @@ test('broadcasts active Codex status across Home, Sessions, task pill, and reloa
     fullPage: true,
   })
 
-  await navigateToSessions(page)
-  const search = page.getByRole('searchbox', { name: 'Search sessions' })
-  await search.fill(sessionId)
-  const sessionRow = page.locator(`.session-tree-session[data-session-id="${sessionId}"]`)
-  await expect(sessionRow).toBeVisible()
-  await sessionRow.click()
-  const detail = page.locator('.sessions-detail-pane')
-  await expect(detail.locator('.session-detail-badge', { hasText: 'Running' }))
-    .toHaveCount(1)
-  await expect(detail.locator('.chat-tool-block-calling').filter({ hasText: TOOL_NAME }))
-    .toBeVisible()
-  await expectQueued(detail, FIRST_QUEUED)
-  await expectQueued(detail, SECOND_QUEUED)
-  expect(await processStatus(page, sessionId)).toBe('running')
-
-  await expect(detail.getByText(FIRST_REPLY, { exact: true }))
-    .toHaveCount(1, { timeout: 25_000 })
-  await expect(detail.getByText(SECOND_REPLY, { exact: true }))
-    .toHaveCount(1, { timeout: 25_000 })
-  await expect.poll(() => processStatus(page, sessionId), { timeout: 15_000 })
-    .toBe('idle')
-  await expect(detail.locator('.session-detail-badge', { hasText: 'Idle' }))
-    .toHaveCount(1)
-
-  await page.reload()
-  const reloadedDetail = page.locator('.sessions-detail-pane')
-  await expect(reloadedDetail.locator('.session-detail-badge', { hasText: 'Idle' }))
-    .toHaveCount(1)
-  await expect(reloadedDetail.getByText(SLOW_PROMPT, { exact: true })).toHaveCount(1)
-  await expect(reloadedDetail.getByText(FIRST_QUEUED, { exact: true })).toHaveCount(1)
-  await expect(reloadedDetail.getByText(SECOND_QUEUED, { exact: true })).toHaveCount(1)
-  await expect(reloadedDetail.locator('.chat-tool-block-done').filter({ hasText: TOOL_NAME }))
-    .toHaveClass(/chat-tool-block-done/)
-
-  await navigateToTasks(page)
-  await page.getByLabel('Filter by status').selectOption('')
-  const finalTaskCard = page.locator(`.task-card[data-task-id="${taskId}"]`)
-  await expect(finalTaskCard).toBeVisible()
-  await expect(finalTaskCard.locator('.task-session-pill')).toContainText('Idle')
-
   await page.getByRole('link', { name: 'Home', exact: true }).click()
   await expect(page).toHaveURL(/\/$/)
   await page.locator('.todo-search-input').fill(sessionId)
@@ -176,13 +128,39 @@ test('broadcasts active Codex status across Home, Sessions, task pill, and reloa
   await expect(finalTaskRow).toBeVisible()
   await finalTaskRow.locator('.todo-item-title').click()
   const finalHomePanel = page.locator('.session-panel:not(.pending-session-panel)')
+  await expect(finalHomePanel).toBeVisible({ timeout: 15_000 })
+  await expect(finalHomePanel.getByText(FIRST_REPLY, { exact: true }))
+    .toHaveCount(1, { timeout: 25_000 })
+  await expect(finalHomePanel.getByText(SECOND_REPLY, { exact: true }))
+    .toHaveCount(1, { timeout: 25_000 })
+  await expect.poll(() => processStatus(page, sessionId), { timeout: 15_000 })
+    .toBe('idle')
   await expect(finalHomePanel.locator('.session-panel-badge', { hasText: 'Idle' }))
     .toHaveCount(1)
-  await expect(finalHomePanel.getByText(SECOND_REPLY, { exact: true })).toHaveCount(1)
+
+  await page.reload()
+  const reloadedPanel = page.locator('.session-panel:not(.pending-session-panel)')
+  await expect(reloadedPanel).toBeVisible({ timeout: 15_000 })
+  await expect(reloadedPanel.locator('.session-panel-badge', { hasText: 'Idle' }))
+    .toHaveCount(1)
+  await expect(reloadedPanel.getByText(SLOW_PROMPT, { exact: true })).toHaveCount(1)
+  await expect(reloadedPanel.getByText(FIRST_QUEUED, { exact: true })).toHaveCount(1)
+  await expect(reloadedPanel.getByText(SECOND_QUEUED, { exact: true })).toHaveCount(1)
+  // After reload the completed tool renders collapsed into a muted run row —
+  // expand it to reach the tool card and verify the done state persisted.
+  await reloadedPanel.locator('.tool-run-toggle').first().click()
+  await expect(reloadedPanel.locator('.chat-tool-block-done').filter({ hasText: TOOL_NAME }))
+    .toHaveClass(/chat-tool-block-done/)
   await page.screenshot({
     path: `${SCREENSHOT_DIR}/reloaded-idle-parity.png`,
     fullPage: true,
   })
+
+  await navigateToTasks(page)
+  await page.getByLabel('Filter by status').selectOption('')
+  const finalTaskCard = page.locator(`.task-card[data-task-id="${taskId}"]`)
+  await expect(finalTaskCard).toBeVisible()
+  await expect(finalTaskCard.locator('.task-session-pill')).toContainText('Idle')
 
   await audit.assertClean({
     requestFailure: (failure) => {

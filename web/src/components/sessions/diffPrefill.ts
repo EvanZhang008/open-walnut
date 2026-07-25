@@ -1,7 +1,7 @@
 /**
  * Shared helper: build the prompt text that the Changed-view's "Ask about this"
  * selection drops into the EXISTING session chat input (via ChatInput's
- * prefillText/prefillNonce). Both SessionPanel and SessionDetailPanel use this so
+ * prefillText/prefillNonce). SessionPanel uses this so
  * the prefill reads identically in the two places sessions render.
  *
  * The message names the file + line and quotes the selected code, then leaves the
