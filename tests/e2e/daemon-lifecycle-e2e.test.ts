@@ -388,4 +388,49 @@ describe('daemon E2E — real process, real WS, real FIFO', () => {
 
     ws.close()
   })
+
+  // ─────────────────────────────────────────────────────────────────
+  // 2026-07-25 incident: a walnut restart raced its own session re-attach —
+  // handleSend saw hasPipe=false and issued start(resume:true) against a sid
+  // whose CLI was ALIVE and mid-compaction. cmdStart killed it. The fix:
+  // resume-with-message against a running pid delivers via FIFO and adopts
+  // (no respawn); explicit restart (message:'') still respawns.
+  it('start(resume) against a LIVE session adopts it — does NOT kill the process', async () => {
+    const ws = await connectWs(daemon!.port)
+    const sid = `e2e-live-adopt-${Date.now()}`
+
+    const started = await sendCmd(ws, {
+      cmd: 'start', sid, args: ['/bin/sleep', '60'], cwd: '/tmp', message: 'first\n',
+    })
+    expect(started.ok).toBe(true)
+    const origPid = started.pid as number
+
+    // Simulate the restart race: a second client issues start(resume:true)
+    // with a message while the original process is still alive.
+    const ws2 = await connectWs(daemon!.port)
+    const resumed = await sendCmd(ws2, {
+      cmd: 'start', sid, args: ['/bin/sleep', '60'], cwd: '/tmp',
+      message: 'second — do not kill me\n', resume: true,
+    })
+    expect(resumed.ok).toBe(true)
+    expect(resumed.adopted).toBe(true)
+    // Same pid — the original process was adopted, not replaced.
+    expect(resumed.pid).toBe(origPid)
+    // Original process must still be alive.
+    expect(() => process.kill(origPid, 0)).not.toThrow()
+
+    // Explicit restart (empty message) must still take the respawn path.
+    const restarted = await sendCmd(ws2, {
+      cmd: 'start', sid, args: ['/bin/sleep', '60'], cwd: '/tmp', resume: true,
+    })
+    expect(restarted.ok).toBe(true)
+    expect(restarted.adopted).toBeUndefined()
+    expect(restarted.pid).not.toBe(origPid)
+    // Old process was killed by the explicit respawn.
+    await new Promise((r) => setTimeout(r, 500))
+    expect(() => process.kill(origPid, 0)).toThrow()
+
+    ws.close()
+    ws2.close()
+  })
 })

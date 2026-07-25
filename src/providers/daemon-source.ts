@@ -197,7 +197,18 @@ const DAEMON_VERSION = '__DAEMON_VERSION__';
 const AGENT_POLL_INTERVAL_MS = 2000;
 const AGENT_REDISCOVER_INTERVAL_MS = 10000;
 const PING_INTERVAL_MS = 15000;
-const HEARTBEAT_INTERVAL_MS = 30000;
+// Env override exists so tests can exercise heartbeat-driven behavior (the
+// parent-liveness watchdog) without waiting 30s. Production leaves it unset.
+const HEARTBEAT_INTERVAL_MS = (function() {
+  const ms = parseInt(process.env.WALNUT_DAEMON_HEARTBEAT_MS || '', 10);
+  return Number.isFinite(ms) && ms > 0 ? ms : 30000;
+})();
+// Parent-liveness watchdog (isolated-dir daemons only — see the heartbeat).
+// 0 / unset / garbage → disabled, which is always the case for production.
+const WATCHDOG_PARENT_PID = (function() {
+  const pid = parseInt(process.env.WALNUT_DAEMON_PARENT_PID || '', 10);
+  return Number.isFinite(pid) && pid > 0 ? pid : 0;
+})();
 
 function ensureOwnerOnlyStorage() {
   function repair(entryPath) {
@@ -235,6 +246,10 @@ const LOG_FILE = path.join(DAEMON_DIR, 'daemon-' + DAEMON_INSTANCE_ID + '.log');
 
 // ── Logging ──
 function logMsg(level, msg, data) {
+  // debug lines (cmd_recv per status poll) are each a SYNCHRONOUS append —
+  // 60k+ writes/day of polling noise. Env opt-in only; info/warn/error always
+  // land. Keep in sync with daemon-standalone.ts.
+  if (level === 'debug' && process.env.WALNUT_DAEMON_DEBUG !== '1') return;
   const entry = JSON.stringify({
     ts: new Date().toISOString(),
     level,
@@ -848,6 +863,10 @@ function decodeFrame(buf) {
 // and is rejected; those stay reachable only over the trusted SSH path.
 var BRIDGE_ALLOWED_COMMANDS = new Set([
   'status', 'appendUserMarker', 'send', 'attach', 'read-history', 'ping', 'bridgeResume', 'stt',
+  // Narrow image fetch (extension allowlist + size cap) — lets the cloud box
+  // proxy session-referenced pictures to phones. NOT fs.read: a compromised
+  // cloud box must never get arbitrary file reads on exec hosts.
+  'fs.readImage',
 ]);
 
 function handleCommand(ws, msg) {
@@ -888,6 +907,7 @@ function handleCommand(ws, msg) {
     case 'unsubscribe-agent': return cmdUnsubscribeAgent(ws, id, cmd);
     case 'write-inbox': return cmdWriteInbox(ws, id, cmd);
     case 'fs.read': return cmdFsRead(ws, id, cmd);
+    case 'fs.readImage': return cmdFsReadImage(ws, id, cmd);
     case 'fs.write': return cmdFsWrite(ws, id, cmd);
     case 'fs.mkdir': return cmdFsMkdir(ws, id, cmd);
     case 'fs.ls': return cmdFsLs(ws, id, cmd);
@@ -1060,6 +1080,38 @@ function cmdStart(ws, id, cmd) {
   // session mis-firing pid-recycled against the newborn pid.
   const existing = sessions.get(sid);
   if (existing) {
+    // Live-adopt guard: resume-with-message against a STILL-RUNNING CLI means the
+    // caller lost track of the process (walnut restart race, stale hasPipe) — do
+    // NOT kill it mid-turn. Deliver via the live FIFO and adopt instead. Explicit
+    // restart (reinitialize) sends message='' and still respawns below.
+    // Keep in sync with daemon-standalone.ts.
+    if (resume && message && existing.state === 'running' && existing.pid) {
+      let oldAlive = false;
+      try { process.kill(existing.pid, 0); oldAlive = true; } catch {}
+      if (oldAlive) {
+        const payload = JSON.stringify({ type: 'user', message: { role: 'user', content: message } });
+        let wrote = 'fail';
+        try { wrote = writeFifoFully(existing.pipePath, Buffer.from(payload + '\\n')); } catch {}
+        if (wrote === 'ok') {
+          if (mode) existing.mode = mode;
+          let curSize = 0;
+          try { curSize = fs.statSync(existing.jsonlPath).size; } catch {}
+          logMsg('info', 'cmdStart: adopted live session — message delivered via FIFO, respawn skipped', {
+            sid, pid: existing.pid, offset: curSize,
+          });
+          addSubscriber(ws, sid, curSize);
+          return sendOk(ws, id, { pid: existing.pid, outputFile: existing.jsonlPath, offset: curSize, adopted: true });
+        }
+        // EAGAIN = pipe full but process alive — refusing respawn (killing a
+        // live CLI over a transient full pipe is exactly the bug this guards).
+        // ENXIO/partial = reader gone / pipe corrupt → respawn is correct.
+        if (wrote === 'EAGAIN') {
+          logMsg('warn', 'cmdStart: live-adopt delivery failed but process alive — refusing respawn', { sid, pid: existing.pid, wrote });
+          return sendError(ws, id, 'start: session ' + sid + ' is alive but FIFO delivery failed (EAGAIN); retry send');
+        }
+        logMsg('warn', 'cmdStart: live-adopt delivery failed — falling back to respawn', { sid, wrote });
+      }
+    }
     logMsg('warn', 'cmdStart: replacing existing session', {
       sid,
       oldPid: existing.pid,
@@ -1124,6 +1176,16 @@ function cmdStart(ws, id, cmd) {
   }
 
   // Spawn Claude
+  // CLAUDE_CODE_MAX_RETRIES: harden against upstream Bedrock degradation windows.
+  // Forensics found degradation windows of 10-103 min; the CLI's default 10 API
+  // retries only cover a ~3min budget, so a turn dies with "Request timed out"
+  // mid-outage. The persistent-retry env (CLAUDE_CODE_UNATTENDED_RETRY) is compiled
+  // OUT of external CLI builds, so we raise the finite retry ceiling instead.
+  // Retries past 10 back off ~35s each, so 60 covers roughly a 30-min outage.
+  // Precedence: respect an explicit process-env override; else WALNUT_CLI_MAX_RETRIES;
+  // else default '60'. Keep in sync with daemon-standalone.ts.
+  const cliMaxRetries =
+    process.env.CLAUDE_CODE_MAX_RETRIES ?? process.env.WALNUT_CLI_MAX_RETRIES ?? '60';
   const proc = spawn(args[0] || 'claude', args.slice(1), {
     detached: true,
     stdio: [pipeFd, outputFd, stderrFd],
@@ -1150,6 +1212,7 @@ function cmdStart(ws, id, cmd) {
       ...process.env,
       MCP_CONNECTION_NONBLOCKING: '1',
       CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
+      CLAUDE_CODE_MAX_RETRIES: cliMaxRetries,
     },
   });
 
@@ -2108,6 +2171,50 @@ async function cmdFsRead(ws, id, cmd) {
   }
 }
 
+// Bridge-safe image read: extension allowlist + size cap. The ONLY fs command
+// reachable from the cloud bridge (see BRIDGE_ALLOWED_COMMANDS) — phones need
+// session-referenced pictures, but a compromised cloud box must not be able to
+// read arbitrary files (keys, configs) off exec hosts.
+// Keep in sync with daemon-standalone.ts cmdFsReadImage.
+var IMAGE_READ_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
+var IMAGE_READ_MAX_BYTES = 20 * 1024 * 1024;
+
+// Magic-byte check: the extension gate alone would let a compromised cloud
+// box exfiltrate any file that merely ENDS in .png; requiring a real image
+// header means non-image bytes (keys, configs) never leave the host.
+function looksLikeImage(data) {
+  if (data.length < 12) return false;
+  if (data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47) return true; // PNG
+  if (data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) return true; // JPEG
+  if (data[0] === 0x47 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x38) return true; // GIF8
+  if (data[0] === 0x52 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x46
+    && data[8] === 0x57 && data[9] === 0x45 && data[10] === 0x42 && data[11] === 0x50) return true; // RIFF…WEBP
+  return false;
+}
+
+async function cmdFsReadImage(ws, id, cmd) {
+  let filePath = cmd.path;
+  if (!filePath) return sendError(ws, id, 'fs.readImage: missing path');
+  if (filePath === '~' || filePath.startsWith('~/')) {
+    filePath = HOME_DIR + filePath.slice(1);
+  }
+  if (filePath.includes('..')) return sendError(ws, id, 'fs.readImage: invalid path');
+  const ext = filePath.slice(filePath.lastIndexOf('.') + 1).toLowerCase();
+  if (!IMAGE_READ_EXTENSIONS.has(ext)) return sendError(ws, id, 'fs.readImage: not an image (ENOTIMAGE)');
+
+  try {
+    const st = await fs.promises.stat(filePath);
+    if (!st.isFile()) return sendError(ws, id, 'fs.readImage: not a file (ENOENT)');
+    if (st.size > IMAGE_READ_MAX_BYTES) return sendError(ws, id, 'fs.readImage: too large (EFBIG)');
+    const data = await fs.promises.readFile(filePath);
+    if (!looksLikeImage(data)) return sendError(ws, id, 'fs.readImage: not an image (ENOTIMAGE)');
+    sendOk(ws, id, { data: data.toString('base64'), encoding: 'base64' });
+  } catch (err) {
+    const code = err.code || '';
+    sendError(ws, id, 'fs.readImage failed: ' + err.message + (code ? ' (' + code + ')' : ''));
+  }
+}
+
 async function cmdFsWrite(ws, id, cmd) {
   const { path: filePath, data, encoding } = cmd;
   if (!filePath || !data) return sendError(ws, id, 'fs.write: missing path or data');
@@ -2958,6 +3065,22 @@ if (action === '--start') {
           process.exit(0);
         }
       } catch {}
+      // Parent-liveness watchdog: isolated-dir daemons (tests, sandbox, demos)
+      // carry WALNUT_DAEMON_PARENT_PID and must die with their one walnut
+      // process — detached spawn means nothing else reaps them (300+ orphans
+      // starved the machine, 2026-07-23). Production daemons never get the
+      // var. Keep in sync with daemon-standalone.ts heartbeat (CLAUDE.md).
+      if (WATCHDOG_PARENT_PID) {
+        let parentAlive = true;
+        try { process.kill(WATCHDOG_PARENT_PID, 0); } catch { parentAlive = false; }
+        if (!parentAlive) {
+          logMsg('warn', 'parent-liveness watchdog: parent process gone — exiting', {
+            parentPid: WATCHDOG_PARENT_PID,
+          });
+          cleanup();
+          process.exit(0);
+        }
+      }
     }, HEARTBEAT_INTERVAL_MS);
   });
 

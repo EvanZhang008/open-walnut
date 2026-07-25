@@ -265,6 +265,15 @@ export class MockDaemon {
     if (!resume) {
       fs.writeFileSync(jsonlPath, '')  // truncate
     }
+    // Resume must stream ONLY new turn output. Mirror the real daemon
+    // (daemon-standalone.ts: "Record offset before spawn"): capture the current
+    // jsonl size so the poller starts past the previous turn's lines. Resetting
+    // to 0 here would re-emit the whole history (e.g. a prior error `result`) as a
+    // fresh event — a mock artifact the real `--resume` path never produces.
+    let startOffset = 0
+    if (resume) {
+      try { startOffset = fs.statSync(jsonlPath).size } catch { startOffset = 0 }
+    }
     const outputFd = fs.openSync(jsonlPath, resume ? 'a' : 'w')
     const stderrFd = fs.openSync(jsonlPath + '.err', resume ? 'a' : 'w')
 
@@ -298,7 +307,7 @@ export class MockDaemon {
       pipePath,
       jsonlPath,
       pollTimer: null,
-      offset: 0,
+      offset: startOffset,
       exitCode: null,
     }
 

@@ -33,9 +33,14 @@ const DIR = path.join(WALNUT_HOME, 'side-questions');
 const locks = new Map<string, Promise<unknown>>();
 async function withLock<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
   const prev = (locks.get(sessionId) ?? Promise.resolve()).catch(() => {});
-  const next = prev.then(fn);
-  locks.set(sessionId, next.catch(() => {}));
-  return next;
+  const run = prev.then(fn);
+  const tail = run.catch(() => {}).finally(() => {
+    // Tail-identity check, NOT unconditional delete — see the race timeline in
+    // chat-history.ts withWriteLock (same pattern).
+    if (locks.get(sessionId) === tail) locks.delete(sessionId);
+  });
+  locks.set(sessionId, tail);
+  return run;
 }
 
 function fileFor(sessionId: string): string {

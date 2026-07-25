@@ -218,6 +218,31 @@ if (outputFormat === 'stream-json') {
       return;
     }
 
+    // 2a.0b. "timeout-error" — reproduce upstream retry exhaustion (b12): the turn
+    //        ends with an is_error result whose text contains "Request timed out"
+    //        (what the CLI surfaces when it burns through its finite API retries
+    //        during a region-wide Bedrock degradation window). No assistant text is
+    //        emitted, so this is a real hard error (not a soft ede downgrade). Drives
+    //        the auto-continue scheduler. The optional "timeout-error:<tag>" form lets
+    //        a test distinguish successive turns in the echoed result of the FIRST turn.
+    // WALNUT_MOCK_CONTINUE_TIMEOUT=1 makes a resumed `continue` turn ALSO time out —
+    // used only by the auto-continue hourly-cap integration test to drive repeated
+    // retry-exhaustion results without affecting any other test.
+    const continueAlwaysTimesOut = process.env.WALNUT_MOCK_CONTINUE_TIMEOUT === '1'
+      && resume && effectiveMessage === 'continue';
+    if (effectiveMessage === 'timeout-error' || effectiveMessage.startsWith('timeout-error:') || continueAlwaysTimesOut) {
+      const tag = effectiveMessage.includes(':') ? effectiveMessage.split(':').slice(1).join(':') : '';
+      const resultEvent = {
+        type: 'result', subtype: 'error_during_execution', is_error: true,
+        duration_ms: 50, num_turns: 1,
+        result: `API Error: Request timed out${tag ? ` [${tag}]` : ''}`,
+        session_id: outputSessionId, total_cost_usd: 0.0,
+        usage: { input_tokens: 10, output_tokens: 0 },
+      };
+      process.stdout.write(JSON.stringify(resultEvent) + '\n', () => process.exit(0));
+      return;
+    }
+
     // 2a. For "plan-test" messages, emit Write (to plans/) + ExitPlanMode tool_use
     if (effectiveMessage === 'plan-test' || effectiveMessage.startsWith('plan-test:')) {
       // Extract optional plan file path from "plan-test:/path/to/plan.md"
@@ -286,6 +311,7 @@ if (outputFormat === 'stream-json') {
     //                                       input_json_delta stream + final assistant
     //     "stream-partial-unknown"        → includes a made-up stream_event type
     //                                       and a made-up top-level JSONL type
+    //     "stream-partial-tool-progress"  → tool_progress heartbeat (must NOT reach UI)
     //     "stream-partial-signature"      → signature_delta (must NOT reach UI)
     //
     //   The full text streamed is 'Hello, world!' split into small deltas.
@@ -302,6 +328,19 @@ if (outputFormat === 'stream-json') {
       if (mode === 'unknown-top-level') {
         // Emit a completely new top-level JSONL type (not wrapped in stream_event)
         emitStream({ type: 'never_seen_before', payload: { ping: 'pong' }, session_id: outputSessionId });
+      }
+
+      if (mode === 'tool-progress') {
+        emitStream({
+          type: 'tool_progress',
+          tool_use_id: 'toolu_mock_long_running',
+          tool_name: 'Bash',
+          parent_tool_use_id: null,
+          elapsed_time_seconds: 30,
+          heartbeat: true,
+          session_id: outputSessionId,
+          uuid: 'mock-tool-progress-uuid',
+        });
       }
 
       if (mode === 'unknown' || mode === 'unknown-stream-event') {

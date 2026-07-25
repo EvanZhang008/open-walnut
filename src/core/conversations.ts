@@ -40,8 +40,14 @@ const indexLocks = new Map<string, Promise<void>>();
 function withIndexLock<T>(agentId: string, fn: () => Promise<T>): Promise<T> {
   const prev = indexLocks.get(agentId) ?? Promise.resolve();
   let release: () => void;
-  indexLocks.set(agentId, new Promise<void>((r) => { release = r; }));
-  return prev.then(fn).finally(() => release!());
+  const tail = new Promise<void>((r) => { release = r; });
+  indexLocks.set(agentId, tail);
+  return prev.then(fn).finally(() => {
+    release!();
+    // Tail-identity check, NOT unconditional delete — see the race timeline in
+    // chat-history.ts withWriteLock (same pattern).
+    if (indexLocks.get(agentId) === tail) indexLocks.delete(agentId);
+  });
 }
 
 function freshIndex(): ConversationIndex {

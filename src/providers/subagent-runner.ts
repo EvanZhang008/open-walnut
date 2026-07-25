@@ -144,7 +144,7 @@ interface Semaphore {
 // ── SubagentRunner ──
 
 export class SubagentRunner {
-  readonly runs = new Map<string, AgentRun & { _history?: MessageParam[]; _abortController?: AbortController; _launchPhase?: string }>();
+  readonly runs = new Map<string, AgentRun & { _history?: MessageParam[]; _historyPruned?: boolean; _abortController?: AbortController; _launchPhase?: string }>();
   private semaphore: Semaphore;
 
   constructor(maxConcurrent = 20) {
@@ -173,11 +173,38 @@ export class SubagentRunner {
   }
 
   getAllRuns(): AgentRun[] {
-    return Array.from(this.runs.values()).map(({ _history, _abortController, _launchPhase, ...run }) => run);
+    return Array.from(this.runs.values()).map(({ _history, _historyPruned, _abortController, _launchPhase, ...run }) => run);
   }
 
-  getRun(runId: string): (AgentRun & { _history?: MessageParam[] }) | undefined {
+  getRun(runId: string): (AgentRun & { _history?: MessageParam[]; _historyPruned?: boolean }) | undefined {
     return this.runs.get(runId);
+  }
+
+  /** Keep full `_history` only on the newest terminal runs. Completed runs are
+   *  never removed from `runs` (metadata is cheap and getAllRuns lists them),
+   *  but each history is a complete MessageParam[] with tool results — an
+   *  unbounded retained-heap accumulator over a long-lived process. Only the
+   *  most recent few can still be resumed via handleSend in practice; older
+   *  ones are marked so handleSend rejects instead of silently losing context.
+   *  10 is a product choice as much as a memory cap: it bounds retained heap
+   *  AND defines how far back a user can resume a finished run — lowering it
+   *  silently shrinks that resume window. */
+  // 10 = comfortably above the couple of runs a user realistically resumes
+  // (resume targets are almost always the most recent one or two), while
+  // capping retained MessageParam[] heap; not a measured constant — safe to
+  // tune, but keep it small: each history holds full tool results.
+  private static MAX_RETAINED_HISTORIES = 10;
+  private pruneRetainedHistories(): void {
+    const terminal: Array<{ _history?: MessageParam[]; _historyPruned?: boolean; completedAt?: string; status: string }> = [];
+    for (const run of this.runs.values()) {
+      if (run._history?.length && run.status !== 'running' && run.status !== 'queued') terminal.push(run);
+    }
+    if (terminal.length <= SubagentRunner.MAX_RETAINED_HISTORIES) return;
+    terminal.sort((a, b) => (a.completedAt ?? '').localeCompare(b.completedAt ?? ''));
+    for (const run of terminal.slice(0, terminal.length - SubagentRunner.MAX_RETAINED_HISTORIES)) {
+      run._history = undefined;
+      run._historyPruned = true;
+    }
   }
 
   /** Cancel all running subagent runs for a given task, optionally filtered by agent ID.
@@ -614,7 +641,9 @@ export class SubagentRunner {
       run.completedAt = new Date().toISOString();
       run.error = err instanceof Error ? err.message : String(err);
 
-      log.subagent.error('run error', { runId: run.runId, error: run.error });
+      // skipNotify: server.ts's subagent:error handler publishes the richer
+      // 'Subagent Error' notification (task ref + deep links) for this failure.
+      log.subagent.error('run error', { runId: run.runId, error: run.error, skipNotify: true });
 
       // Update SessionRecord on error — auto-archive triage sessions
       try {
@@ -661,6 +690,10 @@ export class SubagentRunner {
         error: run.error,
       }, ['main-ai'], { source: 'subagent-runner' });
     } finally {
+      // Prune on EVERY terminal path, not just success: a cancelled or errored
+      // resume still retains the run's prior _history, and error paths used to
+      // skip pruning entirely — letting failed whales accumulate unbounded.
+      this.pruneRetainedHistories();
       this.releaseSemaphore();
     }
   }
@@ -671,6 +704,14 @@ export class SubagentRunner {
       bus.emit(EventNames.SUBAGENT_ERROR, {
         runId: data.runId,
         error: `No run found for ID: ${data.runId}`,
+      }, ['main-ai'], { source: 'subagent-runner' });
+      return;
+    }
+
+    if (run._historyPruned) {
+      bus.emit(EventNames.SUBAGENT_ERROR, {
+        runId: data.runId,
+        error: 'This run can no longer be resumed because its conversation history was pruned.',
       }, ['main-ai'], { source: 'subagent-runner' });
       return;
     }
@@ -692,6 +733,18 @@ export class SubagentRunner {
     const region = agentDef.region ?? subagentConfig?.region ?? config.agent?.region;
     const maxTokens = agentDef.max_tokens ?? subagentConfig?.max_tokens ?? config.agent?.maxTokens;
     const maxToolRounds = agentDef.max_tool_rounds ?? subagentConfig?.max_tool_rounds ?? 10;
+
+    // Re-check after the awaits above: the run was still in a terminal status
+    // during getAgent/getConfig, so a concurrently completing run could have
+    // pruned THIS run's history in that window. Once status flips to 'running'
+    // below, pruneRetainedHistories skips it.
+    if (run._historyPruned) {
+      bus.emit(EventNames.SUBAGENT_ERROR, {
+        runId: data.runId,
+        error: 'This run can no longer be resumed because its conversation history was pruned.',
+      }, ['main-ai'], { source: 'subagent-runner' });
+      return;
+    }
 
     run.status = 'running';
     log.subagent.info('resuming run', { runId: data.runId, agentId: run.agentId, taskId: run.taskId, messageLength: data.message.length });

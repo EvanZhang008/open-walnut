@@ -110,6 +110,8 @@ export interface SessionResultEvent {
   taskId?: string;
   result: string;
   isError?: boolean;
+  /** True only for a terminal upstream retry-exhaustion signature. */
+  retryExhausted?: boolean;
   /** CLI's cumulative cost for the current process (running total, restarts at 0
    *  on each --resume). For DISPLAY only — do NOT bill this; it would re-charge the
    *  whole running total every turn (the 13× session-cost inflation bug). */
@@ -311,6 +313,10 @@ export interface BackgroundTaskInfo {
   taskId: string;
   description?: string;
   subagentType?: string;
+  /** CLI task kind from task_started.task_type (local_agent | local_shell |
+   *  local_workflow | in_process_teammate | …) — display-only, lets the UI
+   *  split agents from plain background tasks. Absent on recovered tasks. */
+  taskType?: string;
   status: string; // running | completed | failed | stopped | paused
   tokens?: number;
   lastTool?: string;

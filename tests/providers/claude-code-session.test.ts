@@ -1640,6 +1640,197 @@ describe('ClaudeCodeSession.askSideQuestion', () => {
 
     await expect(promise).resolves.toBe('right');
   });
+
+  it('rejects immediately when gracefulStop replaces the transport', async () => {
+    const { session } = makeSessionWithStubTransport();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any)._transport.stop = vi.fn(async () => {});
+    (session as any)._transport.stopTail = vi.fn();
+    const pending = session.askSideQuestion('summarize this turn', 10_000);
+    await new Promise((r) => setTimeout(r, 5));
+
+    await session.gracefulStop(true);
+
+    await expect(pending).rejects.toMatchObject({ code: 'SESSION_TRANSPORT_REPLACED' });
+  });
+});
+
+describe('turn-complete self-report across restart', () => {
+  it('waits for an already-running restart before asking the replacement session', async () => {
+    const runner = new SessionRunner(MOCK_CLI);
+    const sid = 'self-report-restart-session';
+    let finishRestart!: () => void;
+    const restarting = new Promise<void>((resolve) => { finishRestart = resolve; });
+    const askSideQuestion = vi.fn().mockResolvedValue('EXEC_SUMMARY: recovered after restart');
+    const fake = { sessionId: sid, askSideQuestion };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (runner as any).sessions.set('restart-task', fake);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (runner as any).nativeSessionReinitializations = new Map([[sid, restarting]]);
+
+    const report = runner.requestTurnCompleteSelfReport(sid, 'report prompt', 10_000);
+    await new Promise((r) => setTimeout(r, 5));
+    expect(askSideQuestion).not.toHaveBeenCalled();
+    finishRestart();
+
+    await expect(report).resolves.toBe('EXEC_SUMMARY: recovered after restart');
+    expect(askSideQuestion).toHaveBeenCalledOnce();
+  });
+
+  it('does not retry a transport replacement without an explicit restart barrier', async () => {
+    const runner = new SessionRunner(MOCK_CLI);
+    const sid = 'self-report-cold-resume-session';
+    const askSideQuestion = vi.fn().mockRejectedValue(Object.assign(
+      new Error('session transport replaced'),
+      { code: 'SESSION_TRANSPORT_REPLACED' },
+    ));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (runner as any).sessions.set('resume-task', { sessionId: sid, askSideQuestion });
+
+    await expect(runner.requestTurnCompleteSelfReport(sid, 'report prompt', 10_000))
+      .rejects.toMatchObject({ code: 'SESSION_TRANSPORT_REPLACED' });
+    expect(askSideQuestion).toHaveBeenCalledOnce();
+  });
+
+  it('retries once when restart interrupts an in-flight self-report', async () => {
+    const runner = new SessionRunner(MOCK_CLI);
+    const sid = 'self-report-interrupted-session';
+    const restarting = Promise.resolve();
+    const askSideQuestion = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('session transport replaced'), {
+        code: 'SESSION_TRANSPORT_REPLACED',
+      }))
+      .mockResolvedValueOnce('EXEC_SUMMARY: recovered after restart');
+    const fake = { sessionId: sid, askSideQuestion };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (runner as any).sessions.set('restart-task', fake);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (runner as any).nativeSessionReinitializations = new Map([[sid, restarting]]);
+
+    await expect(runner.requestTurnCompleteSelfReport(sid, 'report prompt', 10_000))
+      .resolves.toBe('EXEC_SUMMARY: recovered after restart');
+    expect(askSideQuestion).toHaveBeenCalledTimes(2);
+  });
+
+  it('routes a mid-turn send through the restart barrier, never the dying FIFO', async () => {
+    const runner = new SessionRunner(MOCK_CLI);
+    const sid = 'mid-turn-message-during-restart';
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (runner as any).activeProcessing.add(sid);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (runner as any).nativeSessionReinitializations = new Map([[sid, new Promise<void>(() => {})]]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const processNext = vi.spyOn(runner as any, 'processNext').mockResolvedValue(undefined);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const injectMidTurn = vi.spyOn(runner as any, 'injectMidTurn').mockResolvedValue(undefined);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (runner as any).handleSend({ sessionId: sid, message: 'wait for replacement' });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(processNext).toHaveBeenCalledWith(sid, undefined);
+    expect(injectMidTurn).not.toHaveBeenCalled();
+  });
+
+  it('keeps messages pending until an explicit restart is ready', async () => {
+    const runner = new SessionRunner(MOCK_CLI);
+    const sid = 'message-during-restart';
+    let finishRestart!: () => void;
+    const restarting = new Promise<void>((resolve) => { finishRestart = resolve; });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (runner as any).nativeSessionReinitializations = new Map([[sid, restarting]]);
+    const writeMessage = vi.fn(async () => true);
+    const fake = {
+      sessionId: sid,
+      writeMessage,
+      writeSyntheticUserEvent: vi.fn(),
+      hasPendingPermission: false,
+      hasPipe: true,
+      active: true,
+      processPid: 123,
+      host: null,
+      lastMessageDeliveryAt: 0,
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (runner as any).sessions.set('restart-message-task', fake);
+    await enqueueMessage(sid, 'must reach the replacement process');
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const delivery = (runner as any).processNext(sid) as Promise<void>;
+    await new Promise((r) => setTimeout(r, 10));
+    expect(writeMessage).not.toHaveBeenCalled();
+    expect((await getQueue(sid))[0]?.status).toBe('pending');
+
+    finishRestart();
+    await delivery;
+    expect(writeMessage).toHaveBeenCalledOnce();
+  });
+
+  it('coalesces concurrent explicit restarts for the same session', async () => {
+    const runner = new SessionRunner(MOCK_CLI);
+    let finishRestart!: () => void;
+    const operation = new Promise<void>((resolve) => { finishRestart = resolve; });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const perform = vi.spyOn(runner as any, 'performNativeReinitialize').mockReturnValue(operation);
+
+    const first = runner.reinitialize('same-session');
+    const second = runner.reinitialize('same-session');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(second).toBe(first);
+    expect(perform).toHaveBeenCalledOnce();
+    finishRestart();
+    await first;
+  });
+
+  it('queues a concurrent mode override after the current restart', async () => {
+    const runner = new SessionRunner(MOCK_CLI);
+    let finishRestart!: () => void;
+    let finishModeRestart!: () => void;
+    const firstOperation = new Promise<void>((resolve) => { finishRestart = resolve; });
+    const secondOperation = new Promise<void>((resolve) => { finishModeRestart = resolve; });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const perform = vi.spyOn(runner as any, 'performNativeReinitialize')
+      .mockReturnValueOnce(firstOperation)
+      .mockReturnValueOnce(secondOperation);
+
+    const first = runner.reinitialize('mode-session');
+    const modeChange = runner.reinitialize('mode-session', 'bypass');
+    const waiting = (runner as any).awaitNativeReinitialization('mode-session') as Promise<void>;
+    let barrierSettled = false;
+    void waiting.then(() => { barrierSettled = true; });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(perform).toHaveBeenCalledTimes(1);
+
+    finishRestart();
+    await first;
+    await new Promise((r) => setTimeout(r, 0));
+    expect(perform).toHaveBeenCalledTimes(2);
+    expect(perform).toHaveBeenLastCalledWith('mode-session', 'bypass');
+    expect(barrierSettled).toBe(false);
+
+    finishModeRestart();
+    await modeChange;
+    await waiting;
+    expect(barrierSettled).toBe(true);
+  });
+
+  it('bounds restart waiting by the original self-report timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const runner = new SessionRunner(MOCK_CLI);
+      const sid = 'self-report-stuck-restart';
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (runner as any).nativeSessionReinitializations = new Map([[sid, new Promise<void>(() => {})]]);
+
+      const report = runner.requestTurnCompleteSelfReport(sid, 'report prompt', 100);
+      const assertion = expect(report).rejects.toThrow('timed out during session restart');
+      await vi.advanceTimersByTimeAsync(100);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════
@@ -2131,9 +2322,9 @@ describe('ClaudeCodeSession.getSettings (effort read-back)', () => {
     expect((env.request_id as string).startsWith('gs-')).toBe(true);
   });
 
-  it('resolves the applied block (model + true effort) from the nested response', async () => {
+  it('preserves applied runtime settings and the effective configured default', async () => {
     const { session, writes } = makeSessionWithStubTransport();
-    const promise = session.getSettings();
+    const promise = session.getSettingsSnapshot();
     await new Promise((r) => setTimeout(r, 5));
     const requestId = JSON.parse(writes[0]!).request_id as string;
     // Real shape (verbatim 2.1.170): response.response.applied.effort is the
@@ -2144,12 +2335,18 @@ describe('ClaudeCodeSession.getSettings (effort read-back)', () => {
         subtype: 'success',
         request_id: requestId,
         response: {
-          effective: { effortLevel: 'xhigh' },   // disk value — NOT what we read
+          effective: { effortLevel: 'xhigh' },
+          sources: { effortLevel: 'userSettings' },
           applied: { model: 'claude-opus-4-8', effort: 'high', ultracode: false }, // env override → high
         },
       },
     });
-    await expect(promise).resolves.toEqual({ model: 'claude-opus-4-8', effort: 'high', ultracode: false });
+    // `sources` in the CLI payload is intentionally NOT plumbed through — no
+    // consumer reads it; the snapshot carries only applied + effective.
+    await expect(promise).resolves.toEqual({
+      applied: { model: 'claude-opus-4-8', effort: 'high', ultracode: false },
+      effective: { effortLevel: 'xhigh' },
+    });
   });
 
   it('resolves null on an error control_response (untrusted — never clobber)', async () => {
@@ -2384,6 +2581,39 @@ describe('ClaudeCodeSession.getModelCatalog', () => {
     (session as any)._rejectAllSideQuestions('teardown');
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect((session as any)._modelCatalog).toBeNull();
+  });
+
+  it('ignores an old transport catalog result without clearing the new fetch', async () => {
+    const { session } = makeSessionWithStubTransport();
+    let resolveOld!: (models: typeof CLI_MODELS) => void;
+    let resolveNew!: (models: typeof CLI_MODELS) => void;
+    const oldFetch = new Promise<typeof CLI_MODELS>((resolve) => { resolveOld = resolve; });
+    const newFetch = new Promise<typeof CLI_MODELS>((resolve) => { resolveNew = resolve; });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.spyOn(session as any, 'fetchModelCatalog')
+      .mockReturnValueOnce(oldFetch)
+      .mockReturnValueOnce(newFetch);
+
+    const oldRequest = session.getModelCatalog();
+    // Simulate transport replacement: generation advances and the new process gets
+    // its own independent catalog fetch while the old Promise is still settling.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any)._transportGeneration++;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any)._modelCatalogInflight = null;
+    const newRequest = session.getModelCatalog();
+
+    resolveOld(CLI_MODELS);
+    await expect(oldRequest).resolves.toBeNull();
+    // Old finally must not clear the replacement process's in-flight fetch.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((session as any)._modelCatalogInflight).not.toBeNull();
+
+    const replacementModels = CLI_MODELS.slice(0, 1);
+    resolveNew(replacementModels as typeof CLI_MODELS);
+    await expect(newRequest).resolves.toMatchObject({ models: replacementModels });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((session as any)._modelCatalog.models).toEqual(replacementModels);
   });
 
   // ── Eager catalog side effects: every REAL fetch emits SESSION_MODEL_CATALOG

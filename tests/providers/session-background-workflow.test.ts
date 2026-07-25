@@ -97,11 +97,12 @@ function makeSessionStateEvent(sessionId: string, state: 'running' | 'idle' | 'r
 
 function makeTaskStartedEvent(
   sessionId: string, taskId: string,
-  opts: { workflowName?: string; description?: string; subagentType?: string } = {},
+  opts: { workflowName?: string; description?: string; subagentType?: string; taskType?: string } = {},
 ): string {
   return JSON.stringify({
     type: 'system', subtype: 'task_started', session_id: sessionId, task_id: taskId,
     workflow_name: opts.workflowName, description: opts.description, subagent_type: opts.subagentType,
+    task_type: opts.taskType,
   })
 }
 
@@ -1061,5 +1062,42 @@ describe('session_state_changed{running} persists to session tracker', () => {
     const record = await getSessionByClaudeId(sid)
     expect(record).not.toBeNull()
     expect(record!.process_status).toBe('running')
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════
+//  task_type passthrough — the UI splits background AGENTS from TASKS
+// ═══════════════════════════════════════════════════════════════════
+
+describe('task_type rides task_started into the SESSION_BACKGROUND_TASKS snapshot', () => {
+  it('exposes taskType per task so the panel can group agents vs plain tasks', () => {
+    const sid = 'wf-task-type'
+    const session = makeRunningRemoteSession('task-type-passthrough')
+
+    const snaps: Array<Record<string, unknown>> = []
+    bus.subscribe('web-ui', (e: BusEvent) => {
+      if (e.name === EventNames.SESSION_BACKGROUND_TASKS) snaps.push(e.data as Record<string, unknown>)
+    })
+
+    feedLines(session, [
+      makeInitEvent(sid),
+      makeTaskStartedEvent(sid, 'ag-1', { description: 'Explore repo', subagentType: 'Explore', taskType: 'local_agent' }),
+      makeTaskStartedEvent(sid, 'sh-1', { description: 'npm run build', taskType: 'local_shell' }),
+      // A recovered/legacy event with no task_type must still flow (field absent).
+      makeTaskStartedEvent(sid, 'un-1', { description: 'mystery task' }),
+    ])
+
+    const tasks = snaps[snaps.length - 1]!.tasks as Array<Record<string, unknown>>
+    const byId = new Map(tasks.map(t => [t.taskId, t]))
+    expect(byId.get('ag-1')!.taskType).toBe('local_agent')
+    expect(byId.get('sh-1')!.taskType).toBe('local_shell')
+    expect(byId.get('un-1')!.taskType).toBeUndefined()
+
+    // A later task_progress (which never carries task_type) must not clobber it.
+    feedLines(session, [makeTaskProgressEvent(sid, 'ag-1', { tokens: 500 })])
+    const after = (snaps[snaps.length - 1]!.tasks as Array<Record<string, unknown>>)
+      .find(t => t.taskId === 'ag-1')!
+    expect(after.taskType).toBe('local_agent')
+    expect(after.tokens).toBe(500)
   })
 })

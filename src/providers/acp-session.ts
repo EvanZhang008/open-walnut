@@ -1124,11 +1124,16 @@ export class AcpSession {
   ): Promise<void> {
     const sessionId = this.trackingId()
     const commit = this._cursorCommit.then(async () => {
+      // Acceptance can commit after the turn's terminal state on instantaneous
+      // turns. A late 'running' write would cancel the stream buffer's deferred
+      // clear and wedge isStreaming, so the execution-time check is authoritative.
+      const terminalAlreadyObserved = preserveTerminalState
+        || this._terminalCommands.has(commandId)
       const acceptance = await acceptAcpPrompt(sessionId, commandId, {
-        preserveTerminalState,
+        preserveTerminalState: terminalAlreadyObserved,
       })
       if (!acceptance.accepted) return
-      if (preserveTerminalState) return
+      if (terminalAlreadyObserved) return
       emitSessionStatusChanged(
         acceptance.record,
         { phase: 'IN_PROGRESS' },

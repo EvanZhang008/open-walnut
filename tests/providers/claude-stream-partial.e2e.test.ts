@@ -236,6 +236,16 @@ describe('stream_event pipeline: tool_use', () => {
 });
 
 describe('stream_event pipeline: drop rules', () => {
+  it('swallows top-level tool_progress heartbeats without SESSION_UNKNOWN_EVENT', async () => {
+    const c = makeCollector();
+    const session = newSession('task-tool-progress');
+    session.send('stream-partial-tool-progress');
+
+    await waitForResult(c);
+
+    expect(c.unknownEvents.filter(u => u.eventType === 'tool_progress')).toHaveLength(0);
+  });
+
   it('signature_delta never reaches any bus channel', async () => {
     const c = makeCollector();
     const session = newSession('task-sig');

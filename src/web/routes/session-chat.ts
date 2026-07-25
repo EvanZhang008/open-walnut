@@ -260,7 +260,9 @@ export function registerSessionChatRpc(): void {
     let correctedIsStreaming = snapshot.isStreaming
     try {
       const record = await getSessionByClaudeId(sid)
-      if (record && (record.process_status === 'stopped' || record.process_status === 'error')) {
+      // Idle is the authoritative between-turn state, so a buffer that still
+      // claims streaming is stale just like one paired with a terminal record.
+      if (record && (record.process_status === 'idle' || record.process_status === 'stopped' || record.process_status === 'error')) {
         correctedIsStreaming = false
       } else if (record && record.process_status === 'running') {
         const lastChangeMs = record.last_status_change
@@ -624,17 +626,9 @@ function startTeamAgentPolling(sessionId: string, agentName: string, opts: {
 }
 
 function stopTeamAgentPolling(sessionId: string): void {
-  const poller = teamPollers.get(sessionId)
-  if (poller) {
-    poller.destroy()
-    teamPollers.delete(sessionId)
-  }
-  // Also stop remote pollers
-  const remoteTimer = remotePollers.get(sessionId)
-  if (remoteTimer) {
-    clearInterval(remoteTimer)
-    remotePollers.delete(sessionId)
-  }
+  // Same teardown as session end — unsubscribe must also drop remotePollerState
+  // (it holds host/cwd/fullPrompt per session and would otherwise leak).
+  cleanupTeamPoller(sessionId)
 }
 
 /** Cleanup pollers when session ends. Called from server.ts session:result handler. */
@@ -649,6 +643,7 @@ export function cleanupTeamPoller(sessionId: string): void {
     clearInterval(remoteTimer)
     remotePollers.delete(sessionId)
   }
+  remotePollerState.delete(sessionId)
 }
 
 // ── Remote Team Agent Polling ──

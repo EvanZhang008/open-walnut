@@ -2,7 +2,7 @@
  * Integration test for the turn-complete summary flow (session self-report).
  *
  * 2026-07-18 redesign: the task NOTE is the single living document (five sections:
- * Executive Summary / Goal / Context / Progress / Work Log). The session answers
+ * Executive Summary / User Request / Context / Progress / Work Log). The session answers
  * per-section (unchanged | append | content); code assembles + persists the NOTE,
  * derives the short task.summary from Executive Summary, and decides notify via
  * the PHASE_SIGNAL lookup (decideNotify). These tests prove that flow end-to-end
@@ -40,11 +40,13 @@ const SID_FAIL = 'self-report-session-fail';
 const SID_NOTIFY = 'self-report-session-notify';
 const SID_DEDUP = 'self-report-session-dedup';
 
+// Deliberately uses the legacy "## Goal" header: the assemble pass must both
+// preserve its content and normalize the header to "## User Request".
 const BASE_NOTE = `## Executive Summary
 Adding a fallback for fork titles. Implementation done; verify pending.
 
 ## Goal
-Request: "make fork titles never show up blank"
+User request: make fork titles never show up blank.
 Objective: Fork titles never render blank — normalizeLabel falls back to a heuristic title.
 
 ## Context
@@ -176,8 +178,9 @@ describe('turn-complete self-report (success)', () => {
     // 2. The NOTE was reassembled: unchanged sections kept, Work Log appended,
     //    Progress and Executive Summary replaced.
     const t = await getTask(taskId);
-    expect(t.note).toContain('## Goal');
-    expect(t.note).toContain('never render blank'); // unchanged Goal preserved
+    expect(t.note).toContain('## User Request'); // legacy "## Goal" header normalized
+    expect(t.note).not.toContain('## Goal');
+    expect(t.note).toContain('never render blank'); // unchanged section content preserved
     expect(t.note).toContain('- Ran the unit suite (green)'); // Work Log appended
     expect(t.note).toContain('WIP e2e verify — in progress'); // Progress rewritten
     expect(t.note).toContain('Implemented normalizeLabel fallback'); // old log entry kept

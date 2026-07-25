@@ -206,6 +206,23 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
       expect(src).toMatch(/stat\.mode\s*&\s*0o111\s*\?\s*0o700\s*:\s*0o600/)
     }
   })
+
+  // b12 retry hardening — both twins inject CLAUDE_CODE_MAX_RETRIES into the CLI
+  // spawn env so a turn survives upstream Bedrock degradation windows (10-103 min)
+  // that outlast the CLI's default 10-retry (~3min) budget. Precedence must match:
+  // explicit process-env override → WALNUT_CLI_MAX_RETRIES → default '60'.
+  it('both twins compute cliMaxRetries with the same precedence (env → WALNUT_CLI_MAX_RETRIES → 60)', () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    const re = /process\.env\.CLAUDE_CODE_MAX_RETRIES\s*\?\?\s*process\.env\.WALNUT_CLI_MAX_RETRIES\s*\?\?\s*'60'/
+    expect(standaloneSrc).toMatch(re)
+    expect(templateSrc).toMatch(re)
+  })
+  it('both twins pass CLAUDE_CODE_MAX_RETRIES: cliMaxRetries into the spawn env', () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/CLAUDE_CODE_MAX_RETRIES:\s*cliMaxRetries/)
+    }
+  })
 })
 
 // ── L1/L2 parity: versioned events + daemon-authoritative task state ──

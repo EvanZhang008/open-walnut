@@ -78,7 +78,18 @@ const INSTANCE_ID_FILE = path.join(DAEMON_DIR, 'daemon.instance')
 const VERSION_FILE = path.join(DAEMON_DIR, 'daemon.version')
 const AGENT_POLL_INTERVAL_MS = 2000
 const AGENT_REDISCOVER_INTERVAL_MS = 10000
-const HEARTBEAT_INTERVAL_MS = 30_000
+// Env override exists so tests can exercise heartbeat-driven behavior (the
+// parent-liveness watchdog) without waiting 30s. Production leaves it unset.
+const HEARTBEAT_INTERVAL_MS = (() => {
+  const ms = parseInt(process.env.WALNUT_DAEMON_HEARTBEAT_MS || '', 10)
+  return Number.isFinite(ms) && ms > 0 ? ms : 30_000
+})()
+// Parent-liveness watchdog (isolated-dir daemons only — see the heartbeat).
+// 0 / unset / garbage → disabled, which is always the case for production.
+const WATCHDOG_PARENT_PID = (() => {
+  const pid = parseInt(process.env.WALNUT_DAEMON_PARENT_PID || '', 10)
+  return Number.isFinite(pid) && pid > 0 ? pid : 0
+})()
 
 function ensureOwnerOnlyStorage(): void {
   const repair = (entryPath: string): void => {
@@ -276,6 +287,10 @@ interface WsData {
  */
 const BRIDGE_ALLOWED_COMMANDS = new Set([
   'status', 'appendUserMarker', 'send', 'attach', 'read-history', 'ping', 'bridgeResume', 'stt',
+  // Narrow image fetch (extension allowlist + size cap) — lets the cloud box
+  // proxy session-referenced pictures to phones. NOT fs.read: a compromised
+  // cloud box must never get arbitrary file reads on exec hosts.
+  'fs.readImage',
 ])
 
 // DUP-DEBUG: per-process counter and lookup map for stable ws ids.
@@ -297,6 +312,10 @@ function wsId(ws: ServerWebSocket<WsData>): number {
 // Every log line includes DAEMON_INSTANCE_ID so `grep <id> daemon-*.log`
 // isolates one daemon's lifetime even when multiple daemons have run.
 function logMsg(level: string, msg: string, data?: Record<string, unknown>) {
+  // debug lines (cmd_recv per status poll ≈ 3/sec) are each a SYNCHRONOUS
+  // appendFileSync — 60k+ writes/day of pure polling noise. Gate them behind
+  // an env opt-in; info/warn/error always land. Keep in sync with daemon-source.ts.
+  if (level === 'debug' && process.env.WALNUT_DAEMON_DEBUG !== '1') return
   const entry = JSON.stringify({
     ts: new Date().toISOString(),
     level,
@@ -722,6 +741,7 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
     case 'unsubscribe-agent': return cmdUnsubscribeAgent(ws, id as number, cmd)
     case 'write-inbox': return cmdWriteInbox(ws, id as number, cmd)
     case 'fs.read': return cmdFsRead(ws, id as number, cmd)
+    case 'fs.readImage': return cmdFsReadImage(ws, id as number, cmd)
     case 'fs.write': return cmdFsWrite(ws, id as number, cmd)
     case 'fs.mkdir': return cmdFsMkdir(ws, id as number, cmd)
     case 'fs.ls': return cmdFsLs(ws, id as number, cmd)
@@ -964,6 +984,43 @@ function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, u
   // ~1s after spawn, killing every --resume-spawned process in a loop.
   const existing = sessions.get(sid)
   if (existing) {
+    // Live-adopt guard: a resume-with-message against a STILL-RUNNING CLI means
+    // the caller lost track of the process (walnut restart race, stale hasPipe),
+    // not that the process needs replacing. Killing it here aborts whatever the
+    // CLI is doing mid-turn (observed: a 369K-token compaction). Deliver the
+    // message to the live FIFO and adopt instead — exactly what cmdSend would
+    // have done had the caller known the process was alive. An explicit restart
+    // (reinitialize) sends message='' and still takes the respawn path below.
+    if (resume && message && existing.state === 'running' && existing.pid) {
+      let oldAlive = false
+      try { process.kill(existing.pid, 0); oldAlive = true } catch {}
+      if (oldAlive) {
+        const sendResult = core.handleSendCommand(sid, message)
+        if (sendResult.ok) {
+          if (mode) existing.mode = mode as SessionMode
+          const curSize = statSizeOrZero(existing.jsonlPath)
+          logMsg('info', 'cmdStart: adopted live session — message delivered via FIFO, respawn skipped', {
+            sid, pid: existing.pid, offset: curSize,
+          })
+          addSubscriber(ws, sid, curSize)
+          return sendOk(ws, id, { pid: existing.pid, outputFile: existing.jsonlPath, offset: curSize, adopted: true })
+        }
+        // Delivery failed. Only fall through to respawn if handleSendCommand
+        // actually reaped the session (ENXIO / precheck-dead / partial-write).
+        // A transient EAGAIN (pipe full, process alive) must NOT kill the CLI —
+        // fail the start; the message stays queued and the caller retries.
+        const afterSend = sessions.get(sid)
+        if (afterSend && afterSend.state === 'running') {
+          logMsg('warn', 'cmdStart: live-adopt delivery failed but process alive — refusing respawn', {
+            sid, pid: existing.pid, reason: sendResult.reason ?? sendResult.error,
+          })
+          return sendError(ws, id, `start: session ${sid} is alive but FIFO delivery failed (${sendResult.reason ?? sendResult.error}); retry send`)
+        }
+        logMsg('warn', 'cmdStart: live-adopt delivery failed — falling back to respawn', {
+          sid, reason: sendResult.reason ?? sendResult.error,
+        })
+      }
+    }
     logMsg('warn', 'cmdStart: replacing existing session', {
       sid,
       oldPid: existing.pid,
@@ -1052,6 +1109,16 @@ function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, u
   // Empirical verification: bash -c 'source .zshrc' on clouddev produces 0 /usr/bin
   // matches, while zsh -c 'source .zshrc' produces 2 matches, proving the bug.
   const userShell = process.env.SHELL || '/bin/bash'
+  // CLAUDE_CODE_MAX_RETRIES: harden against upstream Bedrock degradation windows.
+  // Forensics found degradation windows of 10-103 min; the CLI's default 10 API
+  // retries only cover a ~3min budget, so a turn dies with "Request timed out"
+  // mid-outage. The persistent-retry env (CLAUDE_CODE_UNATTENDED_RETRY) is compiled
+  // OUT of external CLI builds, so we raise the finite retry ceiling instead.
+  // Retries past 10 back off ~35s each, so 60 covers roughly a 30-min outage.
+  // Precedence: respect an explicit process-env override; else WALNUT_CLI_MAX_RETRIES;
+  // else default '60'. Keep in sync with daemon-source.ts.
+  const cliMaxRetries =
+    process.env.CLAUDE_CODE_MAX_RETRIES ?? process.env.WALNUT_CLI_MAX_RETRIES ?? '60'
   const proc = spawn(userShell, ['-c', shellCmd], {
     detached: true,
     stdio: [pipeFd, outputFd, stderrFd],
@@ -1078,6 +1145,7 @@ function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, u
       ...process.env,
       MCP_CONNECTION_NONBLOCKING: '1',
       CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
+      CLAUDE_CODE_MAX_RETRIES: cliMaxRetries,
     },
   })
 
@@ -1997,6 +2065,50 @@ async function cmdFsRead(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // Tag ENOENT so the server can distinguish "file not found" from transport failure.
     const code = e.code ?? ''
     sendError(ws, id, 'fs.read failed: ' + e.message + (code ? ' (' + code + ')' : ''))
+  }
+}
+
+// Bridge-safe image read: extension allowlist + size cap. The ONLY fs command
+// reachable from the cloud bridge (see BRIDGE_ALLOWED_COMMANDS) — phones need
+// session-referenced pictures, but a compromised cloud box must not be able to
+// read arbitrary files (keys, configs) off exec hosts.
+const IMAGE_READ_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp'])
+const IMAGE_READ_MAX_BYTES = 20 * 1024 * 1024
+
+// Magic-byte check: the extension gate alone would let a compromised cloud
+// box exfiltrate any file that merely ENDS in .png; requiring a real image
+// header means non-image bytes (keys, configs) never leave the host.
+function looksLikeImage(data: Buffer): boolean {
+  if (data.length < 12) return false
+  if (data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47) return true // PNG
+  if (data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) return true // JPEG
+  if (data[0] === 0x47 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x38) return true // GIF8
+  if (data[0] === 0x52 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x46
+    && data[8] === 0x57 && data[9] === 0x45 && data[10] === 0x42 && data[11] === 0x50) return true // RIFF…WEBP
+  return false
+}
+
+async function cmdFsReadImage(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  let filePath = cmd.path as string
+  if (!filePath) return sendError(ws, id, 'fs.readImage: missing path')
+  if (filePath === '~' || filePath.startsWith('~/')) {
+    filePath = HOME_DIR + filePath.slice(1)
+  }
+  if (filePath.includes('..')) return sendError(ws, id, 'fs.readImage: invalid path')
+  const ext = filePath.slice(filePath.lastIndexOf('.') + 1).toLowerCase()
+  if (!IMAGE_READ_EXTENSIONS.has(ext)) return sendError(ws, id, 'fs.readImage: not an image (ENOTIMAGE)')
+
+  try {
+    const st = await fs.promises.stat(filePath)
+    if (!st.isFile()) return sendError(ws, id, 'fs.readImage: not a file (ENOENT)')
+    if (st.size > IMAGE_READ_MAX_BYTES) return sendError(ws, id, 'fs.readImage: too large (EFBIG)')
+    const data = await fs.promises.readFile(filePath)
+    if (!looksLikeImage(data)) return sendError(ws, id, 'fs.readImage: not an image (ENOTIMAGE)')
+    sendOk(ws, id, { data: data.toString('base64'), encoding: 'base64' })
+  } catch (err: unknown) {
+    const e = err as NodeJS.ErrnoException
+    const code = e.code ?? ''
+    sendError(ws, id, 'fs.readImage failed: ' + e.message + (code ? ' (' + code + ')' : ''))
   }
 }
 
@@ -2940,6 +3052,23 @@ if (action === '--start') {
         process.exit(0)
       }
     } catch {}
+    // Parent-liveness watchdog: isolated-dir daemons (tests, sandbox, demos)
+    // are spawned with WALNUT_DAEMON_PARENT_PID and serve exactly one walnut
+    // process — when it's gone we're an orphan burning RAM. 300+ leaked test
+    // daemons once starved the whole machine (2026-07-23). Production daemons
+    // never get the var (parentWatchdogEnv in local-daemon.ts), so surviving
+    // server restarts is unaffected. Keep in sync with daemon-source.ts.
+    if (WATCHDOG_PARENT_PID) {
+      let parentAlive = true
+      try { process.kill(WATCHDOG_PARENT_PID, 0) } catch { parentAlive = false }
+      if (!parentAlive) {
+        logMsg('warn', 'parent-liveness watchdog: parent process gone — exiting', {
+          parentPid: WATCHDOG_PARENT_PID,
+        })
+        cleanup()
+        process.exit(0)
+      }
+    }
   }, HEARTBEAT_INTERVAL_MS)
 
   // Handle signals

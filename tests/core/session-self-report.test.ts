@@ -14,7 +14,7 @@ import {
 } from '../../src/core/session-hooks/builtins.js';
 
 const SAMPLE = `EXEC_SUMMARY: unchanged
-GOAL: unchanged
+USER_REQUEST: unchanged
 CONTEXT: unchanged
 PROGRESS: DONE parser — done
 WIP e2e verify — in progress
@@ -30,7 +30,7 @@ VERIFIED: assumed — have not run the e2e test yet.`;
 const STRUCTURED_NOTE = `## Executive Summary
 Migrating the session store to SQLite. Dual-write shipped; cutover pending.
 
-## Goal
+## User Request
 All session reads/writes go through SQLite with zero data loss; done when the 48h parity check passes.
 
 ## Context
@@ -69,8 +69,15 @@ describe('parseNoteSections', () => {
     const { sections, preamble } = parseNoteSections(STRUCTURED_NOTE);
     expect(preamble).toBe('');
     expect(sections['Executive Summary']).toContain('Migrating the session store');
-    expect(sections['Goal']).toContain('48h parity check');
+    expect(sections['User Request']).toContain('48h parity check');
     expect(sections['Work Log']).toContain('def456');
+  });
+
+  it('normalizes a legacy "## Goal" header into User Request (pre-rename notes)', () => {
+    const legacy = '## Goal\nShip the widget.\n\n## Progress\n- [WIP] widget';
+    const { sections } = parseNoteSections(legacy);
+    expect(sections['User Request']).toBe('Ship the widget.');
+    expect(sections['Progress']).toContain('widget');
   });
 
   it('returns a free-form (pre-migration) note entirely as preamble', () => {
@@ -99,7 +106,7 @@ describe('parseNoteSections', () => {
 
 describe('parseSectionAnswer', () => {
   it('parses unchanged / append / plain content', () => {
-    expect(parseSectionAnswer(SAMPLE, 'Goal')).toEqual({ kind: 'unchanged' });
+    expect(parseSectionAnswer(SAMPLE, 'User Request')).toEqual({ kind: 'unchanged' });
     expect(parseSectionAnswer(SAMPLE, 'Work Log').kind).toBe('append');
     expect(parseSectionAnswer(SAMPLE, 'Progress')).toEqual({
       kind: 'rewrite', text: 'DONE parser — done\nWIP e2e verify — in progress',
@@ -111,9 +118,15 @@ describe('parseSectionAnswer', () => {
   });
 
   it('tolerates backtick wrapping and casing on markers', () => {
-    expect(parseSectionAnswer('GOAL: `unchanged`', 'Goal')).toEqual({ kind: 'unchanged' });
+    expect(parseSectionAnswer('USER_REQUEST: `unchanged`', 'User Request')).toEqual({ kind: 'unchanged' });
     expect(parseSectionAnswer('WORK_LOG: APPEND: entry here', 'Work Log'))
       .toEqual({ kind: 'append', text: 'entry here' });
+  });
+
+  it('accepts the legacy GOAL label for the User Request section (mid-turn rename)', () => {
+    expect(parseSectionAnswer('GOAL: Ship the widget.', 'User Request'))
+      .toEqual({ kind: 'rewrite', text: 'Ship the widget.' });
+    expect(parseSectionAnswer('GOAL: unchanged', 'User Request')).toEqual({ kind: 'unchanged' });
   });
 
   it('marker-less Work Log content defaults to append, never rewrite (append-only log)', () => {
@@ -142,14 +155,14 @@ describe('assembleNote', () => {
   });
 
   it('returns null when every section is unchanged/absent (skip persist)', () => {
-    const allUnchanged = 'EXEC_SUMMARY: unchanged\nGOAL: unchanged\nCONTEXT: unchanged\nPROGRESS: unchanged\nWORK_LOG: unchanged\nSTATUS: ok';
+    const allUnchanged = 'EXEC_SUMMARY: unchanged\nUSER_REQUEST: unchanged\nCONTEXT: unchanged\nPROGRESS: unchanged\nWORK_LOG: unchanged\nSTATUS: ok';
     expect(assembleNote(STRUCTURED_NOTE, allUnchanged)).toBeNull();
   });
 
   it('a full five-section answer supersedes a free-form note (migration)', () => {
     const freeform = 'Goal: roll out READMEs\nProgress so far: pilot done';
     const migration = `EXEC_SUMMARY: Rolling out READMEs; pilot done.
-GOAL: Roll out READMEs to all teams.
+USER_REQUEST: Roll out READMEs to all teams.
 CONTEXT: Cloud copies drifted from local AGENTS.md.
 PROGRESS: DONE pilot — done
 WORK_LOG: append: Pilot synced 49 READMEs.`;
@@ -209,7 +222,7 @@ describe('noteShrinkRejected', () => {
   });
 
   it('protects each durable summary section even when Work Log keeps total length high', () => {
-    const protectedSections = ['Executive Summary', 'Goal', 'Context', 'Progress'] as const;
+    const protectedSections = ['Executive Summary', 'User Request', 'Context', 'Progress'] as const;
     const oldNote = protectedSections
       .map((section) => `## ${section}\n${section} ${'important fact '.repeat(20)}`)
       .concat(`## Work Log\n${'historical evidence '.repeat(200)}`)
@@ -228,8 +241,8 @@ describe('noteShrinkRejected', () => {
     const oldNote = `## Executive Summary
 Short summary.
 
-## Goal
-Keep the goal.
+## User Request
+Keep the request.
 
 ## Context
 Keep context.
@@ -240,7 +253,7 @@ WIP audit.
 ## Work Log
 - ${'evidence '.repeat(250)}`;
 
-    for (const section of ['Executive Summary', 'Goal', 'Context', 'Progress'] as const) {
+    for (const section of ['Executive Summary', 'User Request', 'Context', 'Progress'] as const) {
       const newNote = oldNote.replace(
         new RegExp(`(?:^|\\n\\n)## ${section}\\n[\\s\\S]*?(?=\\n\\n## |$)`),
         '',
@@ -265,7 +278,8 @@ describe('buildSelfReportPrompt', () => {
   it('over the cap → unlocks the Work Log reorganize path with the ID-preservation rule', () => {
     const p = buildSelfReportPrompt('x'.repeat(NOTE_REORG_CAP + 1));
     expect(p).toContain('REORGANIZE');
-    expect(p).toContain('keep every ID');
+    expect(p).toContain('keep every external ID');
+    expect(p).toContain('commit hashes may be dropped');
   });
 
   it('always shows the note budget; over the cap the reorganize is mandatory with a shrink target', () => {
@@ -278,20 +292,27 @@ describe('buildSelfReportPrompt', () => {
     expect(over).toContain('SHORTER than it went in');
   });
 
-  it('Progress uses plain-text status labels, never emoji', () => {
+  it('Progress uses bulleted, bracketed plain-text status labels, never emoji', () => {
     const p = buildSelfReportPrompt('');
-    expect(p).toContain('DONE');
-    expect(p).toContain('WIP');
-    expect(p).toContain('TODO');
-    expect(p).toContain('BLOCKED/WAIT');
+    expect(p).toContain('one BULLET per workitem');
+    expect(p).toContain('[DONE]');
+    expect(p).toContain('[WIP]');
+    expect(p).toContain('[TODO]');
+    expect(p).toContain('[BLOCKED]/[WAIT]');
     // No emoji status board leaked into the instructions.
     expect(p).not.toMatch(/[✅🔄👀🚀🚧]/u);
   });
 
-  it('Goal leads with the user\'s actual request, then the derived objective', () => {
+  it('User Request restates the user intent concisely (no verbatim quote) with acceptance criteria', () => {
     const p = buildSelfReportPrompt('');
-    expect(p).toContain('Request:');
-    expect(p).toContain('Objective:');
-    expect(p).toMatch(/user knows their intent best/i);
+    expect(p).toContain('USER_REQUEST:');
+    expect(p).toMatch(/do NOT quote the user verbatim/);
+    expect(p).toContain('acceptance criteria');
+  });
+
+  it('Work Log demands external ids but forbids commit hashes', () => {
+    const p = buildSelfReportPrompt('');
+    expect(p).toContain('ALWAYS carry EXTERNAL ids');
+    expect(p).toContain('NEVER include commit hashes');
   });
 });

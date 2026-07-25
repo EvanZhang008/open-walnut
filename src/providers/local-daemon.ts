@@ -31,7 +31,26 @@ import { DAEMON_BINARIES_DIR } from '../constants.js'
 // Env-aware default so the singleton (exported below) isolates a demo server's
 // daemon when WALNUT_DAEMON_DIR is set. Tests pass `daemonDir` explicitly and are
 // unaffected. Production sets nothing → /tmp/open-walnut.
-const DEFAULT_DAEMON_DIR = process.env.WALNUT_DAEMON_DIR || '/tmp/open-walnut'
+const PROD_DAEMON_DIR = '/tmp/open-walnut'
+const DEFAULT_DAEMON_DIR = process.env.WALNUT_DAEMON_DIR || PROD_DAEMON_DIR
+
+/**
+ * Parent-liveness contract for spawned daemons.
+ *
+ * An ISOLATED-dir daemon (Playwright test-server, sandbox, ephemeral demo)
+ * serves exactly one walnut process; once that process dies the daemon is
+ * garbage — but it is spawned detached, so nothing reaps it if the spawner
+ * is SIGKILLed or crashes. 300+ such orphans piled up over two weeks of test
+ * runs and starved the whole machine (2026-07-23 prod slow-load incident).
+ * Passing our pid lets the daemon's own watchdog self-exit when we're gone.
+ *
+ * The PRODUCTION daemon (/tmp/open-walnut) must NEVER get this: surviving
+ * server restarts is its whole point (CLI sessions live across deploys).
+ */
+export function parentWatchdogEnv(daemonDir: string): { WALNUT_DAEMON_PARENT_PID?: string } {
+  if (path.resolve(daemonDir) === PROD_DAEMON_DIR) return {}
+  return { WALNUT_DAEMON_PARENT_PID: String(process.pid) }
+}
 
 // True when running under vitest (or any test runner that sets NODE_ENV=test).
 // Used by ensureRunning() to refuse touching the production daemon dir.
@@ -234,6 +253,17 @@ export class LocalDaemon {
     })
   }
 
+  /**
+   * Stop the daemon THIS instance manages — for isolated-dir owners (tests,
+   * sandboxes) whose daemon must not outlive them. Refuses the production dir:
+   * the prod daemon's job is to survive walnut restarts, and every historical
+   * "kill the daemon on shutdown" path has caused a session-loss incident.
+   */
+  async stopIfIsolated(): Promise<void> {
+    if (path.resolve(this.daemonDir) === PROD_DAEMON_DIR) return
+    await this.stopDaemon()
+  }
+
   private async stopDaemon(): Promise<void> {
     const pid = this.readPidFile()
     if (!pid) return
@@ -269,7 +299,12 @@ export class LocalDaemon {
     // Seen live 2026-07-05 (incident inc-1783280584117). The daemon itself never
     // needs these vars (it uses WALNUT_DAEMON_DIR / WALNUT_STREAMS_DIR /
     // WALNUT_HOME_OVERRIDE / HOME), so dropping them is always safe.
-    const env: NodeJS.ProcessEnv = { ...process.env, WALNUT_DAEMON_DIR: this.daemonDir }
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      WALNUT_DAEMON_DIR: this.daemonDir,
+      // Isolated-dir daemons die with us (see parentWatchdogEnv); prod never gets the var.
+      ...parentWatchdogEnv(this.daemonDir),
+    }
     delete env.VITEST
     delete env.VITEST_MODE
     delete env.VITEST_WORKER_ID

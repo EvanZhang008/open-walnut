@@ -337,6 +337,75 @@ describe('ACP session record primitives', () => {
     })
   })
 
+  it('does not reopen running when a same-batch terminal fact wins before acceptance commits', async () => {
+    await createSessionRecord('provider-batched', 'task-batched', 'Project', tmpDir, {
+      engine: 'codex',
+      acpRuntimeId: 'runtime-batched',
+      initialProcessStatus: 'idle',
+      messageCount: 0,
+    })
+    const statuses: Array<{ processStatus: string; phase?: string }> = []
+    bus.subscribe('main-ai', (event) => {
+      if (event.name !== EventNames.SESSION_STATUS_CHANGED) return
+      const data = event.data as { process_status?: string; phase?: string }
+      statuses.push({ processStatus: data.process_status ?? '', phase: data.phase })
+    })
+
+    const session = new AcpSession({
+      taskId: 'task-batched',
+      project: 'Project',
+      cwd: tmpDir,
+      mode: 'default',
+      providerSessionId: 'provider-batched',
+      runtimeId: 'runtime-batched',
+    })
+    const internals = session as unknown as {
+      handleDaemonEvent(event: Record<string, unknown>): void
+    }
+    const commandId = 'acp-prompt:qm-batched'
+
+    // Journal replay delivers both records synchronously. Prompt acceptance is
+    // queued, while terminal observation updates _terminalCommands immediately.
+    internals.handleDaemonEvent({
+      ev: 'jsonl',
+      sid: 'runtime-batched',
+      v: 10,
+      line: JSON.stringify({
+        kind: 'meta',
+        ts: 1,
+        event: {
+          type: 'prompt-accepted',
+          commandId,
+          walnutMessageId: 'qm-batched',
+          text: 'instant turn',
+        },
+      }),
+    })
+    internals.handleDaemonEvent({
+      ev: 'jsonl',
+      sid: 'runtime-batched',
+      v: 20,
+      line: JSON.stringify({
+        kind: 'meta',
+        ts: 2,
+        event: { type: 'turn-ended', commandId, stopReason: 'end_turn' },
+      }),
+    })
+
+    await vi.waitFor(async () => {
+      expect(await getSessionByClaudeId('provider-batched')).toMatchObject({
+        process_status: 'idle',
+        messageCount: 1,
+        lastAcceptedAcpCommandId: commandId,
+        status_reason: 'turn_completed',
+      })
+    })
+    await vi.waitFor(() => {
+      expect(statuses).toEqual([{ processStatus: 'idle', phase: undefined }])
+    })
+    expect(statuses).not.toContainEqual({ processStatus: 'running', phase: 'IN_PROGRESS' })
+  })
+
   it('publishes prompt and terminal status boundaries to main-ai and web-ui', async () => {
     await createSessionRecord('provider-status', 'task-status', 'Project', tmpDir, {
       engine: 'codex',

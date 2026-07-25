@@ -148,7 +148,7 @@ describe('Agent Registry', () => {
     const agents = await getAllAgents();
     const general = agents.find((a) => a.id === 'general');
     expect(general).toBeDefined();
-    expect(general!.name).toBe('General Agent');
+    expect(general!.name).toBe('Walnut');
     expect(general!.runner).toBe('embedded');
     expect(general!.source).toBe('builtin');
   });
@@ -254,12 +254,13 @@ describe('Embedded Session Lifecycle', () => {
     // Wait for result event on WebSocket
     const resultEvent = await waitForWsEvent(ws, 'subagent:result', 20000);
 
-    // Verify event data
+    // Verify event data. The web-ui forward is deliberately sanitized — the full
+    // result text is OMITTED (browsers get a compact notification via
+    // chat:history-updated instead); the stored run carries it (asserted below).
     const data = resultEvent.data as Record<string, unknown>;
     expect(data.agentId).toBe('general');
-    expect(data.agentName).toBe('General Agent');
-    expect(data.result).toBeDefined();
-    expect(typeof data.result).toBe('string');
+    expect(data.agentName).toBe('Walnut');
+    expect(data.result).toBeUndefined();
     expect(data.runId).toBeDefined();
 
     // Verify we got subagent:started before result
@@ -313,14 +314,52 @@ describe('Embedded Session Lifecycle', () => {
     expect(result).toContain('Embedded session started');
     expect(result).toContain('general');
 
-    // Wait for subagent result
+    // Wait for subagent result. The WS payload omits the full result text
+    // (sanitized forward) — read it off the stored run instead.
     const resultEvent = await waitForWsEvent(ws, 'subagent:result', 20000);
     const data = resultEvent.data as Record<string, unknown>;
-    expect(data.result).toBeDefined();
-    expect(typeof data.result).toBe('string');
+    const run = subagentRunner.getRun(data.runId as string);
+    expect(run?.result).toBeDefined();
+    expect(typeof run?.result).toBe('string');
 
     ws.close();
   }, 30000);
+
+  it('rejects resume after retained history was pruned', async () => {
+    const runId = 'pruned-run';
+    subagentRunner.runs.set(runId, {
+      runId,
+      agentId: 'general',
+      task: 'Old task',
+      runner: 'embedded',
+      status: 'completed',
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+      _historyPruned: true,
+    });
+
+    const errorEvent = new Promise<Record<string, unknown>>((resolve) => {
+      bus.subscribe('pruned-resume-test', (event) => {
+        if (event.name === EventNames.SUBAGENT_ERROR) {
+          resolve(event.data as Record<string, unknown>);
+        }
+      }, { global: true });
+    });
+
+    try {
+      await (subagentRunner as unknown as {
+        handleSend(data: { runId: string; message: string }): Promise<void>;
+      }).handleSend({ runId, message: 'Continue' });
+      await expect(errorEvent).resolves.toMatchObject({
+        runId,
+        error: expect.stringContaining('history was pruned'),
+      });
+      expect(subagentRunner.getRun(runId)?.status).toBe('completed');
+    } finally {
+      bus.unsubscribe('pruned-resume-test');
+      subagentRunner.runs.delete(runId);
+    }
+  });
 
   it('send_to_session with run_id resumes embedded run', async () => {
     const ws = await connectWs();
@@ -336,11 +375,11 @@ describe('Embedded Session Lifecycle', () => {
     });
     expect(result).toContain('Resuming in the background');
 
-    // Wait for the resumed run's result
+    // Wait for the resumed run's result (WS payload omits the text — check the run)
     const resultEvent = await waitForWsEvent(ws, 'subagent:result', 20000);
     const data = resultEvent.data as Record<string, unknown>;
     expect(data.runId).toBe(completedRun!.runId);
-    expect(data.result).toBeDefined();
+    expect(subagentRunner.getRun(completedRun!.runId)?.result).toBeDefined();
 
     ws.close();
   }, 30000);
@@ -370,9 +409,11 @@ describe('Embedded session links to task', () => {
     const data = resultEvent.data as Record<string, unknown>;
     expect(data.runId).toBeDefined();
 
-    // Verify the task now has the session linked
+    // Verify the task now has the session linked. Embedded runs link via
+    // addSessionToHistory (session_ids) ONLY — deliberately not the exec slot,
+    // which would block CLI sessions from starting on the same task.
     const afterTask = await getTask(task.id);
-    expect(afterTask.exec_session_id).toBe(data.runId);
+    expect(afterTask.exec_session_id).toBeUndefined();
     expect(afterTask.session_ids).toContain(data.runId as string);
 
     ws.close();
@@ -385,7 +426,7 @@ describe('start_session tool backward compat', () => {
     const result = await executeTool('session_start', {
       prompt: 'Hello world',
     });
-    expect(result).toContain('working_directory is required');
+    expect(result).toContain('No working directory resolved');
   });
 
   it('start_session with agent_id defaults to embedded', async () => {

@@ -182,6 +182,15 @@ export interface CliAppliedSettings {
   ultracode?: boolean
 }
 
+export interface CliEffectiveSettings {
+  effortLevel?: string | null
+}
+
+export interface CliSettingsSnapshot {
+  applied: CliAppliedSettings
+  effective?: CliEffectiveSettings
+}
+
 /** Normalized get_context_usage payload — the CLI's own per-category context
  *  breakdown (same source as the interactive /context command). maxTokens is
  *  the CLI's EFFECTIVE window (reflects env clamps like
@@ -213,7 +222,11 @@ interface StreamPartialEvent {
   session_id?: string
 }
 
-type StreamEvent = StreamInitEvent | StreamStatusEvent | StreamMessageEvent | StreamResultEvent | StreamControlRequestEvent | StreamControlResponseEvent | StreamPartialEvent
+interface StreamToolProgressEvent {
+  type: 'tool_progress'
+}
+
+type StreamEvent = StreamInitEvent | StreamStatusEvent | StreamMessageEvent | StreamResultEvent | StreamControlRequestEvent | StreamControlResponseEvent | StreamPartialEvent | StreamToolProgressEvent
 
 /**
  * Map CLI permissionMode string to our internal SessionMode.
@@ -445,6 +458,11 @@ export class ClaudeCodeSession {
   /** stop_reason of the most recent assistant message_delta — the truncated-success
    *  invariant compares this against result.subtype (success + null = truncation). */
   private _lastStopReason: string | null | undefined
+  /** CLI debug-stream marker for an upstream API timeout (system subtype
+   *  api_timeout). Reset at every turn boundary; augments the human-readable
+   *  result signature when the CLI's final error text is generic, so the
+   *  retryExhausted signal on SESSION_RESULT stays reliable. */
+  private _sawApiTimeoutThisTurn = false
   /** Delivery latency + path of the most recent delivered batch, surfaced into the
    *  per-turn wide event (forensic observability). Stamped by SessionRunner's
    *  logDeliveryLatency onto the target session instance (not `private` because the
@@ -558,7 +576,7 @@ export class ClaudeCodeSession {
   /** THE authoritative set of background tasks (dynamic workflows / subagents), keyed by
    *  task_id, each carrying its latest status. "Is bg work in flight" is derived from this
    *  set (see hasActiveBackgroundWork) — there is no parallel scalar counter to desync. */
-  private _bgTasks = new Map<string, { description?: string; subagentType?: string; status: string; tokens?: number; lastTool?: string; summary?: string; workflowName?: string; isBackgrounded?: boolean }>()
+  private _bgTasks = new Map<string, { description?: string; subagentType?: string; taskType?: string; status: string; tokens?: number; lastTool?: string; summary?: string; workflowName?: string; isBackgrounded?: boolean }>()
   /** Workflow name from the most recent task_started with task_type==='local_workflow'. */
   private _workflowName: string | undefined
   /** The workflow script Claude generated (task_started.prompt) + its description —
@@ -734,7 +752,7 @@ export class ClaudeCodeSession {
   }
 
   /** Snapshot of background tasks for the UI (Workflow progress panel). */
-  get backgroundTasks(): Array<{ taskId: string; description?: string; subagentType?: string; status: string; tokens?: number; lastTool?: string; summary?: string; workflowName?: string }> {
+  get backgroundTasks(): Array<{ taskId: string; description?: string; subagentType?: string; taskType?: string; status: string; tokens?: number; lastTool?: string; summary?: string; workflowName?: string }> {
     return [...this._bgTasks.entries()].map(([taskId, t]) => ({ taskId, ...t }))
   }
   get workflowName(): string | undefined { return this._workflowName }
@@ -934,6 +952,9 @@ export class ClaudeCodeSession {
   private _modelCatalog: { models: SessionModelCatalogEntry[]; fetchedAt: number } | null = null
   /** Concurrency guard: parallel picker opens share ONE initialize round-trip. */
   private _modelCatalogInflight: Promise<SessionModelCatalogEntry[] | null> | null = null
+  /** Incremented whenever the backing CLI transport is replaced. Async catalog
+   *  work from an older generation must not publish into the new process state. */
+  private _transportGeneration = 0
   /** Timestamp when spawn() was called — used to measure time-to-init for diagnostics. */
   private _spawnTs = 0
   /** Wall-clock ts of the HTTP request that triggered this start (latency instrumentation only).
@@ -1260,6 +1281,7 @@ export class ClaudeCodeSession {
     this._lastResultCost = undefined  // Fresh session — no previous cost to compare
     this._costWatermark.reset()       // Fresh process — its total_cost_usd restarts at 0
     this._askUserIntercepted = false
+    this._sawApiTimeoutThisTurn = false
     this.fullText = ''
     this._emittedStreamKeys.clear()
     this._lastEmittedText.clear()
@@ -1275,6 +1297,7 @@ export class ClaudeCodeSession {
     this._cliSessionState = undefined
     // Fresh process ⇒ fresh settings snapshot: the model catalog belongs to the
     // OLD process (its availableModels/modelOverrides at ITS spawn time).
+    this._transportGeneration++
     this._modelCatalog = null
     this._modelCatalogInflight = null
     this._cwd = cwd ?? null
@@ -2061,6 +2084,7 @@ export class ClaudeCodeSession {
       this._turnResultEmitted = false  // New turn starting — allow result emission
       this._turnStartOffset = this._transport?.fileSize ?? 0  // Track where this turn's data begins
       this._askUserIntercepted = false
+      this._sawApiTimeoutThisTurn = false
       this._toolInputFilePaths.clear()  // Fresh turn — clear stale cached tool input paths
       this._emittedStreamKeys.clear()   // Fresh turn — allow new events through dedup
       this._lastEmittedText.clear()     // Fresh turn — reset progressive delta tracking
@@ -2152,8 +2176,9 @@ export class ClaudeCodeSession {
    * Uses SIGINT (Claude Code saves session state on Ctrl+C) + wait, with SIGTERM fallback.
    * This ensures session data is flushed to disk so --resume can find it.
    *
-   * Unlike interrupt(), this does NOT clean up FIFO or modify session state —
-   * it ONLY stops the process. The caller (processNext) will spawn a new process immediately after.
+   * Unlike interrupt(), this does NOT clean up FIFO or modify session state.
+   * It settles process-bound control requests before stopping because the replacement
+   * process cannot answer request IDs issued to the old transport.
    *
    * THIS IS CRITICAL: Without graceful stop, send() would SIGTERM the old process,
    * which doesn't give Claude Code time to flush session state. Then --resume fails,
@@ -2165,6 +2190,9 @@ export class ClaudeCodeSession {
       this.resultEmitted = true
       this.stopMonitoring()
     }
+    this._rejectAllSideQuestions(Object.assign(new Error('session transport replaced'), {
+      code: 'SESSION_TRANSPORT_REPLACED',
+    }))
     log.session.info('gracefulStop: using transport', { taskId: this.taskId })
     await this._transport.stop()
     log.session.info('gracefulStop: complete', { taskId: this.taskId })
@@ -2200,29 +2228,31 @@ export class ClaudeCodeSession {
 
   /** Reject + clear any in-flight side questions (e.g. on session teardown) so the
    *  drawer's promise settles instead of hanging until its own timeout. */
-  private _rejectAllSideQuestions(reason: string): void {
+  private _rejectAllSideQuestions(reason: string | Error): void {
+    const error = reason instanceof Error ? reason : new Error(reason)
     for (const pending of this._pendingSideQuestions.values()) {
       clearTimeout(pending.timer)
-      pending.reject(new Error(reason))
+      pending.reject(error)
     }
     this._pendingSideQuestions.clear()
     // Also settle any ACK-only control_requests (effort switches) so their
     // promises don't hang until their own timeout on teardown.
     for (const pending of this._pendingControlAcks.values()) {
       clearTimeout(pending.timer)
-      pending.reject(new Error(reason))
+      pending.reject(error)
     }
     this._pendingControlAcks.clear()
     // Ordinary payload reads settle to null on teardown; strict callers such
     // as set_permission_mode reject through their per-request wrapper.
     for (const pending of this._pendingPayloadReads.values()) {
       clearTimeout(pending.timer)
-      pending.reject(new Error(reason))
+      pending.reject(error)
     }
     this._pendingPayloadReads.clear()
     // The model catalog is a property of the CLI PROCESS (its settings snapshot
     // at spawn) — a respawn/cold-resume may see different settings, so drop it
     // here; the new process's init event triggers the eager refetch + push.
+    this._transportGeneration++
     this._modelCatalog = null
     this._modelCatalogInflight = null
   }
@@ -2907,6 +2937,14 @@ export class ClaudeCodeSession {
               sessionId: sid, taskId: this.taskId,
               variant: 'info' as const, message: 'Operation succeeded',
             }, ['main-ai'], { source: 'session-runner' })
+          } else if (sys.subtype === 'api_timeout') {
+            // CLI marked an upstream API timeout for this turn. Remember it so the
+            // result handler can stamp retryExhausted even when the final error
+            // text is generic (feeds session-auto-continue).
+            this._sawApiTimeoutThisTurn = true
+            log.session.warn('CLI reported upstream API timeout marker', {
+              sessionId: sid, taskId: this.taskId,
+            })
           } else if (sys.subtype === 'api_retry') {
             // Upstream API error — Claude Code is retrying with backoff.
             // Surface so the user can tell "Anthropic throttle" from "Walnut stuck".
@@ -3076,6 +3114,7 @@ export class ClaudeCodeSession {
                 ...prevStarted,
                 description: sys.description as string | undefined,
                 subagentType: sys.subagent_type as string | undefined,
+                taskType: (sys.task_type as string | undefined) ?? prevStarted?.taskType,
                 status: startedStatus,
                 workflowName,
                 // Today the CLI flags backgrounding via a later task_updated patch, but
@@ -3514,6 +3553,10 @@ export class ClaudeCodeSession {
             //      now preserves record.model on resume, but this catches any
             //      other code path that might lose the [1m] suffix)
             //   3) default → 200K
+            // NB: do NOT special-case natively-1M API families (e.g. Opus 5) here —
+            // the CLI has its own registry and generates a separate "[1m]" row for
+            // opus-5, i.e. CLI-land plain opus-5 runs a 200K auto-compact window.
+            // Trust the CLI's markers/answers, not the raw-API spec.
             const is1M = (this._initModel?.includes('[1m]') ?? false)
               || totalInput > CONTEXT_WINDOW_DEFAULT
             const contextWindowSize = this._cliContextWindow ?? (is1M ? 1_000_000 : 200_000)
@@ -3946,6 +3989,13 @@ export class ClaudeCodeSession {
         } else {
           this.emitStatusChanged('AGENT_COMPLETE')
           log.session.info('session result emitted', { sessionId: this.claudeSessionId, taskId: this.taskId, resultLength: resultText?.length ?? 0 })
+          // retryExhausted: terminal upstream retry-exhaustion signature. Text match
+          // covers the CLI's "Request timed out" result; the api_timeout debug marker
+          // covers turns whose final error text is generic. Feeds session-auto-continue.
+          const retryExhausted = !!effectiveIsError && (
+            /request timed out/i.test(resultText ?? '')
+            || this._sawApiTimeoutThisTurn
+          )
           bus.emit(EventNames.SESSION_RESULT, {
             sessionId: this.claudeSessionId,
             taskId: this.taskId,
@@ -3954,6 +4004,7 @@ export class ClaudeCodeSession {
             costDelta: this.billableCostDelta(result.total_cost_usd),
             duration: result.duration_ms,
             isError: effectiveIsError ?? false,
+            retryExhausted,
           }, ['main-ai', 'session-runner'], { source: 'session-runner' })
           // Turn-end read-back of the CLI's true settings (effort + model, fire-and-
           // forget). Same rationale as _completeTurnOnIdle: keep the badge in sync with
@@ -4183,6 +4234,13 @@ export class ClaudeCodeSession {
           })
           pending.resolve(answer)
         }
+        break
+      }
+
+      case 'tool_progress': {
+        // Heartbeat progress marker for long-running tools, emitted about once
+        // every 30 seconds per tool. It has no user value as a timeline block;
+        // swallowing it keeps it out of the unknown-event catch-all.
         break
       }
 
@@ -4627,9 +4685,20 @@ export class ClaudeCodeSession {
    * it times out. Callers MUST treat null as "don't change what you have" (same
    * contract as reconcileFromDaemon) — never clobber a known value with null.
    */
+  async getSettingsSnapshot(timeoutMs = 5_000): Promise<CliSettingsSnapshot | null> {
+    const payload = await this.readControlPayload('gs', 'get_settings', timeoutMs) as {
+      applied?: CliAppliedSettings
+      effective?: CliEffectiveSettings
+    } | null
+    if (!payload?.applied) return null
+    return {
+      applied: payload.applied,
+      ...(payload.effective ? { effective: payload.effective } : {}),
+    }
+  }
+
   async getSettings(timeoutMs = 5_000): Promise<CliAppliedSettings | null> {
-    const payload = await this.readControlPayload('gs', 'get_settings', timeoutMs)
-    return (payload as { applied?: CliAppliedSettings } | null)?.applied ?? null
+    return (await this.getSettingsSnapshot(timeoutMs))?.applied ?? null
   }
 
   /**
@@ -4660,13 +4729,18 @@ export class ClaudeCodeSession {
    * left means the CLI isn't answering at all (timeout, not old-build error) —
    * initialize would hang the same way, so don't burn a second wait on it.
    */
-  private async fetchModelCatalog(budgetMs = 10_000): Promise<SessionModelCatalogEntry[] | null> {
+  private async fetchModelCatalog(
+    budgetMs = 10_000,
+    generation = this._transportGeneration,
+  ): Promise<SessionModelCatalogEntry[] | null> {
     const t0 = Date.now()
     let payload = await this.readControlPayload('lm', 'list_models', budgetMs)
+    if (generation !== this._transportGeneration) return null
     if (!payload) {
       const remaining = budgetMs - (Date.now() - t0)
       if (remaining < 1_500) return null
       payload = await this.readControlPayload('init', 'initialize', remaining)
+      if (generation !== this._transportGeneration) return null
     }
     const rows = (payload as { models?: unknown } | null)?.models
     if (!Array.isArray(rows)) return null
@@ -4704,10 +4778,12 @@ export class ClaudeCodeSession {
       const models = await this._modelCatalogInflight
       return models ? this._modelCatalog : null
     }
-    const inflight = this.fetchModelCatalog()
+    const generation = this._transportGeneration
+    const inflight = this.fetchModelCatalog(10_000, generation)
     this._modelCatalogInflight = inflight
     try {
       const models = await inflight
+      if (generation !== this._transportGeneration) return null
       if (models) {
         this._modelCatalog = { models, fetchedAt: Date.now() }
         log.session.info('model catalog fetched', {
@@ -4721,11 +4797,18 @@ export class ClaudeCodeSession {
         // rejected would poison every picker's cache with the degraded menu.
         const catSnapshot = this._modelCatalog
         void import('../core/host-model-catalog.js')
-          .then(({ saveHostModelCatalog }) =>
-            saveHostModelCatalog(this._host, models, this._cwd ?? undefined,
-              this._spawnTs || undefined))
+          .then(({ saveHostModelCatalog }) => {
+            if (generation !== this._transportGeneration) return false
+            return saveHostModelCatalog(
+              this._host,
+              models,
+              this._cwd ?? undefined,
+              this._spawnTs || undefined,
+              () => generation === this._transportGeneration,
+            )
+          })
           .then((accepted) => {
-            if (!accepted || !this.claudeSessionId) return
+            if (!accepted || generation !== this._transportGeneration || !this.claudeSessionId) return
             bus.emit(EventNames.SESSION_MODEL_CATALOG, {
               sessionId: this.claudeSessionId,
               taskId: this.taskId,
@@ -4739,7 +4822,9 @@ export class ClaudeCodeSession {
       }
       return null
     } finally {
-      this._modelCatalogInflight = null
+      if (this._modelCatalogInflight === inflight) {
+        this._modelCatalogInflight = null
+      }
     }
   }
 
@@ -4929,11 +5014,16 @@ export class ClaudeCodeSession {
    * `reason` is for logging only. Returns `{effort, model}` as read (or null when
    * the read was untrusted — old CLI / timeout / write fail — in which case we
    * leave stored values untouched, mirroring reconcileFromDaemon).
+   *
+   * `preFetched`: callers that already hold a fresh get_settings `applied` block
+   * (e.g. the picker-pull route, which just called getSettingsSnapshot) pass it
+   * here so the reconcile reuses that read instead of issuing a SECOND
+   * get_settings control round-trip (each is up to 5s on a busy CLI).
    */
-  async refreshAppliedSettings(reason: string): Promise<{ effort: import('../core/types.js').SessionEffort | null; model: string | null } | null> {
+  async refreshAppliedSettings(reason: string, preFetched?: CliAppliedSettings): Promise<{ effort: import('../core/types.js').SessionEffort | null; model: string | null } | null> {
     const sid = this.claudeSessionId
     if (!sid) return null
-    const applied = await this.getSettings().catch(() => null)
+    const applied = preFetched ?? await this.getSettings().catch(() => null)
     if (!applied) return null // untrusted read — don't clobber
 
     // ── Effort ──
@@ -5196,6 +5286,9 @@ export class SessionRunner {
   private acpSessions = new Map<string, AcpSession>()
   /** One reattach constructor/consumer per durable session ID. */
   private acpAttachPromises = new Map<string, Promise<AcpSession | undefined>>()
+  /** Explicit native restarts currently replacing a CLI transport. Hidden
+   *  self-report requests use this barrier to retry once on the new process. */
+  private nativeSessionReinitializations = new Map<string, Promise<void>>()
   /** Sessions constructed by reattach but not yet published into acpSessions. */
   private acpAttachingSessions = new Set<AcpSession>()
   /** Fences async reattach work that completes after runner destruction. */
@@ -5717,6 +5810,7 @@ export class SessionRunner {
     this.acpAttachPromises.clear()
     this.acpAttachingSessions.clear()
     abortAllTurns('session-runner-destroyed')
+    this.nativeSessionReinitializations.clear()
     this.activeProcessing.clear()
     this.batchCounts.clear()
     this.batchMessageIds.clear()
@@ -5764,6 +5858,7 @@ export class SessionRunner {
     this.acpAttachPromises.clear()
     this.acpAttachingSessions.clear()
     abortAllTurns('session-runner-destroyed-and-killed')
+    this.nativeSessionReinitializations.clear()
     this.activeProcessing.clear()
     this.batchCounts.clear()
     this.batchMessageIds.clear()
@@ -6277,6 +6372,51 @@ export class SessionRunner {
   }
 
   /**
+   * Block until any in-flight native-session restart settles (looping in case
+   * a NEWER restart replaced the one we awaited). Restart-race timeline this
+   * protects: the OLD process still holds a pending side_question request id;
+   * gracefulStop settles it with a dedicated "restarting" error; once this
+   * barrier releases (replacement process published), the caller retries ONCE
+   * against the new process using the REMAINING overall deadline — not a fresh
+   * one. Collapsing this into a plain retry (or reusing the old session
+   * reference across the barrier) makes turn-complete self-reports
+   * intermittently vanish or double the timeout during restart windows.
+   */
+  private async awaitNativeReinitialization(
+    sessionId: string,
+    deadlineAt?: number,
+  ): Promise<void> {
+    while (true) {
+      const operation = this.nativeSessionReinitializations.get(sessionId)
+      if (!operation) return
+
+      if (deadlineAt === undefined) {
+        await operation
+      } else {
+        const remainingMs = deadlineAt - Date.now()
+        if (remainingMs <= 0) throw new Error('side question timed out during session restart')
+        let timer: ReturnType<typeof setTimeout> | undefined
+        try {
+          await Promise.race([
+            operation,
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(
+                () => reject(new Error('side question timed out during session restart')),
+                remainingMs,
+              )
+            }),
+          ])
+        } finally {
+          if (timer) clearTimeout(timer)
+        }
+      }
+
+      const current = this.nativeSessionReinitializations.get(sessionId)
+      if (!current || current === operation) return
+    }
+  }
+
+  /**
    * Provider-neutral control channel used by the turn-complete summary hook.
    * Native Claude uses side_question; ACP provides an equivalent hidden report
    * request so the existing merge/phase/notify policy stays provider-agnostic.
@@ -6286,8 +6426,29 @@ export class SessionRunner {
     prompt: string,
     timeoutMs: number,
   ): Promise<string> {
-    const native = this.findSessionByClaudeId(sessionId)
-    if (native) return native.askSideQuestion(prompt, timeoutMs)
+    const deadlineAt = Date.now() + timeoutMs
+    await this.awaitNativeReinitialization(sessionId, deadlineAt)
+
+    let native = this.findSessionByClaudeId(sessionId)
+    while (native) {
+      const remainingMs = deadlineAt - Date.now()
+      if (remainingMs <= 0) throw new Error('side question timed out during session restart')
+      try {
+        return await native.askSideQuestion(prompt, remainingMs)
+      } catch (err) {
+        const replaced = err instanceof Error
+          && (err as Error & { code?: string }).code === 'SESSION_TRANSPORT_REPLACED'
+        if (!replaced || !this.nativeSessionReinitializations.has(sessionId)) throw err
+
+        await this.awaitNativeReinitialization(sessionId, deadlineAt)
+        native = this.findSessionByClaudeId(sessionId)
+        if (!native) throw new Error(`No live session found after restart: ${sessionId}`)
+        log.session.info('turn-complete-summary: retrying self-report after session restart', {
+          sessionId,
+          remainingMs: Math.max(0, deadlineAt - Date.now()),
+        })
+      }
+    }
 
     const acp = this.findAcpSession(sessionId) ?? await this.maybeAttachAcpSession(sessionId)
     if (!acp) throw new Error(`No live session found for self-report: ${sessionId}`)
@@ -7085,16 +7246,18 @@ export class SessionRunner {
     // so logging them here lets `walnut-logs.sh trace` explain any queued stall
     // without guessing.
     const dbgTarget = this.findSessionByClaudeId(sessionId)
+    const restartPending = this.nativeSessionReinitializations.has(sessionId)
     log.session.info('handleSend: routing send', {
       sessionId,
       interrupt: !!interrupt,
       activeProcessing: this.activeProcessing.has(sessionId),
+      restartPending,
       hasPipe: dbgTarget?.hasPipe ?? false,
       pid: dbgTarget?.processPid ?? null,
       host: dbgTarget?.host ?? null,
-      path: this.activeProcessing.has(sessionId) ? 'injectMidTurn' : 'processNext',
+      path: restartPending || !this.activeProcessing.has(sessionId) ? 'processNext' : 'injectMidTurn',
     })
-    if (!this.activeProcessing.has(sessionId)) {
+    if (restartPending || !this.activeProcessing.has(sessionId)) {
       log.session.info('handleSend: triggering processNext', { sessionId, interrupt: !!interrupt })
       this.processNext(sessionId, mode).catch((err) => {
         log.session.error('processNext failed after send', { sessionId, error: err instanceof Error ? err.message : String(err) })
@@ -7440,8 +7603,35 @@ export class SessionRunner {
    * idle), so this costs no tokens and does NOT pollute the conversation. Any
    * pending queue is left untouched and drains on the next real send.
    */
-  async reinitialize(sessionId: string, modeOverride?: SessionMode): Promise<void> {
-    const { model, effort } = await this.resolveResumeArgs(sessionId)
+  reinitialize(sessionId: string, modeOverride?: SessionMode): Promise<void> {
+    // Coalescing rule: a restart WITHOUT a mode override is idempotent — any
+    // in-flight restart satisfies it, so join it. A restart WITH an override
+    // carries new state and must NOT coalesce: it chains AFTER the current
+    // restart and runs again, else a permission-mode change arriving during a
+    // restart window would be silently dropped.
+    const existing = this.nativeSessionReinitializations.get(sessionId)
+    if (existing && !modeOverride) return existing
+
+    const operation = existing
+      ? existing.then(() => this.performNativeReinitialize(sessionId, modeOverride))
+      : Promise.resolve().then(() => this.performNativeReinitialize(sessionId, modeOverride))
+    this.nativeSessionReinitializations.set(sessionId, operation)
+    operation.then(
+      () => {
+        if (this.nativeSessionReinitializations.get(sessionId) === operation) {
+          this.nativeSessionReinitializations.delete(sessionId)
+        }
+      },
+      () => {
+        if (this.nativeSessionReinitializations.get(sessionId) === operation) {
+          this.nativeSessionReinitializations.delete(sessionId)
+        }
+      },
+    )
+    return operation
+  }
+
+  private async performNativeReinitialize(sessionId: string, modeOverride?: SessionMode): Promise<void> {
     const { getSessionByClaudeId } = await import('../core/session-tracker.js')
     const record = await getSessionByClaudeId(sessionId)
     if (!record) throw new Error(`reinitialize: no session record for ${sessionId}`)
@@ -7450,21 +7640,20 @@ export class SessionRunner {
     const cfg = await getConfig()
 
     // Resolve SSH target for remote sessions so the respawn lands on the right host.
+    // An unresolvable host must FAIL, not fall through — sshTarget=undefined would
+    // route the send to the LOCAL daemon and silently resume a remote session here.
     let sshTarget: SshTarget | undefined
     if (record.host) {
       const hostDef = cfg.hosts?.[record.host]
-      if (hostDef) {
-        const hostname = hostDef.hostname ?? (hostDef as Record<string, unknown>).ssh as string | undefined
-        if (hostname) sshTarget = { hostname, user: hostDef.user, port: hostDef.port, shell_setup: hostDef.shell_setup }
-      }
+      if (!hostDef) throw new Error(`reinitialize: host "${record.host}" not found in config.hosts`)
+      const hostname = hostDef.hostname ?? (hostDef as Record<string, unknown>).ssh as string | undefined
+      if (!hostname) throw new Error(`reinitialize: host "${record.host}" has no hostname configured`)
+      sshTarget = { hostname, user: hostDef.user, port: hostDef.port, shell_setup: hostDef.shell_setup }
     }
 
     // Reuse the live session object if we have one (send() detaches its old
     // transport + suppresses the dying process's events); otherwise make a fresh one.
-    let target: ClaudeCodeSession | undefined
-    for (const [, s] of this.sessions) {
-      if (s.sessionId === sessionId) { target = s; break }
-    }
+    let target: ClaudeCodeSession | undefined = this.findSessionByClaudeId(sessionId)
     if (!target) {
       target = new ClaudeCodeSession(record.taskId, record.project, this.cliCommand)
       target._testDaemonUrl = this._testDaemonUrl
@@ -7478,12 +7667,17 @@ export class SessionRunner {
     // of waiting out the 60s safety timeout. Mirrors handleSend's interrupt path.
     this.settleInFlightTurn(sessionId)
 
-    const resumeMode = modeOverride ?? record.mode
-    log.session.info('reinitialize: respawning fresh CLI (no turn)', { sessionId, taskId: record.taskId, host: record.host, model, mode: resumeMode })
-
     // Stop through the daemon's SIGINT-first path and wait for its ack so the
     // canonical conversation is flushed before --resume reads it.
     await target.gracefulStop(true)
+
+    // Model/effort routes persist BEFORE applying their process-local control
+    // requests. Re-read after the old process is stopped so changes made during
+    // the restart window are applied to the replacement CLI.
+    const { model, effort } = await this.resolveResumeArgs(sessionId)
+    const refreshedRecord = await getSessionByClaudeId(sessionId)
+    const resumeMode = modeOverride ?? refreshedRecord?.mode ?? record.mode
+    log.session.info('reinitialize: respawning fresh CLI (no turn)', { sessionId, taskId: record.taskId, host: record.host, model, mode: resumeMode })
 
     // Empty message ⇒ daemon spawns idle: init event + SessionStart hook fire,
     // no user turn runs. onSpawnSettled reports spawn success/failure only.
@@ -7542,6 +7736,18 @@ export class SessionRunner {
    * @param mode - Optional permission mode override for the resumed session.
    */
   private async processNext(sessionId: string, mode?: string): Promise<void> {
+    if (this.nativeSessionReinitializations.has(sessionId)) {
+      log.session.info('processNext: waiting for explicit session restart before delivery', { sessionId })
+      try {
+        await this.awaitNativeReinitialization(sessionId)
+      } catch (err) {
+        log.session.warn('processNext: explicit restart failed — attempting normal recovery', {
+          sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+
     // ACP sessions have their own drain (one prompt per turn, no FIFO/--resume).
     const acpSession = this.findAcpSession(sessionId)
       ?? await this.maybeAttachAcpSession(sessionId)
