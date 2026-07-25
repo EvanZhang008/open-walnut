@@ -24,7 +24,10 @@ import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { dirname } from 'node:path';
 import { log } from '../../logging/index.js';
+import { sttSpawnEnv } from './spawn-env.js';
+import { isFfmpegAvailable } from './audio-convert.js';
 import type { SttEngine, SttRequest, SttResult } from './types.js';
 
 const execFileAsync = promisify(execFile);
@@ -54,7 +57,8 @@ async function fileExists(p: string): Promise<boolean> {
 async function resolveBinary(name: string): Promise<string | null> {
   if (name.startsWith('/')) return (await fileExists(name)) ? name : null;
   try {
-    const { stdout } = await execFileAsync('which', [name], { timeout: 5000 });
+    // Augmented PATH: under launchd/systemd the inherited PATH misses Homebrew.
+    const { stdout } = await execFileAsync('which', [name], { timeout: 5000, env: sttSpawnEnv() });
     return stdout.trim() || null;
   } catch {
     return null;
@@ -103,19 +107,33 @@ export function createWhisperServerEngine(cfg: WhisperServerConfig): SttEngine {
     }
   }
 
-  /** Wait for the server to respond to health checks. */
-  async function waitForReady(port: number, timeoutMs: number): Promise<boolean> {
+  /**
+   * Wait for the server to respond to health checks.
+   * Fails fast if the child exits before becoming ready (e.g. missing ffmpeg
+   * kills whisper-server in <1s — no point waiting the full 30s).
+   */
+  async function waitForReady(proc: ChildProcess, port: number, timeoutMs: number): Promise<'ready' | 'exited' | 'timeout'> {
     const deadline = Date.now() + timeoutMs;
+    let exited = false;
+    proc.once('exit', () => { exited = true; });
+    // spawn failures (ENOENT/EACCES) emit 'error' with NO 'exit' — without this
+    // the loop would probe a dead child for the full timeout.
+    proc.once('error', () => { exited = true; });
     while (Date.now() < deadline) {
+      if (exited) return 'exited';
       try {
-        const res = await fetch(`http://127.0.0.1:${port}/`);
-        if (res.ok) return true;
+        // Per-probe timeout: a port that accepts but never responds must not
+        // hang one fetch past the overall deadline.
+        const res = await fetch(`http://127.0.0.1:${port}/`, {
+          signal: AbortSignal.timeout(Math.max(1, Math.min(2_000, deadline - Date.now()))),
+        });
+        if (res.ok) return 'ready';
       } catch {
         // Not ready yet
       }
       await new Promise(r => setTimeout(r, HEALTH_CHECK_INTERVAL_MS));
     }
-    return false;
+    return exited ? 'exited' : 'timeout';
   }
 
   async function ensureServerRunning(): Promise<number> {
@@ -157,20 +175,27 @@ export function createWhisperServerEngine(cfg: WhisperServerConfig): SttEngine {
 
     log.stt.info(`Starting whisper-server: ${bin} ${args.join(' ')}`);
 
+    // Augment PATH with the binary's own prefix + common install dirs: under
+    // launchd/systemd the inherited PATH misses Homebrew, and whisper-server's
+    // --convert shells out to `ffmpeg` and exits (code 0!) when it's not found.
     const proc = spawn(bin, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: false,
+      env: sttSpawnEnv(bin.startsWith('/') ? [dirname(bin)] : []),
     });
 
-    // Log server output for debugging
-    proc.stdout?.on('data', (d: Buffer) => {
+    // Log server output for debugging; keep a tail so a startup failure can
+    // surface the child's actual complaint instead of a generic timeout.
+    const outputTail: string[] = [];
+    const captureOutput = (d: Buffer) => {
       const line = d.toString().trim();
-      if (line) log.stt.debug(`[whisper-server] ${line}`);
-    });
-    proc.stderr?.on('data', (d: Buffer) => {
-      const line = d.toString().trim();
-      if (line) log.stt.debug(`[whisper-server] ${line}`);
-    });
+      if (!line) return;
+      log.stt.debug(`[whisper-server] ${line}`);
+      outputTail.push(...line.split('\n'));
+      if (outputTail.length > 20) outputTail.splice(0, outputTail.length - 20);
+    };
+    proc.stdout?.on('data', captureOutput);
+    proc.stderr?.on('data', captureOutput);
 
     proc.on('exit', (code, signal) => {
       log.stt.info(`whisper-server exited (code=${code}, signal=${signal})`);
@@ -192,10 +217,20 @@ export function createWhisperServerEngine(cfg: WhisperServerConfig): SttEngine {
     serverPort = port;
 
     // Wait for server to be ready
-    const ready = await waitForReady(port, STARTUP_TIMEOUT_MS);
-    if (!ready) {
+    const outcome = await waitForReady(proc, port, STARTUP_TIMEOUT_MS);
+    if (outcome !== 'ready') {
       killServer();
-      throw new Error(`whisper-server failed to start within ${STARTUP_TIMEOUT_MS / 1000}s`);
+      // Surface the child's own last words — "ffmpeg: command not found" beats
+      // a generic timeout. Filter to likely-diagnostic lines (skip GPU init spam).
+      const diagnostic = outputTail
+        .filter(l => /error|not found|failed|cannot|unable|no such/i.test(l))
+        .slice(-3)
+        .join('; ');
+      const reason = outcome === 'exited'
+        ? `whisper-server exited during startup${diagnostic ? `: ${diagnostic}` : ''}`
+        : `whisper-server failed to start within ${STARTUP_TIMEOUT_MS / 1000}s${diagnostic ? ` (${diagnostic})` : ''}`;
+      log.stt.error(`${reason}${outputTail.length ? ` | tail: ${outputTail.slice(-5).join(' | ')}` : ''}`);
+      throw new Error(reason);
     }
 
     log.stt.info(`whisper-server ready on port ${port} (pid=${proc.pid})`);
@@ -229,6 +264,11 @@ export function createWhisperServerEngine(cfg: WhisperServerConfig): SttEngine {
       }
       if (cfg.vadModelPath && !(await fileExists(cfg.vadModelPath))) {
         return { available: false, error: `VAD model not found: ${cfg.vadModelPath}` };
+      }
+      // --convert makes whisper-server shell out to ffmpeg at startup and exit
+      // (code 0) when missing — catch that here so Settings shows it up front.
+      if (!(await isFfmpegAvailable([dirname(resolvedBinaryPath)]))) {
+        return { available: false, error: 'ffmpeg not found — install it (e.g. `brew install ffmpeg`) so whisper-server can convert browser audio' };
       }
       return { available: true };
     },

@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import { stat } from 'node:fs/promises';
 import { log } from '../../logging/index.js';
 import { convertToWav, cleanupTempFile, isFfmpegAvailable } from './audio-convert.js';
+import { sttSpawnEnv } from './spawn-env.js';
 import type { SttEngine, SttRequest, SttResult } from './types.js';
 
 const execFileAsync = promisify(execFile);
@@ -34,7 +35,8 @@ async function resolveBinary(name: string): Promise<string | null> {
   // Already an absolute path
   if (name.startsWith('/')) return (await fileExists(name)) ? name : null;
   try {
-    const { stdout } = await execFileAsync('which', [name], { timeout: 5000 });
+    // Augmented PATH: under launchd/systemd the inherited PATH misses Homebrew.
+    const { stdout } = await execFileAsync('which', [name], { timeout: 5000, env: sttSpawnEnv() });
     const resolved = stdout.trim();
     return resolved || null;
   } catch {

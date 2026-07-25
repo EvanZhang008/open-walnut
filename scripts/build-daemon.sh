@@ -19,6 +19,24 @@ set -e
 
 cd "$(dirname "$0")/.."
 
+# Resolve bun even under a thin PATH (launchd/cron/systemd give jobs
+# /usr/bin:/bin:... without user install prefixes). Same problem class as
+# src/core/stt/spawn-env.ts — never assume the caller's shell PATH.
+BUN="$(command -v bun || true)"
+if [ -z "$BUN" ]; then
+  for candidate in "$HOME/.bun/bin/bun" /opt/homebrew/bin/bun /usr/local/bin/bun; do
+    if [ -x "$candidate" ]; then
+      BUN="$candidate"
+      break
+    fi
+  done
+fi
+if [ -z "$BUN" ]; then
+  echo "build-daemon.sh: bun not found (checked PATH, ~/.bun/bin, /opt/homebrew/bin, /usr/local/bin)." >&2
+  echo "Install Bun: https://bun.sh" >&2
+  exit 1
+fi
+
 SOURCES=(
   src/providers/daemon-standalone.ts
   src/providers/daemon-core.ts
@@ -60,19 +78,19 @@ mkdir -p "$OUTDIR"
 
 echo "Building daemon binaries (version: $VERSION)..."
 
-bun build --compile --target=bun-linux-x64 --minify \
+"$BUN" build --compile --target=bun-linux-x64 --minify \
   --define "process.env.DAEMON_VERSION='$VERSION'" \
   --outfile "$OUTDIR/daemon-linux-x64" \
   src/providers/daemon-standalone.ts
 echo "$VERSION" > "$OUTDIR/daemon-linux-x64.version"
 
-bun build --compile --target=bun-linux-arm64 --minify \
+"$BUN" build --compile --target=bun-linux-arm64 --minify \
   --define "process.env.DAEMON_VERSION='$VERSION'" \
   --outfile "$OUTDIR/daemon-linux-arm64" \
   src/providers/daemon-standalone.ts
 echo "$VERSION" > "$OUTDIR/daemon-linux-arm64.version"
 
-bun build --compile --target=bun-darwin-arm64 --minify \
+"$BUN" build --compile --target=bun-darwin-arm64 --minify \
   --define "process.env.DAEMON_VERSION='$VERSION'" \
   --outfile "$OUTDIR/daemon-darwin-arm64" \
   src/providers/daemon-standalone.ts
@@ -83,7 +101,7 @@ echo "$VERSION" > "$OUTDIR/daemon-darwin-arm64.version"
 # and codex-acp adapter resolve from the walnut install's node_modules at
 # runtime on the LOCAL host (MVP scope); the remote deploy phase will bundle
 # the adapter too.
-bun build --minify --target=node \
+"$BUN" build --minify --target=node \
   --outfile "$OUTDIR/acp-worker.js" \
   src/providers/acp-worker/worker-main.ts
 echo "$VERSION" > "$OUTDIR/acp-worker.js.version"

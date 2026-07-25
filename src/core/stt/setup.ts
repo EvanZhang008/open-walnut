@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { pipeline } from 'node:stream/promises';
 import { log } from '../../logging/index.js';
+import { sttSpawnEnv } from './spawn-env.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -156,9 +157,12 @@ export function getModelDir(): string {
  * Install a package via Homebrew. Yields progress events.
  */
 export async function* installViaBrew(pkg: string): AsyncGenerator<SetupEvent> {
+  // Augmented PATH: under launchd/systemd the inherited PATH misses Homebrew.
+  const env = sttSpawnEnv();
+
   // Check if brew exists
   try {
-    await execFileAsync('which', ['brew'], { timeout: 5000 });
+    await execFileAsync('which', ['brew'], { timeout: 5000, env });
   } catch {
     yield { type: 'error', message: 'Homebrew not found. Install from https://brew.sh' };
     return;
@@ -166,7 +170,7 @@ export async function* installViaBrew(pkg: string): AsyncGenerator<SetupEvent> {
 
   // Check if already installed
   try {
-    await execFileAsync('brew', ['list', pkg], { timeout: 10000 });
+    await execFileAsync('brew', ['list', pkg], { timeout: 10000, env });
     yield { type: 'log', message: `${pkg} is already installed` };
     yield { type: 'done', message: `${pkg} already installed` };
     return;
@@ -180,6 +184,7 @@ export async function* installViaBrew(pkg: string): AsyncGenerator<SetupEvent> {
   const child = spawn('brew', ['install', pkg], {
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: 600_000, // 10 min max
+    env,
   });
 
   let lastLine = '';

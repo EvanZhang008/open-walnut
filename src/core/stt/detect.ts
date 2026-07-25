@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { stat, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { sttSpawnEnv } from './spawn-env.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -58,7 +59,8 @@ export interface Recommendation {
 
 async function whichBinary(name: string): Promise<{ found: boolean; path?: string }> {
   try {
-    const { stdout } = await execFileAsync('which', [name], { timeout: 5000 });
+    // Augmented PATH: under launchd/systemd the inherited PATH misses Homebrew.
+    const { stdout } = await execFileAsync('which', [name], { timeout: 5000, env: sttSpawnEnv() });
     const path = stdout.trim();
     if (path) return { found: true, path };
     return { found: false };

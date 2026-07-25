@@ -9,6 +9,7 @@ import { writeFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { sttSpawnEnv } from './spawn-env.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -16,10 +17,12 @@ function tempPath(ext: string): string {
   return join(tmpdir(), `walnut-stt-${randomBytes(6).toString('hex')}.${ext}`);
 }
 
-/** Check if ffmpeg is available on the system */
-export async function isFfmpegAvailable(): Promise<boolean> {
+/** Check if ffmpeg is available on the system (augmented PATH — see spawn-env.ts).
+ *  `extraDirs` prepends additional dirs to the probe PATH (e.g. the resolved
+ *  whisper-server binary's own prefix, where a bundled ffmpeg may sit). */
+export async function isFfmpegAvailable(extraDirs: string[] = []): Promise<boolean> {
   try {
-    await execFileAsync('ffmpeg', ['-version'], { timeout: 5000 });
+    await execFileAsync('ffmpeg', ['-version'], { timeout: 5000, env: sttSpawnEnv(extraDirs) });
     return true;
   } catch {
     return false;
@@ -43,7 +46,7 @@ export async function convertToWav(audioBase64: string, inputFormat: string): Pr
       '-ac', '1',         // mono
       '-c:a', 'pcm_s16le', // 16-bit PCM
       outputPath,
-    ], { timeout: 30_000 });
+    ], { timeout: 30_000, env: sttSpawnEnv() });
     return outputPath;
   } finally {
     await unlink(inputPath).catch(() => {});

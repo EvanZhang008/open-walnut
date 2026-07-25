@@ -50,6 +50,15 @@ background agent session) inherits the positive nice and gets scheduler-starved 
 load — HTTP latency spikes that look like app bugs. The server logs an error at startup and
 exposes `processNice` in `GET /api/config` when this happens; fix = restart from a normal shell.
 
+**⚠️ NEVER wrap `npm run dev:prod` in a bare `launchctl submit`.** `launchctl submit` jobs are
+KeepAlive — the script exits, launchd re-runs it, forever. dev-prod.sh is a one-shot deploy, so
+this becomes a kill-server-every-10s loop (2026-07-25 incident: 7 back-to-back restarts, one of
+which killed a healthy mid-compaction CLI session). If you must deploy from a niced shell, use a
+one-shot wrapper with a done-marker (`[ -f /tmp/<marker> ] && exit 0; …; touch /tmp/<marker>`)
+so re-runs are no-ops. dev-prod.sh also has its own storm breaker now: a <120s cooldown after a
+successful deploy (exit 0 no-op) and a refusal to kill a listener younger than 120s
+(`WALNUT_DEVPROD_FORCE=1` overrides both for intentional rapid redeploys).
+
 ### Isolated sandbox for onboarding / provider testing / demos
 
 `scripts/walnut-sandbox.sh` spins up a fully isolated Walnut on **:3457** (`env -i` + throwaway
