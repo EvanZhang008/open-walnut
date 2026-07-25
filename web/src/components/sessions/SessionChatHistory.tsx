@@ -5,7 +5,7 @@ import { useSessionStream, type StreamingBlock } from '@/hooks/useSessionStream'
 import { useEvent } from '@/hooks/useWebSocket';
 import { useLightbox } from '@/hooks/useLightbox';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
-import { SessionMessage, PlanCard, CollapsedPlanWrite, GenericToolCall, TaskGroupPrompt, agentModelLabel } from './SessionMessage';
+import { SessionMessage, SessionThinking, PlanCard, CollapsedPlanWrite, GenericToolCall, TaskGroupPrompt, agentModelLabel, ToolRunShell, toolRunPhrase, isToolOnlyMessage, isTextPlusMergeableTools, MergedHistoryToolRun, SystemGroupRun, SystemLineCollapsible, systemGroupMemberFromHistory, type SystemGroupMember } from './SessionMessage';
 import { dedupeOptimisticMessages } from './optimistic-dedup';
 import { computeRenderFilter, allBlocksAbsorbed, buildHistoryEvidence } from '@/stream/render-filter';
 import { TeamCard } from './TeamCard';
@@ -92,8 +92,9 @@ export interface OptimisticMessage extends SessionHistoryMessage {
 /** Renders base64 image thumbnails for optimistic messages */
 function OptimisticImagePreviews({ images }: { images?: ImageAttachment[] }) {
   if (!images || images.length === 0) return null;
+  // Right-aligned: these thumbnails belong to the user's own (right-bubble) message.
   return (
-    <div className="chat-image-previews" style={{ padding: '0 16px 8px' }}>
+    <div className="chat-image-previews" style={{ padding: '0 0 8px', justifyContent: 'flex-end' }}>
       {images.map((img, i) => {
         const src = `data:${img.mediaType};base64,${img.data}`;
         return (
@@ -193,7 +194,7 @@ function PermissionRequestCard({ sessionId, requestId, toolName, input, reason, 
   return (
     <div className={`permission-request-card permission-request-card--${status}`}>
       <div className="permission-request-header">
-        <span className="permission-request-icon">{status === 'allowed' ? '\u2713' : status === 'denied' ? '\u2717' : '\u26A0\uFE0F'}</span>
+        <span className="permission-request-icon">{status === 'allowed' ? '\u2713' : status === 'denied' ? '\u2717' : '!'}</span>
         <span className="permission-request-tool">{toolName}</span>
         {reason && <span className="permission-request-reason">{reason}</span>}
       </div>
@@ -225,20 +226,19 @@ function PermissionRequestCard({ sessionId, requestId, toolName, input, reason, 
 }
 
 /** Render a single streaming block */
-const StreamingBlockView = memo(function StreamingBlockView({ block, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: { block: StreamingBlock; sessionId: string; sessionCwd?: string; sessionHost?: string; onTaskClick?: (taskId: string) => void; onSessionClick?: (sessionId: string) => void; onFileOpen?: (path: string, line?: number) => void }) {
+const StreamingBlockView = memo(function StreamingBlockView({ block, sessionId, sessionCwd, sessionHost, live, onTaskClick, onSessionClick, onFileOpen }: { block: StreamingBlock; sessionId: string; sessionCwd?: string; sessionHost?: string; live?: boolean; onTaskClick?: (taskId: string) => void; onSessionClick?: (sessionId: string) => void; onFileOpen?: (path: string, line?: number) => void }) {
   if (block.type === 'text') {
+    if (!block.content.trim()) return null;
     return <StreamingTextBlock content={block.content} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
   }
 
   if (block.type === 'system') {
-    const icon = block.variant === 'error' ? '\u26A0\uFE0F'
-      : block.variant === 'compact' ? '\u2699\uFE0F' : '\u2713';
     return (
-      <div className={`session-system-line session-system-line--${block.variant}`}>
-        <span className="session-system-icon">{icon}</span>
-        <span className="session-system-text">{block.message}</span>
-        {block.detail && <span className="session-system-detail">{block.detail}</span>}
-      </div>
+      <SystemLineCollapsible
+        variant={block.variant}
+        message={block.message}
+        detail={block.detail}
+      />
     );
   }
 
@@ -259,16 +259,9 @@ const StreamingBlockView = memo(function StreamingBlockView({ block, sessionId, 
     // Defensive: never render an empty/whitespace-only thinking block as an
     // expandable-but-blank row (signature-only or whitespace-delta artifacts).
     if (!block.content.trim()) return null;
-    // `open` by default so the user sees thinking tokens stream in live.
-    // Once the turn ends the user can collapse it manually; collapsing by
-    // default defeats the whole point of --include-partial-messages for
-    // thinking mode.
-    return (
-      <details open className="session-thinking-block" style={{ margin: '6px 0', opacity: 0.7, fontStyle: 'italic', fontSize: 13, borderLeft: '2px solid rgba(128,128,128,0.3)', paddingLeft: 8 }}>
-        <summary style={{ cursor: 'pointer', userSelect: 'none' }}>thinking…</summary>
-        <div style={{ whiteSpace: 'pre-wrap', marginTop: 4 }}>{block.content}</div>
-      </details>
-    );
+    // Unified muted "Thinking ›" row (same language as merged tool runs).
+    // Collapsed by default; `live` shows a pulsing dot while tokens stream.
+    return <SessionThinking text={block.content} live={live} />;
   }
 
   // Below: block.type === 'tool_call'
@@ -394,6 +387,29 @@ type GroupedStreamItem =
 
 /** Tool names whose streaming child blocks should be grouped under them. */
 const GROUPABLE_STREAM_TOOLS = new Set(['Task', 'Agent']);
+
+/** True when a streaming block merges into a muted "Ran N commands ›" run.
+ *  Only COMPLETED generic tool_calls merge — a still-calling tool stays a
+ *  full card so the user watches it live; it collapses into the run when done.
+ *  Special blocks (Task/Agent anchors, plan cards, plan writes, ghosts) never merge. */
+function isMergeableStreamItem(
+  item: TimelineItem,
+  consumed: Set<number>,
+  groupedByIndex: Map<number, GroupedStreamItem>,
+): item is TimelineItem & { kind: 'block'; block: StreamingBlock & { type: 'tool_call' } } {
+  if (item.kind !== 'block') return false;
+  const b = item.block;
+  if (b.type !== 'tool_call') return false;
+  if (b.status === 'calling') return false;
+  if (groupedByIndex.has(item.index) || consumed.has(item.index)) return false;
+  if (GROUPABLE_STREAM_TOOLS.has(b.name)) return false;
+  if (b.name === 'ExitPlanMode') return false;
+  if (b.name === 'Write' && typeof b.input?.file_path === 'string'
+    && b.input.file_path.includes('.claude/plans/')) return false;
+  // Ghost placeholder (empty input, no result) — renders null, don't count it
+  if (!b.result && (!b.input || Object.keys(b.input).length === 0)) return false;
+  return true;
+}
 
 function groupStreamingBlocks(blocks: StreamingBlock[], hidden?: Set<number>): GroupedStreamItem[] {
   // Find all groupable tool_call blocks (Task, Agent) — these are potential
@@ -524,6 +540,27 @@ type TimelineItem =
   | { kind: 'user'; msg: OptimisticMessage }
   | { kind: 'indicator'; type: 'resuming' | 'working' };
 
+type HistoryPart = { kind: 'msg'; m: SessionHistoryMessage; globalIndex: number; suppressTools?: boolean }
+  | { kind: 'run'; members: { m: SessionHistoryMessage; globalIndex: number }[];
+      /** First member is a tools-only clone of the preceding msg part (same
+       *  globalIndex) — skip the fork-divider check for it. */
+      seeded?: boolean }
+  | { kind: 'system-run'; members: { m: SessionHistoryMessage; globalIndex: number }[] };
+
+function isTransparentStreamItem(item: TimelineItem): boolean {
+  if (item.kind !== 'block') return false;
+  const block = item.block;
+  if ((block.type === 'text' || block.type === 'thinking') && !block.content.trim()) {
+    return true;
+  }
+  // StreamingBlockView suppresses exactly this stale placeholder shape. Keep it
+  // transparent here too so a DOM-null block cannot split adjacent tool runs.
+  return block.type === 'tool_call'
+    && block.status === 'calling'
+    && (!block.input || Object.keys(block.input).length === 0)
+    && !block.result;
+}
+
 /**
  * Interleave streaming blocks and active optimistic messages by blockIndex.
  * Each user message was sent at a specific blocks.length — it renders at that
@@ -587,6 +624,23 @@ function buildTimeline(
 const NEAR_BOTTOM_PX = 80;  // px from bottom to consider "at bottom"
 
 export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onTaskClick, onSessionClick, onFileOpen, onStreamingChange }: SessionChatHistoryProps) {
+  // Slow-commit detector: renderT0 is per-render-pass (closure), the layout
+  // effect runs after THAT pass commits — the delta is the synchronous
+  // render+commit cost of this whole conversation subtree. This is the
+  // heaviest tree in the app (markdown, syntax highlight, tool cards), so
+  // when a page-load main-thread block happens, this line says whether the
+  // conversation render was the culprit and how big the input was.
+  const renderT0 = performance.now();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
+    const commitMs = Math.round(performance.now() - renderT0);
+    if (commitMs > 300) {
+      console.warn('[perf] SessionChatHistory slow commit', {
+        sessionId, commitMs,
+        url: window.location.pathname,
+      });
+    }
+  });
   const [historyVersion, setHistoryVersion] = useState(0);
   const assistantLabel = engine === 'codex' ? 'Codex' : 'Claude Code';
   // Turn watermark: history length when the CURRENT turn started streaming.
@@ -606,8 +660,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
 
   // ── Message truncation — render only the tail to keep DOM count low ──
   const INITIAL_RENDER_LIMIT = 30;
-  const LOAD_MORE_BATCH = 50;
+  const LOAD_MORE_BATCH = 200;
   const [truncationOffset, setTruncationOffset] = useState(0);
+  // "Show earlier" scroll anchor: distance-to-bottom captured at click time,
+  // restored after the expanded batch renders. The container has
+  // overflow-anchor:none, so without this the browser keeps scrollTop
+  // numerically fixed and the newly inserted messages shove the user's
+  // reading position out of view. Bottom distance is invariant to any
+  // content inserted above the viewport.
+  const pendingBottomDistance = useRef<number | null>(null);
   const { lightboxSrc, openLightbox, closeLightbox } = useLightbox();
 
   // ── blockIndexMap: assigns each optimistic message a fixed position in the streaming timeline ──
@@ -882,6 +943,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     watermarkInitialized.current = false;
     setEditingId(null);
     setTruncationOffset(0);
+    pendingBottomDistance.current = null;
     blockIndexMap.current.clear();
     consumedQueueIds.current.clear();
     notifiedConsumedIds.current.clear();
@@ -900,6 +962,23 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if (scrollRafId.current !== null) cancelAnimationFrame(scrollRafId.current);
     if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current);
   }, []);
+
+  // Restore the user's reading position after "Show earlier" expands the
+  // truncation window. Runs before paint (useLayoutEffect) so there is no
+  // visible jump: same distance-to-bottom ⇒ the message the user was reading
+  // stays exactly where it was, with the revealed batch above the viewport.
+  useLayoutEffect(() => {
+    const dist = pendingBottomDistance.current;
+    if (dist === null) return;
+    pendingBottomDistance.current = null;
+    const el = containerRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight - dist;
+    // A programmatic scrollTop write fires a scroll event; the handler would
+    // recompute isAtBottom correctly (we're far from bottom), but suppress the
+    // resize-window race anyway so a concurrent sibling resize can't misread it.
+    ignoreScrollUntil.current = Date.now() + 100;
+  }, [truncationOffset]);
 
   // Listen for expand-to-message events from parent panels (when clicking a truncated message)
   useEffect(() => {
@@ -1196,6 +1275,176 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     && deduped.length > 0;
   const timeline = buildTimeline(blocks, deduped, blockIndexMap.current, isStreaming, isResuming, hiddenBlocks);
 
+  // Prepare both render partitions together so a persisted tool run can absorb
+  // the unpersisted run at the streaming boundary instead of producing two rows.
+  const visibleLimit = INITIAL_RENDER_LIMIT + truncationOffset;
+  const visibleStart = Math.max(0, messages.length - visibleLimit);
+  const visibleMessages = messages.slice(visibleStart);
+  const hiddenCount = visibleStart;
+  const historyParts: HistoryPart[] = [];
+  let historyRun: { m: SessionHistoryMessage; globalIndex: number }[] = [];
+  let historyRunSeeded = false;
+  let systemRun: { m: SessionHistoryMessage; globalIndex: number }[] = [];
+  const flushHistoryRun = () => {
+    if (historyRun.length > 0) {
+      historyParts.push({ kind: 'run', members: historyRun, seeded: historyRunSeeded });
+      historyRun = [];
+    }
+    historyRunSeeded = false;
+  };
+  const flushSystemRun = () => {
+    if (systemRun.length === 1) {
+      historyParts.push({ kind: 'msg', ...systemRun[0] });
+    } else if (systemRun.length > 1) {
+      historyParts.push({ kind: 'system-run', members: systemRun });
+    }
+    systemRun = [];
+  };
+  for (let i = 0; i < visibleMessages.length; i++) {
+    const m = visibleMessages[i];
+    const globalIndex = visibleStart + i;
+    if (forkBoundaryIndex != null && globalIndex === forkBoundaryIndex) {
+      flushHistoryRun();
+      flushSystemRun();
+    }
+    if (m.role === 'system') {
+      flushHistoryRun();
+      systemRun.push({ m, globalIndex });
+      continue;
+    }
+    flushSystemRun();
+    if (isToolOnlyMessage(m)) {
+      historyRun.push({ m, globalIndex });
+      continue;
+    }
+    flushHistoryRun();
+    if (isTextPlusMergeableTools(m)) {
+      // CLI content order is prose first, tool_use after. Render the prose as
+      // its own part and dissolve the tools FORWARD into the next run so a
+      // text-carrying message no longer splits two adjacent runs apart.
+      historyParts.push({ kind: 'msg', m, globalIndex, suppressTools: true });
+      historyRun.push({ m: { ...m, text: '', thinking: undefined }, globalIndex });
+      historyRunSeeded = true;
+      continue;
+    }
+    historyParts.push({ kind: 'msg', m, globalIndex });
+  }
+  flushHistoryRun();
+  flushSystemRun();
+
+  // Pre-group once for both boundary detection and streaming rendering.
+  const groupedBlocks = groupStreamingBlocks(blocks, hiddenBlocks);
+  const groupedByIndex = new Map<number, GroupedStreamItem>();
+  const consumedBlockIndices = new Set<number>();
+  for (const g of groupedBlocks) {
+    if (g.kind === 'task-group' || g.kind === 'orphan-group') {
+      groupedByIndex.set(g.index, g);
+      for (const child of g.childBlocks) {
+        const childIdx = blocks.indexOf(child);
+        if (childIdx >= 0) consumedBlockIndices.add(childIdx);
+      }
+    }
+  }
+
+  const leadingStreamRunIndices: number[] = [];
+  for (let i = 0; i < timeline.length; i++) {
+    const item = timeline[i];
+    // Empty live-tail text/thinking blocks become visible when tokens arrive;
+    // until then they are transparent and neither render nor split a tool run.
+    if (isTransparentStreamItem(item)) continue;
+    if (isMergeableStreamItem(item, consumedBlockIndices, groupedByIndex)) {
+      leadingStreamRunIndices.push(i);
+      continue;
+    }
+    break;
+  }
+  const lastHistoryPart = historyParts[historyParts.length - 1];
+  const boundaryHistoryRun = lastHistoryPart?.kind === 'run' ? lastHistoryPart : null;
+  // A fork divider is at this cross-source boundary when the fork's first
+  // message has not persisted yet, so its index is one past history's tail.
+  const boundaryHasForkDivider = forkBoundaryIndex != null
+    && forkBoundaryIndex === messages.length;
+  const mergeBoundary = boundaryHistoryRun != null
+    && !boundaryHasForkDivider
+    && leadingStreamRunIndices.length > 0;
+  const boundaryStreamIndices = mergeBoundary ? new Set(leadingStreamRunIndices) : new Set<number>();
+  const renderedHistoryParts = mergeBoundary ? historyParts.slice(0, -1) : historyParts;
+  let lastAssistantTextIndex = -1;
+  for (const part of historyParts) {
+    if (part.kind === 'msg'
+      && part.m.role === 'assistant'
+      && (part.m.text ?? '').trim()) {
+      lastAssistantTextIndex = part.globalIndex;
+    }
+  }
+
+  const runStart = new Map<number, number[]>();
+  const runMember = new Set<number>();
+  {
+    let cur: number[] = [];
+    const flushRun = () => {
+      if (cur.length >= 1) {
+        runStart.set(cur[0], [...cur]);
+        for (let k = 1; k < cur.length; k++) runMember.add(cur[k]);
+      }
+      cur = [];
+    };
+    for (let i = 0; i < timeline.length; i++) {
+      if (boundaryStreamIndices.has(i)) continue;
+      if (isTransparentStreamItem(timeline[i])) continue;
+      if (isMergeableStreamItem(timeline[i], consumedBlockIndices, groupedByIndex)) {
+        cur.push(i);
+      } else {
+        flushRun();
+      }
+    }
+    flushRun();
+  }
+
+  // System notices have their own grouping pass: skip DOM-null blocks without
+  // letting them split a run, but stop at every visible non-system item.
+  const systemRunStart = new Map<number, number[]>();
+  const systemRunMember = new Set<number>();
+  {
+    let cur: number[] = [];
+    const flushRun = () => {
+      if (cur.length >= 2) {
+        systemRunStart.set(cur[0], [...cur]);
+        for (let k = 1; k < cur.length; k++) systemRunMember.add(cur[k]);
+      }
+      cur = [];
+    };
+    for (let i = 0; i < timeline.length; i++) {
+      const item = timeline[i];
+      if (boundaryStreamIndices.has(i)
+        || isTransparentStreamItem(item)
+        || (item.kind === 'block' && consumedBlockIndices.has(item.index))) {
+        continue;
+      }
+      if (item.kind === 'block' && item.block.type === 'system') {
+        cur.push(i);
+      } else {
+        flushRun();
+      }
+    }
+    flushRun();
+  }
+
+  // Last VISIBLE timeline index — the item still receiving tokens when
+  // streaming. Skips DOM-null items (boundary-merged, transparent, blocks
+  // consumed into a task/orphan group without anchoring one) so a trailing
+  // signature-only artifact can't steal "liveness" from the real tail block.
+  let lastVisibleTimelineIdx = -1;
+  for (let i = timeline.length - 1; i >= 0; i--) {
+    const item = timeline[i];
+    if (boundaryStreamIndices.has(i) || isTransparentStreamItem(item)) continue;
+    if (item.kind === 'block'
+      && consumedBlockIndices.has(item.index)
+      && !groupedByIndex.has(item.index)) continue;
+    lastVisibleTimelineIdx = i;
+    break;
+  }
+
   const hasContent = messages.length > 0 || timeline.length > 0 || isStreaming
     || deduped.length > 0;
 
@@ -1264,7 +1513,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             live read (SSH/daemon) is failing. Auto-clears on next healthy fetch. */}
         {stale && !error && (
           <div className="session-history-stale-banner" role="status">
-            ⚠ Showing cached history — live connection unavailable ({stale}). Reconnecting…
+            Showing cached history — live connection unavailable ({stale}). Reconnecting…
           </div>
         )}
         {!error && !hasContent && !loading && !phase2Pending && (
@@ -1280,85 +1529,167 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         )}
         {/* Persisted history messages — truncated to tail for performance.
             Full messages[] stays in memory; only the visible slice is rendered as DOM. */}
-        {(() => {
-          const visibleLimit = INITIAL_RENDER_LIMIT + truncationOffset;
-          const visibleStart = Math.max(0, messages.length - visibleLimit);
-          const visibleMessages = messages.slice(visibleStart);
-          const hiddenCount = visibleStart;
+        {initialPrompt && hiddenCount > 0 && (
+          <div className="session-msg session-msg-user session-initial-prompt">
+            <div className="session-msg-header">
+              <span className="session-initial-prompt-label">Initial Prompt</span>
+            </div>
+            <div className="session-msg-content">
+              <div className="markdown-body">{initialPrompt}</div>
+            </div>
+          </div>
+        )}
+        {hiddenCount > 0 && (
+          <button
+            className="session-show-earlier-btn"
+            onClick={() => {
+              isAtBottom.current = false;
+              const el = containerRef.current;
+              if (el) pendingBottomDistance.current = el.scrollHeight - el.scrollTop;
+              setTruncationOffset(prev => prev + LOAD_MORE_BATCH);
+            }}
+          >
+            Show {Math.min(hiddenCount, LOAD_MORE_BATCH)} earlier messages
+            <span className="session-show-earlier-count">({hiddenCount} hidden)</span>
+          </button>
+        )}
+        {renderedHistoryParts.map((part) => {
+          if (part.kind === 'run') {
+            const first = part.members[0];
+            return (
+              <div
+                key={`mrun-${first.m.msgId ?? first.globalIndex}`}
+                data-msg-index={first.globalIndex}
+                className="session-msg-bare"
+              >
+                {!part.seeded && forkBoundaryIndex != null && first.globalIndex === forkBoundaryIndex && (
+                  <div className="session-fork-divider">
+                    <span className="session-fork-divider-label">Forked session starts here</span>
+                  </div>
+                )}
+                <MergedHistoryToolRun
+                  messages={part.members.map(({ m }) => m)}
+                  assistantLabel={assistantLabel}
+                  sessionId={sessionId}
+                  sessionCwd={sessionCwd}
+                  sessionHost={sessionHost}
+                  onTaskClick={onTaskClick}
+                  onSessionClick={onSessionClick}
+                  onFileOpen={onFileOpen}
+                />
+              </div>
+            );
+          }
+          if (part.kind === 'system-run') {
+            const first = part.members[0];
+            return (
+              <div
+                className="session-msg-bare"
+                data-msg-index={first.globalIndex}
+                key={`sys-${first.m.msgId ?? first.globalIndex}`}
+              >
+                <SystemGroupRun members={part.members.map(({ m }) => systemGroupMemberFromHistory(m))} />
+              </div>
+            );
+          }
+          const { m, globalIndex } = part;
           return (
-            <>
-              {/* Initial prompt — pinned copy of the session's first user
-                  message. Only useful when that message is TRUNCATED AWAY;
-                  with the full history on screen it's a pure duplicate of the
-                  first bubble (and a floating blank block in narrow panes). */}
-              {initialPrompt && hiddenCount > 0 && (
-                <div className="session-msg session-msg-user session-initial-prompt">
-                  <div className="session-msg-header">
-                    <span className="session-msg-role">You</span>
-                    <span className="session-initial-prompt-label">Initial Prompt</span>
-                  </div>
-                  <div className="session-msg-content">
-                    <div className="markdown-body">{initialPrompt}</div>
-                  </div>
+            <div
+              key={m.msgId ?? m.walnutMessageId ?? `${m.role}:${m.timestamp}:${globalIndex}`}
+              data-msg-index={globalIndex}
+              data-message-id={m.msgId ?? m.walnutMessageId}
+            >
+              {forkBoundaryIndex != null && globalIndex === forkBoundaryIndex && (
+                <div className="session-fork-divider">
+                  <span className="session-fork-divider-label">Forked session starts here</span>
                 </div>
               )}
-              {hiddenCount > 0 && (
-                <button
-                  className="session-show-earlier-btn"
-                  onClick={() => {
-                    isAtBottom.current = false; // prevent auto-scroll when expanding upward
-                    setTruncationOffset(prev => prev + LOAD_MORE_BATCH);
-                  }}
-                >
-                  Show {Math.min(hiddenCount, LOAD_MORE_BATCH)} earlier messages
-                  <span className="session-show-earlier-count">({hiddenCount} hidden)</span>
-                </button>
-              )}
-              {visibleMessages.map((m, i) => {
-                const globalIndex = visibleStart + i;
-                return (
-                  <div
-                    key={m.msgId ?? m.walnutMessageId ?? `${m.role}:${m.timestamp}:${globalIndex}`}
-                    data-msg-index={globalIndex}
-                    data-message-id={m.msgId ?? m.walnutMessageId}
-                  >
-                    {forkBoundaryIndex != null && globalIndex === forkBoundaryIndex && (
-                      <div className="session-fork-divider">
-                        <span className="session-fork-divider-label">Forked session starts here</span>
-                      </div>
-                    )}
-                    <SessionMessage message={m} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
-                  </div>
-                );
-              })}
-            </>
+              <SessionMessage message={m} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} suppressTools={part.suppressTools} showCopyActions={globalIndex === lastAssistantTextIndex} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+            </div>
           );
-        })()}
+        })}
+        {mergeBoundary && boundaryHistoryRun && (
+          <div
+            key={`boundary-run-${boundaryHistoryRun.members[0].m.msgId ?? boundaryHistoryRun.members[0].globalIndex}`}
+            data-msg-index={boundaryHistoryRun.members[0].globalIndex}
+            className="session-msg-bare"
+          >
+            {!boundaryHistoryRun.seeded && forkBoundaryIndex != null && boundaryHistoryRun.members[0].globalIndex === forkBoundaryIndex && (
+              <div className="session-fork-divider">
+                <span className="session-fork-divider-label">Forked session starts here</span>
+              </div>
+            )}
+            <MergedHistoryToolRun
+              messages={boundaryHistoryRun.members.map(member => member.m)}
+              trailingTools={leadingStreamRunIndices.flatMap((index) => {
+                const item = timeline[index];
+                return item.kind === 'block' && item.block.type === 'tool_call' ? [item.block] : [];
+              })}
+              assistantLabel={assistantLabel}
+              sessionId={sessionId}
+              sessionCwd={sessionCwd}
+              sessionHost={sessionHost}
+              onTaskClick={onTaskClick}
+              onSessionClick={onSessionClick}
+              onFileOpen={onFileOpen}
+            />
+          </div>
+        )}
 
         {/* Turn timeline — interleaved blocks + ALL optimistic messages by blockIndex,
             preserving their correct visual positions until deduped by persisted history. */}
         {timeline.length > 0 && (
           <div className="session-streaming-panel">
-            {(() => {
-              // Pre-group streaming blocks by parentToolUseId for Task grouping
-              // (hidden/absorbed blocks neither anchor groups nor appear as children)
-              const groupedBlocks = groupStreamingBlocks(blocks, hiddenBlocks);
-              // Build a lookup: block original index → grouped item
-              const groupedByIndex = new Map<number, GroupedStreamItem>();
-              const consumedBlockIndices = new Set<number>();
-              for (const g of groupedBlocks) {
-                if (g.kind === 'task-group' || g.kind === 'orphan-group') {
-                  groupedByIndex.set(g.index, g);
-                  // Mark ALL child block indices (tool_call/text/thinking) as
-                  // consumed so they don't render flat in the main conversation
-                  for (const child of g.childBlocks) {
-                    const childIdx = blocks.indexOf(child);
-                    if (childIdx >= 0) consumedBlockIndices.add(childIdx);
-                  }
-                }
+            {timeline.map((item, i) => {
+              if (boundaryStreamIndices.has(i) || isTransparentStreamItem(item)) return null;
+              if (systemRunMember.has(i)) return null;
+              const systemRunIdx = systemRunStart.get(i);
+              if (systemRunIdx && item.kind === 'block') {
+                const members = systemRunIdx.flatMap((index): SystemGroupMember[] => {
+                  const member = timeline[index];
+                  if (member.kind !== 'block' || member.block.type !== 'system') return [];
+                  return [{
+                    variant: member.block.variant,
+                    message: member.block.message,
+                    detail: member.block.detail,
+                    key: `stream-system-${member.index}`,
+                  }];
+                });
+                return (
+                  <div key={`system-run-${item.index}`} className="session-msg-bare">
+                    <SystemGroupRun members={members} />
+                  </div>
+                );
               }
-
-              return timeline.map((item, i) => {
+              if (runMember.has(i)) return null;
+              const runIdx = runStart.get(i);
+              if (runIdx && item.kind === 'block') {
+                const members = runIdx
+                  .map(k => timeline[k])
+                  .filter((t): t is TimelineItem & { kind: 'block' } => t.kind === 'block');
+                const blocks_ = members.map(m => m.block).filter((b): b is StreamingBlock & { type: 'tool_call' } => b.type === 'tool_call');
+                const phrase = toolRunPhrase(blocks_.map(b => b.name ?? 'unknown'));
+                const failCount = blocks_.filter(b => b.status === 'error').length;
+                return (
+                  <div key={`run-${item.index}`} className="session-msg-bare">
+                    <ToolRunShell phrase={phrase} failCount={failCount}>
+                      {blocks_.map((b, bi) => (
+                        <GenericToolCall
+                          key={b.toolUseId ?? bi}
+                          tool={{ name: b.name ?? 'unknown', input: b.input ?? {} }}
+                          status={b.status === 'error' ? 'error' : 'done'}
+                          result={b.result}
+                          sessionCwd={sessionCwd}
+                          sessionHost={sessionHost}
+                          onTaskClick={onTaskClick}
+                          onSessionClick={onSessionClick}
+                          onFileOpen={onFileOpen ? (p) => onFileOpen(p) : undefined}
+                        />
+                      ))}
+                    </ToolRunShell>
+                  </div>
+                );
+              }
               if (item.kind === 'indicator') {
                 return (
                   <div key={`ind-${item.type}`} className="session-streaming-indicator">
@@ -1376,12 +1707,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 if (grouped && (grouped.kind === 'task-group' || grouped.kind === 'orphan-group')) {
                   const isFirst = i === 0 || timeline[i - 1].kind !== 'block';
                   const isInLastGroup = !timeline.slice(i).some(t => t.kind === 'user');
+                  const showStreamingBadge = isFirst && isStreaming && isInLastGroup;
                   return (
                     <div key={`tg-${item.index}`} className={isFirst ? 'session-msg session-msg-assistant' : ''}>
-                      {isFirst && (
+                      {showStreamingBadge && (
                         <div className="session-msg-header">
-                          <span className="session-msg-role">{assistantLabel}</span>
-                          {isStreaming && isInLastGroup && <span className="session-streaming-badge">Streaming</span>}
+                          <span className="session-streaming-badge">Streaming</span>
                         </div>
                       )}
                       <div className={isFirst ? 'session-msg-content' : ''}>
@@ -1417,18 +1748,22 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 const isFirst = i === 0 || timeline[i - 1].kind !== 'block';
                 const isInLastGroup = !timeline.slice(i).some(t => t.kind === 'user');
                 const blockWantsBubble = item.block.type === 'text' || item.block.type === 'system';
-                const headerEl = isFirst && (
+                const showStreamingBadge = isFirst && isStreaming && isInLastGroup;
+                const headerEl = showStreamingBadge ? (
                   <div className="session-msg-header">
-                    <span className="session-msg-role">{assistantLabel}</span>
-                    {isStreaming && isInLastGroup && <span className="session-streaming-badge">Streaming</span>}
+                    <span className="session-streaming-badge">Streaming</span>
                   </div>
-                );
+                ) : null;
+                // `live` marks the block still receiving tokens: streaming AND
+                // it is the last visible timeline item (crude but the only
+                // per-block signal available — deltas always append at the tail).
+                const isLiveTail = isStreaming && i === lastVisibleTimelineIdx;
                 if (blockWantsBubble) {
                   return (
                     <div key={`b-${item.index}`} className={isFirst ? 'session-msg session-msg-assistant' : ''}>
                       {headerEl}
                       <div className={isFirst ? 'session-msg-content' : ''}>
-                        <StreamingBlockView block={item.block} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+                        <StreamingBlockView block={item.block} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} live={isLiveTail} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
                       </div>
                     </div>
                   );
@@ -1436,7 +1771,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 return (
                   <div key={`b-${item.index}`} className="session-msg-bare">
                     {headerEl}
-                    <StreamingBlockView block={item.block} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+                    <StreamingBlockView block={item.block} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} live={isLiveTail} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
                   </div>
                 );
               }
@@ -1492,8 +1827,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                   )}
                 </div>
               );
-            });
-            })()}
+            })}
           </div>
         )}
         {/* Floating scroll-to-bottom arrow — sticky to bottom of scroll viewport */}

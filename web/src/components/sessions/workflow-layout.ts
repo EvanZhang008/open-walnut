@@ -8,7 +8,19 @@
  * WorkflowGraph.tsx; this file is intentionally pure so it can be tested in isolation.
  */
 
-import type { WorkflowPhase, WorkflowAgent } from '@/hooks/useBackgroundTasks';
+import type { WorkflowPhase, WorkflowAgent, BackgroundTask } from '@/hooks/useBackgroundTasks';
+
+// ── Agent vs plain-task split (WorkflowProgress legacy mode) ──
+// The CLI stamps task_type on task_started: agent-like kinds get their own
+// "Agents" section so background AGENTS aren't lumped in with plain background
+// TASKS (local_bash shell commands etc.). Tasks recovered from disk have no
+// taskType — fall back to subagentType (only the Agent tool sets it), else
+// treat as a plain task. taskType is authoritative when present.
+const AGENT_TASK_TYPES = new Set(['local_agent', 'remote_agent', 'in_process_teammate']);
+export function isAgentTask(t: BackgroundTask): boolean {
+  if (t.taskType) return AGENT_TASK_TYPES.has(t.taskType);
+  return !!t.subagentType;
+}
 
 /** Above this many agents in a phase, collapse to a density bar (Level-of-Detail). */
 export const DENSITY_THRESHOLD = 6;

@@ -41,6 +41,7 @@ export const ICON_CLIPBOARD = <svg width="14" height="14" viewBox="0 0 16 16" fi
 export const ICON_NOTES_EXPAND = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M6 2v12M2 6h12"/></svg>;
 /** ⧉ open in new tab — box with an arrow leaving the top-right corner */
 export const ICON_NEW_TAB = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H3.5A1.5 1.5 0 002 4.5v8A1.5 1.5 0 003.5 14h8a1.5 1.5 0 001.5-1.5V8"/><polyline points="10 2 14 2 14 6"/><line x1="7" y1="9" x2="14" y2="2"/></svg>;
+export const ICON_VSCODE = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2.5v11l-3.2 1.2L5.5 9.8 2.7 12 1 10.7l3-2.7-3-2.7L2.7 4l2.8 2.2 5.3-4.9z"/><path d="M10.8 1.3v13.4M5.5 6.2L8 8l-2.5 1.8"/></svg>;
 export const ICON_ROBOT = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="10" height="8" rx="2"/><circle cx="6" cy="9" r="1" fill="currentColor" stroke="none"/><circle cx="10" cy="9" r="1" fill="currentColor" stroke="none"/><path d="M8 2v3"/><circle cx="8" cy="1.5" r="1"/></svg>;
 export const ICON_QUESTION = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6.5"/><path d="M6 6a2 2 0 013.5 1.5c0 1-1.5 1.5-1.5 2.5"/><circle cx="8" cy="12" r=".5" fill="currentColor" stroke="none"/></svg>;
 export const ICON_TRASH = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M2 4h12"/><path d="M5 4V2.5a.5.5 0 01.5-.5h5a.5.5 0 01.5.5V4"/><path d="M3.5 4l.7 9.5a1 1 0 001 .5h5.6a1 1 0 001-.5L12.5 4"/></svg>;
@@ -60,5 +61,24 @@ export function phaseIcon(phase: string): ReactNode {
     case 'POST_WORK_COMPLETED': return ICON_PHASE_POST_WORK;
     case 'COMPLETE': return ICON_PHASE_COMPLETE;
     default: return ICON_PHASE_TODO;
+  }
+}
+
+// ── Focus-tier icons (crosshair / planet+satellite / hourglass) ──
+// Stroke-style on purpose: task PHASE icons are filled-circle shapes, so the
+// tier marks must read as a different visual family (no plain dots).
+
+export const ICON_TIER_FOCUS = <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><circle cx="12" cy="12" r="6.5"/><line x1="12" y1="1.5" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22.5"/><line x1="1.5" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22.5" y2="12"/><circle cx="12" cy="12" r="1.8" fill="currentColor" stroke="none"/></svg>;
+
+export const ICON_TIER_SATELLITE = <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><circle cx="12" cy="12" r="5"/><path d="M3.3 16.8 A 10.5 10.5 0 0 1 12 1.8" opacity="0.55"/><circle cx="20" cy="17.5" r="2.8" fill="currentColor" stroke="none"/></svg>;
+
+export const ICON_TIER_WAIT = <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6.5 3 h11 M6.5 21 h11"/><path d="M8 3 v3.2 c0 2.6 8 4 8 7.3 v4.5 M16 3 v3.2 c0 2.6 -8 4 -8 7.3 v4.5"/></svg>;
+
+/** Tier icon lookup — used by tier section headers, Recent pinned badges, and the kebab menu. */
+export function tierIcon(tier: 'focus' | 'satellite' | 'wait'): ReactNode {
+  switch (tier) {
+    case 'focus': return ICON_TIER_FOCUS;
+    case 'wait': return ICON_TIER_WAIT;
+    default: return ICON_TIER_SATELLITE;
   }
 }

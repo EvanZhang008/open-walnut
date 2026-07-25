@@ -7,7 +7,8 @@
  * (restart / investigate / open-notes …) and pass them down.
  */
 import { useState, useRef, useEffect } from 'react';
-import { ICON_SEARCH, ICON_REFRESH, ICON_STOP } from '../common/Icons';
+import { ICON_SEARCH, ICON_REFRESH, ICON_STOP, ICON_VSCODE } from '../common/Icons';
+import { openSessionInVscode } from './openSessionInVscode';
 
 interface SessionKebabSectionProps {
   sessionId: string;
@@ -32,6 +33,7 @@ interface SessionKebabSectionProps {
   onInvestigate: () => void;
   investigating: boolean;
   investigateResult: { kind: 'ok'; id: string } | { kind: 'error' } | null;
+  onOpenVscodeError: (error: unknown) => void;
   /** Called after any item runs so the parent can close the dropdown. */
   onAfterAction?: () => void;
 }
@@ -66,7 +68,7 @@ export function SessionKebabSection({
   onRestart, restartBusy,
   onTerminate, terminateBusy,
   onInvestigate, investigating, investigateResult,
-  onAfterAction,
+  onOpenVscodeError, onAfterAction,
 }: SessionKebabSectionProps) {
   const cdPrefix = cwd ? `cd ${cwd} && ` : '';
   const cwdLabel = cwd ? (cwd.split('/').filter(Boolean).pop() || 'CWD') : null;
@@ -94,6 +96,17 @@ export function SessionKebabSection({
       <div className="task-kebab-divider" />
 
       {cwdLabel && <CopyItem label={`Copy dir (${cwdLabel})`} value={cwd!} onAfter={onAfterAction} />}
+      <button
+        className="task-kebab-item"
+        onClick={(e) => {
+          e.stopPropagation();
+          void openSessionInVscode(sessionId).then(onAfterAction).catch(onOpenVscodeError);
+        }}
+        title="Open in VS Code"
+      >
+        <span className="task-kebab-icon">{ICON_VSCODE}</span>
+        <span>Open in VS Code</span>
+      </button>
       <CopyItem label="Copy session ID" value={sessionId} onAfter={onAfterAction} />
       <CopyItem label="Copy resume cmd" value={`${cdPrefix}claude -r ${sessionId}`} onAfter={onAfterAction} />
 

@@ -1,14 +1,14 @@
 import { useState, useEffect, useCallback, useRef, useMemo, Component, type ReactNode, type ErrorInfo, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { SessionChatHistory } from './SessionChatHistory';
-import { SessionNotes } from './SessionNotes';
+import { SessionNotesPill, SessionNotesBar, useSessionNote } from './SessionNotes';
 import { SessionFileExplorer } from './SessionFileExplorer';
 import { SessionTerminal } from './SessionTerminal';
 import { SessionDiffView } from './SessionDiffView';
 import { buildSelectionPrefill } from './diffPrefill';
 import type { SessionSplitView } from './sessionSplitView';
 import { FileViewer } from '../common/FileViewer';
-import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_LOCK, ICON_UNLOCK, ICON_LOCATE, ICON_NEW_TAB } from '../common/Icons';
+import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_LOCK, ICON_UNLOCK, ICON_LOCATE, ICON_NEW_TAB, ICON_VSCODE } from '../common/Icons';
 import { openPopout } from '@/popout/openPopout';
 import { UserMessagesSummary } from './UserMessagesSummary';
 // PlanPreviewSection replaced by inline plan popover in meta bar
@@ -51,6 +51,8 @@ import { ErrorSuggestionLink } from '@/components/common/ErrorSuggestionLink';
 import { useResolvedSessionRecord } from '@/hooks/useSessionStatus';
 import { useSessionControls } from '@/hooks/useSessionControls';
 import { nextSessionControlValue, SessionControlPills } from './SessionControlPills';
+import { openSessionInVscode } from './openSessionInVscode';
+import { useNotifications } from '@/contexts/notifications';
 
 interface SessionPanelErrorBoundaryProps {
   sessionId: string;
@@ -138,6 +140,7 @@ interface SessionPanelProps {
 
 export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, locked, onToggleLock, onTaskClick, onOpenTaskDetail, onSessionClick, onSessionReplaced, onForkPending, onForkResolved, onForkFailed }: SessionPanelProps) {
   const navigate = useNavigate();
+  const { notify } = useNotifications();
   const enabledModes = useEnabledModes();
   const [sessionRecord, setSession] = useState<SessionRecord | null>(null);
   const session = useResolvedSessionRecord(sessionRecord);
@@ -292,34 +295,52 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   // Fetch session metadata
   useEffect(() => {
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
     setSession(null);
     setLoading(true);
     setTaskTitle(null);
     setSessionTask(null);
-    fetchSession(sessionId).then((s) => {
-      if (!cancelled) {
-        setSession(s);
-        setLoading(false);
-        // Prewarm the remote terminal transport (ssh ControlMaster + dtach) so a
-        // later Terminal click is ~0.2s instead of ~2.5s. Fire-and-forget; the
-        // server no-ops for local sessions. Cheap, idempotent, self-expires.
-        if (s?.host) {
-          terminalPrewarm(sessionId).catch(() => { /* best-effort; open will still work */ });
+    const load = (attempt: number) => {
+      fetchSession(sessionId).then((s) => {
+        if (!cancelled) {
+          setSession(s);
+          setLoading(false);
+          // Prewarm the remote terminal transport (ssh ControlMaster + dtach) so a
+          // later Terminal click is ~0.2s instead of ~2.5s. Fire-and-forget; the
+          // server no-ops for local sessions. Cheap, idempotent, self-expires.
+          if (s?.host) {
+            terminalPrewarm(sessionId).catch(() => { /* best-effort; open will still work */ });
+          }
+          // Fetch associated task title + pin state
+          if (s?.taskId) {
+            fetchTask(s.taskId).then((t) => {
+              if (!cancelled) {
+                setTaskTitle(t.title);
+                setSessionTask(t);
+              }
+            }).catch(() => {});
+          }
         }
-        // Fetch associated task title + pin state
-        if (s?.taskId) {
-          fetchTask(s.taskId).then((t) => {
-            if (!cancelled) {
-              setTaskTitle(t.title);
-              setSessionTask(t);
-            }
-          }).catch(() => {});
+      }).catch((err) => {
+        if (cancelled) return;
+        // Transient failure (fetchSession only throws for non-404) — the record
+        // exists, this request lost a race. Retry instead of settling into the
+        // "Untitled session" header (inc-1784686852150 / inc-1784752220440).
+        if (attempt < 3) {
+          log.warn('session-panel', 'session metadata fetch failed — retrying', {
+            sessionId, attempt, error: String(err),
+          });
+          retryTimer = setTimeout(() => { if (!cancelled) load(attempt + 1); }, 500 * (attempt + 1));
+        } else {
+          log.error('session-panel', 'session metadata fetch failed after retries', {
+            sessionId, error: String(err),
+          });
+          setLoading(false);
         }
-      }
-    }).catch(() => {
-      if (!cancelled) setLoading(false);
-    });
-    return () => { cancelled = true; };
+      });
+    };
+    load(0);
+    return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
   }, [sessionId]);
 
   // Task phase is not part of SessionStatusSnapshot; keep only that sibling
@@ -381,6 +402,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   // Action chip toggle state
   const [planPopoverOpen, setPlanPopoverOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
+  // Shared note state feeding both the pill (empty) and the bar (has note)
+  const noteState = useSessionNote(sessionId, session?.human_note);
   const [messagesOpen, setMessagesOpen] = useState(false);
   // Changed / Files / Terminal all share ONE full-screen split: [ left panel | chat ].
   // null = none open. Opening any view promotes the panel to fullscreen.
@@ -518,6 +541,18 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     }
     setRestartBusy(false);
   }, [sessionId]);
+
+  const handleOpenVscodeError = useCallback((error: unknown) => {
+    notify({
+      kind: 'operation-error',
+      severity: 'error',
+      title: 'Could not open VS Code',
+      body: error instanceof Error ? error.message : String(error),
+      persistent: false,
+      dedupKey: `session-vscode:${sessionId}:${Date.now()}`,
+      sessionId,
+    });
+  }, [notify, sessionId]);
 
   const [terminateBusy, setTerminateBusy] = useState(false);
   const handleTerminate = useCallback(async () => {
@@ -687,6 +722,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                       onInvestigate={handleInvestigate}
                       investigating={investigating}
                       investigateResult={investigateResult}
+                      onOpenVscodeError={handleOpenVscodeError}
                       onAfterAction={close}
                     />
                   )}
@@ -726,6 +762,14 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                   {locked ? ICON_LOCK : ICON_UNLOCK}
                 </button>
               )}
+              <button
+                className="task-action-btn session-panel-vscode"
+                onClick={() => { void openSessionInVscode(sessionId).catch(handleOpenVscodeError); }}
+                title="Open in VS Code"
+                aria-label="Open in VS Code"
+              >
+                {ICON_VSCODE}
+              </button>
               <button
                 className="task-action-btn session-panel-popout"
                 onClick={() => openPopout('session', { id: sessionId, host: session?.host, cwd: session?.cwd })}
@@ -823,12 +867,86 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                         )}
                       </div>
                       <div className="plan-popup-input">
-                        <ChatInput
+                        {/* Recap tip — one line "what just happened" (self-report) right above
+              the composer, so the user re-orients on a long session without
+              re-reading the transcript. Hidden while streaming (live output
+              makes it redundant). */}
+          {session?.recap && !isStreaming && (
+            <div className="session-recap-tip" title={session.recap}>
+              <span className="session-recap-tip-icon">💬</span>
+              <span className="session-recap-tip-text">{session.recap}</span>
+            </div>
+          )}
+          <ChatInput
+            controlsSlot={session ? (() => {
+              // Mode toggle uses session.mode only (not planCompleted) — planCompleted
+              // is a separate flag meaning "plan was produced", it shouldn't lock the toggle.
+              // Rendered INSIDE the composer card's controls row (D6), between the
+              // "+" and the mic/send cluster.
+              const MODE_LABELS: Record<string, string> = {
+                default: 'Default', bypass: 'Bypass', plan: 'Plan', accept: 'Accept',
+              };
+              const currentMode = session.mode || 'default';
+              const isPlan = currentMode === 'plan';
+              const currentIdx = enabledModes.indexOf(currentMode);
+              const nextMode = enabledModes[(currentIdx + 1) % enabledModes.length]!;
+              const toggleMode = () => {
+                setSession({ ...session, mode: nextMode });
+                updateSession(session.claudeSessionId, { mode: nextMode }).catch(err => {
+                  setSession({ ...session, mode: currentMode }); // revert
+                  console.warn('[session-panel] mode toggle failed', session.claudeSessionId, nextMode, err);
+                });
+              };
+              const label = MODE_LABELS[currentMode] ?? currentMode;
+              return (
+                <div className="session-mode-bar">
+                  {session.engine === 'codex' ? (
+                    <SessionControlPills
+                      controls={sessionControls}
+                      setControl={setSessionControl}
+                      showModeShortcut
+                    />
+                  ) : (
+                    <button
+                      className={`mode-toggle-pill${isPlan ? ' plan-active' : ''}`}
+                      onClick={toggleMode}
+                      title={`Mode: ${currentMode}. Click or Shift+Tab to cycle → ${nextMode}`}
+                    >
+                      <span className="mode-toggle-pill-label">
+                        {label}
+                      </span>
+                      <span className="mode-toggle-pill-shortcut">{'\u21E7'}Tab</span>
+                    </button>
+                  )}
+                  <SideQuestionDrawer sessionId={session?.claudeSessionId} />
+                  <SessionNotesPill
+                    noteState={noteState}
+                    expanded={notesOpen}
+                    onToggleExpanded={() => setNotesOpen(o => !o)}
+                  />
+                </div>
+              );
+            })() : undefined}
                           onSend={handleSend}
                           onInterruptSend={handleInterruptSend}
                           isStreaming={isStreaming}
                           placeholder="Send a message while viewing plan..."
                           showCommands={false}
+                          onToggleMode={session ? () => {
+                            if (session.engine === 'codex') {
+                              const control = sessionControls.find((candidate) => candidate.id === 'mode');
+                              const next = nextSessionControlValue(control);
+                              if (control && next) void setSessionControl(control.id, next);
+                              return;
+                            }
+                            const cur = session.mode || 'default';
+                            const next = enabledModes[(enabledModes.indexOf(cur) + 1) % enabledModes.length]!;
+                            setSession({ ...session, mode: next });
+                            updateSession(session.claudeSessionId, { mode: next }).catch(err => {
+                              setSession({ ...session, mode: cur }); // revert
+                              console.warn('[session-panel] mode toggle failed', session.claudeSessionId, next, err);
+                            });
+                          } : undefined}
                         />
                       </div>
                     </div>
@@ -937,14 +1055,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             />
           </div>
         )}
-        {notesOpen && (
-          <div className="session-action-panel">
-            <SessionNotes
-              sessionId={sessionId}
-              initialNote={session?.human_note}
-            />
-          </div>
-        )}
         {ps === 'error' && session?.errorMessage && (() => {
           // Coupling: 'Connection lost' is set by session-health-monitor when daemon unreachable.
           // 'Reconnecting' activity is set by the same monitor's recoverConnectionLostSessions().
@@ -1050,71 +1160,80 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
           />
         </div>
 
+        {/* Sticky-note bar — always visible once a note exists (also hosts the
+            editor when opened from the pill/kebab while empty). */}
+        <SessionNotesBar
+          noteState={noteState}
+          expanded={notesOpen}
+          onToggleExpanded={() => setNotesOpen(o => !o)}
+        />
+
         <div className="session-panel-input">
           {sendError && (
             <div className="text-xs" style={{ color: 'var(--error)', padding: '4px 12px' }}>
               {sendError}
             </div>
           )}
-          {session && (() => {
-            // Mode toggle uses session.mode only (not planCompleted) — planCompleted
-            // is a separate flag meaning "plan was produced", it shouldn't lock the toggle.
-            const MODE_LABELS: Record<string, string> = {
-              default: 'Default', bypass: 'Bypass', plan: 'Plan', accept: 'Accept',
-            };
-            const MODE_ICONS: Record<string, string> = {
-              default: '\u2699\uFE0F', bypass: '\u26A1', plan: '\uD83D\uDCCB', accept: '\u2705',
-            };
-            const currentMode = session.mode || 'default';
-            const isPlan = currentMode === 'plan';
-            const currentIdx = enabledModes.indexOf(currentMode);
-            const nextMode = enabledModes[(currentIdx + 1) % enabledModes.length]!;
-            const toggleMode = () => {
-              setSession({ ...session, mode: nextMode });
-              updateSession(session.claudeSessionId, { mode: nextMode }).catch(err => {
-                setSession({ ...session, mode: currentMode }); // revert
-                console.warn('[session-panel] mode toggle failed', session.claudeSessionId, nextMode, err);
-              });
-            };
-            const icon = MODE_ICONS[currentMode] ?? '\u2699\uFE0F';
-            const label = MODE_LABELS[currentMode] ?? currentMode;
-            return (
-              <>
-                {/* Recap tip — one line "what just happened" (self-report) right above
-                    the mode bar, so the user re-orients on a long session without
-                    re-reading the transcript. Hidden while streaming (live output
-                    makes it redundant). */}
-                {session.recap && !isStreaming && (
-                  <div className="session-recap-tip" title={session.recap}>
-                    <span className="session-recap-tip-icon">💬</span>
-                    <span className="session-recap-tip-text">{session.recap}</span>
-                  </div>
-                )}
-              <div className="session-mode-bar">
-                {session.engine === 'codex' ? (
-                  <SessionControlPills
-                    controls={sessionControls}
-                    setControl={setSessionControl}
-                    showModeShortcut
-                  />
-                ) : (
-                  <button
-                    className={`mode-toggle-pill${isPlan ? ' plan-active' : ''}`}
-                    onClick={toggleMode}
-                    title={`Mode: ${currentMode}. Click or Shift+Tab to cycle → ${nextMode}`}
-                  >
-                    <span className="mode-toggle-pill-label">
-                      {icon} {label}
-                    </span>
-                    <span className="mode-toggle-pill-shortcut">{'\u21E7'}Tab</span>
-                  </button>
-                )}
-                <SideQuestionDrawer sessionId={session?.claudeSessionId} />
-              </div>
-              </>
-            );
-          })()}
+          {/* Recap tip — one line "what just happened" (self-report) right above
+              the composer, so the user re-orients on a long session without
+              re-reading the transcript. Hidden while streaming (live output
+              makes it redundant). */}
+          {session?.recap && !isStreaming && (
+            <div className="session-recap-tip" title={session.recap}>
+              <span className="session-recap-tip-icon">💬</span>
+              <span className="session-recap-tip-text">{session.recap}</span>
+            </div>
+          )}
           <ChatInput
+            controlsSlot={session ? (() => {
+              // Mode toggle uses session.mode only (not planCompleted) — planCompleted
+              // is a separate flag meaning "plan was produced", it shouldn't lock the toggle.
+              // Rendered INSIDE the composer card's controls row (D6), between the
+              // "+" and the mic/send cluster.
+              const MODE_LABELS: Record<string, string> = {
+                default: 'Default', bypass: 'Bypass', plan: 'Plan', accept: 'Accept',
+              };
+              const currentMode = session.mode || 'default';
+              const isPlan = currentMode === 'plan';
+              const currentIdx = enabledModes.indexOf(currentMode);
+              const nextMode = enabledModes[(currentIdx + 1) % enabledModes.length]!;
+              const toggleMode = () => {
+                setSession({ ...session, mode: nextMode });
+                updateSession(session.claudeSessionId, { mode: nextMode }).catch(err => {
+                  setSession({ ...session, mode: currentMode }); // revert
+                  console.warn('[session-panel] mode toggle failed', session.claudeSessionId, nextMode, err);
+                });
+              };
+              const label = MODE_LABELS[currentMode] ?? currentMode;
+              return (
+                <div className="session-mode-bar">
+                  {session.engine === 'codex' ? (
+                    <SessionControlPills
+                      controls={sessionControls}
+                      setControl={setSessionControl}
+                      showModeShortcut
+                    />
+                  ) : (
+                    <button
+                      className={`mode-toggle-pill${isPlan ? ' plan-active' : ''}`}
+                      onClick={toggleMode}
+                      title={`Mode: ${currentMode}. Click or Shift+Tab to cycle → ${nextMode}`}
+                    >
+                      <span className="mode-toggle-pill-label">
+                        {label}
+                      </span>
+                      <span className="mode-toggle-pill-shortcut">{'\u21E7'}Tab</span>
+                    </button>
+                  )}
+                  <SideQuestionDrawer sessionId={session?.claudeSessionId} />
+                  <SessionNotesPill
+                    noteState={noteState}
+                    expanded={notesOpen}
+                    onToggleExpanded={() => setNotesOpen(o => !o)}
+                  />
+                </div>
+              );
+            })() : undefined}
             onSend={handleSend}
             onInterruptSend={handleInterruptSend}
             isStreaming={isStreaming}

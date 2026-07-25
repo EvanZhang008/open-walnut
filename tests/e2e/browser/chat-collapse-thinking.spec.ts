@@ -100,16 +100,21 @@ test.describe.serial('main chat collapse and thinking rendering', () => {
     const blankThinkingMessage = page.locator('.chat-message-assistant', { hasText: BLANK_THINKING_TEXT })
     await expect(blankThinkingMessage).toBeVisible()
     await expect(blankThinkingMessage).toContainText(BLANK_THINKING_TEXT)
-    await expect(blankThinkingMessage.locator('.chat-thinking')).toHaveCount(0)
+    const blankThinkingRow = blankThinkingMessage.locator('.tool-run-row', {
+      has: page.locator('.tool-run-label', { hasText: /^Thinking$/ }),
+    })
+    await expect(blankThinkingRow).toHaveCount(0)
 
     const realThinkingMessage = page.locator('.chat-message-assistant', { hasText: REAL_THINKING_ANSWER })
     await expect(realThinkingMessage).toBeVisible()
-    const thinking = realThinkingMessage.locator('.chat-thinking')
-    await expect(thinking).toBeVisible()
-    await expect(thinking.locator('.chat-thinking-content')).toHaveCount(0)
+    const thinkingRow = realThinkingMessage.locator('.tool-run-row', {
+      has: page.locator('.tool-run-label', { hasText: /^Thinking$/ }),
+    })
+    await expect(thinkingRow).toBeVisible()
+    await expect(thinkingRow.locator('.chat-thinking-content')).toHaveCount(0)
 
-    await thinking.locator('.chat-thinking-toggle').click()
-    await expect(thinking.locator('.chat-thinking-content')).toBeVisible()
-    await expect(thinking.locator('.chat-thinking-content')).toHaveText(REAL_THINKING_TEXT)
+    await thinkingRow.locator('.tool-run-toggle').click()
+    await expect(thinkingRow.locator('.chat-thinking-content')).toBeVisible()
+    await expect(thinkingRow.locator('.chat-thinking-content')).toHaveText(REAL_THINKING_TEXT)
   })
 })

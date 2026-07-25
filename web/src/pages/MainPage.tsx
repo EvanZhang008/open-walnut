@@ -43,8 +43,6 @@ import { resolveTaskSessionId } from '@/utils/session-status';
 import { FocusDock } from '@/components/dock/FocusDock';
 import { SetupBanner } from '@/components/common/SetupBanner';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
-import { getErrorSuggestion } from '@/utils/error-suggestions';
-import { ErrorSuggestionLink } from '@/components/common/ErrorSuggestionLink';
 import type { SlashCommand } from '@/commands/types';
 import type { CommandContext } from '@/commands/types';
 import {
@@ -164,6 +162,18 @@ function loadSessionColumns(): SessionSlot[] {
   return [];
 }
 
+/** The one Quick Start failure notification shape — used by both the retry
+ *  path and the initial-launch path so the copy/dedup key can't drift apart. */
+function quickStartFailedNotification(host: string | null | undefined, cwd: string, errMsg: string) {
+  return {
+    kind: 'operation-error' as const,
+    severity: 'error' as const,
+    title: 'Quick Start Failed',
+    body: errMsg,
+    persistent: true,
+    dedupKey: `quick-start:${host ?? '__local__'}:${cwd}:${errMsg}`,
+  };
+}
 
 function formatQuickTaskDate(iso: string): string {
   const dateOnly = !iso.includes('T');
@@ -382,6 +392,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Session/task quick-entry popovers above the chat input.
   const [pathSelectorOpen, setPathSelectorOpen] = useState(false);
   const [quickTaskOpen, setQuickTaskOpen] = useState(false);
+  // Where the launcher popover is anchored: 'chat' = above the chat input
+  // (message-first flow), 'todo' = dropdown inside the task panel (path-first
+  // flow that NEVER touches chat visibility — sessions can start with the chat
+  // column hidden; the CLI spawns with an empty first message and idles).
+  const [launcherAnchor, setLauncherAnchor] = useState<'chat' | 'todo'>('chat');
   const [quickStartPath, setQuickStartPath] = useState<QuickStartPath | null>(null);
   // Walnut's own source checkout (null on npm installs / cloud) — drives the
   // fix-walnut pill. Fetched once; the API layer caches for the page lifetime.
@@ -630,10 +645,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       setChatVisible(prev => !prev);
     };
     const handleSessionLauncher = () => {
+      setLauncherAnchor('chat');
       setPathSelectorOpen(true);
       setQuickTaskOpen(false);
     };
     const handleTaskComposer = () => {
+      setLauncherAnchor('chat');
       setQuickTaskOpen(true);
       setPathSelectorOpen(false);
     };
@@ -784,7 +801,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // ── Quick Start retry handler ──
   const handleQuickStartRetry = useCallback(() => {
     const meta = pendingQuickStartMetaRef.current;
-    if (!meta || !meta.message) return;
+    // Empty string is a VALID message (todo-launcher path-first launch spawns
+    // the CLI with no first turn) — only bail when there's no meta at all.
+    if (!meta || typeof meta.message !== 'string') return;
 
     // Clear the httpError so panel goes back to spinner
     pendingQuickStartMetaRef.current = { ...meta, httpError: undefined };
@@ -808,8 +827,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         pendingQuickStartMetaRef.current = { ...pendingQuickStartMetaRef.current, httpError: errMsg };
       }
       setSessionColumns(prev => [...prev]); // force re-render (identity change)
+      notify(quickStartFailedNotification(meta.host, meta.cwd, errMsg));
     });
-  }, []);
+  }, [notify]);
 
   // ── Triage panel handlers ──
   const handleOpenTriageForTask = useCallback((taskId: string) => {
@@ -844,6 +864,16 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     setPathSelectorOpen(false);
   }, []);
 
+  // TodoPanel toolbar "+" launcher — opens the SAME SessionPathSelector /
+  // QuickTaskComposer components, but anchored INSIDE the task panel with a
+  // Session | Task tab header (Session default). Never touches chat
+  // visibility: the whole point of this entry is starting a session while
+  // the chat column stays hidden.
+  const handleToolbarOpenLauncher = useCallback(() => {
+    setLauncherAnchor('todo');
+    setQuickTaskOpen(false);
+    setPathSelectorOpen(true);   // Session tab is the default
+  }, []);
   // fix-walnut pill → skip the path picker entirely: the target is Walnut's own
   // checkout (server-authoritative), the user only describes what's broken.
   const walnutInstallDirRef = useRef(walnutInstallDir);
@@ -1152,22 +1182,46 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const quickStartPathRef = useRef(quickStartPath);
   quickStartPathRef.current = quickStartPath;
 
-  const handleSendMessage = useCallback((text: string, images?: ImageAttachment[]) => {
-    const qsp = quickStartPathRef.current;
+  // Shared QuickTaskComposer create handler (chat-anchored AND todo-anchored
+  // composer instances): create → locate the new row → success toast w/ Undo.
+  const handleQuickTaskCreate = useCallback(async (input: Parameters<typeof handleCreate>[0]) => {
+    const created = await handleCreate(input);
+    // LOCATE the new task: open the todo panel if hidden and select+scroll
+    // to the row. Without this the task lands invisibly ("where did it
+    // go?") — and it also puts the late AI backfill (title cleanup, due
+    // badge) right where the user is already looking.
+    setTodoVisible(true);
+    if (!input.pinnedTier) {
+      // Pinned creates already locate via handleCreate's dock:activate-task
+      // path (scope 'pinned'); calling handleFocusTask here would clobber
+      // that scope back to 'all'.
+      handleFocusTask(created, { openDetail: false });
+    }
+    const summary = [
+      input.pinnedTier ? `${input.pinnedTier[0].toUpperCase()}${input.pinnedTier.slice(1)}` : undefined,
+      input.due_date ? formatQuickTaskDate(input.due_date) : undefined,
+      input.priority !== 'none' ? `${input.priority[0].toUpperCase()}${input.priority.slice(1)}` : undefined,
+      input.category,
+      input.project,
+    ].filter((value): value is string => !!value);
+    notify({
+      kind: 'sort',
+      severity: 'success',
+      title: `Task created: ${created.title}`,
+      ...(summary.length > 0 ? { body: summary.join(' · ') } : {}),
+      dedupKey: created.id,
+      persistent: false,
+      action: { label: 'Undo', kind: 'callback' },
+      onAction: () => { deleteTaskApi(created.id).catch(() => {}); },
+    });
+    return created;
+  }, [handleCreate, handleFocusTask, notify]);
 
-    // Quick-start interception: when a path is selected, create task + start session
-    if (qsp) {
-      setQuickStartPath(null);
-      setQuickStartModel(undefined);   // clear the collapsed-bar model mirror
-      // Local echo as a collapsible bubble — auto-collapses to "⚡ Quick Start on <cwd>"
-      // with a chevron the user can click to see the full pasted prompt. The agent
-      // reorganize message sent later (source: 'quick-start') is suppressed in the UI
-      // (see ChatMessage.tsx), so this echo is the single visual confirmation.
-      chat.addLocalMessage(
-        `${qsp.intent === 'fix-walnut' ? 'Fix Walnut' : 'Quick Start'} on \`${qsp.cwd}\`${qsp.host ? ` (${qsp.hostLabel ?? qsp.host})` : ''}:\n> ${text}`,
-        'quick-start-echo',
-      );
-
+  // Core quick-start launcher — creates the pending session column and fires the
+  // API call. Deliberately does NOT touch chat state/visibility: the todo-panel
+  // "+" entry point starts sessions while the chat column stays hidden (the CLI
+  // spawns with an empty first message and idles on stdin).
+  const launchQuickStart = useCallback((qsp: QuickStartPath, metaSnapshot: QuickStartTaskMeta | null, text: string, images?: ImageAttachment[]) => {
       // Set pending ref BEFORE the async call so WS events that arrive
       // during the HTTP round-trip can still match via taskId
       const tempTaskId = `pending-${Date.now()}`;
@@ -1179,10 +1233,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // Store pending metadata for rendering
       pendingQuickStartMetaRef.current = { id: pendingColId, cwd: qsp.cwd, host: qsp.host ?? undefined, hostLabel: qsp.hostLabel ?? undefined, message: text };
 
-      // Snapshot + clear meta ref BEFORE the async call so a subsequent /session
-      // doesn't pick up the stale meta while this one is in flight.
-      const metaSnapshot = quickStartMetaRef.current;
-      quickStartMetaRef.current = null;
       const taskMeta = metaSnapshot ? {
         starred: metaSnapshot.starred,
         needs_attention: metaSnapshot.needs_attention,
@@ -1220,12 +1270,15 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         // Skipped for fix-walnut: the server already titled the task
         // ("Fix Walnut: <report>") and set its project — renaming would clobber.
         if (qsp.intent !== 'fix-walnut') {
+          // Path-first launches (todo "+") have no prompt yet — don't feed the
+          // agent an empty quote to title from; the path is the only signal.
+          const promptLine = text ? `- User prompt: "${text}"` : `- No first message yet (path-first launch); title from the path for now`;
           const agentMsg = [
             `[Quick Start] Session created and running.`,
             `- Task ID: ${result.taskId}`,
             `- Path: ${qsp.cwd}`,
             `- Category: Inbox / Quick Start`,
-            `- User prompt: "${text}"`,
+            promptLine,
             ``,
             `Please update the task:`,
             `1. Set a descriptive title (replace "Session: ...")`,
@@ -1242,8 +1295,39 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         }
         // Force re-render by updating sessionColumns in-place (identity change)
         setSessionColumns(prev => [...prev]);
-        chat.addLocalMessage(`Quick Start failed: ${errMsg}`);
+        notify(quickStartFailedNotification(qsp.host, qsp.cwd, errMsg));
       });
+  }, [chat, notify]);
+
+  // Todo-anchored select = path-first flow: no chat input to type a first
+  // message into, so start the session immediately with an empty message —
+  // the CLI spawns, initializes, and idles; the user talks to it in the
+  // session column that opens.
+  const handleTodoPathSelect = useCallback((path: QuickStartPath, taskMeta: QuickStartTaskMeta) => {
+    setPathSelectorOpen(false);
+    launchQuickStart(path, taskMeta, '');
+  }, [launchQuickStart]);
+
+  const handleSendMessage = useCallback((text: string, images?: ImageAttachment[]) => {
+    const qsp = quickStartPathRef.current;
+
+    // Quick-start interception: when a path is selected, create task + start session
+    if (qsp) {
+      setQuickStartPath(null);
+      setQuickStartModel(undefined);   // clear the collapsed-bar model mirror
+      // Local echo as a collapsible bubble — auto-collapses to "⚡ Quick Start on <cwd>"
+      // with a chevron the user can click to see the full pasted prompt. The agent
+      // reorganize message sent later (source: 'quick-start') is suppressed in the UI
+      // (see ChatMessage.tsx), so this echo is the single visual confirmation.
+      chat.addLocalMessage(
+        `${qsp.intent === 'fix-walnut' ? 'Fix Walnut' : 'Quick Start'} on \`${qsp.cwd}\`${qsp.host ? ` (${qsp.hostLabel ?? qsp.host})` : ''}:\n> ${text}`,
+        'quick-start-echo',
+      );
+      // Snapshot + clear meta ref BEFORE the async call so a subsequent /session
+      // doesn't pick up the stale meta while this one is in flight.
+      const metaSnapshot = quickStartMetaRef.current;
+      quickStartMetaRef.current = null;
+      launchQuickStart(qsp, metaSnapshot, text, images);
       return;
     }
 
@@ -1291,7 +1375,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       const plan = getPlanPayload();
       chat.sendMessage(text, undefined, images, undefined, plan.mode, plan.planModeFirst, plan.planModeOff);
     }
-  }, [chat, focusedTask, getPlanPayload, tasks]);
+  }, [chat, focusedTask, getPlanPayload, launchQuickStart, tasks]);
 
   const handleCommand = useCallback((cmd: SlashCommand, args?: string) => {
     const ctx: CommandContext = {
@@ -1368,7 +1452,46 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onOperationError={showOperationError}
           externalCategory={activeCategory}
           onCategoryChange={setActiveCategory}
+          onOpenLauncher={handleToolbarOpenLauncher}
         />
+        {/* Todo-anchored launcher popover — the SAME components as the chat
+            column's, wrapped in a Session | Task tab header and dropping DOWN
+            from the toolbar (todo-launcher-popover flips the bottom:100%
+            anchoring). Session select starts the session immediately (empty
+            first message) — chat stays hidden. */}
+        {launcherAnchor === 'todo' && (pathSelectorOpen || quickTaskOpen) && (
+          <div className="todo-launcher-popover">
+            {/* stopPropagation: the hosted components' document-level outside-click
+                handlers would treat a tab mousedown as "outside" and close the
+                popover before the tab's click ever fires. */}
+            <div className="todo-launcher-tabs" onMouseDown={(e) => e.stopPropagation()}>
+              <button
+                className={`todo-launcher-tab${pathSelectorOpen ? ' active' : ''}`}
+                onClick={() => { setQuickTaskOpen(false); setPathSelectorOpen(true); }}
+              >
+                Session
+              </button>
+              <button
+                className={`todo-launcher-tab${quickTaskOpen ? ' active' : ''}`}
+                onClick={() => { setPathSelectorOpen(false); setQuickTaskOpen(true); }}
+              >
+                Task
+              </button>
+            </div>
+            <SessionPathSelector
+              open={pathSelectorOpen}
+              onClose={() => setPathSelectorOpen(false)}
+              onSelect={handleTodoPathSelect}
+              confirmOnDismiss={false}
+            />
+            <QuickTaskComposer
+              open={quickTaskOpen}
+              onClose={() => setQuickTaskOpen(false)}
+              projectOptions={quickTaskProjectOptions}
+              onCreate={handleQuickTaskCreate}
+            />
+          </div>
+        )}
       </div>
 
       {/* Todo Resize Handle — only shown when todo is visible */}
@@ -1442,7 +1565,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             health={health}
             loading={healthLoading}
             onNavigateSettings={handleNavigateSettings}
-            onStartSession={() => setPathSelectorOpen(true)}
+            onStartSession={() => { setLauncherAnchor('chat'); setPathSelectorOpen(true); }}
           />
 
           <ChatPanel messageCount={chat.messages.length} prependedRef={chat.prependedRef}>
@@ -1493,22 +1616,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                 {chat.toolActivity.name}...
               </div>
             )}
-            {chat.error && (
-              <div className="chat-message chat-message-notification chat-message-notification-error">
-                <div className="chat-message-header chat-notification-header">
-                  <div className="chat-message-role">Error</div>
-                </div>
-                <div className="chat-message-content">
-                  <div className="markdown-body">
-                    <p>{chat.error}</p>
-                  </div>
-                  {(() => {
-                    const sug = getErrorSuggestion(chat.error);
-                    return sug ? <ErrorSuggestionLink {...sug} /> : null;
-                  })()}
-                </div>
-              </div>
-            )}
           </ChatPanel>
 
           {/* Quick Start Bar — context pill when path is selected */}
@@ -1524,7 +1631,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                     overflow and saves a row of controls. */}
                 <button
                   className="qsb-model-chip"
-                  onClick={() => { setPathSelectorOpen(true); setQuickTaskOpen(false); }}
+                  onClick={() => { setLauncherAnchor('chat'); setPathSelectorOpen(true); setQuickTaskOpen(false); }}
                   title="Edit launch settings (engine, model, star, pin, priority)"
                 >
                   {/* Chip label: codex engine → "Codex" (its models are discovered at
@@ -1552,7 +1659,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           <div style={{ position: 'relative' }}>
             {/* Session path selector popover (above the input) */}
             <SessionPathSelector
-              open={pathSelectorOpen && !pendingQuestion}
+              open={pathSelectorOpen && launcherAnchor === 'chat' && !pendingQuestion}
               onClose={() => setPathSelectorOpen(false)}
               onSelect={handlePathSelect}
               // Re-opening to edit an already-confirmed Quick Start keeps the prior
@@ -1563,41 +1670,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             />
 
             <QuickTaskComposer
-              open={quickTaskOpen && !pendingQuestion}
+              open={quickTaskOpen && launcherAnchor === 'chat' && !pendingQuestion}
               onClose={() => setQuickTaskOpen(false)}
               projectOptions={quickTaskProjectOptions}
-              onCreate={async (input) => {
-                const created = await handleCreate(input);
-                // LOCATE the new task: open the todo panel if hidden and select+scroll
-                // to the row. Without this the task lands invisibly ("where did it
-                // go?") — and it also puts the late AI backfill (title cleanup, due
-                // badge) right where the user is already looking.
-                setTodoVisible(true);
-                if (!input.pinnedTier) {
-                  // Pinned creates already locate via handleCreate's dock:activate-task
-                  // path (scope 'pinned'); calling handleFocusTask here would clobber
-                  // that scope back to 'all'.
-                  handleFocusTask(created, { openDetail: false });
-                }
-                const summary = [
-                  input.pinnedTier ? `${input.pinnedTier[0].toUpperCase()}${input.pinnedTier.slice(1)}` : undefined,
-                  input.due_date ? formatQuickTaskDate(input.due_date) : undefined,
-                  input.priority !== 'none' ? `${input.priority[0].toUpperCase()}${input.priority.slice(1)}` : undefined,
-                  input.category,
-                  input.project,
-                ].filter((value): value is string => !!value);
-                notify({
-                  kind: 'sort',
-                  severity: 'success',
-                  title: `Task created: ${created.title}`,
-                  ...(summary.length > 0 ? { body: summary.join(' · ') } : {}),
-                  dedupKey: created.id,
-                  persistent: false,
-                  action: { label: 'Undo', kind: 'callback' },
-                  onAction: () => { deleteTaskApi(created.id).catch(() => {}); },
-                });
-                return created;
-              }}
+              onCreate={handleQuickTaskCreate}
             />
 
             {/* Ask Question popover (above the input, mutually exclusive with path selector) */}
@@ -1609,10 +1685,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
             <QuickAccessBar
               onTaskClick={() => {
+                setLauncherAnchor('chat');
                 setQuickTaskOpen(true);
                 setPathSelectorOpen(false);
               }}
               onSessionClick={() => {
+                setLauncherAnchor('chat');
                 setPathSelectorOpen(true);
                 setQuickTaskOpen(false);
               }}

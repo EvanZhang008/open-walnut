@@ -203,7 +203,6 @@ export function NotesSessionChat({ taskId, sessionId: knownSessionId, onResolved
             {localQueue.map((m) => (
               <div key={m.id} className="session-msg session-msg-user">
                 <div className="session-msg-header">
-                  <span className="session-msg-role">You</span>
                   <span className="session-msg-queued-badge">Queued</span>
                 </div>
                 <div className="session-msg-content">

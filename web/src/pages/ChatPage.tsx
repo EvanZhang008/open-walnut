@@ -12,7 +12,7 @@ import { shouldHideUiOnlyMessage, useUiOnlySettings } from '@/hooks/useDeveloper
 
 export function ChatPage() {
   const navigate = useNavigate();
-  const { messages, isStreaming, toolActivity, error, isLoading, queueCount, hasMore, isLoadingOlder, prependedRef, sendMessage, clearMessages, addLocalMessage, stopGeneration, cancelQueuedMessage, clearQueue, loadOlderMessages } = useChat();
+  const { messages, isStreaming, toolActivity, isLoading, queueCount, hasMore, isLoadingOlder, prependedRef, sendMessage, clearMessages, addLocalMessage, stopGeneration, cancelQueuedMessage, clearQueue, loadOlderMessages } = useChat();
   const { mode: chatMode, toggleMode, getPlanPayload } = usePlanMode();
   const { connectionState } = useWebSocket();
   // Force re-render when UI Only settings change
@@ -91,9 +91,6 @@ export function ChatPage() {
             <span className="spinner" style={{ width: 14, height: 14, borderWidth: 2, display: 'inline-block', verticalAlign: 'middle', marginRight: 8 }} />
             {toolActivity.name}...
           </div>
-        )}
-        {error && (
-          <div className="text-sm" style={{ color: 'var(--error)', padding: '8px 12px' }}>Error: {error}</div>
         )}
       </ChatPanel>
 

@@ -10,6 +10,10 @@ export interface BackgroundTask {
   taskId: string;
   description?: string;
   subagentType?: string;
+  /** CLI task kind (local_agent | local_shell | in_process_teammate | …) —
+   *  lets the panel split background AGENTS from plain background TASKS.
+   *  Absent on tasks recovered from disk (recovery only keeps id→status). */
+  taskType?: string;
   status: string; // running | completed | failed | stopped | paused
   tokens?: number;
   lastTool?: string;

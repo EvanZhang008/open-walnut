@@ -134,7 +134,7 @@ export function SideQuestionDrawer({ sessionId }: SideQuestionDrawerProps) {
         disabled={disabled}
         title={disabled ? 'Available once the session has started' : 'Ask a quick, independent question — kept out of the main conversation'}
       >
-        <span>{'💬'} btw</span>
+        <span>btw</span>
         {history.length > 0 && <span className="side-question-count">{history.length}</span>}
       </button>
 

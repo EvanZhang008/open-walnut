@@ -91,9 +91,12 @@ interface ChatInputProps {
   /** Bump this (monotonic, >0) to apply prefillText — replaces the input + focuses,
    *  WITHOUT sending. Keyed on the nonce so the same text can be re-applied. */
   prefillNonce?: number;
+  /** Extra controls rendered in the card's bottom row, between the "+" and the
+   *  mic/send cluster (e.g. the session's Bypass / btw / Note text buttons). */
+  controlsSlot?: React.ReactNode;
 }
 
-export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onControlCommand, draftKey, onToggleMode, mentionCwd, mentionHost, prefillText, prefillNonce }: ChatInputProps) {
+export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onControlCommand, draftKey, onToggleMode, mentionCwd, mentionHost, prefillText, prefillNonce, controlsSlot }: ChatInputProps) {
   const [value, setValue] = useState(() => {
     if (!draftKey) return '';
     try { return localStorage.getItem(draftKey) ?? ''; } catch { return ''; }
@@ -734,45 +737,10 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
           </button>
         </div>
       )}
-      {/* Input row (Claude-style): [+] · input · mic · send.
-          The "+" holds attachments; send is an icon with a split "▾" for
-          Interrupt/Stop while a turn is streaming. */}
+      {/* Composer card (D6): ONE bordered card holding everything —
+          text row on top; controls row below: [+] · slot (Bypass/btw/Note) ·
+          spacer · mic · send. Mic stays next to send. */}
       <div className="chat-input-row">
-        {/* "+" attach menu — anchors a small popover of attachment actions */}
-        <div className="chat-plus-group" ref={plusGroupRef}>
-          <button
-            className={`chat-plus-btn${plusOpen ? ' active' : ''}`}
-            onClick={() => setPlusOpen((o) => !o)}
-            type="button"
-            disabled={disabled}
-            aria-label="Add attachment"
-            aria-haspopup="menu"
-            aria-expanded={plusOpen}
-            title="Add attachment"
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="12" y1="5" x2="12" y2="19" />
-              <line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
-          </button>
-          {plusOpen && (
-            <div className="chat-plus-menu" role="menu">
-              <button
-                className="chat-plus-menu-item"
-                onClick={handleAttachClick}
-                type="button"
-                role="menuitem"
-                disabled={images.length >= MAX_IMAGES}
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
-                </svg>
-                <span>{images.length >= MAX_IMAGES ? 'Image limit reached' : 'Attach image'}</span>
-              </button>
-            </div>
-          )}
-        </div>
-        {/* Unified input box: pill + images + textarea share one border */}
         <div className="chat-input-box">
           {/* Inline task context pill */}
           {focusedTask && onClearFocus && (
@@ -822,7 +790,44 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
             disabled={disabled}
             rows={1}
           />
+          {/* Controls row inside the card */}
+          <div className="chat-input-controls">
+        {/* "+" attach menu — anchors a small popover of attachment actions */}
+        <div className="chat-plus-group" ref={plusGroupRef}>
+          <button
+            className={`chat-plus-btn${plusOpen ? ' active' : ''}`}
+            onClick={() => setPlusOpen((o) => !o)}
+            type="button"
+            disabled={disabled}
+            aria-label="Add attachment"
+            aria-haspopup="menu"
+            aria-expanded={plusOpen}
+            title="Add attachment"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+          </button>
+          {plusOpen && (
+            <div className="chat-plus-menu" role="menu">
+              <button
+                className="chat-plus-menu-item"
+                onClick={handleAttachClick}
+                type="button"
+                role="menuitem"
+                disabled={images.length >= MAX_IMAGES}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
+                </svg>
+                <span>{images.length >= MAX_IMAGES ? 'Image limit reached' : 'Attach image'}</span>
+              </button>
+            </div>
+          )}
         </div>
+        {controlsSlot}
+        <span className="chat-input-controls-spacer" />
         <MicButton
           onTranscribe={(text) => {
             // Insert at cursor position (or append if no selection)
@@ -916,6 +921,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
             </>
           )}
         </div>
+          </div>{/* .chat-input-controls */}
+        </div>{/* .chat-input-box */}
       </div>
     </div>
   );

@@ -56,6 +56,15 @@ export interface SessionRecord {
   recapAt?: string;
 }
 
+export interface SessionSummaryInfo {
+  slug: string;
+  project: string;
+  summary: string;
+  status: string;
+  date: string;
+  task_ids: string[];
+}
+
 export interface SessionHistoryTool {
   name: string;
   input: Record<string, unknown>;
@@ -95,4 +104,8 @@ export interface SessionHistoryMessage {
   msgId?: string;
   /** Walnut-generated message ID for deterministic dedup of optimistic user messages. */
   walnutMessageId?: string;
+  /** True for CLI-injected user lines the human did NOT type (skill content
+   *  dumps, compaction continuation summaries, image-read metadata). Rendered
+   *  as a collapsed context row, never a "You" bubble. */
+  injected?: boolean;
 }

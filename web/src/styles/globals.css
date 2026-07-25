@@ -14,11 +14,13 @@
   /* Virtual-group cluster outline — soft accent, strong enough to read as one box
      but never competing with a task's own status background. */
   --group-outline: rgba(0, 122, 255, 0.32);
-  --border: rgba(0, 0, 0, 0.08);
-  --border-strong: rgba(0, 0, 0, 0.12);
+  /* iOS-style hairline separators (UIColor.separator family). */
+  --border: rgba(60, 60, 67, 0.12);
+  --border-strong: rgba(60, 60, 67, 0.18);
   --card-bg: #FFFFFF;
   --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
-  --card-shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
+  /* iOS shadow softness: low alpha, large blur. */
+  --card-shadow-hover: 0 8px 24px rgba(0, 0, 0, 0.08), 0 2px 8px rgba(0, 0, 0, 0.04);
   --success: #34C759;
   --warning: #FF9500;
   --error: #FF3B30;
@@ -46,6 +48,18 @@
   --session-ref-subtle: rgba(88, 86, 214, 0.08);
   --session-ref-subtle-hover: rgba(88, 86, 214, 0.16);
 
+  /* Focus-tier colors (crosshair / satellite / hourglass icons) */
+  --tier-focus: var(--accent);
+  --tier-satellite: var(--fg-muted);
+  --tier-wait: #FF9F0A;
+
+  /* iOS material helpers — translucent chrome recipe shared by all glass
+     surfaces (sidebar, dock, popovers). Solid fallback via @supports below. */
+  --glass-bg: color-mix(in srgb, var(--bg) 72%, transparent);
+  --glass-bg-menu: color-mix(in srgb, var(--card-bg) 80%, transparent);
+  --glass-blur: blur(20px) saturate(1.8);
+  --glass-blur-menu: blur(16px) saturate(1.8);
+
   color-scheme: light dark;
 }
 
@@ -64,11 +78,13 @@
   --accent-subtle: rgba(10, 132, 255, 0.12);
   /* Brighter on dark so the thin cluster outline stays visible on near-black cards. */
   --group-outline: rgba(10, 132, 255, 0.45);
-  --border: rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.14);
+  /* iOS dark separators (UIColor.separator dark family) — hairlines that stay
+     visible on the #000/#1C1C1E surfaces without reading as boxes. */
+  --border: rgba(84, 84, 88, 0.42);
+  --border-strong: rgba(84, 84, 88, 0.6);
   --card-bg: #1C1C1E;
   --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-  --card-shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --card-shadow-hover: 0 8px 24px rgba(0, 0, 0, 0.35), 0 2px 8px rgba(0, 0, 0, 0.25);
   --heartbeat: #FF8787;
   --overlay-bg: rgba(0, 0, 0, 0.5);
   --bg-hover: rgba(255, 255, 255, 0.06);
@@ -76,6 +92,7 @@
   --session-ref: #5E5CE6;
   --session-ref-subtle: rgba(94, 92, 230, 0.12);
   --session-ref-subtle-hover: rgba(94, 92, 230, 0.24);
+  --tier-wait: #FFB340;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -90,15 +107,16 @@
     --accent-hover: #409CFF;
     --accent-subtle: rgba(10, 132, 255, 0.12);
     --group-outline: rgba(10, 132, 255, 0.45);
-    --border: rgba(255, 255, 255, 0.08);
-    --border-strong: rgba(255, 255, 255, 0.14);
+    --border: rgba(84, 84, 88, 0.42);
+    --border-strong: rgba(84, 84, 88, 0.6);
     --card-bg: #1C1C1E;
     --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-    --card-shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.3);
+    --card-shadow-hover: 0 8px 24px rgba(0, 0, 0, 0.35), 0 2px 8px rgba(0, 0, 0, 0.25);
     --heartbeat: #FF8787;
     --overlay-bg: rgba(0, 0, 0, 0.5);
     --bg-hover: rgba(255, 255, 255, 0.06);
     --bg-elevated: #2C2C2E;
+    --tier-wait: #FFB340;
   }
 }
 
@@ -223,9 +241,10 @@ input:focus, textarea:focus, select:focus {
   box-shadow: 0 0 0 3px var(--accent-subtle);
 }
 
+/* iOS-style text selection: translucent accent wash, keep original text color
+   (solid blue + forced white read harsh, especially over code). */
 ::selection {
-  background: #0055CC;
-  color: #fff;
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 /* ===== Layout ===== */
@@ -237,7 +256,7 @@ input:focus, textarea:focus, select:focus {
 
 .sidebar {
   width: var(--sidebar-width);
-  background: var(--bg-secondary);
+  background: var(--bg);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -485,7 +504,7 @@ input:focus, textarea:focus, select:focus {
   width: 320px;
   z-index: 999;
   /* Same surface as the sidebar so panel + sidebar read as one column. */
-  background: var(--bg-secondary);
+  background: var(--bg);
   border-right: 1px solid var(--border);
   box-shadow: 4px 0 24px rgba(0, 0, 0, 0.12);
   display: flex;
@@ -2076,523 +2095,7 @@ input:focus, textarea:focus, select:focus {
 
 /* ===== Sessions ===== */
 
-/* Split-view layout */
-.sessions-split-view {
-  display: flex;
-  height: calc(100vh - 48px);
-}
-
-.sessions-list-pane {
-  flex: 0 0 320px;
-  overflow-y: auto;
-  border-right: 1px solid var(--border);
-  background: var(--bg);
-  max-width: 45%;
-}
-
-.sessions-list-pane.resizing {
-  transition: none;
-}
-
-/* .sessions-resize-handle — styled by the unified panel-gutter pattern
-   (see "Unified panel resize gutters" near .todo-resize-handle). */
-
-.sessions-detail-pane {
-  flex: 1;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg);
-}
-
-/* Session tree panel */
-.session-tree-panel {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-}
-
-.session-tree-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 16px 10px;
-}
-
-.session-tree-header-title {
-  font-size: 17px;
-  font-weight: 700;
-  letter-spacing: -0.3px;
-}
-
-.session-tree-search {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 40px;
-  margin: 0 12px 8px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-secondary);
-  color: var(--fg-muted);
-}
-
-.session-tree-search:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent);
-}
-
-.session-tree-search-icon {
-  display: inline-flex;
-  flex-shrink: 0;
-}
-
-.session-tree-search input {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--fg);
-  font: inherit;
-  font-size: 13px;
-}
-
-.session-tree-search-clear {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--fg-muted);
-  cursor: pointer;
-}
-
-.session-tree-search-clear:hover {
-  color: var(--fg);
-}
-
-.session-tree-back-btn {
-  background: none;
-  border: none;
-  color: var(--accent);
-  font-size: 18px;
-  padding: 2px 6px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  line-height: 1;
-  flex-shrink: 0;
-}
-
-.session-tree-back-btn:hover {
-  background: var(--bg-secondary);
-}
-
-.session-tree-back-btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.session-tree-toggle-completed {
-  padding: 0 16px 10px;
-}
-
-.session-tree-toggle-completed label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-  color: var(--fg-muted);
-  font-size: 12px;
-}
-
-/* Filter chips */
-.session-tree-filters {
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.session-tree-filter-group {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.session-tree-filter-label {
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--fg-muted);
-  min-width: 46px;
-  flex-shrink: 0;
-}
-
-.session-tree-filter-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  align-items: center;
-}
-
-.session-tree-chip {
-  font-size: 11px;
-  padding: 3px 10px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: transparent;
-  color: var(--fg-muted);
-  cursor: pointer;
-  transition: all 0.15s;
-  font-weight: 500;
-}
-
-.session-tree-chip:hover {
-  background: var(--bg-tertiary);
-  color: var(--fg-secondary);
-}
-
-.session-tree-chip-active {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
-}
-
-
-/* Star in task tree */
-.session-tree-star {
-  color: #FFD60A;
-  font-size: 11px;
-}
-
-.session-tree-scroll {
-  flex: 1;
-  overflow-y: auto;
-  padding: 4px 0;
-}
-
-.session-tree-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 32px 16px;
-}
-
-/* Tree level 1 — Category */
-.session-tree-category {
-  margin-bottom: 2px;
-}
-
-.session-tree-category-header {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 8px 16px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--fg-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  cursor: pointer;
-  user-select: none;
-  width: 100%;
-  border: 0;
-  background: transparent;
-  text-align: left;
-  font-family: inherit;
-}
-
-.session-tree-category-header:hover {
-  color: var(--fg-secondary);
-}
-
-.session-tree-category-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-tree-orphan-header {
-  color: var(--fg-muted);
-  font-weight: 500;
-}
-
-/* Tree level 2 — Project */
-.session-tree-project {
-  margin-bottom: 1px;
-}
-
-.session-tree-project-header {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 16px 5px 28px;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--fg-secondary);
-  cursor: pointer;
-  user-select: none;
-  border-radius: 6px;
-  margin: 0 4px;
-  width: calc(100% - 8px);
-  border: 0;
-  background: transparent;
-  text-align: left;
-  font-family: inherit;
-}
-
-.session-tree-project-header:hover {
-  background: var(--bg-tertiary);
-}
-
-.session-tree-project-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Tree level 3 — Task */
-.session-tree-task {
-  margin-bottom: 1px;
-}
-
-.session-tree-task-header {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 16px 5px 40px;
-  font-size: 13px;
-  font-weight: 400;
-  color: var(--fg);
-  cursor: pointer;
-  user-select: none;
-  border-radius: 6px;
-  margin: 0 4px;
-  width: calc(100% - 8px);
-  border: 0;
-  background: transparent;
-  text-align: left;
-  font-family: inherit;
-}
-
-.session-tree-task-header:hover {
-  background: var(--bg-tertiary);
-}
-
-.session-tree-task-status {
-  font-size: 10px;
-  width: 14px;
-  text-align: center;
-  flex-shrink: 0;
-}
-
-.session-tree-task-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Tree level 4 — Session (leaf) */
-.session-tree-session {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 16px 5px 56px;
-  font-size: 13px;
-  cursor: pointer;
-  user-select: none;
-  border-radius: 6px;
-  margin: 1px 4px;
-  width: calc(100% - 8px);
-  border: 0;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  font-family: inherit;
-}
-
-.session-tree-session:hover {
-  background: var(--bg-tertiary);
-}
-
-.session-tree-category-header:focus-visible,
-.session-tree-project-header:focus-visible,
-.session-tree-task-header:focus-visible,
-.session-tree-session:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-
-.session-tree-session:active,
-.session-tree-session-selected,
-.session-tree-session-selected:active,
-.session-tree-session-selected:focus {
-  background: var(--accent-subtle);
-  box-shadow: inset 2px 0 0 var(--accent);
-  -webkit-tap-highlight-color: transparent;
-}
-
-.session-tree-session-title {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-tree-codex-badge {
-  flex-shrink: 0;
-  padding: 1px 5px;
-  border: 1px solid var(--border-strong);
-  border-radius: 4px;
-  background: var(--bg-tertiary);
-  color: var(--fg-secondary);
-  font-size: 10px;
-  font-weight: 600;
-}
-
-.session-tree-session-time {
-  flex-shrink: 0;
-  margin-left: auto;
-  white-space: nowrap;
-}
-
-/* Shared tree utilities */
-.session-tree-arrow {
-  font-size: 9px;
-  width: 12px;
-  text-align: center;
-  flex-shrink: 0;
-  color: var(--fg-muted);
-}
-
-.session-tree-count {
-  font-size: 11px;
-  color: var(--fg-muted);
-  margin-left: auto;
-  flex-shrink: 0;
-}
-
-.session-tree-load-more {
-  display: flex;
-  justify-content: center;
-  padding: 12px 16px 20px;
-}
-
-.session-tree-load-more button {
-  min-height: 36px;
-  padding: 6px 14px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-secondary);
-  color: var(--fg-secondary);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.session-tree-load-more button:hover:not(:disabled) {
-  background: var(--bg-tertiary);
-  color: var(--fg);
-}
-
-.session-tree-load-more button:disabled {
-  cursor: progress;
-  opacity: 0.65;
-}
-
 /* Session detail & chat history */
-
-.session-detail-panel {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.sessions-mobile-detail-back {
-  display: none;
-}
-
-.session-detail-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-}
-
-.session-detail-header {
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--border);
-}
-
-.session-detail-title-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.session-detail-title {
-  font-size: 17px;
-  font-weight: 600;
-  margin: 0;
-  flex: 1;
-  min-width: 0;
-  /* Truncate with an ellipsis rather than break mid-word — in the narrow Changed
-     chat column, word-break:break-all produced a one-char-per-line title. */
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  letter-spacing: -0.2px;
-}
-
-.session-detail-title-editable {
-  cursor: pointer;
-  border-radius: 4px;
-  padding: 2px 4px;
-  margin: -2px -4px;
-  transition: background 0.15s;
-}
-
-.session-detail-title-editable:hover {
-  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
-}
-
-[data-theme="dark"] .session-detail-title-editable:hover {
-  background: rgba(255, 255, 255, 0.06);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .session-detail-title-editable:hover {
-    background: rgba(255, 255, 255, 0.06);
-  }
-}
-
-.session-detail-title-input {
-  font-size: 17px;
-  font-weight: 600;
-  letter-spacing: -0.2px;
-  flex: 1;
-  border: 1px solid var(--accent, #007AFF);
-  border-radius: 4px;
-  padding: 2px 4px;
-  margin: -2px -4px;
-  background: var(--card-bg, #fff);
-  color: var(--fg-primary, #000);
-  outline: none;
-  font-family: inherit;
-  width: 100%;
-}
 
 .session-detail-badge {
   display: inline-flex;
@@ -2605,117 +2108,12 @@ input:focus, textarea:focus, select:focus {
   flex-shrink: 0;
 }
 
-.session-detail-badge-embedded {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  font-size: 11px;
-  font-weight: 600;
-}
-
 .session-detail-badge-dot {
   display: inline-block;
   width: 6px;
   height: 6px;
   border-radius: 50%;
   animation: session-pulse 1.4s ease-in-out infinite;
-}
-
-.session-detail-summary {
-  margin-top: 8px;
-}
-
-.session-detail-info-grid {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 4px 12px;
-  font-size: 12px;
-}
-
-.session-detail-info-row {
-  display: contents;
-}
-
-.session-detail-info-label {
-  color: var(--fg-muted);
-  white-space: nowrap;
-  padding: 2px 0;
-}
-
-.session-detail-info-label::after {
-  content: ':';
-}
-
-.session-detail-info-value {
-  color: var(--fg-secondary);
-  padding: 2px 0;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-detail-info-value code {
-  font-size: 11px;
-}
-
-.session-detail-copyable {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-  border-radius: 4px;
-  padding: 0 4px;
-  margin: -1px -4px;
-  transition: background 0.15s;
-}
-
-.session-detail-copyable:hover {
-  background: var(--accent-subtle);
-}
-
-.session-detail-copyable code {
-  font-size: 11px;
-  color: var(--fg-secondary);
-}
-
-.session-detail-copy-icon {
-  font-size: 10px;
-  color: var(--accent);
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-
-.session-detail-copyable:hover .session-detail-copy-icon {
-  opacity: 1;
-}
-
-/* Session copy chip buttons (ID / Resume / Fork) */
-.session-copy-buttons {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.session-copy-chip {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 7px;
-  font-size: 10px;
-  font-weight: 500;
-  font-family: inherit;
-  color: var(--fg-muted);
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background 0.15s, color 0.15s;
-  line-height: 1.6;
-}
-
-.session-copy-chip:hover {
-  background: var(--accent-subtle);
-  color: var(--accent);
 }
 
 /* "Fork in Walnut" action button — accent fill to distinguish from copy chips */
@@ -2985,39 +2383,6 @@ input:focus, textarea:focus, select:focus {
   font-weight: 500;
 }
 
-.session-detail-link {
-  color: var(--accent);
-  text-decoration: none;
-  font-size: 12px;
-}
-
-.session-detail-link:hover {
-  text-decoration: underline;
-}
-
-.session-detail-code {
-  font-size: 11px;
-  background: var(--bg-tertiary);
-  padding: 1px 4px;
-  border-radius: 3px;
-}
-
-.session-detail-meta-bar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 6px;
-  font-size: 12px;
-  color: var(--fg-muted);
-  flex-wrap: wrap;
-}
-
-.session-detail-meta-bar > *:not(:last-child)::after {
-  content: '\00B7';
-  margin-left: 6px;
-  opacity: 0.5;
-}
-
 .session-detail-model-pill {
   font-weight: 600;
   font-size: 11px;
@@ -3062,11 +2427,6 @@ input:focus, textarea:focus, select:focus {
   border: 1px solid var(--border-strong);
   border-radius: 6px;
   box-shadow: var(--card-shadow-hover);
-}
-
-.sessions-detail-pane .codex-model-menu {
-  right: auto;
-  left: 0;
 }
 
 .codex-model-menu-status {
@@ -3135,15 +2495,6 @@ input:focus, textarea:focus, select:focus {
   text-transform: capitalize;
 }
 
-.session-detail-meta-bar .session-detail-copyable {
-  margin: 0;
-}
-
-.session-detail-meta-bar .session-detail-copyable code {
-  font-size: 11px;
-  color: var(--fg-muted);
-}
-
 .session-detail-collapse {
   margin-top: 6px;
 }
@@ -3177,81 +2528,81 @@ input:focus, textarea:focus, select:focus {
   border-top: 1px solid var(--border);
 }
 
-/* ── Session Notes ── */
+/* ── Session Notes — minimal ──
+   Empty: a text-only "Note" pill next to btw (style fully inherited from
+   .side-question-pill). Has note: a slim quiet row above the composer —
+   amber dot + one-line preview. Editing: plain textarea, system look. */
 
 .session-notes {
-  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
 }
 
 .session-notes-toggle {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   width: 100%;
-  padding: 8px 20px;
+  padding: 6px 16px;
   background: none;
   border: none;
   cursor: pointer;
-  font-size: 13px;
-  color: var(--fg-secondary);
+  font-size: 12px;
   text-align: left;
+  min-width: 0;
 }
 
 .session-notes-toggle:hover {
-  background: var(--accent-subtle);
+  background: var(--bg-hover);
 }
 
-.session-notes-arrow {
-  font-size: 10px;
-  line-height: 1;
+/* The one accent: a small amber dot marking "this session has a note". */
+.session-notes-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warning);
   flex-shrink: 0;
-}
-
-.session-notes-label {
-  font-weight: 600;
-  color: var(--fg);
-  flex-shrink: 0;
-}
-
-.session-notes-status {
-  font-size: 11px;
-  flex-shrink: 0;
-}
-
-.session-notes-status-saving {
-  color: var(--fg-muted);
-}
-
-.session-notes-status-saved {
-  color: var(--success);
 }
 
 .session-notes-preview {
-  color: var(--fg-muted);
-  font-size: 12px;
+  color: var(--fg-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+  flex: 1;
 }
 
-.session-notes-placeholder {
+.session-notes-status {
+  font-size: 11px;
   color: var(--fg-muted);
-  font-size: 12px;
-  font-style: italic;
+  flex-shrink: 0;
 }
+.session-notes-status-saved { color: var(--success); }
 
 .session-notes-body {
-  padding: 0 20px 10px;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 8px 16px;
+}
+
+.session-notes-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
 .session-notes-textarea {
-  width: 100%;
-  min-height: 80px;
-  max-height: 300px;
+  flex: 1;
+  min-height: 64px;
+  max-height: 260px;
   padding: 8px 10px;
   font-size: 13px;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: inherit;
   line-height: 1.5;
   color: var(--fg);
   background: var(--bg);
@@ -3259,7 +2610,6 @@ input:focus, textarea:focus, select:focus {
   border-radius: var(--radius-sm);
   resize: vertical;
   outline: none;
-  transition: border-color 0.15s;
 }
 
 .session-notes-textarea:focus {
@@ -3270,6 +2620,8 @@ input:focus, textarea:focus, select:focus {
   color: var(--fg-muted);
 }
 
+/* Pill row at the bottom of SessionDetailPanel (btw + Notes side by side).
+   position: relative anchors the shared .side-question-popover full-width. */
 /* ── User Messages Summary (My Messages) ── */
 
 .user-messages-summary {
@@ -3397,10 +2749,12 @@ input:focus, textarea:focus, select:focus {
   flex: 1;
   overflow-y: auto;
   overflow-anchor: none;  /* Prevent browser scroll shifts during content replacement (Phase 2) */
-  padding: 12px;
+  /* Claude-app-style gutter: every row (prose, tool runs, bullets) shares one
+     left baseline with breathing room that scales with the pane width. */
+  padding: 12px clamp(24px, 4%, 40px);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 4px;
 }
 
 .scroll-to-bottom-btn {
@@ -3485,7 +2839,14 @@ input:focus, textarea:focus, select:focus {
 
 .session-msg-user {
   max-width: 85%;
+  /* Right-anchor + shrink-wrap in BOTH parents: history messages sit inside a
+     block wrapper div (align-self is inert there — margin-left:auto does the
+     anchoring), timeline messages sit directly in the flex column. */
   align-self: flex-end;
+  margin-top: 6px;
+  margin-bottom: 6px;
+  margin-left: auto;
+  width: fit-content;
   background: var(--accent);
   color: #fff;
   border-bottom-right-radius: 4px;
@@ -3521,10 +2882,10 @@ input:focus, textarea:focus, select:focus {
 
 .session-msg-assistant {
   align-self: stretch;
-  background: var(--bg-secondary);
+  background: transparent;
   border: none;
-  border-radius: 12px;
-  border-bottom-left-radius: 4px;
+  border-radius: 0;
+  padding: 2px 0;
 }
 
 /* Code blocks in assistant messages: dark bg regardless of theme */
@@ -3556,11 +2917,6 @@ input:focus, textarea:focus, select:focus {
   margin-bottom: 4px;
 }
 
-.session-msg-role {
-  font-weight: 600;
-  font-size: 12px;
-}
-
 /* Initial Prompt label — subtle indicator next to "You" */
 .session-initial-prompt-label {
   font-size: 10px;
@@ -3573,6 +2929,15 @@ input:focus, textarea:focus, select:focus {
 
 .session-msg-content {
   word-break: break-word;
+}
+
+/* List markers hug the shared left baseline (Claude app): the bullet starts
+   at the gutter and its text hangs naturally a bit to the right. */
+.session-msg .markdown-body ul {
+  padding-left: 1.15em;
+}
+.session-msg .markdown-body ol {
+  padding-left: 1.5em;
 }
 
 /* Bare wrapper for tool_call / thinking blocks — no bubble, flush to panel
@@ -3595,7 +2960,7 @@ input:focus, textarea:focus, select:focus {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 12px 16px;
+  padding: 12px 0;
   font-size: 13px;
   color: var(--fg-muted);
 }
@@ -3629,7 +2994,7 @@ input:focus, textarea:focus, select:focus {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 16px;
+  padding: 4px 0;
   margin: 2px 0;
   font-size: 12px;
   color: var(--fg-muted);
@@ -3971,6 +3336,16 @@ input:focus, textarea:focus, select:focus {
   flex-direction: column;
   max-height: 240px;
   overflow-y: auto;
+}
+/* Section labels splitting background Agents from plain Tasks (legacy mode) */
+.wf-section-label {
+  padding: 4px 12px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  border-bottom: 1px solid var(--border-subtle, var(--border));
 }
 .wf-task {
   display: flex;
@@ -4517,141 +3892,8 @@ input:focus, textarea:focus, select:focus {
   cursor: not-allowed;
 }
 
-/* Session list panel (filter tabs + scrollable list) */
-.session-list-panel {
-  display: flex;
-  flex-direction: column;
-}
-
-.session-filter-tabs {
-  display: flex;
-  gap: 4px;
-  padding: 0 0 12px;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 8px;
-}
-
-.session-filter-tab {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--fg-muted);
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.session-filter-tab:hover {
-  background: var(--hover-bg);
-  color: var(--fg);
-}
-
-.session-filter-tab-active {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
-}
-
-.session-filter-count {
-  font-size: 11px;
-  min-width: 18px;
-  height: 18px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 9px;
-  background: rgba(255, 255, 255, 0.15);
-}
-
-.session-filter-tab:not(.session-filter-tab-active) .session-filter-count {
-  background: var(--hover-bg);
-}
-
-.session-list-scroll {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-/* Session row (clickable list item) */
-.session-row {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 10px 14px;
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.session-row:hover {
-  background: var(--bg-tertiary);
-}
-
-.session-row:focus,
-.session-row:focus-visible {
-  outline: none;
-}
-
-.session-row:active,
-.session-row-selected,
-.session-row-selected:active,
-.session-row-selected:focus {
-  background: var(--accent-subtle);
-  border-left: 3px solid var(--accent);
-  padding-left: 11px;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.session-row-top {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.session-status-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.session-row-title {
-  font-weight: 500;
-  font-size: 14px;
-  flex: 1;
-  min-width: 0;
-}
-
-.session-row-time {
-  flex-shrink: 0;
-}
-
-.session-row-bottom {
-  display: flex;
-  gap: 12px;
-  padding-left: 16px;
-}
-
-/* Session detail page layout */
-.session-detail-page {
-  display: flex;
-  flex-direction: column;
-  height: calc(100vh - 48px);
-}
-
-.session-detail-page-nav {
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--border);
-}
-
+/* No separator line above the composer — the card's own border is enough. */
 .session-chat-input-wrapper {
-  border-top: 1px solid var(--border);
   padding: 8px 16px;
   position: relative;
 }
@@ -4674,34 +3916,25 @@ input:focus, textarea:focus, select:focus {
   font-size: 13px;
 }
 
-/* Session message extras */
-.session-msg-time {
-  font-size: 11px;
-  color: var(--fg-muted);
-}
-
-.session-msg-user .session-msg-time {
-  color: rgba(255, 255, 255, 0.7);
-}
-
-.session-msg-model {
-  font-size: 11px;
-  color: var(--fg-muted);
-  padding: 1px 6px;
-  background: var(--hover-bg);
-  border-radius: var(--radius-sm);
-}
-
-.session-msg-text {
-  white-space: pre-wrap;
-}
-
 /* ── Per-message copy actions (Markdown / Rich text) ── */
 /* A bottom action bar under the message body, ChatGPT/Claude style. */
 .session-msg-actions {
   display: flex;
   align-items: center;
-  margin-top: 8px;
+  margin-top: 4px;
+}
+
+.session-msg .session-msg-actions,
+.session-msg-bare .session-msg-actions {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.session-msg:hover .session-msg-actions,
+.session-msg-bare:hover .session-msg-actions {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .msg-copy-actions {
@@ -4746,17 +3979,7 @@ input:focus, textarea:focus, select:focus {
   border-color: rgba(255, 255, 255, 0.3);
 }
 
-.session-msg-meta {
-  margin-top: 6px;
-  font-size: 11px;
-  color: var(--fg-muted);
-}
-
 /* Sessions page (legacy — kept for compatibility) */
-.sessions-page {
-  padding: 0;
-}
-
 /* ===== Memory Browser ===== */
 
 .memory-split-view {
@@ -5831,40 +5054,6 @@ input:focus, textarea:focus, select:focus {
 
 /* ===== Thinking Block ===== */
 
-.chat-thinking {
-  margin: 4px 0;
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
-  overflow: hidden;
-}
-
-.chat-thinking-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  padding: 6px 10px;
-  text-align: left;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--fg-muted);
-  transition: color 0.15s;
-}
-
-.chat-thinking-toggle:hover {
-  color: var(--fg-secondary);
-}
-
-.chat-thinking-icon {
-  font-size: 9px;
-  width: 10px;
-  flex-shrink: 0;
-}
-
-.chat-thinking-label {
-  font-style: italic;
-}
-
 .chat-thinking-content {
   padding: 0 10px 8px;
   font-size: 12px;
@@ -6229,6 +5418,100 @@ input:focus, textarea:focus, select:focus {
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* ===== Merged tool-run row (Claude Code app style) =====
+   Consecutive generic tool calls collapse into one muted text line:
+   "Ran 3 commands, read a file ›". No border, no box — reads like a quiet
+   annotation between prose paragraphs. Also used for CLI-injected context
+   (skill dumps / compaction summaries). Expanding reveals the full cards. */
+.tool-run-row {
+  margin: 2px 0;
+}
+
+.tool-run-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  font-size: 13px;
+  color: var(--fg-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  transition: color 0.15s;
+}
+
+.tool-run-toggle:hover {
+  color: var(--fg-secondary);
+}
+
+.tool-run-label {
+  min-width: 0;
+}
+
+.tool-run-label--error {
+  color: var(--warning);
+}
+
+.tool-run-chevron {
+  font-size: 15px;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: transform 0.15s;
+}
+
+.tool-run-chevron--open {
+  transform: rotate(90deg);
+}
+
+.tool-run-fail {
+  font-size: 11px;
+  color: var(--error);
+  flex-shrink: 0;
+}
+
+.tool-run-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.tool-run-live-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse-dot 1.5s infinite;
+}
+
+.tool-run-body {
+  margin-top: 4px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+}
+
+.tool-run-body .chat-tool-block-result {
+  max-height: 400px;
+}
+
+/* Thinking text inside a tool-run-style row: the body's own left border +
+   padding already indent it — drop the box-era horizontal padding. */
+.tool-run-body .chat-thinking-content {
+  padding: 0 0 4px;
+}
+
+.session-system-detail-pre {
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 4px 0;
+  color: var(--fg-muted);
 }
 
 /* Compact overrides for markdown inside tool result blocks.
@@ -6919,8 +6202,7 @@ input:focus, textarea:focus, select:focus {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  padding: 12px 0 4px;
-  border-top: 1px solid var(--border);
+  padding: 8px 0 4px;
   flex-shrink: 0;
   position: relative;
   align-items: flex-end;
@@ -6947,13 +6229,16 @@ input:focus, textarea:focus, select:focus {
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* Inline task context pill — sits inside .chat-input-box above the textarea */
+/* Inline task context pill — sits inside .chat-input-box above the textarea.
+   Top radius tracks the card (14px border − 1px) so a tinted bg never pokes
+   square corners past the card's rounding. */
 .chat-input-task-pill {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px 2px 6px;
+  padding: 6px 10px 4px 6px;
   border-bottom: 1px solid var(--border);
+  border-radius: 13px 13px 0 0;
   flex-shrink: 0;
   max-width: 100%;
   animation: contextBarSlideIn 0.15s ease;
@@ -6996,21 +6281,31 @@ input:focus, textarea:focus, select:focus {
   flex-shrink: 0;
 }
 
-/* Unified bordered box: pill + images + textarea all inside one border */
+/* D6 composer card: one quiet border holds text row + controls row.
+   Focus = a slightly firmer hairline + lift, NEVER a blue ring/glow. */
 .chat-input-box {
   flex: 1;
   display: flex;
   flex-direction: column;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
   transition: border-color 0.2s, box-shadow 0.2s;
   min-width: 0;
 }
 .chat-input-box:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-subtle);
+  border-color: var(--border-strong);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.07);
 }
+/* Controls row inside the card: [+] · slot · spacer · mic · send */
+.chat-input-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px 6px;
+}
+.chat-input-controls-spacer { flex: 1; }
 
 .chat-input-textarea {
   flex: none; /* flex: 1 would set flex-basis: 0%, overriding the JS-set style.height in a column flex container; use flex: none so height is controlled entirely by JS auto-resize */
@@ -7022,9 +6317,16 @@ input:focus, textarea:focus, select:focus {
   color: var(--fg);
   background: transparent;
   border: none;
+  border-radius: 0;
   padding: 8px 12px;
   outline: none;
   overflow-y: auto;
+}
+/* Kill the global textarea:focus accent ring INSIDE the card — the card itself
+   (.chat-input-box:focus-within) is the only focus affordance. */
+.chat-input-textarea:focus {
+  border: none;
+  box-shadow: none;
 }
 
 .chat-send-btn {
@@ -7074,20 +6376,19 @@ input:focus, textarea:focus, select:focus {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  width: 34px;
+  height: 34px;
   padding: 0;
   background: transparent;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
+  border: none;
+  border-radius: 50%;
   color: var(--fg-muted);
   cursor: pointer;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  transition: color 0.15s, background 0.15s;
 }
 .chat-plus-btn:hover:not(:disabled),
 .chat-plus-btn.active {
   color: var(--accent);
-  border-color: var(--accent);
   background: var(--accent-subtle);
 }
 .chat-plus-btn:disabled {
@@ -7135,54 +6436,52 @@ input:focus, textarea:focus, select:focus {
 .chat-plus-menu-item svg { color: var(--fg-muted); flex-shrink: 0; }
 .chat-send-menu-item.danger { color: var(--error); }
 
-/* ── Send split-button (icon + optional "▾" menu) ── */
+/* ── Send button (accent circle) + optional ghost "▾" menu ──
+   Claude-app style: send is the ONLY filled control in the composer — a
+   solid accent circle. The menu caret is a naked chevron beside it, not a
+   welded-on split box. */
 .chat-send-group {
   position: relative;
   display: flex;
-  align-items: stretch;
+  align-items: center;
+  gap: 2px;
   flex-shrink: 0;
 }
 .chat-send-btn-icon {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  width: 34px;
+  height: 34px;
   padding: 0;
   background: var(--accent);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-sm);
+  border: none;
+  border-radius: 50%;
   color: #fff;
   cursor: pointer;
-  transition: filter 0.15s, opacity 0.15s;
+  transition: filter 0.15s, opacity 0.15s, transform 0.1s;
 }
 .chat-send-btn-icon:hover:not(:disabled) { filter: brightness(0.92); }
+.chat-send-btn-icon:active:not(:disabled) { transform: scale(0.94); }
 .chat-send-btn-icon:disabled {
   opacity: 0.4;
   cursor: not-allowed;
-}
-/* When the split menu is present, square off the shared edge so the two
-   buttons read as one control. */
-.chat-send-group.has-menu .chat-send-btn-icon {
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
 }
 .chat-send-caret {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
+  width: 18px;
+  height: 34px;
   padding: 0;
-  background: var(--accent);
-  border: 1px solid var(--accent);
-  border-left: 1px solid rgba(255, 255, 255, 0.35);
-  border-top-right-radius: var(--radius-sm);
-  border-bottom-right-radius: var(--radius-sm);
-  color: #fff;
+  background: transparent;
+  border: none;
+  border-radius: 9px;
+  color: var(--fg-muted);
   cursor: pointer;
-  transition: filter 0.15s;
+  transition: color 0.15s, background 0.15s;
 }
-.chat-send-caret:hover { filter: brightness(0.92); }
+.chat-send-caret:hover { color: var(--accent); background: var(--accent-subtle); }
 .chat-send-menu {
   position: absolute;
   bottom: calc(100% + 6px);
@@ -7199,23 +6498,27 @@ input:focus, textarea:focus, select:focus {
 
 /* ── Image attachment styles ── */
 
+/* Composer icon buttons are GHOSTS: no border, no box — only the textarea
+   carries a border in the composer row. Hover = soft tint circle. */
 .chat-attach-btn {
   background: transparent;
-  border: 1px solid var(--border-strong);
+  border: none;
   color: var(--fg-muted);
-  padding: 6px 8px;
-  border-radius: var(--radius-sm);
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 50%;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: color 0.15s, border-color 0.15s;
+  transition: color 0.15s, background 0.15s;
   flex-shrink: 0;
 }
 
 .chat-attach-btn:hover:not(:disabled) {
   color: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-subtle);
 }
 
 .chat-attach-btn:disabled {
@@ -7228,23 +6531,23 @@ input:focus, textarea:focus, select:focus {
 .mic-btn {
   position: relative;
   background: transparent;
-  border: 1px solid var(--border-strong);
+  border: none;
   color: var(--fg-muted);
-  min-width: 40px;
-  height: 40px;
-  padding: 6px 8px;
-  border-radius: var(--radius-sm);
+  min-width: 34px;
+  height: 34px;
+  padding: 0 6px;
+  border-radius: 50%;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: color 0.15s, border-color 0.15s, box-shadow 0.15s;
+  transition: color 0.15s, background 0.15s, box-shadow 0.15s;
   flex-shrink: 0;
 }
 
 .mic-btn:hover:not(:disabled) {
   color: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-subtle);
 }
 
 .mic-btn:disabled {
@@ -8061,7 +7364,7 @@ input:focus, textarea:focus, select:focus {
   display: flex;
   gap: 8px;
   width: 100%;
-  padding: 4px 0;
+  padding: 8px 12px 0; /* align thumbnails with the textarea's 12px inset inside the card */
   flex-wrap: wrap;
 }
 
@@ -8397,8 +7700,10 @@ img[data-lightbox-src],
 
 .main-page-todo {
   flex-shrink: 0;
+  position: relative;   /* anchor for .todo-launcher-popover */
   border-right: 1px solid var(--border);
-  background: var(--bg-secondary);
+  /* Same surface as the chat column — the 1px border-right is the divider. */
+  background: var(--bg);
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -8423,7 +7728,6 @@ img[data-lightbox-src],
    on hover as the drag affordance. */
 .todo-resize-handle,
 .session-resize-handle,
-.sessions-resize-handle,
 .memory-resize-handle,
 .notes-resize-handle,
 .session-col-resize-handle {
@@ -8440,7 +7744,6 @@ img[data-lightbox-src],
 }
 .todo-resize-handle::before,
 .session-resize-handle::before,
-.sessions-resize-handle::before,
 .memory-resize-handle::before,
 .notes-resize-handle::before,
 .session-col-resize-handle::before {
@@ -8454,7 +7757,6 @@ img[data-lightbox-src],
 }
 .todo-resize-handle::after,
 .session-resize-handle::after,
-.sessions-resize-handle::after,
 .memory-resize-handle::after,
 .notes-resize-handle::after,
 .session-col-resize-handle::after {
@@ -8471,7 +7773,6 @@ img[data-lightbox-src],
 }
 .todo-resize-handle:hover::after,
 .session-resize-handle:hover::after,
-.sessions-resize-handle:hover::after,
 .memory-resize-handle:hover::after,
 .notes-resize-handle:hover::after,
 .session-col-resize-handle:hover::after {
@@ -8487,7 +7788,8 @@ img[data-lightbox-src],
 .main-page-sessions-area {
   flex-shrink: 0;
   border-left: 1px solid var(--border);
-  background: var(--bg-secondary);
+  /* Same surface as the chat column — the 1px border-left is the divider. */
+  background: var(--bg);
   display: flex;
   flex-direction: row;
   height: 100%;
@@ -9081,9 +8383,9 @@ img[data-lightbox-src],
   justify-content: center;
 }
 
+/* No separator line above the composer — the card's own border is enough. */
 .session-panel-input {
   flex-shrink: 0;
-  border-top: 1px solid var(--border);
   padding: 8px;
   position: relative;
 }
@@ -9264,13 +8566,21 @@ img[data-lightbox-src],
 }
 .vd-trigger:hover { border-color: var(--accent); }
 .vd-has-filter { color: var(--accent); border-color: var(--accent); }
-/* Icon-only variant — square button showing the sliders glyph (View options). */
+/* Icon-only variant — GHOST icon (no border/box; toolbar icons stay quiet).
+   Active filter = accent glyph + corner dot, still no box. */
 .vd-trigger-icon {
-  padding: 5px; gap: 0;
-  color: var(--fg-secondary);
+  width: 28px; height: 28px;
+  padding: 0; gap: 0;
+  align-items: center; justify-content: center;
+  color: var(--fg-muted);
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  transition: color 0.15s, background 0.15s;
 }
+.vd-trigger-icon:hover { color: var(--accent); background: var(--accent-subtle); }
 .vd-trigger-icon svg { display: block; }
-.vd-trigger-icon.vd-has-filter { color: var(--accent); }
+.vd-trigger-icon.vd-has-filter { color: var(--accent); border: none; }
 .vd-trigger-icon .vd-dot {
   position: absolute; top: 2px; right: 2px; margin: 0;
 }
@@ -9685,10 +8995,17 @@ img[data-lightbox-src],
   color: var(--fg-muted);
 }
 
-/* Tier dot on a Recent card whose task is already pinned — replaces the drag
+/* Tier badge on a Recent card whose task is already pinned — replaces the drag
    grip ("already placed"; the tier card is the draggable one). */
 .todo-recent-tier-dot {
   margin: 0 1px;
+  display: inline-flex;
+  align-items: center;
+}
+.todo-recent-tier-dot svg {
+  width: 12px;
+  height: 12px;
+  display: block;
 }
 
 /* Task whose session is currently open on the home page — left accent bar so it
@@ -9863,32 +9180,25 @@ img[data-lightbox-src],
   opacity: 0.7;
 }
 
-/* Pure CSS icons for tier sub-labels */
-.todo-icon-focus {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--accent, #007aff);
+/* Tier icons (SVG, stroke-style: crosshair / planet+satellite / hourglass).
+   Color IS the tier: Focus accent-blue, Satellite muted-grey,
+   Wait amber (paused/blocked — the old grey half-circle read as Satellite). */
+.todo-tier-icon-focus { color: var(--tier-focus, var(--accent, #007aff)); }
+.todo-tier-icon-satellite { color: var(--tier-satellite, var(--fg-muted)); }
+.todo-tier-icon-wait { color: var(--tier-wait, #ff9f0a); }
+
+.todo-tier-icon-focus,
+.todo-tier-icon-satellite,
+.todo-tier-icon-wait {
+  display: inline-flex;
+  align-items: center;
   flex-shrink: 0;
 }
 
-.todo-icon-satellite {
-  width: 7px;
-  height: 7px;
-  border: 1.5px solid var(--fg-muted);
-  border-radius: 50%;
-  flex-shrink: 0;
-  opacity: 0.5;
-}
-
-.todo-icon-wait {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: linear-gradient(90deg, #8e8e93 50%, transparent 50%);
-  border: 1.5px solid #8e8e93;
-  flex-shrink: 0;
-  opacity: 0.7;
+.todo-pinned-sublabel-icon svg {
+  width: 11px;
+  height: 11px;
+  display: block;
 }
 
 /* ── Focus card styles — same neutral base as .todo-pinned-card ── */
@@ -10622,7 +9932,8 @@ img[data-lightbox-src],
 .todo-detail-pane {
   padding: 12px 16px;
   overflow-y: auto;
-  background: var(--bg-secondary);
+  /* Same surface as the todo list above — the splitter's border-top divides. */
+  background: var(--bg);
   min-height: 0;
 }
 
@@ -10851,7 +10162,8 @@ img[data-lightbox-src],
   flex-shrink: 0;
 }
 
-/* Child task items in detail pane */
+/* Child task items in detail pane. Secondary surface so the chips stay
+   distinct now that the detail pane itself sits on var(--bg). */
 .todo-detail-child-item {
   display: flex;
   align-items: center;
@@ -10860,11 +10172,12 @@ img[data-lightbox-src],
   border-radius: 5px;
   font-size: 12px;
   cursor: pointer;
-  background: var(--bg);
+  background: var(--bg-secondary);
   transition: background 0.15s;
 }
 .todo-detail-child-item:hover {
-  background: var(--hover-bg, rgba(0,0,0,0.04));
+  /* One step darker than the chip's bg-secondary base so hover stays visible. */
+  background: var(--bg-tertiary);
 }
 .todo-detail-child-dot {
   width: 7px;
@@ -12795,6 +12108,7 @@ img[data-lightbox-src],
 }
 
 /* ===== Unified task action pill buttons (match .badge pill style) ===== */
+/* Ghost style — no resting box; hover reveals a soft accent wash. */
 .task-action-btn {
   display: inline-flex;
   align-items: center;
@@ -12803,7 +12117,7 @@ img[data-lightbox-src],
   min-width: 20px;
   padding: 0 5px;
   flex-shrink: 0;
-  background: var(--bg-tertiary);
+  background: transparent;
   border: none;
   cursor: pointer;
   color: var(--fg-muted);
@@ -13031,6 +12345,19 @@ a.task-kebab-info:hover {
   font-weight: 500;
   cursor: pointer;
   transition: background 0.1s;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.task-kebab-tier-btn-icon {
+  display: inline-flex;
+  align-items: center;
+}
+.task-kebab-tier-btn-icon svg {
+  width: 11px;
+  height: 11px;
+  display: block;
 }
 
 .task-kebab-tier-btn:hover {
@@ -14709,7 +14036,6 @@ a.task-kebab-info:hover {
 
   .todo-resize-handle,
   .session-resize-handle,
-  .sessions-resize-handle,
   .memory-resize-handle,
   .notes-resize-handle {
     display: none;
@@ -14749,85 +14075,13 @@ a.task-kebab-info:hover {
     height: 44px;
   }
 
-  .sessions-split-view {
-    position: fixed;
-    inset: 52px 0 0;
-    z-index: 30;
-    width: 100vw;
-    height: calc(100dvh - 52px);
-    background: var(--bg);
-  }
-
-  .sessions-list-pane {
-    display: block;
-    flex: 1 1 100% !important;
-    width: 100% !important;
-    max-width: none;
-    border-right: 0;
-  }
-
-  .sessions-detail-pane {
-    display: none;
-    flex: 1 1 100%;
-    width: 100%;
-    min-width: 0;
-    overflow: hidden;
-  }
-
-  .sessions-split-view.has-selection .sessions-list-pane {
-    display: none;
-  }
-
-  .sessions-split-view.has-selection .sessions-detail-pane {
-    display: flex;
-  }
-
-  .sessions-mobile-detail-back {
-    display: flex;
-    align-items: center;
-    min-height: 44px;
-    padding: 0 14px;
-    border: 0;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-secondary);
-    color: var(--accent);
-    font: inherit;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    flex-shrink: 0;
-  }
-
-  .sessions-detail-split,
-  .sessions-detail-chat-col {
-    min-width: 0;
-    min-height: 0;
-  }
-
-  .sessions-detail-chat-col {
-    flex: 1;
-  }
-
-  .sessions-detail-pane .session-detail-header,
   .session-panel-header {
     padding: 10px 12px;
   }
 
-  .sessions-detail-pane .session-chat-input-wrapper,
   .session-panel-input {
     padding: 8px;
     padding-bottom: max(8px, env(safe-area-inset-bottom));
-  }
-
-  .session-tree-session {
-    min-height: 44px;
-    padding-left: 48px;
-  }
-
-  .session-tree-task-header,
-  .session-tree-project-header,
-  .session-tree-category-header {
-    min-height: 44px;
   }
 
   .memory-list-pane,
@@ -15536,8 +14790,9 @@ a.task-kebab-info:hover {
 
 .sps-path-item {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
   padding: 6px 8px;
   border-radius: 6px;
   cursor: pointer;
@@ -15546,10 +14801,15 @@ a.task-kebab-info:hover {
 .sps-path-item:hover { background: var(--bg-secondary); }
 .sps-path-item.active { background: var(--accent-subtle); }
 
+.sps-path-leaf { font-weight: 600; }
+
 .sps-path-main {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .sps-path-cwd {
@@ -15559,9 +14819,24 @@ a.task-kebab-info:hover {
   font-family: 'SF Mono', Menlo, monospace;
   flex: 1;
   min-width: 0;
-  /* break-all wraps mid-segment so a long unbroken path can't overflow horizontally.
-     Accepted tradeoff: in a narrow popover a very long path wraps to several lines. */
+  /* rtl puts the ellipsis on the LEFT so a long path keeps its deepest (most
+     useful) segments visible. The inner <bdi dir="ltr"> (PathList.tsx) stops
+     the characters themselves from reversing. "Fixing" this back to ltr hides
+     the leaf directory on every long path. */
+  direction: rtl;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Keyboard-selected row: full multi-line path, no truncation. */
+.sps-path-item.sps-expanded { align-items: flex-start; }
+.sps-path-item.sps-expanded .sps-path-cwd {
+  direction: ltr;
+  white-space: normal;
+  overflow: visible;
   word-break: break-all;
+  line-height: 1.4;
 }
 
 .sps-path-host-tag {
@@ -15578,11 +14853,11 @@ a.task-kebab-info:hover {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: none;
+  white-space: nowrap;
   font-size: 10px;
   color: var(--fg-muted);
 }
-
-.sps-path-category { font-weight: 500; }
 
 .sps-tag-live {
   background: #e8f5e9;
@@ -17322,17 +16597,18 @@ td.usage-share-col {
 /* Received: server accepted, waiting for CLI — normal opacity, accent border */
 .session-msg-received {
   position: relative;
-  border-left: 2px solid var(--accent);
-  padding-left: 8px;
-  margin-left: 8px;
+  border-right: 2px solid var(--accent);
+  padding-right: 8px;
+  margin-right: 8px;
 }
 
 .session-msg-received-badge {
   font-size: 10px;
   color: var(--accent);
-  padding-left: 4px;
+  padding-right: 4px;
   margin-top: 2px;
   letter-spacing: 0.3px;
+  text-align: right;
   text-transform: uppercase;
 }
 
@@ -17344,22 +16620,24 @@ td.usage-share-col {
   font-size: 11px;
   color: var(--fg-muted);
   padding: 2px 8px 4px 16px;
+  text-align: right;
 }
 
 /* Pending: RPC not returned yet — grey/dimmed */
 .session-msg-queued {
   opacity: 0.7;
   position: relative;
-  border-left: 2px solid var(--fg-muted);
-  padding-left: 8px;
-  margin-left: 8px;
+  border-right: 2px solid var(--fg-muted);
+  padding-right: 8px;
+  margin-right: 8px;
 }
 
 .session-msg-queued-actions {
   display: flex;
+  justify-content: flex-end;
   gap: 8px;
   margin-top: 4px;
-  padding-left: 4px;
+  padding-right: 4px;
 }
 
 .session-msg-queued-actions button {
@@ -17380,15 +16658,16 @@ td.usage-share-col {
 /* Failed: send error — red border, full opacity so message is clearly visible */
 .session-msg-failed {
   position: relative;
-  border-left: 2px solid var(--danger, #ff3b30);
-  padding-left: 8px;
-  margin-left: 8px;
+  border-right: 2px solid var(--danger, #ff3b30);
+  padding-right: 8px;
+  margin-right: 8px;
 }
 .session-msg-failed-badge {
   font-size: 10px;
   color: var(--danger, #ff3b30);
-  padding-left: 4px;
+  padding-right: 4px;
   font-weight: 600;
+  text-align: right;
 }
 .session-msg-retry-btn {
   color: var(--accent) !important;
@@ -17686,6 +16965,7 @@ td.usage-share-col {
   flex-wrap: wrap;
 }
 
+/* Ghost text buttons — no resting box; hover reveals a soft accent wash. */
 .session-action-chip {
   display: inline-flex;
   align-items: center;
@@ -17695,12 +16975,12 @@ td.usage-share-col {
   font-weight: 500;
   font-family: inherit;
   color: var(--fg-muted);
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
+  background: transparent;
+  border: none;
   border-radius: 10px;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  transition: background 0.15s, color 0.15s;
   line-height: 1.6;
 }
 
@@ -17712,7 +16992,6 @@ td.usage-share-col {
 .session-action-chip-active {
   background: var(--accent-subtle, color-mix(in srgb, var(--accent) 12%, transparent));
   color: var(--accent);
-  border-color: var(--accent);
 }
 
 .session-action-chip-count {
@@ -17731,12 +17010,19 @@ td.usage-share-col {
 }
 
 /* Mode bar above session input */
+/* Now lives INSIDE the composer card's controls row (ChatInput controlsSlot),
+   between the "+" and the mic/send cluster. `static` so the btw popover
+   anchors to the nearest positioned ancestor — currently .chat-input-container
+   (position: relative), NOT .chat-input-box (which has no position). If you
+   add `position` to the box or any layer in between, the popover's width
+   reference changes with it. */
 .session-mode-bar {
-  position: relative;        /* anchors the full-width btw popover */
+  position: static;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 12px 0;
+  gap: 4px;
+  padding: 0;
+  min-width: 0;
 }
 
 /* Recap tip — "what just happened" above the mode bar (session composer).
@@ -18137,10 +17423,6 @@ td.usage-share-col {
   color: var(--accent);
 }
 
-.task-session-chat-container .session-chat-input-wrapper {
-  border-top: 1px solid var(--border);
-}
-
 /* ===== Tag Chips & Editor ===== */
 
 .tag-chip {
@@ -18534,7 +17816,8 @@ td.usage-share-col {
   display: flex;
   flex-direction: column;
   border-top: 1px solid var(--border);
-  background: var(--bg-secondary);
+  /* Same surface as the content above — the 1px border-top is the divider. */
+  background: var(--bg);
   min-height: 48px;
   flex-shrink: 0;
 }
@@ -18824,9 +18107,9 @@ td.usage-share-col {
 
 /* ── Card send input (compact ChatInput reuse) ── */
 
+/* No separator line above the composer — the card's own border is enough. */
 .dock-task-input {
   flex-shrink: 0;
-  border-top: 1px solid var(--border);
 }
 
 .dock-task-input .chat-input-container {
@@ -19912,9 +19195,9 @@ td.usage-share-col {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 16px;
+  padding: 6px 0;
   margin: 4px 0;
-  justify-content: center;
+  justify-content: flex-start;
 }
 
 .chat-interrupt-icon {
@@ -19946,24 +19229,24 @@ td.usage-share-col {
   padding: 4px 12px;
 }
 
+/* Text-button style (no capsule) — matches .mode-toggle-pill / .side-question-pill. */
 .quick-access-pill {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 3px 10px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg);
+  padding: 3px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
   font-size: 12px;
   color: var(--fg-muted);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: color 0.15s ease, background 0.15s ease;
   line-height: 1.4;
 }
 
 .quick-access-pill:hover {
   background: var(--accent-subtle);
-  border-color: var(--accent);
   color: var(--accent);
 }
 
@@ -19976,38 +19259,120 @@ td.usage-share-col {
   font-size: 11px;
 }
 
+/* ── New Launcher button (TodoPanel toolbar "+") ──
+   Compact icon button, visual twin of the .vd-trigger-icon View button:
+   same border, radius, and footprint so the toolbar reads as one family. */
+.new-launcher {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.new-launcher-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.new-launcher-btn:hover {
+  color: var(--accent);
+  background: var(--accent-subtle);
+}
+.new-launcher-btn svg { display: block; }
+@container (max-width: 150px) {
+  .todo-panel-toolbar .new-launcher-btn { display: none; }
+}
+
+/* ── Todo-anchored launcher popover ──
+   Card dropping DOWN from the toolbar with a Session | Task tab header;
+   hosts SessionPathSelector / QuickTaskComposer inside the task panel.
+   The wrapper carries the card chrome; the hosted components' own
+   border/shadow/positioning (bottom:100% for the chat input) is neutralized. */
+.todo-launcher-popover {
+  position: absolute;
+  top: 44px;            /* just under the toolbar row */
+  left: 8px;
+  right: 8px;
+  z-index: 200;
+  background: var(--card-bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--card-shadow-hover);
+  overflow: hidden;
+  animation: commandPaletteIn 0.15s ease-out;
+}
+.todo-launcher-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 6px 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.todo-launcher-tab {
+  padding: 6px 14px 7px;
+  border: none;
+  background: none;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--fg-muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;   /* tab underline sits ON the divider */
+  transition: color 0.15s, border-color 0.15s;
+}
+.todo-launcher-tab:hover { color: var(--fg-secondary); }
+.todo-launcher-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.todo-launcher-popover .session-path-selector,
+.todo-launcher-popover .quick-task-composer {
+  position: static;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  margin: 0;
+  animation: none;
+}
+
 /* ── Mode Toggle Pill (Execution / Plan) ── */
 
+/* Text-button style (no capsule): plain muted text, soft tint on hover only.
+   Plan mode reads through TEXT COLOR (amber), not a filled chip. */
 .mode-toggle-pill {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 3px 10px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg);
+  padding: 3px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
   font-size: 12px;
   color: var(--fg-muted);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: color 0.15s ease, background 0.15s ease;
   line-height: 1.4;
   user-select: none;
 }
 
 .mode-toggle-pill:hover {
   background: var(--accent-subtle);
-  border-color: var(--accent);
   color: var(--accent);
 }
 
 .mode-toggle-pill.plan-active {
-  background: color-mix(in srgb, var(--warning) 12%, transparent);
-  border-color: var(--warning);
   color: var(--warning);
 }
 
 .mode-toggle-pill.plan-active:hover {
-  background: color-mix(in srgb, var(--warning) 22%, transparent);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
 }
 
 .mode-toggle-pill-label {
@@ -21010,9 +20375,9 @@ td.usage-share-col {
 }
 .notes-chat-empty ul { margin: 10px 0 0; padding-left: 18px; }
 .notes-chat-empty li { margin: 3px 0; }
+/* No separator line above the composer — the card's own border is enough. */
 .notes-chat-input {
   flex: 0 0 auto;
-  border-top: 1px solid var(--border);
 }
 
 /* Chat-column dropdown switcher (Note Agent + one entry per CC session).
@@ -22477,26 +21842,26 @@ a.file-link:hover {
 
 /* Pill trigger — matches the native .mode-toggle-pill exactly (same bg, border,
    padding, radius, transition) so it sits as a peer next to Bypass, not a stranger. */
+/* Text-button style (no capsule) — matches .mode-toggle-pill. */
 .side-question-pill {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 3px 10px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg);
+  padding: 3px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
   font-size: 12px;
   font-weight: 500;
   color: var(--fg-muted);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: color 0.15s ease, background 0.15s ease;
   line-height: 1.4;
   user-select: none;
 }
 .side-question-pill:hover:not(:disabled),
 .side-question-pill.is-open {
   background: var(--accent-subtle);
-  border-color: var(--accent);
   color: var(--accent);
 }
 .side-question-pill:disabled { opacity: 0.5; cursor: default; }
@@ -22709,22 +22074,19 @@ a.file-link:hover {
 /* ============================================================================
    Session "Changed" view — full-screen File Diff + relocated session chat
    ----------------------------------------------------------------------------
-   Two split containers (one per place sessions render):
-   - SessionPanel (home slide-out): .session-panel-split / -diff-col / -chat-col
-   - SessionsPage (/sessions):      .sessions-detail-split / -diff-col / -chat-col
+   Split container (SessionPanel, home slide-out):
+   .session-panel-split / -diff-col / -chat-col
    When NOT open, the split is `display: contents` so the chat lays out exactly as
    before (no remount, no visual change). When open, it's a flex row: diff left,
    chat right. The diff column is the only new UI; everything on the right is the
    existing chat moved into the right column.
    ========================================================================== */
 
-/* --- Split containers: transparent when closed, flex row when open --- */
-.session-panel-split,
-.sessions-detail-split {
+/* --- Split container: transparent when closed, flex row when open --- */
+.session-panel-split {
   display: contents;
 }
-.session-panel-split.is-changed-open,
-.sessions-detail-split.is-changed-open {
+.session-panel-split.is-changed-open {
   display: flex;
   flex-direction: row;
   flex: 1 1 auto;
@@ -22733,8 +22095,7 @@ a.file-link:hover {
 }
 
 /* Diff column (left) — grows to fill whatever the resizable chat leaves. */
-.session-panel-diff-col,
-.sessions-detail-diff-col {
+.session-panel-diff-col {
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
@@ -22748,8 +22109,7 @@ a.file-link:hover {
    flex column so the chat body scrolls and the input sticks to the bottom.
    Width is driven by an inline style (useResizablePanel); flex-basis there wins,
    this just sets the column behavior + a sane min. */
-.session-panel-split.is-changed-open .session-panel-chat-col,
-.sessions-detail-split.is-changed-open .sessions-detail-chat-col {
+.session-panel-split.is-changed-open .session-panel-chat-col {
   flex: 0 0 30%;
   min-width: 280px;
   min-height: 0;
@@ -22759,8 +22119,7 @@ a.file-link:hover {
   position: relative;
 }
 /* When the chat is collapsed, the diff column takes the whole width. */
-.session-panel-split.is-chat-collapsed .session-panel-chat-col,
-.sessions-detail-split.is-chat-collapsed .sessions-detail-chat-col {
+.session-panel-split.is-chat-collapsed .session-panel-chat-col {
   display: none !important;
 }
 
@@ -22768,19 +22127,16 @@ a.file-link:hover {
    rest (matches .todo-pinned-splitter / .session-resize-handle elsewhere) —
    only the centered ::after pill reveals on hover, so it doesn't read as a
    permanent thick bar down the middle of the panel. */
-.session-panel-chat-resize,
-.sessions-detail-chat-resize {
+.session-panel-chat-resize {
   flex: 0 0 6px;
   cursor: col-resize;
   position: relative;
   background: transparent;
   transition: background 0.15s;
 }
-.session-panel-chat-resize:hover,
-.sessions-detail-chat-resize:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+.session-panel-chat-resize:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
 
-.session-panel-chat-resize::after,
-.sessions-detail-chat-resize::after {
+.session-panel-chat-resize::after {
   content: '';
   position: absolute;
   top: 50%;
@@ -22793,8 +22149,7 @@ a.file-link:hover {
   opacity: 0;
   transition: opacity 0.15s;
 }
-.session-panel-chat-resize:hover::after,
-.sessions-detail-chat-resize:hover::after { opacity: 0.6; }
+.session-panel-chat-resize:hover::after { opacity: 0.6; }
 
 /* Collapse chat → a thin rail with a 💬 button to restore it. */
 .session-chat-collapsed-rail {
@@ -22831,21 +22186,12 @@ a.file-link:hover {
   justify-content: center;
 }
 .session-chat-collapse-btn:hover { color: var(--fg); background: var(--bg-tertiary); }
-/* When closed, the chat columns are transparent wrappers. */
-.session-panel-chat-col,
-.sessions-detail-chat-col {
+/* When closed, the chat column is a transparent wrapper. */
+.session-panel-chat-col {
   display: contents;
 }
-.session-panel-split.is-changed-open .session-panel-chat-col,
-.sessions-detail-split.is-changed-open .sessions-detail-chat-col {
+.session-panel-split.is-changed-open .session-panel-chat-col {
   display: flex;
-}
-/* In the /sessions split, SessionDetailPanel is itself a flex child that must
-   scroll within the chat column. */
-.sessions-detail-split.is-changed-open .session-detail-panel {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
 }
 
 /* --- SessionDiffView --- */
@@ -24094,4 +23440,110 @@ a.file-link:hover {
 .devices-token {
   display: block; word-break: break-all; font-size: 12px;
   padding: 6px 8px; background: var(--bg-secondary); border-radius: 6px; margin-top: 6px;
+}
+
+/* ===== iOS Materials Pass ===== */
+/* Frosted-glass chrome for FLOATING surfaces only (popovers, menus, the
+   sidebar/notification slide-outs, the focus dock). Large static panels stay
+   opaque — nothing scrolls behind them and backdrop-filter costs GPU.
+   These rules sit at the END of the file so they win the cascade over the
+   per-menu background/shadow declarations above. */
+
+/* 1) Consistent popover chrome (all browsers): continuous 12px corners +
+      iOS-soft shadow (low alpha, large blur). */
+.chat-plus-menu,
+.chat-send-menu,
+.chat-header-dropdown,
+.todo-launcher-popover,
+.command-palette-wrap,
+.phase-picker-menu,
+.priority-picker-menu,
+.task-kebab-menu,
+.filter-more-menu,
+.cron-menu,
+.agent-menu,
+.codex-model-menu,
+.vd-panel,
+.model-picker,
+.session-fork-popover,
+.stt-dropdown-menu,
+.dp-popover {
+  border-radius: var(--radius-md);
+  box-shadow: var(--card-shadow-hover);
+}
+
+/* 2) Frosted glass — only where BOTH backdrop-filter and color-mix are
+      supported; otherwise the original opaque backgrounds above stand. */
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) and (background: color-mix(in srgb, red 50%, transparent)) {
+
+  /* Popovers & menus — iOS "menu" material. */
+  .chat-plus-menu,
+  .chat-send-menu,
+  .chat-header-dropdown,
+  .todo-launcher-popover,
+  .command-palette-wrap,
+  .phase-picker-menu,
+  .priority-picker-menu,
+  .task-kebab-menu,
+  .filter-more-menu,
+  .cron-menu,
+  .agent-menu,
+  .codex-model-menu,
+  .vd-panel,
+  .model-picker,
+  .session-fork-popover,
+  .stt-dropdown-menu,
+  .dp-popover,
+  .session-path-selector,
+  .quick-task-composer {
+    background: var(--glass-bg-menu);
+    -webkit-backdrop-filter: var(--glass-blur-menu);
+    backdrop-filter: var(--glass-blur-menu);
+  }
+
+  /* Higher-specificity dark override earlier in the file would otherwise
+     repaint this one opaque. */
+  :root[data-theme="dark"] .stt-dropdown-menu {
+    background: var(--glass-bg-menu);
+  }
+
+  /* Inside the launcher popover the selector/composer render as static
+     children — drop their own material so they don't double-blur over the
+     popover's glass. */
+  .todo-launcher-popover .session-path-selector,
+  .todo-launcher-popover .quick-task-composer {
+    background: transparent;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  /* Sidebar + slide-out panels — macOS sidebar material. */
+  .sidebar,
+  .notification-panel {
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+  }
+
+  /* Voice panel matches the sidebar surface — keep that intent, translucent. */
+  .notification-panel.voice-panel {
+    background: color-mix(in srgb, var(--bg-secondary) 72%, transparent);
+  }
+
+  /* Focus dock — iOS dock material. Guard: backdrop-filter turns the dock
+     into the containing block for position:fixed descendants, which would
+     trap a CSS-promoted fullscreen dock card (.open-walnut-fullscreen), so
+     the material switches off while a card is fullscreen (the overlay covers
+     the dock then anyway). */
+  .focus-dock:not(:has(.open-walnut-fullscreen)) {
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+  }
+
+  /* Image lightbox backdrop — slight blur under the dark scrim. */
+  .lightbox-overlay {
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+  }
 }

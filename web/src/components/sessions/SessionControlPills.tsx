@@ -6,15 +6,6 @@ interface SessionControlPillsProps {
   showModeShortcut?: boolean;
 }
 
-function controlIcon(control: SessionControl): string {
-  if (control.id === 'collaboration_mode') {
-    return control.currentValue === 'plan' ? '\uD83D\uDCCB' : '\u2699\uFE0F';
-  }
-  if (control.currentValue.includes('full-access')) return '\u26A1';
-  if (control.currentValue.includes('read-only')) return '\uD83D\uDD12';
-  return '\u2699\uFE0F';
-}
-
 export function nextSessionControlValue(control: SessionControl | undefined): string | undefined {
   if (!control || control.options.length === 0) return undefined;
   const currentIndex = control.options.findIndex((option) => option.value === control.currentValue);
@@ -44,7 +35,7 @@ export function SessionControlPills({
               title={`${control.name}: ${current?.name ?? control.currentValue}. Click to cycle${next ? ` to ${next.name}` : ''}`}
             >
               <span className="mode-toggle-pill-label">
-                {controlIcon(control)} {current?.name ?? control.currentValue}
+                {current?.name ?? control.currentValue}
               </span>
               {showModeShortcut && control.id === 'mode' && (
                 <span className="mode-toggle-pill-shortcut">{'\u21E7'}Tab</span>

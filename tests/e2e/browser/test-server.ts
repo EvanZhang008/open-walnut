@@ -46,6 +46,13 @@ await fs.writeFile(
   JSON.stringify({
     version: 1,
     defaults: { priority: 'none', category: 'Inbox', platform: 'local' },
+    hosts: {
+      'fixture-remote': {
+        hostname: 'fixture.example.test',
+        label: 'Big remote host',
+        enabled: false,
+      },
+    },
     provider: { type: 'claude-code' },
     agent: {
       main_provider: 'playwright-cli',
@@ -83,6 +90,26 @@ await fs.writeFile(
         ],
         active_session_ids: [],
         session_id: 'pw-mode-test-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
+        id: 'pw-task-vscode',
+        title: 'Editor fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        category: 'Work',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-vscode-session'],
+        active_session_ids: [],
+        session_id: 'pw-vscode-session',
         session_status: { process_status: 'stopped', mode: 'bypass' },
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -416,6 +443,8 @@ await Promise.all([
   fs.writeFile(codexOrderJournalPath, ''),
 ])
 const sessionFixtureNow = Date.now()
+const vscodeFixtureRoot = path.join(tmpBase, 'projects', 'editor-fixture')
+await fs.mkdir(vscodeFixtureRoot, { recursive: true })
 const oldExactTargetAt = new Date(sessionFixtureNow - 30 * 24 * 60 * 60 * 1_000).toISOString()
 const scaleSessions = Array.from({ length: 501 }, (_, index) => ({
   claudeSessionId: `pw-scale-session-${String(index).padStart(3, '0')}`,
@@ -435,6 +464,19 @@ await fs.writeFile(
   JSON.stringify({
     version: 2,
     sessions: [
+      {
+        claudeSessionId: 'pw-vscode-session',
+        taskId: 'pw-task-vscode',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(Date.now() - 30_000).toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        messageCount: 1,
+        cwd: vscodeFixtureRoot,
+        title: 'Editor fixture session',
+      },
       {
         claudeSessionId: 'pw-plan-session-completed',
         taskId: 'pw-task-001',
@@ -813,6 +855,18 @@ await fs.writeFile(
         categoryVotes: { Passion: 25 },
       },
       {
+        cwd: path.join(psFixtureRoot, 'projects', 'wallets'),
+        host: null, count: 24,
+        lastUsed: new Date(Date.now() - 3700_000).toISOString(),
+        categoryVotes: { Passion: 24 },
+      },
+      {
+        cwd: '/home/playwright/a/very/long/remote/path/with/many/segments/remote-project',
+        host: 'fixture-remote', count: 3,
+        lastUsed: new Date(Date.now() - 3900_000).toISOString(),
+        categoryVotes: { Work: 3 },
+      },
+      {
         cwd: path.join(psFixtureRoot, 'other'),
         host: null, count: 2,
         lastUsed: new Date(Date.now() - 20 * 86400_000).toISOString(),
@@ -900,6 +954,13 @@ const shutdown = async () => {
   await viteServer.close().catch(() => {})
   await stopServer()
   if (mockDaemon) await mockDaemon.stop().catch(() => {})
+  // startServer() also warmed the REAL local daemon (singleton) into this
+  // run's isolated WALNUT_DAEMON_DIR — reap it or it outlives the fixture.
+  // (SIGKILLed runs skip this; the daemon's parent-pid watchdog covers those.)
+  try {
+    const { localDaemon } = await import('../../../src/providers/local-daemon.js')
+    await localDaemon.stopIfIsolated()
+  } catch { /* best-effort */ }
   await fs.rm(tmpBase, { recursive: true, force: true }).catch(() => {})
   process.exit(0)
 }

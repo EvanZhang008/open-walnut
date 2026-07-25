@@ -11,6 +11,7 @@ import {
   type ImageAttachment,
 } from '@/api/chat';
 import type { StreamingBlock } from './useSessionStream';
+import { useNotifications } from '@/contexts/notifications';
 
 const PAGE_SIZE = 100;
 
@@ -284,7 +285,6 @@ interface UseChatReturn {
   isStreaming: boolean;
   isCompacting: boolean;
   toolActivity: ToolActivity | null;
-  error: string | null;
   isLoading: boolean;
   stats: ChatStats | null;
   queueCount: number;
@@ -349,11 +349,11 @@ function upsertLastAssistant(
 }
 
 export function useChat(agentId: string = 'general', conversationId: string | null = null): UseChatReturn {
+  const { notify } = useNotifications();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isCompacting, setIsCompacting] = useState(false);
   const [toolActivity, setToolActivity] = useState<ToolActivity | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [stats, setStats] = useState<ChatStats | null>(null);
   const [queueCount, setQueueCount] = useState(0);
@@ -383,10 +383,6 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
   agentIdRef.current = agentId;
   const conversationIdRef = useRef(conversationId);
   conversationIdRef.current = conversationId;
-
-  // Per-session dedup timestamps for delivery-failure error notifications
-  // (see the session:error handler below)
-  const deliveryFailureSeenAtRef = useRef(new Map<string, number>());
 
   // Fetch real conversation stats from server
   const refreshStats = useCallback(() => {
@@ -726,8 +722,8 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
       result?: string; taskId?: string; sessionId?: string; isError?: boolean;
       taskTitle?: string; taskProject?: string; taskCategory?: string;
     };
-    if (!result) return;
-    const prefix = isError ? '**Session Error**' : '**Session Result**';
+    if (!result || isError) return;
+    const prefix = '**Session Result**';
     const taskRef = eventTaskId ? buildTaskRef(eventTaskId, taskTitle, taskProject, taskCategory) : null;
     const content = taskRef
       ? `${prefix} (${taskRef}):\n\n${result}`
@@ -735,43 +731,7 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
     setMessages((prev) => [...prev, {
       key: nextMessageKey(),
       role: 'assistant', content, blocks: [{ type: 'text', content }],
-      source: isError ? 'session-error' : 'session',
-      notification: true,
-    }]);
-  });
-
-  // Handle session errors (General only)
-  useEvent('session:error', (data) => {
-    if (agentIdRef.current !== 'general') return;
-    const { error: errMsg, taskId: eventTaskId, sessionId: errSessionId, errorKind,
-            taskTitle, taskProject, taskCategory } = data as {
-      error: string; taskId?: string; sessionId?: string; errorKind?: string;
-      taskTitle?: string; taskProject?: string; taskCategory?: string;
-    };
-    // delivery_failed: connectivity status, not a turn outcome. Dedup live
-    // appends per session within a window — during an SSH outage each send
-    // fast-fails (~400ms) and without this the chat fills with identical red
-    // boxes (the 2026-06-10 error-storm). Server-side persistence has the same
-    // dedup, so refresh stays consistent with the live view.
-    if (errorKind === 'delivery_failed') {
-      const key = errSessionId ?? eventTaskId ?? 'unknown';
-      const now = Date.now();
-      const lastAt = deliveryFailureSeenAtRef.current.get(key) ?? 0;
-      // MUST stay equal to the server's DELIVERY_FAILURE_NOTIFY_WINDOW_MS
-      // (src/web/server.ts) so the live append window and the
-      // refreshed/persisted-history window match — otherwise a reload could show
-      // a different number of red boxes than the live view did.
-      if (now - lastAt < 5 * 60_000) return;
-      deliveryFailureSeenAtRef.current.set(key, now);
-    }
-    const taskRef = eventTaskId ? buildTaskRef(eventTaskId, taskTitle, taskProject, taskCategory) : null;
-    const content = errorKind === 'delivery_failed'
-      ? `**Session Delivery Failed**${taskRef ? ` (${taskRef})` : ''}: ${errMsg}\n\n_Your message was NOT lost — it stays queued and will be re-sent when you press Retry, send another message, or the connection recovers._`
-      : `**Session Error**${taskRef ? ` (${taskRef})` : ''}: ${errMsg}`;
-    setMessages((prev) => [...prev, {
-      key: nextMessageKey(),
-      role: 'assistant', content, blocks: [{ type: 'text', content }],
-      source: 'session-error',
+      source: 'session',
       notification: true,
     }]);
   });
@@ -783,6 +743,7 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
       entry?: { role: 'user' | 'assistant'; content: string; source?: string; notification?: boolean; taskId?: string; timestamp?: string };
     };
     if (!entry || !entry.content) return;
+    if (entry.source === 'agent-error' || entry.source === 'session-error') return;
     setMessages((prev) => [...prev, {
       key: nextMessageKey(),
       role: entry.role,
@@ -813,14 +774,13 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
   // Handle errors — don't clear queue; after a delay, drain remaining queued messages
   useEvent('agent:error', (data) => {
     if (!isMine(data)) return;
-    const { error: errMsg } = data as { error: string };
-    setError(errMsg);
     setToolActivity(null);
 
     // Safety net: force-close stale 'calling' blocks (tool may have succeeded, result was lost)
     setMessages((prev) => closeStaleToolCalls(prev, 'done'));
 
-    // Let the user see the error, then drain remaining queued messages
+    // The durable notification event carries the error; keep queue processing
+    // independent so one failed turn does not strand later messages.
     if (queueRef.current.length > 0) {
       drainTimerRef.current = setTimeout(() => { drainTimerRef.current = null; drainOrStop(); }, 1500);
     } else {
@@ -920,15 +880,18 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
   /** Send a message via RPC (not queued) */
   const sendRpc = useCallback((text: string, taskContext?: TaskContext, images?: ImageAttachment[], source?: string, mode?: 'plan', planModeFirst?: boolean, planModeOff?: boolean) => {
     setIsStreaming(true);
-    setError(null);
     rpcInFlightRef.current = true;
     // User-initiated chat — clear source so streaming goes into an unsourced assistant message
     currentSourceRef.current = undefined;
 
     const currentAgentId = agentIdRef.current;
+    // Capture the conversation alongside the agent: the RPC may settle after
+    // the user switches conversation, and the catch below must attribute the
+    // failure to the conversation the message was SENT to, not the live one.
+    const currentConversationId = conversationIdRef.current;
     const payload: Record<string, unknown> = { message: text, agentId: currentAgentId };
-    if (conversationIdRef.current) {
-      payload.conversationId = conversationIdRef.current;
+    if (currentConversationId) {
+      payload.conversationId = currentConversationId;
     }
     if (taskContext) {
       payload.taskContext = taskContext;
@@ -953,7 +916,14 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
       })
       .catch((e: Error) => {
         rpcInFlightRef.current = false;
-        setError(e.message);
+        notify({
+          kind: 'operation-error',
+          severity: 'error',
+          title: 'Chat Error',
+          body: e.message,
+          persistent: true,
+          dedupKey: `chat-rpc:${currentAgentId}:${currentConversationId ?? 'unknown'}:${e.message}`,
+        });
         // Don't clear queue on RPC error — drain remaining after delay
         if (queueRef.current.length > 0) {
           drainTimerRef.current = setTimeout(() => { drainTimerRef.current = null; drainOrStop(); }, 1500);
@@ -961,7 +931,7 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
           setIsStreaming(false);
         }
       });
-  }, [drainOrStop]);
+  }, [drainOrStop, notify]);
   sendRpcRef.current = sendRpc;
 
   const sendMessage = useCallback((text: string, taskContext?: TaskContext, images?: ImageAttachment[], source?: string, mode?: 'plan', planModeFirst?: boolean, planModeOff?: boolean) => {
@@ -994,7 +964,6 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
     clearChatHistory(agentIdRef.current, conversationIdRef.current ?? undefined).catch(() => {});
     clearQueue();
     setMessages([]);
-    setError(null);
     setHasMore(false);
     nextPageRef.current = 2;
   }, [clearQueue]);
@@ -1034,5 +1003,5 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
       .finally(() => setIsLoadingOlder(false));
   }, [isLoadingOlder, hasMore]);
 
-  return { messages, isStreaming, isCompacting, toolActivity, error, isLoading, stats, queueCount, hasMore, isLoadingOlder, prependedRef, sendMessage, clearMessages, addLocalMessage, stopGeneration, cancelQueuedMessage, clearQueue, loadOlderMessages };
+  return { messages, isStreaming, isCompacting, toolActivity, isLoading, stats, queueCount, hasMore, isLoadingOlder, prependedRef, sendMessage, clearMessages, addLocalMessage, stopGeneration, cancelQueuedMessage, clearQueue, loadOlderMessages };
 }

@@ -20,7 +20,7 @@
 import { memo, useState } from 'react';
 import { useBackgroundTasks, type BackgroundTask, type WorkflowAgent } from '@/hooks/useBackgroundTasks';
 import { WorkflowGraph, StatusDot, fmtTokens, agentMeta } from './WorkflowGraph';
-import { phaseCounts } from './workflow-layout';
+import { phaseCounts, isAgentTask } from './workflow-layout';
 import { WorkflowTranscriptModal, type TranscriptTarget } from './WorkflowTranscriptModal';
 import { useFullscreen } from '@/hooks/useFullscreen';
 import { ICON_EXPAND, ICON_COLLAPSE } from '../common/Icons';
@@ -68,20 +68,24 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
   // "done" (it does NOT: phaseCounts puts failed in its own bucket, surfaced separately
   // below). One pass over the union instead of three separate filter/reduce scans.
   const wfCounts = phaseCounts(agents);
+  // Legacy mode: split background AGENTS from plain background TASKS — two
+  // different things the user thinks about separately (subagents vs shell cmds).
+  const isDone = (t: BackgroundTask) => t.status !== 'running' && t.status !== 'pending' && t.status !== 'paused';
+  const agentTasks = isWorkflow ? [] : tasks.filter(isAgentTask);
+  const plainTasks = isWorkflow ? [] : tasks.filter(t => !isAgentTask(t));
   const total = isWorkflow ? wfCounts.total : tasks.length;
-  const done = isWorkflow
-    ? wfCounts.done
-    : tasks.filter(t => t.status !== 'running' && t.status !== 'pending' && t.status !== 'paused').length;
+  const done = isWorkflow ? wfCounts.done : tasks.filter(isDone).length;
   const running = isWorkflow ? wfCounts.running : inFlight;
   const failed = isWorkflow ? wfCounts.failed : 0;
   const totalTokens = isWorkflow
     ? wfCounts.tokens
     : tasks.reduce((s, t) => s + (t.tokens ?? 0), 0);
 
-  // Collapse: default collapsed once the run is finished (nothing running) so the
-  // panel doesn't hog vertical space; expanded while work is live. User clicks win.
+  // Collapse: ALWAYS default collapsed — the panel sits quietly as a one-line
+  // header (counts show liveness) and never auto-expands, even while work is
+  // running (auto-expand hogged chat space mid-turn). User clicks win.
   // Fullscreen forces expanded — a collapsed full-screen panel makes no sense.
-  const collapsed = !isFullscreen && (collapseOverride ?? (running === 0));
+  const collapsed = !isFullscreen && (collapseOverride ?? true);
 
   // Orientation: Home Panel stays VERTICAL (glanceable stacked timeline — the daily
   // surface); only fullscreen promotes to the HORIZONTAL swimlane graph (space is
@@ -108,11 +112,20 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
           <span className="wf-card-caret">{collapsed ? '▸' : '▾'}</span>
           <span className="wf-card-icon">{'⚙'}</span>
           <span className="wf-card-title" title={workflowDescription}>
-            {workflowName ? `Workflow: ${workflowName}` : 'Background tasks'}
+            {workflowName ? `Workflow: ${workflowName}` : 'Background'}
           </span>
         </button>
         <span className="wf-card-count">
-          {done}/{total}{isWorkflow ? ' agents' : ''}
+          {isWorkflow || agentTasks.length === 0 || plainTasks.length === 0 ? (
+            <>{done}/{total}{isWorkflow || agentTasks.length > 0 ? ' agents' : ' tasks'}</>
+          ) : (
+            // Mixed legacy set: count agents and plain tasks separately.
+            <>
+              Agents {agentTasks.filter(isDone).length}/{agentTasks.length}
+              {' · '}
+              Tasks {plainTasks.filter(isDone).length}/{plainTasks.length}
+            </>
+          )}
           {running > 0 && <span className="wf-card-running"> · {running} running</span>}
           {failed > 0 && <span className="wf-card-failed"> · {failed} failed</span>}
         </span>
@@ -156,7 +169,16 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
             </div>
           ) : (
             <div className="wf-card-tasks">
-              {tasks.map(t => <TaskRow key={t.taskId} task={t} />)}
+              {/* Agents and plain tasks are separate sections; headers only when
+                  both kinds are present (a homogeneous list needs no labels). */}
+              {agentTasks.length > 0 && plainTasks.length > 0 && (
+                <div className="wf-section-label">Agents</div>
+              )}
+              {agentTasks.map(t => <TaskRow key={t.taskId} task={t} />)}
+              {agentTasks.length > 0 && plainTasks.length > 0 && (
+                <div className="wf-section-label">Tasks</div>
+              )}
+              {plainTasks.map(t => <TaskRow key={t.taskId} task={t} />)}
             </div>
           )}
         </>

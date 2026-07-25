@@ -147,6 +147,11 @@ interface SessionMessageProps {
   sessionId?: string;
   sessionCwd?: string;
   sessionHost?: string;
+  /** True when the timeline dissolved this message's tools into an adjacent
+   *  merged run — render only the prose/thinking here. */
+  suppressTools?: boolean;
+  /** Only the last assistant output renders copy actions, keeping middle rows compact. */
+  showCopyActions?: boolean;
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
   onFileOpen?: (path: string, line?: number) => void;
@@ -158,18 +163,25 @@ function formatTime(ts: string): string {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-function SessionThinking({ text }: { text: string }) {
+/** Muted collapsed "Thinking ›" row — same visual language as merged tool
+ *  runs (ToolRunShell). `live` appends the pulsing dot while tokens stream. */
+export function SessionThinking({ text, live }: { text: string; live?: boolean }) {
   const [open, setOpen] = useState(false);
   // Signature-only thinking has no displayable text — render nothing rather
   // than an expandable-but-blank row.
   if (!text.trim()) return null;
   return (
-    <div className="chat-thinking">
-      <button className="chat-thinking-toggle" onClick={() => setOpen((p) => !p)}>
-        <span className="chat-thinking-icon">{open ? '\u25BC' : '\u25B6'}</span>
-        <span className="chat-thinking-label">Thinking</span>
+    <div className="tool-run-row">
+      <button className="tool-run-toggle" onClick={() => setOpen((p) => !p)}>
+        <span className="tool-run-label">Thinking</span>
+        {live && <span className="tool-run-live-dot" />}
+        <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}>{'\u203A'}</span>
       </button>
-      {open && <div className="chat-thinking-content">{text}</div>}
+      {open && (
+        <div className="tool-run-body">
+          <div className="chat-thinking-content">{text}</div>
+        </div>
+      )}
     </div>
   );
 }
@@ -242,6 +254,292 @@ export function PlanCard({ content }: { content: string }) {
 /** HTML-escape a string for safe insertion into innerHTML */
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/** Label for a CLI-injected user line — the collapsed-row header text. */
+function injectedContextLabel(text: string): string {
+  const skillDir = text.match(/^Base directory for this skill:\s*(\S+)/)?.[1];
+  if (skillDir) {
+    const name = skillDir.replace(/\/+$/, '').split('/').pop() ?? skillDir;
+    return `Loaded skill ${name}`;
+  }
+  if (text.startsWith('This session is being continued')) return 'Continuation summary';
+  if (text.startsWith('[Image:')) return 'Image metadata';
+  return 'Injected context';
+}
+
+/** CLI-injected user line (skill dump, compaction summary, …) — a muted
+ *  one-line context row (Claude Code app style), click to expand the content. */
+function InjectedContextRow({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const html = useMemo(
+    () => (open ? renderMarkdownWithRefs(text) : ''),
+    [open, text],
+  );
+  return (
+    <div className="tool-run-row">
+      <button className="tool-run-toggle" onClick={() => setOpen((p) => !p)}>
+        <span className="tool-run-label">{injectedContextLabel(text)}</span>
+        <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}>{'›'}</span>
+      </button>
+      {open && (
+        <div className="tool-run-body">
+          <div className="chat-tool-block-result markdown-body"
+               dangerouslySetInnerHTML={{ __html: html }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Merged tool-run row (Claude Code app style) ──
+// Consecutive generic tool calls collapse into ONE muted line: "Ran 3 commands,
+// read a file ›". Click expands the individual tool cards. Task/Agent groups
+// and plan cards stay standalone — only generic tools merge.
+
+/** Phrase category per tool name; unknown tools fall into 'other'. */
+function toolPhraseCategory(name: string): string {
+  switch (name) {
+    case 'Bash': case 'BashOutput': case 'KillShell': return 'command';
+    case 'Read': return 'read';
+    case 'Edit': case 'Write': case 'NotebookEdit': return 'edit';
+    case 'Grep': case 'Glob': case 'WebSearch': return 'search';
+    case 'WebFetch': return 'fetch';
+    case 'Skill': return 'skill';
+    case 'TodoWrite': case 'TaskCreate': case 'TaskUpdate': return 'todo';
+    default: return 'other';
+  }
+}
+
+/** "Ran 3 commands, read a file" — categories in first-appearance order. */
+export function toolRunPhrase(names: string[]): string {
+  const counts = new Map<string, number>();
+  for (const n of names) {
+    const cat = toolPhraseCategory(n);
+    counts.set(cat, (counts.get(cat) ?? 0) + 1);
+  }
+  const parts: string[] = [];
+  for (const [cat, n] of counts) {
+    switch (cat) {
+      case 'command': parts.push(n === 1 ? 'ran a command' : `ran ${n} commands`); break;
+      case 'read': parts.push(n === 1 ? 'read a file' : `read ${n} files`); break;
+      case 'edit': parts.push(n === 1 ? 'edited a file' : `edited ${n} files`); break;
+      case 'search': parts.push(n === 1 ? 'searched files' : `ran ${n} searches`); break;
+      case 'fetch': parts.push(n === 1 ? 'fetched a page' : `fetched ${n} pages`); break;
+      case 'skill': parts.push(n === 1 ? 'launched a skill' : `launched ${n} skills`); break;
+      case 'todo': parts.push('updated tasks'); break;
+      default: parts.push(n === 1 ? 'used a tool' : `used ${n} tools`); break;
+    }
+  }
+  const phrase = parts.join(', ');
+  return phrase.charAt(0).toUpperCase() + phrase.slice(1);
+}
+
+/** Shared merged-row shell: muted phrase line + expandable children. */
+export function ToolRunShell({ phrase, failCount, running, children }: {
+  phrase: string;
+  failCount: number;
+  /** True while a member tool is still executing (streaming) — pulse dot. */
+  running?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="tool-run-row">
+      <button className="tool-run-toggle" onClick={() => setOpen((p) => !p)}>
+        <span className="tool-run-label">{phrase}</span>
+        {failCount > 0 && <span className="tool-run-fail">{failCount} failed</span>}
+        {running && <span className="tool-run-live-dot" />}
+        <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}>{'›'}</span>
+      </button>
+      {open && <div className="tool-run-body">{children}</div>}
+    </div>
+  );
+}
+
+/** Error lines carry a "!" prefix; everything else has NO icon — matching the
+ *  bare "Ran 3 commands ›" tool-run rows for one unified visual language. */
+function systemLineIcon(variant: string): string {
+  return variant === 'error' ? '!' : '';
+}
+
+/** System notice that keeps compact lines inline and collapses verbose payloads. */
+export function SystemLineCollapsible({ variant, message, detail, time }: {
+  variant: string;
+  message: string;
+  detail?: string;
+  time?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const icon = systemLineIcon(variant);
+  if (detail && detail.length > 80) {
+    return (
+      <div className="tool-run-row">
+        <button className="tool-run-toggle" onClick={() => setOpen((p) => !p)}>
+          <span className={`tool-run-label${variant === 'error' ? ' tool-run-label--error' : ''}`}>
+            {icon ? `${icon} ${message}` : message}
+          </span>
+          <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}>{'›'}</span>
+        </button>
+        {open && (
+          <div className="tool-run-body">
+            <pre className="session-system-detail-pre">{detail}</pre>
+            {time && <div className="session-system-detail">{time}</div>}
+          </div>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className={`session-system-line session-system-line--${variant}`}>
+      {icon && <span className="session-system-icon">{icon}</span>}
+      <span className="session-system-text">{message}</span>
+      {detail && <span className="session-system-detail">{detail}</span>}
+      {time && <span className="session-system-detail">{time}</span>}
+    </div>
+  );
+}
+
+export interface SystemGroupMember {
+  variant: string;
+  message: string;
+  detail?: string;
+  time?: string;
+  key?: string;
+}
+
+/** Map persisted system history onto the shared compact/verbose row shape. */
+export function systemGroupMemberFromHistory(message: SessionHistoryMessage): SystemGroupMember {
+  const text = message.text ?? '';
+  const isVerbose = text.length > 160;
+  return {
+    variant: message.systemVariant ?? 'info',
+    message: isVerbose ? `${text.slice(0, 80)}…` : text,
+    detail: isVerbose ? text : undefined,
+    time: formatTime(message.timestamp),
+    key: message.msgId ?? message.walnutMessageId,
+  };
+}
+
+/** Collapsed run of consecutive system notices from history or the live stream. */
+export function SystemGroupRun({ members }: { members: SystemGroupMember[] }) {
+  const [open, setOpen] = useState(false);
+  const allErrors = members.length > 0 && members.every((member) => member.variant === 'error');
+  const label = allErrors ? `${members.length} errors` : `${members.length} system messages`;
+  return (
+    <div className="tool-run-row">
+      <button className="tool-run-toggle" onClick={() => setOpen((p) => !p)}>
+        <span className={`tool-run-label${allErrors ? ' tool-run-label--error' : ''}`}>{label}</span>
+        <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}>{'›'}</span>
+      </button>
+      {open && (
+        <div className="tool-run-body">
+          {members.map((member, i) => (
+            <SystemLineCollapsible
+              key={member.key ?? `${member.variant}:${member.message}:${i}`}
+              variant={member.variant}
+              message={member.message}
+              detail={member.detail}
+              time={member.time}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** History-side merged run of generic tools. */
+function ToolRunRow({ tools, assistantLabel, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: {
+  tools: SessionHistoryTool[];
+} & Omit<SessionToolCallProps, 'tool'>) {
+  const phrase = toolRunPhrase(tools.map(t => t.name));
+  const failCount = tools.filter(t => t.isError).length;
+  return (
+    <ToolRunShell phrase={phrase} failCount={failCount}>
+      {tools.map((t, i) => (
+        <SessionToolCall key={t.toolUseId ?? i} tool={t} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+      ))}
+    </ToolRunShell>
+  );
+}
+
+/** True when a history tool merges into a run (generic tools only). */
+export function isMergeableHistoryTool(tool: SessionHistoryTool): boolean {
+  if (GROUPABLE_HISTORY_TOOLS.has(tool.name)) return false;
+  if (tool.name === 'ExitPlanMode') return false;
+  if (isPlanWrite(tool)) return false;
+  return true;
+}
+
+/** True when an entire persisted message can dissolve into a cross-message
+ *  tool run: assistant, no visible text, and every tool is generic. The CLI
+ *  emits one assistant message per tool call, so consecutive tool-only
+ *  messages are the "Ran 3 commands, read 2 files" case. */
+export function isToolOnlyMessage(m: SessionHistoryMessage): boolean {
+  return m.role === 'assistant'
+    && !(m.text ?? '').trim()
+    && !!m.tools && m.tools.length > 0
+    && m.tools.every(isMergeableHistoryTool);
+}
+
+/** Assistant message carrying BOTH prose and (all-generic) tools. The CLI's
+ *  content order is text first, tool_use after — so the prose renders as its
+ *  own message while the tools dissolve forward into the adjacent run instead
+ *  of splitting two runs apart. */
+export function isTextPlusMergeableTools(m: SessionHistoryMessage): boolean {
+  return m.role === 'assistant'
+    && !!(m.text ?? '').trim()
+    && !!m.tools && m.tools.length > 0
+    && m.tools.every(isMergeableHistoryTool);
+}
+
+/** Cross-MESSAGE merged tool run (the iOS look): consecutive tool-only
+ *  assistant messages collapse into ONE muted line. Expanding shows each
+ *  message's thinking + tool cards. */
+export function MergedHistoryToolRun({ messages, trailingTools = [], assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: {
+  messages: SessionHistoryMessage[];
+  trailingTools?: { name: string; input?: Record<string, unknown>; status: 'calling' | 'done' | 'error'; result?: string; toolUseId: string }[];
+  assistantLabel?: string;
+  sessionId?: string;
+  sessionCwd?: string;
+  sessionHost?: string;
+  onTaskClick?: (taskId: string) => void;
+  onSessionClick?: (sessionId: string) => void;
+  onFileOpen?: (path: string, line?: number) => void;
+}) {
+  const allTools = messages.flatMap(m => m.tools ?? []);
+  const phrase = toolRunPhrase([
+    ...allTools.map(t => t.name),
+    ...trailingTools.map(tool => tool.name),
+  ]);
+  const failCount = allTools.filter(t => t.isError).length
+    + trailingTools.filter(tool => tool.status === 'error').length;
+  return (
+    <ToolRunShell phrase={phrase} failCount={failCount}>
+      {messages.map((m, mi) => (
+        <div key={m.msgId ?? mi}>
+          {m.thinking && <SessionThinking text={m.thinking} />}
+          {(m.tools ?? []).map((t, ti) => (
+            <SessionToolCall key={t.toolUseId ?? ti} tool={t} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+          ))}
+        </div>
+      ))}
+      {trailingTools.map((tool, bi) => (
+        <GenericToolCall
+          key={tool.toolUseId ?? bi}
+          tool={{ name: tool.name, input: tool.input ?? {} }}
+          status={tool.status === 'error' ? 'error' : 'done'}
+          result={tool.result}
+          sessionCwd={sessionCwd}
+          sessionHost={sessionHost}
+          onTaskClick={onTaskClick}
+          onSessionClick={onSessionClick}
+          onFileOpen={onFileOpen ? (path) => onFileOpen(path) : undefined}
+        />
+      ))}
+    </ToolRunShell>
+  );
 }
 
 interface GenericToolCallProps {
@@ -622,8 +920,9 @@ function SessionToolCall({ tool, assistantLabel, sessionId, sessionCwd, sessionH
   return <GenericToolCall tool={tool} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen ? (p) => onFileOpen(p) : undefined} />;
 }
 
-export const SessionMessage = memo(function SessionMessage({ message, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: SessionMessageProps) {
-  const { role, text, timestamp, tools, thinking, model, usage } = message;
+export const SessionMessage = memo(function SessionMessage({ message, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, suppressTools, showCopyActions = false, onTaskClick, onSessionClick, onFileOpen }: SessionMessageProps) {
+  const { role, text, timestamp, tools: rawTools, thinking } = message;
+  const tools = suppressTools ? undefined : rawTools;
   const time = formatTime(timestamp);
   const isUser = role === 'user';
 
@@ -631,15 +930,7 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
   // substitution notices) — same visual language as the streaming system blocks
   // (session-system-line), never a chat bubble.
   if (role === 'system') {
-    const variant = message.systemVariant ?? 'info';
-    const icon = variant === 'error' ? '⚠️' : variant === 'compact' ? '⚙️' : 'ℹ️';
-    return (
-      <div className={`session-system-line session-system-line--${variant}`}>
-        <span className="session-system-icon">{icon}</span>
-        <span className="session-system-text">{text}</span>
-        {time && <span className="session-system-detail">{time}</span>}
-      </div>
-    );
+    return <SystemLineCollapsible {...systemGroupMemberFromHistory(message)} />;
   }
 
   // Interrupt marker — render as muted system banner, not a "You" bubble.
@@ -652,11 +943,19 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
   if (isUser && text && /^\[Request interrupted by user( for tool use)?\]$/.test(text.trim())) {
     return (
       <div className="chat-interrupt-banner">
-        <span className="chat-interrupt-icon">{'⏹'}</span>
         <span className="chat-interrupt-text">Turn interrupted</span>
         {time && <span className="chat-interrupt-time">{time}</span>}
       </div>
     );
+  }
+
+  // CLI-injected context (skill content dump, compaction summary, image
+  // metadata) — the human never typed this. Collapsed row, click to expand.
+  // Belt-and-suspenders prefix check catches histories parsed before the
+  // server learned the injected flag (stale cache / old transcript exports).
+  if (isUser && text
+    && (message.injected || text.startsWith('Base directory for this skill:'))) {
+    return <InjectedContextRow text={text} />;
   }
 
   // Detect image paths in assistant text and render inline previews
@@ -670,22 +969,39 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
 
   return (
     <div className={`session-msg ${isUser ? 'session-msg-user' : 'session-msg-assistant'}`}>
-      <div className="session-msg-header">
-        <span className="session-msg-role">{isUser ? 'You' : assistantLabel}</span>
-        {time && <span className="session-msg-time">{time}</span>}
-        {!isUser && model && <span className="session-msg-model">{model}</span>}
-      </div>
       <div className="session-msg-content" onClick={handleContentClick}>
         {thinking && <SessionThinking text={thinking} />}
-        {tools && tools.length > 0 && tools.map((t, i) => (
-          <SessionToolCall key={i} tool={t} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
-        ))}
         {text && (
           <div
             className="markdown-body"
             dangerouslySetInnerHTML={{ __html: renderMarkdownWithRefs(text, sessionCwd) }}
           />
         )}
+        {tools && tools.length > 0 && (() => {
+          // CLI content order is prose first, tool_use blocks after — render
+          // in that order. Merge consecutive generic tools into one "Ran 3
+          // commands, read a file ›" row (Claude Code app style). Special
+          // tools (Task/Agent groups, plan cards, plan writes) break the run
+          // and render solo.
+          const out: React.ReactNode[] = [];
+          let run: SessionHistoryTool[] = [];
+          const flush = () => {
+            if (!run.length) return;
+            // Single tools use the same muted row ("Ran a command ›") — one
+            // visual language for all generic tool activity, like the iOS app.
+            const key = `run-${run[0].toolUseId ?? out.length}`;
+            out.push(<ToolRunRow key={key} tools={run} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />);
+            run = [];
+          };
+          for (let i = 0; i < tools.length; i++) {
+            const t = tools[i];
+            if (isMergeableHistoryTool(t)) { run.push(t); continue; }
+            flush();
+            out.push(<SessionToolCall key={t.toolUseId ?? `solo-${i}`} tool={t} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />);
+          }
+          flush();
+          return out;
+        })()}
         {textImagePaths.length > 0 && (() => {
           const resolved = textImagePaths
             .map((p) => ({ p, abs: resolveImagePath(p, sessionCwd) }))
@@ -705,17 +1021,12 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
             </div>
           );
         })()}
-        {text && text.trim() && (
+        {showCopyActions && text && text.trim() && (
           <div className="session-msg-actions">
             <CopyMessageButtons markdown={text} />
           </div>
         )}
       </div>
-      {!isUser && usage && (
-        <div className="session-msg-meta">
-          {usage.input_tokens.toLocaleString()} in / {usage.output_tokens.toLocaleString()} out
-        </div>
-      )}
     </div>
   );
 });

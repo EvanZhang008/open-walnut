@@ -88,11 +88,6 @@ export function NotesChat({ activeNotePath, headerLeft, conversationId }: {
                 {chat.toolActivity.name}...
               </div>
             )}
-            {chat.error && (
-              <div className="chat-message chat-message-notification chat-message-notification-error">
-                <div className="chat-message-content"><div className="markdown-body"><p>{chat.error}</p></div></div>
-              </div>
-            )}
           </ChatPanel>
 
           <div className="notes-chat-input">

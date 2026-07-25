@@ -106,24 +106,33 @@ export const NOTE_REORG_CAP = 6000; // chars
 
 /** The five canonical NOTE sections, in render order. The NOTE is the task's single
  *  living document (design session 2026-07-18, replaces the summary+milestones pair):
- *  Executive Summary = for the human scanning; Goal = the user's OWN request verbatim
- *  first, then the derived objective + acceptance (search entry point; rewritten on
- *  pivot with a "(pivoted from: …)" trace); Context = self-contained background, frozen
- *  once right; Progress = high-level per-workitem status lines with a plain-text status
- *  label (DONE/WIP/TODO/BLOCKED/WAIT); Work Log = append-only did/found/result entries
- *  carrying every ID and decision (no timestamps). */
+ *  Executive Summary = for the human scanning; User Request = concise restatement of
+ *  the user's request (intent, NOT a verbatim quote) + acceptance criteria (search
+ *  entry point; rewritten on pivot with a "(pivoted from: …)" trace); Context =
+ *  self-contained background, frozen once right; Progress = bulleted per-workitem lines
+ *  with a bracketed status label ([DONE]/[WIP]/[TODO]/[BLOCKED]/[WAIT]); Work Log =
+ *  append-only did/found/result entries carrying every external ID and decision
+ *  (never commit hashes, no timestamps).
+ *  Renamed 2026-07-22: "Goal" → "User Request" (user feedback). Old notes with a
+ *  "## Goal" header keep parsing (normalized to User Request on the next assemble). */
 export const NOTE_SECTIONS = [
-  'Executive Summary', 'Goal', 'Context', 'Progress', 'Work Log',
+  'Executive Summary', 'User Request', 'Context', 'Progress', 'Work Log',
 ] as const;
 export type NoteSection = (typeof NOTE_SECTIONS)[number];
 
 /** Report label per note section (what the session answers with). */
 const NOTE_LABELS: Record<NoteSection, string> = {
   'Executive Summary': 'EXEC_SUMMARY',
-  'Goal': 'GOAL',
+  'User Request': 'USER_REQUEST',
   'Context': 'CONTEXT',
   'Progress': 'PROGRESS',
   'Work Log': 'WORK_LOG',
+};
+
+/** Legacy report label accepted per section: sessions mid-turn when the rename
+ *  shipped still answer with the old label. */
+const LEGACY_NOTE_LABELS: Partial<Record<NoteSection, string>> = {
+  'User Request': 'GOAL',
 };
 
 /** Build the self-report prompt. `existingNote` is injected so the session works
@@ -143,17 +152,17 @@ export function buildSelfReportPrompt(existingNote?: string): string {
     noteBlock = `<existing_note>\n${existing}\n</existing_note>
 For EACH of the five labels answer \`unchanged\` OR the new content. If the note above is NOT yet in this five-section structure, this is a MIGRATION: answer all five with content, preserving EVERY fact from the note above (facts may move between sections; none may be dropped).
 NOTE BUDGET: ${existing.length}/${NOTE_REORG_CAP} chars used.${reorg ? `
-The note is ${existing.length} chars — OVER the ${NOTE_REORG_CAP}-char budget. This fire is a MANDATORY REORGANIZE: answer WORK_LOG with \`rewrite: <full section>\` that merges the OLDEST entries into consolidated ones (several old entries → one), and rewrite any other section that carries superseded or duplicated detail. Target: bring the FULL note back under ${NOTE_REORG_CAP} chars — the note must come back SHORTER than it went in. HARD RULE: keep every ID (commits, tickets, hosts, URLs) and every decision+reason; only drop process narration, dead-end play-by-play, and detail already superseded.` : ''}`;
+The note is ${existing.length} chars — OVER the ${NOTE_REORG_CAP}-char budget. This fire is a MANDATORY REORGANIZE: answer WORK_LOG with \`rewrite: <full section>\` that merges the OLDEST entries into consolidated ones (several old entries → one), and rewrite any other section that carries superseded or duplicated detail. Target: bring the FULL note back under ${NOTE_REORG_CAP} chars — the note must come back SHORTER than it went in. HARD RULE: keep every external ID (tickets, request/approval ids, hosts, URLs) and every decision+reason; commit hashes may be dropped; only drop process narration, dead-end play-by-play, and detail already superseded.` : ''}`;
   }
 
   return `You just finished a turn. Update this task's NOTE — the single living document that lets a human (or a fresh AI with zero context) pick the task up. You have the full context — be the authoritative source. ${noteBlock}
 
 Section contract (plain text under each label, English, self-contained — never "this bug"/"the feature"). Style rules for ALL sections: any name a zero-context reader wouldn't know (project codenames, internal tools, niche libraries, team jargon) gets a FEW-WORDS parenthetical on first use — "walnut (a personal task butler)" — not a sentence of background; well-known public things (React, S3, GitHub) need none. Reference code by file path only, NEVER line numbers (they drift). Terse beats thorough-sounding.
 EXEC_SUMMARY: For the HUMAN scanning: 2-3 plain sentences — what this task is + where it stands. No jargon.
-GOAL: Lead with the user's ACTUAL request in their own words — a "Request: <what the user literally asked for, staying close to their phrasing>" line — because the user knows their intent best and the exact ask is what matters most. Then an "Objective: <the derived goal + acceptance criteria>" line, detailed enough to be the search entry point. If the user changed direction, rewrite and keep a "(pivoted from: <old> — <why>)" trace inline.
+USER_REQUEST: A concise, accurate restatement of what the user asked for — capture the intent faithfully but do NOT quote the user verbatim (raw messages carry typos and thinking-out-loud; distill them). Include the acceptance criteria, detailed enough to be the search entry point. If the user changed direction, rewrite and keep a "(pivoted from: <old> — <why>)" trace inline.
 CONTEXT: Background a newcomer needs: where the problem came from, why it matters, constraints, systems involved. Write once, keep frozen; only add when genuinely new background surfaced.
-PROGRESS: HIGH-LEVEL status board, one line per workitem/component: "<STATUS> <workitem> — <detail>". STATUS is one of the plain-text labels — DONE (finished), WIP (in progress), TODO (not started yet), BLOCKED/WAIT (blocked, or waiting on a human / review / deployment). Use the label text, NOT emoji. Simple and concise — details belong in WORK_LOG, not here.
-WORK_LOG: \`append: <one entry>\` — what you DID, what you FOUND (conclusions, gotchas, dead ends), the RESULT (commit hashes, ticket/PR ids, key decisions + why). No timestamps. \`unchanged\` only if this turn produced nothing worth tracing.
+PROGRESS: HIGH-LEVEL status board, one BULLET per workitem/component: "- [STATUS] <workitem> — <detail>". STATUS is one of the plain-text labels wrapped in square brackets — [DONE] (finished), [WIP] (in progress), [TODO] (not started yet), [BLOCKED]/[WAIT] (blocked, or waiting on a human / review / deployment). Use the bracketed label text, NOT emoji. Simple and concise — details belong in WORK_LOG, not here.
+WORK_LOG: \`append: <one entry>\` — what you DID, what you FOUND (conclusions, gotchas, dead ends), the RESULT (key decisions + why). ALWAYS carry EXTERNAL ids — ticket ids, request ids, approval ids, PR links, incident ids — a reader can't re-derive those. NEVER include commit hashes (low value; git history has them). No timestamps. \`unchanged\` only if this turn produced nothing worth tracing.
 NEVER delete facts: when something is superseded, update it in place and keep an "(was: …)" trace.
 
 Then these status fields (same plain-label format):
@@ -177,7 +186,7 @@ VERIFIED: <ran-and-saw-pass | assumed | not-applicable>.`;
  *  text — missing the regex silently dumps the new section into `preamble`;
  *  missing this list makes the new label bleed into the previous field. */
 const SELF_REPORT_LABELS = [
-  'EXEC_SUMMARY', 'GOAL', 'CONTEXT', 'PROGRESS', 'WORK_LOG', 'RECAP',
+  'EXEC_SUMMARY', 'USER_REQUEST', 'GOAL', 'CONTEXT', 'PROGRESS', 'WORK_LOG', 'RECAP',
   'TASK_SUMMARY', 'WHAT_I_DID', 'STATUS', 'CHANGES_TRIED', 'PHASE_SIGNAL', 'NEXT_STEPS',
   'BLOCKERS', 'USER_INTENT', 'VERIFIED', 'ARTIFACTS',
 ] as const;
@@ -209,10 +218,13 @@ export function parseNoteSections(note: string): { sections: Partial<Record<Note
   // an empty section (`…\n## Work Log` after trim) otherwise leaves that header text
   // inside the previous section's body, and the next assemble fabricates a SECOND
   // `## Work Log` header — corruption that compounds on every fire.
-  const headerRe = /(?:^|\n)##\s+(Executive Summary|Goal|Context|Progress|Work Log)[^\S\n]*(?:\n|$)/g;
+  // "Goal" is the pre-2026-07-22 name of "User Request" — old notes keep parsing
+  // and are silently normalized to the new header on the next assemble.
+  const headerRe = /(?:^|\n)##\s+(Executive Summary|User Request|Goal|Context|Progress|Work Log)[^\S\n]*(?:\n|$)/g;
   const hits: { name: NoteSection; start: number; bodyStart: number }[] = [];
   for (let m = headerRe.exec(note); m; m = headerRe.exec(note)) {
-    hits.push({ name: m[1] as NoteSection, start: m.index, bodyStart: m.index + m[0].length });
+    const name = (m[1] === 'Goal' ? 'User Request' : m[1]) as NoteSection;
+    hits.push({ name, start: m.index, bodyStart: m.index + m[0].length });
   }
   const preamble = note.slice(0, hits.length ? hits[0].start : note.length).trim();
   for (let i = 0; i < hits.length; i++) {
@@ -241,6 +253,8 @@ export type SectionAnswer =
  *  entry, so marker-less Work Log content defaults to append. Exported for unit tests. */
 export function parseSectionAnswer(report: string, section: NoteSection): SectionAnswer {
   let raw = extractField(report, NOTE_LABELS[section]).trim();
+  const legacy = LEGACY_NOTE_LABELS[section];
+  if (!raw && legacy) raw = extractField(report, legacy).trim();
   if (!raw) return { kind: 'none' };
   raw = raw.replace(/^[`*"']+/, '').replace(/[`*"']+$/, '').trim();
   if (/^unchanged\b[.!]?$/i.test(raw)) return { kind: 'unchanged' };
@@ -304,7 +318,7 @@ export function assembleNote(existingNote: string, report: string): { note: stri
 export function noteShrinkRejected(oldNote: string, newNote: string): boolean {
   const oldSections = parseNoteSections(oldNote).sections;
   const newSections = parseNoteSections(newNote).sections;
-  for (const section of ['Executive Summary', 'Goal', 'Context', 'Progress'] as const) {
+  for (const section of ['Executive Summary', 'User Request', 'Context', 'Progress'] as const) {
     const oldPresent = Object.prototype.hasOwnProperty.call(oldSections, section);
     const newPresent = Object.prototype.hasOwnProperty.call(newSections, section);
     if (oldPresent && !newPresent) return true;

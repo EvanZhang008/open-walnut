@@ -224,6 +224,8 @@ function defaultLegacyStatus(sessionId: string): LegacySessionStatusSnapshot {
 
 export class SessionStatusStore {
   private statuses = new Map<string, StoredSessionStatus>();
+  /** session+source pairs whose legacy-input rejection was already logged. */
+  private legacyRejectWarned = new Set<string>();
   private aliases = new Map<string, string>();
   private listeners = new Set<() => void>();
   private epoch = 0;
@@ -336,11 +338,19 @@ export class SessionStatusStore {
     if (!canonicalId) return 'rejected-invalid';
     const current = this.statuses.get(canonicalId);
     if (current?.statusRevision != null) {
-      log.warn('session-status', 'rejected unversioned input after versioned snapshot', {
-        sessionId: canonicalId,
-        revision: current.statusRevision,
-        source,
-      });
+      // Expected steady-state: every task/task-list poll re-seeds legacy
+      // fields for sessions that already hold a versioned WS snapshot. Warn
+      // once per session+source; repeating it turned page load into hundreds
+      // of console lines (each forwarded to the server log — real overhead).
+      const warnKey = `${canonicalId}:${source}`;
+      if (!this.legacyRejectWarned.has(warnKey)) {
+        this.legacyRejectWarned.add(warnKey);
+        log.warn('session-status', 'rejected unversioned input after versioned snapshot (once per session+source)', {
+          sessionId: canonicalId,
+          revision: current.statusRevision,
+          source,
+        });
+      }
       return 'rejected-legacy';
     }
 

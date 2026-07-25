@@ -358,6 +358,8 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
  */
 function groupKeyOf(n: Notification): string {
   if (n.kind === 'permission' && n.sessionId) return `perm:${n.sessionId}`;
+  if (n.kind === 'operation-error' && n.sessionId) return `error:session:${n.sessionId}`;
+  if (n.kind === 'operation-error' && n.taskId) return `error:task:${n.taskId}`;
   if (n.kind === 'cron') return `cron:${n.title}`;
   return n.dedupKey;
 }

@@ -5,6 +5,19 @@
 
 import type { TaskPriority } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
+import type { QuickStartTaskMeta } from './SessionPathSelector';
+
+/** Quick-start defaults. Lives here (not in SessionPathSelector) so MetaFooter's
+ *  "More · N" changed-from-default badge can import it without a runtime import
+ *  cycle — both it and the picker share one definition of "default". */
+export const DEFAULT_META: QuickStartTaskMeta = {
+  starred: true,         // mirrors existing quick-start behavior (task.starred = true)
+  needs_attention: false,
+  priority: 'none',
+  pinTier: 'focus',
+  model: undefined,      // Auto — Claude/config default picks the model unless user overrides
+  engine: undefined,     // Claude (native) unless the user flips the engine toggle
+};
 
 export const TIER_OPTIONS: { value: FocusTier; label: string }[] = [
   { value: 'focus', label: 'Focus' },

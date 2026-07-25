@@ -49,6 +49,25 @@ marked.setOptions({
 // Task ID pattern with human-readable title: [<id>|<title>]
 // e.g. [m1k5q7zr8-a3f1|HomeLab / Fix tax filing] — renders as a clickable pill showing the title
 const TASK_ID_TITLED_RE = /\[([a-z0-9]{7,10}-[a-f0-9]{4})\|([^\]]+)\]/;
+// ⚠ PERF: marked calls each inline extension's start() once per inline token
+// with src = the ENTIRE remaining text. An unbounded scan there is quadratic
+// in message size (a 15KB transcript message costs seconds; this froze page
+// boot for 10-16s on 2026-07-23 — and marked.use() mutates the GLOBAL marked
+// singleton, so these extensions also run inside renderMarkdownWithRefs for
+// every session message). Two rules keep it linear:
+//   1. tokenizer() only accepts matches at index 0 → use a ^-anchored twin
+//      (O(1) reject instead of scanning the tail).
+//   2. start() scans a BOUNDED WINDOW of the tail. When nothing matches in
+//      the window, it returns the window boundary as a bogus hint — marked
+//      cuts the inlineText token there and calls start() again on the rest,
+//      so the lexer advances in ≤window steps (linear total) and a match
+//      beyond the window is still found by a later call. Without the bogus
+//      hint, inlineText (which does NOT stop at '/') would swallow a
+//      special-char-free run past the match and the token would be lost.
+const START_SCAN_WINDOW = 2048;
+// Slack so a match STARTING inside the window isn't cut mid-path by the slice.
+const START_SCAN_SLACK = 1024;
+const TASK_ID_TITLED_AT_START_RE = new RegExp(`^${TASK_ID_TITLED_RE.source}`);
 
 // Image path patterns that should render as inline <img> tags:
 // 1. /api/images/<hash>.ext — uploaded images served by the app
@@ -56,6 +75,16 @@ const TASK_ID_TITLED_RE = /\[([a-z0-9]{7,10}-[a-f0-9]{4})\|([^\]]+)\]/;
 // 3. Absolute Unix paths with 2+ segments (/dir/file.png) — local files proxied via /api/local-image
 //    Allows spaces in paths (common in macOS screenshots like "Screenshot 2026-02-17 at 11.12.47 PM.png")
 const IMAGE_PATH_RE = /(\/api\/(?:images|local-image\?path=)[\w./%?=&-]+\.(?:png|jpe?g|gif|webp)|\/[\w. /-]+\/[\w. -]+\.(?:png|jpe?g|gif|webp))/i;
+// Anchored twin for tokenizer() (see PERF note above). The `\/[\w. /-]+\/…`
+// alternative backtracks heavily on long path-ish runs (dir listings, file
+// dumps); anchoring bounds the scan to the run at src[0] instead of the tail.
+const IMAGE_PATH_AT_START_RE = new RegExp(`^${IMAGE_PATH_RE.source}`, 'i');
+// Cheap start() precheck: most messages contain no image extension at all —
+// a simple alternation test (no backtracking) prunes the expensive scan.
+const IMAGE_EXT_HINT_RE = /\.(?:png|jpe?g|gif|webp)/i;
+// Global-flag twin for the start() scan loop — lastIndex stepping replaces
+// the old slice(offset) loop, which copied the remaining string per step.
+const IMAGE_PATH_SCAN_RE = new RegExp(IMAGE_PATH_RE.source, 'ig');
 
 /** Check if a local URL matches an image path that should be rendered inline */
 function isImageHref(href: string): boolean {
@@ -127,12 +156,26 @@ marked.use({
       name: 'taskLink',
       level: 'inline',
       start(src: string) {
-        return src.match(TASK_ID_TITLED_RE)?.index;
+        // Bounded window (see PERF note): full-tail scans here are quadratic.
+        const windowed = src.length > START_SCAN_WINDOW + START_SCAN_SLACK;
+        const hay = windowed ? src.slice(0, START_SCAN_WINDOW + START_SCAN_SLACK) : src;
+        // Precheck: no '[' → no possible match in the window; skips the regex.
+        if (hay.includes('[')) {
+          const idx = hay.match(TASK_ID_TITLED_RE)?.index;
+          // Windowed: reject slack-region hits (cut mid-window is unreliable);
+          // the boundary hint below re-scans them next round. Unwindowed: hay
+          // is the full src, any hit is trustworthy.
+          if (idx !== undefined && (!windowed || idx < START_SCAN_WINDOW)) return idx;
+        }
+        // Nothing in the window: hint the boundary so marked cuts the text
+        // token there and re-runs start() on the rest (see PERF note).
+        return windowed ? START_SCAN_WINDOW : undefined;
       },
       tokenizer(src: string) {
-        const match = TASK_ID_TITLED_RE.exec(src);
         // marked v15: start() hints where the token begins, but tokenizer receives
-        // src already sliced to that position — match must be at index 0.
+        // src already sliced to that position — match must be at index 0. Use the
+        // anchored twin so a non-match rejects in O(1) instead of scanning the tail.
+        const match = TASK_ID_TITLED_AT_START_RE.exec(src);
         if (match && match.index === 0) {
           return {
             type: 'taskLink',
@@ -152,21 +195,33 @@ marked.use({
       name: 'imagePath',
       level: 'inline',
       start(src: string) {
-        // Find first match preceded by whitespace or start-of-text (not mid-URL/code)
-        let offset = 0;
-        while (offset < src.length) {
-          const m = IMAGE_PATH_RE.exec(src.slice(offset));
-          if (!m || m.index === undefined) return;
-          const absIdx = offset + m.index;
-          if (absIdx === 0 || /\s/.test(src[absIdx - 1])) return absIdx;
-          offset = absIdx + 1;
+        // Bounded window (see PERF note): full-tail scans here are quadratic.
+        const windowed = src.length > START_SCAN_WINDOW + START_SCAN_SLACK;
+        const hay = windowed ? src.slice(0, START_SCAN_WINDOW + START_SCAN_SLACK) : src;
+        // Precheck: no image extension in the window → no possible match. This
+        // is the common case; skips the backtracking-prone path regex entirely.
+        if (IMAGE_EXT_HINT_RE.test(hay)) {
+          // Find first match preceded by whitespace or start-of-text (not
+          // mid-URL/code). lastIndex stepping — no per-step slice() copies.
+          IMAGE_PATH_SCAN_RE.lastIndex = 0;
+          let m: RegExpExecArray | null;
+          while ((m = IMAGE_PATH_SCAN_RE.exec(hay)) !== null) {
+            // Windowed: slack-region hits defer to the boundary hint (a match
+            // cut mid-window is unreliable). Unwindowed: hay is the full src.
+            if (windowed && m.index >= START_SCAN_WINDOW) break;
+            if (m.index === 0 || /\s/.test(hay[m.index - 1])) return m.index;
+            IMAGE_PATH_SCAN_RE.lastIndex = m.index + 1;
+          }
         }
+        // Nothing in the window: hint the boundary so marked cuts the text
+        // token there and re-runs start() on the rest (see PERF note).
+        return windowed ? START_SCAN_WINDOW : undefined;
       },
       tokenizer(src: string) {
-        const match = IMAGE_PATH_RE.exec(src);
-        if (!match || match.index === undefined) return;
-        // Must be at start of src (marked slices to our start() index)
-        if (match.index !== 0) return;
+        // Must match at start of src (marked slices to our start() index) —
+        // anchored twin rejects non-matches without scanning the whole tail.
+        const match = IMAGE_PATH_AT_START_RE.exec(src);
+        if (!match) return;
         return {
           type: 'imagePath',
           raw: match[0],
@@ -486,13 +541,15 @@ export function ThinkingSection({ block }: { block: ThinkingBlock }) {
   // rather than an expandable-but-blank row.
   if (!block.content || !block.content.trim()) return null;
   return (
-    <div className="chat-thinking">
-      <button className="chat-thinking-toggle" onClick={() => setOpen((p) => !p)}>
-        <span className="chat-thinking-icon">{open ? '\u25BC' : '\u25B6'}</span>
-        <span className="chat-thinking-label">Thinking</span>
+    <div className="tool-run-row">
+      <button className="tool-run-toggle" onClick={() => setOpen((p) => !p)}>
+        <span className="tool-run-label">Thinking</span>
+        <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}>{'\u203A'}</span>
       </button>
       {open && (
-        <div className="chat-thinking-content">{block.content}</div>
+        <div className="tool-run-body">
+          <div className="chat-thinking-content">{block.content}</div>
+        </div>
       )}
     </div>
   );

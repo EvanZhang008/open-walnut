@@ -91,6 +91,36 @@ test('todo panel shows seeded test task', async ({ page }) => {
   await expect(taskItem).toBeVisible({ timeout: 5000 })
 })
 
+test('Date=Now hides future tasks from the pinned area', async ({ page }) => {
+  const futurePinned = await createTaskViaApi('Future pinned date filter', {
+    category: 'Work',
+    due_date: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+  })
+  const currentPinned = await createTaskViaApi('Current pinned date filter', {
+    category: 'Work',
+  })
+  await pinTaskViaApi(futurePinned.id)
+  await pinTaskViaApi(currentPinned.id)
+
+  await page.goto('/')
+  await page.waitForLoadState('networkidle')
+  await showAllTasks(page)
+
+  const pinnedCard = (taskId: string) => page.locator(`.todo-focus-card[data-task-id="${taskId}"]`)
+
+  await page.getByRole('button', { name: 'View options' }).click()
+  await page.locator('.vd-field').filter({ hasText: /^Date/ }).locator('select').selectOption('')
+  await page.keyboard.press('Escape')
+  await expect(pinnedCard(futurePinned.id)).toBeVisible({ timeout: 5000 })
+  await expect(pinnedCard(currentPinned.id)).toBeVisible()
+
+  await page.getByRole('button', { name: 'View options' }).click()
+  await page.locator('.vd-field').filter({ hasText: /^Date/ }).locator('select').selectOption('now')
+  await page.keyboard.press('Escape')
+  await expect(pinnedCard(futurePinned.id)).toBeHidden()
+  await expect(pinnedCard(currentPinned.id)).toBeVisible()
+})
+
 test('search and filters apply across pinned, recent, and task sections', async ({ page }) => {
   const query = `shared-query-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const matchingPinned = await createTaskViaApi(`Pinned ${query} match`, {
@@ -321,6 +351,36 @@ test('category tabs filter tasks', async ({ page }) => {
   await selectCategory(page, 'Work')
   await expect(page.locator('.todo-panel-item', { hasText: workTask.title })).toBeVisible()
   await expect(page.locator('.todo-panel-item', { hasText: lifeTask.title })).toBeHidden()
+})
+
+test('pinned + recent stay visible across category tabs (cross-category focus view)', async ({ page }) => {
+  // Regression: a pinned task from another category must NOT vanish when the user
+  // navigates to a different category tab. Pins are a cross-category focus view —
+  // scoping the Pinned/Recent sections to the active tab made "all my focused tasks
+  // disappeared" (they reappeared only on search, which bypasses the tab).
+  const query = `xcat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const lifePinned = await createTaskViaApi(`Life pinned ${query}`, { category: 'Life' })
+  const workTask = await createTaskViaApi(`Work list ${query}`, { category: 'Work' })
+  await pinTaskViaApi(lifePinned.id)
+
+  await page.goto('/')
+  await page.waitForLoadState('networkidle')
+  await showAllTasks(page)
+
+  const pinnedCard = page.locator(`.todo-focus-card[data-task-id="${lifePinned.id}"]`)
+  const recentCard = page.locator(`.todo-pinned-section-recent .todo-pinned-card[data-task-id="${lifePinned.id}"]`)
+  await expect(pinnedCard).toBeVisible({ timeout: 5000 })
+
+  // Navigate to the Work tab — the Life-category pin must remain visible in both the
+  // Pinned tier and the Recent feed even though it belongs to a different category.
+  // (No global pinned-count assertion: /api/focus/tasks is shared state and this suite
+  // runs fully parallel, so other tests' pins would make an exact count flaky.)
+  await selectCategory(page, 'Work')
+  await expect(page.locator('.todo-panel-item', { hasText: workTask.title })).toBeVisible()
+  await expect(pinnedCard).toBeVisible()
+  await expect(recentCard).toBeVisible()
+  // The Work-category list item must NOT leak into the Pinned tier (it isn't pinned).
+  await expect(page.locator(`.todo-focus-card[data-task-id="${workTask.id}"]`)).toHaveCount(0)
 })
 
 // ── Todo panel collapse/expand ──

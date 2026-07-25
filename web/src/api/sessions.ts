@@ -1,4 +1,4 @@
-import { apiGet, apiPatch, apiPost } from './client';
+import { apiGet, apiPatch, apiPost, ApiError } from './client';
 import type { SessionSummary, SessionRecord, SessionEffort, SessionModelCatalogEntry } from '@open-walnut/core';
 import type { ImageAttachment } from './chat';
 import type { SessionHistoryMessage } from '@/types/session';
@@ -171,14 +171,31 @@ export async function fetchSessionsForTask(taskId: string): Promise<SessionRecor
   return res.sessions;
 }
 
+/**
+ * Fetch one session record. Returns null ONLY when the session genuinely does
+ * not exist (404). Any other failure (network, timeout, empty-body parse error)
+ * THROWS — callers must not treat a transient fetch failure as "session gone".
+ * The old blanket `catch { return null }` turned a browser-cache 304 race into
+ * "Untitled session" panels (inc-1784686852150 / inc-1784752220440).
+ */
 export async function fetchSession(sessionId: string): Promise<SessionRecord | null> {
   try {
     const res = await apiGet<{ session: SessionRecord }>(`/api/sessions/${sessionId}`);
     seedSessionStatus(res.session, 'rest:session');
     return res.session;
-  } catch {
-    return null;
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    log.warn('session', 'fetchSession failed (transient — NOT treating as missing)', {
+      sessionId,
+      error: String(err),
+    });
+    throw err;
   }
+}
+
+export async function fetchSessionVscodeUri(sessionId: string): Promise<string> {
+  const res = await apiGet<{ uri: string }>(`/api/sessions/${sessionId}/vscode-uri`);
+  return res.uri;
 }
 
 /**
@@ -285,6 +302,7 @@ export interface SessionLiveSettings {
   live: boolean;
   requested: { model?: string; effort?: SessionEffort; mode?: string };
   applied: { model: string | null; effort: string | null; mode: string | null } | null;
+  effective: { effortLevel: SessionEffort | null } | null;
   /** Present only when fetched with details=true (the picker's collapsed
    *  "Live details" section). Each field degrades to null independently. */
   details?: {
