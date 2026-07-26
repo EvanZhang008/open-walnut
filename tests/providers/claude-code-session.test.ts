@@ -70,6 +70,33 @@ function daemonUrl(): string {
   return `ws://127.0.0.1:${sharedDaemon.port}`;
 }
 
+/**
+ * Poll until `pred()` holds, then return. Replaces fixed sleeps that waited out a
+ * worst case on every run. Throws on timeout so a genuine hang still fails loudly
+ * rather than silently asserting on an empty array.
+ */
+async function waitUntil(pred: () => boolean, timeoutMs = 5000, label = 'condition'): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (pred()) return;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error(`waitUntil timed out after ${timeoutMs}ms waiting for ${label}`);
+}
+
+/**
+ * Prove a one-shot event stays one-shot. Waits for the first occurrence, then
+ * watches a bounded window for a second.
+ *
+ * The anti-loop tests below used to sleep a flat 3000ms because the regression they
+ * guard cycled every ~500ms. Waiting for the first event and then watching 600ms
+ * (>1 cycle) preserves that guarantee at a fraction of the cost.
+ */
+async function settleOneShot(count: () => number, quietMs = 600): Promise<void> {
+  await waitUntil(() => count() >= 1, 5000, 'the first event');
+  await new Promise((r) => setTimeout(r, quietMs));
+}
+
 beforeAll(async () => {
   sharedDaemon = await createMockDaemon();
 });
@@ -123,8 +150,12 @@ afterEach(async () => {
   // Clear all bus subscribers to stop receiving events
   bus.clear();
 
-  // Allow fire-and-forget operations (persistSessionRecord, etc.) to settle
-  await new Promise((r) => setTimeout(r, 200));
+  // Yield one IO turn so fire-and-forget work (persistSessionRecord, etc.) can
+  // start settling. This was an unconditional 200ms sleep x 133 tests = 25s, a
+  // third of the file's runtime, and it was never load-bearing: the rm below
+  // already retries (maxRetries:3, retryDelay:100), which is what actually
+  // handles a writer still holding a file. Measured 88.9s -> 63.7s, 133/133 both.
+  await new Promise((r) => setImmediate(r));
   await fsp.rm(tmpBase, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => {});
 });
 
@@ -587,9 +618,9 @@ describe('delivery failure: no retry loop, no message loss', () => {
       message: 'precious message — do not lose',
     }, ['session-runner'], { source: 'test' });
 
-    // Give the failure path time to settle — and time for a loop to manifest
-    // if the regression came back (the old loop cycled every ~500ms).
-    await new Promise((r) => setTimeout(r, 3000));
+    // Wait for the failure, then watch a quiet window longer than one cycle of the
+    // old ~500ms loop. Same guarantee as the previous flat 3000ms sleep, ~5x faster.
+    await settleOneShot(() => batchFailed.length);
 
     // Exactly one delivery attempt failed — NOT a loop (old bug: 5-6 cycles in 3s)
     expect(batchFailed.length).toBe(1);
@@ -618,12 +649,13 @@ describe('delivery failure: no retry loop, no message loss', () => {
 
     await enqueueMessage(sessionId, 'first try');
     bus.emit(EventNames.SESSION_SEND, { sessionId, message: 'first try' }, ['session-runner'], { source: 'test' });
-    await new Promise((r) => setTimeout(r, 1500));
+    // Poll for the attempt instead of sleeping out a 1500ms worst case.
+    await waitUntil(() => batchFailed.length >= 1, 5000, 'the first failed attempt');
     expect(batchFailed.length).toBe(1);
 
     // User-initiated retry = a NEW session:send → another single attempt
     bus.emit(EventNames.SESSION_SEND, { sessionId, message: 'first try' }, ['session-runner'], { source: 'test' });
-    await new Promise((r) => setTimeout(r, 1500));
+    await waitUntil(() => batchFailed.length >= 2, 5000, 'the retried attempt');
     expect(batchFailed.length).toBe(2);
 
     // Still exactly one pending message — no duplication, no loss

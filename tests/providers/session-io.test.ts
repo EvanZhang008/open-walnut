@@ -40,7 +40,9 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  await new Promise((r) => setTimeout(r, 100))
+  // setImmediate, not a 100ms sleep: 35 tests x 100ms was 3.5s of this file's
+  // 6.7s. The rm already retries on ENOTEMPTY, so the sleep was redundant.
+  await new Promise((r) => setImmediate(r))
   await fsp.rm(tmpBase, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => {})
 })
 

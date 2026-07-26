@@ -487,9 +487,11 @@ describe('Chat RPC task context integration', () => {
 
   afterEach(async () => {
     await stopServer();
-    // Small delay to let async cleanup (WAL checkpoints, file handles) complete
-    await new Promise((r) => setTimeout(r, 100));
-    await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {});
+    // Yield one IO turn instead of sleeping 100ms x 27 tests (2.7s of a 3.6s file).
+    // stopServer() already awaits its own shutdown; the retrying rm below is what
+    // actually tolerates a WAL checkpoint still finishing.
+    await new Promise((r) => setImmediate(r));
+    await fs.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }).catch(() => {});
   });
 
   it('prepends [Task Context] prefix to API message when taskContext is provided', async () => {

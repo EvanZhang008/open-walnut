@@ -111,6 +111,21 @@ exit 0
   return scriptPath
 }
 
+/**
+ * Poll until `pred()` holds. Use this ONLY for positive conditions ("the data
+ * arrived"). Tests that assert an ABSENCE (e.g. control_request lines must be 0)
+ * deliberately keep their fixed sleep: a poll would return instantly and prove
+ * nothing, since the condition is already true before the daemon has done anything.
+ */
+async function waitUntil(pred: () => boolean, timeoutMs = 5000, label = 'condition'): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (pred()) return
+    await new Promise((r) => setTimeout(r, 25))
+  }
+  throw new Error(`waitUntil timed out after ${timeoutMs}ms waiting for ${label}`)
+}
+
 describe.skipIf(!binaryExists())('Local daemon session E2E', () => {
   let tmpDir: string
 
@@ -167,8 +182,8 @@ describe.skipIf(!binaryExists())('Local daemon session E2E', () => {
     expect(startRes.ok).toBe(true)
     expect(startRes.pid).toBeGreaterThan(0)
 
-    // Give the daemon a moment to fan out the JSONL
-    await new Promise((r) => setTimeout(r, 1500))
+    // Poll for the fan-out instead of sleeping out a 1500ms worst case.
+    await waitUntil(() => lines.length >= 3, 5000, '3 fanned-out JSONL lines')
 
     // Should have received all 3 mock lines
     expect(lines.length).toBeGreaterThanOrEqual(3)
@@ -214,7 +229,7 @@ describe.skipIf(!binaryExists())('Local daemon session E2E', () => {
     expect(startRes.ok).toBe(true)
     expect(startRes.pid).toBeGreaterThan(0)
 
-    await new Promise((r) => setTimeout(r, 1500))
+    await waitUntil(() => lines.some((l) => l.includes('"init"')), 5000, 'the init line')
 
     // init streamed through even though we sent no message, and NO user turn was
     // injected into the JSONL (the FIFO got no `{"type":"user",...}` write).
@@ -402,6 +417,8 @@ exit 0
       mode: 'plan',
     })
 
+    // Bounded sleep retained: the next step polls via attach, and the condition
+    // (pendingCtrl set) is only observable through that RPC, not a local array.
     await new Promise((r) => setTimeout(r, 1000))
 
     // Confirm pendingCtrl exists
