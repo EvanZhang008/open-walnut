@@ -28,15 +28,20 @@ const BUILTIN_DIR = path.join(SRC_DIR, 'integrations');
 let bundledFile: string | null = null;
 let register: (api: any) => void;
 
+/**
+ * This suite exercises a plugin that lives OUTSIDE the repo
+ * (~/.open-walnut/plugins/ext-sync/) — external plugins are never committed. On
+ * any machine that hasn't installed it, the plugin simply isn't there, so the
+ * suite skips instead of failing: an absent optional plugin is not a regression,
+ * and a hard throw here made every one of these tests a permanent red in CI and
+ * on other contributors' machines.
+ */
+const PLUGIN_INSTALLED = fs.existsSync(PLUGIN_ENTRY);
+
 // ── Setup: bundle the external plugin like the production loader does ──
 
 beforeAll(async () => {
-  if (!fs.existsSync(PLUGIN_ENTRY)) {
-    throw new Error(
-      `External plugin not found at ${PLUGIN_ENTRY}. ` +
-      'This test requires the external plugin to be installed.',
-    );
-  }
+  if (!PLUGIN_INSTALLED) return;
 
   const { build } = await import('esbuild');
   const pluginName = 'ext-sync';
@@ -109,7 +114,7 @@ function extPluginTask(overrides?: Partial<ReturnType<typeof createMockTask>>) {
 
 // ── Tests ──
 
-describe('External plugin registration', () => {
+describe.skipIf(!PLUGIN_INSTALLED)('External plugin registration', () => {
   it('registers sync with all required methods', () => {
     const { api, collected } = extPluginApi();
     register(api);
@@ -171,7 +176,10 @@ describe('External plugin registration', () => {
     const { api, collected } = extPluginApi();
     register(api);
 
-    const syncedTask = extPluginTask({ ext: { ext-sync: { id: 'SIM-123' } } });
+    // Quoted: `ext-sync` contains a hyphen, so a bare key is a syntax error.
+    // Unquoted, esbuild fails to transform this file — which broke whole-suite
+    // collection (`vitest related`, coverage runs) for every other test too.
+    const syncedTask = extPluginTask({ ext: { 'ext-sync': { id: 'SIM-123' } } });
     expect(collected.display!.isSynced(syncedTask)).toBe(true);
 
     const unsyncedTask = extPluginTask();
@@ -220,30 +228,30 @@ describe('External plugin registration', () => {
   });
 });
 
-describe('External plugin migration', () => {
+describe.skipIf(!PLUGIN_INSTALLED)('External plugin migration', () => {
   it('migrates ext-sync_id to ext.ext-sync.id', () => {
     const { api, collected } = extPluginApi();
     register(api);
 
     const task = extPluginTask() as any;
-    task.ext-sync_id = 'SIM-456';
-    task.ext-sync_short_id = 'S456';
-    task.ext-sync_comment_id = 'comment-789';
-    task.ext-sync_tags = ['bug', 'p1'];
+    task['ext-sync_id'] = 'SIM-456';
+    task['ext-sync_short_id'] = 'S456';
+    task['ext-sync_comment_id'] = 'comment-789';
+    task['ext-sync_tags'] = ['bug', 'p1'];
 
     const migrated = collected.migrations[0]([task]);
 
-    expect(migrated[0].ext?.ext-sync).toEqual({
+    expect(migrated[0].ext?.['ext-sync']).toEqual({
       id: 'SIM-456',
       short_id: 'S456',
       comment_id: 'comment-789',
       tags: ['bug', 'p1'],
     });
     // Old fields should be removed
-    expect(task.ext-sync_id).toBeUndefined();
-    expect(task.ext-sync_short_id).toBeUndefined();
-    expect(task.ext-sync_comment_id).toBeUndefined();
-    expect(task.ext-sync_tags).toBeUndefined();
+    expect(task['ext-sync_id']).toBeUndefined();
+    expect(task['ext-sync_short_id']).toBeUndefined();
+    expect(task['ext-sync_comment_id']).toBeUndefined();
+    expect(task['ext-sync_tags']).toBeUndefined();
   });
 
   it('skips tasks already migrated (ext.ext-sync exists)', () => {
@@ -251,14 +259,14 @@ describe('External plugin migration', () => {
     register(api);
 
     const task = extPluginTask({
-      ext: { ext-sync: { id: 'existing-id', short_id: 'E1' } },
+      ext: { 'ext-sync': { id: 'existing-id', short_id: 'E1' } },
     }) as any;
     // Even if old field exists, migration should skip because ext.ext-sync is set
-    task.ext-sync_id = 'old-id';
+    task['ext-sync_id'] = 'old-id';
 
     const migrated = collected.migrations[0]([task]);
     // ext.ext-sync should remain unchanged
-    expect(migrated[0].ext?.ext-sync).toEqual({ id: 'existing-id', short_id: 'E1' });
+    expect(migrated[0].ext?.['ext-sync']).toEqual({ id: 'existing-id', short_id: 'E1' });
   });
 
   it('handles tasks without ext-sync_id (no-op)', () => {
@@ -275,8 +283,8 @@ describe('External plugin migration', () => {
     register(api);
 
     const task = extPluginTask() as any;
-    task.ext-sync_id = 'SIM-100';
-    task.ext-sync_short_id = 'S100';
+    task['ext-sync_id'] = 'SIM-100';
+    task['ext-sync_short_id'] = 'S100';
 
     const first = collected.migrations[0]([task]);
     const second = collected.migrations[0](first);

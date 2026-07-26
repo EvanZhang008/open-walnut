@@ -1,0 +1,63 @@
+/**
+ * The measured slow-test list — files that take >2s and therefore cannot live in
+ * the fast feedback tier (`npm run test:quick`).
+ *
+ * This list is DATA, not judgement: it was produced by running the whole suite
+ * with `--reporter=json` and taking every file whose wall-clock exceeded 2000ms
+ * (2026-07-25). Slowness here is almost always "this file starts a real process"
+ * — a local daemon, a `claude` CLI, an ssh preamble, a git subprocess — or waits
+ * on a real timeout. Those are exactly the tests that must still run, just not on
+ * every keystroke.
+ *
+ * Keeping it in one module (rather than inline in a config) means:
+ *   - `test:quick` excludes it, and
+ *   - `test:slow` includes EXACTLY it,
+ * so the two tiers are complementary by construction and no file can silently
+ * fall out of both. tests/setup/quick-tier.test.ts asserts that partition.
+ *
+ * Maintenance: re-measure rather than hand-edit. See docs/reference/testing-pipeline.md.
+ */
+
+/** Files measured >2s. Paths are repo-root-relative, matching vitest's include/exclude. */
+export const SLOW_TEST_FILES = [
+  // ── Spawns a real `claude` CLI / local daemon (the heavyweights) ────────────
+  'tests/providers/claude-code-session.test.ts', // 278s — 80% of the old "unit" tier by itself
+  'tests/providers/local-daemon.test.ts', // 41s
+  'tests/providers/local-daemon-session-e2e.test.ts', // 29s
+  'tests/providers/claude-stream-partial.e2e.test.ts', // 11s
+  'tests/providers/acp-worker.test.ts', // 9s
+  'tests/providers/session-io.test.ts', // 9s
+  'tests/providers/acp-daemon.test.ts', // 7s
+  'tests/providers/session-background-workflow.test.ts', // 5s
+  'tests/providers/daemon-transport-unit.test.ts', // 3s
+  'tests/providers/remote-session-manager-session-state.test.ts', // 2s
+
+  // ── Real git subprocesses (repo creation, history rewrite, packing) ─────────
+  'tests/integrations/git-compaction.test.ts', // 67s
+  'tests/integrations/git-sync.test.ts', // 11s
+  'tests/core/git-versioning.test.ts', // 5s
+
+  // ── Real HTTP server + session plumbing ────────────────────────────────────
+  'tests/web/routes/sessions.test.ts', // 60s
+  'tests/web/routes/bug-report.test.ts', // 5s
+  'tests/web/routes/task-hook-maintainer.test.ts', // 5s
+  'tests/web/routes/chat-plan-mode.test.ts', // 5s
+  'tests/web/routes/chat-background-review.test.ts', // 3s
+  'tests/web/routes/chat-task-context.test.ts', // 3s
+  'tests/web/routes/notes-v2.test.ts', // 2s
+  'tests/web/routes/sessions-compare-modes-diverge.test.ts', // 2s
+  'tests/web/routes/sessions-git-diff.test.ts', // 2s
+
+  // ── Real timers / pollers / plugin discovery ───────────────────────────────
+  'tests/unit/subagent-poller.test.ts', // 15s
+  'tests/core/session-hooks-triage-debounce.test.ts', // 9s
+  'tests/core/plugin-sources.test.ts', // 3s
+  'tests/agent/loop-newmessages.test.ts', // 2s
+] as const
+
+/**
+ * Directories that are heavy END TO END — every file inside starts a server or a
+ * browser, so the quick tier skips the whole directory instead of enumerating it.
+ * (tests/e2e is 97/103 heavy; tests/commands is 2/2.)
+ */
+export const SLOW_TEST_DIRS = ['tests/e2e/**', 'tests/commands/**'] as const

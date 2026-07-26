@@ -13,8 +13,13 @@
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
+import { acquireTestSlot, releaseTestSlot } from './test-gate';
 
-export function setup(): void {
+export async function setup(): Promise<void> {
+  // Machine-wide gate: a second concurrent vitest run queues instead of
+  // stacking another ~8GB of fork workers (see tests/setup/test-gate.ts).
+  await acquireTestSlot();
+
   const prodHome = path.join(os.homedir(), '.open-walnut'); // safe: production-path — comparison only
   const current = process.env.OPEN_WALNUT_HOME;
 
@@ -30,4 +35,8 @@ export function setup(): void {
 
   process.env.OPEN_WALNUT_HOME = testHome;
   process.env.NODE_ENV = 'test';
+}
+
+export function teardown(): void {
+  releaseTestSlot();
 }

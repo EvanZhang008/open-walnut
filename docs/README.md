@@ -39,6 +39,8 @@ must live under one of these top-level categories instead of directly under
 
 ## References
 
+- [Testing pipeline](reference/testing-pipeline.md) - the four layers, which one
+  to run when, the known-failure baseline, and the free CI setup.
 - [Heartbeat example](reference/heartbeat-example.md)
 - [ACP seam map](reference/acp-seam-map.md)
 - [Frozen API v1 contract](reference/api-v1.md)

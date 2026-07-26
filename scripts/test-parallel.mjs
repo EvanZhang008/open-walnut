@@ -42,10 +42,13 @@ const runs = [
 const children = new Set();
 const isCI = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
 const passthroughArgs = process.argv.slice(2);
-const localWorkers = Math.max(2, Math.min(8, os.cpus().length));
-const parallelCount = Math.max(1, runs.length);
-const perRunWorkers = Math.max(1, Math.floor(localWorkers / parallelCount));
-const maxWorkers = isCI ? null : perRunWorkers;
+// One id per invocation of this script — all child tiers share a single slot
+// in the machine-wide vitest gate (tests/setup/test-gate.ts).
+const testRunId = process.env.WALNUT_TEST_RUN_ID ?? `tp-${process.pid}`;
+// Worker count comes from the single machine-wide budget (tests/setup/worker-budget.ts)
+// via each tier's vitest config — we deliberately pass NO --maxWorkers flag, so
+// there is exactly one place that decides it. CI keeps the config default too.
+const maxWorkers = null;
 
 const runOnce = (entry, extraArgs = []) =>
   new Promise((resolve) => {
@@ -57,7 +60,10 @@ const runOnce = (entry, extraArgs = []) =>
 
     const child = spawn(npm, args, {
       stdio: 'inherit',
-      env: { ...process.env, VITEST_GROUP: entry.name },
+      // WALNUT_TEST_RUN_ID: all 6 tiers of this invocation share ONE slot in
+      // the machine-wide vitest gate (tests/setup/test-gate.ts) — without it,
+      // each tier would count as a separate concurrent run and self-deadlock.
+      env: { ...process.env, VITEST_GROUP: entry.name, WALNUT_TEST_RUN_ID: testRunId },
       shell: process.platform === 'win32',
     });
     children.add(child);
@@ -91,6 +97,7 @@ if (passthroughArgs.length > 0) {
   const code = await new Promise((resolve) => {
     const child = spawn(npm, args, {
       stdio: 'inherit',
+      env: { ...process.env, WALNUT_TEST_RUN_ID: testRunId },
       shell: process.platform === 'win32',
     });
     children.add(child);
@@ -102,8 +109,23 @@ if (passthroughArgs.length > 0) {
   process.exit(Number(code) || 0);
 }
 
-// Run all test groups in parallel
-const codes = await Promise.all(runs.map((entry) => runOnce(entry)));
+// Run tiers SEQUENTIALLY, one at a time.
+//
+// This used to be `Promise.all(...)` — 6 tiers at once, each with its own worker
+// pool. That multiplied the per-tier worker cap by 6 and is what hard-crashed the
+// Mac on 2026-07-25 (screen flashing → reboot): a `maxWorkers: 4` config actually
+// permitted 24 fork workers, each allowed a 2GB heap, on top of ~3GB of security
+// agents, the prod server, simulators and browsers. Sequential means the machine
+// only ever sees ONE tier's workers — the budget in tests/setup/worker-budget.ts
+// becomes an absolute bound instead of a per-tier hint.
+//
+// Cost: wall-clock. Benefit: the suite can never take the machine down. Keep it.
+// (CI is exempt from the low budget, not from sequencing — isolated runners have
+// the RAM, and sequential output is far easier to read in a log.)
+const codes = [];
+for (const entry of runs) {
+  codes.push(await runOnce(entry));
+}
 const failed = codes.find((code) => code !== 0);
 
 if (failed !== undefined) {

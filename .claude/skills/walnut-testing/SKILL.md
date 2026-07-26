@@ -6,6 +6,37 @@ description: Testing details for the Walnut repo — 5-tier pyramid (unit/integr
 # Testing — Implementation Details
 
 For testing philosophy, run commands, and anti-patterns, see project `CLAUDE.md`.
+For the layered pipeline (which tier to run when), see
+[docs/reference/testing-pipeline.md](../../../docs/reference/testing-pipeline.md).
+
+## Run the cheap layer (start here)
+
+```bash
+npm run test:quick          # 311 pure-logic files, ~51s — the default
+npm run test:focus <path>   # one file/dir, 0.3-30s
+npm run test:baseline       # ⭐ the honest verdict: fails ONLY on NEW failures
+npm run test:pre-commit     # maps your diff → affected tiers
+```
+
+**`npm run test:baseline` is how you judge a change.** The suite carries **119
+pre-existing failures on `main`** (recorded in `tests/setup/known-failures.json`,
+measured in a clean clone of `e399786`). The baseline gate ignores those and fails
+only on failures absent from the list, so you get a yes/no answer instead of
+eyeballing an aggregate. Fixed some? `npm run test:baseline:record`.
+
+⚠️ **Never raise the worker budget** (`tests/setup/worker-budget.ts`, 2 workers
+locally). Uncapped fan-out hard-crashed the dev Mac twice in July 2026. `npm test`
+runs tiers *sequentially* for the same reason — don't "optimise" it back to parallel.
+
+### The mergeConfig trap (cost 2× suite runtime for months)
+
+`mergeConfig` **CONCATENATES** `include`/`exclude` arrays. Passing `include`
+through its second argument appends to the base's `tests/**` instead of replacing
+it — so `vitest.unit.config.ts` and `vitest.integration.config.ts` each collected
+~336 files (the whole suite) and `npm test` ran nearly every test **twice** (349s +
+397s). Both now assign `config.test.include` *after* the merge;
+`tests/setup/quick-tier.test.ts` guards the invariant. **Any new narrowing config
+must do the same.**
 
 ## Testing Pyramid (5 tiers)
 
@@ -35,15 +66,25 @@ For testing philosophy, run commands, and anti-patterns, see project `CLAUDE.md`
 
 Each tier has its own config. All tiers except Live run in parallel.
 
-| Tier | Config File | Workers | Timeout | Parallel? |
-|---|---|---|---|---|
-| **Unit** | `vitest.unit.config.ts` | CPU-proportional | 30s | Yes |
-| **Integration** | `vitest.integration.config.ts` | CPU-proportional | 60s | Yes |
-| **E2E** | `vitest.e2e.config.ts` | 4 forks | 60s | Yes (each test starts own server on port:0) |
-| **Browser** | `playwright.config.ts` | half CPUs (4 in CI) | 30s | Yes (fullyParallel) |
-| **Live** | `vitest.live.config.ts` | 1 (serial) | 120s | No (costs money) |
+All tiers share ONE worker budget: `tests/setup/worker-budget.ts` (2 locally, 4 in CI).
 
-`scripts/test-parallel.mjs` orchestrates unit + integration + e2e as 3 parallel groups.
+| Tier | Config File | Files | Time | Timeout |
+|---|---|---|---|---|
+| **Quick** ⭐ | `vitest.quick.config.ts` | 311 | 51s @4w | 15s |
+| **Slow** | `vitest.slow.config.ts` | 26 | 311s | 60s |
+| **Unit** | `vitest.unit.config.ts` | 224 | — | 30s |
+| **Integration** | `vitest.integration.config.ts` | 112 | — | 60s |
+| **E2E** | `vitest.e2e.config.ts` | 103 | ~120s | 60s |
+| **Browser** | `playwright.config.ts` | — | — | 30s |
+| **Live** | `vitest.live.config.ts` | 11 | — | 300s (costs money) |
+
+**quick + slow = an exact partition** (311 + 26 = 337, zero overlap, zero orphans)
+of everything except e2e/commands/live/frontend-rooted. Membership is decided by
+*measured* time — the >2s list lives in `tests/setup/slow-tests.ts`. Re-measure
+rather than hand-editing it.
+
+`scripts/test-parallel.mjs` runs the tiers **sequentially** (it used to be
+`Promise.all`, which multiplied the worker cap by 6 and crashed the machine).
 `*.live.test.ts` is excluded from all non-live configs — never runs accidentally.
 
 ## Judging whether YOUR change caused a failure (read before you panic)
@@ -67,6 +108,12 @@ when many forks spawn real sessions at once (`Timed out waiting for session resu
 which is a perf artifact, not a correctness one.
 
 ### Known pre-existing failures (NOT regressions — don't chase these)
+
+**These are now enumerated machine-readably in `tests/setup/known-failures.json`
+(119 entries, measured 2026-07-25 in a clean clone of `e399786`), so prefer
+`npm run test:baseline` over the manual HEAD-baseline dance below** — it does the
+same comparison automatically and exits non-zero only on genuinely new failures.
+The prose below explains *why* the big clusters fail.
 
 - **`tests/providers/claude-code-session.test.ts`, `tests/providers/session-io.test.ts`,
   `tests/e2e/ssh-session.test.ts`** import `buildRemoteCommand` (and `session-io.test.ts` also

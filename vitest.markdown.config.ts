@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import { maxWorkers, workerExecArgv } from './tests/setup/worker-budget';
 import path from 'path';
 
 /**
@@ -25,9 +26,13 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['tests/web/markdown/**/*.test.ts'],
-    setupFiles: ['tests/web/markdown/dom-setup.ts'],
+    globalSetup: ['tests/setup/global-setup.ts'],
+    setupFiles: ['tests/setup/worker-watchdog.ts', 'tests/web/markdown/dom-setup.ts'],
     testTimeout: 30_000,
     pool: 'forks',
+    // Machine-memory caps — see vitest.config.ts (2026-07-25 swap incident).
+    maxWorkers: maxWorkers(),
+    poolOptions: { forks: { execArgv: workerExecArgv() } },
     server: {
       // Inline so vitest transforms (not externalizes) the aliased ESM bundles.
       deps: { inline: ['marked', 'dompurify'] },

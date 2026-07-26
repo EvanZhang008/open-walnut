@@ -172,8 +172,26 @@ death).
 npm run build                 # Build server → dist/
 cd web && npx vite build      # Build React SPA
 cd web && npx vite            # Frontend hot reload (:5173, proxies to :3456)
-npm test                      # All tests (parallel)
+npm run test:quick            # ⭐ DEFAULT — 311 pure-logic files, ~51s
+npm test                      # Everything, sequential tiers (~10 min)
 ```
+
+### Test pipeline: run the cheap layer, not the whole suite
+
+Full details: [Testing pipeline](./docs/reference/testing-pipeline.md).
+
+| Layer | Command | Time | When |
+|---|---|---|---|
+| L1 quick | `npm run test:quick` | ~51s | every code change |
+| L2 focus | `npm run test:focus <path>` | 0.3–30s | one module |
+| L3 pre-commit | `npm run test:pre-commit` | 1–6 min | before a larger commit — maps your diff → affected tiers |
+| L4 CI | GitHub Actions, automatic | free | every push/PR |
+
+**The suite has a 119-failure baseline on `main`** (stale imports of exports deleted 2026-05, tests needing a real CLI/daemon, some load flakes). So judge your change with `npm run test:baseline` — it fails ONLY on failures absent from `tests/setup/known-failures.json`. Never judge from the raw aggregate count. When you fix some, `npm run test:baseline:record`.
+
+**CI failed?** `scripts/ci-status.sh brief` distils the run into the few real error lines; fix locally (free) rather than running an AI inside CI (paid).
+
+⚠️ **Never raise the local worker budget** (`tests/setup/worker-budget.ts`, 2 workers). Uncapped test fan-out hard-crashed this Mac twice in July 2026. Want faster? Use L1 or L2.
 
 ## E2E-First Development
 
@@ -185,6 +203,41 @@ npm test                      # All tests (parallel)
 - **NEVER** commit UI changes without Playwright verification
 - **NEVER** use `page.goto()` — use real UI clicks (SPA navigation)
 - Use `/verify` after implementation
+
+### Playwright runs are machine-wide serialized (don't fight the gate)
+
+Every browser worker is a whole Chromium (~385 MB measured). With several agent
+sessions each running `npx playwright test`, this used to sum to dozens of browsers
+and wedge the Mac (2026-07-25: load avg **225** on 14 cores, 1210 processes) — which
+then surfaced as "Walnut is slow" and as runs dying with `Timed out waiting 30000ms
+from config.webServer`. Concurrent runs were never safe anyway: specs hardcode
+`localhost:3457`, and `reuseExistingServer` makes run #2 attach to run #1's fixture
+server, so they share one dataset and the first to finish kills the other's server.
+
+`playwright.config.ts` now engages a gate at config-load time (`tests/e2e/browser/pw-gate.ts`):
+
+- **Exclusive lease on :3457** — a second run *queues* instead of interleaving. Seeing
+  `[pw-concurrency] another Playwright run holds :3457 … Queuing` is correct behavior,
+  not a hang. It self-heals (dead holder / 45-min TTL) and fails open.
+- **`workers` capped at 4** (was `undefined` = half the cores = 7). Override with `PW_WORKERS`.
+- **Orphan sweep** — reaps a fixture server left by a SIGKILLed run before
+  `reuseExistingServer` can silently attach to it.
+- **Overload wait** — if something else already saturates the box (concurrent vitest,
+  Xcode, simulators), it waits rather than piling on. `PW_IGNORE_LOAD=1` skips it.
+
+```bash
+scripts/pw-cleanup.sh status   # browsers / fixture server / isolated daemons / leases
+scripts/pw-cleanup.sh clean    # reap orphans + stale leases (skips live runs, never :3456)
+```
+
+**When a Playwright run fails on timeouts, check the load first** (`scripts/pw-cleanup.sh
+status`). At load 486 every spec failed on `page.waitForLoadState` — those are starvation
+artifacts, not product bugs. Fixture cold boot is ~20 s idle but ~70 s at load 133, so
+`webServer.timeout` is 120 s.
+
+**Never use `npx tsx` in a test hot path** — tsx is now a real devDependency; use
+`./node_modules/.bin/tsx`. A bare `npx tsx --version` measured **88 s** on this machine,
+which alone exceeded the old 30 s webServer budget.
 
 ## Testing
 

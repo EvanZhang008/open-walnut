@@ -171,7 +171,11 @@ process.umask(0o077);
 
 // ── Constants ──
 // DAEMON_DIR default is /tmp/open-walnut; tests override via env var.
-const DAEMON_DIR = process.env.WALNUT_DAEMON_DIR || '/tmp/open-walnut';
+// PROD_DAEMON_DIR is duplicated from local-daemon.ts (this template is deployed
+// standalone and cannot import it); any OTHER dir is "isolated" — sandbox, test,
+// ephemeral demo — which decides CLI-reap-on-exit. Mirror daemon-standalone.ts.
+const PROD_DAEMON_DIR = '/tmp/open-walnut';
+const DAEMON_DIR = process.env.WALNUT_DAEMON_DIR || PROD_DAEMON_DIR;
 // Sibling dir so an isolated daemon dir yields an isolated streams dir; production
 // default stays /tmp/open-walnut-streams. Must mirror daemon-standalone.ts.
 // NOTE: string concat (not template literal) because this code lives inside a
@@ -675,6 +679,64 @@ function killSessionProcessGroup(pid, sid) {
       killProcessGroup(pid, 'SIGKILL');
     }, 2000);
   }, 5000);
+}
+
+// Block the thread without spinning the event loop (cleanup() has no timers).
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// Is this an isolated-dir daemon (sandbox / test / ephemeral demo) whose CLI
+// children must die with it? Derived from DAEMON_DIR — the same definition
+// local-daemon.ts uses for parentWatchdogEnv/stopIfIsolated — NOT from
+// WALNUT_DAEMON_PARENT_PID, so direct-spawn test launchers get the fix without
+// opting in and a stale inherited PARENT_PID can never make the PRODUCTION
+// daemon kill live sessions. Keep in sync with daemon-standalone.ts.
+function shouldReapOnExit() {
+  try {
+    return path.resolve(DAEMON_DIR) !== path.resolve(PROD_DAEMON_DIR);
+  } catch {
+    return false; // unresolvable → treat as prod (never kill)
+  }
+}
+
+// Synchronous kill-all for isolated-dir daemon exit (cleanup() runs right
+// before process.exit, so the async ladder in killSessionProcessGroup would
+// never fire). Mirrors that ladder — SIGINT (on-stop hooks) → SIGTERM →
+// SIGKILL — with a budget above the CLI's ~3.5-5s graceful-shutdown window.
+// Production daemons never call this — see cleanup(). Keep in sync with
+// daemon-standalone.ts.
+function reapAllSessionGroupsSync() {
+  const pids = [];
+  for (const [sid, session] of sessions) {
+    // Only LIVE sessions — a dead session's pid is never nulled and macOS
+    // recycles pids, so signalling a stale one can hit an unrelated group.
+    if ((session.state || 'running') !== 'running' || session.exitCode !== null) continue;
+    if (!session.pid || !isProcessGroupAlive(session.pid)) continue;
+    logMsg('info', 'isolated-dir exit: SIGINT session group', { sid, pid: session.pid });
+    killProcessGroup(session.pid, 'SIGINT');
+    pids.push(session.pid);
+  }
+  if (pids.length === 0) return;
+
+  const sigintDeadline = Date.now() + 5000;
+  while (Date.now() < sigintDeadline && pids.some(isProcessGroupAlive)) sleepSync(200);
+
+  const stillAlive = pids.filter(isProcessGroupAlive);
+  if (stillAlive.length === 0) return;
+  for (const pid of stillAlive) {
+    logMsg('info', 'isolated-dir exit: SIGTERM session group', { pid });
+    killProcessGroup(pid, 'SIGTERM');
+  }
+  const termDeadline = Date.now() + 2000;
+  while (Date.now() < termDeadline && stillAlive.some(isProcessGroupAlive)) sleepSync(200);
+
+  for (const pid of stillAlive) {
+    if (isProcessGroupAlive(pid)) {
+      logMsg('warn', 'isolated-dir exit: SIGKILL session group', { pid });
+      killProcessGroup(pid, 'SIGKILL');
+    }
+  }
 }
 
 // ── WebSocket connections ──
@@ -1213,6 +1275,11 @@ function cmdStart(ws, id, cmd) {
       MCP_CONNECTION_NONBLOCKING: '1',
       CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
       CLAUDE_CODE_MAX_RETRIES: cliMaxRetries,
+      // Never let OUR watchdog pid leak into the CLI's env — a CLI session that
+      // runs a dev:prod deploy would hand this stale pid to the PRODUCTION
+      // daemon, whose watchdog would trip and (with the isolated-dir reap) kill
+      // live prod sessions. Keep in sync with daemon-standalone.ts.
+      WALNUT_DAEMON_PARENT_PID: undefined,
     },
   });
 
@@ -2893,6 +2960,21 @@ function cleanup() {
     // Stop the session-bound watcher.
     stopSessionWatcher(sid);
   }
+  // Do we still own this daemon dir? A zombie exiting via the heartbeat
+  // self-check finds daemon.pid naming its SUCCESSOR — it must touch neither
+  // the dir's files nor (crucially) the session process groups the successor
+  // has already adopted. Computed BEFORE the reap for exactly that reason.
+  let ownsFiles = true;
+  try {
+    const ownerPid = parseInt(fs.readFileSync(PID_FILE, 'utf-8').trim(), 10);
+    if (ownerPid > 0 && ownerPid !== process.pid) ownsFiles = false;
+  } catch {}
+
+  // EXCEPTION — isolated-dir daemons (sandbox/tests/demos): no successor will
+  // ever adopt these, so "preserve for adoption" leaks CLI process groups
+  // forever. Keep in sync with daemon-standalone.ts.
+  if (ownsFiles && shouldReapOnExit()) reapAllSessionGroupsSync();
+
   try { persistRegistry(); } catch {}
   // Stop all agent subs
   for (const [, sub] of agentSubs) {
@@ -2902,13 +2984,6 @@ function cleanup() {
   // Remove port/pid/instance files (so new daemon knows to start fresh).
   // IMPORTANT: Do NOT remove .pgid files here — cleanupOrphanedProcessGroups()
   // on the next daemon needs them to adopt running sessions. See that function above.
-  // ONLY if we still own the dir — a zombie exiting via the heartbeat
-  // self-check must not delete the successor daemon's live files.
-  let ownsFiles = true;
-  try {
-    const ownerPid = parseInt(fs.readFileSync(PID_FILE, 'utf-8').trim(), 10);
-    if (ownerPid > 0 && ownerPid !== process.pid) ownsFiles = false;
-  } catch {}
   if (ownsFiles) {
     try { fs.unlinkSync(PORT_FILE); } catch {}
     try { fs.unlinkSync(PID_FILE); } catch {}

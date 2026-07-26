@@ -1,16 +1,31 @@
 import { defineConfig } from 'vitest/config';
+import { maxWorkers, workerExecArgv } from './tests/setup/worker-budget';
 
 export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
     globalSetup: ['tests/setup/global-setup.ts'],
+    // Per-worker parent-liveness watchdog — exits workers whose runner died
+    // (they otherwise leak forever with ppid=1). See the file for the incident.
+    setupFiles: ['tests/setup/worker-watchdog.ts'],
     include: ['tests/**/*.test.ts'],
     // notes-roundtrip runs under its own DOM-shimmed config (its deps live in
     // web/node_modules); exclude it from the node-env base/coverage runs so it
     // can't fail to resolve @tiptap/* here.
     exclude: ['tests/e2e/**/*.test.ts', 'tests/commands/**/*.test.ts', 'tests/web/notes-roundtrip/**', '**/*.live.test.ts'],
     pool: 'forks',
+    // Machine-wide budget — see tests/setup/worker-budget.ts for the crash
+    // rationale. Inherited by unit/integration via mergeConfig.
+    // NOTE: must be maxWorkers, NOT poolOptions.forks.maxForks — maxForks takes
+    // precedence over the --maxWorkers CLI flag and would silently void any
+    // per-tier throttle (verified: with maxForks:4, `--maxWorkers 1` ran 4).
+    maxWorkers: maxWorkers(),
+    poolOptions: {
+      forks: {
+        execArgv: workerExecArgv(),
+      },
+    },
     testTimeout: 30_000,
     hookTimeout: 30_000,
     coverage: {

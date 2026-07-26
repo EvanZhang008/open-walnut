@@ -223,6 +223,50 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
       expect(src).toMatch(/CLAUDE_CODE_MAX_RETRIES:\s*cliMaxRetries/)
     }
   })
+
+  // Isolated-dir CLI reap (2026-07-25 leak): cleanup() preserves session process
+  // groups for successor adoption in PROD, but isolated-dir daemons (sandbox /
+  // tests / demos, marked by WATCHDOG_PARENT_PID) never get a successor — they
+  // must kill their CLI children on exit or the CLIs leak forever (25 orphans,
+  // oldest 8 days). Both twins must gate the reap on WATCHDOG_PARENT_PID and
+  // use the sync SIGTERM→wait→SIGKILL helper (cleanup runs right before
+  // process.exit, so async kill sequences would never fire).
+  it('both twins reap session groups on isolated-dir cleanup, gated on ownsFiles', () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/function reapAllSessionGroupsSync/)
+      // Isolation is DERIVED from DAEMON_DIR, never from WALNUT_DAEMON_PARENT_PID:
+      // direct-spawn test launchers must get the fix without opting in, and a
+      // stale inherited parent pid must never make PROD reap live sessions.
+      expect(src).toMatch(/function shouldReapOnExit/)
+      expect(src).toMatch(/path\.resolve\(DAEMON_DIR\)\s*!==\s*path\.resolve\(PROD_DAEMON_DIR\)/)
+      // ownsFiles gate is load-bearing: a daemon that LOST the pid-file race must
+      // not kill the process groups its successor already adopted.
+      expect(src).toMatch(/if\s*\(ownsFiles\s*&&\s*shouldReapOnExit\(\)\)\s*reapAllSessionGroupsSync\(\)/)
+      // …and ownsFiles must be computed BEFORE the reap call.
+      const ownsIdx = src.indexOf('let ownsFiles = true')
+      const reapIdx = src.indexOf('shouldReapOnExit()) reapAllSessionGroupsSync()')
+      expect(ownsIdx).toBeGreaterThan(0)
+      expect(ownsIdx).toBeLessThan(reapIdx)
+      // Full kill ladder — SIGINT (hooks) → SIGTERM → SIGKILL, not SIGTERM-then-kill.
+      expect(src).toMatch(/isolated-dir exit: SIGINT session group/)
+      expect(src).toMatch(/isolated-dir exit: SIGTERM session group/)
+      expect(src).toMatch(/isolated-dir exit: SIGKILL session group/)
+      // Only LIVE sessions: a dead session's pid is never nulled and pids recycle.
+      expect(src).toMatch(/exitCode !== null\) continue/)
+      // Sync sleep helper (cleanup() runs right before process.exit — no timers).
+      expect(src).toMatch(/function sleepSync/)
+    }
+  })
+
+  it('both twins scrub WALNUT_DAEMON_PARENT_PID from the CLI spawn env', () => {
+    // Env-carrier chain: isolated daemon → CLI → `npm run dev:prod` → PROD daemon
+    // inherits a dead parent pid, watchdog trips, prod sessions die.
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/WALNUT_DAEMON_PARENT_PID:\s*undefined/)
+    }
+  })
 })
 
 // ── L1/L2 parity: versioned events + daemon-authoritative task state ──

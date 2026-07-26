@@ -302,9 +302,15 @@ export class LocalDaemon {
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       WALNUT_DAEMON_DIR: this.daemonDir,
-      // Isolated-dir daemons die with us (see parentWatchdogEnv); prod never gets the var.
-      ...parentWatchdogEnv(this.daemonDir),
     }
+    // Scrub any INHERITED watchdog pid before (maybe) setting our own: for the
+    // prod dir parentWatchdogEnv() returns {} and would otherwise leave a stale
+    // value from an isolated-daemon-spawned CLI in place — the prod daemon's
+    // watchdog would then trip on a dead pid and exit (killing its sessions once
+    // the isolated-dir reap is in play). Same env-carrier chain as VITEST_*.
+    delete env.WALNUT_DAEMON_PARENT_PID
+    // Isolated-dir daemons die with us (see parentWatchdogEnv); prod never gets the var.
+    Object.assign(env, parentWatchdogEnv(this.daemonDir))
     delete env.VITEST
     delete env.VITEST_MODE
     delete env.VITEST_WORKER_ID

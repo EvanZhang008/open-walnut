@@ -67,6 +67,49 @@ stop_server() {
   [ -f "$PID_FILE" ] && kill "$(cat "$PID_FILE")" 2>/dev/null || true
   lsof -ti:${PORT} -sTCP:LISTEN 2>/dev/null | xargs kill 2>/dev/null || true   # never 3456
   rm -f "$PID_FILE"
+  reap_session_groups
+}
+
+# Kill any claude CLI process groups the sandbox daemon left behind. The daemon's
+# own cleanup() handles the graceful-exit path, but a hard-killed daemon (or a
+# pre-fix leak) leaves CLIs parented to launchd forever — 15 were found running
+# 8 days on 2026-07-25.
+#
+# SAFETY: a .pgid file's provenance ($ROOT, sandbox-only) proves nothing about the
+# pid NUMBER inside it — nothing unlinks .pgid on session death, so a days-old file
+# can name a pid macOS has since recycled as some unrelated group leader (another
+# agent's daemon, a prod CLI, a browser). So we verify IDENTITY before signalling:
+# the leader's command must look like a claude CLI. Mirrors the daemon-side
+# start-time drift check in daemon-core.ts.
+sandbox_pgids() {
+  for f in "$ROOT"/daemon-streams/*.pgid "$ROOT"/daemon/*.pgid; do
+    [ -f "$f" ] || continue
+    pgid=$(cat "$f" 2>/dev/null)
+    case "$pgid" in ''|*[!0-9]*) continue ;; esac
+    # Identity gate: leader pid must still be a claude process.
+    cmd=$(ps -o command= -p "$pgid" 2>/dev/null) || continue
+    case "$cmd" in *claude*) echo "$pgid" ;; esac
+  done
+}
+reap_session_groups() {
+  pgids=$(sandbox_pgids)
+  [ -z "$pgids" ] && return 0
+  # SIGINT first so the CLI's on-stop / SessionEnd hooks get to run (CLAUDE.md:
+  # never force-kill Claude Code). Budget > the CLI's ~3.5-5s shutdown window.
+  for pgid in $pgids; do
+    kill -INT -- "-$pgid" 2>/dev/null && echo "==> reaping sandbox session group $pgid (SIGINT)"
+  done
+  for _ in 1 2 3 4 5 6; do
+    sleep 1
+    [ -z "$(sandbox_pgids)" ] && return 0
+  done
+  # Stragglers: SIGTERM, then SIGKILL (orphan CLIs blocked on FIFO stdin ignore
+  # SIGTERM outright — observed 2026-07-25).
+  for pgid in $(sandbox_pgids); do kill -TERM -- "-$pgid" 2>/dev/null || true; done
+  sleep 2
+  for pgid in $(sandbox_pgids); do
+    kill -KILL -- "-$pgid" 2>/dev/null && echo "==> SIGKILLed sandbox session group $pgid"
+  done
 }
 
 # Launch with a chosen HOME and an explicit, minimal env. Extra KEY=VAL pairs ($@) are

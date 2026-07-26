@@ -6,16 +6,32 @@ on:
   pull_request:
     branches: [main]
 
+# A newer push to the same branch makes the older run obsolete. Cancelling keeps
+# the queue short and feedback fast (and costs nothing — this repo is public, so
+# GitHub-hosted runners are free with unlimited minutes).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # tests/setup/worker-budget.ts reads CI to lift the deliberately-low local
+  # worker cap (2 → 4). A runner is an isolated single-purpose box, so the
+  # machine-safety reasoning behind the low local budget doesn't apply here.
+  CI: 'true'
+
 jobs:
+  # ── Gate 1: type-check + build. Everything else is moot if this fails. ───────
   build:
+    name: Lint & build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
+          cache: npm
       # The build compiles the remote-session daemon with Bun
-      # (scripts/build-daemon.sh). Without it, `npm run build` fails with
+      # (scripts/build-daemon.sh). Without it `npm run build` fails with
       # `bun: command not found` (exit 127).
       - uses: oven-sh/setup-bun@v2
         with:
@@ -23,3 +39,99 @@ jobs:
       - run: npm install
       - run: npm run lint
       - run: npm run build
+
+  # ── Gate 2: the test tiers that are genuinely green, so they can BLOCK ──────
+  #
+  # Deliberately a separate job from `test-report` below rather than one matrix
+  # with `continue-on-error: ${{ matrix.blocking == false }}`. Job-level
+  # continue-on-error has murky interaction with `needs.<job>.result` — a failed
+  # but tolerated leg may still surface as 'success' — and the one check that
+  # branch protection depends on must not rest on ambiguous semantics. Two jobs,
+  # zero expressions, obvious behaviour.
+  test:
+    name: Test (${{ matrix.tier }})
+    runs-on: ubuntu-latest
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 311 pure-logic files, ~51s on 4 workers. Gated through the BASELINE
+          # check, not raw pass/fail: main carries 119 pre-existing failures
+          # (measured 2026-07-25 in a clean clone), so `npm run test:quick`
+          # could never be a gate. test:baseline fails only on failures absent
+          # from tests/setup/known-failures.json — i.e. real regressions.
+          - tier: quick
+            cmd: npm run test:baseline
+          # 158 tests, ~10s, baseline ZERO. Plain pass/fail is correct here.
+          - tier: frontend
+            cmd: npm run test:frontend:ci
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: npm install
+      - name: ${{ matrix.tier }} tests
+        run: ${{ matrix.cmd }}
+
+  # ── Informational: heavy tiers, allowed to fail ─────────────────────────────
+  #
+  # These spawn real daemons, `claude` CLIs and HTTP servers and still carry an
+  # unmeasured pre-existing baseline, so they report rather than gate. They are
+  # NOT in `ci-ok`'s needs list — a red leg here does not block a merge.
+  #
+  # Promote a tier into the `test` job above once its baseline reaches zero (or
+  # give it a known-failures file of its own, like the quick tier has).
+  test-report:
+    name: Report (${{ matrix.tier }})
+    runs-on: ubuntu-latest
+    needs: build
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        tier: [slow, e2e]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: npm install
+      # Both tiers spawn the session daemon, which the build produces.
+      - run: npm run build
+      - name: ${{ matrix.tier }} tests
+        run: npm run test:${{ matrix.tier }}
+
+  # ── The single required check ───────────────────────────────────────────────
+  #
+  # Point branch protection at THIS job, never at individual matrix legs: leg
+  # names change whenever the matrix does, which silently orphans a
+  # required-check rule and leaves the branch unprotected.
+  #
+  # `needs` deliberately omits test-report, so informational tiers cannot block.
+  ci-ok:
+    name: CI OK
+    runs-on: ubuntu-latest
+    needs: [build, test]
+    if: always()
+    steps:
+      - name: Check gate results
+        run: |
+          echo "build: ${{ needs.build.result }}"
+          echo "test:  ${{ needs.test.result }}"
+          # A matrix job's result is 'success' only when EVERY leg succeeded.
+          # Neither job uses continue-on-error, so these values are unambiguous.
+          failed=0
+          [ "${{ needs.build.result }}" = "success" ] || { echo "::error::build failed"; failed=1; }
+          [ "${{ needs.test.result }}" = "success" ] || { echo "::error::a blocking test tier failed"; failed=1; }
+          [ "$failed" = "0" ] || exit 1
+          echo "All blocking checks passed."
