@@ -2153,6 +2153,25 @@ sessionsRouter.post('/:sessionId/execute', async (req: Request, res: Response, n
     // a server restart (alive CLI, not in the in-memory map) is also retired.
     const livePlanSession = await sessionRunner.getOrAttachLiveSession(planSessionId).catch(() => undefined)
 
+    // Nobody is listening for SESSION_START → nothing will ever start the session,
+    // so the 30s wait below can only end in a timeout. Fail immediately instead of
+    // holding the request open for half a minute: the answer is already known.
+    //
+    // This is not a test-only path. If the session runner is not subscribed (it
+    // failed to init, or was torn down), every /execute call blocks its connection
+    // for 30s before returning the same 502 — a slow failure that reads like a hang.
+    if (!bus.has('session-runner')) {
+      log.web.error('execute: no session-runner subscribed, cannot start execution session', {
+        planSessionId, taskId,
+      })
+      res.status(502).json({
+        error: 'Session runner is not available — cannot start the execution session',
+        planSessionId,
+        planPreserved: true,
+      })
+      return
+    }
+
     // Set up a temporary bus listener BEFORE emitting SESSION_START so we
     // catch the status-changed event that carries the new session's ID,
     // or a SESSION_ERROR if the process dies before init.

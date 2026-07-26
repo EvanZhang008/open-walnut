@@ -793,11 +793,22 @@ export class RemoteSessionManager implements SessionManager {
         const data = fs.readFileSync(localPath)
         const remotePath = `/tmp/open-walnut-images/${path.basename(localPath)}`
 
-        await this.conn.send('fs.write', {
+        const result = await this.conn.send('fs.write', {
           path: remotePath,
           data: data.toString('base64'),
           encoding: 'base64',
         })
+        // send() RESOLVES with {ok:false} on a daemon-side error — it only
+        // throws on transport failure. Rewriting regardless pointed the CLI at
+        // a remote path that was never written, so Claude got a bogus
+        // "file not found" for a path the user never typed. Keep the original
+        // local path on failure (the SCP-era transfer had the same contract).
+        if (!result.ok) {
+          log.session.warn('RemoteSessionManager: image upload rejected by daemon — keeping local path', {
+            localPath, remotePath, host: this.hostKey, error: result.error,
+          })
+          continue
+        }
 
         rewritten = rewritten.split(localPath).join(remotePath)
       } catch (err) {
@@ -821,11 +832,23 @@ export class RemoteSessionManager implements SessionManager {
       throw new Error(`Cannot upload spill file: daemon not connected (host "${this.hostKey}")`)
     }
     const data = fs.readFileSync(localPath)
-    await this.conn.send('fs.write', {
+    const result = await this.conn.send('fs.write', {
       path: localPath,
       data: data.toString('base64'),
       encoding: 'base64',
     })
+    // send() RESOLVES with {ok:false} on a daemon-side error and only THROWS on
+    // transport failure (daemon-connection.ts resolves every reply regardless of
+    // `ok`). Without this check the doc comment above was a lie: a rejected write
+    // logged "uploaded spill file" and returned successfully, and the session then
+    // started with a pointer prompt referencing a file that does not exist on the
+    // remote host — so Claude reads nothing and the Quick Start context is silently
+    // lost. Same defect as prepareOutbound had; keep both checked.
+    if (!result.ok) {
+      throw new Error(
+        `Failed to upload spill file to host "${this.hostKey}": ${result.error ?? 'daemon rejected fs.write'}`,
+      )
+    }
     log.session.info('RemoteSessionManager: uploaded spill file to remote', {
       path: localPath, size: data.length, host: this.hostKey,
     })
