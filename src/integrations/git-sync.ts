@@ -248,6 +248,13 @@ sessions/streams/
 sync/ms-todo-tokens.json
 auth.json
 
+# Machine-local settings — MUST stay out of the sync history. These hold the STT
+# engine, SSH hosts and provider credentials, which differ per box. Keep in sync
+# with CRITICAL_IGNORES; a fresh install missing these is how a remote deletion
+# reached ~/.open-walnut/config.yaml twice (2026-07-25 / 07-26).
+config.yaml
+config.yaml.bak
+
 # Sync state (ephemeral)
 sync/ms-todo-delta.json
 sync/*.json
@@ -271,10 +278,17 @@ node_modules/
 
 /**
  * Ignore entries that MUST be present even in pre-existing repos whose
- * .gitignore predates them. auth.json holds device-token hashes — it must
- * never ride the sync repo between machines (each box pairs its own devices).
+ * .gitignore predates them.
+ *
+ *  - auth.json  — device-token hashes; each box pairs its own devices.
+ *  - config.yaml (+ its backup) — MACHINE-LOCAL settings: the STT engine, SSH
+ *    hosts, provider credentials, per-device model lists. Never synced.
+ *
+ * These are also actively untracked (see ensureMachineLocalUntracked): being
+ * gitignored on THIS box while still tracked in the index is the dangerous
+ * state — see that function for the incident this prevents.
  */
-const CRITICAL_IGNORES = ['auth.json'];
+const CRITICAL_IGNORES = ['auth.json', 'config.yaml', 'config.yaml.bak'];
 
 /**
  * Append missing CRITICAL_IGNORES to an existing .gitignore (idempotent).
@@ -292,9 +306,90 @@ export function ensureCriticalIgnores(): void {
   const missing = CRITICAL_IGNORES.filter((entry) => !lines.has(entry));
   if (missing.length === 0) return;
   const suffix = (content.endsWith('\n') ? '' : '\n')
-    + '\n# Device-token auth (sensitive — never synced)\n'
+    + '\n# Machine-local / sensitive — never synced\n'
     + missing.join('\n') + '\n';
   fs.writeFileSync(gitignorePath, content + suffix, 'utf-8');
+}
+
+/**
+ * Drop machine-local files from the INDEX while keeping them on disk.
+ *
+ * Being gitignored locally is NOT enough: .gitignore only stops git from
+ * *adding* an untracked file. A file that is already tracked stays tracked, and
+ * then a merge/pull that carries someone else's deletion of it DELETES THE
+ * LOCAL FILE — .gitignore does not protect a tracked path.
+ *
+ * That is exactly how voice input broke (2026-07-25): config.yaml was
+ * gitignored + untracked on one box, but still tracked here, so a merge from
+ * origin applied the deletion and wiped ~/.open-walnut/config.yaml. The app
+ * then rebuilt a minimal config from defaults, silently dropping `stt:` (plus
+ * hosts/tools/plugins) — the mic went grey with "No STT engine configured".
+ *
+ * `rm --cached` stages the removal without touching the working tree, so after
+ * this runs the path is untracked AND ignored, and no future merge can reach
+ * the file on disk. Idempotent: no-ops once nothing ignored is still tracked.
+ */
+export function ensureMachineLocalUntracked(): string[] {
+  // `ls-files -i -c --exclude-standard` = tracked paths that .gitignore says
+  // should be ignored. Cheap (~20ms on a 3.7k-file repo).
+  const tracked = gitSafe('ls-files -i -c --exclude-standard');
+  if (!tracked) return [];
+  const stillTracked = tracked
+    .split('\n')
+    .map((f) => f.trim())
+    .filter((f) => CRITICAL_IGNORES.includes(path.basename(f)) && CRITICAL_IGNORES.includes(f));
+  if (stillTracked.length === 0) return [];
+
+  const untracked: string[] = [];
+  for (const file of stillTracked) {
+    // --cached: index only. The file on disk is the user's live config.
+    if (gitSafe(`rm --cached --quiet -- "${file}"`) !== null) untracked.push(file);
+  }
+  if (untracked.length > 0) {
+    log.git.warn(
+      'git-sync untracked machine-local files that were still in the index — a remote deletion could have wiped them from disk',
+      { files: untracked },
+    );
+  }
+  return untracked;
+}
+
+/**
+ * Async twin of ensureMachineLocalUntracked, for the sync tick.
+ *
+ * ensureRepo() runs this once at boot, but a merge happens every 30s and the
+ * dangerous state can appear at runtime: any `add -A` after a critical file is
+ * (re-)created while .gitignore hasn't caught up re-tracks it, and then the
+ * NEXT pull can carry a remote deletion straight to disk. Re-checking right
+ * before every pull closes that window instead of waiting for a restart.
+ *
+ * Must be async: the sync tick runs on the event loop and gitSafe's execSync
+ * blocks every HTTP request for the duration (the bug fixed in 2928b29).
+ */
+async function ensureMachineLocalUntrackedAsync(): Promise<string[]> {
+  // `ls-files -i` only reports paths the CURRENT .gitignore ignores, so the
+  // ignore rules must exist before the query — otherwise a repo whose
+  // .gitignore predates CRITICAL_IGNORES reports nothing and the guard no-ops.
+  try { ensureCriticalIgnores(); } catch { /* best-effort */ }
+  const tracked = await gitSafeAsync('ls-files -i -c --exclude-standard');
+  if (!tracked) return [];
+  const stillTracked = tracked
+    .split('\n')
+    .map((f) => f.trim())
+    .filter((f) => CRITICAL_IGNORES.includes(f));
+  if (stillTracked.length === 0) return [];
+
+  const untracked: string[] = [];
+  for (const file of stillTracked) {
+    if (await gitSafeAsync(`rm --cached --quiet -- "${file}"`) !== null) untracked.push(file);
+  }
+  if (untracked.length > 0) {
+    log.git.error(
+      'git-sync found a machine-local file re-entering the index AT RUNTIME — untracked it before pulling. A remote deletion would have wiped it from disk (2026-07-25/26 incident).',
+      { files: untracked },
+    );
+  }
+  return untracked;
 }
 
 export function initSync(remoteUrl?: string): void {
@@ -377,6 +472,11 @@ async function syncInner(): Promise<{ pulled: number; pushed: number; conflicts:
   // Commit everything BEFORE pulling/merging so no local edit is ever
   // unrecorded — even if it loses an LWW conflict it stays in history.
   await gitAsync('add -A');
+
+  // …but never let `add -A` leave a machine-local file tracked: the pull below
+  // would then be able to apply a remote deletion of it straight to disk.
+  // Runs after add, before pull — the only point where the check matters.
+  await ensureMachineLocalUntrackedAsync();
 
   // Check for staged changes
   const diff = await gitSafeAsync('diff --cached --stat');
@@ -791,9 +891,12 @@ export function ensureRepo(): { available: boolean; error?: string } {
       return { available: false, error: `git init failed: ${err instanceof Error ? err.message : String(err)}` };
     }
   } else {
-    // Pre-existing repo: self-heal the .gitignore so sensitive files added
-    // after the repo was initialized (auth.json) never enter the sync history.
+    // Pre-existing repo: self-heal the .gitignore so sensitive/machine-local
+    // files added after the repo was initialized never enter the sync history…
     try { ensureCriticalIgnores(); } catch { /* best-effort */ }
+    // …and drop any that are STILL tracked. Ignoring a tracked path does not
+    // protect it: a merge carrying its deletion removes the local file.
+    try { ensureMachineLocalUntracked(); } catch { /* best-effort */ }
   }
   return { available: true };
 }

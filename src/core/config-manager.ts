@@ -37,12 +37,72 @@ function ensureBuiltInLocalReservation(config: Config): void {
 }
 
 /**
+ * Sidecar copy of the last successfully written config.
+ *
+ * config.yaml holds settings that exist NOWHERE else — the STT engine + model
+ * paths, SSH hosts, provider credentials. When the file vanished (a git-sync
+ * merge carried a remote deletion of a still-tracked path, 2026-07-25) every
+ * reader silently fell back to DEFAULT_CONFIG and the next writer persisted
+ * that skeleton, so voice input died with "No STT engine configured" and no
+ * error anywhere. The sidecar makes that loss recoverable instead of terminal.
+ *
+ * Gitignored + untracked by git-sync's CRITICAL_IGNORES — it must never sync.
+ */
+const CONFIG_BACKUP_FILE = `${CONFIG_FILE}.bak`;
+
+/**
+ * Read the raw config file, falling back to the sidecar backup when the primary
+ * is missing or unreadable.
+ *
+ * Returns null only when BOTH are absent — a genuine first run, where defaults
+ * are the correct answer. Distinguishing those two cases is the whole point: a
+ * first run and a wiped config used to be indistinguishable.
+ */
+async function readRawConfigContent(): Promise<string | null> {
+  try {
+    return await fs.readFile(CONFIG_FILE, 'utf-8');
+  } catch (primaryErr) {
+    let backup: string;
+    try {
+      backup = await fs.readFile(CONFIG_BACKUP_FILE, 'utf-8');
+    } catch {
+      return null; // No config and no backup — first run.
+    }
+    if (!backup.trim()) return null;
+    // Loud: losing the primary config is never normal operation.
+    log.session.error('config-manager: config.yaml missing/unreadable — recovering from config.yaml.bak', {
+      error: primaryErr instanceof Error ? primaryErr.message : String(primaryErr),
+      backup: CONFIG_BACKUP_FILE,
+    });
+    // Put the primary back so the rest of the system (and the user's editor)
+    // sees a real file again. Best-effort: recovery must not throw.
+    try {
+      await fs.writeFile(CONFIG_FILE, backup, 'utf-8');
+    } catch { /* read-only FS or a racing writer — the in-memory value still holds */ }
+    return backup;
+  }
+}
+
+/** Mirror freshly written config to the sidecar. Never throws. */
+async function writeConfigWithBackup(content: string): Promise<void> {
+  await fs.writeFile(CONFIG_FILE, content, 'utf-8');
+  try {
+    await fs.writeFile(CONFIG_BACKUP_FILE, content, 'utf-8');
+  } catch (err) {
+    log.session.warn('config-manager: failed to update config backup', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
  * Read config.yaml. Returns default config if file doesn't exist.
  * Also merges auto-discovered SSH hosts.
  */
 export async function getConfig(): Promise<Config> {
   try {
-    const content = await fs.readFile(CONFIG_FILE, 'utf-8');
+    const content = await readRawConfigContent();
+    if (content === null) throw new Error('no config file and no backup');
     const parsed = yaml.load(content) as Config;
     const config = { ...DEFAULT_CONFIG, ...parsed };
     ensureBuiltInLocalReservation(config);
@@ -64,9 +124,15 @@ export async function getConfig(): Promise<Config> {
     await mergeSshDiscoveredHosts(config);
     return config;
   } catch (err) {
-    log.session.debug('config-manager: config file not found, using defaults', {
-      error: err instanceof Error ? err.message : String(err),
-    });
+    // Was log.debug — invisible in prod, which is precisely why a wiped
+    // config.yaml went unnoticed for hours twice (2026-07-25 voice input,
+    // 2026-07-26 `host "<alias>" not found`). Falling back to defaults is only correct on
+    // a genuine first run; any other time it means settings that exist nowhere
+    // else are gone, so say so at a level that shows up.
+    const firstRun = err instanceof Error && err.message === 'no config file and no backup';
+    const detail = { error: err instanceof Error ? err.message : String(err), configFile: CONFIG_FILE };
+    if (firstRun) log.session.info('config-manager: no config.yaml and no backup — first run, using defaults', detail);
+    else log.session.error('config-manager: config.yaml UNREADABLE and backup did not cover it — falling back to DEFAULTS. Machine-local settings (hosts/plugins/stt/provider) are missing until this is fixed.', detail);
     const defaultModels = (MODEL_CATALOG.bedrock ?? []).map(m => m.id);
     return { ...DEFAULT_CONFIG, agent: { available_models: defaultModels, main_model: defaultModels[0] } };
   }
@@ -144,7 +210,7 @@ export async function saveConfig(config: Config): Promise<void> {
       /^(\s+)available_models:/m,
       '$1# Available models for the agent form dropdown.\n$1# Edit this list to add or remove models.\n$1available_models:',
     );
-    await fs.writeFile(CONFIG_FILE, content, 'utf-8');
+    await writeConfigWithBackup(content);
   });
 }
 
@@ -156,13 +222,17 @@ export async function saveConfig(config: Config): Promise<void> {
  */
 export async function updateConfig(partial: Partial<Config>): Promise<void> {
   return withWriteLock(async () => {
-    // Read raw config from disk (not getConfig() which fills in defaults)
+    // Read raw config from disk (not getConfig() which fills in defaults).
+    // Uses the backup-aware reader: if the primary file was deleted underneath
+    // us, merging into `{}` would persist a config with EVERY unmentioned
+    // section (stt, hosts, plugins, tools) silently dropped. That is how a
+    // deleted config.yaml turned into a permanently broken mic.
     let existing: Record<string, unknown> = {};
     try {
-      const content = await fs.readFile(CONFIG_FILE, 'utf-8');
-      existing = (yaml.load(content) as Record<string, unknown>) ?? {};
+      const content = await readRawConfigContent();
+      existing = content === null ? {} : ((yaml.load(content) as Record<string, unknown>) ?? {});
     } catch (err) {
-      log.session.debug('config-manager: no existing config file, starting from empty', {
+      log.session.warn('config-manager: existing config unreadable, starting from empty', {
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -180,7 +250,7 @@ export async function updateConfig(partial: Partial<Config>): Promise<void> {
       /^(\s+)available_models:/m,
       '$1# Available models for the agent form dropdown.\n$1# Edit this list to add or remove models.\n$1available_models:',
     );
-    await fs.writeFile(CONFIG_FILE, content, 'utf-8');
+    await writeConfigWithBackup(content);
   });
 }
 

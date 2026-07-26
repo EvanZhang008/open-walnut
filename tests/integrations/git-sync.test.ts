@@ -15,6 +15,7 @@ import {
   setRemote,
   ensureRepo,
   ensureCriticalIgnores,
+  ensureMachineLocalUntracked,
   credentialGuardArgs,
   credentialGuardArgsAsync,
   clearStaleLock,
@@ -161,6 +162,94 @@ describe('auth.json is never synced (data-repo gitignore)', () => {
     expect(result.available).toBe(true);
     const gitignore = await fsp.readFile(path.join(tmpDir, '.gitignore'), 'utf-8');
     expect(gitignore.split('\n')).toContain('auth.json');
+  });
+
+  it('ensureCriticalIgnores also protects config.yaml (machine-local settings)', async () => {
+    initSync();
+    await fsp.writeFile(path.join(tmpDir, '.gitignore'), 'images/\n', 'utf-8');
+
+    ensureCriticalIgnores();
+    const gitignore = await fsp.readFile(path.join(tmpDir, '.gitignore'), 'utf-8');
+    expect(gitignore.split('\n')).toContain('config.yaml');
+  });
+
+  // ── 2026-07-25 incident: a remote deletion of a TRACKED-but-ignored
+  // config.yaml wiped the local file, taking the `stt:` section with it —
+  // voice input went grey with "No STT engine configured".
+  // .gitignore alone does NOT protect an already-tracked path.
+  it('ensureMachineLocalUntracked drops a tracked config.yaml from the index but keeps it on disk', async () => {
+    initSync();
+    const configPath = path.join(tmpDir, 'config.yaml');
+    await fsp.writeFile(configPath, 'stt:\n  engine: whisper-server\n', 'utf-8');
+    // Tracked BEFORE the ignore rule existed — the dangerous legacy state.
+    execSync('git add -f config.yaml && git commit -q -m "legacy: config tracked"', { cwd: tmpDir });
+    ensureCriticalIgnores();
+
+    const untracked = ensureMachineLocalUntracked();
+
+    expect(untracked).toContain('config.yaml');
+    expect(execSync('git ls-files', { cwd: tmpDir, encoding: 'utf-8' }).split('\n'))
+      .not.toContain('config.yaml');
+    // The user's live settings must survive untouched.
+    expect(await fsp.readFile(configPath, 'utf-8')).toContain('engine: whisper-server');
+  });
+
+  it('ensureMachineLocalUntracked is a no-op when nothing ignored is tracked', () => {
+    initSync();
+    ensureCriticalIgnores();
+    expect(ensureMachineLocalUntracked()).toEqual([]);
+  });
+
+  it('a pulled deletion of config.yaml cannot wipe the local file once untracked', async () => {
+    // Reproduces the incident end to end: remote deletes config.yaml, we merge.
+    const remoteDir = path.join(path.dirname(tmpDir), `remote-${path.basename(tmpDir)}`);
+    await fsp.rm(remoteDir, { recursive: true, force: true });
+    await fsp.mkdir(remoteDir, { recursive: true });
+    execSync('git init -q -b main && git config user.email t@t && git config user.name t', { cwd: remoteDir });
+    await fsp.writeFile(path.join(remoteDir, 'config.yaml'), 'stt:\n  engine: whisper-server\n', 'utf-8');
+    await fsp.writeFile(path.join(remoteDir, 'notes.md'), 'shared\n', 'utf-8');
+    execSync('git add -A && git commit -q -m init', { cwd: remoteDir });
+
+    execSync(`git clone -q "${remoteDir}" "${tmpDir}-clone"`, { cwd: path.dirname(tmpDir) });
+    await fsp.rm(tmpDir, { recursive: true, force: true });
+    await fsp.rename(`${tmpDir}-clone`, tmpDir);
+    execSync('git config user.email t@t && git config user.name t', { cwd: tmpDir });
+
+    // Protect the machine-local file the way ensureRepo() now does on boot.
+    await fsp.writeFile(path.join(tmpDir, '.gitignore'), 'config.yaml\n', 'utf-8');
+    ensureMachineLocalUntracked();
+    execSync('git add -A && git commit -q -m "untrack machine-local config"', { cwd: tmpDir });
+
+    // Remote (another box) deletes it and we pull that deletion.
+    execSync('git rm -q --cached config.yaml && git commit -q -m "untrack on remote"', { cwd: remoteDir });
+    execSync('git pull -q --no-rebase --no-edit origin main', { cwd: tmpDir });
+
+    // The live settings must still be there.
+    const onDisk = await fsp.readFile(path.join(tmpDir, 'config.yaml'), 'utf-8');
+    expect(onDisk).toContain('engine: whisper-server');
+
+    await fsp.rm(remoteDir, { recursive: true, force: true });
+  });
+
+  // ── 2026-07-26 recurrence: the boot-time guard (ensureRepo) is not enough.
+  // A merge runs every 30s, so a critical file that re-enters the index at
+  // RUNTIME — e.g. tracked by `add -A` before .gitignore covered it — is
+  // exposed until the next restart. sync() must re-check before every pull.
+  it('sync() untracks a machine-local file that re-entered the index at runtime, before pulling', async () => {
+    initSync();
+    const configPath = path.join(tmpDir, 'config.yaml');
+    await fsp.writeFile(configPath, 'hosts:\n  marina:\n    hostname: box\n', 'utf-8');
+    // The runtime-exposure state: tracked despite being ignored. `-f` mimics an
+    // `add -A` that ran while the ignore rule was still missing.
+    execSync('git add -f config.yaml && git commit -q -m "runtime: config re-tracked"', { cwd: tmpDir });
+    expect(execSync('git ls-files', { cwd: tmpDir, encoding: 'utf-8' })).toContain('config.yaml');
+
+    await sync();
+
+    expect(execSync('git ls-files', { cwd: tmpDir, encoding: 'utf-8' }).split('\n'))
+      .not.toContain('config.yaml');
+    // The user's live settings must never be touched — index only.
+    expect(await fsp.readFile(configPath, 'utf-8')).toContain('marina');
   });
 
   it('sync never commits auth.json', async () => {
