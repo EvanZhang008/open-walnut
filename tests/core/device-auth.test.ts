@@ -163,3 +163,41 @@ describe('corrupt / missing auth.json', () => {
     expect(await listDevices()).toEqual([]);
   });
 });
+
+// ── 2026-07-26 incident: a merge carrying a remote deletion removed auth.json
+// on both boxes. "Missing" is indistinguishable from a first boot here, so every
+// token silently stopped validating and sync died on a bare 401 for six hours.
+describe('auth.json sidecar backup (a lost device registry is recoverable)', () => {
+  it('recovers every device from auth.json.bak when the primary is deleted', async () => {
+    const { token } = await createDevice('phone');
+    await createDevice('laptop');
+    // The sidecar is written alongside the primary, not lazily on loss.
+    expect(await fs.readFile(`${authFile()}.bak`, 'utf-8')).toContain('laptop');
+
+    // Exactly what the merge did.
+    await fs.rm(authFile());
+    _resetDeviceAuthForTesting();
+
+    // The token must still validate — this is what broke.
+    expect(await verifyDeviceToken(token)).toEqual({ name: 'phone' });
+    expect((await listDevices()).map((d) => d.name).sort()).toEqual(['laptop', 'phone']);
+    // …and the primary is restored so the next read is a plain hit.
+    expect(await fs.readFile(authFile(), 'utf-8')).toContain('phone');
+  });
+
+  it('a genuine first boot (no primary, no sidecar) still reports zero devices', async () => {
+    // Must NOT mistake a fresh install for a loss — that would block claiming.
+    expect(await isClaimed()).toBe(false);
+    expect(await listDevices()).toEqual([]);
+  });
+
+  it('revocation is not resurrected by the sidecar', async () => {
+    const { token } = await createDevice('phone');
+    await revokeDevice('phone');
+    await fs.rm(authFile());
+    _resetDeviceAuthForTesting();
+
+    // The sidecar mirrors the POST-revocation state, so the token stays dead.
+    expect(await verifyDeviceToken(token)).toBeNull();
+  });
+});

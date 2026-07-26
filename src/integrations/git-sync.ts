@@ -247,6 +247,7 @@ sessions/streams/
 # Auth tokens (sensitive)
 sync/ms-todo-tokens.json
 auth.json
+auth.json.bak
 
 # Machine-local settings — MUST stay out of the sync history. These hold the STT
 # engine, SSH hosts and provider credentials, which differ per box. Keep in sync
@@ -280,7 +281,8 @@ node_modules/
  * Ignore entries that MUST be present even in pre-existing repos whose
  * .gitignore predates them.
  *
- *  - auth.json  — device-token hashes; each box pairs its own devices.
+ *  - auth.json (+ its backup) — device-token hashes; each box pairs its own
+ *    devices. Losing it presents as a blanket 401 on every token.
  *  - config.yaml (+ its backup) — MACHINE-LOCAL settings: the STT engine, SSH
  *    hosts, provider credentials, per-device model lists. Never synced.
  *
@@ -288,7 +290,7 @@ node_modules/
  * gitignored on THIS box while still tracked in the index is the dangerous
  * state — see that function for the incident this prevents.
  */
-const CRITICAL_IGNORES = ['auth.json', 'config.yaml', 'config.yaml.bak'];
+const CRITICAL_IGNORES = ['auth.json', 'auth.json.bak', 'config.yaml', 'config.yaml.bak'];
 
 /**
  * Append missing CRITICAL_IGNORES to an existing .gitignore (idempotent).

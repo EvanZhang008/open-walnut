@@ -83,7 +83,24 @@ async function loadAuth(): Promise<AuthFile> {
   try {
     raw = await fs.readFile(file, 'utf-8')
   } catch {
-    return { devices: [] } // missing — normal before first pairing
+    // Missing is normal before first pairing — but it is ALSO what a lost
+    // auth.json looks like, and the two are indistinguishable here. On
+    // 2026-07-26 a merge carrying a remote deletion removed auth.json on both
+    // the primary and the cloud box; every device token silently stopped
+    // validating and git sync died on a bare 401 for six hours. The sidecar
+    // makes that recoverable; git-sync now also keeps auth.json untracked so
+    // the deletion cannot reach disk in the first place.
+    const recovered = await readAuthBackup()
+    if (recovered) {
+      log.web.error('auth.json missing — recovered the device registry from auth.json.bak. Every device token would otherwise have stopped validating.', {
+        file,
+        devices: recovered.devices.length,
+      })
+      // Put the primary back so the next read is a plain hit.
+      try { await saveAuth(recovered) } catch { /* read-only FS / racing writer */ }
+      return recovered
+    }
+    return { devices: [] } // missing with no backup — genuine first boot
   }
   try {
     const parsed = JSON.parse(raw) as AuthFile
@@ -98,13 +115,45 @@ async function loadAuth(): Promise<AuthFile> {
   }
 }
 
-/** Write auth.json atomically with mode 0600. */
+/**
+ * Sidecar copy of the device registry, for the same reason config.yaml has one:
+ * losing it is unrecoverable from anywhere else and presents as a blanket 401.
+ * Gitignored + kept untracked by git-sync's CRITICAL_IGNORES — never synced
+ * (each box pairs its own devices).
+ */
+function authBackupPath(): string {
+  return `${authFilePath()}.bak`
+}
+
+/** Read the sidecar. Returns null when absent, empty, or unparseable. */
+async function readAuthBackup(): Promise<AuthFile | null> {
+  try {
+    const raw = await fs.readFile(authBackupPath(), 'utf-8')
+    const parsed = JSON.parse(raw) as AuthFile
+    if (!Array.isArray(parsed.devices)) return null
+    const devices = parsed.devices.filter((d) => d && typeof d.name === 'string' && typeof d.tokenHash === 'string')
+    return devices.length > 0 ? { devices } : null
+  } catch {
+    return null
+  }
+}
+
+/** Write auth.json atomically with mode 0600, mirroring to the sidecar. */
 async function saveAuth(auth: AuthFile): Promise<void> {
   const file = authFilePath()
   await fs.mkdir(path.dirname(file), { recursive: true })
   const tmp = `${file}.tmp-${process.pid}`
   await fs.writeFile(tmp, JSON.stringify(auth, null, 2) + '\n', { mode: 0o600 })
   await fs.rename(tmp, file)
+  // Mirror AFTER the primary lands, so the sidecar never leads the real file.
+  // Never throws: a failed backup must not fail a device pairing.
+  try {
+    const btmp = `${authBackupPath()}.tmp-${process.pid}`
+    await fs.writeFile(btmp, JSON.stringify(auth, null, 2) + '\n', { mode: 0o600 })
+    await fs.rename(btmp, authBackupPath())
+  } catch (err) {
+    log.web.warn('failed to update auth.json.bak', { error: err instanceof Error ? err.message : String(err) })
+  }
 }
 
 function validateDeviceName(name: string): void {
