@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionRecord, Task } from '../../src/core/types.js';
 
 const mocks = vi.hoisted(() => ({
@@ -106,7 +106,18 @@ function expectNoPhysicalCleanup(): void {
   expect(mocks.cleanupOrphanedContent).not.toHaveBeenCalled();
 }
 
+const previousEmbedModel = process.env.QMD_EMBED_MODEL;
+
+afterAll(() => {
+  if (previousEmbedModel === undefined) delete process.env.QMD_EMBED_MODEL;
+  else process.env.QMD_EMBED_MODEL = previousEmbedModel;
+});
+
 beforeEach(() => {
+  // See qmd-maintenance.test.ts: setQmdRuntimeModel() writes QMD_EMBED_MODEL,
+  // so a sibling file that pinned a model leaks it here and beats the mocked
+  // DEFAULT_QMD_MODEL — these specs then fail only in a parallel run.
+  delete process.env.QMD_EMBED_MODEL;
   vi.clearAllMocks();
   mocks.getActiveDocumentPaths.mockReturnValue([]);
   mocks.findActiveDocument.mockReturnValue({

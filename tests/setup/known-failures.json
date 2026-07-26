@@ -1,15 +1,7 @@
 {
-  "_note": "Known failures in the quick tier. This list is the gate's reference: scripts/test-baseline.mjs fails only on failures NOT listed here, so real regressions turn CI red while these stay quiet. Shrinking it is the goal \u2014 it went 121 -> 2 on 2026-07-26 when the underlying causes were actually fixed rather than baselined. When it reaches 0, delete the baseline indirection and gate on `npm run test:quick` directly.",
-  "_entries": {
-    "session-outputfile-clobber": "DELIBERATE failing regression test, not drift. It pins a REAL BUG: the session-id rename path re-reads RemoteSessionManager.outputFile (hardcoded null by design) and wipes the remote:// sentinel that transport.start() published. Baselined only because the fix lives in src/providers/claude-code-session.ts, which had 305 uncommitted lines from another agent. REMOVE this entry when the clobber is fixed \u2014 it should go green.",
-    "sessions-changes git mv": "LOAD-DEPENDENT FLAKE: passes 3/3 in isolation, fails with ECONNRESET only under full parallel load. It drives a real Express app via supertest while spawning git. Baselined so an intermittent red doesn't train people to rerun until green; the underlying supertest/git-subprocess race is worth fixing separately."
-  },
-  "_recordedAt": "2026-07-26",
-  "_baselineCommit": "9051cff",
   "config": "vitest.quick.config.ts",
-  "count": 2,
+  "count": 1,
   "failures": [
-    "tests/providers/session-outputfile-clobber.test.ts :: outputFile survives the session-id rename stays a remote:// sentinel after the init event renames the transport",
-    "tests/web/routes/sessions-changes.test.ts :: GET /api/sessions/:id/changes surfaces a `git mv` file move as status=renamed with oldRelPath over the wire"
+    "tests/providers/session-outputfile-clobber.test.ts :: outputFile survives the session-id rename stays a remote:// sentinel after the init event renames the transport"
   ]
 }

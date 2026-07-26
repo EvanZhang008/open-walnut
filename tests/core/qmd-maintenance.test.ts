@@ -101,9 +101,15 @@ import {
 } from '../../src/core/qmd-maintenance.js';
 
 const previousWorkerFlag = process.env.WALNUT_QMD_WORKER;
+const previousEmbedModel = process.env.QMD_EMBED_MODEL;
 
 beforeEach(() => {
   process.env.WALNUT_QMD_WORKER = '1';
+  // qmd-maintenance prefers process.env.QMD_EMBED_MODEL over DEFAULT_QMD_MODEL,
+  // and setQmdRuntimeModel() writes that variable — so a sibling test file that
+  // pinned a runtime model leaks its value in here and beats the mock, making
+  // this file fail only when run alongside them.
+  delete process.env.QMD_EMBED_MODEL;
   vi.clearAllMocks();
   let pageCountRead = 0;
   mocks.dbPragma.mockImplementation((pragma: string) => {
@@ -125,6 +131,11 @@ afterAll(() => {
     delete process.env.WALNUT_QMD_WORKER;
   } else {
     process.env.WALNUT_QMD_WORKER = previousWorkerFlag;
+  }
+  if (previousEmbedModel === undefined) {
+    delete process.env.QMD_EMBED_MODEL;
+  } else {
+    process.env.QMD_EMBED_MODEL = previousEmbedModel;
   }
 });
 
