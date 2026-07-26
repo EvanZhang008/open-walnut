@@ -34,6 +34,8 @@ import { WALNUT_HOME, TASKS_FILE, CONFIG_FILE } from '../../src/constants.js';
 import { IntegrationRegistry } from '../../src/core/integration-registry.js';
 import { runPluginMigrations, migrateConfigToPlugins } from '../../src/core/integration-loader.js';
 import { getConfig } from '../../src/core/config-manager.js';
+import { _resetForTesting, listTasks } from '../../src/core/task-manager.js';
+import { closeDb } from '../../src/core/task-db.js';
 
 // ── Helpers ──
 
@@ -60,9 +62,15 @@ function makeNoopSync() {
 
 // ── Setup / teardown ──
 
+// Tasks live in SQLite; the handle and task-manager's init flag / store cache are
+// module singletons, so removing WALNUT_HOME alone leaves the previous test's rows
+// visible through the still-open handle (and blocks the one-shot tasks.json import
+// that these fixtures rely on, since it only runs when the table is empty).
 beforeEach(async () => {
   tmpDir = WALNUT_HOME;
-  await fsp.rm(tmpDir, { recursive: true, force: true });
+  closeDb();
+  _resetForTesting();
+  await fsp.rm(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
   await fsp.mkdir(tmpDir, { recursive: true });
   await fsp.mkdir(path.dirname(TASKS_FILE), { recursive: true });
 
@@ -76,7 +84,9 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await fsp.rm(tmpDir, { recursive: true, force: true });
+  closeDb();
+  _resetForTesting();
+  await fsp.rm(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
 });
 
 // ── migrateConfigToPlugins ──
@@ -288,10 +298,12 @@ describe('runPluginMigrations', () => {
 
     await runPluginMigrations(registry);
 
-    const result = JSON.parse(await fsp.readFile(TASKS_FILE, 'utf-8'));
-    expect(result.tasks[0].ms_todo_id).toBeUndefined();
-    expect(result.tasks[0].ms_todo_list).toBeUndefined();
-    expect(result.tasks[0].ext).toEqual({ 'ms-todo': { id: 'abc123', list: 'list456' } });
+    // tasks.json is only the one-shot import seed now — the store of record is
+    // SQLite, so migrated data must be read back through task-manager.
+    const [migrated] = await listTasks();
+    expect((migrated as Record<string, unknown>).ms_todo_id).toBeUndefined();
+    expect((migrated as Record<string, unknown>).ms_todo_list).toBeUndefined();
+    expect(migrated.ext).toEqual({ 'ms-todo': { id: 'abc123', list: 'list456' } });
   });
 
   it('does not write when no data changes', async () => {
@@ -328,12 +340,13 @@ describe('runPluginMigrations', () => {
       httpRoutes: [],
     });
 
-    const before = await fsp.stat(TASKS_FILE);
-    await new Promise(r => setTimeout(r, 50));
+    // Assert against the store of record (SQLite). A tasks.json mtime check
+    // would pass vacuously — nothing writes that file since the SQLite cutover.
+    const before = await listTasks();
     await runPluginMigrations(registry);
-    const after = await fsp.stat(TASKS_FILE);
+    const after = await listTasks();
 
-    expect(after.mtimeMs).toBe(before.mtimeMs);
+    expect(after).toEqual(before);
   });
 
   it('does nothing when no plugins have migrations', async () => {
@@ -404,8 +417,8 @@ describe('runPluginMigrations', () => {
 
     await runPluginMigrations(registry);
 
-    const result = JSON.parse(await fsp.readFile(TASKS_FILE, 'utf-8'));
-    expect(result.tasks[0].ext?.migrated).toBe(true);
+    const [migrated] = await listTasks();
+    expect(migrated.ext?.migrated).toBe(true);
   });
 
   it('handles empty task store', async () => {

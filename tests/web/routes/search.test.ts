@@ -8,7 +8,7 @@ import express from 'express';
 import request from 'supertest';
 import { searchRouter } from '../../../src/web/routes/search.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
-import { addTask } from '../../../src/core/task-manager.js';
+import { addTask, _resetForTesting } from '../../../src/core/task-manager.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
 
 function createApp() {
@@ -19,11 +19,25 @@ function createApp() {
   return app;
 }
 
+// These cases assert the LEXICAL (BM25-over-tasks.sqlite) path. The old
+// `?mode=keyword` query param that used to select it was removed with the
+// embedding search modes; the remaining switch is WALNUT_DISABLE_SEARCH=1.
+// Without it, search() delegates tasks to QMD, and QMD has no task index here
+// (qmd-task-sync is a server.ts bus subscriber, not part of this router) — so
+// every query legitimately returned an empty set.
+let previousDisableSearch: string | undefined;
+
 beforeEach(async () => {
+  previousDisableSearch = process.env.WALNUT_DISABLE_SEARCH;
+  process.env.WALNUT_DISABLE_SEARCH = '1';
+  _resetForTesting();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
 afterEach(async () => {
+  if (previousDisableSearch === undefined) delete process.env.WALNUT_DISABLE_SEARCH;
+  else process.env.WALNUT_DISABLE_SEARCH = previousDisableSearch;
+  _resetForTesting();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
@@ -41,8 +55,7 @@ describe('GET /api/search', () => {
     await addTask({ title: 'Add logging' });
 
     const app = createApp();
-    // Use mode=keyword to avoid Ollama dependency (vector search tested separately)
-    const res = await request(app).get('/api/search?q=authentication&mode=keyword');
+    const res = await request(app).get('/api/search?q=authentication');
 
     expect(res.status).toBe(200);
     expect(res.body.results.length).toBeGreaterThanOrEqual(1);
@@ -54,7 +67,7 @@ describe('GET /api/search', () => {
     await addTask({ title: 'Searchable task' });
 
     const app = createApp();
-    const res = await request(app).get('/api/search?q=searchable&types=task&mode=keyword');
+    const res = await request(app).get('/api/search?q=searchable&types=task');
 
     expect(res.status).toBe(200);
     expect(res.body.results.length).toBeGreaterThanOrEqual(1);
@@ -67,7 +80,7 @@ describe('GET /api/search', () => {
     await addTask({ title: 'Match three' });
 
     const app = createApp();
-    const res = await request(app).get('/api/search?q=match&limit=2&mode=keyword');
+    const res = await request(app).get('/api/search?q=match&limit=2');
 
     expect(res.status).toBe(200);
     expect(res.body.results.length).toBeLessThanOrEqual(2);

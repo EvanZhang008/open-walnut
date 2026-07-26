@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { createMockConstants } from '../../helpers/mock-constants.js';
+import { removeTempTree } from '../../helpers/temp-home.js';
 
 vi.mock('../../../src/constants.js', () => createMockConstants());
 
@@ -62,7 +63,7 @@ function truncatedTurn(sessionId: string): Omit<TurnEvent, 'ts'> {
 }
 
 beforeEach(async () => {
-  await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
+  await removeTempTree(WALNUT_HOME);
   await fsp.mkdir(WALNUT_HOME, { recursive: true });
   await fsp.rm(INCIDENTS_FILE, { force: true });
   // Reset the recorder's module-level sink so cross-test leakage can't fire incidents.
@@ -70,8 +71,13 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  // Unregister FIRST: the sink is fire-and-forget, so a turn recorded by the
+  // test body can still be mid-flight here and would write incidents.json +
+  // an evidence bundle back into the tree we are deleting. That resurrection
+  // is what produced `ENOTEMPTY: rmdir .../walnut-test-*` (removeTempTree's
+  // retries cover the residual window). Verified: 1/6 iterations without this.
   registerIncidentSink(() => {});
-  await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
+  await removeTempTree(WALNUT_HOME);
   await fsp.rm(INCIDENTS_FILE, { force: true });
 });
 

@@ -34,9 +34,11 @@ vi.mock('../../../src/providers/session-manager.js', () => ({
 }));
 
 // Mock claude-code-session. Restart now respawns a fresh CLI via
-// sessionRunner.reinitialize() (which marks the record 'running'); terminate uses
-// findSessionByClaudeId(). Stub both so the routes exercise their real logic
-// without a live CLI.
+// sessionRunner.reinitialize() (which marks the record 'running'); terminate probes
+// findAcpSession() then findSessionByClaudeId(). Stub all of them so the routes
+// exercise their real logic without a live CLI — a method the route calls but the stub
+// omits surfaces as a 500 ("sessionRunner.findAcpSession is not a function"), not as a
+// helpful failure, so keep this in sync with the route's sessionRunner.* calls.
 const reinitializeMock = vi.fn(async (sessionId: string) => {
   const { updateSessionRecord } = await import('../../../src/core/session-tracker.js');
   await updateSessionRecord(sessionId, { process_status: 'running', errorMessage: undefined } as Record<string, unknown>);
@@ -45,6 +47,7 @@ const settleInFlightTurnMock = vi.fn(() => {});
 vi.mock('../../../src/providers/claude-code-session.js', () => ({
   sessionRunner: {
     reinitialize: (sid: string) => reinitializeMock(sid),
+    findAcpSession: () => null,
     findSessionByClaudeId: () => null,
     settleInFlightTurn: (sid: string) => settleInFlightTurnMock(sid),
   },
@@ -444,10 +447,19 @@ describe('POST /api/sessions/:sessionId/terminate', () => {
     await createSessionRecord('term-sess-1', task.id, 'proj', '/tmp');
     await updateSessionRecord('term-sess-1', { process_status: 'running', pid: 12345 });
 
+    // A local record with a pid and no live session/manager makes terminate take the
+    // raw `process.kill(-pid, 'SIGTERM')` fallback. Intercept it: pid 12345 is a real
+    // pgid on the host, so an unmocked run would SIGTERM whatever process group owns
+    // it. Assert the route targeted the record's group instead of signalling for real.
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation((() => true) as never);
+
     const app = createApp();
     const res = await request(app)
       .post('/api/sessions/term-sess-1/terminate')
       .send({});
+
+    expect(killSpy).toHaveBeenCalledWith(-12345, 'SIGTERM');
+    killSpy.mockRestore();
 
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('terminated');

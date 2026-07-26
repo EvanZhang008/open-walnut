@@ -43,7 +43,8 @@ describe('GET /api/agents', () => {
     const general = res.body.agents.find((a: { id: string }) => a.id === 'general');
     expect(general).toBeDefined();
     expect(general.source).toBe('builtin');
-    expect(general.name).toBe('General Agent');
+    // BUILTIN_GENERAL.name — product-facing butler name, matched by api-v1.test.ts too.
+    expect(general.name).toBe('Walnut');
   });
 });
 
@@ -319,7 +320,7 @@ describe('Builtin agent override lifecycle', () => {
     const get = await request(app).get('/api/agents/general');
     expect(get.status).toBe(200);
     expect(get.body.agent.source).toBe('builtin');
-    expect(get.body.agent.name).toBe('General Agent');
+    expect(get.body.agent.name).toBe('Walnut');
     expect(get.body.agent.overrides_builtin).toBeUndefined();
   });
 

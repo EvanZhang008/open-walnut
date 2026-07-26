@@ -71,6 +71,7 @@ import {
 } from '../../src/core/session-tracker.js';
 import { SessionHealthMonitor } from '../../src/core/session-health-monitor.js';
 import { WALNUT_HOME } from '../../src/constants.js';
+import { log } from '../../src/logging/index.js';
 
 let tmpDir: string;
 
@@ -298,5 +299,79 @@ describe('SessionHealthMonitor — idle-threshold source gating (DEFAULT_*_IDLE_
     expect(src).toMatch(/configOverrideMs\s*\?\?/);
     // And 0 still disables globally.
     expect(src).toMatch(/if\s*\(\s*configOverrideMs\s*===\s*0\s*\)\s*return\s+killedIds/);
+  });
+});
+
+// ── The tick budget must bind INSIDE the per-session loops, not only between phases ──
+
+describe('SessionHealthMonitor — in-loop budget enforcement', () => {
+  it('abandons the liveness loop mid-way once the tick budget is spent', async () => {
+    // Six dead-pid sessions. pid is set (999999999, mocked dead) so they are not
+    // swept into the orphan dead-pool, which would bypass the liveness loop.
+    const ids = ['budget-a', 'budget-b', 'budget-c', 'budget-d', 'budget-e', 'budget-f'];
+    for (const id of ids) {
+      await createSessionRecord(id, 'task-4', 'proj', undefined, { pid: 999999999 });
+    }
+
+    // Flip the budget as soon as the loop has processed its FIRST session, keyed on
+    // the loop's own per-session transition log. Deterministic without depending on
+    // how many times the between-phase checks query the budget: those all run
+    // before any transition, while the flag is still false.
+    //
+    // Counted, not identity-checked: this file's tests share one sessions.sqlite, so
+    // records from earlier tests are also in the scan set and the loop's first
+    // session need not be one of ours. "How many sessions did the loop touch" is the
+    // invariant that matters and it is immune to that ordering.
+    const TRANSITION_LOGS = new Set([
+      'health monitor: process status updated',
+      'health monitor: session process died',
+    ]);
+    let transitions = 0;
+    const infoSpy = vi.spyOn(log.session, 'info').mockImplementation(((msg: string) => {
+      if (TRANSITION_LOGS.has(msg)) transitions++;
+    }) as never);
+    const warnSpy = vi.spyOn(log.session, 'warn').mockImplementation((() => {}) as never);
+
+    try {
+      const monitor = new SessionHealthMonitor();
+      await monitor.check({
+        overBudget: () => transitions > 0,
+        elapsedMs: () => (transitions > 0 ? 99_999 : 0),
+      });
+
+      const abandoned = warnSpy.mock.calls.filter(
+        (c) => c[0] === 'health monitor: liveness loop abandoned mid-loop (over budget)',
+      );
+      expect(abandoned).toHaveLength(1);
+      // One transition, then the loop stopped — instead of grinding through all six
+      // (plus the leftovers) with the budget long gone.
+      expect(transitions).toBe(1);
+
+      const sessions = await listSessions();
+      const untouched = sessions.filter(
+        (s) => ids.includes(s.claudeSessionId) &&
+          s.process_status !== 'stopped' && s.process_status !== 'error',
+      );
+      expect(untouched.length).toBeGreaterThanOrEqual(5);
+    } finally {
+      infoSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('processes every session when the budget is never exceeded', async () => {
+    const ids = ['nb-a', 'nb-b', 'nb-c'];
+    for (const id of ids) {
+      await createSessionRecord(id, 'task-4', 'proj', undefined, { pid: 999999999 });
+    }
+
+    const monitor = new SessionHealthMonitor();
+    await monitor.check(); // default ctx = unlimited
+
+    const sessions = await listSessions();
+    const transitioned = sessions.filter(
+      (s) => ids.includes(s.claudeSessionId) && s.process_status === 'stopped',
+    );
+    expect(transitioned).toHaveLength(3);
   });
 });

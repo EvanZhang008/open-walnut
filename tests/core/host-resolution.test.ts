@@ -16,16 +16,26 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
 
-import { addTask, getProjectMetadata, getTask, updateTask } from '../../src/core/task-manager.js';
+import { _resetForTesting, addTask, getProjectMetadata, getTask, updateTask } from '../../src/core/task-manager.js';
+import { closeDb } from '../../src/core/task-db.js';
 import type { Task } from '../../src/core/types.js';
 import { WALNUT_HOME, CONFIG_FILE } from '../../src/constants.js';
 
+// Tasks live in SQLite now, and both the handle and task-manager's `initialized`
+// flag / whole-store cache are module singletons. Deleting WALNUT_HOME alone
+// leaves the previous test's rows readable through the still-open handle, so
+// .metadata_project lookups leak across tests (symptom: a later test resolves
+// the *previous* test's default_host/default_cwd). Close + reset first.
 beforeEach(async () => {
-  await fs.rm(WALNUT_HOME, { recursive: true, force: true });
+  closeDb();
+  _resetForTesting();
+  await fs.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
 });
 
 afterEach(async () => {
-  await fs.rm(WALNUT_HOME, { recursive: true, force: true });
+  closeDb();
+  _resetForTesting();
+  await fs.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
 });
 
 /**

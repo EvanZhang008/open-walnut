@@ -24,6 +24,12 @@ export interface QueuedMessage {
   message: string;
   status: MessageStatus;
   enqueuedAt: string;
+  /**
+   * Process-monotonic enqueue counter — the tiebreaker for messages that share
+   * an `enqueuedAt` millisecond. Optional: rows persisted before this field
+   * existed don't have it. See compareEnqueueOrder.
+   */
+  seq?: number;
 }
 
 interface QueueStore {
@@ -40,6 +46,37 @@ function generateId(): string {
   const ts = Date.now();
   const rand = Math.random().toString(36).slice(2, 8);
   return `qm-${ts}-${rand}`;
+}
+
+/**
+ * Monotonic tiebreaker for the enqueue order.
+ *
+ * `enqueuedAt` is an ISO string with MILLISECOND resolution, and enqueues are
+ * fast enough to collide inside one millisecond (measured: two consecutive
+ * enqueues, each with an atomic write, share a ms ~57% of the time). Every
+ * `.sort((a,b) => a.enqueuedAt.localeCompare(b.enqueuedAt))` below is therefore
+ * a sort on EQUAL keys for such pairs, and Array#sort being stable only
+ * preserves the *input* order — which for migrateSessionQueue is
+ * `[...target, ...moved]`, i.e. the target queue's messages first. So a message
+ * enqueued LAST on the target could sort ahead of an older migrated one: user
+ * messages redelivered out of order (the queue's whole point is FIFO).
+ *
+ * `seq` restores a total order: it's process-monotonic, so it breaks intra-ms
+ * ties by real enqueue order. Rows written before this field existed have no
+ * `seq`; those fall back to `enqueuedAt` alone (see compareEnqueueOrder).
+ */
+let enqueueSeq = 0;
+
+/**
+ * Total order over queued messages: timestamp first (correct across restarts,
+ * where `seq` resets), then `seq` to break intra-millisecond ties.
+ */
+function compareEnqueueOrder(a: QueuedMessage, b: QueuedMessage): number {
+  const byTime = a.enqueuedAt.localeCompare(b.enqueuedAt);
+  if (byTime !== 0) return byTime;
+  // Legacy rows (persisted before `seq`) keep their relative input order.
+  if (a.seq === undefined || b.seq === undefined) return 0;
+  return a.seq - b.seq;
 }
 
 async function getStore(): Promise<QueueStore> {
@@ -109,6 +146,7 @@ export async function enqueueMessage(sessionId: string, message: string): Promis
     message,
     status: 'pending',
     enqueuedAt: new Date().toISOString(),
+    seq: ++enqueueSeq,
   };
   if (!s.queues[sessionId]) {
     s.queues[sessionId] = [];
@@ -308,7 +346,7 @@ export async function revertToPending(messages: QueuedMessage[]): Promise<void> 
       });
       queue.push(m);
       // Keep queue ordered by enqueue time so redelivery preserves user order
-      queue.sort((a, b) => a.enqueuedAt.localeCompare(b.enqueuedAt));
+      queue.sort(compareEnqueueOrder);
     }
   }
   await persist();
@@ -366,7 +404,7 @@ export async function migrateSessionQueue(
   const movedIds = moved.map((message) => message.id);
 
   s.queues[newSessionId] = [...target, ...moved]
-    .sort((a, b) => a.enqueuedAt.localeCompare(b.enqueuedAt));
+    .sort(compareEnqueueOrder);
   delete s.queues[oldSessionId];
   try {
     await persist(true);
@@ -409,7 +447,7 @@ export async function rollbackSessionQueueMigration(
   s.queues[oldSessionId] = [
     ...source,
     ...returning.filter((message) => !sourceIds.has(message.id)),
-  ].sort((a, b) => a.enqueuedAt.localeCompare(b.enqueuedAt));
+  ].sort(compareEnqueueOrder);
   const remaining = target.filter((message) => !movedSet.has(message.id));
   if (remaining.length > 0) s.queues[newSessionId] = remaining;
   else delete s.queues[newSessionId];

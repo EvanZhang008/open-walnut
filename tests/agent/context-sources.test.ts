@@ -3,15 +3,16 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fsp from 'node:fs/promises';
-import fs from 'node:fs';
 import path from 'node:path';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
 
 import { loadContextSources } from '../../src/agent/context-sources.js';
-import { WALNUT_HOME, TASKS_FILE, TASKS_DIR, PROJECTS_MEMORY_DIR, MEMORY_FILE, DAILY_DIR } from '../../src/constants.js';
-import type { AgentDefinition, Task, ContextSourceConfig } from '../../src/core/types.js';
+import { closeDb } from '../../src/core/task-db.js';
+import { _resetForTesting } from '../../src/core/task-manager.js';
+import { WALNUT_HOME, TASKS_FILE, TASKS_DIR, PROJECTS_MEMORY_DIR, agentMemoryDir, agentDailyDir } from '../../src/constants.js';
+import type { AgentDefinition, Task } from '../../src/core/types.js';
 
 // ── Helpers ──
 
@@ -35,9 +36,11 @@ function makeTask(overrides: Partial<Task> = {}): Task {
   };
 }
 
+const AGENT_ID = 'test-agent';
+
 function makeAgentDef(overrides: Partial<AgentDefinition> = {}): AgentDefinition {
   return {
-    id: 'test-agent',
+    id: AGENT_ID,
     name: 'Test Agent',
     runner: 'embedded',
     source: 'config',
@@ -56,23 +59,39 @@ async function writeProjectMemory(projectPath: string, content: string): Promise
   await fsp.writeFile(path.join(dir, 'MEMORY.md'), content, 'utf-8');
 }
 
+// `global_memory` / `daily_log` are PER-AGENT sources — they resolve through
+// agentMemoryDir(agentDef.id) / agentDailyDir(agentDef.id), not the General
+// paths. (General's copies are separate sources: main_global_memory /
+// main_daily_log.) Seed under the agent under test, or the loader correctly
+// reports "(no global memory yet)".
 async function writeGlobalMemory(content: string): Promise<void> {
-  await fsp.mkdir(path.dirname(MEMORY_FILE), { recursive: true });
-  await fsp.writeFile(MEMORY_FILE, content, 'utf-8');
+  const file = path.join(agentMemoryDir(AGENT_ID), 'MEMORY.md');
+  await fsp.mkdir(path.dirname(file), { recursive: true });
+  await fsp.writeFile(file, content, 'utf-8');
 }
 
 async function writeDailyLog(dateKey: string, content: string): Promise<void> {
-  await fsp.mkdir(DAILY_DIR, { recursive: true });
-  await fsp.writeFile(path.join(DAILY_DIR, `${dateKey}.md`), content, 'utf-8');
+  const dir = agentDailyDir(AGENT_ID);
+  await fsp.mkdir(dir, { recursive: true });
+  await fsp.writeFile(path.join(dir, `${dateKey}.md`), content, 'utf-8');
 }
 
 // ── Setup / teardown ──
 
 beforeEach(async () => {
+  // task-manager reads tasks from tasks.sqlite, not tasks.json — the JSON is only
+  // imported by the one-shot migration, which is guarded by `initialized` + an
+  // in-process store cache, both module-level. Without this reset every test
+  // after the first inherits test #1's already-migrated (empty) DB and every
+  // `getTask` misses → loadContextSources returns ''. Failure mode: seven
+  // "expected '' to contain '<task_context>'" that pass in isolation.
+  closeDb();
+  _resetForTesting();
   await fsp.mkdir(WALNUT_HOME, { recursive: true });
 });
 
 afterEach(async () => {
+  closeDb();
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 

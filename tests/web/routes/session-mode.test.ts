@@ -7,7 +7,6 @@
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
-import path from 'node:path'
 import type { Server as HttpServer } from 'node:http'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
@@ -16,6 +15,9 @@ vi.mock('../../../src/constants.js', () => createMockConstants())
 
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
+import { closeDb as closeTaskDb } from '../../../src/core/task-db.js'
+import { closeDb as closeSessionDb } from '../../../src/core/session-db.js'
+import { _resetForTesting as resetTaskManager } from '../../../src/core/task-manager.js'
 import { createSessionRecord, updateSessionRecord, getSessionByClaudeId } from '../../../src/core/session-tracker.js'
 import type { SessionMode } from '../../../src/core/types.js'
 import { sessionRunner } from '../../../src/providers/claude-code-session.js'
@@ -27,34 +29,37 @@ function apiUrl(p: string): string {
   return `http://localhost:${port}${p}`
 }
 
-// Seed a minimal task and session for testing
+// Seed a minimal task with a caller-chosen id.
+//
+// Must go through addTasksBulk (the only writer that honors an explicit id), NOT
+// by hand-writing tasks.json: the task store is SQLite now, and tasks.json is
+// only ever imported by the one-shot JSON→SQLite migration, which no-ops as soon
+// as the tasks table is non-empty. Writing JSON after the first seed therefore
+// silently drops the task and every later lookup fails with "No task found
+// matching ID prefix".
 async function seedTask(taskId: string): Promise<void> {
-  const tasksDir = path.join(WALNUT_HOME, 'tasks')
-  await fs.mkdir(tasksDir, { recursive: true })
-  const tasksFile = path.join(tasksDir, 'tasks.json')
-  let store = { version: 1, tasks: [] as unknown[] }
+  const { addTasksBulk, getTask } = await import('../../../src/core/task-manager.js')
   try {
-    store = JSON.parse(await fs.readFile(tasksFile, 'utf-8'))
-  } catch { /* first run */ }
-  if (!store.tasks.find((t: { id?: string }) => t.id === taskId)) {
-    store.tasks.push({
-      id: taskId,
-      title: `Test task ${taskId}`,
-      status: 'todo',
-      phase: 'IN_PROGRESS',
-      priority: 'immediate',
-      category: 'Test',
-      project: 'ModeTest',
-      session_ids: [],
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      description: '',
-      summary: '',
-      note: '',
-      subtasks: [],
-    })
-    await fs.writeFile(tasksFile, JSON.stringify(store))
-  }
+    await getTask(taskId)
+    return // already seeded
+  } catch { /* not present yet */ }
+  const now = new Date().toISOString()
+  await addTasksBulk([{
+    id: taskId,
+    title: `Test task ${taskId}`,
+    status: 'todo',
+    phase: 'IN_PROGRESS',
+    priority: 'immediate',
+    category: 'Test',
+    project: 'ModeTest',
+    source: 'local',
+    session_ids: [],
+    created_at: now,
+    updated_at: now,
+    description: '',
+    summary: '',
+    note: '',
+  }])
 }
 
 async function seedSession(sessionId: string, taskId: string, mode: SessionMode, extra?: Record<string, unknown>): Promise<void> {
@@ -65,6 +70,12 @@ async function seedSession(sessionId: string, taskId: string, mode: SessionMode,
 }
 
 beforeAll(async () => {
+  // closeDb before the rm: a task/session DB handle inherited from an earlier
+  // file in this Vitest worker keeps its fd on the unlinked inode and would
+  // resurrect that file's rows here.
+  closeTaskDb()
+  closeSessionDb()
+  resetTaskManager()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   await seedTask('mode-test-task-001')
   server = await startServer({ port: 0, dev: true })
@@ -74,6 +85,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await stopServer()
+  closeTaskDb()
+  closeSessionDb()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 
@@ -369,18 +382,12 @@ describe('ClaudeCodeSession send() mode preservation', () => {
     }
   })
 
-  it('send() with undefined mode falls back to default', async () => {
-    const { ClaudeCodeSession } = await import('../../../src/providers/claude-code-session.js')
-    const session = new ClaudeCodeSession('test-task', 'TestProject', 'echo')
-    const s = session as unknown as { _mode: string }
-
-    try {
-      session.send('test', '/tmp', undefined, undefined)
-    } catch { /* spawn will fail */ }
-
-    // This is the bug we're protecting against at the call sites
-    expect(s._mode).toBe('default')
-  })
+  // Removed: 'send() with undefined mode falls back to default'. ea2e248 flipped
+  // the no-mode fallback from 'default' to 'bypass' on purpose (users shouldn't be
+  // prompted to approve every edit; plan mode must be explicitly requested), and
+  // that contract is asserted against the real CLI flag — not a private field — in
+  // tests/providers/claude-code-session.test.ts ('no mode defaults to
+  // bypassPermissions'). Re-asserting it here would only duplicate it more weakly.
 })
 
 // Note: JSONL recovery tests (recoverStateFromJsonl) are covered in

@@ -3,59 +3,16 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
+import { createMockConstants } from '../../helpers/mock-constants.js';
 
 const execFileAsync = promisify(execFile);
 
-// vi.hoisted runs before imports, so it's safe to use in vi.mock factories
-const { mockConst, tmpDir } = vi.hoisted(() => {
-  const _path = require('node:path');
-  const _os = require('node:os');
-  const base = _path.join(
-    _os.tmpdir(),
-    `walnut-git-integ-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-  );
-  const tasksDir = _path.join(base, 'tasks');
-  return {
-    tmpDir: base as string,
-    mockConst: {
-      WALNUT_HOME: base,
-      TASKS_DIR: tasksDir,
-      TASKS_FILE: _path.join(tasksDir, 'tasks.json'),
-      ARCHIVE_DIR: _path.join(tasksDir, 'archive'),
-      MEMORY_DIR: _path.join(base, 'memory'),
-      SESSIONS_DIR: _path.join(base, 'memory', 'sessions'),
-      PROJECTS_DIR: _path.join(base, 'memory', 'projects'),
-      DAILY_DIR: _path.join(base, 'memory', 'daily'),
-      MEMORY_FILE: _path.join(base, 'MEMORY.md'),
-      PROJECTS_MEMORY_DIR: _path.join(base, 'memory', 'projects'),
-      CONFIG_FILE: _path.join(base, 'config.yaml'),
-      SYNC_DIR: _path.join(base, 'sync'),
-      SESSIONS_FILE: _path.join(base, 'sessions.json'),
-      CLAUDE_HOME: _path.join(base, '.claude'),
-      HOOK_LOG_FILE: _path.join(base, 'hook-errors.log'),
-      GLOBAL_SKILLS_DIR: _path.join(base, 'skills'),
-      CLAUDE_SKILLS_DIR: _path.join(base, '.claude', 'skills'),
-      CHAT_HISTORY_FILE: _path.join(base, 'chat-history.json'),
-      CRON_FILE: _path.join(base, 'cron-jobs.json'),
-      PLUGIN_A_SYNC_FILE: _path.join(base, 'sync', 'plugin-a-sync.json'),
-      PLUGIN_B_SYNC_FILE: _path.join(base, 'sync', 'plugin-b-sync.json'),
-      USAGE_DB_FILE: _path.join(base, 'usage.sqlite'),
-      SESSION_STREAMS_DIR: _path.join(base, 'sessions', 'streams'),
-      SESSION_QUEUE_FILE: _path.join(base, 'session-message-queue.json'),
-      IMAGES_DIR: _path.join(base, 'images'),
-      HEARTBEAT_FILE: _path.join(base, 'HEARTBEAT.md'),
-      COMMANDS_DIR: _path.join(base, 'commands'),
-      BUILTIN_COMMANDS_DIR: _path.join(base, 'builtin-commands'),
-      TIMELINE_DIR: _path.join(base, 'timeline'),
-      LOG_DIR: _path.join(base, 'logs'),
-      LOG_PREFIX: 'open-walnut-test-',
-    },
-  };
-});
+// Use the shared helper, NOT a hand-written constant list: every new export in
+// src/constants.ts that initDirectories() touches (REPOS_MEMORY_DIR was the last
+// one) breaks an inline mock with "No <X> export is defined on the mock".
+vi.mock('../../../src/constants.js', () => createMockConstants('walnut-git-integ'));
 
-vi.mock('../../../src/constants.js', () => mockConst);
-
+import { WALNUT_HOME as tmpDir } from '../../../src/constants.js';
 import { bus, EventNames } from '../../../src/core/event-bus.js';
 import { GitVersioningService, setGitVersioning, getGitVersioning } from '../../../src/core/git-versioning.js';
 import { addTask } from '../../../src/core/task-manager.js';

@@ -1,14 +1,23 @@
 /**
- * Tests for SessionIO abstraction layer — LocalIO, RemoteIO, createSessionIO.
+ * Tests for SessionIO abstraction layer — LocalIO, createSessionIO.
  *
  * Verifies the unified I/O interface introduced to eliminate local/SSH
  * divergence in ClaudeCodeSession. Tests the abstraction directly,
  * independent of the session runner / mock CLI.
  *
- * Three sections:
+ * Sections:
  *   1. LocalIO — FIFO creation, write, startTail/stopTail, rename, recovery, cleanup
- *   2. createSessionIO factory — dispatches LocalIO vs RemoteIO
- *   3. RemoteIO structural — property checks (no real SSH)
+ *   2. createSessionIO factory — always LocalIO (see below)
+ *   3. Remote command helpers still used by the daemon (preamble / login shell)
+ *   4. Image path detection
+ *
+ * The RemoteIO / buildRemoteCommand / transferImagesForRemoteSession suites were
+ * DELETED (2026-07-25), not repaired: the daemon-transport refactor removed those
+ * symbols from src outright. Remote sessions now go through RemoteSessionManager
+ * over a WebSocket to a daemon that spawns the CLI on the remote host, so walnut
+ * never builds `ssh claude …` strings and createSessionIO always returns LocalIO.
+ * The tests had been asserting a deleted architecture, failing every run on
+ * `X is not a function` — ~28 failures that were pure noise.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -20,7 +29,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 // Isolate all file I/O to a temp directory
 vi.mock('../../src/constants.js', () => createMockConstants())
 
-import { LocalIO, RemoteIO, createSessionIO, findLocalImagePaths, transferImagesForRemoteSession, buildRemoteCommand, buildRemotePreamble, wrapInLoginShell, REMOTE_BASE_PATH } from '../../src/providers/session-io.js'
+import { LocalIO, createSessionIO, findLocalImagePaths, buildRemotePreamble, wrapInLoginShell, REMOTE_BASE_PATH } from '../../src/providers/session-io.js'
 import { SESSION_STREAMS_DIR, WALNUT_HOME } from '../../src/constants.js'
 
 const tmpBase = WALNUT_HOME
@@ -425,202 +434,11 @@ describe('createSessionIO', () => {
     expect(io).toBeInstanceOf(LocalIO)
     expect(io.processName).toBe('claude')
   })
-
-  it('returns RemoteIO when host and sshTarget are provided', () => {
-    const io = createSessionIO('factory-remote', 'remote-dev', {
-      hostname: 'remote.example.com',
-      user: 'testuser',
-    })
-    expect(io).toBeInstanceOf(RemoteIO)
-    expect(io.processName).toBe('ssh')
-  })
-
-  it('returns LocalIO when only host is provided (no sshTarget)', () => {
-    // Edge case: host string without resolved SSH target → falls back to local
-    const io = createSessionIO('factory-edge', 'some-host')
-    expect(io).toBeInstanceOf(LocalIO)
-    expect(io.processName).toBe('claude')
-  })
 })
 
 // ═══════════════════════════════════════════════════════════════════
-//  Section 3: RemoteIO structural tests (no real SSH)
-// ═══════════════════════════════════════════════════════════════════
-
-describe('RemoteIO', () => {
-  it('processName is "ssh"', () => {
-    const io = new RemoteIO('test-remote', 'dev-host', {
-      hostname: 'remote.example.com',
-      user: 'testuser',
-    })
-    expect(io.processName).toBe('ssh')
-  })
-
-  it('hasPipe is false before setupRemote', () => {
-    const io = new RemoteIO('test-remote-pipe', 'dev-host', {
-      hostname: 'remote.example.com',
-    })
-    expect(io.hasPipe).toBe(false)
-  })
-
-  // setupRemote() now makes real SSH calls (deploy script, start, write message).
-  // These can't run in unit tests — test the structural properties instead.
-  // Integration/E2E tests with real SSH are done manually.
-
-  it('setupRemote() throws when SSH is unavailable (expected in test env)', () => {
-    const io = new RemoteIO('test-setup-fail', 'dev-host', {
-      hostname: 'remote.example.com',
-      user: 'admin',
-    })
-
-    // setupRemote() needs real SSH — should throw with a clear error
-    expect(() => io.setupRemote(
-      ['-p', '--output-format', 'stream-json'],
-      '/home/admin/project',
-      'hello remote',
-    )).toThrow(/Failed to deploy remote script/)
-  })
-
-  it('reconnectTail() returns null when no remote output path', () => {
-    const io = new RemoteIO('test-reconnect-no-path', 'dev-host', {
-      hostname: 'remote.example.com',
-    })
-    // No setupRemote() called — remoteOutputPath is null
-    expect(io.reconnectTail()).toBeNull()
-  })
-
-  it('checkRemoteAlive() returns no-pgid when no PGID path set', async () => {
-    const io = new RemoteIO('test-alive-no-pgid', 'dev-host', {
-      hostname: 'remote.example.com',
-    })
-    // No setupRemote() called — remotePgidPath is null
-    const status = await io.checkRemoteAlive()
-    expect(status).toBe('no-pgid')
-  })
-
-  it('tailSshPid is null before reconnect', () => {
-    const io = new RemoteIO('test-tail-pid', 'dev-host', {
-      hostname: 'remote.example.com',
-    })
-    expect(io.tailSshPid).toBeNull()
-  })
-
-  it('recoverPipe() sets remote paths optimistically', () => {
-    const io = new RemoteIO('test-recover', 'dev-host', {
-      hostname: 'remote.example.com',
-    })
-
-    expect(io.hasPipe).toBe(false)
-    io.recoverPipe('recovered-session-id')
-    expect(io.hasPipe).toBe(true)
-  })
-
-  it('deletePipe() flips hasPipe to false', () => {
-    const io = new RemoteIO('test-delete', 'dev-host', {
-      hostname: 'remote.example.com',
-    })
-
-    // Set up hasPipe
-    io.recoverPipe('some-session')
-    expect(io.hasPipe).toBe(true)
-
-    io.deletePipe()
-    expect(io.hasPipe).toBe(false)
-  })
-
-  it('write() returns false when hasPipe is false', () => {
-    const io = new RemoteIO('test-write-nopipe', 'dev-host', {
-      hostname: 'remote.example.com',
-    })
-
-    expect(io.hasPipe).toBe(false)
-    expect(io.write('hello')).toBe(false)
-  })
-
-  it('renameForSession() renames local output file', () => {
-    const io = new RemoteIO('test-rename-remote', 'dev-host', {
-      hostname: 'remote.example.com',
-    })
-
-    // Create the local JSONL file
-    fs.writeFileSync(io.outputFile, '')
-    fs.writeFileSync(io.outputFile + '.err', '')
-
-    const oldPath = io.outputFile
-    io.renameForSession('renamed-session-id')
-
-    const expectedPath = path.join(SESSION_STREAMS_DIR, 'renamed-session-id.jsonl')
-    expect(io.outputFile).toBe(expectedPath)
-    expect(fs.existsSync(expectedPath)).toBe(true)
-    expect(fs.existsSync(oldPath)).toBe(false)
-  })
-
-  it('renameForSession() is idempotent', () => {
-    const io = new RemoteIO('test-rename-idem', 'dev-host', {
-      hostname: 'remote.example.com',
-    })
-
-    fs.writeFileSync(io.outputFile, '')
-
-    io.renameForSession('session-abc')
-    const afterFirst = io.outputFile
-
-    io.renameForSession('session-abc')
-    expect(io.outputFile).toBe(afterFirst)
-  })
-
-  it('tailOffset is 0 before startTail', () => {
-    const io = new RemoteIO('test-tail-offset', 'dev-host', {
-      hostname: 'remote.example.com',
-    })
-    expect(io.tailOffset).toBe(0)
-  })
-
-  it('startTail() tails the local output file', async () => {
-    const io = new RemoteIO('test-tail-remote', 'dev-host', {
-      hostname: 'remote.example.com',
-    })
-
-    // Create a local JSONL file with content
-    const jsonLine = JSON.stringify({ type: 'system', subtype: 'init', session_id: 'remote-123' })
-    fs.writeFileSync(io.outputFile, jsonLine + '\n')
-
-    const lines: string[] = []
-    io.startTail((line) => lines.push(line))
-
-    await new Promise((r) => setTimeout(r, 200))
-
-    expect(lines.length).toBe(1)
-    expect(lines[0]).toContain('remote-123')
-
-    io.stopTail()
-  })
-
-  it('host property is accessible', () => {
-    const io = new RemoteIO('test-host-prop', 'my-host', {
-      hostname: 'remote.example.com',
-    })
-    expect(io.host).toBe('my-host')
-  })
-
-  it('remoteImagesDir is undefined by default', () => {
-    const io = new RemoteIO('test-images-dir', 'dev-host', {
-      hostname: 'remote.example.com',
-    })
-    expect(io.remoteImagesDir).toBeUndefined()
-  })
-
-  it('remoteImagesDir can be set for cleanup', () => {
-    const io = new RemoteIO('test-images-dir-set', 'dev-host', {
-      hostname: 'remote.example.com',
-    })
-    io.remoteImagesDir = '/tmp/open-walnut-images/abc123'
-    expect(io.remoteImagesDir).toBe('/tmp/open-walnut-images/abc123')
-  })
-})
-
-// ═══════════════════════════════════════════════════════════════════
-//  Section 3b: REMOTE_PATH_SETUP & buildRemoteCommand
+//  Section 3: Remote command helpers (still used — by the daemon, over SSH,
+//  to set up PATH before it spawns the CLI on the remote host)
 // ═══════════════════════════════════════════════════════════════════
 
 describe('buildRemotePreamble', () => {
@@ -676,24 +494,6 @@ describe('wrapInLoginShell', () => {
     const wrapped = wrapInLoginShell("echo 'hello world'")
     // The inner command should be quoted
     expect(wrapped).toMatch(/\$SHELL -lc '/)
-  })
-})
-
-describe('buildRemoteCommand', () => {
-  it('includes CLAUDE_CODE_DISABLE_BACKGROUND_TASKS and claude', () => {
-    const cmd = buildRemoteCommand(['-p', '--output-format', 'stream-json'])
-    expect(cmd).toContain('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1')
-    expect(cmd).toContain('claude')
-  })
-
-  it('includes cd when cwd is provided', () => {
-    const cmd = buildRemoteCommand(['-p'], '/home/user/project')
-    expect(cmd).toContain("cd '/home/user/project'")
-  })
-
-  it('omits cd when no cwd', () => {
-    const cmd = buildRemoteCommand(['-p'])
-    expect(cmd).not.toMatch(/\bcd\b/)
   })
 })
 
@@ -773,29 +573,3 @@ describe('findLocalImagePaths', () => {
   })
 })
 
-// ═══════════════════════════════════════════════════════════════════
-//  Section 5: transferImagesForRemoteSession
-//  Tests requiring mocked execFileSync are in session-io-transfer.test.ts
-// ═══════════════════════════════════════════════════════════════════
-
-describe('transferImagesForRemoteSession', () => {
-  it('returns text unchanged when no image paths exist', async () => {
-    const text = 'No images here, just text.'
-    const result = await transferImagesForRemoteSession(
-      text,
-      { hostname: 'remote.example.com', user: 'admin' },
-      '/tmp/open-walnut-images/abc123',
-    )
-    expect(result).toBe(text)
-  })
-
-  it('returns text unchanged when image paths do not exist on disk', async () => {
-    const text = 'Check /nonexistent/path/screenshot.png'
-    const result = await transferImagesForRemoteSession(
-      text,
-      { hostname: 'remote.example.com' },
-      '/tmp/open-walnut-images/abc123',
-    )
-    expect(result).toBe(text)
-  })
-})

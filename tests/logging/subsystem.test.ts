@@ -4,7 +4,16 @@
  * Covers: createSubsystemLogger() — all 6 methods, child() nesting,
  * writeLogEntry delegation, meta passthrough, and stderr output.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
+
+// levels.ts resolves the threshold ONCE at module load, and emit() short-circuits
+// anything below it (default `info`) — so trace/debug assertions need the env set
+// before src/logging/levels.js is imported. vi.hoisted runs above the imports.
+const { previousLogLevel } = vi.hoisted(() => {
+  const previous = process.env.WALNUT_LOG_LEVEL;
+  process.env.WALNUT_LOG_LEVEL = 'trace';
+  return { previousLogLevel: previous };
+});
 
 // Mock writeLogEntry so we don't need real file I/O
 vi.mock('../../src/logging/logger.js', () => ({
@@ -26,6 +35,12 @@ beforeEach(() => {
 
 afterEach(() => {
   stderrSpy.mockRestore();
+});
+
+// Workers are reused across files — don't leak a trace-level threshold into them.
+afterAll(() => {
+  if (previousLogLevel === undefined) delete process.env.WALNUT_LOG_LEVEL;
+  else process.env.WALNUT_LOG_LEVEL = previousLogLevel;
 });
 
 describe('createSubsystemLogger', () => {

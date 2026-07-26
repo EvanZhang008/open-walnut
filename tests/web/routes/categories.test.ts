@@ -10,6 +10,7 @@ import request from 'supertest';
 import { categoriesRouter } from '../../../src/web/routes/categories.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 import { addTask, createCategory, _resetForTesting } from '../../../src/core/task-manager.js';
+import { closeDb } from '../../../src/core/task-db.js';
 import { WALNUT_HOME, CONFIG_FILE } from '../../../src/constants.js';
 
 function createApp() {
@@ -20,12 +21,17 @@ function createApp() {
   return app;
 }
 
+// The task store is SQLite: rm'ing WALNUT_HOME does NOT reset it. better-sqlite3
+// keeps its fd on the unlinked inode, so without closeDb() the cached handle
+// silently carries every previous test's categories into the next one.
 beforeEach(async () => {
+  closeDb();
   _resetForTesting();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
 afterEach(async () => {
+  closeDb();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
@@ -131,8 +137,11 @@ describe('GET /api/categories', () => {
     const res = await request(app).get('/api/categories');
 
     expect(res.status).toBe(200);
-    // Includes the built-in 'Local' category (seeded by ensureBuiltInCategories) + 'Life' + 'Work'
-    expect(res.body).toHaveLength(3);
+    // Two built-in local categories are always seeded ('Local' for Quick Start,
+    // 'Inbox' for default quick-add — BUILTIN_LOCAL_CATEGORIES in config-manager.ts)
+    // plus the two created here. Assert the exact set so a new built-in shows up
+    // as a deliberate change instead of silently inflating a bare count.
+    expect(res.body.map((c: { name: string }) => c.name).sort()).toEqual(['Inbox', 'Life', 'Local', 'Work']);
 
     const life = res.body.find((c: { name: string }) => c.name === 'Life');
     expect(life).toBeDefined();

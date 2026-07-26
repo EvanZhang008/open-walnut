@@ -6,6 +6,14 @@
  * in twice. These are source-level assertions (web components can't be imported in
  * the node vitest env — same approach as todo-panel-layout.test.ts). Each would fail
  * if the corresponding piece of the grouping feature regressed out of TaskList.
+ *
+ * 2026-07-26: 2 of these 8 tests had rotted (the ≥2 group threshold became ≥1, and
+ * the category+project scope gate was removed). The whole file was briefly deleted
+ * as "a source-text test that proves nothing" — restored instead, because the other
+ * 6 are the ONLY coverage of the /tasks-page grouping wiring (App.tsx routes /tasks
+ * → DashboardPage → TaskList), and the two stale ones just needed re-pointing at the
+ * current rules. A source-text guard is a weak test, but weak beats absent for
+ * frontend wiring that the node test env cannot render.
  */
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
@@ -37,18 +45,26 @@ describe('TaskList grouping wiring', () => {
     expect(TASK_LIST_SRC).toMatch(/clusterByGroup\(projTasks\)/);
   });
 
-  it('counts group members from the DISPLAYED lane set (≥2 to box)', () => {
-    // The chip+rail must require ≥2 *visible* members — derived from each lane, not
-    // from the unfiltered task list — so a lone survivor never shows a broken group.
+  it('counts group members from the DISPLAYED lane set', () => {
+    // The chip+rail count must be derived from each lane, not from the unfiltered
+    // task list, so a filtered-out member never leaves a broken-looking group.
     const mapIdx = TASK_LIST_SRC.indexOf('groupRenderMap');
     expect(mapIdx).toBeGreaterThan(-1);
     expect(TASK_LIST_SRC).toMatch(/for \(const t of lane\) if \(t\.group_id\)/);
-    expect(TASK_LIST_SRC).toMatch(/counts\.get\(gid\) \?\? 0\) < 2/);
+    // Threshold is `< 1` (drop groups with no visible member). It was `< 2` when
+    // this test was written; the product deliberately relaxed it so a group whose
+    // siblings are filtered out still renders its remaining member.
+    expect(TASK_LIST_SRC).toMatch(/counts\.get\(gid\) \?\? 0\) < 1/);
   });
 
-  it('enforces the same category+project scope rule before enabling Group', () => {
-    expect(TASK_LIST_SRC).toMatch(/t\.category === category && t\.project === project/);
-    expect(TASK_LIST_SRC).toContain('disabled={!selectionInfo.sameScope}');
+  it('gates the Group button on the selection size, not on category+project scope', () => {
+    // The old rule required every selected task to share category AND project
+    // (`sameScope`). That was dropped — grouping across lanes is now allowed — so
+    // the only gate is "at least 2 selected". Assert the rule's ABSENCE too, so
+    // silently reinstating the scope restriction fails here.
+    expect(TASK_LIST_SRC).not.toMatch(/t\.category === category && t\.project === project/);
+    expect(TASK_LIST_SRC).toMatch(/canGroup:\s*picked\.length >= 2/);
+    expect(TASK_LIST_SRC).toContain('disabled={!selectionInfo.canGroup}');
   });
 
   it('builds a multi-selection via modifier-click and a floating Group bar', () => {

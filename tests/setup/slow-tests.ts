@@ -21,12 +21,16 @@
 /** Files measured >2s. Paths are repo-root-relative, matching vitest's include/exclude. */
 export const SLOW_TEST_FILES = [
   // ── Spawns a real `claude` CLI / local daemon (the heavyweights) ────────────
-  'tests/providers/claude-code-session.test.ts', // 278s — 80% of the old "unit" tier by itself
+  // Was 278s (80% of the old "unit" tier) — nearly all of it was 14 tests waiting
+  // out a 15s timeout because no daemon existed to spawn a session, plus 44 that
+  // threw on construction for the same reason. Wiring a file-level MockDaemon cut
+  // it to ~87s. Still slow enough to belong here: it spawns real mock-CLI processes.
+  'tests/providers/claude-code-session.test.ts', // 87s
   'tests/providers/local-daemon.test.ts', // 41s
   'tests/providers/local-daemon-session-e2e.test.ts', // 29s
   'tests/providers/claude-stream-partial.e2e.test.ts', // 11s
   'tests/providers/acp-worker.test.ts', // 9s
-  'tests/providers/session-io.test.ts', // 9s
+  'tests/providers/session-io.test.ts', // 6.5s (was 9s — dead RemoteIO suites deleted)
   'tests/providers/acp-daemon.test.ts', // 7s
   'tests/providers/session-background-workflow.test.ts', // 5s
   'tests/providers/daemon-transport-unit.test.ts', // 3s

@@ -340,6 +340,15 @@ export async function readSessionJsonlContent(
         host: daemonHost, sessionId,
         error: errMsg,
       });
+      // A byte-ceiling refusal is NOT a transport failure and must propagate for
+      // BOTH local and remote. The fallbacks below (streams capture, then the
+      // outputFile) are the SAME oversized transcript, so they either blow the
+      // same ceiling or return nothing — and "nothing" is worse than an error,
+      // because the caller (readSessionHistory) has a real answer for this case:
+      // degrade to a bounded 4 MB tail. Swallowing it here served an EMPTY
+      // history for a 197 MB session (observed: 200 with respBytes=49) while the
+      // tail degradation sat unreachable.
+      if (errMsg.includes('byte ceiling')) throw err;
       // For remote this is fatal (no local fallback exists). For local, fall
       // through to the streams-capture fallback below (steps 2-3) rather than
       // throwing — the local daemon may be mid-restart while the streams file

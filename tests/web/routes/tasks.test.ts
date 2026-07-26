@@ -9,6 +9,7 @@ import request from 'supertest';
 import { tasksRouter } from '../../../src/web/routes/tasks.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 import { addTask, linkSessionSlot, _resetForTesting } from '../../../src/core/task-manager.js';
+import { closeDb } from '../../../src/core/task-db.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
 
 function createApp() {
@@ -19,12 +20,17 @@ function createApp() {
   return app;
 }
 
+// The task store is SQLite: rm'ing WALNUT_HOME does NOT reset it. better-sqlite3
+// keeps its fd on the unlinked inode, so without closeDb() the cached handle
+// silently carries every previous test's rows into the next one.
 beforeEach(async () => {
+  closeDb();
   _resetForTesting();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
 afterEach(async () => {
+  closeDb();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
@@ -255,16 +261,11 @@ describe('PATCH /api/tasks/reorder', () => {
     expect(res.status).toBe(400);
   });
 
-  it('returns 500 for mismatched IDs', async () => {
-    await addTask({ title: 'One', category: 'work', project: 'HomeLab' });
-
-    const app = createApp();
-    const res = await request(app)
-      .patch('/api/tasks/reorder')
-      .send({ category: 'work', project: 'HomeLab', taskIds: ['fake-id'] });
-
-    expect(res.status).toBe(500);
-  });
+  // Removed: 'returns 500 for mismatched IDs'. reorderTasks stopped throwing on
+  // an orderedIds/group mismatch in 3404816 — it now self-heals (drops unknown
+  // ids, dedups, appends missing members) because the frontend legitimately sends
+  // stale ids from optimistic updates. The reconciliation semantics are covered in
+  // tests/core/task-manager.test.ts; there is no 500 path left to assert here.
 });
 
 // Subtask endpoint tests removed — subtasks are now child tasks in the plugin system
@@ -317,7 +318,7 @@ describe('DELETE /api/tasks/:id', () => {
   });
 });
 
-describe('Category-source conflict (409)', () => {
+describe('Cross-source category change', () => {
   async function setupPluginConfig() {
     const { CONFIG_FILE } = await import('../../../src/constants.js');
     const path = await import('node:path');
@@ -334,27 +335,35 @@ describe('Category-source conflict (409)', () => {
     );
   }
 
-  it('PATCH /api/tasks/:id returns 409 on category change source conflict', async () => {
+  // 9deb72e replaced the 409 hard-block with auto-migration: a moved task adopts
+  // the target category's source. The route's CategorySourceConflictError → 409
+  // mapping still guards addTask/renameCategory, but PATCH category is a 200 now.
+  it('PATCH /api/tasks/:id auto-migrates source into a plugin-reserved category', async () => {
     await setupPluginConfig();
+
+    // The migration push is AWAITED, so the target source must be a loaded
+    // plugin — otherwise updateTask throws "plugin not loaded" as a 500.
+    const { registry } = await import('../../../src/core/integration-registry.js');
+    const { createMockPlugin } = await import('../../core/plugin-test-utils.js');
+    if (!registry.has('plugin-a')) registry.register('plugin-a', createMockPlugin({ id: 'plugin-a' }));
 
     // Create a plugin-a task in 'Work' (matches config plugin-a category)
     const { task: pluginTask } = await addTask({ title: 'Plugin task', category: 'Work' });
     expect(pluginTask.source).toBe('plugin-a');
 
-    // Create a local task in 'Life' (no ms-todo plugin registered, defaults to local)
+    // Create a local task in 'Life' (no plugin claims it, defaults to local)
     const { task: localTask } = await addTask({ title: 'Local task', category: 'Life' });
     expect(localTask.source).toBe('local');
 
     const app = createApp();
-    // Try to move local task to the 'Work' category (plugin-a)
+    // Move the local task to 'Work' (plugin-a) → adopts plugin-a source
     const res = await request(app)
       .patch(`/api/tasks/${localTask.id}`)
       .send({ category: 'Work' });
 
-    expect(res.status).toBe(409);
-    expect(res.body.error).toContain('Cannot move task');
-    expect(res.body.intended_source).toBe('local');
-    expect(res.body.existing_source).toBe('plugin-a');
+    expect(res.status).toBe(200);
+    expect(res.body.task.category).toBe('Work');
+    expect(res.body.task.source).toBe('plugin-a');
   });
 
   it('PATCH /api/tasks/:id succeeds for same-source category change', async () => {

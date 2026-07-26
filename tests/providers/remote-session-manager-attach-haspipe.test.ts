@@ -19,6 +19,20 @@ import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 
 const TEST_TARGET = { hostname: '127.0.0.1', user: undefined, port: undefined }
 
+/**
+ * Poll until `pred` holds. The daemon's session_state broadcast arrives over a
+ * real WebSocket, so its delivery latency is whatever the event loop grants us
+ * — 0.1ms p50 idle, but unbounded when co-resident fork workers saturate the
+ * box. A fixed `setTimeout(30)` asserts a deadline the test never meant to
+ * assert, which is why this file flaked only under full parallel load.
+ */
+async function waitFor(pred: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!pred() && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 5))
+  }
+}
+
 describe('RemoteSessionManager.attach() hasPipe seeding', () => {
   let daemon: MockDaemon
   const managers: RemoteSessionManager[] = []
@@ -86,7 +100,7 @@ describe('RemoteSessionManager.attach() hasPipe seeding', () => {
     expect(mgr.hasPipe).toBe(true)
 
     daemon.emitSessionState('sid-adopted', 'dead', { exitCode: 3 })
-    await new Promise((r) => setTimeout(r, 30))
+    await waitFor(() => onExit.mock.calls.length > 0)
 
     expect(onExit).toHaveBeenCalledTimes(1)
     expect(onExit).toHaveBeenCalledWith(3)

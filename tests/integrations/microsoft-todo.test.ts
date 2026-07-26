@@ -43,9 +43,26 @@ vi.mock('../../src/core/config-manager.js', () => ({
 
 const mockReadJsonFile = vi.fn();
 const mockWriteJsonFile = vi.fn().mockResolvedValue(undefined);
+// Mirror ALL of src/utils/fs.ts — a partial factory throws
+// 'No "<export>" export is defined on the mock' the moment src reaches the
+// missing one (ensureDir, via initDirectories, was that case).
 vi.mock('../../src/utils/fs.js', () => ({
   readJsonFile: (...args: unknown[]) => mockReadJsonFile(...args),
   writeJsonFile: (...args: unknown[]) => mockWriteJsonFile(...args),
+  ensureDir: vi.fn().mockResolvedValue(undefined),
+}));
+
+// Task-store reads are the boundary of this unit: reconcilePulledTasks resolves
+// locals through the SQLite-indexed findTaskByExtId (it replaced a caller-built
+// localByMsId Map), so the tasks a test hands to syncTasks/deltaPull are only
+// findable if they're seeded here. buildListName stays real — the list-migration
+// case asserts its "category / project" output.
+const mockFindTaskByExtId = vi.fn();
+const mockGetStoreCategories = vi.fn();
+vi.mock('../../src/core/task-manager.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/core/task-manager.js')>()),
+  findTaskByExtId: (...args: unknown[]) => mockFindTaskByExtId(...args),
+  getStoreCategories: (...args: unknown[]) => mockGetStoreCategories(...args),
 }));
 
 import {
@@ -155,9 +172,28 @@ function setupGraphResponses(responses: { status?: number; body: unknown }[]) {
   });
 }
 
+/**
+ * Register the local tasks that findTaskByExtId should resolve, keyed by their
+ * ms-todo ext id — the store-side half of a pull test's fixture.
+ */
+function seedLocalByMsId(tasks: Task[]) {
+  const byMsId = new Map(
+    tasks
+      .map((t) => [getMsExt(t).id, t] as const)
+      .filter((entry): entry is readonly [string, Task] => typeof entry[0] === 'string'),
+  );
+  mockFindTaskByExtId.mockImplementation(async (source: string, extId: string) =>
+    source === 'ms-todo' ? byMsId.get(extId) : undefined);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   clearListIdCache();
+
+  // Default: an empty task store (no local task resolves, no category is claimed
+  // by another source) — pull tests opt in via seedLocalByMsId.
+  seedLocalByMsId([]);
+  mockGetStoreCategories.mockResolvedValue({});
 
   // Default: MSAL returns a valid token
   mockAcquireTokenSilent.mockResolvedValue({ accessToken: 'fake-token' });
@@ -958,6 +994,7 @@ describe('syncTasks', () => {
       title: 'Old Title',
       updated_at: '2024-01-01T00:00:00Z',
     });
+    seedLocalByMsId([localTask]);
 
     setupGraphResponses([
       // fetchTaskLists
@@ -996,6 +1033,7 @@ describe('syncTasks', () => {
       updated_at: '2024-12-01T00:00:00Z', // newer than remote
       _syncedAt: '2024-12-01T00:00:00Z',
     });
+    seedLocalByMsId([localTask]);
 
     setupGraphResponses([
       { body: { value: [{ id: 'list-1', displayName: 'Tasks' }] } },
@@ -1077,6 +1115,7 @@ describe('deltaPull', () => {
       ms_todo_id: 'ms-existing',
       updated_at: '2024-01-01T00:00:00Z',
     });
+    seedLocalByMsId([localTask]);
 
     setupGraphResponses([
       { body: { value: [{ id: 'list-1', displayName: 'Tasks' }] } },
@@ -1125,6 +1164,7 @@ describe('deltaPull', () => {
       updated_at: '2025-01-01T00:00:00Z', // very recent
       _syncedAt: '2025-01-01T00:00:00Z',
     });
+    seedLocalByMsId([localTask]);
 
     setupGraphResponses([
       { body: { value: [{ id: 'list-1', displayName: 'Tasks' }] } },

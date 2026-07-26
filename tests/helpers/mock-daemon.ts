@@ -57,6 +57,8 @@ export class MockDaemon {
   private _wsClients = new Set<WebSocket>()
   /** Per-session injected faults for cmdSend (strict-ack envelope). */
   private _sendFaults = new Map<string, SendFault>()
+  /** Spawn fault returned by every cmdStart until cleared (see injectStartFault). */
+  private _startFault: string | null = null
   /** Sessions flagged as dead via simulateDeath — exitCode returned in session_dead replies. */
   private _deadSessions = new Map<string, number>()
   /** Command log for test assertions. */
@@ -247,6 +249,13 @@ export class MockDaemon {
     const cwd = cmd.cwd as string || this.tmpDir
     const message = cmd.message as string || ''
     const resume = cmd.resume as boolean ?? false
+
+    // Injected spawn failure. Mirrors the real daemon's cmdStart error replies
+    // (missing cwd / mkfifo failed / no pid) — envelope ok:false, no session
+    // registered, so the client's transport.start() rejects. Sticky until cleared.
+    if (this._startFault) {
+      return this.sendError(ws, id, this._startFault)
+    }
 
     const streamsDir = this.streamsDir
     const pipePath = path.join(streamsDir, `${sid}.pipe`)
@@ -580,6 +589,25 @@ export class MockDaemon {
   injectSendFault(sid: string, reason: SendFault): void {
     if (reason === null) this._sendFaults.delete(sid)
     else this._sendFaults.set(sid, reason)
+  }
+
+  /**
+   * Inject a SPAWN failure that every `cmdStart` returns until cleared.
+   *
+   * The DAEMON owns the spawn, so the CLI path passed to `new ClaudeCodeSession(...)`
+   * can never cause one: an unreachable binary just makes the daemon spawn its own
+   * default mock-claude. This is the only way for a test to exercise
+   * `transport.start()` rejecting (envelope `ok:false`), which is what real
+   * spawn failures look like on the wire — `daemon-standalone.ts` cmdStart
+   * sendError()s on a missing cwd, a failed mkfifo, or `!proc.pid`.
+   *
+   * STICKY, unlike injectSendFault's one-shot: a genuinely broken host fails
+   * EVERY spawn attempt, and the loop-regression tests need each retry to keep
+   * failing so a resurrected retry loop still shows up as N batch-failures.
+   * Call `injectStartFault(null)` to clear.
+   */
+  injectStartFault(reason: string | null): void {
+    this._startFault = reason
   }
 
   /** Broadcast a `session_state` event to all connected ws clients. */

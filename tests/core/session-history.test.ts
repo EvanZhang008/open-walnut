@@ -726,3 +726,93 @@ describe('readSessionHistoryPaginated', () => {
     expect(result.pagination.totalPages).toBe(1);
   });
 });
+
+// Regression: the mtime cache only helps AFTER a read completes, so two callers
+// arriving in the same tick both missed and both read the whole file. Observed in
+// production: the same 38.9 MB JSONL read twice inside one second (attach + the
+// reconnecting UI's GET /history).
+describe('readSessionHistory in-flight dedup', () => {
+  /** Count real file reads by spying on the fs the mock daemon reader uses. */
+  const countReads = async (sessionId: string): Promise<{ reads: () => number; restore: () => void }> => {
+    const spy = vi.spyOn(fsp, 'readFile');
+    return {
+      reads: () => spy.mock.calls.filter((c) => String(c[0]).includes(`${sessionId}.jsonl`)).length,
+      restore: () => spy.mockRestore(),
+    };
+  };
+
+  it('collapses concurrent reads of the same session — N callers cost the same as 1', async () => {
+    const lines = Array.from({ length: 40 }, (_, i) => msg(`m${i}`, 'assistant', `Message ${i}`));
+    await writeJsonl('dedup-concurrent', '/test', lines);
+
+    // Baseline: what ONE read costs. (A single readSessionHistory internally also
+    // reads the synthetic-events sidecar, so the absolute count is >1 — the
+    // invariant that matters is that it does not scale with caller count.)
+    let counter = await countReads('dedup-concurrent');
+    let baseline: number;
+    try {
+      await readSessionHistory('dedup-concurrent', '/test');
+      baseline = counter.reads();
+    } finally {
+      counter.restore();
+    }
+    expect(baseline).toBeGreaterThan(0);
+
+    // Force a re-read (the mtime cache would otherwise serve all three for free,
+    // which would pass even with dedup broken).
+    await writeJsonl('dedup-concurrent', '/test', [...lines, msg('m40', 'user', 'more')]);
+
+    counter = await countReads('dedup-concurrent');
+    try {
+      const [a, b, c] = await Promise.all([
+        readSessionHistory('dedup-concurrent', '/test'),
+        readSessionHistory('dedup-concurrent', '/test'),
+        readSessionHistory('dedup-concurrent', '/test'),
+      ]);
+      // Without dedup this would be ~3× baseline.
+      expect(counter.reads()).toBeLessThanOrEqual(baseline);
+      // All three callers must get the full, correct result — not a partial share.
+      expect(a).toHaveLength(41);
+      expect(b).toHaveLength(41);
+      expect(c).toHaveLength(41);
+    } finally {
+      counter.restore();
+    }
+  });
+
+  it('does NOT share between different skipSubagents shapes', async () => {
+    await writeJsonl('dedup-shape', '/test', [msg('m0', 'user', 'Hello')]);
+
+    // Different option shape ⇒ different key ⇒ must not be served the other's result.
+    const [withSub, withoutSub] = await Promise.all([
+      readSessionHistory('dedup-shape', '/test', undefined, undefined, { skipSubagents: false }),
+      readSessionHistory('dedup-shape', '/test', undefined, undefined, { skipSubagents: true }),
+    ]);
+    expect(withSub[0].text).toBe('Hello');
+    expect(withoutSub[0].text).toBe('Hello');
+  });
+
+  it('releases the in-flight entry so later reads still work', async () => {
+    await writeJsonl('dedup-release', '/test', [msg('m0', 'user', 'First')]);
+    const first = await readSessionHistory('dedup-release', '/test');
+    expect(first).toHaveLength(1);
+
+    // A sequential second call must not be served a stale in-flight promise.
+    await writeJsonl('dedup-release', '/test', [
+      msg('m0', 'user', 'First'),
+      msg('m1', 'assistant', 'Second'),
+    ]);
+    const second = await readSessionHistory('dedup-release', '/test');
+    expect(second).toHaveLength(2);
+  });
+
+  it('a rejected read does not poison later reads', async () => {
+    // No file at all → the read path fails/returns empty; the key must still clear.
+    const missing = await readSessionHistory('dedup-missing', '/test').catch(() => null);
+    expect(missing).toBeDefined();
+
+    await writeJsonl('dedup-missing', '/test', [msg('m0', 'user', 'Now here')]);
+    const after = await readSessionHistory('dedup-missing', '/test');
+    expect(after).toHaveLength(1);
+  });
+});

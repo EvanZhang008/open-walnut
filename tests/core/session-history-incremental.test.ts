@@ -214,3 +214,152 @@ describe('incremental append-read', () => {
     expect(asst[0].text).toContain('part two.');
   });
 });
+
+/**
+ * The cache's byte budget (MAX_HISTORY_CACHE_CHARS) can only work if entries are
+ * charged their real retained size. The incremental path used to charge only the
+ * sum of message `.text` lengths — but tool inputs/results carry no `.text` and
+ * dominate a coding transcript, so a 100 MB session was booked as a few hundred KB
+ * and eviction effectively never fired for any session refreshed this way.
+ */
+describe('incremental path byte accounting', () => {
+  // The tail segment rolls at 4 MB (TAIL_SEGMENT_ROLL_BYTES). BELOW that the whole
+  // file IS the tail, so the old and new formulas nearly agree — a small fixture
+  // cannot tell them apart. These fixtures deliberately exceed the roll threshold
+  // so the parsed prefix is non-empty, which is exactly where the old formula lost
+  // the tool bytes (prefixMessages contribute only their .text).
+  const bulkTurns = (n: number, bytesEach: number) => {
+    const out: unknown[] = [];
+    for (let i = 0; i < n; i++) {
+      out.push(toolUseLine(`t${i}`, 'Bash'), toolResultLine(`t${i}`, 'X'.repeat(bytesEach)));
+    }
+    return out;
+  };
+
+  it('charges tool-heavy content in the parsed prefix, not just message text', async () => {
+    const sid = 'inc-accounting';
+    // ~6 MB of tool-result bytes: forces a tail roll, leaving most bytes in the prefix.
+    await writeLines(sid, bulkTurns(12, 500_000));
+    await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+
+    await appendLines(sid, [userLine('next question'), assistantLine('next answer')]);
+    await bumpMtime(sid);
+    await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+
+    const entry = _historyCacheGetForTesting(sid);
+    expect(entry?.inc).toBeDefined();
+    const fileBytes = (await fsp.stat(jsonlPath(sid))).size;
+    // The old formula booked this ~6 MB session at a few hundred bytes (tool_result
+    // content carries no .text). Require most of the real size to be charged.
+    expect(entry!.approxChars).toBeGreaterThan(fileBytes * 0.5);
+    // ...and never MORE than the file (that would mean the tail is double-counted).
+    expect(entry!.approxChars).toBeLessThanOrEqual(fileBytes);
+  });
+
+  it('does not double-count the rolling tail across repeated appends', async () => {
+    const sid = 'inc-no-double';
+    await writeLines(sid, bulkTurns(10, 500_000));
+    await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+
+    for (let i = 0; i < 4; i++) {
+      await appendLines(sid, bulkTurns(2, 300_000));
+      await bumpMtime(sid);
+      await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+      const fileBytes = (await fsp.stat(jsonlPath(sid))).size;
+      // parsedBytes + tailText.length would drift past the file size as the tail rolls.
+      expect(_historyCacheGetForTesting(sid)!.approxChars).toBeLessThanOrEqual(fileBytes);
+    }
+  });
+
+  it('agrees with the full-read path on the same content', async () => {
+    const sid = 'inc-vs-full';
+    await writeLines(sid, bulkTurns(12, 500_000));
+
+    // Cold full read charges raw source size — the reference figure.
+    await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+    const fullCharge = _historyCacheGetForTesting(sid)!.approxChars;
+    expect(fullCharge).toBeGreaterThan(1_000_000);
+
+    await appendLines(sid, [userLine('three')]);
+    await bumpMtime(sid);
+    await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+    const incCharge = _historyCacheGetForTesting(sid)!.approxChars;
+
+    // The old bug made the incremental charge orders of magnitude smaller.
+    expect(incCharge).toBeGreaterThan(fullCharge * 0.5);
+  });
+});
+
+/**
+ * The reader's hard byte ceiling REJECTS an oversized whole-file read. History must
+ * degrade to a bounded tail window rather than surfacing a load error — a very long
+ * transcript still renders its recent messages, which is what the UI shows anyway.
+ */
+describe('history degrades to a bounded tail at the byte ceiling', () => {
+  const withLimit = async <T>(bytes: number, fn: () => Promise<T>): Promise<T> => {
+    const prev = process.env.WALNUT_MAX_FILE_READ_BYTES;
+    process.env.WALNUT_MAX_FILE_READ_BYTES = String(bytes);
+    try {
+      return await fn();
+    } finally {
+      if (prev === undefined) delete process.env.WALNUT_MAX_FILE_READ_BYTES;
+      else process.env.WALNUT_MAX_FILE_READ_BYTES = prev;
+    }
+  };
+
+  it('serves recent messages instead of failing when the file exceeds the ceiling', async () => {
+    const sid = 'ceiling-degrade';
+    const lines: unknown[] = [];
+    // ~5 MB of bulk, then clearly identifiable recent turns at the very end.
+    for (let i = 0; i < 10; i++) {
+      lines.push(toolUseLine(`b${i}`, 'Bash'), toolResultLine(`b${i}`, 'X'.repeat(500_000)));
+    }
+    lines.push(userLine('LATEST QUESTION'), assistantLine('LATEST ANSWER'));
+    await writeLines(sid, lines);
+    _resetHistoryCacheForTesting();
+
+    await withLimit(2 * 1024 * 1024, async () => {
+      const msgs = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+      // Must NOT be an empty/error result — the tail window carries the recent turns.
+      expect(msgs.length).toBeGreaterThan(0);
+      const texts = msgs.map(m => m.text ?? '').join('\n');
+      expect(texts).toContain('LATEST ANSWER');
+    });
+  });
+
+  it('serves a BOUNDED tail — not the whole transcript — when over the ceiling', async () => {
+    // Distinguishes "degradation ran" from "ceiling never fired". An earlier version
+    // of this suite mocked the reader without a ceiling, so the assertion above was
+    // satisfied by a FULL read and the regression shipped anyway.
+    const sid = 'ceiling-bounded';
+    const lines: unknown[] = [];
+    for (let i = 0; i < 10; i++) {
+      lines.push(toolUseLine(`b${i}`, 'Bash'), toolResultLine(`b${i}`, 'X'.repeat(500_000)));
+    }
+    lines.push(userLine('LATEST QUESTION'), assistantLine('LATEST ANSWER'));
+    await writeLines(sid, lines);
+    _resetHistoryCacheForTesting();
+
+    const full = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+    _resetHistoryCacheForTesting();
+
+    await withLimit(1024 * 1024, async () => {
+      const msgs = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+      expect(msgs.length).toBeGreaterThan(0);
+      // Strictly fewer messages than the full parse — the window really is a window.
+      expect(msgs.length).toBeLessThan(full.length);
+      expect(msgs.map(m => m.text ?? '').join('\n')).toContain('LATEST ANSWER');
+    });
+  });
+
+  it('a file under the ceiling is unaffected (full history, not a tail)', async () => {
+    const sid = 'ceiling-normal';
+    await writeLines(sid, [userLine('first'), assistantLine('second'), userLine('third')]);
+    _resetHistoryCacheForTesting();
+
+    await withLimit(32 * 1024 * 1024, async () => {
+      const msgs = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+      expect(msgs.map(m => m.text)).toEqual(['first', 'second', 'third']);
+    });
+  });
+});

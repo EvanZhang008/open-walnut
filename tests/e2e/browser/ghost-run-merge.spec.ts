@@ -151,6 +151,81 @@ test.describe('Session timeline collapsed rows', () => {
     await expect(page.locator('.session-streaming-panel .chat-tool-block')).toHaveCount(0)
   })
 
+  test('merges adjacent streaming thinking segments into one row', async ({ page }) => {
+    await mockSession(page, [])
+    await page.goto(`/sessions?id=${SESSION_ID}`)
+    await page.waitForLoadState('networkidle')
+    await waitForWs(page)
+
+    // Two thinking segments from DIFFERENT messages, split by a ghost tool
+    // call (renders null) — the timeline must show ONE "Thinking ›" row.
+    await injectEvent(page, 'session:thinking-delta', {
+      sessionId: SESSION_ID,
+      taskId: 'pw-task-ghost-run',
+      delta: 'First thinking segment.',
+      msgId: 'msg_think_1',
+    })
+    await injectEvent(page, 'session:tool-use', {
+      sessionId: SESSION_ID,
+      taskId: 'pw-task-ghost-run',
+      toolName: 'Bash',
+      toolUseId: 'toolu_think_ghost',
+      input: {},
+    })
+    await injectEvent(page, 'session:thinking-delta', {
+      sessionId: SESSION_ID,
+      taskId: 'pw-task-ghost-run',
+      delta: 'Second thinking segment.',
+      msgId: 'msg_think_2',
+    })
+
+    const thinkingRows = page.locator('.session-streaming-panel .tool-run-row', {
+      has: page.locator('.tool-run-label', { hasText: /^Thinking$/ }),
+    })
+    await expect(thinkingRows).toHaveCount(1)
+
+    await thinkingRows.locator('.tool-run-toggle').click()
+    await expect(thinkingRows.locator('.chat-thinking-content')).toContainText('First thinking segment.')
+    await expect(thinkingRows.locator('.chat-thinking-content')).toContainText('Second thinking segment.')
+  })
+
+  test('merges consecutive thinking-only history messages into one row', async ({ page }) => {
+    await mockSession(page, [
+      {
+        role: 'assistant',
+        text: '',
+        thinking: 'History thinking segment one.',
+        timestamp: '2026-01-01T00:00:00.000Z',
+      },
+      {
+        role: 'assistant',
+        text: '',
+        thinking: 'History thinking segment two.',
+        timestamp: '2026-01-01T00:00:01.000Z',
+      },
+      {
+        role: 'assistant',
+        text: 'Final visible answer.',
+        thinking: 'History thinking segment three.',
+        timestamp: '2026-01-01T00:00:02.000Z',
+      },
+    ])
+    await page.goto(`/sessions?id=${SESSION_ID}`)
+    await page.waitForLoadState('networkidle')
+
+    await expect(page.locator('.session-history .markdown-body p', { hasText: 'Final visible answer.' })).toBeVisible()
+    const thinkingRows = page.locator('.session-history .tool-run-row', {
+      has: page.locator('.tool-run-label', { hasText: /^Thinking$/ }),
+    })
+    await expect(thinkingRows).toHaveCount(1)
+
+    await thinkingRows.locator('.tool-run-toggle').click()
+    const body = thinkingRows.locator('.chat-thinking-content')
+    await expect(body).toContainText('History thinking segment one.')
+    await expect(body).toContainText('History thinking segment two.')
+    await expect(body).toContainText('History thinking segment three.')
+  })
+
   test('collapses a verbose persisted system line and reveals its full text', async ({ page }) => {
     await mockSession(page)
     await page.goto(`/sessions?id=${SESSION_ID}`)

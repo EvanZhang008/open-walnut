@@ -4,7 +4,9 @@
  * Sets WALNUT_HOME env var to a temp dir BEFORE importing any modules,
  * then starts the real Express server serving the pre-built SPA.
  *
- * Run: npx tsx tests/e2e/browser/test-server.ts
+ * Run: ./node_modules/.bin/tsx tests/e2e/browser/test-server.ts
+ * (Local binary, not `npx tsx` — npx's resolution path costs tens of seconds on a
+ * loaded machine and used to blow playwright.config.ts's webServer timeout.)
  */
 
 import path from 'node:path'
@@ -445,6 +447,33 @@ await Promise.all([
 const sessionFixtureNow = Date.now()
 const vscodeFixtureRoot = path.join(tmpBase, 'projects', 'editor-fixture')
 await fs.mkdir(vscodeFixtureRoot, { recursive: true })
+// Files-panel Refresh fixture (file-explorer-refresh.spec.ts): a file whose
+// content the spec rewrites on disk, plus a dir it creates a new file inside —
+// Refresh must surface both without a page reload.
+await fs.writeFile(path.join(vscodeFixtureRoot, 'refresh-target.txt'), 'ORIGINAL_CONTENT\n')
+// Markdown preview fixture (file-explorer-refresh.spec.ts): a FOUR-backtick
+// fence wrapping inner ``` fences — the shape that used to make path
+// linkification inject <a> inside a code region, which marked then escaped into
+// a visible `<a class="file-link" …>` tag.
+await fs.writeFile(
+  path.join(vscodeFixtureRoot, 'nested-fence.md'),
+  [
+    '# Prompt doc',
+    '',
+    'Copy this prompt verbatim:',
+    '',
+    '````',
+    '**1. READ the docs**',
+    '```',
+    'tool.py get --path acme/docs/README',
+    '```',
+    '',
+    '- `references/routing.md` (in this skill): find the owner',
+    '- then read pkg/sub/module.ts for the impl',
+    '````',
+    '',
+  ].join('\n'),
+)
 const oldExactTargetAt = new Date(sessionFixtureNow - 30 * 24 * 60 * 60 * 1_000).toISOString()
 const scaleSessions = Array.from({ length: 501 }, (_, index) => ({
   claudeSessionId: `pw-scale-session-${String(index).padStart(3, '0')}`,

@@ -114,3 +114,76 @@ describe('event-loop monitor probe', () => {
     expect(warns[0].suspectSection).toBe('git-pull-walnut')
   })
 })
+
+/**
+ * Attribution used to live in a SINGLE slot that also persisted across `await`.
+ * Two consequences, both seen in production logs:
+ *   - concurrent sections: only the first was recorded, so the other was invisible
+ *     (health monitor and git sync are both ~30 s cadence, so they overlap often)
+ *   - await-bound ticks: a tick that merely waited on a dead host for 30 s was
+ *     reported as an event-loop stall even though the loop was free
+ */
+describe('event-loop monitor multi-section attribution', () => {
+  it('reports EVERY open section, not just the first', () => {
+    const endA = markCriticalSection('health-monitor.check')
+    const endB = markCriticalSection('git-pull-walnut')
+    fireProbe(3_000, 3_000)
+    endB()
+    endA()
+
+    const warns = warnCalls('event-loop blocked (probe late)')
+    expect(warns).toHaveLength(1)
+    const open = warns[0].openSections as string[]
+    expect(open.join(' ')).toContain('health-monitor.check')
+    // The second section used to be entirely invisible.
+    expect(open.join(' ')).toContain('git-pull-walnut')
+  })
+
+  it('blames the LONGEST-running open section', () => {
+    const endOld = markCriticalSection('health-monitor.check')
+    wall += 10_000
+    mono += 10_000
+    const endNew = markCriticalSection('git-pull-walnut')
+    fireProbe(3_000, 3_000)
+    endNew()
+    endOld()
+
+    const warns = warnCalls('event-loop blocked (probe late)')
+    expect(warns[0].suspectSection).toBe('health-monitor.check')
+  })
+
+  it('flags a wait-dominated section as awaiting, not blocking', () => {
+    // Fake clocks advance wall time without burning CPU — exactly the shape of a
+    // tick parked on a daemon RPC. cpu/wall stays far below 50%.
+    const end = markCriticalSection('health-monitor.check')
+    fireProbe(30_000, 30_000)
+    end()
+
+    const warns = warnCalls('event-loop blocked (probe late)')
+    expect(warns).toHaveLength(1)
+    expect(warns[0].sectionAwaiting).toBe(true)
+    // wall vs cpu must be legible in the log, which is what makes it discountable.
+    expect((warns[0].openSections as string[])[0]).toMatch(/wall=\d+ms cpu=\d+ms/)
+  })
+
+  it('reports no section when none is open', () => {
+    fireProbe(3_000, 3_000)
+    const warns = warnCalls('event-loop blocked (probe late)')
+    expect(warns[0].suspectSection).toBeNull()
+    expect(warns[0].sectionAwaiting).toBe(false)
+  })
+
+  it('an end() for an already-cleared section cannot remove a live one', () => {
+    const endA = markCriticalSection('health-monitor.check')
+    endA()
+    endA() // double-call must be harmless
+    const endB = markCriticalSection('git-pull-walnut')
+    endA() // stale closure again — must not touch B
+
+    fireProbe(3_000, 3_000)
+    endB()
+
+    const warns = warnCalls('event-loop blocked (probe late)')
+    expect(warns[0].suspectSection).toBe('git-pull-walnut')
+  })
+})

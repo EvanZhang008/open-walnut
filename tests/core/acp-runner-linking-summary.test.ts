@@ -476,10 +476,13 @@ describe('ACP task linking and fork routing', () => {
     });
 
     await session.sendAccepted('next prompt after rollback', 'qm-after-rollback');
+    // acpStart is the cold-resume path, so it carries an explicit timeout as a
+    // third arg. toHaveBeenCalledWith matches the FULL arg list — omitting it
+    // never matched any real call.
     expect(send).toHaveBeenCalledWith('acpStart', expect.objectContaining({
       sid: 'acp-fallback-rollback-runtime',
       providerSessionId: oldId,
-    }));
+    }), expect.any(Number));
     expect(send).toHaveBeenCalledWith('acpSend', expect.objectContaining({
       sid: 'acp-fallback-rollback-runtime',
       walnutMessageId: 'qm-after-rollback',

@@ -56,15 +56,23 @@ function lookupCatalogEntry(modelId: string, providerName?: string): ModelEntry 
 /**
  * Get the context window size for a model.
  * Uses MODEL_CATALOG to determine size; falls back to 200K for unknown models.
- * When totalInput is provided and exceeds 200K, auto-upgrades to 1M as a safety net.
+ * When totalInput exceeds the resolved window, auto-upgrades to 1M as a safety net.
+ *
+ * Observed usage OUTRANKS the catalog label: a prompt can't be larger than the window
+ * that accepted it, so totalInput above the catalog size means the real window is bigger
+ * (resume dropped the `-1m` variant id, an env clamp raised it, or the string isn't a
+ * catalog id at all). Checking the catalog FIRST and returning early — as this did
+ * between dd16928 and now — disabled the net for every catalogued model, i.e. almost
+ * all of them, silently reinstating the 434%-context bug f686c8d fixed.
  */
 export function getContextWindowSize(model?: string, totalInput?: number): number {
-  if (model) {
-    const entry = lookupCatalogEntry(model);
-    if (entry?.context_window) return entry.context_window;
+  const catalogWindow = model ? lookupCatalogEntry(model)?.context_window : undefined;
+  const resolved = catalogWindow ?? CONTEXT_WINDOW_DEFAULT;
+  if (totalInput != null && totalInput > resolved) {
+    // max() so a >1M catalog window (e.g. gpt-5.4's 1.05M) is never downgraded.
+    return Math.max(CONTEXT_WINDOW_1M, resolved);
   }
-  if (totalInput != null && totalInput > CONTEXT_WINDOW_DEFAULT) return CONTEXT_WINDOW_1M;
-  return CONTEXT_WINDOW_DEFAULT;
+  return resolved;
 }
 
 /**

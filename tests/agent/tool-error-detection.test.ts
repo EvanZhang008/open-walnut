@@ -122,9 +122,11 @@ describe('isToolResultError', () => {
 });
 
 describe('buildRoleSection includes tool error handling', () => {
-  it('contains "Tool error handling" section', () => {
+  it('contains the error-handling section', () => {
     const section = buildRoleSection('TestUser');
-    expect(section).toContain('## Tool error handling');
+    // Renamed from "## Tool error handling" in ae0cd90 when the section grew to
+    // cover non-tool failures too (don't-bypass / no-silent-fallback / no-speculation).
+    expect(section).toContain('## Error handling and integrity');
   });
 
   it('contains is_error guidance for the model', () => {

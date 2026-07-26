@@ -13,6 +13,7 @@ import type {
   MigrateFn,
   HttpRoute,
   ExtData,
+  ExtIndexSpec,
   SyncPollContext,
 } from '../../src/core/integration-types.js';
 import type { Task, TaskPhase, TaskPriority } from '../../src/core/types.js';
@@ -100,6 +101,7 @@ export function createTestPluginApi(
     agentContext: string | null;
     migrations: MigrateFn[];
     httpRoutes: HttpRoute[];
+    extIndex: ExtIndexSpec | null;
   };
 } {
   const m = { id: 'test', name: 'Test Plugin', ...manifest };
@@ -110,6 +112,7 @@ export function createTestPluginApi(
     agentContext: null as string | null,
     migrations: [] as MigrateFn[],
     httpRoutes: [] as HttpRoute[],
+    extIndex: null as ExtIndexSpec | null,
   };
 
   const api: PluginApi = {
@@ -141,6 +144,33 @@ export function createTestPluginApi(
     },
     registerHttpRoute(route: HttpRoute) {
       collected.httpRoutes.push(route);
+    },
+    // Mirrors integration-loader's validation, not just the collection: a plugin
+    // that declares a malformed spec must fail the same way here as it does at
+    // real load time, otherwise these tests would green-light a plugin that
+    // cannot actually load.
+    registerExtIndex(spec: ExtIndexSpec) {
+      if (collected.extIndex) {
+        throw new Error(`Plugin "${m.id}" called registerExtIndex() more than once.`);
+      }
+      if (spec.source !== m.id) {
+        throw new Error(
+          `Plugin "${m.id}" tried to register ext-index for source "${spec.source}". ` +
+          `spec.source must equal the plugin id.`,
+        );
+      }
+      if (!Array.isArray(spec.paths) || spec.paths.length === 0) {
+        throw new Error(`Plugin "${m.id}" registerExtIndex: paths must be a non-empty array.`);
+      }
+      for (const p of spec.paths) {
+        if (!/^[a-z0-9_]+$/.test(p.key)) {
+          throw new Error(`Plugin "${m.id}" ext-index path key "${p.key}" must match /^[a-z0-9_]+$/.`);
+        }
+        if (!p.json.startsWith('$.') && !p.json.startsWith('$[')) {
+          throw new Error(`Plugin "${m.id}" ext-index path json "${p.json}" must start with '$.' or '$['.`);
+        }
+      }
+      collected.extIndex = spec;
     },
   };
 

@@ -32,6 +32,8 @@ import { cacheTTLTracker } from '../../src/agent/cache.js';
 
 const mockSendMessage = vi.mocked(sendMessageStream);
 
+let originalCwd: string;
+
 /** Extract the system prompt string from the sendMessageStream mock call. */
 function capturedSystemPrompt(): string {
   const call = mockSendMessage.mock.calls[0];
@@ -49,12 +51,18 @@ beforeEach(async () => {
   tmpDir = WALNUT_HOME;
   await fsp.rm(tmpDir, { recursive: true, force: true });
   await fsp.mkdir(tmpDir, { recursive: true });
+  // getSearchDirs() includes path.resolve('skills') — without the chdir the repo's
+  // own skills/setup-walnut/ is discovered, so the "no skills exist" cases see a
+  // real <available_skills> block. Same guard as tests/core/skill-loader.test.ts.
+  originalCwd = process.cwd();
+  process.chdir(tmpDir);
   clearSkillsCache();
   cacheTTLTracker.reset();
   vi.clearAllMocks();
 });
 
 afterEach(async () => {
+  process.chdir(originalCwd);
   await fsp.rm(tmpDir, { recursive: true, force: true });
 });
 

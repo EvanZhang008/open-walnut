@@ -70,10 +70,39 @@ async function expandGlob(absPattern: string): Promise<string | null> {
   return null;
 }
 
+/**
+ * Ceiling on bytes ONE read may materialize — mirrors the real
+ * DaemonFileReader.maxReadBytes(). The double MUST enforce it: without it, a test
+ * that sets WALNUT_MAX_FILE_READ_BYTES to force the degradation path silently gets
+ * a full read instead and passes for the wrong reason (exactly how an empty-history
+ * regression for a 197 MB session reached production behind a green test).
+ */
+function maxReadBytes(): number {
+  const raw = process.env.WALNUT_MAX_FILE_READ_BYTES;
+  if (raw) {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return 32 * 1024 * 1024;
+}
+
+/** Same message shape the real reader throws, so `.includes('byte ceiling')` matches. */
+function ceilingError(p: string, size: number, limit: number): Error {
+  return new Error(
+    `file read exceeded the ${limit}-byte ceiling (path=${p}, size=${size}); ` +
+    'read a bounded window instead (see readSessionHistoryTail)',
+  );
+}
+
 class MockLocalDaemonFileReader {
   private host: string;
   constructor(host: string) {
     this.host = host;
+  }
+
+  /** Mirrors the real static — callers clamp bounded windows against it. */
+  static maxReadBytes(): number {
+    return maxReadBytes();
   }
 
   private async resolve(remotePath: string): Promise<string | null> {
@@ -88,10 +117,18 @@ class MockLocalDaemonFileReader {
   async readFile(remotePath: string): Promise<string | null> {
     const abs = await this.resolve(remotePath);
     if (!abs) return null;
+    let size: number;
+    try {
+      size = (await fsp.stat(abs)).size;
+    } catch {
+      return null; // ENOENT → null (matches real reader's ENOENT contract)
+    }
+    const limit = maxReadBytes();
+    if (size > limit) throw ceilingError(abs, size, limit);
     try {
       return await fsp.readFile(abs, 'utf-8');
     } catch {
-      return null; // ENOENT → null (matches real reader's ENOENT contract)
+      return null;
     }
   }
 
@@ -113,8 +150,14 @@ class MockLocalDaemonFileReader {
     if (!abs) return null;
     try {
       const buf = await fsp.readFile(abs);
-      return { content: buf.subarray(Math.min(start, buf.length)).toString('utf-8'), fileSize: buf.length };
-    } catch {
+      const slice = buf.subarray(Math.min(start, buf.length));
+      // Ceiling applies to bytes THIS call materializes, not file size — a tail read
+      // of a huge file passes a large `start` and legitimately stays under it.
+      const limit = maxReadBytes();
+      if (slice.length > limit) throw ceilingError(abs, buf.length, limit);
+      return { content: slice.toString('utf-8'), fileSize: buf.length };
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('byte ceiling')) throw err;
       return null;
     }
   }
@@ -132,11 +175,10 @@ class MockLocalDaemonFileReader {
   async findSession(sessionId: string): Promise<{ content: string; path: string } | null> {
     const found = await this.findSessionPath(sessionId);
     if (!found) return null;
-    try {
-      return { content: await fsp.readFile(found, 'utf-8'), path: found };
-    } catch {
-      return null;
-    }
+    // Routes through readFile so the ceiling applies here too — this is the hot
+    // path for hashed-cwd sessions, and the real reader chunks through readFile.
+    const content = await this.readFile(found);
+    return content !== null ? { content, path: found } : null;
   }
 
   /** Path-only find (mirrors the real reader's findSessionPath). */

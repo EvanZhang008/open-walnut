@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { createMockConstants } from '../helpers/mock-constants.js';
+import { removeTempTree } from '../helpers/temp-home.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
 
@@ -55,7 +56,7 @@ async function seedOverview(category = CAT): Promise<void> {
 const okRunner: MaintainerRunner = vi.fn(async () => ({ response: 'Appended one entry.' }));
 
 beforeEach(async () => {
-  await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
+  await removeTempTree(WALNUT_HOME);
   await fsp.mkdir(WALNUT_HOME, { recursive: true });
   vi.clearAllMocks();
   resetMaintainerState();
@@ -63,8 +64,11 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  // Stop the bus subscription BEFORE the rm: a queued task event would
+  // otherwise run the maintainer (writing skills/ + notifications.json) into
+  // the tree being deleted → `ENOTEMPTY: rmdir .../walnut-test-*`.
   stopOverviewMaintainer();
-  await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
+  await removeTempTree(WALNUT_HOME);
 });
 
 describe('gating', () => {

@@ -139,10 +139,19 @@ describe('summarizeSession', () => {
     expect(callArgs.config.model).toBe('global.anthropic.claude-opus-4-6-v1');
   });
 
-  it('falls back to config.agent.model when no agent configured', async () => {
+  it('falls back to agent.main_model when no summarizer agent is configured', async () => {
+    // NB: NOT a cheap/haiku model, and that is deliberate — summarizing a whole session
+    // (200K-char budget) is a quality job. The genuinely cheap background paths opt in
+    // explicitly via fastModelFor() (quick-task parse, fork/conversation titles); this
+    // one intentionally rides the main model. A user who wants it cheap configures
+    // agent.session_summarizer_agent with a cheap model (see the test above).
+    //
+    // Asserts an EXPLICITLY-set main_model rather than a hardcoded model name, so a
+    // catalog reorder can't make this drift again (it previously pinned a haiku id that
+    // only ever came from the legacy `agent.model` key).
     await saveConfig({
       ...BASE_CONFIG,
-      agent: { model: 'us.anthropic.claude-haiku-4-5-20251001-v1:0' },
+      agent: { main_model: 'global.anthropic.claude-sonnet-4-6' },
     });
     await writeJsonl('sess-1', [
       msg('u1', 'user', 'Hello'),
@@ -152,7 +161,24 @@ describe('summarizeSession', () => {
     await summarizeSession('sess-1', record);
 
     const callArgs = mockSendMessageStream.mock.calls[0][0];
-    expect(callArgs.config.model).toBe('us.anthropic.claude-haiku-4-5-20251001-v1:0');
+    expect(callArgs.config.model).toBe('global.anthropic.claude-sonnet-4-6');
+  });
+
+  it('never resolves the model to undefined — that recorded usage as 3x-overbilled "unknown"', async () => {
+    // Regression guard for 987175f: the chain used to read only the legacy `agent.model`
+    // key, which getConfig() never populates, so model stayed undefined and usageTracker
+    // priced it at the most-expensive fallback tier. getConfig() always seeds main_model,
+    // so an empty agent block must still resolve to a real id.
+    await saveConfig({ ...BASE_CONFIG, agent: {} });
+    await writeJsonl('sess-1', [
+      msg('u1', 'user', 'Hello'),
+      msg('a1', 'assistant', 'Hi'),
+    ]);
+
+    await summarizeSession('sess-1', record);
+
+    const callArgs = mockSendMessageStream.mock.calls[0][0];
+    expect(callArgs.config.model).toBeTruthy();
   });
 
   it('includes session history in user message', async () => {

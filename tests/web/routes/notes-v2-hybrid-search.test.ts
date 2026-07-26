@@ -261,6 +261,80 @@ describe('hybrid search: semantic filepath → id normalization', () => {
   });
 });
 
+// ─── Folder-name recall (the "search can't find my notes" bug) ───────────────
+
+describe('search: folder-name matching', () => {
+  it('a query matching a FOLDER name returns that folder\'s notes + a folder row', async () => {
+    // The reported symptom: journal entries live in `Areas/Journal/Dairy/` and are
+    // TITLED BY DATE, so neither their title nor body ever says "dairy". Before the
+    // folder leg existed, searching "dairy" returned none of them.
+    await writeNote('Areas/Journal/Dairy/2026-04-03.md', '# 2026-04-03\n\nWoke up early.');
+    await writeNote('Areas/Journal/Dairy/2026-04-13.md', '# 2026-04-13\n\nWent for a run.');
+    await writeNote('unrelated.md', '# Unrelated\n\nNothing to do with it.');
+    await syncIndex();
+
+    const app = createApp();
+    const res = await request(app).get('/api/notes-v2/search?q=dairy&mode=string');
+
+    expect(res.status).toBe(200);
+    const paths = res.body.results.map((r: any) => r.path);
+    expect(paths).toContain('Areas/Journal/Dairy/2026-04-03.md');
+    expect(paths).toContain('Areas/Journal/Dairy/2026-04-13.md');
+    expect(paths).not.toContain('unrelated.md');
+
+    // The folder itself is surfaced as its own row, with a TRUE recursive count.
+    expect(res.body.folders).toEqual([
+      { path: 'Areas/Journal/Dairy', name: 'Dairy', noteCount: 2 },
+    ]);
+  });
+
+  it('a real TITLE match still outranks notes that merely live in the folder', async () => {
+    await writeNote('Journal.md', '# Journal\n\nThe note actually called Journal.');
+    await writeNote('Areas/Journal/2026-01-01.md', '# 2026-01-01\n\nA dated entry.');
+    await syncIndex();
+
+    const app = createApp();
+    const res = await request(app).get('/api/notes-v2/search?q=journal&mode=string');
+
+    expect(res.status).toBe(200);
+    // Folder band (0.86–0.89) sits strictly below every title band (≥0.90).
+    expect(res.body.results[0].path).toBe('Journal.md');
+    const folderHit = res.body.results.find((r: any) => r.path === 'Areas/Journal/2026-01-01.md');
+    expect(folderHit.stringScore).toBeLessThan(res.body.results[0].stringScore);
+  });
+
+  it('matches on path SEGMENTS only — a filename substring is not a folder hit', async () => {
+    // 'diary' appears in the FILENAME, never as a directory. It must not produce a
+    // folder row (that would invent folders out of arbitrary path substrings).
+    await writeNote('Areas/my-diary-notes.md', '# Some Note\n\nBody text.');
+    await syncIndex();
+
+    const app = createApp();
+    const res = await request(app).get('/api/notes-v2/search?q=diary&mode=string');
+
+    expect(res.status).toBe(200);
+    expect(res.body.folders).toBeUndefined();
+  });
+
+  it('caps folder-ONLY rows so a huge folder cannot flood the list', async () => {
+    // 20 date-titled notes in an Archive/ folder; only the folder name matches.
+    for (let i = 1; i <= 20; i++) {
+      const dd = String(i).padStart(2, '0');
+      await writeNote(`Archive/2026-02-${dd}.md`, `# 2026-02-${dd}\n\nDaily entry.`);
+    }
+    await syncIndex();
+
+    const app = createApp();
+    const res = await request(app).get('/api/notes-v2/search?q=archive&mode=string');
+
+    expect(res.status).toBe(200);
+    // Folder row states the real total…
+    expect(res.body.folders[0]).toMatchObject({ name: 'Archive', noteCount: 20 });
+    // …while only a small sample of its members occupies the note list.
+    expect(res.body.results.length).toBeLessThanOrEqual(5);
+  });
+});
+
 // ─── Graceful degradation ────────────────────────────────────────────────────
 
 describe('hybrid search: degraded semantic leg', () => {

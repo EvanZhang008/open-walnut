@@ -21,21 +21,23 @@ import { createMockConstants } from '../../helpers/mock-constants.js';
 
 vi.mock('../../../src/constants.js', () => createMockConstants());
 
-// Mock session-message-queue so sendMessageToSession is a spy, not real
+// Mock session-message-queue so sendMessageToSession is a spy, not real.
+// getQueue must be here too: retry inspects the pending queue FIRST and only falls
+// back to "continue" when it is empty. Omitting it made every resume-path request
+// 500 with "No getQueue export is defined on the mock".
 vi.mock('../../../src/core/session-message-queue.js', () => ({
   sendMessageToSession: vi.fn().mockResolvedValue({ id: 'qm-test-1', sessionId: 'test', message: 'test', status: 'pending', enqueuedAt: new Date().toISOString() }),
+  getQueue: vi.fn().mockResolvedValue([]),
 }));
 
-// Mock event-bus to capture SESSION_START emits without real side-effects
-vi.mock('../../../src/core/event-bus.js', () => ({
-  bus: { emit: vi.fn() },
-  EventNames: {
-    SESSION_START: 'session:start',
-    SESSION_STATUS_CHANGED: 'session:status-changed',
-    TASK_UPDATED: 'task:updated',
-  },
-  eventData: vi.fn(),
-}));
+// Stub the bus so SESSION_START/SESSION_SEND emits have no real side-effects, but keep
+// the REAL EventNames. A hand-listed subset silently resolves to `undefined` for any
+// event the route later adds (SESSION_SEND was missing here), which turns a wrong-event
+// bug into a passing test.
+vi.mock('../../../src/core/event-bus.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/core/event-bus.js')>();
+  return { ...actual, bus: { emit: vi.fn() } };
+});
 
 // Mock session-liveness so PID checks don't actually probe the OS
 vi.mock('../../../src/utils/session-liveness.js', () => ({

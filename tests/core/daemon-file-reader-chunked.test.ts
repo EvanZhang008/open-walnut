@@ -207,3 +207,104 @@ describe('DaemonFileReader chunked reads', () => {
     expect(callsFor('fs.read')).toHaveLength(1)
   })
 })
+
+/**
+ * GUARDRAIL. The concurrency gate bounds how MANY whole-file reads run at once; it
+ * never bounded how BIG one may be. A single unbounded read drove ~3 GB RSS within
+ * minutes of boot (533 reads / 9.56 GB in one day; the largest session JSONL grew
+ * 34.9 MB → 174.9 MB in two days and keeps growing with age).
+ *
+ * These tests exist so that reintroducing an unbounded whole-file read FAILS CI.
+ * The contract is REJECT, never truncate: a silently truncated transcript parses
+ * fine and looks successful, corrupting history in ways far harder to diagnose.
+ */
+describe('DaemonFileReader byte ceiling (guardrail)', () => {
+  const withLimit = async <T>(bytes: number, fn: () => Promise<T>): Promise<T> => {
+    const prev = process.env.WALNUT_MAX_FILE_READ_BYTES
+    process.env.WALNUT_MAX_FILE_READ_BYTES = String(bytes)
+    try {
+      return await fn()
+    } finally {
+      if (prev === undefined) delete process.env.WALNUT_MAX_FILE_READ_BYTES
+      else process.env.WALNUT_MAX_FILE_READ_BYTES = prev
+    }
+  }
+
+  it('REJECTS a whole-file read over the ceiling instead of truncating', async () => {
+    const fileBuf = Buffer.alloc(6 * 1024 * 1024, 'a')
+    serveFile(fileBuf)
+
+    await withLimit(4 * 1024 * 1024, async () => {
+      const reader = new DaemonFileReader('__local__')
+      await expect(reader.readFile('/whale.jsonl')).rejects.toThrow(/byte ceiling/)
+    })
+  })
+
+  it('fails fast on a known-oversized file — no transfer, no concurrency slot spent', async () => {
+    const fileBuf = Buffer.alloc(6 * 1024 * 1024, 'a')
+    serveFile(fileBuf)
+
+    await withLimit(4 * 1024 * 1024, async () => {
+      const reader = new DaemonFileReader('__local__')
+      await expect(reader.readFile('/whale.jsonl')).rejects.toThrow(/byte ceiling/)
+      // stat told us the size; nothing should have been pulled over the wire.
+      expect(callsFor('fs.readRange')).toHaveLength(0)
+    })
+  })
+
+  it('a file UNDER the ceiling still reads completely and byte-exactly', async () => {
+    const content = '好'.repeat(400_000) // ~1.2 MB, multi-byte
+    const fileBuf = Buffer.from(content, 'utf-8')
+    serveFile(fileBuf)
+
+    await withLimit(4 * 1024 * 1024, async () => {
+      const reader = new DaemonFileReader('__local__')
+      await expect(reader.readFile('/normal.jsonl')).resolves.toBe(content)
+    })
+  })
+
+  it('a BOUNDED WINDOW of a huge file is still allowed — tail readers must not be broken', async () => {
+    // 20 MB file, 4 MB ceiling: readFileRange from near EOF pulls only its window.
+    const fileBuf = Buffer.alloc(20 * 1024 * 1024, 'b')
+    serveFile(fileBuf)
+
+    await withLimit(4 * 1024 * 1024, async () => {
+      const reader = new DaemonFileReader('__local__')
+      const res = await reader.readFileRange('/whale.jsonl', fileBuf.length - 1024 * 1024)
+      expect(res).not.toBeNull()
+      expect(res!.content).toHaveLength(1024 * 1024)
+    })
+  })
+
+  it('rejects a range read whose window itself exceeds the ceiling', async () => {
+    const fileBuf = Buffer.alloc(20 * 1024 * 1024, 'b')
+    serveFile(fileBuf)
+
+    await withLimit(4 * 1024 * 1024, async () => {
+      const reader = new DaemonFileReader('__local__')
+      // start=0 ⇒ the "window" is the whole 20 MB file.
+      await expect(reader.readFileRange('/whale.jsonl', 0)).rejects.toThrow(/byte ceiling/)
+    })
+  })
+
+  it('defaults to a ceiling above the 4 MB history tail window and below whale sizes', () => {
+    const limit = (DaemonFileReader as unknown as { maxReadBytes(): number }).maxReadBytes()
+    expect(limit).toBeGreaterThan(4 * 1024 * 1024)
+    expect(limit).toBeLessThan(100 * 1024 * 1024)
+  })
+
+  it('honors WALNUT_MAX_FILE_READ_BYTES and ignores a garbage value', async () => {
+    await withLimit(7_000_000, async () => {
+      expect((DaemonFileReader as unknown as { maxReadBytes(): number }).maxReadBytes()).toBe(7_000_000)
+    })
+    const prev = process.env.WALNUT_MAX_FILE_READ_BYTES
+    process.env.WALNUT_MAX_FILE_READ_BYTES = 'not-a-number'
+    try {
+      // Garbage must fall back to the default, not to 0 (which would block all reads).
+      expect((DaemonFileReader as unknown as { maxReadBytes(): number }).maxReadBytes()).toBeGreaterThan(0)
+    } finally {
+      if (prev === undefined) delete process.env.WALNUT_MAX_FILE_READ_BYTES
+      else process.env.WALNUT_MAX_FILE_READ_BYTES = prev
+    }
+  })
+})

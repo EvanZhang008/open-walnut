@@ -1,8 +1,14 @@
 /**
- * Tests for transferImagesForRemoteSession — requires mocked child_process.
+ * Local → remote image upload: RemoteSessionManager.prepareOutbound().
  *
- * Separated from session-io.test.ts because LocalIO tests need real execFileSync
- * (for mkfifo), while these tests need it mocked (for SSH/SCP).
+ * HISTORY: this suite used to test `transferImagesForRemoteSession()` in
+ * session-io.ts, which shelled out to `ssh mkdir -p` + `scp`. The daemon
+ * transport refactor (08182ce) deleted it — uploads now ride the daemon's
+ * `fs.write` RPC over the existing WebSocket, so there is no SSH/SCP process
+ * to spy on. The BEHAVIOUR under test is unchanged and still load-bearing:
+ * find local images in the outbound text, put them on the remote host, rewrite
+ * the paths, and on failure leave the text alone rather than pointing the CLI
+ * at a file that isn't there.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -14,24 +20,41 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 // Isolate all file I/O to a temp directory
 vi.mock('../../src/constants.js', () => createMockConstants())
 
-// Mock child_process — capture execFileSync calls for SSH/SCP verification
-const mockExecFileSync = vi.fn(() => Buffer.from(''))
-vi.mock('node:child_process', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:child_process')>()
-  return {
-    ...actual,
-    execFileSync: (...args: unknown[]) => mockExecFileSync(...args),
-  }
-})
-
-import { transferImagesForRemoteSession } from '../../src/providers/session-io.js'
+import { RemoteSessionManager } from '../../src/providers/remote-session-manager.js'
 import { WALNUT_HOME, SESSION_STREAMS_DIR } from '../../src/constants.js'
+import type { SshTarget } from '../../src/providers/session-io.js'
 
 const tmpBase = WALNUT_HOME
 
+const REMOTE_TARGET: SshTarget = { hostname: 'remote.example.com', user: 'admin', use_daemon: true }
+
+type FsWriteCall = { path: string; data: string; encoding?: string }
+
+/**
+ * Minimal DaemonConnection stand-in. prepareOutbound only touches `.connected`
+ * and `.send()`, so a plain object is enough — and it keeps this suite a unit
+ * test (no WS server, no ports) like the SCP-mock version it replaces.
+ */
+function makeConn(sendImpl?: (cmd: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>>) {
+  return {
+    connected: true,
+    send: vi.fn(sendImpl ?? (async () => ({ ok: true, written: true }))),
+  }
+}
+
+/** Attach a fake connection without going through start() (which needs a daemon). */
+function injectConn(mgr: RemoteSessionManager, conn: unknown): void {
+  ;(mgr as unknown as { conn: unknown }).conn = conn
+}
+
+/** fs.write payloads seen by the daemon, in call order. */
+function fsWrites(conn: ReturnType<typeof makeConn>): FsWriteCall[] {
+  return conn.send.mock.calls
+    .filter((c) => c[0] === 'fs.write')
+    .map((c) => c[1] as FsWriteCall)
+}
+
 beforeEach(async () => {
-  mockExecFileSync.mockReset()
-  mockExecFileSync.mockReturnValue(Buffer.from(''))
   await fsp.rm(tmpBase, { recursive: true, force: true })
   await fsp.mkdir(SESSION_STREAMS_DIR, { recursive: true })
 })
@@ -40,138 +63,114 @@ afterEach(async () => {
   await fsp.rm(tmpBase, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => {})
 })
 
-describe('transferImagesForRemoteSession (mocked SSH/SCP)', () => {
-  it('calls ssh mkdir + scp and rewrites paths', async () => {
+describe('RemoteSessionManager.prepareOutbound (local → remote image upload)', () => {
+  it('uploads the image via daemon fs.write and rewrites the path', async () => {
     const imgPath = path.join(tmpBase, 'dashboard.png')
     fs.writeFileSync(imgPath, 'fake-png-data')
 
-    const text = `Please analyze this screenshot: ${imgPath}`
-    const remoteDir = '/tmp/open-walnut-images/test123'
-    const result = await transferImagesForRemoteSession(
-      text,
-      { hostname: 'remote.example.com', user: 'admin' },
-      remoteDir,
-    )
+    const mgr = new RemoteSessionManager('sid-upload', 'remotehost', REMOTE_TARGET)
+    const conn = makeConn()
+    injectConn(mgr, conn)
 
-    // SSH mkdir should have been called
-    expect(mockExecFileSync).toHaveBeenCalledWith(
-      'ssh',
-      expect.arrayContaining(['admin@remote.example.com']),
-      expect.objectContaining({ timeout: 10_000 }),
-    )
+    const result = await mgr.prepareOutbound(`Please analyze this screenshot: ${imgPath}`)
 
-    // SCP should have been called with the image file
-    expect(mockExecFileSync).toHaveBeenCalledWith(
-      'scp',
-      expect.arrayContaining([imgPath, 'admin@remote.example.com:/tmp/open-walnut-images/test123/']),
-      expect.objectContaining({ timeout: 60_000 }),
-    )
+    const writes = fsWrites(conn)
+    expect(writes).toHaveLength(1)
+    expect(writes[0].path).toBe('/tmp/open-walnut-images/dashboard.png')
+    expect(writes[0].encoding).toBe('base64')
+    // Bytes must survive the base64 round-trip — a mangled encoding would ship
+    // a corrupt image that Claude silently fails to read.
+    expect(Buffer.from(writes[0].data, 'base64').toString()).toBe('fake-png-data')
 
-    // Path should be rewritten
-    expect(result).toBe(`Please analyze this screenshot: ${remoteDir}/dashboard.png`)
+    expect(result).toBe('Please analyze this screenshot: /tmp/open-walnut-images/dashboard.png')
     expect(result).not.toContain(imgPath)
   })
 
-  it('uses -P (uppercase) for scp port and -p (lowercase) for ssh port', async () => {
-    const imgPath = path.join(tmpBase, 'screen.png')
-    fs.writeFileSync(imgPath, 'data')
-
-    await transferImagesForRemoteSession(
-      `See ${imgPath}`,
-      { hostname: 'remote.example.com', user: 'admin', port: 2222 },
-      '/tmp/open-walnut-images/porttest',
-    )
-
-    // SCP call should use -P (uppercase) for port
-    const scpCall = mockExecFileSync.mock.calls.find((c) => c[0] === 'scp')
-    expect(scpCall).toBeDefined()
-    const scpArgs = scpCall![1] as string[]
-    const pIdx = scpArgs.indexOf('-P')
-    expect(pIdx).toBeGreaterThan(-1)
-    expect(scpArgs[pIdx + 1]).toBe('2222')
-
-    // SSH call should use -p (lowercase) for port
-    const sshCall = mockExecFileSync.mock.calls.find((c) => c[0] === 'ssh')
-    expect(sshCall).toBeDefined()
-    const sshArgs = sshCall![1] as string[]
-    const pIdxSsh = sshArgs.indexOf('-p')
-    expect(pIdxSsh).toBeGreaterThan(-1)
-    expect(sshArgs[pIdxSsh + 1]).toBe('2222')
-  })
-
-  it('handles scp failure gracefully — returns original text', async () => {
-    const imgPath = path.join(tmpBase, 'fail.png')
-    fs.writeFileSync(imgPath, 'data')
-
-    // ssh mkdir succeeds, scp fails
-    mockExecFileSync.mockImplementation((cmd: unknown) => {
-      if (cmd === 'scp') throw new Error('Connection refused')
-      return Buffer.from('')
-    })
-
-    const text = `See ${imgPath}`
-    const result = await transferImagesForRemoteSession(
-      text,
-      { hostname: 'remote.example.com' },
-      '/tmp/open-walnut-images/failtest',
-    )
-
-    // Should return original text on SCP failure
-    expect(result).toBe(text)
-  })
-
-  it('handles ssh mkdir failure gracefully — returns original text', async () => {
-    const imgPath = path.join(tmpBase, 'mkdirfail.png')
-    fs.writeFileSync(imgPath, 'data')
-
-    mockExecFileSync.mockImplementation(() => {
-      throw new Error('Permission denied')
-    })
-
-    const text = `See ${imgPath}`
-    const result = await transferImagesForRemoteSession(
-      text,
-      { hostname: 'remote.example.com' },
-      '/tmp/open-walnut-images/mkdirfail',
-    )
-
-    // Should return original text on mkdir failure
-    expect(result).toBe(text)
-  })
-
-  it('rewrites multiple paths correctly', async () => {
+  it('rewrites every occurrence of multiple images', async () => {
     const img1 = path.join(tmpBase, 'a.png')
     const img2 = path.join(tmpBase, 'b.jpg')
     fs.writeFileSync(img1, 'data1')
     fs.writeFileSync(img2, 'data2')
 
-    const text = `First: ${img1}\nSecond: ${img2}\nAgain: ${img1}`
-    const remoteDir = '/tmp/open-walnut-images/multi'
-    const result = await transferImagesForRemoteSession(
-      text,
-      { hostname: 'remote.example.com' },
-      remoteDir,
-    )
+    const mgr = new RemoteSessionManager('sid-multi', 'remotehost', REMOTE_TARGET)
+    const conn = makeConn()
+    injectConn(mgr, conn)
 
-    expect(result).toBe(`First: ${remoteDir}/a.png\nSecond: ${remoteDir}/b.jpg\nAgain: ${remoteDir}/a.png`)
+    const result = await mgr.prepareOutbound(`First: ${img1}\nSecond: ${img2}\nAgain: ${img1}`)
+
+    expect(fsWrites(conn).map((w) => w.path).sort()).toEqual([
+      '/tmp/open-walnut-images/a.png',
+      '/tmp/open-walnut-images/b.jpg',
+    ])
+    expect(result).toBe(
+      'First: /tmp/open-walnut-images/a.png\n' +
+      'Second: /tmp/open-walnut-images/b.jpg\n' +
+      'Again: /tmp/open-walnut-images/a.png',
+    )
     expect(result).not.toContain(tmpBase)
   })
 
-  it('builds correct host string without user', async () => {
-    const imgPath = path.join(tmpBase, 'nouser.png')
+  it('keeps the local path when the daemon rejects the write (ok:false)', async () => {
+    const imgPath = path.join(tmpBase, 'fail.png')
     fs.writeFileSync(imgPath, 'data')
 
-    await transferImagesForRemoteSession(
-      `See ${imgPath}`,
-      { hostname: 'remote.example.com' },
-      '/tmp/open-walnut-images/nouser',
-    )
+    const mgr = new RemoteSessionManager('sid-reject', 'remotehost', REMOTE_TARGET)
+    // send() RESOLVES {ok:false} on daemon-side errors (it only throws on
+    // transport failure), so an `await` alone does NOT prove the file landed.
+    // Rewriting anyway pointed the CLI at a path that was never written.
+    const conn = makeConn(async () => ({ ok: false, error: 'fs.write failed: EACCES' }))
+    injectConn(mgr, conn)
 
-    // SSH should use hostname directly (no user@ prefix)
-    const sshCall = mockExecFileSync.mock.calls.find((c) => c[0] === 'ssh')
-    expect(sshCall).toBeDefined()
-    const sshArgs = sshCall![1] as string[]
-    expect(sshArgs).toContain('remote.example.com')
-    expect(sshArgs.some((a: string) => a.includes('@'))).toBe(false)
+    const text = `See ${imgPath}`
+    expect(await mgr.prepareOutbound(text)).toBe(text)
+  })
+
+  it('keeps the local path when the transport throws', async () => {
+    const imgPath = path.join(tmpBase, 'throw.png')
+    fs.writeFileSync(imgPath, 'data')
+
+    const mgr = new RemoteSessionManager('sid-throw', 'remotehost', REMOTE_TARGET)
+    const conn = makeConn(async () => { throw new Error('daemon command timeout: fs.write') })
+    injectConn(mgr, conn)
+
+    const text = `See ${imgPath}`
+    expect(await mgr.prepareOutbound(text)).toBe(text)
+  })
+
+  it('is a no-op with no connection (message must not be mangled before start)', async () => {
+    const imgPath = path.join(tmpBase, 'noconn.png')
+    fs.writeFileSync(imgPath, 'data')
+
+    const mgr = new RemoteSessionManager('sid-noconn', 'remotehost', REMOTE_TARGET)
+    const conn = makeConn()
+    conn.connected = false
+    injectConn(mgr, conn)
+
+    const text = `See ${imgPath}`
+    expect(await mgr.prepareOutbound(text)).toBe(text)
+    expect(conn.send).not.toHaveBeenCalled()
+  })
+
+  it('skips upload entirely for the local daemon (__local__ shares the filesystem)', async () => {
+    const imgPath = path.join(tmpBase, 'local.png')
+    fs.writeFileSync(imgPath, 'data')
+
+    const mgr = new RemoteSessionManager('sid-local', '__local__', null)
+    const conn = makeConn()
+    injectConn(mgr, conn)
+
+    const text = `See ${imgPath}`
+    expect(await mgr.prepareOutbound(text)).toBe(text)
+    expect(conn.send).not.toHaveBeenCalled()
+  })
+
+  it('ignores paths that do not exist locally (no phantom uploads)', async () => {
+    const mgr = new RemoteSessionManager('sid-phantom', 'remotehost', REMOTE_TARGET)
+    const conn = makeConn()
+    injectConn(mgr, conn)
+
+    const text = 'Look at /nonexistent/never-written.png please'
+    expect(await mgr.prepareOutbound(text)).toBe(text)
+    expect(conn.send).not.toHaveBeenCalled()
   })
 })

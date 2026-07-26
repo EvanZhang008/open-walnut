@@ -25,6 +25,12 @@ vi.mock('../../src/core/session-tracker.js', () => ({
 
 import { SYNC_DIR, WALNUT_HOME } from '../../src/constants.js';
 import { SyncReconciler } from '../../src/core/sync-reconciler.js';
+import {
+  _resetForTesting,
+  addTasksBulk,
+  listTasks,
+} from '../../src/core/task-manager.js';
+import { closeDb } from '../../src/core/task-db.js';
 import type { RegisteredPlugin, RemoteSyncItem, SyncPollContext } from '../../src/core/integration-types.js';
 import type { Task } from '../../src/core/types.js';
 
@@ -51,14 +57,41 @@ function makeTask(overrides: Partial<Task> = {}): Task {
   } as Task;
 }
 
+/**
+ * `fields` mirrors a real fullPull row: every shipped plugin's mapper sets
+ * title/category/project/status/phase (see microsoft-todo.mapToLocal). category
+ * matters — it is NOT NULL in the tasks table, so a fixture that omits it makes
+ * the whole create batch roll back and tests nothing about the diff.
+ */
 function makeRemoteItem(overrides: Partial<RemoteSyncItem> = {}): RemoteSyncItem {
+  const { fields, ...rest } = overrides;
   return {
     remoteId: `remote-${Math.random().toString(36).slice(2, 8)}`,
     title: 'Remote Task',
     remoteUpdatedAt: '2025-06-01T00:00:00Z',
-    fields: {},
-    ...overrides,
+    ...rest,
+    fields: {
+      category: 'Test',
+      project: 'Test',
+      status: 'todo' as any,
+      phase: 'TODO' as any,
+      ...fields,
+    },
   };
+}
+
+/** Seed the real task store, then hand back the snapshot prod passes as ctx.getTasks(). */
+async function seedStore(tasks: Task[]): Promise<Task[]> {
+  if (tasks.length) await addTasksBulk(tasks);
+  return listTasks();
+}
+
+async function storedTitles(): Promise<string[]> {
+  return (await listTasks()).map((t) => t.title);
+}
+
+async function storedIds(): Promise<string[]> {
+  return (await listTasks()).map((t) => t.id);
 }
 
 function makePlugin(overrides: {
@@ -87,7 +120,12 @@ function makePlugin(overrides: {
       associateSubtask: vi.fn(),
       disassociateSubtask: vi.fn(),
       syncPoll: vi.fn(),
-      fullPull: vi.fn().mockResolvedValue(overrides.fullPullResult ?? []),
+      // `in` rather than `??`: the null-return contract needs a literal null to
+      // reach the reconciler, and `?? []` silently turned that case into an
+      // empty-array pull (which takes the *delete everything* branch instead).
+      fullPull: vi.fn().mockResolvedValue(
+        'fullPullResult' in overrides ? overrides.fullPullResult : [],
+      ),
       extractRemoteId: overrides.extractFn ?? ((task: Task) => (task.ext?.['test-plugin'] as any)?.remote_id),
     },
     migrations: [],
@@ -95,34 +133,20 @@ function makePlugin(overrides: {
   };
 }
 
-function makeCtx(localTasks: Task[] = []): SyncPollContext & {
-  addedTasks: any[];
-  updatedTasks: Array<{ id: string; updates: Partial<Task> }>;
-  deletedIds: string[];
-} {
-  const addedTasks: any[] = [];
-  const updatedTasks: Array<{ id: string; updates: Partial<Task> }> = [];
-  const deletedIds: string[] = [];
-
+/**
+ * applyDiff writes through task-manager's bulk APIs, NOT through ctx (`void ctx`
+ * in sync-reconciler.applyDiff). ctx is only the read side — getTasks() supplies
+ * the per-tick local snapshot, exactly like startPluginSyncPolling in server.ts.
+ * Asserting on ctx.addTask/updateTask/deleteTask spies would silently pass on a
+ * reconciler that writes nothing, so every effect assertion reads the store.
+ */
+function makeCtx(localTasks: Task[] = []): SyncPollContext {
   return {
     getTasks: () => [...localTasks],
-    addTask: vi.fn(async (data) => {
-      const task = { id: `new-${addedTasks.length}`, ...data } as Task;
-      addedTasks.push(task);
-      return task;
-    }),
-    updateTask: vi.fn(async (id, updates) => {
-      updatedTasks.push({ id, updates });
-      const existing = localTasks.find(t => t.id === id);
-      return { ...existing, ...updates } as Task;
-    }),
-    deleteTask: vi.fn(async (id) => {
-      deletedIds.push(id);
-    }),
+    addTask: vi.fn(async (data) => ({ id: 'unused', ...data }) as Task),
+    updateTask: vi.fn(async (id, updates) => ({ id, ...updates }) as Task),
+    deleteTask: vi.fn(async () => {}),
     emit: vi.fn(),
-    addedTasks,
-    updatedTasks,
-    deletedIds,
   };
 }
 
@@ -131,13 +155,21 @@ function makeCtx(localTasks: Task[] = []): SyncPollContext & {
 describe('SyncReconciler', () => {
   let reconciler: SyncReconciler;
 
+  // Tasks live in SQLite; the handle + task-manager's init flag / store cache are
+  // module singletons, so wiping WALNUT_HOME alone leaves the previous test's rows
+  // readable through the still-open handle.
   beforeEach(() => {
+    closeDb();
+    _resetForTesting();
+    fs.rmSync(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
     fs.mkdirSync(SYNC_DIR, { recursive: true });
     reconciler = new SyncReconciler();
   });
 
   afterEach(() => {
-    fs.rmSync(WALNUT_HOME, { recursive: true, force: true });
+    closeDb();
+    _resetForTesting();
+    fs.rmSync(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
   });
 
   describe('scheduling', () => {
@@ -219,12 +251,11 @@ describe('SyncReconciler', () => {
         }),
       ];
       const plugin = makePlugin({ fullPullResult: remoteItems });
-      const ctx = makeCtx([]);
+      const ctx = makeCtx(await seedStore([]));
 
       await reconciler.tick(plugin, ctx);
 
-      expect(ctx.addedTasks).toHaveLength(1);
-      expect(ctx.addedTasks[0].title).toBe('New from remote');
+      expect(await storedTitles()).toEqual(['New from remote']);
     });
 
     it('updates local tasks when remote is newer', async () => {
@@ -243,13 +274,13 @@ describe('SyncReconciler', () => {
         }),
       ];
       const plugin = makePlugin({ fullPullResult: remoteItems });
-      const ctx = makeCtx([localTask]);
+      const ctx = makeCtx(await seedStore([localTask]));
 
       await reconciler.tick(plugin, ctx);
 
-      expect(ctx.updatedTasks).toHaveLength(1);
-      expect(ctx.updatedTasks[0].id).toBe('local-1');
-      expect(ctx.updatedTasks[0].updates.title).toBe('New title');
+      const [stored] = await listTasks();
+      expect(stored.id).toBe('local-1');
+      expect(stored.title).toBe('New title');
     });
 
     it('does not update local tasks when local is newer', async () => {
@@ -267,11 +298,11 @@ describe('SyncReconciler', () => {
         }),
       ];
       const plugin = makePlugin({ fullPullResult: remoteItems });
-      const ctx = makeCtx([localTask]);
+      const ctx = makeCtx(await seedStore([localTask]));
 
       await reconciler.tick(plugin, ctx);
 
-      expect(ctx.updatedTasks).toHaveLength(0);
+      expect(await storedTitles()).toEqual(['Test Task']);
     });
 
     it('removes local tasks not in remote', async () => {
@@ -280,13 +311,12 @@ describe('SyncReconciler', () => {
         ext: { 'test-plugin': { remote_id: 'r-gone' } },
       });
       const plugin = makePlugin({ fullPullResult: [] });
-      // Need at least one item on first reconcile so empty guard doesn't trigger
-      // Actually with lastFullPullCount=0 and result=0, the empty guard won't trigger
-      const ctx = makeCtx([localTask]);
+      // lastFullPullCount=0 and result=0, so the empty-result guard won't trigger
+      const ctx = makeCtx(await seedStore([localTask]));
 
       await reconciler.tick(plugin, ctx);
 
-      expect(ctx.deletedIds).toContain('orphan-1');
+      expect(await storedIds()).not.toContain('orphan-1');
     });
 
     it('ignores local tasks without remote ID (cannot reconcile)', async () => {
@@ -295,11 +325,11 @@ describe('SyncReconciler', () => {
         ext: {}, // no test-plugin key
       });
       const plugin = makePlugin({ fullPullResult: [] });
-      const ctx = makeCtx([localTask]);
+      const ctx = makeCtx(await seedStore([localTask]));
 
       await reconciler.tick(plugin, ctx);
 
-      expect(ctx.deletedIds).not.toContain('no-remote-id');
+      expect(await storedIds()).toContain('no-remote-id');
     });
 
     it('only processes tasks belonging to the plugin', async () => {
@@ -309,34 +339,16 @@ describe('SyncReconciler', () => {
         ext: { 'test-plugin': { remote_id: 'r1' } },
       });
       const plugin = makePlugin({ fullPullResult: [] });
-      const ctx = makeCtx([localTaskOtherSource]);
+      const ctx = makeCtx(await seedStore([localTaskOtherSource]));
 
       await reconciler.tick(plugin, ctx);
 
       // Should not delete tasks from other sources
-      expect(ctx.deletedIds).not.toContain('other-source');
+      expect(await storedIds()).toContain('other-source');
     });
   });
 
   describe('safety guards', () => {
-    it('aborts on empty result when previously had items', async () => {
-      const plugin = makePlugin({ fullPullResult: [makeRemoteItem()] });
-      const localTask = makeTask({ ext: { 'test-plugin': { remote_id: 'r1' } } });
-      const ctx = makeCtx([localTask]);
-
-      // First reconcile with 1 item (sets lastFullPullCount=1)
-      await reconciler.tick(plugin, ctx);
-
-      // Now return 0 — but lastFullPullCount=1, and threshold is >5
-      // So this should NOT trigger the guard since lastFullPullCount is only 1
-      (plugin.sync.fullPull as any).mockResolvedValue([]);
-      reconciler.forceNextReconcile('test-plugin');
-      await reconciler.tick(plugin, ctx);
-
-      // With lastFullPullCount=1 < 5, the empty guard doesn't trigger
-      // Let's test with a higher count
-    });
-
     it('aborts on empty result when last count was > 5', async () => {
       // Manually seed state with high last count
       const stateFile = `${SYNC_DIR as string}/reconcile-test-plugin.json`;
@@ -349,13 +361,13 @@ describe('SyncReconciler', () => {
 
       const reconciler2 = new SyncReconciler();
       const plugin = makePlugin({ fullPullResult: [] });
-      const localTask = makeTask({ ext: { 'test-plugin': { remote_id: 'r1' } } });
-      const ctx = makeCtx([localTask]);
+      const localTask = makeTask({ id: 'guarded-1', ext: { 'test-plugin': { remote_id: 'r1' } } });
+      const ctx = makeCtx(await seedStore([localTask]));
 
       await reconciler2.tick(plugin, ctx);
 
       // Should NOT delete anything — empty result guard triggered
-      expect(ctx.deletedIds).toHaveLength(0);
+      expect(await storedIds()).toEqual(['guarded-1']);
     });
 
     it('does not remove tasks with running session', async () => {
@@ -369,11 +381,11 @@ describe('SyncReconciler', () => {
         ext: { 'test-plugin': { remote_id: 'r-gone' } },
       });
       const plugin = makePlugin({ fullPullResult: [] });
-      const ctx = makeCtx([localTask]);
+      const ctx = makeCtx(await seedStore([localTask]));
 
       await reconciler.tick(plugin, ctx);
 
-      expect(ctx.deletedIds).not.toContain('has-session');
+      expect(await storedIds()).toContain('has-session');
       mockSessions.length = 0;
     });
 
@@ -388,11 +400,11 @@ describe('SyncReconciler', () => {
         ext: { 'test-plugin': { remote_id: 'r-gone' } },
       });
       const plugin = makePlugin({ fullPullResult: [] });
-      const ctx = makeCtx([localTask]);
+      const ctx = makeCtx(await seedStore([localTask]));
 
       await reconciler.tick(plugin, ctx);
 
-      expect(ctx.deletedIds).toContain('has-done-session');
+      expect(await storedIds()).not.toContain('has-done-session');
       mockSessions.length = 0;
     });
 
@@ -418,16 +430,15 @@ describe('SyncReconciler', () => {
         }),
       ];
       const plugin = makePlugin({ fullPullResult: remoteItems });
-      const ctx = makeCtx([localTask]);
+      const ctx = makeCtx(await seedStore([localTask]));
 
       await reconciler.tick(plugin, ctx);
 
-      expect(ctx.updatedTasks).toHaveLength(1);
-      const updates = ctx.updatedTasks[0].updates;
-      expect(updates.title).toBe('Updated title');
-      expect(updates.note).toBeUndefined();
-      expect(updates.summary).toBeUndefined();
-      expect(updates.conversation_log).toBeUndefined();
+      const [stored] = await listTasks();
+      expect(stored.title).toBe('Updated title');
+      expect(stored.note).toBe('my private note');
+      expect(stored.summary).toBe('my summary');
+      expect(stored.conversation_log).toBe('log entry');
     });
   });
 
@@ -441,23 +452,39 @@ describe('SyncReconciler', () => {
         }),
       );
       const plugin = makePlugin({ fullPullResult: remoteItems });
-      const ctx = makeCtx([]);
+      const ctx = makeCtx(await seedStore([]));
 
       await reconciler.tick(plugin, ctx);
 
-      expect(ctx.addedTasks.length).toBeLessThanOrEqual(50);
+      // Asserts the CAP (never more than 50 of the 70 offered), not an exact
+      // count of 50.
+      //
+      // A strict `toHaveLength(50)` here is ~1.9% flaky, and the flakiness is a
+      // real product defect rather than test noise: the reconciler's create path
+      // passes no ids, so all 50 rows get `generateId()` = base36(Date.now()) +
+      // 2 random bytes (src/utils/format.ts). Within one same-millisecond bulk
+      // insert that is a 50-draw birthday problem over 65536 values → 1.85%
+      // chance of a duplicate id, and `addTasksBulk` uses INSERT OR REPLACE, so a
+      // collision SILENTLY DROPS a task instead of erroring.
+      //
+      // Widening the id (or making the bulk insert reject duplicates) is the real
+      // fix; that lives in task-manager/format and is tracked separately. Until
+      // then this asserts the invariant the test is actually named for.
+      const ids = await storedIds();
+      expect(ids.length).toBeLessThanOrEqual(50);
+      expect(ids.length).toBeGreaterThanOrEqual(49);
     });
   });
 
   describe('fullPull returns null', () => {
     it('skips reconcile when fullPull returns null', async () => {
+      const localTask = makeTask({ id: 'untouched-1', ext: { 'test-plugin': { remote_id: 'r-gone' } } });
       const plugin = makePlugin({ fullPullResult: null as any });
-      const ctx = makeCtx([]);
+      const ctx = makeCtx(await seedStore([localTask]));
 
       await reconciler.tick(plugin, ctx);
 
-      expect(ctx.addedTasks).toHaveLength(0);
-      expect(ctx.deletedIds).toHaveLength(0);
+      expect(await storedIds()).toEqual(['untouched-1']);
     });
   });
 });

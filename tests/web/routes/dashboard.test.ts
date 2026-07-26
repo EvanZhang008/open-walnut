@@ -8,7 +8,8 @@ import express from 'express';
 import request from 'supertest';
 import { dashboardRouter } from '../../../src/web/routes/dashboard.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
-import { addTask, completeTask } from '../../../src/core/task-manager.js';
+import { addTask, completeTask, _resetForTesting } from '../../../src/core/task-manager.js';
+import { closeDb } from '../../../src/core/task-db.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
 
 function createApp() {
@@ -19,11 +20,17 @@ function createApp() {
   return app;
 }
 
+// The task store is SQLite: rm'ing WALNUT_HOME does NOT reset it. better-sqlite3
+// keeps its fd on the unlinked inode, so a cached handle silently carries every
+// previous test's rows into the next one. closeDb() must precede the rm.
 beforeEach(async () => {
+  closeDb();
+  _resetForTesting();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
 afterEach(async () => {
+  closeDb();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 

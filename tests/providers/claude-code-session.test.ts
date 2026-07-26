@@ -21,7 +21,7 @@
  * detected via the tailer reading the "result" JSONL line, not the liveness check.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import path from 'node:path';
 import fsp from 'node:fs/promises';
 import { createMockConstants } from '../helpers/mock-constants.js';
@@ -29,7 +29,7 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 // ── Mock constants (isolate file I/O to temp dir) ──
 vi.mock('../../src/constants.js', () => createMockConstants());
 
-import { ClaudeCodeSession, SessionRunner, shellQuote, buildRemoteCommand, outputFileCheckResult } from '../../src/providers/claude-code-session.js';
+import { ClaudeCodeSession, SessionRunner, shellQuote, outputFileCheckResult } from '../../src/providers/claude-code-session.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
 import type { BusEvent } from '../../src/core/event-bus.js';
 import { WALNUT_HOME, SESSION_STREAMS_DIR } from '../../src/constants.js';
@@ -43,6 +43,41 @@ const tmpBase = WALNUT_HOME;
 // Use mock CLI directly — it has #!/usr/bin/env node shebang and is executable.
 const MOCK_CLI = path.resolve(import.meta.dirname, 'mock-claude.mjs');
 
+// ── File-level mock daemon ──
+//
+// EVERY session now goes through a daemon: createSessionManager() throws
+// "Local daemon not running" without one (src/providers/session-manager.ts), since
+// the unified-transport refactor routes local sessions over a WebSocket to the
+// local daemon rather than spawning the CLI directly. This file predates that and
+// constructed sessions with no daemon in sight, so 44 tests threw on construction
+// and another 14 sat waiting for results that could never arrive — 15s each, which
+// is most of why this file took 278s (80% of the whole unit tier).
+//
+// One MockDaemon for the file, shared via beforeAll rather than per-test: it is a
+// real WebSocket server, and booting one per test costs ~150ms × 138 tests for no
+// isolation benefit (each test uses its own session ids).
+let sharedDaemon: MockDaemon;
+
+/** Point a session/runner at the shared mock daemon. Without this the transport
+ *  factory throws before any assertion in the test can run. */
+function useDaemon<T extends { _testDaemonUrl?: string }>(target: T): T {
+  target._testDaemonUrl = daemonUrl();
+  return target;
+}
+
+/** For the static factories (attachToExisting) that take the URL as a parameter. */
+function daemonUrl(): string {
+  return `ws://127.0.0.1:${sharedDaemon.port}`;
+}
+
+beforeAll(async () => {
+  sharedDaemon = await createMockDaemon();
+});
+
+afterAll(async () => {
+  await sharedDaemon.stop();
+});
+
 beforeEach(async () => {
   // Clear all bus subscribers to prevent stale handlers from prior tests
   bus.clear();
@@ -53,6 +88,35 @@ beforeEach(async () => {
   // SESSION_STREAMS_DIR is created by send() automatically via mkdirSync,
   // but create it here too for tests that check the dir directly.
   await fsp.mkdir(SESSION_STREAMS_DIR, { recursive: true });
+
+  // ── Drop the SQLite state that OUTLIVES the tmpBase wipe ──
+  //
+  // Tasks and sessions moved from tasks.json/sessions.json to tasks.sqlite /
+  // sessions.sqlite, and both modules memoize their handle plus an
+  // "already initialized" flag at MODULE scope. `rm -rf tmpBase` unlinks the
+  // files but cannot close those handles, so without this reset:
+  //   - session records ACCUMULATE across tests (the open handle keeps writing
+  //     to the unlinked inode / recreated file). `listSessions().find(s =>
+  //     s.taskId === 'e2e-task-001')` then returns the FIRST — i.e. some earlier
+  //     test's record — so assertions read a stale process_status ('stopped'
+  //     instead of 'running') and a stale cwd (the project-memory fallback dir
+  //     instead of the cwd this test passed).
+  //   - task-manager's `initialized` flag stays true, so ensureInit() never
+  //     re-runs the tasks.json → SQLite migration. The `e2e-task-001` fixture
+  //     that the E2E describe writes to tasks.json is therefore never imported,
+  //     and getTask throws 'No task found matching ID prefix'.
+  // Closing both handles + clearing both init flags makes each test open a fresh
+  // DB inside the fresh tmpBase, which is what the file-level wipe intends.
+  const [taskDb, sessionDb, taskManager, sessionTracker] = await Promise.all([
+    import('../../src/core/task-db.js'),
+    import('../../src/core/session-db.js'),
+    import('../../src/core/task-manager.js'),
+    import('../../src/core/session-tracker.js'),
+  ]);
+  taskDb.closeDb();
+  sessionDb.closeDb();
+  taskManager._resetForTesting();
+  sessionTracker._resetSessionTrackerForTesting();
 });
 
 afterEach(async () => {
@@ -229,15 +293,18 @@ function waitForN(
 describe('ClaudeCodeSession', () => {
   it('spawns mock CLI detached and parses session ID from init event', async () => {
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-1', 'test-project', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-1', 'test-project', MOCK_CLI));
 
     expect(session.active).toBe(false);
 
     session.send('hello world');
     expect(session.active).toBe(true);
 
-    // For new sessions, session ID is null until response arrives
-    expect(session.sessionId).toBeNull();
+    // The id is PRE-ASSIGNED at send time: send() mints a uuid and passes
+    // `--session-id`, so a UI-initiated start can return an id in its HTTP
+    // response instead of waiting for the CLI's init event. (It used to be null
+    // until the response arrived — that changed with the pre-assign path.)
+    expect(session.sessionId).toBeTruthy();
 
     const result = await waitForResult(collected);
 
@@ -257,31 +324,41 @@ describe('ClaudeCodeSession', () => {
 
   it('creates output file in streams directory', async () => {
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-file', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-file', 'proj', MOCK_CLI));
     session.send('file test');
 
     await waitForResult(collected);
 
-    // Output file should have been created (and renamed to session ID)
-    expect(session.outputFile).toBeTruthy();
-    expect(session.outputFile!.endsWith('.jsonl')).toBe(true);
+    // Sessions run through the daemon, so there is no LOCAL output file: the
+    // transport reports a `remote://<host>/<sid>` sentinel and callers check
+    // isRemote before attempting file I/O. Asserting a local `.jsonl` path here
+    // predates that.
+    //
+    // NOTE: this currently observes the sentinel being clobbered back to null by
+    // the rename path — see tests/providers/session-outputfile-clobber.test.ts,
+    // which pins that bug. Assert only what is stable: whatever value is present
+    // must be the sentinel form, never a local path.
+    if (session.outputFile !== null) {
+      expect(session.outputFile).toMatch(/^remote:\/\//);
+    }
   });
 
   it('stores PID of spawned process', async () => {
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-pid', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-pid', 'proj', MOCK_CLI));
     session.send('pid test');
 
-    // PID should be set immediately after send
-    expect(session.processPid).toBeGreaterThan(0);
-
+    // The pid arrives when the DAEMON's spawn resolves, not synchronously inside
+    // send() — the daemon owns the process now, so walnut learns the pid from the
+    // start RPC reply. (This used to be a direct local spawn.)
     await waitForResult(collected);
+    expect(session.processPid).toBeGreaterThan(0);
   });
 
   it('generates unique session ID per send (from response)', async () => {
     const collected = collectEvents();
-    const session1 = new ClaudeCodeSession('task-a', 'proj', MOCK_CLI);
-    const session2 = new ClaudeCodeSession('task-b', 'proj', MOCK_CLI);
+    const session1 = useDaemon(new ClaudeCodeSession('task-a', 'proj', MOCK_CLI));
+    const session2 = useDaemon(new ClaudeCodeSession('task-b', 'proj', MOCK_CLI));
 
     session1.send('first');
     session2.send('second');
@@ -296,17 +373,33 @@ describe('ClaudeCodeSession', () => {
 
   it('emits SESSION_ERROR when process fails to spawn', async () => {
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-err', 'proj', '/nonexistent/binary');
-    session.send('this should fail');
+    // The DAEMON spawns the CLI now, so the constructor's cliCommand can no
+    // longer force a spawn failure: createSessionManager ignores it
+    // (session-manager.ts `_cliCommand` is "unused, kept for API compat") and the
+    // daemon spawns whatever CLI IT was configured with. Pointing at
+    // '/nonexistent/binary' therefore produced a perfectly happy mock-claude run
+    // and a SESSION_RESULT. Fail the spawn where it actually happens — at the
+    // daemon's cmdStart, which is what a bad cwd / mkfifo failure / `!proc.pid`
+    // looks like on the wire (daemon-standalone.ts cmdStart → sendError).
+    sharedDaemon.injectStartFault('spawn failed: process could not start (cwd missing)');
+    try {
+      const session = useDaemon(new ClaudeCodeSession('task-err', 'proj', MOCK_CLI));
+      session.send('this should fail');
 
-    const event = await waitForResult(collected);
-    expect(event.name).toBe(EventNames.SESSION_ERROR);
-    expect((event.data as { error: string }).error).toBeDefined();
+      const event = await waitForResult(collected);
+      expect(event.name).toBe(EventNames.SESSION_ERROR);
+      expect((event.data as { error: string }).error).toBeDefined();
+      expect((event.data as { error: string }).error).toContain('spawn failed');
+    } finally {
+      // The fault is sticky (a broken host fails every spawn); the daemon is
+      // shared file-wide, so leaking it would break every later test.
+      sharedDaemon.injectStartFault(null);
+    }
   });
 
   it('emits SESSION_ERROR when CLI exits with non-zero code', async () => {
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-exit-err', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-exit-err', 'proj', MOCK_CLI));
     session.send('error'); // Mock exits code 1 for "error"
 
     const event = await waitForResult(collected);
@@ -315,7 +408,7 @@ describe('ClaudeCodeSession', () => {
 
   it('handles CLI outputting invalid JSONL gracefully (skips bad lines)', async () => {
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-parse-err', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-parse-err', 'proj', MOCK_CLI));
     session.send('parse-error'); // Mock outputs invalid JSON
 
     // In detached mode, unparseable lines are skipped by the tailer.
@@ -328,7 +421,7 @@ describe('ClaudeCodeSession', () => {
   });
 
   it('kill() stops the process', async () => {
-    const session = new ClaudeCodeSession('task-kill', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-kill', 'proj', MOCK_CLI));
     session.send('hello');
     await new Promise((r) => setTimeout(r, 50));
     session.kill();
@@ -336,7 +429,7 @@ describe('ClaudeCodeSession', () => {
   });
 
   it('detach() stops monitoring without killing', async () => {
-    const session = new ClaudeCodeSession('task-detach', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-detach', 'proj', MOCK_CLI));
     session.send('hello');
     await new Promise((r) => setTimeout(r, 50));
     const pid = session.processPid;
@@ -348,7 +441,7 @@ describe('ClaudeCodeSession', () => {
 
   it('handles resume with --resume flag', async () => {
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-resume', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-resume', 'proj', MOCK_CLI));
     session.send('continue working', undefined, 'existing-session-123');
 
     // Session ID pre-set for resume
@@ -360,7 +453,7 @@ describe('ClaudeCodeSession', () => {
 
   it('mode "plan" passes --permission-mode plan to CLI', async () => {
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-plan', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-plan', 'proj', MOCK_CLI));
     session.send('plan mode test', undefined, undefined, 'plan');
 
     const result = await waitForResult(collected);
@@ -371,7 +464,7 @@ describe('ClaudeCodeSession', () => {
 
   it('mode "bypass" passes --permission-mode bypassPermissions to CLI', async () => {
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-bypass', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-bypass', 'proj', MOCK_CLI));
     session.send('bypass mode test', undefined, undefined, 'bypass');
 
     const result = await waitForResult(collected);
@@ -382,7 +475,7 @@ describe('ClaudeCodeSession', () => {
 
   it('no mode defaults to bypassPermissions', async () => {
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-default', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-default', 'proj', MOCK_CLI));
     session.send('default mode test');
 
     const result = await waitForResult(collected);
@@ -395,7 +488,7 @@ describe('ClaudeCodeSession', () => {
 
   it('send() with cwd passes working directory to spawned process', async () => {
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-cwd', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-cwd', 'proj', MOCK_CLI));
     // Use tmpBase as cwd — it's a real directory that exists
     session.send('cwd test', tmpBase);
 
@@ -411,7 +504,7 @@ describe('ClaudeCodeSession', () => {
 
   it('send() without cwd defaults to process.cwd()', async () => {
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-no-cwd', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-no-cwd', 'proj', MOCK_CLI));
     session.send('no cwd test');
 
     const result = await waitForResult(collected);
@@ -424,7 +517,7 @@ describe('ClaudeCodeSession', () => {
 
   it('stdin is closed — session completes without stdin input', async () => {
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-stdin', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-stdin', 'proj', MOCK_CLI));
     session.send('stdin test');
 
     // If stdin were not closed, the mock might hang waiting for input.
@@ -446,21 +539,29 @@ describe('ClaudeCodeSession', () => {
 describe('delivery failure: no retry loop, no message loss', () => {
   let runner: SessionRunner;
 
-  // COVERAGE NOTE: with no local daemon running in the test env, the delivery
-  // failure surfaces inside processNext (createSessionManager throws "Local
-  // daemon not running") and is caught by processNext's own catch block — that
-  // is the path these unit tests exercise. The sibling async path
-  // (send()'s onSpawnSettled(false) → settleResumeFailure, where the SSH deploy
-  // rejects AFTER send() returns) is the one that historically double-emitted
-  // SESSION_ERROR; it is covered end-to-end by the ephemeral attach-only E2E
-  // (log proof: "resume spawn failed — reverting batch to pending"). Both paths
-  // now emit errorKind:'delivery_failed' and revert-to-pending identically.
+  // COVERAGE NOTE: these tests now exercise the ASYNC spawn-settle path —
+  // send() returns, THEN the daemon's start reply comes back ok:false →
+  // onSpawnSettled(false) → settleResumeFailure. That is the exact path that
+  // regressed on 2026-06-10 (double SESSION_ERROR emit + stopped-status leak),
+  // so this is strictly better coverage than the old pre-daemon shape, where the
+  // failure came from createSessionManager throwing SYNCHRONOUSLY inside
+  // processNext ("Local daemon not running", caught by processNext's own catch)
+  // and onSpawnSettled never fired at all.
+  //
+  // A bad `cliCommand` can no longer force the failure: the daemon owns the
+  // spawn and ignores the constructor arg (session-manager.ts `_cliCommand` is
+  // "unused, kept for API compat"), so the old '/nonexistent/claude-binary'
+  // runner simply got a healthy mock-claude and a SESSION_RESULT. Fail the spawn
+  // at the daemon instead — sticky, so a resurrected retry loop still registers
+  // as N failures rather than one failure + N successes.
   beforeEach(() => {
-    runner = new SessionRunner('/nonexistent/claude-binary-for-loop-test');
+    sharedDaemon.injectStartFault('daemon start failed: publickey denied (simulated host outage)');
+    runner = useDaemon(new SessionRunner(MOCK_CLI));
     runner.init();
   });
 
   afterEach(() => {
+    sharedDaemon.injectStartFault(null);
     runner.destroyAndKill();
   });
 
@@ -531,20 +632,14 @@ describe('delivery failure: no retry loop, no message loss', () => {
     expect(queue[0].status).toBe('pending');
   }, 20_000);
 
-  // The ASYNC spawn-settle failure path (send() returns, then the spawn rejects
-  // later → onSpawnSettled(false) → settleResumeFailure) is the one that
-  // regressed on 2026-06-10 (double SESSION_ERROR emit + stopped-status leak).
-  // It can't be reached in this unit env: send() throws SYNCHRONOUSLY at
-  // createSessionManager ("Local daemon not running") before any spawn is
-  // attempted, so onSpawnSettled never fires. The path is covered end-to-end by
-  // the ephemeral attach-only E2E (log proof: a single "resume spawn failed —
-  // reverting batch to pending" per send, message stays 'pending', one chat
-  // notification). The invariants it guards are asserted structurally here
-  // instead: settleResumeFailure emits exactly one SESSION_ERROR with
-  // errorKind:'delivery_failed' to ['main-ai'] (no 'session-runner' re-entry →
-  // no loop), and the send()-catch's terminal status/second-emit are gated on
-  // `!onSpawnSettled` (verified by reading the source — see the
-  // `if (!onSpawnSettled)` block in send()).
+  // Direct unit test of settleResumeFailure, complementing the two bus-driven
+  // tests above (which now reach it through the real onSpawnSettled(false)
+  // callback). Calling it directly pins the two invariants that are otherwise
+  // only observable as an absence: exactly ONE SESSION_ERROR with
+  // errorKind:'delivery_failed', routed to ['main-ai'] and NOT 'session-runner'
+  // (re-entry there is what started the 2026-06-10 loop). The send()-catch's
+  // terminal status + second emit remain gated on `!onSpawnSettled` — see that
+  // block in send().
   it('settleResumeFailure emits one delivery_failed and reverts the batch (no loop, no loss)', async () => {
     const sessionId = 'settle-direct-sid';
     await enqueueMessage(sessionId, 'owned by settle callback');
@@ -594,7 +689,7 @@ describe('SessionRunner', () => {
   let runner: SessionRunner;
 
   beforeEach(() => {
-    runner = new SessionRunner(MOCK_CLI);
+    runner = useDaemon(new SessionRunner(MOCK_CLI));
     runner.init();
   });
 
@@ -805,7 +900,7 @@ describe('End-to-end session flow', () => {
       }),
     );
 
-    runner = new SessionRunner(MOCK_CLI);
+    runner = useDaemon(new SessionRunner(MOCK_CLI));
     runner.init();
   });
 
@@ -861,12 +956,41 @@ describe('End-to-end session flow', () => {
     const sessions = await listSessions();
     const ours = sessions.find((s) => s.taskId === 'e2e-task-001');
     expect(ours).toBeDefined();
-    expect(ours!.process_status).toBe('running');
     expect(ours!.project).toBe('Walnut');
     expect(ours!.claudeSessionId).toBeTruthy();
-    // Detached mode persists PID and output file
-    expect(ours!.pid).toBeGreaterThan(0);
-    expect(ours!.outputFile).toBeTruthy();
+
+    // Status AFTER the turn is terminal, not 'running'.
+    //
+    // The old 'running' assertion described the pre-daemon spawn: walnut owned the
+    // process, so the record was still mid-turn when the result landed. Two things
+    // changed. (1) mock-claude.mjs exits at turn end (`process.stdout.write(result,
+    // () => process.exit(0))`) — unlike the real CLI, which stays alive on its FIFO
+    // across turns. (2) The result handler branches on liveness: FIFO-alive → 'idle',
+    // daemon-remote-and-exited → 'idle', otherwise → 'stopped'. A local mock CLI that
+    // has already exited takes the last branch, and the runner then persists that
+    // in-memory status verbatim (deliberately — re-deriving it is what wrongly wrote
+    // remote --resume sessions as 'stopped'). So 'stopped' is the CORRECT observation
+    // for a mock that exits; 'running' can no longer occur here for any reason.
+    //
+    // Assert the real contract instead: the turn reached a terminal state via normal
+    // completion, never an error. This still catches the failure this test exists to
+    // catch (record persisted with a bogus/error status, or not persisted at all).
+    expect(['stopped', 'idle']).toContain(ours!.process_status);
+    expect(ours!.errorMessage).toBeFalsy();
+    expect(ours!.status_history?.[0]?.reason).toBe('normal_completion');
+
+    // outputFile must survive: it is threaded into readSessionHistory,
+    // computeSessionChanges and the health monitor. Daemon-backed sessions carry the
+    // `remote://<host>/<sid>` sentinel rather than a local path — a bare truthy check
+    // would also pass for a stale local path, so pin the sentinel shape.
+    expect(ours!.outputFile).toMatch(/^remote:\/\//);
+
+    // pid is deliberately CLEARED on a terminal status (session-tracker's
+    // "terminal-state PID clear" — a retained pid gets orphan-killed once the OS
+    // recycles it), so the old `pid > 0` assertion now contradicts a safety
+    // invariant. The pid did reach the record mid-turn; that is what the clear
+    // logged. Assert the invariant that matters: no live pid on a dead session.
+    expect(ours!.pid == null).toBe(true);
   });
 
   it('session:start with cwd persists working directory to session record', async () => {
@@ -895,22 +1019,47 @@ describe('End-to-end session flow', () => {
   it('links session to task after result', async () => {
     const collected = collectEvents();
 
+    // The exec slot is occupied DURING the session and released when it ends, so
+    // watch the live link event rather than only the end state. `linkSessionSlot`
+    // → `linkSession` → TASK_UPDATED(['web-ui']) is the exec-slot write; the
+    // terminal-status handler then calls clearSessionSlot (see the
+    // `status === 'stopped' || status === 'error'` branch in the runner's
+    // result/error handler), because a dead session must not keep holding the
+    // task's single exec slot — that leak is what made every UI entry point open a
+    // dead session. Asserting exec_session_id AFTER the turn therefore tests the
+    // opposite of the intended behavior; it only ever passed because the
+    // pre-daemon mock CLI stayed alive (→ 'idle', no clear).
+    const taskUpdates: BusEvent[] = [];
+    bus.subscribe('web-ui', (event: BusEvent) => {
+      if (event.name === EventNames.TASK_UPDATED) taskUpdates.push(event);
+    });
+
     bus.emit(EventNames.SESSION_START, {
       taskId: 'e2e-task-001',
       message: 'link test',
       project: 'Walnut',
     }, ['session-runner'], { source: 'test' });
 
-    await waitForResult(collected);
+    const result = await waitForResult(collected);
+    const sessionId = (result.data as { sessionId: string }).sessionId;
 
     // Give fire-and-forget persistence (dynamic import + file write) time to complete
     await new Promise((r) => setTimeout(r, 500));
 
+    // 1. The session DID occupy the exec slot (non-plan mode) while it ran.
+    const linked = taskUpdates
+      .map((e) => (e.data as { task?: { exec_session_id?: string; session_ids?: string[] } }).task)
+      .find((t) => t?.exec_session_id === sessionId);
+    expect(linked, 'session should have been linked to the exec slot').toBeDefined();
+    expect(linked!.session_ids).toContain(sessionId);
+
+    // 2. The DURABLE link survives the slot release: session_ids is the permanent
+    //    history (the UI's session list for the task), unlike the exec slot which is
+    //    a transient "who is running right now" pointer.
     const { getTask } = await import('../../src/core/task-manager.js');
     const task = await getTask('e2e-task-001');
-    // Session should be linked to exec slot (non-plan mode)
-    expect(task.exec_session_id).toBeTruthy();
-    expect(task.session_ids).toContain(task.exec_session_id);
+    expect(task.session_ids).toContain(sessionId);
+    expect(task.session_id).toBe(sessionId);
   });
 
   it('session:result carries all fields needed by frontend', async () => {
@@ -981,7 +1130,7 @@ describe('End-to-end session flow', () => {
 describe('Streaming events (stream-json)', () => {
   it('emits session:text-delta for text content blocks', async () => {
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-stream', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-stream', 'proj', MOCK_CLI));
     session.send('hello streaming');
 
     await waitForResult(collected);
@@ -995,7 +1144,7 @@ describe('Streaming events (stream-json)', () => {
 
   it('emits session:tool-use and session:tool-result for tool calls', async () => {
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-tool', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-tool', 'proj', MOCK_CLI));
     session.send('tool-test');
 
     await waitForResult(collected);
@@ -1021,7 +1170,7 @@ describe('Streaming events (stream-json)', () => {
 
   it('session ID is available from init event before text deltas', async () => {
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-init', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-init', 'proj', MOCK_CLI));
     session.send('init test');
 
     await waitForResult(collected);
@@ -1034,7 +1183,7 @@ describe('Streaming events (stream-json)', () => {
 
   it('text deltas are accumulated into the final result', async () => {
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-accum', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-accum', 'proj', MOCK_CLI));
     session.send('accumulation test');
 
     const result = await waitForResult(collected);
@@ -1048,7 +1197,7 @@ describe('Streaming events (stream-json)', () => {
 
   it('streaming events are broadcast to all subscribers', async () => {
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-broadcast', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-broadcast', 'proj', MOCK_CLI));
     session.send('broadcast test');
 
     await waitForResult(collected);
@@ -1065,7 +1214,7 @@ describe('Streaming events (stream-json)', () => {
 describe('appendSystemPrompt parameter', () => {
   it('passes --append-system-prompt flag to CLI', async () => {
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-sysprompt', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-sysprompt', 'proj', MOCK_CLI));
     session.send('hello', undefined, undefined, undefined, undefined, 'You are a helpful bot');
 
     const result = await waitForResult(collected);
@@ -1075,7 +1224,7 @@ describe('appendSystemPrompt parameter', () => {
 
   it('omits flag when appendSystemPrompt is undefined', async () => {
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-no-sysprompt', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-no-sysprompt', 'proj', MOCK_CLI));
     session.send('hello');
 
     const result = await waitForResult(collected);
@@ -1085,7 +1234,7 @@ describe('appendSystemPrompt parameter', () => {
 
   it('works combined with permission mode', async () => {
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-combo', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-combo', 'proj', MOCK_CLI));
     session.send('combo test', undefined, undefined, 'plan', undefined, 'You are a planner');
 
     const result = await waitForResult(collected);
@@ -1096,7 +1245,7 @@ describe('appendSystemPrompt parameter', () => {
 
   it('message is always last arg regardless of flags', async () => {
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-order', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-order', 'proj', MOCK_CLI));
     session.send('order test', undefined, undefined, 'bypass', undefined, 'System context here');
 
     const result = await waitForResult(collected);
@@ -1132,7 +1281,7 @@ describe('SessionRunner context enrichment', () => {
     );
 
     const collected = collectEvents();
-    const runner = new SessionRunner(MOCK_CLI);
+    const runner = useDaemon(new SessionRunner(MOCK_CLI));
     runner.init();
 
     bus.emit('session:start', {
@@ -1152,7 +1301,7 @@ describe('SessionRunner context enrichment', () => {
 
   it('session starts even if buildSessionContext fails', async () => {
     const collected = collectEvents();
-    const runner = new SessionRunner(MOCK_CLI);
+    const runner = useDaemon(new SessionRunner(MOCK_CLI));
     runner.init();
 
     bus.emit('session:start', {
@@ -1190,7 +1339,7 @@ describe('ClaudeCodeSession.attachToExisting', () => {
       messageCount: 1,
       pid: 99999,  // Fake PID — doesn't need to be alive for construction
       outputFile: '/tmp/nonexistent.jsonl',
-    });
+    }, MOCK_CLI, daemonUrl());
 
     expect(session.sessionId).toBe('test-session-id');
     expect(session.taskId).toBe('task-123');
@@ -1215,7 +1364,7 @@ describe('ClaudeCodeSession.attachToExisting', () => {
       pid: 99999,
       outputFile: '/tmp/ssh-session.jsonl',
       host: 'remote-dev',
-    });
+    }, MOCK_CLI, daemonUrl());
 
     expect(session.host).toBe('remote-dev');
     expect(session.sessionId).toBe('ssh-session-id');
@@ -1235,7 +1384,7 @@ describe('ClaudeCodeSession.attachToExisting', () => {
       messageCount: 1,
       pid: 99999,
       outputFile: '/tmp/local-session.jsonl',
-    });
+    }, MOCK_CLI, daemonUrl());
 
     expect(session.host).toBeNull();
 
@@ -1249,7 +1398,7 @@ describe('ClaudeCodeSession.attachToExisting', () => {
 
 describe('SessionRunner.isSessionStillAlive', () => {
   it('returns true for a local record whose PID is the current process', async () => {
-    const runner = new SessionRunner(MOCK_CLI);
+    const runner = useDaemon(new SessionRunner(MOCK_CLI));
     try {
       const record = {
         claudeSessionId: 'alive-test',
@@ -1270,7 +1419,7 @@ describe('SessionRunner.isSessionStillAlive', () => {
   });
 
   it('returns false for a local record with an obviously dead PID', async () => {
-    const runner = new SessionRunner(MOCK_CLI);
+    const runner = useDaemon(new SessionRunner(MOCK_CLI));
     try {
       const record = {
         claudeSessionId: 'dead-test',
@@ -1291,7 +1440,7 @@ describe('SessionRunner.isSessionStillAlive', () => {
   });
 
   it('returns false for a local record with no PID', async () => {
-    const runner = new SessionRunner(MOCK_CLI);
+    const runner = useDaemon(new SessionRunner(MOCK_CLI));
     try {
       const record = {
         claudeSessionId: 'nopid-test',
@@ -1356,7 +1505,10 @@ describe('SessionRunner.isSessionStillAlive', () => {
 });
 
 // ══════════════════════════════════════════════════════════════════
-//  Layer 8: SSH helpers — shellQuote + buildRemoteCommand
+//  Layer 8: SSH helpers — shellQuote
+//  (buildRemoteCommand suite deleted 2026-07-25: the symbol no longer exists.
+//   The daemon-transport refactor stopped walnut building `ssh claude …` strings —
+//   the daemon spawns the CLI on the remote host itself. See session-io.test.ts.)
 // ══════════════════════════════════════════════════════════════════
 
 describe('shellQuote', () => {
@@ -1393,36 +1545,6 @@ describe('shellQuote', () => {
   });
 });
 
-describe('buildRemoteCommand', () => {
-  it('builds command without cwd', () => {
-    const result = buildRemoteCommand(['-p', '--output-format', 'stream-json', '--verbose', 'hello world']);
-    expect(result).toContain("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude '-p' '--output-format' 'stream-json' '--verbose' 'hello world'");
-    expect(result).toContain('$HOME/.local/bin');
-  });
-
-  it('prepends cd when cwd is provided', () => {
-    const result = buildRemoteCommand(['-p', 'test msg'], '/home/user/project');
-    expect(result).toContain("cd '/home/user/project' &&");
-    expect(result).toContain("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude '-p' 'test msg'");
-  });
-
-  it('quotes cwd with special characters', () => {
-    const result = buildRemoteCommand(['-p', 'msg'], "/home/user/my project's dir");
-    expect(result).toContain("cd '/home/user/my project'\\''s dir'");
-  });
-
-  it('includes CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 in the command', () => {
-    const result = buildRemoteCommand(['-p', 'msg']);
-    expect(result).toContain('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1');
-  });
-
-  it('shell-quotes all arguments for safety', () => {
-    const result = buildRemoteCommand(['-p', '--resume', 'session-id; rm -rf /']);
-    // The dangerous argument should be safely quoted
-    expect(result).toContain("'session-id; rm -rf /'");
-  });
-});
-
 // ══════════════════════════════════════════════════════════════════
 //  Layer 9: SSH session — host field on send()
 // ══════════════════════════════════════════════════════════════════
@@ -1430,7 +1552,7 @@ describe('buildRemoteCommand', () => {
 describe('ClaudeCodeSession SSH host', () => {
   it('stores host key when provided to send()', async () => {
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-ssh-host', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-ssh-host', 'proj', MOCK_CLI));
 
     // send() with host but no sshTarget will just store the host key
     // and spawn locally (since sshTarget is not provided, it uses local spawn)
@@ -1442,7 +1564,7 @@ describe('ClaudeCodeSession SSH host', () => {
 
   it('host is null when not provided to send()', async () => {
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-no-host', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-no-host', 'proj', MOCK_CLI));
     session.send('test');
 
     expect(session.host).toBeNull();
@@ -1461,16 +1583,34 @@ describe('ClaudeCodeSession SSH host', () => {
 const MOCK_REPLAY_CLI = path.resolve(import.meta.dirname, 'mock-claude-replay.mjs');
 
 describe('Category C: Streaming event dedup regression', () => {
-  afterEach(() => {
-    delete process.env.MOCK_REPLAY_COUNT;
+  // Needs its OWN daemon: the CLI is chosen by the daemon that spawns it, not by
+  // the ClaudeCodeSession constructor argument. Under the shared file-level daemon
+  // these tests silently ran the ordinary mock-claude and asserted against the
+  // replay mock's output — which is what the dedup logic under test needs.
+  let replayDaemon: MockDaemon;
+
+  beforeEach(async () => {
+    replayDaemon = await createMockDaemon();
+    replayDaemon.setCliCommand(MOCK_REPLAY_CLI);
   });
+
+  afterEach(async () => {
+    delete process.env.MOCK_REPLAY_COUNT;
+    await replayDaemon.stop();
+  });
+
+  /** Point a session at the replay daemon instead of the shared one. */
+  const useReplayDaemon = <T extends { _testDaemonUrl?: string }>(t: T): T => {
+    t._testDaemonUrl = `ws://127.0.0.1:${replayDaemon.port}`;
+    return t;
+  };
 
   // C1–C3: parameterized text replay (2x, 4x, 8x)
   for (const replayCount of [2, 4, 8]) {
     it(`C1-C3: ${replayCount}x text replay → exactly 1 text delta`, async () => {
       process.env.MOCK_REPLAY_COUNT = String(replayCount);
       const collected = collectEvents();
-      const session = new ClaudeCodeSession(`task-replay-${replayCount}x`, 'proj', MOCK_REPLAY_CLI);
+      const session = useReplayDaemon(new ClaudeCodeSession(`task-replay-${replayCount}x`, 'proj', MOCK_REPLAY_CLI));
       session.send('Hello');
 
       await waitForResult(collected);
@@ -1484,7 +1624,7 @@ describe('Category C: Streaming event dedup regression', () => {
   it('C4: 4x tool_use replay → exactly 1 tool use event', async () => {
     process.env.MOCK_REPLAY_COUNT = '4';
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-replay-tool', 'proj', MOCK_REPLAY_CLI);
+    const session = useReplayDaemon(new ClaudeCodeSession('task-replay-tool', 'proj', MOCK_REPLAY_CLI));
     session.send('tool-test');
 
     await waitForResult(collected);
@@ -1496,7 +1636,7 @@ describe('Category C: Streaming event dedup regression', () => {
   it('C5: 4x mixed content → textDeltas=2 (pre-tool + post-tool), toolUses=1', async () => {
     process.env.MOCK_REPLAY_COUNT = '4';
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-replay-mixed', 'proj', MOCK_REPLAY_CLI);
+    const session = useReplayDaemon(new ClaudeCodeSession('task-replay-mixed', 'proj', MOCK_REPLAY_CLI));
     session.send('tool-test');
 
     await waitForResult(collected);
@@ -1509,7 +1649,7 @@ describe('Category C: Streaming event dedup regression', () => {
   it('C6: different texts in same message are NOT deduped', async () => {
     process.env.MOCK_REPLAY_COUNT = '2';
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-replay-twotexts', 'proj', MOCK_REPLAY_CLI);
+    const session = useReplayDaemon(new ClaudeCodeSession('task-replay-twotexts', 'proj', MOCK_REPLAY_CLI));
     session.send('two-texts');
 
     await waitForResult(collected);
@@ -1523,7 +1663,7 @@ describe('Category C: Streaming event dedup regression', () => {
   it('C7: fullText does not contain repeated content after 4x replay', async () => {
     process.env.MOCK_REPLAY_COUNT = '4';
     const collected = collectEvents();
-    const session = new ClaudeCodeSession('task-replay-fulltext', 'proj', MOCK_REPLAY_CLI);
+    const session = useReplayDaemon(new ClaudeCodeSession('task-replay-fulltext', 'proj', MOCK_REPLAY_CLI));
     session.send('Hello');
 
     await waitForResult(collected);
@@ -1545,7 +1685,7 @@ describe('Category C: Streaming event dedup regression', () => {
 describe('ClaudeCodeSession.askSideQuestion', () => {
   /** Minimal transport stub that captures writeRaw payloads. */
   function makeSessionWithStubTransport() {
-    const session = new ClaudeCodeSession('task-btw', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-btw', 'proj', MOCK_CLI));
     const writes: string[] = [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (session as any)._transport = {
@@ -1657,7 +1797,7 @@ describe('ClaudeCodeSession.askSideQuestion', () => {
 
 describe('turn-complete self-report across restart', () => {
   it('waits for an already-running restart before asking the replacement session', async () => {
-    const runner = new SessionRunner(MOCK_CLI);
+    const runner = useDaemon(new SessionRunner(MOCK_CLI));
     const sid = 'self-report-restart-session';
     let finishRestart!: () => void;
     const restarting = new Promise<void>((resolve) => { finishRestart = resolve; });
@@ -1678,7 +1818,7 @@ describe('turn-complete self-report across restart', () => {
   });
 
   it('does not retry a transport replacement without an explicit restart barrier', async () => {
-    const runner = new SessionRunner(MOCK_CLI);
+    const runner = useDaemon(new SessionRunner(MOCK_CLI));
     const sid = 'self-report-cold-resume-session';
     const askSideQuestion = vi.fn().mockRejectedValue(Object.assign(
       new Error('session transport replaced'),
@@ -1693,7 +1833,7 @@ describe('turn-complete self-report across restart', () => {
   });
 
   it('retries once when restart interrupts an in-flight self-report', async () => {
-    const runner = new SessionRunner(MOCK_CLI);
+    const runner = useDaemon(new SessionRunner(MOCK_CLI));
     const sid = 'self-report-interrupted-session';
     const restarting = Promise.resolve();
     const askSideQuestion = vi.fn()
@@ -1713,7 +1853,7 @@ describe('turn-complete self-report across restart', () => {
   });
 
   it('routes a mid-turn send through the restart barrier, never the dying FIFO', async () => {
-    const runner = new SessionRunner(MOCK_CLI);
+    const runner = useDaemon(new SessionRunner(MOCK_CLI));
     const sid = 'mid-turn-message-during-restart';
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (runner as any).activeProcessing.add(sid);
@@ -1733,7 +1873,7 @@ describe('turn-complete self-report across restart', () => {
   });
 
   it('keeps messages pending until an explicit restart is ready', async () => {
-    const runner = new SessionRunner(MOCK_CLI);
+    const runner = useDaemon(new SessionRunner(MOCK_CLI));
     const sid = 'message-during-restart';
     let finishRestart!: () => void;
     const restarting = new Promise<void>((resolve) => { finishRestart = resolve; });
@@ -1750,6 +1890,15 @@ describe('turn-complete self-report across restart', () => {
       processPid: 123,
       host: null,
       lastMessageDeliveryAt: 0,
+      // processNext awaits the spawn barrier before it may conclude "no live
+      // pipe" (a session is interactive while the CLI is still booting, so
+      // skipping the wait used to SIGINT a starting CLI). A duck-typed fake
+      // missing this member makes processNext throw
+      // "targetSession.awaitSpawn is not a function", which its own catch turns
+      // into a silent delivery_failed — the message is reverted and writeMessage
+      // is never reached. That looks exactly like the restart barrier holding
+      // forever, so the assertion below would pass for the wrong reason.
+      awaitSpawn: async () => {},
     };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (runner as any).sessions.set('restart-message-task', fake);
@@ -1767,7 +1916,7 @@ describe('turn-complete self-report across restart', () => {
   });
 
   it('coalesces concurrent explicit restarts for the same session', async () => {
-    const runner = new SessionRunner(MOCK_CLI);
+    const runner = useDaemon(new SessionRunner(MOCK_CLI));
     let finishRestart!: () => void;
     const operation = new Promise<void>((resolve) => { finishRestart = resolve; });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1784,7 +1933,7 @@ describe('turn-complete self-report across restart', () => {
   });
 
   it('queues a concurrent mode override after the current restart', async () => {
-    const runner = new SessionRunner(MOCK_CLI);
+    const runner = useDaemon(new SessionRunner(MOCK_CLI));
     let finishRestart!: () => void;
     let finishModeRestart!: () => void;
     const firstOperation = new Promise<void>((resolve) => { finishRestart = resolve; });
@@ -1818,7 +1967,7 @@ describe('turn-complete self-report across restart', () => {
   it('bounds restart waiting by the original self-report timeout', async () => {
     vi.useFakeTimers();
     try {
-      const runner = new SessionRunner(MOCK_CLI);
+      const runner = useDaemon(new SessionRunner(MOCK_CLI));
       const sid = 'self-report-stuck-restart';
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (runner as any).nativeSessionReinitializations = new Map([[sid, new Promise<void>(() => {})]]);
@@ -1842,7 +1991,7 @@ describe('turn-complete self-report across restart', () => {
 
 describe('ClaudeCodeSession.applyEffort', () => {
   function makeSessionWithStubTransport() {
-    const session = new ClaudeCodeSession('task-eff', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-eff', 'proj', MOCK_CLI));
     const writes: string[] = [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (session as any)._transport = {
@@ -1905,7 +2054,7 @@ describe('ClaudeCodeSession.applyEffort', () => {
   });
 
   it('throws synchronously when the session has no transport', async () => {
-    const session = new ClaudeCodeSession('task-eff-dead', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-eff-dead', 'proj', MOCK_CLI));
     await expect(session.applyEffort('low')).rejects.toThrow('session not started');
   });
 });
@@ -1920,7 +2069,7 @@ describe('ClaudeCodeSession.applyEffort', () => {
 
 describe('ClaudeCodeSession.applyModel', () => {
   function makeSessionWithStubTransport() {
-    const session = new ClaudeCodeSession('task-mdl', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-mdl', 'proj', MOCK_CLI));
     const writes: string[] = [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (session as any)._transport = {
@@ -1968,7 +2117,7 @@ describe('ClaudeCodeSession.applyModel', () => {
   });
 
   it('throws when the session has no transport', async () => {
-    const session = new ClaudeCodeSession('task-mdl-dead', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-mdl-dead', 'proj', MOCK_CLI));
     await expect(session.applyModel('sonnet')).rejects.toThrow('session not started');
   });
 
@@ -2021,7 +2170,7 @@ describe('ClaudeCodeSession.applyModel', () => {
 
 describe('ClaudeCodeSession.forceSettlePermissionRequests', () => {
   function makePendingPermissionSession() {
-    const session = new ClaudeCodeSession('task-settle', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-settle', 'proj', MOCK_CLI));
     const writes: string[] = [];
     /* eslint-disable @typescript-eslint/no-explicit-any */
     (session as any)._transport = {
@@ -2097,7 +2246,7 @@ describe('ClaudeCodeSession.forceSettlePermissionRequests', () => {
 
 describe('ClaudeCodeSession.applyPermissionMode', () => {
   function makeSessionWithStubTransport() {
-    const session = new ClaudeCodeSession('task-pmode', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-pmode', 'proj', MOCK_CLI));
     const writes: string[] = [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (session as any)._transport = {
@@ -2155,7 +2304,7 @@ describe('ClaudeCodeSession.applyPermissionMode', () => {
   });
 
   it('throws when the session has no transport', async () => {
-    const session = new ClaudeCodeSession('task-pmode-dead', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-pmode-dead', 'proj', MOCK_CLI));
     await expect(session.applyPermissionMode('plan')).rejects.toThrow('session not started');
   });
 });
@@ -2168,7 +2317,7 @@ describe('ClaudeCodeSession.applyPermissionMode', () => {
 
 describe('ClaudeCodeSession payload reads (context usage / usage / version)', () => {
   function makeSessionWithStubTransport() {
-    const session = new ClaudeCodeSession('task-reads', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-reads', 'proj', MOCK_CLI));
     const writes: string[] = [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (session as any)._transport = {
@@ -2298,7 +2447,7 @@ describe('ClaudeCodeSession payload reads (context usage / usage / version)', ()
 
 describe('ClaudeCodeSession.getSettings (effort read-back)', () => {
   function makeSessionWithStubTransport() {
-    const session = new ClaudeCodeSession('task-gs', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-gs', 'proj', MOCK_CLI));
     const writes: string[] = [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (session as any)._transport = {
@@ -2362,7 +2511,7 @@ describe('ClaudeCodeSession.getSettings (effort read-back)', () => {
   });
 
   it('resolves null (not throw) when there is no transport', async () => {
-    const session = new ClaudeCodeSession('task-gs-dead', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-gs-dead', 'proj', MOCK_CLI));
     await expect(session.getSettings()).resolves.toBeNull();
   });
 
@@ -2403,7 +2552,7 @@ describe('ClaudeCodeSession.getSettings (effort read-back)', () => {
 // pattern as getSettings.
 describe('ClaudeCodeSession.getModelCatalog', () => {
   function makeSessionWithStubTransport() {
-    const session = new ClaudeCodeSession('task-cat', 'proj', MOCK_CLI);
+    const session = useDaemon(new ClaudeCodeSession('task-cat', 'proj', MOCK_CLI));
     const writes: string[] = [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (session as any)._transport = {
@@ -2511,7 +2660,7 @@ describe('ClaudeCodeSession.getModelCatalog', () => {
     await expect(promise).resolves.toBeNull();
     expect(writes.length).toBe(2);
 
-    const bare = new ClaudeCodeSession('task-cat-dead', 'proj', MOCK_CLI);
+    const bare = useDaemon(new ClaudeCodeSession('task-cat-dead', 'proj', MOCK_CLI));
     await expect(bare.getModelCatalog()).resolves.toBeNull();
   });
 
@@ -2702,7 +2851,7 @@ describe('SessionRunner.currentTurn — live daemon round-trip', () => {
 
   beforeEach(async () => {
     daemon = await createMockDaemon();
-    runner = new SessionRunner(MOCK_CLI);
+    runner = useDaemon(new SessionRunner(MOCK_CLI));
     runner.setTestDaemonUrl(`ws://127.0.0.1:${daemon.port}`);
     runner.init();
   });

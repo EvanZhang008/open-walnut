@@ -3,8 +3,8 @@
  * Covers Fix 2 (toggle complete) and Fix 4 (slash parsing).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import fs from 'node:fs/promises';
 import { createMockConstants } from '../helpers/mock-constants.js';
+import { removeTempTree } from '../helpers/temp-home.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
 
@@ -15,12 +15,14 @@ import { WALNUT_HOME } from '../../src/constants.js';
 beforeEach(async () => {
   closeDb();
   _resetForTesting();
-  await fs.rm(WALNUT_HOME, { recursive: true, force: true });
+  await removeTempTree(WALNUT_HOME);
 });
 
 afterEach(async () => {
+  // closeDb() before the rm so sqlite isn't still journaling into the tree
+  // (a -wal/-shm file recreated mid-rimraf is an ENOTEMPTY source).
   closeDb();
-  await fs.rm(WALNUT_HOME, { recursive: true, force: true });
+  await removeTempTree(WALNUT_HOME);
 });
 
 // ── Fix 2: toggleComplete ──
