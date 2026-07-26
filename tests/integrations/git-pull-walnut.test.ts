@@ -16,22 +16,41 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-gitpull-test
 const h = vi.hoisted(() => ({
   asyncCalls: [] as string[],
   resolvers: [] as Array<() => void>,
+  /** `detached` flag each spawn was given — must be true for group-kill to work. */
+  detachedFlags: [] as boolean[],
 }));
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
-  const util = await import('node:util');
-  const exec: any = vi.fn(); // eslint-disable-line @typescript-eslint/no-explicit-any
-  // gitAsync uses promisify(exec) — provide the custom promisified form so the
-  // mocked async git call resolves { stdout, stderr } like the real one.
-  exec[util.promisify.custom] = (cmd: string) =>
-    new Promise<{ stdout: string; stderr: string }>((resolve) => {
-      h.asyncCalls.push(cmd);
-      h.resolvers.push(() => resolve({ stdout: 'Already up to date.\n', stderr: '' }));
+  const { EventEmitter } = await import('node:events');
+
+  // gitAsync now runs git through spawn(detached) so a timeout can kill the whole
+  // process GROUP (see execGitGroup) — mock spawn, not exec. Each fake child stays
+  // open until its resolver fires, which is what holds a pull "in flight".
+  const spawn: any = vi.fn((_file: string, args: readonly string[], opts: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
+    h.asyncCalls.push(args[1] ?? '');
+    h.detachedFlags.push(Boolean(opts?.detached));
+
+    const child: any = new EventEmitter(); // eslint-disable-line @typescript-eslint/no-explicit-any
+    child.pid = 4242;
+    const mkStream = (): any => { // eslint-disable-line @typescript-eslint/no-explicit-any
+      const s: any = new EventEmitter(); // eslint-disable-line @typescript-eslint/no-explicit-any
+      s.setEncoding = () => s;
+      return s;
+    };
+    child.stdout = mkStream();
+    child.stderr = mkStream();
+
+    h.resolvers.push(() => {
+      child.stdout.emit('data', 'Already up to date.\n');
+      child.emit('close', 0);
     });
+    return child;
+  });
+
   return {
     ...actual,
-    exec,
+    spawn,
     // Sync preflight checks (isGitAvailable / isRepo / hasRemote / credential guard).
     execSync: vi.fn((cmd: string) => {
       if (cmd.includes('--version')) return 'git version 2.99.0\n';
@@ -48,6 +67,7 @@ import { gitPullWalnut } from '../../src/integrations/git-sync.js';
 beforeEach(() => {
   h.asyncCalls.length = 0;
   h.resolvers.length = 0;
+  h.detachedFlags.length = 0;
 });
 
 describe('gitPullWalnut single-flight', () => {
@@ -86,6 +106,16 @@ describe('gitPullWalnut single-flight', () => {
     let ticked = false;
     setTimeout(() => { ticked = true; }, 0);
     await vi.waitFor(() => expect(ticked).toBe(true));
+    h.resolvers.shift()!();
+    await p;
+  });
+
+  it('spawns git detached so a timeout can reap the whole process group', async () => {
+    // Without `detached`, a timeout kills only the top-level git and orphans
+    // git-remote-https / send-pack / pack-objects — the 2026-07-25 starvation.
+    const p = gitPullWalnut();
+    await vi.waitFor(() => expect(h.detachedFlags).toHaveLength(1));
+    expect(h.detachedFlags[0]).toBe(true);
     h.resolvers.shift()!();
     await p;
   });

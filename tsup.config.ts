@@ -16,6 +16,7 @@ export default defineConfig({
     'src/web/server.ts',
     'src/session-server/index.ts',
     'src/workers/qmd-index-worker.ts',
+    'src/workers/git-compaction-worker.ts',
     ...pluginEntries,
   ],
   format: ['esm'],

@@ -67,7 +67,7 @@ import type { Task } from '../core/types.js'
 import { log } from '../logging/index.js'
 import { usageTracker } from '../core/usage/index.js'
 import * as chatHistory from '../core/chat-history.js'
-import { gitPullWalnut, ensureRepo, commitIfDirty, autoSync, isGitAvailable, isLockContention } from '../integrations/git-sync.js'
+import { gitPullWalnut, ensureRepo, commitIfDirty, autoSync, isGitAvailable, isLockContention, checkRepoSize } from '../integrations/git-sync.js'
 import { registry } from '../core/integration-registry.js'
 import { loadPlugins, migrateConfigToPlugins, runPluginMigrations, getUnconfiguredPlugins } from '../core/integration-loader.js'
 import type { SyncPollContext } from '../core/integration-types.js'
@@ -1345,19 +1345,67 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       log.git.info('cloud mode: skipping git history compaction (Mac is the sole compactor)')
     } else {
       // Recover from any crashed compaction, then schedule if due
-      const { recoverFromCrashedCompaction, runScheduledCompaction } = await import('../integrations/git-compaction.js')
+      const { recoverFromCrashedCompaction } = await import('../integrations/git-compaction.js')
       recoverFromCrashedCompaction()
-      // Run compaction 60s after startup (low priority, non-blocking)
-      setTimeout(() => {
-        try {
-          const result = runScheduledCompaction()
-          if (result && !result.skipped) {
-            log.git.info('git compaction complete', { before: result.before, after: result.after })
-          }
-        } catch (err) {
-          log.git.warn('git compaction failed', { error: err instanceof Error ? err.message : String(err) })
+      // Compaction runs in a FORKED WORKER (dist/workers/git-compaction-worker.js):
+      // it is execSync-based and took 303s on the real 89k-commit repo — inline
+      // that would freeze the event loop for minutes. The worker self-gates on
+      // isCompactionDue(), so the daily re-check is a no-op until due.
+      // Failures MUST escalate to a notification, not just a warn line: a
+      // paging bug (ENOBUFS) silently killed every compaction run for months —
+      // the data repo grew to 15GB/161k commits and each 30s sync tick's push
+      // repacked 5.2GB, starving the whole machine (2026-07-25, load avg 211).
+      const { fork } = await import('node:child_process')
+      const { fileURLToPath } = await import('node:url')
+      const workerPath = (() => {
+        const baseDir = path.dirname(fileURLToPath(import.meta.url))
+        const candidates = [
+          path.join(baseDir, 'workers', 'git-compaction-worker.js'),
+          path.join(baseDir, '..', 'workers', 'git-compaction-worker.js'),
+          path.join(process.cwd(), 'dist', 'workers', 'git-compaction-worker.js'),
+        ]
+        return candidates.find((c) => fs.existsSync(c)) ?? null
+      })()
+      const reportCompactionFailure = (failure: string): void => {
+        log.git.warn('git compaction failed', { error: failure })
+        void publishErrorNotification({
+          title: 'Data Repo Compaction Failing',
+          body: `Git history compaction failed: ${failure}. The data repo will grow unbounded until this is fixed — check open-walnut logs -s git.`,
+          dedupScope: 'git:compaction',
+        })
+      }
+      const attemptCompaction = (retriesLeft = 2): void => {
+        if (!workerPath) {
+          reportCompactionFailure('compaction worker build is missing from dist/workers')
+          return
         }
-      }, 60_000)
+        const child = fork(workerPath, [], { stdio: 'ignore' })
+        let reply: { ok: boolean; result?: { skipped?: boolean; before: number; after: number; error?: string }; error?: string } | null = null
+        child.on('message', (msg) => { reply = msg as typeof reply })
+        child.on('exit', () => {
+          const result = reply?.ok ? reply.result : null
+          if (result && !result.skipped && !result.error) {
+            log.git.info('git compaction complete', { before: result.before, after: result.after })
+            return
+          }
+          // result.error (e.g. tree-verification mismatch) is returned, not
+          // thrown — treat it as a failure too or it stays invisible.
+          const failure = result?.error ?? (reply && !reply.ok ? reply.error ?? 'unknown error' : null)
+          if (!failure) return // skipped / not due — normal
+          // Lock contention with the 30s auto-commit tick is transient — retry
+          // off-phase instead of alerting (45s keeps us misaligned with the tick).
+          if (isLockContention(new Error(failure)) && retriesLeft > 0) {
+            log.git.debug('git compaction hit lock contention — retrying', { retriesLeft })
+            setTimeout(() => attemptCompaction(retriesLeft - 1), 45_000).unref?.()
+            return
+          }
+          reportCompactionFailure(failure)
+        })
+      }
+      // 75s start delay: deliberately NOT a multiple of the 30s sync tick —
+      // at 60s the two collided on index.lock at every single boot.
+      setTimeout(() => attemptCompaction(), 75_000)
+      setInterval(() => attemptCompaction(), 24 * 60 * 60 * 1000).unref?.()
     }
   }
 
@@ -2755,6 +2803,18 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
         import('../core/task-outbox.js')
           .then(({ reconcileAfterPull }) => reconcileAfterPull())
           .catch(() => { /* best-effort */ })
+      }
+      // Repo-size sentinel (self-throttled to one real check per 6h): the
+      // last line of defense if gitignores/compaction/timeout-reaping all
+      // fail again — a ballooning .git warns here instead of starving the box.
+      const sizeWarning = checkRepoSize()
+      if (sizeWarning) {
+        log.git.warn(sizeWarning)
+        void publishErrorNotification({
+          title: 'Data Repo Growing Too Large',
+          body: sizeWarning,
+          dedupScope: 'git:repo-size',
+        })
       }
     } catch (err) {
       if (isLockContention(err)) {

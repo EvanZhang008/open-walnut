@@ -1,4 +1,4 @@
-import { execSync, exec } from 'node:child_process';
+import { execSync, exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -18,6 +18,8 @@ export interface SyncStatus {
 
 const LOCAL_TIMEOUT = 30_000;
 const NETWORK_TIMEOUT = 15_000;
+/** Grace period between SIGTERM and SIGKILL when reaping a git process group. */
+const KILL_GRACE_MS = 3_000;
 
 /** Flag set by git-compaction to pause auto-commits during compaction. */
 export let compactionInProgress = false;
@@ -28,6 +30,10 @@ export function setCompactionInProgress(v: boolean): void {
 // Network git subcommands that may authenticate against a remote. Only these
 // get the credential-helper guard — local ops never touch credentials.
 const NETWORK_GIT_RE = /^(?:clone|fetch|pull|push|ls-remote)\b/;
+
+// Declared here (not next to the async git helpers below) because
+// credentialGuardArgsAsync() uses it and `const` bindings are not hoisted.
+const execAsync = promisify(exec);
 
 /**
  * When the repo's remote URL already embeds credentials (https://user:token@host),
@@ -57,6 +63,39 @@ export function credentialGuardArgs(cwd?: string): string[] {
   return [];
 }
 
+/**
+ * Async twin of credentialGuardArgs — MUST be used by the async tick path.
+ * The sync version spawns a child process with execSync, which blocks the whole
+ * event loop; gitAsync() called it on every network op, so the "async" sync path
+ * still froze all HTTP requests once per fetch/push. Remote URLs effectively never
+ * change at runtime, so the answer is cached after the first resolution.
+ */
+let credentialGuardCache: { cwd: string; args: string[] } | null = null;
+
+/** Drop the cached guard answer — call whenever the remote URL changes. */
+export function invalidateCredentialGuardCache(): void {
+  credentialGuardCache = null;
+}
+
+export async function credentialGuardArgsAsync(cwd?: string): Promise<string[]> {
+  const dir = cwd ?? WALNUT_HOME;
+  if (credentialGuardCache?.cwd === dir) return credentialGuardCache.args;
+
+  let args: string[] = [];
+  try {
+    const { stdout } = await execAsync('git config --get-regexp "remote\\..*\\.url"', {
+      cwd: dir,
+      timeout: LOCAL_TIMEOUT,
+      encoding: 'utf-8',
+    });
+    if (/https?:\/\/[^/\s]+@/.test(stdout)) args = ['-c', 'credential.helper='];
+  } catch {
+    // No remotes / not a repo — nothing to guard
+  }
+  credentialGuardCache = { cwd: dir, args };
+  return args;
+}
+
 export function git(args: string, options?: { cwd?: string; timeout?: number; env?: Record<string, string> }): string {
   const guard = NETWORK_GIT_RE.test(args) ? credentialGuardArgs(options?.cwd).join(' ') : '';
   return execSync(`git ${guard ? `${guard} ` : ''}${args}`, {
@@ -82,14 +121,82 @@ export function gitSafe(args: string, options?: { cwd?: string; timeout?: number
 // loop, and ALL HTTP requests stalled behind it. The tick path now uses these
 // async variants; the sync `git()`/`gitSafe()` stay for one-shot callers
 // (init, compaction, CLI) where blocking is acceptable.
-const execAsync = promisify(exec);
+
+/**
+ * Run git in its own process GROUP and kill the whole group on timeout.
+ *
+ * Why not execAsync's `timeout`: it signals only the top-level `git`, but a
+ * network op is a process TREE — `git push` → `git-remote-https` → `send-pack`
+ * → `pack-objects`. Killing the parent orphans the children (they reparent to
+ * pid 1) and they keep burning CPU and RAM. On a large data repo `pack-objects`
+ * alone holds ~1.9GB and runs for minutes, so every timed-out tick leaked one
+ * more. Observed 2026-07-25: four concurrent orphaned push trees, load average
+ * 211, swap exhausted, every HTTP request timing out at 15s.
+ *
+ * `detached: true` puts the child in a new process group (pgid == child pid),
+ * so `kill(-pgid)` reaps the parent AND every descendant.
+ */
+async function execGitGroup(
+  command: string,
+  opts: { cwd: string; timeout: number; env?: NodeJS.ProcessEnv },
+): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const child = spawn('/bin/sh', ['-c', command], {
+      cwd: opts.cwd,
+      env: opts.env,
+      detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    child.stdout?.setEncoding('utf-8');
+    child.stderr?.setEncoding('utf-8');
+    child.stdout?.on('data', (d: string) => { stdout += d; });
+    child.stderr?.on('data', (d: string) => { stderr += d; });
+
+    // Escalate SIGTERM → SIGKILL on the GROUP (negative pid). `git` traps TERM
+    // and can take a while to unwind a large pack, so don't trust it to exit.
+    const killGroup = (signal: NodeJS.Signals): void => {
+      if (child.pid === undefined) return;
+      try { process.kill(-child.pid, signal); } catch { /* already gone */ }
+    };
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killGroup('SIGTERM');
+      setTimeout(() => killGroup('SIGKILL'), KILL_GRACE_MS).unref?.();
+    }, opts.timeout);
+    timer.unref?.();
+
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (timedOut) {
+        reject(new Error(`git timed out after ${opts.timeout}ms (process group killed): ${command}`));
+      } else if (code === 0) {
+        resolve(stdout);
+      } else {
+        reject(new Error(`git exited ${code}: ${stderr.trim() || stdout.trim()}`));
+      }
+    });
+  });
+}
 
 export async function gitAsync(args: string, options?: { cwd?: string; timeout?: number; env?: Record<string, string> }): Promise<string> {
-  const guard = NETWORK_GIT_RE.test(args) ? credentialGuardArgs(options?.cwd).join(' ') : '';
-  const { stdout } = await execAsync(`git ${guard ? `${guard} ` : ''}${args}`, {
+  // Async guard resolution: the sync credentialGuardArgs() spawns via execSync and
+  // would block the event loop on every network op, defeating this whole path.
+  const guard = NETWORK_GIT_RE.test(args)
+    ? (await credentialGuardArgsAsync(options?.cwd)).join(' ')
+    : '';
+  const stdout = await execGitGroup(`git ${guard ? `${guard} ` : ''}${args}`, {
     cwd: options?.cwd ?? WALNUT_HOME,
     timeout: options?.timeout ?? LOCAL_TIMEOUT,
-    encoding: 'utf-8',
     env: options?.env ? { ...process.env, ...options.env } : undefined,
   });
   return stdout.trim();
@@ -223,6 +330,9 @@ export function setRemote(url: string): void {
     git(`remote add origin ${url}`);
   }
   hardenGitConfigPerms(url);
+  // The async guard caches per-cwd; changing the remote is the one thing that
+  // invalidates it (e.g. swapping a credentialed HTTPS URL for SSH).
+  invalidateCredentialGuardCache();
 }
 
 /**
@@ -238,7 +348,28 @@ export function hardenGitConfigPerms(url: string, repoDir?: string): void {
   }
 }
 
+/**
+ * Single-flight latch for sync(). The 30s tick used to rely on setTimeout
+ * self-rescheduling for serialization ("the next tick is armed only AFTER the
+ * current one finishes"), but that guarantee died with the timeout leak above:
+ * on timeout the tick RESOLVED and armed the next one while the orphaned git
+ * tree kept packing in the background. Every 60s stacked another layer.
+ *
+ * The latch makes overlap impossible even if a caller ignores the tick: a
+ * concurrent call joins the in-flight sync instead of starting a second one.
+ */
+let syncInflight: Promise<{ pulled: number; pushed: number; conflicts: number }> | null = null;
+
 export async function sync(): Promise<{ pulled: number; pushed: number; conflicts: number }> {
+  if (syncInflight) {
+    log.git.debug('git-sync already in flight — joining instead of stacking');
+    return syncInflight;
+  }
+  syncInflight = syncInner().finally(() => { syncInflight = null; });
+  return syncInflight;
+}
+
+async function syncInner(): Promise<{ pulled: number; pushed: number; conflicts: number }> {
   let pulled = 0;
   let pushed = 0;
   let conflicts = 0;
@@ -306,10 +437,45 @@ export async function sync(): Promise<{ pulled: number; pushed: number; conflict
 async function lwwMerge(branch: string): Promise<{ merged: boolean; conflicts: number }> {
   const remoteRef = `origin/${branch}`;
 
-  if (await gitSafeAsync(`fetch origin ${branch}`, { timeout: NETWORK_TIMEOUT }) === null) {
-    // Network/transport failure — nothing to merge; push below will fail too.
-    log.git.warn('git-sync fetch failed — skipping merge this cycle', { branch });
-    return { merged: false, conflicts: 0 };
+  // Clear stale locks BEFORE fetching: a crashed git can leave a ref lock that
+  // makes every future fetch fail. Previously only commitIfDirty() did this and
+  // only for index.lock, so a stale refs/remotes/origin/<branch>.lock wedged sync
+  // permanently — it never self-healed and the warning below repeated forever.
+  clearStaleLock();
+
+  let fetchError: unknown = null;
+  try {
+    await gitAsync(`fetch origin ${branch}`, { timeout: NETWORK_TIMEOUT });
+  } catch (err) {
+    fetchError = err;
+  }
+
+  if (fetchError) {
+    // Distinguish lock contention from a real network failure: gitSafeAsync used
+    // to swallow the error entirely, so a self-healable lock looked identical to
+    // an unreachable remote. On lock contention, force-clear and retry once.
+    if (isLockContention(fetchError)) {
+      clearStaleLock(0);
+      try {
+        await gitAsync(`fetch origin ${branch}`, { timeout: NETWORK_TIMEOUT });
+        fetchError = null;
+        log.git.warn('git-sync fetch recovered after clearing a stale lock', { branch });
+      } catch (retryErr) {
+        fetchError = retryErr;
+      }
+    }
+
+    if (fetchError) {
+      const detail = fetchError instanceof Error ? fetchError.message : String(fetchError);
+      log.git.warn('git-sync fetch failed — skipping merge this cycle', {
+        branch,
+        // Surface WHY. 246 consecutive failures were logged without ever naming
+        // the cause, which is why a 2.5-day-old lock went unnoticed.
+        error: detail.slice(0, 400),
+        lockContention: isLockContention(fetchError),
+      });
+      return { merged: false, conflicts: 0 };
+    }
   }
 
   const localHead = await gitSafeAsync('rev-parse HEAD');
@@ -459,32 +625,126 @@ export async function gitPullWalnut(): Promise<void> {
 }
 
 /**
- * Remove a stale .git/index.lock if it exists and is older than the threshold.
+ * Remove stale git lock files older than the threshold.
  * The lock file format varies by git version (binary index copy, sometimes with PID).
  * We use pure age-based removal (default 60s) since any normal git op finishes quickly.
+ *
+ * Covers BOTH lock families — a crashed git leaves either behind:
+ *   - .git/index.lock             → blocks `add`/`commit`
+ *   - .git/refs/**\/<name>.lock   → blocks `fetch`/`pull` ref updates
+ * Only index.lock used to be cleaned, so a stale ref lock survived indefinitely:
+ * one sat in refs/remotes/origin/main.lock for 2.5 days and failed every 30s sync
+ * tick (246 failures), each retry re-running the blocking git chain.
  */
 export function clearStaleLock(maxAgeMs = 60_000): boolean {
-  const lockPath = path.join(WALNUT_HOME, '.git', 'index.lock');
-  try {
-    const stat = fs.statSync(lockPath);
-    const ageMs = Date.now() - stat.mtimeMs;
-    if (ageMs <= maxAgeMs) return false;
+  const gitDir = path.join(WALNUT_HOME, '.git');
+  let removed = false;
 
-    fs.unlinkSync(lockPath);
-    return true;
-  } catch {
-    // File doesn't exist or can't stat — nothing to do
-  }
-  return false;
+  const removeIfStale = (lockPath: string): void => {
+    try {
+      const stat = fs.statSync(lockPath);
+      if (Date.now() - stat.mtimeMs <= maxAgeMs) return;
+      fs.unlinkSync(lockPath);
+      removed = true;
+      log.git.warn('git-sync removed stale lock', { lock: path.relative(gitDir, lockPath) });
+    } catch {
+      // Missing / unreadable / already gone — nothing to do
+    }
+  };
+
+  removeIfStale(path.join(gitDir, 'index.lock'));
+
+  // Walk .git/refs for *.lock. Depth-bounded and tiny in practice (a handful of
+  // refs), so this stays cheap enough for the 30s tick.
+  const walkRefs = (dir: string, depth: number): void => {
+    if (depth > 6) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walkRefs(full, depth + 1);
+      else if (entry.name.endsWith('.lock')) removeIfStale(full);
+    }
+  };
+  walkRefs(path.join(gitDir, 'refs'), 0);
+
+  return removed;
 }
 
 /**
- * Check whether an error is a git index.lock contention error.
- * Matches git's specific error: "Unable to create '...index.lock': File exists."
+ * Check whether an error is a git lock contention error.
+ * Matches both lock families git can block on:
+ *   - "Unable to create '...index.lock': File exists."          (add/commit)
+ *   - "cannot lock ref 'refs/...': Unable to create '....lock'" (fetch/pull)
+ * Matching only index.lock made every ref-lock failure look like a network error,
+ * so the self-heal retry never fired.
  */
 export function isLockContention(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
-  return msg.includes('index.lock') && msg.includes('File exists');
+  if (!msg.includes('.lock')) return false;
+  return msg.includes('File exists') || msg.includes('cannot lock ref');
+}
+
+// ── Repo-size sentinel ───────────────────────────────────────────────────────
+// Last line of defense for the 2026-07-25 starvation incident: every layer
+// above (derived-file gitignores, history compaction, timeout reaping) can
+// fail independently, and compaction in particular failed SILENTLY for months
+// (ENOBUFS) while .git grew to 15GB. Whatever breaks next, this check makes
+// sure a ballooning data repo surfaces as a warning long before it can take
+// the machine down. Checked from the sync tick, at most once per interval.
+
+/** Warn when the data repo's .git exceeds this many bytes (3GB). */
+const REPO_SIZE_WARN_BYTES = 3 * 1024 * 1024 * 1024;
+const REPO_SIZE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6h
+
+let lastRepoSizeCheck = 0;
+
+/** du -sk equivalent for .git via pack files only — packs dominate (>95%) and
+ * enumerating just objects/pack avoids walking hundreds of loose-object dirs. */
+function measureGitDirBytes(repoDir: string): number {
+  let total = 0;
+  const addDir = (dir: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (!e.isFile()) continue;
+      try {
+        total += fs.statSync(path.join(dir, e.name)).size;
+      } catch { /* raced with gc — skip */ }
+    }
+  };
+  addDir(path.join(repoDir, '.git', 'objects', 'pack'));
+  return total;
+}
+
+/**
+ * Periodic sentinel: returns a human-readable warning when the data repo has
+ * grown past the threshold, null otherwise. Self-throttles to one real check
+ * per REPO_SIZE_CHECK_INTERVAL_MS; callers can invoke it every tick.
+ */
+export function checkRepoSize(repoDir = WALNUT_HOME): string | null {
+  const now = Date.now();
+  if (now - lastRepoSizeCheck < REPO_SIZE_CHECK_INTERVAL_MS) return null;
+  lastRepoSizeCheck = now;
+
+  const bytes = measureGitDirBytes(repoDir);
+  if (bytes < REPO_SIZE_WARN_BYTES) return null;
+
+  const gb = (bytes / 1024 / 1024 / 1024).toFixed(1);
+  return `data repo .git has grown to ${gb}GB (threshold 3GB) — compaction may be failing; check open-walnut logs -s git`;
+}
+
+/** Test hook: reset the sentinel's throttle window. */
+export function resetRepoSizeCheckForTest(): void {
+  lastRepoSizeCheck = 0;
 }
 
 /**

@@ -139,6 +139,38 @@ function parseGitLog(raw: string): Commit[] {
 }
 
 // ---------------------------------------------------------------------------
+// Paged commit collection
+// ---------------------------------------------------------------------------
+
+/** Commits per `git log` page. ~100B/line → 5k ≈ 0.5MB, half of execSync's 1MB maxBuffer. */
+const LOG_PAGE_SIZE = 5_000;
+
+/**
+ * Collect every commit on HEAD, oldest first, in fixed-size pages so no single
+ * child-process read can hit execSync's maxBuffer regardless of repo size.
+ * Pages walk backwards from HEAD (`--skip`), then the whole list is reversed —
+ * `--reverse --max-count` would return the OLDEST N instead of paging.
+ */
+export function collectCommitsPaged(repoDir: string): Commit[] {
+  const opts = { cwd: repoDir };
+  const pages: Commit[][] = [];
+
+  for (let skip = 0; ; skip += LOG_PAGE_SIZE) {
+    const raw = git(
+      `log --format="%H %aI %s" --max-count=${LOG_PAGE_SIZE} --skip=${skip}`,
+      opts,
+    );
+    const page = parseGitLog(raw);
+    if (page.length === 0) break;
+    pages.push(page);
+    if (page.length < LOG_PAGE_SIZE) break;
+  }
+
+  // Pages are newest→oldest and each page is newest-first — flatten then flip.
+  return pages.flat().reverse();
+}
+
+// ---------------------------------------------------------------------------
 // Core compaction
 // ---------------------------------------------------------------------------
 
@@ -155,9 +187,13 @@ export function compactGitHistory(repoDir = WALNUT_HOME): CompactionResult {
     git('checkout main', opts);
   }
 
-  // 1. Collect all commits (oldest first)
-  const logRaw = git('log --format="%H %aI %s" --reverse', opts);
-  const commits = parseGitLog(logRaw);
+  // 1. Collect all commits (oldest first).
+  // Paged: one `git log` over the whole history blew execSync's 1MB default
+  // maxBuffer once the repo passed ~10k commits (ENOBUFS) — which silently
+  // disabled compaction on exactly the repos that needed it most. At 30s
+  // auto-commits that's ~3.5 days of history; the 2026-07-25 incident repo had
+  // 161k commits and had never compacted once.
+  const commits = collectCommitsPaged(repoDir);
 
   if (commits.length < 50) {
     return { skipped: true, before: commits.length, after: commits.length };
@@ -178,50 +214,56 @@ export function compactGitHistory(repoDir = WALNUT_HOME): CompactionResult {
   writeState(repoDir, { phase: 'building', backup: backupName, startedAt: new Date().toISOString() });
 
   try {
-    // 4. Build compacted branch (orphan)
-    git('checkout --orphan compaction-wip', opts);
-    // Clean the index (orphan branch starts with all files staged)
-    gitSafe('rm -rf .', opts);
-
+    // 4. Build the compacted chain with `commit-tree` — NO working-tree I/O.
+    // The old implementation materialized every kept commit via
+    // `rm -rf . && checkout <hash> -- . && add -A && commit`: four child
+    // processes plus a full working-tree rewrite PER COMMIT. On the real data
+    // repo (2.5GB tree, ~20k commits inside the keep-everything window) that
+    // is 10+ hours — compaction could never finish even without ENOBUFS.
+    // `commit-tree` snapshots each kept commit's EXISTING tree object into a
+    // new parent chain directly in the object DB: O(1) per commit, and the
+    // resulting trees are byte-identical by construction.
+    let parent = '';
+    let newHead = '';
     for (const commit of selected) {
-      // Clear working tree then restore from commit's tree.
-      // checkout <hash> -- . is additive (doesn't delete missing files),
-      // so we must rm first to handle deleted files correctly.
-      gitSafe('rm -rf .', opts);
-      git(`checkout ${commit.hash} -- .`, opts);
-      git('add -A', opts);
-
-      // Commit with the original timestamp preserved
       const safeSubject = commit.subject.replace(/"/g, '\\"');
       const message = commit === selected[0] && selected.length < commits.length
         ? `compacted: ${safeSubject}`
         : safeSubject;
 
-      git(`commit --allow-empty -m "${message}"`, {
-        ...opts,
-        env: {
-          GIT_AUTHOR_DATE: commit.date,
-          GIT_COMMITTER_DATE: commit.date,
+      newHead = git(
+        `commit-tree ${commit.hash}^{tree}${parent ? ` -p ${parent}` : ''} -m "${message}"`,
+        {
+          ...opts,
+          env: {
+            GIT_AUTHOR_DATE: commit.date,
+            GIT_COMMITTER_DATE: commit.date,
+          },
         },
-      });
+      );
+      parent = newHead;
     }
+    git(`update-ref refs/heads/compaction-wip ${newHead}`, opts);
 
-    // 5. Verify: final tree of compaction-wip must match main exactly
+    // 5. Verify: final tree of compaction-wip must match main exactly.
+    // Tree-hash equality — the strongest possible check, and it works without
+    // touching the working tree (there is no checkout to compare anymore).
     writeState(repoDir, { phase: 'verified', backup: backupName, startedAt: new Date().toISOString() });
-    const diff = gitSafe('diff compaction-wip main', opts);
-    if (diff && diff.length > 0) {
-      // MISMATCH — abort
-      git('checkout main', opts);
-      gitSafe('branch -D compaction-wip', opts);
+    const wipTree = gitSafe('rev-parse compaction-wip^{tree}', opts);
+    const mainTree = gitSafe('rev-parse main^{tree}', opts);
+    if (!wipTree || wipTree !== mainTree) {
+      // MISMATCH — abort (main was never touched)
+      gitSafe('update-ref -d refs/heads/compaction-wip', opts);
       removeState(repoDir);
       return { before: commits.length, after: commits.length, error: 'verification failed: trees differ' };
     }
 
     // 6. Atomic swap: point main at compaction-wip HEAD
-    const newHead = git('rev-parse compaction-wip', opts);
     git(`update-ref refs/heads/main ${newHead}`, opts);
-    git('checkout main', opts);
-    gitSafe('branch -D compaction-wip', opts);
+    // The working tree still matches (same tree hash) — refresh the index so
+    // a subsequent `status` doesn't report phantom changes.
+    gitSafe('reset --mixed HEAD', opts);
+    gitSafe('update-ref -d refs/heads/compaction-wip', opts);
     writeState(repoDir, { phase: 'swapped', backup: backupName, startedAt: new Date().toISOString() });
 
     // 7. Cleanup (non-fatal)

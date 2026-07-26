@@ -16,6 +16,9 @@ import {
   ensureRepo,
   ensureCriticalIgnores,
   credentialGuardArgs,
+  credentialGuardArgsAsync,
+  clearStaleLock,
+  isLockContention,
   hardenGitConfigPerms,
 } from '../../src/integrations/git-sync.js';
 import { WALNUT_HOME } from '../../src/constants.js';
@@ -195,6 +198,95 @@ describe('credentialGuardArgs', () => {
 
   it('returns nothing outside a git repo', () => {
     expect(credentialGuardArgs(tmpDir)).toEqual([]);
+  });
+
+  // The async tick path called the execSync-based sync version on every network
+  // op, blocking the event loop (all HTTP requests stalled) once per fetch/push.
+  it('async variant agrees with the sync one on a credentialed remote', async () => {
+    initSync();
+    setRemote('https://walnut:deadbeef00112233@cloud.example.com/git/data');
+    await expect(credentialGuardArgsAsync(tmpDir)).resolves.toEqual(['-c', 'credential.helper=']);
+  });
+
+  it('async variant returns nothing when the remote has no credentials', async () => {
+    initSync();
+    setRemote('https://cloud.example.com/git/data');
+    await expect(credentialGuardArgsAsync(tmpDir)).resolves.toEqual([]);
+  });
+});
+
+// Regression: a stale refs/remotes/origin/main.lock (crashed git, no owning
+// process) sat for 2.5 days and failed all 246 sync ticks. Only index.lock was
+// ever cleaned, and isLockContention() only matched index.lock — so the
+// self-heal retry never fired and the UI stalled on every retry.
+describe('stale git lock recovery', () => {
+  const REF_LOCK = ['refs', 'remotes', 'origin', 'main.lock'];
+
+  const writeLock = async (parts: string[], ageMs: number): Promise<string> => {
+    const full = path.join(tmpDir, '.git', ...parts);
+    await fsp.mkdir(path.dirname(full), { recursive: true });
+    await fsp.writeFile(full, '');
+    const when = new Date(Date.now() - ageMs);
+    await fsp.utimes(full, when, when);
+    return full;
+  };
+
+  it('clears a stale REF lock, not just index.lock', async () => {
+    initSync();
+    const refLock = await writeLock(REF_LOCK, 10 * 60_000);
+
+    expect(clearStaleLock()).toBe(true);
+    await expect(fsp.stat(refLock)).rejects.toThrow();
+  });
+
+  it('clears a stale index.lock (existing behavior preserved)', async () => {
+    initSync();
+    const indexLock = await writeLock(['index.lock'], 10 * 60_000);
+
+    expect(clearStaleLock()).toBe(true);
+    await expect(fsp.stat(indexLock)).rejects.toThrow();
+  });
+
+  it('leaves a FRESH lock alone — a live git op must not be sabotaged', async () => {
+    initSync();
+    const refLock = await writeLock(REF_LOCK, 2_000);
+    const indexLock = await writeLock(['index.lock'], 2_000);
+
+    expect(clearStaleLock()).toBe(false);
+    await expect(fsp.stat(refLock)).resolves.toBeDefined();
+    await expect(fsp.stat(indexLock)).resolves.toBeDefined();
+  });
+
+  it('clears nested ref locks (tags, multi-segment branch names)', async () => {
+    initSync();
+    const nested = await writeLock(['refs', 'remotes', 'origin', 'feature', 'a', 'b.lock'], 10 * 60_000);
+
+    expect(clearStaleLock()).toBe(true);
+    await expect(fsp.stat(nested)).rejects.toThrow();
+  });
+
+  it('is a no-op when there are no locks', () => {
+    initSync();
+    expect(clearStaleLock()).toBe(false);
+  });
+
+  it('isLockContention matches ref-lock errors, not just index.lock', () => {
+    const refErr = new Error(
+      "error: cannot lock ref 'refs/remotes/origin/main': Unable to create " +
+        "'/home/u/.open-walnut/.git/refs/remotes/origin/main.lock': File exists.",
+    );
+    const indexErr = new Error(
+      "fatal: Unable to create '/home/u/.open-walnut/.git/index.lock': File exists.",
+    );
+
+    expect(isLockContention(refErr)).toBe(true);
+    expect(isLockContention(indexErr)).toBe(true);
+  });
+
+  it('isLockContention does NOT match real network failures', () => {
+    expect(isLockContention(new Error('fatal: unable to access ... Could not resolve host'))).toBe(false);
+    expect(isLockContention(new Error('fatal: Authentication failed'))).toBe(false);
+    expect(isLockContention(new Error('Command failed: git fetch origin main'))).toBe(false);
   });
 });
 
