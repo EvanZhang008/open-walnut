@@ -277,7 +277,10 @@ describe('isWithinActiveHours edge cases', () => {
     const now = new Date();
     const h = now.getHours();
     const start = `${String(h).padStart(2, '0')}:00`;
-    const end = `${String(h).padStart(2, '0')}:59`;
+    // End is EXCLUSIVE, so HH:59 excludes the 59th minute — this assertion used
+    // to fail for one minute in every hour (caught at 22:59). Use the top of the
+    // next hour so the range covers the whole current hour whatever the minute.
+    const end = `${String((h + 1) % 24).padStart(2, '0')}:00`;
     expect(isWithinActiveHours(`${start}-${end}`)).toBe(true);
   });
 

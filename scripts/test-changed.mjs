@@ -21,6 +21,20 @@ const args = process.argv.slice(2);
 const FULL_TIERS = args.includes('--tiers');
 const BASE = process.env.WALNUT_DIFF_BASE ?? 'HEAD';
 
+// This script is a LOCAL developer convenience, not a CI gate. Its "no changes →
+// exit 0" path is correct for a working tree and catastrophic for CI: a clean PR
+// checkout has no uncommitted changes, so it would run nothing and report green.
+// Refuse to be a gate rather than silently be a broken one.
+if (process.env.CI && !process.env.WALNUT_DIFF_BASE) {
+  console.error(
+    'test-changed.mjs is a local tool and must not gate CI: on a clean checkout it\n' +
+      'would find no uncommitted changes, run nothing, and exit 0 (a green no-op).\n' +
+      'Run the tiers explicitly in CI, or set WALNUT_DIFF_BASE=origin/main to compare\n' +
+      'against the base branch deliberately.',
+  );
+  process.exit(2);
+}
+
 /** Run a git command, returning '' rather than throwing (fresh clone, no commits, …). */
 function git(cmd) {
   try {
@@ -49,13 +63,17 @@ function changedFiles() {
  * `null` tiers mean "this path cannot affect any vitest tier" (docs, iOS, CI meta).
  */
 const RULES = [
+  // tests/e2e/** owns the e2e tier; a change there (or to the session/daemon
+  // transport it exercises) is the only thing that warrants paying for it.
+  { re: /^tests\/e2e\//, tiers: ['e2e'], why: 'e2e specs' },
+  { re: /^src\/providers\/|^src\/web\/(server|ws)/, tiers: ['quick', 'slow', 'e2e'], why: 'session transport — e2e covers it' },
   { re: /^(src|tests)\//, tiers: ['quick', 'slow'], why: 'server/core code + its tests' },
   { re: /^vitest(\..*)?\.config\.ts$|^tests\/setup\//, tiers: ['quick', 'slow'], why: 'test infrastructure' },
   { re: /^playwright\.config\.ts$/, tiers: [], why: 'browser tier only — run `npx playwright test`' },
   { re: /^tsup\.config\.ts$|^tsconfig.*\.json$/, tiers: ['quick'], why: 'build/type config' },
   { re: /^web\/src\//, tiers: ['web'], why: 'frontend — covered by the web-rooted configs + Playwright' },
   { re: /^scripts\//, tiers: ['quick'], why: 'scripts are exercised by unit-level tests' },
-  { re: /^package(-lock)?\.json$/, tiers: ['quick', 'slow'], why: 'dependency change — anything can break' },
+  { re: /^package(-lock)?\.json$/, tiers: ['quick', 'slow', 'web'], why: 'dependency change — anything can break' },
   { re: /^(docs|site|ios-native|infra|\.github)\//, tiers: [], why: 'no vitest coverage' },
   { re: /\.(md|svg|png|jpg|gif|mp4|plist|yml|yaml)$/, tiers: [], why: 'non-code' },
 ];
@@ -64,7 +82,11 @@ const TIER_CMDS = {
   quick: ['vitest', 'run', '--config', 'vitest.quick.config.ts'],
   slow: ['vitest', 'run', '--config', 'vitest.slow.config.ts'],
   e2e: ['vitest', 'run', '--config', 'vitest.e2e.config.ts'],
-  web: ['vitest', 'run', '--config', 'vitest.diff-view.config.ts'],
+  // ALL FOUR frontend-rooted configs, via the npm script. Pointing this at
+  // vitest.diff-view.config.ts alone silently skipped markdown, workflow-graph
+  // and notes-roundtrip — three quarters of the frontend coverage — while
+  // reporting the 'web' tier as run.
+  web: ['npm', 'run', 'test:frontend:ci'],
 };
 
 const files = changedFiles();
@@ -113,11 +135,17 @@ const env = { ...process.env, WALNUT_TEST_RUN_ID: process.env.WALNUT_TEST_RUN_ID
 let failed = 0;
 for (const tier of order) {
   // In narrow mode, let vitest intersect the tier with the diff's module graph.
-  // The slow/e2e tiers are already small, so narrowing them adds no value.
+  // Only the quick tier: slow/e2e are already small, and the web tier runs
+  // through an npm script that takes no vitest flags.
   const narrow = !FULL_TIERS && tier === 'quick' ? ['--changed', BASE] : [];
-  const argv = [...TIER_CMDS[tier], ...narrow];
-  console.log(`▶ [${tier}] npx ${argv.join(' ')}\n`);
-  const r = spawnSync('npx', argv, { stdio: 'inherit', env });
+  const [bin, ...rest] = TIER_CMDS[tier];
+  // The web tier shells out to `npm run …`; everything else is a bare vitest
+  // invocation that needs npx. Deriving the binary from the command (rather than
+  // hardcoding npx) keeps those two shapes from silently mixing.
+  const cmd = bin === 'npm' ? 'npm' : 'npx';
+  const argv = bin === 'npm' ? [...rest] : [bin, ...rest, ...narrow];
+  console.log(`▶ [${tier}] ${cmd} ${argv.join(' ')}\n`);
+  const r = spawnSync(cmd, argv, { stdio: 'inherit', env, shell: process.platform === 'win32' });
   const code = r.status ?? 1;
   console.log(code === 0 ? `\n✓ [${tier}] passed\n` : `\n✗ [${tier}] failed (exit ${code})\n`);
   if (code !== 0) failed = code;

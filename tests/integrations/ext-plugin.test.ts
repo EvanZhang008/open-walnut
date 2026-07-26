@@ -179,7 +179,7 @@ describe.skipIf(!PLUGIN_INSTALLED)('External plugin registration', () => {
     // Quoted: `ext-sync` contains a hyphen, so a bare key is a syntax error.
     // Unquoted, esbuild fails to transform this file — which broke whole-suite
     // collection (`vitest related`, coverage runs) for every other test too.
-    const syncedTask = extPluginTask({ ext: { 'ext-sync': { id: 'SIM-123' } } });
+    const syncedTask = extPluginTask({ ext: { 'ext-sync': { id: 'EXT-123' } } });
     expect(collected.display!.isSynced(syncedTask)).toBe(true);
 
     const unsyncedTask = extPluginTask();
@@ -193,8 +193,8 @@ describe.skipIf(!PLUGIN_INSTALLED)('External plugin registration', () => {
     const { api, collected } = extPluginApi();
     register(api);
 
-    const taskWithUrl = extPluginTask({ external_url: 'https://ext-sync.example.com/SIM-123' } as any);
-    expect(collected.display!.getExternalUrl(taskWithUrl)).toBe('https://ext-sync.example.com/SIM-123');
+    const taskWithUrl = extPluginTask({ external_url: 'https://ext-sync.example.com/EXT-123' } as any);
+    expect(collected.display!.getExternalUrl(taskWithUrl)).toBe('https://ext-sync.example.com/EXT-123');
 
     const taskWithoutUrl = extPluginTask();
     expect(collected.display!.getExternalUrl(taskWithoutUrl)).toBeNull();
@@ -234,7 +234,7 @@ describe.skipIf(!PLUGIN_INSTALLED)('External plugin migration', () => {
     register(api);
 
     const task = extPluginTask() as any;
-    task['ext-sync_id'] = 'SIM-456';
+    task['ext-sync_id'] = 'EXT-456';
     task['ext-sync_short_id'] = 'S456';
     task['ext-sync_comment_id'] = 'comment-789';
     task['ext-sync_tags'] = ['bug', 'p1'];
@@ -242,7 +242,7 @@ describe.skipIf(!PLUGIN_INSTALLED)('External plugin migration', () => {
     const migrated = collected.migrations[0]([task]);
 
     expect(migrated[0].ext?.['ext-sync']).toEqual({
-      id: 'SIM-456',
+      id: 'EXT-456',
       short_id: 'S456',
       comment_id: 'comment-789',
       tags: ['bug', 'p1'],
@@ -283,7 +283,7 @@ describe.skipIf(!PLUGIN_INSTALLED)('External plugin migration', () => {
     register(api);
 
     const task = extPluginTask() as any;
-    task['ext-sync_id'] = 'SIM-100';
+    task['ext-sync_id'] = 'EXT-100';
     task['ext-sync_short_id'] = 'S100';
 
     const first = collected.migrations[0]([task]);

@@ -172,7 +172,7 @@ death).
 npm run build                 # Build server → dist/
 cd web && npx vite build      # Build React SPA
 cd web && npx vite            # Frontend hot reload (:5173, proxies to :3456)
-npm run test:quick            # ⭐ DEFAULT — 311 pure-logic files, ~51s
+npm run test:quick            # ⭐ DEFAULT — 306 pure-logic files, ~51s
 npm test                      # Everything, sequential tiers (~10 min)
 ```
 
@@ -187,7 +187,7 @@ Full details: [Testing pipeline](./docs/reference/testing-pipeline.md).
 | L3 pre-commit | `npm run test:pre-commit` | 1–6 min | before a larger commit — maps your diff → affected tiers |
 | L4 CI | GitHub Actions, automatic | free | every push/PR |
 
-**The suite has a 119-failure baseline on `main`** (stale imports of exports deleted 2026-05, tests needing a real CLI/daemon, some load flakes). So judge your change with `npm run test:baseline` — it fails ONLY on failures absent from `tests/setup/known-failures.json`. Never judge from the raw aggregate count. When you fix some, `npm run test:baseline:record`.
+**The suite has a 118-failure baseline on `main`** (stale imports of exports deleted 2026-05, tests needing a real CLI/daemon, some load flakes). So judge your change with `npm run test:baseline` — it fails ONLY on failures absent from `tests/setup/known-failures.json`. Never judge from the raw aggregate count. When you fix some, `npm run test:baseline:record`.
 
 **CI failed?** `scripts/ci-status.sh brief` distils the run into the few real error lines; fix locally (free) rather than running an AI inside CI (paid).
 

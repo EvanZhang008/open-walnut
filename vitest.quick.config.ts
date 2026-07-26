@@ -45,9 +45,21 @@ config.test!.exclude = [
   ...SLOW_TEST_FILES,
   '**/*.live.test.ts',
   // Frontend-rooted suites — their deps live in web/node_modules and they need a
-  // DOM shim, so they run under their own configs (see package.json test:web).
+  // DOM shim, so they run ONLY under their own configs (`npm run test:frontend:ci`).
+  //
+  // All four must be listed. Missing tests/web/markdown/** made 3 files
+  // permanently red in the quick tier for a reason unrelated to the code under
+  // test: `dompurify` is not installed at the repo root, so without
+  // vitest.markdown.config.ts's alias into web/node_modules they die at import
+  // with `notePurify.addHook is not a function`. Worse, an import-time death
+  // produces ZERO assertionResults, so they were invisible to the baseline gate
+  // too (see scripts/test-baseline.mjs). tests/web/workflow-graph/** does pass
+  // here, but is excluded for the same reason: one owner per test file, so it
+  // can't run twice and can't drift between two configs.
   'tests/web/notes-roundtrip/**',
   'tests/web/diff-view/**',
+  'tests/web/markdown/**',
+  'tests/web/workflow-graph/**',
 ];
 
 export default config;

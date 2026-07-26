@@ -53,8 +53,21 @@ const failures = new Set();
 const report = JSON.parse(fs.readFileSync(reportFile, 'utf-8'));
 for (const file of report.testResults ?? []) {
   const rel = file.name.replace(/^.*?(tests\/.*)$/, '$1');
-  for (const a of file.assertionResults ?? []) {
+  const asserts = file.assertionResults ?? [];
+  for (const a of asserts) {
     if (a.status === 'failed') failures.add(`${rel} :: ${a.fullName}`);
+  }
+
+  // A file that dies at IMPORT/COLLECTION time reports status:'failed' with an
+  // EMPTY assertionResults array — verified: a bad import yields
+  // numFailedTestSuites:1, numFailedTests:0, numTotalTests:0. Harvesting only
+  // assertion results therefore made the single most likely regression class of
+  // a refactor — a broken import, a top-level throw, a module-scope crash —
+  // completely invisible: zero new keys, "no new failures", exit 0.
+  //
+  // Synthesize a per-file key so those DO surface and can be baselined.
+  if (file.status === 'failed' && asserts.length === 0) {
+    failures.add(`${rel} :: <file failed to load or collect>`);
   }
 }
 const filesRun = (report.testResults ?? []).length;
@@ -64,7 +77,11 @@ fs.rmSync(reportFile, { force: true });
 // A config that matches nothing, a collection error, or a crashed worker pool all
 // produce a valid-but-empty report — which would otherwise read as "no new
 // failures" and pass the gate while testing NOTHING. Refuse that outcome.
-const MIN_FILES = Number(process.env.WALNUT_BASELINE_MIN_FILES ?? 200);
+// 290 against an actual 306 (2026-07-25): tight enough that losing even ~5% of
+// the tier trips it, loose enough to survive normal churn. A floor far below the
+// real count (the first version used 200) would let a hundred files silently
+// vanish from collection and still call it a pass.
+const MIN_FILES = Number(process.env.WALNUT_BASELINE_MIN_FILES ?? 290);
 if (filesRun < MIN_FILES) {
   console.error(
     `\nOnly ${filesRun} test file(s) ran (${testsRun} tests) — expected at least ${MIN_FILES}.\n` +

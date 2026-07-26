@@ -12,15 +12,15 @@ For the layered pipeline (which tier to run when), see
 ## Run the cheap layer (start here)
 
 ```bash
-npm run test:quick          # 311 pure-logic files, ~51s — the default
+npm run test:quick          # 306 pure-logic files, ~51s — the default
 npm run test:focus <path>   # one file/dir, 0.3-30s
 npm run test:baseline       # ⭐ the honest verdict: fails ONLY on NEW failures
 npm run test:pre-commit     # maps your diff → affected tiers
 ```
 
-**`npm run test:baseline` is how you judge a change.** The suite carries **119
+**`npm run test:baseline` is how you judge a change.** The suite carries **118
 pre-existing failures on `main`** (recorded in `tests/setup/known-failures.json`,
-measured in a clean clone of `e399786`). The baseline gate ignores those and fails
+measured in a clean clone of `844dc84`). The baseline gate ignores those and fails
 only on failures absent from the list, so you get a yes/no answer instead of
 eyeballing an aggregate. Fixed some? `npm run test:baseline:record`.
 
@@ -70,7 +70,7 @@ All tiers share ONE worker budget: `tests/setup/worker-budget.ts` (2 locally, 4 
 
 | Tier | Config File | Files | Time | Timeout |
 |---|---|---|---|---|
-| **Quick** ⭐ | `vitest.quick.config.ts` | 311 | 51s @4w | 15s |
+| **Quick** ⭐ | `vitest.quick.config.ts` | 306 | 51s @4w | 15s |
 | **Slow** | `vitest.slow.config.ts` | 26 | 311s | 60s |
 | **Unit** | `vitest.unit.config.ts` | 224 | — | 30s |
 | **Integration** | `vitest.integration.config.ts` | 112 | — | 60s |
@@ -78,7 +78,7 @@ All tiers share ONE worker budget: `tests/setup/worker-budget.ts` (2 locally, 4 
 | **Browser** | `playwright.config.ts` | — | — | 30s |
 | **Live** | `vitest.live.config.ts` | 11 | — | 300s (costs money) |
 
-**quick + slow = an exact partition** (311 + 26 = 337, zero overlap, zero orphans)
+**quick + slow = an exact partition** (306 + 26 = 332, zero overlap, zero orphans)
 of everything except e2e/commands/live/frontend-rooted. Membership is decided by
 *measured* time — the >2s list lives in `tests/setup/slow-tests.ts`. Re-measure
 rather than hand-editing it.
@@ -110,7 +110,7 @@ which is a perf artifact, not a correctness one.
 ### Known pre-existing failures (NOT regressions — don't chase these)
 
 **These are now enumerated machine-readably in `tests/setup/known-failures.json`
-(119 entries, measured 2026-07-25 in a clean clone of `e399786`), so prefer
+(118 entries, measured 2026-07-25 in a clean clone of `844dc84`), so prefer
 `npm run test:baseline` over the manual HEAD-baseline dance below** — it does the
 same comparison automatically and exits non-zero only on genuinely new failures.
 The prose below explains *why* the big clusters fail.

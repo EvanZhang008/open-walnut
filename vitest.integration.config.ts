@@ -30,12 +30,20 @@ const config = mergeConfig(
 // excludes 'tests/commands/**', and a merged exclude would CONCATENATE — so this
 // tier's `include` of tests/commands was silently dead (2 files ran nowhere).
 //
-// notes-roundtrip drives the FRONTEND editor serializer; diff-view drives the
-// FRONTEND diff pipeline (react-diff-view/diff). Both have deps in
-// web/node_modules, so they run under their own web-rooted configs
-// (vitest.notes-roundtrip.config.ts / vitest.diff-view.config.ts) — never the
-// node-env integration tier where those deps don't resolve.
-config.test!.exclude = ['**/*.live.test.ts', 'tests/web/notes-roundtrip/**', 'tests/web/diff-view/**'];
+// The four FRONTEND-rooted suites under tests/web/ have deps in web/node_modules
+// and need a DOM shim, so they run ONLY under their own web-rooted configs
+// (`npm run test:frontend:ci`) — never this node-env tier, where those deps don't
+// resolve. markdown/** and workflow-graph/** were missing here, so this tier was
+// silently red on 3 markdown files (`dompurify` is not installed at the repo
+// root); because an import-time death emits zero assertionResults, nothing
+// surfaced it. Keep all four listed here and in vitest.quick.config.ts.
+config.test!.exclude = [
+  '**/*.live.test.ts',
+  'tests/web/notes-roundtrip/**',
+  'tests/web/diff-view/**',
+  'tests/web/markdown/**',
+  'tests/web/workflow-graph/**',
+];
 
 config.test!.include = [
   'tests/commands/**/*.test.ts',

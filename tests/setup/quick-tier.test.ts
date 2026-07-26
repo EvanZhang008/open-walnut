@@ -57,15 +57,44 @@ describe('quick + slow partition the whole runnable suite', () => {
     return out
   }
 
-  /** Everything the quick+slow pair is responsible for. e2e/commands/live/frontend have their own tiers. */
+  /**
+   * Directories whose files belong to a DIFFERENT tier and must therefore be
+   * excluded by both quick and slow. Derived here, asserted against the real
+   * config below — an earlier version of this file hand-copied the config's
+   * filter list, which is exactly how tests/web/markdown/** came to be missing
+   * from the config while this guard still passed: two copies of one rule, only
+   * one updated. Never re-inline these; assert the config contains them.
+   */
+  const FOREIGN_TIER_DIRS = [
+    'tests/e2e/', // own tier (vitest.e2e.config.ts)
+    'tests/commands/', // integration tier
+    'tests/web/notes-roundtrip/', // frontend-rooted (web/node_modules + DOM shim)
+    'tests/web/diff-view/',
+    'tests/web/markdown/',
+    'tests/web/workflow-graph/',
+  ]
+
+  /** Everything the quick+slow pair is responsible for. */
   const universe = listTests('tests').filter(
-    (f) =>
-      !f.endsWith('.live.test.ts') &&
-      !f.startsWith('tests/e2e/') &&
-      !f.startsWith('tests/commands/') &&
-      !f.includes('notes-roundtrip') &&
-      !f.includes('diff-view'),
+    (f) => !f.endsWith('.live.test.ts') && !FOREIGN_TIER_DIRS.some((d) => f.startsWith(d)),
   )
+
+  it('the quick config excludes every foreign-tier directory', async () => {
+    const quickConfig: any = (await import('../../vitest.quick.config.js')).default
+    const exclude: string[] = quickConfig.test.exclude
+    // A missing entry means those files run in the quick tier under the wrong
+    // config — red for reasons unrelated to the code, or silently duplicated.
+    const missing = FOREIGN_TIER_DIRS.filter((d) => !exclude.some((e) => e.startsWith(d)))
+    expect(missing, `foreign-tier dirs NOT excluded from the quick tier:\n${missing.join('\n')}`).toEqual([])
+  })
+
+  it('the integration config excludes every frontend-rooted directory', async () => {
+    const integrationConfig: any = (await import('../../vitest.integration.config.js')).default
+    const exclude: string[] = integrationConfig.test.exclude
+    const frontend = FOREIGN_TIER_DIRS.filter((d) => d.startsWith('tests/web/'))
+    const missing = frontend.filter((d) => !exclude.some((e) => e.startsWith(d)))
+    expect(missing, `frontend dirs NOT excluded from the integration tier:\n${missing.join('\n')}`).toEqual([])
+  })
 
   it('every slow-list entry is a file the pair is responsible for', () => {
     // A slow entry outside the universe would be excluded from quick and matched
