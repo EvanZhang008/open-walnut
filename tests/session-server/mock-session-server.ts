@@ -49,6 +49,8 @@ export class MockSessionServer {
   private wss: WebSocketServer | null = null
   private httpServer: HttpServer | null = null
   private scenario: MockScenario | null = null
+  /** When true, commands are recorded but never answered — for timeout tests. */
+  private swallowCommands = false
   private clients = new Set<WebSocket>()
   private pendingWaiters: PendingWaiter[] = []
   private activeSessions = new Map<string, ActiveSession>()
@@ -59,6 +61,15 @@ export class MockSessionServer {
   /** Set the scenario to play back on next session.start */
   setScenario(scenario: MockScenario): void {
     this.scenario = scenario
+  }
+
+  /**
+   * Accept commands but never reply, so the client's own commandTimeoutMs fires.
+   * A "slow scenario" cannot produce this: scenario delays only affect EVENTS,
+   * while command acks are answered immediately on a separate path.
+   */
+  setSwallowCommands(on: boolean): void {
+    this.swallowCommands = on
   }
 
   /** Start the mock server on a random port. Returns the port number. */
@@ -123,10 +134,14 @@ export class MockSessionServer {
     this.pendingWaiters.length = 0
     this.activeSessions.clear()
     this.scenario = null
+    this.swallowCommands = false
   }
 
   private handleCommand(ws: WebSocket, cmd: CommandFrame): void {
     this.receivedCommands.push(cmd)
+
+    // Recorded but deliberately unanswered — the client must time out on its own.
+    if (this.swallowCommands) return
 
     // Check if any scripted event is waiting for this command method
     const waiterIdx = this.pendingWaiters.findIndex((w) => w.method === cmd.method)

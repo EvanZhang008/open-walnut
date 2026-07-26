@@ -20,6 +20,7 @@ vi.mock('../../src/constants.js', () => createMockConstants());
 
 import { WALNUT_HOME, IMAGES_DIR } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
+import { buildImageAnnotation } from '../../src/web/routes/images.js';
 
 let server: HttpServer;
 let port: number;
@@ -255,26 +256,33 @@ describe('Chat history image hydration', () => {
 // ── <attached-images> annotation tests ──
 
 describe('<attached-images> annotation in chat.ts', () => {
-  it('annotation is present in source code at the image content block construction', async () => {
+  it('chat.ts composes the annotation through buildImageAnnotation, not a hand-rolled string', async () => {
+    // This assertion USED to grep chat.ts for the literal '<attached-images>' and
+    // for 'imageAnnotation + agentMessage'. Both broke the moment chat.ts was
+    // refactored to call buildImageAnnotation() — behaviour identical, test red.
+    // That is the standing cost of source-text assertions, so this now checks the
+    // WIRING (one shared builder, no second copy of the format) and leaves the
+    // format itself to the behavioural tests below that call the real function.
     const chatRouteContent = await fs.readFile(
       path.resolve(import.meta.dirname, '../../src/web/routes/chat.ts'),
       'utf-8',
     );
-    // The annotation must be built from saved image paths and prepended to the text block
-    expect(chatRouteContent).toContain('<attached-images>');
-    expect(chatRouteContent).toContain('imageAnnotation + agentMessage');
+    expect(chatRouteContent).toContain('buildImageAnnotation(savedImages)');
+    // No second, divergent copy of the tag format anywhere in the route.
+    expect(chatRouteContent).not.toContain('<attached-images>');
   });
 
+  // These tests used to REPRODUCE the annotation logic in the test body ("Reproduce
+  // the exact logic from chat.ts") and then assert on their own copy — a tautology
+  // that would pass even if the production function were deleted. buildImageAnnotation
+  // is exported from src/web/routes/images.ts, so call the real thing.
   it('annotation format: 1-indexed, one path per line, XML-wrapped', () => {
-    // Reproduce the exact logic from chat.ts lines 412-413
-    const saved = [
+    const result = buildImageAnnotation([
       { filePath: '/home/user/.open-walnut/images/1700000000000-abc123.png' },
       { filePath: '/home/user/.open-walnut/images/1700000000001-def456.jpg' },
-    ];
-    const imagePathLines = saved.map((s, i) => `Image ${i + 1}: ${s.filePath}`).join('\n');
-    const imageAnnotation = `<attached-images>\n${imagePathLines}\n</attached-images>\n\n`;
+    ]);
 
-    expect(imageAnnotation).toBe(
+    expect(result).toBe(
       '<attached-images>\n' +
       'Image 1: /home/user/.open-walnut/images/1700000000000-abc123.png\n' +
       'Image 2: /home/user/.open-walnut/images/1700000000001-def456.jpg\n' +
@@ -283,25 +291,18 @@ describe('<attached-images> annotation in chat.ts', () => {
   });
 
   it('annotation with single image', () => {
-    const saved = [{ filePath: '/home/user/.open-walnut/images/1700000000000-abc123.png' }];
-    const imagePathLines = saved.map((s, i) => `Image ${i + 1}: ${s.filePath}`).join('\n');
-    const imageAnnotation = `<attached-images>\n${imagePathLines}\n</attached-images>\n\n`;
+    const result = buildImageAnnotation([{ filePath: '/home/user/.open-walnut/images/1700000000000-abc123.png' }]);
 
-    expect(imageAnnotation).toContain('Image 1:');
-    expect(imageAnnotation).not.toContain('Image 2:');
+    expect(result).toContain('Image 1:');
+    expect(result).not.toContain('Image 2:');
   });
 
   it('annotation is prepended to user message, not appended', () => {
-    const saved = [{ filePath: '/path/to/image.png' }];
-    const imagePathLines = saved.map((s, i) => `Image ${i + 1}: ${s.filePath}`).join('\n');
-    const imageAnnotation = `<attached-images>\n${imagePathLines}\n</attached-images>\n\n`;
     const agentMessage = 'What do you think about this design?';
+    const result = buildImageAnnotation([{ filePath: '/path/to/image.png' }]) + agentMessage;
 
-    const result = imageAnnotation + agentMessage;
-
-    // Annotation comes first
+    // Annotation comes first — Claude reads the paths before the question.
     expect(result.indexOf('<attached-images>')).toBe(0);
-    // User message follows after the closing tag
     expect(result.indexOf(agentMessage)).toBeGreaterThan(result.indexOf('</attached-images>'));
   });
 });
@@ -309,14 +310,19 @@ describe('<attached-images> annotation in chat.ts', () => {
 // ── System prompt includes image instruction ──
 
 describe('Agent system prompt image instruction', () => {
-  it('context.ts contains Image attachments section', async () => {
+  it('tells the agent to pass image file paths into session prompts', async () => {
+    // The CONTRACT: a session can only read an image if its path is in the prompt,
+    // so the butler's prompt must say so. Asserting the old exact headings
+    // ('### Image attachments', '<attached-images>') made this fail when the same
+    // instruction was reworded into a numbered list (commit ae0cd90) — a false
+    // alarm on unchanged behaviour. Assert the substance instead of the wording.
     const contextContent = await fs.readFile(
       path.resolve(import.meta.dirname, '../../src/agent/context.ts'),
       'utf-8',
     );
-    expect(contextContent).toContain('### Image attachments');
-    expect(contextContent).toContain('<attached-images>');
-    expect(contextContent).toContain('file paths in the prompt');
+    expect(contextContent).toMatch(/image/i);
+    expect(contextContent).toContain('file paths in the session prompt');
+    expect(contextContent).toMatch(/Read tool/);
   });
 });
 

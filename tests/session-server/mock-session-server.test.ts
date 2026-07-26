@@ -621,7 +621,12 @@ describe('Mock Session Server — 12 Interaction Scenarios', () => {
   })
 
   it('command timeout — unresponsive server triggers timeout', async () => {
-    // Create a client with very short timeout
+    // This test previously asserted NOTHING: it set a "slow scenario" and gave up,
+    // leaving the author's notes as comments. Scenario delays only slow EVENTS —
+    // command acks are answered on a separate, immediate path — so a slow scenario
+    // can never produce a command timeout. The mock server now has an explicit
+    // setSwallowCommands() that records a command and never answers it, which is
+    // the only way to exercise the client's commandTimeoutMs.
     const fastClient = new SessionServerClient({
       url: `ws://localhost:${port}`,
       hostName: 'fast-test',
@@ -631,21 +636,17 @@ describe('Mock Session Server — 12 Interaction Scenarios', () => {
     })
     await fastClient.connect()
 
-    // Set a scenario that takes longer than the timeout
-    const scenario: MockScenario = {
-      name: 'slow-scenario',
-      events: [
-        { name: 'session:init', data: { model: 'claude-opus-4-6' }, delay: 5000 },
-      ],
+    try {
+      mockServer.setSwallowCommands(true)
+
+      await expect(fastClient.ping()).rejects.toThrow(/timed out after 100ms/)
+
+      // The command did reach the server — this distinguishes a real timeout from
+      // the command never having been sent (which would also "reject").
+      expect(mockServer.receivedCommands.some((c) => c.method === 'ping')).toBe(true)
+    } finally {
+      mockServer.setSwallowCommands(false)
+      fastClient.destroy()
     }
-    mockServer.setScenario(scenario)
-
-    // The start command ack should arrive quickly (it's separate from events),
-    // so test with an unknown method that gets no response
-    // Actually let's test ping timeout by stopping the server handling
-    // Let's just verify session start works fine (ack is instant)
-    // and test timeout by creating a command that never gets a response
-
-    fastClient.destroy()
   })
 })

@@ -37,25 +37,55 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
 
   // P1b — reapSession SIGTERM → SIGKILL 2s sequence
   it('both implementations schedule SIGKILL 2000ms after SIGTERM', () => {
-    expect(coreSrc).toMatch(/SIGTERM/)
-    expect(coreSrc).toMatch(/SIGKILL/)
-    expect(coreSrc).toMatch(/2000/)
-    expect(templateSrc).toMatch(/SIGTERM/)
-    expect(templateSrc).toMatch(/SIGKILL/)
-    expect(templateSrc).toMatch(/2000/)
+    // Asserts the SEQUENCE, not the vocabulary. This used to be six independent
+    // `toMatch(/SIGTERM/)`-style checks, which passed as long as each word appeared
+    // ANYWHERE in a 3000-line file — including inside an unrelated comment. Reordering
+    // the escalation, or dropping the 2000ms delay, could not fail it.
+    const escalates = (src: string, label: string) => {
+      const termIdx = src.search(/'SIGTERM'|"SIGTERM"/)
+      const killIdx = src.search(/'SIGKILL'|"SIGKILL"/)
+      expect(termIdx, `${label}: no SIGTERM signal literal`).toBeGreaterThan(-1)
+      expect(killIdx, `${label}: no SIGKILL signal literal`).toBeGreaterThan(-1)
+      expect(termIdx, `${label}: SIGKILL is sent before SIGTERM — the ladder is inverted`).toBeLessThan(killIdx)
+      // The SIGKILL must be on a timer, not immediate: a bare kill defeats the grace period.
+      expect(
+        src.slice(termIdx, killIdx + 400),
+        `${label}: SIGKILL is not scheduled on a 2000ms timer after SIGTERM`,
+      ).toMatch(/setTimeout[\s\S]{0,200}2000|2000[\s\S]{0,200}SIGKILL/)
+    }
+    escalates(coreSrc, 'daemon-core')
+    escalates(templateSrc, 'daemon-source template')
   })
 
   // P1c — reapSession persists BEFORE broadcast
   it('both implementations persist registry before broadcasting session_state', () => {
-    const persistBeforeBroadcast = (src: string) => {
-      const reapBody = src.match(/reapSession[^}]*?(?:\{[^}]*\})*[^}]*?(?:broadcastSessionState|broadcast)[^}]*?\}/s)
-      // simpler: just check ordering in the file
-      const persistIdx = src.indexOf('persistRegistry')
-      const broadcastIdx = src.indexOf("broadcastSessionState(sid, 'dead'")
-      return persistIdx > -1 && broadcastIdx > -1
+    // This test USED TO be unable to fail: it computed persistIdx and broadcastIdx
+    // and then returned `persistIdx > -1 && broadcastIdx > -1` — i.e. "both words
+    // appear somewhere in the file", never their ORDER. Swapping the two calls (the
+    // exact regression it exists to catch: a crash between broadcast and persist
+    // leaves subscribers told 'dead' while the registry still says alive) kept it
+    // green. It now compares positions inside reapSession's own body.
+    const orderWithinReap = (src: string, label: string) => {
+      // Slice from `function reapSession` to the next top-level function, so a
+      // persistRegistry() elsewhere in the file can't satisfy the assertion.
+      const start = src.search(/(?:function|const)\s+reapSession/)
+      expect(start, `${label}: reapSession not found — parity test is checking nothing`).toBeGreaterThan(-1)
+      const rest = src.slice(start + 1)
+      const nextFn = rest.search(/\n(?:function|const)\s+\w+/)
+      const body = nextFn === -1 ? rest : rest.slice(0, nextFn)
+
+      const persistIdx = body.indexOf('persistRegistry')
+      const broadcastIdx = body.search(/broadcastSessionState\(\s*sid\s*,\s*['"]dead['"]/)
+      expect(persistIdx, `${label}: reapSession does not call persistRegistry`).toBeGreaterThan(-1)
+      expect(broadcastIdx, `${label}: reapSession does not broadcast 'dead'`).toBeGreaterThan(-1)
+      expect(
+        persistIdx,
+        `${label}: reapSession broadcasts 'dead' BEFORE persisting the registry — a crash in ` +
+          'between leaves subscribers believing the session died while the registry still lists it alive',
+      ).toBeLessThan(broadcastIdx)
     }
-    expect(persistBeforeBroadcast(coreSrc)).toBe(true)
-    expect(persistBeforeBroadcast(templateSrc)).toBe(true)
+    orderWithinReap(coreSrc, 'daemon-core')
+    orderWithinReap(templateSrc, 'daemon-source template')
   })
 
   // P1d — stderr tail cap at 4096 bytes

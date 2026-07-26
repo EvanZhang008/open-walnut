@@ -170,12 +170,32 @@ describe('TerminalReaper.reap — overlap guard (③)', () => {
 
 describe('TerminalReaper timer lifecycle', () => {
   it('start() is idempotent and stop() is safe to call without start', () => {
-    const r = new TerminalReaper();
-    r.stop(); // no-op, no throw
-    r.start();
-    r.start(); // idempotent — second start is a no-op
-    r.stop();
-    r.stop(); // double stop safe
-    expect(true).toBe(true);
+    // Counts real timers instead of asserting `expect(true).toBe(true)`, which was
+    // the only tautological assertion in the suite: it passed as long as nothing
+    // threw, so a start() that leaked a second interval on every call — the exact
+    // idempotence bug named in the title — went undetected.
+    vi.useFakeTimers();
+    try {
+      const r = new TerminalReaper();
+
+      r.stop(); // safe before any start
+      expect(vi.getTimerCount()).toBe(0);
+
+      r.start();
+      // start() arms two timers: the INITIAL_DELAY_MS kick-off and the recurring interval.
+      const afterFirstStart = vi.getTimerCount();
+      expect(afterFirstStart).toBe(2);
+
+      r.start(); // idempotent — must NOT arm a second pair
+      expect(vi.getTimerCount(), 'second start() leaked additional timers').toBe(afterFirstStart);
+
+      r.stop();
+      expect(vi.getTimerCount(), 'stop() left a timer armed').toBe(0);
+
+      r.stop(); // double stop safe
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
