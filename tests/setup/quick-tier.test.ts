@@ -67,20 +67,37 @@ describe('quick + slow partition the whole runnable suite', () => {
       !f.includes('diff-view'),
   )
 
-  it('no file is claimed by both tiers', () => {
-    const slow = new Set<string>(SLOW_TEST_FILES)
-    // quick = universe minus slow, by construction — so overlap is impossible
-    // unless a slow entry is also somehow force-included. Assert the list is a
-    // strict subset of the universe, which is the same guarantee.
-    const strays = [...slow].filter((f) => !universe.includes(f))
+  it('every slow-list entry is a file the pair is responsible for', () => {
+    // A slow entry outside the universe would be excluded from quick and matched
+    // by nothing meaningful in slow — e.g. someone lists a tests/e2e/ path, which
+    // belongs to a different tier entirely.
+    const strays = SLOW_TEST_FILES.filter((f) => !universe.includes(f))
     expect(strays, `SLOW_TEST_FILES entries outside the quick/slow universe:\n${strays.join('\n')}`).toEqual([])
   })
 
-  it('no file falls outside both tiers', () => {
+  // The two tests below deliberately read the REAL config files. An earlier
+  // version asserted `quick.length + slow.size === universe.length`, which is
+  // tautological — it is arithmetic on a set difference and true no matter what
+  // the configs actually say. These import the configs so a broken glob fails.
+  it('the quick config excludes exactly the slow list (no more, no less)', async () => {
+    const quickConfig: any = (await import('../../vitest.quick.config.js')).default
+    const exclude: string[] = quickConfig.test.exclude
+    const missing = SLOW_TEST_FILES.filter((f) => !exclude.includes(f))
+    expect(missing, `slow files NOT excluded from the quick tier (they would run in both):\n${missing.join('\n')}`).toEqual([])
+  })
+
+  it('the slow config includes exactly the slow list', async () => {
+    const slowConfig: any = (await import('../../vitest.slow.config.js')).default
+    expect([...slowConfig.test.include].sort()).toEqual([...SLOW_TEST_FILES].sort())
+  })
+
+  it('the fast tier holds the bulk of the suite', () => {
     const slow = new Set<string>(SLOW_TEST_FILES)
     const quick = universe.filter((f) => !slow.has(f))
-    expect(quick.length + slow.size).toBe(universe.length)
-    expect(quick.length).toBeGreaterThan(200) // sanity: the fast tier is the bulk
+    // If this inverts, the slow list has grown into the fast tier's job and L1 is
+    // no longer the cheap layer it exists to be.
+    expect(quick.length).toBeGreaterThan(slow.size * 5)
+    expect(quick.length).toBeGreaterThan(200)
   })
 })
 
