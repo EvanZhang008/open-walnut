@@ -483,6 +483,15 @@ export function isToolOnlyMessage(m: SessionHistoryMessage): boolean {
     && m.tools.every(isMergeableHistoryTool);
 }
 
+/** Assistant message that is ONLY thinking (no prose, no tools). Consecutive
+ *  ones collapse into a single "Thinking ›" row instead of stacking. */
+export function isThinkingOnlyMessage(m: SessionHistoryMessage): boolean {
+  return m.role === 'assistant'
+    && !(m.text ?? '').trim()
+    && (!m.tools || m.tools.length === 0)
+    && !!(m.thinking ?? '').trim();
+}
+
 /** Assistant message carrying BOTH prose and (all-generic) tools. The CLI's
  *  content order is text first, tool_use after — so the prose renders as its
  *  own message while the tools dissolve forward into the adjacent run instead

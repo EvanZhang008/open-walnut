@@ -5,7 +5,7 @@ import { useSessionStream, type StreamingBlock } from '@/hooks/useSessionStream'
 import { useEvent } from '@/hooks/useWebSocket';
 import { useLightbox } from '@/hooks/useLightbox';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
-import { SessionMessage, SessionThinking, PlanCard, CollapsedPlanWrite, GenericToolCall, TaskGroupPrompt, agentModelLabel, ToolRunShell, toolRunPhrase, isToolOnlyMessage, isTextPlusMergeableTools, MergedHistoryToolRun, SystemGroupRun, SystemLineCollapsible, systemGroupMemberFromHistory, type SystemGroupMember } from './SessionMessage';
+import { SessionMessage, SessionThinking, PlanCard, CollapsedPlanWrite, GenericToolCall, TaskGroupPrompt, agentModelLabel, ToolRunShell, toolRunPhrase, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, MergedHistoryToolRun, SystemGroupRun, SystemLineCollapsible, systemGroupMemberFromHistory, type SystemGroupMember } from './SessionMessage';
 import { dedupeOptimisticMessages } from './optimistic-dedup';
 import { computeRenderFilter, allBlocksAbsorbed, buildHistoryEvidence } from '@/stream/render-filter';
 import { TeamCard } from './TeamCard';
@@ -1318,16 +1318,33 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       continue;
     }
     flushHistoryRun();
-    if (isTextPlusMergeableTools(m)) {
+    // Adjacent thinking collapses into ONE "Thinking ›" row: a thinking-only
+    // message concatenates into a preceding thinking-only part, and a message
+    // whose own thinking follows a thinking-only part absorbs it. Never merge
+    // across the fork divider (it renders inside the second part).
+    const prevPart = historyParts[historyParts.length - 1];
+    const prevIsThinkingOnly = prevPart?.kind === 'msg' && isThinkingOnlyMessage(prevPart.m);
+    const atForkDivider = forkBoundaryIndex != null && globalIndex === forkBoundaryIndex;
+    let msg = m;
+    if (prevIsThinkingOnly && !atForkDivider
+      && m.role === 'assistant' && (m.thinking ?? '').trim()) {
+      if (isThinkingOnlyMessage(m)) {
+        prevPart.m = { ...prevPart.m, thinking: `${prevPart.m.thinking}\n\n${m.thinking}` };
+        continue;
+      }
+      msg = { ...m, thinking: `${prevPart.m.thinking}\n\n${m.thinking}` };
+      historyParts.pop();
+    }
+    if (isTextPlusMergeableTools(msg)) {
       // CLI content order is prose first, tool_use after. Render the prose as
       // its own part and dissolve the tools FORWARD into the next run so a
       // text-carrying message no longer splits two adjacent runs apart.
-      historyParts.push({ kind: 'msg', m, globalIndex, suppressTools: true });
-      historyRun.push({ m: { ...m, text: '', thinking: undefined }, globalIndex });
+      historyParts.push({ kind: 'msg', m: msg, globalIndex, suppressTools: true });
+      historyRun.push({ m: { ...msg, text: '', thinking: undefined }, globalIndex });
       historyRunSeeded = true;
       continue;
     }
-    historyParts.push({ kind: 'msg', m, globalIndex });
+    historyParts.push({ kind: 'msg', m: msg, globalIndex });
   }
   flushHistoryRun();
   flushSystemRun();
@@ -1422,6 +1439,37 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         continue;
       }
       if (item.kind === 'block' && item.block.type === 'system') {
+        cur.push(i);
+      } else {
+        flushRun();
+      }
+    }
+    flushRun();
+  }
+
+  // Adjacent streaming thinking blocks (the CLI emits one per message) merge
+  // into a single "Thinking ›" row. DOM-null items between them don't split
+  // the run; any visible non-thinking item does.
+  const thinkingRunStart = new Map<number, number[]>();
+  const thinkingRunMember = new Set<number>();
+  {
+    let cur: number[] = [];
+    const flushRun = () => {
+      if (cur.length >= 2) {
+        thinkingRunStart.set(cur[0], [...cur]);
+        for (let k = 1; k < cur.length; k++) thinkingRunMember.add(cur[k]);
+      }
+      cur = [];
+    };
+    for (let i = 0; i < timeline.length; i++) {
+      const item = timeline[i];
+      if (boundaryStreamIndices.has(i)
+        || isTransparentStreamItem(item)
+        || (item.kind === 'block' && consumedBlockIndices.has(item.index) && !groupedByIndex.has(item.index))) {
+        continue;
+      }
+      if (item.kind === 'block' && item.block.type === 'thinking'
+        && !item.block.parentToolUseId && !groupedByIndex.has(item.index)) {
         cur.push(i);
       } else {
         flushRun();
@@ -1658,6 +1706,24 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 return (
                   <div key={`system-run-${item.index}`} className="session-msg-bare">
                     <SystemGroupRun members={members} />
+                  </div>
+                );
+              }
+              if (thinkingRunMember.has(i)) return null;
+              const thinkingIdx = thinkingRunStart.get(i);
+              if (thinkingIdx && item.kind === 'block') {
+                const content = thinkingIdx
+                  .map(k => {
+                    const t = timeline[k];
+                    return t.kind === 'block' && t.block.type === 'thinking' ? t.block.content : '';
+                  })
+                  .filter(s => s.trim())
+                  .join('\n\n');
+                const runIsLiveTail = isStreaming
+                  && thinkingIdx.includes(lastVisibleTimelineIdx);
+                return (
+                  <div key={`think-run-${item.index}`} className="session-msg-bare">
+                    <SessionThinking text={content} live={runIsLiveTail} />
                   </div>
                 );
               }

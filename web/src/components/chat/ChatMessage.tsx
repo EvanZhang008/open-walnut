@@ -535,6 +535,25 @@ function RouteInfoSection({ info, taskLookup, onTaskClick, onSessionClick }: Rou
   );
 }
 
+/** Merge adjacent thinking blocks (the model emits one per segment) into a
+ *  single block so the timeline shows ONE "Thinking ›" row, not a stack.
+ *  Empty (signature-only) thinking blocks render null and never split a run. */
+export function mergeAdjacentThinking<T extends { type: string; content?: string }>(blocks: readonly T[]): T[] {
+  const out: T[] = [];
+  for (const b of blocks) {
+    if (b.type === 'thinking') {
+      if (!(b.content ?? '').trim()) continue;
+      const prev = out[out.length - 1];
+      if (prev?.type === 'thinking') {
+        out[out.length - 1] = { ...prev, content: `${prev.content}\n\n${b.content}` };
+        continue;
+      }
+    }
+    out.push(b);
+  }
+  return out;
+}
+
 export function ThinkingSection({ block }: { block: ThinkingBlock }) {
   const [open, setOpen] = useState(false);
   // Signature-only thinking blocks have no displayable text — render nothing
@@ -959,7 +978,7 @@ function SystemMessageGroup({ blocks, sourceLabel, taskLookup, onTaskClick, onSe
         </button>
         {isOpen && (
           <div className="chat-tool-group-body">
-            {blocks.map((block, i) => {
+            {mergeAdjacentThinking(blocks).map((block, i) => {
               switch (block.type) {
                 case 'thinking':
                   return <ThinkingSection key={i} block={block} />;
@@ -1291,7 +1310,7 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
                 />
               ) : (
                 /* User-initiated: render all blocks directly (tool calls expanded by default) */
-                blocks.map((block, i) => {
+                mergeAdjacentThinking(blocks).map((block, i) => {
                   switch (block.type) {
                     case 'thinking':
                       return <ThinkingSection key={i} block={block} />;
