@@ -23979,9 +23979,11 @@ a.file-link:hover {
      the material switches off while a card is fullscreen (the overlay covers
      the dock then anyway). */
   .focus-dock:not(:has(.open-walnut-fullscreen)) {
-    background: var(--glass-bg);
-    -webkit-backdrop-filter: var(--glass-blur);
-    backdrop-filter: var(--glass-blur);
+    /* Upgraded to the G4 milky recipe (readability-first) for consistency
+       with the other scroll-under surfaces. */
+    background: var(--glass-g4-bg);
+    -webkit-backdrop-filter: var(--glass-g4-blur);
+    backdrop-filter: var(--glass-g4-blur);
   }
 
   /* Image lightbox backdrop — slight blur under the dark scrim. */
