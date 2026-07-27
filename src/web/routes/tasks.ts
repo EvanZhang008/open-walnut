@@ -12,8 +12,10 @@ import {
   getTask,
   completeTask,
   toggleComplete,
+  setPhaseBulk,
   updateTask,
   deleteTask,
+  deleteTasksByIds,
   ActiveSessionError,
   ActiveChildrenError,
   CategorySourceConflictError,
@@ -559,6 +561,75 @@ tasksRouter.patch('/reorder', async (req: Request, res: Response, next: NextFunc
     await reorderTasks(category, project, taskIds)
     bus.emit(EventNames.TASK_REORDERED, { category, project, taskIds }, ['web-ui'], { source: 'api' })
     res.json({ ok: true })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ── Batch (multi-select) operations ──
+// Registered BEFORE the `/:id` routes so Express doesn't read "batch" as a task id
+// (same reason the `/groups…` paths sit above `/:id`).
+//
+// Both endpoints are PARTIAL-SUCCESS by design: they always return 200 with
+// { changed|deleted, failed[] }. A single un-completable task (active children) or
+// busy task (active session) must not void the other 9 the user picked. The client
+// applies `changed`/`deleted` and surfaces `failed` as a warning.
+
+/** Validate a batch body's task_ids array. Returns the ids, or null after replying 400. */
+function batchIds(req: Request, res: Response): string[] | null {
+  const { task_ids: taskIds } = req.body as { task_ids?: unknown }
+  if (!Array.isArray(taskIds) || taskIds.length === 0 || !taskIds.every((id) => typeof id === 'string')) {
+    res.status(400).json({ error: 'task_ids must be a non-empty array of strings' })
+    return null
+  }
+  return taskIds as string[]
+}
+
+// POST /api/tasks/batch/phase — set the phase of many tasks in one store write
+tasksRouter.post('/batch/phase', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const taskIds = batchIds(req, res)
+    if (!taskIds) return
+    const { phase } = req.body as { phase?: string }
+    if (typeof phase !== 'string' || !VALID_PHASES.has(phase)) {
+      res.status(400).json({ error: `phase must be one of: ${VALID_PHASES_ARRAY.join(', ')}` })
+      return
+    }
+
+    const { changed, failed, syncFailed } = await setPhaseBulk(taskIds, phase as Task['phase'])
+    log.web.info('tasks batch phase via REST', { count: taskIds.length, changed: changed.length, failed: failed.length, syncFailed: syncFailed.length, phase })
+
+    // Per-task events so every surface (web-ui lists, main-agent) reconciles the
+    // same way it does for a single complete — the bulk `{ }` form would force a
+    // full refetch and blank the list mid-animation.
+    const eventName = phase === 'COMPLETE' ? EventNames.TASK_COMPLETED : EventNames.TASK_UPDATED
+    for (const task of changed) {
+      bus.emit(eventName, { task }, ['web-ui', 'main-agent'], { source: 'api' })
+    }
+    // syncFailed is reported separately from failed — those tasks DID change locally,
+    // only their external push failed, so the client must not roll them back.
+    res.json({ changed, failed, syncFailed })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/tasks/batch/delete — delete many tasks in one store write.
+// POST (not DELETE) because the id list travels in the body; DELETE-with-body is
+// poorly supported across proxies/clients.
+tasksRouter.post('/batch/delete', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const taskIds = batchIds(req, res)
+    if (!taskIds) return
+    const force = req.body?.force === true || req.query.force === 'true'
+
+    const { deleted, failed } = await deleteTasksByIds(taskIds, { force })
+    log.web.info('tasks batch delete via REST', { count: taskIds.length, deleted: deleted.length, failed: failed.length, force })
+
+    for (const task of deleted) {
+      bus.emit(EventNames.TASK_DELETED, { id: task.id, task }, ['web-ui', 'main-agent'], { source: 'api' })
+    }
+    res.json({ deleted, failed })
   } catch (err) {
     next(err)
   }

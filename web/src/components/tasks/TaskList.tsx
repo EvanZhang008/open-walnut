@@ -2,13 +2,18 @@ import { useState, useMemo, useCallback } from 'react';
 import type { Task } from '@open-walnut/core';
 import { TaskCard, type CardGroupInfo } from './TaskCard';
 import { EmptyState } from '../common/EmptyState';
-import { usePrompt } from '@/hooks/useConfirm';
+import { useConfirm, usePrompt } from '@/hooks/useConfirm';
+import type { BatchTaskOutcome } from '@/api/tasks';
 
 interface TaskListProps {
   tasks: Task[];
   onComplete: (id: string) => void;
   onStar: (id: string) => void;
   onDelete?: (id: string) => void;
+  /** Multi-select batch ops — one round-trip for the whole selection. Without these
+   *  the selection bar can only group, which is what made multi-select look broken. */
+  onBatchSetPhase?: (ids: string[], phase: string) => Promise<BatchTaskOutcome[]>;
+  onBatchDelete?: (ids: string[], opts?: { force?: boolean }) => Promise<BatchTaskOutcome[]>;
   onAdd?: () => void;
   /** group_id → label registry (for the chip text). */
   taskGroups?: Record<string, string>;
@@ -41,6 +46,8 @@ export function TaskList({
   onComplete,
   onStar,
   onDelete,
+  onBatchSetPhase,
+  onBatchDelete,
   onAdd,
   taskGroups,
   onGroupTasks,
@@ -50,6 +57,7 @@ export function TaskList({
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
   const prompt = usePrompt();
+  const confirm = useConfirm();
   // ── Multi-select for group building ── (Cmd/Ctrl/Shift-click a card to toggle.)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
@@ -133,7 +141,8 @@ export function TaskList({
   // grouped regardless of category/project (a group is a pure visual cluster).
   const selectionInfo = useMemo(() => {
     const picked = tasks.filter((t) => selectedIds.has(t.id));
-    return { tasks: picked, canGroup: picked.length >= 2 };
+    const doneCount = picked.filter((t) => t.status === 'done' || t.phase === 'COMPLETE').length;
+    return { tasks: picked, canGroup: picked.length >= 2, doneCount };
   }, [tasks, selectedIds]);
 
   const handleGroupSelected = useCallback(() => {
@@ -141,6 +150,32 @@ export function TaskList({
     onGroupTasks(selectionInfo.tasks.map((t) => t.id));
     setSelectedIds(new Set());
   }, [onGroupTasks, selectionInfo]);
+
+  // Batch complete / delete for this surface. One round-trip via the batch props;
+  // falls back to a per-task fan-out for a consumer that only wired the singles.
+  const handleCompleteSelected = useCallback(() => {
+    const ids = selectionInfo.tasks.map((t) => t.id);
+    if (ids.length === 0) return;
+    setSelectedIds(new Set());
+    if (onBatchSetPhase) { void onBatchSetPhase(ids, 'COMPLETE'); return; }
+    ids.forEach((id) => onComplete(id));
+  }, [selectionInfo, onBatchSetPhase, onComplete]);
+
+  const handleDeleteSelected = useCallback(async () => {
+    const picked = selectionInfo.tasks;
+    if (picked.length === 0) return;
+    const ok = await confirm({
+      title: picked.length === 1 ? `Delete “${picked[0].title}”?` : `Delete ${picked.length} tasks?`,
+      message: 'This cannot be undone.',
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
+    const ids = picked.map((t) => t.id);
+    setSelectedIds(new Set());
+    if (onBatchDelete) { void onBatchDelete(ids); return; }
+    ids.forEach((id) => onDelete?.(id));
+  }, [selectionInfo, confirm, onBatchDelete, onDelete]);
 
   const handleRenameGroup = useCallback(async (groupId: string, currentLabel: string) => {
     if (!onRenameGroup) return;
@@ -231,11 +266,22 @@ export function TaskList({
         </div>
       ))}
 
-      {/* Floating action bar — appears once ≥2 tasks are multi-selected.
-          "Group" is enabled only when they share one category+project (the scope rule). */}
+      {/* Floating action bar — appears once ≥2 tasks are multi-selected. Carries the
+          whole batch verb set (Complete / Delete / Group), not just Group: a bar that
+          could only group is exactly why multi-select read as broken here. */}
       {onGroupTasks && selectionInfo.tasks.length >= 2 && (
         <div className="task-selection-bar">
           <span className="task-selection-count">{selectionInfo.tasks.length} selected</span>
+          {/* Hidden when everything picked is already done — nothing left to complete. */}
+          {selectionInfo.doneCount < selectionInfo.tasks.length && (
+            <button
+              className="task-selection-action-btn"
+              title="Mark the selected tasks complete"
+              onClick={handleCompleteSelected}
+            >
+              ✓ Complete
+            </button>
+          )}
           <button
             className="task-selection-group-btn"
             disabled={!selectionInfo.canGroup}
@@ -244,6 +290,15 @@ export function TaskList({
           >
             ⑂ Group
           </button>
+          {(onBatchDelete || onDelete) && (
+            <button
+              className="task-selection-action-btn task-selection-action-danger"
+              title="Delete the selected tasks"
+              onClick={handleDeleteSelected}
+            >
+              Delete
+            </button>
+          )}
           <button className="task-selection-clear-btn" onClick={() => setSelectedIds(new Set())}>
             Cancel
           </button>

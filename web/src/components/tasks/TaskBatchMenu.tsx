@@ -10,6 +10,7 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
 import type { FocusTier } from '@/api/focus';
 import { TaskActionMenuItems } from './TaskKebabMenu';
+import * as ICONS from '../common/Icons';
 
 interface TaskBatchMenuProps {
   /** Number of selected tasks (drives the label + group-enabled state). */
@@ -22,9 +23,18 @@ interface TaskBatchMenuProps {
   onSetPriorityAll: (priority: string) => void;
   onPinAllToTier: (tier: FocusTier) => void;
   onSetDateAll: (date: string | null) => void;
+  /** Mark every selected task COMPLETE. */
+  onCompleteAll: () => void;
+  /** Reopen (phase → TODO) every selected task. Only offered when the selection
+   *  actually contains done tasks — otherwise it's a no-op row. */
+  onReopenAll: () => void;
+  /** How many of the selected tasks are already done (drives Complete/Reopen rows). */
+  doneCount: number;
+  /** Delete every selected task (confirms first — the handler owns the dialog). */
+  onDeleteAll: () => void;
 }
 
-export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPinAllToTier, onSetDateAll }: TaskBatchMenuProps) {
+export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPinAllToTier, onSetDateAll, onCompleteAll, onReopenAll, doneCount, onDeleteAll }: TaskBatchMenuProps) {
   const [open, setOpen] = useState(false);
   // Fixed-position coords for the dropdown. The selection bar is position:sticky at the
   // bottom of the .todo-panel-list scroll container (overflow:auto), so a plain
@@ -114,6 +124,31 @@ export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPi
           <div className="task-kebab-section-label">
             {count} task{count === 1 ? '' : 's'} selected
           </div>
+
+          {/* Complete / Reopen — the two lifecycle actions. These lead the menu
+              because "finish these N tasks" is the most common batch intent (the
+              per-row ○/✓ toggle is the single-task equivalent). Complete is hidden
+              when the whole selection is already done; Reopen only appears when the
+              selection actually contains done tasks. */}
+          {doneCount < count && (
+            <button
+              className="task-kebab-item"
+              onClick={(e) => { e.stopPropagation(); onCompleteAll(); close(); }}
+            >
+              <span className="task-kebab-icon">{ICONS.ICON_PHASE_COMPLETE}</span>
+              <span>Complete {count - doneCount === count ? 'all' : `${count - doneCount}`}</span>
+            </button>
+          )}
+          {doneCount > 0 && (
+            <button
+              className="task-kebab-item"
+              onClick={(e) => { e.stopPropagation(); onReopenAll(); close(); }}
+            >
+              <span className="task-kebab-icon">{ICONS.ICON_PHASE_TODO}</span>
+              <span>Reopen {doneCount === count ? 'all' : `${doneCount}`}</span>
+            </button>
+          )}
+
           {/* Same rows as the per-task kebab — applied to every selected task. */}
           <TaskActionMenuItems
             task={null}
@@ -125,6 +160,16 @@ export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPi
             onSetDate={(d) => onSetDateAll(d)}
             afterAction={close}
           />
+
+          {/* Delete — last, and destructive. The handler confirms before firing. */}
+          <div className="task-kebab-divider" />
+          <button
+            className="task-kebab-item task-kebab-item-danger"
+            onClick={(e) => { e.stopPropagation(); close(); onDeleteAll(); }}
+          >
+            <span className="task-kebab-icon">{ICONS.ICON_TRASH}</span>
+            <span>Delete {count === 1 ? 'task' : `${count} tasks`}</span>
+          </button>
         </div>
       )}
     </div>

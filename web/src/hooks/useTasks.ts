@@ -168,11 +168,18 @@ function phaseToStatus(phase: string): 'done' | 'todo' | 'in_progress' {
 }
 
 function applyPhaseChange(tasks: Task[], id: string, phase: string): Task[] {
+  return applyPhaseChangeMany(tasks, new Set([id]), phase);
+}
+
+/** Multi-id form of applyPhaseChange — one pass for a whole multi-select batch, so
+ *  every selected row flips in the SAME frame (a per-id map() per task would make
+ *  the rows complete one-by-one and stagger the 3s vanish animation). */
+function applyPhaseChangeMany(tasks: Task[], ids: Set<string>, phase: string): Task[] {
   const now = new Date().toISOString();
   const completing = phase === 'COMPLETE';
   const status = phaseToStatus(phase);
   return tasks.map((t): Task => {
-    if (t.id !== id) return t;
+    if (!ids.has(t.id)) return t;
     const base = completing ? clearSessionSlots(t) : t;
     return { ...base, phase: phase as Task['phase'], status, completed_at: completing ? now : undefined, updated_at: now };
   });
@@ -261,6 +268,14 @@ interface UseTasksReturn {
    */
   bakeOrder: (orderedIds: string[]) => void;
   deleteTask: (id: string) => void;
+  /**
+   * Multi-select batch ops — ONE API round-trip + one optimistic setTasks pass for
+   * the whole selection (a per-task fan-out would rewrite the store N times and
+   * flicker the list row by row). Both are partial-success: they resolve with the
+   * per-task `failed` list so the caller can warn without voiding the successes.
+   */
+  batchSetPhase: (ids: string[], phase: string) => Promise<tasksApi.BatchTaskOutcome[]>;
+  batchDelete: (ids: string[], opts?: { force?: boolean }) => Promise<tasksApi.BatchTaskOutcome[]>;
   /**
    * Local-only batch patch (no API call, no echo guard) — one setTasks pass for
    * all entries. Used by optimistic flows that own their persistence (Focus Bar
@@ -823,6 +838,68 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
     });
   }, [onOpError, refetch]);
 
+  // ── Multi-select batch ops ──
+  // One round-trip + one optimistic pass for the whole selection. Partial success:
+  // the server applies what it can and reports the rest in `failed`, so we roll the
+  // FAILED ids back (refetch) rather than voiding the successes. Resolves with
+  // `failed` so the caller can warn; rejects only on a transport-level failure.
+
+  const batchSetPhase = useCallback(async (ids: string[], phase: string) => {
+    if (ids.length === 0) return [];
+    // One echo guard per id — the server emits a per-task event for each change
+    // (deliberately, so surfaces reconcile incrementally instead of refetching).
+    for (const id of ids) guardEcho(phase === 'COMPLETE' ? `complete:${id}` : `phase:${id}`);
+    const idSet = new Set(ids);
+    setTasks((prev) => applyPhaseChangeMany(prev, idSet, phase));
+    try {
+      const { failed, syncFailed } = await withRetry(() => tasksApi.batchSetPhase(ids, phase));
+      // Only `failed` means "not applied" — our optimistic flip lied about those, so
+      // refetch server truth. `syncFailed` tasks DID change locally (only their plugin
+      // push failed), so they must NOT trigger a rollback; they're reported to the
+      // caller as a warning alongside the real failures.
+      if (failed.length > 0) refetch();
+      // Tag the sync-only entries so the caller can word its warning honestly
+      // ("completed, but not synced" vs "could not complete").
+      return [...failed, ...(syncFailed ?? []).map((s) => ({ ...s, syncOnly: true }))];
+    } catch (err) {
+      onOpError(err as Error);
+      return [{ id: ids.join(','), ok: false, error: (err as Error).message }];
+    }
+  }, [guardEcho, onOpError, refetch]);
+
+  const batchDelete = useCallback(async (ids: string[], opts?: { force?: boolean }) => {
+    if (ids.length === 0) return [];
+    const idSet = new Set(ids);
+    // Capture the rows we're optimistically removing INSIDE the updater (not from a
+    // closed-over `tasks`, which would be one render stale) so a partial failure can
+    // restore the survivors without a refetch.
+    let removed: Task[] = [];
+    setTasks((prev) => {
+      removed = prev.filter((t) => idSet.has(t.id));
+      return prev.filter((t) => !idSet.has(t.id));
+    });
+    try {
+      const { deleted, failed } = await withRetry(() => tasksApi.batchDeleteTasks(ids, opts));
+      if (failed.length > 0) {
+        // Put the NOT-deleted rows back: the failed ids are exactly what survived.
+        const deletedIds = new Set(deleted.map((t) => t.id));
+        const restore = removed.filter((t) => !deletedIds.has(t.id));
+        if (restore.length > 0) {
+          setTasks((prev) => {
+            const present = new Set(prev.map((t) => t.id));
+            const missing = restore.filter((t) => !present.has(t.id));
+            return missing.length > 0 ? [...missing, ...prev] : prev;
+          });
+        }
+      }
+      return failed;
+    } catch (err) {
+      onOpError(err as Error);
+      refetch();
+      return [{ id: ids.join(','), ok: false, error: (err as Error).message }];
+    }
+  }, [onOpError, refetch]);
+
   // Local-only batch patch — NO API call, NO echo guard. One setTasks pass for
   // all entries so dependent optimistic UI (e.g. a cross-tier drag that changes
   // focus_tier + several pin_orders) commits in a single frame. Callers own
@@ -897,5 +974,5 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
       .catch((err) => { onOpError(err); refetchGroups(); });
   }, [onOpError, refetchGroups]);
 
-  return { tasks, taskGroups, hiddenGroups, loading, refreshing, error, operationError, clearOperationError, showOperationError, refetch, create, update, toggleComplete, setPhase, star, reorder, moveTask, reparentTask, bakeOrder, deleteTask, patchTasksLocal, guardEcho, groupTasks: groupTasksCb, addToGroup: addToGroupCb, ungroupTasks: ungroupTasksCb, renameGroup: renameGroupCb, setGroupHidden: setGroupHiddenCb };
+  return { tasks, taskGroups, hiddenGroups, loading, refreshing, error, operationError, clearOperationError, showOperationError, refetch, create, update, toggleComplete, setPhase, star, reorder, moveTask, reparentTask, bakeOrder, deleteTask, batchSetPhase, batchDelete, patchTasksLocal, guardEcho, groupTasks: groupTasksCb, addToGroup: addToGroupCb, ungroupTasks: ungroupTasksCb, renameGroup: renameGroupCb, setGroupHidden: setGroupHiddenCb };
 }

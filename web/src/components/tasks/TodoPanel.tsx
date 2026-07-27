@@ -3,11 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import type { Task as CoreTask, SessionRecord } from '@open-walnut/core';
 import { renderNoteMarkdown } from '@/utils/markdown';
 import { fetchSessionsForTask } from '@/api/sessions';
-import { fetchTask, updateTask as apiUpdateTask } from '@/api/tasks';
+import { fetchTask, updateTask as apiUpdateTask, type BatchTaskOutcome } from '@/api/tasks';
 import { SprintPicker } from '@/components/tasks/SprintPicker';
 import { fetchTriageHistory } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
-import { usePrompt } from '@/hooks/useConfirm';
+import { useConfirm, usePrompt } from '@/hooks/useConfirm';
 import { useNotifications } from '@/contexts/notifications';
 import { timeAgo } from '@/utils/time';
 import { scrollLog } from '@/utils/scroll-debug';
@@ -94,6 +94,11 @@ interface TodoPanelProps {
   onUpdate?: (id: string, updates: { title?: string }) => void;
   onStar?: (id: string) => void;
   onDelete?: (id: string) => void;
+  /** Multi-select batch ops — ONE round-trip for the whole selection (a fan-out over
+   *  onSetPhase/onDelete would rewrite the store N times and flicker the list row by
+   *  row). Resolve with the per-task failures so the bar can warn. */
+  onBatchSetPhase?: (ids: string[], phase: string) => Promise<BatchTaskOutcome[]>;
+  onBatchDelete?: (ids: string[], opts?: { force?: boolean }) => Promise<BatchTaskOutcome[]>;
   onSetPriority?: (id: string, priority: string) => void;
   onFocusTask?: (task: Task, opts?: { openDetail?: boolean }) => void;
   onClearFocus?: () => void;
@@ -1748,7 +1753,7 @@ function SortableRecentCard({ task, isFocused, isSessionOpen, isDetailOpen, onCl
 
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, pinnedTaskIds, focusTaskIds, waitTaskIds, suppressDetail, openSessionIds, openSessionTaskIds, onClearOperationError, onOperationError, externalCategory, onCategoryChange, onOpenLauncher, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, pinnedTaskIds, focusTaskIds, waitTaskIds, suppressDetail, openSessionIds, openSessionTaskIds, onClearOperationError, onOperationError, externalCategory, onCategoryChange, onOpenLauncher, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden }: TodoPanelProps) {
   // TEMP drag-flash trace — remove after diagnosis
   const __renderCountRef = useRef(0);
   __renderCountRef.current += 1;
@@ -1757,6 +1762,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const tasks = useMemo(() => rawTasks.filter((t) => !t.title.startsWith('.metadata')), [rawTasks]);
   const navigate = useNavigate();
   const prompt = usePrompt();
+  const confirm = useConfirm();
   const [showCompleted, setShowCompleted] = useState(false);
   const [priorityFilter, setPriorityFilter] = useState('');
   const [phaseFilter, setPhaseFilter] = useState('');
@@ -4262,7 +4268,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // drives the floating action bar's Group enabled/disabled state.
   const selectionInfo = useMemo(() => {
     const picked = tasks.filter((t) => selectedIds.has(t.id));
-    return { tasks: picked, canGroup: picked.length >= 2 };
+    // doneCount drives which lifecycle rows the batch menu offers: all-done hides
+    // "Complete", none-done hides "Reopen", a mix shows both with counts.
+    const doneCount = picked.filter((t) => t.status === 'done' || t.phase === 'COMPLETE').length;
+    return { tasks: picked, canGroup: picked.length >= 2, doneCount };
   }, [tasks, selectedIds]);
 
   const handleGroupSelected = useCallback(() => {
@@ -4282,6 +4291,70 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     selectionInfo.tasks.forEach((t) => onSetDate?.(t.id, date));
     exitSelectMode();
   }, [selectionInfo, onSetDate, exitSelectMode]);
+
+  /** Report what a batch op could NOT do. Successes are silent — the rows already
+   *  moved. Two distinct outcomes, worded honestly:
+   *   - rejected (active children / active session / gone) → "Could not <verb> N"
+   *   - `syncOnly` (applied locally, external push failed) → "<verb>d, but N not synced"
+   *  Conflating them told the user their tasks weren't completed when they were. */
+  const reportBatchFailures = useCallback((outcomes: BatchTaskOutcome[], verb: string) => {
+    if (outcomes.length === 0) return;
+    const rejected = outcomes.filter((o) => !o.syncOnly);
+    const syncOnly = outcomes.filter((o) => o.syncOnly);
+    if (rejected.length > 0) {
+      notify({
+        kind: 'sort',
+        severity: 'warning',
+        title: `Could not ${verb} ${rejected.length} task${rejected.length === 1 ? '' : 's'}`,
+        body: rejected[0].error ?? undefined,
+        persistent: false,
+        dedupKey: `batch-${verb}`,
+      });
+    }
+    if (syncOnly.length > 0) {
+      notify({
+        kind: 'sort',
+        severity: 'warning',
+        title: `${syncOnly.length} task${syncOnly.length === 1 ? '' : 's'} not synced externally`,
+        body: syncOnly[0].error ?? undefined,
+        persistent: false,
+        dedupKey: `batch-${verb}-sync`,
+      });
+    }
+  }, [notify]);
+
+  const batchSetPhase = useCallback(async (phase: string) => {
+    const ids = selectionInfo.tasks.map((t) => t.id);
+    if (ids.length === 0) return;
+    exitSelectMode();
+    if (onBatchSetPhase) {
+      reportBatchFailures(await onBatchSetPhase(ids, phase), phase === 'COMPLETE' ? 'complete' : 'reopen');
+      return;
+    }
+    // Fallback for a consumer that wires onSetPhase but not the batch prop.
+    ids.forEach((id) => setPhaseOrComplete(id, phase));
+  }, [selectionInfo, onBatchSetPhase, setPhaseOrComplete, exitSelectMode, reportBatchFailures]);
+
+  const batchDelete = useCallback(async () => {
+    const picked = selectionInfo.tasks;
+    if (picked.length === 0) return;
+    const ok = await confirm({
+      title: picked.length === 1
+        ? `Delete “${picked[0].title}”?`
+        : `Delete ${picked.length} tasks?`,
+      message: 'This cannot be undone.',
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
+    const ids = picked.map((t) => t.id);
+    exitSelectMode();
+    if (onBatchDelete) {
+      reportBatchFailures(await onBatchDelete(ids), 'delete');
+      return;
+    }
+    ids.forEach((id) => onDelete?.(id));
+  }, [selectionInfo, confirm, onBatchDelete, onDelete, exitSelectMode, reportBatchFailures]);
 
   const batchPinToTier = useCallback((tier: FocusTier) => {
     // Pin any unpinned task first, then set its tier. The 100ms gap is the same race
@@ -5175,6 +5248,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             onSetPriorityAll={batchSetPriority}
             onPinAllToTier={batchPinToTier}
             onSetDateAll={batchSetDate}
+            onCompleteAll={() => batchSetPhase('COMPLETE')}
+            onReopenAll={() => batchSetPhase('TODO')}
+            doneCount={selectionInfo.doneCount}
+            onDeleteAll={batchDelete}
           />
           <button
             className="task-selection-clear-btn"

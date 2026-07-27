@@ -213,6 +213,39 @@ export function deleteSubtask(taskId: string, subtaskId: string): Promise<void> 
   return apiDelete(`/api/tasks/${taskId}/subtasks/${subtaskId}`);
 }
 
+// ── Batch (multi-select) operations ──
+// Both are PARTIAL-SUCCESS: the response always carries the tasks that DID change
+// plus a `failed` list (active children / active sessions / unknown id). Callers
+// apply the successes and surface `failed` — never treat a non-empty `failed` as a
+// total failure.
+
+/** One task's outcome in a batch op — mirrors the server's BatchTaskOutcome. */
+export interface BatchTaskOutcome {
+  id: string;
+  title?: string;
+  ok: boolean;
+  error?: string;
+  /** Set by the client layer for a task that DID change locally but whose external
+   *  plugin push failed — so a warning can say "not synced", not "did not apply". */
+  syncOnly?: boolean;
+}
+
+/**
+ * Set the phase of many tasks in one round-trip (multi-select Complete / Reopen).
+ *
+ * `failed` = not applied (blocked / unknown id) — roll those back.
+ * `syncFailed` = applied locally but the external push failed — do NOT roll back;
+ * the phase change is real, only the plugin sync didn't land.
+ */
+export function batchSetPhase(taskIds: string[], phase: string): Promise<{ changed: Task[]; failed: BatchTaskOutcome[]; syncFailed?: BatchTaskOutcome[] }> {
+  return apiPost('/api/tasks/batch/phase', { task_ids: taskIds, phase });
+}
+
+/** Delete many tasks in one round-trip. `force` stops active sessions first. */
+export function batchDeleteTasks(taskIds: string[], opts?: { force?: boolean }): Promise<{ deleted: Task[]; failed: BatchTaskOutcome[] }> {
+  return apiPost('/api/tasks/batch/delete', { task_ids: taskIds, ...(opts?.force ? { force: true } : {}) });
+}
+
 export async function reorderTasks(category: string, project: string, taskIds: string[]): Promise<void> {
   await apiPatch<{ ok: boolean }>('/api/tasks/reorder', { category, project, taskIds });
 }

@@ -9715,6 +9715,24 @@ img[data-lightbox-src],
   opacity: 0.45;
   cursor: not-allowed;
 }
+/* Secondary verbs in the selection bar (Complete / Delete) — outlined, so the
+   filled accent stays reserved for the primary Group action. */
+.task-selection-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.14));
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg);
+  font-weight: 500;
+  cursor: pointer;
+}
+.task-selection-action-btn:hover { background: rgba(0, 0, 0, 0.05); }
+.task-selection-action-danger { color: var(--error); border-color: color-mix(in srgb, var(--error) 35%, transparent); }
+.task-selection-action-danger:hover { background: color-mix(in srgb, var(--error) 12%, transparent); }
+
 .task-selection-clear-btn {
   padding: 4px 10px;
   border: none;

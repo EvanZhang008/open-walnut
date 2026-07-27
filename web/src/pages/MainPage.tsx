@@ -204,7 +204,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const { mode: chatMode, toggleMode, getPlanPayload } = usePlanMode();
   const { connectionState } = useWebSocket();
   const { notify } = useNotifications();
-  const { tasks, loading, refreshing: tasksRefreshing, error: tasksError, toggleComplete, setPhase, star, create, update, reorder, moveTask, reparentTask, deleteTask, bakeOrder, clearOperationError, showOperationError, taskGroups, hiddenGroups, groupTasks, addToGroup, ungroupTasks, renameGroup, setGroupHidden } = useTasksContext();
+  const { tasks, loading, refreshing: tasksRefreshing, error: tasksError, toggleComplete, setPhase, star, create, update, reorder, moveTask, reparentTask, deleteTask, batchSetPhase, batchDelete, bakeOrder, clearOperationError, showOperationError, taskGroups, hiddenGroups, groupTasks, addToGroup, ungroupTasks, renameGroup, setGroupHidden } = useTasksContext();
   const favorites = useFavorites();
   const focusBar = useFocusBarContext();
   const pinnedTaskIdSet = useMemo(() => new Set(focusBar.pinnedIds), [focusBar.pinnedIds]);
@@ -1166,6 +1166,23 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     setPhase(id, phase);
   }, [setPhase]);
 
+  // Batch complete/reopen from the multi-select bar. Mirrors handleSetPhase's detail-pane
+  // cleanup: completing the focused task must drop the detail pane, and in a batch the
+  // focused task can be ANY member of the selection.
+  const handleBatchSetPhase = useCallback((ids: string[], phase: string) => {
+    const focusedId = focusedTaskRef.current?.id;
+    if (phase === 'COMPLETE' && focusedId && ids.includes(focusedId)) setFocusedTask(null);
+    return batchSetPhase(ids, phase);
+  }, [batchSetPhase]);
+
+  // Batch delete — a deleted task must not stay in the detail pane (it would render
+  // a task that no longer exists). Same cleanup as complete, applied to any member.
+  const handleBatchDelete = useCallback((ids: string[], opts?: { force?: boolean }) => {
+    const focusedId = focusedTaskRef.current?.id;
+    if (focusedId && ids.includes(focusedId)) setFocusedTask(null);
+    return batchDelete(ids, opts);
+  }, [batchDelete]);
+
   const handleSetPriority = useCallback((id: string, priority: string) => {
     update(id, { priority });
   }, [update]);
@@ -1415,6 +1432,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onUpdate={handleUpdate}
           onStar={star}
           onDelete={deleteTask}
+          onBatchSetPhase={handleBatchSetPhase}
+          onBatchDelete={handleBatchDelete}
           onSetPriority={handleSetPriority}
           onSetDate={handleSetDate}
           onFocusTask={handleFocusTask}

@@ -1,7 +1,7 @@
 import { createContext, useContext, useMemo, type ReactNode } from 'react';
 import { useTasks, type CreateHooks } from '@/hooks/useTasks';
 import type { Task } from '@open-walnut/core';
-import type { CreateTaskInput, UpdateTaskInput } from '@/api/tasks';
+import type { BatchTaskOutcome, CreateTaskInput, UpdateTaskInput } from '@/api/tasks';
 
 /** The shape exposed by TasksContext — mirrors useTasks() return. */
 export interface TasksContextValue {
@@ -22,6 +22,9 @@ export interface TasksContextValue {
   moveTask: (taskId: string, category: string, project: string, insertNearTaskId?: string) => void;
   reparentTask: (taskId: string, newParentId: string | null, opts?: { insertAfterId?: string }) => void;
   deleteTask: (id: string) => void;
+  /** Multi-select batch ops — one round-trip; resolve with the per-task `failed` list. */
+  batchSetPhase: (ids: string[], phase: string) => Promise<BatchTaskOutcome[]>;
+  batchDelete: (ids: string[], opts?: { force?: boolean }) => Promise<BatchTaskOutcome[]>;
   bakeOrder: (orderedIds: string[]) => void;
   /** Local-only batch patch (no API call) — for optimistic flows (Focus Bar pin/tier). */
   patchTasksLocal: (patches: Record<string, Partial<Task>>) => void;

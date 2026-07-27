@@ -1338,6 +1338,129 @@ export async function toggleComplete(idPrefix: string): Promise<{ task: Task }> 
   return { task };
 }
 
+/** One task's outcome in a batch op: applied, or skipped with a reason. */
+export interface BatchTaskOutcome {
+  id: string;
+  title?: string;
+  ok: boolean;
+  /** Present when ok=false — human-readable reason (active children, active sessions, …). */
+  error?: string;
+}
+
+export interface BatchPhaseResult {
+  /** Tasks whose phase actually changed and was persisted locally. */
+  changed: Task[];
+  /** Tasks NOT applied — guard rejection (active children), unknown/ambiguous id. */
+  failed: BatchTaskOutcome[];
+  /**
+   * Tasks applied locally whose EXTERNAL sync push failed. Deliberately separate
+   * from `failed`: the local write committed, so the row genuinely is complete and
+   * the client must not roll it back or report "could not complete". Folding these
+   * into `failed` made a fully-successful batch report total failure whenever the
+   * tasks belonged to a plugin category with no plugin loaded.
+   */
+  syncFailed: BatchTaskOutcome[];
+}
+
+/**
+ * Set the phase of MANY tasks in ONE store write (multi-select "Complete" /
+ * "Reopen"). Deliberately NOT a loop over completeTask(): that would take the
+ * write lock + rewrite the whole store per task, so completing 10 tasks meant 10
+ * full-store rewrites and 10 separate WS events (the UI then flickered row by row).
+ *
+ * Per-task guards are still enforced INDIVIDUALLY — a task with active children
+ * can't be completed — but a guard failure only skips THAT task and is reported in
+ * `failed`; the rest still apply. Partial success is the right semantics here: the
+ * user picked 10 rows and one being un-completable must not void the other 9.
+ *
+ * Completing also auto-unpins (same rule as completeTask) so done tasks don't
+ * linger in the Focus bar, and pin_order is compacted once for the whole batch.
+ * External-sync push + session auto-complete run OUTSIDE the lock, per task, the
+ * same way completeTask does (autoPushIfConfigured re-enters the lock).
+ */
+export async function setPhaseBulk(
+  idPrefixes: string[],
+  phase: TaskPhase,
+): Promise<BatchPhaseResult> {
+  if (!idPrefixes.length) return { changed: [], failed: [], syncFailed: [] };
+  if (!VALID_PHASES.has(phase)) throw new Error(`Invalid phase "${phase}"`);
+
+  const { changed, failed } = await withWriteLock(async () => {
+    const store = await readStore();
+    const applied: Task[] = [];
+    const skipped: BatchTaskOutcome[] = [];
+    const now = new Date().toISOString();
+
+    for (const prefix of [...new Set(idPrefixes)]) {
+      const matches = store.tasks.filter((t) => t.id.startsWith(prefix));
+      if (matches.length === 0) {
+        skipped.push({ id: prefix, ok: false, error: `No task found matching ID prefix "${prefix}"` });
+        continue;
+      }
+      if (matches.length > 1) {
+        skipped.push({ id: prefix, ok: false, error: `Ambiguous ID prefix "${prefix}" matches ${matches.length} tasks` });
+        continue;
+      }
+      const t = matches[0];
+      if (t.phase === phase) continue; // already there — not a failure, just a no-op
+      if (phase === 'COMPLETE') {
+        // Guard per task, not per batch: one blocked parent must not void the rest.
+        // Children already inside THIS batch count as being completed, so selecting
+        // a parent together with its children succeeds (the natural user intent).
+        const activeChildren = store.tasks.filter(
+          (c) => c.parent_task_id === t.id
+            && c.phase !== 'COMPLETE'
+            && !applied.some((a) => a.id === c.id),
+        );
+        if (activeChildren.length > 0) {
+          skipped.push({
+            id: t.id,
+            title: t.title,
+            ok: false,
+            error: new ActiveChildrenError(t.title, activeChildren).message,
+          });
+          continue;
+        }
+      }
+      applyPhase(t, phase);
+      if (phase === 'COMPLETE' && t.pinned) {
+        t.pinned = false;
+        delete t.pin_order;
+        delete t.focus_tier;
+      }
+      t.updated_at = now;
+      applied.push(t);
+    }
+
+    if (applied.length === 0) return { changed: applied, failed: skipped };
+
+    // Compact pin orders ONCE for the whole batch (completeTask does this per call).
+    if (phase === 'COMPLETE') {
+      const pinned = store.tasks.filter((x) => x.pinned).sort((a, b) => (a.pin_order ?? 0) - (b.pin_order ?? 0));
+      pinned.forEach((x, i) => { x.pin_order = i; });
+    }
+    await writeStore(store);
+    return { changed: applied, failed: skipped };
+  });
+
+  // Outside the lock (autoPushIfConfigured re-acquires it → self-deadlock).
+  // Unlike completeTask a sync failure does NOT throw and is NOT merged into
+  // `failed`: the local write already committed for every task in `changed`, so the
+  // phase change is real. Reporting it as a failure would make the client roll back
+  // (or warn about) rows that genuinely did change — which is exactly what happens
+  // for any plugin-sourced task whose plugin isn't loaded.
+  const syncFailed: BatchTaskOutcome[] = [];
+  for (const task of changed) {
+    const syncResult = await autoPushIfConfigured(task);
+    if (!syncResult.success) {
+      syncFailed.push({ id: task.id, title: task.title, ok: false, error: `Sync to ${task.source} failed: ${syncResult.error ?? 'unknown error'}` });
+    }
+    if (task.phase === 'COMPLETE') autoCompleteTaskSessions(task);
+  }
+
+  return { changed, failed, syncFailed };
+}
+
 export interface UpdateTaskInput {
   title?: string;
   priority?: TaskPriority;
@@ -2276,6 +2399,94 @@ export async function deleteTask(idPrefix: string): Promise<{ task: Task }> {
 
   return { task };
   });
+}
+
+export interface BatchDeleteResult {
+  deleted: Task[];
+  failed: BatchTaskOutcome[];
+}
+
+/**
+ * Delete MANY tasks in ONE store write (multi-select "Delete"). Same reasoning as
+ * setPhaseBulk: a loop over deleteTask() would take the write lock and rewrite the
+ * whole store per task.
+ *
+ * Per-task active-session guard is enforced individually and only skips that task
+ * (reported in `failed`) — partial success, so one busy task doesn't void the rest.
+ * `force` mirrors DELETE /api/tasks/:id?force=true: stop the task's sessions first,
+ * then delete. Emptied groups are pruned once at the end.
+ */
+export async function deleteTasksByIds(
+  idPrefixes: string[],
+  opts?: { force?: boolean },
+): Promise<BatchDeleteResult> {
+  if (!idPrefixes.length) return { deleted: [], failed: [] };
+
+  // Resolve first (read-only) so force-mode can stop sessions BEFORE taking the
+  // write lock — completeTaskSessions/clearSessionSlot re-enter it.
+  const resolved = await withWriteLock(async () => {
+    const store = await readStore();
+    const found: Task[] = [];
+    const skipped: BatchTaskOutcome[] = [];
+    for (const prefix of [...new Set(idPrefixes)]) {
+      const matches = store.tasks.filter((t) => t.id.startsWith(prefix));
+      if (matches.length === 0) {
+        skipped.push({ id: prefix, ok: false, error: `No task found matching ID prefix "${prefix}"` });
+        continue;
+      }
+      if (matches.length > 1) {
+        skipped.push({ id: prefix, ok: false, error: `Ambiguous ID prefix "${prefix}" matches ${matches.length} tasks` });
+        continue;
+      }
+      found.push(matches[0]);
+    }
+    return { found, skipped };
+  });
+
+  const failed = [...resolved.skipped];
+  const targets: Task[] = [];
+  for (const task of resolved.found) {
+    const activeIds = [task.session_id, task.plan_session_id, task.exec_session_id].filter(Boolean) as string[];
+    if (activeIds.length === 0) { targets.push(task); continue; }
+    if (!opts?.force) {
+      failed.push({ id: task.id, title: task.title, ok: false, error: new ActiveSessionError(task.id, activeIds).message });
+      continue;
+    }
+    // Force: stop the sessions and clear the slots, then the task is deletable.
+    const { completeTaskSessions } = await import('./session-tracker.js');
+    await completeTaskSessions(activeIds);
+    for (const sid of activeIds) {
+      try { await clearSessionSlot(task.id, sid); } catch { /* best-effort */ }
+    }
+    targets.push(task);
+  }
+
+  if (targets.length === 0) return { deleted: [], failed };
+
+  const deleted = await withWriteLock(async () => {
+    const store = await readStore();
+    const targetIds = new Set(targets.map((t) => t.id));
+    const removed = store.tasks.filter((t) => targetIds.has(t.id));
+    const touchedGroups = new Set(removed.map((t) => t.group_id).filter(Boolean) as string[]);
+    store.tasks = store.tasks.filter((t) => !targetIds.has(t.id));
+    // A group survives down to 1 member; prune only the ones left with 0.
+    for (const gid of touchedGroups) pruneVirtualGroup(store, gid);
+    await writeStore(store);
+    return removed;
+  });
+
+  // Fire-and-forget remote deletes (same as deleteTask).
+  for (const task of deleted) {
+    pushToPlugin(task, 'deleteTask').catch((err) => {
+      log.task.warn('failed to delete task from remote', {
+        taskId: task.id,
+        source: task.source,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
+
+  return { deleted, failed };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
