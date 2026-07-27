@@ -157,7 +157,8 @@ struct NoteDetailView: View {
                 onCheckboxToggle: {
                     dirty = true
                     saveTask?.cancel()
-                    saveTask = Task { await flushSave() }
+                    // Same in-flight protection as scheduleAutosave.
+                    saveTask = Task { await Task { await flushSave() }.value }
                 }
             )
             .accessibilityIdentifier("note.editor")
@@ -273,7 +274,7 @@ struct NoteDetailView: View {
         adopt(content: rawContent, hash: contentHash)
         dirty = true
         saveTask?.cancel()
-        saveTask = Task { await flushSave() }
+        saveTask = Task { await Task { await flushSave() }.value }
     }
 
     private func scheduleAutosave() {
@@ -281,7 +282,12 @@ struct NoteDetailView: View {
         saveTask = Task {
             try? await Task.sleep(for: .seconds(1.2))
             guard !Task.isCancelled else { return }
-            await flushSave()
+            // Unstructured hop: cancelling the debounce (the next keystroke)
+            // must NOT cancel a PUT already in flight. The server may have
+            // applied that PUT — killing the response leaves contentHash
+            // stale, and the next save then 409s against our OWN write
+            // (bogus "Server Changed" with nothing changed elsewhere).
+            await Task { await flushSave() }.value
         }
     }
 
@@ -308,7 +314,23 @@ struct NoteDetailView: View {
                 dirty = false
                 DiskCache.remove(key: Self.draftKey(path))
             case .conflict(let serverHash, let serverContent):
-                conflict = (serverHash, serverContent)
+                // Self-conflict heal: if the server's "conflicting" copy is
+                // byte-identical to what we just sent (or to what we're about
+                // to send), our own earlier PUT landed but its response was
+                // lost (cancelled mid-flight / backgrounded). Nothing changed
+                // elsewhere — adopt the hash silently instead of alarming.
+                if serverContent == text || serverContent == currentMarkdown() {
+                    contentHash = serverHash
+                    if serverContent == currentMarkdown() {
+                        dirty = false
+                        DiskCache.remove(key: Self.draftKey(path))
+                    } else {
+                        // Editor moved on since `text` — retry with the fresh hash.
+                        scheduleAutosave()
+                    }
+                } else {
+                    conflict = (serverHash, serverContent)
+                }
             }
         } catch {
             // Keep dirty=true so the next edit or screen pop retries.
