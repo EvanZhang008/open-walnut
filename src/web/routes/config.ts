@@ -44,7 +44,21 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
     // fix-walnut / bug reports can spot it without shell access.
     let processNice = 0
     try { processNice = (await import('node:os')).getPriority() } catch { /* diagnostics only */ }
-    res.json({ config: CLOUD_MODE ? redactConfig(config) : config, envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice })
+    // memory: same purpose as processNice — a diagnostic a bug report can carry
+    // without shell access. Unbounded whole-file JSONL reads drove RSS to ~3 GB
+    // within minutes and ended in V8 OOM aborts; those reads are gone, but the
+    // symptom was invisible from the UI, so the number is now always available.
+    // uptimeSec is the denominator that makes it meaningful (2 GB after a week is
+    // ordinary; 2 GB after five minutes is the bug).
+    const mem = process.memoryUsage()
+    const memory = {
+      rssMb: Math.round(mem.rss / 1048576),
+      heapUsedMb: Math.round(mem.heapUsed / 1048576),
+      heapTotalMb: Math.round(mem.heapTotal / 1048576),
+      externalMb: Math.round(mem.external / 1048576),
+      uptimeSec: Math.round(process.uptime()),
+    }
+    res.json({ config: CLOUD_MODE ? redactConfig(config) : config, envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory })
   } catch (err) {
     next(err)
   }
