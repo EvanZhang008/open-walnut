@@ -33,6 +33,20 @@ interface OptimisticLike {
   status: string;
   /** qm-… once the send RPC resolved; client tempId before that. */
   queueId?: string;
+  /** Text the server actually enqueued, when it differs from `text` (image refs
+   *  prepended). Persisted history echoes THIS, so it is the correct dedup key —
+   *  see `dedupKeyOf`. */
+  dedupText?: string;
+}
+
+/** The text to match against persisted history. Prefers the server-reported
+ *  enqueued text (`dedupText`) over the user-visible `text`: with attachments the
+ *  server prepends `[Images attached …]` + paths before handing the message to
+ *  the CLI, so history's echo never equals what the user typed. Without this the
+ *  bubble is unmatchable and stays pinned below newer content until a manual
+ *  refresh (inc-1785091339102). */
+function dedupKeyOf(m: OptimisticLike): string {
+  return m.dedupText ?? m.text;
 }
 interface QueuedOptimisticLike extends OptimisticLike {
   queueId: string;
@@ -75,9 +89,10 @@ export function dedupeOptimisticMessages<T extends OptimisticLike>(
   return optimistic.filter(m => {
     if (m.status === 'failed') return true;
     if (m.queueId && persistedIds.has(m.queueId)) return false;
-    const c = newUserTextCounts.get(m.text);
+    const key = dedupKeyOf(m);
+    const c = newUserTextCounts.get(key);
     if (c && c > 0) {
-      newUserTextCounts.set(m.text, c - 1);
+      newUserTextCounts.set(key, c - 1);
       return false;
     }
     return true;

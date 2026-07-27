@@ -87,6 +87,13 @@ export interface OptimisticMessage extends SessionHistoryMessage {
   images?: ImageAttachment[];
   /** Error message when status is 'failed' */
   failedError?: string;
+  /** Server-side text ACTUALLY enqueued to the CLI, when it differs from `text`.
+   *  `text` is what the user typed (and what we render); with attachments the
+   *  server prepends image refs before enqueueing, so the persisted echo carries
+   *  the augmented form. Dedup must compare against THIS, not `text`, or an
+   *  image message's bubble never matches its persisted twin and stays pinned at
+   *  the bottom forever (inc-1785091339102). Set from the send RPC response. */
+  dedupText?: string;
 }
 
 /** Renders base64 image thumbnails for optimistic messages */

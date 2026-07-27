@@ -173,3 +173,58 @@ describe('markDeliveredMessages', () => {
     expect(out[1].status).toBe('pending');
   });
 });
+
+/**
+ * REGRESSION inc-1785091339102 — an ATTACHMENT message's bubble could never be
+ * absorbed, so it stayed pinned at the bottom of the timeline below 20 minutes of
+ * newer content until the user refreshed.
+ *
+ * `session:send` prepends `[Images attached …]` + one line per saved image before
+ * enqueueing, so the CLI — and therefore the canonical JSONL echo that history
+ * parses — carries the AUGMENTED text, while the bubble carries what the user
+ * typed. Text dedup compared bubble.text against persisted text, making the two
+ * STRUCTURALLY unequal for every image send. Fix: the send RPC returns the
+ * enqueued text as `dedupText`; dedup matches on that, display still uses `text`.
+ */
+describe('dedupeOptimisticMessages — attachment text augmentation', () => {
+  const IMG_PREFIX = '[Images attached — use the Read tool to view them]\n- /img/a.png\n\n';
+
+  it('matches the persisted AUGMENTED echo via dedupText (bubble is absorbed)', () => {
+    const typed = 'why is the category summary empty?';
+    const persisted = [user(IMG_PREFIX + typed)];
+    const bubble = { text: typed, status: 'delivered', queueId: 'qm-1', dedupText: IMG_PREFIX + typed };
+
+    // Reverting the fix (dropping dedupText) makes this return the bubble → pinned.
+    expect(dedupeOptimisticMessages([bubble], persisted, 0)).toEqual([]);
+  });
+
+  it('without dedupText an augmented echo does NOT absorb the bubble (the bug)', () => {
+    const typed = 'why is the category summary empty?';
+    const persisted = [user(IMG_PREFIX + typed)];
+    const bubble = opt(typed, 'delivered', 'qm-1'); // no dedupText — pre-fix shape
+    expect(dedupeOptimisticMessages([bubble], persisted, 0)).toHaveLength(1);
+  });
+
+  it('plain (no-attachment) messages are unaffected — text is still the key', () => {
+    const bubble = opt('hello', 'delivered', 'qm-1');
+    expect(dedupeOptimisticMessages([bubble], [user('hello')], 0)).toEqual([]);
+  });
+
+  it('multiset: two image sends with identical typed text consume two echoes', () => {
+    const typed = 'look at this';
+    const a = { text: typed, status: 'delivered', queueId: 'qm-1', dedupText: IMG_PREFIX + typed };
+    const b = { text: typed, status: 'delivered', queueId: 'qm-2', dedupText: IMG_PREFIX + typed };
+    const persisted = [user(IMG_PREFIX + typed), user(IMG_PREFIX + typed)];
+    expect(dedupeOptimisticMessages([a, b], persisted, 0)).toEqual([]);
+    // Only ONE echo → exactly one bubble survives (no over-consumption).
+    expect(dedupeOptimisticMessages([a, b], [user(IMG_PREFIX + typed)], 0)).toHaveLength(1);
+  });
+
+  it('id-first pass still wins over text for an attachment bubble', () => {
+    const typed = 'ship it';
+    const bubble = { text: typed, status: 'delivered', queueId: 'qm-1', dedupText: IMG_PREFIX + typed };
+    // Persisted text differs entirely, but the server stamped the echo-claim id.
+    const persisted = [{ role: 'user', text: 'unrelated', walnutMessageId: 'qm-1' }];
+    expect(dedupeOptimisticMessages([bubble], persisted, 0)).toEqual([]);
+  });
+});

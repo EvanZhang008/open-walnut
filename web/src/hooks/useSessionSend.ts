@@ -47,6 +47,23 @@ interface UseSessionSendReturn {
  *
  * See SessionChatHistory.tsx top-of-file doc block for the full lifecycle.
  */
+/**
+ * Undo the server's image-ref augmentation for DISPLAY purposes.
+ *
+ * `session:send` prepends `[Images attached — use the Read tool to view them]\n`
+ * + one `- <path>` line per saved image + a blank line, then the user's text
+ * (src/web/routes/session-chat.ts). The disk queue therefore stores the augmented
+ * form, so a bubble rehydrated from the queue would otherwise show the machine
+ * preamble instead of what the user wrote. Keep this in sync with that emitter;
+ * a format drift just means the prefix stays visible (no dedup breakage, since
+ * the untouched string is then used as both display and dedup key).
+ */
+function stripImageRefPrefix(message: string): string {
+  if (!message.startsWith('[Images attached')) return message;
+  const sep = message.indexOf('\n\n');
+  return sep === -1 ? message : message.slice(sep + 2);
+}
+
 export function useSessionSend(activeSessionId: string | null): UseSessionSendReturn {
   const [optimisticMsgs, setOptimisticMsgs] = useState<OptimisticMessage[]>([]);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -72,13 +89,21 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
             const existing = new Set(prev.map(m => m.queueId));
             const newMsgs = res.messages
               .filter(m => !existing.has(m.id))
-              .map(m => ({
-                role: 'user' as const,
-                text: m.message,
-                timestamp: m.enqueuedAt ?? new Date().toISOString(),
-                queueId: m.id,
-                status: (m.status === 'processing' ? 'delivered' : 'received') as 'received' | 'delivered',
-              }));
+              .map(m => {
+                // The queue stores the ENQUEUED text, which for an attachment send
+                // carries the server's `[Images attached …]` + paths prefix. Render
+                // the user-facing part, but dedup against the full enqueued form
+                // (that is what history echoes) — see OptimisticMessage.dedupText.
+                const display = stripImageRefPrefix(m.message);
+                return {
+                  role: 'user' as const,
+                  text: display,
+                  timestamp: m.enqueuedAt ?? new Date().toISOString(),
+                  queueId: m.id,
+                  status: (m.status === 'processing' ? 'delivered' : 'received') as 'received' | 'delivered',
+                  ...(display !== m.message ? { dedupText: m.message } : {}),
+                };
+              });
             return [...prev, ...newMsgs];
           });
           log.info('send', 'rehydrated from queue', {
@@ -112,10 +137,15 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
       rpcPayload.images = images.map(img => ({ data: img.data, mediaType: img.mediaType }));
     }
     try {
-      const res = await wsClient.sendRpc<{ messageId: string }>('session:send', rpcPayload);
+      const res = await wsClient.sendRpc<{ messageId: string; dedupText?: string }>('session:send', rpcPayload);
       if (res?.messageId) {
+        // Adopt dedupText when the server augmented the text (image refs) — the
+        // bubble keeps rendering the user's original, but dedups against what was
+        // actually enqueued. See OptimisticMessage.dedupText.
         setOptimisticMsgs((prev) => prev.map((m) =>
-          m.queueId === tempId ? { ...m, queueId: res.messageId, status: 'received' as const } : m
+          m.queueId === tempId
+            ? { ...m, queueId: res.messageId, status: 'received' as const, ...(res.dedupText ? { dedupText: res.dedupText } : {}) }
+            : m
         ));
       }
       return true;
@@ -150,10 +180,12 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
       rpcPayload.images = images.map(img => ({ data: img.data, mediaType: img.mediaType }));
     }
     try {
-      const res = await wsClient.sendRpc<{ messageId: string }>('session:send', rpcPayload);
+      const res = await wsClient.sendRpc<{ messageId: string; dedupText?: string }>('session:send', rpcPayload);
       if (res?.messageId) {
         setOptimisticMsgs((prev) => prev.map((m) =>
-          m.queueId === tempId ? { ...m, queueId: res.messageId, status: 'received' as const } : m
+          m.queueId === tempId
+            ? { ...m, queueId: res.messageId, status: 'received' as const, ...(res.dedupText ? { dedupText: res.dedupText } : {}) }
+            : m
         ));
       }
       return true;
@@ -185,11 +217,13 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     if (failedMsg.images?.length) {
       rpcPayload.images = failedMsg.images.map(img => ({ data: img.data, mediaType: img.mediaType }));
     }
-    wsClient.sendRpc<{ messageId: string }>('session:send', rpcPayload)
+    wsClient.sendRpc<{ messageId: string; dedupText?: string }>('session:send', rpcPayload)
       .then((res) => {
         if (res?.messageId) {
           setOptimisticMsgs((prev) => prev.map((m) =>
-            m.queueId === newTempId ? { ...m, queueId: res.messageId, status: 'received' as const } : m
+            m.queueId === newTempId
+              ? { ...m, queueId: res.messageId, status: 'received' as const, ...(res.dedupText ? { dedupText: res.dedupText } : {}) }
+              : m
           ));
         }
       })

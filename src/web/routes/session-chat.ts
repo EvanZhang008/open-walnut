@@ -184,7 +184,19 @@ export function registerSessionChatRpc(): void {
       enqueueMessage: augmentedMessage,
     })
 
-    return { messageId: msg.id }
+    // Return the AUGMENTED text alongside the id. The optimistic bubble holds the
+    // user's ORIGINAL text (what they typed), but the CLI — and therefore the
+    // canonical JSONL echo that history parses — sees `augmentedMessage` (image
+    // refs prepended above). Text-based optimistic dedup compares bubble.text
+    // against persisted history text, so for any message with attachments the two
+    // are STRUCTURALLY unequal and the bubble can never be absorbed: it stays
+    // pinned at the bottom of the timeline below newer content until a refresh
+    // (inc-1785091339102). Handing the augmented text back lets the frontend keep
+    // showing the original while deduping against what actually got persisted.
+    return {
+      messageId: msg.id,
+      ...(augmentedMessage !== data.message ? { dedupText: augmentedMessage } : {}),
+    }
   })
 
   registerMethod('session:edit-queued', async (payload: unknown) => {
