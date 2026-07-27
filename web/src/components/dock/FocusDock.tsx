@@ -227,6 +227,11 @@ const DockQuickAdd = memo(function DockQuickAdd({ onAdd }: DockQuickAddProps) {
       await onAdd(t);
       setTitle('');
       setOpen(false);
+    } catch {
+      // onAdd rethrows after reporting the failure (useTasks.create → onOpError →
+      // toast). Swallow it here so the keydown handler's un-awaited submit() call
+      // doesn't surface as an [unhandledrejection]; the form stays open with the
+      // title intact so the user can retry.
     } finally {
       setBusy(false);
     }

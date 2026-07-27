@@ -1449,8 +1449,17 @@ function InlineAdd({ onAdd, label = 'Add to Focus…' }: { onAdd: (title: string
   const submit = () => {
     const title = value.trim();
     if (!title) { setOpen(false); return; }
-    onAdd(title);
+    // Clear optimistically (rapid multi-add is the common case) but PUT THE TEXT
+    // BACK if the create rejects. onAdd is async and useTasks.create() rethrows
+    // after reporting, so an unawaited call here both lost the user's typing and
+    // produced an [unhandledrejection] in the console — the create failed, the
+    // optimistic row rolled back, and the row just vanished with the title gone.
     setValue('');
+    Promise.resolve(onAdd(title)).catch(() => {
+      setValue(title);
+      setOpen(true);
+      inputRef.current?.focus();
+    });
     // Keep open for rapid multi-add; input stays focused.
   };
 
