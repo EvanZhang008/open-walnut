@@ -22,6 +22,45 @@ export interface QuickTaskParse {
   project?: string;
 }
 
+// ── Pin tier routing policy ───────────────────────────────────────────────
+// What belongs in which tier. Single source of truth: the quick-task PROMPT
+// builds its pinTier rule from this, and the UI shows the same wording as the
+// tier tooltips — so the AI's guess and the human's mental model can't drift.
+//
+// The deliberate asymmetry: only urgent/soon work gets pinned at all. The
+// pinned area is a small working set the user actually looks at, so anything
+// low-priority or far-off stays OUT of it (no tier) and lives in the task list
+// below. Over-pinning is what made the old Focus tier useless.
+export interface PinTierPolicyEntry {
+  tier: 'focus' | 'satellite' | 'wait';
+  /** Short label shown in pickers. */
+  label: string;
+  /** One-line "what goes here", shown as the tier's tooltip. */
+  guidance: string;
+}
+
+export const PIN_TIER_POLICY: readonly PinTierPolicyEntry[] = [
+  {
+    tier: 'focus',
+    label: 'Focus',
+    guidance: 'Super important and urgent — work on it now.',
+  },
+  {
+    tier: 'satellite',
+    label: 'Satellite',
+    guidance: 'Needs doing soon — lower priority than Focus, or due within about a week.',
+  },
+  {
+    tier: 'wait',
+    label: 'Wait',
+    guidance: 'Parked — pinned but blocked or waiting on someone else.',
+  },
+] as const;
+
+/** The "leave it unpinned" half of the policy — no tier is a real answer. */
+export const PIN_TIER_NONE_GUIDANCE =
+  'Low priority, or no near-term date (someday / vague / months out) — leave it unpinned.';
+
 // ── Session model registry ────────────────────────────────────────────────
 // Single source of truth for the set of selectable Claude Code session models.
 // Both backend (CLI --model mapping, web RPC allowlist) and frontend (picker,

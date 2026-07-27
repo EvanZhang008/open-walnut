@@ -83,7 +83,13 @@ test('two-stage review creates parsed task in chosen category', async ({ page, r
   await expect(panel).toBeVisible()
   await expect(panel.locator('.qtc-confirm-title')).toHaveValue(title)
   await expect(panel.locator('.qtc-chip').first()).toContainText('Tomorrow 2:00')
-  await expect(panel.locator('.qtc-chip').nth(1)).toContainText('Pin: Satellite')
+  // The pinned area shows the AI's tier as a pressed button — no click needed to read it,
+  // and the ✦ on the PINNED label marks the tier as AI-suggested (same as the other fields).
+  const pinnedField = panel.locator('.qtc-confirm-field', { hasText: 'Pinned' })
+  await expect(pinnedField.locator('.qtc-confirm-ai')).toBeVisible()
+  const tiers = panel.getByRole('group', { name: 'Pin new task to tier' })
+  await expect(tiers.getByRole('button', { name: 'Satellite' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'false')
   await expect(panel.locator('.qtc-confirm-select')).toHaveValue(category)
   await expect(panel.locator('.qtc-confirm-project')).toHaveValue(project)
   await panel.locator('.qtc-confirm-title').press('Enter')
@@ -109,6 +115,12 @@ test('plain note reviews defaults and creates in the default category', async ({
   const panel = page.locator('.qtc-confirm-panel')
   await expect(panel.locator('.qtc-confirm-title')).toHaveValue(rawTitle)
   await expect(panel.locator('.qtc-confirm-select')).toHaveValue('')
+  // Pinned area is always present, with nothing pressed when the AI suggested no tier.
+  const tiers = panel.getByRole('group', { name: 'Pin new task to tier' })
+  await expect(tiers).toBeVisible()
+  for (const label of ['Focus', 'Satellite', 'Wait']) {
+    await expect(tiers.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'false')
+  }
   await panel.locator('.qtc-confirm-title').press('Enter')
 
   const created = await waitForNewTask(request, rawTitle, existingIds)
@@ -135,12 +147,22 @@ test('panel overrides pin, category, project, priority, and star before create',
   await page.locator('.qtc-input').press('Enter')
   const panel = page.locator('.qtc-confirm-panel')
   await expect(panel.locator('.qtc-confirm-title')).toHaveValue(title)
+  // Override the AI's Focus with Satellite in ONE click (the old cycling chip
+  // needed two, and you couldn't see which tier was next).
+  const tiers = panel.getByRole('group', { name: 'Pin new task to tier' })
+  const pinnedField = panel.locator('.qtc-confirm-field', { hasText: 'Pinned' })
+  await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(pinnedField.locator('.qtc-confirm-ai')).toBeVisible()
+  await tiers.getByRole('button', { name: 'Satellite' }).click()
+  await expect(tiers.getByRole('button', { name: 'Satellite' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'false')
+  // The tier is now the USER's pick, so the ✦ must go — otherwise the panel keeps
+  // crediting the AI for a value the user just overrode.
+  await expect(pinnedField.locator('.qtc-confirm-ai')).toHaveCount(0)
   await panel.locator('.qtc-chip').nth(1).click()
-  await expect(panel.locator('.qtc-chip').nth(1)).toContainText('Pin: Satellite')
+  await expect(panel.locator('.qtc-chip').nth(1)).toContainText('Immediate')
   await panel.locator('.qtc-chip').nth(2).click()
-  await expect(panel.locator('.qtc-chip').nth(2)).toContainText('Immediate')
-  await panel.locator('.qtc-chip').nth(3).click()
-  await expect(panel.locator('.qtc-chip').nth(3)).toContainText('Starred')
+  await expect(panel.locator('.qtc-chip').nth(2)).toContainText('Starred')
   await panel.locator('.qtc-confirm-select').selectOption(selectedCategory)
   await expect(panel.locator('.qtc-confirm-project')).toHaveValue('')
   await panel.locator('.qtc-confirm-project').fill(selectedProject)
@@ -156,6 +178,45 @@ test('panel overrides pin, category, project, priority, and star before create',
     const body = await response.json() as { satellite_tasks?: string[] }
     return body.satellite_tasks?.includes(created.id) ?? false
   }).toBe(true)
+})
+
+/**
+ * Clicking the tier the AI already picked means "don't pin this one" — the task
+ * must land UNPINNED, not fall through to some other tier. The old cycling chip
+ * could only reach "not pinned" by clicking through the remaining tiers.
+ */
+test('clicking the pressed tier unpins, and the task is created unpinned', async ({ page, request }) => {
+  const title = unique('Unpin before create')
+  await page.route('**/api/tasks/quick-parse', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ title, pinTier: 'focus' }),
+  }))
+  const existingIds = new Set((await listTasks(request)).map((task) => task.id))
+
+  await openComposer(page)
+  await page.locator('.qtc-input').fill('unpin before create')
+  await page.locator('.qtc-input').press('Enter')
+  const panel = page.locator('.qtc-confirm-panel')
+  const tiers = panel.getByRole('group', { name: 'Pin new task to tier' })
+  await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'true')
+  await tiers.getByRole('button', { name: 'Focus' }).click()
+  for (const label of ['Focus', 'Satellite', 'Wait']) {
+    await expect(tiers.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'false')
+  }
+  await panel.locator('.qtc-confirm-primary').click()
+
+  const created = await waitForNewTask(request, title, existingIds)
+  const response = await request.get('/api/focus/tasks')
+  const body = await response.json() as {
+    focus_tasks?: string[]; satellite_tasks?: string[]; wait_tasks?: string[]
+  }
+  const pinned = [
+    ...(body.focus_tasks ?? []),
+    ...(body.satellite_tasks ?? []),
+    ...(body.wait_tasks ?? []),
+  ]
+  expect(pinned).not.toContain(created.id)
 })
 
 test('slow parse keeps Enter inert, then supports parsed and no-AI create paths', async ({ page, request }) => {

@@ -1,11 +1,10 @@
 import { useState } from 'react';
 import type { CategorySummary } from '@/api/tasks';
 import { DatePicker, formatDateTimeDisplay } from '@/components/common/DatePicker';
+import { PinTierPicker } from '@/components/common/PinTierPicker';
 import {
-  PIN_CYCLE,
   PRIORITY_CYCLE,
   PRIORITY_OPTIONS,
-  TIER_COLORS,
   nextValue,
 } from '@/components/sessions/task-meta-constants';
 
@@ -72,7 +71,6 @@ export function QuickTaskConfirm({
   }
 
   const priorityOption = PRIORITY_OPTIONS.find((option) => option.value === draft.priority);
-  const pinLabel = draft.pin ? `Pin: ${draft.pin[0].toUpperCase()}${draft.pin.slice(1)}` : 'Not pinned';
   const priorityLabel = priorityOption ? `${priorityOption.icon} ${priorityOption.label}` : 'No priority';
   const suggestions = projectOptions[draft.category || 'Inbox'] ?? [];
   const titleChanged = draft.title.trim() !== rawText.trim();
@@ -113,15 +111,6 @@ export function QuickTaskConfirm({
           </button>
           <button
             type="button"
-            className={`qtc-chip${draft.aiFields.has('pin') ? ' qtc-chip-ai' : ''}`}
-            style={draft.pin ? { borderColor: TIER_COLORS[draft.pin] } : undefined}
-            disabled={submitting}
-            onClick={() => onChange({ pin: nextValue(PIN_CYCLE, draft.pin) })}
-          >
-            {pinLabel} <AiBadge visible={draft.aiFields.has('pin')} />
-          </button>
-          <button
-            type="button"
             className={`qtc-chip${draft.aiFields.has('priority') ? ' qtc-chip-ai' : ''}`}
             disabled={submitting}
             onClick={() => onChange({ priority: nextValue(PRIORITY_CYCLE, draft.priority) as ConfirmDraft['priority'] })}
@@ -142,6 +131,21 @@ export function QuickTaskConfirm({
             <DatePicker inline date={draft.due} onChange={(due) => onChange({ due: due ?? undefined })} />
           </div>
         )}
+      </div>
+
+      {/* Pinned area — its OWN labelled field, not a chip in Details. Which tier
+          a task lands in decides whether the user ever sees it again, so it gets
+          the same always-visible three-button row as the session launcher
+          instead of a chip you had to click up to three times to read. */}
+      <div className="qtc-confirm-field">
+        <span className="qtc-confirm-label">
+          Pinned <AiBadge visible={draft.aiFields.has('pin')} />
+        </span>
+        <PinTierPicker
+          value={draft.pin}
+          disabled={submitting}
+          onChange={(pin) => onChange({ pin })}
+        />
       </div>
 
       <div className="qtc-confirm-grid">

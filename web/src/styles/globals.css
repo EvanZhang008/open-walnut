@@ -15102,24 +15102,55 @@ a.task-kebab-info:hover {
   line-height: 1;
 }
 
-.sps-meta-tier-options,
 .sps-meta-priority-options {
   display: flex;
   gap: 4px;
   align-items: center;
 }
-.sps-tier-btn {
+
+/* ── Shared pin-tier picker (PinTierPicker) ──
+   One control for every create surface — the session launcher footer and the
+   Quick Task confirm panel — so the "pinned area" can't drift between them. */
+.pin-tier-options {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+/* Inline "Pin" caption (launcher footer only) — the menu version used a
+   fixed-width .sps-meta-label column, which would eat the footer's single row.
+   Hidden below ~520px of footer width: in the narrow todo-anchored launcher the
+   caption is what tips the row into wrapping, and each wrapped row costs a
+   directory-history row (the popover height is fixed at min(44vh, 460px)). The
+   three tier labels are self-explanatory; the group still has an aria-label. */
+.pin-tier-label {
+  font-size: 11px;
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+@container sps-footer (max-width: 520px) {
+  .pin-tier-label { display: none; }
+}
+/* Unpicked tiers stay muted so the picked one reads as picked — the tier color
+   lands only on .active. Satellite's brand grey (--tier-satellite) is too quiet
+   to signal "selected", so the active state uses full --fg for it. */
+.pin-tier-btn {
   padding: 2px 10px;
   border-radius: 10px;
   border: 1px solid var(--border);
   background: transparent;
+  color: var(--fg-muted);
   font-size: 11px;
   font-weight: 500;
   cursor: pointer;
   transition: background 0.12s, border-color 0.12s;
 }
-.sps-tier-btn:hover { background: var(--accent-subtle); }
-.sps-tier-btn.active {
+.pin-tier-btn:hover { background: var(--accent-subtle); }
+.pin-tier-btn:disabled { cursor: default; opacity: 0.55; }
+.pin-tier-focus.active { color: var(--tier-focus); }
+.pin-tier-satellite.active { color: var(--fg); }
+.pin-tier-wait.active { color: var(--tier-wait); }
+.pin-tier-btn.active {
   border-color: currentColor;
   background: color-mix(in srgb, currentColor 12%, transparent);
   font-weight: 600;

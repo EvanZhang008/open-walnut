@@ -22,7 +22,7 @@ import { useLiveDirs, type HostLiveState } from './path-selector/useLiveDirs';
 import { GhostTextInput } from './path-selector/GhostTextInput';
 import { PathList } from './path-selector/PathList';
 import { MetaFooter } from './path-selector/MetaFooter';
-import { DEFAULT_META } from './task-meta-constants';
+import { freshLauncherMeta } from './task-meta-constants';
 
 export interface QuickStartPath {
   cwd: string;
@@ -54,8 +54,8 @@ interface Props {
   onClose: () => void;
   onSelect: (path: QuickStartPath, taskMeta: QuickStartTaskMeta) => void;
   /** Meta to seed the footer with on open (e.g. re-opening to edit an already
-   *  confirmed Quick Start). undefined → DEFAULT_META. Lets a prior model/priority
-   *  choice survive a reopen instead of silently resetting to Auto/defaults. */
+   *  confirmed Quick Start). undefined → defaults + the remembered pin tier. Lets a
+   *  prior model/priority choice survive a reopen instead of silently resetting. */
   initialMeta?: QuickStartTaskMeta;
   /** Path to seed on open (e.g. re-opening to edit an already-confirmed Quick Start).
    *  When set, the picker opens directly in edit mode with this cwd pre-filled and the
@@ -88,7 +88,9 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
   const [editingPath, setEditingPath] = useState('');
 
   // Task metadata the user picks in the footer — applied to the new task when the session starts.
-  const [meta, setMeta] = useState<QuickStartTaskMeta>(initialMeta ?? DEFAULT_META);
+  // A fresh open starts from the defaults with the LAST tier the user picked
+  // (freshLauncherMeta) so the choice is sticky across launches and browsers.
+  const [meta, setMeta] = useState<QuickStartTaskMeta>(initialMeta ?? freshLauncherMeta);
   // True once the user touches the model/engine controls during THIS open —
   // their explicit pick (including an explicit reset to Auto) beats the
   // per-directory launch memory applied at confirm time.
@@ -130,7 +132,7 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
     setError(null);
     setQuery('');
     setSelectedIdx(0);
-    setMeta(initialMetaRef.current ?? DEFAULT_META);
+    setMeta(initialMetaRef.current ?? freshLauncherMeta());
     launchTouchedRef.current = false;
     // Re-opening to edit a confirmed selection: open straight into edit mode with the
     // path pre-filled and its host tab active — an "edit this selection" view. Without

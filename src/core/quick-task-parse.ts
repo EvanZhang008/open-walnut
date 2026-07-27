@@ -1,6 +1,7 @@
 import { sendMessage } from '../agent/model.js';
 import { log } from '../logging/index.js';
 import { fastModelFor } from './cheap-model.js';
+import { PIN_TIER_NONE_GUIDANCE, PIN_TIER_POLICY } from './types.js';
 import type { QuickTaskParse } from './types.js';
 
 export type { QuickTaskParse } from './types.js';
@@ -21,11 +22,21 @@ export interface QuickTaskParseOptions {
   modelOverride?: string;
 }
 
+/** The pinTier rule, rendered from PIN_TIER_POLICY so the prompt can't drift
+ *  from the tooltips the user reads in the picker. */
+const PIN_TIER_RULE = [
+  '- pinTier: which pinned tier the task belongs in. Judge it from the work itself — do NOT require the words "pin"/"focus".',
+  ...PIN_TIER_POLICY.map((p) => `  · ${p.tier} — ${p.guidance}`),
+  `  · OMIT the field entirely — ${PIN_TIER_NONE_GUIDANCE}`,
+  '  Urgency signals (urgent/critical/asap/today/紧急/right now) point at focus; a CONCRETE due date inside the next ~7 days points at satellite even with no urgency word; "waiting on"/"blocked by"/等 points at wait. An explicit "pin to X" always wins.',
+  '  Vague or far-off timing is NOT a near-term date — "sometime this year", "someday", "when I get around to it", 有空 stay UNPINNED. Unpinned is the DEFAULT: pin only what the user needs to see in the next few days.',
+].join('\n');
+
 const SYSTEM_PROMPT = `You convert a user's quick task note into strict JSON. Reply with ONLY a JSON object — no markdown fence, no commentary.
 Fields:
 - title: cleaned task title. Remove date/time/priority/pin phrases; keep the action. Fix obvious typos. Preserve the user's language (Chinese stays Chinese). Never empty.
 - due_date: only if the note contains a date or time. Date-only -> YYYY-MM-DD. With a time of day -> LOCAL ISO 8601 datetime WITHOUT timezone suffix (e.g. 2026-07-15T10:00:00) — copy the wall-clock time the user said; never convert timezones. Resolve relative dates (tomorrow, next friday, 明天, 下周三) against the current datetime given below.
-- pinTier: focus|satellite|wait — only when the note asks to pin/focus it.
+${PIN_TIER_RULE}
 - priority: immediate|important|backlog — only when urgency is stated (urgent/asap -> immediate, important/重要 -> important, later/someday -> backlog).
 - starred: true only when the note explicitly says star it.
 - category: the ONE best-matching category NAME from the "Your categories and projects" list, judged by similarity between the note and that category's example task titles. Copy the name EXACTLY as written. Always give your best guess — the user confirms it in a UI, so a plausible guess beats omitting. For everyday personal errands (shopping, calls, appointments) prefer the category whose examples look most like personal life. Omit ONLY if the list is empty or truly nothing fits. NEVER invent a name not in the list.

@@ -10,6 +10,7 @@ vi.mock('../../src/core/config-manager.js', () => ({
 }));
 
 import { parseQuickTask, type QuickTaskParse } from '../../src/core/quick-task-parse.js';
+import { PIN_TIER_NONE_GUIDANCE, PIN_TIER_POLICY } from '../../src/core/types.js';
 
 function textResult(text: string) {
   return { content: [{ type: 'text', text }], stopReason: 'end_turn' };
@@ -21,6 +22,7 @@ function parseOnly(parse: QuickTaskParse) {
 
 function lastCall() {
   return sendMessageMock.mock.calls.at(-1)![0] as {
+    system: string;
     messages: Array<{ role: string; content: string }>;
     config: { maxTokens: number; model?: string };
   };
@@ -198,6 +200,24 @@ describe('parseQuickTask', () => {
     const result = await parseQuickTask('pay invoice', { modelOverride: 'request-fast-model' });
     expect(lastCall().config.model).toBe('request-fast-model');
     expect(result.model).toBe('request-fast-model');
+  });
+
+  // The pinTier rule is RENDERED from PIN_TIER_POLICY so the prompt and the
+  // picker tooltips can't drift. Assert the wiring (every tier's guidance
+  // reaches the prompt), not the prose — editing a guidance line is allowed.
+  it('builds the pinTier rule from the shared tier policy', async () => {
+    sendMessageMock.mockResolvedValue(textResult('{"title":"Pay invoice"}'));
+    await parseQuickTask('pay invoice');
+    const system = lastCall().system;
+    for (const entry of PIN_TIER_POLICY) {
+      expect(system).toContain(`· ${entry.tier} — ${entry.guidance}`);
+    }
+    // "leave it unpinned" is a real answer and must be spelled out, otherwise
+    // the model pins everything it is asked about.
+    expect(system).toContain(PIN_TIER_NONE_GUIDANCE);
+    // The old rule only fired on a literal "pin"/"focus" in the note, so
+    // "urgent: fix the login bug" came back unpinned. Judging the WORK is the fix.
+    expect(system).toContain('Judge it from the work itself');
   });
 
   it('uses 320 max tokens and includes a weekday in the datetime line', async () => {

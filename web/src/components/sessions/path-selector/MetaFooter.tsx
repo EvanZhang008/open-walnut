@@ -1,12 +1,15 @@
 /**
  * MetaFooter — task metadata controls in the session path selector footer.
- * The primary row keeps launch-critical model/engine choices visible while the
- * less-frequent task metadata controls live in an upward-opening More menu.
+ * The primary row keeps launch-critical choices visible — model, engine, and the
+ * pin tier (which tier column the new task lands in, changed often enough that
+ * burying it cost a click every launch) — while rarer metadata (star, needs
+ * attention, priority) lives in an upward-opening More menu.
  */
 import { useEffect, useRef, useState } from 'react';
 import { SESSION_MODELS } from '@open-walnut/core';
-import { TIER_OPTIONS, TIER_COLORS, PRIORITY_OPTIONS, DEFAULT_META } from '../task-meta-constants';
+import { PRIORITY_OPTIONS, DEFAULT_META, rememberPinTier } from '../task-meta-constants';
 import type { QuickStartTaskMeta } from '../SessionPathSelector';
+import { PinTierPicker } from '@/components/common/PinTierPicker';
 import { useHostModelCatalog } from '@/hooks/useModelCatalog';
 
 interface Props {
@@ -63,6 +66,28 @@ function EngineToggle({ meta, onChange, host }: Pick<Props, 'meta' | 'onChange' 
   );
 }
 
+/** Pin-tier picker. Lives in the PRIMARY row (not the More menu): which tier the
+ *  new task lands in is a per-launch decision, and the pick is remembered as the
+ *  next launch's default — so it has to be visible and one click away. The
+ *  buttons themselves are the shared PinTierPicker (same control as Quick Task);
+ *  the launcher only adds the stickiness. */
+function TierPicker({ meta, onChange }: Pick<Props, 'meta' | 'onChange'>) {
+  return (
+    <PinTierPicker
+      value={meta.pinTier}
+      label="Pin"
+      onChange={(pinTier) => {
+        // Remember it so the next launcher opens on it. undefined = the user
+        // deliberately unpinned, which is remembered as such. Done here (not in
+        // the setState updater) so the localStorage write + queued PUT stay out
+        // of the reducer.
+        rememberPinTier(pinTier);
+        onChange(m => ({ ...m, pinTier }));
+      }}
+    />
+  );
+}
+
 export function MetaFooter({ meta, onChange, compact, host }: Props) {
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
@@ -78,11 +103,11 @@ export function MetaFooter({ meta, onChange, compact, host }: Props) {
   // Remote tabs run Claude regardless (codex is local-only), so show the select.
   const isCodex = meta.engine === 'codex' && !(host && host !== '__local__');
   // Count fields the user actually CHANGED from the quick-start defaults —
-  // starred=true and pinTier='focus' ARE the defaults, so a fresh open must
-  // show an inactive badge, not "More · 2".
+  // starred=true IS a default, so a fresh open must show an inactive badge, not
+  // "More · 1". Only counts controls that LIVE in the menu: the pin tier moved
+  // to the primary row, where its own active state is already visible.
   const nonDefaultCount = Number(meta.starred !== DEFAULT_META.starred)
     + Number(meta.needs_attention !== DEFAULT_META.needs_attention)
-    + Number(meta.pinTier !== DEFAULT_META.pinTier)
     + Number(meta.priority !== DEFAULT_META.priority);
 
   useEffect(() => {
@@ -134,6 +159,7 @@ export function MetaFooter({ meta, onChange, compact, host }: Props) {
           </select>
         )}
         <EngineToggle meta={meta} onChange={onChange} host={host} />
+        <TierPicker meta={meta} onChange={onChange} />
         <div className="sps-meta-more" ref={moreRef}>
           {moreOpen && (
             <div className="sps-meta-more-popover" role="dialog" aria-label="More task settings">
@@ -158,23 +184,6 @@ export function MetaFooter({ meta, onChange, compact, host }: Props) {
                   <span className="sps-meta-toggle-icon">●</span>
                   <span>Needs attention</span>
                 </button>
-              </div>
-              <div className="sps-meta-row">
-                <span className="sps-meta-label">Pin to</span>
-                <div className="sps-meta-tier-options">
-                  {TIER_OPTIONS.map(t => (
-                    <button
-                      key={t.value}
-                      type="button"
-                      className={`sps-tier-btn${meta.pinTier === t.value ? ' active' : ''}`}
-                      style={{ color: TIER_COLORS[t.value] }}
-                      onClick={() => onChange(m => ({ ...m, pinTier: m.pinTier === t.value ? undefined : t.value }))}
-                      title={t.label}
-                    >
-                      {t.label}
-                    </button>
-                  ))}
-                </div>
               </div>
               <div className="sps-meta-row">
                 <span className="sps-meta-label">Priority</span>
