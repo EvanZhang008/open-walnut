@@ -5220,7 +5220,7 @@ input:focus, textarea:focus, select:focus {
 
 /* Subtask list within expanded context */
 .chat-task-context-subtasks {
-  max-height: 160px;
+  max-height: 240px;
   overflow-y: auto;
 }
 

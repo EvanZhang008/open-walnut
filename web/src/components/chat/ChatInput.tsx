@@ -226,6 +226,32 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     window.setTimeout(() => setRefreshing(false), 8000);
   }, [onRefreshSessionCommands]);
 
+  // Auto-resize (single source of truth): after EVERY value change — typing,
+  // draft restore on mount (useState initializer bypasses all handlers), prefill,
+  // voice insert — grow the textarea to fit, capped by the CSS max-height.
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, getMaxHeight(el)) + 'px';
+  }, [value]);
+
+  // Re-fit when the textarea's WIDTH changes (panel resize / composer overlay
+  // reflow re-wraps lines). Width-guarded so our own height writes don't loop.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    let lastWidth = el.clientWidth;
+    const ro = new ResizeObserver(() => {
+      if (el.clientWidth === lastWidth) return;
+      lastWidth = el.clientWidth;
+      el.style.height = 'auto';
+      el.style.height = Math.min(el.scrollHeight, getMaxHeight(el)) + 'px';
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   // Ref mirror for palette state — guarantees handleKeyDown always reads latest values
   // even if React hasn't flushed the re-render from onChange before the next keydown fires
   const paletteRef = useRef({ open: false, results: [] as PaletteItem[], selectedIndex: 0 });
