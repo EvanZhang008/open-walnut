@@ -97,6 +97,21 @@ async function enrichWithLiveStatus(sessions: SessionRecord[]): Promise<SessionR
         // is unreachable. GET must not turn transport uncertainty into durable
         // process death; the health monitor owns remote reconciliation.
         if (checked.host) continue
+        // Not-yet-spawned session: the start routes seed the record BEFORE the CLI
+        // exists (so the UI can open the real panel on the id it just got back),
+        // so for a moment there is legitimately no pid to probe. For those rows
+        // "no pid" is absence of evidence, not evidence of death — persisting
+        // 'stopped' here would render a session the user just launched as already
+        // dead. Keyed off the explicit `status_reason` the seed writes rather than
+        // `pid == null` in general, because a pid-less row with any OTHER reason
+        // really is dead (e.g. a record whose process was reaped) and must still
+        // be corrected. The window mirrors the health monitor's ORPHAN_GRACE_MS,
+        // which reaps a still-pid-less row afterwards, so nothing leaks.
+        const SPAWN_GRACE_MS = 2 * 60 * 1000
+        if (checked.pid == null && checked.status_reason === 'awaiting_spawn') {
+          const since = new Date(checked.last_status_change ?? checked.startedAt ?? 0).getTime()
+          if (Date.now() - since < SPAWN_GRACE_MS) continue
+        }
         const checkedStatus = toSessionStatusSnapshot(checked)
         corrections.push((async () => {
           const updated = await updateSessionRecordConditionally(

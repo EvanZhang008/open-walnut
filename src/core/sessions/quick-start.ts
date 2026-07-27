@@ -171,6 +171,45 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     clearDaemonFailureCache(host);
   }
 
+  // Seed the session record BEFORE the spawn when the id is caller-minted.
+  //
+  // Why this is required, not just nice: returning the id lets the UI mount the
+  // real session panel immediately, and that panel's first act is
+  // GET /api/sessions/:id. Until the spawn is confirmed (~200ms local, seconds
+  // for a cold remote daemon) no record exists, so that GET 404s — and a 404 is
+  // treated as "session does not exist" (not a transient error), so the panel
+  // would settle permanently into its "Untitled session" empty state. Writing a
+  // minimal row up front makes the read succeed from the first frame; the spawn's
+  // own persistSessionRecord then fills in pid/outputFile/model (it takes the
+  // "row exists" branch and updates in place — same id, so no duplicate).
+  //
+  // Safe against the orphan sweepers: a pid-less non-terminal row is only reaped
+  // after a 2-minute grace period on last_status_change (session-health-monitor's
+  // ORPHAN_GRACE_MS), which is far longer than any spawn.
+  if (preassignedSessionId && engine !== 'codex') {
+    try {
+      const { createSessionRecord } = await import('../session-tracker.js');
+      await createSessionRecord(preassignedSessionId, updatedTask.id, project, cwd, {
+        title: updatedTask.title,
+        mode: mode as import('../types.js').SessionMode | undefined,
+        host,
+        // No turn has begun (the CLI isn't up yet) — 'running' would show a
+        // phantom "working…" badge on a session that hasn't started.
+        initialProcessStatus: 'idle',
+        // Marks "no pid YET" so the liveness overlay doesn't read the missing pid
+        // as a dead process and persist 'stopped' on a session just launched.
+        initialStatusReason: 'awaiting_spawn',
+      });
+    } catch (err) {
+      // Non-fatal: the spawn path persists the record too. Worst case the UI's
+      // first metadata read 404s and the panel shows its empty state briefly.
+      log.web.warn(`${source}: pre-spawn session record seed failed`, {
+        sessionId: preassignedSessionId, taskId: updatedTask.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   // Emit SESSION_START event (sessionMessage includes image path annotations if the caller prepended them)
   bus.emit(EventNames.SESSION_START, {
     taskId: updatedTask.id,

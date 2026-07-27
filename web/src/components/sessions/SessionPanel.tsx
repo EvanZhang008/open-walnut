@@ -116,6 +116,11 @@ function PlanPopoverContent({ content, cwd }: { content: string; cwd?: string })
   );
 }
 
+/** A just-launched session's record lands when the daemon confirms the spawn.
+ *  Poll a 404 for ~15s (local ≈1s, remote SSH can be 10s+) before giving up. */
+const MISSING_SESSION_RETRIES = 30;
+const MISSING_SESSION_RETRY_MS = 500;
+
 interface SessionPanelProps {
   sessionId: string;
   /** Stable close handler — receives the sessionId so parent can identify which panel to close. */
@@ -133,7 +138,7 @@ interface SessionPanelProps {
   /** Called immediately when Fork is clicked — parent can show a pending panel. */
   onForkPending?: (cwd: string, host?: string) => void;
   /** Called when fork API returns — parent stores taskId for WS-based session resolution. */
-  onForkResolved?: (taskId: string) => void;
+  onForkResolved?: (taskId: string, sessionId?: string) => void;
   /** Called when fork API fails — parent should show error on the pending panel. */
   onForkFailed?: (errorMessage?: string) => void;
 }
@@ -305,6 +310,17 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     const load = (attempt: number) => {
       fetchSession(sessionId).then((s) => {
         if (!cancelled) {
+          // 404 (s === null) is EXPECTED briefly on a freshly launched session:
+          // quick-start/fork pre-assign the CLI session id and return it in the
+          // HTTP response, so this panel mounts BEFORE the record is persisted
+          // (persist happens once the daemon confirms the spawn — ~1s locally,
+          // longer over SSH). Treat "not there yet" as retryable, otherwise the
+          // panel settles permanently into an empty "Untitled session" header.
+          // A genuinely deleted session just costs a few silent retries first.
+          if (s === null && attempt < MISSING_SESSION_RETRIES) {
+            retryTimer = setTimeout(() => { if (!cancelled) load(attempt + 1); }, MISSING_SESSION_RETRY_MS);
+            return;
+          }
           setSession(s);
           setLoading(false);
           // Prewarm the remote terminal transport (ssh ControlMaster + dtach) so a
@@ -984,7 +1000,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               taskId={session?.taskId}
               engine={session?.engine}
               onForkStarted={(cwd, host) => { onForkPending?.(cwd, host); }}
-              onForkComplete={(newTaskId) => { onForkResolved?.(newTaskId); onTaskClick?.(newTaskId); }}
+              onForkComplete={(newTaskId, newSessionId) => { onForkResolved?.(newTaskId, newSessionId); onTaskClick?.(newTaskId); }}
               onForkFailed={(errMsg) => onForkFailed?.(errMsg)}
             />
             <button
