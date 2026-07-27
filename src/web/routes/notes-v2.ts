@@ -46,6 +46,7 @@ import {
   notesForTag,
   notePathsForTag,
   getNoteIdByPath,
+  countNotesUnderFolder,
   updateNotePath,
   docCount,
   dbSizeBytes,
@@ -689,6 +690,15 @@ interface SearchResultRow {
   stringScore?: number
   semanticScore?: number
   matchedTags?: string[]
+  /** Folder whose NAME matched the query (query "dairy" → "Areas/Journal/Dairy"). */
+  folderMatch?: string
+}
+
+/** A folder whose name matched, with how many of its notes are in this result set. */
+interface FolderGroupRow {
+  path: string
+  name: string
+  noteCount: number
 }
 
 /**
@@ -839,7 +849,8 @@ notesV2Router.get('/search', async (req: Request, res: Response, next: NextFunct
           snippet: makeSnippet(h.body, q),
           matchType: 'exact',
           score: 0,
-          stringScore: h.stringScore, // real banded relevance (title > body > LIKE)
+          stringScore: h.stringScore, // real banded relevance (title > folder > body > LIKE)
+          ...(h.folderMatch ? { folderMatch: h.folderMatch } : {}),
         })
       }
     }
@@ -885,22 +896,54 @@ notesV2Router.get('/search', async (req: Request, res: Response, next: NextFunct
     }
     results.sort((a, b) => b.score - a.score)
 
+    // Matching FOLDERS become their own rows above the notes, with a TRUE
+    // recursive note count from the index (not a count of rows in this window).
+    const matchedFolders = new Set<string>()
+    for (const r of results) if (r.folderMatch) matchedFolders.add(r.folderMatch)
+    const folders: FolderGroupRow[] = [...matchedFolders]
+      .map((p) => ({
+        path: p,
+        name: p.split('/').pop() ?? p,
+        noteCount: countNotesUnderFolder(p),
+      }))
+      .sort((a, b) => b.noteCount - a.noteCount || a.path.localeCompare(b.path))
+
     // Cap semantic-only rows so weak matches don't flood the list, while never
     // touching exact/both hits (they're all kept, up to the overall limit).
+    //
+    // FOLDER-only rows get their own cap for the same reason: query "journal"
+    // matches 233 notes under Areas/Journal/, and listing 30 date-named children
+    // buries every other kind of match. The folder ROW above already says "233
+    // notes" and opens the folder, so a handful of samples is enough. A note that
+    // ALSO matched by title/body/semantics is not folder-only and is never capped.
     const capped: SearchResultRow[] = []
     let semanticOnly = 0
+    let folderOnly = 0
     for (const r of results) {
       if (r.matchType === 'semantic') {
         if (semanticOnly >= SEMANTIC_ONLY_CAP) continue
         semanticOnly++
       }
+      // folderMatch + a stringScore still in the folder band (<0.90, i.e. no title
+      // hit and no body-FTS hit outranked it) ⇒ the folder name is the only reason
+      // this note is here. A strong semantic hit exempts it — that's a real
+      // content match, not folder membership.
+      const isFolderOnly =
+        !!r.folderMatch && (r.stringScore ?? 0) < 0.9 && (r.semanticScore ?? 0) < 0.5
+      if (isFolderOnly) {
+        if (folderOnly >= FOLDER_ONLY_CAP) continue
+        folderOnly++
+      }
       capped.push(r)
       if (capped.length >= limit) break
     }
 
-    const payload: { results: SearchResultRow[]; degraded?: 'semantic-unavailable' } = {
-      results: capped,
-    }
+    const payload: {
+      results: SearchResultRow[]
+      folders?: FolderGroupRow[]
+      degraded?: 'semantic-unavailable'
+    } = { results: capped }
+    if (folders.length > 0) payload.folders = folders
     if (degraded) payload.degraded = degraded
     res.json(payload)
   } catch (err) {

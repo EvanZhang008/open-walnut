@@ -487,9 +487,17 @@ export interface StringHit {
    * meaningfully (was hardcoded 1 → every exact hit tied). Bands are disjoint
    * and ordered so a title match ALWAYS outranks a body match:
    *   title-exact 1.0 · title-prefix .96 · title-word .93 · title-substr .90
-   *   body FTS .50–.85 (by bm25) · LIKE mid-token body-only fallback .10–.25
+   *   FOLDER-name match .86–.89 · body FTS .50–.85 (by bm25)
+   *   LIKE mid-token body-only fallback .10–.25
    */
   stringScore: number
+  /**
+   * Set when the hit was matched by its FOLDER path rather than by title/body
+   * (query "dairy" → every note under `Areas/Journal/Dairy/`). The route surfaces
+   * these grouped under the folder so the answer reads as "this folder" instead
+   * of an undifferentiated list of date-named notes.
+   */
+  folderMatch?: string
 }
 
 /**
@@ -522,6 +530,39 @@ function titleScore(title: string, q: string): number | null {
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Banded relevance for a FOLDER-name match, scored on path segments so the query
+ * matches a real directory rather than an arbitrary path substring. Bands sit
+ * just BELOW every title band (≥0.90) and just ABOVE the best body-FTS band
+ * (0.85): a note actually titled "Dairy" should still outrank the notes merely
+ * stored in a Dairy/ folder, but folder membership beats any body mention.
+ */
+function folderScore(segments: string[], q: string): number | null {
+  const ql = q.toLowerCase().trim()
+  if (!ql) return null
+  let best: number | null = null
+  for (const seg of segments) {
+    const s = seg.toLowerCase()
+    let band: number | null = null
+    if (s === ql) band = 0.89
+    else if (s.startsWith(ql)) band = 0.88
+    else if (new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRegExp(ql)}`, 'u').test(s)) band = 0.87
+    else if (s.includes(ql)) band = 0.86
+    if (band != null && (best == null || band > best)) best = band
+  }
+  return best
+}
+
+/** The deepest folder path whose segment matched — the group label for the UI. */
+function matchedFolderPath(segments: string[], q: string): string | undefined {
+  const ql = q.toLowerCase().trim()
+  if (!ql) return undefined
+  for (let i = segments.length - 1; i >= 0; i--) {
+    if (segments[i].toLowerCase().includes(ql)) return segments.slice(0, i + 1).join('/')
+  }
+  return undefined
 }
 
 /**
@@ -574,6 +615,36 @@ export function stringSearch(q: string, limit: number): StringHit[] {
     if (seen.has(r.id)) continue
     seen.add(r.id)
     out.push({ id: r.id, path: r.path, title: r.title, body: r.body, stringScore: band })
+  }
+
+  // Folder leg: a query matching a FOLDER NAME in the path must return that
+  // folder's notes. Without this, searching "dairy" returned only notes whose
+  // title/body says "dairy" — never the 100+ journal entries that literally LIVE
+  // in `Areas/Journal/Dairy/` (their titles are dates). Users read that as
+  // "search can't find my notes". Matching is on path SEGMENTS only, so the
+  // query can't accidentally match a mid-path substring of the filename.
+  const folderRows = d
+    .prepare(
+      `SELECT id, path, title, body FROM notes
+       WHERE path LIKE ? ESCAPE '\\'
+       ORDER BY path
+       LIMIT ?`,
+    )
+    .all(`%${q.replace(/[\\%_]/g, (m) => '\\' + m)}%`, limit * 4) as RawHit[]
+  for (const r of folderRows) {
+    const segments = r.path.split('/').slice(0, -1) // folders only, drop the filename
+    const band = folderScore(segments, q)
+    if (band == null) continue
+    if (seen.has(r.id)) continue
+    seen.add(r.id)
+    out.push({
+      id: r.id,
+      path: r.path,
+      title: r.title,
+      body: r.body,
+      stringScore: band,
+      folderMatch: matchedFolderPath(segments, q),
+    })
   }
 
   const ftsQuery = escapeFts(q)
@@ -649,6 +720,22 @@ export function stringSearch(q: string, limit: number): StringHit[] {
   // Highest relevance first within the string leg.
   out.sort((a, b) => b.stringScore - a.stringScore)
   return out
+}
+
+/**
+ * True number of notes under a folder path (recursive). The search route can't
+ * derive this from its own hit list — that list is capped by the query window, so
+ * "Journal — 233 notes" would really mean "233 rows I happened to fetch". This
+ * counts the index directly so the folder row states a real vault fact.
+ */
+export function countNotesUnderFolder(folderPath: string): number {
+  const d = getNotesIndexDb()
+  if (!d) return 0
+  const prefix = folderPath.replace(/\/+$/, '') + '/'
+  const row = d
+    .prepare(`SELECT COUNT(*) AS n FROM notes WHERE path LIKE ? ESCAPE '\\'`)
+    .get(prefix.replace(/[\\%_]/g, (m) => '\\' + m) + '%') as { n: number } | undefined
+  return row?.n ?? 0
 }
 
 export interface BacklinkRow {

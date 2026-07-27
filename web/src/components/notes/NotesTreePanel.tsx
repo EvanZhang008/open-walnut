@@ -659,7 +659,45 @@ export const NotesTreePanel = memo(function NotesTreePanel({
       >
         {searchResults ? (
           <div className="notes-search-results">
-            {searchResults.length === 0 ? (
+            {/* Matching FOLDERS first. Clicking one exits search and reveals the
+                folder expanded in the tree — the natural answer to "where do my
+                dairy notes live?". Path shown so two same-named folders differ. */}
+            {searchFolders.map(f => (
+              <div
+                key={`folder:${f.path}`}
+                className="notes-tree-item notes-tree-folder notes-search-folder"
+                onClick={() => {
+                  setSearchQuery('');
+                  setSearchResults(null);
+                  setSearchFolders([]);
+                  setExpandedFolders(prev => {
+                    const next = new Set(prev);
+                    for (const p of ancestorFolderPaths(f.path)) next.add(p);
+                    return next;
+                  });
+                  // Defer so the newly-expanded rows exist before we scroll.
+                  setTimeout(() => {
+                    bodyRef.current
+                      ?.querySelector(`[data-node-path="${CSS.escape(f.path)}"]`)
+                      ?.scrollIntoView({ block: 'nearest' });
+                  }, 60);
+                }}
+                title={f.path}
+              >
+                <FolderIcon />
+                <div className="notes-search-result-content">
+                  <span className="notes-tree-name">
+                    <HighlightedTitle text={f.name} query={searchQuery} />
+                  </span>
+                  <span className="notes-search-snippet">
+                    {f.path}
+                    {' · '}
+                    {f.noteCount} {f.noteCount === 1 ? 'note' : 'notes'}
+                  </span>
+                </div>
+              </div>
+            ))}
+            {searchResults.length === 0 && searchFolders.length === 0 ? (
               <div className="notes-tree-empty">No results</div>
             ) : (
               searchResults.map(r => (

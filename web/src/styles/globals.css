@@ -21058,6 +21058,13 @@ td.usage-share-col {
   max-width: 100%;
 }
 
+/* Folder hits sit above the note rows; the accent left-edge + weight separates
+   "this is a place" from "this is a note". */
+.notes-search-folder {
+  border-left: 2px solid var(--accent);
+}
+.notes-search-folder .notes-tree-name { font-weight: 600; }
+
 /* ─── Context Menu ─── */
 
 .notes-context-menu {
