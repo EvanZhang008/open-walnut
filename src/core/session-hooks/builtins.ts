@@ -35,6 +35,10 @@ const TRIAGE_COOLDOWN_MS = 5_000; // 5 seconds — normal triage cycle takes 10-
 // timer either fires (and self-deletes) or is cancelled (and deletes).
 const triageDebounceTimers = new Map<string, NodeJS.Timeout>();
 const DEFAULT_TRIAGE_DEBOUNCE_MS = 4 * 60_000; // 4 minutes
+// (2026-07-25) A first-note fast path (empty note → 20s window) shipped briefly
+// and was reverted the same day on user direction: the first note should wait
+// the SAME quiet window as every other fire — an early fire mid-burst captures
+// a half-done state; the UI placeholder covers the blank-note period instead.
 
 // ── Notify dedup ──
 // The self-report's PHASE_SIGNAL drives notification via a deterministic lookup
