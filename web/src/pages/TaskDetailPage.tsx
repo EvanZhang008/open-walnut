@@ -730,6 +730,15 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
         <div className="flex items-center gap-2 mb-2">
           <h2 style={{ fontSize: '16px', fontWeight: 600 }}>Note</h2>
         </div>
+        {/* Empty note + a session attached = the AI's first self-report simply
+            hasn't fired yet (short quiet window after the first turn). Say so —
+            a silent blank reads as "broken" (two incident reports, 2026-07-25). */}
+        {!(task.note || '').trim() && (task.session_ids?.length ?? 0) > 0 && (
+          <div className="text-sm mb-2" style={{ color: 'var(--text-tertiary, #8a8a8e)' }}>
+            AI keeps this note updated after each working session — the first
+            update lands shortly after the session pauses.
+          </div>
+        )}
         <TaskFieldEditor
           taskId={task.id}
           field="note"
