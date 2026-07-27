@@ -62,6 +62,7 @@ import { CategoryDetailPane } from './CategoryDetailPane';
 import { GlobalNotesSection } from '../notes/GlobalNotesSection';
 import { useGlobalNotes } from '@/hooks/useGlobalNotes';
 import { SortableTierCard, TierDropZone, GroupChip, groupSortableId } from './FocusSatelliteCards';
+import { TodoSectionTabs, TODO_SECTIONS, type TodoSection } from './TodoSectionTabs';
 import type { FocusTier } from '@/api/focus';
 import { useSessionStatusEpoch } from '@/hooks/useSessionStatus';
 import {
@@ -242,6 +243,7 @@ const LS_EXPANDED_PARENTS_KEY = 'walnut-todo-expanded-parents';
 const LS_SORT_KEY = 'walnut-todo-sortBy';
 const LS_GROUP_KEY = 'walnut-todo-groupBy';
 const LS_DATE_FILTER_KEY = 'walnut-todo-dateFilter';
+const LS_SECTION_KEY = 'walnut-todo-active-section';
 
 function readSetFromStorage(key: string): Set<string> {
   try {
@@ -264,6 +266,20 @@ function readTab(): string {
 
 function persistTab(tab: string) {
   try { localStorage.setItem(LS_TAB_KEY, tab); } catch { /* ignore */ }
+}
+
+/** Active section tab. Defaults to 'focus' — the panel's whole point is that you
+ *  open it already looking at what you're working on, not at 7 cramped regions. */
+function readSection(): TodoSection {
+  try {
+    const v = localStorage.getItem(LS_SECTION_KEY);
+    if (v && (TODO_SECTIONS as readonly string[]).includes(v)) return v as TodoSection;
+  } catch { /* ignore */ }
+  return 'focus';
+}
+
+function persistSection(section: TodoSection) {
+  try { localStorage.setItem(LS_SECTION_KEY, section); } catch { /* ignore */ }
 }
 
 // Disable layout animation for items that were just dragged to prevent
@@ -1765,6 +1781,22 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       return next;
     });
   }, []);
+
+  // ── Section tabs ──
+  // Which of Focus / Satellite / Wait / Recent / Tasks / Notes owns the panel
+  // right now ('all' = the legacy stacked view, kept for cross-tier drag).
+  // `collapsedSections` is still the *within-a-view* chevron state; these two are
+  // independent — in single-section mode the region renders regardless of its
+  // collapse flag (a tab you just picked must never show up already folded).
+  const [activeSection, setActiveSection] = useState<TodoSection>(readSection);
+  // Mirror in a ref: the focus/locate effect reads the current section but must NOT
+  // list it as a dependency (a tab switch would re-run the whole locate pass).
+  const activeSectionRef = useRef(activeSection);
+  activeSectionRef.current = activeSection;
+  const handleSectionChange = useCallback((section: TodoSection) => {
+    setActiveSection(section);
+    persistSection(section);
+  }, []);
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(() => readSetFromStorage(LS_COLLAPSED_CATS_KEY));
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(() => readSetFromStorage(LS_COLLAPSED_PROJS_KEY));
   // Tracks which parent tasks the user has EXPANDED (default = all collapsed)
@@ -1846,6 +1878,24 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   // Determine if search mode is active (query entered)
   const isSearchMode = searchQuery.trim().length > 0;
+
+  // ── Section-tab view resolution ──
+  // Search results only ever render in the main-list region, so a query typed
+  // while a tier tab is active would look like the search did nothing. Searching
+  // therefore FORCES the tasks view (without touching the persisted tab — clearing
+  // the query drops you back where you were).
+  const effectiveSection: TodoSection = isSearchMode && activeSection !== 'all' ? 'tasks' : activeSection;
+  const isAll = effectiveSection === 'all';
+  /** True when `section` should be mounted: either we're in the stacked view or it IS the active tab. */
+  const showSection = useCallback(
+    (section: Exclude<TodoSection, 'all'>) => isAll || effectiveSection === section,
+    [isAll, effectiveSection],
+  );
+  /** Within the active view, is this region folded? Only the stacked view honors chevrons. */
+  const isFolded = useCallback(
+    (id: string) => isAll && collapsedSections.has(id),
+    [isAll, collapsedSections],
+  );
 
   // Track previous focusedTaskId to detect new focus (not re-renders)
   const prevFocusedRef = useRef<string | undefined>(undefined);
@@ -2102,6 +2152,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           return next;
         });
       }
+      // Section tabs make "unmounted" a second way the target can be missing:
+      // a locate into Wait while the Focus tab is showing would scroll to nothing.
+      // Switch to the task's own tier (no-op in the stacked view).
+      const cur = activeSectionRef.current;
+      if (cur !== 'all' && cur !== tierKey) handleSectionChange(tierKey);
+    } else if (isUserLocate && !pinnedOnly && activeSectionRef.current !== 'all' && activeSectionRef.current !== 'tasks') {
+      // Unpinned task located from outside (chat ref, session panel, search): it
+      // only exists in the main list, so that's the tab that must be showing.
+      handleSectionChange('tasks');
     }
 
     // Scroll to the focused task after state changes (expand/filter) have flushed to DOM.
@@ -4411,16 +4470,35 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       );
     }
     return out;
-  }, [pinnedTaskMap, taskGroups, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onStar, handleExpandDetail, onClearFocus, onOpenSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup]);
+  }, [pinnedTaskMap, taskGroups, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onStar, handleExpandDetail, onClearFocus, onOpenSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, recentTick]);
 
   // The regular task list gets its own PINNED/RECENT-style collapsible bar.
-  const tasksCollapsed = collapsedSections.has('tasks');
+  // Outside the stacked view the Tasks tab IS the list — it can't be folded away.
+  const tasksCollapsed = isAll && collapsedSections.has('tasks');
+  const tasksVisible = showSection('tasks');
+  // Any pinned tier showing? Drives whether the pinned wrapper mounts at all.
+  const anyTierVisible = showSection('focus') || showSection('satellite') || showSection('wait');
+  const recentVisible = showSection('recent');
   // When both Pinned and Recent are collapsed (or absent), the pinned wrapper
   // shrink-wraps its header rows instead of holding the splitter ratio — no
-  // dead blank region pushing the task list down.
-  const pinnedAreaCollapsed =
-    (visiblePinnedTasks.length === 0 || collapsedSections.has('pinned')) &&
-    (visibleRecentTasks.length === 0 || collapsedSections.has('recent'));
+  // dead blank region pushing the task list down. In a single-section view the
+  // region always owns the full panel, so it's never "collapsed" in this sense.
+  const pinnedAreaCollapsed = isAll
+    && (visiblePinnedTasks.length === 0 || collapsedSections.has('pinned'))
+    && (visibleRecentTasks.length === 0 || collapsedSections.has('recent'));
+  // Section counts for the tab badges. `focus`/`satellite`/`wait`/`recent` come
+  // from the already-computed display arrays, so the badges track exactly what
+  // the tab would render (incl. category/filter scoping).
+  const sectionCounts: Partial<Record<TodoSection, number>> = {
+    focus: focusTasksDisplay.length,
+    satellite: satelliteTasksDisplay.length,
+    wait: waitTasksDisplay.length,
+    recent: visibleRecentTasks.length,
+    tasks: isSearchMode ? searchMatches.length : filtered.length,
+  };
+  // In a single-tier view the tier fills the panel: the persisted per-tier drag
+  // height (a cap sized for the old cramped stack) would leave dead space below.
+  const tierHeight = (h: number | null) => (isAll && h != null ? { maxHeight: h } : undefined);
 
   return (
     <div className={`todo-panel${splitterResizing ? ' splitter-resizing' : ''}`} ref={splitterContainerRef}>
@@ -4470,41 +4548,53 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             Cmd/Ctrl/Shift-click — no separate toolbar button (keeps the bar clean). */}
       </div>
 
+      {/* Section tabs — one section owns the panel at a time (see TodoSectionTabs). */}
+      <TodoSectionTabs active={effectiveSection} onChange={handleSectionChange} counts={sectionCounts} />
+
       {/* Unified DndContext wrapping both Pinned + Recent — enables drag from Recent to Pin */}
-      {(visiblePinnedTasks.length > 0 || visibleRecentTasks.length > 0 || hiddenPinnedGroups.length > 0) && (
+      {(anyTierVisible || recentVisible) && (visiblePinnedTasks.length > 0 || visibleRecentTasks.length > 0 || hiddenPinnedGroups.length > 0) && (
         <DndContext sensors={pinnedSensors} collisionDetection={closestCenter} onDragStart={handlePinnedDragStart} onDragOver={handlePinnedDragOver} onDragEnd={handlePinnedDragEnd} onDragCancel={handlePinnedDragCancel}>
           <div
-            className="todo-pinned-wrapper"
+            className={`todo-pinned-wrapper${isAll ? '' : ' todo-pinned-wrapper-solo'}`}
             style={
-              // Pinned+Recent both collapsed → shrink-wrap to the header rows (no
-              // dead blank region below them). Tasks section collapsed → pinned
-              // area takes all the freed space. Otherwise honor the splitter ratio.
-              pinnedAreaCollapsed ? { flex: '0 0 auto' }
+              // Single-section view: this region IS the panel — take all the height.
+              // Stacked view: Pinned+Recent both collapsed → shrink-wrap to the header
+              // rows (no dead blank region below them). Tasks section collapsed →
+              // pinned area takes the freed space. Otherwise honor the splitter ratio.
+              !isAll ? { flex: '1 1 auto' }
+              : pinnedAreaCollapsed ? { flex: '0 0 auto' }
               : tasksCollapsed ? { flex: '1 1 auto' }
               : { flex: `${1 - listRatio} 1 0%` }
             }
           >
-          {/* PINNED section — Focus + Satellite + Wait sub-groups */}
-          {visiblePinnedTasks.length > 0 && (
-            <div className="todo-pinned-section">
+          {/* PINNED section — Focus + Satellite + Wait sub-groups. In a single-tier
+              view the "Pinned" wrapper header is dropped (the tab already names the
+              tier) and only that tier's subgroup renders. */}
+          {anyTierVisible && (visiblePinnedTasks.length > 0 || !isAll) && (
+            <div className={`todo-pinned-section${isAll ? '' : ' todo-pinned-section-solo'}`}>
+              {isAll && (
               <div className="todo-pinned-header" onClick={() => toggleSection('pinned')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('pinned'); }} style={{ cursor: 'pointer' }}>
                 <span className={`todo-pinned-chevron${collapsedSections.has('pinned') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
                 <span className="todo-pinned-label">Pinned</span>
                 <span className="todo-pinned-count">{visiblePinnedTasks.length}</span>
               </div>
-              {!collapsedSections.has('pinned') && (
+              )}
+              {!isFolded('pinned') && (
                 <>
                   {/* Focus sub-group */}
+                  {showSection('focus') && (
                   <div className="todo-pinned-subgroup">
+                    {isAll && (
                     <div className="todo-pinned-sublabel" onClick={() => toggleSection('focus')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('focus'); }} style={{ cursor: 'pointer' }} title="Current sprint — finish these first">
                       <span className={`todo-pinned-chevron todo-pinned-sub-chevron${collapsedSections.has('focus') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
                       <span className="todo-pinned-sublabel-icon todo-tier-icon-focus">{ICONS.ICON_TIER_FOCUS}</span>
                       <span className="todo-pinned-sublabel-text">Focus</span>
                       <span className="todo-pinned-sublabel-count">{focusTasksDisplay.length}</span>
                     </div>
-                    {!collapsedSections.has('focus') && (
+                    )}
+                    {!isFolded('focus') && (
                       <SortableContext items={visibleFocusIds} strategy={verticalListSortingStrategy}>
-                        <div className="todo-pinned-list-scroll" style={focusResize.height != null ? { maxHeight: focusResize.height } : undefined}>
+                        <div className="todo-pinned-list-scroll" style={tierHeight(focusResize.height)}>
                           <TierDropZone id="focus-drop-zone" isEmpty={focusTasksDisplay.length === 0}>
                             {renderTierItems(visibleFocusIds, 'focus', focusGroupMeta)}
                           </TierDropZone>
@@ -4517,54 +4607,73 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                             await onCreate({ title, priority: 'none', pinnedTier: 'focus', capture: true });
                           }} />
                         </div>
+                        {/* Per-tier drag handle only makes sense when tiers share the
+                            panel; a solo tier already owns the full height. */}
+                        {isAll && (
                         <div
                           className={`todo-tier-resize-handle${focusResize.isDragging ? ' dragging' : ''}`}
                           onMouseDown={(e) => focusResize.handleMouseDown(e, e.currentTarget.previousElementSibling as HTMLElement | null)}
                           title="Drag to resize Focus"
                         />
+                        )}
                       </SortableContext>
                     )}
                   </div>
+                  )}
 
                   {/* Satellite sub-group */}
-                  {satelliteTasksDisplay.length > 0 && (
+                  {showSection('satellite') && (satelliteTasksDisplay.length > 0 || !isAll) && (
                     <div className="todo-pinned-subgroup">
+                      {isAll && (
                       <div className="todo-pinned-sublabel" onClick={() => toggleSection('satellite')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('satellite'); }} style={{ cursor: 'pointer' }} title="Backlog — other pinned tasks">
                         <span className={`todo-pinned-chevron todo-pinned-sub-chevron${collapsedSections.has('satellite') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
                         <span className="todo-pinned-sublabel-icon todo-tier-icon-satellite">{ICONS.ICON_TIER_SATELLITE}</span>
                         <span className="todo-pinned-sublabel-text">Satellite</span>
                         <span className="todo-pinned-sublabel-count">{satelliteTasksDisplay.length}</span>
                       </div>
-                      {!collapsedSections.has('satellite') && (
+                      )}
+                      {!isFolded('satellite') && (
                         <SortableContext items={visibleSatelliteIds} strategy={verticalListSortingStrategy}>
-                          <div className="todo-pinned-list todo-pinned-list-scroll" style={satelliteResize.height != null ? { maxHeight: satelliteResize.height } : undefined}>
-                            {renderTierItems(visibleSatelliteIds, 'satellite', satelliteGroupMeta)}
+                          <div className="todo-pinned-list todo-pinned-list-scroll" style={tierHeight(satelliteResize.height)}>
+                            {/* Solo view needs the drop zone so an empty Satellite tab is
+                                still a valid drag target — the stacked view can skip it
+                                because the tier only renders when non-empty. */}
+                            {isAll ? renderTierItems(visibleSatelliteIds, 'satellite', satelliteGroupMeta) : (
+                              <TierDropZone id="satellite-drop-zone" isEmpty={satelliteTasksDisplay.length === 0}>
+                                {renderTierItems(visibleSatelliteIds, 'satellite', satelliteGroupMeta)}
+                              </TierDropZone>
+                            )}
                             <InlineAdd label="Add to Satellite…" onAdd={async (title) => {
                               // handleCreate locates with scope 'pinned' — see the Focus InlineAdd note.
                               await onCreate({ title, priority: 'none', pinnedTier: 'satellite', capture: true });
                             }} />
                           </div>
+                          {isAll && (
                           <div
                             className={`todo-tier-resize-handle${satelliteResize.isDragging ? ' dragging' : ''}`}
                             onMouseDown={(e) => satelliteResize.handleMouseDown(e, e.currentTarget.previousElementSibling as HTMLElement | null)}
                             title="Drag to resize Satellite"
                           />
+                          )}
                         </SortableContext>
                       )}
                     </div>
                   )}
 
                   {/* Wait sub-group — parked tasks pinned but deprioritized */}
+                  {showSection('wait') && (
                   <div className="todo-pinned-subgroup">
+                    {isAll && (
                     <div className="todo-pinned-sublabel" onClick={() => toggleSection('wait')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('wait'); }} style={{ cursor: 'pointer' }} title="Wait — parked tasks, pinned but not actively worked on">
                       <span className={`todo-pinned-chevron todo-pinned-sub-chevron${collapsedSections.has('wait') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
                       <span className="todo-pinned-sublabel-icon todo-tier-icon-wait">{ICONS.ICON_TIER_WAIT}</span>
                       <span className="todo-pinned-sublabel-text">Wait</span>
                       <span className="todo-pinned-sublabel-count">{waitTasksDisplay.length}</span>
                     </div>
-                    {!collapsedSections.has('wait') && (
+                    )}
+                    {!isFolded('wait') && (
                       <SortableContext items={visibleWaitIds} strategy={verticalListSortingStrategy}>
-                        <div className="todo-pinned-list-scroll" style={waitResize.height != null ? { maxHeight: waitResize.height } : undefined}>
+                        <div className="todo-pinned-list-scroll" style={tierHeight(waitResize.height)}>
                           <TierDropZone id="wait-drop-zone" isEmpty={waitTasksDisplay.length === 0}>
                             {renderTierItems(visibleWaitIds, 'wait', waitGroupMeta)}
                           </TierDropZone>
@@ -4573,14 +4682,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                             await onCreate({ title, priority: 'none', pinnedTier: 'wait', capture: true });
                           }} />
                         </div>
+                        {isAll && (
                         <div
                           className={`todo-tier-resize-handle${waitResize.isDragging ? ' dragging' : ''}`}
                           onMouseDown={(e) => waitResize.handleMouseDown(e, e.currentTarget.previousElementSibling as HTMLElement | null)}
                           title="Drag to resize Wait"
                         />
+                        )}
                       </SortableContext>
                     )}
                   </div>
+                  )}
                 </>
               )}
             </div>
@@ -4590,8 +4702,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
               above, each with an unhide (⊙) affordance. Rendered as a sibling of the
               Pinned section so it shows even when every pinned task is in a hidden
               group (pinnedTasks would be empty then). This is the in-Focus way back —
-              without it a hidden group's cards vanish with no local restore point. */}
-          {hiddenPinnedGroups.length > 0 && (
+              without it a hidden group's cards vanish with no local restore point.
+              Tier tabs only — unhiding puts cards back into a tier, so the strip
+              belongs with the tiers, not with Recent. */}
+          {anyTierVisible && hiddenPinnedGroups.length > 0 && (
             <div className="todo-pinned-hidden-strip">
               {hiddenPinnedGroups.map((g) => (
                 <button
@@ -4611,22 +4725,26 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           {/* Recent tasks section — draggable cards, drop on Pinned tiers to pin.
               When expanded it flex-grows to fill the wrapper's leftover space (no
               dead gap above TASKS); the list scrolls once items exceed that space. */}
-          {visibleRecentTasks.length > 0 && (
-            <div className={`todo-pinned-section${!collapsedSections.has('recent') ? ' todo-pinned-section-recent' : ''}`}>
+          {recentVisible && visibleRecentTasks.length > 0 && (
+            <div className={`todo-pinned-section${!isFolded('recent') ? ' todo-pinned-section-recent' : ''}${isAll ? '' : ' todo-pinned-section-solo'}`}>
+              {isAll && (
               <div className="todo-pinned-header" onClick={() => toggleSection('recent')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('recent'); }} style={{ cursor: 'pointer' }}>
                 <span className={`todo-pinned-chevron${collapsedSections.has('recent') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
                 <span className="todo-pinned-label">Recent</span>
                 <span className="todo-pinned-count">{visibleRecentTasks.length}</span>
               </div>
-              {!collapsedSections.has('recent') && (
+              )}
+              {!isFolded('recent') && (
                 <SortableContext items={visibleRecentIds} strategy={verticalListSortingStrategy}>
                   {/* Undragged: flex-grow fills the wrapper's leftover space (no dead gap
                       above TASKS), with a ~3-row min so it stays compact when there's
                       little room. Once dragged, an explicit maxHeight pins the height and
-                      the list scrolls past it (persisted via recentResize). */}
+                      the list scrolls past it (persisted via recentResize). The solo tab
+                      ignores the dragged cap — that height was picked for the cramped
+                      stack and would strand empty space below. */}
                   <div
                     className="todo-pinned-list todo-pinned-list-scroll todo-pinned-list-recent"
-                    style={recentResize.height != null
+                    style={isAll && recentResize.height != null
                       ? { maxHeight: recentResize.height, flex: 'none' }
                       : { minHeight: RECENT_VISIBLE_MAX * 30 }}
                   >
@@ -4656,11 +4774,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                       />
                     ))}
                   </div>
+                  {isAll && (
                   <div
                     className={`todo-tier-resize-handle${recentResize.isDragging ? ' dragging' : ''}`}
                     onMouseDown={(e) => recentResize.handleMouseDown(e, e.currentTarget.previousElementSibling as HTMLElement | null)}
                     title="Drag to resize Recent"
                   />
+                  )}
                 </SortableContext>
               )}
             </div>
@@ -4698,20 +4818,24 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       {/* Draggable divider between PINNED+RECENT and the main task list.
           Task detail now opens in a full-screen modal (hosted by MainPage), so only
           the inline project/category pane (detailTarget) compresses the list here. */}
-      {(visiblePinnedTasks.length > 0 || visibleRecentTasks.length > 0) && !detailTarget && !tasksCollapsed && !pinnedAreaCollapsed && (
+      {isAll && (visiblePinnedTasks.length > 0 || visibleRecentTasks.length > 0) && !detailTarget && !tasksCollapsed && !pinnedAreaCollapsed && (
         <div className="todo-pinned-splitter" onMouseDown={pinnedSplitterMouseDown} />
       )}
 
-      {/* TASKS header bar — same collapsible affordance as PINNED / RECENT / Notes,
-          so the regular todo area can be folded away entirely. */}
+      {/* TASKS header bar — the stacked view's collapsible affordance, matching
+          PINNED / RECENT / Notes. The Tasks TAB doesn't get one: the tab strip
+          already labels the region, and folding the only visible section away
+          would leave an empty panel with no way back except another tab. */}
+      {isAll && (
       <div className="todo-pinned-header todo-tasks-header" onClick={() => toggleSection('tasks')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('tasks'); }} style={{ cursor: 'pointer' }}>
         <span className={`todo-pinned-chevron${tasksCollapsed ? '' : ' todo-pinned-chevron-open'}`}>{'▸'}</span>
         <span className="todo-pinned-label">Tasks</span>
         <span className="todo-pinned-count">{isSearchMode ? searchMatches.length : filtered.length}</span>
       </div>
+      )}
 
-      {!tasksCollapsed && (
-      <div className={`todo-panel-list${!detailTarget && listCollapsed ? ' todo-panel-list-collapsed' : ''}`} style={detailTarget ? { flex: `${1 - detailRatio} 1 0%` } : (visiblePinnedTasks.length > 0 || visibleRecentTasks.length > 0) && !pinnedAreaCollapsed ? { flex: `${listRatio} 1 0%` } : undefined}>
+      {tasksVisible && !tasksCollapsed && (
+      <div className={`todo-panel-list${!detailTarget && listCollapsed ? ' todo-panel-list-collapsed' : ''}`} style={detailTarget ? { flex: `${1 - detailRatio} 1 0%` } : isAll && (visiblePinnedTasks.length > 0 || visibleRecentTasks.length > 0) && !pinnedAreaCollapsed ? { flex: `${listRatio} 1 0%` } : undefined}>
         {loading && (
           <div className="empty-state" style={{ padding: '24px 8px' }}>
             <div className="spinner" style={{ width: 20, height: 20, borderWidth: 2, margin: '0 auto' }} />
@@ -5107,8 +5231,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       ) : null}
 
       {/* operationError is surfaced globally via the unified notification toaster (AppShell). */}
-      {/* Quick add belongs to the Tasks section — folds away with it. */}
-      {!tasksCollapsed && (
+      {/* Quick add belongs to the Tasks section — folds away with it, and is absent
+          from the other tabs (each tier has its own "Add to <tier>…" inline row). */}
+      {tasksVisible && !tasksCollapsed && (
       <form className="todo-panel-add" onSubmit={handleAdd}>
         <input
           type="text"
@@ -5197,15 +5322,20 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         </button>
       </form>
       )}
-      <GlobalNotesSection
-        {...globalNotes}
-        tasks={tasks}
-        focusedTaskId={focusedTaskId ?? undefined}
-        onTaskClick={(taskId) => {
-          const task = tasks.find(t => t.id === taskId);
-          if (task) handleTaskClick(task);
-        }}
-      />
+      {/* Notes — a bottom drawer in the stacked view, the whole panel on its own tab
+          (`fill`: no header row, no drag handle, editor takes the remaining height). */}
+      {showSection('notes') && (
+        <GlobalNotesSection
+          {...globalNotes}
+          fill={!isAll}
+          tasks={tasks}
+          focusedTaskId={focusedTaskId ?? undefined}
+          onTaskClick={(taskId) => {
+            const task = tasks.find(t => t.id === taskId);
+            if (task) handleTaskClick(task);
+          }}
+        />
+      )}
 
       {/* Multi-select action bar — shown in explicit select mode, or whenever ≥2 tasks
           are selected (incl. the Cmd/Ctrl-click path). "Group" is enabled once ≥2 tasks

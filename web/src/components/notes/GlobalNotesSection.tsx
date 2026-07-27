@@ -23,10 +23,18 @@ interface GlobalNotesSectionProps extends UseGlobalNotesReturn {
   tasks?: Task[];
   focusedTaskId?: string;
   onTaskClick?: (taskId: string) => void;
+  /** Own the full height of the parent panel (the todo panel's Notes tab) instead of
+   *  sitting at the bottom as a fixed-height, collapsible drawer. In fill mode the
+   *  collapse chevron and the drag handle are dropped — there's nothing to collapse
+   *  into or resize against — and the editor flexes to the available space. */
+  fill?: boolean;
 }
 
 export function GlobalNotesSection(props: GlobalNotesSectionProps) {
-  const { content, onEditorUpdate, saving, saveError, collapsed, toggleCollapse, popupOpen, openPopup, closePopup, tasks, focusedTaskId, onTaskClick } = props;
+  const { content, onEditorUpdate, saving, saveError, collapsed: collapsedProp, toggleCollapse, popupOpen, openPopup, closePopup, tasks, focusedTaskId, onTaskClick, fill } = props;
+  // Fill mode can't honor the persisted collapse flag: this IS the visible section,
+  // so a stale `collapsed` from the drawer era would render an empty Notes tab.
+  const collapsed = fill ? false : collapsedProp;
   const [height, setHeight] = useState(readHeight);
   const heightRef = useRef(height);
   const dragging = useRef(false);
@@ -74,8 +82,8 @@ export function GlobalNotesSection(props: GlobalNotesSectionProps) {
 
   return (
     <>
-      <div className="global-notes-section">
-        {!collapsed && (
+      <div className={`global-notes-section${fill ? ' global-notes-section-fill' : ''}`}>
+        {!collapsed && !fill && (
           <div
             ref={handleRef}
             className="global-notes-resize-handle"
@@ -83,9 +91,12 @@ export function GlobalNotesSection(props: GlobalNotesSectionProps) {
             title="Drag to resize"
           />
         )}
-        <div className="global-notes-header" onClick={toggleCollapse}>
-          <span className="global-notes-chevron">{collapsed ? '\u25B8' : '\u25BE'}</span>
-          <span className="global-notes-label">Notes</span>
+        <div className="global-notes-header" onClick={fill ? undefined : toggleCollapse} style={fill ? { cursor: 'default' } : undefined}>
+          {!fill && <span className="global-notes-chevron">{collapsed ? '\u25B8' : '\u25BE'}</span>}
+          {/* In fill mode the section tab above already reads "Notes" \u2014 repeating it
+              here is pure duplication. The row itself stays: it carries the
+              saving/error status and the pop-out + fullscreen buttons. */}
+          {!fill && <span className="global-notes-label">Notes</span>}
           {saving && <span className="global-notes-saving">Saving...</span>}
           {saveError && <span className="global-notes-error" title={saveError}>Save failed</span>}
           {/* Open in a new browser tab (standalone, lightweight) */}
@@ -108,7 +119,7 @@ export function GlobalNotesSection(props: GlobalNotesSectionProps) {
           </button>
         </div>
         {!collapsed && (
-          <div className="global-notes-body" style={{ height }}>
+          <div className="global-notes-body" style={fill ? undefined : { height }}>
             {/* Deliberate compact opt-out of MarkdownEditorPanel: this inline
                 panel has its own header row and no room for the shell's
                 toolbar/grip rail. The fullscreen popup/pop-out use the shell. */}

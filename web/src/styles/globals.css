@@ -8759,6 +8759,94 @@ img[data-lightbox-src],
   border-bottom: 1px solid var(--border);
 }
 
+/* ── Section tab strip ──
+   One row under the toolbar; the picked section owns the whole panel below it.
+   Replaces the old "7 stacked regions each a few rows tall" layout (the panel got
+   unusable once any tier had real volume). Icon-only at rest + a text pill on the
+   active tab is what makes 7 tabs fit a ~420px panel without scrolling. */
+.todo-section-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 5px 8px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  /* No horizontal scrollbar: the tabs shrink (icon+count only) before they'd overflow. */
+  overflow: hidden;
+  /* Own query container so the count-shedding @container rule below measures the
+     STRIP's width — .todo-panel-toolbar already declares one for its own controls,
+     and a child can't query an ancestor container it isn't the nearest one for. */
+  container-type: inline-size;
+}
+
+.todo-section-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 4px 7px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.todo-section-tab:hover {
+  background: var(--hover-bg, rgba(0,0,0,0.04));
+  color: var(--fg-secondary);
+}
+
+.todo-section-tab.is-active {
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.todo-section-tab-icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* Only the active tab spells out its name — inactive tabs collapse to icon+count.
+   Kept in the DOM (not display:none) so screen readers still announce the tab. */
+.todo-section-tab-label {
+  white-space: nowrap;
+  overflow: hidden;
+  max-width: 0;
+  opacity: 0;
+  transition: max-width 0.18s ease, opacity 0.15s ease;
+}
+
+.todo-section-tab.is-active .todo-section-tab-label {
+  max-width: 88px;
+  opacity: 1;
+}
+
+.todo-section-tab-count {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-muted);
+  opacity: 0.85;
+}
+
+.todo-section-tab.is-active .todo-section-tab-count {
+  color: var(--accent);
+  opacity: 1;
+}
+
+/* Narrow panel: shed the count badges before anything wraps or clips. */
+@container (max-width: 300px) {
+  .todo-section-tab:not(.is-active) .todo-section-tab-count { display: none; }
+}
+
 /* ── Pinned tasks section (between filters and task list) ── */
 
 /* Scrollable wrapper for pinned + recent so they don't push Notes off-screen */
@@ -8779,6 +8867,78 @@ img[data-lightbox-src],
   flex-shrink: 0;
   border-bottom: 1px solid var(--border);
   padding: 6px 12px 4px;
+}
+
+/* ── Solo section view (a single tab active, not "All") ──
+   The region is the panel: grow to fill, scroll internally, and drop the
+   bottom rule (there's no sibling section below it to divide from). */
+.todo-pinned-wrapper-solo {
+  overflow-y: hidden; /* the tier's own list scrolls, not the wrapper */
+}
+
+.todo-pinned-section-solo {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-bottom: none;
+  padding-top: 4px;
+}
+
+.todo-pinned-section-solo .todo-pinned-subgroup {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Solo tiers have no per-tier drag handle, so the sibling border-top rules
+   keyed off `:has(.todo-tier-resize-handle)` don't apply — and with one tier
+   visible there's no divider to draw at all. */
+.todo-pinned-section-solo .todo-pinned-subgroup + .todo-pinned-subgroup {
+  border-top: none;
+  padding-top: 0;
+}
+
+/* dnd-kit's SortableContext renders no DOM node, so the scroller is a direct
+   child of the subgroup and inherits the flex growth. */
+.todo-pinned-section-solo .todo-pinned-list-scroll,
+.todo-pinned-section-solo .todo-pinned-list-recent {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  display: flex;
+  flex-direction: column;
+}
+
+/* An EMPTY solo tier: make the drop zone claim the panel instead of leaving a
+   one-line dashed strip above a tall blank area. The whole region then reads as
+   (and IS) the drag target. The inline "Add to <tier>…" row stays pinned below.
+
+   `flex-shrink: 0` (not the usual `1`) is load-bearing. The zone is a flex CHILD of
+   the scroller and the CARDS live inside it, so a shrinkable zone gets squashed to
+   the scroller's height while its own content still needs the full card stack — the
+   overflow spills OUT of the zone's box and the sibling "Add to …" row lands on top
+   of the last cards instead of below them. Refusing to shrink keeps the zone as tall
+   as its cards; the scroller (overflow-y:auto) does the scrolling, which is where it
+   belonged all along. */
+.todo-pinned-section-solo .todo-focus-drop-zone {
+  flex: 1 0 auto;
+  min-height: 0;
+}
+
+.todo-pinned-section-solo .todo-focus-drop-zone-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* The inline add row is a flex sibling of the (now non-shrinking) drop zone —
+   pin its size so it can't be compressed to nothing in a full tier. */
+.todo-pinned-section-solo .focus-inline-add-trigger,
+.todo-pinned-section-solo .focus-inline-add {
+  flex: 0 0 auto;
 }
 
 /* Expanded RECENT grows to consume the wrapper's leftover space so there's no
@@ -10796,6 +10956,36 @@ img[data-lightbox-src],
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+}
+
+/* ── Notes as its own todo-panel tab (fill mode) ──
+   Not a bottom drawer here: no margin-top:auto push-down, no fixed body height,
+   no top border (the tab strip above is the boundary). */
+.global-notes-section-fill {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 0;
+  border-top: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.global-notes-section-fill .global-notes-header:hover {
+  background: transparent; /* not clickable in fill mode — don't imply otherwise */
+}
+
+/* No label in fill mode (the tab says "Notes"), so the pop-out/fullscreen buttons
+   would otherwise sit flush left where the label used to be. */
+.global-notes-section-fill .global-notes-header {
+  justify-content: flex-end;
+  padding-top: 4px;
+  padding-bottom: 2px;
+}
+
+.global-notes-section-fill .global-notes-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
 }
 
 /* ── Draggable resize handle between task list and notes ── */

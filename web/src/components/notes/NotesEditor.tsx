@@ -627,6 +627,13 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
   // Only apply setContent() for genuine external changes (initial load, other editor saved).
   useEffect(() => {
     if (!editor) return;
+    // A destroyed editor has already torn down `storage`, so reading
+    // `storage.markdown.getMarkdown()` below would throw a render-killing
+    // TypeError. This effect CAN run against a dead editor: `content` changing in
+    // the same commit that unmounts the editor (the todo panel's Notes tab being
+    // switched away while a save settles) fires it after `destroy()`. There's
+    // nothing to sync into an editor that's gone.
+    if (editor.isDestroyed) return;
 
     // This editor was the source of changes — the content update came from
     // our own save. Editor already has correct content, skip setContent().

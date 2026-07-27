@@ -355,6 +355,9 @@ export function TierDropZone({ id, isEmpty, children }: { id: string; isEmpty: b
   return (
     <div
       ref={setNodeRef}
+      // `id` is dnd-kit's droppable id (not a DOM id) — mirror it onto an attribute
+      // so tests and DOM debugging can tell one tier's zone from another's.
+      data-drop-zone={id}
       className={`todo-pinned-list todo-focus-drop-zone${isEmpty ? ' todo-focus-drop-zone-empty' : ''}${isOver ? ' todo-focus-drop-zone-over' : ''}`}
     >
       {children}

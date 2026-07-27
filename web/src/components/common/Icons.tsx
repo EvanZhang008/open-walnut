@@ -92,3 +92,19 @@ export function tierIcon(tier: 'focus' | 'satellite' | 'wait'): ReactNode {
     default: return ICON_TIER_SATELLITE;
   }
 }
+
+// ── Todo panel section-tab icons ──
+// Same stroke family as the tier icons above (the tab strip mixes both), sized
+// to 13px so every tab glyph shares one optical weight.
+
+/** ALL — the stacked/combined view (every section at once). */
+export const ICON_SECTION_ALL = <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3.5" width="18" height="5" rx="1.6"/><rect x="3" y="11" width="18" height="4" rx="1.4" opacity="0.7"/><rect x="3" y="17.5" width="18" height="3.5" rx="1.2" opacity="0.45"/></svg>;
+
+/** RECENT — clock (recently touched tasks). */
+export const ICON_SECTION_RECENT = <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.4l3.6 2.4"/></svg>;
+
+/** TASKS — checklist (the full filterable task list). */
+export const ICON_SECTION_TASKS = <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3.5 6.5l2.2 2.2L10 4.4"/><path d="M3.5 16.5l2.2 2.2L10 14.4"/><path d="M13 7h7.5M13 17h7.5"/></svg>;
+
+/** NOTES — scratchpad page with a folded corner. */
+export const ICON_SECTION_NOTES = <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 3h9l5 5v13H5z"/><path d="M14 3v5h5"/><path d="M8.5 13h7M8.5 17h4.5"/></svg>;
