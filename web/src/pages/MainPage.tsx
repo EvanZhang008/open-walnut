@@ -25,6 +25,7 @@ import { TaskDetailModal } from '@/components/tasks/TaskDetailModal';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { PendingSessionPanel } from '@/components/sessions/PendingSessionPanel';
 import { SessionPathSelector, type QuickStartPath, type QuickStartTaskMeta } from '@/components/sessions/SessionPathSelector';
+import { DEFAULT_META } from '@/components/sessions/task-meta-constants';
 import { QuestionPopover, parseAskQuestionInput } from '@/components/chat/QuestionPopover';
 import { TriagePanel } from '@/components/triage/TriagePanel';
 import { fetchSession, fetchSessionsForTask, quickStartSession } from '@/api/sessions';
@@ -915,7 +916,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     setPathSelectorOpen(false);
     setQuickTaskOpen(false); // launcher popovers are mutually exclusive
     setQuickStartPath({ cwd: dir, host: null, category: 'Local', intent: 'fix-walnut' });
-    quickStartMetaRef.current = null; // DEFAULT_META semantics (starred + focus) applied server-side defaults
+    // The pill skips the path picker, so nothing else ever produces the launcher's
+    // task meta — seed it explicitly (starred + pin to Focus). Leaving it null used
+    // to send NO taskMeta at all, and the server only defaults `starred`, so every
+    // Fix Walnut task landed unpinned instead of in Focus. Focus is hardcoded here
+    // (not DEFAULT_META's tier, now Satellite): a repair report is by definition
+    // "fix this NOW", and it deliberately ignores the launcher's sticky tier.
+    quickStartMetaRef.current = { ...DEFAULT_META, pinTier: 'focus' };
     setQuickStartModel(undefined);
     // Land the cursor in the input — the bar + hint + focused caret form one visual path.
     setTimeout(() => {
@@ -1288,11 +1295,16 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // Store pending metadata for rendering
       pendingQuickStartMetaRef.current = { id: pendingColId, cwd: qsp.cwd, host: qsp.host ?? undefined, hostLabel: qsp.hostLabel ?? undefined, message: text };
 
+      // `pinTier: null` — NOT undefined — is how an explicit "don't pin this"
+      // reaches the server: undefined is dropped by JSON.stringify, and the
+      // fix-walnut branch treats an absent pinTier as "client didn't choose" and
+      // pins to Focus. Without the null, unpinning inside a fix-walnut re-edit
+      // was silently overridden back to Focus.
       const taskMeta = metaSnapshot ? {
         starred: metaSnapshot.starred,
         needs_attention: metaSnapshot.needs_attention,
         priority: metaSnapshot.priority,
-        pinTier: metaSnapshot.pinTier,
+        pinTier: metaSnapshot.pinTier ?? null,
       } : undefined;
       // Model is a session arg, not task metadata. undefined = Auto (let the
       // CLI/config default decide) — only forwarded when the user picks one.

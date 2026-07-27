@@ -513,7 +513,9 @@ export interface QuickStartTaskMeta {
   starred?: boolean;
   needs_attention?: boolean;
   priority?: 'immediate' | 'important' | 'backlog' | 'none';
-  pinTier?: 'focus' | 'satellite' | 'wait';
+  /** Tier to pin the new task to. `null` = explicitly DON'T pin — distinct from
+   *  omitted, which lets the server apply its own default (fix-walnut → Focus). */
+  pinTier?: 'focus' | 'satellite' | 'wait' | null;
 }
 
 export async function quickStartSession(opts: {

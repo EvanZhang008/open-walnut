@@ -482,6 +482,13 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     const isFixWalnut = intent === 'fix-walnut'
     const sessionMessage = isFixWalnut ? buildFixWalnutMessage(message) : message
     const reportSnippet = message.replace(/\s+/g, ' ').trim().slice(0, 60)
+    // A repair report is by definition something the user wants NOW, and the pill
+    // deliberately skips the path picker — so there is no launcher footer to pick a
+    // tier in. Default the intent to Focus server-side (so iOS/cloud clients get it
+    // too) while still honoring an explicit client pick: `pinTier: null` opts out.
+    const fixWalnutTaskMeta = isFixWalnut && taskMeta?.pinTier === undefined
+      ? { ...taskMeta, pinTier: 'focus' as const }
+      : taskMeta
     const fixWalnutExtras = isFixWalnut
       ? { taskTitle: `Fix Walnut: ${reportSnippet}`, project: 'Fix Walnut' }
       : {}
@@ -506,7 +513,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       const preassignedSessionId = isNativeEngine ? randomUUID() : undefined
       const updatedTask = await quickStartSession({
         message: sessionMessage, messagePrefix, cwd, host, model, mode,
-        existingTaskId, taskMeta, source: 'quick-start', requestTs,
+        existingTaskId, taskMeta: fixWalnutTaskMeta, source: 'quick-start', requestTs,
         engine: engine === 'codex' ? 'codex' : undefined,
         preassignedSessionId,
         ...fixWalnutExtras,
@@ -524,7 +531,13 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
           engine: engine === 'codex' ? 'codex' : undefined,
         }).catch(() => {})
       }
-      res.json({ taskId: updatedTask.id, task: updatedTask })
+      // sessionId is present for native starts (see preassignedSessionId above).
+      // Clients MUST treat it as optional — a Codex start omits it.
+      res.json({
+        taskId: updatedTask.id,
+        task: updatedTask,
+        ...(preassignedSessionId ? { sessionId: preassignedSessionId } : {}),
+      })
     } catch (err) {
       if (err instanceof QuickStartError) {
         res.status(err.statusCode).json({ error: err.message })

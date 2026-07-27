@@ -4,8 +4,11 @@
  * POST /api/sessions/quick-start with `intent: 'fix-walnut'` must:
  *   1. wrap the user's report in the repair briefing (SESSION_START message),
  *   2. title the task "Fix Walnut: <report>" under project "Fix Walnut",
- *   3. reject unknown intent values with 400,
- *   4. leave plain quick-starts (no intent) untouched.
+ *   3. pin the task to the Focus tier by default (the pill skips the path picker,
+ *      so there is no launcher footer to pick a tier in) — while still honoring an
+ *      explicit client pick, including `pinTier: null` to opt out,
+ *   4. reject unknown intent values with 400,
+ *   5. leave plain quick-starts (no intent) untouched.
  *
  * Also covers GET /api/config `installDir` exposure (drives the UI pill).
  */
@@ -110,6 +113,71 @@ describe('POST /api/sessions/quick-start — intent=fix-walnut', () => {
     } finally {
       capture.dispose();
     }
+  });
+
+  // Repro of the reported bug: a Fix Walnut launch sends no taskMeta (the pill
+  // skips the path picker entirely), so the task used to land unpinned and the
+  // user had to hand-pin it into Focus after every single repair request.
+  it('pins the task to the Focus tier when the client sends no taskMeta', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/sessions/quick-start')
+      .send({
+        cwd: '/fake/walnut-checkout',
+        message: 'focus tier is not applied',
+        intent: 'fix-walnut',
+      });
+
+    expect(res.status).toBe(200);
+    const task = await getTask(res.body.taskId);
+    expect(task!.pinned).toBe(true);
+    expect(task!.focus_tier).toBe('focus');
+  });
+
+  it('honors an explicit non-focus tier instead of forcing focus', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/sessions/quick-start')
+      .send({
+        cwd: '/fake/walnut-checkout',
+        message: 'park this one',
+        intent: 'fix-walnut',
+        taskMeta: { pinTier: 'wait' },
+      });
+
+    expect(res.status).toBe(200);
+    const task = await getTask(res.body.taskId);
+    expect(task!.pinned).toBe(true);
+    expect(task!.focus_tier).toBe('wait');
+  });
+
+  it('lets an explicit pinTier:null opt out of pinning', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/sessions/quick-start')
+      .send({
+        cwd: '/fake/walnut-checkout',
+        message: 'do not pin me',
+        intent: 'fix-walnut',
+        taskMeta: { pinTier: null },
+      });
+
+    expect(res.status).toBe(200);
+    const task = await getTask(res.body.taskId);
+    expect(task!.pinned).toBeFalsy();
+    expect(task!.focus_tier).toBeUndefined();
+  });
+
+  it('does not pin plain quick-starts that send no taskMeta', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/sessions/quick-start')
+      .send({ cwd: '/tmp/plain-dir', message: 'no intent here' });
+
+    expect(res.status).toBe(200);
+    const task = await getTask(res.body.taskId);
+    expect(task!.pinned).toBeFalsy();
+    expect(task!.focus_tier).toBeUndefined();
   });
 
   it('rejects unknown intent values with 400', async () => {
