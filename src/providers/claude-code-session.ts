@@ -53,7 +53,7 @@ import type { SessionManager } from './session-manager.js'
 import type { DaemonTaskState } from './daemon-connection.js'
 import { checkCwdExists } from './cwd-check.js'
 import { AcpSession, emitAcpIdentityBoundary } from './acp-session.js'
-import { recoverStateFromJsonl, extractImageFilePathFromInput } from '../core/session-history.js'
+import { extractImageFilePathFromInput } from '../core/session-history.js'
 import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase, SessionModelCatalogEntry, SessionEffort } from '../core/types.js'
 import { SESSION_MODEL_CLI_MAP, modelSupportsEffort, VALID_SESSION_EFFORT_IDS } from '../core/types.js'
 import { classifyStreamEvent, classifyDelta } from './claude-stream-event-map.js'
@@ -1652,111 +1652,25 @@ export class ClaudeCodeSession {
       }
     }
 
-    // Recover state from CloudCode canonical JSONL.
-    // The session record in sessions.json may be stale if the server crashed
-    // before an async updateSessionRecord() completed. The CloudCode JSONL
-    // is maintained by Claude CLI itself. Permission mode is the exception:
-    // canonical user rows only update on the next turn, so they can lag a
-    // confirmed live set_permission_mode switch. Keep record.mode authoritative.
-    let jsonlByteLength = 0
-    try {
-      const recovered = await recoverStateFromJsonl(record.claudeSessionId, record.cwd, record.host)
-      if (recovered) {
-        if (recovered.model) {
-          // De-duplicate [1m][1m] from old resume bug
-          const cleanModel = recovered.model.replace(/(\[1m\])+$/, '[1m]')
-          session._initModel = cleanModel
-          const shortModel = cleanModel.replace(/^.*\./, '').replace(/[-_]v\d+(\[1m\])?$/, '$1') || cleanModel
-          session._model = shortModel
-        }
-        if (recovered.planFile) session.planFile = recovered.planFile
-        if (recovered.planCompleted != null) session.planCompleted = recovered.planCompleted
-        if (recovered.activity) session._activity = recovered.activity
-        if (recovered.jsonlByteLength) jsonlByteLength = recovered.jsonlByteLength
-        if (recovered.teamActive != null) session._teamActive = recovered.teamActive
-        // ── Recover background-task / workflow state ──
-        // Without this, a server restart mid-workflow loses the task set and the next
-        // replayed/real `result` would be mistaken for turn-over. We rebuild the
-        // AUTHORITATIVE set (id→status); in-flight is derived from it, never a scalar.
-        if (recovered.bgTasks) {
-          const backgrounded = new Set(recovered.bgBackgroundedIds ?? [])
-          for (const [taskId, status] of Object.entries(recovered.bgTasks)) {
-            session._bgTasks.set(taskId, { status, isBackgrounded: backgrounded.has(taskId) || undefined })
-          }
-        }
-        if (recovered.cliSessionState != null) {
-          session._sessionStateSeen = true
-          session._cliSessionState = recovered.cliSessionState
-        }
-        // The task set is the SOLE authority for "work in flight" — NOT _cliSessionState.
-        // A workflow persists idle ~20×/run, so a mid-workflow restart often recovers with
-        // cliSessionState='idle' while tasks are genuinely live; gating on `!== 'idle'` here
-        // would drop us out of running status. Trust the derived count.
-        if (session.hasActiveBackgroundWork()) {
-          session._processStatus = 'running'
-          session._activity = 'Background tasks running'
-          log.session.info('recovery: background work in flight — keeping running status', {
-            sessionId: session.claudeSessionId, taskId: session.taskId,
-            runningBgTasks: (session as unknown as { _runningBgCount(): number })._runningBgCount(),
-          })
-        }
-        // Arm team-idle safety timer when recovering into team mode.
-        // Without this, if no new JSONL events arrive after restart (process alive
-        // but team poll loop idle), _teamActive stays true forever and triage never fires.
-        // The live flow arms this timer inside the result handler (line ~2000); on
-        // recovery we must do it explicitly since result events before the crash are
-        // not replayed (tailer starts from fromOffset).
-        if (session._teamActive) {
-          // If teammates are still active, show 'running' (not 'idle')
-          if (session._areTeammatesStillActive()) {
-            session._processStatus = 'running'
-            session._activity = 'Team subagents working'
-            log.session.info('recovery: team still active — keeping running status', {
-              sessionId: session.claudeSessionId, taskId: session.taskId,
-            })
-            // Persist to session record so API/frontend show 'running'
-            if (session.claudeSessionId) {
-              import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
-                updateSessionRecord(session.claudeSessionId!, {
-                  process_status: 'running',
-                  activity: 'Team subagents working',
-                }),
-              ).catch(() => {})
-            }
-          }
-          session._scheduleTeamIdleCheck('(team-idle timeout after server restart)')
-        }
-        log.session.info('recovered state from canonical JSONL', {
-          sessionId: record.claudeSessionId,
-          recovered,
-        })
-        // Patch the in-memory record directly so other code paths that read it
-        // (reconciler, API responses) see the corrected values immediately.
-        // The next updateSessionRecord() call from any code path will persist these.
-        if (recovered.model) record.model = recovered.model
-        if (recovered.planFile) record.planFile = recovered.planFile
-        if (recovered.planCompleted != null) record.planCompleted = recovered.planCompleted
-
-        // Layer 1 (canonical JSONL): recover orphaned control_request.
-        // Note: control_request events are typically NOT in the canonical JSONL —
-        // they only appear in the STDOUT stream. This check exists as a belt-and-suspenders.
-        if (recovered.pendingControlRequest) {
-          const { request_id, request } = recovered.pendingControlRequest
-          session._pendingPermissionRequests.set(request_id, { request_id, request })
-          log.session.info(`recovered orphaned control_request from canonical JSONL`, {
-            sessionId: record.claudeSessionId,
-            requestId: request_id,
-            toolName: request.tool_name,
-            mode: session._mode,
-          })
-        }
-      }
-    } catch (err) {
-      log.session.warn('state recovery from canonical JSONL failed, using session record', {
-        sessionId: record.claudeSessionId,
-        error: err instanceof Error ? err.message : String(err),
-      })
-    }
+    // ── Canonical-JSONL recovery REMOVED (2026-07-25) ──
+    // This used to call recoverStateFromJsonl(), an UNBOUNDED full read of the
+    // canonical JSONL, once per session on every attach. Measured cost: 533 reads
+    // totalling 9.56 GB in one day, mean 18.4 MB, worst single file 118 MB — the
+    // dominant driver of ~3 GB RSS within minutes of boot.
+    //
+    // It read all that to extract fields that DO NOT EXIST in the file. A census of
+    // the six largest canonical JSONLs (42-231 MB) found `system/init` = 0,
+    // `type:'result'` = 0 and `system/task_*` = 0 in every one — so model,
+    // workStatus, bgTasks, cliSessionState and pendingControlRequest never came from
+    // here on real data (see the stream-fold comment below, which already said so).
+    // Everything it COULD extract has a better source that runs above:
+    // record.model / record.mode (record was already authoritative — the recovered
+    // mode was deliberately discarded) / record.planFile / record.planCompleted, all
+    // persisted columns. jsonlByteLength was already unused.
+    //
+    // The one field with no persisted column, teamActive, now comes from the stream
+    // fold below (fetchStreamTailFold folds TeamCreate/TeamDelete), which is
+    // window-bounded at 256 KB-2 MB instead of unbounded.
 
     // ── Stream-tail state merge + authoritative downgrade ──
     // Runs OUTSIDE the canonical-recovery block above on purpose: the canonical
@@ -1781,6 +1695,12 @@ export class ClaudeCodeSession {
         session._sessionStateSeen = true
         session._cliSessionState = fold.cliState
       }
+      // teamActive from the stream fold (TeamCreate/TeamDelete). This is the only
+      // piece of attach state with no persisted column, so the stream tail is its
+      // sole surviving source once canonical recovery is gone. The team-idle
+      // timeout (_maybeClearTeamActive) remains the safety net against a stuck
+      // true — a fold that ends on TeamCreate can only ever over-report.
+      if (fold.teamActive) session._teamActive = true
       // If the fold shows non-backgrounded bg work still in flight, the turn is
       // genuinely live — mirror the canonical-recovery branch's running upgrade.
       if (session.hasActiveBackgroundWork() && session._processStatus !== 'running') {
@@ -1921,7 +1841,6 @@ export class ClaudeCodeSession {
         sessionId: record.claudeSessionId,
         isRemote,
         transportFileSize: session._transport.fileSize,
-        canonicalJsonlByteLength: jsonlByteLength,
         fromOffset: fromOffset === Number.MAX_SAFE_INTEGER ? 'MAX_SAFE_INTEGER (skip replay)' : fromOffset,
       })
       try {
