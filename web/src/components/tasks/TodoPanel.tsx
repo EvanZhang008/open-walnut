@@ -428,6 +428,7 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVan
     'todo-panel-item',
     isDone ? 'todo-panel-item-done' : '',
     isRecentlyDone ? 'todo-panel-item-recently-done' : '',
+    isVanishing ? 'todo-panel-item-vanishing' : '',
     isFocused ? 'task-focused' : '',
     filterOverrideReason ? 'task-filter-override' : '',
     isFadingOverride ? 'task-filter-override-fading' : '',
@@ -2132,6 +2133,112 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     }
   });
 
+  // ── Completion grace period (3s "done, then vanish") ──
+  // Declared BEFORE every task-visibility memo below (pinned tiers, Recent, the main
+  // list): each of those filters drops done tasks, so they ALL must consult the grace
+  // window or a completed task disappears instantly in that surface.
+  // 3s still + 150ms slack so the 450ms exit animation (delay 2550ms, see
+  // .todo-panel-item-vanishing) finishes BEFORE the row unmounts — otherwise the
+  // fade-out is cut off mid-way and the removal still reads as a pop.
+  const GRACE_MS = 3_150;
+  const recentlyCompletedRef = useRef<Set<string>>(new Set());
+  const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const [recentTick, setRecentTick] = useState(0);
+
+  /** True while `completed_at` is inside the grace window. Checked INLINE during
+   *  render (not only via recentlyCompletedRef): the ref is populated by an effect
+   *  AFTER the completion render commits, so without this the optimistic-complete
+   *  render would hide the row for one frame (or forever — the memos don't re-run on
+   *  ref writes). completed_at-based, so it needs no state at all. */
+  const isInCompletionGrace = useCallback((t: Task): boolean => {
+    if (t.status !== 'done' && t.phase !== 'COMPLETE') return false;
+    if (!t.completed_at) return false;
+    const elapsed = Date.now() - new Date(t.completed_at).getTime();
+    return elapsed >= 0 && elapsed < GRACE_MS;
+  }, []);
+
+  /** A done task is still rendered while it's inside the grace window. */
+  const keepWhileCompleting = useCallback(
+    (t: Task): boolean => recentlyCompletedRef.current.has(t.id) || isInCompletionGrace(t),
+    [isInCompletionGrace],
+  );
+
+  useEffect(() => {
+    let added = false;
+    for (const task of tasks) {
+      if (task.status === 'done' && task.completed_at && !recentlyCompletedRef.current.has(task.id)) {
+        const elapsed = Date.now() - new Date(task.completed_at).getTime();
+        if (elapsed >= 0 && elapsed < GRACE_MS) {
+          recentlyCompletedRef.current.add(task.id);
+          added = true;
+          const timerId = setTimeout(() => {
+            recentlyCompletedRef.current.delete(task.id);
+            timersRef.current.delete(task.id);
+            setRecentTick((n) => n + 1);
+          }, GRACE_MS - elapsed);
+          timersRef.current.set(task.id, timerId);
+        }
+      }
+    }
+    // Trigger re-render so the filters re-run with the new grace entries
+    if (added) setRecentTick((n) => n + 1);
+    // Clean up timers for tasks that are no longer done (reopened)
+    for (const [taskId, timerId] of timersRef.current) {
+      const task = tasks.find((t) => t.id === taskId);
+      if (!task || task.status !== 'done') {
+        clearTimeout(timerId);
+        timersRef.current.delete(taskId);
+        recentlyCompletedRef.current.delete(taskId);
+      }
+    }
+  }, [tasks]);
+
+  // Cleanup all timers on unmount
+  useEffect(() => {
+    const timers = timersRef.current;
+    return () => { for (const id of timers.values()) clearTimeout(id); };
+  }, []);
+
+  // ── Sticky pin membership during the grace window ──
+  // Completing a task AUTO-UNPINS it server-side (task-manager.ts: "Auto-unpin
+  // completed tasks so they don't linger in Focus Bar"), and getPinnedTasks() also
+  // filters done tasks defensively. So the id leaves `pinnedTaskIds`/`focusTaskIds`
+  // the moment it completes and the Focus/Satellite/Wait card is yanked out of the
+  // dataset — the grace filters never even see it, which is why a completed card
+  // vanished instantly from Focus while the Recent copy sat there for 3s.
+  //
+  // Fix: remember the pin membership each task had just BEFORE it completed, and keep
+  // serving it for the length of the grace window. The server state is untouched (the
+  // auto-unpin is correct); this only defers when the UI stops drawing the card.
+  const lastPinStateRef = useRef<Map<string, { pinned: boolean; focus: boolean; wait: boolean }>>(new Map());
+  useEffect(() => {
+    for (const t of tasks) {
+      // Snapshot only while OPEN — once done, the entry must stay frozen at its
+      // pre-completion value (the server has already dropped it from the sets).
+      if (t.status !== 'done' && t.phase !== 'COMPLETE') {
+        lastPinStateRef.current.set(t.id, {
+          pinned: pinnedTaskIds?.has(t.id) ?? false,
+          focus: focusTaskIds?.has(t.id) ?? false,
+          wait: waitTaskIds?.has(t.id) ?? false,
+        });
+      }
+    }
+  }, [tasks, pinnedTaskIds, focusTaskIds, waitTaskIds]);
+
+  /** Pin-membership sets widened to include tasks still inside the grace window. */
+  const graceUnion = useCallback((live: Set<string> | undefined, which: 'pinned' | 'focus' | 'wait'): Set<string> => {
+    const out = new Set(live ?? []);
+    for (const t of tasks) {
+      if (!keepWhileCompleting(t)) continue;
+      if (lastPinStateRef.current.get(t.id)?.[which]) out.add(t.id);
+    }
+    return out;
+  }, [tasks, keepWhileCompleting]);
+
+  const pinnedIdsWithGrace = useMemo(() => graceUnion(pinnedTaskIds, 'pinned'), [graceUnion, pinnedTaskIds, recentTick]);
+  const focusIdsWithGrace = useMemo(() => graceUnion(focusTaskIds, 'focus'), [graceUnion, focusTaskIds, recentTick]);
+  const waitIdsWithGrace = useMemo(() => graceUnion(waitTaskIds, 'wait'), [graceUnion, waitTaskIds, recentTick]);
+
   // Active pinned-drag id — declared BEFORE the pinned render-model memos below so
   // they can freeze on it (useFrozenWhile) while a drag is live.
   const [activeDragPinnedId, setActiveDragPinnedId] = useState<string | null>(null);
@@ -2145,13 +2252,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // FROZEN during a pinned drag: external churn must not add/remove/replace pinned
   // Task objects mid-drag (cards would remount → dnd-kit useRect loop → React #185).
   const pinnedTasksLive = useMemo(() => {
-    if (!pinnedTaskIds || pinnedTaskIds.size === 0) return [];
+    if (pinnedIdsWithGrace.size === 0) return [];
     const taskMap = new Map(tasks.map((t) => [t.id, t]));
-    return [...pinnedTaskIds]
+    return [...pinnedIdsWithGrace]
       .map((id) => taskMap.get(id))
-      .filter((t): t is Task => !!t && t.status !== 'done' && t.phase !== 'COMPLETE'
+      .filter((t): t is Task => !!t
+        && ((t.status !== 'done' && t.phase !== 'COMPLETE') || keepWhileCompleting(t))
         && !(t.group_id && hiddenGroups?.has(t.group_id)));
-  }, [tasks, pinnedTaskIds, hiddenGroups]);
+  }, [tasks, pinnedIdsWithGrace, hiddenGroups, keepWhileCompleting, recentTick]);
   const pinnedTasks = useFrozenWhile(pinnedTasksLive, isPinnedDragActive);
 
   // Hidden groups that HAVE pinned members — these were collapsed out of the tiers
@@ -2182,28 +2290,26 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   // Split pinned into Focus / Next / Satellite
   const focusTasksLocal = useMemo(() => {
-    if (!focusTaskIds || focusTaskIds.size === 0) return [];
-    return pinnedTasks.filter((t) => focusTaskIds.has(t.id));
-  }, [pinnedTasks, focusTaskIds]);
+    if (focusIdsWithGrace.size === 0) return [];
+    return pinnedTasks.filter((t) => focusIdsWithGrace.has(t.id));
+  }, [pinnedTasks, focusIdsWithGrace]);
 
-  const satelliteTasksLocal = useMemo(() => {
-    const fSet = focusTaskIds ?? new Set<string>();
-    const wSet = waitTaskIds ?? new Set<string>();
-    return pinnedTasks.filter((t) => !fSet.has(t.id) && !wSet.has(t.id));
-  }, [pinnedTasks, focusTaskIds, waitTaskIds]);
+  const satelliteTasksLocal = useMemo(() =>
+    pinnedTasks.filter((t) => !focusIdsWithGrace.has(t.id) && !waitIdsWithGrace.has(t.id)),
+  [pinnedTasks, focusIdsWithGrace, waitIdsWithGrace]);
 
   const waitTasksLocal = useMemo(() => {
-    if (!waitTaskIds || waitTaskIds.size === 0) return [];
-    return pinnedTasks.filter((t) => waitTaskIds.has(t.id));
-  }, [pinnedTasks, waitTaskIds]);
+    if (waitIdsWithGrace.size === 0) return [];
+    return pinnedTasks.filter((t) => waitIdsWithGrace.has(t.id));
+  }, [pinnedTasks, waitIdsWithGrace]);
 
   // Helper: resolve a task's current tier
   const getTier = useCallback((taskId: string): FocusTier | undefined => {
-    if (!pinnedTaskIds?.has(taskId)) return undefined;
-    if (focusTaskIds?.has(taskId)) return 'focus';
-    if (waitTaskIds?.has(taskId)) return 'wait';
+    if (!pinnedIdsWithGrace.has(taskId)) return undefined;
+    if (focusIdsWithGrace.has(taskId)) return 'focus';
+    if (waitIdsWithGrace.has(taskId)) return 'wait';
     return 'satellite';
-  }, [pinnedTaskIds, focusTaskIds, waitTaskIds]);
+  }, [pinnedIdsWithGrace, focusIdsWithGrace, waitIdsWithGrace]);
 
   // Recent tasks: an ACTIVITY FEED — every recently created/updated task pops up
   // here, INCLUDING pinned ones (they render in their tier AND here; the Recent
@@ -2224,11 +2330,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return tasks
       .filter(t => {
         const isDone = t.status === 'done' || t.phase === 'COMPLETE';
-        return isDone ? showCompleted : true;
+        return isDone ? (showCompleted || keepWhileCompleting(t)) : true;
       })
       .sort((a, b) => recentTime(b).localeCompare(recentTime(a)))
       .slice(0, 50);
-  }, [tasks, showCompleted]);
+  }, [tasks, showCompleted, keepWhileCompleting, recentTick]);
   const recentTasks = useFrozenWhile(recentTasksLive, isPinnedDragActive);
 
   // Stable sensor config — inline objects in useSensor destabilize dnd-kit's internal
@@ -2785,51 +2891,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     onReorderPinned?.(newOrder);
   }, [pinnedTaskIds_arr, onReorderPinned, onSetTier, onPinTask, clearDragState, onAddToGroup, onGroupTasks, onUngroupTask, pinnedCardIds, tasks]);
 
-  // Recently completed: tracks tasks completed in the last few seconds.
-  // Used for BOTH visual styling (isRecentlyDone green tint) AND filtering —
-  // recently completed tasks stay visible briefly before being hidden, giving
-  // the user visual feedback that the completion took effect.
-  const recentlyCompletedRef = useRef<Set<string>>(new Set());
-  const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-  const [, setRecentTick] = useState(0);
-
-  useEffect(() => {
-    const GRACE_MS = 3_000; // keep visible for 3s after completion
-    let added = false;
-    for (const task of tasks) {
-      if (task.status === 'done' && task.completed_at && !recentlyCompletedRef.current.has(task.id)) {
-        const elapsed = Date.now() - new Date(task.completed_at).getTime();
-        if (elapsed >= 0 && elapsed < GRACE_MS) {
-          recentlyCompletedRef.current.add(task.id);
-          added = true;
-          const timerId = setTimeout(() => {
-            recentlyCompletedRef.current.delete(task.id);
-            timersRef.current.delete(task.id);
-            setRecentTick((n) => n + 1);
-          }, GRACE_MS - elapsed);
-          timersRef.current.set(task.id, timerId);
-        }
-      }
-    }
-    // Trigger re-render so the filter re-runs with the new grace entries
-    if (added) setRecentTick((n) => n + 1);
-    // Clean up timers for tasks that are no longer done (reopened)
-    for (const [taskId, timerId] of timersRef.current) {
-      const task = tasks.find((t) => t.id === taskId);
-      if (!task || task.status !== 'done') {
-        clearTimeout(timerId);
-        timersRef.current.delete(taskId);
-        recentlyCompletedRef.current.delete(taskId);
-      }
-    }
-  }, [tasks]);
-
-  // Cleanup all timers on unmount
-  useEffect(() => {
-    const timers = timersRef.current;
-    return () => { for (const id of timers.values()) clearTimeout(id); };
-  }, []);
-
   const categories = useMemo(() => {
     const set = new Set<string>();
     for (const t of tasks) if (t.category) set.add(t.category);
@@ -2888,8 +2949,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       if (focusOverrideRef.current === t.id || fadingOverrideRef.current === t.id) return true;
 
       if (!showCompleted && t.status === 'done' && phaseFilter !== 'COMPLETE') {
-        // Keep recently-completed tasks visible briefly for visual feedback
-        if (!recentlyCompletedRef.current.has(t.id)) return false;
+        // Keep recently-completed tasks visible for the grace period (visual feedback
+        // + exit animation) before hiding them.
+        if (!keepWhileCompleting(t)) return false;
       }
       if (priorityFilter && effectivePriority(t.priority) !== priorityFilter) return false;
       if (phaseFilter && !matchesPhaseFilter(phaseFilter, t.phase)) return false;
@@ -2937,7 +2999,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         if (directlyMatched.has(t.id)) continue; // already included
         if (!t.parent_task_id) continue; // not a child task
         // Respect completed filter even for children (but keep recently-completed visible)
-        if (!showCompleted && t.status === 'done' && phaseFilter !== 'COMPLETE' && !recentlyCompletedRef.current.has(t.id)) continue;
+        if (!showCompleted && t.status === 'done' && phaseFilter !== 'COMPLETE' && !keepWhileCompleting(t)) continue;
         // parent_task_id uses a prefix convention: check if any visible task's id
         // starts with this task's parent_task_id (handles composite/prefixed IDs)
         const parentVisible = result.some(p => p.id.startsWith(t.parent_task_id!));
@@ -2950,7 +3012,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     }
     return result;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- isDescendantVisibleInStarred is stable (useCallback); focusOverrideRef/fadingOverrideRef read via _overrideTick
-  }, [tasks, showCompleted, priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, dateFilter, _tick, _overrideTick, activeCategory, favorites, isDescendantVisibleInStarred]);
+  }, [tasks, showCompleted, priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, dateFilter, _tick, _overrideTick, recentTick, activeCategory, favorites, isDescendantVisibleInStarred]);
+
+  // Whether a completed task will actually disappear after the grace period —
+  // mirrors the visibility filter (`isDone && !showCompleted && phaseFilter !== 'COMPLETE'`).
+  // Drives the exit animation: only play fade+collapse when the item WILL be removed.
+  // Search mode keeps completed tasks visible, so no exit animation there either
+  // (otherwise the row fades out then pops back when the grace timer clears).
+  const completedWillHide = !showCompleted && phaseFilter !== 'COMPLETE' && !isSearchMode;
 
   const filterOverrideId = focusOverrideRef.current;
   const fadingOverrideId = fadingOverrideRef.current;
@@ -4329,6 +4398,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       }
       out.push(
         <SortableTierCard key={task.id} task={task} tier={tier} isFocused={focusedTaskId === task.id}
+          isVanishing={keepWhileCompleting(task)}
           isSessionOpen={openSessionTaskIds?.has(task.id) ?? false}
           isDetailOpen={focusedTaskId === task.id && !suppressDetail}
           onClick={handlePinnedCardClick} onSetTier={onSetTier} onUnpinTask={onUnpinTask}
@@ -4565,6 +4635,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         key={task.id}
                         task={task}
                         isFocused={focusedTaskId === task.id}
+                        isVanishing={keepWhileCompleting(task) && !showCompleted}
                         isSessionOpen={openSessionTaskIds?.has(task.id) ?? false}
                         isDetailOpen={focusedTaskId === task.id && !suppressDetail}
                         onClick={handlePinnedCardClick}
@@ -4706,6 +4777,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     isFocused={focusedTaskId === task.id}
                     isDetailOpen={focusedTaskId === task.id && !suppressDetail}
                     isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
+                    isVanishing={recentlyCompletedRef.current.has(task.id) && completedWillHide}
                     isNestTarget={nestTargetId === task.id} isGroupTarget={groupTargetId === task.id}
                     depth={depthMap.get(task.id) ?? 0}
                     childCount={searchChildCount.get(task.id)}
@@ -4754,6 +4826,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   isFocused={focusedTaskId === task.id}
                   isDetailOpen={focusedTaskId === task.id && !suppressDetail}
                   isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
+                  isVanishing={recentlyCompletedRef.current.has(task.id) && completedWillHide}
                   isNestTarget={nestTargetId === task.id} isGroupTarget={groupTargetId === task.id}
                   depth={depthMap.get(task.id) ?? 0}
                   childCount={trueChildCountMap.get(task.id)}
@@ -4845,6 +4918,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                   isFocused={focusedTaskId === task.id}
                                   isDetailOpen={focusedTaskId === task.id && !suppressDetail}
                                   isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
+                                  isVanishing={recentlyCompletedRef.current.has(task.id) && completedWillHide}
                                   isNestTarget={nestTargetId === task.id} isGroupTarget={groupTargetId === task.id}
                                   depth={depthMap.get(task.id) ?? 0}
                                   childCount={trueChildCountMap.get(task.id)}
@@ -4931,6 +5005,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                                 isFocused={focusedTaskId === task.id}
                                                 isDetailOpen={focusedTaskId === task.id && !suppressDetail}
                                                 isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
+                                                isVanishing={recentlyCompletedRef.current.has(task.id) && completedWillHide}
                                                 isNestTarget={nestTargetId === task.id} isGroupTarget={groupTargetId === task.id}
                                                 depth={depthMap.get(task.id) ?? 0}
                                                 childCount={trueChildCountMap.get(task.id)}

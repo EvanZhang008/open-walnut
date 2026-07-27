@@ -9420,9 +9420,44 @@ img[data-lightbox-src],
   color: var(--fg-muted);
 }
 
+/* Just-completed tint: a brief brighter green flash settling to a calm tint, held for
+   the whole grace period (the green used to ride the vanish keyframes — it now lives
+   here so the row's background is stable while the row sits still). */
+@keyframes todo-recently-done-flash {
+  from { background: rgba(52, 199, 89, 0.20); }
+  to   { background: rgba(52, 199, 89, 0.06); }
+}
 .todo-panel-item-recently-done {
   background: rgba(52, 199, 89, 0.06);
-  transition: background 0.3s ease;
+  animation: todo-recently-done-flash 360ms ease-out;
+}
+/* Both classes land on the same element when a completed row is also on its way out.
+   `animation` is a single shorthand — declaring it twice would drop the flash — so the
+   combined case lists BOTH animations explicitly. */
+.todo-panel-item-recently-done.todo-panel-item-vanishing {
+  animation: todo-recently-done-flash 360ms ease-out,
+             todo-recently-done-out 450ms ease-in 2550ms forwards;
+}
+/* Completed grace period: the row must sit COMPLETELY STILL for ~2.55s (so the
+   check-mark flip is what you notice), then fade + collapse away in 450ms, timed so
+   it unmounts exactly as the collapse ends (GRACE_MS = 3s in TodoPanel).
+
+   The stillness comes from `animation-delay`, NOT from early keyframes: properties
+   listed only in the 100% frame (padding/margin/transform/border-width) get an
+   implicit 0% frame from the current computed value, so a 3s animation interpolates
+   them across the WHOLE 3s — the row visibly squeezes from the first frame and reads
+   as "it never waited". A delayed 450ms animation leaves the row untouched until the
+   exit actually begins. Keep the delay + duration summing to GRACE_MS. */
+@keyframes todo-recently-done-out {
+  from { opacity: 1; max-height: 240px; transform: translateX(0); }
+  to   { opacity: 0; max-height: 0; padding-top: 0; padding-bottom: 0; margin-top: 0; margin-bottom: 0; transform: translateX(24px); border-width: 0; }
+}
+.todo-panel-item-vanishing,
+/* Same hold-then-vanish for the card-shaped surfaces (Focus / Satellite / Wait tier
+   cards + Recent cards) — one rule so the timing can't drift between surfaces. */
+.todo-card-vanishing {
+  overflow: hidden;
+  animation: todo-recently-done-out 450ms ease-in 2550ms forwards;
 }
 .todo-panel-item-recently-done::after {
   content: '';
