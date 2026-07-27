@@ -689,6 +689,63 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
 
   const planContentValue = plan?.content ?? null;
 
+  // Model info pill — moved from the header meta row into the composer's
+  // controls row (rendered inside both ChatInput controlsSlot mode bars).
+  // Codex sessions get the CodexModelPicker; its menu is re-anchored to open
+  // UPWARD when inside the mode bar (see .session-mode-bar .codex-model-menu).
+  const modelInfoPill = session?.engine === 'codex' ? (
+    <CodexModelPicker
+      sessionId={sessionId}
+      currentModelId={session.acpModel}
+      contextPercent={contextPercent}
+      onModelChange={(acpModel) => {
+        setSession((previous) => previous ? { ...previous, acpModel } : previous);
+      }}
+    />
+  ) : displayModel ? (
+    <button
+      type="button"
+      className="session-detail-model-pill session-detail-model-pill-clickable composer-model-pill"
+      title={`${rawModel || ''} — click to switch model / effort`}
+      onClick={() => setModelPickerOpen((v) => !v)}
+    >
+      {displayModel}
+      {contextPercent != null && (
+        <span
+          className="session-detail-context-pct"
+          style={{
+            color: contextPercent > 80 ? 'var(--danger, #ff3b30)'
+              : contextPercent > 50 ? 'var(--warning, #ff9500)'
+              : 'var(--fg-muted)',
+          }}
+          title={`Context: ${contextPercent}%${liveUsage.inputTokens ? ` (${Math.round(liveUsage.inputTokens / 1000)}K)` : ''}`}
+        >
+          {' '}{contextPercent}%
+        </span>
+      )}
+      {modelSupportsEffort(rawModel) && (() => {
+        // Badge shows the CLI's TRUE effort (effectiveEffort, read back via
+        // get_settings) — falling back to the requested level, then the API
+        // default. When the CLI overrode the request (env / downgrade), flag it.
+        const shown = session?.effectiveEffort ?? session?.effort ?? DEFAULT_SESSION_EFFORT;
+        const overridden = session?.effectiveEffort != null && session?.effort != null
+          && session.effectiveEffort !== session.effort;
+        const title = overridden
+          ? `Reasoning effort: ${session!.effectiveEffort} (requested ${session!.effort}, overridden by env/model)`
+          : session?.effectiveEffort
+          ? `Reasoning effort: ${session.effectiveEffort} (confirmed by CLI)`
+          : session?.effort
+          ? `Reasoning effort: ${session.effort} (requested)`
+          : `Reasoning effort: ${DEFAULT_SESSION_EFFORT} (default)`;
+        return (
+          <span className="session-detail-effort-badge" title={title}>
+            {' · '}{shown}{overridden ? ' ⚠' : ''}
+          </span>
+        );
+      })()}
+    </button>
+  ) : null;
+
   return (
     <PlanContentContext.Provider value={planContentValue}>
     <SessionPanelErrorBoundary sessionId={sessionId} onClose={onClose}>
@@ -964,6 +1021,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                     expanded={notesOpen}
                     onToggleExpanded={() => setNotesOpen(o => !o)}
                   />
+                  {modelInfoPill}
                 </div>
               );
             })() : undefined}
@@ -1024,64 +1082,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             >
               Terminal
             </button>
-            {session?.engine === 'codex' && (
-              <CodexModelPicker
-                sessionId={sessionId}
-                currentModelId={session.acpModel}
-                contextPercent={contextPercent}
-                onModelChange={(acpModel) => {
-                  setSession((previous) => previous ? { ...previous, acpModel } : previous);
-                }}
-              />
-            )}
-            {displayModel && session?.engine !== 'codex' && (
-              <button
-                type="button"
-                className="session-detail-model-pill session-detail-model-pill-clickable"
-                title={`${rawModel || ''} — click to switch model / effort`}
-                onClick={() => setModelPickerOpen((v) => !v)}
-              >
-                {displayModel}
-                {contextPercent != null && (
-                  <span
-                    className="session-detail-context-pct"
-                    style={{
-                      color: contextPercent > 80 ? 'var(--danger, #ff3b30)'
-                        : contextPercent > 50 ? 'var(--warning, #ff9500)'
-                        : 'var(--fg-muted)',
-                    }}
-                    title={`Context: ${contextPercent}%${liveUsage.inputTokens ? ` (${Math.round(liveUsage.inputTokens / 1000)}K)` : ''}`}
-                  >
-                    {' '}{contextPercent}%
-                  </span>
-                )}
-                {modelSupportsEffort(rawModel) && (() => {
-                  // Badge shows the CLI's TRUE effort (effectiveEffort, read back via
-                  // get_settings) — falling back to the requested level, then the API
-                  // default. When the CLI overrode the request (env / downgrade), flag it.
-                  const shown = session?.effectiveEffort ?? session?.effort ?? DEFAULT_SESSION_EFFORT;
-                  const overridden = session?.effectiveEffort != null && session?.effort != null
-                    && session.effectiveEffort !== session.effort;
-                  const title = overridden
-                    ? `Reasoning effort: ${session!.effectiveEffort} (requested ${session!.effort}, overridden by env/model)`
-                    : session?.effectiveEffort
-                    ? `Reasoning effort: ${session.effectiveEffort} (confirmed by CLI)`
-                    : session?.effort
-                    ? `Reasoning effort: ${session.effort} (requested)`
-                    : `Reasoning effort: ${DEFAULT_SESSION_EFFORT} (default)`;
-                  return (
-                    <span className="session-detail-effort-badge" title={title}>
-                      {' · '}{shown}{overridden ? ' ⚠' : ''}
-                    </span>
-                  );
-                })()}
-              </button>
-            )}
-            {session?.messageCount != null && session.messageCount > 0 && (
-              <span className="session-panel-message-count">
-                {session.messageCount} {session.messageCount === 1 ? 'turn' : 'turns'}
-              </span>
-            )}
+            {/* Model pill + turn count moved out of the header (2026-07-25):
+                the pill now lives in the composer controls row (modelInfoPill,
+                rendered in both ChatInput controlsSlot mode bars); the turn
+                count was removed entirely. Time-ago stays. */}
             {session?.lastActiveAt && <span className="session-panel-time">{timeAgo(session.lastActiveAt)}</span>}
           </div>
         </div>
@@ -1278,6 +1282,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                     expanded={notesOpen}
                     onToggleExpanded={() => setNotesOpen(o => !o)}
                   />
+                  {modelInfoPill}
                 </div>
               );
             })() : undefined}

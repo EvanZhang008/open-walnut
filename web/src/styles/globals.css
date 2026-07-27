@@ -15292,7 +15292,10 @@ a.task-kebab-info:hover {
   background: var(--bg-secondary);
 }
 
-/* Task metadata footer — Star / Needs attention / Pin tier / Priority */
+/* Task metadata footer — model / engine / Pin tier in the primary row, the rest
+   in the More menu. `container-type: inline-size` lets the primary row drop its
+   least-informative bits (the "Pin" caption) when the launcher is anchored in
+   the narrow todo panel instead of the wide chat column. */
 .sps-meta-footer {
   position: relative;
   flex-shrink: 0;
@@ -15302,6 +15305,7 @@ a.task-kebab-info:hover {
   flex-direction: column;
   gap: 6px;
   background: var(--bg-secondary, transparent);
+  container: sps-footer / inline-size;
 }
 /* Edit mode only tightens padding; both modes share the same control layout. */
 .sps-meta-footer.compact {
