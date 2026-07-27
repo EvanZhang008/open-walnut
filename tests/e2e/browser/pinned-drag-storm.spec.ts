@@ -14,6 +14,7 @@
  * task store, including cross-tier hovers.
  */
 import { test, expect, type Page } from '@playwright/test'
+import { showAllSections } from './todo-panel-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
@@ -106,6 +107,11 @@ test('pinned drag survives task-churn storm on a non-All tab (no React #185)', a
 
   await page.goto('/')
   await page.waitForLoadState('networkidle')
+
+  // This spec drags ACROSS tiers (focus → satellite → wait), so all three must be
+  // mounted at once — that's the "All" SECTION tab. A single-tier tab renders one
+  // tier only, and there'd be no cross-tier target to drop on.
+  await showAllSections(page)
 
   // Crash precondition: a NON-All category tab (cross-category focus view keeps
   // the pinned cards visible there).

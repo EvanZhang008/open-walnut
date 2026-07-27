@@ -12,18 +12,18 @@
  *  - Session: pw-model-switch-session (seeded as running, reconciled to stopped)
  */
 import { test, expect } from '@playwright/test'
+import { presetPanelView } from './todo-panel-helpers'
 
 /**
  * Opens the SessionPanel for the model-switch test task.
  *
  * Flow: home page → find the task row → plain click (a task with a session
- * opens the SessionPanel inline; category tabs moved into the View dropdown,
- * so the active-tab localStorage key is preset to '' = All).
+ * opens the SessionPanel inline). Both panel axes are preset via localStorage:
+ * the SECTION tab to 'all' (the panel defaults to Focus, which doesn't mount the
+ * main task list) and the CATEGORY to '' = All (default is ★ Starred).
  */
 async function openSessionPanel(page: import('@playwright/test').Page) {
-  await page.addInitScript(() => {
-    try { localStorage.setItem('walnut-todo-active-tab', '') } catch { /* ignore */ }
-  })
+  await presetPanelView(page)
   await page.goto('/')
   await page.waitForLoadState('networkidle')
 

@@ -17,6 +17,7 @@
  * Test server is started by playwright.config.ts webServer.
  */
 import { test, expect } from '@playwright/test'
+import { presetPanelView } from './todo-panel-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
@@ -86,6 +87,10 @@ test('session panel renders for a task with session', async ({ page }) => {
 // ═══════════════════════════════════════════════════════════════════
 
 test('session chat history shows messages after opening session', async ({ page }) => {
+  // Without this the row isn't in the DOM at all (panel defaults to the Focus
+  // section + ★ category), and the `isVisible()` guard below would silently skip
+  // every assertion in this test rather than fail.
+  await presetPanelView(page)
   await page.goto('/')
   await page.waitForLoadState('networkidle')
 

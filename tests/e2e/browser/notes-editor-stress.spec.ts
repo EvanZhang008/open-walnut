@@ -11,6 +11,7 @@
  * - Save race conditions (focus/blur cycle)
  */
 import { test, expect, type Page } from '@playwright/test'
+import { selectSection } from './todo-panel-helpers'
 
 const API = 'http://localhost:3457'
 
@@ -21,16 +22,15 @@ async function openNotesEditor(page: Page) {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
 
-  // Expand notes section if collapsed (click the header)
+  // The todo panel's section tabs mean Notes isn't mounted unless it's the active
+  // section (the panel defaults to Focus). Pick the Notes tab — in that view Notes
+  // owns the whole panel and is always expanded, so no chevron click is needed.
+  await selectSection(page, 'Notes')
+
   const header = page.locator('.global-notes-header')
   await expect(header).toBeVisible({ timeout: 5000 })
-
-  // Check if notes body is visible — if not, click header to expand
   const body = page.locator('.global-notes-body')
-  if (!(await body.isVisible())) {
-    await header.click()
-    await expect(body).toBeVisible({ timeout: 3000 })
-  }
+  await expect(body).toBeVisible({ timeout: 5000 })
 
   // Wait for tiptap editor to be ready
   const editor = page.locator('.notes-editor .tiptap')
@@ -225,7 +225,15 @@ test.describe('Notes Editor Stress Tests', () => {
     const editorVisible = await editor.isVisible()
     expect(editorVisible).toBe(true)
 
-    expect(errors.filter(e => !e.includes('favicon'))).toHaveLength(0)
+    // A 409 here is the DESIGNED outcome, not a defect: this test deliberately
+    // races a user edit against an external write, and `useGlobalNotes` resolves
+    // that by letting the external write win and reloading (see its 409 branch).
+    // Asserting zero errors contradicted the very behavior being exercised — only
+    // genuinely unexpected errors should fail this.
+    const unexpected = errors
+      .filter(e => !e.includes('favicon'))
+      .filter(e => !/\b409\b|modified externally/i.test(e))
+    expect(unexpected).toHaveLength(0)
   })
 
   test('toggle storm — click 10 checkboxes rapidly', async ({ page }) => {

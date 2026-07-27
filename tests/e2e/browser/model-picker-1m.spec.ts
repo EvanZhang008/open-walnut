@@ -20,6 +20,7 @@
  */
 import { test, expect } from '@playwright/test'
 import path from 'node:path'
+import { presetPanelView } from './todo-panel-helpers'
 
 const SCREENSHOT_DIR = '/tmp/test-and-verify'
 const SESSION_ID = 'pw-model-switch-session'
@@ -48,11 +49,10 @@ const CLI_CATALOG = {
 }
 
 async function openSessionPanel(page: import('@playwright/test').Page) {
-  // Category tabs moved into the View dropdown; the persisted tab defaults to ★
-  // (starred), which hides the seeded task. Preset it to '' (All) up front.
-  await page.addInitScript(() => {
-    try { localStorage.setItem('walnut-todo-active-tab', '') } catch { /* ignore */ }
-  })
+  // Two panel axes both hide the seeded task by default: the SECTION tab (Focus,
+  // which doesn't mount the main task list) and the CATEGORY (★ starred, now in
+  // the View dropdown). Preset both to "All" before the first render.
+  await presetPanelView(page)
   await page.goto('/')
   await page.waitForLoadState('networkidle')
 

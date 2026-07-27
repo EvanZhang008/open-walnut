@@ -12,21 +12,18 @@
  *   npx playwright test          (runs these tests)
  */
 import { test, expect, type Page } from '@playwright/test'
+import { selectCategory, showEverything } from './todo-panel-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
-async function selectCategory(page: Page, category: string): Promise<void> {
-  if (!await page.locator('.vd-panel').isVisible()) {
-    await page.getByRole('button', { name: 'View options' }).click()
-  }
-  await page.locator('.vd-cat').filter({
-    has: page.locator('.vd-cat-name').filter({ hasText: new RegExp(`^${category}$`) }),
-  }).click()
-  await page.keyboard.press('Escape')
-}
-
+/**
+ * Make every task visible: the "All" CATEGORY (so no category scoping) plus the
+ * "All" SECTION tab (so the main task list and the pinned tiers are all mounted).
+ * These are two independent axes — the panel defaults to the Focus section tab, in
+ * which `.todo-panel-item` rows don't exist at all.
+ */
 async function showAllTasks(page: Page): Promise<void> {
-  await selectCategory(page, 'All')
+  await showEverything(page)
 }
 
 // Helper: create task via REST API with unique suffix for parallel safety

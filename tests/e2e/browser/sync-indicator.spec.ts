@@ -12,6 +12,7 @@
  * - pw-task-001: source=ms-todo, no ms_todo_id
  */
 import { test, expect } from '@playwright/test'
+import { showEverything } from './todo-panel-helpers'
 
 // ── TaskCard sync indicators (dashboard / task list views) ──
 
@@ -66,11 +67,9 @@ test.describe('TodoPanel source badge', () => {
   async function showAllTasks(page: import('@playwright/test').Page) {
     await page.goto('/')
     await page.waitForLoadState('networkidle')
-    await page.getByRole('button', { name: 'View options' }).click()
-    await page.locator('.vd-cat').filter({
-      has: page.locator('.vd-cat-name').filter({ hasText: /^All$/ }),
-    }).click()
-    await page.keyboard.press('Escape')
+    // Both axes: the SECTION tab defaults to Focus (where `.todo-panel-item` rows
+    // aren't mounted at all) and the CATEGORY defaults to ★ Starred.
+    await showEverything(page)
   }
 
   async function openSourceRow(

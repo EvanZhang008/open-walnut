@@ -14,6 +14,7 @@
  * - pw-task-ms-synced:        source=ms-todo, ext.ms-todo set (synced), category=Personal
  */
 import { test, expect } from '@playwright/test'
+import { showEverything } from './todo-panel-helpers'
 
 const API = 'http://localhost:3457'
 
@@ -22,7 +23,9 @@ const API = 'http://localhost:3457'
 async function showAllTasksInTodoPanel(page: import('@playwright/test').Page) {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
-  await page.locator('.todo-panel-tab', { hasText: 'All' }).click()
+  // Both axes: the SECTION tab defaults to Focus (main list not mounted) and the
+  // CATEGORY defaults to ★ Starred. Categories live in the View dropdown now.
+  await showEverything(page)
   await page.waitForTimeout(300)
 }
 

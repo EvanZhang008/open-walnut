@@ -16,6 +16,7 @@
  *    the mode prop entirely, always showing "exec".
  */
 import { test, expect } from '@playwright/test'
+import { showEverything } from './todo-panel-helpers'
 
 // Session ID used in test-server seed data (the bypass session linked to pw-task-001)
 const BYPASS_SESSION_ID = 'pw-mode-test-session'
@@ -77,10 +78,10 @@ test.describe('SessionPill real-time mode change', () => {
       return ws && ws.readyState === WebSocket.OPEN
     }, null, { timeout: 5000 })
 
-    // Click "All" category tab to show all tasks (default is starred tab)
-    const allTab = page.locator('.todo-panel-tab', { hasText: 'All' })
-    await expect(allTab).toBeVisible({ timeout: 5000 })
-    await allTab.click()
+    // Both panel axes to "All": the SECTION tab (default Focus doesn't mount the
+    // main task list) and the CATEGORY (default ★ Starred hides these tasks; it
+    // lives in the View dropdown now, not the removed `.todo-panel-tab` strip).
+    await showEverything(page)
     await page.waitForTimeout(300)
 
     // Find the SessionPill for pw-task-001 — it should show "session" (bypass mode)
@@ -123,10 +124,10 @@ test.describe('SessionPill real-time mode change', () => {
       return ws && ws.readyState === WebSocket.OPEN
     }, null, { timeout: 5000 })
 
-    // Click "All" category tab to show all tasks (default is starred tab)
-    const allTab = page.locator('.todo-panel-tab', { hasText: 'All' })
-    await expect(allTab).toBeVisible({ timeout: 5000 })
-    await allTab.click()
+    // Both panel axes to "All": the SECTION tab (default Focus doesn't mount the
+    // main task list) and the CATEGORY (default ★ Starred hides these tasks; it
+    // lives in the View dropdown now, not the removed `.todo-panel-tab` strip).
+    await showEverything(page)
     await page.waitForTimeout(300)
 
     const taskItem = page.locator('.todo-panel-item', { hasText: 'Playwright test task' })
