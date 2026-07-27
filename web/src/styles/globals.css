@@ -9718,17 +9718,19 @@ img[data-lightbox-src],
 .task-selection-count {
   color: var(--fg-muted);
   font-weight: 500;
+  white-space: nowrap;
 }
 .task-selection-group-btn {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 4px 12px;
+  gap: 4px;
+  padding: 4px 9px;
   border: none;
   border-radius: 7px;
   background: var(--accent);
   color: #fff;
   font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
 }
 .task-selection-group-btn:disabled {
@@ -9740,13 +9742,16 @@ img[data-lightbox-src],
 .task-selection-action-btn {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 4px 10px;
+  gap: 4px;
+  /* Tight horizontal padding: 5 verbs share a ~300px panel, and every px saved here is
+     a px that keeps the row from wrapping onto a third line. */
+  padding: 4px 8px;
   border: 1px solid var(--border, rgba(0, 0, 0, 0.14));
   border-radius: 7px;
   background: transparent;
   color: var(--fg);
   font-weight: 500;
+  white-space: nowrap;
   cursor: pointer;
 }
 .task-selection-action-btn:hover { background: rgba(0, 0, 0, 0.05); }
@@ -9765,27 +9770,25 @@ img[data-lightbox-src],
   background: rgba(0, 0, 0, 0.06);
 }
 
-/* Group split-button: [⑂ Group | ▾] — caret opens a side dropdown of batch actions. */
-.task-batch-menu { position: relative; }
-.task-batch-split { display: inline-flex; align-items: stretch; }
-.task-batch-split .task-batch-group {
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
+/* Batch verbs live directly on the bar: [✓ Complete] [⑂ Group] [🗑 Delete] [More ▾].
+   This replaced a [⑂ Group | ▾] split button whose caret half was only ~7px of accent
+   blue — it read as a stray dot, so Complete/Delete (hidden behind it) were invisible. */
+/* `display: contents` — the wrapper contributes NO box, so its 4 buttons become direct
+   flex items of .task-selection-bar and wrap together with the count and Cancel. As a
+   nested inline-flex it wrapped independently, which stacked the bar into 4 near-empty
+   rows. Safe here because the dropdown is position:fixed (it never needed a relative
+   ancestor) and the outside-click check walks the DOM tree, not the layout boxes. */
+.task-batch-menu { display: contents; }
+/* Icons inside bar buttons: the shared ICON_* svgs are 14px, which crowds a 4px-tall
+   button row — scale them down and align to the text baseline box. */
+.task-selection-action-icon {
+  display: inline-flex;
+  align-items: center;
 }
-.task-batch-caret {
-  display: inline-flex; align-items: center; justify-content: center;
-  padding: 0 7px;
-  border: none;
-  border-left: 1px solid rgba(255, 255, 255, 0.25);
-  border-top-right-radius: 7px;
-  border-bottom-right-radius: 7px;
-  background: var(--accent);
-  color: #fff;
-  font-size: 10px;
-  cursor: pointer;
-}
-.task-batch-caret:disabled { opacity: 0.45; cursor: not-allowed; }
-.task-batch-caret:hover:not(:disabled) { filter: brightness(1.08); }
+.task-selection-action-icon svg { width: 12px; height: 12px; }
+.task-batch-more { gap: 3px; }
+.task-batch-more-caret { font-size: 9px; opacity: 0.7; }
+.task-selection-action-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 /* Dropdown opens ABOVE the bar. Positioned via inline position:fixed coords (computed
    from the caret in TaskBatchMenu) so it escapes the .todo-panel-list overflow:auto clip
    box — a plain position:absolute child of the sticky bar gets cut off in a short panel.

@@ -62,9 +62,14 @@ async function selectRows(page: Page, titles: string[]) {
   await expect(page.locator('.task-selection-count')).toHaveText(`${titles.length} selected`)
 }
 
-/** Open the selection bar's batch dropdown (the ▾ half of the Group split button). */
-async function openBatchMenu(page: Page) {
-  await page.locator('.task-batch-caret').click()
+/** A verb button ON the selection bar (Complete / Reopen / Group / Delete / More). */
+function barBtn(page: Page, name: RegExp) {
+  return page.locator('.task-selection-bar').getByRole('button', { name })
+}
+
+/** Open the overflow menu (secondary attribute setters only — pin / priority / date). */
+async function openMoreMenu(page: Page) {
+  await barBtn(page, /^More/).click()
   await expect(page.locator('.task-batch-dropdown')).toBeVisible()
 }
 
@@ -78,18 +83,31 @@ async function setup(page: Page, titles: string[]) {
   return tasks
 }
 
-test('batch dropdown offers Complete and Delete for a multi-selection', async ({ page }) => {
+test('selection bar shows Complete and Delete directly — not behind a caret', async ({ page }) => {
   const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
   const titles = [`Batch menu A ${stamp}`, `Batch menu B ${stamp}`]
   await setup(page, titles)
 
   await selectRows(page, titles)
-  await openBatchMenu(page)
 
-  // The two verbs that were entirely missing before this fix.
+  // The two verbs that were entirely missing before this fix, and which then spent a
+  // round hidden behind a ~7px split-button caret that rendered as a bare dot. They
+  // must be visible on the bar itself with no extra click.
+  await expect(barBtn(page, /^Complete/)).toBeVisible()
+  await expect(barBtn(page, /^Delete/)).toBeVisible()
+  await expect(barBtn(page, /Group/)).toBeVisible()
+
+  // The overflow button carries a text label (not just a caret glyph) so it reads as
+  // "opens a menu", and it holds only the secondary attribute setters.
+  const more = barBtn(page, /^More/)
+  await expect(more).toBeVisible()
+  await expect(more).toContainText('More')
+  await expect(page.locator('.task-batch-dropdown')).toHaveCount(0)
+  await openMoreMenu(page)
   const menu = page.locator('.task-batch-dropdown')
-  await expect(menu.getByText(/^Complete/)).toBeVisible()
-  await expect(menu.getByText(/^Delete/)).toBeVisible()
+  await expect(menu).toContainText('Priority')
+  await expect(menu.getByRole('button', { name: /^Complete/ })).toHaveCount(0)
+  await expect(menu.getByRole('button', { name: /^Delete/ })).toHaveCount(0)
 })
 
 test('multi-select completes every selected task', async ({ page }) => {
@@ -98,8 +116,7 @@ test('multi-select completes every selected task', async ({ page }) => {
   const tasks = await setup(page, titles)
 
   await selectRows(page, titles)
-  await openBatchMenu(page)
-  await page.locator('.task-batch-dropdown').getByText(/^Complete/).click()
+  await barBtn(page, /^Complete/).click()
 
   // Selection bar closes — the action was the user's intent, so select mode exits.
   await expect(page.locator('.task-selection-bar')).toBeHidden({ timeout: 10_000 })
@@ -117,8 +134,7 @@ test('multi-select deletes every selected task after confirming', async ({ page 
   const tasks = await setup(page, titles)
 
   await selectRows(page, titles)
-  await openBatchMenu(page)
-  await page.locator('.task-batch-dropdown').getByText(/^Delete/).click()
+  await barBtn(page, /^Delete/).click()
 
   // Destructive → the app's own confirm dialog (never window.confirm).
   const dialog = page.locator('.app-modal-overlay[role="dialog"]').first()
@@ -146,8 +162,7 @@ test('cancelling the delete confirm keeps every task', async ({ page }) => {
   const tasks = await setup(page, titles)
 
   await selectRows(page, titles)
-  await openBatchMenu(page)
-  await page.locator('.task-batch-dropdown').getByText(/^Delete/).click()
+  await barBtn(page, /^Delete/).click()
 
   const dialog = page.locator('.app-modal-overlay[role="dialog"]').first()
   await expect(dialog).toBeVisible({ timeout: 10_000 })
@@ -166,23 +181,20 @@ test('a done selection offers Reopen instead of Complete', async ({ page }) => {
 
   // Complete them through the UI first.
   await selectRows(page, titles)
-  await openBatchMenu(page)
-  await page.locator('.task-batch-dropdown').getByText(/^Complete/).click()
+  await barBtn(page, /^Complete/).click()
   await expect.poll(async () => (await fetchTask(tasks[0].id))?.phase, { timeout: 15_000 }).toBe('COMPLETE')
 
-  // Show done rows, re-select them, and the menu should now offer Reopen.
+  // Show done rows, re-select them, and the bar should now offer Reopen.
   await page.getByRole('button', { name: 'View options' }).click()
   await page.locator('.vd-check input[type="checkbox"]').check()
   await page.keyboard.press('Escape')
   await page.waitForTimeout(500)
 
   await selectRows(page, titles)
-  await openBatchMenu(page)
-  const menu = page.locator('.task-batch-dropdown')
-  await expect(menu.getByText(/^Reopen/)).toBeVisible()
-  await expect(menu.getByText(/^Complete/)).toHaveCount(0)
+  await expect(barBtn(page, /^Reopen/)).toBeVisible()
+  await expect(barBtn(page, /^Complete/)).toHaveCount(0)
 
-  await menu.getByText(/^Reopen/).click()
+  await barBtn(page, /^Reopen/).click()
   await expect.poll(async () => {
     const phases = await Promise.all(tasks.map(async (t) => (await fetchTask(t.id))?.phase))
     return phases.join(',')

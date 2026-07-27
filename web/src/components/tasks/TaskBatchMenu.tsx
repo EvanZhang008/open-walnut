@@ -75,9 +75,20 @@ export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPi
       if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    // A scroll/resize moves the caret out from under the fixed menu — close rather than
-    // leave it stranded (same trade-off the kebab makes).
-    const onScrollOrResize = () => setOpen(false);
+    // A scroll/resize moves the button out from under the position:fixed menu, so the
+    // menu has to react. It must NOT blanket-close though: clicking the button itself
+    // scrolls it into view (a scroll on .todo-panel fires in the SAME tick as the
+    // opening click), which made a plain `setOpen(false)` here close the menu
+    // instantly — it never appeared at all. Instead REPOSITION to follow the button,
+    // and only close once the button has actually left the viewport.
+    const onScrollOrResize = () => {
+      const btn = caretRef.current;
+      if (!btn) return;
+      const r = btn.getBoundingClientRect();
+      const offscreen = r.bottom < 0 || r.top > window.innerHeight;
+      if (offscreen) { setOpen(false); return; }
+      setMenuPos({ bottom: window.innerHeight - r.top + 6, right: window.innerWidth - r.right });
+    };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
     window.addEventListener('scroll', onScrollOrResize, true);
@@ -92,27 +103,64 @@ export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPi
 
   return (
     <div className="task-batch-menu" ref={wrapRef}>
-      <div className="task-batch-split">
+      {/* The three primary verbs sit ON the bar, not behind a caret. They used to
+          live inside the dropdown behind a split-button's right half, which can only
+          ever be a few px wide — it rendered as a bare dot with no affordance, so the
+          most common batch actions were effectively invisible. Complete/Reopen and
+          Delete are one click now; only the secondary attribute setters (pin tier /
+          priority / date) stay in the overflow menu. */}
+      {doneCount < count && (
         <button
-          className="task-selection-group-btn task-batch-group"
-          disabled={!canGroup}
-          title={count < 2 ? 'Select at least 2 tasks' : 'Group these tasks together'}
-          onClick={onGroup}
+          className="task-selection-action-btn"
+          title="Mark the selected tasks complete"
+          onClick={onCompleteAll}
         >
-          ⑂ Group
+          <span className="task-selection-action-icon">{ICONS.ICON_PHASE_COMPLETE}</span>
+          Complete
         </button>
+      )}
+      {doneCount > 0 && (
         <button
-          ref={caretRef}
-          className="task-batch-caret"
-          disabled={count < 1}
-          title="Batch actions for the selected tasks"
-          aria-haspopup="menu"
-          aria-expanded={open}
-          onClick={toggle}
+          className="task-selection-action-btn"
+          title="Reopen the selected tasks"
+          onClick={onReopenAll}
         >
-          {'▾'}
+          <span className="task-selection-action-icon">{ICONS.ICON_PHASE_TODO}</span>
+          Reopen
         </button>
-      </div>
+      )}
+
+      <button
+        className="task-selection-group-btn"
+        disabled={!canGroup}
+        title={count < 2 ? 'Select at least 2 tasks' : 'Group these tasks together'}
+        onClick={onGroup}
+      >
+        ⑂ Group
+      </button>
+
+      <button
+        className="task-selection-action-btn task-selection-action-danger"
+        title="Delete the selected tasks"
+        onClick={onDeleteAll}
+      >
+        <span className="task-selection-action-icon">{ICONS.ICON_TRASH}</span>
+        Delete
+      </button>
+
+      {/* Overflow — a labelled button, not a bare caret, so it reads as "opens a menu". */}
+      <button
+        ref={caretRef}
+        className="task-selection-action-btn task-batch-more"
+        disabled={count < 1}
+        title="More batch actions (pin tier, priority, date)"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={toggle}
+      >
+        More
+        <span className="task-batch-more-caret" aria-hidden="true">▾</span>
+      </button>
 
       {open && (
         <div
@@ -125,30 +173,6 @@ export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPi
             {count} task{count === 1 ? '' : 's'} selected
           </div>
 
-          {/* Complete / Reopen — the two lifecycle actions. These lead the menu
-              because "finish these N tasks" is the most common batch intent (the
-              per-row ○/✓ toggle is the single-task equivalent). Complete is hidden
-              when the whole selection is already done; Reopen only appears when the
-              selection actually contains done tasks. */}
-          {doneCount < count && (
-            <button
-              className="task-kebab-item"
-              onClick={(e) => { e.stopPropagation(); onCompleteAll(); close(); }}
-            >
-              <span className="task-kebab-icon">{ICONS.ICON_PHASE_COMPLETE}</span>
-              <span>Complete {count - doneCount === count ? 'all' : `${count - doneCount}`}</span>
-            </button>
-          )}
-          {doneCount > 0 && (
-            <button
-              className="task-kebab-item"
-              onClick={(e) => { e.stopPropagation(); onReopenAll(); close(); }}
-            >
-              <span className="task-kebab-icon">{ICONS.ICON_PHASE_TODO}</span>
-              <span>Reopen {doneCount === count ? 'all' : `${doneCount}`}</span>
-            </button>
-          )}
-
           {/* Same rows as the per-task kebab — applied to every selected task. */}
           <TaskActionMenuItems
             task={null}
@@ -160,16 +184,6 @@ export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPi
             onSetDate={(d) => onSetDateAll(d)}
             afterAction={close}
           />
-
-          {/* Delete — last, and destructive. The handler confirms before firing. */}
-          <div className="task-kebab-divider" />
-          <button
-            className="task-kebab-item task-kebab-item-danger"
-            onClick={(e) => { e.stopPropagation(); close(); onDeleteAll(); }}
-          >
-            <span className="task-kebab-icon">{ICONS.ICON_TRASH}</span>
-            <span>Delete {count === 1 ? 'task' : `${count} tasks`}</span>
-          </button>
         </div>
       )}
     </div>
