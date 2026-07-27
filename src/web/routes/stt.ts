@@ -7,7 +7,7 @@ import { unlink, stat, readFile, appendFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { getConfig, updateConfig } from '../../core/config-manager.js';
-import { transcribeAudio, createEngine, getOrCreateEngine, type SttResult } from '../../core/stt/index.js';
+import { transcribeAudio, createEngine, getOrCreateEngine, type SttEngine, type SttResult } from '../../core/stt/index.js';
 import { saveRecordingAudio, writeRecordingResult, listRecordings, readRecordingAudio } from '../../core/stt/recordings.js';
 import { createWhisperCppEngine } from '../../core/stt/engine-whisper-cpp.js';
 import { detectSystem } from '../../core/stt/detect.js';
@@ -222,16 +222,75 @@ sttRouter.post('/vocab', express.json(), async (req: Request, res: Response, nex
 });
 
 /**
+ * Self-heal a missing `stt:` section when the machine plainly HAS a working
+ * local engine.
+ *
+ * Voice input is the one setting whose loss is invisible: the mic just goes
+ * grey and says "not configured", which reads as "this box was never set up".
+ * When config.yaml is rebuilt without `stt:` (a git-sync merge deleted the
+ * file, 2026-07-25) the engine is gone but whisper-cli/whisper-server and the
+ * downloaded models are all still on disk — so the config is recoverable from
+ * the filesystem alone. Detection is exactly what the Settings "auto-configure"
+ * button already does; doing it automatically turns a dead mic into a hiccup.
+ *
+ * Only ever WRITES when no engine is configured at all, so it can never
+ * override a deliberate choice (including `openai` or a hand-picked model).
+ * Returns the healed engine, or null when nothing local was found.
+ */
+async function tryAutoHealSttConfig(): Promise<SttEngine | null> {
+  const detection = await detectSystem();
+  const rec = detection.recommendation;
+  // Only local engines are self-healable — `openai` needs a key we can't invent.
+  if (!rec || rec.engine !== 'whisper-cpp' || rec.missingSteps.length > 0) return null;
+
+  const modelPath = rec.modelPath ?? detection.models[0]?.path;
+  if (!modelPath) return null;
+
+  // Prefer whisper-server when its binary exists: it keeps the model resident,
+  // which is what makes repeat dictation fast. Falls back to one-shot CLI.
+  const useServer = detection.whisperServer.found;
+  const existing = await getConfig();
+  const healed = useServer
+    ? {
+        engine: 'whisper-server' as const,
+        whisper_server_path: detection.whisperServer.path ?? 'whisper-server',
+        whisper_server_model: modelPath,
+        whisper_server_vad_model: detection.vadModel?.path,
+        whisper_cpp_path: detection.whisperCli.path ?? 'whisper-cli',
+        whisper_cpp_model: modelPath,
+        whisper_cpp_vad_model: detection.vadModel?.path,
+      }
+    : {
+        engine: 'whisper-cpp' as const,
+        whisper_cpp_path: detection.whisperCli.path ?? 'whisper-cli',
+        whisper_cpp_model: modelPath,
+        whisper_cpp_vad_model: detection.vadModel?.path,
+      };
+
+  await updateConfig({ stt: { ...existing.stt, ...healed } });
+  log.stt.warn('STT config was missing — auto-healed from detected local engine', {
+    engine: healed.engine,
+    model: modelPath,
+  });
+  return getOrCreateEngine(await getConfig());
+}
+
+/**
  * GET /api/stt/status
  * Response: { engine: string | null, available: boolean, error?: string }
  */
 sttRouter.get('/status', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const config = await getConfig();
-    const engine = getOrCreateEngine(config);
+    let engine = getOrCreateEngine(config);
     if (!engine) {
-      res.json({ engine: null, available: false, error: 'No STT engine configured' });
-      return;
+      // Nothing configured — but this box may already have whisper installed
+      // (e.g. the config was lost). Recover instead of greying out the mic.
+      engine = await tryAutoHealSttConfig().catch(() => null);
+      if (!engine) {
+        res.json({ engine: null, available: false, error: 'No STT engine configured' });
+        return;
+      }
     }
     const status = await engine.isAvailable();
     res.json({ engine: engine.name, ...status });
