@@ -11,12 +11,15 @@ import {
   type ImageAttachment,
 } from '@/api/chat';
 import type { StreamingBlock } from './useSessionStream';
+import { mergeAdjacentErrors, type WithErrorCount } from './mergeAdjacentErrors';
 import { useNotifications } from '@/contexts/notifications';
 
 const PAGE_SIZE = 100;
 
 // Re-export block types for components that import from this file
 export type { ThinkingBlock, ToolCallBlock, TextBlock, ImageBlock, MessageBlock, ImageAttachment };
+// Re-exported so chat pages get the merge helper from the same module as ChatMessage.
+export { mergeAdjacentErrors };
 
 let messageKeyCounter = 0;
 function nextMessageKey(): string {
@@ -278,6 +281,9 @@ interface ToolActivity {
   name: string;
   status: 'running' | 'done';
 }
+
+/** Error entries carry a repeat count once merged, so the row can read "×6". */
+export type MergedErrorMessage = WithErrorCount<ChatMessage>;
 
 export const MAX_QUEUE_SIZE = 10;
 interface UseChatReturn {

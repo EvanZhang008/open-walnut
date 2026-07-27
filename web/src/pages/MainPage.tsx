@@ -3,7 +3,7 @@ import type { NavigateFunction } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
 import { SESSION_MODELS } from '@open-walnut/core';
 import { getHostCatalog } from '@/hooks/useModelCatalog';
-import { useChat, type TaskContext, type ImageAttachment } from '@/hooks/useChat';
+import { useChat, mergeAdjacentErrors, type TaskContext, type ImageAttachment } from '@/hooks/useChat';
 import { useAgentConsole } from '@/hooks/useAgentConsole';
 import { useConversations } from '@/hooks/useConversations';
 import { usePlanMode } from '@/hooks/usePlanMode';
@@ -1613,13 +1613,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                 }</p>
               </div>
             )}
-            {chat.messages
-              .filter((msg) => !shouldHideUiOnlyMessage(msg.source, msg.notification))
+            {mergeAdjacentErrors(chat.messages
+              .filter((msg) => !shouldHideUiOnlyMessage(msg.source, msg.notification)))
               .map((msg) => (
               <ChatMessage
                 key={msg.key}
                 role={msg.role}
                 content={msg.content}
+                errorCount={msg.errorCount}
                 blocks={'blocks' in msg ? msg.blocks : undefined}
                 images={'images' in msg ? msg.images : undefined}
                 taskContext={'taskContext' in msg ? msg.taskContext : undefined}

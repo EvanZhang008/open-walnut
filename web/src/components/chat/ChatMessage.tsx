@@ -33,6 +33,8 @@ interface ChatMessageProps {
   source?: 'cron' | 'triage' | 'session' | 'session-error' | 'agent-error' | 'subagent' | 'compaction' | 'compacting' | 'heartbeat' | 'quick-start' | 'quick-start-echo';
   cronJobName?: string;
   notification?: boolean;
+  /** How many adjacent error entries this row represents (see mergeAdjacentErrors). */
+  errorCount?: number;
   queued?: boolean;
   onCancel?: () => void;
   taskLookup?: Map<string, Task>;
@@ -1021,7 +1023,7 @@ function MemoizedTextBlock({ content, onClick }: { content: string; onClick: (e:
   );
 }
 
-function ChatMessageInner({ role, content, blocks, images, taskContext, routeInfo, timestamp, source, cronJobName, notification, queued, onCancel, taskLookup, onTaskClick, onSessionClick }: ChatMessageProps) {
+function ChatMessageInner({ role, content, blocks, images, taskContext, routeInfo, timestamp, source, cronJobName, notification, errorCount, queued, onCancel, taskLookup, onTaskClick, onSessionClick }: ChatMessageProps) {
   const { lightboxSrc, openLightbox, closeLightbox } = useLightbox();
 
   // File path click → open the shared FileViewer overlay. Self-contained so every
@@ -1184,7 +1186,9 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
         : isSubagent
           ? 'Subagent'
           : isNotification
-            ? (isErrorNotification ? 'Error' : 'Session')
+            ? (isErrorNotification
+                ? ((errorCount ?? 1) > 1 ? `${errorCount} errors` : 'Error')
+                : 'Session')
             : role === 'user' ? 'You' : 'Walnut';
 
   // Auto-collapse notification messages (session results, subagent) AND all triage messages.
@@ -1495,6 +1499,7 @@ function arePropsEqual(prev: ChatMessageProps, next: ChatMessageProps): boolean 
     prev.source === next.source &&
     prev.cronJobName === next.cronJobName &&
     prev.notification === next.notification &&
+    prev.errorCount === next.errorCount &&
     prev.queued === next.queued &&
     prev.onCancel === next.onCancel &&
     prev.taskLookup === next.taskLookup &&

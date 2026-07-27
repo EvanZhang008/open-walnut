@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useChat } from '@/hooks/useChat';
+import { useChat, mergeAdjacentErrors } from '@/hooks/useChat';
 import { usePlanMode } from '@/hooks/usePlanMode';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { ChatPanel } from '@/components/chat/ChatPanel';
@@ -73,13 +73,14 @@ export function ChatPage() {
             <p>Start a conversation with Walnut. Ask about your tasks, get help with planning, or just chat.</p>
           </div>
         )}
-        {messages
-          .filter((msg) => !shouldHideUiOnlyMessage(msg.source, msg.notification))
+        {mergeAdjacentErrors(messages
+          .filter((msg) => !shouldHideUiOnlyMessage(msg.source, msg.notification)))
           .map((msg) => (
           <ChatMessage
                 key={msg.key}
                 role={msg.role}
                 content={msg.content}
+                errorCount={msg.errorCount}
                 blocks={msg.blocks}
                 timestamp={msg.timestamp}
                 source={msg.source}
