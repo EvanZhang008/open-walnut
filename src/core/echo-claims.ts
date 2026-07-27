@@ -143,6 +143,27 @@ export function bindEchoClaims(sessionId: string, messages: EchoBindableMessage[
   }
 }
 
+/**
+ * Revoke the UNBOUND claims of a batch that failed to reach the CLI.
+ *
+ * A failed delivery leaves a claim that will never have an echo — but the user
+ * then hits Retry, which re-sends the SAME text under a NEW qm id. Claims bind in
+ * FIFO order by text match, so the dead claim wins the race for the retry's echo
+ * line: the new bubble never receives its `walnutMessageId` and falls back to text
+ * matching (which for an attachment send can't match either) — the bubble stays
+ * pinned at the bottom of the timeline (inc-1785091339102).
+ *
+ * Only unbound claims are dropped; existing bindings are untouched (they belong to
+ * echoes that already materialized). Safe to call for ids that were never
+ * registered — a failed spawn may precede any claim.
+ */
+export function revokeEchoClaims(sessionId: string, qmIds: string[]): void {
+  const sc = store.get(sessionId);
+  if (!sc || qmIds.length === 0) return;
+  const revoked = new Set(qmIds);
+  sc.claims = sc.claims.filter(c => !c.qmIds.some(id => revoked.has(id)));
+}
+
 /** Drop all state for a session (session removed / tests). */
 export function clearEchoClaims(sessionId: string): void {
   store.delete(sessionId);

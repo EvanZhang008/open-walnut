@@ -14,6 +14,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   registerEchoClaims,
+  revokeEchoClaims,
   bindEchoClaims,
   clearEchoClaims,
   _resetEchoClaimsForTest,
@@ -140,5 +141,61 @@ describe('echo-claims', () => {
     const exact = userMsg('  deploy the fix  ', 'uuid-b', 2000);
     bindEchoClaims(SID, [exact]);
     expect(exact.walnutMessageId).toBe('qm-1');
+  });
+
+  // ── REGRESSION inc-1785091339102: failed batch's claim stole the Retry's echo ──
+  // A failed delivery leaves an unbound claim. The user hits Retry, which re-sends
+  // the SAME text under a NEW qm id. FIFO text-match binding handed the retry's
+  // echo line to the DEAD claim, so the live bubble never got its walnutMessageId
+  // and fell back to text dedup (which an attachment send can't satisfy) — the
+  // bubble stayed pinned at the bottom of the timeline until a refresh.
+  describe('revokeEchoClaims (failed-delivery cleanup)', () => {
+    it('a revoked claim does not steal the retry echo — the retry claim binds', () => {
+      registerEchoClaims(SID, ['qm-failed'], 'run the weekly report');
+      revokeEchoClaims(SID, ['qm-failed']);
+      registerEchoClaims(SID, ['qm-retry'], 'run the weekly report');
+
+      const echo = userMsg('run the weekly report', 'uuid-echo', 1000);
+      bindEchoClaims(SID, [echo]);
+
+      // Without the revoke, 'qm-failed' (registered first) would win FIFO order.
+      expect(echo.walnutMessageId).toBe('qm-retry');
+    });
+
+    it('revokes only the named batch — an unrelated pending claim still binds', () => {
+      registerEchoClaims(SID, ['qm-dead'], 'first message');
+      registerEchoClaims(SID, ['qm-live'], 'second message');
+      revokeEchoClaims(SID, ['qm-dead']);
+
+      const dead = userMsg('first message', 'uuid-1', 1000);
+      const live = userMsg('second message', 'uuid-2', 2000);
+      bindEchoClaims(SID, [dead, live]);
+
+      expect(dead.walnutMessageId).toBeUndefined();
+      expect(live.walnutMessageId).toBe('qm-live');
+    });
+
+    it('is safe for unknown sessions / ids that were never registered', () => {
+      expect(() => revokeEchoClaims('no-such-session', ['qm-x'])).not.toThrow();
+      registerEchoClaims(SID, ['qm-1'], 'hello');
+      revokeEchoClaims(SID, []);
+      revokeEchoClaims(SID, ['qm-never']);
+      const echo = userMsg('hello', 'uuid-a', 1000);
+      bindEchoClaims(SID, [echo]);
+      expect(echo.walnutMessageId).toBe('qm-1'); // untouched
+    });
+
+    it('does not disturb an ALREADY BOUND binding (echo already materialized)', () => {
+      registerEchoClaims(SID, ['qm-1'], 'hello');
+      const echo = userMsg('hello', 'uuid-a', 1000);
+      bindEchoClaims(SID, [echo]);
+      expect(echo.walnutMessageId).toBe('qm-1');
+
+      revokeEchoClaims(SID, ['qm-1']);
+      // Re-parse must still re-stamp from the surviving binding.
+      const reparsed = userMsg('hello', 'uuid-a', 1000);
+      bindEchoClaims(SID, [reparsed]);
+      expect(reparsed.walnutMessageId).toBe('qm-1');
+    });
   });
 });

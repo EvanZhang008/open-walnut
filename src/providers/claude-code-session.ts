@@ -44,7 +44,7 @@ import {
   getAllSessionsWithPending,
 } from '../core/session-message-queue.js'
 import type { QueuedMessage } from '../core/session-message-queue.js'
-import { registerEchoClaims } from '../core/echo-claims.js'
+import { registerEchoClaims, revokeEchoClaims } from '../core/echo-claims.js'
 // Image transfer for remote sessions: RemoteSessionManager.prepareOutbound() uploads
 // local images via daemon and rewrites paths inside start() and writeMessage().
 import type { SshTarget } from './session-io.js'
@@ -7460,6 +7460,10 @@ export class SessionRunner {
   private settleResumeFailure(sessionId: string, msgs: QueuedMessage[], err: Error): void {
     this.clearActiveProcessing(sessionId, { kind: 'error', message: err.message })
     log.session.warn('resume spawn failed — reverting batch to pending', { sessionId, error: err.message })
+    // This batch produced no echo and never will. Drop its claim so a Retry of the
+    // SAME text isn't shadowed by it (FIFO text-match binding would give the dead
+    // claim the retry's echo line — see revokeEchoClaims).
+    revokeEchoClaims(sessionId, msgs.map((m) => m.id))
     revertToPending(msgs).catch(() => {})
     bus.emit(EventNames.SESSION_BATCH_FAILED, {
       sessionId,
@@ -7973,6 +7977,9 @@ export class SessionRunner {
       // CLI, so they must survive (server restart re-picks pending; user can Retry).
       // Then tell the UI to mark these specific messages 'failed' (keep text + Retry)
       // via batch-failed — NOT batch-completed, which would delete the optimistic rows.
+      // Revoke the batch's echo-claim first: it will never bind, and left in place it
+      // would steal a same-text Retry's echo line (see revokeEchoClaims).
+      revokeEchoClaims(sessionId, msgs.map((m) => m.id))
       await revertToPending(msgs).catch(() => {})
 
       bus.emit(EventNames.SESSION_BATCH_FAILED, {
