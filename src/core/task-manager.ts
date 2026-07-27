@@ -151,6 +151,32 @@ async function seedCategoriesFromConfig(): Promise<void> {
     if (typeof cat === 'string' && cat) addIfNew(cat, pluginId as TaskSource);
   }
 
+  // Heal a stale registration that contradicts a local reservation. addIfNew above
+  // only INSERTs missing rows, so a category registered to a sync plugin BEFORE it
+  // became local-reserved (the built-in 'Inbox' is the common case: an old ms-todo
+  // sync registered it, then it became a built-in local category) kept its plugin
+  // source forever. Validation hard-rejects non-local sources for those names, so
+  // the row's source was unusable — and it also made every /api/tasks list and the
+  // UI attribute the category to a sync target it can never push to. Row source is
+  // corrected to 'local'; TASKS keep their own source (existing synced rows stay
+  // synced), which validateCategorySource now tolerates for reserved names.
+  const localReservedNames = ['Local', ...(config.local?.categories ?? [])];
+  const fixSource = db.prepare('UPDATE task_categories SET source = ? WHERE name = ?');
+  let healed = 0;
+  for (const name of localReservedNames) {
+    const key = name.toLowerCase();
+    const registeredName = existing.get(key);
+    if (!registeredName) continue;
+    const row = existingRows.find(r => r.name === registeredName);
+    if (!row || row.source === 'local') continue;
+    fixSource.run('local', registeredName);
+    healed += 1;
+    log.task.warn('healed local-reserved category registration', {
+      category: registeredName, was: row.source, now: 'local',
+    });
+  }
+  if (healed > 0) invalidateTaskStoreCache();
+
   // Task-derived categories: any distinct (category, source) pair on existing
   // tasks that isn't already registered. Matches the legacy V3 migration.
   const taskRows = db
@@ -858,7 +884,8 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       project = project ?? parsed.listName;
     }
 
-    // Auto-determine source: parent → store.categories → existing tasks → input.source → ms-todo
+    // Auto-determine source: parent → local reservation → store.categories →
+    // existing tasks → input.source → registry claim.
     const catLower = category.toLowerCase();
     const storeCatKey = Object.keys(store.categories ?? {}).find(k => k.toLowerCase() === catLower);
     const storeCatSource: TaskSource | undefined = storeCatKey ? store.categories![storeCatKey].source : undefined;
@@ -868,7 +895,19 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       ? store.tasks.find(t => t.category.toLowerCase() === catLower)?.source
       : undefined;
 
+    // config.local.categories is a HARD reservation (validateCategorySource rejects
+    // any non-local source for these names, with no migration path). It therefore has
+    // to win the source *resolution* too, ahead of store.categories and existing
+    // tasks — otherwise a category that is both reserved-local and historically
+    // registered to a sync plugin (e.g. 'Inbox' left as ms-todo by an old sync) is a
+    // permanent deadlock: resolution says ms-todo, validation says local-only, and
+    // EVERY create into the default capture category 409s. That is exactly what broke
+    // "Add to Focus" — the task never existed, so the optimistic card rolled back and
+    // read as "the task I added disappeared".
+    const localReserved = (config.local?.categories ?? []).some(c => c.toLowerCase() === catLower);
+
     const source: TaskSource = parentTask?.source
+      ?? (localReserved ? 'local' : undefined)
       ?? storeCatSource
       ?? existingSource
       ?? input.source
@@ -2246,7 +2285,8 @@ export function validateCategorySource(
   // Check config reservation: config.local.categories are reserved for local tasks only
   const localConfig = cfg.local as { categories?: string[] } | undefined;
   const localCategories = localConfig?.categories;
-  if (localCategories?.some(c => c.toLowerCase() === catLower) && intendedSource !== 'local') {
+  const localReserved = !!localCategories?.some(c => c.toLowerCase() === catLower);
+  if (localReserved && intendedSource !== 'local') {
     return {
       ok: false,
       error: `Category "${category}" is reserved for local tasks (config.local.categories). Only local tasks can use this category. Use a different category name for ${intendedSource} tasks.`,
@@ -2254,6 +2294,13 @@ export function validateCategorySource(
       reason: 'config_local',
     };
   }
+  // A local-reserved category accepts local tasks unconditionally — the checks below
+  // must not veto it. store.categories or a pile of legacy tasks can still say
+  // 'ms-todo' for a name that config reserves as local-only (e.g. 'Inbox' registered
+  // by an old sync, then added to local.categories). Letting a soft conflict win there
+  // deadlocks the category outright: the hard reservation forbids every non-local
+  // source, and the soft conflict forbids local — so nothing can be created.
+  if (localReserved) return { ok: true };
 
   // Check plugin config reservations: plugins.*.category or legacy top-level keys
   const plugins = (cfg.plugins ?? {}) as Record<string, Record<string, unknown>>;

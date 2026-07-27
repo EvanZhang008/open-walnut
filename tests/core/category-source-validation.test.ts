@@ -880,6 +880,125 @@ describe('v3 migration — store.categories populated from config + tasks', () =
     expect(storeCategories['Scratch']).toEqual({ source: 'local' });
   });
 
+  // ── Regression: local-reserved category deadlock ──
+  // A category can be BOTH hard-reserved local (config.local.categories) and
+  // historically registered to a sync plugin in store.categories — 'Inbox' is the
+  // real-world case: an old ms-todo sync registered it before it became a built-in
+  // local category. Source resolution used to read store.categories FIRST (→
+  // ms-todo) and then validation hard-rejected any non-local source for a reserved
+  // name, so EVERY create into the default capture category 409'd forever. That is
+  // what made "Add to Focus" look like the task vanished: the create failed, the
+  // optimistic card rolled back, and nothing was left behind.
+  it('heals a stale plugin registration on a local-reserved category', async () => {
+    await fs.mkdir(path.dirname(CONFIG_FILE), { recursive: true });
+    await fs.writeFile(
+      CONFIG_FILE,
+      JSON.stringify({
+        version: 1,
+        user: { name: 'test' },
+        defaults: { priority: 'none', category: 'Inbox' },
+        provider: { type: 'bedrock' },
+        local: { categories: ['Inbox'] },
+      }),
+    );
+    // Pre-existing store where 'Inbox' is registered to ms-todo (the drifted state).
+    const tasksDir = path.join(WALNUT_HOME, 'tasks');
+    await fs.mkdir(tasksDir, { recursive: true });
+    await fs.writeFile(
+      path.join(tasksDir, 'tasks.json'),
+      JSON.stringify({
+        version: 3,
+        categories: { 'Inbox': { source: 'ms-todo' } },
+        tasks: [{
+          id: 'seed-inbox-1',
+          title: 'Legacy synced inbox task',
+          status: 'todo',
+          phase: 'TODO',
+          priority: 'none',
+          category: 'Inbox',
+          project: 'Inbox',
+          source: 'ms-todo',
+          session_ids: [],
+          description: '',
+          summary: '',
+          note: '',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }],
+      }),
+    );
+
+    // The reservation wins: the registration is corrected to local.
+    const storeCategories = await getStoreCategories();
+    expect(storeCategories['Inbox']).toEqual({ source: 'local' });
+
+    // And the create that used to 409 now succeeds as a local task.
+    const { task } = await addTask({ title: 'Add to Focus quick capture', category: 'Inbox' });
+    expect(task.source).toBe('local');
+    expect(task.category).toBe('Inbox');
+  });
+
+  it('creates into a local-reserved category even when legacy synced tasks live there', async () => {
+    // Same deadlock via the OTHER soft check: no store.categories row at all, but
+    // existing ms-todo tasks in the reserved category. The 'existing_tasks' conflict
+    // must not veto a local create into a hard-reserved name either.
+    await fs.mkdir(path.dirname(CONFIG_FILE), { recursive: true });
+    await fs.writeFile(
+      CONFIG_FILE,
+      JSON.stringify({
+        version: 1,
+        user: { name: 'test' },
+        defaults: { priority: 'none', category: 'Inbox' },
+        provider: { type: 'bedrock' },
+        local: { categories: ['Inbox'] },
+      }),
+    );
+    const tasksDir = path.join(WALNUT_HOME, 'tasks');
+    await fs.mkdir(tasksDir, { recursive: true });
+    await fs.writeFile(
+      path.join(tasksDir, 'tasks.json'),
+      JSON.stringify({
+        tasks: [{
+          id: 'seed-inbox-2',
+          title: 'Legacy synced inbox task',
+          status: 'todo',
+          phase: 'TODO',
+          priority: 'none',
+          category: 'Inbox',
+          project: 'Inbox',
+          source: 'ms-todo',
+          session_ids: [],
+          description: '',
+          summary: '',
+          note: '',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }],
+      }),
+    );
+
+    const { task } = await addTask({ title: 'Fresh local capture', category: 'Inbox' });
+    expect(task.source).toBe('local');
+    // The legacy synced task is left alone — healing is about the REGISTRATION,
+    // not a bulk rewrite of task rows that still have real sync identities.
+    const legacy = await getTask('seed-inbox-2');
+    expect(legacy?.source).toBe('ms-todo');
+  });
+
+  it('still hard-rejects an explicitly non-local source in a local-reserved category', async () => {
+    // The reservation must keep its teeth: tolerating drift for LOCAL creates
+    // must not turn into "anything goes" for a sync-sourced create.
+    const result = validateCategorySource(
+      [],
+      'Inbox',
+      'ms-todo',
+      { local: { categories: ['Inbox'] } },
+      { 'Inbox': { source: 'ms-todo' } },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe('config_local');
+  });
+
   it('does not re-run migration when store.categories already exists', async () => {
     const tasksDir = path.join(WALNUT_HOME, 'tasks');
     await fs.mkdir(tasksDir, { recursive: true });
