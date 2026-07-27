@@ -108,6 +108,32 @@ describe('runCredentialProcess — real command execution', () => {
     expect(creds.expiration).toBe('2099-01-01T00:00:00Z');
   });
 
+  // The AWS-documented credential_process protocol is FLAT (Version + the fields
+  // at the top level) — that's what SSO/ada-style helpers emit. Rejecting it made
+  // the butler fall through to expired ~/.aws creds and 403 for 18h (2026-07-26).
+  it('parses the standard FLAT credential_process payload (Version at top level)', async () => {
+    const json = JSON.stringify({
+      Version: 1,
+      AccessKeyId: 'ASIA_FLAT', SecretAccessKey: 'flatsec', SessionToken: 'flatsess',
+      Expiration: '2099-06-01T00:00:00Z',
+    }).replace(/'/g, "'\\''");
+    const creds = await runCredentialProcess(`printf '%s' '${json}'`);
+    expect(creds.accessKeyId).toBe('ASIA_FLAT');
+    expect(creds.secretAccessKey).toBe('flatsec');
+    expect(creds.sessionToken).toBe('flatsess');
+    expect(creds.expiration).toBe('2099-06-01T00:00:00Z');
+  });
+
+  it('prefers the nested Credentials object when BOTH shapes are present', async () => {
+    const json = JSON.stringify({
+      AccessKeyId: 'ASIA_ROOT', SecretAccessKey: 'rootsec',
+      Credentials: { AccessKeyId: 'ASIA_NESTED', SecretAccessKey: 'nestedsec' },
+    }).replace(/'/g, "'\\''");
+    const creds = await runCredentialProcess(`printf '%s' '${json}'`);
+    expect(creds.accessKeyId).toBe('ASIA_NESTED');
+    expect(creds.secretAccessKey).toBe('nestedsec');
+  });
+
   it('rejects with a clear error when the command fails (SSO expired → honest error, not a hang)', async () => {
     await expect(runCredentialProcess('exit 7')).rejects.toThrow(/awsCredentialExport command failed/);
   });
@@ -116,7 +142,8 @@ describe('runCredentialProcess — real command execution', () => {
     await expect(runCredentialProcess("printf 'not json'")).rejects.toThrow(/did not return valid JSON/);
   });
 
-  it('rejects when the JSON lacks a valid Credentials object', async () => {
-    await expect(runCredentialProcess(`printf '%s' '{"Foo":1}'`)).rejects.toThrow(/valid Credentials object/);
+  it('rejects when neither shape carries credentials, naming the keys it did get', async () => {
+    await expect(runCredentialProcess(`printf '%s' '{"Foo":1}'`))
+      .rejects.toThrow(/did not return AWS credentials.*Got keys: Foo/s);
   });
 });

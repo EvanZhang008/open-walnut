@@ -2,10 +2,16 @@
  * Runner + cache for a `credential_process`-style command (Claude Code's
  * `awsCredentialExport` settings key).
  *
- * The command prints temporary AWS credentials as JSON on stdout:
- *   { "Credentials": { "AccessKeyId", "SecretAccessKey", "SessionToken", "Expiration" } }
- * (the `aws configure export-credentials --format process` shape). ada / SSO
- * cred_process helpers emit the same structure.
+ * The command prints temporary AWS credentials as JSON on stdout, in EITHER of
+ * the two shapes in the wild — we accept both:
+ *   flat   { "Version":1, "AccessKeyId", "SecretAccessKey", "SessionToken", "Expiration" }
+ *          — the AWS-documented `credential_process` protocol; what SSO/ada-style
+ *          helpers and `aws configure export-credentials --format process` emit.
+ *   nested { "Credentials": { "AccessKeyId", … } }
+ *          — the `sts assume-role` / `claude default-credential-export` shape.
+ * Accepting only the nested one silently broke every standards-compliant helper
+ * (2026-07-26: the butler ran 18h on expired ~/.aws creds because its configured
+ * credential_process was rejected as "not a valid Credentials object").
  *
  * Design mirrors the Claude Code fork's `refreshAndGetAwsCredentials`
  * (src/utils/auth.ts): cache the result and re-run the command only when the
@@ -29,14 +35,17 @@ export interface ProcessCredentials {
   expiration?: string;
 }
 
-/** Parsed shape of the command's JSON stdout. */
-interface CredentialProcessOutput {
-  Credentials?: {
-    AccessKeyId?: unknown;
-    SecretAccessKey?: unknown;
-    SessionToken?: unknown;
-    Expiration?: unknown;
-  };
+/** The credential fields, in whichever shape they arrived. */
+interface RawCredentialFields {
+  AccessKeyId?: unknown;
+  SecretAccessKey?: unknown;
+  SessionToken?: unknown;
+  Expiration?: unknown;
+}
+
+/** Parsed shape of the command's JSON stdout — flat or nested under `Credentials`. */
+interface CredentialProcessOutput extends RawCredentialFields {
+  Credentials?: RawCredentialFields;
 }
 
 /** Refresh this many ms BEFORE the reported Expiration so a request never signs
@@ -83,9 +92,15 @@ export function runCredentialProcess(command: string): Promise<ProcessCredential
           reject(new Error('awsCredentialExport did not return valid JSON'));
           return;
         }
-        const c = parsed.Credentials;
-        if (!c || typeof c.AccessKeyId !== 'string' || typeof c.SecretAccessKey !== 'string') {
-          reject(new Error('awsCredentialExport did not return a valid Credentials object'));
+        // Nested shape wins when present; otherwise read the fields off the root
+        // (the standard flat `credential_process` protocol).
+        const c: RawCredentialFields = parsed?.Credentials ?? parsed ?? {};
+        if (typeof c.AccessKeyId !== 'string' || typeof c.SecretAccessKey !== 'string') {
+          reject(new Error(
+            'awsCredentialExport did not return AWS credentials: expected AccessKeyId + '
+            + 'SecretAccessKey either at the top level or under "Credentials". '
+            + `Got keys: ${Object.keys(parsed ?? {}).join(', ') || '(none)'}`,
+          ));
           return;
         }
         resolve({
