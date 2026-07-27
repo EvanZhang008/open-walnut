@@ -75,6 +75,9 @@ playwright-responses/
 tests/MEMORY_V2_*_PLAN.md
 # repo-root scratch dir ONLY — a bare `tools/` would swallow src/agent/tools/ additions
 /tools/
+# one-off Playwright probe scripts dropped at the repo root while debugging a UI
+# behavior — throwaway by nature; a real spec belongs in tests/e2e/browser/
+/.pw-*.mjs
 
 # Local demo assets (4K video, clips, thumbnails, launch kit) — large + local-only, never committed
 demo/
