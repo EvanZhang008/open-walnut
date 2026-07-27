@@ -17508,11 +17508,16 @@ td.usage-share-col {
 }
 
 .sfe-btn {
-  border: none;
-  background: var(--bg-tertiary);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  /* A visible border: on the near-white toolbar, --bg-tertiary alone made these
+     read as blank space — users couldn't find the Refresh button at all. */
+  border: 1px solid var(--border);
+  background: var(--bg);
   color: var(--fg);
   border-radius: var(--radius-sm, 8px);
-  padding: 2px 8px;
+  padding: 3px 8px;
   cursor: pointer;
   font-size: 13px;
   line-height: 1.4;
@@ -17520,6 +17525,21 @@ td.usage-share-col {
 
 .sfe-btn:hover {
   background: var(--bg-hover, var(--bg-tertiary));
+  color: var(--fg);
+}
+
+.sfe-btn:active { transform: scale(0.96); }
+
+.sfe-btn-label {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+/* Spin the glyph while the refetch is in flight so the click has feedback even
+   when the listing comes back instantly. */
+.sfe-refresh-btn.is-refreshing svg {
+  animation: spin 0.7s linear infinite;
 }
 
 .sfe-hidden-toggle {
@@ -17632,6 +17652,23 @@ td.usage-share-col {
 
 .session-file-explorer-preview .file-content-view {
   height: 100%;
+}
+
+/* Transient "Reloading…" chip shown while Refresh re-fetches the open file.
+   Sticky (not absolute) so it stays visible when the preview is scrolled. */
+.fv-reloading-badge {
+  position: sticky;
+  top: 4px;
+  z-index: 6;
+  width: fit-content;
+  margin: 4px 4px 0 auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg));
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  pointer-events: none;
 }
 
 /* Session pill status dots */

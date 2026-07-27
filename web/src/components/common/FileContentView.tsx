@@ -19,6 +19,12 @@ interface FileContentViewProps {
   host?: string;
   /** Hide the "pop out to window" button (e.g. when already rendered inside a pop-out). */
   hidePopout?: boolean;
+  /**
+   * Bump to force a re-fetch of the same path (the explorer's Refresh button).
+   * `key={path}` alone can't do this — the path is unchanged, only the file's
+   * bytes on disk moved.
+   */
+  reloadToken?: number;
 }
 
 /** Build line-numbered HTML from raw file content. Lines get Prism syntax
@@ -65,9 +71,12 @@ function mediaKind(path: string): 'video' | 'audio' | null {
   return null;
 }
 
-export function FileContentView({ path: filePath, line, host, hidePopout }: FileContentViewProps) {
+export function FileContentView({ path: filePath, line, host, hidePopout, reloadToken = 0 }: FileContentViewProps) {
   const [data, setData] = useState<FileContentResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  // Re-fetch of the file already on screen (Refresh): keep the old content
+  // visible instead of flashing to blank, and show a small "Reloading…" badge.
+  const [reloading, setReloading] = useState(false);
   // For HTML/Markdown files, default to the rendered preview; toggle to source on demand.
   const [showSource, setShowSource] = useState(false);
   // Fullscreen the preview (md/html) — CSS-fixed overlay, no remount.
@@ -87,17 +96,30 @@ export function FileContentView({ path: filePath, line, host, hidePopout }: File
 
   const media = mediaKind(filePath);
 
+  // View state (source/preview toggle, fullscreen, speed) belongs to the FILE,
+  // not to a reload — a Refresh must not kick you back out of Preview mode.
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setData(null);
     setShowSource(false);
     setFullscreen(false);
     setPlaybackRate(1);
+  }, [filePath, host]);
+
+  // Distinguishes "first load of this file" (blank → spinner) from "Refresh of
+  // the file already on screen" (keep content, badge it as reloading).
+  const lastTokenRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const isReload = lastTokenRef.current !== null && lastTokenRef.current !== reloadToken;
+    lastTokenRef.current = reloadToken;
+    if (isReload) setReloading(true);
+    else { setLoading(true); setData(null); }
     // Media plays straight from the raw URL — no JSON content fetch (which
     // would whole-file-read a potentially huge binary on the remote side).
-    if (mediaKind(filePath)) { setLoading(false); return; }
-    fetchFileContent(filePath, host)
+    if (mediaKind(filePath)) { setLoading(false); setReloading(false); return; }
+    // A reload must bypass the HTTP cache, else a 200-from-cache hands back the
+    // stale bytes and Refresh looks like a no-op.
+    fetchFileContent(filePath, host, { noCache: isReload })
       .then((d) => { if (!cancelled) setData(d); })
       .catch((err) => {
         if (cancelled) return;
@@ -107,9 +129,9 @@ export function FileContentView({ path: filePath, line, host, hidePopout }: File
           extension: '',
         });
       })
-      .finally(() => { if (!cancelled) setLoading(false); });
+      .finally(() => { if (!cancelled) { setLoading(false); setReloading(false); } });
     return () => { cancelled = true; };
-  }, [filePath, host]);
+  }, [filePath, host, reloadToken]);
 
   // Scroll to highlighted line after content renders
   useEffect(() => {
@@ -225,6 +247,7 @@ export function FileContentView({ path: filePath, line, host, hidePopout }: File
   return (
     <div className={`file-content-view${fullscreen ? ' fv-fullscreen' : ''}`} ref={contentRef}>
       {loading && <div className="file-viewer-loading">Loading file...</div>}
+      {reloading && <div className="fv-reloading-badge">Reloading…</div>}
       {!loading && data?.error && <div className="file-viewer-error">{data.error}</div>}
       {!loading && !media && data?.binary && (
         <>

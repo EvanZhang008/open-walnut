@@ -16,6 +16,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { fetchDirList, type DirEntry } from '@/api/files';
 import { fetchSessionChangedPaths } from '@/api/session-changes';
 import { FileContentView } from '@/components/common/FileContentView';
+import { ICON_REFRESH } from '@/components/common/Icons';
 import { formatSize } from '@/utils/format';
 import { getRecentFolders, fuzzyMatchRecents, type RecentFolder } from '@/utils/recentFolders';
 import { log } from '@/utils/log';
@@ -157,16 +158,16 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine }: Sessi
 
   const loadDir = useCallback(async (
     dirPath: string,
-    opts: { isRoot?: boolean; restoreExpanded?: boolean } = {},
+    opts: { isRoot?: boolean; restoreExpanded?: boolean; noCache?: boolean } = {},
   ): Promise<void> => {
-    const { isRoot = false, restoreExpanded = false } = opts;
+    const { isRoot = false, restoreExpanded = false, noCache = false } = opts;
     // Dedupe concurrent loads of the same dir (rapid double-clicks, overlapping refetch)
     if (inFlightRef.current.has(dirPath)) return;
     inFlightRef.current.add(dirPath);
     setLoadingPaths((prev) => new Set(prev).add(dirPath));
     setErrorPaths((prev) => { const next = new Map(prev); next.delete(dirPath); return next; });
     try {
-      const res = await fetchDirList(dirPath, host, showHidden);
+      const res = await fetchDirList(dirPath, host, showHidden, { noCache });
       // Backend resolves ~ → absolute path and returns it; adopt it as the canonical
       // root so localStorage keys and child paths are all absolute (keeps the
       // persisted expand-state key stable instead of split between ~ and /abs).
@@ -368,14 +369,22 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine }: Sessi
     }
   }, [root, loadDir]);
 
+  // Bumped on every Refresh so the preview pane refetches the open file too —
+  // "refresh the file panel" means the tree AND the content you're looking at.
+  const [reloadToken, setReloadToken] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+
   const handleRefresh = useCallback(() => {
     // Refetch root + every loaded dir IN PLACE — do NOT clear childrenMap first.
     // Nuking it collapsed every expanded subtree until refetches trickled in
     // (and left `expanded` pointing at unloaded dirs → the dead first click).
     // loadDir overwrites each dir's entries as fresh listings arrive.
     const loaded = [...childrenMapRef.current.keys()];
-    if (loaded.length === 0) { void loadDir(root, { isRoot: true }); return; }
-    for (const p of loaded) void loadDir(p, { isRoot: p === root });
+    const targets = loaded.length === 0 ? [root] : loaded;
+    setReloadToken((n) => n + 1);
+    setRefreshing(true);
+    void Promise.all(targets.map((p) => loadDir(p, { isRoot: p === root, noCache: true })))
+      .finally(() => setRefreshing(false));
   }, [root, loadDir]);
 
   // ── Editable root path with fuzzy recent-folder suggestions (same scorer as "@") ──
@@ -413,7 +422,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine }: Sessi
   return (
     <div className="session-file-explorer">
       <div className="session-file-explorer-toolbar">
-        <button className="sfe-btn" onClick={goUp} title="Go to parent directory">↑</button>
+        <button type="button" className="sfe-btn sfe-up-btn" onClick={goUp} title="Go to parent directory" aria-label="Go to parent directory">↑</button>
         {editingPath ? (
           <div className="sfe-path-edit">
             <input
@@ -464,7 +473,16 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine }: Sessi
           </span>
         )}
         <div className="sfe-toolbar-actions">
-          <button className="sfe-btn" onClick={handleRefresh} title="Refresh">⟳</button>
+          <button
+            type="button"
+            className={`sfe-btn sfe-refresh-btn${refreshing ? ' is-refreshing' : ''}`}
+            onClick={handleRefresh}
+            title="Refresh — re-list folders and reload the open file"
+            aria-label="Refresh file panel"
+          >
+            {ICON_REFRESH}
+            <span className="sfe-btn-label">Refresh</span>
+          </button>
           <label className="sfe-hidden-toggle" title="Show hidden files">
             <input
               type="checkbox"
@@ -555,6 +573,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine }: Sessi
               path={selectedFile}
               host={host}
               line={selectedFile === cwd ? initialLine : undefined}
+              reloadToken={reloadToken}
             />
           ) : (
             <div className="sfe-preview-empty">Select a file to preview</div>

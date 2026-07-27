@@ -12,11 +12,14 @@ export interface FileContentResponse {
 export async function fetchFileContent(
   filePath: string,
   host?: string,
+  opts: { noCache?: boolean } = {},
 ): Promise<FileContentResponse> {
   const params = new URLSearchParams({ path: filePath });
   if (host) params.set('host', host);
 
-  const res = await fetch(`/api/file-content?${params}`);
+  // An explicit Refresh must reach disk — a cached 200 would silently serve the
+  // pre-edit bytes and make the button look broken.
+  const res = await fetch(`/api/file-content?${params}`, opts.noCache ? { cache: 'no-store' } : undefined);
   if (!res.ok) throw new Error(`Failed to fetch file content: ${res.status}`);
   return res.json();
 }
@@ -82,12 +85,13 @@ export async function fetchDirList(
   dirPath: string,
   host?: string,
   showHidden = false,
+  opts: { noCache?: boolean } = {},
 ): Promise<DirListResponse> {
   const params = new URLSearchParams({ path: dirPath });
   if (host) params.set('host', host);
   if (showHidden) params.set('showHidden', '1');
 
-  const res = await fetch(`/api/files/list?${params}`);
+  const res = await fetch(`/api/files/list?${params}`, opts.noCache ? { cache: 'no-store' } : undefined);
   if (!res.ok) {
     let msg = `Failed to list directory: ${res.status}`;
     try {
