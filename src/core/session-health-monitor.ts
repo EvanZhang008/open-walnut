@@ -219,6 +219,21 @@ export class SessionHealthMonitor {
     // Includes primary-session back-links: reconcileTaskPhases needs task.session_id(s)
     // which we can only know from the tasks themselves, so this is scan-set tasks only —
     // that is exactly its contract (it derives phase from THESE sessions' facts).
+    // ── Per-phase timing ─────────────────────────────────────────────────────
+    // Only orphanMs (t0→tOrphan) and recoverMs (tOrphan→tRecover) used to be
+    // measured, and the slow-tick log emitted nothing else. So a tick reported as
+    // `totalMs: 11224, orphanMs: 130, recoverMs: 0` said only "11 seconds went
+    // somewhere in the seven phases below" — which is why a chronically slow phase
+    // sat unnoticed. Time each one; the slow-tick log now names the culprit.
+    const phaseMs: Record<string, number> = {}
+    let phaseMark = Date.now()
+    const endPhase = (name: string): void => {
+      const now = Date.now()
+      // Only record phases worth looking at, so the log line stays readable.
+      if (now - phaseMark >= 1) phaseMs[name] = now - phaseMark
+      phaseMark = now
+    }
+
     let taskMap = new Map<string, Task>()
     try {
       const taskIds = [...new Set(sessions.map(s => s.taskId).filter((id): id is string => !!id))]
@@ -230,10 +245,12 @@ export class SessionHealthMonitor {
         error: err instanceof Error ? err.message : String(err),
       })
     }
+    endPhase('loadTasks')
 
     // Detect stale AWAIT_HUMAN_ACTION sessions (stuck sub-agents)
     if (ctx.overBudget()) return
     await this.checkStaleAwaitingSessions(sessions, updateSessionRecord, taskMap)
+    endPhase('staleAwaiting')
 
     // Self-heal background-task panels for sessions that are NOT turn-over gating
     // candidates (idle / AWAIT_HUMAN_ACTION) — checkHungSessions only runs for
@@ -245,6 +262,7 @@ export class SessionHealthMonitor {
     // panel shows the pre-restart snapshot forever (inc-1784012867247).
     if (ctx.overBudget()) return
     await this.reconcilePendingBackgroundTasks(sessions)
+    endPhase('pendingBgTasks')
 
     // Authoritative reconcile for stuck sessions — the periodic safety net behind
     // the event-driven paths. Any lost/swallowed result event (tailer freeze,
@@ -253,6 +271,7 @@ export class SessionHealthMonitor {
     // NOTHING re-checked them against the daemon stream file. This does.
     if (ctx.overBudget()) return
     const reconciledIds = await this.reconcileStuckRunningSessions(sessions, taskMap)
+    endPhase('reconcileStuck')
 
     // Detect hung Claude Code processes: message delivered but no Claude output for 5 minutes.
     // Root cause: Claude Code can hang internally (e.g. between autocompact and API call)
@@ -453,16 +472,23 @@ export class SessionHealthMonitor {
       }
     }
 
+    endPhase('livenessLoop')
+
     // Layer 2: Reconcile task phases from session facts (30s cycle)
     if (ctx.overBudget()) return
     await this.reconcileTaskPhases(sessions, taskMap, cachedIsAlive)
+    endPhase('taskPhases')
 
     // Log total check duration (> 500ms = worth investigating)
     const checkTotal = Date.now() - checkT0
     if (checkTotal > 500) {
+      // `phases` names the actual cost centre. `slowestPhase` is what to read first.
+      const slowest = Object.entries(phaseMs).sort((a, b) => b[1] - a[1])[0]
       log.session.warn('health monitor: check() slow', {
         totalMs: checkTotal, orphanMs: tOrphan - checkT0, recoverMs: tRecover - tOrphan,
         sessionCount: sessions.length, taskCount: taskMap.size,
+        phases: phaseMs,
+        slowestPhase: slowest ? `${slowest[0]}=${slowest[1]}ms` : 'none',
       })
     }
   }
