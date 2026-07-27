@@ -60,6 +60,20 @@
   --glass-blur: blur(20px) saturate(1.8);
   --glass-blur-menu: blur(16px) saturate(1.8);
 
+  /* G4 "milky glass" (readability-first) — the full liquid-glass recipe for
+     surfaces that CONTENT SCROLLS UNDER (session header/composer, chat
+     composer, todo toolbar, focus dock).
+     READABILITY IS THE CONTRACT: chrome text must stay crisp even when dense
+     message text is scrolling directly beneath it. 0.68 + 30px was too clear —
+     transcript text read straight through the composer chrome. 0.88 + 44px is
+     the tuned floor; never go clearer than 0.84 / blur below 36px. */
+  --glass-g4-bg: rgba(250, 250, 252, 0.88);
+  --glass-g4-blur: blur(44px) saturate(1.8);
+  --glass-g4-shadow: 0 6px 24px rgba(0, 0, 0, 0.08);
+  /* Distance over which a scroll-under glass wash dissolves into the content
+     below it — a soft edge instead of a hard bordered slab. */
+  --glass-g4-fade: 28px;
+
   color-scheme: light dark;
 }
 
@@ -93,6 +107,9 @@
   --session-ref-subtle: rgba(94, 92, 230, 0.12);
   --session-ref-subtle-hover: rgba(94, 92, 230, 0.24);
   --tier-wait: #FFB340;
+  /* G4 dark = translucent #1C1C1E (bg-secondary), same blur + opacity floor. */
+  --glass-g4-bg: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
+  --glass-g4-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -117,6 +134,9 @@
     --bg-hover: rgba(255, 255, 255, 0.06);
     --bg-elevated: #2C2C2E;
     --tier-wait: #FFB340;
+    /* G4 dark = translucent #1C1C1E (bg-secondary), same blur + opacity floor. */
+    --glass-g4-bg: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
+    --glass-g4-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
   }
 }
 
@@ -23690,5 +23710,372 @@ a.file-link:hover {
   .lightbox-overlay {
     -webkit-backdrop-filter: blur(8px);
     backdrop-filter: blur(8px);
+  }
+}
+
+/* ===== G4 Liquid Glass Pass ("milky glass", readability-first) =====
+   Content SCROLLS UNDER the chrome. Three overlay surfaces:
+   - Session panel: header bar (top) + composer (bottom) float over the chat
+     scroll area; the scroll container pads itself by the measured heights
+     (--sp-header-h / --sp-composer-h, written by ResizeObservers in
+     SessionPanel via useHeightVar — composer height is dynamic: textarea
+     autogrow, image previews, queue indicator).
+   - Main chat column: the composer overlay (QuickAccessBar pills + quick-start
+     bar + ChatInput ride together) floats over .chat-panel; padding via
+     --chat-composer-h on .chat-page.
+   - Todo panel: toolbar bar floats over the pinned/list scrollers (stable
+     height → fixed padding).
+   LAYOUT (absolute overlays + padding) is unconditional; the MATERIAL
+   (translucent bg + blur) is gated behind @supports — fallback is the current
+   opaque background, which over an overlay reads exactly like the old
+   in-flow bars.
+   Glass is applied via ::before layers (position:absolute; inset:0;
+   backdrop-filter; z-index:-1) — backdrop-filter on the element itself would
+   make it the containing block for fixed/absolute descendants (kebab menus
+   use position:fixed with viewport coords; the btw popover anchors to
+   .chat-input-container) and misplace them. */
+
+/* ── Session panel: header overlay ── */
+.session-panel {
+  position: relative;
+}
+.session-panel:not(.pending-session-panel) > .session-panel-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  background: var(--bg); /* fallback; replaced by glass below */
+}
+
+/* ── Session panel: composer overlay ──
+   Wrapper = transparent padding (glass lives on the card). pointer-events
+   none so the 8px gutter around the card doesn't swallow clicks on content
+   scrolling beneath. */
+.session-panel .session-panel-input {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  background: var(--bg); /* fallback; transparent when glass is on */
+}
+
+/* Scroll area extends behind both overlays; padding keeps content readable
+   at rest while it visibly passes under the glass mid-scroll. Padding on the
+   scroll container is included in scrollHeight, so the existing pin-to-bottom
+   logic keeps working. */
+.session-panel-body .session-history {
+  padding-top: calc(var(--sp-header-h, 76px) + 8px);
+  padding-bottom: calc(var(--sp-composer-h, 84px) + 8px);
+}
+/* The sticky scroll-to-bottom arrow must float above the composer glass. */
+.session-panel-body .scroll-to-bottom-btn {
+  bottom: calc(var(--sp-composer-h, 84px) + 8px);
+}
+/* Non-scroll siblings rendered above the history (team tab bar, workflow
+   card) sit in normal flow at the panel top — push the first one below the
+   glass header and drop the history's compensating padding (the history's
+   top edge is then below them; content can't slide under the header). */
+.session-panel-body > :first-child:not(.session-history) {
+  margin-top: calc(var(--sp-header-h, 76px) + 4px);
+}
+.session-panel-body:has(> :first-child:not(.session-history)) .session-history {
+  padding-top: 12px;
+}
+
+/* Split view (Changed/Files/Terminal): columns start below the header so the
+   diff/file toolbars aren't buried; the chat column then no longer needs the
+   header padding (composer overlay anchors to the chat column, which is
+   position:relative in split mode). */
+.session-panel-split.is-changed-open {
+  padding-top: var(--sp-header-h, 76px);
+}
+.session-panel-split.is-changed-open .session-history {
+  padding-top: 12px;
+}
+.session-panel-split.is-changed-open .session-panel-body > :first-child:not(.session-history) {
+  margin-top: 4px;
+}
+
+/* ── Session composer card: G4 floating card (radius + shadow always) ── */
+.session-panel-input .chat-input-box {
+  border-radius: 20px;
+  box-shadow: var(--glass-g4-shadow);
+}
+.session-panel-input .chat-input-task-pill {
+  border-radius: 19px 19px 0 0;
+}
+
+/* ── Main chat column: composer overlay ── */
+.chat-page {
+  position: relative;
+}
+.chat-composer-overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  background: var(--bg); /* fallback; transparent + card glass when supported */
+}
+.chat-page .chat-panel {
+  padding-bottom: calc(var(--chat-composer-h, 120px) + 8px);
+}
+/* Same floating-card treatment as the session composer (radius + shadow always). */
+.chat-composer-overlay .chat-input-box {
+  border-radius: 20px;
+  box-shadow: var(--glass-g4-shadow);
+}
+.chat-composer-overlay .chat-input-task-pill {
+  border-radius: 19px 19px 0 0;
+}
+
+/* ── Chrome-over-content legibility ──
+   Rows that float above the composer card sit on the glass wash, not on solid
+   --bg. 11-12px --fg-muted was the weakest link in the stack, so the labels
+   step up to --fg-secondary (and the Quick Start path/label to full --fg).
+   Applies in both the glass and the opaque-fallback case: darker chrome text is
+   correct either way. */
+.chat-composer-overlay .quick-access-pill,
+.chat-composer-overlay .mode-toggle-pill {
+  color: var(--fg-secondary);
+}
+.chat-composer-overlay .quick-access-pill-label,
+.chat-composer-overlay .mode-toggle-pill-label {
+  font-weight: 500;
+}
+/* Quick Start bar: the tinted 8%-alpha panel is nearly invisible over content —
+   give it its own readable surface (opaque-ish tint + hairline) and darken the
+   monospace path, which is the longest text in the row. */
+.chat-composer-overlay .quick-start-bar {
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+  border: 0.5px solid color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.chat-composer-overlay .qsb-path {
+  color: var(--fg);
+  font-weight: 500;
+}
+.chat-composer-overlay .qsb-hint {
+  color: var(--fg-secondary);
+}
+
+/* ── Todo panel: toolbar overlay (stable height → fixed padding) ── */
+.todo-panel {
+  position: relative;
+}
+.todo-panel > .todo-panel-toolbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  background: var(--bg); /* fallback; glass ::before when supported */
+}
+/* First element after the toolbar: a scroller (.todo-pinned-wrapper) pads —
+   its content scrolls under the glass; anything else just moves down.
+   Since the section tab strip was added it is normally the first sibling and
+   takes the margin branch; the wrapper rule stays for the tabs-hidden case. */
+.todo-panel > .todo-panel-toolbar + .todo-pinned-wrapper {
+  padding-top: 46px;
+}
+.todo-panel > .todo-panel-toolbar + :not(.todo-pinned-wrapper) {
+  margin-top: 42px;
+}
+
+/* ── Composer model pill (moved from the session header, 2026-07-25) ──
+   Ghost/iOS aesthetic: muted text, hover accent, no grey box. Truncates on
+   narrow panels instead of overflowing the controls row. */
+.session-mode-bar .composer-model-pill,
+.session-mode-bar .codex-model-picker .session-detail-model-pill {
+  margin: 0;
+  padding: 3px 8px;
+  font-weight: 500;
+  color: var(--fg-muted);
+  max-width: 180px;
+  min-width: 0;
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-mode-bar .composer-model-pill:hover,
+.session-mode-bar .codex-model-picker .session-detail-model-pill:hover {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+/* CodexModelPicker menu opens DOWNWARD in the header; flipped upward when the
+   pill lives in the composer controls row. */
+.session-mode-bar .codex-model-menu {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
+/* ── The material (gated): milky bg + blur, hairlines, soft shadow ── */
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) and (background: color-mix(in srgb, red 50%, transparent)) {
+
+  /* Session header — full-width bar: hairline bottom, NO radius, no shadow. */
+  .session-panel:not(.pending-session-panel) > .session-panel-header {
+    background: transparent;
+    border-bottom: 0.5px solid var(--border);
+  }
+  .session-panel:not(.pending-session-panel) > .session-panel-header::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: var(--glass-g4-bg);
+    -webkit-backdrop-filter: var(--glass-g4-blur);
+    backdrop-filter: var(--glass-g4-blur);
+  }
+
+  /* Session composer wrapper: the card carries the main glass; the wrapper adds
+     the same soft-edged wash as the chat overlay so the rows ABOVE the card
+     (notes bar, recap tip, send-error line, queue indicator) are never bare
+     over scrolling transcript text. Soft top edge, no border/radius/shadow. */
+  .session-panel .session-panel-input {
+    background: transparent;
+    pointer-events: none;
+  }
+  .session-panel .session-panel-input > * {
+    pointer-events: auto;
+  }
+  .session-panel .session-panel-input::before {
+    content: '';
+    position: absolute;
+    /* Fade lives above the content box (see the chat overlay note) so the notes
+       bar / recap tip sit on fully opaque glass, not mid-ramp. */
+    inset: calc(-1 * var(--glass-g4-fade)) 0 0 0;
+    z-index: -1;
+    pointer-events: none;
+    background: var(--glass-g4-bg);
+    -webkit-backdrop-filter: var(--glass-g4-blur);
+    backdrop-filter: var(--glass-g4-blur);
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--glass-g4-fade));
+    mask-image: linear-gradient(to bottom, transparent 0, #000 var(--glass-g4-fade));
+  }
+
+  /* Session composer card: G4 milky glass. Keeps the D6 focus behavior —
+     firmer hairline on :focus-within, never an accent ring. */
+  .session-panel-input .chat-input-box {
+    position: relative; /* anchors the ::before glass layer */
+    background: var(--glass-g4-bg);
+    border: 0.5px solid var(--border);
+  }
+  .session-panel-input .chat-input-box:focus-within {
+    border-color: var(--border-strong);
+  }
+  .session-panel-input .chat-input-box::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    z-index: -1;
+    -webkit-backdrop-filter: var(--glass-g4-blur);
+    backdrop-filter: var(--glass-g4-blur);
+  }
+
+  /* Main chat composer overlay: the .chat-input-box card carries the full G4
+     glass, and the overlay adds a SOFT-EDGED wash behind everything above the
+     card (QuickAccessBar pills, quick-start bar, queue indicator) so their text
+     never collides with transcript text scrolling underneath. Earlier this
+     overlay was `background: transparent`, which left those rows with no
+     material at all — labels like "+ Task / + Session / fix walnut / 25%" and
+     the Quick Start path rendered directly on top of message text (user: "need
+     more fuzzy for the background, the text should be super clear even if there
+     is text in the background").
+     Still NOT a slab: no border, no radius, no shadow, and it dissolves into
+     the content over --glass-g4-fade via a mask — that's what the earlier
+     "border shadow, square, nonono" feedback was about. */
+  .chat-composer-overlay {
+    background: transparent;
+    pointer-events: none;
+  }
+  .chat-composer-overlay > * {
+    pointer-events: auto;
+  }
+  .chat-composer-overlay::before {
+    content: '';
+    position: absolute;
+    /* Bleed UPWARD by the fade distance (and sideways past the chat gutter) so
+       the whole gradient lives ABOVE the overlay's content box. The first chrome
+       row then sits on a fully opaque wash instead of halfway up the ramp —
+       otherwise the pills are the one row the fade fails to cover. */
+    inset: calc(-1 * var(--glass-g4-fade)) -12px 0 -12px;
+    z-index: -1;
+    pointer-events: none;
+    background: var(--glass-g4-bg);
+    -webkit-backdrop-filter: var(--glass-g4-blur);
+    backdrop-filter: var(--glass-g4-blur);
+    /* Soft top edge: dissolves to nothing at the very top so it reads as a fade,
+       not a bordered bar. */
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--glass-g4-fade));
+    mask-image: linear-gradient(to bottom, transparent 0, #000 var(--glass-g4-fade));
+  }
+  .chat-composer-overlay .chat-input-box {
+    position: relative; /* anchors the ::before glass layer */
+    background: var(--glass-g4-bg);
+    border: 0.5px solid var(--border);
+  }
+  .chat-composer-overlay .chat-input-box:focus-within {
+    border-color: var(--border-strong);
+  }
+  .chat-composer-overlay .chat-input-box::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    z-index: -1;
+    -webkit-backdrop-filter: var(--glass-g4-blur);
+    backdrop-filter: var(--glass-g4-blur);
+  }
+
+  /* Todo toolbar — full-width bar over the task list. */
+  .todo-panel > .todo-panel-toolbar {
+    background: transparent;
+  }
+  .todo-panel > .todo-panel-toolbar::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: var(--glass-g4-bg);
+    -webkit-backdrop-filter: var(--glass-g4-blur);
+    backdrop-filter: var(--glass-g4-blur);
+  }
+}
+
+/* Flow siblings that render between the header and the split (messages
+   summary panel, error banners) must clear the absolute header — only the
+   FIRST one; the rest stack naturally below it. The split is exempt (its
+   content is what scrolls under the glass). */
+.session-panel:not(.pending-session-panel) > .session-panel-header + .session-action-panel,
+.session-panel:not(.pending-session-panel) > .session-panel-header + .session-error-banner {
+  margin-top: calc(var(--sp-header-h, 76px) + 6px);
+}
+
+/* Inside the session composer overlay the notes bar / send-error rows float
+   over scrolling content — give them their own readable card surface (the
+   recap tip and queue indicator already have opaque backgrounds). */
+.session-panel-input .session-notes {
+  border-top: none;
+  border: 0.5px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  margin-bottom: 6px;
+  overflow: hidden;
+}
+.session-panel-input > .text-xs {
+  background: var(--bg);
+  border-radius: 8px;
+  margin-bottom: 4px;
+}
+
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) and (background: color-mix(in srgb, red 50%, transparent)) {
+  .session-panel-input .session-notes,
+  .session-panel-input > .text-xs {
+    background: var(--glass-g4-bg);
+    -webkit-backdrop-filter: var(--glass-g4-blur);
+    backdrop-filter: var(--glass-g4-blur);
   }
 }

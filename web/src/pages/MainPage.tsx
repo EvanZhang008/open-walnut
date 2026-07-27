@@ -15,6 +15,7 @@ import { useFocusBarContext } from '@/contexts/FocusBarContext';
 import { useOrdering } from '@/hooks/useOrdering';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { ChatPanel } from '@/components/chat/ChatPanel';
+import { useOverlayHeightVar } from '@/hooks/useHeightVar';
 import { ChatMessage, type RouteInfo } from '@/components/chat/ChatMessage';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { TodoPanel } from '@/components/tasks/TodoPanel';
@@ -364,6 +365,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   triageOpenRef.current = triagePanelOpen;
   // Task ID for filtered triage panel (null = show all)
   const [triageTaskId, setTriageTaskId] = useState<string | null>(null);
+
+  // G4 glass: track the chat composer overlay's height into --chat-composer-h
+  // on .chat-page so the message scroller pads itself (content scrolls under
+  // the glass). Height is dynamic: quick-start bar, pills wrap, textarea grow.
+  const chatComposerRef = useOverlayHeightVar('--chat-composer-h', '.chat-panel');
 
   // Measure session area container width for auto mode (ResizeObserver)
   const contentRowRef = useRef<HTMLDivElement>(null);
@@ -1637,6 +1643,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             )}
           </ChatPanel>
 
+          {/* G4 glass composer overlay — QuickAccessBar pills + quick-start bar +
+              ChatInput ride together on one glass surface floating over the chat
+              scroll area (.chat-panel pads by the tracked --chat-composer-h).
+              Also the positioned ancestor for the launcher/question popovers. */}
+          <div className="chat-composer-overlay" ref={chatComposerRef}>
+
           {/* Quick Start Bar — context pill when path is selected */}
           {quickStartPath && (
             <div className="quick-start-bar">
@@ -1746,6 +1758,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               mentionHost={quickStartPath?.host ?? undefined}
             />
           </div>
+          </div>{/* .chat-composer-overlay */}
         </div>
       </div>
 

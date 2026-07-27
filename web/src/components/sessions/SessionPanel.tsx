@@ -39,6 +39,7 @@ import { TaskQuickActions } from './TaskQuickActions';
 import { useFullscreen } from '@/hooks/useFullscreen';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { useSessionUsage, formatModelName, getContextWindowSize } from '@/hooks/useSessionUsage';
+import { useHeightVar } from '@/hooks/useHeightVar';
 import { useSessionPlan } from '@/hooks/useSessionPlan';
 import { PlanContentContext } from '@/contexts/PlanContentContext';
 import { SessionRetryButton } from './SessionRetryButton';
@@ -167,6 +168,15 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   // CSS-promotion fullscreen (same instance, no remount)
   const { isFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop } = useFullscreen();
+
+  // G4 liquid glass: header + composer overlay the chat column (position:
+  // absolute) so content scrolls UNDER them; the scroll area pads itself by
+  // these measured heights (CSS vars on the panel root). Composer height is
+  // dynamic (textarea autogrow, image previews, queue bar) so it MUST be
+  // tracked, not hardcoded; header varies with chip-row wrap.
+  const panelRef = useRef<HTMLDivElement>(null);
+  const glassHeaderRef = useHeightVar(panelRef, '--sp-header-h');
+  const glassComposerRef = useHeightVar(panelRef, '--sp-composer-h', '.session-panel-body .session-history');
 
   const handleControlCommand = useCallback((command: string) => {
     if (command === 'model') {
@@ -674,8 +684,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
       <div
         className={`session-panel${fullscreenClass}${splitOpen ? ' is-changed-open' : ''}`}
         data-session-id={sessionId}
+        ref={panelRef}
       >
-        <div className="session-panel-header">
+        <div className="session-panel-header" ref={glassHeaderRef}>
           <div className="session-panel-header-top">
             <div className="session-panel-title-area">
               {!loading && session?.taskId && (
@@ -1178,15 +1189,17 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
           />
         </div>
 
-        {/* Sticky-note bar — always visible once a note exists (also hosts the
-            editor when opened from the pill/kebab while empty). */}
-        <SessionNotesBar
-          noteState={noteState}
-          expanded={notesOpen}
-          onToggleExpanded={() => setNotesOpen(o => !o)}
-        />
-
-        <div className="session-panel-input">
+        <div className="session-panel-input" ref={glassComposerRef}>
+          {/* Sticky-note bar — always visible once a note exists (also hosts the
+              editor when opened from the pill/kebab while empty). Lives INSIDE
+              the composer overlay so the tracked --sp-composer-h includes it
+              (the overlay floats over the scroll area; anything outside it
+              would be hidden behind the glass). */}
+          <SessionNotesBar
+            noteState={noteState}
+            expanded={notesOpen}
+            onToggleExpanded={() => setNotesOpen(o => !o)}
+          />
           {sendError && (
             <div className="text-xs" style={{ color: 'var(--error)', padding: '4px 12px' }}>
               {sendError}

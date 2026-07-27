@@ -7,6 +7,7 @@ import { ChatPanel } from '@/components/chat/ChatPanel';
 import { ChatMessage } from '@/components/chat/ChatMessage';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { QuickAccessBar } from '@/components/chat/QuickAccessBar';
+import { useOverlayHeightVar } from '@/hooks/useHeightVar';
 import type { SlashCommand, CommandContext } from '@/commands/types';
 import { shouldHideUiOnlyMessage, useUiOnlySettings } from '@/hooks/useDeveloperSettings';
 
@@ -17,6 +18,8 @@ export function ChatPage() {
   const { connectionState } = useWebSocket();
   // Force re-render when UI Only settings change
   useUiOnlySettings();
+  // G4 glass composer overlay height → --chat-composer-h on .chat-page
+  const chatComposerRef = useOverlayHeightVar('--chat-composer-h', '.chat-panel');
 
   const handleSend = useCallback((text: string, images?: Parameters<typeof sendMessage>[2]) => {
     const plan = getPlanPayload();
@@ -94,19 +97,23 @@ export function ChatPage() {
         )}
       </ChatPanel>
 
-      <QuickAccessBar onSessionClick={() => {}} mode={chatMode} onModeToggle={toggleMode} />
+      {/* G4 glass composer overlay — pills + input on one glass surface;
+          .chat-panel pads by the tracked --chat-composer-h. */}
+      <div className="chat-composer-overlay" ref={chatComposerRef}>
+        <QuickAccessBar onSessionClick={() => {}} mode={chatMode} onModeToggle={toggleMode} />
 
-      <ChatInput
-        onSend={handleSend}
-        onCommand={handleCommand}
-        onStop={stopGeneration}
-        onClearQueue={clearQueue}
-        disabled={connectionState !== 'connected'}
-        isStreaming={isStreaming}
-        queueCount={queueCount}
-        draftKey="draft:chat-page"
-        onToggleMode={toggleMode}
-      />
+        <ChatInput
+          onSend={handleSend}
+          onCommand={handleCommand}
+          onStop={stopGeneration}
+          onClearQueue={clearQueue}
+          disabled={connectionState !== 'connected'}
+          isStreaming={isStreaming}
+          queueCount={queueCount}
+          draftKey="draft:chat-page"
+          onToggleMode={toggleMode}
+        />
+      </div>
     </div>
   );
 }
