@@ -1414,7 +1414,36 @@ export async function readSessionHistoryTail(
   return readSessionHistory(sessionId, cwd, host, outputFile, { skipSubagents: true });
 }
 
-export async function readSessionHistory(sessionId: string, cwd?: string, host?: string, outputFile?: string, options?: ReadHistoryOptions): Promise<SessionHistoryMessage[]> {
+/**
+ * In-flight dedup for readSessionHistory.
+ *
+ * Five caller families hit this concurrently (attach, GET /history, the
+ * stream-convergence probe, agent tools, the session summarizer) and the mtime
+ * cache only helps AFTER a read finishes — two callers arriving in the same tick
+ * both missed and both read the whole file. Observed: the same 38.9 MB JSONL read
+ * twice inside one second (attach + the reconnecting UI's GET /history).
+ *
+ * Same pattern as `inflightByKey` in session-changes.ts. The key includes every
+ * option that changes the RESULT (currently only skipSubagents, which decides
+ * whether childMessages is populated), so a caller can never be served a
+ * different shape than it asked for. Add to the key if ReadHistoryOptions grows.
+ */
+const historyInflightByKey = new Map<string, Promise<SessionHistoryMessage[]>>();
+
+export function readSessionHistory(sessionId: string, cwd?: string, host?: string, outputFile?: string, options?: ReadHistoryOptions): Promise<SessionHistoryMessage[]> {
+  const key = `${sessionId}@${host ?? '__local__'}|${options?.skipSubagents ? 's' : ''}`;
+  const existing = historyInflightByKey.get(key);
+  if (existing) return existing;
+
+  const run = readSessionHistoryInner(sessionId, cwd, host, outputFile, options);
+  historyInflightByKey.set(key, run);
+  void run.finally(() => {
+    if (historyInflightByKey.get(key) === run) historyInflightByKey.delete(key);
+  }).catch(() => { /* observed by the caller */ });
+  return run;
+}
+
+async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: string, outputFile?: string, options?: ReadHistoryOptions): Promise<SessionHistoryMessage[]> {
   let messages: SessionHistoryMessage[] | null = null;
 
   // Server-side mtime cache: check if JSONL hasn't changed since last parse.
