@@ -1192,7 +1192,17 @@ async function tryIncrementalHistoryRead(
       inc.lastLineCheck = historyLineCheckOf(lastLine);
       inc.tailText = newTailText;
     }
-    const approxChars = inc.prefixMessages.reduce((n, m) => n + (m.text?.length ?? 0), 0) + newTailText.length;
+    // Charge the same quantity the full-read path charges (raw source size), NOT
+    // the sum of message .text lengths. Tool inputs/results dominate a coding
+    // transcript and carry no .text, so the old formula under-reported a 100 MB
+    // session as a few hundred KB — the byte budget never tripped and eviction
+    // effectively never fired for any session refreshed via this path.
+    //
+    // inc.parsedBytes already spans the WHOLE parsed prefix including the rolling
+    // tail segment (it was advanced by completePart just above, and tailText is a
+    // window inside it), so it must not be added to newTailText.length — that
+    // would double-count the tail. It is the single authoritative figure here.
+    const approxChars = inc.parsedBytes;
     cacheSet(sessionId, { mtimeMs: newMtimeMs, messages, approxChars, inc }, host);
 
     // Keep the restart-survival disk cache fresh (same as the full-read path).
@@ -1316,6 +1326,58 @@ function seedIncrementalState(
  * (callers slice the tail anyway). Returns null when the tail read fails
  * (caller decides whether to fall back to the full read).
  */
+/**
+ * Range-read and parse ONLY the last `maxTailBytes` of a session's JSONL.
+ *
+ * Extracted so both callers share it: readSessionHistoryTail (the deliberate
+ * bounded reader) and readSessionHistory's byte-ceiling degradation path. The
+ * latter must NOT call readSessionHistoryTail — that delegates back to
+ * readSessionHistory for small files, which would recurse.
+ *
+ * Returns null when the window can't be read (no resolvable path, stat failure,
+ * transport error) so the caller picks its own fallback.
+ */
+async function readSessionHistoryTailWindow(
+  sessionId: string,
+  cwd?: string,
+  host?: string,
+  maxTailBytes = 4 * 1024 * 1024,
+): Promise<SessionHistoryMessage[] | null> {
+  const daemonHost = host ?? '__local__';
+  const statPath = cwd && isSafeForProjectEncoding(cwd)
+    ? remoteJsonlPath(sessionId, cwd)
+    : getResolvedRemotePath(sessionId, daemonHost);
+  if (!statPath) return null;
+  try {
+    const { DaemonFileReader } = await import('./daemon-file-reader.js');
+    const reader = new DaemonFileReader(daemonHost);
+    const st = await reader.stat(statPath);
+    if (!st) return null;
+    // Clamp the window to the reader's own ceiling. Without this, a ceiling set
+    // BELOW the tail size makes the degradation path itself get refused, so the
+    // fallback for an oversized file silently returns nothing — the fallback must
+    // never be able to exceed the limit that triggered it.
+    const window = Math.min(maxTailBytes, DaemonFileReader.maxReadBytes());
+    const start = Math.max(0, st.size - window);
+    const res = await reader.readFileRange(statPath, start);
+    if (res === null) return null;
+    // Skip the first (almost certainly partial) line when we didn't start at 0.
+    let windowText = res.content;
+    if (start > 0) {
+      const nl = res.content.indexOf('\n');
+      windowText = nl >= 0 ? res.content.slice(nl + 1) : '';
+    }
+    const merged = await mergeSyntheticUserEvents(sessionId, windowText);
+    return parseSessionMessages(merged);
+  } catch (err) {
+    log.session.debug('tail window read failed', {
+      sessionId, host: daemonHost,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
 export async function readSessionHistoryTail(
   sessionId: string,
   cwd?: string,
@@ -1339,13 +1401,7 @@ export async function readSessionHistoryTail(
         // Serve from the shared cache when fresh — same data, zero I/O.
         const cached = cacheGet(sessionId, host);
         if (cached && cached.mtimeMs === st.mtimeMs) return cached.messages;
-        const res = await reader.readFileRange(statPath, st.size - maxTailBytes);
-        if (res === null) return null;
-        // Skip the first (almost certainly partial) line.
-        const nl = res.content.indexOf('\n');
-        const windowText = nl >= 0 ? res.content.slice(nl + 1) : '';
-        const merged = await mergeSyntheticUserEvents(sessionId, windowText);
-        return parseSessionMessages(merged);
+        return await readSessionHistoryTailWindow(sessionId, cwd, host, maxTailBytes);
       }
     } catch (err) {
       log.session.debug('tail history stat/read failed — falling back to full read', {
@@ -1422,7 +1478,25 @@ export async function readSessionHistory(sessionId: string, cwd?: string, host?:
     }
   }
 
-  const result = await readSessionJsonlContent(sessionId, cwd, host, outputFile);
+  // A file over the reader's hard byte ceiling throws instead of materializing
+  // (DaemonFileReader.maxReadBytes). Degrade to the BOUNDED tail window rather than
+  // surfacing a load error: a very long transcript still renders its recent history,
+  // which is what the UI shows anyway. Only this specific ceiling error degrades —
+  // transport failures keep their existing contract.
+  let result: Awaited<ReturnType<typeof readSessionJsonlContent>>;
+  try {
+    result = await readSessionJsonlContent(sessionId, cwd, host, outputFile);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes('byte ceiling')) throw err;
+    log.session.warn('history read hit the byte ceiling — serving a bounded tail instead', {
+      sessionId, host: host ?? '__local__', error: msg,
+    });
+    const tail = await readSessionHistoryTailWindow(sessionId, cwd, host);
+    if (tail) return tail;
+    // Tail unavailable too — last resort is the previous parse, else empty.
+    return getCachedSessionHistory(sessionId, host) ?? [];
+  }
   // Raw JSONL length — the cache's byte-budget proxy for the parsed messages.
   const sourceChars = result?.content.length ?? 0;
   if (result) {
