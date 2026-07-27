@@ -89,9 +89,12 @@ export function setShowUiOnlyTriage(value: boolean): void {
  * (which lack the notification flag) are always shown.
  */
 export function shouldHideUiOnlyMessage(source?: string, notification?: boolean): boolean {
-  // Runtime errors have a dedicated durable notification surface. Always hide
-  // legacy error entries even if a developer enabled other UI-only categories.
-  if (source === 'agent-error' || source === 'session-error') return true;
+  // Errors are never hidden. They used to be dropped here on the claim that they
+  // had "a dedicated durable notification surface" — no such surface existed, so
+  // a total outage looked identical to a short reply (2026-07-26: 18h of
+  // all-turns-failing went unnoticed). They now render as a collapsed row
+  // (see mergeAdjacentErrors) AND fire a toast for auth failures.
+  if (source === 'agent-error' || source === 'session-error') return false;
   if (!notification) return false;
   const category = source as UiOnlyCategory | undefined;
   if (!category) return false;

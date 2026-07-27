@@ -689,6 +689,18 @@ async function runApiV1Turn(
         { source: 'agent-error', agentId, conversationId },
       ).catch(() => { /* best-effort */ })
       emitSse(conversationId, 'error', { message: errMsg })
+      // Mirror the WS path: push the error entry live, not disk-only (see chat.ts).
+      broadcastEvent(EventNames.CHAT_HISTORY_UPDATED, {
+        entry: {
+          role: 'assistant',
+          content: `[Error: ${errMsg}]`,
+          source: 'agent-error',
+          notification: true,
+          timestamp: new Date().toISOString(),
+        },
+        agentId,
+        conversationId,
+      })
       broadcastEvent(EventNames.AGENT_ERROR, { error: errMsg, agentId, conversationId })
     }
   })

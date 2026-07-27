@@ -1085,6 +1085,22 @@ export function registerChatRpc(): void {
           { source: 'agent-error', agentId, conversationId },
         )
 
+        // Push it live. addAIMessages only writes to DISK — without this the error
+        // was invisible until a page refresh, and then indistinguishable from a
+        // short normal reply. That is how an 18h all-turns-failing outage went
+        // unnoticed (2026-07-26: every turn returned `[Error: 403 …]`).
+        broadcastEvent(EventNames.CHAT_HISTORY_UPDATED, {
+          entry: {
+            role: 'assistant',
+            content: `[Error: ${errMsg}]`,
+            source: 'agent-error',
+            notification: true,
+            timestamp: new Date().toISOString(),
+          },
+          agentId,
+          conversationId,
+        })
+
         // Auto-append to conversation_log for error turns (General only)
         if (taskContext?.id && agentId === 'general') {
           autoAppendConversationLog(taskContext.id, message, `[Error: ${errMsg}]`, [...toolsUsedInTurn]).catch(() => { /* non-critical */ })

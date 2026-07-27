@@ -743,7 +743,6 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
       entry?: { role: 'user' | 'assistant'; content: string; source?: string; notification?: boolean; taskId?: string; timestamp?: string };
     };
     if (!entry || !entry.content) return;
-    if (entry.source === 'agent-error' || entry.source === 'session-error') return;
     setMessages((prev) => [...prev, {
       key: nextMessageKey(),
       role: entry.role,
@@ -779,8 +778,10 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
     // Safety net: force-close stale 'calling' blocks (tool may have succeeded, result was lost)
     setMessages((prev) => closeStaleToolCalls(prev, 'done'));
 
-    // The durable notification event carries the error; keep queue processing
-    // independent so one failed turn does not strand later messages.
+    // The error text itself arrives as a durable `chat:history-updated` entry
+    // (source 'agent-error') which renders as a collapsed row; the toaster
+    // subscribes to this event separately. Keep queue processing independent so
+    // one failed turn does not strand later messages.
     if (queueRef.current.length > 0) {
       drainTimerRef.current = setTimeout(() => { drainTimerRef.current = null; drainOrStop(); }, 1500);
     } else {

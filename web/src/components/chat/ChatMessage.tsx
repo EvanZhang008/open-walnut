@@ -1191,8 +1191,12 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
   // Triage always collapses regardless of notification flag — the full analysis is noisy.
   // Quick Start local echoes and any long plain user message also auto-collapse so they
   // don't fill the viewport — the full content is still available behind the chevron.
+  // Errors auto-collapse too: an outage can produce dozens of identical rows, and
+  // an expanded stack of 403s buries the actual conversation. The row itself stays
+  // visible (red "N errors" chevron) so the signal is never lost — only the body
+  // is behind the chevron.
   const shouldAutoCollapse =
-    isCron || (isNotification && !isErrorNotification) || isTriage || isQuickStartEcho || isLongPlainUser;
+    isCron || isNotification || isTriage || isQuickStartEcho || isLongPlainUser;
   const [isCollapsed, setIsCollapsed] = useState(shouldAutoCollapse);
   // Streaming cron/heartbeat responses get their source tag AFTER the message is
   // created (agent:response retro-tags it), so the initial useState saw false.
@@ -1267,7 +1271,9 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
     <div className="chat-message-header chat-notification-header" onClick={shouldAutoCollapse ? () => setIsCollapsed(c => !c) : undefined} style={shouldAutoCollapse ? { cursor: 'pointer' } : undefined}>
       <div className="chat-message-role">
         {roleLabel}
-        {notification && <span className="chat-ui-only-badge">UI Only</span>}
+        {/* Errors are exempt: the badge means "a developer setting can hide this",
+            which is the opposite of true for failures (they now always render). */}
+        {notification && !isErrorNotification && <span className="chat-ui-only-badge">UI Only</span>}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden', flex: 1 }}>
         {isCollapsed && collapsedSummary && (
