@@ -957,6 +957,19 @@ export class ClaudeCodeSession {
   private _transportGeneration = 0
   /** Timestamp when spawn() was called — used to measure time-to-init for diagnostics. */
   private _spawnTs = 0
+  /**
+   * Resolves when the in-flight `startSpawn()` settles (transport up, or failed).
+   * Null once settled / when no spawn is running.
+   *
+   * Why this exists: the UI now opens the real session panel the moment the id is
+   * minted, i.e. BEFORE the CLI process exists (see the preassignedSessionId
+   * comment in send()). So a user can type into a session whose transport is
+   * still starting. Without a barrier, that send takes processNext's
+   * "no live pipe" branch → `gracefulStop()` + `--resume` respawn, which SIGINTs
+   * the CLI that is still booting: the first turn is lost and the session can
+   * come back under a different id. Delivery waits on this instead.
+   */
+  private _spawnSettled: Promise<void> | null = null
   /** Wall-clock ts of the HTTP request that triggered this start (latency instrumentation only).
    *  Not `private` — SessionRunner stamps it on the instance before send(). */
   _requestTs = 0
@@ -1092,6 +1105,17 @@ export class ClaudeCodeSession {
   /** Whether this session has an active write pipe (FIFO). */
   get hasPipe(): boolean {
     return this._transport?.hasPipe ?? false
+  }
+
+  /**
+   * Await an in-flight spawn, if any (no-op once the transport is up).
+   *
+   * Delivery paths MUST call this before concluding "no live pipe → respawn":
+   * the panel is now interactive while the CLI is still booting, so a message
+   * typed in that window would otherwise SIGINT the process that is starting.
+   */
+  async awaitSpawn(): Promise<void> {
+    if (this._spawnSettled) await this._spawnSettled
   }
 
   /**
@@ -1402,7 +1426,14 @@ export class ClaudeCodeSession {
       })
     }
 
-    startSpawn().then((result) => {
+    // Publish the spawn barrier BEFORE awaiting it, so a send arriving during the
+    // spawn window waits for the transport instead of respawning over it. Settles
+    // on both success and failure (a failed spawn must not wedge delivery forever).
+    const spawnPromise = startSpawn()
+    this._spawnSettled = spawnPromise.then(() => {}, () => {})
+      .finally(() => { this._spawnSettled = null })
+
+    spawnPromise.then((result) => {
       this.pid = result.pid
       this._outputFile = result.outputFile
       this._turnStartOffset = result.fileSize
@@ -7351,6 +7382,11 @@ export class SessionRunner {
       return this.processNext(sessionId)
     }
 
+    // The panel accepts input while the CLI is still spawning (the id is minted
+    // before the process exists), so the FIFO may not be created yet. Wait for the
+    // spawn rather than writing into a missing pipe and taking the respawn path.
+    await targetSession.awaitSpawn()
+
     // If Claude is blocked on a permission prompt, auto-deny it so the user's
     // message can be processed. Without this, messages are silently lost.
     if (targetSession.hasPendingPermission) {
@@ -7824,6 +7860,15 @@ export class SessionRunner {
       // Each optimistic copy in the frontend has a unique queueId; we need a matching
       // walnutMessageId in the JSONL for each one so Layer 1 dedup can remove them all.
       const walnutMessageIds = msgs.map(m => m.id).filter(Boolean)
+
+      // The session panel is interactive from the instant the id is minted, which is
+      // BEFORE the CLI process exists. If the user types in that window, wait for the
+      // spawn to land so we deliver over its fresh FIFO. Skipping this wait meant
+      // reading hasPipe=false on a session that was merely still booting, taking the
+      // respawn branch below, and SIGINT-ing the starting CLI (lost first turn).
+      if (targetSession) {
+        await targetSession.awaitSpawn()
+      }
 
       // Try stdin write first (stream-json mode — reuses running process)
       if (targetSession) {
