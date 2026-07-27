@@ -60,6 +60,33 @@ export class DaemonFileReader implements SessionFileReader {
   private static fullReadsInFlight = 0
   private static fullReadWaiters: Array<() => void> = []
 
+  /** Hard ceiling on the bytes ONE read may materialize as a single JS string.
+   *
+   *  The concurrency gate above bounds how many whales are in flight; it does NOT
+   *  bound how big one may be. A single unbounded read is what drove ~3 GB RSS
+   *  minutes after boot (533 reads / 9.56 GB in a day; largest file observed grew
+   *  34.9 MB → 174.9 MB in two days, and these keep growing with session age).
+   *
+   *  Over the ceiling we REJECT rather than truncate: a silently truncated
+   *  transcript parses fine and looks successful, which would corrupt history and
+   *  session state in ways far harder to diagnose than a loud failure. Callers
+   *  that legitimately need a big file must read a bounded window instead
+   *  (readSessionHistoryTail / fetchStreamTailFold / readRangeBytes).
+   *
+   *  Deliberately well above the largest bounded window in the codebase (the 4 MB
+   *  history tail) and well below whale territory. Override for a genuinely
+   *  outsized deployment via WALNUT_MAX_FILE_READ_BYTES. */
+  private static readonly DEFAULT_MAX_READ_BYTES = 32 * 1024 * 1024
+
+  static maxReadBytes(): number {
+    const raw = process.env.WALNUT_MAX_FILE_READ_BYTES
+    if (raw) {
+      const parsed = Number(raw)
+      if (Number.isFinite(parsed) && parsed > 0) return parsed
+    }
+    return DaemonFileReader.DEFAULT_MAX_READ_BYTES
+  }
+
   private static async acquireFullReadSlot(): Promise<void> {
     if (DaemonFileReader.fullReadsInFlight < DaemonFileReader.MAX_CONCURRENT_FULL_READS) {
       DaemonFileReader.fullReadsInFlight++
@@ -98,7 +125,13 @@ export class DaemonFileReader implements SessionFileReader {
       if (st.size > DaemonFileReader.CHUNK_THRESHOLD) {
         return await this.readFileChunked(remotePath, st.size)
       }
-    } catch { /* stat unavailable — plain read below */ }
+    } catch (err) {
+      // A byte-ceiling rejection MUST propagate: falling through to the plain
+      // fs.read below would perform the very unbounded whole-file read the
+      // ceiling exists to prevent (and blow the ws maxPayload besides).
+      if (err instanceof Error && err.message.includes('byte ceiling')) throw err
+      /* stat unavailable — plain read below */
+    }
 
     const result = await conn.send('fs.read', { path: remotePath, encoding: 'utf-8' })
     if (result.ok) return result.data as string
@@ -125,6 +158,10 @@ export class DaemonFileReader implements SessionFileReader {
     const chunks: Buffer[] = []
     let offset = start
     let fileSize = 0
+    let totalBytes = 0
+    // Ceiling is on bytes THIS call materializes, not on file size: a tail read of
+    // a 200 MB file legitimately passes a large `start` and only pulls its window.
+    const limit = DaemonFileReader.maxReadBytes()
     for (;;) {
       const res = await conn.send('fs.readRange', {
         path: remotePath, start: offset, length: DaemonFileReader.CHUNK_SIZE,
@@ -139,10 +176,27 @@ export class DaemonFileReader implements SessionFileReader {
       if (bytesRead > 0) {
         chunks.push(Buffer.from(res.data as string, 'base64'))
         offset += bytesRead
+        totalBytes += bytesRead
+        if (totalBytes > limit) {
+          // Free the partial buffers before throwing — the whole point is to not
+          // hold this much at once.
+          chunks.length = 0
+          log.session.warn('DaemonFileReader: read exceeded the byte ceiling — refusing', {
+            host: this.host, path: remotePath, start, fileSize, limit, readSoFar: totalBytes,
+          })
+          throw new Error(
+            `file read exceeded the ${limit}-byte ceiling (path=${remotePath}, size=${fileSize}); ` +
+            'read a bounded window instead (see readSessionHistoryTail)',
+          )
+        }
       }
       if (res.eof || bytesRead === 0) break
     }
-    return { content: Buffer.concat(chunks).toString('utf-8'), fileSize }
+    // Concat then decode in one step and drop the chunk refs first, so the peak is
+    // the joined buffer + the string rather than chunks + buffer + string.
+    const joined = Buffer.concat(chunks)
+    chunks.length = 0
+    return { content: joined.toString('utf-8'), fileSize }
   }
 
   /**
@@ -173,6 +227,18 @@ export class DaemonFileReader implements SessionFileReader {
   }
 
   private async readFileChunked(remotePath: string, size: number): Promise<string | null> {
+    // Fail fast: size is already known here, so reject before spending a
+    // concurrency slot and 32 MB of transfer on a read that cannot complete.
+    const limit = DaemonFileReader.maxReadBytes()
+    if (size > limit) {
+      log.session.warn('DaemonFileReader: whole-file read exceeds the byte ceiling — refusing', {
+        host: this.host, path: remotePath, fileSize: size, limit,
+      })
+      throw new Error(
+        `file read exceeded the ${limit}-byte ceiling (path=${remotePath}, size=${size}); ` +
+        'read a bounded window instead (see readSessionHistoryTail)',
+      )
+    }
     await DaemonFileReader.acquireFullReadSlot()
     try {
       const result = await this.readFileRange(remotePath, 0)
