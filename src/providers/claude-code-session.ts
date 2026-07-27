@@ -5892,21 +5892,45 @@ export class SessionRunner {
    * This prevents accumulation of zombie claude processes over time.
    */
   private async killOrphanedSessionProcesses(): Promise<void> {
+    // Single-flight: this runs fire-and-forget on every session start, and each
+    // run scans the whole sessions table + execs `ps` per live pid. Without the
+    // guard, launching several sessions back-to-back (or one Quick Start while a
+    // cron start fires) stacks concurrent scans that each burn CPU and contend on
+    // the same reads. Callers get the in-flight run's promise instead.
+    if (this._orphanSweepInFlight) return this._orphanSweepInFlight
+    const run = this._runOrphanSweep().finally(() => { this._orphanSweepInFlight = null })
+    this._orphanSweepInFlight = run
+    return run
+  }
+
+  private _orphanSweepInFlight: Promise<void> | null = null
+
+  private async _runOrphanSweep(): Promise<void> {
     try {
       const { listSessions, isTerminalSession } = await import('../core/session-tracker.js')
       const sessions = await listSessions()
 
+      // Cheap filters first (pure field reads, no syscalls), so the expensive
+      // liveness probes below run only for genuine candidates.
+      const candidates = sessions.filter((s) => {
+        if (s.pid == null) return false
+        if (s.provider === 'embedded' || s.provider === 'sdk') return false
+        return s.process_status === 'stopped' || s.process_status === 'error' || isTerminalSession(s)
+      })
+
+      // Probe liveness in PARALLEL. Each isProcessAliveAsync spawns `ps` (up to a
+      // 3s timeout); serially that was O(candidates) × exec latency — the bulk of
+      // the old ~1–2s. They're independent reads, so fan them out.
+      const alive = await Promise.all(
+        candidates.map(async (s) => ({
+          s,
+          isAlive: await isProcessAliveAsync(s.pid!, s.host ? 'ssh' : 'claude'),
+        })),
+      )
+
       let killed = 0
-      for (const s of sessions) {
-        if (s.pid == null) continue
-        if (s.provider === 'embedded' || s.provider === 'sdk') continue
-
-        // Kill processes for sessions that are stopped/error or in terminal state
-        const shouldBeDeadByStatus = s.process_status === 'stopped' || s.process_status === 'error'
-        if (!shouldBeDeadByStatus && !isTerminalSession(s)) continue
-
-        const processName = s.host ? 'ssh' : 'claude'
-        if (!await isProcessAliveAsync(s.pid, processName)) continue
+      for (const { s, isAlive } of alive) {
+        if (!isAlive) continue
 
         // GROUND-TRUTH RECHECK before a destructive kill — veto on POSITIVE proof of life.
         // This sweeper fires on every session start and trusts process_status==='stopped'
@@ -5941,7 +5965,8 @@ export class SessionRunner {
           process_status: s.process_status,
         })
 
-        try { process.kill(s.pid, 'SIGTERM') } catch { /* already dead */ }
+        // Non-null: the candidate filter above admitted only pid != null rows.
+        try { process.kill(s.pid!, 'SIGTERM') } catch { /* already dead */ }
         killed++
       }
 
@@ -6651,7 +6676,15 @@ export class SessionRunner {
     // Kill orphaned processes from stopped/terminal sessions to prevent accumulation.
     // Over time, claude processes can leak (e.g. idle timeout GC'd, server restart
     // orphaned the in-process timer). This ensures we don't exhaust OS resources.
-    await this.killOrphanedSessionProcesses()
+    //
+    // Deliberately NOT awaited: reaping OTHER sessions' leaked processes has no
+    // causal relation to starting THIS one, but the scan is expensive (whole
+    // sessions table + one `ps` exec per live pid — measured ~1–2s at 130 live
+    // pids / 3.3k rows) and it sat directly in front of the spawn, so the user
+    // paid all of it as click latency. Fire-and-forget keeps the cleanup while
+    // letting the CLI start now. The in-flight guard inside makes a burst of
+    // starts share ONE sweep instead of N concurrent table scans.
+    void this.killOrphanedSessionProcesses()
 
     const mapKey = taskId || `taskless-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     if (taskId) {
