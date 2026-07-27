@@ -47,13 +47,11 @@ const STARRED_TAB = '\u2605';
 // Keep in sync with .vd-panel width in globals.css.
 const PANEL_WIDTH = 340;
 
+// Simplified to the two user-facing states (To Do / Complete); intermediate
+// agent-lifecycle phases still exist in the data model but are hidden from UI.
 const PHASE_OPTIONS = [
   { value: '', label: 'All' },
   { value: 'TODO', label: 'To Do' },
-  { value: 'IN_PROGRESS', label: 'In Progress' },
-  { value: 'AGENT_COMPLETE', label: 'Agent Done' },
-  { value: 'AWAIT_HUMAN_ACTION', label: 'Awaiting You' },
-  { value: 'HUMAN_VERIFIED', label: 'Verified' },
   { value: 'COMPLETE', label: 'Complete' },
 ];
 

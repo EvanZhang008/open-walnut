@@ -8291,24 +8291,25 @@ img[data-lightbox-src],
   position: relative;
 }
 
+/* Ghost (no box): the phase circle stands alone; hover gets the usual soft
+   accent wash. User: "this button I don't want a box surrounding". */
 .task-quick-phase-btn {
   display: flex;
   align-items: center;
   gap: 3px;
   padding: 1px 6px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg-secondary);
+  border: none;
+  border-radius: 6px;
+  background: transparent;
   font-size: 11px;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
+  transition: background 0.15s;
   white-space: nowrap;
   line-height: 1.4;
 }
 
 .task-quick-phase-btn:hover {
-  background: var(--bg-tertiary);
-  border-color: var(--accent);
+  background: var(--accent-subtle);
 }
 
 .task-quick-phase-icon {

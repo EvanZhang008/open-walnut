@@ -13,7 +13,7 @@ import { timeAgo } from '@/utils/time';
 import { scrollLog } from '@/utils/scroll-debug';
 import type { ProcessStatus } from '@open-walnut/core';
 import type { TaskPhase } from '@/types/session';
-import { PHASE_LABELS, PHASE_COLORS, PROCESS_COLORS, resolveTaskSessionId } from '@/utils/session-status';
+import { PHASE_LABELS, PHASE_COLORS, PROCESS_COLORS, resolveTaskSessionId, phasePickerChoices, matchesPhaseFilter } from '@/utils/session-status';
 import type { UseFavoritesReturn } from '@/hooks/useFavorites';
 import type { UseOrderingReturn } from '@/hooks/useOrdering';
 import * as ICONS from '../common/Icons';
@@ -25,7 +25,6 @@ import {
   taskReferenceMatchField,
 } from './search-results';
 import { useTaskSearch } from '@/hooks/useTaskSearch';
-import { usePhaseHooks } from '@/hooks/usePhaseHooks';
 import {
   DndContext,
   DragOverlay,
@@ -282,6 +281,8 @@ interface SortableTaskItemProps {
   isFocused: boolean;
   isDetailOpen?: boolean;
   isRecentlyDone?: boolean;
+  /** True when the completion grace period will end in the item being hidden — plays the fade+collapse exit animation. */
+  isVanishing?: boolean;
   /** True when a drag over this task's RIGHT indent zone would nest it as a subtask. */
   isNestTarget?: boolean;
   /** True when a drag over this task's LEFT zone would group the two together. */
@@ -398,8 +399,7 @@ function buildTierGroupMeta(displayed: Task[], labels?: Record<string, string>):
   return map;
 }
 
-function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isNestTarget, isGroupTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, selectMode, onSelectToggle, onStartSelect, onSetPhase, onStar, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onUnparent, onMoveUp, isPinned, pinnedTier, searchContext, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask, onDissolveGroup, isGroupHidden, onUnhideGroup }: SortableTaskItemProps) {
-  const hookPhases = usePhaseHooks();
+function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVanishing, isNestTarget, isGroupTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, selectMode, onSelectToggle, onStartSelect, onSetPhase, onStar, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onUnparent, onMoveUp, isPinned, pinnedTier, searchContext, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask, onDissolveGroup, isGroupHidden, onUnhideGroup }: SortableTaskItemProps) {
   const {
     attributes,
     listeners,
@@ -422,22 +422,7 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isNes
     ...(depth > 0 ? { marginLeft: `${depth * 22}px` } : {}),
   };
 
-  const isDone = task.phase === 'COMPLETE';
-
-  // Phase picker dropdown state
-  const [phaseMenuOpen, setPhaseMenuOpen] = useState(false);
-  const phaseWrapperRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!phaseMenuOpen) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (phaseWrapperRef.current && !phaseWrapperRef.current.contains(e.target as Node)) {
-        setPhaseMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [phaseMenuOpen]);
+  const isDone = task.status === 'done' || task.phase === 'COMPLETE';
 
   const className = [
     'todo-panel-item',
@@ -649,45 +634,18 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isNes
           {task.needs_attention && !isDone && (
             <span className="task-attention-dot" role="img" aria-label="Needs your attention" title="Needs your attention" />
           )}
-          {/* Phase icon */}
-          <div className="phase-picker-wrapper phase-picker-inline" ref={phaseWrapperRef}>
-            <button
-              className={`task-phase-icon-btn task-status-${task.status} task-phase-${task.phase?.toLowerCase()}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                setPhaseMenuOpen(!phaseMenuOpen);
-              }}
-              aria-label={PHASE_LABEL[task.phase] ?? 'Change phase'}
-              title={PHASE_LABEL[task.phase] ?? 'Change phase'}
-            >
-              {PHASE_ICON[task.phase] ?? ICONS.ICON_PHASE_TODO}
-            </button>
-            {phaseMenuOpen && (
-              <div className="phase-picker-menu">
-                {PHASE_ORDER.map((phase, i) => (
-                  <button
-                    key={phase}
-                    className={`phase-picker-item${task.phase === phase ? ' active' : ''}`}
-                    style={i === PHASE_ORDER.length - 1 && PHASE_ORDER.length % 2 === 1 ? { gridColumn: '1 / -1' } : undefined}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (task.phase !== phase) onSetPhase(task.id, phase);
-                      setPhaseMenuOpen(false);
-                    }}
-                  >
-                    <span className={`phase-picker-icon task-phase-${phase.toLowerCase()}`}>
-                      {PHASE_ICON[phase]}
-                    </span>
-                    <span>{PHASE_LABEL[phase]}</span>
-                    {hookPhases.has(phase) && (
-                      <span className="phase-hook-indicator" title={hookPhases.get(phase)}>{ICONS.ICON_LIGHTNING}</span>
-                    )}
-                    {task.phase === phase && <span className="phase-picker-check">✓</span>}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+          {/* Phase icon — one click toggles To Do ↔ Complete */}
+          <button
+            className={`task-phase-icon-btn task-status-${task.status} task-phase-${task.phase?.toLowerCase()}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onSetPhase(task.id, isDone ? 'TODO' : 'COMPLETE');
+            }}
+            aria-label={isDone ? 'Reopen (mark To Do)' : 'Mark complete'}
+            title={isDone ? 'Done — click to reopen' : 'Click to complete'}
+          >
+            {ICONS.binaryPhaseIcon(isDone)}
+          </button>
           <span
             ref={titleRef}
             className={`todo-item-title${isEditing ? ' editing' : ''}`}
@@ -1464,7 +1422,7 @@ const RECENT_VISIBLE_MAX = 3;
 
 // ── InlineAdd — "+" row at the bottom of a tier or project group to add a task
 // directly into that context. Reuses the parent onCreate (optimistic + tier-correct path). ──
-function InlineAdd({ onAdd, label = 'Add to Focus…' }: { onAdd: (title: string) => void; label?: string }) {
+function InlineAdd({ onAdd, label = 'Add to Focus…' }: { onAdd: (title: string) => void | Promise<unknown>; label?: string }) {
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
@@ -1510,6 +1468,8 @@ function InlineAdd({ onAdd, label = 'Add to Focus…' }: { onAdd: (title: string
 interface RecentCardProps {
   task: Task;
   isFocused: boolean;
+  /** Completion grace period is ending in removal — play the fade+collapse exit. */
+  isVanishing?: boolean;
   isSessionOpen?: boolean;
   isDetailOpen?: boolean;
   onClick?: (task: Task) => void;
@@ -1531,7 +1491,7 @@ interface RecentCardProps {
 
 // ── SortableRecentCard — draggable recent-activity card with kebab menu ──
 
-function SortableRecentCard({ task, isFocused, isSessionOpen, isDetailOpen, onClick, onPinTask, onUnpinTask, isPinned, pinnedTier, onSetPriority, onSetDate, onStar, onSetTier, onExpandDetail, onClearFocus, onOpenSession, onSetPhase, onUpdateTitle, onDelete }: RecentCardProps) {
+function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onPinTask, onUnpinTask, isPinned, pinnedTier, onSetPriority, onSetDate, onStar, onSetTier, onExpandDetail, onClearFocus, onOpenSession, onSetPhase, onUpdateTitle, onDelete }: RecentCardProps) {
   // Static cards: done (tiers filter them out — a drag would silently vanish) and
   // pinned (already placed in a tier; that tier card is the draggable one). Static
   // cards register under a NAMESPACED sortable id — the raw task.id is already
@@ -1548,33 +1508,12 @@ function SortableRecentCard({ task, isFocused, isSessionOpen, isDetailOpen, onCl
     isDragging,
   } = useSortable({ id: isStatic ? `recent-static:${task.id}` : task.id, data: { source: 'recent' }, disabled: isStatic });
 
-  // Phase picker state — fixed positioning to escape overflow:hidden scroll containers
-  const [phaseMenuOpen, setPhaseMenuOpen] = useState(false);
-  const [phaseMenuPos, setPhaseMenuPos] = useState<{ top: number; left: number } | null>(null);
-  const phaseWrapperRef = useRef<HTMLDivElement>(null);
-
   // Editable title state
   const [isEditing, setIsEditing] = useState(false);
   const titleRef = useRef<HTMLSpanElement>(null);
   const isCommittingRef = useRef(false);
   const clickPosRef = useRef<{ x: number; y: number } | null>(null);
   const titleClickedRef = useRef(false);
-
-  // Close phase menu on outside click or scroll
-  useEffect(() => {
-    if (!phaseMenuOpen) return;
-    const handleClick = (e: MouseEvent) => {
-      if (phaseWrapperRef.current?.contains(e.target as Node)) return;
-      setPhaseMenuOpen(false);
-    };
-    const handleScroll = () => setPhaseMenuOpen(false);
-    document.addEventListener('mousedown', handleClick);
-    window.addEventListener('scroll', handleScroll);
-    return () => {
-      document.removeEventListener('mousedown', handleClick);
-      window.removeEventListener('scroll', handleScroll);
-    };
-  }, [phaseMenuOpen]);
 
   useEffect(() => {
     if (!isEditing && titleRef.current && titleRef.current.textContent !== task.title) {
@@ -1642,7 +1581,7 @@ function SortableRecentCard({ task, isFocused, isSessionOpen, isDetailOpen, onCl
       ref={setNodeRef}
       style={style}
       data-task-id={task.id}
-      className={`todo-pinned-card${isFocused ? ' todo-pinned-card-active' : ''}${needsAttention ? ' todo-pinned-card-attention' : ''}${isSessionOpen ? ' todo-pinned-card-session-open' : ''}${isDone ? ' todo-pinned-card-done' : ''}`}
+      className={`todo-pinned-card${isFocused ? ' todo-pinned-card-active' : ''}${needsAttention ? ' todo-pinned-card-attention' : ''}${isSessionOpen ? ' todo-pinned-card-session-open' : ''}${isDone ? ' todo-pinned-card-done' : ''}${isVanishing ? ' todo-card-vanishing' : ''}`}
       onClick={(e) => {
         if (isEditing) return;
         if ((e.target as HTMLElement).closest('.pinned-phase-picker')) return;
@@ -1663,54 +1602,18 @@ function SortableRecentCard({ task, isFocused, isSessionOpen, isDetailOpen, onCl
           {ICONS.tierIcon(pinnedTier)}
         </span>
       )}
-      {/* Phase icon with picker */}
-      <div className="phase-picker-wrapper phase-picker-inline pinned-phase-picker" ref={phaseWrapperRef}>
-        <button
-          className={`task-phase-icon-btn task-status-${task.status} task-phase-${task.phase?.toLowerCase()}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (!phaseMenuOpen && phaseWrapperRef.current) {
-              const rect = phaseWrapperRef.current.getBoundingClientRect();
-              const menuWidth = 300;
-              const menuHeight = 170;
-              let top = rect.bottom + 2;
-              let left = rect.left;
-              if (window.innerHeight - rect.bottom < menuHeight) top = rect.top - menuHeight - 2;
-              if (left + menuWidth > window.innerWidth) left = window.innerWidth - menuWidth - 8;
-              if (left < 8) left = 8;
-              setPhaseMenuPos({ top, left });
-            }
-            setPhaseMenuOpen(!phaseMenuOpen);
-          }}
-          aria-label={PHASE_LABEL[task.phase] ?? 'Change phase'}
-          title={PHASE_LABEL[task.phase] ?? 'Change phase'}
-        >
-          {PHASE_ICON[task.phase] ?? ICONS.ICON_PHASE_TODO}
-        </button>
-        {phaseMenuOpen && (
-          <div
-            className="phase-picker-menu"
-            style={phaseMenuPos ? { position: 'fixed', top: phaseMenuPos.top, left: phaseMenuPos.left, zIndex: 9999 } : undefined}
-          >
-            {PHASE_ORDER.map((phase, i) => (
-              <button
-                key={phase}
-                className={`phase-picker-item${task.phase === phase ? ' active' : ''}`}
-                style={i === PHASE_ORDER.length - 1 && PHASE_ORDER.length % 2 === 1 ? { gridColumn: '1 / -1' } : undefined}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (task.phase !== phase) onSetPhase?.(task.id, phase);
-                  setPhaseMenuOpen(false);
-                }}
-              >
-                <span className={`phase-picker-icon task-phase-${phase.toLowerCase()}`}>{PHASE_ICON[phase]}</span>
-                <span>{PHASE_LABEL[phase]}</span>
-                {task.phase === phase && <span className="phase-picker-check">✓</span>}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+      {/* Phase icon — one click toggles To Do ↔ Complete */}
+      <button
+        className={`task-phase-icon-btn pinned-phase-picker task-status-${task.status} task-phase-${task.phase?.toLowerCase()}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          onSetPhase?.(task.id, isDone ? 'TODO' : 'COMPLETE');
+        }}
+        aria-label={isDone ? 'Reopen (mark To Do)' : 'Mark complete'}
+        title={isDone ? 'Done — click to reopen' : 'Click to complete'}
+      >
+        {ICONS.binaryPhaseIcon(isDone)}
+      </button>
       {/* Editable title */}
       <span
         ref={titleRef}
@@ -2163,7 +2066,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const wouldBeHidden =
       (isDone && !showCompleted && phaseFilter !== 'COMPLETE') ||
       (!!priorityFilter && effectivePriority(task.priority) !== priorityFilter) ||
-      (!!phaseFilter && task.phase !== phaseFilter) ||
+      (!!phaseFilter && !matchesPhaseFilter(phaseFilter, task.phase)) ||
       (!!sessionFilter && task.phase !== sessionFilter) ||
       (sourceFilter !== 'all' && (task.source || 'ms-todo') !== sourceFilter) ||
       (!!dateFilter && !isDone && !matchesDateFilter(task, dateFilter, tasks)) ||
@@ -2989,7 +2892,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         if (!recentlyCompletedRef.current.has(t.id)) return false;
       }
       if (priorityFilter && effectivePriority(t.priority) !== priorityFilter) return false;
-      if (phaseFilter && t.phase !== phaseFilter) return false;
+      if (phaseFilter && !matchesPhaseFilter(phaseFilter, t.phase)) return false;
       if (sessionFilter) {
         if (t.phase !== sessionFilter) return false;
       }
@@ -3063,7 +2966,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const isDone = task.status === 'done';
     if (isDone && !showCompleted && phaseFilter !== 'COMPLETE') reasons.push('hidden by completed filter');
     if (priorityFilter && effectivePriority(task.priority) !== priorityFilter) reasons.push(`priority ≠ ${priorityFilter}`);
-    if (phaseFilter && task.phase !== phaseFilter) reasons.push(`phase ≠ ${phaseFilter}`);
+    if (phaseFilter && !matchesPhaseFilter(phaseFilter, task.phase)) reasons.push(`phase ≠ ${phaseFilter}`);
     if (sessionFilter && task.phase !== sessionFilter) reasons.push(`session ≠ ${sessionFilter}`);
     if (sourceFilter !== 'all' && (task.source || 'ms-todo') !== sourceFilter) reasons.push(`source ≠ ${sourceFilter}`);
     if (dateFilter && !isDone && !matchesDateFilter(task, dateFilter, tasks)) reasons.push(`outside "${DATE_LABELS[dateFilter] || dateFilter}" date filter`);
@@ -3079,7 +2982,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // tab — pins are a cross-category focus view by design.
   const passesExplicitFilters = useCallback((t: Task): boolean => {
     if (priorityFilter && effectivePriority(t.priority) !== priorityFilter) return false;
-    if (phaseFilter && t.phase !== phaseFilter) return false;
+    if (phaseFilter && !matchesPhaseFilter(phaseFilter, t.phase)) return false;
     if (sessionFilter && t.phase !== sessionFilter) return false;
     if (sourceFilter !== 'all' && (t.source || 'ms-todo') !== sourceFilter) return false;
     if (tagFilter && (!t.tags || !t.tags.includes(tagFilter))) return false;
@@ -3384,7 +3287,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
     // Priority counts (apply phase + session + source + tag filters)
     const forPriority = baseTasks.filter((t) => {
-      if (phaseFilter && t.phase !== phaseFilter) return false;
+      if (phaseFilter && !matchesPhaseFilter(phaseFilter, t.phase)) return false;
       if (sessionFilter && t.phase !== sessionFilter) return false;
       if (sourceFilter !== 'all' && (t.source || 'ms-todo') !== sourceFilter) return false;
       if (tagFilter && (!t.tags || !t.tags.includes(tagFilter))) return false;
@@ -3411,7 +3314,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // Session counts (apply priority + phase + source + tag filters)
     const forSession = baseTasks.filter((t) => {
       if (priorityFilter && effectivePriority(t.priority) !== priorityFilter) return false;
-      if (phaseFilter && t.phase !== phaseFilter) return false;
+      if (phaseFilter && !matchesPhaseFilter(phaseFilter, t.phase)) return false;
       if (sourceFilter !== 'all' && (t.source || 'ms-todo') !== sourceFilter) return false;
       if (tagFilter && (!t.tags || !t.tags.includes(tagFilter))) return false;
       return true;
@@ -3425,7 +3328,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // Source counts (apply priority + phase + session + tag filters)
     const forSource = baseTasks.filter((t) => {
       if (priorityFilter && effectivePriority(t.priority) !== priorityFilter) return false;
-      if (phaseFilter && t.phase !== phaseFilter) return false;
+      if (phaseFilter && !matchesPhaseFilter(phaseFilter, t.phase)) return false;
       if (sessionFilter && t.phase !== sessionFilter) return false;
       if (tagFilter && (!t.tags || !t.tags.includes(tagFilter))) return false;
       return true;
@@ -3443,7 +3346,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // Tag counts (apply priority + phase + session + source filters)
     const forTags = baseTasks.filter((t) => {
       if (priorityFilter && effectivePriority(t.priority) !== priorityFilter) return false;
-      if (phaseFilter && t.phase !== phaseFilter) return false;
+      if (phaseFilter && !matchesPhaseFilter(phaseFilter, t.phase)) return false;
       if (sessionFilter && t.phase !== sessionFilter) return false;
       if (sourceFilter !== 'all' && (t.source || 'ms-todo') !== sourceFilter) return false;
       return true;

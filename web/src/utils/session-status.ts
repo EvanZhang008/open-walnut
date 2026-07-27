@@ -58,6 +58,33 @@ export const PHASE_COLORS: Record<TaskPhase, string> = {
   COMPLETE: '#22c55e',
 };
 
+// ── Phase picker choices (simplified) ──
+
+/**
+ * Phases offered in ALL phase-picker menus: just To Do and Complete.
+ * The full lifecycle (IN_PROGRESS → AGENT_COMPLETE → …) still exists in the
+ * data model and is set by agents/automation; it's only hidden from manual
+ * pickers. If the task currently sits in a hidden phase, that phase is
+ * included (between the two) so the active state stays visible and escapable.
+ */
+export function phasePickerChoices(current?: TaskPhase | string | null): string[] {
+  if (current && current !== 'TODO' && current !== 'COMPLETE') {
+    return ['TODO', current, 'COMPLETE'];
+  }
+  return ['TODO', 'COMPLETE'];
+}
+
+/**
+ * Phase-filter matching for the simplified two-state UI:
+ * 'TODO' means "not complete" (any phase except COMPLETE), 'COMPLETE' matches
+ * exactly. Other filter values (deep links, saved prefs) still match exactly.
+ */
+export function matchesPhaseFilter(filter: string, phase: TaskPhase | string | undefined): boolean {
+  if (!filter) return true;
+  if (filter === 'TODO') return phase !== 'COMPLETE';
+  return phase === filter;
+}
+
 // ── Composite helpers ──
 
 /** Single color for indicators that combine process status and task phase.

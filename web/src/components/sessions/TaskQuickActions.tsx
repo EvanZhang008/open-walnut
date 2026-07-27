@@ -11,7 +11,6 @@ import type { Task, TaskPhase, TaskPriority } from '@open-walnut/core';
 import { fetchTask, updateTask, starTask } from '@/api/tasks';
 import { ApiError } from '@/api/client';
 import { useEvent } from '@/hooks/useWebSocket';
-import { usePhaseHooks } from '@/hooks/usePhaseHooks';
 import * as ICONS from '@/components/common/Icons';
 import type { FocusTier } from '@/api/focus';
 import { getIntegrationMeta, useIntegrations } from '@/hooks/useIntegrations';
@@ -40,11 +39,6 @@ const PHASE_LABEL: Record<string, string> = {
   COMPLETE: 'Complete',
 };
 
-const PHASE_ORDER: string[] = [
-  'TODO', 'IN_PROGRESS', 'AGENT_COMPLETE', 'AWAIT_HUMAN_ACTION',
-  'HUMAN_VERIFIED', 'POST_WORK_COMPLETED',
-  'COMPLETE',
-];
 
 /* ── Component ───────────────────────────────────────────────────── */
 
@@ -78,14 +72,8 @@ interface TaskQuickActionsProps {
 export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedTier, onPinTask, onUnpinTask, onSetTier, compact, slot = 'all', extraSection, onOpenTaskDetail }: TaskQuickActionsProps) {
   const integrations = useIntegrations();
   const [task, setTask] = useState<Task | null>(externalTask ?? null);
-  const [phaseMenuOpen, setPhaseMenuOpen] = useState(false);
-  const [phaseMenuPos, setPhaseMenuPos] = useState<{ top: number; left: number } | null>(null);
   const [kebabOpen, setKebabOpen] = useState(false);
   const [kebabPos, setKebabPos] = useState<{ top: number; right: number } | null>(null);
-  const hookPhases = usePhaseHooks();
-  const phaseRef = useRef<HTMLDivElement>(null);
-  const phaseBtnRef = useRef<HTMLButtonElement>(null);
-  const phaseMenuRef = useRef<HTMLDivElement>(null);
   const kebabBtnRef = useRef<HTMLButtonElement>(null);
   const kebabMenuRef = useRef<HTMLDivElement>(null);
 
@@ -115,24 +103,6 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
     if (d.task && d.task.id === taskId) setTask(d.task);
   });
 
-  // Close phase dropdown on outside click or scroll
-  useEffect(() => {
-    if (!phaseMenuOpen) return;
-    const handleClick = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (phaseRef.current?.contains(target)) return;
-      if (phaseMenuRef.current?.contains(target)) return;
-      setPhaseMenuOpen(false);
-    };
-    const handleScroll = () => setPhaseMenuOpen(false);
-    document.addEventListener('mousedown', handleClick);
-    window.addEventListener('scroll', handleScroll);
-    return () => {
-      document.removeEventListener('mousedown', handleClick);
-      window.removeEventListener('scroll', handleScroll);
-    };
-  }, [phaseMenuOpen]);
-
   // Close kebab on outside click or scroll
   useEffect(() => {
     if (!kebabOpen) return;
@@ -151,7 +121,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
   }, [kebabOpen, closeKebab]);
 
   const handlePhaseChange = useCallback((phase: string) => {
-    if (!task || task.phase === phase) { setPhaseMenuOpen(false); return; }
+    if (!task || task.phase === phase) return;
     const now = new Date().toISOString();
     const completing = phase === 'COMPLETE';
     setTask(prev => {
@@ -164,7 +134,6 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
         updated_at: now,
       };
     });
-    setPhaseMenuOpen(false);
     const id = task.id;
     const attempt = (retries: number) => {
       updateTask(id, { phase }).catch((err) => {
@@ -248,56 +217,20 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
 
   return (
     <div className="task-quick-actions">
-      {/* Phase picker — stays inline */}
+      {/* Phase badge — one click toggles To Do ↔ Complete */}
       {slot !== 'kebab' && task && (
-      <div className="task-quick-phase" ref={phaseRef}>
+      <div className="task-quick-phase">
         <button
-          ref={phaseBtnRef}
           className={`task-quick-phase-btn${task.phase ? ` task-phase-${task.phase.toLowerCase()}` : ''}`}
           onClick={(e) => {
             e.stopPropagation();
-            if (!phaseMenuOpen && phaseBtnRef.current) {
-              const rect = phaseBtnRef.current.getBoundingClientRect();
-              const menuWidth = 300;
-              const menuHeight = 170;
-              let top = rect.bottom + 2;
-              let left = rect.left;
-              if (window.innerHeight - rect.bottom < menuHeight) top = rect.top - menuHeight - 2;
-              if (left + menuWidth > window.innerWidth) left = window.innerWidth - menuWidth - 8;
-              if (left < 8) left = 8;
-              setPhaseMenuPos({ top, left });
-            }
-            setPhaseMenuOpen(!phaseMenuOpen);
+            handlePhaseChange(isDone ? 'TODO' : 'COMPLETE');
           }}
-          title={PHASE_LABEL[task.phase] ?? 'Change phase'}
+          title={isDone ? 'Done — click to reopen' : 'Click to complete'}
         >
-          <span className="task-quick-phase-icon">{PHASE_ICON[task.phase] ?? '○'}</span>
+          <span className="task-quick-phase-icon">{ICONS.binaryPhaseIcon(isDone)}</span>
           {!compact && <span className="task-quick-phase-label">{PHASE_LABEL[task.phase] ?? task.phase}</span>}
         </button>
-        {phaseMenuOpen && phaseMenuPos && (
-          <div
-            ref={phaseMenuRef}
-            className="phase-picker-menu task-quick-phase-menu"
-            style={{ top: phaseMenuPos.top, left: phaseMenuPos.left }}
-          >
-            {PHASE_ORDER.map((phase) => (
-              <button
-                key={phase}
-                className={`phase-picker-item${task.phase === phase ? ' active' : ''}`}
-                onClick={(e) => { e.stopPropagation(); handlePhaseChange(phase); }}
-              >
-                <span className={`phase-picker-icon task-phase-${phase.toLowerCase()}`}>
-                  {PHASE_ICON[phase]}
-                </span>
-                <span>{PHASE_LABEL[phase]}</span>
-                {hookPhases.has(phase) && (
-                  <span className="phase-hook-indicator" title={hookPhases.get(phase)}>⚡</span>
-                )}
-                {task.phase === phase && <span className="phase-picker-check">✓</span>}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
       )}
 

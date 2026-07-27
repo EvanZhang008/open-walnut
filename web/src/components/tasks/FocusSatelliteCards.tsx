@@ -114,11 +114,6 @@ const PHASE_LABEL: Record<string, string> = {
   COMPLETE: 'Complete',
 };
 
-const PHASE_ORDER: string[] = [
-  'TODO', 'IN_PROGRESS', 'AGENT_COMPLETE', 'AWAIT_HUMAN_ACTION',
-  'HUMAN_VERIFIED', 'POST_WORK_COMPLETED', 'COMPLETE',
-];
-
 // ── SortableTierCard — unified draggable card for any tier ──
 // Wrapped in React.memo (invariant #4) to prevent re-render cascades during drag.
 // Without memo, every RAF tick from bumpDragTick would re-render all cards in all tiers,
@@ -136,6 +131,8 @@ interface SortableTierCardProps {
   task: Task;
   tier: FocusTier;
   isFocused: boolean;
+  /** Completion grace period is ending in removal — play the fade+collapse exit. */
+  isVanishing?: boolean;
   isSessionOpen?: boolean;
   isDetailOpen?: boolean;
   onClick?: (task: Task) => void;
@@ -166,7 +163,7 @@ interface SortableTierCardProps {
   isGroupTarget?: boolean;
 }
 
-export const SortableTierCard = memo(function SortableTierCard({ task, tier, isFocused, isSessionOpen, isDetailOpen, onClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onStar, onExpandDetail, onClearFocus, onOpenSession, onSetPhase, onUpdateTitle, onDelete, groupInfo, selectMode, isSelected, onSelectToggle, onStartSelect, isGroupTarget }: SortableTierCardProps) {
+export const SortableTierCard = memo(function SortableTierCard({ task, tier, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onStar, onExpandDetail, onClearFocus, onOpenSession, onSetPhase, onUpdateTitle, onDelete, groupInfo, selectMode, isSelected, onSelectToggle, onStartSelect, isGroupTarget }: SortableTierCardProps) {
   const {
     attributes,
     listeners,
@@ -178,33 +175,12 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
     // drag (mirrors the main list — drag + multi-select gestures otherwise conflict).
   } = useSortable({ id: task.id, disabled: selectMode });
 
-  // Phase picker state — uses fixed positioning to escape overflow:hidden scroll containers
-  const [phaseMenuOpen, setPhaseMenuOpen] = useState(false);
-  const [phaseMenuPos, setPhaseMenuPos] = useState<{ top: number; left: number } | null>(null);
-  const phaseWrapperRef = useRef<HTMLDivElement>(null);
-
   // Editable title state
   const [isEditing, setIsEditing] = useState(false);
   const titleRef = useRef<HTMLSpanElement>(null);
   const isCommittingRef = useRef(false);
   const clickPosRef = useRef<{ x: number; y: number } | null>(null);
   const titleClickedRef = useRef(false);
-
-  // Close phase menu on outside click or scroll
-  useEffect(() => {
-    if (!phaseMenuOpen) return;
-    const handleClick = (e: MouseEvent) => {
-      if (phaseWrapperRef.current?.contains(e.target as Node)) return;
-      setPhaseMenuOpen(false);
-    };
-    const handleScroll = () => setPhaseMenuOpen(false);
-    document.addEventListener('mousedown', handleClick);
-    window.addEventListener('scroll', handleScroll);
-    return () => {
-      document.removeEventListener('mousedown', handleClick);
-      window.removeEventListener('scroll', handleScroll);
-    };
-  }, [phaseMenuOpen]);
 
   // Sync title text when task.title changes externally while not editing
   useEffect(() => {
@@ -271,6 +247,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
   };
 
   const needsAttention = task.phase === 'AGENT_COMPLETE' || task.phase === 'AWAIT_HUMAN_ACTION';
+  const isDone = task.status === 'done' || task.phase === 'COMPLETE';
   const cardClass = tier === 'focus' ? 'todo-focus-card' : 'todo-pinned-card';
   // Virtual-group cluster classes — reuse the main list's rail/rounding styling.
   const groupClass = groupInfo
@@ -286,7 +263,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       style={style}
       data-task-id={task.id}
       data-group-id={groupInfo?.groupId}
-      className={`${cardClass}${groupClass}${isFocused ? ' todo-pinned-card-active' : ''}${needsAttention ? ' todo-pinned-card-attention' : ''}${isSessionOpen ? ' todo-pinned-card-session-open' : ''}${isSelected ? ' task-multi-selected' : ''}${isGroupTarget ? ' todo-panel-item-group-target' : ''}`}
+      className={`${cardClass}${groupClass}${isFocused ? ' todo-pinned-card-active' : ''}${needsAttention ? ' todo-pinned-card-attention' : ''}${isSessionOpen ? ' todo-pinned-card-session-open' : ''}${isSelected ? ' task-multi-selected' : ''}${isGroupTarget ? ' todo-panel-item-group-target' : ''}${isDone ? ' todo-pinned-card-done' : ''}${isVanishing ? ' todo-card-vanishing' : ''}`}
       onClick={(e) => {
         if (isEditing) return;
         // Select mode: a click anywhere toggles selection (no navigation/edit).
@@ -315,56 +292,18 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
           &#x2630;
         </span>
       )}
-      {/* Phase icon with picker */}
-      <div className="phase-picker-wrapper phase-picker-inline pinned-phase-picker" ref={phaseWrapperRef}>
-        <button
-          className={`task-phase-icon-btn task-status-${task.status} task-phase-${task.phase?.toLowerCase()}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (!phaseMenuOpen && phaseWrapperRef.current) {
-              const rect = phaseWrapperRef.current.getBoundingClientRect();
-              const menuWidth = 300;
-              const menuHeight = 170;
-              let top = rect.bottom + 2;
-              let left = rect.left;
-              if (window.innerHeight - rect.bottom < menuHeight) top = rect.top - menuHeight - 2;
-              if (left + menuWidth > window.innerWidth) left = window.innerWidth - menuWidth - 8;
-              if (left < 8) left = 8;
-              setPhaseMenuPos({ top, left });
-            }
-            setPhaseMenuOpen(!phaseMenuOpen);
-          }}
-          aria-label={PHASE_LABEL[task.phase] ?? 'Change phase'}
-          title={PHASE_LABEL[task.phase] ?? 'Change phase'}
-        >
-          {PHASE_ICON[task.phase] ?? ICONS.ICON_PHASE_TODO}
-        </button>
-        {phaseMenuOpen && (
-          <div
-            className="phase-picker-menu"
-            style={phaseMenuPos ? { position: 'fixed', top: phaseMenuPos.top, left: phaseMenuPos.left, zIndex: 9999 } : undefined}
-          >
-            {PHASE_ORDER.map((phase, i) => (
-              <button
-                key={phase}
-                className={`phase-picker-item${task.phase === phase ? ' active' : ''}`}
-                style={i === PHASE_ORDER.length - 1 && PHASE_ORDER.length % 2 === 1 ? { gridColumn: '1 / -1' } : undefined}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (task.phase !== phase) onSetPhase?.(task.id, phase);
-                  setPhaseMenuOpen(false);
-                }}
-              >
-                <span className={`phase-picker-icon task-phase-${phase.toLowerCase()}`}>
-                  {PHASE_ICON[phase]}
-                </span>
-                <span>{PHASE_LABEL[phase]}</span>
-                {task.phase === phase && <span className="phase-picker-check">✓</span>}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+      {/* Phase icon — one click toggles To Do ↔ Complete */}
+      <button
+        className={`task-phase-icon-btn pinned-phase-picker task-status-${task.status} task-phase-${task.phase?.toLowerCase()}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          onSetPhase?.(task.id, isDone ? 'TODO' : 'COMPLETE');
+        }}
+        aria-label={isDone ? 'Reopen (mark To Do)' : 'Mark complete'}
+        title={isDone ? 'Done — click to reopen' : 'Click to complete'}
+      >
+        {ICONS.binaryPhaseIcon(isDone)}
+      </button>
       {/* Editable title */}
       <span
         ref={titleRef}

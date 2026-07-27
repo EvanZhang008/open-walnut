@@ -51,6 +51,16 @@ export const ICON_UNLOCK = <svg width="14" height="14" viewBox="0 0 16 16" fill=
 // Sliders / filter-options icon — three horizontal tracks each with a knob.
 export const ICON_SLIDERS = <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><line x1="2" y1="4" x2="14" y2="4"/><line x1="2" y1="8" x2="14" y2="8"/><line x1="2" y1="12" x2="14" y2="12"/><circle cx="11" cy="4" r="1.7" fill="var(--bg-elevated,#1c1e24)"/><circle cx="5" cy="8" r="1.7" fill="var(--bg-elevated,#1c1e24)"/><circle cx="10" cy="12" r="1.7" fill="var(--bg-elevated,#1c1e24)"/></svg>;
 
+/**
+ * Binary task-state icon — the ONLY glyph pair the interactive task toggle uses:
+ * hollow circle = open, single check = done. The 7-phase lifecycle still exists in
+ * the data model (and keeps its per-phase COLOR via .task-phase-*), but the shape is
+ * deliberately two-valued so a task row reads like a plain todo item.
+ */
+export function binaryPhaseIcon(isDone: boolean): ReactNode {
+  return isDone ? ICON_PHASE_AGENT_COMPLETE : ICON_PHASE_TODO;
+}
+
 // ── Phase icon map (for TodoPanel, StatusBadge, ChatMessage) ──
 export function phaseIcon(phase: string): ReactNode {
   switch (phase) {
