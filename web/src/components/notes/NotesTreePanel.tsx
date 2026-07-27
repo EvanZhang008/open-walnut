@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo, memo } from 'react';
-import { searchNotes, saveNoteContent, revealNote } from '@/api/notes-v2';
-import type { NoteTreeNode, SearchResult } from '@/api/notes-v2';
+import { searchNotesHybrid, saveNoteContent, revealNote } from '@/api/notes-v2';
+import type { NoteTreeNode, SearchResult, SearchFolderGroup } from '@/api/notes-v2';
 import { NotesBookmarksGroup } from './NotesBookmarksGroup';
 import { NotesRecentGroup, RECENT_GROUP_KEY } from './NotesRecentGroup';
 import { HighlightedText, HighlightedTitle } from './HighlightedText';
@@ -17,6 +17,14 @@ import { useConfirm, useAlert } from '@/hooks/useConfirm';
  * the opposite convention (present ⇒ expanded), so the sentinel is treated specially.
  */
 const LS_EXPANDED_KEY = 'open-walnut-notes-expanded';
+
+/**
+ * Keystroke debounce before the first (string-only) search fires. 300ms read as
+ * laggy on a leg that answers in ~40ms; 120ms is below the ~150ms threshold where
+ * a UI stops feeling reactive, while still collapsing a fast typist's burst into
+ * one request.
+ */
+const SEARCH_DEBOUNCE_MS = 120;
 
 function readExpandedFolders(): Set<string> {
   try {
@@ -122,6 +130,9 @@ export const NotesTreePanel = memo(function NotesTreePanel({
 }: NotesTreePanelProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
+  // Folders whose NAME matched the query — rendered ABOVE the note rows so a
+  // query like "dairy" answers with the Dairy/ folder, not 30 date-named notes.
+  const [searchFolders, setSearchFolders] = useState<SearchFolderGroup[]>([]);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(readExpandedFolders);
   const [creatingIn, setCreatingIn] = useState<string | null>(null);
   const [newItemName, setNewItemName] = useState('');
@@ -225,30 +236,60 @@ export const NotesTreePanel = memo(function NotesTreePanel({
     };
   }, []);
 
-  // Search handler with debounce. Previous results stay rendered during a
-  // refetch (we only setSearchResults on response) so typing never collapses the
-  // list to a flash of "No results"; the seq guard drops out-of-order responses
-  // so a slow older query can't overwrite a newer one.
+  // Search handler — TWO-STAGE so the list feels instant.
+  //
+  // Stage 1 (`mode=string`) is pure local SQLite FTS/LIKE/folder matching: ~20-60ms,
+  // no embedding, no model. It renders at SEARCH_DEBOUNCE_MS so results appear
+  // while you're still typing.
+  // Stage 2 (`mode=hybrid`) adds the semantic leg and REPLACES stage 1 when it
+  // lands. It's the slower leg (embedding + vector lookup), so it must never gate
+  // first paint — that ordering is the whole point.
+  //
+  // Previous results stay rendered during a refetch (we only set state on
+  // response) so typing never collapses the list to a flash of "No results". The
+  // seq guard drops out-of-order responses so a slow older query can't overwrite
+  // a newer one, and each keystroke aborts the previous stage-2 request so the
+  // server isn't doing embedding work for text the user already replaced.
   const searchSeqRef = useRef(0);
+  const searchAbortRef = useRef<AbortController | null>(null);
   const handleSearchChange = useCallback((value: string) => {
     setSearchQuery(value);
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    searchAbortRef.current?.abort();
+    searchAbortRef.current = null;
 
     if (!value.trim()) {
       searchSeqRef.current++; // invalidate any in-flight search
       setSearchResults(null);
+      setSearchFolders([]);
       return;
     }
 
     const seq = ++searchSeqRef.current;
-    searchTimerRef.current = setTimeout(async () => {
-      try {
-        const results = await searchNotes(value.trim());
-        if (seq === searchSeqRef.current) setSearchResults(results);
-      } catch {
-        if (seq === searchSeqRef.current) setSearchResults([]);
-      }
-    }, 300);
+    searchTimerRef.current = setTimeout(() => {
+      const q = value.trim();
+      const ac = new AbortController();
+      searchAbortRef.current = ac;
+      const fresh = () => seq === searchSeqRef.current;
+
+      // Stage 1 — instant, string-only.
+      searchNotesHybrid(q, { mode: 'string', signal: ac.signal })
+        .then((p) => {
+          if (!fresh()) return;
+          setSearchResults(p.results);
+          setSearchFolders(p.folders ?? []);
+        })
+        .catch(() => { if (fresh()) setSearchResults([]); });
+
+      // Stage 2 — semantic upgrade, merged in when it arrives.
+      searchNotesHybrid(q, { mode: 'hybrid', signal: ac.signal })
+        .then((p) => {
+          if (!fresh()) return;
+          setSearchResults(p.results);
+          setSearchFolders(p.folders ?? []);
+        })
+        .catch(() => { /* stage 1 already rendered — a semantic failure is not fatal */ });
+    }, SEARCH_DEBOUNCE_MS);
   }, []);
 
   const toggleFolder = useCallback((path: string) => {

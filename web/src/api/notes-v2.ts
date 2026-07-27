@@ -87,6 +87,18 @@ export interface SearchResult {
   stringScore?: number;
   semanticScore?: number;
   matchedTags?: string[];
+  /** Folder whose NAME matched the query (query "dairy" → "Areas/Journal/Dairy"). */
+  folderMatch?: string;
+}
+
+/** A folder whose NAME matched the search query — rendered above the note rows. */
+export interface SearchFolderGroup {
+  /** Vault-relative folder path. */
+  path: string;
+  /** Basename (the segment that matched). */
+  name: string;
+  /** How many notes under it matched (counted pre-cap, so honest for big folders). */
+  noteCount: number;
 }
 
 export interface BacklinkResult {
@@ -162,15 +174,18 @@ export async function searchNotes(query: string): Promise<SearchResult[]> {
 export async function searchNotesHybrid(
   query: string,
   opts: { mode?: 'hybrid' | 'string' | 'semantic'; limit?: number; signal?: AbortSignal } = {},
-): Promise<{ results: SearchResult[]; degraded?: 'semantic-unavailable' }> {
+): Promise<NotesSearchPayload> {
   const params: Record<string, string> = { q: query };
   if (opts.mode) params.mode = opts.mode;
   if (opts.limit) params.limit = String(opts.limit);
-  return apiGet<{ results: SearchResult[]; degraded?: 'semantic-unavailable' }>(
-    '/api/notes-v2/search',
-    params,
-    { signal: opts.signal },
-  );
+  return apiGet<NotesSearchPayload>('/api/notes-v2/search', params, { signal: opts.signal });
+}
+
+export interface NotesSearchPayload {
+  results: SearchResult[];
+  /** Folders whose name matched — absent when none did. */
+  folders?: SearchFolderGroup[];
+  degraded?: 'semantic-unavailable';
 }
 
 export async function fetchBacklinks(notePath: string): Promise<BacklinkResult[]> {

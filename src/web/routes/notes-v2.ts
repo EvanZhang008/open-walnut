@@ -766,14 +766,36 @@ function findNoteIdByRelPath(rel: string): string | undefined {
 const BIG = 1_000_000
 
 /**
- * Semantic-only relevance floor + cap. QMD happily returns 0.3-score noise
+ * Semantic-only relevance floor + cap. QMD happily returns low-score noise
  * ("Shoping", "Post office" for query "dental") which made search feel broken.
  * We keep semantic hits that either (a) ALSO matched as a string (matchType
- * 'both', no floor) or (b) clear this cosine floor; and we cap how many
- * semantic-ONLY rows survive so the list isn't flooded with weak matches.
+ * 'both', no floor) or (b) clear the floor; and we cap how many semantic-ONLY
+ * rows survive so the list isn't flooded with weak matches.
  */
-const SEMANTIC_FLOOR = 0.45
 const SEMANTIC_ONLY_CAP = 10
+
+/**
+ * How many notes matched ONLY by their containing folder's name may appear. The
+ * folder row itself carries the full count and opens the folder, so these rows
+ * are just a sample — uncapped, a 233-note folder would consume the whole list.
+ */
+const FOLDER_ONLY_CAP = 5
+
+/**
+ * Interactive-search relevance floor for the RRF-only (rerank-disabled) semantic
+ * leg. Without the local reranker QMD scores a hit as `1 / rrfRank`, so the
+ * [0,1] cosine-like scale SEMANTIC_FLOOR assumes no longer applies: rank 1 =
+ * 1.0, rank 2 = 0.5, rank 3 = 0.33 … Reusing 0.45 here would keep only the top
+ * TWO semantic rows. 1/6 keeps the top six — the same recall the reranked path
+ * produced — while still dropping the long RRF tail.
+ *
+ * Why rerank is off at all: the reranker is a local llama.cpp cross-encoder over
+ * up to 40 candidate chunks. Cold (uncached query) that costs 5–8s of the ~8s
+ * total request, and it runs on EVERY keystroke-debounced search. `/api/search`
+ * already passes `rerank: false` for exactly this reason; the notes panel was
+ * the last interactive surface still paying for it.
+ */
+const SEMANTIC_RRF_FLOOR = 1 / 6
 
 // GET /api/notes-v2/search?q&mode&limit — hybrid string+semantic, deduped, labeled
 notesV2Router.get('/search', async (req: Request, res: Response, next: NextFunction) => {
@@ -796,7 +818,14 @@ notesV2Router.get('/search', async (req: Request, res: Response, next: NextFunct
 
     const [stringSettled, semanticSettled] = await Promise.allSettled([
       wantString ? Promise.resolve(stringSearch(q, limit * 2)) : Promise.resolve([]),
-      wantSemantic ? memoryNotesSearch(q, ['note_vault'], limit * 2) : Promise.resolve([]),
+      // rerank:false + overfetch 1 — see SEMANTIC_RRF_FLOOR. This is the
+      // difference between a ~60ms and a ~8s notes search.
+      wantSemantic
+        ? memoryNotesSearch(q, ['note_vault'], limit * 2, undefined, {
+            rerank: false,
+            overfetchMultiplier: 1,
+          })
+        : Promise.resolve([]),
     ])
 
     const byId = new Map<string, SearchResultRow>()
@@ -828,7 +857,7 @@ notesV2Router.get('/search', async (req: Request, res: Response, next: NextFunct
           if (!existing.snippet.includes('<mark>') && h.snippet) {
             existing.snippet = cleanSnippetText(h.snippet)
           }
-        } else if (h.score >= SEMANTIC_FLOOR) {
+        } else if (h.score >= SEMANTIC_RRF_FLOOR) {
           // Semantic-only: keep only above the relevance floor (drops noise).
           byId.set(id, {
             id,
