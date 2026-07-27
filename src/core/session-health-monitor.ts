@@ -41,6 +41,74 @@ const HEALTH_V2 = process.env.WALNUT_HEALTH_V2 !== '0'
  */
 const DEFAULT_LOCAL_IDLE_TIMEOUT_MS = 60 * 60 * 1000
 const DEFAULT_REMOTE_IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000
+/**
+ * Ceiling on ONE session's daemon probe inside a per-session loop.
+ *
+ * The tick budget (HEALTH_CHECK_BUDGET_MS) is only consulted *between* phases, so
+ * it cannot cut off a single slow session: `await runner.isBackgroundWorkActive()`
+ * reaches a daemon RPC whose own timeout is COMMAND_TIMEOUT_MS = 30_000, and a
+ * host stuck in the "connected but no pong yet" window pays that in full — per
+ * session, serially. Two such sessions already blow the 20 s budget before the
+ * budget is ever checked again, which is how a tick reached 11 s (and worse).
+ *
+ * 5 s is generous for a healthy daemon (observed p99 well under 1 s) and turns a
+ * dead host into a bounded cost instead of an unbounded one.
+ */
+const DEFAULT_SESSION_PROBE_TIMEOUT_MS = 5_000
+/** Override for genuinely high-latency deployments (and for tests). */
+function sessionProbeTimeoutMs(): number {
+  const raw = process.env.WALNUT_HEALTH_PROBE_TIMEOUT_MS
+  if (raw) {
+    const parsed = Number(raw)
+    if (Number.isFinite(parsed) && parsed > 0) return parsed
+  }
+  return DEFAULT_SESSION_PROBE_TIMEOUT_MS
+}
+/** Unique sentinel so a probe legitimately resolving to undefined/null/false isn't mistaken for a timeout. */
+const TIMED_OUT = Symbol('probe-timeout')
+
+/**
+ * Race a per-session probe against SESSION_PROBE_TIMEOUT_MS.
+ *
+ * `fallback` is what we assume on timeout, and it must always be the SAFE answer,
+ * not the likely one: for isBackgroundWorkActive that is `true` ("assume busy"),
+ * because the false branch leads to killing the session. An unknown-state session
+ * must never be reaped on a probe that merely timed out.
+ */
+export async function probeWithTimeout<T>(
+  probe: Promise<T> | T,
+  fallback: T,
+  label: string,
+  sessionId: string,
+): Promise<T> {
+  if (!(probe instanceof Promise)) return probe
+  const timeoutMs = sessionProbeTimeoutMs()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
+      timer = setTimeout(() => resolve(TIMED_OUT), timeoutMs)
+      if (timer && typeof timer === 'object' && 'unref' in timer) timer.unref()
+    })
+    const winner = await Promise.race([probe, timeout])
+    if (winner === TIMED_OUT) {
+      log.session.warn('health monitor: per-session probe timed out — assuming safe default', {
+        sessionId, probe: label, timeoutMs, assumed: String(fallback),
+      })
+      // Abandon the loser rather than awaiting it — that is the whole point of the
+      // ceiling. Safe: Promise.race has already subscribed to it, so a rejection
+      // arriving later is handled and cannot become an unhandledRejection.
+      return fallback
+    }
+    return winner as T
+  } catch (err) {
+    log.session.debug('health monitor: per-session probe failed', {
+      sessionId, probe: label, error: err instanceof Error ? err.message : String(err),
+    })
+    return fallback
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
 
 export class SessionHealthMonitor {
   private handle: PeriodicHandle | null = null
@@ -77,10 +145,13 @@ export class SessionHealthMonitor {
     }
   }
 
-  /** Manual/test entry point — one tick without the periodic scheduler. */
-  async check(): Promise<void> {
+  /**
+   * Manual/test entry point — one tick without the periodic scheduler.
+   * `ctx` defaults to an unlimited budget; pass one to exercise budget abandonment.
+   */
+  async check(ctx?: TickContext): Promise<void> {
     const noBudget: TickContext = { overBudget: () => false, elapsedMs: () => 0 }
-    await this.checkInner(noBudget)
+    await this.checkInner(ctx ?? noBudget)
   }
 
   private async checkInner(ctx: TickContext): Promise<void> {
@@ -278,17 +349,31 @@ export class SessionHealthMonitor {
     // while the process stays alive. Idle timeout misses this because Walnut's own user
     // message writes refresh the file mtime.
     if (ctx.overBudget()) return
-    const hungKilledIds = await this.checkHungSessions(sessions, updateSessionRecord)
+    const hungKilledIds = await this.checkHungSessions(sessions, updateSessionRecord, ctx)
+    endPhase('hungSessions')
 
     // Idle timeout — kill sessions with stale outputFile mtime past the configured threshold.
     // Returns IDs of sessions it killed — the main loop must skip those to avoid
     // a race where the stale in-memory process_status ('idle') causes the main loop
     // to overwrite the correct 'stopped' with 'error' + "Process exited without result".
     if (ctx.overBudget()) return
-    const idleTimedOutIds = await this.checkIdleTimeout(sessions, updateSessionRecord, taskMap, cachedIsAlive)
+    const idleTimedOutIds = await this.checkIdleTimeout(sessions, updateSessionRecord, taskMap, cachedIsAlive, ctx)
+    endPhase('idleTimeout')
 
     if (ctx.overBudget()) return
+    let livenessChecked = 0
     for (const session of sessions) {
+      // In-loop budget: each iteration can await a liveness probe AND up to three
+      // sequential writes, so the between-phase check alone let this loop run
+      // arbitrarily past the budget. Abandoning is safe — every state transition
+      // here is idempotent and re-derived from scratch next tick.
+      if (ctx.overBudget()) {
+        log.session.warn('health monitor: liveness loop abandoned mid-loop (over budget)', {
+          checked: livenessChecked, sessionCount: sessions.length,
+        })
+        break
+      }
+      livenessChecked++
       // Skip sessions already handled by reconcile, idle timeout, or hung detection (prevents stale-state race)
       if (reconciledIds.has(session.claudeSessionId)) continue
       if (idleTimedOutIds.has(session.claudeSessionId)) continue
@@ -542,6 +627,7 @@ export class SessionHealthMonitor {
   private async checkHungSessions(
     sessions: SessionRecord[],
     updateSessionRecord: (id: string, update: Record<string, unknown>) => Promise<SessionRecord>,
+    ctx?: TickContext,
   ): Promise<Set<string>> {
     const WARN_THRESHOLD_MS = 5 * 60 * 1000  // log warning after 5 min with no Claude output
     const flaggedIds = new Set<string>()
@@ -553,6 +639,17 @@ export class SessionHealthMonitor {
     } catch { return flaggedIds }
 
     for (const session of sessions) {
+      // Budget is enforced INSIDE the loop, not only between phases: this loop
+      // makes one bounded daemon probe per session, so a large scan set can still
+      // exceed the tick budget while the old between-phase check sat unreached.
+      // Remaining sessions get the next tick — this phase is a detector, not a
+      // correctness-critical write path.
+      if (ctx?.overBudget()) {
+        log.session.warn('health monitor: checkHungSessions abandoned mid-loop (over budget)', {
+          checked: flaggedIds.size, sessionCount: sessions.length,
+        })
+        break
+      }
       if (session.process_status !== 'running') continue
 
       // Skip team-active sessions — poll loop produces no Claude output, but is not hung
@@ -561,7 +658,13 @@ export class SessionHealthMonitor {
       // produces no output for minutes, but the session is busy, not hung. L2: this PULLs the
       // daemon-authoritative task state and reconciles any lost-terminal event before deciding,
       // so a wedged session self-heals on this tick (see claude-code-session reconcileFromDaemon).
-      if (await runner.isBackgroundWorkActive(session.claudeSessionId)) continue
+      // Bounded: this reaches a daemon RPC whose own timeout is 30s. On timeout we
+      // assume busy (true) — the flagged path only writes a UI banner, so a false
+      // "busy" costs one tick of visibility, while an unbounded wait costs the tick.
+      if (await probeWithTimeout(
+        runner.isBackgroundWorkActive(session.claudeSessionId), true,
+        'isBackgroundWorkActive', session.claudeSessionId,
+      )) continue
 
       const ts = runner.getSessionTimestamps(session.claudeSessionId)
       if (!ts) continue
@@ -614,6 +717,7 @@ export class SessionHealthMonitor {
     updateSessionRecord: (id: string, update: Record<string, unknown>) => Promise<SessionRecord>,
     taskMap: Map<string, Task>,
     cachedIsAlive: (s: SessionRecord) => Promise<boolean>,
+    ctx?: TickContext,
   ): Promise<Set<string>> {
     const killedIds = new Set<string>()
     // Config override applies uniformly to local + remote when set. 0 = disabled.
@@ -646,6 +750,15 @@ export class SessionHealthMonitor {
     } catch { /* fallback: no team check */ }
 
     for (const session of sessions) {
+      // Budget enforced inside the loop (see checkHungSessions). Safe to abandon:
+      // an idle session that misses this tick is reaped on the next one, and the
+      // thresholds are 1–2 HOURS, so 30 s of extra life is immaterial.
+      if (ctx?.overBudget()) {
+        log.session.warn('health monitor: checkIdleTimeout abandoned mid-loop (over budget)', {
+          killed: killedIds.size, sessionCount: sessions.length,
+        })
+        break
+      }
       // Per-session threshold: config override wins; otherwise remote gets 2h, local gets 1h.
       const isRemote = !!session.host
       const idleTimeoutMs = configOverrideMs
@@ -670,7 +783,13 @@ export class SessionHealthMonitor {
       // output, but the session is busy, not idle. Killing it would abort the workflow.
       // L2: PULLs the daemon-authoritative task state and reconciles any lost-terminal event
       // first, so a wedged session self-heals on this tick (see reconcileFromDaemon).
-      if (await runner?.isBackgroundWorkActive?.(session.claudeSessionId)) {
+      // Bounded (see probeWithTimeout): on timeout assume ACTIVE. The false branch
+      // of this check leads to killing the session, so an unknown answer must never
+      // be read as "idle" — that would reap a live workflow because a host was slow.
+      if (await probeWithTimeout(
+        runner?.isBackgroundWorkActive?.(session.claudeSessionId) ?? false, true,
+        'isBackgroundWorkActive', session.claudeSessionId,
+      )) {
         log.session.debug('health monitor: skipping idle check — background work active', {
           sessionId: session.claudeSessionId, taskId: session.taskId,
         })
