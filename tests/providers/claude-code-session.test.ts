@@ -3001,3 +3001,91 @@ describe('SessionRunner.currentTurn — live daemon round-trip', () => {
     await waitForResult(collected2).catch(() => {});
   }, 20_000);
 });
+
+// ═══════════════════════════════════════════════════════════════════
+//  REGRESSION inc-1785091339102 — the 60s activeProcessing safety timeout used
+//  to DELETE batchMessageIds. A normal turn routinely runs longer than 60s (228s
+//  in the incident), so the eventual SESSION_BATCH_COMPLETED fired WITHOUT ids
+//  (`ids=0` in the logs). That demoted the frontend from exact-id bubble removal
+//  to the count fallback and left the user's message pinned at the bottom of the
+//  timeline for 20 minutes.
+//
+//  Invariant pinned here: the timeout may clear the in-flight FLAG (its job), but
+//  the batch's message ids must SURVIVE so a late result still names them.
+// ═══════════════════════════════════════════════════════════════════
+
+describe('activeProcessing safety timeout — batch ids survive for a late result', () => {
+  // White-box on purpose: the regression is one line inside setActiveProcessing's
+  // timeout body, and the observable consequence (SESSION_BATCH_COMPLETED carrying
+  // ids) is produced by the result handler reading `batchMessageIds` MINUTES later.
+  // Driving a >60s real turn would mean a 60s test; asserting the map directly pins
+  // the exact invariant the incident violated.
+  interface RunnerInternals {
+    setActiveProcessing(sessionId: string, batchCount: number, messageIds?: string[]): void
+    activeProcessing: Set<string>
+    batchCounts: Map<string, number>
+    batchMessageIds: Map<string, string[]>
+    activeProcessingTimers: Map<string, ReturnType<typeof setTimeout>>
+  }
+
+  it('the timeout clears the in-flight flag but KEEPS the batch messageIds', async () => {
+    const runner = useDaemon(new SessionRunner(MOCK_CLI));
+    const internal = runner as unknown as RunnerInternals;
+    const sid = 'timeout-keeps-ids';
+
+    try {
+      vi.useFakeTimers();
+      internal.setActiveProcessing(sid, 1, ['qm-late-1']);
+      // The ledger promise rejects on abortTurn — observe it so the abort below
+      // doesn't surface as an unhandled rejection.
+      const turn = runner.currentTurn(sid);
+      expect(turn).toBeDefined();
+      const settled = turn!.then(() => 'resolved').catch(() => 'rejected');
+
+      expect(internal.activeProcessing.has(sid)).toBe(true);
+      expect(internal.batchMessageIds.get(sid)).toEqual(['qm-late-1']);
+
+      // Turn outlives 60s (228s in the incident) — the safety timeout fires first.
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      // Flag cleared: that IS the timeout's job (unblock routing).
+      expect(internal.activeProcessing.has(sid)).toBe(false);
+      expect(internal.batchCounts.has(sid)).toBe(false);
+      // THE ASSERTION — pre-fix this was deleted, so the late result's
+      // SESSION_BATCH_COMPLETED fired with `ids=0` and the frontend fell back to
+      // count matching, pinning the user's bubble at the bottom of the timeline.
+      expect(internal.batchMessageIds.get(sid)).toEqual(['qm-late-1']);
+
+      expect(await settled).toBe('rejected');
+    } finally {
+      vi.useRealTimers();
+      runner.destroyAndKill();
+    }
+  });
+
+  it('a later batch overwrites the retained ids (no unbounded staleness)', async () => {
+    const runner = useDaemon(new SessionRunner(MOCK_CLI));
+    const internal = runner as unknown as RunnerInternals;
+    const sid = 'timeout-ids-overwritten';
+
+    try {
+      vi.useFakeTimers();
+      internal.setActiveProcessing(sid, 1, ['qm-old']);
+      const first = runner.currentTurn(sid)!.catch(() => 'rejected');
+      await vi.advanceTimersByTimeAsync(60_000);
+      await first;
+      expect(internal.batchMessageIds.get(sid)).toEqual(['qm-old']);
+
+      // Next batch replaces the entry wholesale — retained ids can never
+      // accumulate or leak across turns.
+      internal.setActiveProcessing(sid, 2, ['qm-new-a', 'qm-new-b']);
+      const second = runner.currentTurn(sid)!.catch(() => 'rejected');
+      expect(internal.batchMessageIds.get(sid)).toEqual(['qm-new-a', 'qm-new-b']);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await second;
+    } finally {
+      vi.useRealTimers();
+      runner.destroyAndKill();
+    }
+  });
+});

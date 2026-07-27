@@ -5354,13 +5354,24 @@ export class SessionRunner {
     const existingTimer = this.activeProcessingTimers.get(sessionId)
     if (existingTimer) clearTimeout(existingTimer)
 
-    // Set safety timeout — prevents permanent stuck state
+    // Set safety timeout — prevents permanent stuck state.
+    //
+    // It clears the in-flight FLAG (its actual job: unblock routing when a result
+    // never arrives / arrives under a mismatched session id) but deliberately
+    // KEEPS `batchMessageIds`. A normal turn routinely outlives 60s (228s observed
+    // in inc-1785091339102), and deleting the ids here made the eventual
+    // SESSION_BATCH_COMPLETED fire WITHOUT them (`ids=0` in the logs) — demoting
+    // the frontend from exact-id bubble removal to the count fallback, which in
+    // that incident left the user's message pinned at the bottom of the timeline
+    // for 20 minutes. The ids are pure bookkeeping for the id-first removal path:
+    // stale entries are harmless (the frontend only removes bubbles whose queueId
+    // actually matches), the next batch overwrites the entry, and
+    // `clearActiveProcessing` deletes it on the real turn end.
     const timer = setTimeout(() => {
       if (this.activeProcessing.has(sessionId)) {
-        log.session.warn('activeProcessing safety timeout (60s): force-clearing stuck entry', { sessionId })
+        log.session.warn('activeProcessing safety timeout (60s): force-clearing stuck entry (batch ids retained)', { sessionId })
         this.activeProcessing.delete(sessionId)
         this.batchCounts.delete(sessionId)
-        this.batchMessageIds.delete(sessionId)
         this.activeProcessingTimers.delete(sessionId)
         abortTurn(sessionId, 'activeProcessing-safety-timeout')
         // Try to process next messages if any accumulated while stuck
