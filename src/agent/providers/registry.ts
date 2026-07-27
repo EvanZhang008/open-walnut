@@ -105,10 +105,23 @@ export function buildProviderMap(
     }
   }
 
-  // 2. Overlay explicit config (wins over auto-detected)
+  // 2. Overlay explicit config (wins over auto-detected).
+  //    MERGE onto the known template rather than replacing it: a hand-written
+  //    `providers.<name>` block that sets only auth/region (a very natural thing
+  //    to write) would otherwise drop `api`, and every turn then died with
+  //    "Unknown protocol: undefined" — an edit meant to fix auth taking the whole
+  //    agent down. Explicit fields still win field-by-field.
   if (explicitProviders) {
     for (const [name, config] of Object.entries(explicitProviders)) {
-      result[name] = config;
+      const template = KNOWN_PROVIDERS[name];
+      const merged = template ? { ...template, ...config } : config;
+      if (!merged.api) {
+        log.agent.error('provider config has no `api` protocol and no known template — skipping', {
+          provider: name, keys: Object.keys(config).join(','),
+        });
+        continue;
+      }
+      result[name] = merged;
     }
   }
 
