@@ -9901,9 +9901,16 @@ img[data-lightbox-src],
   align-self: center;
   display: flex;
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px 8px;
+  /* Stay INSIDE the Todo panel. The bar carries 5 labelled verbs now (Complete /
+     Group / Delete / More / Cancel); with `width:auto` it sized to content and simply
+     overflowed the ~300px panel — the count and Complete were clipped off the left
+     edge and More/Cancel vanished. Cap the width and let the row wrap instead. */
+  max-width: calc(100% - 16px);
   margin: 8px auto 12px;
-  padding: 7px 12px;
+  padding: 7px 10px;
   background: var(--bg-elevated, #fff);
   border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
   border-radius: 10px;
