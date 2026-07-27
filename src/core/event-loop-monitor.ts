@@ -61,16 +61,39 @@ let lastWindowWallAt = 0
 let lastWindowMonoAt = 0
 
 /**
- * The name of the synchronous section currently executing, if any. Periodic
- * tasks that are known event-loop hazards (health monitor, reconciler, git
- * sync) wrap themselves with markCriticalSection() so that when the probe
- * detects a stall we can attribute it instead of guessing.
+ * Every synchronous/awaited section currently executing. Periodic tasks that are
+ * known event-loop hazards (health monitor, reconciler, git sync) wrap themselves
+ * with markCriticalSection() so that when the probe detects a stall we can
+ * attribute it instead of guessing.
+ *
+ * Tracks ALL open sections, not just one. This was a single slot, which caused
+ * two concrete misreads:
+ *   1. Concurrent sections — only the first was recorded, so a stall during an
+ *      overlapping section was blamed on whichever started first. The health
+ *      monitor and git sync both run on ~30 s cadences, so they overlap often.
+ *   2. Await-heavy sections — the label persists across `await`, so a tick that
+ *      merely WAITED (e.g. a 30 s daemon RPC to a dead host) was reported as a
+ *      stall even though the loop was free the whole time. That is how an 11 s
+ *      "stall" was attributed to health-monitor.check when nothing was blocked.
+ *
+ * Fix: track every open section, and record CPU time alongside wall time so a
+ * reader can tell "burning the loop" from "waiting on I/O".
  */
-let currentSection: string | null = null
-let sectionStartedAt = 0
-// Token identifying the current section owner, so a sleep-triggered clear
-// (see clearSectionForSleep) can't be undone-over by a stale end() closure.
-let sectionToken = 0
+interface OpenSection {
+  name: string
+  startedAt: number
+  startCpuMs: number
+}
+const openSections = new Map<number, OpenSection>()
+// Monotonic key per section. A stale end() from a sleep-cleared section simply
+// deletes a key that's already gone, so it can no longer clobber a NEW section
+// (which is what the old shared-slot + token dance had to guard against).
+let sectionSeq = 0
+
+function cpuMsNow(): number {
+  const u = process.cpuUsage()
+  return (u.user + u.system) / 1000
+}
 
 /**
  * Mark a synchronous/awaited section so a concurrent stall can be attributed
@@ -80,15 +103,44 @@ let sectionToken = 0
  *   try { ...heavy work... } finally { end() }
  */
 export function markCriticalSection(name: string): () => void {
-  // Nested sections: keep the outermost label (the one that owns the burst).
-  if (currentSection) return () => { /* inner — outer owns attribution */ }
-  currentSection = name
-  sectionStartedAt = clocks.now()
-  const token = ++sectionToken
-  return () => {
-    if (token !== sectionToken) return // cleared by sleep detection meanwhile
-    currentSection = null
-    sectionStartedAt = 0
+  const token = ++sectionSeq
+  openSections.set(token, { name, startedAt: clocks.now(), startCpuMs: cpuMsNow() })
+  return () => { openSections.delete(token) }
+}
+
+/**
+ * Sections open right now, longest-running first, each with the share of its wall
+ * time that actually consumed CPU.
+ *
+ * `section` keeps the existing contract (the longest-running open section is the
+ * suspect) so a real block is still attributed. `openSections` is the new part:
+ * it exposes wall vs cpu per section, which is what distinguishes "burned the
+ * loop" from "waited on a dead host for 30 s" — the two used to be
+ * indistinguishable in the logs, and every await-bound tick read as a stall.
+ * `awaiting` flags the whole set as wait-dominated so a reader (or
+ * scripts/walnut-logs.sh) can discount it without doing the arithmetic.
+ */
+function describeOpenSections(): {
+  section: string | null
+  detail: string[]
+  awaiting: boolean
+} {
+  if (openSections.size === 0) return { section: null, detail: [], awaiting: false }
+  const now = clocks.now()
+  const cpuNow = cpuMsNow()
+  const rows = [...openSections.values()]
+    .map(s => ({
+      name: s.name,
+      wallMs: now - s.startedAt,
+      cpuMs: Math.max(0, Math.round(cpuNow - s.startCpuMs)),
+    }))
+    .sort((a, b) => b.wallMs - a.wallMs)
+  const top = rows[0]
+  return {
+    section: top.name,
+    detail: rows.map(r => `${r.name} wall=${r.wallMs}ms cpu=${r.cpuMs}ms`),
+    // Wall ≫ cpu ⇒ the section was waiting, not holding the loop.
+    awaiting: top.wallMs > 0 && top.cpuMs / top.wallMs < 0.5,
   }
 }
 
@@ -98,9 +150,9 @@ export function markCriticalSection(name: string): () => void {
  * attribution prevents falsely blaming that section for the "stall".
  */
 function clearSectionForSleep(): void {
-  currentSection = null
-  sectionStartedAt = 0
-  sectionToken++ // invalidate outstanding end() closures
+  // Drop all open sections; their end() closures become no-ops (delete of a
+  // missing key), so a tick that spanned the sleep can't be blamed afterwards.
+  openSections.clear()
 }
 
 export function startEventLoopMonitor(clocksOverride?: MonitorClocks): void {
@@ -135,9 +187,13 @@ export function startEventLoopMonitor(clocksOverride?: MonitorClocks): void {
         maxMs: Math.round(maxMs),
         p99Ms: Math.round(histogram.percentile(99) / 1e6),
         meanMs: Math.round(histogram.mean / 1e6),
-        // If a marked section is mid-flight it's the prime suspect.
-        suspectSection: currentSection,
-        sectionAgeMs: currentSection ? clocks.now() - sectionStartedAt : undefined,
+        // suspectSection names only a section whose CPU time dominates its wall
+        // time — i.e. one that really held the loop. openSections lists them all
+        // (with wall vs cpu) so an await-bound tick isn't mistaken for a stall.
+        ...(() => {
+          const { section, detail, awaiting } = describeOpenSections()
+          return { suspectSection: section, openSections: detail, sectionAwaiting: awaiting }
+        })(),
       })
     }
     histogram.reset()
@@ -167,10 +223,12 @@ export function startEventLoopMonitor(clocksOverride?: MonitorClocks): void {
     } else {
       const lateBy = monoDelta - PROBE_INTERVAL_MS
       if (lateBy >= STALL_THRESHOLD_MS) {
+        const { section, detail, awaiting } = describeOpenSections()
         log.web.warn('event-loop blocked (probe late)', {
           lateByMs: Math.round(lateBy),
-          suspectSection: currentSection,
-          sectionAgeMs: currentSection ? wallNow - sectionStartedAt : undefined,
+          suspectSection: section,
+          openSections: detail,
+          sectionAwaiting: awaiting,
         })
       }
     }
@@ -187,7 +245,6 @@ export function stopEventLoopMonitor(): void {
   if (windowTimer) { clearInterval(windowTimer); windowTimer = null }
   if (probeTimer) { clearTimeout(probeTimer); probeTimer = null }
   if (histogram) { histogram.disable(); histogram = null }
-  currentSection = null
-  sectionToken++
+  openSections.clear()
   clocks = defaultClocks
 }
