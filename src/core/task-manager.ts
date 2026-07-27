@@ -70,10 +70,102 @@ function invalidateTaskStoreCache(): void {
   taskStoreCache = null;
 }
 
+// ── Row shadow: makes writeStore() write only the rows that changed ──
+//
+// writeStore() takes a whole-store snapshot, so without this it re-INSERTs every
+// task on every edit (O(all tasks) per one-field change). The shadow records, for
+// the last snapshot we persisted, each row's serialized column tuple AND the row
+// order, letting writeStore skip untouched rows.
+//
+// ORDER IS PART OF THE STATE, not just content. `store.tasks` array order is
+// persisted implicitly as SQLite rowid order: INSERT OR REPLACE deletes and
+// re-inserts a row, giving it a fresh (highest) rowid, and readStore() does a bare
+// `SELECT * FROM tasks`. That's how reorderTasks() works — it PERMUTES array slots
+// without changing any field, so a content-only diff would see zero changes and
+// silently drop the reorder. Hence: any permutation of surviving rows forces a full
+// ordered rewrite; only append-at-the-end (the addTask case) stays incremental.
+//
+// Trust boundary: `PRAGMA data_version` changes when ANOTHER connection commits
+// (our own commits don't bump it), so a mismatch means someone else wrote the DB
+// and our shadow may be stale → we fall back to a full rewrite and re-seed. That
+// makes a stale shadow a performance question, never a correctness one.
+interface RowShadow {
+  /** taskId → serialized column tuple as last persisted. */
+  fingerprints: Map<string, string>;
+  /** Row order as last persisted (== SQLite rowid order). */
+  order: string[];
+}
+let rowShadow: RowShadow | null = null;
+let rowShadowDataVersion: number | null = null;
+/** Shadow built inside the current transaction, published only on commit. */
+let pendingRowShadow: RowShadow | null = null;
+
+type SqliteHandle = Pick<import('better-sqlite3').Database, 'pragma'>;
+
+function readDataVersion(handle: SqliteHandle): number | null {
+  try {
+    return handle.pragma('data_version', { simple: true }) as number;
+  } catch {
+    return null; // pragma unavailable — behave as if un-shadowed (full rewrite)
+  }
+}
+
+/** The shadow, but only if no foreign connection has committed since we built it. */
+function rowShadowIfCurrent(handle: SqliteHandle): RowShadow | null {
+  if (!rowShadow || rowShadowDataVersion === null) return null;
+  const current = readDataVersion(handle);
+  if (current === null || current !== rowShadowDataVersion) return null;
+  return rowShadow;
+}
+
+/**
+ * True when `nextIds` keeps the shadow's relative order for every row that still
+ * exists, i.e. the change is only removals and/or appends at the end. In that case
+ * surviving rows keep their rowid ordering and need no positional rewrite.
+ * A genuine permutation (reorderTasks) returns false → caller does a full rewrite.
+ */
+function preservesShadowOrder(shadow: RowShadow, nextIds: string[]): boolean {
+  const nextSet = new Set(nextIds);
+  const survivors = shadow.order.filter((id) => nextSet.has(id));
+  // survivors must be a PREFIX of nextIds (anything past it is newly appended).
+  if (survivors.length > nextIds.length) return false;
+  for (let i = 0; i < survivors.length; i++) {
+    if (nextIds[i] !== survivors[i]) return false;
+  }
+  return true;
+}
+
+/** Adopt the shadow built by a transaction that committed successfully. */
+function commitRowShadow(): void {
+  if (!pendingRowShadow) return;
+  rowShadow = pendingRowShadow;
+  pendingRowShadow = null;
+  const db = getDb();
+  rowShadowDataVersion = db ? readDataVersion(db) : null;
+}
+
+/**
+ * Drop the shadow after a write that did NOT go through writeStore().
+ *
+ * The per-row fast paths (updateTaskRaw, updateTasksBulk, addTasksBulk,
+ * deleteTasksBulk) issue targeted UPDATE/INSERT/DELETE on OUR OWN connection, so
+ * `data_version` does not move and the staleness check can't see them. Without
+ * this, the shadow would still claim the pre-patch value and the next
+ * writeStore() would skip re-writing a row that genuinely changed. Cost of
+ * dropping it: exactly one full rewrite on the next whole-store write.
+ */
+function invalidateRowShadow(): void {
+  rowShadow = null;
+  rowShadowDataVersion = null;
+}
+
 /** Reset internal flags for test isolation (call in beforeEach). */
 export function _resetForTesting(): void {
   initialized = false;
   taskStoreCache = null;
+  rowShadow = null;
+  rowShadowDataVersion = null;
+  pendingRowShadow = null;
 }
 
 // ── Write lock: serializes all read-modify-write operations ──
@@ -352,6 +444,10 @@ async function writeStore(store: TaskStore): Promise<void> {
     'INSERT OR REPLACE INTO tasks (' + insertCols.join(', ') + ') VALUES (' +
     insertCols.map((c) => '@' + c).join(', ') + ')';
 
+  // Clear any shadow staged by a transaction that rolled back — adopting it on a
+  // later commit would describe rows that were never written.
+  pendingRowShadow = null;
+
   dbTransaction((handle) => {
     const existingIds = (handle.prepare('SELECT id FROM tasks').all() as { id: string }[])
       .map((r) => r.id);
@@ -364,16 +460,49 @@ async function writeStore(store: TaskStore): Promise<void> {
     const deleteStmt = handle.prepare('DELETE FROM tasks WHERE id = ?');
     for (const id of toDelete) deleteStmt.run(id);
 
+    // Write only rows whose serialized form actually CHANGED.
+    //
+    // Why: every exported helper here is read-whole-store → mutate → writeStore,
+    // so a one-field edit used to re-INSERT all ~4k rows (~600ms). A single
+    // quick-start runs ~5 of these helpers (addTask → updateTask → togglePin →
+    // setFocusTier → linkSession), so the click cost ~3s of pure SQLite before
+    // the CLI was even asked to spawn. Diffing against a row shadow makes the
+    // steady-state write O(changed rows) instead of O(all tasks).
+    //
+    // The shadow is only trusted while `PRAGMA data_version` matches what we saw
+    // at our last commit: that counter is bumped by OTHER connections' commits
+    // (verified — our own writes leave it untouched), so any external writer
+    // (CLI process, migration, plugin) forces a full rewrite and self-heals.
+    const shadow = rowShadowIfCurrent(handle);
+    const validTasks = store.tasks.filter(
+      (t) => t && typeof t === 'object' && typeof t.id === 'string',
+    );
+    const nextOrder = validTasks.map((t) => t.id);
+    // Row order is persisted as rowid order (see RowShadow doc): a permutation must
+    // rewrite every row positionally, so only skip rows when order is preserved.
+    const canSkipUnchanged = !!shadow && preservesShadowOrder(shadow, nextOrder);
+    const nextFingerprints = new Map<string, string>();
+
     const insertStmt = handle.prepare(insertSql);
-    for (const task of store.tasks) {
-      if (!task || typeof task !== 'object' || typeof task.id !== 'string') continue;
+    for (const task of validTasks) {
       const partial = taskToRow(task);
       const bound: Record<string, unknown> = {};
       for (const col of insertCols) {
         bound[col] = partial[col] === undefined ? null : partial[col];
       }
+      // Identity key over the exact bound values, so a field that round-trips to
+      // the same column value is correctly treated as unchanged.
+      const fingerprint = JSON.stringify(insertCols.map((c) => bound[c] ?? null));
+      nextFingerprints.set(task.id, fingerprint);
+      if (canSkipUnchanged && shadow!.fingerprints.get(task.id) === fingerprint) {
+        continue; // row unchanged and keeps its position — skip the write
+      }
       insertStmt.run(bound);
     }
+    // Staged, not published: dbTransaction rolls back on throw, and a shadow
+    // describing rows that were never persisted would make the NEXT write skip
+    // them. commitRowShadow() below adopts it only once the commit succeeded.
+    pendingRowShadow = { fingerprints: nextFingerprints, order: nextOrder };
 
     handle.prepare('DELETE FROM task_categories').run();
     const catInsert = handle.prepare(
@@ -395,6 +524,9 @@ async function writeStore(store: TaskStore): Promise<void> {
       if (rec?.label) groupInsert.run({ id, label: rec.label, hidden: rec.hidden ? 1 : 0 });
     }
   });
+
+  // Transaction committed — the staged row shadow now describes what's on disk.
+  commitRowShadow();
 
   // Invalidate the read cache at COMMIT time, not just in withWriteLock.finally.
   // Several helpers emit bus events between writeStore() and lock release
@@ -3796,6 +3928,7 @@ export async function updateTaskRaw(
     dbTransaction((handle) => {
       handle.prepare(`UPDATE tasks SET ${setClause} WHERE id = @id`).run(bound);
     });
+    invalidateRowShadow(); // targeted write on our own connection — see invalidateRowShadow
     // Return the merged post-update task so callers can emit / push without re-reading.
     Object.assign(task, prepared);
     return task;
@@ -3870,6 +4003,7 @@ export async function updateTasksBulk(
         changedTasks.push(task);
       }
     });
+    if (changedTasks.length) invalidateRowShadow(); // see invalidateRowShadow
     return { changed: changedTasks };
   });
 }
@@ -3914,6 +4048,7 @@ export async function addTasksBulk(
         created.push(task);
       }
     });
+    if (created.length) invalidateRowShadow(); // see invalidateRowShadow
     return created;
   });
 }
@@ -3937,6 +4072,7 @@ export async function deleteTasksBulk(ids: string[]): Promise<{ deleted: Task[] 
         del.run(id);
       }
     });
+    if (deleted.length) invalidateRowShadow(); // see invalidateRowShadow
     return { deleted };
   });
 }
