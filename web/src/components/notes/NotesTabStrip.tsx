@@ -9,7 +9,7 @@
  * mis-renders an inactive row.
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { ICON_CLOSE } from '@/components/common/Icons';
 
 export type TabKind = 'note' | 'attachment';
@@ -27,6 +27,13 @@ interface NotesTabStripProps {
   onActivate: (path: string) => void;
   onClose: (path: string) => void;
   onNewTab: () => void;
+  /**
+   * Right-aligned controls pinned to the END of the strip (currently the AI-pane
+   * toggle). They live HERE rather than as an absolutely-positioned overlay on the
+   * editor pane so they occupy real layout space and can never cover the note's
+   * own header/content.
+   */
+  trailing?: ReactNode;
 }
 
 /** Vault-relative path → Obsidian-style tab label (basename, no .md). */
@@ -35,7 +42,7 @@ function tabLabel(path: string): string {
   return base.replace(/\.md$/, '');
 }
 
-export function NotesTabStrip({ tabs, activePath, onActivate, onClose, onNewTab }: NotesTabStripProps) {
+export function NotesTabStrip({ tabs, activePath, onActivate, onClose, onNewTab, trailing }: NotesTabStripProps) {
   const activeRef = useRef<HTMLDivElement>(null);
 
   // Keep the active tab visible when activated (the strip scrolls horizontally on overflow).
@@ -78,6 +85,7 @@ export function NotesTabStrip({ tabs, activePath, onActivate, onClose, onNewTab 
           <line x1="3" y1="8" x2="13" y2="8" />
         </svg>
       </button>
+      {trailing && <div className="notes-tab-trailing">{trailing}</div>}
     </div>
   );
 }

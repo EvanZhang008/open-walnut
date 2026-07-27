@@ -658,6 +658,20 @@ export function NotesPage() {
     [renameNote, activeNotePath, markMovedAway],
   );
 
+  // Rendered into the tab strip's trailing slot (both the with-tabs and the
+  // no-tabs strip), so there's a single definition of the button.
+  const aiToggleButton = (
+    <button
+      className={`notes-ai-toggle${chatOpen ? ' active' : ''}`}
+      onClick={toggleChat}
+      aria-pressed={chatOpen}
+      title={chatOpen ? 'Hide Note Agent' : 'Ask the Note Agent'}
+    >
+      <SparkleIcon />
+      <span>AI</span>
+    </button>
+  );
+
   if (treeLoading) return <LoadingSpinner />;
   if (treeError) return <div className="empty-state"><p>Error: {treeError}</p></div>;
 
@@ -688,23 +702,23 @@ export function NotesPage() {
       </div>
       <div className="notes-resize-handle" onMouseDown={handleResizeStart} />
       <div className="notes-editor-pane">
-        <button
-          className={`notes-ai-toggle${chatOpen ? ' active' : ''}`}
-          onClick={toggleChat}
-          aria-pressed={chatOpen}
-          title={chatOpen ? 'Hide Note Agent' : 'Ask the Note Agent'}
-        >
-          <SparkleIcon />
-          <span>AI</span>
-        </button>
-        {tabs.length > 0 && (
+        {/* The AI toggle is IN the tab strip (real layout space, right-aligned), not
+            floating over the pane — an absolute overlay sat on top of the note's own
+            header/content. With no tabs open there's no strip, so we render a bare
+            strip that holds just the button. */}
+        {tabs.length > 0 ? (
           <NotesTabStrip
             tabs={tabs}
             activePath={activePath}
             onActivate={handleActivateTab}
             onClose={handleCloseTab}
             onNewTab={handleNewTab}
+            trailing={aiToggleButton}
           />
+        ) : (
+          <div className="notes-tab-strip notes-tab-strip-empty">
+            <div className="notes-tab-trailing">{aiToggleButton}</div>
+          </div>
         )}
         <div className="notes-editor-body">
           {activeTab?.kind === 'attachment' ? (

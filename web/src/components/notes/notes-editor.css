@@ -641,6 +641,26 @@ mark.notes-search-mark {
 .notes-tab-strip::-webkit-scrollbar { height: 4px; }
 .notes-tab-strip::-webkit-scrollbar-thumb { background: var(--border, #2a2d35); border-radius: 999px; }
 
+/* No tabs open → still show a strip so the trailing AI button has a home (and the
+   editor pane's top edge stays consistent between the two states). */
+.notes-tab-strip-empty { justify-content: flex-end; padding-bottom: 4px; }
+
+/* Right-aligned trailing controls. `margin-left:auto` pins them right when the
+   tabs fit; `position:sticky; right:0` keeps them visible once the strip scrolls
+   (the strip is overflow-x:auto, so a plain flex-end child would scroll away).
+   The background prevents tab labels showing through underneath. */
+.notes-tab-trailing {
+  margin-left: auto;
+  position: sticky;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 8px;
+  padding-bottom: 4px;
+  background: var(--bg-secondary, #1a1c22);
+}
+
 .notes-tab {
   display: inline-flex;
   align-items: center;

@@ -20575,11 +20575,12 @@ td.usage-share-col {
 }
 
 /* ─── AI assistant column (#6) ─── */
+/* In-strip button (see NotesTabStrip `trailing`) — deliberately NOT absolutely
+   positioned: the old `position:absolute; top:9; right:56` floated it over the
+   note's own header row. */
 .notes-ai-toggle {
-  position: absolute;
-  top: 9px;
-  right: 56px;            /* sits left of the pop-out button (right:16) */
-  z-index: 6;
+  flex: 0 0 auto;
+  align-self: center;
   display: inline-flex;
   align-items: center;
   gap: 5px;
