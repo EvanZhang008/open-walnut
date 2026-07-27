@@ -51,6 +51,10 @@ interface NotificationContextValue {
 
 const NotificationContext = createContext<NotificationContextValue | null>(null);
 
+/** Min gap between toasts for the SAME agent-error message. Wider than the cron
+ *  interval (30min) so a persistent failure toasts about twice an hour, not 36x. */
+const AGENT_ERROR_TOAST_THROTTLE_MS = 10 * 60 * 1000;
+
 /** Server feed record shape from GET /api/notifications. */
 interface FeedRecord {
   id: string;
@@ -74,6 +78,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   // per-component dedup but unified. Feed dedup is keyed separately (below) so a
   // toast that already auto-dismissed doesn't block its feed entry from loading.
   const toastDedup = useRef(new Set<string>());
+  /** agent:error → last toast time per dedupKey (see AGENT_ERROR_TOAST_THROTTLE_MS). */
+  const errorToastAt = useRef(new Map<string, number>());
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   // dedupKeys the user dismissed this session — a slow initial GET resolving
   // after a dismiss must not resurrect the entry via the merge below.
@@ -245,6 +251,37 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       ...(timestamp ? { timestamp } : {}),
       ...(sessionId ? { sessionId } : {}),
       ...(taskId ? { taskId } : {}),
+    });
+  });
+
+  // ── WS source: a butler turn failed ──
+  // Nothing subscribed to this before, so a total outage was silent on every
+  // surface (2026-07-26: 18h / 36 cron runs of `403 invalid security token`, with
+  // the only trace a server log line). Auth failures are the important class:
+  // they mean EVERY subsequent turn fails too, not a one-off blip.
+  useEvent('agent:error', (data) => {
+    const { error, agentId } = (data ?? {}) as { error?: string; agentId?: string };
+    if (!error) return;
+    const isAuth = /security token|credential|expired|unauthor|forbidden|\b(401|403)\b|invalidclienttoken|accessdenied/i
+      .test(error);
+    const key = `agent-error:${agentId ?? 'general'}:${error.slice(0, 120)}`;
+    // Throttle across toast lifetimes. notify()'s own dedup is released when the
+    // toast auto-dismisses (6s), so a recurring failure — cron retrying every
+    // 30min — would toast on every single attempt. One per key per window keeps
+    // the signal without training the user to ignore it.
+    const lastAt = errorToastAt.current.get(key) ?? 0;
+    if (Date.now() - lastAt < AGENT_ERROR_TOAST_THROTTLE_MS) return;
+    errorToastAt.current.set(key, Date.now());
+    notify({
+      kind: 'operation-error',
+      severity: isAuth ? 'error' : 'warning',
+      title: isAuth ? 'Agent auth failed — every turn will fail' : 'Agent turn failed',
+      body: error.length > MAX_FEED_BODY_CHARS ? `${error.slice(0, MAX_FEED_BODY_CHARS)}…` : error,
+      // Keyed by message (not timestamp) so 36 identical 403s collapse into ONE
+      // feed entry — that noise is what makes users tune notifications out.
+      dedupKey: key,
+      persistent: true,
+      ...(isAuth ? { action: { label: 'Open Settings', kind: 'navigate' as const, to: '/settings' } } : {}),
     });
   });
 
