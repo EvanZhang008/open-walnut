@@ -1123,6 +1123,16 @@ export class ClaudeCodeSession {
     // "delivered". Removing the message from the queue / reporting delivery must
     // happen in THIS callback, never right after send() returns. See processNext.
     onSpawnSettled?: (ok: boolean, err?: Error) => void,
+    opts?: {
+      /**
+       * Caller-chosen session id (pre-validated v4 UUID) forwarded as
+       * `--session-id`. Set by the UI-initiated start paths so the session's
+       * identity exists before the CLI does; the CLI adopts it on spawn.
+       * Composes with `--resume --fork-session` (the fork gets THIS id while
+       * still inheriting the parent conversation).
+       */
+      preassignedSessionId?: string
+    },
   ): void {
     const args = ['-p', '--output-format', 'stream-json', '--verbose']
 
@@ -1215,15 +1225,29 @@ export class ClaudeCodeSession {
       this._expectedSessionId = null
     }
 
-    // Init-only spawn (fresh session, EMPTY first message): the CLI emits NO
-    // JSONL at all (not even the init line) until its first stdin input, so
-    // sessionReady would never resolve and the task would never link. Pre-assign
-    // the id via --session-id: we persist + resolve right after the daemon
-    // confirms the spawn, and the CLI idles (SessionStart hook, MCP/skills
-    // loaded) until the user's first real message arrives over the FIFO.
+    // Pre-assign the session id for EVERY spawn that mints a new session (fresh
+    // start with or without a first message, and forks). Verified against the
+    // real CLI: `--session-id` is honored alongside a first prompt and alongside
+    // `--resume X --fork-session` — every JSONL line comes back with our id.
+    //
+    // Why this matters for UX: without it the id is only learned from the CLI's
+    // first init JSONL line, which lands 3–6s after spawn (CLI cold start + MCP
+    // load). The UI had to park on a placeholder panel for those seconds and then
+    // REMOUNT the whole column on the pending→real id swap. Pre-assigning makes
+    // the id known before the HTTP response, so the real session panel mounts at
+    // once and the CLI warms up behind it.
+    //
+    // `initOnly` (empty first message) additionally needs the persist-and-resolve
+    // shortcut below: that spawn emits NO JSONL at all until its first stdin
+    // input, so nothing else would ever resolve sessionReady.
+    // The id may already have been minted by the caller (route → SESSION_START →
+    // handleStart), which is how a UI-initiated start gets a session id in its HTTP
+    // response. Adopt that one when present; otherwise mint here so bus/RPC callers
+    // that don't supply one still get the fast path.
+    const initOnly = !message && !resumeSessionId
     let preassignedId: string | null = null
-    if (!message && !resumeSessionId) {
-      preassignedId = crypto.randomUUID()
+    if (!resumeSessionId || forkSession) {
+      preassignedId = opts?.preassignedSessionId ?? crypto.randomUUID()
       args.push('--session-id', preassignedId)
       this.claudeSessionId = preassignedId
       this._expectedSessionId = preassignedId
@@ -1272,7 +1296,7 @@ export class ClaudeCodeSession {
     // then landed inside the markDone dedup window and was SUPPRESSED, so the
     // UI showed a stuck "working…" indicator on a session that was never
     // going to produce output.
-    this._processStatus = preassignedId ? 'idle' : 'running'
+    this._processStatus = initOnly ? 'idle' : 'running'
     this._exitCode = null
     this._exitStderr = undefined
     this.resultEmitted = false
@@ -1419,24 +1443,27 @@ export class ClaudeCodeSession {
         ).catch(() => {})
       }
 
-      // Init-only spawn: no first turn ⇒ the CLI emits no init JSONL line, so the
-      // normal init handler will never persist/resolve. The id was pre-assigned
-      // (--session-id), the daemon confirmed the pid — persist the record and
-      // resolve sessionReady NOW so the task links and the UI attaches. The CLI
-      // sits idle on its FIFO; the eventual first message flows the normal path.
+      // Pre-assigned id: don't wait for the CLI's init JSONL line (3–6s away, and
+      // for an init-only spawn it never comes at all). The daemon confirmed the
+      // pid and we already know the id, so register the transport, refresh the
+      // record with the real pid/outputFile, and resolve sessionReady NOW. The
+      // init handler still runs later and is idempotent — same id, so it takes
+      // the `expectedId === newId` branch and just persists model/settings.
       if (preassignedId) {
         registerSessionManager(preassignedId, transport)
-        // Idle, not mid-turn: no turn runs until the user sends. Set BEFORE
-        // persist so the record lands with the truthful status.
-        this._processStatus = 'idle'
-        this._activity = undefined
+        if (initOnly) {
+          // No turn runs until the user sends — park as idle. Set BEFORE persist
+          // so the record lands with the truthful status.
+          this._processStatus = 'idle'
+          this._activity = undefined
+        }
         ;(async () => {
           try {
             await this.persistSessionRecord(preassignedId, this._cwd ?? undefined)
             this.emitStatusChanged('IN_PROGRESS')
           } catch (err) {
-            log.session.error('CRITICAL: init-only spawn record persist failed', {
-              sessionId: preassignedId, taskId: this.taskId,
+            log.session.error('CRITICAL: preassigned-id record persist failed', {
+              sessionId: preassignedId, taskId: this.taskId, initOnly,
               error: err instanceof Error ? err.message : String(err),
             })
           } finally {
@@ -6610,6 +6637,7 @@ export class SessionRunner {
     forkedFromSessionId?: string
     largePromptFile?: { localPath: string; originalLength: number }
     requestTs?: number
+    preassignedSessionId?: string
   }): Promise<{ sessionReady: Promise<string>; title: string }> {
     const { taskId, project, mode, model } = data
     let cwd = data.cwd
@@ -6816,7 +6844,7 @@ export class SessionRunner {
     // Carry the HTTP request ts onto the session instance so the init handler can
     // compute the full route→init latency breakdown (instrumentation only).
     session._requestTs = data.requestTs ?? 0
-    session.send(message, cwd, resumeId, mode, resolvedModel, appendSystemPrompt, data.host, sshTarget, isFork, config.session?.permission_prompt, spillFile, config.session?.stream_partial_messages, resolvedEffort)
+    session.send(message, cwd, resumeId, mode, resolvedModel, appendSystemPrompt, data.host, sshTarget, isFork, config.session?.permission_prompt, spillFile, config.session?.stream_partial_messages, resolvedEffort, undefined, data.preassignedSessionId ? { preassignedSessionId: data.preassignedSessionId } : undefined)
 
     // Record directory usage for the frequent-dirs persistent store (fire-and-forget)
     if (cwd) {

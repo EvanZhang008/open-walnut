@@ -1036,6 +1036,10 @@ export type SessionEngine = 'claude' | 'codex';
 export type SessionType = 'interactive' | 'triage' | 'hook' | 'cron' | 'subagent';
 
 export type StatusReason =
+  /** Record seeded by a start route before the CLI process exists (its id was
+   *  pre-assigned so the UI can open the real panel immediately). Marks the row
+   *  as "no pid YET" so liveness checks don't mistake it for a dead process. */
+  | 'awaiting_spawn'
   | 'session_started'
   | 'turn_completed'
   | 'message_sent'

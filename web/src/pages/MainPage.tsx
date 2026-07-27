@@ -34,6 +34,7 @@ import { ContextInspectorPanel } from '@/components/context/ContextInspectorPane
 import { QuickAccessBar } from '@/components/chat/QuickAccessBar';
 import { AgentTabBar, slugifyAgentId } from '@/components/chat/AgentTabBar';
 import { createAgentDef, updateAgentDef } from '@/api/agents';
+import { log } from '@/utils/log';
 import { useContextInspector } from '@/hooks/useContextInspector';
 import { useUrlSync } from '@/hooks/useUrlSync';
 import { useSessionPanelMode } from '@/hooks/useSessionPanelMode';
@@ -858,6 +859,30 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Fork: pending panel metadata (same pattern as quick-start)
   const pendingForkMetaRef = useRef<{ id: string; cwd: string; host?: string; realTaskId?: string; httpError?: string } | null>(null);
   const pendingForkTaskRef = useRef<string | null>(null);
+  // Fallback poll handle for pending columns (used by promoteToRealSession below
+  // and armed by the effect further down; declared here so both can see it).
+  const pendingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Swap a `pending:*` placeholder column for its real session id and clear the
+  // pending bookkeeping, so the event/poll fallbacks can't fire a second swap.
+  //
+  // The server now pre-assigns session ids (CLI `--session-id`), so this runs on
+  // the quick-start / fork HTTP response — before the CLI has even finished
+  // booting. SessionPanel is fine mounting "early": its metadata fetch already
+  // retries transient failures, and the record is written at spawn confirmation.
+  const promoteToRealSession = useCallback((pendingColId: string, sessionId: string, taskId?: string) => {
+    if (pendingQuickStartMetaRef.current?.id === pendingColId) {
+      pendingQuickStartMetaRef.current = null;
+      pendingQuickStartRef.current = null;
+    }
+    if (pendingForkMetaRef.current?.id === pendingColId) {
+      pendingForkMetaRef.current = null;
+      pendingForkTaskRef.current = null;
+    }
+    if (pendingPollRef.current) { clearInterval(pendingPollRef.current); pendingPollRef.current = null; }
+    setSessionColumns(prev => replaceSessionColumn(prev, pendingColId, sessionId));
+    log.info('session', 'promoted pending column to real session', { sessionId, taskId });
+  }, []);
 
   // Path selector → select handler
   const handlePathSelect = useCallback((path: QuickStartPath, taskMeta: QuickStartTaskMeta) => {
@@ -939,7 +964,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   useEvent('task:updated', openPendingSession);
 
   // Fallback poll: if WS events are missed, poll for the session ID every 2s
-  const pendingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
     return () => { if (pendingPollRef.current) clearInterval(pendingPollRef.current); };
   }, []);
@@ -1000,13 +1024,21 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     setSessionColumns(prev => addSessionColumn(prev, pendingColId, triageOpenRef.current, maxPanelsRef.current));
   }, []);
 
-  const handleForkResolved = useCallback((taskId: string) => {
+  const handleForkResolved = useCallback((taskId: string, sessionId?: string) => {
+    // The fork route pre-assigns the new session's id, so the response already
+    // knows it — swap straight to the real panel instead of showing "Forking
+    // session..." until task:updated / the poll lands.
+    const pendingColId = pendingForkMetaRef.current?.id;
+    if (sessionId && pendingColId) {
+      promoteToRealSession(pendingColId, sessionId, taskId);
+      return;
+    }
     // Store the real taskId so WS events + polling can resolve the pending panel
     pendingForkTaskRef.current = taskId;
     if (pendingForkMetaRef.current) {
       pendingForkMetaRef.current = { ...pendingForkMetaRef.current, realTaskId: taskId };
     }
-  }, []);
+  }, [promoteToRealSession]);
 
   const handleForkFailed = useCallback((errorMessage?: string) => {
     if (pendingForkMetaRef.current) {
@@ -1288,6 +1320,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         // Store real taskId so PendingSessionPanel can match error events
         if (pendingQuickStartMetaRef.current?.id === pendingColId) {
           pendingQuickStartMetaRef.current = { ...pendingQuickStartMetaRef.current, realTaskId: result.taskId };
+        }
+        // Native starts return the session id up front (server pre-assigns it and
+        // passes it to the CLI as --session-id). Swap the placeholder for the real
+        // panel NOW rather than waiting on task:updated / the 2s poll — that wait
+        // was the multi-second "starting session…" spinner. Codex omits sessionId,
+        // so those keep the event/poll path below.
+        if (result.sessionId) {
+          promoteToRealSession(pendingColId, result.sessionId, result.taskId);
         }
         // Notify main agent to reorganize the task (include user's prompt).
         // Skipped for fix-walnut: the server already titled the task

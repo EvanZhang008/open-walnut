@@ -46,6 +46,13 @@ export interface QuickStartParams {
   requestTs?: number;
   /** Coding-agent engine; defaults to 'claude' (native path). */
   engine?: SessionEngine;
+  /**
+   * Caller-minted session id, forwarded to the CLI as `--session-id`. Lets the
+   * HTTP route return the session id in its response instead of making the UI
+   * poll for it — the CLI adopts this id when it spawns. Native (claude) engine
+   * only: the ACP path derives its own ids from the adapter.
+   */
+  preassignedSessionId?: string;
 }
 
 export class QuickStartError extends Error {
@@ -63,7 +70,7 @@ export class QuickStartError extends Error {
 export async function quickStartSession(params: QuickStartParams): Promise<Task> {
   const {
     message, messagePrefix, cwd, host, model, mode, existingTaskId, taskMeta,
-    source, requestTs = Date.now(), engine,
+    source, requestTs = Date.now(), engine, preassignedSessionId,
   } = params;
   const project = params.project ?? 'Quick Start';
 
@@ -176,6 +183,8 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     largePromptFile,
     requestTs,
     engine,
+    // ACP (codex) mints its own ids inside the adapter — only forward for native.
+    ...(preassignedSessionId && engine !== 'codex' ? { preassignedSessionId } : {}),
   }, ['session-runner'], { source });
 
   log.web.info(`${source}: created task + started session`, {

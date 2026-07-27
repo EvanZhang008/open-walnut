@@ -25,6 +25,7 @@ import { listTasks, getTask, addTask, updateTask, togglePin, setFocusTier, linkS
 import { getConfig } from '../../core/config-manager.js'
 import { bus, EventNames, eventData } from '../../core/event-bus.js'
 import fsp from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import path from 'path'
 import { isSessionProcessAlive } from '../../utils/session-liveness.js'
 import { readPlanFromSession, buildPlanExecutionMessage } from '../../utils/plan-message.js'
@@ -481,10 +482,18 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         }
         await ensureCwd(cwd, host)
       }
+      // Mint the session id HERE so it can ride the response: the UI then mounts
+      // the real session panel in the same frame as the click instead of parking
+      // on a placeholder until the CLI's first init line (3–6s later). The CLI
+      // adopts this id via --session-id. Codex/ACP is excluded (its adapter owns
+      // id assignment), so those clients keep the poll-for-id path.
+      const isNativeEngine = engine !== 'codex'
+      const preassignedSessionId = isNativeEngine ? randomUUID() : undefined
       const updatedTask = await quickStartSession({
         message: sessionMessage, messagePrefix, cwd, host, model, mode,
         existingTaskId, taskMeta, source: 'quick-start', requestTs,
         engine: engine === 'codex' ? 'codex' : undefined,
+        preassignedSessionId,
         ...fixWalnutExtras,
       })
       // Remember this folder's launch config for next time (fire-and-forget).
@@ -2793,10 +2802,38 @@ sessionsRouter.post('/:sessionId/fork', async (req: Request, res: Response, next
     }
     const forkMessage = `${FORK_FOCUS_PREFIX}${imageContext}New request:\n${userRequest}`
 
+    // Mint the fork's session id up front (verified: --session-id composes with
+    // --resume --fork-session, so the fork gets THIS id while still inheriting the
+    // parent conversation). Returning it lets the UI open the real forked panel
+    // immediately instead of showing a "Forking session..." placeholder and polling.
+    const forkSessionId = randomUUID()
+
+    // Seed the record before the spawn — same reason as quick-start: the UI opens
+    // the real panel on this response, and its first GET /api/sessions/:id must
+    // not 404 (a 404 reads as "no such session" and sticks the panel in its empty
+    // state). The spawn's persistSessionRecord updates this same row in place.
+    try {
+      const { createSessionRecord } = await import('../../core/session-tracker.js')
+      await createSessionRecord(forkSessionId, task.id, task.project ?? '', sourceRecord.cwd, {
+        title: title ?? `Fork of ${sourceRecord.title ?? sourceSessionId.slice(0, 16)}`,
+        mode: sourceRecord.mode !== 'default' ? sourceRecord.mode : undefined,
+        host: sourceRecord.host,
+        forkedFromSessionId: sourceSessionId,
+        initialProcessStatus: 'idle',
+        initialStatusReason: 'awaiting_spawn',
+      })
+    } catch (err) {
+      log.web.warn('fork: pre-spawn session record seed failed', {
+        sessionId: forkSessionId, taskId: task.id,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+
     // Emit SESSION_START with forkedFromSessionId — handleStart() uses Claude Code's
     // native --resume + --fork-session to transfer conversation context efficiently.
     // No need to read source history or wait for session start; return immediately.
     bus.emit(EventNames.SESSION_START, {
+      preassignedSessionId: forkSessionId,
       taskId: task.id,
       message: forkMessage,
       cwd: sourceRecord.cwd,
@@ -2823,6 +2860,7 @@ sessionsRouter.post('/:sessionId/fork', async (req: Request, res: Response, next
     res.json({
       status: 'pending',
       sourceSessionId,
+      sessionId: forkSessionId,
       taskId: task.id,
       ...(childTaskCreated ? { childTaskCreated: true } : {}),
       ...(sourceRecord.host ? { host: sourceRecord.host } : {}),

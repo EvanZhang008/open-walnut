@@ -806,6 +806,9 @@ export async function createSessionRecord(
     cliModel?: string;
     effort?: import('./types.js').SessionEffort;
     initialProcessStatus?: SessionRecord['process_status'];
+    /** Why the row starts in `initialProcessStatus` (e.g. 'awaiting_spawn' for a
+     *  record seeded before its CLI process exists). */
+    initialStatusReason?: import('./types.js').StatusReason;
     messageCount?: number;
     engine?: import('./types.js').SessionEngine;
     acpRuntimeId?: string;
@@ -893,6 +896,7 @@ export async function createSessionRecord(
         // permanent Running badge until the first real turn ended.
         process_status: extra?.initialProcessStatus ?? 'running',
         mode: extra?.mode ?? 'default',
+        ...(extra?.initialStatusReason ? { status_reason: extra.initialStatusReason } : {}),
         last_status_change: now,
         startedAt: now,
         lastActiveAt: now,

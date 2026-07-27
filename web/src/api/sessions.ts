@@ -532,7 +532,8 @@ export async function quickStartSession(opts: {
   createCwd?: boolean;
   /** Coding-agent engine. undefined = 'claude'; 'codex' → ACP-backed session (local-only). */
   engine?: 'codex';
-}): Promise<{ taskId: string; task: unknown }> {
+  /** `sessionId` is present for native (claude) starts; a Codex start omits it. */
+}): Promise<{ taskId: string; task: unknown; sessionId?: string }> {
   // Convert ImageAttachment[] to the backend ImagePayload format (data + mediaType only)
   const payload: Record<string, unknown> = { ...opts };
   if (opts.images?.length) {
@@ -540,7 +541,7 @@ export async function quickStartSession(opts: {
   } else {
     delete payload.images;
   }
-  const result = await apiPost<{ taskId: string; task: unknown }>('/api/sessions/quick-start', payload);
+  const result = await apiPost<{ taskId: string; task: unknown; sessionId?: string }>('/api/sessions/quick-start', payload);
   seedTaskSessionStatuses(result.task, 'rest:task');
   invalidateWorkingDirsCache(); // new session → new path entry
   if (opts.createCwd) invalidateLiveDirCache(); // the dir now exists — stale "missing" entries lie
@@ -580,7 +581,7 @@ export async function respondToPermission(
 export async function forkSessionInWalnut(
   sessionId: string,
   opts?: { child_title?: string; message?: string; model?: string; images?: ImageAttachment[] },
-): Promise<{ status: string; sourceSessionId: string; taskId: string; childTaskCreated?: boolean }> {
+): Promise<{ status: string; sourceSessionId: string; sessionId: string; taskId: string; childTaskCreated?: boolean }> {
   const { images, ...rest } = opts ?? {};
   const body: Record<string, unknown> = { create_child_task: true, ...rest };
   // Convert ImageAttachment[] → backend ImagePayload (data + mediaType only).

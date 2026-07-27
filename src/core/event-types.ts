@@ -58,6 +58,18 @@ export interface SessionStartEvent {
   fromPlanSessionId?: string;
   forkedFromSessionId?: string;
   /**
+   * Caller-chosen session id (UUID), passed to the CLI as `--session-id`.
+   *
+   * Why: the CLI's own id normally only becomes known when it emits its first
+   * init JSONL line — 3–11s after the click. Every UI surface is keyed by that
+   * id, so the panel could not exist until then (the old "pending column"
+   * spinner). Letting the caller mint the id up front makes the real session
+   * panel mountable in the SAME frame as the click; the CLI adopts the id when
+   * it eventually spawns. Must be a v4-shaped UUID (validated at the edge) —
+   * it becomes a filename on the exec host.
+   */
+  preassignedSessionId?: string;
+  /**
    * When the original user message was spilled to a temp file (Quick Start long paste),
    * the pointer to that local file. For remote sessions, the file is uploaded to the
    * same path on the remote host before the session starts.

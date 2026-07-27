@@ -202,6 +202,20 @@ export function validateConversationId(id: string): string {
 }
 
 /**
+ * Strict RFC-4122 v4 UUID shape — the ONLY form accepted for a client-supplied
+ * session id (`preassignedSessionId`). Deliberately narrower than "any uuid":
+ * the value is passed to the CLI as `--session-id` and becomes a filename on
+ * the exec host (`<id>.jsonl`, `<id>.pipe`), so anything but hex+dashes is a
+ * path-traversal / arg-injection vector.
+ */
+const SESSION_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** True when `id` is a v4 UUID safe to use as a session id / filename. */
+export function isValidSessionUuid(id: unknown): id is string {
+  return typeof id === 'string' && SESSION_UUID_RE.test(id);
+}
+
+/**
  * Resolve the memory directory for a console agent.
  * General → MEMORY_DIR (existing path, zero migration).
  * Others → MEMORY_DIR/agents/{agentId}/.

@@ -16,7 +16,8 @@ interface SessionForkButtonProps {
   taskId?: string;
   engine?: 'claude' | 'codex';
   onForkStarted?: (cwd: string, host?: string) => void;
-  onForkComplete?: (taskId: string) => void;
+  /** `sessionId` is the pre-assigned id of the new forked session (always set by the server). */
+  onForkComplete?: (taskId: string, sessionId?: string) => void;
   onForkFailed?: (errorMessage?: string) => void;
 }
 
@@ -147,7 +148,9 @@ export function SessionForkButton({ sessionId, cwd, taskId, engine, onForkStarte
       clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => setForkResult(null), 2000);
       if (result.taskId) {
-        onForkComplete?.(result.taskId);
+        // sessionId comes back immediately (server pre-assigns it via --session-id),
+        // so the parent can open the real forked panel without polling.
+        onForkComplete?.(result.taskId, result.sessionId);
       }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : 'Fork failed';
