@@ -147,6 +147,139 @@ export function renderToolResultWithRefs(text: string): string {
   }
 }
 
+// ── Code-region detection (shared by every pass that edits markdown SOURCE) ──
+
+/**
+ * Byte ranges of `text` that markdown will render as CODE — fenced blocks,
+ * indented blocks, and inline spans.
+ *
+ * Any pass that injects raw HTML into the markdown SOURCE must skip these: HTML
+ * placed inside a code region is escaped by marked and surfaces on screen as a
+ * literal `<a class="file-link" …>` instead of a link. That was the 2026-07-25
+ * bug — the old tracker was a single `/```[\s\S]*?```|`[^`\n]+`/` regex, so a
+ * FOUR-backtick fence wrapping inner ``` fences (a very common shape in
+ * agent-written docs: "copy this prompt verbatim" blocks) closed at the first
+ * inner ```, leaving the rest of the block unprotected.
+ *
+ * CommonMark rules honored: a fence is 3+ backticks or tildes and is closed only
+ * by a fence of the SAME char and at least the same length; an unclosed fence
+ * runs to EOF; a backtick fence's info string may not contain a backtick; an
+ * indented block needs 4 columns beyond the enclosing list item's content indent.
+ */
+export function codeRegions(text: string): [number, number][] {
+  const ranges = blockCodeRanges(text);
+  ranges.push(...inlineCodeRanges(text, ranges));
+  return ranges;
+}
+
+/** Visual column width of a line's leading whitespace (tab = 4 columns). */
+function indentWidth(line: string): number {
+  let w = 0;
+  for (const ch of line) {
+    if (ch === ' ') w += 1;
+    else if (ch === '\t') w += 4 - (w % 4);
+    else break;
+  }
+  return w;
+}
+
+/** Fenced + indented code blocks, scanned line by line. */
+function blockCodeRanges(text: string): [number, number][] {
+  const ranges: [number, number][] = [];
+  let pos = 0;
+  let fence: { char: string; len: number; start: number } | null = null;
+  // Open indented block: start offset + end of its last non-blank line (trailing
+  // blank lines belong to the block only if more code follows).
+  let indentStart: number | null = null;
+  let indentEnd = 0;
+  let prevBlank = true;
+  // Content indent of the innermost open list item — an indented code block
+  // inside `- item` starts at 2+4 columns, not 4.
+  let listIndent = 0;
+
+  for (const line of text.split('\n')) {
+    const lineStart = pos;
+    const lineEnd = lineStart + line.length;
+    pos = lineEnd + 1; // consumed '\n'
+    const blank = line.trim() === '';
+    const indent = indentWidth(line);
+
+    if (fence) {
+      const close = /^[ \t]*(`{3,}|~{3,})[ \t]*$/.exec(line);
+      if (close && close[1]![0] === fence.char && close[1]!.length >= fence.len) {
+        ranges.push([fence.start, lineEnd]);
+        fence = null;
+      }
+      prevBlank = blank;
+      continue;
+    }
+
+    // A fence may be indented up to 3 columns past its container's content indent.
+    const open = /^[ \t]*(`{3,}|~{3,})(.*)$/.exec(line);
+    if (open && indent <= listIndent + 3 && !(open[1]![0] === '`' && open[2]!.includes('`'))) {
+      if (indentStart !== null) { ranges.push([indentStart, indentEnd]); indentStart = null; }
+      fence = { char: open[1]![0]!, len: open[1]!.length, start: lineStart };
+      prevBlank = false;
+      continue;
+    }
+
+    // List bookkeeping: a marker line opens/re-bases the container indent; a
+    // non-blank line dedented back to column 0 closes it.
+    const li = /^[ \t]*([-*+]|\d{1,9}[.)])([ \t]+)/.exec(line);
+    if (li) listIndent = indent + li[1]!.length + li[2]!.length;
+    else if (!blank && indent === 0) listIndent = 0;
+
+    if (!blank && indent >= listIndent + 4) {
+      if (indentStart !== null) indentEnd = lineEnd;
+      else if (prevBlank) { indentStart = lineStart; indentEnd = lineEnd; }
+    } else if (!blank && indentStart !== null) {
+      ranges.push([indentStart, indentEnd]);
+      indentStart = null;
+    }
+    prevBlank = blank;
+  }
+
+  if (fence) ranges.push([fence.start, text.length]);
+  if (indentStart !== null) ranges.push([indentStart, indentEnd]);
+  return ranges;
+}
+
+/**
+ * Inline code spans outside the block ranges. A run of N backticks is closed by
+ * the next run of exactly N; a pair never spans a blank line (an unmatched stray
+ * backtick must not swallow the rest of the document).
+ */
+function inlineCodeRanges(text: string, blocked: [number, number][]): [number, number][] {
+  const inBlocked = (i: number) => blocked.some(([s, e]) => i >= s && i < e);
+  const runs: { start: number; len: number }[] = [];
+  const runRe = /`+/g;
+  let m: RegExpExecArray | null;
+  while ((m = runRe.exec(text)) !== null) {
+    if (!inBlocked(m.index)) runs.push({ start: m.index, len: m[0].length });
+  }
+  const out: [number, number][] = [];
+  let i = 0;
+  while (i < runs.length) {
+    const open = runs[i]!;
+    // Bound the closer search to the current paragraph. Besides matching
+    // CommonMark (a span can't cross a blank line), this keeps the scan from
+    // going quadratic on a doc full of unmatched backticks — the whole-array
+    // rescan-per-run was the same shape as the 2026-07-23 boot freeze.
+    const brk = text.indexOf('\n\n', open.start);
+    const paraEnd = brk === -1 ? text.length : brk;
+    let j = i + 1;
+    while (j < runs.length && runs[j]!.start < paraEnd && runs[j]!.len !== open.len) j++;
+    const close = j < runs.length && runs[j]!.start < paraEnd ? runs[j] : undefined;
+    if (close) {
+      out.push([open.start, close.start + close.len]);
+      i = j + 1;
+    } else {
+      i++;
+    }
+  }
+  return out;
+}
+
 // ── File path detection & linkification ──
 
 /** Image extensions to exclude from file-path linkification */
@@ -195,13 +328,10 @@ const ABS_FILE_RE_SRC = `(?<![\\/\\w])(~?\\/(?:${PATH_SEG_SP}\\/)+${PATH_SEG_SP}
  * Exclusions: URLs, image paths, code fences, already-linked text.
  */
 export function filePathsToHtml(text: string, sessionCwd?: string): string {
-  // Track code fence regions to skip
-  const fenceRanges: [number, number][] = [];
-  const fenceRe = /```[\s\S]*?```|`[^`\n]+`/g;
-  let fm: RegExpExecArray | null;
-  while ((fm = fenceRe.exec(text)) !== null) {
-    fenceRanges.push([fm.index, fm.index + fm[0].length]);
-  }
+  // Code regions (fenced/indented blocks + inline spans) are off-limits: raw HTML
+  // injected there gets escaped by marked and shows as literal tags. linkifyPathsInCode
+  // handles those AFTER parsing, where escaping is no longer a hazard.
+  const fenceRanges = codeRegions(text);
 
   function isInFence(idx: number): boolean {
     return fenceRanges.some(([start, end]) => idx >= start && idx < end);
@@ -447,10 +577,7 @@ function linkifyPathsInCode(html: string, sessionCwd?: string): string {
 export function stripLeakedToolCalls(text: string): string {
   if (!text.includes('invoke')) return text;
 
-  const fenceRanges: [number, number][] = [];
-  const fenceRe = /```[\s\S]*?```|`[^`\n]+`/g;
-  let fm: RegExpExecArray | null;
-  while ((fm = fenceRe.exec(text)) !== null) fenceRanges.push([fm.index, fm.index + fm[0].length]);
+  const fenceRanges = codeRegions(text);
   const inFence = (i: number) => fenceRanges.some(([s, e]) => i >= s && i < e);
 
   const removals: [number, number][] = [];
@@ -742,12 +869,9 @@ notePurify.addHook('afterSanitizeAttributes', (node) => {
  * Skips paths inside triple-backtick fences or markdown image/link syntax.
  */
 function bareImagePathsToMarkdown(text: string): string {
-  const tripleFenceRanges: [number, number][] = [];
-  const tripleFenceRe = /```[\s\S]*?```/g;
-  let fm: RegExpExecArray | null;
-  while ((fm = tripleFenceRe.exec(text)) !== null) {
-    tripleFenceRanges.push([fm.index, fm.index + fm[0].length]);
-  }
+  // Block-level code only here — the backtick passes below own inline spans
+  // (pass 1 deliberately rewrites `path.png` INTO an image).
+  const tripleFenceRanges = blockCodeRanges(text);
   const inTripleFence = (i: number) => tripleFenceRanges.some(([s, e]) => i >= s && i < e);
 
   const replacements: { start: number; end: number; replacement: string }[] = [];
@@ -771,6 +895,7 @@ function bareImagePathsToMarkdown(text: string): string {
   // Pass 2: bare absolute image paths (not in backticks, not in triple fences)
   const singleBacktickRanges: [number, number][] = [];
   const singleBtRe = /`[^`\n]+`/g;
+  let fm: RegExpExecArray | null;
   while ((fm = singleBtRe.exec(text)) !== null) {
     singleBacktickRanges.push([fm.index, fm.index + fm[0].length]);
   }
