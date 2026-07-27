@@ -33,7 +33,13 @@ const FLUSH_DEBOUNCE_MS = 800;
 
 interface PrefEntry { v: string | null; ts: number }
 
-function syncable(key: string): boolean {
+/** Whether a localStorage key is mirrored to the server. Exported so a feature
+ *  that DEPENDS on cross-device sync (e.g. the launcher's sticky pin tier) can
+ *  assert its key against this predicate instead of a hardcoded prefix string —
+ *  narrowing the allowlist would otherwise silently make that state
+ *  device-local with a green test suite. Keep in sync with the server-side twin
+ *  in src/web/routes/ui-prefs.ts. */
+export function syncable(key: string): boolean {
   if (key === META_KEY) return false;
   if (EXCLUDE_PREFIXES.some((p) => key.startsWith(p))) return false;
   return INCLUDE_PREFIXES.some((p) => key.startsWith(p));
