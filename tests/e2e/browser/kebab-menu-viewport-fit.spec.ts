@@ -66,6 +66,35 @@ async function openHomepageSession(page: Page) {
   return panel
 }
 
+/**
+ * Assert the menu is the TOP element along its own box — i.e. actually visible,
+ * not merely correctly sized underneath something else.
+ *
+ * Geometry alone can't catch this: the menu measured perfectly while the session
+ * composer drew over its lower half. `position: fixed` escapes clipping ancestors
+ * but NOT stacking contexts, and the menu's home was inside
+ * .session-panel-header (z-index: 30) while the composer is .session-panel-input
+ * (z-index: 40) — so its own z-index: 9999 only ordered it within the header.
+ * Fixed by portalling to <body>; this hit-tests that it stayed fixed.
+ */
+async function assertMenuOnTop(page: Page, menu: Locator, label: string) {
+  const covered = await menu.evaluate((el) => {
+    const r = el.getBoundingClientRect()
+    // Sample down the menu's vertical centre line. The bug only showed at the
+    // bottom, where the composer overlapped.
+    const bad: { y: number; by: string }[] = []
+    for (const frac of [0.1, 0.35, 0.6, 0.85, 0.97]) {
+      const y = r.top + r.height * frac
+      const top = document.elementFromPoint(r.left + r.width / 2, y)
+      if (top && !el.contains(top) && top !== el) {
+        bad.push({ y: Math.round(y), by: (top.className || top.tagName).toString().slice(0, 60) })
+      }
+    }
+    return bad
+  })
+  expect(covered, `${label}: menu is covered by ${covered.map(c => `${c.by}@y=${c.y}`).join(', ')}`).toEqual([])
+}
+
 /** Assert a menu's box sits fully inside the viewport, and report its metrics. */
 async function assertFitsViewport(page: Page, menu: Locator, label: string) {
   const box = (await menu.boundingBox())!
@@ -98,6 +127,8 @@ test('the session kebab fits the viewport and scrolls when the window is short',
   await expect(menu).toBeVisible()
 
   const m = await assertFitsViewport(page, menu, 'short window')
+  // Sized right AND actually on top — the composer used to draw over its lower half.
+  await assertMenuOnTop(page, menu, 'short window')
 
   // 1. It IS the tall two-section menu (guards against the test passing because
   //    a short single-section menu rendered instead).
@@ -145,6 +176,7 @@ for (const height of [900, 620, 480]) {
     const menu = page.locator('.task-kebab-menu:visible')
     await expect(menu).toBeVisible()
     await assertFitsViewport(page, menu, `height=${height}`)
+    await assertMenuOnTop(page, menu, `height=${height}`)
 
     // Escape must dismiss it (the menu owns the key handler now).
     await page.keyboard.press('Escape')

@@ -7,6 +7,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 
 /**
@@ -266,14 +267,18 @@ export function DatePicker({ date, onChange, inline }: DatePickerProps) {
       >
         {display || 'Date'}
       </button>
-      {open && (
+      {/* Portalled for the same reason as the kebab menus: `position: fixed`
+          escapes clipping ancestors but not stacking contexts, and this pill can
+          sit inside z-indexed panels. */}
+      {open && createPortal(
         <div
           ref={menuRef}
           className="dp-popover"
           style={menuPlacementStyle(menuPos)}
         >
           <DatePickerContent date={date} onChange={handleChange} />
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

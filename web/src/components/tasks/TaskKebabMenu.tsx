@@ -6,6 +6,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import type { Task, TaskPriority } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
 import * as ICONS from '../common/Icons';
@@ -297,8 +298,11 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
     && task.source !== 'local'
     && (Boolean(task.ext?.[task.source]) || Boolean(task.has_synced) || legacySynced);
 
+  // data-menu-open replaces a `:has(.task-kebab-menu)` CSS check that kept the ⋮
+  // visible while its menu was open — the menu is portalled to <body> now, so it
+  // is no longer a descendant for :has() to find.
   return (
-    <div className="task-kebab-wrapper">
+    <div className="task-kebab-wrapper" data-menu-open={open || undefined}>
       <button
         ref={btnRef}
         className="task-kebab-btn"
@@ -308,7 +312,11 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
       >
         ⋮
       </button>
-      {open && (
+      {/* Portalled to <body>: `position: fixed` escapes clipping ancestors but
+          NOT stacking contexts, so a z-indexed ancestor (a panel header, a
+          sticky bar) caps this menu at the ancestor's layer no matter how high
+          its own z-index is. See the note in TaskQuickActions.tsx. */}
+      {open && createPortal(
         <div
           ref={menuRef}
           className="task-kebab-menu"
@@ -538,7 +546,8 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
               </button>
             </>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

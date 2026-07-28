@@ -290,6 +290,11 @@ export function useMenuPlacement(
     if (typeof ResizeObserver !== 'undefined' && menuRef.current) {
       ro = new ResizeObserver(() => onScrollOrResize());
       for (const child of Array.from(menuRef.current.children)) ro.observe(child);
+      // Also watch the TRIGGER. A row hidden with display:none (the live search
+      // filter) collapses it to 0x0 without firing scroll, resize or any mutation
+      // the menu can see — so nothing would re-run place(), and the anchor-lost
+      // check inside it would never get a chance to close the menu.
+      if (triggerRef.current) ro.observe(triggerRef.current);
     }
     // Rows appearing/disappearing changes the child LIST, which no
     // ResizeObserver reports — re-observe the new children and re-place.
