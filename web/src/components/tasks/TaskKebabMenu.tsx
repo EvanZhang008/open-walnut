@@ -209,11 +209,15 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
   const [cursorAnchor, setCursorAnchor] = useState<{ x: number; y: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const closeMenu = useCallback(() => { setOpen(false); setCursorAnchor(null); }, []);
   // Measured placement + height cap — the menu height is never guessed, so a
   // tall menu in a short window scrolls internally instead of being clipped.
-  const menuPos = useMenuPlacement(open, btnRef, menuRef, { anchorPoint: cursorAnchor });
-
-  const closeMenu = useCallback(() => { setOpen(false); setCursorAnchor(null); }, []);
+  const menuPos = useMenuPlacement(open, btnRef, menuRef, {
+    anchorPoint: cursorAnchor,
+    // A task row is filtered out from under an open menu often here (the live
+    // todo search re-filters as you type); close rather than strand the menu.
+    onAnchorLost: closeMenu,
+  });
 
   useEffect(() => {
     if (!open) return;

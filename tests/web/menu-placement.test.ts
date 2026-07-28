@@ -38,15 +38,28 @@ function place(over: Partial<PlacementInput> = {}) {
   return { input, out: computePlacement(input) };
 }
 
-/** Assert the three "always on screen" invariants for any input. */
+/**
+ * Assert the "always on screen" invariants.
+ *
+ * Deliberately asserts against `out.maxHeight` — the only value the hook actually
+ * writes to the DOM — rather than re-deriving the height with the implementation's
+ * own `min(naturalHeight, maxHeight)` expression. Recomputing it would make the
+ * assertion agree with the impl even when the impl is wrong (self-confirming), and
+ * would miss the border the real box carries.
+ */
 function expectOnScreen(input: PlacementInput, out: { top: number; maxHeight: number }) {
-  const height = Math.min(input.naturalHeight || out.maxHeight, out.maxHeight);
-  expect(out.maxHeight).toBeLessThanOrEqual(input.viewportHeight - input.margin * 2);  // I1
-  // Epsilon because real geometry is fractional — the pre-fix E2E failure read
-  // "bottom edge past viewport (746.5 > 700)". These inputs are integers, but the
-  // production values they mirror are not.
-  expect(out.top + height).toBeLessThanOrEqual(input.viewportHeight - input.margin + 0.001); // I2
-  expect(out.top).toBeGreaterThanOrEqual(input.margin);                                // I3
+  // I1: never taller than the window itself. (Not `viewportHeight - margin*2`:
+  // the margins are deliberately given up before the menu is, for a window that
+  // is shorter than the margins — see the zero-height describe below.)
+  expect(out.maxHeight).toBeLessThanOrEqual(input.viewportHeight);
+  // I2: the box the browser will render — top + the cap it was given, plus the
+  // 1px border on each side that box-sizing: border-box carries — stays inside
+  // the window. Epsilon because real geometry is fractional: the pre-fix E2E
+  // failure read "bottom edge past viewport (746.5 > 700)".
+  const BORDER_Y = 2;
+  expect(out.top + out.maxHeight).toBeLessThanOrEqual(input.viewportHeight + BORDER_Y + 0.001);
+  // I3: never above the top edge.
+  expect(out.top).toBeGreaterThanOrEqual(0);
 }
 
 describe('computePlacement: normal case', () => {
@@ -96,6 +109,24 @@ describe('computePlacement: the reported bug — tall menu, short window', () =>
     const { input, out } = place({ naturalHeight: TALL, viewportHeight: 120, anchor: { top: 40, bottom: 60, right: 900 } });
     expect(out.maxHeight).toBeLessThanOrEqual(120 - MARGIN * 2);
     expectOnScreen(input, out);
+  });
+});
+
+describe('computePlacement: never returns a zero-height menu', () => {
+  // The viewport cap is the last clamp, so `viewportHeight <= margin * 2` used to
+  // yield maxHeight 0 — a menu showing literally nothing, strictly worse than the
+  // clipping this all fixes. Reachable via a very short window (phone landscape
+  // with a keyboard up) or any caller passing a large margin.
+  it('a window no taller than the margins still yields a usable height', () => {
+    for (const viewportHeight of [1, 10, 16, 17, 40]) {
+      const { out } = place({ viewportHeight, naturalHeight: 300, anchor: { top: 5, bottom: 8, right: 900 } });
+      expect(out.maxHeight, `viewportHeight=${viewportHeight}`).toBeGreaterThan(0);
+    }
+  });
+
+  it('an absurd margin does not collapse the menu', () => {
+    const { out } = place({ margin: 500, viewportHeight: 700, naturalHeight: 300 });
+    expect(out.maxHeight).toBeGreaterThan(0);
   });
 });
 

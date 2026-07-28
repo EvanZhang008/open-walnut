@@ -29,12 +29,25 @@ import { expect, test, type APIRequestContext, type Page, type Locator } from '@
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
 
+// Every test here pays a full page load plus a session-panel open. That is
+// ~12-25s when other specs run in parallel on this machine (fixture cold boot
+// alone is ~20s idle and far worse under load, per CLAUDE.md), so the default
+// 30s budget leaves no headroom and these fail on timeout rather than on a real
+// defect. The assertions are geometric and fast; the boot is the cost.
+test.describe.configure({ timeout: 90_000 })
+
 /**
  * The fixture dataset is shared across concurrently running specs, and
  * task-multi-select-batch.spec.ts completes/reopens tasks in it. A COMPLETE task
  * renders a SHORTER kebab (no attention row, no pin/tier block) and drops the
  * "Session idle" entry, so this spec must assert its own precondition instead of
  * inheriting whatever the last spec left behind.
+ *
+ * ⚠️ This writes to shared fixture data, so the hazard runs both ways. It is safe
+ * only because IN_PROGRESS is `pw-task-vscode`'s seeded state and no other spec
+ * asserts a different phase for THIS id (the batch spec seeds its own tasks). A
+ * spec that starts depending on this task being complete would break; give it a
+ * private task id rather than changing what this restores.
  */
 async function ensureTaskInProgress(request: APIRequestContext) {
   const res = await request.patch(`/api/tasks/${TASK_ID}`, { data: { phase: 'IN_PROGRESS' } })
@@ -170,11 +183,16 @@ test('a task-row kebab fits the viewport, opened by click and by right-click', a
   await assertFitsViewport(page, menu, 'task row (right-click)')
 })
 
-test('the date popover fits the viewport too (same defect shape)', async ({ page, request }) => {
-  // DatePicker's POPOVER mode (task detail pane) had the identical defect: a
-  // ~250px calendar placed at `rect.bottom + 2` with no flip, clamp or cap. Its
-  // inline mode (embedded in the kebab) was never affected. Both are asserted
-  // here so the popover can't regress back to the unclamped placement.
+test('the kebab containing an inline calendar still fits the viewport', async ({ page, request }) => {
+  // The inline DatePicker is what makes the kebab tall enough to overflow in the
+  // first place (~200px of calendar), so assert it is actually present — a
+  // shorter menu would let the viewport check pass for the wrong reason.
+  //
+  // DatePicker's POPOVER mode (`.dp-popover`, rendered in task detail panes) had
+  // the same defect shape and is now placed by the same hook, but this fixture's
+  // home panel renders only the inline mode, so there is no honest way to reach
+  // the popover here. Its CSS/placement contract is covered by the unit tests
+  // instead; a browser test for it needs a fixture that opens a detail pane.
   await ensureTaskInProgress(request)
   await page.setViewportSize({ width: 1280, height: 620 })
   await page.goto('/')
@@ -184,24 +202,38 @@ test('the date popover fits the viewport too (same defect shape)', async ({ page
   const row = page.locator(`.todo-panel-item[data-task-id="${TASK_ID}"]`)
   await expect(row).toBeVisible()
 
-  // Open the task's detail pane, which renders the popover-mode DatePicker.
-  await row.click()
-  const trigger = page.locator('.dp-trigger').first()
-  if (await trigger.count() === 0) {
-    // The detail surface didn't render a date pill in this layout — assert the
-    // inline calendar inside the kebab instead, so the test still covers a
-    // DatePicker rather than silently passing.
-    await row.getByRole('button', { name: 'More actions' }).click()
-    const kebab = page.locator('.task-kebab-menu:visible')
-    await expect(kebab).toBeVisible()
-    await expect(kebab.locator('.dp-content')).toHaveCount(1)
-    await assertFitsViewport(page, kebab, 'kebab with inline date picker')
-    return
-  }
-
-  await trigger.click()
-  const pop = page.locator('.dp-popover:visible')
-  await expect(pop).toBeVisible()
-  const m = await assertFitsViewport(page, pop, 'date popover')
+  await row.getByRole('button', { name: 'More actions' }).click()
+  const kebab = page.locator('.task-kebab-menu:visible')
+  await expect(kebab).toBeVisible()
+  await expect(kebab.locator('.dp-content')).toHaveCount(1)
+  const m = await assertFitsViewport(page, kebab, 'kebab with inline date picker')
   expect(m.overflowY).toBe('auto')
+})
+
+test('a menu whose trigger disappears closes instead of stranding off-screen', async ({ page, request }) => {
+  // A trigger removed or display:none'd while its menu is open reports an
+  // all-zero rect. Treating that as a position parked the menu at the top-left
+  // corner — measured `right: 1280px` on a 1280px viewport, i.e. fully
+  // off-screen left — and no scroll could recover it, because the components'
+  // "did the trigger scroll away?" test is `r.bottom < 0 || r.top > innerHeight`,
+  // which is false for all zeros. The hook now reports the anchor as lost.
+  await ensureTaskInProgress(request)
+  await page.setViewportSize({ width: 1280, height: 700 })
+  await page.goto('/')
+  await page.waitForLoadState('networkidle')
+
+  await page.locator('.todo-search-input').fill(SESSION_ID)
+  const row = page.locator(`.todo-panel-item[data-task-id="${TASK_ID}"]`)
+  await expect(row).toBeVisible()
+  await row.getByRole('button', { name: 'More actions' }).click()
+  const menu = page.locator('.task-kebab-menu')
+  await expect(menu).toBeVisible()
+
+  // Hide the row the trigger lives in — what the live search filter does.
+  await page.evaluate((taskId) => {
+    const el = document.querySelector<HTMLElement>(`.todo-panel-item[data-task-id="${taskId}"]`)
+    if (el) el.style.display = 'none'
+  }, TASK_ID)
+
+  await expect(menu).toHaveCount(0)
 })

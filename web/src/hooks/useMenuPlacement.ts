@@ -29,9 +29,10 @@
  *     and the menu is clamped into the viewport and scrolls instead.
  *   - Right-aligned to the trigger, then clamped so the left edge stays on-screen.
  *
- * Adopted by TaskQuickActions + TaskKebabMenu. NOT adopted (yet) by
- * ViewDropdown / SessionForkButton — those already measure correctly — nor by
- * TaskBatchMenu, which anchors by `bottom` and so needs a different return shape.
+ * Adopted by TaskQuickActions, TaskKebabMenu and DatePicker (popover mode). NOT
+ * adopted by ViewDropdown / SessionForkButton — those already measure correctly —
+ * nor by TaskBatchMenu, which anchors by `bottom` and so needs a different return
+ * shape, nor by PriorityPicker, which is short enough to only need the flip.
  *
  * Measurement happens in `useLayoutEffect` (before paint, so no visible jump)
  * and is kept in sync on scroll/resize via a rAF-throttled listener.
@@ -46,6 +47,16 @@ export interface MenuPlacement {
 }
 
 export interface MenuPlacementOptions {
+  /**
+   * Called when the anchor stops being placeable — the trigger was unmounted or
+   * `display:none`d while the menu was open (the live search filter, a tab
+   * switch, a WS-driven re-render). Its rect then reads all zeros, which is NOT
+   * a position: without this the menu is placed at the top-left corner detached
+   * from everything, and the components' own "did the trigger scroll away?"
+   * check can't help because `0 < 0 || 0 > innerHeight` is false. The owner
+   * should close the menu.
+   */
+  onAnchorLost?: () => void;
   /** Gap between the trigger and the menu. */
   gap?: number;
   /** Minimum gutter kept between the menu and the viewport edges. */
@@ -119,7 +130,14 @@ export function computePlacement(input: PlacementInput): MenuPlacement & { side:
   // Cap to the space available, but never below minHeight and never above the
   // viewport itself (a minHeight bigger than the window would re-introduce the
   // very clipping this fixes).
-  const viewportCap = Math.max(viewportHeight - margin * 2, 0);
+  //
+  // The viewport cap is the LAST clamp, so it must never reach 0: a zero-height
+  // menu shows nothing at all, which is strictly worse than the clipping this
+  // fixes. `viewportHeight <= margin * 2` (a very short window, or a caller
+  // passing a large margin) would otherwise produce exactly that — so give up
+  // the margins before giving up the menu.
+  const ABSOLUTE_MIN = 48;   // ~1 row + padding: still usable, still scrollable
+  const viewportCap = Math.max(viewportHeight - margin * 2, Math.min(viewportHeight, ABSOLUTE_MIN));
   // `|| available` carries the pre-mount pass, where naturalHeight is still 0.
   // Without it that first frame would collapse to maxHeight === minHeight.
   const wanted = naturalHeight || available;
@@ -154,22 +172,45 @@ export function useMenuPlacement(
   menuRef: RefObject<HTMLElement | null>,
   options: MenuPlacementOptions = {},
 ): MenuPlacement | null {
-  const { gap = 2, margin = 8, minHeight = 180, anchorPoint = null } = options;
+  const { gap = 2, margin = 8, minHeight = 180, anchorPoint = null, onAnchorLost } = options;
   const [placement, setPlacement] = useState<MenuPlacement | null>(null);
   // The side is decided ONCE per open and then latched — see PlacementInput.forceSide.
   const sideRef = useRef<OpenSide>(null);
+  // Latest callback without making it a dependency (a fresh arrow per render
+  // would otherwise tear down and re-run the whole effect every render).
+  const onAnchorLostRef = useRef(onAnchorLost);
+  onAnchorLostRef.current = onAnchorLost;
 
   useLayoutEffect(() => {
-    if (!open) { sideRef.current = null; setPlacement(null); return; }
+    // Reset the latch on close AND on a new anchor: a second right-click at a
+    // different point (or right-click → kebab-button) changes the anchor without
+    // `open` ever going false, and a side latched for the old anchor can then be
+    // badly wrong (measured: 'down' latched for a cursor at y=660 in a 700px
+    // window placed the menu 148px ABOVE the cursor, squeezed to minHeight).
+    sideRef.current = null;
+    if (!open) { setPlacement(null); return; }
 
     const place = () => {
       const menu = menuRef.current;
       // A cursor anchor is a zero-size rect at the click point; otherwise use
       // the trigger button's box.
+      const trigger = triggerRef.current;
       const r = anchorPoint
         ? { top: anchorPoint.y, bottom: anchorPoint.y, right: anchorPoint.x }
-        : triggerRef.current?.getBoundingClientRect();
+        : trigger?.getBoundingClientRect();
       if (!r) return;
+
+      // A trigger that was unmounted or display:none'd while the menu is open
+      // reports an all-zero rect. That is "no anchor", not "anchor at 0,0":
+      // placing against it parks the menu in the top-left corner (measured:
+      // right: 1280px on a 1280px viewport, i.e. fully off-screen left) and no
+      // scroll can recover it. Cursor anchors are exempt — they're legitimately
+      // zero-HEIGHT, and they don't depend on the trigger still existing.
+      if (!anchorPoint && trigger
+          && (trigger.offsetWidth === 0 || trigger.offsetHeight === 0 || !trigger.isConnected)) {
+        onAnchorLostRef.current?.();
+        return;
+      }
 
       // Natural (unconstrained) height. Two subtleties, both load-bearing:
       //  · scrollHeight ignores our own max-height cap, so re-measuring on every
@@ -181,9 +222,19 @@ export function useMenuPlacement(
       //    therefore leaves exactly (border-top + border-bottom) px permanently
       //    unreachable — a menu that fits perfectly still shows a scrollbar and
       //    swallows wheel events via overscroll-behavior. Add the border back.
-      //    offsetHeight - clientHeight is border+scrollbar and stays constant
-      //    across caps, so this doesn't reopen the ResizeObserver feedback loop.
-      const borderY = menu ? menu.offsetHeight - menu.clientHeight : 0;
+      //
+      // Read the border from computed style, NOT from `offsetHeight -
+      // clientHeight`: that difference is border PLUS any horizontal scrollbar,
+      // so the moment a cap makes one appear it inflates by ~16px, and the next
+      // pass adds that on top again — the cap then ratchets DOWN instead of
+      // tracking the content (measured: a menu with 628px of content in 764px of
+      // space stuck at 472px). Computed border widths depend on nothing we set.
+      const borderY = menu
+        ? (() => {
+            const cs = getComputedStyle(menu);
+            return (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
+          })()
+        : 0;
 
       const next = computePlacement({
         anchor: { top: r.top, bottom: r.bottom, right: r.right },
@@ -226,18 +277,45 @@ export function useMenuPlacement(
     window.addEventListener('resize', onScrollOrResize);
 
     // The menu's own content can grow AFTER mount — an async task fetch filling
-    // in rows, a date picker switching months, an "investigate" result line. A
-    // one-shot measurement would then be stale (too-small cap, wrong flip), so
-    // track the element itself.
+    // in rows, a date picker switching months, an "investigate" result line — and
+    // a one-shot measurement would leave the cap and the flip decision stale.
+    //
+    // ⚠️ Observe the CHILDREN, not the menu. ResizeObserver watches the border
+    // box, and once we apply maxHeight that box is pinned: content growth then
+    // changes only scrollHeight, so observing the menu itself fires ZERO times
+    // (measured: 400px of content added under a cap → 0 callbacks, vs 1 when
+    // uncapped). That is exactly backwards — it would work only for menus that
+    // already fit. The children are unclamped, so their resize is observable.
     let ro: ResizeObserver | undefined;
     if (typeof ResizeObserver !== 'undefined' && menuRef.current) {
       ro = new ResizeObserver(() => onScrollOrResize());
-      ro.observe(menuRef.current);
+      for (const child of Array.from(menuRef.current.children)) ro.observe(child);
+    }
+    // Rows appearing/disappearing changes the child LIST, which no
+    // ResizeObserver reports — re-observe the new children and re-place.
+    //
+    // Two rAFs, not one: a MutationObserver callback runs as a microtask right
+    // after the mutation, BEFORE the frame's layout, so scrollHeight there still
+    // reports the old content (measured: a +160px insertion moved the cap by only
+    // the 2.5px border correction). Waiting one extra frame lets layout settle so
+    // the re-measure sees the real height.
+    let mo: MutationObserver | undefined;
+    let moRaf = 0;
+    if (typeof MutationObserver !== 'undefined' && menuRef.current) {
+      const menuEl = menuRef.current;
+      mo = new MutationObserver(() => {
+        if (ro) for (const child of Array.from(menuEl.children)) ro.observe(child);
+        cancelAnimationFrame(moRaf);
+        moRaf = requestAnimationFrame(() => { moRaf = requestAnimationFrame(place); });
+      });
+      mo.observe(menuEl, { childList: true, subtree: true });
     }
 
     return () => {
       cancelAnimationFrame(raf);
+      cancelAnimationFrame(moRaf);
       ro?.disconnect();
+      mo?.disconnect();
       window.removeEventListener('scroll', onScrollOrResize, true);
       window.removeEventListener('resize', onScrollOrResize);
     };
@@ -252,8 +330,10 @@ export function menuPlacementStyle(p: MenuPlacement | null): CSSProperties {
     // Pre-measurement pass: park the menu off-screen so the frame before
     // placement is known never flashes at 0,0. It must stay LAID OUT (hence a
     // position offset rather than display:none) for scrollHeight/offsetWidth to
-    // be measurable.
-    return { position: 'fixed', top: 0, left: -9999, zIndex: 9999 };
+    // be measurable. pointerEvents:none because an element at left:-9999 is
+    // still hit-testable and still matches Playwright's `:visible`, so without
+    // it a click could land on the unplaced frame.
+    return { position: 'fixed', top: 0, left: -9999, zIndex: 9999, pointerEvents: 'none' };
   }
   return { position: 'fixed', top: p.top, right: p.right, maxHeight: p.maxHeight, zIndex: 9999 };
 }
