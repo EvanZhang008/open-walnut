@@ -13,6 +13,7 @@ import { getIntegrationMeta, useIntegrations } from '@/hooks/useIntegrations';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { DatePicker, formatDateDisplay } from '../common/DatePicker';
 import { useSessionStatus } from '@/hooks/useSessionStatus';
+import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 
 type TaskListProjection = Task & {
   /** Precomputed by fields=list because that projection intentionally omits ext. */
@@ -204,11 +205,15 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
   const sessionId = resolveTaskSessionId(task);
   const storedSessionStatus = useSessionStatus(sessionId);
   const [open, setOpen] = useState(false);
-  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
+  /** Set only by the right-click path, which anchors the menu at the cursor. */
+  const [cursorAnchor, setCursorAnchor] = useState<{ x: number; y: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  // Measured placement + height cap — the menu height is never guessed, so a
+  // tall menu in a short window scrolls internally instead of being clipped.
+  const menuPos = useMenuPlacement(open, btnRef, menuRef, { anchorPoint: cursorAnchor });
 
-  const closeMenu = useCallback(() => setOpen(false), []);
+  const closeMenu = useCallback(() => { setOpen(false); setCursorAnchor(null); }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -217,14 +222,35 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
       if (menuRef.current?.contains(e.target as Node)) return;
       closeMenu();
     };
-    const handleScroll = () => closeMenu();
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeMenu(); };
+    // Three different scroll cases, deliberately:
+    //  1. Inside the menu — the menu scrolls its own overflow now, so this must
+    //     NOT dismiss it (that would make the fix unusable).
+    //  2. Right-click path (cursorAnchor set) — a cursor anchor is a frozen
+    //     viewport point, not an element. Once the page scrolls, it no longer
+    //     points at the row it was opened on, so close outright. Safe here
+    //     because a right-click never scrolls the row into view, so this can't
+    //     fire in the same tick as the open (see case 3).
+    //  3. Button path — follow the trigger (useMenuPlacement repositions) and
+    //     only close once it truly leaves the viewport. A blanket close-on-scroll
+    //     would fire in the SAME tick as the opening click whenever that click
+    //     scrolls the row into view, so the menu never appeared at all — the bug
+    //     documented in TaskBatchMenu.tsx.
+    const handleScroll = (e: Event) => {
+      if (menuRef.current?.contains(e.target as Node)) return;
+      if (cursorAnchor) { closeMenu(); return; }
+      const r = btnRef.current?.getBoundingClientRect();
+      if (r && (r.bottom < 0 || r.top > window.innerHeight)) closeMenu();
+    };
     document.addEventListener('mousedown', handleClickOutside);
-    window.addEventListener('scroll', handleScroll);
+    document.addEventListener('keydown', handleKey);
+    window.addEventListener('scroll', handleScroll, true);
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
-      window.removeEventListener('scroll', handleScroll);
+      document.removeEventListener('keydown', handleKey);
+      window.removeEventListener('scroll', handleScroll, true);
     };
-  }, [open, closeMenu]);
+  }, [open, closeMenu, cursorAnchor]);
 
   // Right-click anywhere on the task row opens this kebab menu at the cursor —
   // the row is an app object, not a document, so the browser context menu is
@@ -240,14 +266,9 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
       // Nested/overlapping rows: only the innermost row owns the right-click.
       if (target.closest('[data-task-id]') !== row) return;
       e.preventDefault();
-      const menuWidth = 268;
-      const menuHeight = 350; // approximate max height (same as kebab toggle)
-      const top = window.innerHeight - e.clientY < menuHeight
-        ? Math.max(8, e.clientY - menuHeight)
-        : e.clientY + 2;
-      // Anchor the menu's right edge at the cursor, clamped so it stays on-screen.
-      const right = Math.max(8, Math.min(window.innerWidth - e.clientX, window.innerWidth - menuWidth - 8));
-      setMenuPos({ top, right });
+      // Placement (flip, clamp, height cap) is all measured by useMenuPlacement —
+      // record only the cursor point it should anchor to.
+      setCursorAnchor({ x: e.clientX, y: e.clientY });
       setOpen(true);
     };
     row.addEventListener('contextmenu', handleContextMenu);
@@ -256,13 +277,7 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
 
   const handleToggle = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!open && btnRef.current) {
-      const rect = btnRef.current.getBoundingClientRect();
-      const menuHeight = 350; // approximate max height
-      const spaceBelow = window.innerHeight - rect.bottom;
-      const top = spaceBelow < menuHeight ? Math.max(8, rect.top - menuHeight) : rect.bottom + 2;
-      setMenuPos({ top, right: window.innerWidth - rect.right });
-    }
+    setCursorAnchor(null);   // button path anchors to the button, not a cursor
     setOpen(!open);
   };
 
@@ -293,7 +308,7 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
         <div
           ref={menuRef}
           className="task-kebab-menu"
-          style={menuPos ? { position: 'fixed', top: menuPos.top, right: menuPos.right, zIndex: 9999 } : undefined}
+          style={menuPlacementStyle(menuPos)}
         >
           {/* Session status */}
           {(() => {

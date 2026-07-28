@@ -7,6 +7,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 
 /**
  * Parse an ISO date string as local time.
@@ -199,10 +200,14 @@ function DatePickerContent({ date, onChange }: Pick<DatePickerProps, 'date' | 'o
 
 export function DatePicker({ date, onChange, inline }: DatePickerProps) {
   const [open, setOpen] = useState(false);
-  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  // Same class of bug as the kebab menu: this popover holds a ~250px calendar and
+  // used to place itself at `rect.bottom + 2` with no flip, no clamp and no height
+  // cap, so opening it near the bottom of a short window pushed the day grid off
+  // screen unreachably. Hooks must run before the `inline` early-return below.
+  const menuPos = useMenuPlacement(open, btnRef, menuRef);
 
   const close = useCallback(() => setOpen(false), []);
 
@@ -213,12 +218,22 @@ export function DatePicker({ date, onChange, inline }: DatePickerProps) {
       if (menuRef.current?.contains(e.target as Node)) return;
       close();
     };
-    const handleScroll = () => close();
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    // A scroll inside the popover (the calendar can scroll when capped) must not
+    // dismiss it; outside, useMenuPlacement keeps it glued to the trigger until
+    // the trigger itself leaves the viewport.
+    const handleScroll = (e: Event) => {
+      if (menuRef.current?.contains(e.target as Node)) return;
+      const r = btnRef.current?.getBoundingClientRect();
+      if (r && (r.bottom < 0 || r.top > window.innerHeight)) close();
+    };
     document.addEventListener('mousedown', handleClick);
-    window.addEventListener('scroll', handleScroll);
+    document.addEventListener('keydown', handleKey);
+    window.addEventListener('scroll', handleScroll, true);
     return () => {
       document.removeEventListener('mousedown', handleClick);
-      window.removeEventListener('scroll', handleScroll);
+      document.removeEventListener('keydown', handleKey);
+      window.removeEventListener('scroll', handleScroll, true);
     };
   }, [open, close]);
 
@@ -233,10 +248,6 @@ export function DatePicker({ date, onChange, inline }: DatePickerProps) {
 
   const handleToggle = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!open && btnRef.current) {
-      const rect = btnRef.current.getBoundingClientRect();
-      setMenuPos({ top: rect.bottom + 2, right: window.innerWidth - rect.right });
-    }
     setOpen(!open);
   };
 
@@ -259,7 +270,7 @@ export function DatePicker({ date, onChange, inline }: DatePickerProps) {
         <div
           ref={menuRef}
           className="dp-popover"
-          style={menuPos ? { position: 'fixed', top: menuPos.top, right: menuPos.right, zIndex: 9999 } : undefined}
+          style={menuPlacementStyle(menuPos)}
         >
           <DatePickerContent date={date} onChange={handleChange} />
         </div>

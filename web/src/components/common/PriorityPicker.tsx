@@ -63,7 +63,16 @@ export function PriorityPicker({ priority, onChange, fixed }: PriorityPickerProp
     e.stopPropagation();
     if (!open && fixed && btnRef.current) {
       const rect = btnRef.current.getBoundingClientRect();
-      setMenuPos({ top: rect.bottom + 2, left: rect.right });
+      // Only 4 rows (~140px), so this doesn't need useMenuPlacement's measure +
+      // scroll treatment — but it does need the flip, or opening it near the
+      // bottom of a short window pushes the last option off-screen. Full
+      // measured placement lives in useMenuPlacement for the tall menus.
+      const MENU_H = 150, MARGIN = 8;
+      const openUp = window.innerHeight - rect.bottom < MENU_H && rect.top > window.innerHeight - rect.bottom;
+      const top = openUp
+        ? Math.max(MARGIN, rect.top - 2 - MENU_H)
+        : Math.min(rect.bottom + 2, window.innerHeight - MENU_H - MARGIN);
+      setMenuPos({ top: Math.max(MARGIN, top), left: rect.right });
     }
     setOpen(!open);
   };
