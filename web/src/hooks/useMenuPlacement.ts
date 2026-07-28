@@ -21,7 +21,9 @@
  *
  * Placement rules:
  *   - Prefer opening downward; flip upward only when the menu doesn't fit below
- *     AND above has more room (a plain `>`, no threshold — see computePlacement).
+ *     AND above has more room. The side is decided ONCE and then latched for the
+ *     lifetime of that open, so scrolling repositions the menu without ever
+ *     flipping it mid-scroll (see PlacementInput.forceSide).
  *   - `maxHeight` = the space available on the chosen side, except when that is
  *     below `minHeight`: a menu squeezed to 40px is useless, so minHeight wins
  *     and the menu is clamped into the viewport and scrolls instead.
@@ -35,7 +37,7 @@
  * and is kept in sync on scroll/resize via a rAF-throttled listener.
  */
 
-import { useState, useLayoutEffect, type RefObject } from 'react';
+import { useState, useRef, useLayoutEffect, type CSSProperties, type RefObject } from 'react';
 
 export interface MenuPlacement {
   top: number;
@@ -43,7 +45,7 @@ export interface MenuPlacement {
   maxHeight: number;
 }
 
-interface Options {
+export interface MenuPlacementOptions {
   /** Gap between the trigger and the menu. */
   gap?: number;
   /** Minimum gutter kept between the menu and the viewport edges. */
@@ -64,6 +66,9 @@ interface Options {
   anchorPoint?: { x: number; y: number } | null;
 }
 
+/** Which side the menu opens toward. `null` = decide from the geometry. */
+export type OpenSide = 'up' | 'down' | null;
+
 export interface PlacementInput {
   /**
    * Anchor box in viewport coords. Only `right` is used horizontally: the menu's
@@ -82,6 +87,15 @@ export interface PlacementInput {
   gap: number;
   margin: number;
   minHeight: number;
+  /**
+   * Force a side instead of deriving one. The hook latches the first decision
+   * for the lifetime of one open: `place()` re-runs on every scroll frame, and
+   * re-deciding there makes a tall menu teleport (measured: a 5px scroll of the
+   * trigger past the viewport midpoint flipped the menu 354px). The pre-refactor
+   * code decided once at open time; latching preserves that feel while keeping
+   * the position glued to the trigger.
+   */
+  forceSide?: OpenSide;
 }
 
 /**
@@ -89,14 +103,17 @@ export interface PlacementInput {
  * actually broke ("never taller than the viewport", "never clipped off the
  * bottom", "cap equals the space available") are unit-testable without a DOM.
  */
-export function computePlacement(input: PlacementInput): MenuPlacement {
-  const { anchor, naturalHeight, menuWidth, viewportWidth, viewportHeight, gap, margin, minHeight } = input;
+export function computePlacement(input: PlacementInput): MenuPlacement & { side: 'up' | 'down' } {
+  const { anchor, naturalHeight, menuWidth, viewportWidth, viewportHeight, gap, margin, minHeight, forceSide } = input;
 
   const spaceBelow = viewportHeight - anchor.bottom - gap - margin;
   const spaceAbove = anchor.top - gap - margin;
 
-  // Open downward unless it doesn't fit AND there is more room above.
-  const openUp = naturalHeight > spaceBelow && spaceAbove > spaceBelow;
+  // Open downward unless it doesn't fit AND there is more room above. A caller
+  // that already opened (forceSide) keeps its side — see PlacementInput.forceSide.
+  const openUp = forceSide
+    ? forceSide === 'up'
+    : naturalHeight > spaceBelow && spaceAbove > spaceBelow;
   const available = Math.max(openUp ? spaceAbove : spaceBelow, 0);
 
   // Cap to the space available, but never below minHeight and never above the
@@ -122,7 +139,7 @@ export function computePlacement(input: PlacementInput): MenuPlacement {
   }
   right = Math.max(right, margin);
 
-  return { top, right, maxHeight };
+  return { top, right, maxHeight, side: openUp ? 'up' : 'down' };
 }
 
 /**
@@ -135,13 +152,15 @@ export function useMenuPlacement(
   open: boolean,
   triggerRef: RefObject<HTMLElement | null>,
   menuRef: RefObject<HTMLElement | null>,
-  options: Options = {},
+  options: MenuPlacementOptions = {},
 ): MenuPlacement | null {
   const { gap = 2, margin = 8, minHeight = 180, anchorPoint = null } = options;
   const [placement, setPlacement] = useState<MenuPlacement | null>(null);
+  // The side is decided ONCE per open and then latched — see PlacementInput.forceSide.
+  const sideRef = useRef<OpenSide>(null);
 
   useLayoutEffect(() => {
-    if (!open) { setPlacement(null); return; }
+    if (!open) { sideRef.current = null; setPlacement(null); return; }
 
     const place = () => {
       const menu = menuRef.current;
@@ -152,17 +171,33 @@ export function useMenuPlacement(
         : triggerRef.current?.getBoundingClientRect();
       if (!r) return;
 
+      // Natural (unconstrained) height. Two subtleties, both load-bearing:
+      //  · scrollHeight ignores our own max-height cap, so re-measuring on every
+      //    reposition stays stable instead of ratcheting down to whatever we
+      //    capped it at last time.
+      //  · scrollHeight is a PADDING-box measure, but these menus are
+      //    box-sizing: border-box with a 1px border, and max-height applies to
+      //    the border box. Feeding the raw scrollHeight back as max-height
+      //    therefore leaves exactly (border-top + border-bottom) px permanently
+      //    unreachable — a menu that fits perfectly still shows a scrollbar and
+      //    swallows wheel events via overscroll-behavior. Add the border back.
+      //    offsetHeight - clientHeight is border+scrollbar and stays constant
+      //    across caps, so this doesn't reopen the ResizeObserver feedback loop.
+      const borderY = menu ? menu.offsetHeight - menu.clientHeight : 0;
+
       const next = computePlacement({
         anchor: { top: r.top, bottom: r.bottom, right: r.right },
-        // Natural (unconstrained) height: scrollHeight ignores our own max-height
-        // cap, so re-measuring on every reposition stays stable instead of
-        // ratcheting down to whatever we capped it at last time.
-        naturalHeight: menu ? menu.scrollHeight : 0,
+        naturalHeight: menu ? menu.scrollHeight + borderY : 0,
         menuWidth: menu ? menu.offsetWidth : 0,
         viewportWidth: window.innerWidth,
         viewportHeight: window.innerHeight,
         gap, margin, minHeight,
+        forceSide: sideRef.current,
       });
+      // Latch on the first pass only — but not before the menu has been measured,
+      // or we'd freeze a side chosen from naturalHeight 0 (which always "fits
+      // below") and never reconsider once the real height is known.
+      if (menu && sideRef.current === null) sideRef.current = next.side;
 
       // ⚠️ LOAD-BEARING, not a micro-optimisation: the ResizeObserver below
       // watches the very element whose size we set (we apply maxHeight → its box
@@ -212,7 +247,7 @@ export function useMenuPlacement(
 }
 
 /** Inline style for a menu placed by {@link useMenuPlacement}. */
-export function menuPlacementStyle(p: MenuPlacement | null): React.CSSProperties | undefined {
+export function menuPlacementStyle(p: MenuPlacement | null): CSSProperties {
   if (!p) {
     // Pre-measurement pass: park the menu off-screen so the frame before
     // placement is known never flashes at 0,0. It must stay LAID OUT (hence a

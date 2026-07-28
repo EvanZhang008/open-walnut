@@ -121,6 +121,41 @@ describe('computePlacement: flipping', () => {
   });
 });
 
+describe('computePlacement: the side is latched, not re-decided per scroll frame', () => {
+  // place() re-runs on every rAF scroll frame. Re-deciding the side there made a
+  // tall menu teleport: measured 354px of jump for 5px of trigger movement as the
+  // trigger crossed the viewport midpoint. forceSide freezes the first decision.
+  const TALL = 770;
+  const VH = 700;
+
+  it('without a forced side, a 5px scroll across the midpoint flips the menu', () => {
+    const a = place({ naturalHeight: TALL, viewportHeight: VH, anchor: { top: 340, bottom: 360, right: 900 } }).out;
+    const b = place({ naturalHeight: TALL, viewportHeight: VH, anchor: { top: 345, bottom: 365, right: 900 } }).out;
+    expect(a.side).toBe('down');
+    expect(b.side).toBe('up');
+    expect(Math.abs(b.top - a.top)).toBeGreaterThan(300);   // the jump this guards against
+  });
+
+  it('with the side latched, the same scroll only moves the menu by the scroll amount', () => {
+    const base = { naturalHeight: TALL, viewportHeight: VH, forceSide: 'down' as const };
+    const a = place({ ...base, anchor: { top: 340, bottom: 360, right: 900 } }).out;
+    const b = place({ ...base, anchor: { top: 345, bottom: 365, right: 900 } }).out;
+    expect(b.side).toBe('down');
+    expect(Math.abs(b.top - a.top)).toBeLessThanOrEqual(5);
+  });
+
+  it('a latched side still keeps the menu on screen', () => {
+    // Latched 'down' while the trigger sits near the bottom: the clamp has to
+    // rescue it, since the flip no longer can.
+    const { input, out } = place({
+      naturalHeight: 500, viewportHeight: VH, forceSide: 'down',
+      anchor: { top: 640, bottom: 660, right: 900 },
+    });
+    expect(out.side).toBe('down');
+    expectOnScreen(input, out);
+  });
+});
+
 describe('computePlacement: horizontal clamping', () => {
   it('keeps the left edge on screen for a narrow viewport', () => {
     const { out } = place({ viewportWidth: 320, menuWidth: 260, anchor: { top: 100, bottom: 120, right: 300 } });
