@@ -1,4 +1,5 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useRef } from 'react';
+import { useDragGesture } from './useDragGesture';
 
 const PANEL_PCT_MIN = 10;  // minimum 10% of viewport
 const PANEL_PCT_MAX = 70;  // maximum 70% of viewport (supports multi-column sessions)
@@ -36,58 +37,55 @@ interface UseResizablePanelReturn {
   /** Programmatically set the panel width (clamped to min/max) */
   setPct: (pct: number) => void;
   panelRef: React.RefObject<HTMLDivElement | null>;
-  handleResizeStart: (e: React.MouseEvent) => void;
+  /** Spread onto the drag handle: `<div {...handleProps} />` */
+  handleProps: { onPointerDown: (e: React.PointerEvent) => void };
 }
 
 /**
  * Reusable hook for a resizable panel with width as % of viewport.
  * @param direction 'right' (default) = panel is right of handle (drag left = increase).
  *                  'left' = panel is left of handle (drag right = increase).
+ *
+ * Drag mechanics (pointer capture, iframe-proof, rAF-coalesced) live in
+ * useDragGesture — see that file for why raw document mouse listeners were
+ * getting stuck on the Files panel's HTML-preview iframe.
  */
 export function useResizablePanel(storageKey: string, defaultPct = PANEL_PCT_DEFAULT, direction: 'left' | 'right' = 'right'): UseResizablePanelReturn {
   const [pct, setPct] = useState(() => readStoredPct(storageKey, defaultPct));
-  const resizingRef = useRef(false);
-  const startXRef = useRef(0);
-  const startPctRef = useRef(0);
+  const startPctRef = useRef(pct);
+  const pctRef = useRef(pct);
+  pctRef.current = pct;
   const panelRef = useRef<HTMLDivElement>(null);
 
-  const handleResizeStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    resizingRef.current = true;
-    startXRef.current = e.clientX;
-    startPctRef.current = pct;
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    panelRef.current?.classList.add('resizing');
-
-    const onMouseMove = (ev: MouseEvent) => {
-      if (!resizingRef.current) return;
+  const { onPointerDown } = useDragGesture({
+    cursor: 'col-resize',
+    onStart: () => {
+      startPctRef.current = pctRef.current;
+      panelRef.current?.classList.add('resizing');
+    },
+    onMove: ({ dx }) => {
       const pxDelta = direction === 'right'
-        ? startXRef.current - ev.clientX   // drag left = increase (panel right of handle)
-        : ev.clientX - startXRef.current;  // drag right = increase (panel left of handle)
+        ? -dx   // drag left = increase (panel right of handle)
+        : dx;   // drag right = increase (panel left of handle)
       const pctDelta = (pxDelta / window.innerWidth) * 100;
       setPct(clampPct(startPctRef.current + pctDelta));
-    };
-
-    const onMouseUp = () => {
-      resizingRef.current = false;
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
+    },
+    onEnd: () => {
       panelRef.current?.classList.remove('resizing');
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
-    };
+      // Persist ONCE per drag. This used to be a `useEffect` keyed on `pct`,
+      // i.e. a synchronous localStorage write on every single mousemove —
+      // a blocking disk write per frame, and the main source of the drag lag.
+      try { localStorage.setItem(storageKey, String(pctRef.current)); } catch { /* ignore */ }
+    },
+  });
 
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
-  }, [pct]);
+  const setClampedPct = useCallback((v: number) => {
+    const next = clampPct(v);
+    setPct(next);
+    // Programmatic sets (e.g. the graduated session-area width) aren't part of
+    // a drag, so they persist immediately.
+    try { localStorage.setItem(storageKey, String(next)); } catch { /* ignore */ }
+  }, [storageKey]);
 
-  // Persist percentage changes
-  useEffect(() => {
-    try { localStorage.setItem(storageKey, String(pct)); } catch { /* ignore */ }
-  }, [pct, storageKey]);
-
-  const setClampedPct = useCallback((v: number) => setPct(clampPct(v)), []);
-
-  return { width: `${pct}%`, pct, setPct: setClampedPct, panelRef, handleResizeStart };
+  return { width: `${pct}%`, pct, setPct: setClampedPct, panelRef, handleProps: { onPointerDown } };
 }

@@ -1169,7 +1169,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                 title="Show chat"
               >💬</button>
             ) : (
-              <div className="session-panel-chat-resize" onMouseDown={chatPanel.handleResizeStart} title="Drag to resize chat" />
+              <div className="session-panel-chat-resize" {...chatPanel.handleProps} title="Drag to resize chat" />
             )
           )}
           <div

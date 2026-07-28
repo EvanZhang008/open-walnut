@@ -13,6 +13,7 @@
  * Expanded-dir state persists in localStorage, keyed per host + resolved root.
  */
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useDragGesture } from '@/hooks/useDragGesture';
 import { fetchDirList, type DirEntry } from '@/api/files';
 import { fetchSessionChangedPaths } from '@/api/session-changes';
 import { FileContentView } from '@/components/common/FileContentView';
@@ -113,34 +114,25 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine }: Sessi
   const [changedRoots, setChangedRoots] = useState<RootSection[]>([]);
   const [openRoots, setOpenRoots] = useState<Set<string>>(new Set());
   // Tree pane width — drag the divider to resize; persisted globally.
+  // The preview pane immediately right of this divider renders an <iframe> for
+  // HTML files, which is why this drag used to stick: a raw document mouseup
+  // listener never fires once the cursor is over the iframe. useDragGesture
+  // captures the pointer so every move/up comes back to the handle.
   const [treeWidth, setTreeWidth] = useState<number>(loadTreeWidth);
-  const dragStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const treeWidthRef = useRef(treeWidth);
+  treeWidthRef.current = treeWidth;
+  const startWidthRef = useRef(treeWidth);
 
-  const onDividerMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    dragStateRef.current = { startX: e.clientX, startWidth: treeWidth };
-    const onMove = (ev: MouseEvent) => {
-      const st = dragStateRef.current;
-      if (!st) return;
-      const w = Math.min(TREE_WIDTH_MAX, Math.max(TREE_WIDTH_MIN, st.startWidth + (ev.clientX - st.startX)));
-      setTreeWidth(w);
-    };
-    const onUp = () => {
-      dragStateRef.current = null;
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-      document.body.style.removeProperty('cursor');
-      document.body.style.removeProperty('user-select');
-      setTreeWidth((w) => {
-        try { localStorage.setItem(LS_TREE_WIDTH, String(w)); } catch { /* denied */ }
-        return w;
-      });
-    };
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-  }, [treeWidth]);
+  const { onPointerDown: onDividerPointerDown } = useDragGesture({
+    cursor: 'col-resize',
+    onStart: () => { startWidthRef.current = treeWidthRef.current; },
+    onMove: ({ dx }) => {
+      setTreeWidth(Math.min(TREE_WIDTH_MAX, Math.max(TREE_WIDTH_MIN, startWidthRef.current + dx)));
+    },
+    onEnd: () => {
+      try { localStorage.setItem(LS_TREE_WIDTH, String(treeWidthRef.current)); } catch { /* denied */ }
+    },
+  });
 
   // toggleDir must persist to the CURRENT root's localStorage key, but we don't
   // want it re-created every time `root` changes (~ → absolute resolution). A ref
@@ -560,7 +552,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine }: Sessi
 
         <div
           className="sfe-divider"
-          onMouseDown={onDividerMouseDown}
+          onPointerDown={onDividerPointerDown}
           title="Drag to resize"
           role="separator"
           aria-orientation="vertical"

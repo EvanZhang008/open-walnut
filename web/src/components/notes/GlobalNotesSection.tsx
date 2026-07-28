@@ -1,4 +1,5 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef } from 'react';
+import { useDragGesture } from '@/hooks/useDragGesture';
 import { GlobalNotesPopup } from './GlobalNotesPopup';
 import { NotesEditor } from './NotesEditor';
 import type { UseGlobalNotesReturn } from '@/hooks/useGlobalNotes';
@@ -37,48 +38,29 @@ export function GlobalNotesSection(props: GlobalNotesSectionProps) {
   const collapsed = fill ? false : collapsedProp;
   const [height, setHeight] = useState(readHeight);
   const heightRef = useRef(height);
-  const dragging = useRef(false);
-  const startY = useRef(0);
-  const startH = useRef(0);
+  const startH = useRef(height);
   const handleRef = useRef<HTMLDivElement>(null);
 
   // Keep ref in sync for use in event handlers
   heightRef.current = height;
 
-  const onMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    dragging.current = true;
-    startY.current = e.clientY;
-    startH.current = heightRef.current;
-    document.body.style.cursor = 'row-resize';
-    document.body.style.userSelect = 'none';
-    handleRef.current?.classList.add('dragging');
-  }, []);
-
-  useEffect(() => {
-    const onMouseMove = (e: MouseEvent) => {
-      if (!dragging.current) return;
-      const delta = startY.current - e.clientY;
-      const newH = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, startH.current + delta));
-      setHeight(newH);
-    };
-    const onMouseUp = () => {
-      if (!dragging.current) return;
-      dragging.current = false;
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
+  // The body this drag resizes IS the notes editor, which can host PDF wiki-embed
+  // iframes — a downward drag puts the cursor inside them. Pointer capture keeps
+  // move/up flowing to the handle instead of vanishing into the iframe.
+  const { onPointerDown } = useDragGesture({
+    cursor: 'row-resize',
+    onStart: () => {
+      startH.current = heightRef.current;
+      handleRef.current?.classList.add('dragging');
+    },
+    // Handle sits above the body: dragging up (negative dy) grows it.
+    onMove: ({ dy }) => setHeight(Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, startH.current - dy))),
+    onEnd: () => {
       handleRef.current?.classList.remove('dragging');
       // Persist latest height from ref (not stale closure value)
       try { localStorage.setItem(LS_NOTES_HEIGHT_KEY, String(heightRef.current)); } catch {}
-    };
-
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
-    return () => {
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
-    };
-  }, []);
+    },
+  });
 
   return (
     <>
@@ -87,7 +69,7 @@ export function GlobalNotesSection(props: GlobalNotesSectionProps) {
           <div
             ref={handleRef}
             className="global-notes-resize-handle"
-            onMouseDown={onMouseDown}
+            onPointerDown={onPointerDown}
             title="Drag to resize"
           />
         )}

@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useNotesTree } from '@/hooks/useNotesTree';
 import { useNoteContent } from '@/hooks/useNoteContent';
 import { useFavorites } from '@/hooks/useFavorites';
+import { useDragGesture } from '@/hooks/useDragGesture';
 import { NotesTreePanel } from '@/components/notes/NotesTreePanel';
 import { NotesEditorPanel } from '@/components/notes/NotesEditorPanel';
 import { NotesTabStrip, type OpenTab, type TabKind } from '@/components/notes/NotesTabStrip';
@@ -494,44 +495,29 @@ export function NotesPage() {
     }, 0);
   }, []);
 
-  // Resizable left pane
+  // Resizable left pane. Both dividers here sit beside the editor pane, which
+  // renders PDF <iframe>s (attachment preview / wiki embeds) — the reason these
+  // drags used to stick. useDragGesture captures the pointer, so move/up always
+  // come back to the handle, and it persists once on release instead of writing
+  // localStorage synchronously on every frame.
   const [listWidth, setListWidth] = useState(readWidth);
-  const isResizingRef = useRef(false);
-  const startXRef = useRef(0);
-  const startWidthRef = useRef(0);
+  const listWidthRef = useRef(listWidth);
+  listWidthRef.current = listWidth;
+  const startWidthRef = useRef(listWidth);
   const listPaneRef = useRef<HTMLDivElement>(null);
 
-  const handleResizeStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    isResizingRef.current = true;
-    startXRef.current = e.clientX;
-    startWidthRef.current = listWidth;
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    listPaneRef.current?.classList.add('resizing');
-
-    const onMouseMove = (ev: MouseEvent) => {
-      if (!isResizingRef.current) return;
-      const newWidth = clampWidth(startWidthRef.current + (ev.clientX - startXRef.current));
-      setListWidth(newWidth);
-    };
-
-    const onMouseUp = () => {
-      isResizingRef.current = false;
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
+  const { onPointerDown: treeResizePointerDown } = useDragGesture({
+    cursor: 'col-resize',
+    onStart: () => {
+      startWidthRef.current = listWidthRef.current;
+      listPaneRef.current?.classList.add('resizing');
+    },
+    onMove: ({ dx }) => setListWidth(clampWidth(startWidthRef.current + dx)),
+    onEnd: () => {
       listPaneRef.current?.classList.remove('resizing');
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
-    };
-
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
-  }, [listWidth]);
-
-  useEffect(() => {
-    try { localStorage.setItem(LS_WIDTH_KEY, String(listWidth)); } catch { /* ignore */ }
-  }, [listWidth]);
+      try { localStorage.setItem(LS_WIDTH_KEY, String(listWidthRef.current)); } catch { /* ignore */ }
+    },
+  });
 
   // Resizable chat column — the divider between editor and chat pane is a drag
   // handle (mirrors the tree resize). Width persists; dragging LEFT widens.
@@ -542,35 +528,19 @@ export function NotesPage() {
     } catch { /* ignore */ }
     return CHAT_WIDTH_DEFAULT;
   });
-  const chatResizingRef = useRef(false);
+  const chatWidthRef = useRef(chatWidth);
+  chatWidthRef.current = chatWidth;
+  const startChatWidthRef = useRef(chatWidth);
 
-  const handleChatResizeStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    chatResizingRef.current = true;
-    const startX = e.clientX;
-    const startWidth = chatWidth;
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-
-    const onMouseMove = (ev: MouseEvent) => {
-      if (!chatResizingRef.current) return;
-      // The pane is on the RIGHT: dragging the divider left grows it.
-      setChatWidth(clampChatWidth(startWidth + (startX - ev.clientX)));
-    };
-    const onMouseUp = () => {
-      chatResizingRef.current = false;
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
-    };
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
-  }, [chatWidth]);
-
-  useEffect(() => {
-    try { localStorage.setItem(LS_CHAT_WIDTH_KEY, String(chatWidth)); } catch { /* ignore */ }
-  }, [chatWidth]);
+  const { onPointerDown: chatResizePointerDown } = useDragGesture({
+    cursor: 'col-resize',
+    onStart: () => { startChatWidthRef.current = chatWidthRef.current; },
+    // The pane is on the RIGHT: dragging the divider left grows it.
+    onMove: ({ dx }) => setChatWidth(clampChatWidth(startChatWidthRef.current - dx)),
+    onEnd: () => {
+      try { localStorage.setItem(LS_CHAT_WIDTH_KEY, String(chatWidthRef.current)); } catch { /* ignore */ }
+    },
+  });
 
   const handleCreateNote = useCallback(
     async (notePath: string) => {
@@ -700,7 +670,7 @@ export function NotesPage() {
           onStartAgentChat={handleStartAgentChat}
         />
       </div>
-      <div className="notes-resize-handle" onMouseDown={handleResizeStart} />
+      <div className="notes-resize-handle" onPointerDown={treeResizePointerDown} />
       <div className="notes-editor-pane">
         {/* The AI toggle is IN the tab strip (real layout space, right-aligned), not
             floating over the pane — an absolute overlay sat on top of the note's own
@@ -766,7 +736,7 @@ export function NotesPage() {
       </div>
       {chatOpen && (
         <>
-          <div className="notes-chat-divider" onMouseDown={handleChatResizeStart} title="Drag to resize" />
+          <div className="notes-chat-divider" onPointerDown={chatResizePointerDown} title="Drag to resize" />
           <div className="notes-chat-pane" style={{ flex: `0 0 ${chatWidth}px`, width: chatWidth }}>
             {(() => {
               // Dropdown switcher — only shown once there's something to switch

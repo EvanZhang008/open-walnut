@@ -14,6 +14,7 @@ import { useFavorites } from '@/hooks/useFavorites';
 import { useFocusBarContext } from '@/contexts/FocusBarContext';
 import { useOrdering } from '@/hooks/useOrdering';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
+import { useDragGesture } from '@/hooks/useDragGesture';
 import { ChatPanel } from '@/components/chat/ChatPanel';
 import { useOverlayHeightVar } from '@/hooks/useHeightVar';
 import { ChatMessage, type RouteInfo } from '@/components/chat/ChatMessage';
@@ -490,33 +491,32 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   });
   const colSplitRef = useRef(colSplitPct);
   colSplitRef.current = colSplitPct;
-  useEffect(() => { try { localStorage.setItem('open-walnut-col-split', String(colSplitPct)); } catch {} }, [colSplitPct]);
 
-  const handleColSplitStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    const sessionsEl = sessionPanel.panelRef.current;
-    if (!sessionsEl) return;
-    const startX = e.clientX;
-    const startPct = colSplitRef.current;
-    const areaRect = sessionsEl.getBoundingClientRect();
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    sessionsEl.classList.add('resizing');
-    const onMove = (ev: MouseEvent) => {
-      const dx = ev.clientX - startX;
-      const deltaPct = (dx / areaRect.width) * 100;
-      setColSplitPct(Math.min(80, Math.max(20, startPct + deltaPct)));
-    };
-    const onUp = () => {
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      sessionsEl.classList.remove('resizing');
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    };
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  }, [sessionPanel.panelRef]);
+  // Column split drag. Persists on release only — it used to write localStorage
+  // from a `useEffect` keyed on colSplitPct, i.e. a synchronous disk write on
+  // every mousemove. Pointer capture (useDragGesture) keeps the drag alive when
+  // the cursor crosses a session column's HTML-preview iframe.
+  const colSplitStartRef = useRef({ pct: 50, width: 1 });
+  const { onPointerDown: colSplitPointerDown } = useDragGesture({
+    cursor: 'col-resize',
+    onStart: () => {
+      const el = sessionPanel.panelRef.current;
+      colSplitStartRef.current = {
+        pct: colSplitRef.current,
+        width: el?.getBoundingClientRect().width || 1,
+      };
+      el?.classList.add('resizing');
+    },
+    onMove: ({ dx }) => {
+      const { pct, width } = colSplitStartRef.current;
+      setColSplitPct(Math.min(80, Math.max(20, pct + (dx / width) * 100)));
+    },
+    onEnd: () => {
+      sessionPanel.panelRef.current?.classList.remove('resizing');
+      try { localStorage.setItem('open-walnut-col-split', String(colSplitRef.current)); } catch {}
+    },
+  });
+  const colSplitHandleProps = { onPointerDown: colSplitPointerDown };
 
   // Graduated session area width — use total session count (not visible) so tabbed
   // sessions still get full width. Only auto-set when count increases.
@@ -1572,7 +1572,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       </div>
 
       {/* Todo Resize Handle — only shown when todo is visible */}
-      {todoVisible && <div className="todo-resize-handle" onMouseDown={todoPanel.handleResizeStart} />}
+      {todoVisible && <div className="todo-resize-handle" {...todoPanel.handleProps} />}
 
       {/* Routines Panel (slide-out, toggled via Sidebar) */}
       {routinesVisible && (
@@ -1819,7 +1819,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           collapsed the sessions area is flex:1 (fills the row), so this handle
           can't resize anything and would just double the todo↔sessions gutter. */}
       {chatVisible && (sessionColumns.length > 0 || triagePanelOpen) && (
-        <div className="session-resize-handle" onMouseDown={sessionPanel.handleResizeStart} />
+        <div className="session-resize-handle" {...sessionPanel.handleProps} />
       )}
 
       {/* Sessions Area — triage (first slot) + session columns.
@@ -1859,7 +1859,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             ? { flex: `0 0 ${colIdx === 0 ? colSplitPct : (100 - colSplitPct)}%` }
             : {};
           return (<Fragment key={sid}>
-            {needsDivider && <div className="session-col-resize-handle" onMouseDown={handleColSplitStart} />}
+            {needsDivider && <div className="session-col-resize-handle" {...colSplitHandleProps} />}
             <div
               className={`main-page-session-column${slot.locked ? ' is-locked' : ''}${idx === sessionColumns.length - 1 ? ' is-mobile-active' : ''}`}
               style={colStyle}

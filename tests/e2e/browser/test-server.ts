@@ -474,6 +474,22 @@ await fs.writeFile(
     '',
   ].join('\n'),
 )
+// Drag fixture (panel-resize-drag.spec.ts): an HTML file, because FileContentView
+// previews HTML in an <iframe>. That iframe sits directly right of the tree
+// divider and used to swallow the drag's mousemove/mouseup — the stuck-drag bug.
+await fs.writeFile(
+  path.join(vscodeFixtureRoot, 'drag-fixture.html'),
+  [
+    '<!doctype html>',
+    '<html><head><title>Drag fixture</title></head>',
+    // Tall + opaque so it definitely covers the area the cursor crosses.
+    '<body style="margin:0;background:#eef;height:3000px">',
+    '<h1>Drag fixture preview</h1>',
+    '<p>This page is previewed in an iframe next to the resize divider.</p>',
+    '</body></html>',
+    '',
+  ].join('\n'),
+)
 const oldExactTargetAt = new Date(sessionFixtureNow - 30 * 24 * 60 * 60 * 1_000).toISOString()
 const scaleSessions = Array.from({ length: 501 }, (_, index) => ({
   claudeSessionId: `pw-scale-session-${String(index).padStart(3, '0')}`,

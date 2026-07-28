@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef } from 'react';
+import { useDragGesture } from './useDragGesture';
 
 const RATIO_DEFAULT = 0.65;
 const RATIO_MIN = 0.15;
@@ -19,8 +20,8 @@ export interface UseVerticalSplitterReturn {
   ratio: number;
   /** Attach to the flex-column container (.todo-panel). */
   containerRef: React.RefObject<HTMLDivElement | null>;
-  /** onMouseDown for the drag handle element. */
-  handleMouseDown: (e: React.MouseEvent) => void;
+  /** Spread onto the drag handle: `<div {...handleProps} />` */
+  handleProps: { onPointerDown: (e: React.PointerEvent) => void };
   /** True while user is actively dragging. */
   isResizing: boolean;
 }
@@ -28,6 +29,9 @@ export interface UseVerticalSplitterReturn {
 /**
  * Ratio-based vertical splitter for list/detail panes.
  * Mouse UP (negative deltaY) → ratio increases (top pane grows).
+ *
+ * Drag mechanics (pointer capture, iframe-proof, rAF-coalesced) live in
+ * useDragGesture.
  */
 export function useVerticalSplitter(opts: VerticalSplitterOptions = {}): UseVerticalSplitterReturn {
   const storageKey = opts.storageKey ?? STORAGE_KEY;
@@ -52,55 +56,34 @@ export function useVerticalSplitter(opts: VerticalSplitterOptions = {}): UseVert
   }, [storageKey, defaultRatio, clampRatio]);
 
   const [ratio, setRatio] = useState(readStoredRatio);
-  const [isResizing, setIsResizing] = useState(false);
+  const ratioRef = useRef(ratio);
+  ratioRef.current = ratio;
   const ownContainerRef = useRef<HTMLDivElement>(null);
   const containerRef = opts.containerRef ?? ownContainerRef;
-  const startYRef = useRef(0);
-  const startRatioRef = useRef(0);
+  const startRatioRef = useRef(ratio);
+  const containerHeightRef = useRef(0);
 
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    const container = containerRef.current;
-    if (!container) return;
+  const { onPointerDown, isDragging } = useDragGesture({
+    cursor: 'row-resize',
+    onStart: () => {
+      const container = containerRef.current;
+      startRatioRef.current = ratioRef.current;
+      // Measured once at grab — reading it per move would force a sync layout
+      // every frame, and the height doesn't change during the drag anyway.
+      containerHeightRef.current = container?.getBoundingClientRect().height ?? 0;
+      container?.classList.add('splitter-resizing');
+    },
+    onMove: ({ dy }) => {
+      const h = containerHeightRef.current;
+      if (!h) return;
+      // Moving pointer up (negative dy) → detail grows → ratio increases
+      setRatio(clampRatio(startRatioRef.current + -dy / h));
+    },
+    onEnd: () => {
+      containerRef.current?.classList.remove('splitter-resizing');
+      try { localStorage.setItem(storageKey, String(ratioRef.current)); } catch { /* ignore */ }
+    },
+  });
 
-    startYRef.current = e.clientY;
-    startRatioRef.current = ratio;
-    setIsResizing(true);
-    document.body.style.cursor = 'row-resize';
-    document.body.style.userSelect = 'none';
-    container.classList.add('splitter-resizing');
-
-    const containerHeight = container.getBoundingClientRect().height;
-
-    const onMouseMove = (ev: MouseEvent) => {
-      const deltaY = ev.clientY - startYRef.current;
-      // Moving mouse up (negative deltaY) → detail grows → ratio increases
-      const deltaRatio = -deltaY / containerHeight;
-      const newRatio = clampRatio(startRatioRef.current + deltaRatio);
-      setRatio(newRatio);
-    };
-
-    const onMouseUp = () => {
-      setIsResizing(false);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      container.classList.remove('splitter-resizing');
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
-      // Persist final ratio
-      try {
-        // Read latest ratio from state via the container's flex children
-        // (simpler: just persist whatever setRatio last set)
-        setRatio((current) => {
-          try { localStorage.setItem(storageKey, String(current)); } catch { /* ignore */ }
-          return current;
-        });
-      } catch { /* ignore */ }
-    };
-
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
-  }, [ratio, clampRatio, storageKey]);
-
-  return { ratio, containerRef, handleMouseDown, isResizing };
+  return { ratio, containerRef, handleProps: { onPointerDown }, isResizing: isDragging };
 }

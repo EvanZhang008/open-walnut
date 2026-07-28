@@ -1295,7 +1295,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
               </div>
               <div
                 className="session-diff-tree-resize"
-                onMouseDown={tree.handleResizeStart}
+                {...tree.handleProps}
                 title="Drag to resize"
               />
             </>

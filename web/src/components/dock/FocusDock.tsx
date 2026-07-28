@@ -11,6 +11,7 @@ import type { UseFocusBarReturn } from '@/hooks/useFocusBar';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { ICON_CHAT } from '@/components/common/Icons';
 import { useSessionStatus } from '@/hooks/useSessionStatus';
+import { useDragGesture } from '@/hooks/useDragGesture';
 
 // ── Custom events for Dock ↔ MainPage communication ──
 
@@ -325,36 +326,19 @@ export function FocusDock({ focusBar, onQuickAddToFocus }: FocusDockProps) {
   const [dockHeight, setDockHeight] = useState(readDockHeight);
   const dockHeightRef = useRef(dockHeight);
   dockHeightRef.current = dockHeight;
-  const resizingRef = useRef(false);
-  const startYRef = useRef(0);
-  const startHeightRef = useRef(0);
+  const startHeightRef = useRef(dockHeight);
 
-  const handleResizeStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    resizingRef.current = true;
-    startYRef.current = e.clientY;
-    startHeightRef.current = dockHeightRef.current;
-    document.body.style.cursor = 'row-resize';
-    document.body.style.userSelect = 'none';
-
-    const onMouseMove = (ev: MouseEvent) => {
-      if (!resizingRef.current) return;
-      const delta = startYRef.current - ev.clientY;
-      setDockHeight(Math.min(DOCK_HEIGHT_MAX, Math.max(DOCK_HEIGHT_MIN, startHeightRef.current + delta)));
-    };
-
-    const onMouseUp = () => {
-      resizingRef.current = false;
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
+  const { onPointerDown: resizePointerDown } = useDragGesture({
+    cursor: 'row-resize',
+    onStart: () => { startHeightRef.current = dockHeightRef.current; },
+    // Dock grows upward, so an upward drag (negative dy) increases the height.
+    onMove: ({ dy }) => {
+      setDockHeight(Math.min(DOCK_HEIGHT_MAX, Math.max(DOCK_HEIGHT_MIN, startHeightRef.current - dy)));
+    },
+    onEnd: () => {
       try { localStorage.setItem(DOCK_HEIGHT_KEY, String(dockHeightRef.current)); } catch { /* ignore */ }
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
-    };
-
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
-  }, []); // stable — uses only refs
+    },
+  });
 
   const hasPinnedTasks = pinnedTasks.length > 0;
 
@@ -364,7 +348,7 @@ export function FocusDock({ focusBar, onQuickAddToFocus }: FocusDockProps) {
       style={hasPinnedTasks ? { height: dockHeight } : undefined}
     >
       {hasPinnedTasks && (
-        <div className="dock-resize-handle" onMouseDown={handleResizeStart} />
+        <div className="dock-resize-handle" onPointerDown={resizePointerDown} />
       )}
       <div className="dock-content">
         <ChatDockItem isActive={chatVisible} />

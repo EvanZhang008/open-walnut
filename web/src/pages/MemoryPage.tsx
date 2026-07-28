@@ -4,6 +4,7 @@ import { fetchMemoryBrowse, fetchMemory, fetchGlobalMemory, fetchUserMemory } fr
 import { MemoryTreePanel } from '@/components/memory/MemoryTreePanel';
 import { MemoryContentPanel } from '@/components/memory/MemoryContentPanel';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { useDragGesture } from '@/hooks/useDragGesture';
 import type { MemoryBrowseTree } from '@/api/memory';
 
 const LS_WIDTH_KEY = 'open-walnut-memory-list-width';
@@ -34,44 +35,27 @@ export function MemoryPage() {
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [contentLoading, setContentLoading] = useState(false);
 
-  // Resizable left pane
+  // Resizable left pane. Shared drag primitive: pointer capture (never sticks)
+  // + one persist on release instead of a synchronous localStorage write per
+  // mousemove frame.
   const [listWidth, setListWidth] = useState(readWidth);
-  const isResizingRef = useRef(false);
-  const startXRef = useRef(0);
-  const startWidthRef = useRef(0);
+  const listWidthRef = useRef(listWidth);
+  listWidthRef.current = listWidth;
+  const startWidthRef = useRef(listWidth);
   const listPaneRef = useRef<HTMLDivElement>(null);
 
-  const handleResizeStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    isResizingRef.current = true;
-    startXRef.current = e.clientX;
-    startWidthRef.current = listWidth;
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    listPaneRef.current?.classList.add('resizing');
-
-    const onMouseMove = (ev: MouseEvent) => {
-      if (!isResizingRef.current) return;
-      const newWidth = clampWidth(startWidthRef.current + (ev.clientX - startXRef.current));
-      setListWidth(newWidth);
-    };
-
-    const onMouseUp = () => {
-      isResizingRef.current = false;
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
+  const { onPointerDown: resizePointerDown } = useDragGesture({
+    cursor: 'col-resize',
+    onStart: () => {
+      startWidthRef.current = listWidthRef.current;
+      listPaneRef.current?.classList.add('resizing');
+    },
+    onMove: ({ dx }) => setListWidth(clampWidth(startWidthRef.current + dx)),
+    onEnd: () => {
       listPaneRef.current?.classList.remove('resizing');
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
-    };
-
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
-  }, [listWidth]);
-
-  useEffect(() => {
-    try { localStorage.setItem(LS_WIDTH_KEY, String(listWidth)); } catch { /* ignore */ }
-  }, [listWidth]);
+      try { localStorage.setItem(LS_WIDTH_KEY, String(listWidthRef.current)); } catch { /* ignore */ }
+    },
+  });
 
   // Load tree on mount + poll every 15s for live refresh
   useEffect(() => {
@@ -167,7 +151,7 @@ export function MemoryPage() {
           onSelect={handleSelect}
         />
       </div>
-      <div className="memory-resize-handle" onMouseDown={handleResizeStart} />
+      <div className="memory-resize-handle" onPointerDown={resizePointerDown} />
       <div className="memory-detail-pane">
         {contentLoading ? (
           <LoadingSpinner />

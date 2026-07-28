@@ -1866,13 +1866,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const globalNotes = useGlobalNotes();
 
   // Vertical splitter for list/detail ratio
-  const { ratio: detailRatio, containerRef: splitterContainerRef, handleMouseDown: splitterMouseDown, isResizing: splitterResizing } = useVerticalSplitter();
+  const { ratio: detailRatio, containerRef: splitterContainerRef, handleProps: splitterHandleProps, isResizing: splitterResizing } = useVerticalSplitter();
   // Splitter between the PINNED+RECENT region and the main task list.
   // ratio = bottom (main list) share, matching the hook's drag direction
   // (drag divider down → list shrinks → ratio decreases). Default 0.4 = list ~40%.
   // minRatio 0 lets the main list collapse fully — pinned tiers have no per-tier
   // visible cap, so this drag is the one control for how many pinned cards show.
-  const { ratio: listRatio, handleMouseDown: pinnedSplitterMouseDown } = useVerticalSplitter({ storageKey: 'open-walnut-todo-pinned-ratio', defaultRatio: 0.4, minRatio: 0, maxRatio: 0.8, containerRef: splitterContainerRef });
+  const { ratio: listRatio, handleProps: pinnedSplitterHandleProps } = useVerticalSplitter({ storageKey: 'open-walnut-todo-pinned-ratio', defaultRatio: 0.4, minRatio: 0, maxRatio: 0.8, containerRef: splitterContainerRef });
   const listCollapsed = listRatio <= 0.02;
 
   // Per-tier resize: each of Focus/Satellite/Wait gets its own drag handle at the
@@ -4621,7 +4621,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         {isAll && (
                         <div
                           className={`todo-tier-resize-handle${focusResize.isDragging ? ' dragging' : ''}`}
-                          onMouseDown={(e) => focusResize.handleMouseDown(e, e.currentTarget.previousElementSibling as HTMLElement | null)}
+                          onPointerDown={(e) => focusResize.handlePointerDown(e, e.currentTarget.previousElementSibling as HTMLElement | null)}
                           title="Drag to resize Focus"
                         />
                         )}
@@ -4660,7 +4660,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                           {isAll && (
                           <div
                             className={`todo-tier-resize-handle${satelliteResize.isDragging ? ' dragging' : ''}`}
-                            onMouseDown={(e) => satelliteResize.handleMouseDown(e, e.currentTarget.previousElementSibling as HTMLElement | null)}
+                            onPointerDown={(e) => satelliteResize.handlePointerDown(e, e.currentTarget.previousElementSibling as HTMLElement | null)}
                             title="Drag to resize Satellite"
                           />
                           )}
@@ -4694,7 +4694,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         {isAll && (
                         <div
                           className={`todo-tier-resize-handle${waitResize.isDragging ? ' dragging' : ''}`}
-                          onMouseDown={(e) => waitResize.handleMouseDown(e, e.currentTarget.previousElementSibling as HTMLElement | null)}
+                          onPointerDown={(e) => waitResize.handlePointerDown(e, e.currentTarget.previousElementSibling as HTMLElement | null)}
                           title="Drag to resize Wait"
                         />
                         )}
@@ -4786,7 +4786,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   {isAll && (
                   <div
                     className={`todo-tier-resize-handle${recentResize.isDragging ? ' dragging' : ''}`}
-                    onMouseDown={(e) => recentResize.handleMouseDown(e, e.currentTarget.previousElementSibling as HTMLElement | null)}
+                    onPointerDown={(e) => recentResize.handlePointerDown(e, e.currentTarget.previousElementSibling as HTMLElement | null)}
                     title="Drag to resize Recent"
                   />
                   )}
@@ -4828,7 +4828,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           Task detail now opens in a full-screen modal (hosted by MainPage), so only
           the inline project/category pane (detailTarget) compresses the list here. */}
       {isAll && (visiblePinnedTasks.length > 0 || visibleRecentTasks.length > 0) && !detailTarget && !tasksCollapsed && !pinnedAreaCollapsed && (
-        <div className="todo-pinned-splitter" onMouseDown={pinnedSplitterMouseDown} />
+        <div className="todo-pinned-splitter" {...pinnedSplitterHandleProps} />
       )}
 
       {/* TASKS header bar — the stacked view's collapsible affordance, matching
@@ -5220,7 +5220,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
       {/* Detail pane: project or category (inline split-pane). Task detail now
           opens in a full-screen modal hosted by MainPage, not inline here. */}
-      {detailTarget && <div className="todo-detail-splitter" onMouseDown={splitterMouseDown} />}
+      {detailTarget && <div className="todo-detail-splitter" {...splitterHandleProps} />}
       {detailTarget?.type === 'project' ? (
         <ProjectDetailPane
           category={detailTarget.category}

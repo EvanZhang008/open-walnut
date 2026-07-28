@@ -7803,6 +7803,44 @@ img[data-lightbox-src],
   transition: none;
 }
 
+/* ===== Drag shield (set by useDragGesture for any drag-resize) =====
+   Belt-and-braces for the stuck-drag bug. `setPointerCapture` already retargets
+   every pointer event to the handle, so an <iframe> under the cursor can no
+   longer swallow the move/up — but if capture is ever unavailable the hook falls
+   back to document listeners, and THEN an iframe would steal the pointer again
+   (this is exactly how the Files-panel divider got stuck next to the HTML
+   preview iframe). Making iframes transparent to pointer events for the
+   duration of a drag closes that fallback path too. */
+body.walnut-dragging iframe {
+  pointer-events: none;
+}
+body.walnut-dragging {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Every drag handle now listens for POINTER events (not mouse), so a touch drag
+   would otherwise be claimed by the browser's native scroll/pan gesture and the
+   handle would get a `pointercancel` instead of a drag. `touch-action: none`
+   tells the browser this element's gestures are ours. Mouse behavior unaffected.
+   Keep this selector list in sync when adding a handle. */
+.todo-resize-handle,
+.session-resize-handle,
+.memory-resize-handle,
+.notes-resize-handle,
+.session-col-resize-handle,
+.session-panel-chat-resize,
+.session-diff-tree-resize,
+.sfe-divider,
+.notes-chat-divider,
+.dock-resize-handle,
+.global-notes-resize-handle,
+.todo-tier-resize-handle,
+.todo-detail-splitter,
+.todo-pinned-splitter {
+  touch-action: none;
+}
+
 /* ===== Sessions Area (between chat and todo) — multi-column layout ===== */
 
 .main-page-sessions-area {
