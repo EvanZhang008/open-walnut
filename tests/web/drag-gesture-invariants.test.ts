@@ -110,6 +110,29 @@ describe('useDragGesture closes every release path', () => {
     expect(effectTail).toMatch(/return\s*\(\)\s*=>\s*\{[\s\S]*release\(true\)/);
   });
 
+  it('does NOT preventDefault the pointerdown itself', () => {
+    // A canceled pointerdown suppresses its compatibility mouse events entirely
+    // (verified in Chromium), and ~25 menus close via a document 'mousedown'
+    // listener — so cancelling it left menus floating open during a drag. The
+    // hook cancels only the compat mousedown's DEFAULT ACTION instead.
+    const down = GESTURE.slice(
+      GESTURE.indexOf('const onPointerDown ='),
+      GESTURE.indexOf('const cancel = useCallback'),
+    );
+    expect(down).not.toMatch(/^\s*e\.preventDefault\(\);/m);
+    expect(down).toContain("addEventListener('mousedown', killMouseDefault, true)");
+  });
+
+  it('flushes the last coalesced move on a real release', () => {
+    // A fast flick puts the final pointermove and the pointerup in the same
+    // frame; cancelling the pending rAF without flushing dropped that frame, so
+    // the panel settled short AND persisted the second-to-last position.
+    const rel = GESTURE.slice(GESTURE.indexOf('const release ='));
+    expect(rel).toMatch(/if\s*\(!canceled\s*&&\s*finalEv\)/);
+    // ...and the flush must happen BEFORE onEnd persists.
+    expect(rel.indexOf('if (!canceled && finalEv)')).toBeLessThan(rel.indexOf('onEnd?.('));
+  });
+
   it('coalesces moves through requestAnimationFrame', () => {
     // One React commit per painted frame at most, instead of one per raw event.
     expect(GESTURE).toContain('requestAnimationFrame');

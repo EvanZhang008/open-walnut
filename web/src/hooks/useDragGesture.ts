@@ -64,6 +64,8 @@ interface DragState {
   startY: number;
   raf: number;
   pending: PointerEvent | null;
+  /** One-shot compat-mousedown canceller; see onPointerDown. */
+  killMouseDefault: ((e: Event) => void) | null;
 }
 
 export interface UseDragGestureReturn {
@@ -96,7 +98,28 @@ export function useDragGesture(opts: DragGestureOptions): UseDragGestureReturn {
     if (!st) return;
 
     if (st.raf) cancelAnimationFrame(st.raf);
+    // Apply the LAST coalesced position before finalizing. A fast flick-and-
+    // release puts the final pointermove and the pointerup in the same painted
+    // frame, so cancelling the pending rAF without flushing would drop that
+    // frame — the panel settles short of the cursor AND onEnd persists the
+    // second-to-last position, which then survives reload. Skipped when
+    // canceled (Escape / lost capture / unmount shouldn't advance the value).
+    const finalEv = st.pending;
     st.pending = null;
+    if (!canceled && finalEv) {
+      optsRef.current.onMove({
+        x: finalEv.clientX,
+        y: finalEv.clientY,
+        dx: finalEv.clientX - st.startX,
+        dy: finalEv.clientY - st.startY,
+        event: finalEv,
+      });
+    }
+
+    if (st.killMouseDefault) {
+      document.removeEventListener('mousedown', st.killMouseDefault, true);
+      st.killMouseDefault = null;
+    }
 
     const h = handlersRef.current;
     handlersRef.current = null;
@@ -126,7 +149,27 @@ export function useDragGesture(opts: DragGestureOptions): UseDragGestureReturn {
     // A stale gesture should be impossible now, but if one somehow survives,
     // finalize it rather than leaking its listeners.
     if (stateRef.current) release(true);
-    e.preventDefault();
+
+    // Do NOT preventDefault() the pointerdown. Per the Pointer Events spec a
+    // canceled pointerdown suppresses its COMPATIBILITY MOUSE EVENTS entirely,
+    // and ~25 menus/popovers in this app close themselves via a `document`
+    // `mousedown` listener (kebab menus, DatePicker, fork dropdown, the
+    // stale-selection clearer in main.tsx). Verified in Chromium: with
+    // preventDefault the document mousedown never fires at all. Suppressing it
+    // would leave an open menu floating while the resize ran underneath.
+    //
+    // Instead let mousedown through and cancel only its DEFAULT ACTION (text
+    // selection / focus shift) with a one-shot capture-phase listener. It does
+    // not stopPropagation, so every click-outside closer still sees the event —
+    // which is exactly the old onMouseDown+preventDefault behavior.
+    const killMouseDefault = (ev: Event) => {
+      document.removeEventListener('mousedown', killMouseDefault, true);
+      if (stateRef.current?.killMouseDefault === killMouseDefault) {
+        stateRef.current.killMouseDefault = null;
+      }
+      ev.preventDefault();
+    };
+    document.addEventListener('mousedown', killMouseDefault, true);
 
     const el = e.currentTarget as HTMLElement;
     let captureEl: HTMLElement | null = el;
@@ -149,6 +192,7 @@ export function useDragGesture(opts: DragGestureOptions): UseDragGestureReturn {
       startY: e.clientY,
       raf: 0,
       pending: null,
+      killMouseDefault,
     };
     stateRef.current = st;
 

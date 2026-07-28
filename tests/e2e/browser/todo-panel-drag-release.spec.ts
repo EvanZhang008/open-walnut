@@ -100,3 +100,46 @@ test('every TodoPanel drag handle arms on press and fully releases on mouseup', 
   expect(exercised, 'no TodoPanel drag handles were found to exercise').toBeGreaterThan(0)
   expect(errors).toEqual([])
 })
+
+/**
+ * Starting a drag must still CLOSE an open menu.
+ *
+ * Pointer-events regression: a `preventDefault()` on `pointerdown` suppresses
+ * that pointer's compatibility mouse events entirely (verified in Chromium), and
+ * ~25 menus/popovers in this app close via a `document` 'mousedown' listener. The
+ * first version of useDragGesture did exactly that, so grabbing a divider left an
+ * open kebab menu floating over the layout while the resize ran underneath.
+ * The hook now lets `mousedown` propagate and only cancels its default action.
+ */
+test('grabbing a resize handle closes an open kebab menu', async ({ page }) => {
+  await page.goto('/')
+  await page.waitForLoadState('networkidle')
+  await page.waitForTimeout(1000)
+
+  // The main lane defaults to a starred/favorites scope, so surface a row via
+  // search rather than assuming one is listed.
+  await page.locator('.todo-search-input').fill('pw')
+  const task = page.locator('.todo-panel-item').first()
+  await expect(task).toBeVisible({ timeout: 10_000 })
+  await task.getByRole('button', { name: 'More actions' }).click()
+
+  const menu = page.locator('.task-kebab-menu:visible')
+  await expect(menu).toBeVisible()
+
+  const handle = page.locator('.todo-resize-handle').first()
+  const box = await handle.boundingBox()
+  expect(box, 'todo-resize-handle must be present for this assertion').not.toBeNull()
+
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2)
+  await page.mouse.down()
+  // THE assertion: the outside-mousedown closer must have seen the event.
+  await expect(menu).toBeHidden({ timeout: 2000 })
+  await page.mouse.move(box!.x + 60, box!.y)
+  await page.mouse.up()
+
+  // And the gesture still releases cleanly.
+  expect(await page.evaluate(() => ({
+    cursor: document.body.style.cursor,
+    dragClass: document.body.classList.contains('walnut-dragging'),
+  }))).toEqual({ cursor: '', dragClass: false })
+})
