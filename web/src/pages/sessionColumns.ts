@@ -24,15 +24,39 @@ export function splitByLock(cols: SessionSlot[]): { unlocked: SessionSlot[]; loc
 }
 
 /**
- * Shrink to `max` total columns, dropping unlocked slots from the right.
- * Locked slots are exempt — they can even push total > max (visible overflow
- * is preferred over evicting something the user explicitly pinned).
+ * Shrink to `max` total columns by dropping unlocked slots from the RIGHT, and
+ * leaving every surviving slot exactly where it was.
+ *
+ * Locked slots are exempt — they can even push the total past `max` (visible
+ * overflow is preferred over evicting something the user explicitly pinned).
+ *
+ * IT MUST PRESERVE THE INCOMING ORDER. This used to return
+ * `[...unlocked.slice(0, keep), ...locked]`, i.e. it rebuilt the strip from the
+ * lock-partitioned halves, which made a shrink do two things nobody asked for:
+ *   - `[A* B C]` → `[B A*]`: the locked column, sitting LEFT of the survivors,
+ *     was moved to the right — a pinned panel visibly jumping across the strip
+ *     during an unrelated 3→2 change.
+ *   - `[A B C*]` → `[A C*]`: it dropped B, the MIDDLE column, because
+ *     `unlocked.slice(0, keep)` counts within the partitioned run rather than
+ *     along the visual row. From the user's side a window in the middle
+ *     vanished while the rightmost one stayed.
+ * Both read as "a random panel disappeared". Walking right-to-left over the
+ * original array evicts what the user actually sees as last, and keeps the rest
+ * of the row untouched.
  */
 export function trimUnlockedToMax(cols: SessionSlot[], max: number): SessionSlot[] {
   if (cols.length <= max) return cols;
-  const { unlocked, locked } = splitByLock(cols);
-  const keepUnlocked = Math.max(0, max - locked.length);
-  return [...unlocked.slice(0, keepUnlocked), ...locked];
+  // How many unlocked slots must go. Locked ones are never candidates, so when
+  // they alone exceed `max` this drops every unlocked slot and still overflows.
+  let toDrop = cols.length - Math.max(max, cols.filter(c => c.locked).length);
+  if (toDrop <= 0) return cols;
+  const doomed = new Set<SessionSlot>();
+  for (let i = cols.length - 1; i >= 0 && toDrop > 0; i--) {
+    if (cols[i].locked) continue;
+    doomed.add(cols[i]);
+    toDrop--;
+  }
+  return cols.filter(c => !doomed.has(c));
 }
 
 /**

@@ -57,6 +57,7 @@ import {
   replaceSessionColumn,
   toggleLockSlot,
 } from './sessionColumns';
+import { loadColWeights, saveColWeights, resizeAtBoundary } from './columnSizing';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
 
 // ── Compact chat header with dropdown menu ──
@@ -139,7 +140,14 @@ const SS_SESSION_KEY_LEGACY = 'open-walnut-home-session-panel';
 // Pure column-queue operations live in ./sessionColumns.ts so they can be
 // unit-tested without React. See that file for the layout invariant rationale.
 
-const SESSION_WIDTH_BY_COUNT = [0, 65, 65]; // 1=65%, 2=65% (max width)
+// Session-area width as % of the viewport, by column count. 65% is the practical
+// max alongside a readable chat column; from 3 columns up we take the whole 70% the
+// resizable panel allows (useResizablePanel's PANEL_PCT_MAX) or each column is
+// unreadably thin. Indexes past the end clamp to the last entry, so a custom count
+// of 4-5 gets the same 70% rather than falling back to a narrower 2-column width.
+const SESSION_WIDTH_BY_COUNT = [0, 65, 65, 70];
+const sessionWidthForCount = (count: number): number =>
+  SESSION_WIDTH_BY_COUNT[Math.min(Math.max(count, 0), SESSION_WIDTH_BY_COUNT.length - 1)];
 
 /** Load session columns from sessionStorage, with migration from legacy single-session key */
 function loadSessionColumns(): SessionSlot[] {
@@ -386,17 +394,22 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, []);
 
   // Session panel mode (1 / 2 / auto) — controls how many sessions shown side by side
-  const { effectiveMaxPanels } = useSessionPanelMode(sessionAreaWidth);
+  const { effectiveMaxPanels, loaded: panelModeLoaded } = useSessionPanelMode(sessionAreaWidth);
   const maxPanelsRef = useRef(effectiveMaxPanels);
   maxPanelsRef.current = effectiveMaxPanels;
 
   // Auto-evict excess session columns when effectiveMaxPanels shrinks (e.g. auto mode + window resize).
+  // Gated on `panelModeLoaded`: until the config fetch settles the hook reports the
+  // '2' DEFAULT, and evicting on that would silently drop a restored 3rd column
+  // (sessionStorage/deep link) before the user's real setting arrives — eviction is
+  // one-way, so the column never comes back.
   useEffect(() => {
+    if (!panelModeLoaded) return;
     setSessionColumns(prev => {
       const max = triageOpenRef.current ? effectiveMaxPanels - 1 : effectiveMaxPanels;
       return trimUnlockedToMax(prev, max);
     });
-  }, [effectiveMaxPanels]);
+  }, [effectiveMaxPanels, panelModeLoaded]);
 
   // Session/task quick-entry popovers above the chat input.
   const [pathSelectorOpen, setPathSelectorOpen] = useState(false);
@@ -485,38 +498,50 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     sessionsAreaAutoAnimateRef(el);
   }, [sessionPanel.panelRef, sessionsAreaAutoAnimateRef]);
 
-  // Column split ratio: left column gets splitPct%, right gets (100-splitPct)%
-  const [colSplitPct, setColSplitPct] = useState(() => {
-    try { const v = parseFloat(localStorage.getItem('open-walnut-col-split') ?? ''); return isNaN(v) ? 50 : Math.min(80, Math.max(20, v)); } catch { return 50; }
-  });
-  const colSplitRef = useRef(colSplitPct);
-  colSplitRef.current = colSplitPct;
+  // Column widths: one WEIGHT per column, summing to 100. This replaced a single
+  // `colSplitPct` scalar (col 0 = pct%, "the rest" = 100-pct% each) that only made
+  // sense for exactly 2 columns — with 3 it handed every non-first column the same
+  // remainder and the strip summed past 100%. See ./columnSizing.ts.
+  const [colWeights, setColWeights] = useState<number[]>(() => loadColWeights(1, localStorage));
+  const colWeightsRef = useRef(colWeights);
+  colWeightsRef.current = colWeights;
 
   // Column split drag. Persists on release only — it used to write localStorage
-  // from a `useEffect` keyed on colSplitPct, i.e. a synchronous disk write on
-  // every mousemove. Pointer capture (useDragGesture) keeps the drag alive when
+  // from a `useEffect` keyed on the per-frame value, i.e. a synchronous disk write
+  // on every mousemove. Pointer capture (useDragGesture) keeps the drag alive when
   // the cursor crosses a session column's HTML-preview iframe.
-  const colSplitStartRef = useRef({ pct: 50, width: 1 });
+  //
+  // ONE gesture instance serves every divider (hooks can't be called in a loop):
+  // the handle records which boundary it is into `dragBoundaryRef` on pointerdown,
+  // before delegating. Deltas are applied to the weights captured at grab time, so
+  // a drag is never a running sum of per-frame deltas.
+  const dragBoundaryRef = useRef(0);
+  const colSplitStartRef = useRef<{ weights: number[]; width: number }>({ weights: [], width: 1 });
   const { onPointerDown: colSplitPointerDown } = useDragGesture({
     cursor: 'col-resize',
     onStart: () => {
       const el = sessionPanel.panelRef.current;
       colSplitStartRef.current = {
-        pct: colSplitRef.current,
+        weights: colWeightsRef.current,
         width: el?.getBoundingClientRect().width || 1,
       };
       el?.classList.add('resizing');
     },
     onMove: ({ dx }) => {
-      const { pct, width } = colSplitStartRef.current;
-      setColSplitPct(Math.min(80, Math.max(20, pct + (dx / width) * 100)));
+      const { weights, width } = colSplitStartRef.current;
+      setColWeights(resizeAtBoundary(weights, dragBoundaryRef.current, (dx / width) * 100));
     },
     onEnd: () => {
       sessionPanel.panelRef.current?.classList.remove('resizing');
-      try { localStorage.setItem('open-walnut-col-split', String(colSplitRef.current)); } catch {}
+      saveColWeights(colWeightsRef.current, localStorage);
     },
   });
-  const colSplitHandleProps = { onPointerDown: colSplitPointerDown };
+  const colSplitHandleProps = useCallback((boundary: number) => ({
+    onPointerDown: (e: React.PointerEvent) => {
+      dragBoundaryRef.current = boundary;
+      colSplitPointerDown(e);
+    },
+  }), [colSplitPointerDown]);
 
   // Graduated session area width — use total session count (not visible) so tabbed
   // sessions still get full width. Only auto-set when count increases.
@@ -526,9 +551,28 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     if (count === prevColCountRef.current) return;
     const prev = prevColCountRef.current;
     prevColCountRef.current = count;
-    // Only auto-set width when opening panels (0→1, 1→2), not when closing
-    if (count > prev && count > 0) sessionPanel.setPct(SESSION_WIDTH_BY_COUNT[Math.min(count, 2)]);
+    // Only auto-set width when opening panels (0→1, 1→2, 2→3), not when closing
+    if (count > prev && count > 0) {
+      sessionPanel.setPct(sessionWidthForCount(count));
+    }
   }, [sessionColumns.length, triagePanelOpen, sessionPanel.setPct]);
+
+  // Swap in the layout saved for THIS column count. Layouts are stored per count,
+  // so opening a 3rd panel doesn't destroy the 2-column split the user tuned —
+  // closing it restores the old one verbatim instead of leaving a stretched guess.
+  const colCount = sessionColumns.length + (triagePanelOpen ? 1 : 0);
+  useEffect(() => {
+    setColWeights(prev => (prev.length === colCount ? prev : loadColWeights(colCount, localStorage)));
+  }, [colCount]);
+
+  // Weights ACTUALLY rendered. Derived rather than read straight from state so the
+  // weight count can never disagree with the column count for even one frame — the
+  // effect above lands a tick later, and a mismatch would size N columns with N∓1
+  // weights. Cheap: the common in-sync path returns the state array untouched.
+  const renderWeights = useMemo(
+    () => (colWeights.length === colCount ? colWeights : loadColWeights(colCount, localStorage)),
+    [colWeights, colCount],
+  );
 
   // Keep focusedTask in sync with latest data from tasks array (handles WS updates from other sources)
   useEffect(() => {
@@ -1831,7 +1875,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         style={sessionColumns.length > 0 || triagePanelOpen ? { width: sessionPanel.width } : undefined}
       >
         {triagePanelOpen && (
-          <div className="main-page-session-column" key="__triage__">
+          <div
+            className="main-page-session-column"
+            key="__triage__"
+            style={colCount >= 2 ? { flex: `0 0 ${renderWeights[0] ?? 0}%` } : undefined}
+          >
             <TriagePanel
               onClose={handleCloseTriage}
               taskId={triageTaskId ?? undefined}
@@ -1852,14 +1900,15 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           const forkMeta = isPending ? pendingForkMetaRef.current : null;
           const pendingMeta = (qsMeta?.id === sid ? qsMeta : null) ?? (forkMeta?.id === sid ? forkMeta : null);
           const isForkPending = forkMeta?.id === sid;
-          // Column split: when 2+ columns, first gets splitPct%, rest share remainder
-          const totalCols = sessionColumns.length + (triagePanelOpen ? 1 : 0);
+          // Column widths: one weight per column (summing to 100). A single column
+          // stays on the CSS default (flex:1) so it fills the strip.
           const colIdx = idx + (triagePanelOpen ? 1 : 0);
-          const colStyle: React.CSSProperties = totalCols >= 2
-            ? { flex: `0 0 ${colIdx === 0 ? colSplitPct : (100 - colSplitPct)}%` }
+          const colStyle: React.CSSProperties = colCount >= 2
+            ? { flex: `0 0 ${renderWeights[colIdx] ?? 0}%` }
             : {};
           return (<Fragment key={sid}>
-            {needsDivider && <div className="session-col-resize-handle" {...colSplitHandleProps} />}
+            {/* This divider trades width between colIdx-1 and colIdx only. */}
+            {needsDivider && <div className="session-col-resize-handle" {...colSplitHandleProps(colIdx - 1)} />}
             <div
               className={`main-page-session-column${slot.locked ? ' is-locked' : ''}${idx === sessionColumns.length - 1 ? ' is-mobile-active' : ''}`}
               style={colStyle}

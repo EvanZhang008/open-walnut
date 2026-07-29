@@ -7757,11 +7757,6 @@ img[data-lightbox-src],
   z-index: 5;
   cursor: col-resize;
 }
-/* Between two session columns there is no adjacent panel border, so this one
-   handle draws the 1px line itself. */
-.session-col-resize-handle {
-  border-left: 1px solid var(--border);
-}
 .todo-resize-handle::before,
 .session-resize-handle::before,
 .memory-resize-handle::before,
@@ -7797,6 +7792,22 @@ img[data-lightbox-src],
 .notes-resize-handle:hover::after,
 .session-col-resize-handle:hover::after {
   opacity: 0.5;
+}
+
+/* Between two session columns there is no adjacent panel border, so this handle
+   draws the 1px line itself — painted by the ABSOLUTE ::before overlay above, never
+   as a `border-left` on the handle. A border consumes layout width, which is the one
+   thing the `width: 0` above exists to avoid: columns are sized to sum to 100% of the
+   strip, so N-1 one-pixel borders push the total past it and the RIGHTMOST column is
+   clipped out of view — measured overflow equals the divider count (4px at 5 columns).
+   Invisible at 2 columns, a visibly cut-off panel at a custom count of 5-6.
+   ::before is the ±3px grab zone that straddles the seam, so the line is drawn as a
+   1px background stripe at its horizontal centre — landing exactly on the seam while
+   costing no layout. (A box-shadow on the handle itself paints nothing: zero width.) */
+.session-col-resize-handle::before {
+  background:
+    linear-gradient(var(--border), var(--border)) no-repeat
+    center top / 1px 100%;
 }
 
 .main-page-todo.resizing {
@@ -17370,6 +17381,16 @@ td.usage-share-col {
   gap: 4px;
   padding: 0;
   min-width: 0;
+  /* WRAP, don't overflow. `min-width: 0` lets this bar be squeezed narrower than its
+     pills (mode + btw + Note + model), but with the default `nowrap` those pills then
+     spilled OUT of the bar — measured 300px of content in a 123px box — landing on top
+     of the mic/send cluster and, in the worst column, 19px past the panel's own right
+     edge. Purely width-driven: it reproduces at 2 panels in a 1100px window (274px
+     columns), so it long predated the 4/5-panel options — those just make a narrow
+     column easy to reach on a big monitor. Wrapping matches what the enclosing
+     .chat-input-container already does. */
+  flex-wrap: wrap;
+  row-gap: 2px;
 }
 
 /* Recap tip — "what just happened" above the mode bar (session composer).

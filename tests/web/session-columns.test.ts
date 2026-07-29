@@ -42,6 +42,48 @@ describe('sessionColumns: trimUnlockedToMax', () => {
     const cols = [slot('u1'), slot('u2'), slot('L', true)];
     expect(trimUnlockedToMax(cols, 2).map(s => s.id)).toEqual(['u1', 'L']);
   });
+
+  // ── Regressions: a shrink must ONLY remove the rightmost unlocked slot(s). ──
+  // Both cases below reported as "a random panel disappeared" on a 3→2 change.
+  // Root cause was rebuilding the strip as [...unlocked.slice(0, keep), ...locked],
+  // which reorders by lock state and counts within the partitioned run instead of
+  // along the visual row.
+
+  it('never REORDERS survivors — a locked slot on the left stays on the left', () => {
+    // [L, u1, u2] max=2. Old code returned [u1, L]: the pinned column jumped from
+    // leftmost to rightmost during an unrelated count change.
+    const cols = [slot('L', true), slot('u1'), slot('u2')];
+    expect(trimUnlockedToMax(cols, 2).map(s => s.id)).toEqual(['L', 'u1']);
+  });
+
+  it('evicts the rightmost UNLOCKED slot, skipping over a locked one', () => {
+    // [u1, u2, L] — already covered above — and the harder shape: the rightmost
+    // slot is locked, so the rightmost *unlocked* (u2) is what goes, even though
+    // it sits in the middle of the row.
+    const cols = [slot('u1'), slot('u2'), slot('L', true)];
+    const out = trimUnlockedToMax(cols, 2);
+    expect(out.map(s => s.id)).toEqual(['u1', 'L']);
+    // Position of every survivor is unchanged relative to each other.
+    expect(out.map(s => s.id)).toEqual(cols.filter(c => out.includes(c)).map(s => s.id));
+  });
+
+  it('drops several from the right at once, right-to-left', () => {
+    // 5 → 2 in one step (e.g. picking "2" while five panels are open).
+    const cols = [slot('a'), slot('b'), slot('c'), slot('d'), slot('e')];
+    expect(trimUnlockedToMax(cols, 2).map(s => s.id)).toEqual(['a', 'b']);
+  });
+
+  it('keeps every locked slot and sheds only the unlocked when locks exceed max', () => {
+    // [L1, u, L2, L3] max=2 → all 3 locks survive (overflow allowed), u is dropped.
+    const cols = [slot('L1', true), slot('u'), slot('L2', true), slot('L3', true)];
+    expect(trimUnlockedToMax(cols, 2).map(s => s.id)).toEqual(['L1', 'L2', 'L3']);
+  });
+
+  it('returns the same array reference when nothing can be dropped', () => {
+    // All locked and over max — callers compare by reference to detect "no change".
+    const cols = [slot('a', true), slot('b', true), slot('c', true)];
+    expect(trimUnlockedToMax(cols, 2)).toBe(cols);
+  });
 });
 
 describe('sessionColumns: addSessionColumn', () => {

@@ -835,9 +835,11 @@ export interface Config {
     show_ui_only_agent_error?: boolean;
   };
   ui?: {
-    /** How many session panels to show side-by-side: '1', '2', or 'auto' (breakpoint-driven).
-     *  Default: '2'. */
-    session_panels?: '1' | '2' | 'auto';
+    /** How many session panels to show side-by-side: 'auto' (breakpoint-driven) or
+     *  an explicit count as a decimal string — the UI offers '1'..'5'. Default: '2'.
+     *  Out-of-range or non-numeric values are ignored by the client, which falls
+     *  back to auto rather than rendering a broken strip. */
+    session_panels?: 'auto' | `${number}`;
   };
   /** Audio capture configuration (system audio recording) */
   audio?: {

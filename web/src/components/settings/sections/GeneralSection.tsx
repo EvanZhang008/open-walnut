@@ -15,8 +15,11 @@ const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
 ];
 
 const PANEL_OPTIONS: { value: SessionPanelMode; label: string }[] = [
-  { value: '1', label: '1 Panel' },
-  { value: '2', label: '2 Panels' },
+  { value: '1', label: '1' },
+  { value: '2', label: '2' },
+  { value: '3', label: '3' },
+  { value: '4', label: '4' },
+  { value: '5', label: '5' },
   { value: 'auto', label: 'Auto' },
 ];
 
@@ -120,7 +123,8 @@ export function GeneralSection({ config, onSave }: Props) {
           ))}
         </div>
         <p className="text-sm text-muted" style={{ margin: '4px 0 0' }}>
-          Auto adjusts based on screen width
+          How many sessions sit side by side. Auto adjusts based on screen width; more
+          panels means narrower columns &mdash; each one is a live session.
         </p>
       </div>
 

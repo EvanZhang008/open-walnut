@@ -1,4 +1,5 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
+import { MAX_PANELS } from '@/hooks/useSessionPanelMode';
 
 // Starred tab uses Unicode star internally; URL uses readable "starred"
 const STARRED_INTERNAL = '\u2605';
@@ -20,18 +21,24 @@ export interface UrlPending {
   category: string | null;
 }
 
+// Session columns ride the URL as s1..sN. Capped at the same ceiling as the panel
+// setting so a custom count is fully shareable/reloadable — a lower cap here would
+// silently drop the rightmost columns of a 5- or 6-panel layout on refresh. The cap
+// also stops a corrupt/hand-edited link asking for unbounded columns; MainPage trims
+// to the user's actual panel setting anyway.
+const MAX_URL_SESSIONS = MAX_PANELS;
+const SESSION_PARAMS = Array.from({ length: MAX_URL_SESSIONS }, (_, i) => `s${i + 1}`);
+
 function parseUrlParams(): UrlPending | null {
   if (window.location.pathname !== '/') return null;
   const sp = new URLSearchParams(window.location.search);
-  const s1 = sp.get('s1');
-  const s2 = sp.get('s2');
   const task = sp.get('task');
   const cat = sp.get('cat');
+  // s1..sN in order. A gap (s1 + s3, only possible by hand-editing) is closed
+  // rather than treated as an empty column.
+  const sessionIds = SESSION_PARAMS.map(k => sp.get(k)).filter((v): v is string => !!v);
   // Empty params (e.g. ?cat=) are treated as absent
-  if (!s1 && !s2 && !task && !cat) return null;
-  const sessionIds: string[] = [];
-  if (s1) sessionIds.push(s1);
-  if (s2) sessionIds.push(s2);
+  if (sessionIds.length === 0 && !task && !cat) return null;
   return {
     taskId: task || null,
     sessionIds,
@@ -45,10 +52,9 @@ function buildSearch(params: {
   activeCategory?: string;
 }): string {
   const sp = new URLSearchParams();
-  // Only persist real session IDs (not pending: placeholders). Max 2 columns.
+  // Only persist real session IDs (not pending: placeholders).
   const sessions = params.sessionColumns.filter(s => !s.startsWith('pending:'));
-  if (sessions[0]) sp.set('s1', sessions[0]);
-  if (sessions[1]) sp.set('s2', sessions[1]);
+  sessions.slice(0, MAX_URL_SESSIONS).forEach((id, i) => sp.set(SESSION_PARAMS[i], id));
   if (params.focusedTaskId) sp.set('task', params.focusedTaskId);
   if (params.activeCategory) sp.set('cat', categoryToUrl(params.activeCategory));
   const str = sp.toString();

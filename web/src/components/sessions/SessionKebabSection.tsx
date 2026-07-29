@@ -9,6 +9,57 @@
 import { useState, useRef, useEffect } from 'react';
 import { ICON_SEARCH, ICON_REFRESH, ICON_STOP, ICON_VSCODE } from '../common/Icons';
 import { openSessionInVscode } from './openSessionInVscode';
+import {
+  useSessionPanelMode,
+  MIN_PANELS,
+  MAX_PANELS,
+  type SessionPanelMode,
+} from '@/hooks/useSessionPanelMode';
+
+/** 1..MAX_PANELS then Auto — same options, same order as Settings → General. */
+const PANEL_CHOICES: SessionPanelMode[] = [
+  ...Array.from({ length: MAX_PANELS - MIN_PANELS + 1 }, (_, i) => String(MIN_PANELS + i) as SessionPanelMode),
+  'auto',
+];
+
+/**
+ * How many session columns sit side by side — the same app-wide setting as
+ * Settings → General → Session Panels, surfaced here because it is a
+ * "change it constantly while working" control, not a configure-once one.
+ *
+ * It is deliberately NOT per-session (there is one strip, so a per-session count
+ * would be meaningless), hence the "all sessions" hint in the title: switching it
+ * from any session's menu changes the layout everywhere. Kept as its own component
+ * so the hook's config fetch only runs when a menu is actually open.
+ */
+function PanelCountRow({ onAfterAction }: { onAfterAction?: () => void }) {
+  const { mode, setMode } = useSessionPanelMode();
+  return (
+    <div className="task-kebab-tier">
+      <span className="task-kebab-tier-label" title="How many session panels sit side by side (applies to all sessions)">
+        Panels
+      </span>
+      <div className="task-kebab-tier-options">
+        {PANEL_CHOICES.map((value) => (
+          <button
+            key={value}
+            className={`task-kebab-tier-btn${mode === value ? ' active' : ''}`}
+            title={value === 'auto' ? 'Adjust automatically to the window width' : `Show ${value} side by side`}
+            onClick={(e) => {
+              e.stopPropagation();
+              // Re-picking the current value is a no-op beyond closing, so we don't
+              // write config (and don't re-trigger column eviction) for nothing.
+              if (value !== mode) setMode(value);
+              onAfterAction?.();
+            }}
+          >
+            {value === 'auto' ? 'Auto' : value}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 interface SessionKebabSectionProps {
   sessionId: string;
@@ -92,6 +143,10 @@ export function SessionKebabSection({
         <span className="task-kebab-icon">💬</span>
         <span>Msgs{msgCount && msgCount > 0 ? ` (${msgCount})` : ''}</span>
       </button>
+
+      {/* Layout control — grouped with the other view toggles above, deliberately far
+          from Restart/Terminate so a mis-click near the destructive items can't land here. */}
+      <PanelCountRow onAfterAction={onAfterAction} />
 
       <div className="task-kebab-divider" />
 
