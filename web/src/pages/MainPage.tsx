@@ -144,7 +144,7 @@ const SS_SESSION_KEY_LEGACY = 'open-walnut-home-session-panel';
 // max alongside a readable chat column; from 3 columns up we take the whole 70% the
 // resizable panel allows (useResizablePanel's PANEL_PCT_MAX) or each column is
 // unreadably thin. Indexes past the end clamp to the last entry, so a custom count
-// of 4-5 gets the same 70% rather than falling back to a narrower 2-column width.
+// of 4-6 gets the same 70% rather than falling back to a narrower 2-column width.
 const SESSION_WIDTH_BY_COUNT = [0, 65, 65, 70];
 const sessionWidthForCount = (count: number): number =>
   SESSION_WIDTH_BY_COUNT[Math.min(Math.max(count, 0), SESSION_WIDTH_BY_COUNT.length - 1)];
@@ -397,11 +397,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const { effectiveMaxPanels, loaded: panelModeLoaded } = useSessionPanelMode(sessionAreaWidth);
   const maxPanelsRef = useRef(effectiveMaxPanels);
   maxPanelsRef.current = effectiveMaxPanels;
+  const panelModeLoadedRef = useRef(panelModeLoaded);
+  panelModeLoadedRef.current = panelModeLoaded;
 
   // Auto-evict excess session columns when effectiveMaxPanels shrinks (e.g. auto mode + window resize).
   // Gated on `panelModeLoaded`: until the config fetch settles the hook reports the
-  // '2' DEFAULT, and evicting on that would silently drop a restored 3rd column
-  // (sessionStorage/deep link) before the user's real setting arrives — eviction is
+  // '2' DEFAULT, and evicting on that would silently drop a 3rd restored column
+  // (sessionStorage/deep link) before the user's real '3' arrives — eviction is
   // one-way, so the column never comes back.
   useEffect(() => {
     if (!panelModeLoaded) return;
@@ -606,9 +608,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         // URL carries ids only — preserve lock state from sessionStorage where ids match.
         const saved = loadSessionColumns();
         const lockedById = new Map(saved.map(s => [s.id, s.locked]));
-        setSessionColumns(
-          p.sessionIds.slice(0, maxPanelsRef.current).map(id => ({ id, locked: lockedById.get(id) ?? false }))
-        );
+        // Same rationale as the visibility restore below: don't truncate a deep
+        // link against the pre-config default panel count.
+        const ids = panelModeLoadedRef.current ? p.sessionIds.slice(0, maxPanelsRef.current) : p.sessionIds;
+        setSessionColumns(ids.map(id => ({ id, locked: lockedById.get(id) ?? false })));
       }
       if (p.category !== null) setActiveCategory(p.category);
       urlSync.clearPending();
@@ -643,7 +646,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     }
     if (sessionColumns.length === 0) {
       const restored = loadSessionColumns();
-      if (restored.length > 0) setSessionColumns(restored.slice(0, maxPanelsRef.current));
+      // Truncate only once the real panel setting is known — see the eviction
+      // effect. Restoring un-truncated is safe: that effect trims as soon as the
+      // config settles, whereas truncating early loses a column permanently.
+      if (restored.length > 0) {
+        setSessionColumns(panelModeLoadedRef.current ? restored.slice(0, maxPanelsRef.current) : restored);
+      }
     }
     // visible/tasks/focusedTask/sessionColumns are intentional — this effect only fires
     // when the page becomes visible again, not on every sessionColumns tick.
