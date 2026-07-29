@@ -3089,3 +3089,183 @@ describe('activeProcessing safety timeout — batch ids survive for a late resul
     }
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════
+//  Result-text fallback — the turn answered on `result` alone
+//
+//  Port of upstream ACP fix #858 (issue #453). A cache-replayed turn can
+//  generate zero output tokens and skip streaming entirely: no stream_event
+//  deltas, no consolidated `assistant` message, the answer only on `result`.
+//  Walnut's UI treats session:result as a pure turn boundary (it never renders
+//  the text) and history parsing keeps only user/assistant roles, so that
+//  answer was lost in BOTH surfaces — the turn rendered empty.
+//
+//  The naive check (output_tokens === 0 && result non-empty) double-emits when
+//  the answer already streamed, so the guard pairs it with a per-turn
+//  "did any main-lane text reach the UI" flag set at the emit sites.
+// ═══════════════════════════════════════════════════════════════════
+
+describe('ClaudeCodeSession result-text fallback (#858)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const feed = (session: ClaudeCodeSession, obj: unknown) => (session as any).handleStreamLine(JSON.stringify(obj));
+
+  /** A session wired far enough to run handleStreamLine's result case. */
+  function makeSession(id: string) {
+    const session = useDaemon(new ClaudeCodeSession(`task-${id}`, 'proj', MOCK_CLI));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any)._active = true;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any).claudeSessionId = id;
+    const deltas: string[] = [];
+    const results: string[] = [];
+    bus.subscribe('main-ai', (event: BusEvent) => {
+      const d = event.data as { sessionId?: string; delta?: string; result?: string };
+      if (d.sessionId !== id) return;
+      if (event.name === EventNames.SESSION_TEXT_DELTA) deltas.push(d.delta ?? '');
+      if (event.name === EventNames.SESSION_RESULT) results.push(d.result ?? '');
+    });
+    return { session, deltas, results };
+  }
+
+  const resultLine = (id: string, text: string, outputTokens: number, extra: Record<string, unknown> = {}) => ({
+    type: 'result',
+    subtype: 'success',
+    is_error: false,
+    result: text,
+    session_id: id,
+    num_turns: 1,
+    usage: { input_tokens: 4, output_tokens: outputTokens },
+    ...extra,
+  });
+
+  it('forwards the result text when nothing else carried it', () => {
+    const id = 'fb-silent';
+    const { session, deltas } = makeSession(id);
+
+    // No assistant message, no stream_event — the replayed-turn signature.
+    feed(session, resultLine(id, 'The cached answer.', 0));
+
+    // The answer reached the UI stream instead of vanishing.
+    expect(deltas.join('')).toContain('The cached answer.');
+  });
+
+  it('does NOT re-emit when a consolidated assistant message already delivered it', () => {
+    const id = 'fb-assistant';
+    const { session, deltas } = makeSession(id);
+
+    feed(session, {
+      type: 'assistant',
+      message: { id: 'msg_1', role: 'assistant', content: [{ type: 'text', text: 'Streamed answer.' }] },
+    });
+    // The CLI's result line is a trailing COPY of the same text.
+    feed(session, resultLine(id, 'Streamed answer.', 0));
+
+    // Exactly once — the naive output_tokens check double-emits here.
+    expect(deltas.filter((d) => d.includes('Streamed answer.')).length).toBe(1);
+  });
+
+  it('does NOT re-emit when stream_event deltas already delivered it', () => {
+    const id = 'fb-sse';
+    const { session, deltas } = makeSession(id);
+
+    feed(session, { type: 'stream_event', event: { type: 'message_start', message: { id: 'msg_2' } } });
+    feed(session, {
+      type: 'stream_event',
+      event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'SSE answer.' } },
+    });
+    feed(session, resultLine(id, 'SSE answer.', 0));
+
+    expect(deltas.filter((d) => d.includes('SSE answer.')).length).toBe(1);
+  });
+
+  it('does NOT forward when the turn generated output tokens (normal turn)', () => {
+    const id = 'fb-tokens';
+    const { session, deltas } = makeSession(id);
+
+    // Non-zero output tokens = a real generation, so the result is a trailing
+    // copy even if our delta paths somehow saw nothing.
+    feed(session, resultLine(id, 'Generated answer.', 128));
+
+    expect(deltas.join('')).not.toContain('Generated answer.');
+  });
+
+  it('does NOT forward an error result (already surfaced as the error message)', () => {
+    const id = 'fb-error';
+    const { session, deltas } = makeSession(id);
+
+    feed(session, resultLine(id, 'API Error: 400 bad request', 0, { is_error: true }));
+
+    expect(deltas.join('')).not.toContain('API Error: 400 bad request');
+  });
+
+  it('does NOT forward a task-notification followup (background prose)', () => {
+    const id = 'fb-tasknotif';
+    const { session, deltas } = makeSession(id);
+
+    // A background followup runs alongside a user turn — its output must never
+    // be injected into that turn's feed.
+    feed(session, resultLine(id, 'Background agent finished.', 0, { origin: { kind: 'task-notification' } }));
+
+    expect(deltas.join('')).not.toContain('Background agent finished.');
+  });
+
+  it('subagent text does not count as the turn answer (fallback still fires)', () => {
+    const id = 'fb-subagent';
+    const { session, deltas } = makeSession(id);
+
+    // Subagent text lives in its own lane and is never the turn's answer.
+    feed(session, {
+      type: 'assistant',
+      parent_tool_use_id: 'toolu_child',
+      message: { id: 'msg_sub', role: 'assistant', content: [{ type: 'text', text: 'child prose' }] },
+    });
+    feed(session, resultLine(id, 'The real answer.', 0));
+
+    expect(deltas.join('')).toContain('The real answer.');
+  });
+
+  it('a turn that streamed does not suppress the NEXT turn fallback', () => {
+    const id = 'fb-nextturn';
+    const { session, deltas } = makeSession(id);
+
+    // Turn 1: streams normally, result is a trailing copy.
+    feed(session, {
+      type: 'assistant',
+      message: { id: 'msg_t1', role: 'assistant', content: [{ type: 'text', text: 'turn one text' }] },
+    });
+    feed(session, resultLine(id, 'turn one text', 0));
+
+    // A new init opens turn 2 (the auto-continuation / replay path that resets
+    // the per-turn result guard).
+    feed(session, { type: 'system', subtype: 'init', session_id: id });
+
+    // Turn 2 is the silent replayed one — its fallback MUST still fire.
+    feed(session, resultLine(id, 'turn two cached answer.', 0));
+
+    expect(deltas.join('')).toContain('turn two cached answer.');
+    expect(deltas.filter((d) => d.includes('turn one text')).length).toBe(1);
+  });
+
+  it('does not forward an empty or whitespace-only result', () => {
+    const id = 'fb-empty';
+    const { session, deltas } = makeSession(id);
+
+    feed(session, resultLine(id, '   \n  ', 0));
+
+    expect(deltas.join('').trim()).toBe('');
+  });
+
+  it('treats a missing usage object as the replay signature', () => {
+    const id = 'fb-nousage';
+    const { session, deltas } = makeSession(id);
+
+    // Third-party backends have been observed omitting usage fields entirely,
+    // and the replay lane was reported from exactly such a backend.
+    feed(session, {
+      type: 'result', subtype: 'success', is_error: false,
+      result: 'Answer with no usage block.', session_id: id, num_turns: 1,
+    });
+
+    expect(deltas.join('')).toContain('Answer with no usage block.');
+  });
+});

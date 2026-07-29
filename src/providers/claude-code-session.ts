@@ -396,6 +396,22 @@ export class ClaudeCodeSession {
   /** Per-turn flag: reset on writeMessage()/send(), prevents duplicate JSONL result
    *  events within a single turn (e.g., tailer emits result, then PID-death handler fires). */
   private _turnResultEmitted = false
+  /** Did any MAIN-lane assistant text reach the UI stream during this turn?
+   *
+   *  Set as a side effect of emitting SESSION_TEXT_DELTA (both the `assistant`
+   *  and `stream_event` paths), never at a decision site — so a new streaming
+   *  path added later records delivery for free. Subagent text is excluded: it
+   *  lands in its own lane and is never the turn's answer.
+   *
+   *  Read once at the terminal `result` to tell a turn whose answer already
+   *  streamed from one that only ever carried it on `result` (upstream ACP
+   *  issue #453 / fix #858): a cache-replayed turn can generate zero output
+   *  tokens and skip streaming entirely, so without this fallback the UI
+   *  renders an empty turn. Deliberately NOT keyed off `fullText`, which is
+   *  ALSO written by the withheld-result and PID-death paths (and by the
+   *  task-notification branch) — those writes would make a genuinely silent
+   *  turn look like it had streamed. */
+  private _emittedAssistantText = false
   /** L1 byte-offset (`v`) of the event currently being processed by handleStreamLine.
    *  Set at entry, valid only within that synchronous call. Undefined = old daemon. */
   private _currentEventV: number | undefined
@@ -683,6 +699,11 @@ export class ClaudeCodeSession {
     this._activity = undefined
     this._processStatus = 'idle'
     this._turnResultEmitted = true
+    // Idle is the CLI's authoritative turn-over signal, and this lane completes a
+    // turn whose `result` was withheld — nothing here will run the result case's
+    // clear. Close the delivery stretch so this turn's streamed text can't
+    // suppress the NEXT turn's result-text fallback (#858).
+    this._emittedAssistantText = false
     // The idle that completes a withheld turn is the turn's LAST lifecycle event —
     // advance the watermark to it so a replay of this whole turn (result + idle)
     // is positionally suppressed after a restart.
@@ -1331,6 +1352,7 @@ export class ClaudeCodeSession {
     this._askUserIntercepted = false
     this._sawApiTimeoutThisTurn = false
     this.fullText = ''
+    this._emittedAssistantText = false  // Fresh process — nothing streamed yet
     this._emittedStreamKeys.clear()
     this._lastEmittedText.clear()
     this._currentStreamMsgId = null
@@ -2314,6 +2336,10 @@ export class ClaudeCodeSession {
 
       this.resultEmitted = true
       this._turnResultEmitted = true
+      // Process death ends the turn without running the result case — close the
+      // delivery stretch so partial streamed text can't suppress the next turn's
+      // result-text fallback (#858). Every branch below is terminal for this turn.
+      this._emittedAssistantText = false
 
       if (hasResultInFile) {
         this._activity = undefined
@@ -3294,6 +3320,10 @@ export class ClaudeCodeSession {
             if (!parentToolUseId && this.fullText.length < MAX_FULL_TEXT) {
               this.fullText += rewrittenDelta
             }
+            // Main-lane answer delivered — the result-text fallback must stay off
+            // for this turn. Recorded even past MAX_FULL_TEXT: the cap truncates
+            // what we keep, it does not undo what the UI already rendered.
+            if (!parentToolUseId) this._emittedAssistantText = true
             log.session.debug('JSONL event: text-delta', { sessionId: this.claudeSessionId, taskId: this.taskId, parentToolUseId })
             bus.emit(EventNames.SESSION_TEXT_DELTA, {
               sessionId: this.claudeSessionId,
@@ -3759,6 +3789,16 @@ export class ClaudeCodeSession {
           this.claudeSessionId = result.session_id
         }
 
+        // Snapshot the delivery record BEFORE anything below can emit text of its
+        // own, and clear it here so every exit from this case starts the next turn
+        // clean. Clearing only at the bottom would leave the flag set on the early
+        // `break` paths (soft-error / conversation-lost), and a following replayed
+        // turn's fallback would be wrongly suppressed. The task-notification and
+        // background-withhold branches returned earlier and deliberately do NOT
+        // clear: they run alongside a user turn whose answer is still pending.
+        const deliveredAssistantText = this._emittedAssistantText
+        this._emittedAssistantText = false
+
         // Extract error messages from the result (e.g. "No conversation found with session ID: ...")
         let resultText = result.result ?? this.fullText
         const resultErrors = Array.isArray((result as { errors?: unknown }).errors)
@@ -3939,6 +3979,59 @@ export class ClaudeCodeSession {
           teamActive: this._teamActive,
           backgroundActive: this.hasActiveBackgroundWork(),
         })
+
+        // ── Result-text fallback: the turn answered on `result` alone ──
+        // (upstream ACP issue #453 / fix #858, adapted). The `result` line is
+        // normally a trailing COPY of text that already streamed, so forwarding it
+        // unconditionally would render every answer twice. But a cache-replayed
+        // turn generates no output tokens and some backends then skip streaming
+        // entirely: no stream_event deltas, no consolidated `assistant` message —
+        // only the `result`. The UI's session:result handler treats the event as a
+        // pure turn boundary and never renders its text, and history parsing keeps
+        // only user/assistant roles, so that answer was lost in BOTH surfaces and
+        // the turn rendered empty.
+        //
+        // Two guards keep this to exactly the replayed lane:
+        //  • !deliveredAssistantText — a turn that already showed its answer can
+        //    never emit it a second time. This is the guard the naive
+        //    "output_tokens === 0 && result" check lacks; upstream measured that
+        //    version double-emitting, including when a mid-turn echo makes the
+        //    consolidated message dedupe to nothing.
+        //  • output_tokens === 0 — pins the fallback to the replay signature so a
+        //    normal turn whose text somehow bypassed both delta paths still can't
+        //    duplicate. `?? 0` because third-party backends have been observed
+        //    omitting usage fields entirely, and the replay lane comes from exactly
+        //    such a backend — a missing count reads as the replay signature rather
+        //    than silently disabling the fallback.
+        // Errors are excluded: an is_error result's text is already surfaced as the
+        // error message (resultText feeds emitStatusChanged + SESSION_RESULT
+        // isError), and re-emitting it as assistant prose would show it twice.
+        // Task-notification and background-withheld results returned earlier.
+        const needsResultTextFallback = !deliveredAssistantText
+          && !effectiveIsError
+          && typeof result.result === 'string'
+          && result.result.trim().length > 0
+          && (result.usage?.output_tokens ?? 0) === 0
+        if (needsResultTextFallback && this.claudeSessionId) {
+          const forwarded = this.rewriteRemoteImages(result.result)
+          log.session.info('forwarding result text — turn emitted no assistant message', {
+            sessionId: this.claudeSessionId, taskId: this.taskId,
+            resultLength: forwarded.length,
+            outputTokens: result.usage?.output_tokens,
+            numTurns: result.num_turns,
+          })
+          // msgId ties the block to this turn's result so the render filter can
+          // absorb it if a persisted twin ever appears; without one the block is
+          // kept visible (never deleted) — the safe direction.
+          const msgId = `result-fallback:${this.claudeSessionId}:${this._currentEventV ?? Date.now()}`
+          if (this.fullText.length < MAX_FULL_TEXT) this.fullText += forwarded
+          bus.emit(EventNames.SESSION_TEXT_DELTA, {
+            sessionId: this.claudeSessionId,
+            taskId: this.taskId,
+            delta: forwarded,
+            msgId,
+          }, ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
+        }
 
         if (this._teamActive) {
           // Team subagents still working — this is an intermediate result from
@@ -4289,6 +4382,10 @@ export class ClaudeCodeSession {
             if (this.fullText.length < MAX_FULL_TEXT) {
               this.fullText += rewritten
             }
+            // See the `assistant` path: records that this turn's answer reached
+            // the UI. stream_event lines carry no parent_tool_use_id (verified
+            // across the local corpus), so every delta here is main-lane.
+            this._emittedAssistantText = true
             bus.emit(EventNames.SESSION_TEXT_DELTA, {
               sessionId: this.claudeSessionId,
               taskId: this.taskId,
@@ -4312,6 +4409,8 @@ export class ClaudeCodeSession {
             // Surface citation as a text_delta with the reference mark so it
             // appears in the normal text flow. More elaborate UI can come later.
             const citation = JSON.stringify(delta)
+            // Text reached the main lane (see the text_delta path above).
+            this._emittedAssistantText = true
             bus.emit(EventNames.SESSION_TEXT_DELTA, {
               sessionId: this.claudeSessionId,
               taskId: this.taskId,

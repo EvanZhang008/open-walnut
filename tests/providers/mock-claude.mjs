@@ -243,6 +243,26 @@ if (outputFormat === 'stream-json') {
       return;
     }
 
+    // 2a.0c. "replayed-turn" — reproduce upstream ACP issue #453 (fix #858): a
+    //        cache-replayed turn answers on the `result` line ALONE. Zero output
+    //        tokens, no stream_event deltas, no consolidated `assistant` message.
+    //        Without the result-text fallback the UI renders an empty turn, since
+    //        session:result is only a turn boundary and history keeps no result
+    //        lines. The optional "replayed-turn:<text>" form sets the answer text.
+    if (effectiveMessage === 'replayed-turn' || effectiveMessage.startsWith('replayed-turn:')) {
+      const answer = effectiveMessage.includes(':')
+        ? effectiveMessage.split(':').slice(1).join(':')
+        : 'This answer arrived on the result line only.';
+      const resultEvent = {
+        type: 'result', subtype: 'success', is_error: false,
+        duration_ms: 20, num_turns: 1, result: answer,
+        session_id: outputSessionId, total_cost_usd: 0,
+        usage: { input_tokens: 12, output_tokens: 0 },
+      };
+      process.stdout.write(JSON.stringify(resultEvent) + '\n', () => process.exit(0));
+      return;
+    }
+
     // 2a. For "plan-test" messages, emit Write (to plans/) + ExitPlanMode tool_use
     if (effectiveMessage === 'plan-test' || effectiveMessage.startsWith('plan-test:')) {
       // Extract optional plan file path from "plan-test:/path/to/plan.md"
