@@ -1,5 +1,39 @@
-import { marked, Marked } from 'marked';
+import { marked, Marked, type MarkedExtension } from 'marked';
 import DOMPurify from 'dompurify';
+
+/**
+ * GFM `del` retuned to require DOUBLE tildes — shared by EVERY renderer here.
+ *
+ * marked's default del tokenizer treats a SINGLE `~` as a strikethrough opener,
+ * so two unrelated approximate numbers in one paragraph ("watching ~550K objects
+ * … cache (~20 min rebuild)") pair up and strike out everything between them —
+ * including the `<strong>` runs, which is exactly how a real incident write-up
+ * rendered in the Files preview (2026-07-28). Agent-written technical prose is
+ * full of `~N` approximations, so this is the common case, not an edge case.
+ *
+ * The notes renderer fixed this locally in 2026-07-19, but `marked.use()` mutates
+ * the GLOBAL singleton that the chat / file-preview / diff / context paths all
+ * parse through, so the fix has to live at that level too. GitHub itself only
+ * strikes on `~~`, so this is GFM-correct, not a local dialect.
+ *
+ * Returning `undefined` means "no token here" (a leading `~` falls through to
+ * inlineText and stays literal). Returning `false` would instead fall back to
+ * marked's DEFAULT del tokenizer — resurrecting the single-tilde behavior this
+ * removes. Don't "fix" undefined to false.
+ */
+const doubleTildeDelTokenizer: NonNullable<MarkedExtension['tokenizer']> = {
+  del(src: string) {
+    const m = /^~~(?=\S)([\s\S]*?\S)~~/.exec(src);
+    if (!m) return undefined;
+    return { type: 'del', raw: m[0], text: m[1], tokens: this.lexer.inlineTokens(m[1]) };
+  },
+};
+
+// Applied to the global singleton so chat, the Files/Changed markdown preview,
+// the context inspector and copy-as-rich-text all share one del contract.
+// Deliberately the ONLY global retune: the notes instance also escapes raw inline
+// HTML, which would break the chat path (it pre-injects task-ref/file-link HTML).
+marked.use({ tokenizer: doubleTildeDelTokenizer });
 
 /** Task-ref regex: matches <task-ref id="..." label="..."/> or <task-ref id="..."/> */
 const TASK_REF_RE = /<task-ref\s+id="([^"]*)"(?:\s+label="([^"]*)")?\s*\/?>/g;
@@ -818,17 +852,9 @@ export function resolveImagePath(path: string, cwd?: string): string | null {
  */
 const noteMarked = new Marked({ breaks: true, gfm: true });
 noteMarked.use({
-  tokenizer: {
-    del(src: string) {
-      const m = /^~~(?=\S)([\s\S]*?\S)~~/.exec(src);
-      // undefined = "no token here" (leading ~ falls through to inlineText, stays
-      // literal). Returning `false` instead would fall back to marked's DEFAULT
-      // del tokenizer — resurrecting exactly the single-tilde behavior this
-      // override removes. Don't "fix" undefined to false.
-      if (!m) return undefined;
-      return { type: 'del', raw: m[0], text: m[1], tokens: this.lexer.inlineTokens(m[1]) };
-    },
-  },
+  // Same double-tilde contract as the global singleton (single source above) —
+  // this is a separate Marked instance, so it needs its own registration.
+  tokenizer: doubleTildeDelTokenizer,
   renderer: {
     html({ text }: { text: string }) {
       return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

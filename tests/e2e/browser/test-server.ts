@@ -474,6 +474,37 @@ await fs.writeFile(
     '',
   ].join('\n'),
 )
+// Files-panel resume fixture (file-view-resume.spec.ts). Two jobs in one file:
+//  1. `~N` approximations in prose — marked's default del tokenizer paired the
+//     lone tildes and struck out everything between them (the 2026-07-28 report).
+//  2. long enough to scroll, so the spec can verify the reading position and the
+//     selected file are restored when the panel is reopened.
+await fs.writeFile(
+  path.join(vscodeFixtureRoot, 'incident-report.md'),
+  [
+    '# Controller restart loop',
+    '',
+    'The controller (watching ~550K objects, largest in the fleet) has been',
+    '**silently losing its lease and restarting** — recently ~694 times per two',
+    'weeks, roughly every 30 minutes. Each restart wipes the cache (~20 min cold',
+    'rebuild) and loses DELETE events during the window.',
+    '',
+    'A genuine ~~retracted claim~~ still renders struck through.',
+    '',
+    ...Array.from({ length: 160 }, (_, i) => `- timeline entry ${i + 1}: steady-state drift observed`),
+    '',
+    '## Tail marker',
+    '',
+    'BOTTOM_OF_REPORT',
+    '',
+  ].join('\n'),
+)
+// A second scrollable file, so the spec can prove offsets are per-FILE (switching
+// away and back must not carry file A's position onto file B).
+await fs.writeFile(
+  path.join(vscodeFixtureRoot, 'second-doc.md'),
+  ['# Second doc', '', ...Array.from({ length: 160 }, (_, i) => `- second entry ${i + 1}`), '', 'SECOND_TAIL', ''].join('\n'),
+)
 // Drag fixture (panel-resize-drag.spec.ts): an HTML file, because FileContentView
 // previews HTML in an <iframe>. That iframe sits directly right of the tree
 // divider and used to swallow the drag's mousemove/mouseup — the stuck-drag bug.

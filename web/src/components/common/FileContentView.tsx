@@ -9,6 +9,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { fetchFileContent, rawFileContentUrl, downloadFileUrl, type FileContentResponse } from '@/api/files';
 import { formatSize } from '@/utils/format';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
+import { loadFileScroll, saveFileScroll } from '@/utils/file-view-state';
 import { highlightLines } from '@/utils/code-highlight';
 import { ICON_NEW_TAB } from '@/components/common/Icons';
 import { openPopout } from '@/popout/openPopout';
@@ -71,6 +72,25 @@ function mediaKind(path: string): 'video' | 'audio' | null {
   return null;
 }
 
+/**
+ * The element that actually scrolls the file body.
+ *
+ * It differs by render mode, which is why this is resolved from the DOM instead
+ * of hardcoded: the markdown preview (`.fv-md-preview`) scrolls itself, while the
+ * plain-source `<pre>` only scrolls HORIZONTALLY — its vertical scroller is an
+ * ancestor (the explorer's preview pane, the fullscreen overlay, or the pop-out
+ * root). Walk up until one can actually scroll.
+ */
+function findScroller(start: HTMLElement | null): HTMLElement | null {
+  let el: HTMLElement | null = start;
+  while (el && el !== document.body) {
+    const overflowY = getComputedStyle(el).overflowY;
+    if (/auto|scroll|overlay/.test(overflowY) && el.scrollHeight > el.clientHeight + 1) return el;
+    el = el.parentElement;
+  }
+  return null;
+}
+
 export function FileContentView({ path: filePath, line, host, hidePopout, reloadToken = 0 }: FileContentViewProps) {
   const [data, setData] = useState<FileContentResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -98,8 +118,10 @@ export function FileContentView({ path: filePath, line, host, hidePopout, reload
 
   // View state (source/preview toggle, fullscreen, speed) belongs to the FILE,
   // not to a reload — a Refresh must not kick you back out of Preview mode.
+  // Source-vs-Preview is restored from the last visit to THIS file (same store as
+  // the scroll offset) so reopening a file returns you to how you were reading it.
   useEffect(() => {
-    setShowSource(false);
+    setShowSource(loadFileScroll(host, filePath)?.source === true);
     setFullscreen(false);
     setPlaybackRate(1);
   }, [filePath, host]);
@@ -139,6 +161,76 @@ export function FileContentView({ path: filePath, line, host, hidePopout, reload
     const el = contentRef.current.querySelector(`[data-line="${line}"]`);
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, [line, data]);
+
+  // ── Resume reading position ────────────────────────────────────────────────
+  // Restore this file's last scroll offset once its content is on screen, then
+  // keep it up to date. Without this, every reopen of a file (panel toggle,
+  // session switch, reload) dumped you back at line 1 of a long document.
+  //
+  // Skipped when `line` is set — an explicit deep-link to a line wins over the
+  // remembered offset (that effect above owns the scroll in that case).
+  const restoredForRef = useRef<string | null>(null);
+  // Last offset OBSERVED while the scroller was live, per file. The unmount flush
+  // must use this instead of re-reading the element: by teardown the node is
+  // detached, `scrollTop` reads 0, and saving that DELETES the entry we were
+  // trying to preserve — which is exactly why the first version of this restore
+  // silently never worked (localStorage came back as `{}` after closing).
+  const lastSeenRef = useRef<{ key: string; top: number } | null>(null);
+  useEffect(() => {
+    if (!data?.content || media) return;
+    // Latch per FILE, not per render mode: a Refresh or a Preview⇄Source toggle
+    // re-runs this effect and must only RE-ATTACH the listener. Re-restoring
+    // would yank the user back to the saved offset mid-read (and a Preview
+    // offset is meaningless in Source view, which has different line heights).
+    const key = `${host ?? 'local'} ${filePath}`;
+    const firstRestore = restoredForRef.current !== key;
+    restoredForRef.current = key;
+
+    let scroller: HTMLElement | null = null;
+    let raf = 0;
+    let saveTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const onScroll = () => {
+      if (!scroller) return;
+      lastSeenRef.current = { key, top: scroller.scrollTop };
+      clearTimeout(saveTimer);
+      // Debounced: a scroll gesture fires dozens of events; one write per rest.
+      saveTimer = setTimeout(() => {
+        const seen = lastSeenRef.current;
+        if (seen?.key === key) saveFileScroll(host, filePath, { top: seen.top, source: showSource });
+      }, 250);
+    };
+
+    // Content lands after paint (markdown HTML injection / syntax highlight), so
+    // the scroller and its scrollHeight only exist on the next frame.
+    raf = requestAnimationFrame(() => {
+      const body = contentRef.current?.querySelector<HTMLElement>('.fv-md-preview, .file-viewer-code');
+      scroller = findScroller(body ?? contentRef.current);
+      if (!scroller) return;
+      if (firstRestore && !line) {
+        const saved = loadFileScroll(host, filePath);
+        if (saved) {
+          // Clamp: the file may have shrunk since the offset was stored.
+          const top = Math.max(0, Math.min(saved.top, scroller.scrollHeight - scroller.clientHeight));
+          scroller.scrollTop = top;
+          // Seed the tracker so an immediate close re-persists the restored value
+          // rather than flushing a 0 (setting scrollTop fires no synchronous event).
+          lastSeenRef.current = { key, top };
+        }
+      }
+      scroller.addEventListener('scroll', onScroll, { passive: true });
+    });
+
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(saveTimer);
+      scroller?.removeEventListener('scroll', onScroll);
+      // Flush the last LIVE value — closing the panel is the most common way to
+      // leave a file, and the debounce would otherwise drop that last position.
+      const seen = lastSeenRef.current;
+      if (seen?.key === key) saveFileScroll(host, filePath, { top: seen.top, source: showSource });
+    };
+  }, [data, filePath, host, showSource, media, line]);
 
   // Media keyboard shortcuts. Capture phase so we beat the browser's native
   // focused-<video> handling; preventDefault stops a double-seek. Skipped while

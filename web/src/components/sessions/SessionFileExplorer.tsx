@@ -20,6 +20,7 @@ import { FileContentView } from '@/components/common/FileContentView';
 import { ICON_REFRESH } from '@/components/common/Icons';
 import { formatSize } from '@/utils/format';
 import { getRecentFolders, fuzzyMatchRecents, type RecentFolder } from '@/utils/recentFolders';
+import { loadSelectedFile, saveSelectedFile } from '@/utils/file-view-state';
 import { log } from '@/utils/log';
 
 interface SessionFileExplorerProps {
@@ -147,6 +148,9 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine }: Sessi
   const inFlightRef = useRef<Set<string>>(new Set());
   // Self-reference for the restore-expanded eager loads inside loadDir's body.
   const loadDirRef = useRef<((dirPath: string, opts?: { isRoot?: boolean; restoreExpanded?: boolean }) => Promise<void>) | null>(null);
+  // A restored selection awaiting existence-check against its parent listing —
+  // a file deleted since the last visit must not leave a dead preview pane.
+  const pendingValidateRef = useRef<string | null>(null);
 
   const loadDir = useCallback(async (
     dirPath: string,
@@ -184,9 +188,26 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine }: Sessi
             if (!childrenMapRef.current.has(p)) void loadDirRef.current?.(p);
           }
         }
-        // If the user typed a file path, the backend listed its parent and flagged
-        // the file — open it in the preview pane (VS Code style).
-        if (res.selectedFile) setSelectedFile(joinPath(canonical, res.selectedFile));
+        // If the user typed a file path (or a click deep-linked one), the backend
+        // listed its parent and flagged the file — open it in the preview pane
+        // (VS Code style). An EXPLICIT target always beats the remembered one.
+        if (res.selectedFile) {
+          const target = joinPath(canonical, res.selectedFile);
+          setSelectedFile(target);
+          saveSelectedFile(host, canonical, target);
+        } else if (restoreExpanded) {
+          // Nothing explicit: reopen the file that was last being read under this
+          // root, so toggling the Files panel resumes instead of showing the empty
+          // "Select a file to preview" pane. Validated below once its parent
+          // listing arrives (the file may have been deleted since).
+          const remembered = loadSelectedFile(host, canonical);
+          if (remembered) {
+            setSelectedFile(remembered);
+            pendingValidateRef.current = remembered;
+            const dir = parentPath(remembered);
+            if (dir !== canonical && !childrenMapRef.current.has(dir)) void loadDirRef.current?.(dir);
+          }
+        }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -210,6 +231,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine }: Sessi
     setErrorPaths(new Map());
     setSelectedFile(null);
     setFocusedDir(null);
+    pendingValidateRef.current = null;
     setExpanded(new Set()); // re-restored in loadDir once the root resolves to absolute
     setOpenRoots(new Set([initialRoot])); // cwd section open; re-keyed on canonicalization below
     void loadDir(initialRoot, { isRoot: true, restoreExpanded: true });
@@ -233,6 +255,22 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine }: Sessi
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [root, host]);
+
+  // Drop a restored selection whose file no longer exists (deleted/renamed since
+  // the last visit) once its parent directory listing lands — otherwise the
+  // preview pane sits on a permanent "file not found".
+  useEffect(() => {
+    const pending = pendingValidateRef.current;
+    if (!pending) return;
+    const entries = childrenMap.get(parentPath(pending));
+    if (!entries) return; // listing not in yet
+    pendingValidateRef.current = null;
+    const name = lastSegment(pending);
+    if (!entries.some((e) => e.name === name && e.type === 'file')) {
+      setSelectedFile((cur) => (cur === pending ? null : cur));
+      saveSelectedFile(host, root, null);
+    }
+  }, [childrenMap, host, root]);
 
   // Changed-file quick access: ONE section per git repo/submodule the session
   // edited (git roots only — a section per changed folder was a noisy wall).
@@ -355,8 +393,12 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine }: Sessi
     const parent = parentPath(root);
     if (parent !== root) {
       setChildrenMap(new Map());
+      // Deliberately leaves the OLD root's remembered file intact (navigating up
+      // isn't "I'm done with that file") — the new root has its own key, and
+      // loadDir's restoreExpanded reopens whatever was last read there.
       setSelectedFile(null);
       setFocusedDir(null);
+      pendingValidateRef.current = null;
       void loadDir(parent, { isRoot: true, restoreExpanded: true });
     }
   }, [root, loadDir]);
@@ -408,6 +450,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine }: Sessi
     setChildrenMap(new Map());
     setSelectedFile(null);
     setFocusedDir(null);
+    pendingValidateRef.current = null;
     void loadDir(next, { isRoot: true, restoreExpanded: true });
   }, [root, loadDir]);
 
@@ -525,7 +568,12 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine }: Sessi
                         style={{ paddingLeft: `${8 + node.depth * 14}px` }}
                         onClick={() => {
                           if (node.type === 'dir') toggleDir(node);
-                          else { setSelectedFile(node.path); setFocusedDir(parentPath(node.path)); }
+                          else {
+                            setSelectedFile(node.path);
+                            setFocusedDir(parentPath(node.path));
+                            // Remember the file being read so reopening the panel resumes here.
+                            saveSelectedFile(host, root, node.path);
+                          }
                         }}
                         title={node.path}
                       >
