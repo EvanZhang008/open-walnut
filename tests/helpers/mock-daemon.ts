@@ -201,6 +201,7 @@ export class MockDaemon {
       case 'start': return this.cmdStart(ws, id, cmd)
       case 'attach': return this.cmdAttach(ws, id, cmd)
       case 'send': return this.cmdSend(ws, id, cmd)
+      case 'sendRaw': return this.cmdSendRaw(ws, id, cmd)
       case 'appendUserMarker': return this.cmdAppendUserMarker(ws, id, cmd)
       case 'stop': return this.cmdStop(ws, id, cmd)
       case 'status': return this.cmdStatus(ws, id, cmd)
@@ -425,6 +426,36 @@ export class MockDaemon {
       this.sendOk(ws, id, { ok: true })
     } catch (err) {
       this.sendError(ws, id, `write failed: ${(err as Error).message}`)
+    }
+  }
+
+  /** Mirrors daemon-core.handleSendRawCommand — writes a pre-serialized JSON
+   *  envelope (control_request / control_response) verbatim to the FIFO. Used by
+   *  Walnut's writeRaw path (side questions, generate_session_title, flag
+   *  settings). Strict-ack envelope like cmdSend. */
+  private cmdSendRaw(ws: WebSocket, id: number, cmd: Record<string, unknown>): void {
+    const sid = cmd.sid as string
+    const raw = cmd.raw as string
+    if (!sid || !raw) return this.sendError(ws, id, 'sendRaw: missing sid or raw')
+    if (this._deadSessions.has(sid)) {
+      return this.sendOk(ws, id, { ok: false, reason: 'session_dead', exitCode: this._deadSessions.get(sid)! })
+    }
+    const session = this.sessions.get(sid)
+    if (!session) return this.sendOk(ws, id, { ok: false, reason: 'not_found' })
+    try {
+      const fd = fs.openSync(session.pipePath, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)
+      fs.writeSync(fd, Buffer.from(raw.endsWith('\n') ? raw : raw + '\n'))
+      fs.closeSync(fd)
+      this.sendOk(ws, id, { ok: true })
+    } catch (err) {
+      // Mirror daemon-core.handleSendRawCommand's strict-ack envelope: write
+      // failures come back as {ok:false, reason} — NOT a protocol-level error —
+      // so writeRaw() resolves false and callers take their no-FIFO fallback
+      // exactly like production.
+      const code = (err as NodeJS.ErrnoException).code
+      if (code === 'ENXIO') return this.sendOk(ws, id, { ok: false, reason: 'ENXIO', exitCode: -1 })
+      if (code === 'EAGAIN') return this.sendOk(ws, id, { ok: false, reason: 'EAGAIN', retriable: true })
+      this.sendError(ws, id, `sendRaw write failed: ${(err as Error).message}`)
     }
   }
 

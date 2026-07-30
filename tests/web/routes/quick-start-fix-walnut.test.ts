@@ -4,9 +4,10 @@
  * POST /api/sessions/quick-start with `intent: 'fix-walnut'` must:
  *   1. wrap the user's report in the repair briefing (SESSION_START message),
  *   2. title the task "Fix Walnut: <report>" under project "Fix Walnut",
- *   3. pin the task to the Focus tier by default (the pill skips the path picker,
- *      so there is no launcher footer to pick a tier in) — while still honoring an
- *      explicit client pick, including `pinTier: null` to opt out,
+ *   3. pin the task to the launcher's Satellite baseline by default (same launch
+ *      defaults as a regular quick session — NOT a hardcoded Focus override) —
+ *      while still honoring an explicit client pick, including `pinTier: null`
+ *      to opt out,
  *   4. reject unknown intent values with 400,
  *   5. leave plain quick-starts (no intent) untouched.
  *
@@ -115,23 +116,27 @@ describe('POST /api/sessions/quick-start — intent=fix-walnut', () => {
     }
   });
 
-  // Repro of the reported bug: a Fix Walnut launch sends no taskMeta (the pill
-  // skips the path picker entirely), so the task used to land unpinned and the
-  // user had to hand-pin it into Focus after every single repair request.
-  it('pins the task to the Focus tier when the client sends no taskMeta', async () => {
+  // A taskMeta-less Fix Walnut launch (headless clients — iOS/cloud) gets the
+  // SAME default tier as a regular quick session (Satellite), not a hardcoded
+  // Focus override: the pill must follow the user's normal launch settings.
+  // (The web client sends its sticky launcher tier explicitly.)
+  it('pins the task to the Satellite baseline when the client sends no taskMeta', async () => {
     const app = createApp();
     const res = await request(app)
       .post('/api/sessions/quick-start')
       .send({
         cwd: '/fake/walnut-checkout',
-        message: 'focus tier is not applied',
+        message: 'default tier is not applied',
         intent: 'fix-walnut',
       });
 
     expect(res.status).toBe(200);
     const task = await getTask(res.body.taskId);
     expect(task!.pinned).toBe(true);
-    expect(task!.focus_tier).toBe('focus');
+    // Satellite is the tier-less pinned state: setFocusTier only writes
+    // focus_tier for 'focus'/'wait' (splitTiers buckets everything else
+    // into satellite_tasks).
+    expect(task!.focus_tier).toBeUndefined();
   });
 
   it('honors an explicit non-focus tier instead of forcing focus', async () => {

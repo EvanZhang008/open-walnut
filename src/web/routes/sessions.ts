@@ -482,12 +482,14 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     const isFixWalnut = intent === 'fix-walnut'
     const sessionMessage = isFixWalnut ? buildFixWalnutMessage(message) : message
     const reportSnippet = message.replace(/\s+/g, ' ').trim().slice(0, 60)
-    // A repair report is by definition something the user wants NOW, and the pill
-    // deliberately skips the path picker — so there is no launcher footer to pick a
-    // tier in. Default the intent to Focus server-side (so iOS/cloud clients get it
-    // too) while still honoring an explicit client pick: `pinTier: null` opts out.
+    // Fix Walnut follows the SAME launch defaults as a regular quick session —
+    // the web client sends its sticky launcher tier explicitly, and headless
+    // clients (iOS/cloud) that send no pick get the launcher's Satellite
+    // baseline instead of a hardcoded Focus override (the old behavior, which
+    // ignored the user's remembered tier on every repair). `pinTier: null`
+    // still opts out of pinning entirely.
     const fixWalnutTaskMeta = isFixWalnut && taskMeta?.pinTier === undefined
-      ? { ...taskMeta, pinTier: 'focus' as const }
+      ? { ...taskMeta, pinTier: 'satellite' as const }
       : taskMeta
     const fixWalnutExtras = isFixWalnut
       ? { taskTitle: `Fix Walnut: ${reportSnippet}`, project: 'Fix Walnut' }

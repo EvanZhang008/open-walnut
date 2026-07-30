@@ -62,6 +62,9 @@ for (let i = 0; i < args.length; i++) {
   }
 }
 
+// Resolver for an init-only spawn awaiting its first FIFO user message (see below).
+let pendingUserResolve = null;
+
 // When --input-format stream-json is used, read the message from stdin (FIFO pipe).
 // The real CLI reads JSON lines like: {"type":"user","message":{"role":"user","content":"..."}}
 // The FIFO is opened O_RDWR so it won't EOF — we read available data with a short timeout.
@@ -102,6 +105,49 @@ if (inputFormat === 'stream-json') {
       } catch { /* skip non-JSON lines */ }
     }
   }
+
+  // Persistent stdin listener — two jobs, mirroring the real FIFO-mode CLI:
+  //  1. control_request{generate_session_title} → immediate control_response with
+  //     a deterministic title derived from the description (fire-and-forget,
+  //     same contract as fork print.ts), so tests can assert the full
+  //     Walnut→CLI→Walnut round-trip.
+  //  2. a `type:'user'` line resolves a pending init-only wait (see below) —
+  //     the real CLI spawned with an empty first message idles on stdin and
+  //     adopts the first FIFO user message as its turn.
+  process.stdin.resume();
+  // stdin is a FIFO opened O_NONBLOCK: writers opening/closing between turns
+  // can surface as `read EAGAIN` stream errors. Without a handler that's an
+  // uncaught 'error' event → process crash → every later control write gets
+  // ENXIO (no FIFO reader). Swallow and keep listening, like the real CLI.
+  process.stdin.on('error', () => { try { process.stdin.resume(); } catch { /* ignore */ } });
+  let ctlBuf = '';
+  process.stdin.on('data', (chunk) => {
+    ctlBuf += chunk;
+    let nl;
+    while ((nl = ctlBuf.indexOf('\n')) !== -1) {
+      const line = ctlBuf.slice(0, nl);
+      ctlBuf = ctlBuf.slice(nl + 1);
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed.type === 'control_request' && parsed.request?.subtype === 'generate_session_title') {
+          // Strip test-harness prefixes (slow:/chunk-delay:) so they never leak
+          // into the asserted title, then take the first five words.
+          const desc = String(parsed.request.description ?? '')
+            .replace(/^(?:(?:slow|chunk-delay):\d+\s+)+/, '');
+          const words = desc.trim().split(/\s+/).slice(0, 5).join(' ');
+          process.stdout.write(JSON.stringify({
+            type: 'control_response',
+            response: { subtype: 'success', request_id: parsed.request_id, response: { title: `Mock title: ${words}` } },
+          }) + '\n');
+        } else if (parsed.type === 'user' && parsed.message?.content !== undefined && pendingUserResolve) {
+          const c = parsed.message.content;
+          const resolve = pendingUserResolve;
+          pendingUserResolve = null;
+          resolve(typeof c === 'string' ? c : JSON.stringify(c));
+        }
+      } catch { /* not JSON — ignore */ }
+    }
+  });
 }
 
 const outputSessionId = sessionId || 'mock-session-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
@@ -120,34 +166,43 @@ if (message === 'parse-error') {
 
 // Parse "slow:<ms>" prefix — emits init immediately, then delays before result.
 // Example: "slow:500 my message" → 500ms delay between init and result events.
+// Recomputable: an init-only spawn (see the stream-json branch) adopts its first
+// FIFO user message AFTER these were computed for the empty spawn message.
 let slowDelayMs = 0;
 let effectiveMessage = message;
-const slowMatch = message.match(/^slow:(\d+)\s+(.*)/);
-if (slowMatch) {
-  slowDelayMs = parseInt(slowMatch[1], 10);
-  effectiveMessage = slowMatch[2];
-}
-
-// Parse "chunk-delay:<ms>" prefix — inserts a real delay BETWEEN content_block_delta
-// emissions (currently wired into stream-partial-thinking-then-text only), so
-// browser tests can observe partial text mid-turn (the default burst is
-// synchronous and races any DOM poll). Composable after slow:, e.g.
-// "chunk-delay:250 stream-partial-thinking-then-text".
 let chunkDelayMs = 0;
-const chunkDelayMatch = effectiveMessage.match(/^chunk-delay:(\d+)\s+(.*)/);
-if (chunkDelayMatch) {
-  chunkDelayMs = parseInt(chunkDelayMatch[1], 10);
-  effectiveMessage = chunkDelayMatch[2];
-}
+let resultText = '';
+function computeMessageParts() {
+  slowDelayMs = 0;
+  effectiveMessage = message;
+  const slowMatch = message.match(/^slow:(\d+)\s+(.*)/);
+  if (slowMatch) {
+    slowDelayMs = parseInt(slowMatch[1], 10);
+    effectiveMessage = slowMatch[2];
+  }
 
-// Build result text
-const permPart = permissionMode ? ` [permission-mode:${permissionMode}]` : '';
-const cwdPart = ` [cwd:${process.cwd()}]`;
-const sysPart = appendSystemPrompt ? ` [has-system-prompt]` : '';
-const modelPart = modelFlag ? ` [model:${modelFlag}]` : '';
-const effortPart = effortFlag ? ` [effort:${effortFlag}]` : '';
-const bypassCapabilityPart = dangerouslySkipPermissions ? ' [dangerously-skip-permissions:true]' : '';
-const resultText = `Hello! I processed your message: ${effectiveMessage}${permPart}${cwdPart}${sysPart}${modelPart}${effortPart}${bypassCapabilityPart}`;
+  // Parse "chunk-delay:<ms>" prefix — inserts a real delay BETWEEN content_block_delta
+  // emissions (currently wired into stream-partial-thinking-then-text only), so
+  // browser tests can observe partial text mid-turn (the default burst is
+  // synchronous and races any DOM poll). Composable after slow:, e.g.
+  // "chunk-delay:250 stream-partial-thinking-then-text".
+  chunkDelayMs = 0;
+  const chunkDelayMatch = effectiveMessage.match(/^chunk-delay:(\d+)\s+(.*)/);
+  if (chunkDelayMatch) {
+    chunkDelayMs = parseInt(chunkDelayMatch[1], 10);
+    effectiveMessage = chunkDelayMatch[2];
+  }
+
+  // Build result text
+  const permPart = permissionMode ? ` [permission-mode:${permissionMode}]` : '';
+  const cwdPart = ` [cwd:${process.cwd()}]`;
+  const sysPart = appendSystemPrompt ? ` [has-system-prompt]` : '';
+  const modelPart = modelFlag ? ` [model:${modelFlag}]` : '';
+  const effortPart = effortFlag ? ` [effort:${effortFlag}]` : '';
+  const bypassCapabilityPart = dangerouslySkipPermissions ? ' [dangerously-skip-permissions:true]' : '';
+  resultText = `Hello! I processed your message: ${effectiveMessage}${permPart}${cwdPart}${sysPart}${modelPart}${effortPart}${bypassCapabilityPart}`;
+}
+computeMessageParts();
 
 // ── stream-json mode: emit JSONL lines ──
 if (outputFormat === 'stream-json') {
@@ -651,6 +706,36 @@ if (outputFormat === 'stream-json') {
       return;
     }
 
+    // 2a.10. "title-test[:<text>]" — a normal successful turn that KEEPS THE
+    //         PROCESS ALIVE afterwards (real FIFO-mode CLI behavior), so the
+    //         persistent control-protocol listener above can answer a
+    //         generate_session_title control_request that Walnut sends after
+    //         the turn (session-auto-title hook e2e). Every other mock mode
+    //         exits at result, which would kill the control round-trip.
+    if (effectiveMessage === 'title-test' || effectiveMessage.startsWith('title-test:')) {
+      const text = effectiveMessage.includes(':')
+        ? effectiveMessage.split(':').slice(1).join(':')
+        : 'Turn done; staying alive for control requests.';
+      process.stdout.write(JSON.stringify({
+        type: 'assistant',
+        message: {
+          id: 'msg_mock_title', type: 'message', role: 'assistant', model: 'mock-model',
+          content: [{ type: 'text', text }],
+          stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 5 },
+        },
+        session_id: outputSessionId,
+      }) + '\n');
+      process.stdout.write(JSON.stringify({
+        type: 'result', subtype: 'success', is_error: false,
+        duration_ms: 30, num_turns: 1, result: text,
+        session_id: outputSessionId, total_cost_usd: 0.001,
+        usage: { input_tokens: 10, output_tokens: 5 },
+      }) + '\n');
+      // Do NOT exit: stream-json FIFO mode stays alive between turns; the
+      // stdin control listener answers generate_session_title requests.
+      return;
+    }
+
     // 2b. For "tool-test" messages, emit a tool_use + tool_result before the text
     if (effectiveMessage === 'tool-test') {
       const toolUseEvent = {
@@ -724,12 +809,37 @@ if (outputFormat === 'stream-json') {
     process.stdout.write(JSON.stringify(resultEvent) + '\n', () => process.exit(0));
   }
 
-  // For mode-change messages, ensure remaining events fire AFTER the mode-change system event
-  const effectiveDelay = modeChangeMatch ? Math.max(slowDelayMs, 200) : slowDelayMs;
-  if (effectiveDelay > 0) {
-    setTimeout(emitRemainingEvents, effectiveDelay);
+  // Init-only spawn (empty first message, FIFO mode): the real CLI idles on
+  // stdin after init and adopts the first FIFO user message as its turn — it
+  // does NOT emit an empty-turn result and exit. Mirror that: wait for the
+  // persistent stdin listener to hand us the first user line, adopt it, then
+  // run the normal turn for it. Without this, an init-only mock exited ~2s in,
+  // and every later send raced a cold --resume respawn (flaky control round-trips).
+  if (inputFormat === 'stream-json' && !message) {
+    // Orphan guards — this branch parks on stdin indefinitely (real-CLI
+    // behavior), which a SIGKILLed test run would leak forever (this machine
+    // has wedged on leaked test processes before). Self-exit when the parent
+    // (mock daemon) dies or after a hard 5-min ceiling.
+    const orphanCheck = setInterval(() => {
+      try { process.kill(process.ppid, 0); } catch { process.exit(0); }
+      if (process.ppid === 1) process.exit(0);
+    }, 5000);
+    orphanCheck.unref?.();
+    const hardStop = setTimeout(() => process.exit(0), 5 * 60_000);
+    hardStop.unref?.();
+    (async () => {
+      message = await new Promise((resolve) => { pendingUserResolve = resolve; });
+      computeMessageParts();
+      emitRemainingEvents();
+    })();
   } else {
-    emitRemainingEvents();
+    // For mode-change messages, ensure remaining events fire AFTER the mode-change system event
+    const effectiveDelay = modeChangeMatch ? Math.max(slowDelayMs, 200) : slowDelayMs;
+    if (effectiveDelay > 0) {
+      setTimeout(emitRemainingEvents, effectiveDelay);
+    } else {
+      emitRemainingEvents();
+    }
   }
 } else {
   // ── json mode: single JSON blob (original behavior) ──

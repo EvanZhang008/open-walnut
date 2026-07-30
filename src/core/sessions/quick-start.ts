@@ -63,6 +63,16 @@ export class QuickStartError extends Error {
 }
 
 /**
+ * The placeholder title a quick-start task gets when the caller supplies none.
+ * Exported as the single definition of "still untitled" — the session
+ * auto-title hook compares against this exact string to decide whether a
+ * task's title is safe to replace with an AI-generated one.
+ */
+export function defaultSessionTaskTitle(cwd: string): string {
+  return `Session: ${path.basename(cwd.replace(/\/+$/, '') || '/')}`;
+}
+
+/**
  * Create (or reuse) the task and emit SESSION_START. Returns the task.
  * Throws QuickStartError with an HTTP-ish statusCode on invalid input so the
  * route wrapper can map it 1:1.
@@ -121,8 +131,7 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     }
   } else {
     // Normal mode: create new task
-    const title = params.taskTitle?.trim()
-      || `Session: ${path.basename(cwd.replace(/\/+$/, '') || '/')}`;
+    const title = params.taskTitle?.trim() || defaultSessionTaskTitle(cwd);
     const { task } = await addTask({
       title,
       category: taskCategory,

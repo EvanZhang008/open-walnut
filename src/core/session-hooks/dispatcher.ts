@@ -223,6 +223,7 @@ export class SessionHookDispatcher {
             extraPayload: {
               message: data.message as string,
               isResume: state.turnIndex > 0,
+              source: event.source,
             } satisfies Partial<OnMessageSendPayload>,
           });
         }

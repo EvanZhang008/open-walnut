@@ -4603,6 +4603,28 @@ export class ClaudeCodeSession {
   }
 
   /**
+   * Ask the CLI to generate a session title from a description (usually the
+   * user's first real message) via the `generate_session_title` control_request
+   * subtype — the same Haiku titler the CLI uses natively, riding the session's
+   * existing stream-json stdin (no separate LLM plumbing in Walnut). The CLI
+   * handles it fire-and-forget, so a mid-turn request doesn't block the stdin
+   * loop. `persist:false` — Walnut owns the title (task + session record); the
+   * CLI's own session store must not become a second source of truth.
+   *
+   * Returns the title, or null on ANY failure (dead transport, timeout, CLI
+   * error) — callers treat null as "keep the placeholder".
+   */
+  async generateSessionTitle(description: string, timeoutMs = 20_000): Promise<string | null> {
+    const payload = await this.readControlPayloadWithRequest(
+      `title-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
+      { subtype: 'generate_session_title', description, persist: false },
+      timeoutMs,
+    )
+    const title = payload && typeof payload.title === 'string' ? payload.title.trim() : ''
+    return title || null
+  }
+
+  /**
    * Change the session's reasoning effort MID-SESSION, without respawning the CLI.
    *
    * ── How it works (stream-json control protocol, OUTBOUND — same as askSideQuestion) ──

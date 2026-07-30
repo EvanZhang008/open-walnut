@@ -46,6 +46,10 @@ export interface OnSessionStartPayload extends SessionHookContext {
 export interface OnMessageSendPayload extends SessionHookContext {
   message: string;
   isResume: boolean;
+  /** Bus source of the send ('ui' | 'mobile' | 'web-api' | 'cli' | 'phase-hook' | …).
+   *  The dispatcher already drops 'agent'/'subagent-runner'; hooks that must act
+   *  only on a HUMAN's message (e.g. auto-title) filter further on this. */
+  source?: string;
 }
 
 /** onTurnStart payload — derived: first text-delta/tool-use after send */

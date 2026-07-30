@@ -514,7 +514,8 @@ export interface QuickStartTaskMeta {
   needs_attention?: boolean;
   priority?: 'immediate' | 'important' | 'backlog' | 'none';
   /** Tier to pin the new task to. `null` = explicitly DON'T pin — distinct from
-   *  omitted, which lets the server apply its own default (fix-walnut → Focus). */
+   *  omitted, which lets the server apply its own default (fix-walnut → Satellite,
+   *  the same launcher baseline as a regular quick session). */
   pinTier?: 'focus' | 'satellite' | 'wait' | null;
 }
 

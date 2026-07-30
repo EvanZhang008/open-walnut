@@ -26,10 +26,10 @@ import { TaskDetailModal } from '@/components/tasks/TaskDetailModal';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { PendingSessionPanel } from '@/components/sessions/PendingSessionPanel';
 import { SessionPathSelector, type QuickStartPath, type QuickStartTaskMeta } from '@/components/sessions/SessionPathSelector';
-import { DEFAULT_META } from '@/components/sessions/task-meta-constants';
+import { freshLauncherMeta } from '@/components/sessions/task-meta-constants';
 import { QuestionPopover, parseAskQuestionInput } from '@/components/chat/QuestionPopover';
 import { TriagePanel } from '@/components/triage/TriagePanel';
-import { fetchSession, fetchSessionsForTask, quickStartSession } from '@/api/sessions';
+import { fetchSession, fetchSessionsForTask, fetchWorkingDirs, quickStartSession } from '@/api/sessions';
 import { deleteTask as deleteTaskApi } from '@/api/tasks';
 import { fetchConfig, fetchInstallDir } from '@/api/config';
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
@@ -969,13 +969,23 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     setQuickTaskOpen(false); // launcher popovers are mutually exclusive
     setQuickStartPath({ cwd: dir, host: null, category: 'Local', intent: 'fix-walnut' });
     // The pill skips the path picker, so nothing else ever produces the launcher's
-    // task meta — seed it explicitly (starred + pin to Focus). Leaving it null used
-    // to send NO taskMeta at all, and the server only defaults `starred`, so every
-    // Fix Walnut task landed unpinned instead of in Focus. Focus is hardcoded here
-    // (not DEFAULT_META's tier, now Satellite): a repair report is by definition
-    // "fix this NOW", and it deliberately ignores the launcher's sticky tier.
-    quickStartMetaRef.current = { ...DEFAULT_META, pinTier: 'focus' };
+    // task meta — seed it explicitly with the SAME settings a regular quick session
+    // would get: the sticky pin tier (freshLauncherMeta; a hardcoded 'focus' here
+    // used to override the user's remembered tier on every repair), then the
+    // checkout dir's remembered model/engine merged in below once working-dirs
+    // resolve (usually instant — the API layer caches for the page lifetime).
+    const seeded = freshLauncherMeta();
+    quickStartMetaRef.current = seeded;
     setQuickStartModel(undefined);
+    fetchWorkingDirs().then(({ dirs }) => {
+      // Stale guard: only merge while THIS fix-walnut compose is still the active
+      // meta (user may have cancelled, re-edited via the picker, or re-clicked).
+      if (quickStartMetaRef.current !== seeded) return;
+      const launch = dirs.find(d => d.cwd === dir && (d.host ?? null) === null)?.lastLaunch;
+      if (!launch || launch.engine === 'codex') return; // repair briefing is written for the native CLI — don't inherit a Codex memory (or its model)
+      quickStartMetaRef.current = { ...seeded, model: launch.model };
+      setQuickStartModel(launch.model);
+    }).catch(() => { /* no memory → keep Auto/Claude, same as the launcher */ });
     // Land the cursor in the input — the bar + hint + focused caret form one visual path.
     setTimeout(() => {
       document.querySelector<HTMLTextAreaElement>('.chat-input-textarea')?.focus();
@@ -1350,8 +1360,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // `pinTier: null` — NOT undefined — is how an explicit "don't pin this"
       // reaches the server: undefined is dropped by JSON.stringify, and the
       // fix-walnut branch treats an absent pinTier as "client didn't choose" and
-      // pins to Focus. Without the null, unpinning inside a fix-walnut re-edit
-      // was silently overridden back to Focus.
+      // applies its own default tier. Without the null, unpinning inside a
+      // fix-walnut re-edit was silently overridden back to the server default.
       const taskMeta = metaSnapshot ? {
         starred: metaSnapshot.starred,
         needs_attention: metaSnapshot.needs_attention,
@@ -1396,16 +1406,19 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         // Notify main agent to reorganize the task (include user's prompt).
         // Skipped for fix-walnut: the server already titled the task
         // ("Fix Walnut: <report>") and set its project — renaming would clobber.
-        if (qsp.intent !== 'fix-walnut') {
-          // Path-first launches (todo "+") have no prompt yet — don't feed the
-          // agent an empty quote to title from; the path is the only signal.
-          const promptLine = text ? `- User prompt: "${text}"` : `- No first message yet (path-first launch); title from the path for now`;
+        // Skipped for path-first launches (todo "+", no prompt yet): the butler
+        // would title from the path alone, replacing the "Session: <dir>"
+        // placeholder — which is exactly what the session-auto-title hook keys
+        // on to generate a real title from the user's FIRST message (via the
+        // CLI's generate_session_title control request). Titling from the path
+        // here would race that and win with a worse title.
+        if (qsp.intent !== 'fix-walnut' && text) {
           const agentMsg = [
             `[Quick Start] Session created and running.`,
             `- Task ID: ${result.taskId}`,
             `- Path: ${qsp.cwd}`,
             `- Category: Inbox / Quick Start`,
-            promptLine,
+            `- User prompt: "${text}"`,
             ``,
             `Please update the task:`,
             `1. Set a descriptive title (replace "Session: ...")`,
