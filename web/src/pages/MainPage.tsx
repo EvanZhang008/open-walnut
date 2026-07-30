@@ -980,6 +980,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     fetchWorkingDirs().then(({ dirs }) => {
       // Stale guard: only merge while THIS fix-walnut compose is still the active
       // meta (user may have cancelled, re-edited via the picker, or re-clicked).
+      // Fail-safe trade-off: if the user re-opens the picker or fires the send
+      // before this (page-lifetime-cached, usually instant) fetch resolves, the
+      // dir's model memory loses and the launch goes out as Auto — never the
+      // other way around (memory must not clobber an explicit user edit).
       if (quickStartMetaRef.current !== seeded) return;
       const launch = dirs.find(d => d.cwd === dir && (d.host ?? null) === null)?.lastLaunch;
       if (!launch || launch.engine === 'codex') return; // repair briefing is written for the native CLI — don't inherit a Codex memory (or its model)
@@ -1406,23 +1410,32 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         // Notify main agent to reorganize the task (include user's prompt).
         // Skipped for fix-walnut: the server already titled the task
         // ("Fix Walnut: <report>") and set its project — renaming would clobber.
-        // Skipped for path-first launches (todo "+", no prompt yet): the butler
-        // would title from the path alone, replacing the "Session: <dir>"
-        // placeholder — which is exactly what the session-auto-title hook keys
-        // on to generate a real title from the user's FIRST message (via the
-        // CLI's generate_session_title control request). Titling from the path
-        // here would race that and win with a worse title.
-        if (qsp.intent !== 'fix-walnut' && text) {
+        // Path-first launches (todo "+", no prompt yet) still notify — the
+        // butler owns category/project placement — but must NOT title: the
+        // "Session: <dir>" placeholder is exactly what the session-auto-title
+        // hook keys on to generate a real title from the user's FIRST message
+        // (CLI generate_session_title). A path-derived title would race it
+        // and win with a worse name.
+        if (qsp.intent !== 'fix-walnut') {
           const agentMsg = [
             `[Quick Start] Session created and running.`,
             `- Task ID: ${result.taskId}`,
             `- Path: ${qsp.cwd}`,
             `- Category: Inbox / Quick Start`,
-            `- User prompt: "${text}"`,
-            ``,
-            `Please update the task:`,
-            `1. Set a descriptive title (replace "Session: ...")`,
-            `2. Move to the correct category and project if needed`,
+            ...(text
+              ? [
+                  `- User prompt: "${text}"`,
+                  ``,
+                  `Please update the task:`,
+                  `1. Set a descriptive title (replace "Session: ...")`,
+                  `2. Move to the correct category and project if needed`,
+                ]
+              : [
+                  `- No first message yet (path-first launch).`,
+                  ``,
+                  `Please move the task to the correct category and project if needed.`,
+                  `Do NOT rename it: the title auto-generates from the user's first message in the session.`,
+                ]),
           ].join('\n');
           // Images already sent to the session via quickStartSession() — don't duplicate
           chat.sendMessage(agentMsg, undefined, undefined, 'quick-start');

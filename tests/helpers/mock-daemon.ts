@@ -429,10 +429,11 @@ export class MockDaemon {
     }
   }
 
-  /** Mirrors daemon-core.handleSendRawCommand — writes a pre-serialized JSON
-   *  envelope (control_request / control_response) verbatim to the FIFO. Used by
-   *  Walnut's writeRaw path (side questions, generate_session_title, flag
-   *  settings). Strict-ack envelope like cmdSend. */
+  /** SIMPLIFIED mirror of daemon-core.handleSendRawCommand — writes a
+   *  pre-serialized JSON envelope (control_request / control_response) verbatim
+   *  to the FIFO, with the same strict-ack error shape (ok:false + reason).
+   *  Not mirrored: pid kill-0 precheck, pendingCtrl clearing, writeFifoFully
+   *  partial-write handling — fine for the small control envelopes tests send. */
   private cmdSendRaw(ws: WebSocket, id: number, cmd: Record<string, unknown>): void {
     const sid = cmd.sid as string
     const raw = cmd.raw as string

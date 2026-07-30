@@ -487,7 +487,9 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     // clients (iOS/cloud) that send no pick get the launcher's Satellite
     // baseline instead of a hardcoded Focus override (the old behavior, which
     // ignored the user's remembered tier on every repair). `pinTier: null`
-    // still opts out of pinning entirely.
+    // still opts out of pinning entirely. Keep this literal in sync with the
+    // frontend baseline: DEFAULT_META.pinTier in
+    // web/src/components/sessions/task-meta-constants.ts.
     const fixWalnutTaskMeta = isFixWalnut && taskMeta?.pinTier === undefined
       ? { ...taskMeta, pinTier: 'satellite' as const }
       : taskMeta

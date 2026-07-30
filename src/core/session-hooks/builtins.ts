@@ -851,12 +851,17 @@ export const sessionAutoTitleHook: SessionHookDefinition = {
 
     // Only while the task still wears the quick-start placeholder. Exact match
     // against the shared definition (not a loose /^Session: /) so a user title
-    // that happens to start with "Session: " is never clobbered.
-    const cwd = p.session?.cwd ?? p.task.cwd;
-    if (!cwd) return;
+    // that happens to start with "Session: " is never clobbered. Try BOTH cwds:
+    // cwd-rename-detector (below in this file) can move task/session cwd after
+    // launch, and the placeholder was minted from the LAUNCH cwd — matching only
+    // the current one would silently kill titling after any rename.
     const { defaultSessionTaskTitle } = await import('../sessions/quick-start.js');
-    const placeholder = defaultSessionTaskTitle(cwd);
-    if ((p.task.title ?? '') !== placeholder) return;
+    const taskTitle = p.task.title ?? '';
+    const placeholder = [p.session?.cwd, p.task.cwd]
+      .filter((c): c is string => !!c)
+      .map(defaultSessionTaskTitle)
+      .find((ph) => taskTitle === ph);
+    if (!placeholder) return;
 
     if (autoTitleInFlight.has(p.sessionId)) return;
     if ((autoTitleAttempts.get(p.sessionId) ?? 0) >= AUTO_TITLE_MAX_ATTEMPTS) return;
@@ -878,8 +883,12 @@ export const sessionAutoTitleHook: SessionHookDefinition = {
       autoTitleAttempts.set(p.sessionId, (autoTitleAttempts.get(p.sessionId) ?? 0) + 1);
       // Two tries inside one hook dispatch: the send that triggered us may be
       // cold-resuming a dead CLI, in which case the first control write fails
-      // before the FIFO exists. Total budget (10+4+10=24s) stays under the
-      // dispatcher's 30s inline-handler timeout.
+      // before the FIFO exists. Ask budget (10+4+10=24s) stays under the
+      // dispatcher's 30s inline-handler timeout; even if the trailing task
+      // writes push past it, that timeout only stops the dispatcher WAITING —
+      // the handler still completes and the finally below still cleans up.
+      // slice(2000): the titler only needs the opening of the message, and the
+      // envelope rides the FIFO — no point shipping a pasted wall of text.
       let title = await live.generateSessionTitle(message.slice(0, 2000), 10_000);
       if (!title) {
         await new Promise((r) => setTimeout(r, autoTitleRetryDelayMs));

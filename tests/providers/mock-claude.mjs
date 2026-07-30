@@ -830,6 +830,10 @@ if (outputFormat === 'stream-json') {
     (async () => {
       message = await new Promise((resolve) => { pendingUserResolve = resolve; });
       computeMessageParts();
+      // Known limits of the adopted-message path (extend when a test needs one):
+      // mode-change:* (matched before adoption), slow:'s delay (computed but not
+      // awaited here), and error/parse-error (checked at top level) don't apply
+      // when they arrive as the adopted first FIFO message.
       emitRemainingEvents();
     })();
   } else {
