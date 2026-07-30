@@ -23940,6 +23940,47 @@ a.file-link:hover {
 .devices-add-row { display: flex; gap: 8px; }
 .devices-add-row input { flex: 1; }
 .devices-error { color: var(--danger, #d33); font-size: 13px; margin: 0; }
+.devices-hint { font-size: 12px; color: var(--text-secondary); margin: 0; }
+.devices-row-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+/* Self-reported hardware line, e.g. "iPhone17,1 · iOS 26.1 · Walnut 1.0 (26)". */
+.devices-hw { font-size: 12px; color: var(--text); font-variant-numeric: tabular-nums; }
+.devices-meta-dim { opacity: 0.7; font-style: italic; }
+/* Non-phone credentials (this Mac, simulators) collapse out of the way. */
+.devices-others > summary {
+  font-size: 12px; color: var(--text-secondary); cursor: pointer; padding: 2px 0;
+}
+.devices-others > summary:hover { color: var(--text); }
+.devices-others .devices-list { margin-top: 8px; }
+/* Re-pair a phone that lost its token (outline button, mirrors .btn-danger-outline). */
+.devices-showqr {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.devices-showqr:hover:not(:disabled) { color: var(--text); border-color: var(--text-secondary); }
+.devices-showqr:disabled { opacity: 0.5; cursor: default; }
+/* Local vs Cloud credential — the two are stored on different machines. */
+.devices-tag {
+  margin-left: 6px; padding: 1px 6px; border-radius: 999px;
+  font-size: 10px; font-weight: 600; letter-spacing: 0.02em; vertical-align: 1px;
+}
+.devices-tag-lan { background: var(--bg-secondary); color: var(--text-secondary); }
+.devices-tag-cloud { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+/* Pairing-target picker: which address the QR sends the phone to. */
+.devices-target-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.devices-target {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px;
+  background: transparent; cursor: pointer; text-align: left;
+}
+.devices-target:hover { background: var(--bg-secondary); }
+.devices-target-active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.devices-target-label { font-size: 13px; font-weight: 600; }
+.devices-target-origin { font-size: 11px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .devices-qr-block {
   display: flex; flex-direction: column; align-items: center; gap: 10px;
   padding: 18px; border: 1px solid var(--border); border-radius: 12px;

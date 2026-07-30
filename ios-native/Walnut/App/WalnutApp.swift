@@ -58,6 +58,11 @@ struct RootView: View {
                 SetupView()
             }
         }
+        // Report model/OS once per launch. Also the BACKFILL path: devices
+        // paired before /devices/self existed get labelled on their next open.
+        .task {
+            connection.reportDeviceInfo()
+        }
         // `.background` is the ONLY suspend trigger. `willResignActive` also
         // fires for transient interruptions the app never leaves for — the
         // control center swipe, an incoming call banner, the app switcher, any

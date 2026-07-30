@@ -32,6 +32,27 @@ export interface DeviceRecord {
    * upgrade, rejected on every REST route. Absent = normal paired device.
    */
   kind?: 'machine'
+  /**
+   * Self-reported hardware/app identity, refreshed by the client on every
+   * launch (POST /api/v1/devices/self). Absent for devices paired before the
+   * reporting build shipped — they backfill on their next launch, and the
+   * console falls back to the pairing name until then.
+   */
+  info?: DeviceSelfInfo
+}
+
+/** What a paired client tells us about itself. All fields optional/untrusted. */
+export interface DeviceSelfInfo {
+  /** Raw hardware identifier, e.g. 'iPhone17,1' (hw.machine). */
+  model?: string
+  /** e.g. 'iOS 26.1'. */
+  os?: string
+  /** Marketing/user-assigned name when the OS grants it, e.g. 'Evan's iPhone'. */
+  deviceName?: string
+  /** e.g. '1.0 (26)'. */
+  appVersion?: string
+  /** Server-stamped receipt time (ISO) — never client-supplied. */
+  reportedAt?: string
 }
 
 interface AuthFile {
@@ -43,6 +64,10 @@ export interface DeviceInfo {
   name: string
   createdAt: string
   lastUsedAt?: string
+  /** 'machine' = daemon bridge credential, not a user device (never QR-paired). */
+  kind?: 'machine'
+  /** Self-reported model/OS/app — absent until the client reports once. */
+  info?: DeviceSelfInfo
 }
 
 const SETUP_TOKEN_TTL_MS = 15 * 60 * 1000
@@ -230,7 +255,59 @@ export async function revokeDevice(name: string): Promise<boolean> {
 /** List devices — never exposes token hashes. */
 export async function listDevices(): Promise<DeviceInfo[]> {
   const auth = await loadAuth()
-  return auth.devices.map(({ name, createdAt, lastUsedAt }) => ({ name, createdAt, lastUsedAt }))
+  return auth.devices.map(({ name, createdAt, lastUsedAt, kind, info }) => ({ name, createdAt, lastUsedAt, kind, info }))
+}
+
+/** Max accepted length per self-reported string — these are untrusted input. */
+const INFO_FIELD_MAX = 120
+
+/**
+ * Record a paired client's self-reported identity. Called on every client
+ * launch, so it doubles as the backfill path for devices paired before the
+ * reporting build existed. Returns false when the device is unknown.
+ *
+ * Values are clamped and the timestamp is stamped server-side — a client must
+ * not be able to bloat auth.json or forge a report time.
+ */
+export async function setDeviceInfo(name: string, info: DeviceSelfInfo): Promise<boolean> {
+  const auth = await loadAuth()
+  const device = auth.devices.find((d) => d.name === name)
+  if (!device) return false
+  const clean = (v: unknown): string | undefined => {
+    if (typeof v !== 'string') return undefined
+    const trimmed = v.trim().slice(0, INFO_FIELD_MAX)
+    return trimmed.length > 0 ? trimmed : undefined
+  }
+  const next: DeviceSelfInfo = {
+    model: clean(info.model),
+    os: clean(info.os),
+    deviceName: clean(info.deviceName),
+    appVersion: clean(info.appVersion),
+    reportedAt: new Date().toISOString(),
+  }
+  // Don't churn the file when nothing meaningful changed — clients report on
+  // every launch, and each auth.json write also rewrites the .bak sidecar.
+  const prev = device.info
+  if (prev
+    && prev.model === next.model && prev.os === next.os
+    && prev.deviceName === next.deviceName && prev.appVersion === next.appVersion) {
+    return true
+  }
+  device.info = next
+  await saveAuth(auth)
+  log.web.info('device-auth: device info reported', {
+    name, model: next.model, os: next.os, appVersion: next.appVersion,
+  })
+  return true
+}
+
+/**
+ * Full records INCLUDING token hashes. Internal use only — callers must never
+ * send these to a client. Used to recognize a credential we already hold (e.g.
+ * "which device record is this Mac's own cloud token?").
+ */
+export async function listDeviceRecords(): Promise<DeviceRecord[]> {
+  return (await loadAuth()).devices
 }
 
 /** True once at least one device is paired (claim path closed). */

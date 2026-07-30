@@ -9,6 +9,9 @@ final class ConnectionStore {
     private let api = WalnutAPI()
     private var consecutiveFailures = 0
     private var probeTask: Task<Void, Never>?
+    /// In-flight 401 confirmation probe (see handleUnauthorized) — coalesces the
+    /// burst of 401s a single screen's parallel requests would otherwise raise.
+    private var unauthorizedProbe: Task<Bool, Never>?
     private var isActive = true
 
     var isConfigured: Bool = AppConfig.isConfigured
@@ -20,11 +23,51 @@ final class ConnectionStore {
 
     init() {
         LifecycleHub.shared.register(self)
-        // Any 401 anywhere bounces the app back to setup.
+        // A 401 does NOT immediately wipe the credential. It used to: "any 401
+        // anywhere bounces the app back to setup" destroyed the Keychain token
+        // on the FIRST one, and tokens are unrecoverable by design — so one
+        // transient 401 (a request racing a locked Keychain read and going out
+        // with no Authorization header, a proxy stripping the header, a cloud
+        // box mid-restart) permanently unpaired a healthy phone and forced a
+        // QR re-scan. Reported 2026-07-29 with the device still present in the
+        // cloud's auth.json, proving nothing was actually revoked.
+        //
+        // Instead: re-probe /status with the SAME stored token. Only a second,
+        // confirmed 401 means the token is genuinely revoked.
         NotificationCenter.default.addObserver(
             forName: WalnutAPI.unauthorizedNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.disconnect() }
+            Task { @MainActor in await self?.handleUnauthorized() }
+        }
+    }
+
+    /// Confirm a 401 before treating the token as dead. Runs at most one probe
+    /// at a time; a transport error is inconclusive and leaves pairing intact.
+    private func handleUnauthorized() async {
+        guard isConfigured, unauthorizedProbe == nil else { return }
+        let probe = Task { [weak self] () -> Bool in
+            guard let self else { return false }
+            guard let url = AppConfig.serverURL?.absoluteString, let token = AppConfig.token, !token.isEmpty else {
+                // No usable credential to re-check — the token really is gone.
+                return true
+            }
+            do {
+                _ = try await self.api.testStatus(serverURL: url, token: token)
+                return false // token still valid: the 401 was transient
+            } catch APIError.unauthorized {
+                return true // confirmed revoked
+            } catch {
+                return false // network/proxy problem — inconclusive, stay paired
+            }
+        }
+        unauthorizedProbe = probe
+        let revoked = await probe.value
+        unauthorizedProbe = nil
+        if revoked {
+            AppLog.error("auth", "device token confirmed revoked — returning to setup", [:])
+            disconnect()
+        } else {
+            AppLog.info("auth", "ignored transient 401 — token still valid", [:])
         }
     }
 
@@ -38,6 +81,29 @@ final class ConnectionStore {
         self.deviceName = name ?? ""
         isConfigured = true
         reportReachability(true, source: "setup-rest", endpoint: "/api/v1/status", latencyMs: Self.latency(since: started))
+        // Tell the server what this device IS, so the console shows the model
+        // rather than just the name typed during pairing.
+        reportDeviceInfo()
+    }
+
+    /// Push model/OS/app version to the server. Fire-and-forget: this is
+    /// cosmetic metadata and must never block or fail a connection.
+    ///
+    /// Called at pair time AND on every launch — the launch call is what
+    /// backfills devices paired before this existed.
+    func reportDeviceInfo() {
+        guard isConfigured else { return }
+        let model = DeviceIdentity.model
+        let os = DeviceIdentity.os
+        let name = DeviceIdentity.name
+        let appVersion = DeviceIdentity.appVersion
+        Task { [api] in
+            do {
+                try await api.reportDeviceInfo(model: model, os: os, deviceName: name, appVersion: appVersion)
+            } catch {
+                AppLog.info("auth", "device info report skipped", ["error": String(describing: error)])
+            }
+        }
     }
 
     func refreshStatus() async {

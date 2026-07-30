@@ -32,6 +32,23 @@ struct WalnutAPI {
         return try Self.decode(ServerStatus.self, data: data, response: response)
     }
 
+    /// Report this device's model/OS/app version so the console can label it.
+    /// Fire-and-forget at the call site — the server identifies the device from
+    /// the Bearer token, so no identifiers are sent in the body beyond identity.
+    func reportDeviceInfo(model: String, os: String, deviceName: String, appVersion: String) async throws {
+        struct Report: Encodable {
+            let model: String
+            let os: String
+            let deviceName: String
+            let appVersion: String
+        }
+        struct Ack: Decodable { let ok: Bool }
+        let _: Ack = try await send(
+            "POST", "/devices/self",
+            body: Report(model: model, os: os, deviceName: deviceName, appVersion: appVersion)
+        )
+    }
+
     /// Console agents available for chat (additive endpoint).
     func agents() async throws -> [AgentSummary] {
         try await get("/agents")

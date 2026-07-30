@@ -29,6 +29,26 @@ afterAll(async () => {
   await stopServer()
 })
 
+describe('GET /api/devices hides plumbing', () => {
+  it('never lists daemon bridge credentials as pairable devices', async () => {
+    // kind:'machine' is a daemon bridge credential. Listing these beside a
+    // "Show QR" button made a 2-phone setup render as 9 rows (2026-07-29) and
+    // invited pairing a phone against daemon plumbing.
+    const res = await fetch(apiUrl('/api/devices'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'bridge-somehost', kind: 'machine' }),
+    })
+    expect(res.status).toBe(201)
+
+    const list = await fetch(apiUrl('/api/devices'))
+    const body = await list.json() as { devices: Array<{ name: string }> }
+    expect(body.devices.map((d) => d.name)).not.toContain('bridge-somehost')
+
+    await fetch(apiUrl('/api/devices/bridge-somehost'), { method: 'DELETE' })
+  })
+})
+
 describe('POST/GET/DELETE /api/devices', () => {
   it('creates a device with a one-time token + pairing URI carrying the server origin', async () => {
     const res = await fetch(apiUrl('/api/devices'), {
@@ -42,7 +62,14 @@ describe('POST/GET/DELETE /api/devices', () => {
     expect(body.token).toMatch(/^[0-9a-f]{32}$/)
     expect(body.pairingURI).toContain('wn://pair?name=test-iphone')
     expect(body.pairingURI).toContain(`&token=${body.token}`)
-    expect(body.pairingURI).toContain(encodeURIComponent(`http://localhost:${port}`))
+    // The QR must never carry an address only THIS machine can reach.
+    // `localhost` would resolve to the phone itself (2026-07-28 regression).
+    // On a host with no LAN/cloud address, `server` is omitted entirely so the
+    // app prompts — either way, never loopback.
+    const server = new URL(body.pairingURI.replace('wn://', 'https://')).searchParams.get('server')
+    if (server !== null) {
+      expect(new URL(server).hostname).not.toMatch(/^(localhost|127\.0\.0\.1|::1)$/)
+    }
 
     // List shows the device but never the token.
     const list = await fetch(apiUrl('/api/devices'))
@@ -58,6 +85,23 @@ describe('POST/GET/DELETE /api/devices', () => {
       body: JSON.stringify({ name: 'test-iphone' }),
     })
     expect(dup.status).toBe(400)
+
+    // replace:true re-pairs the SAME name with a FRESH token — the "Show QR"
+    // path for a phone that lost its pairing (app reinstall wipes the app's
+    // stored server URL, and tokens are unrecoverable by design).
+    const rePair = await fetch(apiUrl('/api/devices'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'test-iphone', replace: true }),
+    })
+    expect(rePair.status).toBe(201)
+    const rotated = await rePair.json() as { name: string; token: string }
+    expect(rotated.name).toBe('test-iphone')
+    expect(rotated.token).not.toBe(body.token) // old credential is dead
+    // Still exactly one entry — rotate must not duplicate the device.
+    const afterRotate = await fetch(apiUrl('/api/devices'))
+    const rotateList = await afterRotate.json() as { devices: Array<{ name: string }> }
+    expect(rotateList.devices.filter((d) => d.name === 'test-iphone')).toHaveLength(1)
 
     // Revoke → gone from the list.
     const del = await fetch(apiUrl('/api/devices/test-iphone'), { method: 'DELETE' })

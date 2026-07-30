@@ -86,6 +86,20 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
 
   // Localhost/private-LAN requests always pass through (backward compat with web SPA)
   if (isLocalhost(req)) {
+    // Still IDENTIFY a device that bothered to present a token. The bypass only
+    // waives the requirement to authenticate — it must not erase who the caller
+    // is, or routes keyed on device identity (POST /api/v1/devices/self) break
+    // for exactly the LAN phones the bypass was meant to help.
+    const header = req.headers.authorization
+    if (header?.startsWith('Bearer ')) {
+      try {
+        const cred = await validateBearerCredential(header.slice(7))
+        if (cred) {
+          ;(req as Request & { apiKeyName?: string }).apiKeyName = cred.name
+          ;(req as Request & { deviceName?: string }).deviceName = cred.kind === 'device' ? cred.name : undefined
+        }
+      } catch { /* identification is best-effort here; the bypass still applies */ }
+    }
     next()
     return
   }

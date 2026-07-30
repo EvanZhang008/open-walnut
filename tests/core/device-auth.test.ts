@@ -19,6 +19,7 @@ import {
   isClaimed,
   getSetupTokenIfUnclaimed,
   claimInstance,
+  setDeviceInfo,
   _resetDeviceAuthForTesting,
 } from '../../src/core/device-auth.js';
 
@@ -199,5 +200,61 @@ describe('auth.json sidecar backup (a lost device registry is recoverable)', () 
 
     // The sidecar mirrors the POST-revocation state, so the token stays dead.
     expect(await verifyDeviceToken(token)).toBeNull();
+  });
+});
+
+describe('self-reported device info (model/OS backfill)', () => {
+  it('stores a report, stamps reportedAt server-side, and surfaces it in listDevices', async () => {
+    await createDevice('phone');
+    expect(await setDeviceInfo('phone', {
+      model: 'iPhone17,1', os: 'iOS 26.1', deviceName: 'iPhone', appVersion: '1.0 (26)',
+    })).toBe(true);
+
+    const [device] = (await listDevices()).filter((d) => d.name === 'phone');
+    expect(device.info?.model).toBe('iPhone17,1');
+    expect(device.info?.os).toBe('iOS 26.1');
+    expect(device.info?.appVersion).toBe('1.0 (26)');
+    // reportedAt is stamped by the server, never taken from the client.
+    expect(Date.parse(device.info!.reportedAt!)).not.toBeNaN();
+  });
+
+  it('ignores a client-supplied reportedAt', async () => {
+    await createDevice('phone');
+    await setDeviceInfo('phone', {
+      model: 'iPhone17,1', reportedAt: '1999-01-01T00:00:00.000Z',
+    } as Parameters<typeof setDeviceInfo>[1]);
+    const [device] = (await listDevices()).filter((d) => d.name === 'phone');
+    expect(device.info?.reportedAt).not.toBe('1999-01-01T00:00:00.000Z');
+  });
+
+  it('clamps overlong values and drops blank ones', async () => {
+    await createDevice('phone');
+    await setDeviceInfo('phone', { model: 'x'.repeat(500), os: '   ' });
+    const [device] = (await listDevices()).filter((d) => d.name === 'phone');
+    expect(device.info!.model!.length).toBeLessThanOrEqual(120);
+    expect(device.info?.os).toBeUndefined();
+  });
+
+  it('reports for an unknown device are rejected, not silently created', async () => {
+    await createDevice('phone');
+    expect(await setDeviceInfo('not-a-device', { model: 'iPhone17,1' })).toBe(false);
+    expect((await listDevices()).map((d) => d.name)).not.toContain('not-a-device');
+  });
+
+  it('a repeat report with identical values does not rewrite auth.json', async () => {
+    await createDevice('phone');
+    await setDeviceInfo('phone', { model: 'iPhone17,1', os: 'iOS 26.1' });
+    const firstStamp = (await listDevices())[0].info!.reportedAt;
+
+    await setDeviceInfo('phone', { model: 'iPhone17,1', os: 'iOS 26.1' });
+    // Unchanged payload → early return, so the original stamp survives.
+    expect((await listDevices())[0].info!.reportedAt).toBe(firstStamp);
+  });
+
+  it('a changed value (app upgrade) does update the record', async () => {
+    await createDevice('phone');
+    await setDeviceInfo('phone', { model: 'iPhone17,1', appVersion: '1.0 (26)' });
+    await setDeviceInfo('phone', { model: 'iPhone17,1', appVersion: '1.1 (30)' });
+    expect((await listDevices())[0].info?.appVersion).toBe('1.1 (30)');
   });
 });

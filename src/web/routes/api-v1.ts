@@ -33,6 +33,7 @@ import { broadcastEvent } from '../ws/handler.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { usageTracker } from '../../core/usage/index.js'
 import { getLastSyncAt } from '../../integrations/git-sync.js'
+import { setDeviceInfo } from '../../core/device-auth.js'
 import { computeContentHash } from '../../utils/file-ops.js'
 import { parseFrontmatter, readId, generateNoteId, stampId } from '../../core/parse-frontmatter.js'
 import { toolDetail, toolResultPreview, toolResultText } from '../../core/tool-summary.js'
@@ -97,6 +98,45 @@ apiV1Router.use((_req: Request, res: Response, next: NextFunction) => {
 // ── Version (moved to core/version.ts so the bug-report bundler can share it) ──
 
 import { getVersion } from '../../core/version.js'
+
+// ─── POST /api/v1/devices/self ─────────────────────────────────────────────
+
+/**
+ * A paired client reports its own hardware/app identity so the console can show
+ * "iPhone17,1 · iOS 26.1" instead of just the name typed at pairing time.
+ *
+ * The device is identified by its BEARER TOKEN (req.deviceName, set by
+ * authMiddleware) — never by a name in the body, which would let any paired
+ * device overwrite another's record.
+ *
+ * Clients call this on every launch, which makes it the backfill path too:
+ * phones paired before this endpoint existed populate themselves on next open.
+ * Trusted-LAN requests carry no device identity, so there is nothing to attach
+ * the report to — those get 400 rather than a silent no-op.
+ */
+apiV1Router.post('/devices/self', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const deviceName = (req as Request & { deviceName?: string }).deviceName
+    if (!deviceName) {
+      res.status(400).json({ error: 'This endpoint requires a device Bearer token' })
+      return
+    }
+    const body = (req.body ?? {}) as Record<string, unknown>
+    const updated = await setDeviceInfo(deviceName, {
+      model: body.model as string | undefined,
+      os: body.os as string | undefined,
+      deviceName: body.deviceName as string | undefined,
+      appVersion: body.appVersion as string | undefined,
+    })
+    if (!updated) {
+      res.status(404).json({ error: 'Device not found' })
+      return
+    }
+    res.json({ ok: true })
+  } catch (err) {
+    next(err)
+  }
+})
 
 // ─── GET /api/v1/status ────────────────────────────────────────────────────
 
