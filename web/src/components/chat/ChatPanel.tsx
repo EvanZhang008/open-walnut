@@ -1,4 +1,5 @@
 import { useRef, useEffect, useLayoutEffect, useCallback, type ReactNode, type MutableRefObject } from 'react';
+import { useSelectionScrollGuard } from '@/utils/selection-guard';
 
 interface ChatPanelProps {
   children: ReactNode;
@@ -46,17 +47,24 @@ export function ChatPanel({ children, messageCount, prependedRef }: ChatPanelPro
     prevScrollHeight.current = el.scrollHeight;
   }, [messageCount, prependedRef]);
 
-  // Auto-scroll to bottom when new messages arrive and user is near the end
+  // Auto-scroll to bottom when new messages arrive and user is near the end.
+  // Paused while the user is drag-selecting (or holds a selection) inside the
+  // panel — a scroll write mid-drag extends the selection to the bottom.
+  // isNearBottom deliberately stays stale-true during the pause (skipping the
+  // write fires no scroll event, so it never recomputes) — that's what makes
+  // follow-bottom resume on the next children change once the selection
+  // clears. Don't "correct" it to false in the skip branch.
+  const selectionActive = useSelectionScrollGuard(containerRef);
   useEffect(() => {
     if (isNearBottom.current) {
       if (scrollRaf.current !== null) cancelAnimationFrame(scrollRaf.current);
       scrollRaf.current = requestAnimationFrame(() => {
         scrollRaf.current = null;
         const el = containerRef.current;
-        if (el) el.scrollTop = el.scrollHeight;
+        if (el && !selectionActive()) el.scrollTop = el.scrollHeight;
       });
     }
-  }, [children]);
+  }, [children, selectionActive]);
 
   return (
     <div className="chat-panel" ref={containerRef} onScroll={handleScroll}>

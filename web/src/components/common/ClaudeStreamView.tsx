@@ -14,6 +14,7 @@ import { memo, useMemo } from 'react';
 import type { StreamingBlock } from '@/hooks/useSessionStream';
 import { GenericToolCall } from '../sessions/SessionMessage';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
+import { useSelectionFrozen } from '@/utils/selection-guard';
 
 interface ClaudeStreamViewProps {
   blocks: StreamingBlock[];
@@ -132,11 +133,14 @@ export const ClaudeStreamView = memo(function ClaudeStreamView({
   );
 });
 
-/** Render a text block as markdown */
+/** Render a text block as markdown. Frozen while a selection lives inside it —
+ *  streaming deltas otherwise swap innerHTML and destroy the selection. */
 const StreamTextBlock = memo(function StreamTextBlock({ content }: { content: string }) {
-  const html = useMemo(() => renderMarkdownWithRefs(content), [content]);
+  const { value: displayContent, hostRef } = useSelectionFrozen(content);
+  const html = useMemo(() => renderMarkdownWithRefs(displayContent), [displayContent]);
   return (
     <div
+      ref={hostRef}
       className="claude-stream-text markdown-body"
       dangerouslySetInnerHTML={{ __html: html }}
     />

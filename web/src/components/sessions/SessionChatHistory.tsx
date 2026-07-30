@@ -16,6 +16,7 @@ import type { SessionEngine, SessionHistoryMessage } from '@/types/session';
 import type { ImageAttachment } from '@/api/chat';
 import { respondToPermission } from '@/api/sessions';
 import { renderMarkdownWithRefs, findImagePaths, resolveImagePath } from '@/utils/markdown';
+import { useSelectionScrollGuard, useSelectionFrozen, useSelectionFrozenWith } from '@/utils/selection-guard';
 import { log } from '@/utils/log';
 
 /**
@@ -144,12 +145,18 @@ interface SessionChatHistoryProps {
 
 /** Memoized text block that caches renderMarkdownWithRefs output */
 function StreamingTextBlock({ content, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: { content: string; sessionCwd?: string; sessionHost?: string; onTaskClick?: (taskId: string) => void; onSessionClick?: (sessionId: string) => void; onFileOpen?: (path: string, line?: number) => void }) {
-  const html = useMemo(() => renderMarkdownWithRefs(content, sessionCwd), [content, sessionCwd]);
-  const imagePaths = useMemo(() => findImagePaths(content), [content]);
+  // Freeze the rendered content while the user is selecting inside this block —
+  // each delta otherwise swaps innerHTML and destroys the selection's anchor
+  // nodes (the "selection disappears while generating" bug). Catches up the
+  // moment the selection clears.
+  const { value: displayContent, hostRef } = useSelectionFrozen(content);
+  const html = useMemo(() => renderMarkdownWithRefs(displayContent, sessionCwd), [displayContent, sessionCwd]);
+  const imagePaths = useMemo(() => findImagePaths(displayContent), [displayContent]);
   const handleClick = useEntityClickHandler(onTaskClick, onSessionClick, onFileOpen, sessionHost);
   return (
     <>
       <div
+        ref={hostRef}
         className="markdown-body"
         onClick={handleClick}
         dangerouslySetInnerHTML={{ __html: html }}
@@ -742,10 +749,17 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // watermark, which only widens the content window (duplicate-safe, never
   // vanish). If you ever write the watermark on an independent trigger, this
   // memo will keep serving a stale filter until some dep happens to change.
-  const { hidden: hiddenBlocks, unmatched: unmatchedBlocks } = useMemo(
+  const { hidden: liveHiddenBlocks, unmatched: unmatchedBlocks } = useMemo(
     () => computeRenderFilter({ blocks, messages, watermark: turnWatermark.current, isStreaming, historyEvidence }),
     [blocks, messages, isStreaming, historyEvidence],
   );
+  // Freeze the hidden set while a selection lives in the container: absorption
+  // hides a streaming block and mounts its persisted twin — brand-new DOM — so
+  // applying it mid-selection destroys the nodes the selection is anchored to
+  // (the "select while generating, copy after it finishes" flow). Deferring
+  // the swap until the selection clears is safe by design: the failure mode of
+  // a stale filter is a brief DOUBLE-render next to the twin, never a vanish.
+  const hiddenBlocks = useSelectionFrozenWith(containerRef, liveHiddenBlocks);
 
   // Divergence tripwire: a FINISHED block with no history twin is kept visible
   // (safe), but persistent misses mean archive & stream disagree — surface it.
@@ -913,6 +927,17 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // ═══════════════════════════════════════════════════════════════════════════
 
   const isAtBottom = useRef(true);
+  // Selection guard: every auto-scroll write shifts content under the cursor,
+  // which mid-drag makes the browser extend the selection to the bottom (the
+  // "select lines 2-10 but get 2-to-bottom" bug). All scroll paths consult
+  // this and skip while the user is drag-selecting or has a live selection
+  // inside the container. While the gap stays small, isAtBottom stays true so
+  // following resumes seamlessly; once suppressed content grows past
+  // NEAR_BOTTOM_PX, suppressedScrollCheck converts the pause into the standard
+  // "user scrolled up" state (isAtBottom=false + arrow) — holding a selection
+  // to read IS that intent, and it avoids a silent teleport-to-bottom the
+  // instant the selection clears.
+  const selectionActive = useSelectionScrollGuard(containerRef);
   const scrollRafId = useRef<number | null>(null);
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const firstScrollDone = useRef(false);
@@ -925,6 +950,21 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // geometry), which falsely sets isAtBottom=false. By ignoring scroll events during the
   // debounce window, we prevent resize-induced geometry shifts from corrupting isAtBottom.
   const ignoreScrollUntil = useRef(0);
+
+  // A scroll write was suppressed for an active selection. While the gap is
+  // still small, keep isAtBottom=true (seamless resume). Once the suppressed
+  // content has pushed the view further than NEAR_BOTTOM_PX from the bottom,
+  // demote to the standard "user scrolled up" state — no silent teleport when
+  // the selection clears, and the ↓ arrow appears as the affordance to return.
+  const noteSuppressedScroll = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (gap > NEAR_BOTTOM_PX) {
+      isAtBottom.current = false;
+      setShowScrollArrow(el.scrollHeight > el.clientHeight);
+    }
+  }, []);
 
   // ── Scroll debug logging (persisted via browser-logger → walnut logs -s browser) ──
   // Gated: every call is a console.log that the browser-logger forwards to the
@@ -1088,11 +1128,16 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         if (!isAtBottom.current && !force) scrollLog('debounced', `SKIP(${reason})`, el);
         return;
       }
+      if (selectionActive()) {
+        scrollLog('debounced', `SKIP-SELECTION(${reason})`, el);
+        noteSuppressedScroll();
+        return;
+      }
       el.scrollTop = el.scrollHeight;
       isAtBottom.current = true;
       scrollLog('debounced', `SCROLL(${reason}${force ? ',forced' : ''})`, el);
     }, 250);
-  }, [scrollLog]);
+  }, [scrollLog, selectionActive, noteSuppressedScroll]);
 
   // Path A-0: User just sent a message — force follow-bottom so the sent message
   // and subsequent streaming response are visible. Runs before A-1 so isAtBottom
@@ -1115,8 +1160,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if (!isAtBottom.current || !(optimisticMessages?.length)) return;
     const el = containerRef.current;
     if (!el) return;
+    if (selectionActive()) { noteSuppressedScroll(); return; }
     el.scrollTop = el.scrollHeight;
-  }, [optimisticMessages, phase]);
+  }, [optimisticMessages, phase, selectionActive, noteSuppressedScroll]);
 
   // Path A-1: Content changes — immediate scroll, before paint (useLayoutEffect)
   // Fires on every messages/loading change. This is NOT the source of jumps — jumps come
@@ -1131,11 +1177,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if (!containerRef.current || messages.length === 0) return;
     const forceScroll = phase2Pending && !initialLoadDone.current; // initial load only
     if (!forceScroll && !isAtBottom.current) return;
+    // Selection wins over follow-bottom even on forced initial-load scrolls —
+    // the user selecting means they're reading, not waiting for the bottom.
+    if (selectionActive()) { noteSuppressedScroll(); return; }
     containerRef.current.scrollTop = containerRef.current.scrollHeight;
     isAtBottom.current = true;
     firstScrollDone.current = true;
     scrollLog('content', `SCROLL(msgs=${messages.length}${forceScroll ? ',forced' : ''})`, containerRef.current);
-  }, [loading, messages, phase2Pending, scrollLog]);
+  }, [loading, messages, phase2Pending, scrollLog, selectionActive, noteSuppressedScroll]);
 
   // Path A-2: Streaming — immediate scroll for new blocks (live output needs instant follow)
   useEffect(() => {
@@ -1146,10 +1195,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     scrollRafId.current = requestAnimationFrame(() => {
       scrollRafId.current = null;
       if (!el || !isAtBottom.current) return;
+      if (selectionActive()) { noteSuppressedScroll(); return; }
       el.scrollTop = el.scrollHeight;
       isAtBottom.current = true;
     });
-  }, [blocks.length]);
+  }, [blocks.length, selectionActive, noteSuppressedScroll]);
 
   // Path B-1: Content replacement (Phase 2, batch refresh) — debounced
   // The isAtBottom check is sufficient — Path A-1 already handles the immediate scroll.
@@ -1172,6 +1222,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if (!el) return;
     const onLoad = (e: Event) => {
       if (!isAtBottom.current) return;
+      if (selectionActive()) { noteSuppressedScroll(); return; }
       const target = e.target as HTMLElement;
       if (target.tagName !== 'IMG') return;
       const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
@@ -1182,7 +1233,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     };
     el.addEventListener('load', onLoad, true); // capture phase — img load doesn't bubble
     return () => el.removeEventListener('load', onLoad, true);
-  }, [sid8]);
+  }, [sid8, selectionActive, noteSuppressedScroll]);
 
   // Path B-2: Container resize (sibling components loading) — debounced
   useEffect(() => {

@@ -240,7 +240,7 @@ test.describe('Mid-stream user message persistence', () => {
     // ── Step 2: User sends a message mid-stream ──
     const chatInput = page.getByPlaceholder('Send a message to this session...');
     await chatInput.fill(midStreamText);
-    const sendBtn = page.locator('.session-chat-input-wrapper .chat-send-btn');
+    const sendBtn = page.locator('.session-panel-input .chat-send-btn-icon');
     await sendBtn.click();
 
     // Wait for the optimistic message to appear
@@ -371,7 +371,7 @@ test.describe('Mid-stream user message persistence', () => {
     // Send first message mid-stream
     const chatInput = page.getByPlaceholder('Send a message to this session...');
     await chatInput.fill('First mid-stream message');
-    await page.locator('.session-chat-input-wrapper .chat-send-btn').click();
+    await page.locator('.session-panel-input .chat-send-btn-icon').click();
     await page.waitForTimeout(200);
 
     // More streaming
@@ -382,7 +382,7 @@ test.describe('Mid-stream user message persistence', () => {
 
     // Send second message mid-stream
     await chatInput.fill('Second mid-stream message');
-    await page.locator('.session-chat-input-wrapper .chat-send-btn').click();
+    await page.locator('.session-panel-input .chat-send-btn-icon').click();
     await page.waitForTimeout(200);
 
     // Deliver both
@@ -506,7 +506,7 @@ test.describe('Mid-stream user message persistence', () => {
     // ── Step 2: User sends mid-stream message ──
     const chatInput = page.getByPlaceholder('Send a message to this session...');
     await chatInput.fill('check test files too');
-    await page.locator('.session-chat-input-wrapper .chat-send-btn').click();
+    await page.locator('.session-panel-input .chat-send-btn-icon').click();
     await page.waitForTimeout(200);
 
     await injectEvent(page, 'session:messages-delivered', {

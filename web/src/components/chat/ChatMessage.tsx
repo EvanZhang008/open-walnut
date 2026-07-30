@@ -10,6 +10,7 @@ import { useNotesAwareFileOpen } from '@/hooks/useNotesAwareFileOpen';
 import { Lightbox } from '@/components/common/Lightbox';
 import { FileViewer } from '@/components/common/FileViewer';
 import { entityRefsToHtml, renderToolResultWithRefs, extractMarkdownFields, renderMarkdownWithRefs } from '@/utils/markdown';
+import { useSelectionFrozen } from '@/utils/selection-guard';
 import { parseAskQuestionInput } from './QuestionPopover';
 import { SubagentBlock } from './SubagentBlock';
 import { getErrorSuggestion } from '@/utils/error-suggestions';
@@ -1011,11 +1012,15 @@ function SystemMessageGroup({ blocks, sourceLabel, taskLookup, onTaskClick, onSe
   );
 }
 
-/** Memoized text block that caches renderMarkdownWithRefs output (incl. clickable file paths) */
+/** Memoized text block that caches renderMarkdownWithRefs output (incl. clickable file paths).
+ *  Content freezes while a selection lives inside the block (streaming deltas
+ *  otherwise swap innerHTML and destroy the selection); catches up on clear. */
 function MemoizedTextBlock({ content, onClick }: { content: string; onClick: (e: React.MouseEvent<HTMLDivElement>) => void }) {
-  const html = useMemo(() => renderMarkdownWithRefs(content), [content]);
+  const { value: displayContent, hostRef } = useSelectionFrozen(content);
+  const html = useMemo(() => renderMarkdownWithRefs(displayContent), [displayContent]);
   return (
     <div
+      ref={hostRef}
       className="markdown-body"
       onClick={onClick}
       dangerouslySetInnerHTML={{ __html: html }}

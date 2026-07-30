@@ -9,6 +9,7 @@ import { initBrowserLogger } from './utils/browser-logger';
 import { initLongTaskMonitor } from './utils/longtask-monitor';
 import { initMainThreadTracer, startPhase, endPhase, tracePhase } from './utils/main-thread-tracer';
 import { initUiPrefsSync } from './utils/ui-prefs-sync';
+import { selectionIntersects } from './utils/selection-guard';
 import { initSessionStatusStore } from './stores/init-session-status-store';
 import './styles/globals.css';
 
@@ -26,10 +27,19 @@ initMainThreadTracer();
 // Cache server version/mode for crash reports (survives to server-down crashes).
 initAppInfo();
 
-// Clear text selection instantly on mousedown to avoid macOS inactive-selection pink flash
-document.addEventListener('mousedown', () => {
+// Clear text selection instantly on mousedown to avoid macOS inactive-selection pink flash.
+// Scoped (was unconditional, which broke copy entirely): never on right/middle click —
+// the context menu needs the selection alive for "Copy" — and never when the click
+// lands inside the selection itself (drag-of-selected-text, copy affordances).
+// Inside-selection clicks are cleared by the BROWSER on mouseup (native collapse
+// when a click lands in a selection without dragging) — this handler only owns
+// the outside-click instant-clear; don't "complete" it or right-click Copy breaks.
+document.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;
   const sel = window.getSelection();
-  if (sel && !sel.isCollapsed) sel.removeAllRanges();
+  if (!sel || sel.isCollapsed) return;
+  if (e.target instanceof Node && selectionIntersects(e.target)) return;
+  sel.removeAllRanges();
 }, true);
 
 // Seed layout prefs (collapse states, splitter positions) from the server
