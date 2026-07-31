@@ -326,6 +326,15 @@ describe('mapToRemote', () => {
   it('omits dueDateTime when task has no due_date', () => {
     expect(mapToRemote(makeTask()).dueDateTime).toBeUndefined();
   });
+
+  it('includes startDateTime when task has start_date (day-truncated like due)', () => {
+    const remote = mapToRemote(makeTask({ start_date: '2024-06-10T09:30:00.000Z' }));
+    expect(remote.startDateTime).toEqual({ dateTime: '2024-06-10T00:00:00.0000000', timeZone: 'UTC' });
+  });
+
+  it('omits startDateTime when task has no start_date', () => {
+    expect(mapToRemote(makeTask()).startDateTime).toBeUndefined();
+  });
 });
 
 // ────────────────────────────────────────────────────────────────────
@@ -401,8 +410,19 @@ describe('mapToLocal', () => {
     expect(mapToLocal(msTask, 'personal').due_date).toBe('2024-06-15');
   });
 
-  it('handles missing dueDateTime', () => {
-    expect(mapToLocal(makeMsTask(), 'personal').due_date).toBeUndefined();
+  // Missing remote date must OMIT the key (not emit a null clear): a pull that
+  // races a not-yet-pushed local edit would otherwise wipe the local date.
+  it('missing dueDateTime leaves due_date untouched (no clear on pull)', () => {
+    expect('due_date' in mapToLocal(makeMsTask(), 'personal')).toBe(false);
+  });
+
+  it('extracts start date from startDateTime', () => {
+    const msTask = makeMsTask({ startDateTime: { dateTime: '2024-06-10T00:00:00.0000000', timeZone: 'UTC' } });
+    expect(mapToLocal(msTask, 'personal').start_date).toBe('2024-06-10');
+  });
+
+  it('missing startDateTime leaves start_date untouched (no clear on pull)', () => {
+    expect('start_date' in mapToLocal(makeMsTask(), 'personal')).toBe(false);
   });
 });
 

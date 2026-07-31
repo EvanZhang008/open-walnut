@@ -87,6 +87,7 @@ export interface CreateTaskInput {
   category?: string;
   project?: string;
   due_date?: string;
+  start_date?: string;
   sprint?: string;
   /** Explicit platform/source for the new task (e.g. 'local', 'ms-todo'). When set,
    *  overrides the backend's category-based source inference — used by quick-add so a
@@ -103,6 +104,7 @@ export interface UpdateTaskInput {
   category?: string;
   project?: string;
   due_date?: string | null;
+  start_date?: string | null;
   /** Idempotent star set (unlike POST /:id/star which toggles). */
   starred?: boolean;
   needs_attention?: boolean;

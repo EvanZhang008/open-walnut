@@ -1137,7 +1137,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     } catch { /* non-critical */ }
   }, [openSessionOrToast]);
 
-  const handleCreate = useCallback(async (input: { title: string; priority: string; category?: string; project?: string; due_date?: string; starred?: boolean; pinnedTier?: 'focus' | 'satellite' | 'wait'; capture?: boolean }) => {
+  const handleCreate = useCallback(async (input: { title: string; priority: string; category?: string; project?: string; due_date?: string; start_date?: string; starred?: boolean; pinnedTier?: 'focus' | 'satellite' | 'wait'; capture?: boolean }) => {
     const tier = input.pinnedTier;
     // Quick-capture ("Add to Focus/Satellite/Wait", Focus Dock) routes to the user's
     // configured Default Platform + Category instead of the active tab's category — so a
@@ -1154,6 +1154,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         category: input.capture ? captureCategory : input.category,
         project: input.capture ? taskDefaults.project : input.project,
         due_date: input.due_date,
+        start_date: input.start_date,
         ...(input.capture ? { source: captureSource } : {}),
       },
       tier
@@ -1302,6 +1303,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     update(id, { due_date: date ?? '' });
   }, [update]);
 
+  const handleSetStartDate = useCallback((id: string, date: string | null) => {
+    update(id, { start_date: date ?? '' });
+  }, [update]);
+
   const handleUpdate = useCallback((id: string, updates: { title?: string }) => {
     update(id, updates);
   }, [update]);
@@ -1327,7 +1332,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     }
     const summary = [
       input.pinnedTier ? `${input.pinnedTier[0].toUpperCase()}${input.pinnedTier.slice(1)}` : undefined,
-      input.due_date ? formatQuickTaskDate(input.due_date) : undefined,
+      input.due_date ? `Due ${formatQuickTaskDate(input.due_date)}` : undefined,
+      input.start_date ? `Starts ${formatQuickTaskDate(input.start_date)}` : undefined,
       input.priority !== 'none' ? `${input.priority[0].toUpperCase()}${input.priority.slice(1)}` : undefined,
       input.category,
       input.project,
@@ -1546,6 +1552,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onBatchDelete={handleBatchDelete}
           onSetPriority={handleSetPriority}
           onSetDate={handleSetDate}
+          onSetStartDate={handleSetStartDate}
           onFocusTask={handleFocusTask}
           onClearFocus={handleClearFocus}
           focusedTaskId={focusedTask?.id}

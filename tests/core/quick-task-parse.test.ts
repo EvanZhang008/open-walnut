@@ -114,6 +114,31 @@ describe('parseQuickTask', () => {
     );
   });
 
+  it('passes start_date through the same validation as due_date', async () => {
+    sendMessageMock.mockResolvedValueOnce(textResult(
+      '{"title":"Call mom","start_date":"2026-07-17"}',
+    ));
+    await expect(parseQuickTask('call mom friday')).resolves.toEqual(
+      parseOnly({ title: 'Call mom', start_date: '2026-07-17' }),
+    );
+
+    // Both fields can coexist (start defers, due deadlines).
+    sendMessageMock.mockResolvedValueOnce(textResult(
+      '{"title":"File report","start_date":"2026-07-16T09:00:00","due_date":"2026-07-18"}',
+    ));
+    await expect(parseQuickTask('file report, start wed morning, due friday')).resolves.toEqual(
+      parseOnly({ title: 'File report', start_date: '2026-07-16T09:00:00', due_date: '2026-07-18' }),
+    );
+
+    // Invalid start_date is dropped, not passed through.
+    sendMessageMock.mockResolvedValueOnce(textResult(
+      '{"title":"Call mom","start_date":"next friday"}',
+    ));
+    await expect(parseQuickTask('call mom friday')).resolves.toEqual(
+      parseOnly({ title: 'Call mom' }),
+    );
+  });
+
   it('returns empty input without calling the model', async () => {
     await expect(parseQuickTask('')).resolves.toEqual({ parse: { title: '' }, parseMs: 0 });
     await expect(parseQuickTask('   ')).resolves.toEqual({ parse: { title: '   ' }, parseMs: 0 });

@@ -445,6 +445,7 @@ export const tools: ToolDefinition[] = [
         if (t.starred) entry.starred = true;
         if (t.needs_attention) entry.needs_attention = true;
         if (t.due_date) entry.due_date = t.due_date;
+        if (t.start_date) entry.start_date = t.start_date;
         if (t.sprint) entry.sprint = t.sprint;
         if (t.tags?.length) entry.tags = t.tags;
         if (t.depends_on?.length) entry.depends_on = t.depends_on;
@@ -561,7 +562,8 @@ export const tools: ToolDefinition[] = [
         priority: { type: 'string', enum: ['immediate', 'important', 'backlog', 'none'], description: 'Priority: immediate (urgent), important (can wait), backlog (future), none' },
         category: { type: 'string', description: 'Category — top-level group (e.g. Work, Life, Later). Required for type=project.' },
         project: { type: 'string', description: 'Project — list within category (e.g. HomeLab, Costco). Required for type=project. Defaults to category if omitted for type=task.' },
-        due_date: { type: 'string', description: 'Due date (YYYY-MM-DD)' },
+        due_date: { type: 'string', description: 'Due date — the deadline (YYYY-MM-DD, or ISO datetime for a specific time)' },
+        start_date: { type: 'string', description: 'Start date — when to begin working (YYYY-MM-DD, or ISO datetime). Tasks with a future start_date are hidden from the "Now" view until that time arrives.' },
         parent_task_id: { type: 'string', description: 'Create as child of this task. Child inherits category, project, and source from parent.' },
         description: { type: 'string', description: 'What & why context for the task (pre-action). Synced to configured plugins on creation.' },
         tags: { type: 'array', items: { type: 'string' }, description: 'Initial tags. Convention: "key:value" for structured data (e.g. "team:backend", "blocked").' },
@@ -647,6 +649,7 @@ export const tools: ToolDefinition[] = [
           category,
           project,
           due_date: params.due_date as string | undefined,
+          start_date: params.start_date as string | undefined,
           parent_task_id: parentTaskId,
           description: params.description as string | undefined,
           tags: params.tags as string[] | undefined,
@@ -671,7 +674,7 @@ export const tools: ToolDefinition[] = [
     name: 'task_update',
     description: `Update a task, project, or category. Supports multiple fields in a single call.
 
-For tasks (type='task'): update structural fields (priority, phase, category, project, starred, needs_attention, due_date, title, pinned, focus_tier) and/or text fields (description, summary, note, append_note) in one call. Use phase='AGENT_COMPLETE' to mark a task done (only humans can set COMPLETE). Use pinned + focus_tier to pin/unpin tasks for the Focus Bar.
+For tasks (type='task'): update structural fields (priority, phase, category, project, starred, needs_attention, due_date, start_date, title, pinned, focus_tier) and/or text fields (description, summary, note, append_note) in one call. Use phase='AGENT_COMPLETE' to mark a task done (only humans can set COMPLETE). Use pinned + focus_tier to pin/unpin tasks for the Focus Bar.
 
 For projects (type='project'): set default_host and default_cwd for remote session defaults.
 
@@ -687,7 +690,8 @@ For categories (type='category'): rename a category across all tasks (requires o
         phase: { type: 'string', enum: [...VALID_PHASES].filter(p => p !== 'COMPLETE'), description: 'Task lifecycle phase. Status is auto-derived. Only humans can set COMPLETE.' },
         category: { type: 'string', description: 'New category (also used for project identification when type=project).' },
         project: { type: 'string', description: 'New project (also used for project identification when type=project).' },
-        due_date: { type: 'string', description: 'New due date (YYYY-MM-DD).' },
+        due_date: { type: 'string', description: 'New due date — the deadline (YYYY-MM-DD, or ISO datetime). Empty string clears.' },
+        start_date: { type: 'string', description: 'New start date — when to begin working (YYYY-MM-DD, or ISO datetime). Tasks with a future start_date are hidden from the "Now" view until then. Empty string clears.' },
         starred: { type: 'boolean', description: 'Star or unstar the task.' },
         needs_attention: { type: 'boolean', description: 'Flag task as needing human attention (red dot in UI). Set true when human review/decision is required.' },
         parent_task_id: { type: 'string', description: 'Set or change the parent task. Pass empty string to remove parent.' },
@@ -766,6 +770,7 @@ For categories (type='category'): rename a category across all tasks (requires o
         const hasStructural = params.title !== undefined || params.priority !== undefined ||
           params.phase !== undefined || params.category !== undefined ||
           params.project !== undefined || params.due_date !== undefined ||
+          params.start_date !== undefined ||
           params.starred !== undefined || params.needs_attention !== undefined ||
           params.parent_task_id !== undefined || params.sprint !== undefined ||
           params.add_tags !== undefined || params.remove_tags !== undefined ||
@@ -782,6 +787,7 @@ For categories (type='category'): rename a category across all tasks (requires o
               category: params.category as string | undefined,
               phase: params.phase as TaskPhase | undefined,
               due_date: params.due_date as string | undefined,
+              start_date: params.start_date as string | undefined,
               project: params.project as string | undefined,
               starred: (params.starred === true || params.starred === 'true') ? true : (params.starred === false || params.starred === 'false') ? false : undefined,
               needs_attention: (params.needs_attention === true || params.needs_attention === 'true') ? true : (params.needs_attention === false || params.needs_attention === 'false') ? false : undefined,

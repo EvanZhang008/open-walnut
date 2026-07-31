@@ -35,7 +35,7 @@ const OPTIMISTIC_STARTING_STATUS = { process_status: 'running' as const };
 function tasksShallowEqual(a: Task, b: Task): boolean {
   const scalarKeys: (keyof Task)[] = [
     'title', 'status', 'phase', 'priority', 'category', 'project',
-    'parent_task_id', 'group_id', 'starred', 'due_date', 'completed_at', 'updated_at',
+    'parent_task_id', 'group_id', 'starred', 'due_date', 'start_date', 'completed_at', 'updated_at',
     'sync_error', 'external_url', 'needs_attention', 'source', 'sprint',
     'cwd', 'session_id', 'plan_session_id', 'exec_session_id',
     // Session-resume touch updates ONLY this field now (the pin-bump side
@@ -188,7 +188,7 @@ function applyPhaseChangeMany(tasks: Task[], ids: Set<string>, phase: string): T
 /** Only spread direct-value task fields for optimistic update (not instruction fields like add_tags). */
 const OPTIMISTIC_FIELDS = new Set([
   'title', 'status', 'phase', 'priority', 'category', 'project',
-  'due_date', 'needs_attention', 'parent_task_id', 'starred',
+  'due_date', 'start_date', 'needs_attention', 'parent_task_id', 'starred',
 ]);
 
 function applyFieldUpdate(tasks: Task[], id: string, updates: Record<string, unknown>): Task[] {

@@ -76,6 +76,7 @@ interface MSTodoTask {
   importance: 'high' | 'normal' | 'low';
   body?: { content: string; contentType: string };
   dueDateTime?: { dateTime: string; timeZone: string };
+  startDateTime?: { dateTime: string; timeZone: string };
   completedDateTime?: { dateTime: string; timeZone: string };
   createdDateTime: string;
   lastModifiedDateTime: string;
@@ -648,6 +649,17 @@ export function mapToRemote(task: Task): Partial<MSTodoTask> {
     };
   }
 
+  if (task.start_date) {
+    // Same day-precision contract as dueDateTime. The pull side's precision
+    // echo guard (prepareRawUpdate) keeps this truncation from clobbering a
+    // local time-level start_date.
+    const datePart = task.start_date.split('T')[0];
+    msTask.startDateTime = {
+      dateTime: datePart + 'T00:00:00.0000000',
+      timeZone: 'UTC',
+    };
+  }
+
   if (task.phase === 'COMPLETE' && task.completed_at) {
     msTask.completedDateTime = {
       dateTime: task.completed_at,
@@ -699,8 +711,19 @@ export function mapToLocal(
     if (parsed.depends_on) local.depends_on = parsed.depends_on;
   }
 
+  // Deliberately OMIT the date keys when the remote has none, rather than
+  // emitting an explicit clear: a pull that races a not-yet-pushed local edit
+  // (push failed / remote had an unrelated newer edit) would otherwise wipe the
+  // local date. Cost: a clear made in the MS To-Do app itself doesn't propagate
+  // here — acceptable, since local clears DO propagate (pushTask PATCHes
+  // dueDateTime/startDateTime: null explicitly), which kills the old
+  // "cleared date resurrects on next pull" loop at the source.
   if (msTask.dueDateTime?.dateTime) {
     local.due_date = msTask.dueDateTime.dateTime.split('T')[0];
+  }
+
+  if (msTask.startDateTime?.dateTime) {
+    local.start_date = msTask.startDateTime.dateTime.split('T')[0];
   }
 
   if (msTask.completedDateTime?.dateTime) {
@@ -801,11 +824,18 @@ export async function pushTask(task: Task): Promise<{ msTaskId: string; serverTi
       // the same ext.id. NEVER fallback to POST create — doing so leaves the original
       // remote task as an orphan and produces ghost duplicates on the next full pull.
       try {
+        // Clears must be explicit on PATCH: mapToRemote omits absent dates, and
+        // Graph treats an omitted field as "leave unchanged" — so a locally
+        // cleared start/due would survive remotely and resurrect on the next
+        // pull. `null` is Graph's documented "delete this field" marker.
+        const patchBody: Record<string, unknown> = { ...msBody };
+        if (!task.due_date) patchBody.dueDateTime = null;
+        if (!task.start_date) patchBody.startDateTime = null;
         const patched = await graphRequest<MSTodoTask>(
           token,
           'PATCH',
           `/me/todo/lists/${listId}/tasks/${existingMsTodoId}`,
-          msBody,
+          patchBody,
         );
         msTaskId = existingMsTodoId;
         serverTimestamp = patched.lastModifiedDateTime;
@@ -1133,6 +1163,7 @@ export async function reconcilePulledTasks(
           created_at: msTask.createdDateTime,
           updated_at: msTask.lastModifiedDateTime,
           due_date: partial.due_date,
+          start_date: partial.start_date,
           ...(partial.parent_task_id ? { parent_task_id: partial.parent_task_id } : {}),
           description: partial.description ?? '',
           summary: partial.summary ?? '',

@@ -262,6 +262,12 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
     setTask(updated);
   };
 
+  const handleStartDateChange = async (date: string | null) => {
+    if (!id) return;
+    const updated = await updateTask(id, { start_date: date ?? '' });
+    setTask(updated);
+  };
+
   const handleDelete = async () => {
     if (!id) return;
     const confirmed = await confirm({ title: `Delete task “${task?.title}”?`, message: 'This cannot be undone.', confirmLabel: 'Delete', danger: true });
@@ -338,7 +344,8 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
           <StatusBadge status={task.status} phase={task.phase} />
           <PriorityBadge priority={task.priority} />
           <span className="text-sm text-muted">{task.category}{task.project && task.project !== task.category ? ` / ${task.project}` : ''}</span>
-          <DatePicker date={task.due_date} onChange={handleDateChange} />
+          <DatePicker date={task.start_date} onChange={handleStartDateChange} label="Start" />
+          <DatePicker date={task.due_date} onChange={handleDateChange} label="Due" />
           <SprintPicker sprint={task.sprint} onSprintChange={handleSprintChange} />
         </div>
         {/* Dependencies */}

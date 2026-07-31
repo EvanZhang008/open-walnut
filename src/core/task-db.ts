@@ -45,6 +45,7 @@ const EXPLICIT_TASK_COLUMNS = [
   'source',
   'parent_task_id',
   'due_date',
+  'start_date',
   'created_at',
   'updated_at',
   'completed_at',
@@ -332,6 +333,7 @@ const SCHEMA_SQL = `
     source TEXT,
     parent_task_id TEXT,
     due_date TEXT,
+    start_date TEXT,
     created_at TEXT,
     updated_at TEXT,
     completed_at TEXT,
@@ -393,7 +395,7 @@ const SCHEMA_SQL = `
  * Bump SCHEMA_VERSION and add an `if (from < N)` branch for each new one-time
  * migration. Keep the branch append-only — never edit or reorder old ones.
  */
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 function runOneTimeMigrations(handle: DatabaseType): void {
   const current = handle.pragma('user_version', { simple: true }) as number;
@@ -433,6 +435,16 @@ function runOneTimeMigrations(handle: DatabaseType): void {
     const cols = handle.prepare(`PRAGMA table_info(task_groups)`).all() as { name: string }[];
     if (!cols.some((c) => c.name === 'hidden')) {
       handle.exec(`ALTER TABLE task_groups ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;`);
+    }
+  }
+
+  if (current < 4) {
+    // v3 → v4: add the `start_date` column ("start working on" time — drives the
+    // Now view's deferral). CREATE TABLE IF NOT EXISTS won't alter an existing
+    // table, so add it here; sniff the column list to stay re-run safe.
+    const cols = handle.prepare(`PRAGMA table_info(tasks)`).all() as { name: string }[];
+    if (!cols.some((c) => c.name === 'start_date')) {
+      handle.exec(`ALTER TABLE tasks ADD COLUMN start_date TEXT;`);
     }
   }
 

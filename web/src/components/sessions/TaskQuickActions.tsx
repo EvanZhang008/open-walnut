@@ -14,7 +14,7 @@ import { useEvent } from '@/hooks/useWebSocket';
 import * as ICONS from '@/components/common/Icons';
 import type { FocusTier } from '@/api/focus';
 import { getIntegrationMeta, useIntegrations } from '@/hooks/useIntegrations';
-import { DatePicker, formatDateDisplay } from '@/components/common/DatePicker';
+import { DatePicker, formatDateDisplay, formatStartDateDisplay } from '@/components/common/DatePicker';
 import { TIER_OPTIONS, TIER_COLORS, PRIORITY_OPTIONS } from './task-meta-constants';
 
 /* ── Phase constants ─────────────────────────────────────────────── */
@@ -196,6 +196,16 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
     closeKebab();
   }, [task, closeKebab]);
 
+  const handleSetStartDate = useCallback((date: string | null) => {
+    if (!task) return;
+    const id = task.id;
+    setTask(prev => prev ? { ...prev, start_date: date ?? undefined } : prev);
+    updateTask(id, { start_date: date ?? '' }).catch(() => {
+      fetchTask(id).then(setTask).catch(() => {});
+    });
+    closeKebab();
+  }, [task, closeKebab]);
+
   const handleKebabToggle = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!kebabOpen && kebabBtnRef.current) {
@@ -348,11 +358,24 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
             </div>
           </div>
 
-          {/* Date */}
+          {/* Start date — when to begin (drives the Now view's deferral) */}
           <div className="task-kebab-divider" />
           <div className="task-kebab-date">
             <span className="task-kebab-date-label">
-              Date{task.due_date ? `: ${formatDateDisplay(task.due_date)}` : ''}
+              Start{task.start_date ? `: ${formatStartDateDisplay(task.start_date)}` : ''}
+            </span>
+            <DatePicker
+              date={task.start_date}
+              onChange={handleSetStartDate}
+              inline
+            />
+          </div>
+
+          {/* Due date — the deadline */}
+          <div className="task-kebab-divider" />
+          <div className="task-kebab-date">
+            <span className="task-kebab-date-label">
+              Due{task.due_date ? `: ${formatDateDisplay(task.due_date)}` : ''}
             </span>
             <DatePicker
               date={task.due_date}

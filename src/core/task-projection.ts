@@ -36,6 +36,7 @@ export interface ProjectedTask {
   category: string
   project: string
   due_date?: string
+  start_date?: string
   created_at: string
   updated_at: string
   completed_at?: string
@@ -65,6 +66,7 @@ function projectTask(t: Task): ProjectedTask {
     category: t.category,
     project: t.project,
     ...(t.due_date ? { due_date: t.due_date } : {}),
+    ...(t.start_date ? { start_date: t.start_date } : {}),
     created_at: t.created_at,
     updated_at: t.updated_at,
     ...(t.completed_at ? { completed_at: t.completed_at } : {}),

@@ -35,7 +35,8 @@ const PIN_TIER_RULE = [
 const SYSTEM_PROMPT = `You convert a user's quick task note into strict JSON. Reply with ONLY a JSON object — no markdown fence, no commentary.
 Fields:
 - title: cleaned task title. Remove date/time/priority/pin phrases; keep the action. Fix obvious typos. Preserve the user's language (Chinese stays Chinese). Never empty.
-- due_date: only if the note contains a date or time. Date-only -> YYYY-MM-DD. With a time of day -> LOCAL ISO 8601 datetime WITHOUT timezone suffix (e.g. 2026-07-15T10:00:00) — copy the wall-clock time the user said; never convert timezones. Resolve relative dates (tomorrow, next friday, 明天, 下周三) against the current datetime given below.
+- due_date: only if the note states a DEADLINE (by/before/due/截止). Date-only -> YYYY-MM-DD. With a time of day -> LOCAL ISO 8601 datetime WITHOUT timezone suffix (e.g. 2026-07-15T10:00:00) — copy the wall-clock time the user said; never convert timezones. Resolve relative dates (tomorrow, next friday, 明天, 下周三) against the current datetime given below.
+- start_date: only if the note states when to START or defer the work (start/begin/from/after/开始/之后再/等到). Same format rules as due_date. A bare date with no deadline wording ("call mom friday", "下周三处理") is a start_date, not a due_date — it says when to do it, not when it's due.
 ${PIN_TIER_RULE}
 - priority: immediate|important|backlog — only when urgency is stated (urgent/asap -> immediate, important/重要 -> important, later/someday -> backlog).
 - starred: true only when the note explicitly says star it.
@@ -152,6 +153,8 @@ export async function parseQuickTask(
 
     const dueDate = validLocalDueDate(parsed.due_date);
     if (dueDate) output.due_date = dueDate;
+    const startDate = validLocalDueDate(parsed.start_date);
+    if (startDate) output.start_date = startDate;
     if (parsed.pinTier === 'focus' || parsed.pinTier === 'satellite' || parsed.pinTier === 'wait') {
       output.pinTier = parsed.pinTier;
     }

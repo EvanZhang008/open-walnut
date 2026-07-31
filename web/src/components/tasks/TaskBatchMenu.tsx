@@ -23,6 +23,7 @@ interface TaskBatchMenuProps {
   onSetPriorityAll: (priority: string) => void;
   onPinAllToTier: (tier: FocusTier) => void;
   onSetDateAll: (date: string | null) => void;
+  onSetStartDateAll: (date: string | null) => void;
   /** Mark every selected task COMPLETE. */
   onCompleteAll: () => void;
   /** Reopen (phase → TODO) every selected task. Only offered when the selection
@@ -34,7 +35,7 @@ interface TaskBatchMenuProps {
   onDeleteAll: () => void;
 }
 
-export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPinAllToTier, onSetDateAll, onCompleteAll, onReopenAll, doneCount, onDeleteAll }: TaskBatchMenuProps) {
+export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPinAllToTier, onSetDateAll, onSetStartDateAll, onCompleteAll, onReopenAll, doneCount, onDeleteAll }: TaskBatchMenuProps) {
   const [open, setOpen] = useState(false);
   // Fixed-position coords for the dropdown. The selection bar is position:sticky at the
   // bottom of the .todo-panel-list scroll container (overflow:auto), so a plain
@@ -182,6 +183,7 @@ export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPi
             onSetPriority={(p) => onSetPriorityAll(p)}
             onSetTier={(t) => onPinAllToTier(t)}
             onSetDate={(d) => onSetDateAll(d)}
+            onSetStartDate={(d) => onSetStartDateAll(d)}
             afterAction={close}
           />
         </div>

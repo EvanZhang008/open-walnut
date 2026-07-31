@@ -12,7 +12,7 @@ import type { FocusTier } from '@/api/focus';
 import * as ICONS from '../common/Icons';
 import { getIntegrationMeta, useIntegrations } from '@/hooks/useIntegrations';
 import { resolveTaskSessionId } from '@/utils/session-status';
-import { DatePicker, formatDateDisplay } from '../common/DatePicker';
+import { DatePicker, formatDateDisplay, formatStartDateDisplay } from '../common/DatePicker';
 import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 
@@ -40,6 +40,7 @@ interface TaskKebabMenuProps {
   onSetTier?: (id: string, tier: FocusTier) => void;
   onOpenSession?: (sessionId: string) => void;
   onSetDate?: (id: string, date: string | null) => void;
+  onSetStartDate?: (id: string, date: string | null) => void;
   /** Promote a subtask to top-level (remove parent_task_id). Only shown when task has a parent. */
   onUnparent?: (id: string) => void;
   /** Move task up one slot among its siblings. Pass undefined when task is already first. */
@@ -85,7 +86,7 @@ const PRIORITY_OPTIONS: { value: TaskPriority; icon: string; label: string }[] =
  */
 export function TaskActionMenuItems({
   task, isPinned, pinnedTier, isDone, batchMode,
-  onSetPriority, onPinTask, onUnpinTask, onSetTier, onSetDate, afterAction,
+  onSetPriority, onPinTask, onUnpinTask, onSetTier, onSetDate, onSetStartDate, afterAction,
 }: {
   /** Single task (kebab) — null in batch mode. */
   task: Task | null;
@@ -99,6 +100,7 @@ export function TaskActionMenuItems({
   onUnpinTask?: () => void;
   onSetTier?: (tier: FocusTier) => void;
   onSetDate?: (date: string | null) => void;
+  onSetStartDate?: (date: string | null) => void;
   /** Close the menu after an action fires. */
   afterAction: () => void;
 }) {
@@ -181,13 +183,30 @@ export function TaskActionMenuItems({
         </>
       )}
 
-      {/* Date */}
+      {/* Start date — when to begin working (drives the Now view's deferral) */}
+      {onSetStartDate && (
+        <>
+          <div className="task-kebab-divider" />
+          <div className="task-kebab-date">
+            <span className="task-kebab-date-label">
+              Start{task?.start_date ? `: ${formatStartDateDisplay(task.start_date)}` : ''}
+            </span>
+            <DatePicker
+              date={task?.start_date}
+              onChange={(date) => { onSetStartDate(date); afterAction(); }}
+              inline
+            />
+          </div>
+        </>
+      )}
+
+      {/* Due date — the deadline */}
       {onSetDate && (
         <>
           <div className="task-kebab-divider" />
           <div className="task-kebab-date">
             <span className="task-kebab-date-label">
-              Date{task?.due_date ? `: ${formatDateDisplay(task.due_date)}` : ''}
+              Due{task?.due_date ? `: ${formatDateDisplay(task.due_date)}` : ''}
             </span>
             <DatePicker
               date={task?.due_date}
@@ -201,7 +220,7 @@ export function TaskActionMenuItems({
   );
 }
 
-export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedTier, isDone, onExpandDetail, onClearFocus, onSetPriority, onStar, onPinTask, onUnpinTask, onSetTier, onOpenSession, onSetDate, onUnparent, onMoveUp, onUngroup, isGroupHidden, onUnhideGroup, onStartSelect, onDelete }: TaskKebabMenuProps) {
+export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedTier, isDone, onExpandDetail, onClearFocus, onSetPriority, onStar, onPinTask, onUnpinTask, onSetTier, onOpenSession, onSetDate, onSetStartDate, onUnparent, onMoveUp, onUngroup, isGroupHidden, onUnhideGroup, onStartSelect, onDelete }: TaskKebabMenuProps) {
   const integrations = useIntegrations();
   const sessionId = resolveTaskSessionId(task);
   const storedSessionStatus = useSessionStatus(sessionId);
@@ -467,6 +486,7 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
             onUnpinTask={onUnpinTask ? () => onUnpinTask(task.id) : undefined}
             onSetTier={onSetTier ? (t) => onSetTier(task.id, t) : undefined}
             onSetDate={onSetDate ? (d) => onSetDate(task.id, d) : undefined}
+            onSetStartDate={onSetStartDate ? (d) => onSetStartDate(task.id, d) : undefined}
             afterAction={closeMenu}
           />
 

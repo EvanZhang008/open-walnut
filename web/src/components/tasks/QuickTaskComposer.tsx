@@ -15,6 +15,7 @@ interface Props {
     category?: string;
     project?: string;
     due_date?: string;
+    start_date?: string;
     starred?: boolean;
     pinnedTier?: PinTier;
   }) => Promise<unknown>;
@@ -35,6 +36,7 @@ function draftFromParse(parse: QuickTaskParse, rawText: string): ConfirmDraft {
   // response (parse failure/timeout) echoes the input and isn't an AI suggestion.
   if (title !== rawText.trim()) aiFields.add('title');
   if (parse.due_date) aiFields.add('due');
+  if (parse.start_date) aiFields.add('start');
   if (parse.pinTier) aiFields.add('pin');
   if (parse.priority) aiFields.add('priority');
   if (parse.starred !== undefined) aiFields.add('star');
@@ -43,6 +45,7 @@ function draftFromParse(parse: QuickTaskParse, rawText: string): ConfirmDraft {
   return {
     title,
     due: parse.due_date,
+    start: parse.start_date,
     pin: parse.pinTier,
     priority: parse.priority,
     starred: !!parse.starred,
@@ -237,6 +240,7 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions }: P
       title: source.title.trim(),
       priority: source.priority ?? 'none',
       ...(source.due ? { due_date: source.due } : {}),
+      ...(source.start ? { start_date: source.start } : {}),
       ...(source.pin ? { pinnedTier: source.pin } : {}),
       ...(source.starred ? { starred: true } : {}),
       ...(category ? { category } : {}),

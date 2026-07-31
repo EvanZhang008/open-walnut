@@ -3215,6 +3215,11 @@ function startPluginSyncPolling(): void {
             const { changed } = await updateTaskRaw(id, effectiveUpdates)
             const updatedTask = localTasks.find(t => t.id === id)
             if (updatedTask) {
+              // NOTE: this re-applies the raw patch even when updateTaskRaw's
+              // precision-echo guard dropped a due_date/start_date echo — the tick
+              // cache may briefly hold the day-level date the DB rejected. Harmless
+              // today (pushes truncate anyway); don't read guarded fields from this
+              // cache as truth.
               Object.assign(updatedTask, effectiveUpdates)
               if (changed) {
                 bus.emit(EventNames.TASK_UPDATED, { task: updatedTask }, [], { source: `${plugin.id}-sync` })

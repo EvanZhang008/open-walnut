@@ -10164,6 +10164,13 @@ body.walnut-dragging {
   color: var(--error);
 }
 
+/* Deferred-start pill — future start_date; blue tint to read as "scheduled",
+   not "late" */
+.todo-item-start-pill {
+  background: rgba(0, 122, 255, 0.1);
+  color: var(--accent, #007aff);
+}
+
 /* Inline title editing (contentEditable — same element, no layout shift) */
 
 .todo-item-title.editing {

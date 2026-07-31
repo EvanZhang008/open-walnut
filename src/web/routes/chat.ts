@@ -112,6 +112,7 @@ interface TaskContext {
   phase?: string
   priority?: string
   starred?: boolean
+  start_date?: string
   due_date?: string
   source?: string
   description?: string
@@ -180,6 +181,7 @@ export function buildTaskContextPrefix(ctx: TaskContext | null | undefined): str
   if (ctx.category) lines.push(`Category: ${ctx.category}`)
   if (ctx.project && ctx.project !== ctx.category) lines.push(`Project: ${ctx.project}`)
   if (ctx.source) lines.push(`Source: ${ctx.source}`)
+  if (ctx.start_date) lines.push(`Start: ${ctx.start_date}`)
   if (ctx.due_date) lines.push(`Due: ${ctx.due_date}`)
   if (ctx.created_at) lines.push(`Created: ${ctx.created_at}`)
 
@@ -345,6 +347,7 @@ export async function enrichTaskContext(ctx: TaskContext, conversationId?: strin
   if (task.category) lines.push(`Category: ${task.category}`);
   if (task.project && task.project !== task.category) lines.push(`Project: ${task.project}`);
   if (ctx.source) lines.push(`Source: ${ctx.source}`);
+  if (task.start_date) lines.push(`Start: ${task.start_date}`);
   if (task.due_date) lines.push(`Due: ${task.due_date}`);
   if (task.created_at) lines.push(`Created: ${task.created_at}`);
 

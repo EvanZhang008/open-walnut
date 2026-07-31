@@ -52,7 +52,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { TaskKebabMenu } from './TaskKebabMenu';
 import { TaskBatchMenu } from './TaskBatchMenu';
 import { ViewDropdown, type SortBy, type GroupBy, type DateFilter } from './ViewDropdown';
-import { DatePicker, formatDateDisplay, isOverdue, parseDateLocal } from '../common/DatePicker';
+import { DatePicker, formatDateDisplay, formatDateTimeDisplay, isOverdue, parseDateLocal } from '../common/DatePicker';
 import { PersonIcon } from '../common/PersonIcon';
 import { useVerticalSplitter } from '@/hooks/useVerticalSplitter';
 import { useResizableHeight } from '@/hooks/useResizableHeight';
@@ -123,6 +123,7 @@ interface TodoPanelProps {
   onReorderPinned?: (newIds: string[]) => void;
   onSetTier?: (taskId: string, tier: FocusTier, newPinnedOrder?: string[]) => void;
   onSetDate?: (taskId: string, date: string | null) => void;
+  onSetStartDate?: (taskId: string, date: string | null) => void;
   pinnedTaskIds?: Set<string>;
   focusTaskIds?: Set<string>;
   waitTaskIds?: Set<string>;
@@ -330,6 +331,7 @@ interface SortableTaskItemProps {
   onUnpinTask?: (taskId: string) => void;
   onSetTier?: (taskId: string, tier: FocusTier, newPinnedOrder?: string[]) => void;
   onSetDate?: (taskId: string, date: string | null) => void;
+  onSetStartDate?: (taskId: string, date: string | null) => void;
   onUnparent?: (taskId: string) => void;  // Remove parent_task_id (promote to top-level)
   onMoveUp?: (taskId: string) => void;    // Swap with previous sibling
   isPinned?: boolean;
@@ -415,7 +417,7 @@ function buildTierGroupMeta(displayed: Task[], labels?: Record<string, string>):
   return map;
 }
 
-function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVanishing, isNestTarget, isGroupTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, selectMode, onSelectToggle, onStartSelect, onSetPhase, onStar, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onUnparent, onMoveUp, isPinned, pinnedTier, searchContext, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask, onDissolveGroup, isGroupHidden, onUnhideGroup }: SortableTaskItemProps) {
+function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVanishing, isNestTarget, isGroupTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, selectMode, onSelectToggle, onStartSelect, onSetPhase, onStar, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onSetStartDate, onUnparent, onMoveUp, isPinned, pinnedTier, searchContext, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask, onDissolveGroup, isGroupHidden, onUnhideGroup }: SortableTaskItemProps) {
   const {
     attributes,
     listeners,
@@ -458,6 +460,13 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVan
 
   const dueDateLabel = formatDateDisplay(task.due_date);
   const dueDateOverdue = isOverdue(task.due_date);
+  // Start pill only matters while the task is still deferred (future start).
+  // Deliberately checks the task's OWN start_date, not the parent-inherited
+  // effective start used by the Now filter — the pill marks where the defer
+  // was set, and this row component has no access to the full task list.
+  const startMs = task.start_date ? parseDateLocal(task.start_date).getTime() : NaN;
+  const startDeferred = Number.isFinite(startMs) && startMs > Date.now();
+  const startDateLabel = startDeferred ? formatDateDisplay(task.start_date) : '';
 
   // Inline title editing via contentEditable (preserves wrapping/layout)
   const [isEditing, setIsEditing] = useState(false);
@@ -679,8 +688,13 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVan
             {task.title}
           </span>
           {/* Info pills + kebab — same line as title, no second row */}
+          {startDateLabel && (
+            <span className="todo-item-due-pill todo-item-start-pill" title={`Starts: ${task.start_date}`}>
+              ▶ {startDateLabel}
+            </span>
+          )}
           {dueDateLabel && (
-            <span className={`todo-item-due-pill${dueDateOverdue ? ' todo-item-due-overdue' : ''}`}>
+            <span className={`todo-item-due-pill${dueDateOverdue ? ' todo-item-due-overdue' : ''}`} title={task.due_date ? `Due: ${task.due_date}` : undefined}>
               {dueDateLabel}
             </span>
           )}
@@ -712,6 +726,7 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVan
             onSetTier={onSetTier}
             onOpenSession={onOpenSession}
             onSetDate={onSetDate}
+            onSetStartDate={onSetStartDate}
             onUnparent={onUnparent}
             onMoveUp={onMoveUp}
             onUngroup={onUngroupTask}
@@ -860,35 +875,58 @@ function persistDateFilter(v: DateFilter) {
 }
 
 /**
- * Resolve effective due_date for a task: if the task has no due_date,
- * walk up the parent chain and inherit the first ancestor's due_date.
+ * Resolve an effective date field for a task: if the task has no value,
+ * walk up the parent chain and inherit the first ancestor's value.
  */
-function getEffectiveDueDate(task: Task, allTasks: Task[]): string | undefined {
-  if (task.due_date) return task.due_date;
+function getEffectiveDateField(task: Task, allTasks: Task[], field: 'due_date' | 'start_date'): string | undefined {
+  if (task[field]) return task[field];
   if (!task.parent_task_id) return undefined;
   // Walk up parent chain (max 10 depth to avoid infinite loops)
   let current: Task | undefined = task;
   for (let i = 0; i < 10 && current?.parent_task_id; i++) {
     const parent = allTasks.find(t => t.id.startsWith(current!.parent_task_id!));
     if (!parent) break;
-    if (parent.due_date) return parent.due_date;
+    if (parent[field]) return parent[field];
     current = parent;
   }
   return undefined;
 }
 
+function getEffectiveDueDate(task: Task, allTasks: Task[]): string | undefined {
+  return getEffectiveDateField(task, allTasks, 'due_date');
+}
+
+function getEffectiveStartDate(task: Task, allTasks: Task[]): string | undefined {
+  return getEffectiveDateField(task, allTasks, 'start_date');
+}
+
+/** True when the task's (inherited) start_date is still in the future —
+ *  i.e. the task is deferred and not yet actionable. Day-level start dates
+ *  activate at local midnight of that day. */
+function isDeferredByStart(task: Task, allTasks: Task[], now = Date.now()): boolean {
+  const effectiveStart = getEffectiveStartDate(task, allTasks);
+  if (!effectiveStart) return false;
+  const startMs = parseDateLocal(effectiveStart).getTime();
+  return Number.isFinite(startMs) && startMs > now;
+}
+
 /** Match task against dateFilter. Uses time-level precision for "now".
- *  Child tasks inherit parent's due_date for filtering if they have none. */
+ *  Child tasks inherit parent's due_date/start_date for filtering if they
+ *  have none.
+ *
+ *  "Now" is START-time driven: it answers "what should I look at now", so a
+ *  task is shown unless its start_date says the work begins later. Due dates
+ *  are deadlines — they mark Overdue but never hide a task from Now. */
 function matchesDateFilter(task: Task, filter: DateFilter, allTasks: Task[]): boolean {
   if (!filter) return true; // "All"
-  const effectiveDue = getEffectiveDueDate(task, allTasks);
-  const dueMs = effectiveDue ? parseDateLocal(effectiveDue).getTime() : null;
   const now = Date.now();
   switch (filter) {
     case 'now':
-      // No date + overdue + today (time-level: deferred tasks hidden until their time)
-      return !dueMs || dueMs <= now;
+      // Everything actionable now: no start date, or start time has arrived.
+      return !isDeferredByStart(task, allTasks, now);
     case 'overdue': {
+      const effectiveDue = getEffectiveDueDate(task, allTasks);
+      const dueMs = effectiveDue ? parseDateLocal(effectiveDue).getTime() : null;
       if (!dueMs) return false;
       // Time-level dates: overdue if past now; Day-level: overdue if before start of today
       if (effectiveDue!.includes('T')) return dueMs < now;
@@ -896,11 +934,16 @@ function matchesDateFilter(task: Task, filter: DateFilter, allTasks: Task[]): bo
       todayStart.setHours(0, 0, 0, 0);
       return dueMs < todayStart.getTime();
     }
-    case 'this-week':
-      return !dueMs || dueMs <= now + 7 * 86_400_000;
+    case 'this-week': {
+      // Same start-driven semantics with a 7-day horizon: hide only tasks
+      // whose start is beyond this week.
+      const effectiveStart = getEffectiveStartDate(task, allTasks);
+      const startMs = effectiveStart ? parseDateLocal(effectiveStart).getTime() : null;
+      return !startMs || startMs <= now + 7 * 86_400_000;
+    }
     case 'no-date':
-      // no-date means the task itself has no date (not inherited)
-      return !task.due_date;
+      // no-date means the task itself is unscheduled (not inherited)
+      return !task.due_date && !task.start_date;
     default:
       return true;
   }
@@ -1070,6 +1113,10 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
     await apiUpdateTask(task.id, { due_date: date ?? '' });
   };
 
+  const handleStartDateChange = async (date: string | null) => {
+    await apiUpdateTask(task.id, { start_date: date ?? '' });
+  };
+
   // Child tasks — tasks whose parent_task_id matches this task (handles prefix parent IDs)
   const childTasks = useMemo(() => {
     if (!allTasks) return [];
@@ -1165,7 +1212,8 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
         <span className="todo-detail-category">
           {task.category}{task.project && task.project !== task.category ? ` / ${task.project}` : ''}
         </span>
-        <DatePicker date={task.due_date} onChange={handleDateChange} />
+        <DatePicker date={task.start_date} onChange={handleStartDateChange} label="Start" />
+        <DatePicker date={task.due_date} onChange={handleDateChange} label="Due" />
         {task.external_url && (
           <a
             className="todo-detail-external-link"
@@ -1199,6 +1247,14 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
         <div className="todo-detail-dates text-xs text-muted">
           {task.created_at && <span>Created {timeAgo(task.created_at)}</span>}
           {task.updated_at && <span> · Updated {timeAgo(task.updated_at)}</span>}
+          {task.start_date && (
+            <span> · Starts {formatDateTimeDisplay(task.start_date)}</span>
+          )}
+          {task.due_date && (
+            <span style={isOverdue(task.due_date) ? { color: 'var(--error)' } : undefined}>
+              {' '}· Due {formatDateTimeDisplay(task.due_date)}
+            </span>
+          )}
         </div>
       </div>
 
@@ -1505,6 +1561,7 @@ interface RecentCardProps {
   pinnedTier?: FocusTier;
   onSetPriority?: (id: string, priority: string) => void;
   onSetDate?: (id: string, date: string | null) => void;
+  onSetStartDate?: (id: string, date: string | null) => void;
   onStar?: (id: string) => void;
   onSetTier?: (id: string, tier: FocusTier) => void;
   onExpandDetail?: (task: Task) => void;
@@ -1517,7 +1574,7 @@ interface RecentCardProps {
 
 // ── SortableRecentCard — draggable recent-activity card with kebab menu ──
 
-function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onPinTask, onUnpinTask, isPinned, pinnedTier, onSetPriority, onSetDate, onStar, onSetTier, onExpandDetail, onClearFocus, onOpenSession, onSetPhase, onUpdateTitle, onDelete }: RecentCardProps) {
+function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onPinTask, onUnpinTask, isPinned, pinnedTier, onSetPriority, onSetDate, onSetStartDate, onStar, onSetTier, onExpandDetail, onClearFocus, onOpenSession, onSetPhase, onUpdateTitle, onDelete }: RecentCardProps) {
   // Static cards: done (tiers filter them out — a drag would silently vanish) and
   // pinned (already placed in a tier; that tier card is the draggable one). Static
   // cards register under a NAMESPACED sortable id — the raw task.id is already
@@ -1669,6 +1726,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
         onClearFocus={onClearFocus}
         onSetPriority={onSetPriority}
         onSetDate={onSetDate}
+        onSetStartDate={onSetStartDate}
         onStar={onStar}
         onPinTask={onPinTask}
         onUnpinTask={onUnpinTask}
@@ -1682,7 +1740,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
 
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, pinnedTaskIds, focusTaskIds, waitTaskIds, suppressDetail, openSessionIds, openSessionTaskIds, onClearOperationError, onOperationError, externalCategory, onCategoryChange, onOpenLauncher, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, waitTaskIds, suppressDetail, openSessionIds, openSessionTaskIds, onClearOperationError, onOperationError, externalCategory, onCategoryChange, onOpenLauncher, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden }: TodoPanelProps) {
   // TEMP drag-flash trace — remove after diagnosis
   const __renderCountRef = useRef(0);
   __renderCountRef.current += 1;
@@ -1753,13 +1811,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     prevExternalCatRef.current = externalCategory;
   }, [externalCategory]);
 
-  // Auto-refresh tick: bump every 60s so date filter re-evaluates (deferred tasks appear on time)
+  // Auto-refresh tick: bump every 60s so time-dependent UI re-evaluates —
+  // the date filter (deferred tasks appear on time) AND the per-row ▶ start
+  // pill, which renders in the "All" view too, so the timer runs always.
   const [_tick, setTick] = useState(0);
   useEffect(() => {
-    if (!dateFilter) return; // no timer needed when showing "All"
     const id = setInterval(() => setTick((t) => t + 1), 60_000);
     return () => clearInterval(id);
-  }, [dateFilter]);
+  }, []);
 
   const integrations = useIntegrations();
   const [newTitle, setNewTitle] = useState('');
@@ -4332,6 +4391,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     exitSelectMode();
   }, [selectionInfo, onSetDate, exitSelectMode]);
 
+  const batchSetStartDate = useCallback((date: string | null) => {
+    selectionInfo.tasks.forEach((t) => onSetStartDate?.(t.id, date));
+    exitSelectMode();
+  }, [selectionInfo, onSetStartDate, exitSelectMode]);
+
   /** Report what a batch op could NOT do. Successes are silent — the rows already
    *  moved. Two distinct outcomes, worded honestly:
    *   - rejected (active children / active session / gone) → "Could not <verb> N"
@@ -4470,7 +4534,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           isSessionOpen={openSessionTaskIds?.has(task.id) ?? false}
           isDetailOpen={focusedTaskId === task.id && !suppressDetail}
           onClick={handlePinnedCardClick} onSetTier={onSetTier} onUnpinTask={onUnpinTask}
-          onPinTask={onPinTask} onSetPriority={onSetPriority} onSetDate={onSetDate} onStar={onStar}
+          onPinTask={onPinTask} onSetPriority={onSetPriority} onSetDate={onSetDate} onSetStartDate={onSetStartDate} onStar={onStar}
           onExpandDetail={handleExpandDetail} onClearFocus={onClearFocus} onOpenSession={onOpenSession}
           onSetPhase={setPhaseOrComplete} onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
           onDelete={onDelete} groupInfo={gi} selectMode={selectMode}
@@ -4772,6 +4836,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         pinnedTier={getTier(task.id)}
                         onSetPriority={onSetPriority}
                         onSetDate={onSetDate}
+                        onSetStartDate={onSetStartDate}
                         onStar={onStar}
                         onSetTier={onSetTier}
                         onExpandDetail={handleExpandDetail}
@@ -4926,6 +4991,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     onDelete={onDelete}
                     onSetPriority={onSetPriority}
                     onSetDate={onSetDate}
+                    onSetStartDate={onSetStartDate}
                     onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
                     onOpenSession={onOpenSession}
                     onExpandDetail={handleExpandDetail}
@@ -4975,6 +5041,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   onDelete={onDelete}
                   onSetPriority={onSetPriority}
                   onSetDate={onSetDate}
+                  onSetStartDate={onSetStartDate}
                   onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
                   onOpenSession={onOpenSession}
                   onExpandDetail={handleExpandDetail}
@@ -5067,6 +5134,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                   onDelete={onDelete}
                                   onSetPriority={onSetPriority}
                                   onSetDate={onSetDate}
+                                  onSetStartDate={onSetStartDate}
                                   onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
                                   onOpenSession={onOpenSession}
                                   onExpandDetail={handleExpandDetail}
@@ -5154,6 +5222,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                                 onDelete={onDelete}
                                                 onSetPriority={onSetPriority}
                                                 onSetDate={onSetDate}
+                                                onSetStartDate={onSetStartDate}
                                                 onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
                                                 onOpenSession={onOpenSession}
                                                 onExpandDetail={handleExpandDetail}
@@ -5365,6 +5434,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             onSetPriorityAll={batchSetPriority}
             onPinAllToTier={batchPinToTier}
             onSetDateAll={batchSetDate}
+            onSetStartDateAll={batchSetStartDate}
             onCompleteAll={() => batchSetPhase('COMPLETE')}
             onReopenAll={() => batchSetPhase('TODO')}
             doneCount={selectionInfo.doneCount}

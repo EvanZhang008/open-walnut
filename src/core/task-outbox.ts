@@ -45,7 +45,7 @@ export type TaskOp =
 /** Fields an 'update' op may write onto an existing primary row. */
 const UPDATE_WHITELIST: (keyof Task)[] = [
   'title', 'status', 'phase', 'priority', 'category', 'project',
-  'due_date', 'completed_at', 'starred', 'pinned', 'tags', 'summary',
+  'due_date', 'start_date', 'completed_at', 'starred', 'pinned', 'tags', 'summary',
   'description', 'note', 'sprint', 'needs_attention', 'updated_at',
 ];
 
@@ -173,6 +173,11 @@ export async function applyOutboxOnPrimary(): Promise<number> {
             for (const key of UPDATE_WHITELIST) {
               if (snapshot[key] !== undefined) (patch as Record<string, unknown>)[key] = snapshot[key];
             }
+            // The snapshot is the FULL task, so an absent date means "cleared on
+            // the phone/cloud" — write it through as the explicit-clear marker,
+            // otherwise a cleared date silently survives on the primary.
+            if (snapshot.due_date === undefined) (patch as Record<string, unknown>).due_date = null;
+            if (snapshot.start_date === undefined) (patch as Record<string, unknown>).start_date = null;
             const { changed, task } = await tm.updateTaskRaw(existing.id, patch, {
               emitEvent: true, push: true, source: 'cloud-outbox',
             });
@@ -245,6 +250,7 @@ export async function importProjectionOnCloud(): Promise<number> {
         created_at: p.created_at,
         updated_at: p.updated_at,
         ...(p.due_date ? { due_date: p.due_date } : {}),
+        ...(p.start_date ? { start_date: p.start_date } : {}),
         ...(p.completed_at ? { completed_at: p.completed_at } : {}),
         ...(p.starred ? { starred: true } : {}),
         ...(p.pinned ? { pinned: true } : {}),
@@ -260,7 +266,12 @@ export async function importProjectionOnCloud(): Promise<number> {
           priority: p.priority as Task['priority'],
           category: p.category,
           project: p.project,
-          due_date: p.due_date,
+          // Projection omits cleared dates entirely; `undefined` in a patch means
+          // "don't touch" (taskToRow drops it), which left stale dates on the
+          // cloud replica forever. `null` is the explicit-clear marker that
+          // taskToRow writes through as SQL NULL.
+          due_date: (p.due_date ?? null) as Task['due_date'],
+          start_date: (p.start_date ?? null) as Task['start_date'],
           completed_at: p.completed_at,
           starred: p.starred,
           pinned: p.pinned,

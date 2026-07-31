@@ -212,8 +212,10 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
 - `GET /api/v1/tasks?status=todo|in_progress|done` →
   `{ "tasks": [ProjectedTask], "syncedAt": "<ISO>" }`
 - `ProjectedTask`: `{ id, title, status, phase, priority, category, project,
-  due_date?, created_at, updated_at, completed_at?, starred?, pinned?, tags?,
-  summary? }` — `summary` is truncated to ~500 chars.
+  due_date?, start_date?, created_at, updated_at, completed_at?, starred?,
+  pinned?, tags?, summary? }` — `summary` is truncated to ~500 chars.
+  `start_date` (added 2026-07) is the "when to begin" time that defers a task
+  out of the web Now view; additive and optional, so older clients ignore it.
 - Scope: all open tasks + tasks completed in the last 14 days (older
   completions are excluded from the projection).
 - Provenance: `syncedAt` is when the primary box exported the snapshot. On the

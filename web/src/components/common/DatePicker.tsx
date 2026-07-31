@@ -97,6 +97,17 @@ export function formatDateTimeDisplay(iso: string | undefined | null): string {
   return `${day} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
+/**
+ * Format a start_date for display. Same buckets as formatDateDisplay, except a
+ * past start is "Started", never "Overdue" — a passed start means "work on it
+ * now", not "late" (only due dates can be late).
+ */
+export function formatStartDateDisplay(iso: string | undefined | null): string {
+  if (!iso) return '';
+  const s = formatDateDisplay(iso);
+  return s === 'Overdue' ? 'Started' : s;
+}
+
 /** Check if a due_date is overdue. */
 export function isOverdue(iso: string | undefined | null): boolean {
   if (!iso) return false;
@@ -115,6 +126,9 @@ interface DatePickerProps {
   onChange: (date: string | null) => void;
   /** Render content directly instead of inside a popover. */
   inline?: boolean;
+  /** Trigger-pill label when no date is set, and prefix when set
+   *  (e.g. "Start" → "Start 8h"). Default: "Date" / bare value. */
+  label?: string;
 }
 
 /** Inner content shared by popover and inline modes. */
@@ -199,7 +213,7 @@ function DatePickerContent({ date, onChange }: Pick<DatePickerProps, 'date' | 'o
   );
 }
 
-export function DatePicker({ date, onChange, inline }: DatePickerProps) {
+export function DatePicker({ date, onChange, inline, label }: DatePickerProps) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -243,9 +257,11 @@ export function DatePicker({ date, onChange, inline }: DatePickerProps) {
     return <DatePickerContent date={date} onChange={onChange} />;
   }
 
-  // Popover mode
-  const display = formatDateDisplay(date);
-  const overdue = isOverdue(date);
+  // Popover mode. Start pickers must never show red "Overdue" — a passed start
+  // means "active now", so it renders as "Started" with no error styling.
+  const isStart = label === 'Start';
+  const display = isStart ? formatStartDateDisplay(date) : formatDateDisplay(date);
+  const overdue = !isStart && isOverdue(date);
 
   const handleToggle = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -263,9 +279,9 @@ export function DatePicker({ date, onChange, inline }: DatePickerProps) {
         ref={btnRef}
         className={`dp-trigger${overdue ? ' dp-trigger-overdue' : ''}${display ? ' dp-trigger-has-date' : ''}`}
         onClick={handleToggle}
-        title={date ? `Date: ${date}` : 'Set date'}
+        title={date ? `${label ?? 'Date'}: ${date}` : `Set ${(label ?? 'date').toLowerCase()}`}
       >
-        {display || 'Date'}
+        {display ? (label ? `${label} ${display}` : display) : (label ?? 'Date')}
       </button>
       {/* Portalled for the same reason as the kebab menus: `position: fixed`
           escapes clipping ancestors but not stacking contexts, and this pill can

@@ -15,6 +15,7 @@ export type TaskSource = string;
 export interface QuickTaskParse {
   title: string;
   due_date?: string;
+  start_date?: string;
   pinTier?: 'focus' | 'satellite' | 'wait';
   priority?: Exclude<TaskPriority, 'none'>;
   starred?: boolean;
@@ -502,6 +503,10 @@ export interface Task {
   updated_at: string;
   completed_at?: string;
   due_date?: string;
+  /** When to START working on the task (ISO date or datetime). Drives the "Now"
+   *  view: a task with a future start_date is deferred (hidden) until that time
+   *  arrives. due_date is the deadline; start_date is the activation time. */
+  start_date?: string;
   starred?: boolean;
   pinned?: boolean;
   pin_order?: number;  // lower = higher in list, undefined = not pinned

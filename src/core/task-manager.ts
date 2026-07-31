@@ -543,6 +543,7 @@ export interface AddTaskInput {
   category?: string;
   project?: string;
   due_date?: string;
+  start_date?: string;
   parent_task_id?: string;
   description?: string;
   tags?: string[];
@@ -1067,6 +1068,7 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       created_at: now,
       updated_at: now,
       due_date: input.due_date,
+      ...(input.start_date ? { start_date: input.start_date } : {}),
       ...(parentTask ? { parent_task_id: parentTask.id } : {}),
       ...(input.tags?.length ? { tags: [...new Set(input.tags)] } : {}),
       ...(input.cwd ? { cwd: input.cwd } : {}),
@@ -1209,7 +1211,7 @@ export async function listTasksSlim(filter: ListTasksSlimFilter = {}): Promise<S
   const heavyCols = ['summary', 'description', 'ext'];
   const selectCols = [
     'id', 'title', 'category', 'project', 'status', 'phase', 'priority', 'source',
-    'parent_task_id', 'due_date', 'created_at', 'updated_at', 'completed_at',
+    'parent_task_id', 'due_date', 'start_date', 'created_at', 'updated_at', 'completed_at',
     'sprint', 'focus_tier', 'pinned', 'ext', 'tags', 'depends_on', 'session_ids',
     'summary', 'description', 'sync_error', '_synced_at', 'payload',
   ].filter((c) => !(minimal && heavyCols.includes(c)));
@@ -1639,6 +1641,7 @@ export interface UpdateTaskInput {
   status?: TaskStatus;
   phase?: TaskPhase;
   due_date?: string;
+  start_date?: string;      // When to start working (empty string clears)
   project?: string;
   starred?: boolean;
   needs_attention?: boolean;
@@ -1825,7 +1828,10 @@ export async function updateTask(
       applyPhase(task, derivedPhase);
     }
   }
-  if (updates.due_date !== undefined) task.due_date = updates.due_date;
+  // '' means "clear" for both dates — normalize to undefined so the store never
+  // holds an empty string (downstream code checks truthiness AND !== undefined).
+  if (updates.due_date !== undefined) task.due_date = updates.due_date || undefined;
+  if (updates.start_date !== undefined) task.start_date = updates.start_date || undefined;
   if (updates.project !== undefined) task.project = updates.project;
   if (updates.starred !== undefined) task.starred = updates.starred;
   if (updates.needs_attention !== undefined) task.needs_attention = updates.needs_attention;
@@ -3754,7 +3760,16 @@ export async function addTaskFull(taskData: Omit<Task, 'id'>): Promise<Task> {
       existing.category = taskData.category;
       existing.project = taskData.project;
       existing.ext = { ...existing.ext, ...taskData.ext };
-      if (taskData.due_date !== undefined) existing.due_date = taskData.due_date;
+      // Dedup-merge is a sync-pull write path too — a full pull re-imports the
+      // remote twin, so the same day-precision echo guard applies here.
+      if (taskData.due_date !== undefined &&
+          !isDayPrecisionEcho(existing.due_date, taskData.due_date)) {
+        existing.due_date = taskData.due_date;
+      }
+      if (taskData.start_date !== undefined &&
+          !isDayPrecisionEcho(existing.start_date, taskData.start_date)) {
+        existing.start_date = taskData.start_date;
+      }
       if (taskData.completed_at !== undefined) existing.completed_at = taskData.completed_at;
       if (taskData.external_url) existing.external_url = taskData.external_url;
       existing.updated_at = taskData.updated_at ?? new Date().toISOString();
@@ -3814,6 +3829,9 @@ function hasFieldChanges(task: Task, updates: Record<string, unknown>): boolean 
     const current = (task as any)[key];
     // Fast path: identical references or both primitive-equal
     if (current === value) continue;
+    // null and undefined both mean "field absent" (a patch uses null as the
+    // explicit-clear marker; the store never holds it) — not a real change.
+    if ((current === undefined || current === null) && (value === undefined || value === null)) continue;
     // Deep compare for objects (handles key-order differences in ext, etc.)
     if (typeof current === 'object' && typeof value === 'object') {
       if (stableStringify(current) !== stableStringify(value)) return true;
@@ -3833,6 +3851,34 @@ function stableStringify(v: unknown): string {
 }
 
 /**
+ * Post-Object.assign cleanup: a patch uses `null` as the explicit-clear marker
+ * (written through to SQL NULL by taskToRow), but the in-memory Task contract
+ * is "absent field = undefined". Keep the returned/emitted object consistent
+ * with what rowToTask would produce on the next read.
+ */
+function normalizeNullClears(task: Task): void {
+  const rec = task as unknown as Record<string, unknown>;
+  for (const key of Object.keys(rec)) {
+    if (rec[key] === null) delete rec[key];
+  }
+}
+
+/**
+ * True when an incoming day-precision date (due_date OR start_date) is just
+ * the existing time-level value truncated to its UTC date part. External task
+ * trackers only store day precision, so every push of a time-level value comes
+ * back on the next pull as `YYYY-MM-DD` — an echo, not a user edit. Applying
+ * it would strip the time the user set (e.g. the "8h" quick pill); for
+ * start_date that instantly un-defers the task from the Now view.
+ */
+function isDayPrecisionEcho(existing: string | undefined, incoming: unknown): boolean {
+  return typeof incoming === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(incoming) &&
+    typeof existing === 'string' && existing.includes('T') &&
+    existing.slice(0, 10) === incoming;
+}
+
+/**
  * Apply the terminal-phase guard + dirty check + phase↔status derivation to a
  * task/updates pair. Returns the canonicalized update dict that should be
  * persisted, or `null` if the update is a no-op (nothing changed).
@@ -3845,6 +3891,15 @@ function prepareRawUpdate(task: Task, updates: Partial<Task>): Partial<Task> | n
   const { id: _ignoreId, ...safeUpdates } = updates as Record<string, unknown>;
   if (safeUpdates.priority !== undefined) {
     safeUpdates.priority = sanitizePriority(safeUpdates.priority as string);
+  }
+  // Day-precision echo guard: sync pull must not downgrade a time-level
+  // due_date/start_date to its own truncated day (a genuinely different day
+  // still applies). Human edits go through updateTask() and are unaffected.
+  if (isDayPrecisionEcho(task.due_date, safeUpdates.due_date)) {
+    delete safeUpdates.due_date;
+  }
+  if (isDayPrecisionEcho(task.start_date, safeUpdates.start_date)) {
+    delete safeUpdates.start_date;
   }
   // Terminal phase guard: sync pull cannot overwrite COMPLETE/HUMAN_VERIFIED
   // (only humans can reopen completed tasks, via updateTask with source='api')
@@ -3931,6 +3986,7 @@ export async function updateTaskRaw(
     invalidateRowShadow(); // targeted write on our own connection — see invalidateRowShadow
     // Return the merged post-update task so callers can emit / push without re-reading.
     Object.assign(task, prepared);
+    normalizeNullClears(task);
     return task;
   });
 
@@ -4000,6 +4056,7 @@ export async function updateTasksBulk(
         // Apply the patch to the in-memory task object so callers see the
         // post-update view in the returned array.
         Object.assign(task, prepared);
+        normalizeNullClears(task);
         changedTasks.push(task);
       }
     });
