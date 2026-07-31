@@ -11738,6 +11738,19 @@ body.walnut-dragging {
   margin-bottom: 6px;
 }
 
+.detail-summary-refresh {
+  margin-left: 6px;
+  border: none;
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 2px;
+  vertical-align: baseline;
+}
+.detail-summary-refresh:hover:not(:disabled) { color: var(--fg); }
+.detail-summary-refresh:disabled { cursor: default; opacity: 0.6; }
+
 .detail-setting-row {
   display: flex;
   align-items: center;

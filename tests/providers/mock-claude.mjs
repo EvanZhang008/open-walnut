@@ -130,10 +130,15 @@ if (inputFormat === 'stream-json') {
       try {
         const parsed = JSON.parse(line);
         if (parsed.type === 'control_request' && parsed.request?.subtype === 'generate_session_title') {
-          // Strip test-harness prefixes (slow:/chunk-delay:) so they never leak
-          // into the asserted title, then take the first five words.
-          const desc = String(parsed.request.description ?? '')
-            .replace(/^(?:(?:slow|chunk-delay):\d+\s+)+/, '');
+          // The auto-title caller wraps the message in a context envelope
+          // ("Current session title: …\nUser's first message: <msg>") — unwrap
+          // so asserted titles stay derived from the user's own words. Then
+          // strip test-harness prefixes (slow:/chunk-delay:) so they never
+          // leak into the asserted title, and take the first five words.
+          let desc = String(parsed.request.description ?? '');
+          const envelope = desc.match(/User's first message: ([\s\S]*)$/);
+          if (envelope) desc = envelope[1];
+          desc = desc.replace(/^(?:(?:slow|chunk-delay):\d+\s+)+/, '');
           const words = desc.trim().split(/\s+/).slice(0, 5).join(' ');
           process.stdout.write(JSON.stringify({
             type: 'control_response',

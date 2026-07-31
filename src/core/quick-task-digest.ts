@@ -1,10 +1,11 @@
-import { getStoreCategories, listTasksSlim } from './task-manager.js';
+import { getStoreCategories, listTasksSlim, getProjectMetadata } from './task-manager.js';
 
 const MAX_CATEGORIES = 15;
 const MAX_PROJECTS_PER_CATEGORY = 4;
 const MAX_TITLES_PER_LINE = 3;
 const MAX_TITLE_CHARS = 40;
 const MAX_DIGEST_CHARS = 4000;
+const MAX_SUMMARY_CHARS = 200;
 
 export interface CategoryDigest {
   digest: string;
@@ -119,6 +120,15 @@ export async function buildCategoryDigest(): Promise<CategoryDigest> {
     lines.push(appendTitles(`- ${category.name} (${category.openCount} open tasks)`, category.defaultTitles));
     for (const [project, titles] of category.projectTitles) {
       lines.push(appendTitles(`  - ${project}`, titles));
+      // The maintained project summary (project-summary.ts) beats raw titles
+      // for "does this note/session belong here?" judgment — ride it along.
+      try {
+        const meta = await getProjectMetadata(category.name, project);
+        const summary = typeof meta?.summary === 'string' ? meta.summary.trim() : '';
+        if (summary) {
+          lines.push(`    about: ${Array.from(summary).slice(0, MAX_SUMMARY_CHARS).join('')}`);
+        }
+      } catch { /* summary is enrichment only — digest works without it */ }
     }
   }
 

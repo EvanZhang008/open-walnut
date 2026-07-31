@@ -1407,39 +1407,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         if (result.sessionId) {
           promoteToRealSession(pendingColId, result.sessionId, result.taskId);
         }
-        // Notify main agent to reorganize the task (include user's prompt).
-        // Skipped for fix-walnut: the server already titled the task
-        // ("Fix Walnut: <report>") and set its project — renaming would clobber.
-        // Path-first launches (todo "+", no prompt yet) still notify — the
-        // butler owns category/project placement — but must NOT title: the
-        // "Session: <dir>" placeholder is exactly what the session-auto-title
-        // hook keys on to generate a real title from the user's FIRST message
-        // (CLI generate_session_title). A path-derived title would race it
-        // and win with a worse name.
-        if (qsp.intent !== 'fix-walnut') {
-          const agentMsg = [
-            `[Quick Start] Session created and running.`,
-            `- Task ID: ${result.taskId}`,
-            `- Path: ${qsp.cwd}`,
-            `- Category: Inbox / Quick Start`,
-            ...(text
-              ? [
-                  `- User prompt: "${text}"`,
-                  ``,
-                  `Please update the task:`,
-                  `1. Set a descriptive title (replace "Session: ...")`,
-                  `2. Move to the correct category and project if needed`,
-                ]
-              : [
-                  `- No first message yet (path-first launch).`,
-                  ``,
-                  `Please move the task to the correct category and project if needed.`,
-                  `Do NOT rename it: the title auto-generates from the user's first message in the session.`,
-                ]),
-          ].join('\n');
-          // Images already sent to the session via quickStartSession() — don't duplicate
-          chat.sendMessage(agentMsg, undefined, undefined, 'quick-start');
-        }
+        // No butler notification here anymore. Title AND category/project are
+        // both server-side now: the session-auto-title hook titles from the
+        // user's first message (CLI generate_session_title), and quick-start
+        // fires a fast-model categorizer (session-organize.ts) for placement.
+        // The old "[Quick Start] …move the task" chat message woke the MAIN
+        // agent (full model + context) for a one-field decision on every
+        // launch — deliberately removed; don't reintroduce it.
       }).catch((err) => {
         // Keep the pending column visible with error — user can Retry from panel
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -1450,7 +1424,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         setSessionColumns(prev => [...prev]);
         notify(quickStartFailedNotification(qsp.host, qsp.cwd, errMsg));
       });
-  }, [chat, notify]);
+  }, [notify]);
 
   // Todo-anchored select = path-first flow: no chat input to type a first
   // message into, so start the session immediately with an empty message —
@@ -1469,9 +1443,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       setQuickStartPath(null);
       setQuickStartModel(undefined);   // clear the collapsed-bar model mirror
       // Local echo as a collapsible bubble — auto-collapses to "⚡ Quick Start on <cwd>"
-      // with a chevron the user can click to see the full pasted prompt. The agent
-      // reorganize message sent later (source: 'quick-start') is suppressed in the UI
-      // (see ChatMessage.tsx), so this echo is the single visual confirmation.
+      // with a chevron the user can click to see the full pasted prompt. This echo
+      // is the single visual confirmation (no butler message is sent anymore —
+      // titling and category placement both happen server-side).
       chat.addLocalMessage(
         `${qsp.intent === 'fix-walnut' ? 'Fix Walnut' : 'Quick Start'} on \`${qsp.cwd}\`${qsp.host ? ` (${qsp.hostLabel ?? qsp.host})` : ''}:\n> ${text}`,
         'quick-start-echo',

@@ -802,14 +802,19 @@ export const messageSendTriageHook: SessionHookDefinition = {
 };
 
 // ── Session auto-title (CLI generate_session_title control protocol) ──
-// A path-first quick start (todo "+" launcher) spawns the CLI with an EMPTY first
-// message, so its task keeps the `Session: <basename(cwd)>` placeholder title —
-// nothing ever had a prompt to title from. When the user's first real message
-// arrives, this hook asks the SESSION'S OWN CLI to title it (the same Haiku
-// titler the CLI uses natively, over the existing stream-json control_request
-// pipe — no separate LLM plumbing). The result replaces the placeholder on the
-// task AND the session record. A user rename or agent retitle wins permanently:
-// the hook only ever writes while the exact placeholder is still in place.
+// EVERY quick start (text-first and path-first) creates its task with the
+// `Session: <basename(cwd)>` placeholder title. The AI title comes from the
+// SESSION'S OWN CLI (the same Haiku titler the CLI uses natively, over the
+// existing stream-json control_request pipe — no separate LLM plumbing):
+//   - text-first: triggered at LAUNCH from quick-start.ts (autoTitleFromLaunch
+//     below) using the launch message — the hook alone would only see the
+//     SECOND send, because the first message rides SESSION_START, which the
+//     dispatcher never maps to onMessageSend.
+//   - path-first: triggered by this onMessageSend hook when the user's first
+//     real message arrives (nothing existed to title from at launch).
+// The result replaces the placeholder on the task AND the session record. A
+// user rename or agent retitle wins permanently: titling only ever writes
+// while the exact placeholder is still in place.
 
 /** Re-asks on later sends while the placeholder survives, but caps total tries
  *  so a session whose CLI never answers doesn't burn a control request forever. */
@@ -825,6 +830,124 @@ export function __resetAutoTitleState(retryDelayMs = 4_000): void {
   autoTitleAttempts.clear();
   autoTitleInFlight.clear();
   autoTitleRetryDelayMs = retryDelayMs;
+}
+
+/**
+ * Shared titling core — ask the session's own CLI for a title and apply it
+ * while the placeholder still holds. Used by both the onMessageSend hook
+ * (path-first) and autoTitleFromLaunch (text-first). Returns true when a
+ * title was written. Never throws.
+ */
+async function askAndApplyTitle(
+  sessionId: string, taskId: string, message: string, placeholder: string,
+): Promise<boolean> {
+  if (autoTitleInFlight.has(sessionId)) return false;
+  if ((autoTitleAttempts.get(sessionId) ?? 0) >= AUTO_TITLE_MAX_ATTEMPTS) return false;
+  autoTitleInFlight.add(sessionId);
+
+  try {
+    const { sessionRunner } = await import('../../providers/claude-code-session.js');
+    const live = sessionRunner.findSessionByClaudeId(sessionId);
+    // No live native session (ACP/codex engine, or record-only) → nothing to
+    // ask. Deliberately does NOT burn an attempt: the CLI may attach later.
+    if (!live?.generateSessionTitle) return false;
+
+    // The caller's task snapshot can be stale (hook payload cache is up to
+    // 10s old) — re-read before spending a CLI round-trip, so a send that
+    // follows a successful titling doesn't re-ask and discard.
+    const { getTask, updateTask } = await import('../task-manager.js');
+    if (((await getTask(taskId)).title ?? '') !== placeholder) return false;
+
+    autoTitleAttempts.set(sessionId, (autoTitleAttempts.get(sessionId) ?? 0) + 1);
+    // The CLI passes `description` VERBATIM to its Haiku titler (fork
+    // sessionTitle.ts: userPrompt = description) — so ship context, not just
+    // the raw message. The current (placeholder) title carries the directory
+    // name; the titler keeps it when it matters ("Fix walnut session titles")
+    // and drops it when it doesn't. slice(2000): the titler only needs the
+    // opening of the message, and the envelope rides the FIFO — no point
+    // shipping a pasted wall of text.
+    const description = `Current session title: ${placeholder}\nUser's first message: ${message.slice(0, 2000)}`;
+    // Two tries per call: the send that triggered us may be cold-resuming a
+    // dead CLI, in which case the first control write fails before the FIFO
+    // exists. Ask budget (10+4+10=24s) stays under the dispatcher's 30s
+    // inline-handler timeout; even if the trailing task writes push past it,
+    // that timeout only stops the dispatcher WAITING — the handler still
+    // completes and the finally below still cleans up.
+    let title = await live.generateSessionTitle(description, 10_000);
+    if (!title) {
+      await new Promise((r) => setTimeout(r, autoTitleRetryDelayMs));
+      title = await live.generateSessionTitle(description, 10_000);
+    }
+    if (!title) return false;
+    // The CLI titler contracts to a few words, but updateTask has no length
+    // gate (unlike PATCH /api/sessions/:id's 500) — cap defensively.
+    title = title.slice(0, 200);
+
+    // Re-read before writing — the user (or the butler) may have renamed the
+    // task while the CLI was thinking; the placeholder check must hold at
+    // write time, not just at dispatch time.
+    const current = await getTask(taskId);
+    if ((current.title ?? '') !== placeholder) {
+      log.session.info('session-auto-title: skipped — title changed during generation', {
+        sessionId, taskId,
+      });
+      return false;
+    }
+    // updateTask's central emit covers web-ui; main-agent rides extraTargets
+    // (a second manual emit would double-process the task in every frontend).
+    await updateTask(taskId, { title }, { source: 'session-auto-title', extraTargets: ['main-agent'] });
+    autoTitleAttempts.delete(sessionId); // done — free the entry
+
+    // Mirror onto the session record (same placeholder guard) so the session
+    // panel header and search index pick it up too.
+    try {
+      const { getSessionByClaudeId, updateSessionRecord } = await import('../session-tracker.js');
+      const record = await getSessionByClaudeId(sessionId);
+      if (record && (record.title ?? '') === placeholder) {
+        await updateSessionRecord(sessionId, { title });
+      }
+    } catch { /* record mirror is best-effort; the task title is the visible one */ }
+
+    log.session.info('session-auto-title: applied CLI-generated title', {
+      sessionId, taskId, title,
+    });
+    return true;
+  } catch (err) {
+    log.session.warn('session-auto-title: failed — placeholder kept', {
+      sessionId, taskId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  } finally {
+    autoTitleInFlight.delete(sessionId);
+  }
+}
+
+/**
+ * Launch-path titling for TEXT-FIRST quick starts. The launch message rides
+ * SESSION_START (which the dispatcher never maps to onMessageSend), so without
+ * this the task would only get its AI title on the user's SECOND message.
+ * Fire-and-forget from quick-start.ts, right after the SESSION_START emit —
+ * the CLI spawn is seconds behind that emit, so poll for the live session
+ * before asking. If the whole launch attempt fails, the placeholder stays and
+ * the onMessageSend hook still covers the next human send (shared attempt cap).
+ */
+export async function autoTitleFromLaunch(
+  sessionId: string, taskId: string, message: string, cwd: string,
+): Promise<void> {
+  const trimmed = (message ?? '').trim();
+  if (!trimmed) return; // path-first: nothing to title from — the hook owns it
+  if (/^\/[a-z][\w-]*(\s|$)/i.test(trimmed)) return; // command grammar, not a paste path
+  const { defaultSessionTaskTitle } = await import('../sessions/quick-start.js');
+  const placeholder = defaultSessionTaskTitle(cwd);
+
+  const { sessionRunner } = await import('../../providers/claude-code-session.js');
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (sessionRunner.findSessionByClaudeId(sessionId)?.generateSessionTitle) break;
+    await new Promise((r) => setTimeout(r, 1_000));
+  }
+  await askAndApplyTitle(sessionId, taskId, trimmed, placeholder);
 }
 
 export const sessionAutoTitleHook: SessionHookDefinition = {
@@ -863,78 +986,7 @@ export const sessionAutoTitleHook: SessionHookDefinition = {
       .find((ph) => taskTitle === ph);
     if (!placeholder) return;
 
-    if (autoTitleInFlight.has(p.sessionId)) return;
-    if ((autoTitleAttempts.get(p.sessionId) ?? 0) >= AUTO_TITLE_MAX_ATTEMPTS) return;
-    autoTitleInFlight.add(p.sessionId);
-
-    try {
-      const { sessionRunner } = await import('../../providers/claude-code-session.js');
-      const live = sessionRunner.findSessionByClaudeId(p.sessionId);
-      // No live native session (ACP/codex engine, or record-only) → nothing to
-      // ask. Deliberately does NOT burn an attempt: the CLI may attach later.
-      if (!live?.generateSessionTitle) return;
-
-      // The payload's task snapshot can be up to 10s stale (payload-builder
-      // cache) — re-read before spending a CLI round-trip, so a send that
-      // follows a successful titling doesn't re-ask and discard.
-      const { getTask, updateTask } = await import('../task-manager.js');
-      if (((await getTask(p.taskId)).title ?? '') !== placeholder) return;
-
-      autoTitleAttempts.set(p.sessionId, (autoTitleAttempts.get(p.sessionId) ?? 0) + 1);
-      // Two tries inside one hook dispatch: the send that triggered us may be
-      // cold-resuming a dead CLI, in which case the first control write fails
-      // before the FIFO exists. Ask budget (10+4+10=24s) stays under the
-      // dispatcher's 30s inline-handler timeout; even if the trailing task
-      // writes push past it, that timeout only stops the dispatcher WAITING —
-      // the handler still completes and the finally below still cleans up.
-      // slice(2000): the titler only needs the opening of the message, and the
-      // envelope rides the FIFO — no point shipping a pasted wall of text.
-      let title = await live.generateSessionTitle(message.slice(0, 2000), 10_000);
-      if (!title) {
-        await new Promise((r) => setTimeout(r, autoTitleRetryDelayMs));
-        title = await live.generateSessionTitle(message.slice(0, 2000), 10_000);
-      }
-      if (!title) return;
-      // The CLI titler contracts to a few words, but updateTask has no length
-      // gate (unlike PATCH /api/sessions/:id's 500) — cap defensively.
-      title = title.slice(0, 200);
-
-      // Re-read before writing — the user (or the butler) may have renamed the
-      // task while the CLI was thinking; the placeholder check must hold at
-      // write time, not just at dispatch time.
-      const current = await getTask(p.taskId);
-      if ((current.title ?? '') !== placeholder) {
-        log.session.info('session-auto-title: skipped — title changed during generation', {
-          sessionId: p.sessionId, taskId: p.taskId,
-        });
-        return;
-      }
-      // updateTask's central emit covers web-ui; main-agent rides extraTargets
-      // (a second manual emit would double-process the task in every frontend).
-      await updateTask(p.taskId, { title }, { source: 'session-auto-title', extraTargets: ['main-agent'] });
-      autoTitleAttempts.delete(p.sessionId); // done — free the entry
-
-      // Mirror onto the session record (same placeholder guard) so the session
-      // panel header and search index pick it up too.
-      try {
-        const { getSessionByClaudeId, updateSessionRecord } = await import('../session-tracker.js');
-        const record = await getSessionByClaudeId(p.sessionId);
-        if (record && (record.title ?? '') === placeholder) {
-          await updateSessionRecord(p.sessionId, { title });
-        }
-      } catch { /* record mirror is best-effort; the task title is the visible one */ }
-
-      log.session.info('session-auto-title: applied CLI-generated title', {
-        sessionId: p.sessionId, taskId: p.taskId, title,
-      });
-    } catch (err) {
-      log.session.warn('session-auto-title: failed — placeholder kept', {
-        sessionId: p.sessionId, taskId: p.taskId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    } finally {
-      autoTitleInFlight.delete(p.sessionId);
-    }
+    await askAndApplyTitle(p.sessionId, p.taskId, message, placeholder);
   },
 };
 

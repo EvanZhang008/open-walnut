@@ -184,6 +184,26 @@ categoriesRouter.patch('/:category/projects/:project/metadata', async (req: Requ
   }
 })
 
+// POST /api/categories/:category/projects/:project/summary/refresh — regenerate
+// the fast-model project summary on demand (backfill for pre-existing projects;
+// the automatic path is task-count thresholds in project-summary.ts).
+categoriesRouter.post('/:category/projects/:project/summary/refresh', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const category = decodeURIComponent(req.params.category as string)
+    const project = decodeURIComponent(req.params.project as string)
+    const { refreshProjectSummary } = await import('../../core/project-summary.js')
+    const ok = await refreshProjectSummary(category, project)
+    if (!ok) {
+      res.status(422).json({ error: 'summary generation produced nothing (no tasks, or model unavailable)' })
+      return
+    }
+    const metadata = await getProjectMetadata(category, project)
+    res.json({ summary: metadata?.summary ?? null, summary_task_count: metadata?.summary_task_count ?? null })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // POST /api/categories/:name/source — update category source via store.categories
 categoriesRouter.post('/:name/source', async (req: Request, res: Response, next: NextFunction) => {
   try {

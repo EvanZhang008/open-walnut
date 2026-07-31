@@ -104,7 +104,8 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
 
   // Quick Start tasks always go to the built-in 'Local' category (source=local,
   // hard-reserved via config.local.categories so no sync plugin can claim it).
-  // The session AI will move the task to the correct category/project after completion.
+  // The fast-model auto-organize step below moves the task to the right
+  // category/project moments later (or leaves it here when nothing matches).
   const taskCategory = 'Local';
 
   let updatedTask: Task;
@@ -234,6 +235,38 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     // ACP (codex) mints its own ids inside the adapter — only forward for native.
     ...(preassignedSessionId && engine !== 'codex' ? { preassignedSessionId } : {}),
   }, ['session-runner'], { source });
+
+  // TEXT-FIRST auto-title: the launch message rides SESSION_START, which the
+  // hook dispatcher never maps to onMessageSend — without this kick the task
+  // would keep its `Session: <basename>` placeholder until the user's SECOND
+  // message. Fire-and-forget (the helper polls for the CLI spawn internally);
+  // native engine only — ACP mints its own ids and has no control pipe. The
+  // placeholder check here skips callers with a real title (fix-walnut,
+  // routines, retries of an already-titled task) without the helper's poll.
+  if (preassignedSessionId && engine !== 'codex' && message.trim()
+      && updatedTask.title === defaultSessionTaskTitle(cwd)) {
+    import('../session-hooks/builtins.js')
+      .then(({ autoTitleFromLaunch }) => autoTitleFromLaunch(preassignedSessionId, updatedTask.id, message, cwd))
+      .catch((err) => log.web.warn(`${source}: launch auto-title failed`, {
+        taskId: updatedTask.id, error: err instanceof Error ? err.message : String(err),
+      }));
+  }
+
+  // AUTO-ORGANIZE: fast-model category/project placement, replacing the old
+  // client-side "[Quick Start] …move the task" wake-up of the main butler
+  // agent. New default-placed tasks only — a caller that supplied a project
+  // (fix-walnut, routines) placed the task deliberately; retries were already
+  // organized (or deliberately left) on the original launch. Gated off in
+  // test servers (real ~/.aws → live Bedrock calls + mid-assertion task moves).
+  const { backgroundAiDisabled } = await import('../cheap-model.js');
+  if (!existingTaskId && !backgroundAiDisabled()
+      && updatedTask.category === 'Local' && updatedTask.project === 'Quick Start') {
+    import('../session-organize.js')
+      .then(({ organizeQuickStartTask }) => organizeQuickStartTask(updatedTask.id, cwd, message))
+      .catch((err) => log.web.warn(`${source}: auto-organize failed`, {
+        taskId: updatedTask.id, error: err instanceof Error ? err.message : String(err),
+      }));
+  }
 
   log.web.info(`${source}: created task + started session`, {
     taskId: updatedTask.id, cwd, host, category: taskCategory, retry: !!existingTaskId,

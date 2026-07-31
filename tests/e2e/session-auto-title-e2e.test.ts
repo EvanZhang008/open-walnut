@@ -1,12 +1,17 @@
 /**
  * E2E: session auto-title over the real stream-json control protocol.
  *
- * Scenario (the path-first quick start): POST /api/sessions/quick-start with an
- * EMPTY message spawns the CLI init-only and leaves the task titled
- * `Session: <basename(cwd)>`. The user then sends their first real message via
- * the session:send RPC — the session-auto-title hook must ask the LIVE CLI for
- * a title (generate_session_title control_request over the FIFO) and replace
- * the placeholder on the task.
+ * Two scenarios:
+ *  - PATH-FIRST quick start: POST /api/sessions/quick-start with an EMPTY
+ *    message spawns the CLI init-only and leaves the task titled
+ *    `Session: <basename(cwd)>`. The user then sends their first real message
+ *    via the session:send RPC — the session-auto-title hook must ask the LIVE
+ *    CLI for a title (generate_session_title control_request over the FIFO)
+ *    and replace the placeholder on the task.
+ *  - TEXT-FIRST quick start: the launch itself carries the message (which
+ *    rides SESSION_START, an event the hook dispatcher never maps) — titling
+ *    must fire from the quick-start launch path (autoTitleFromLaunch), with
+ *    no further send needed.
  *
  * Everything is real except the CLI binary: Express server, WS RPC, event bus,
  * hook dispatcher, session-runner, mock daemon (real FIFO + sendRaw), and
@@ -148,5 +153,36 @@ describe('session auto-title E2E (path-first quick start)', () => {
     expect(recTitle).toBe('Mock title: title-test:please fix the login redirect')
 
     ws.close()
+  }, 60_000)
+})
+
+describe('session auto-title E2E (text-first quick start)', () => {
+  it('titles the task from the LAUNCH message with no further send', async () => {
+    // Launch WITH a message: the CLI spawns and runs the turn immediately
+    // ('title-test:' mode keeps the mock alive after the turn, like the real
+    // long-running CLI). autoTitleFromLaunch must pick the title up from the
+    // launch alone — no session:send afterwards.
+    const cwd = path.join(WALNUT_HOME, 'demo-text-first')
+    await fs.mkdir(cwd, { recursive: true })
+    const res = await fetch(apiUrl('/api/sessions/quick-start'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ cwd, message: 'title-test:add dark mode to settings page' }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json() as { taskId: string; sessionId?: string }
+    expect(body.sessionId).toBeTruthy()
+
+    const title = await pollUntil(
+      () => getTaskTitle(body.taskId),
+      (t) => t !== 'Session: demo-text-first',
+      30_000,
+    )
+    expect(title).toBe('Mock title: title-test:add dark mode to settings')
+
+    // Session record mirrors it.
+    const recRes = await fetch(apiUrl(`/api/sessions/${body.sessionId}`))
+    const rec = await recRes.json() as { session?: { title?: string }; title?: string }
+    expect(rec.session?.title ?? rec.title).toBe('Mock title: title-test:add dark mode to settings')
   }, 60_000)
 })

@@ -24,6 +24,10 @@ process.env.OPEN_WALNUT_HOME = tmpBase
 process.env.WALNUT_DAEMON_DIR = path.join(tmpBase, 'daemon')
 process.env.WALNUT_STREAMS_DIR = path.join(tmpBase, 'daemon-streams')
 process.env.WALNUT_DISABLE_SEARCH = '1'
+// No unprompted model calls (auto-organize, project summaries) from the
+// fixture — the host's real ~/.aws would make quick-start POSTs hit live
+// Bedrock and move tasks mid-assertion. See backgroundAiDisabled().
+process.env.WALNUT_DISABLE_BACKGROUND_AI = '1'
 // Keep host discovery, Claude history, credentials, and child processes inside
 // the fixture. Inheriting the developer's HOME makes browser tests probe real
 // SSH aliases and can even project unrelated ~/.claude journals.
@@ -36,9 +40,9 @@ await fs.rm(tmpBase, { recursive: true, force: true })
 const tasksDir = path.join(tmpBase, 'tasks')
 await fs.mkdir(tasksDir, { recursive: true })
 
-// Quick Start asks the main agent to reorganize the newly-created task after
-// the real session route returns. Keep that process local and deterministic;
-// session/ACP processes are mocked separately below.
+// The main agent still gets messages from other flows (chat, notifications).
+// Keep that process local and deterministic; session/ACP processes are mocked
+// separately below.
 const mockMainAgent = path.resolve(
   path.dirname(new URL(import.meta.url).pathname),
   '../../providers/mock-main-agent.mjs',

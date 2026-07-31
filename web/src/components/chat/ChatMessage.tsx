@@ -1149,7 +1149,9 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
     // Substantive heartbeat response falls through to normal rendering below
   }
 
-  // Quick Start system banner — compact, centered, no bubble chrome
+  // Quick Start system banner — hidden. New launches stopped sending it
+  // (2026-07-31: titling + placement moved server-side), but old chat history
+  // still replays these entries, so the filter must stay.
   if (source === 'quick-start' && role === 'user') {
     return null;
   }

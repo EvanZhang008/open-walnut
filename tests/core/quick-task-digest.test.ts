@@ -3,11 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   getStoreCategories: vi.fn(),
   listTasksSlim: vi.fn(),
+  getProjectMetadata: vi.fn(),
 }));
 
 vi.mock('../../src/core/task-manager.js', () => ({
   getStoreCategories: mocks.getStoreCategories,
   listTasksSlim: mocks.listTasksSlim,
+  getProjectMetadata: mocks.getProjectMetadata,
 }));
 
 import { buildCategoryDigest } from '../../src/core/quick-task-digest.js';
@@ -37,8 +39,24 @@ describe('buildCategoryDigest', () => {
   beforeEach(() => {
     mocks.getStoreCategories.mockReset();
     mocks.listTasksSlim.mockReset();
+    mocks.getProjectMetadata.mockReset();
     mocks.getStoreCategories.mockResolvedValue({});
     mocks.listTasksSlim.mockResolvedValue([]);
+    mocks.getProjectMetadata.mockResolvedValue(null);
+  });
+
+  it('appends the maintained project summary as an "about:" line under the project', async () => {
+    mocks.getStoreCategories.mockResolvedValue(categories(['Work']));
+    mocks.listTasksSlim.mockResolvedValue([
+      task('Update homepage', 'Work', 'Website'),
+    ]);
+    mocks.getProjectMetadata.mockImplementation(async (_cat: string, project: string) =>
+      project === 'Website' ? { summary: 'Marketing site revamp: new landing page and SEO.' } : null);
+
+    const { digest } = await buildCategoryDigest();
+
+    expect(digest).toContain('  - Website: "Update homepage"');
+    expect(digest).toContain('    about: Marketing site revamp: new landing page and SEO.');
   });
 
   it('groups default-project titles on category lines and named projects below them', async () => {

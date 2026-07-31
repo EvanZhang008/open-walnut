@@ -1500,6 +1500,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     startOverviewMaintainer()
   }
 
+  // -- Start project summary maintainer (task counts → fast-model project summaries) --
+  {
+    const { startProjectSummaryMaintainer } = await import('../core/project-summary.js')
+    startProjectSummaryMaintainer()
+  }
+
   // -- Wire bus subscriber to push events to WS clients --
   bus.subscribe('web-ui', (event) => {
     broadcastEvent(event.name, event.data)

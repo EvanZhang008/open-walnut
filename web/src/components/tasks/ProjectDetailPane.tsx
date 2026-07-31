@@ -5,6 +5,9 @@ import { useIntegrations, getIntegrationMeta } from '../../hooks/useIntegrations
 interface ProjectMetadata {
   default_cwd?: string;
   default_host?: string;
+  /** Fast-model project summary (project-summary.ts), regenerated at task-count thresholds. */
+  summary?: string;
+  summary_task_count?: number;
   [key: string]: unknown;
 }
 
@@ -22,6 +25,20 @@ export function ProjectDetailPane({ category, project, tasks, onClose, style }: 
   const [memorySummary, setMemorySummary] = useState<string | null>(null);
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
+  const [summaryRefreshing, setSummaryRefreshing] = useState(false);
+
+  const refreshSummary = useCallback(async () => {
+    setSummaryRefreshing(true);
+    try {
+      const r = await fetch(`/api/categories/${encodeURIComponent(category)}/projects/${encodeURIComponent(project)}/summary/refresh`, { method: 'POST' });
+      if (r.ok) {
+        const data = await r.json();
+        setMetadata((prev) => ({ ...prev, summary: data.summary ?? undefined, summary_task_count: data.summary_task_count ?? undefined }));
+      }
+    } catch { /* keep the old summary */ } finally {
+      setSummaryRefreshing(false);
+    }
+  }, [category, project]);
 
   // Compute task counts from props
   const counts = useMemo(() => {
@@ -166,6 +183,24 @@ export function ProjectDetailPane({ category, project, tasks, onClose, style }: 
             <span className="detail-stat-label">Done</span>
           </div>
         </div>
+      </div>
+
+      {/* AI project summary (project-summary.ts, refreshed at task-count thresholds) */}
+      <div className="detail-section">
+        <div className="detail-section-title">
+          About
+          <button
+            className="detail-summary-refresh"
+            onClick={refreshSummary}
+            disabled={summaryRefreshing}
+            title="Regenerate the AI summary from the current task list"
+          >
+            {summaryRefreshing ? '…' : '↻'}
+          </button>
+        </div>
+        {metadata.summary
+          ? <p className="detail-memory-text">{metadata.summary}</p>
+          : <p className="detail-memory-text text-muted">No summary yet — generated automatically as tasks accumulate, or click ↻.</p>}
       </div>
 
       {/* Memory summary */}

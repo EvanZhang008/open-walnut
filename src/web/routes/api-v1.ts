@@ -333,7 +333,9 @@ export function normalizeEntries(entries: ChatEntry[]): ApiV1Message[] {
     // Machine-generated Quick Start banners ("[Quick Start] Session created…
     // Please update the task…") are agent instructions, not conversation —
     // the web console hides them entirely (ChatMessage.tsx); so do we. They
-    // appear BOTH as ui echoes and as ai-tagged user turns.
+    // appear BOTH as ui echoes and as ai-tagged user turns. New launches no
+    // longer send this message (titling + placement moved server-side,
+    // 2026-07-31) — the filter stays for replaying OLD chat history.
     if (entry.role === 'user' && entry.source === 'quick-start') continue
     if (entry.tag === 'ui') {
       if (entry.notification && entry.source && HIDDEN_NOTIFICATION_SOURCES.has(entry.source)) continue
