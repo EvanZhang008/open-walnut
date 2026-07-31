@@ -323,6 +323,52 @@ if (outputFormat === 'stream-json') {
       return;
     }
 
+    // 2a.0d. "hold-turn-test[:<summary>]" — reproduce upstream ACP #870: a turn
+    //        launches an async SUBAGENT and its terminal `result` (plus the CLI's
+    //        immediate trailing idle) arrives while the subagent is still live.
+    //        Real-CLI-verified cycle (2.1.206):
+    //          user result → idle → (subagent works) → task_notification →
+    //          followup summary → result(origin task-notification)
+    //        The turn must stay open (no SESSION_RESULT) across the early result
+    //        AND the early idle, and complete when the followup result lands —
+    //        with the followup summary as the answer. No trailing idle after the
+    //        followup result is emitted (that's the lost-idle wedge #870 heals).
+    if (effectiveMessage === 'hold-turn-test' || effectiveMessage.startsWith('hold-turn-test:')) {
+      const summary = effectiveMessage.includes(':')
+        ? effectiveMessage.split(':').slice(1).join(':')
+        : 'The background agent finished and produced its report.';
+      const sid = outputSessionId;
+      function emitHold(line) { process.stdout.write(JSON.stringify(line) + '\n'); }
+      emitHold({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'running' });
+      emitHold({ type: 'assistant', message: { id: 'msg_hold_main', type: 'message', role: 'assistant', model: 'mock-model', content: [{ type: 'text', text: 'Launching a background agent — will report back.' }], stop_reason: 'end_turn', usage: { input_tokens: 100, output_tokens: 25 } }, session_id: sid });
+      emitHold({ type: 'system', subtype: 'task_started', session_id: sid, task_id: 'hold-sub-1', task_type: 'local_agent', subagent_type: 'general-purpose', description: 'Background reader agent' });
+      emitHold({ type: 'system', subtype: 'background_tasks_changed', session_id: sid, tasks: [{ task_id: 'hold-sub-1', task_type: 'local_agent', description: 'Background reader agent' }] });
+      // The user turn's terminal result + immediate idle — subagent still live: HELD.
+      emitHold({ type: 'result', subtype: 'success', is_error: false, duration_ms: 900, num_turns: 1, result: 'Launching a background agent — will report back.', session_id: sid, total_cost_usd: 0.003, usage: { input_tokens: 100, output_tokens: 25 } });
+      emitHold({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
+      // Hold window sized for BROWSER assertions: the spec must observe the
+      // held-open state (status still 'running') AFTER the early result+idle
+      // batch — page load + panel render costs seconds, so a sub-second window
+      // is unobservable. Unit tests cover the same lanes with zero delay.
+      const HOLD_MS = Number(process.env.MOCK_HOLD_TURN_MS || 10000);
+      setTimeout(() => {
+        // Subagent works (progress heartbeat), then reaches terminal.
+        emitHold({ type: 'system', subtype: 'task_progress', session_id: sid, task_id: 'hold-sub-1', summary: 'reading files', usage: { total_tokens: 800 } });
+        emitHold({ type: 'system', subtype: 'task_updated', session_id: sid, task_id: 'hold-sub-1', patch: { status: 'completed' } });
+        emitHold({ type: 'system', subtype: 'task_notification', session_id: sid, task_id: 'hold-sub-1', status: 'completed' });
+        emitHold({ type: 'system', subtype: 'background_tasks_changed', session_id: sid, tasks: [] });
+      }, HOLD_MS);
+      setTimeout(() => {
+        // The promised followup summary streams, then its result (task-notification
+        // origin) lands. Deliberately NO trailing idle afterwards.
+        emitHold({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'running' });
+        emitHold({ type: 'assistant', message: { id: 'msg_hold_followup', type: 'message', role: 'assistant', model: 'mock-model', content: [{ type: 'text', text: summary }], stop_reason: 'end_turn', usage: { input_tokens: 60, output_tokens: 40 } }, session_id: sid });
+        emitHold({ type: 'result', subtype: 'success', is_error: false, duration_ms: 700, num_turns: 1, result: summary, session_id: sid, total_cost_usd: 0.006, origin: { kind: 'task-notification' }, usage: { input_tokens: 60, output_tokens: 40 } });
+      }, HOLD_MS + 4000);
+      // Do NOT exit: FIFO-mode CLI stays alive between turns.
+      return;
+    }
+
     // 2a. For "plan-test" messages, emit Write (to plans/) + ExitPlanMode tool_use
     if (effectiveMessage === 'plan-test' || effectiveMessage.startsWith('plan-test:')) {
       // Extract optional plan file path from "plan-test:/path/to/plan.md"

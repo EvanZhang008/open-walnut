@@ -592,7 +592,21 @@ export class ClaudeCodeSession {
   /** THE authoritative set of background tasks (dynamic workflows / subagents), keyed by
    *  task_id, each carrying its latest status. "Is bg work in flight" is derived from this
    *  set (see hasActiveBackgroundWork) — there is no parallel scalar counter to desync. */
-  private _bgTasks = new Map<string, { description?: string; subagentType?: string; taskType?: string; status: string; tokens?: number; lastTool?: string; summary?: string; workflowName?: string; isBackgrounded?: boolean }>()
+  private _bgTasks = new Map<string, { description?: string; subagentType?: string; taskType?: string; status: string; tokens?: number; lastTool?: string; summary?: string; workflowName?: string; isBackgrounded?: boolean; endedPerLevel?: boolean }>()
+  /** Task ids that have EVER appeared in a `background_tasks_changed` payload — proof of
+   *  membership in the CLI's level universe. Only a task the CLI itself once listed may be
+   *  absent-marked by a later level (see the background_tasks_changed handler); a task the
+   *  level universe never covered must not be touched by level evidence. Cleared on spawn
+   *  (fresh process = fresh registry). */
+  private _bgSeenInLevel = new Set<string>()
+  /** The withheld user-turn outcome (port of upstream ACP #870 `Turn.deferredSettle`).
+   *  Stored when the turn's terminal `result` arrives while background subagents are
+   *  still live; the turn later completes WITH this outcome — at the drain idle, at the
+   *  task-notification followup's terminal result, or at a level/daemon reconcile drain —
+   *  instead of rewriting an error to success. Cleared on spawn, on a new turn's
+   *  writeMessage (the user moving on outranks the hold — upstream's hand-off contract),
+   *  and on interrupt/process-death teardown. */
+  private _deferredOutcome: { isError: boolean; resultText?: string; totalCost?: number; duration?: number } | undefined
   /** Workflow name from the most recent task_started with task_type==='local_workflow'. */
   private _workflowName: string | undefined
   /** The workflow script Claude generated (task_started.prompt) + its description —
@@ -623,6 +637,11 @@ export class ClaudeCodeSession {
     let n = 0
     for (const t of this._bgTasks.values()) {
       if (t.isBackgrounded) continue
+      // endedPerLevel (#870 port): a replace-semantics `background_tasks_changed`
+      // payload omitted this task after having listed it — its terminal bookends were
+      // lost. Gating on it would wedge the withheld turn forever. Excluded from
+      // turn-over gating only; the entry stays for the UI and the daemon PULL.
+      if (t.endedPerLevel) continue
       if (!ClaudeCodeSession._BG_TERMINAL_STATUSES.has(t.status)) n++
     }
     return n
@@ -692,10 +711,18 @@ export class ClaudeCodeSession {
 
   /** Emit the withheld turn-over (AGENT_COMPLETE + SESSION_RESULT) exactly once. Called by
    *  the idle handler when the CLI goes idle with no background work left.
-   *  `_turnResultEmitted` guards against the CLI's trailing idles re-firing it. */
+   *  `_turnResultEmitted` guards against the CLI's trailing idles re-firing it.
+   *
+   *  Settles with the STORED outcome when the withheld result recorded one (upstream ACP
+   *  #870: "the hand-off reports the recorded stop reason instead of rewriting it to
+   *  end_turn"). Pre-fix this lane hardcoded isError:false, so a turn whose own result
+   *  was an error — withheld because a subagent was still live — completed as a SUCCESS:
+   *  the task went AGENT_COMPLETE instead of surfacing the failure. */
   private _completeTurnOnIdle(): void {
     const sid = this.claudeSessionId
     if (!sid) return
+    const outcome = this._deferredOutcome
+    this._deferredOutcome = undefined
     this._activity = undefined
     this._processStatus = 'idle'
     this._turnResultEmitted = true
@@ -708,10 +735,20 @@ export class ClaudeCodeSession {
     // advance the watermark to it so a replay of this whole turn (result + idle)
     // is positionally suppressed after a restart.
     this._advanceConsumedOffset()
-    this.emitStatusChanged('AGENT_COMPLETE')
+    this.emitStatusChanged('AGENT_COMPLETE', outcome?.isError ? (outcome.resultText ?? '').slice(0, 500) || undefined : undefined)
     bus.emit(EventNames.SESSION_RESULT, {
       sessionId: sid, taskId: this.taskId,
-      result: this.fullText, isError: false,
+      // Success: fullText — it carries the LATEST answer (a task-notification
+      // followup's summary overwrites it after the withheld result was stored, and
+      // that summary IS the turn's real answer). Error: the stored error text is
+      // the signal; fullText would be pre-error prose.
+      result: outcome?.isError ? (outcome.resultText ?? this.fullText) : this.fullText,
+      isError: outcome?.isError ?? false,
+      ...(outcome?.totalCost !== undefined ? {
+        totalCost: outcome.totalCost,
+        costDelta: this.billableCostDelta(outcome.totalCost),
+      } : {}),
+      ...(outcome?.duration !== undefined ? { duration: outcome.duration } : {}),
     }, ['main-ai', 'session-runner'], { source: 'session-runner' })
     // Read back the CLI's true settings (effort + model) at turn-end (fire-and-forget
     // — never blocks completion). Keeps the badge honest across turns: settings can
@@ -1362,6 +1399,8 @@ export class ClaudeCodeSession {
     // hasActiveBackgroundWork() true forever → the new turn's completion is
     // withheld at the idle handler ("Background tasks running" stuck state).
     this._bgTasks.clear()
+    this._bgSeenInLevel.clear()      // Fresh process — fresh level universe
+    this._deferredOutcome = undefined // Fresh process — a dead process's withheld turn is gone
     this._resetWorkflowState()
     this._teamActive = false
     this._cliSessionState = undefined
@@ -1769,7 +1808,11 @@ export class ClaudeCodeSession {
           ...prev,
           status,
           isBackgrounded: t.isBackgrounded || prev?.isBackgrounded,
+          // #870: the fold's level verdict rides along so a wedged hold stays
+          // un-wedged across an attach (gating skips endedPerLevel entries).
+          endedPerLevel: t.endedPerLevel || prev?.endedPerLevel,
         })
+        if (t.endedPerLevel) session._bgSeenInLevel.add(taskId)
       }
       if (fold.cliState != null) {
         session._sessionStateSeen = true
@@ -2081,6 +2124,12 @@ export class ClaudeCodeSession {
       this._activity = undefined
       this.resultEmitted = false
       this._turnResultEmitted = false  // New turn starting — allow result emission
+      // #870 hand-off: the user moving on outranks a still-pending hold. A stale
+      // withheld outcome must not settle the NEW turn (a withheld turn that reached
+      // this reset already completed via idle/followup/reconcile, or its process
+      // died — either way the outcome is spent). Mid-turn injections skip this
+      // block, so an ACTIVE hold (status 'running') is never cleared here.
+      this._deferredOutcome = undefined
       this._turnStartOffset = this._transport?.fileSize ?? 0  // Track where this turn's data begins
       this._askUserIntercepted = false
       this._sawApiTimeoutThisTurn = false
@@ -2213,6 +2262,7 @@ export class ClaudeCodeSession {
   async interrupt(): Promise<void> {
     log.session.info('session interrupted', { taskId: this.taskId, pid: this.pid })
     this.resultEmitted = true
+    this._deferredOutcome = undefined // #870: a cancelled hold never settles later
     this.stopMonitoring()
     if (this._transport) {
       await this._transport.interrupt()
@@ -3212,6 +3262,79 @@ export class ClaudeCodeSession {
               })
               this._emitBackgroundTasksUpdate(sid)
             }
+          } else if (sys.subtype === 'background_tasks_changed') {
+            // ── Level reconciliation (port of upstream ACP #870) ──
+            // Replace-semantics snapshot of the CLI's OWN live background-task set
+            // ({tasks:[{task_id,…}]}; verified shape on real streams — local_agent +
+            // local_bash entries, empty array when everything drained). This is the
+            // self-heal signal for the residual failure the derived count can't fix
+            // alone: a task whose terminal bookends (task_updated/task_notification)
+            // were ALL lost (SSH flap, daemon-restart gap) stays 'running' in _bgTasks
+            // forever, wedging the withheld turn until the 2h idle-kill.
+            //
+            // Rules (each cost upstream a review round — don't simplify):
+            //  • Universe guard: only a task the level has EVER listed may be
+            //    absent-marked (_bgSeenInLevel). A live sync subagent is legitimately
+            //    absent from level payloads (measured 4–9×/session on real streams),
+            //    and a payload built before a spawn's registration would absent-mark
+            //    a brand-new task — both are outside the level's proven universe.
+            //  • Absent = endedPerLevel, NOT deleted and NOT status-rewritten: the
+            //    entry stays for the UI/daemon-PULL; only turn-over gating stops
+            //    waiting on it (see _runningBgCount). We never manufacture a
+            //    'completed' status the CLI didn't report.
+            //  • Reversible: a later level that lists the id again clears the mark
+            //    (upstream's corrective-inclusive-level rescue).
+            //  • Terminal entries are untouched (terminal is terminal).
+            const levelTasks = Array.isArray(sys.tasks) ? sys.tasks as Array<Record<string, unknown>> : null
+            if (levelTasks) {
+              const present = new Set<string>()
+              for (const t of levelTasks) {
+                const id = t?.task_id
+                if (typeof id !== 'string') continue
+                present.add(id)
+                this._bgSeenInLevel.add(id)
+                const prev = this._bgTasks.get(id)
+                if (prev?.endedPerLevel) {
+                  this._bgTasks.set(id, { ...prev, endedPerLevel: undefined })
+                }
+                // A level entry for an id we've never seen a task_started for: record
+                // it (level is CLI ground truth; the started event may have been lost).
+                if (!prev) {
+                  this._bgTasks.set(id, {
+                    status: 'running',
+                    description: t.description as string | undefined,
+                    taskType: t.task_type as string | undefined,
+                  })
+                }
+              }
+              let marked = 0
+              for (const [id, t] of this._bgTasks) {
+                if (present.has(id)) continue
+                if (!this._bgSeenInLevel.has(id)) continue // outside the level's proven universe
+                if (ClaudeCodeSession._BG_TERMINAL_STATUSES.has(t.status)) continue
+                if (!t.endedPerLevel) {
+                  this._bgTasks.set(id, { ...t, endedPerLevel: true })
+                  marked++
+                }
+              }
+              if (marked > 0) {
+                log.session.info('level reconcile: absent-marked tasks no longer in background_tasks_changed', {
+                  sessionId: sid, taskId: this.taskId, marked,
+                  remainingInFlight: this._runningBgCount(),
+                })
+              }
+              this._emitBackgroundTasksUpdate(sid)
+              // If the level just drained the last gating task and the CLI is already
+              // idle with a withheld turn, complete it now — the drain idle already
+              // passed and will not re-fire (the exact wedge this reconcile heals).
+              if (this._runningBgCount() === 0 && !this.resultEmitted && !this._turnResultEmitted
+                && this._cliSessionState === 'idle' && this._deferredOutcome) {
+                log.session.info('level reconcile drained last gating task — completing withheld turn', {
+                  sessionId: sid, taskId: this.taskId,
+                })
+                this._completeTurnOnIdle()
+              }
+            }
           } else if (sys.subtype && sys.subtype !== 'init' && sys.subtype !== 'status') {
             // ── Observability: structured status cards from the stream-json protocol ──
             // post_turn_summary (per-turn status card: status_category / needs_action /
@@ -3659,6 +3782,67 @@ export class ClaudeCodeSession {
           break
         }
 
+        // ── Task-notification-origin results (#870) — checked BEFORE the duplicate
+        // guards. A followup result is not a turn-over, so it never sets
+        // _turnResultEmitted; but when the hold already settled (drain idle / level
+        // reconcile), _turnResultEmitted IS set and the guard below would swallow
+        // the followup result — which is the only guaranteed closer of the followup
+        // cycle (its running state pulled the status back to 'running', and its own
+        // trailing idle can be lost). The positional watermark guard above still
+        // runs first: a JSONL-replayed followup is suppressed by position.
+        const resultOrigin = (event as { origin?: { kind?: string } }).origin
+        const isTaskNotificationResult = resultOrigin?.kind === 'task-notification'
+        if (isTaskNotificationResult) {
+          log.session.info('result is task-notification origin — bookkeeping only, no turn-over', {
+            sessionId: this.claudeSessionId, taskId: this.taskId,
+          })
+          // Capture final text for display but do NOT complete the turn or set
+          // _turnResultEmitted (a real result or idle still has to arrive).
+          //
+          // is_error guard (#870 hardening, upstream-confirmed defect): a FOLLOWUP's
+          // error ("Please run /login", a failed notification turn) must never touch
+          // the user turn's lifecycle — adopting its text here overwrote the answer
+          // the user turn already streamed with followup error prose.
+          if (!result.is_error && typeof result.result === 'string' && result.result) this.fullText = result.result
+          // #870: settle the withheld turn at the followup's terminal result — the
+          // promised summary has fully streamed by then (upstream's common case).
+          // Waiting only for the trailing idle left a lost-idle wedge: the followup
+          // result was the LAST event a flaky stream delivered. Guarded on the same
+          // drain predicate as the idle lane so a followup that lands while OTHER
+          // spawned tasks still run keeps the hold.
+          if (this._deferredOutcome && this._runningBgCount() === 0
+            && !this.resultEmitted && !this._turnResultEmitted) {
+            log.session.info('followup result with all background work drained — completing withheld turn', {
+              sessionId: this.claudeSessionId, taskId: this.taskId,
+            })
+            this._completeTurnOnIdle()
+            // The followup result's OWN companion idle is still in flight (upstream
+            // #870 hardening: "the followup's trailing idle was un-owed"). If the
+            // next user message lands before it, writeMessage resets
+            // _turnResultEmitted and that idle would complete the brand-new turn
+            // with zero output (#825 false-fail / premature-idle family). Bank it.
+            this._idleDebt = Math.min(this._idleDebt + 1, 4)
+          } else if (this._turnResultEmitted && this._runningBgCount() === 0
+            && this._processStatus === 'running') {
+            // Followup-cycle CLOSURE for an already-settled turn. When the hold
+            // settled BEFORE the followup arrived (drain idle or level reconcile),
+            // the followup's own session_state_changed{running} pulled the status
+            // back to 'running' — and this origin-marked result is the only event
+            // guaranteed to end that cycle (its trailing idle can be lost, and the
+            // idle handler's already-completed branch was a no-op). Close the
+            // status only: the turn's SESSION_RESULT already fired at the settle,
+            // re-emitting it would double-run triage.
+            log.session.info('followup result after settled turn — closing followup cycle to idle', {
+              sessionId: this.claudeSessionId, taskId: this.taskId,
+            })
+            this._processStatus = 'idle'
+            this._activity = undefined
+            this.emitStatusChanged('AGENT_COMPLETE')
+            this._idleDebt = Math.min(this._idleDebt + 1, 4)
+          }
+          break
+        }
+
         // Guard against duplicate/replayed result events (daemon resume can replay
         // old JSONL lines). The init-reset above handles auto-continuation turns;
         // this guard catches pure replays where no new init was emitted.
@@ -3720,22 +3904,11 @@ export class ClaudeCodeSession {
         // [[claude_code_session_state_semantics]] and the session_state_changed handler).
         //
         // Two filters:
-        //  (a) origin.kind === 'task-notification' → a result produced by the CLI
-        //      processing a completion notification. Never a real turn-over. Skip
-        //      completion entirely (don't even update _lastResultCost — it's noise).
+        //  (a) origin.kind === 'task-notification' → handled ABOVE the duplicate
+        //      guards (see the task-notification block before them) — never a real
+        //      turn-over, but it may settle or close a #870 hold.
         //  (b) the derived running-count shows live background tasks → withhold
         //      AGENT_COMPLETE; stay running. The idle-after-drain event completes it.
-        const resultOrigin = (event as { origin?: { kind?: string } }).origin
-        const isTaskNotificationResult = resultOrigin?.kind === 'task-notification'
-        if (isTaskNotificationResult) {
-          log.session.info('result is task-notification origin — bookkeeping only, no turn-over', {
-            sessionId: this.claudeSessionId, taskId: this.taskId,
-          })
-          // Capture final text/cost for display but do NOT complete the turn or set
-          // _turnResultEmitted (a real result or idle still has to arrive).
-          if (typeof result.result === 'string' && result.result) this.fullText = result.result
-          break
-        }
         if (this.hasActiveBackgroundWork()) {
           log.session.info('result while background work in flight — staying running, awaiting idle', {
             sessionId: this.claudeSessionId, taskId: this.taskId,
@@ -3743,6 +3916,16 @@ export class ClaudeCodeSession {
           })
           if (typeof result.result === 'string' && result.result) this.fullText = result.result
           if (result.total_cost_usd !== undefined) this._lastResultCost = result.total_cost_usd
+          // #870 (`Turn.deferredSettle`): record the withheld outcome so the turn later
+          // completes WITH it. Pre-fix, the drain lane (_completeTurnOnIdle) hardcoded
+          // isError:false — a turn whose own result was an ERROR, withheld because a
+          // subagent was live, completed as a success and the failure vanished.
+          this._deferredOutcome = {
+            isError: result.is_error === true,
+            resultText: typeof result.result === 'string' && result.result ? result.result : undefined,
+            totalCost: result.total_cost_usd,
+            duration: result.duration_ms,
+          }
           this._processStatus = 'running'
           this._activity = this._workflowName ? `Workflow: ${this._workflowName}` : 'Background tasks running'
           this.emitStatusChanged('IN_PROGRESS')

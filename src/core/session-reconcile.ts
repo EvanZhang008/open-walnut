@@ -79,8 +79,11 @@ export interface SessionTailFold {
   trailingIdle: boolean
   /** Last observed CLI session state in the window. */
   cliState?: 'running' | 'idle' | 'requires_action'
-  /** Background tasks folded from the window (terminal-is-terminal, is_backgrounded sticky). */
-  bgTasks: Record<string, { status: string; isBackgrounded?: boolean }>
+  /** Background tasks folded from the window (terminal-is-terminal, is_backgrounded sticky).
+   *  `endedPerLevel`: a `background_tasks_changed` replace-semantics snapshot omitted this
+   *  task after having listed it — its terminal bookends were lost; excluded from gating
+   *  (mirrors the live handler's #870 level reconciliation). */
+  bgTasks: Record<string, { status: string; isBackgrounded?: boolean; endedPerLevel?: boolean }>
   /** In-flight bg tasks that GATE turn-over (non-terminal AND not backgrounded). */
   gatingBgCount: number
   /** TeamCreate seen after the anchor without a closing TeamDelete. */
@@ -154,6 +157,11 @@ export function foldSessionTail(content: string, baseOffset?: number): SessionTa
   }
 
   const lines = content.split('\n')
+  // Level universe for the #870 reconciliation: ids ever listed by a
+  // background_tasks_changed snapshot inside this window. Only those may be
+  // absent-marked by a later snapshot (a live sync subagent is legitimately
+  // absent from every level payload).
+  const seenInLevel = new Set<string>()
   // Pass 1: locate the turn anchor — the LAST real user line in the window.
   let anchorIdx = -1
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -226,6 +234,29 @@ export function foldSessionTail(content: string, baseOffset?: number): SessionTa
           status: (parsed.status as string | undefined) ?? 'completed',
           isBackgrounded: prev?.isBackgrounded,
         }
+      } else if (subtype === 'background_tasks_changed') {
+        // #870 level reconciliation, replay flavor — same rules as the live handler:
+        // replace semantics, universe guard (only ever-listed ids may be absent-marked),
+        // reversible mark, terminal untouched. Heals a lost terminal bookend so the
+        // reconciler's gatingBgCount can converge a wedged 'running' session.
+        const levelTasks = parsed.tasks
+        if (Array.isArray(levelTasks)) {
+          const present = new Set<string>()
+          for (const t of levelTasks) {
+            const id = (t as Record<string, unknown> | null)?.task_id
+            if (typeof id !== 'string') continue
+            present.add(id)
+            seenInLevel.add(id)
+            const prev = fold.bgTasks[id]
+            if (prev?.endedPerLevel) fold.bgTasks[id] = { ...prev, endedPerLevel: undefined }
+            if (!prev) fold.bgTasks[id] = { status: 'running' }
+          }
+          for (const [id, t] of Object.entries(fold.bgTasks)) {
+            if (present.has(id) || !seenInLevel.has(id)) continue
+            if (BG_TERMINAL.has(t.status)) continue
+            fold.bgTasks[id] = { ...t, endedPerLevel: true }
+          }
+        }
       }
     } else if (type === 'result') {
       const origin = (parsed as { origin?: { kind?: string } }).origin
@@ -250,7 +281,7 @@ export function foldSessionTail(content: string, baseOffset?: number): SessionTa
   }
 
   for (const t of Object.values(fold.bgTasks)) {
-    if (!t.isBackgrounded && !BG_TERMINAL.has(t.status)) fold.gatingBgCount++
+    if (!t.isBackgrounded && !t.endedPerLevel && !BG_TERMINAL.has(t.status)) fold.gatingBgCount++
   }
 
   if (fold.lastResult) {
