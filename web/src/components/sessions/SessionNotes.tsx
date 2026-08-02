@@ -1,6 +1,8 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { updateSession } from '@/api/sessions';
 import { MicButton } from '../common/MicButton';
+import { LinkifiedText } from '../common/LinkifiedText';
+import { CollapsibleUrlEditor, type CollapsibleUrlEditorHandle } from '../common/CollapsibleUrlEditor';
 
 /**
  * Session notes — minimal two-mode UI sharing one state (useSessionNote):
@@ -69,6 +71,12 @@ interface SessionNotesPartProps {
   /** Expansion is owned by the parent so the kebab "Notes" item, pill, and row stay in sync. */
   expanded: boolean;
   onToggleExpanded: () => void;
+  /**
+   * Explicit "close" (not toggle). Blur-driven collapse MUST NOT toggle: a stray
+   * blur racing a click would re-OPEN a just-closed editor (or close a just-opened
+   * one — the 2026-07-30 "flashes open then shut" bug). Falls back to toggle.
+   */
+  onCollapse?: () => void;
 }
 
 /** Text-only "Note" pill next to btw — only rendered while NO note exists. */
@@ -85,18 +93,53 @@ export function SessionNotesPill({ noteState, expanded, onToggleExpanded }: Sess
   );
 }
 
-/** Slim always-visible row once a note exists (or while composing a new one). */
-export function SessionNotesBar({ noteState, expanded, onToggleExpanded }: SessionNotesPartProps) {
-  const { note, hasNote, saveStatus, handleChange } = noteState;
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+/**
+ * Label budget for a link inside the note row. ≈ a long host + "/…/" + the last
+ * path segment — short enough that one deploy link can't eat the row, long
+ * enough to still say WHERE it goes and WHAT it is. The host is never
+ * abbreviated (you must be able to see a link's destination).
+ *
+ * Shrinking is safe precisely BECAUSE the full URL is one click away: clicking
+ * the note swaps in the textarea, which always holds the raw text verbatim.
+ * Short to scan, full to edit.
+ */
+const NOTE_LINK_LABEL_MAX = 48;
 
-  // Focus the textarea when the editor opens
+/** Slim always-visible row once a note exists (or while composing a new one). */
+export function SessionNotesBar({ noteState, expanded, onToggleExpanded, onCollapse }: SessionNotesPartProps) {
+  const { note, hasNote, saveStatus, handleChange } = noteState;
+  const editorRef = useRef<CollapsibleUrlEditorHandle>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const collapse = onCollapse ?? onToggleExpanded;
+
+  // The collapsed view keeps the note's LINE STRUCTURE — a note is a checklist
+  // ("1. … 2. … 3. …"), and folding it to one line destroyed the shape the user
+  // typed. Each line is rendered separately so newlines survive visually; the
+  // links are linkified inline within their own line, never lifted out.
+  const lines = useMemo(() => note.replace(/\s+$/, '').split('\n'), [note]);
+
+  // Focus the editor the moment it opens. No setTimeout: the old 50ms delay
+  // left focus parked on <body> right after the collapsed row unmounted, which
+  // is the window the blur-collapse race lived in.
   useEffect(() => {
-    if (expanded) {
-      const t = setTimeout(() => textareaRef.current?.focus(), 50);
-      return () => clearTimeout(t);
-    }
+    if (expanded) editorRef.current?.focus();
   }, [expanded]);
+
+  // Collapse on POINTERDOWN OUTSIDE the card — not on blur. Blur cannot be
+  // trusted here: expanding unmounts the focused collapsed row, which fires a
+  // focusout with relatedTarget=null; whether that lands in the pre- or
+  // post-expand render is browser timing, and in real Chrome it landed post-
+  // expand and instantly closed the editor ("it just flashes", 2026-07-30).
+  // An outside pointerdown has no such race: the opening click already ended
+  // by the time this effect registers the listener.
+  useEffect(() => {
+    if (!expanded) return;
+    const onDocPointerDown = (e: PointerEvent) => {
+      if (cardRef.current && !cardRef.current.contains(e.target as Node)) collapse();
+    };
+    document.addEventListener('pointerdown', onDocPointerDown);
+    return () => document.removeEventListener('pointerdown', onDocPointerDown);
+  }, [expanded, collapse]);
 
   // No note and not composing → nothing (the pill is the entry point)
   if (!hasNote && !expanded) return null;
@@ -109,21 +152,30 @@ export function SessionNotesBar({ noteState, expanded, onToggleExpanded }: Sessi
 
   return (
     <div
+      ref={cardRef}
       className={`session-notes${hasNote ? ' session-notes--has-note' : ''}`}
-      // Collapse when focus leaves the whole card (not on textarea→mic moves)
+      // Keyboard escape hatches: Tab out to a REAL element → collapse (keyboard
+      // parity with outside-click); Escape → collapse. relatedTarget=null blurs
+      // (unmount race, window switch) deliberately do nothing — see above.
       onBlur={(e) => {
-        if (expanded && !e.currentTarget.contains(e.relatedTarget as Node)) onToggleExpanded();
+        if (expanded && e.relatedTarget && !e.currentTarget.contains(e.relatedTarget as Node)) collapse();
+      }}
+      onKeyDown={(e) => {
+        if (expanded && e.key === 'Escape') { e.stopPropagation(); collapse(); }
       }}
     >
       {expanded ? (
+        // Edit mode: everything is editable, but URLs display COLLAPSED (pill)
+        // until the caret moves into them — then they expand to the full text
+        // in place, and re-collapse when the caret leaves. The model text is
+        // always verbatim; only the presentation shrinks.
         <div className="session-notes-body">
-          <textarea
-            ref={textareaRef}
-            className="session-notes-textarea"
+          <CollapsibleUrlEditor
+            ref={editorRef}
+            className="session-notes-textarea session-notes-editor"
             value={note}
-            onChange={(e) => handleChange(e.target.value)}
+            onChange={handleChange}
             placeholder="Session note…"
-            rows={3}
           />
           <div className="session-notes-side">
             {status}
@@ -131,11 +183,29 @@ export function SessionNotesBar({ noteState, expanded, onToggleExpanded }: Sessi
           </div>
         </div>
       ) : (
-        <button className="session-notes-toggle" onClick={onToggleExpanded} title={note}>
+        // Not a <button>: an <a> inside a button is invalid HTML and browsers
+        // won't dispatch the anchor's navigation. A role=button div keeps the
+        // "click the row to edit" affordance while letting links live inside.
+        <div
+          className="session-notes-toggle"
+          role="button"
+          tabIndex={0}
+          onClick={onToggleExpanded}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggleExpanded(); }
+          }}
+          title={note}
+        >
           <span className="session-notes-dot" aria-hidden="true" />
-          <span className="session-notes-preview">{note.split('\n')[0]}</span>
+          <span className="session-notes-preview">
+            {lines.map((line, i) => (
+              <span className="session-notes-line" key={i}>
+                <LinkifiedText text={line} max={NOTE_LINK_LABEL_MAX} />
+              </span>
+            ))}
+          </span>
           {status}
-        </button>
+        </div>
       )}
     </div>
   );

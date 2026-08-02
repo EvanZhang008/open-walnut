@@ -2560,7 +2560,9 @@ input:focus, textarea:focus, select:focus {
 
 .session-notes-toggle {
   display: flex;
-  align-items: center;
+  /* flex-start, not center: a multi-line note's dot/status should sit with the
+     FIRST line rather than float beside the block's middle. */
+  align-items: flex-start;
   gap: 8px;
   width: 100%;
   padding: 6px 16px;
@@ -2571,6 +2573,10 @@ input:focus, textarea:focus, select:focus {
   text-align: left;
   min-width: 0;
 }
+
+/* Keep the dot and the save status optically on the first text line. */
+.session-notes-toggle > .session-notes-dot { margin-top: 6px; }
+.session-notes-toggle > .session-notes-status { margin-top: 1px; }
 
 .session-notes-toggle:hover {
   background: var(--bg-hover);
@@ -2585,13 +2591,37 @@ input:focus, textarea:focus, select:focus {
   flex-shrink: 0;
 }
 
+/* The collapsed note keeps the LINE STRUCTURE the user typed (a note is usually
+   a checklist). Bounded to 3 lines so the bar can't push the composer around;
+   the full text is in the textarea one click away.
+
+   max-height, NOT -webkit-line-clamp: the child lines are `display: block`, and
+   line-clamp only counts line boxes in an inline formatting context — with block
+   children it silently doesn't clamp at all (measured: a 12-line note rendered
+   216px tall). 3 lines x 1.5 line-height x 12px font = 54px. */
 .session-notes-preview {
   color: var(--fg-secondary);
+  min-width: 0;
+  flex: 1;
+  line-height: 1.5;
+  max-height: 54px;
+  overflow: hidden;
+}
+
+/* One typed line = one rendered line. `display: block` on a span inside the
+   -webkit-box clamp keeps each note line on its own row without needing <br>
+   (which would break the token-per-span rendering). */
+.session-notes-line {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  min-width: 0;
-  flex: 1;
+}
+
+/* An empty typed line (blank line between paragraphs) still deserves its height,
+   otherwise a note's spacing silently collapses. */
+.session-notes-line:empty::before {
+  content: '\200B';
 }
 
 .session-notes-status {
@@ -2600,6 +2630,20 @@ input:focus, textarea:focus, select:focus {
   flex-shrink: 0;
 }
 .session-notes-status-saved { color: var(--success); }
+
+/* ── Links inside a note ──
+   The links live INLINE in the note text — no separate chip row lifting them
+   out (that just duplicates the note). A raw deploy link is ~150 chars and would
+   eat the whole row, so the label is shortened; the full URL stays in href+title
+   and in the textarea you get when you click into the note. */
+.session-notes-preview .linkified-url {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.session-notes-preview .linkified-url:hover {
+  border-bottom-color: var(--accent);
+}
 
 .session-notes-body {
   display: flex;
@@ -2630,6 +2674,49 @@ input:focus, textarea:focus, select:focus {
   border-radius: var(--radius-sm);
   resize: vertical;
   outline: none;
+}
+
+/* ── Collapsed-URL note editor (CollapsibleUrlEditor) ──
+   contentEditable stand-in for the old textarea: same skin, plus per-range
+   styling a textarea can't do. URLs render as ellipsized pills that expand IN
+   PLACE while the caret is inside them (.cue-active) and re-collapse on leave. */
+.session-notes-editor {
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  overflow-y: auto;
+  resize: none;
+  cursor: text;
+}
+
+/* Placeholder for an empty contentEditable (textarea ::placeholder analogue). */
+.session-notes-editor:empty::before {
+  content: attr(data-placeholder);
+  color: var(--fg-muted);
+  pointer-events: none;
+}
+
+/* A URL at rest: one line, clipped mid-run. inline-block + bottom-align keeps
+   the pill sitting on the text baseline without growing the line box. */
+.session-notes-editor .cue-url {
+  display: inline-block;
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-radius: 4px;
+  padding: 0 3px;
+}
+
+/* Caret inside → expand to the full URL, wrapping like normal text. */
+.session-notes-editor .cue-url.cue-active {
+  display: inline;
+  max-width: none;
+  white-space: pre-wrap;
+  overflow: visible;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 .session-notes-textarea:focus {

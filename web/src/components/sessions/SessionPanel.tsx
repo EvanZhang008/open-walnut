@@ -1219,6 +1219,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             noteState={noteState}
             expanded={notesOpen}
             onToggleExpanded={() => setNotesOpen(o => !o)}
+            onCollapse={() => setNotesOpen(false)}
           />
           {sendError && (
             <div className="text-xs" style={{ color: 'var(--error)', padding: '4px 12px' }}>
