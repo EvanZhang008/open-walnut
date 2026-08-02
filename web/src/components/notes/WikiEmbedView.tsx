@@ -17,6 +17,7 @@
 import { useState } from 'react';
 import { NodeViewWrapper, type ReactNodeViewProps } from '@tiptap/react';
 import { attachmentUrl } from '@/api/notes-v2';
+import { browserCanInlinePdf } from '@/utils/pdf-support';
 import './wiki-embed.css';
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
@@ -41,7 +42,11 @@ export function WikiEmbedView({ node }: ReactNodeViewProps) {
   // inside an inline node throw in ProseMirror). `contentEditable={false}` so
   // the embed is selected as one unit and never typed into.
   const isImage = IMAGE_EXTS.has(ext) && !imgFailed;
-  const isPdf = ext === 'pdf';
+  // Only iframe-embed a PDF when the browser will actually render it inline.
+  // With the viewer disabled (Firefox "Save File"/"Open in Preview", Chrome
+  // "Download PDFs"), each iframe fires a download + external-app launch the
+  // moment the note opens — so those browsers get the click-to-open card.
+  const isPdf = ext === 'pdf' && browserCanInlinePdf();
 
   return (
     <NodeViewWrapper as="span" className="notes-wikiembed-view" contentEditable={false}>

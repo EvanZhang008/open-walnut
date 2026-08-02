@@ -1,4 +1,5 @@
 import { attachmentUrl, revealNote } from '@/api/notes-v2';
+import { browserCanInlinePdf } from '@/utils/pdf-support';
 import './notes-attachment.css';
 
 /**
@@ -19,7 +20,10 @@ export function AttachmentPreview({ notePath }: { notePath: string }) {
   const breadcrumb = notePath.split('/');
 
   const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext);
-  const isPdf = ext === 'pdf';
+  // Same guard as WikiEmbedView: with the browser's PDF viewer disabled an
+  // <iframe> is a silent download, so route those users to the open card
+  // (local app via /reveal) instead of downloading on every tree click.
+  const isPdf = ext === 'pdf' && browserCanInlinePdf();
 
   return (
     <div className="notes-editor-panel">
