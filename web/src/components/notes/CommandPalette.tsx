@@ -28,8 +28,11 @@ import { HighlightedTitle } from './HighlightedText';
 import { log } from '@/utils/log';
 
 interface CommandPaletteProps {
-  /** Navigate to a note path (SPA — never page.goto). */
-  onNavigate: (path: string) => void;
+  /**
+   * Navigate to a note path (SPA — never page.goto). `opts.scrollToText` is set
+   * for search hits so the editor jumps to the matched span, not the note top.
+   */
+  onNavigate: (path: string, opts?: { scrollToText?: string }) => void;
   /**
    * Create (and open) a new note. `title` empty = a blank/untitled note with 0
    * required decisions (⌘↵ quick-capture). Returns the created path so the
@@ -49,6 +52,8 @@ interface PaletteRow {
   path?: string;
   title: string;
   snippetHtml?: string;
+  /** Raw BE snippet (with literal <mark> tags) — source of the jump-to-match text. */
+  snippetRaw?: string;
   matchType?: MatchType;
 }
 
@@ -215,6 +220,7 @@ export function CommandPalette({ onNavigate, onCreate, onPreviewAttachment }: Co
       // Hybrid search rows carry `title` (not `name`); fall back to the path basename.
       title: r.title || r.name || basenameNoExt(r.path),
       snippetHtml: r.snippet ? renderNoteSnippet(r.snippet) : undefined,
+      snippetRaw: r.snippet,
       matchType: r.matchType,
     }));
     const lower = q.toLowerCase();
@@ -256,12 +262,15 @@ export function CommandPalette({ onNavigate, onCreate, onPreviewAttachment }: Co
         onPreviewAttachment(row.path);
       } else {
         pushRecent(row.path);
-        onNavigate(row.path);
+        // Search hits jump to the matched span (<mark> text, else the query).
+        const m = row.snippetRaw?.match(/<mark>([^<]{1,80})<\/mark>/);
+        const scrollToText = row.kind === 'search' ? (m?.[1] || query.trim() || undefined) : undefined;
+        onNavigate(row.path, scrollToText ? { scrollToText } : undefined);
       }
     }
     setOpen(false);
     setQuery('');
-  }, [onCreate, onNavigate, onPreviewAttachment]);
+  }, [onCreate, onNavigate, onPreviewAttachment, query]);
 
   const onInputKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (composingRef.current || e.nativeEvent.isComposing || (e.nativeEvent as KeyboardEvent).keyCode === 229) return;

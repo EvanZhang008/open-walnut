@@ -64,8 +64,12 @@ function collectFilePaths(nodes: NoteTreeNode[], acc: Set<string> = new Set()): 
 interface NotesTreePanelProps {
   tree: NoteTreeNode[];
   selectedPath: string | null;
-  /** Open a note. `opts.newTab` (⌘-click / context-menu) opens it in a new tab. */
-  onSelect: (path: string, opts?: { newTab?: boolean }) => void;
+  /**
+   * Open a note. `opts.newTab` (⌘-click / context-menu) opens it in a new tab;
+   * `opts.scrollToText` (search-result click) scrolls the editor to the first
+   * occurrence of the matched text instead of landing at the top.
+   */
+  onSelect: (path: string, opts?: { newTab?: boolean; scrollToText?: string }) => void;
   /** Preview an attachment (image/pdf) — distinct from onSelect, which markdown-loads. */
   onPreviewAttachment: (path: string) => void;
   onCreateNote: (path: string) => void;
@@ -770,7 +774,13 @@ export const NotesTreePanel = memo(function NotesTreePanel({
                     // Attachment hits (OCR/PDF text) open in the preview pane —
                     // the note loader .md-suffixes the path and 404s on binaries.
                     if (r.matchType === 'attachment') onPreviewAttachment(r.path);
-                    else onSelect(r.path);
+                    else {
+                      // Jump to the MATCH, not the top of the note: the snippet's
+                      // <mark> holds the exact matched span (falls back to the raw
+                      // query for semantic hits, which carry no mark).
+                      const m = r.snippet?.match(/<mark>([^<]{1,80})<\/mark>/);
+                      onSelect(r.path, { scrollToText: m?.[1] || searchQuery.trim() });
+                    }
                     setSearchQuery('');
                     setSearchResults(null);
                   }}
@@ -784,6 +794,13 @@ export const NotesTreePanel = memo(function NotesTreePanel({
                         query={searchQuery}
                       />
                     </span>
+                    {/* WHERE the note lives — without this, same-named notes in
+                        different folders are indistinguishable in the result list. */}
+                    {r.path.includes('/') && (
+                      <span className="notes-search-path" title={r.path}>
+                        {r.path.slice(0, r.path.lastIndexOf('/'))}
+                      </span>
+                    )}
                     <span className="notes-search-snippet">
                       {/* Snippet carries literal <mark> tags from the server — render real marks, never raw HTML. */}
                       <HighlightedText text={r.snippet} />

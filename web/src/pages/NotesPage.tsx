@@ -137,6 +137,33 @@ function hydrateTabs(searchParams: URLSearchParams): PersistedTabs {
   return { tabs, activePath };
 }
 
+/**
+ * Find `needle` (case-insensitive) in the rendered editor DOM and return the
+ * enclosing element. Editor text nodes are split by inline marks (bold, links),
+ * so if the full needle isn't inside one node, fall back to its longest token.
+ */
+function findTextInDom(root: HTMLElement, needle: string): HTMLElement | null {
+  const tryFind = (n: string): HTMLElement | null => {
+    const lower = n.toLowerCase();
+    if (!lower) return null;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let node: Node | null;
+    while ((node = walker.nextNode())) {
+      if ((node.textContent ?? '').toLowerCase().includes(lower)) {
+        return node.parentElement;
+      }
+    }
+    return null;
+  };
+  const direct = tryFind(needle.trim());
+  if (direct) return direct;
+  const longest = needle.trim().split(/\s+/).sort((a, b) => b.length - a.length)[0] ?? '';
+  return longest.length >= 2 ? tryFind(longest) : null;
+}
+
+/** Flash-highlight class applied to the jumped-to element (defined in globals.css). */
+const JUMP_FLASH_CLASS = 'notes-jump-flash';
+
 export function NotesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { tree, loading: treeLoading, error: treeError, refresh: refreshTree, addFolder, removeNote, removeFolder, removeAttachment, renameNote } = useNotesTree();
@@ -340,6 +367,55 @@ export function NotesPage() {
     } catch { /* ignore quota / disabled storage */ }
   }, [tabs, activePath]);
 
+  // Jump-to-match request state: {path, text} of the search hit to scroll to
+  // (set by handleSelect below); the nonce re-fires the effect when the target
+  // note is ALREADY open (content/path unchanged → effect wouldn't rerun).
+  const pendingJumpRef = useRef<{ path: string; text: string } | null>(null);
+  const [jumpNonce, setJumpNonce] = useState(0);
+
+  // ── Jump-to-match: after a search-result open renders, scroll to the hit. ──
+  // Retries briefly because tiptap paints async after `content` lands; gives up
+  // quietly if the text isn't found (e.g. match was in frontmatter/OCR only).
+  useEffect(() => {
+    const pending = pendingJumpRef.current;
+    if (!pending || pending.path !== activeNotePath || content === null) return;
+    pendingJumpRef.current = null;
+    let cancelled = false;
+    let attempts = 0;
+    let rescrolls = 0;
+    const inView = (el: HTMLElement) => {
+      const r = el.getBoundingClientRect();
+      return r.top >= 0 && r.bottom <= window.innerHeight;
+    };
+    // After scrolling, verify the target STAYED in view: the editor's autoFocus
+    // (fired async on mount) moves the caret to the doc start and yanks the
+    // scroll back to the top — re-scroll until it sticks (bounded).
+    const settle = (el: HTMLElement) => {
+      if (cancelled) return;
+      if (!inView(el) && rescrolls < 4) {
+        rescrolls++;
+        el.scrollIntoView({ block: 'center' });
+        setTimeout(() => settle(el), 250);
+        return;
+      }
+      el.classList.add(JUMP_FLASH_CLASS);
+      setTimeout(() => el.classList.remove(JUMP_FLASH_CLASS), 1600);
+    };
+    const tryJump = () => {
+      if (cancelled) return;
+      const root = document.querySelector('.notes-editor .tiptap') as HTMLElement | null;
+      const el = root && findTextInDom(root, pending.text);
+      if (el) {
+        el.scrollIntoView({ block: 'center' });
+        setTimeout(() => settle(el), 250);
+        return;
+      }
+      if (++attempts < 10) setTimeout(tryJump, 120);
+    };
+    setTimeout(tryJump, 80);
+    return () => { cancelled = true; };
+  }, [activeNotePath, content, jumpNonce]);
+
   // ── Auto-locate (#2): whenever the active tab changes, reveal it in the tree
   //    (expand its folders + scroll into view). Only for note/attachment paths. ──
   useEffect(() => {
@@ -405,7 +481,11 @@ export function NotesPage() {
 
   // Thin wrappers preserve the existing prop names consumed by tree / palette /
   // backlinks / wiki-link clicks — they all open in the ACTIVE tab by default.
-  const handleSelect = useCallback((path: string, opts?: { newTab?: boolean }) => openInTab(path, 'note', opts), [openInTab]);
+  const handleSelect = useCallback((path: string, opts?: { newTab?: boolean; scrollToText?: string }) => {
+    pendingJumpRef.current = opts?.scrollToText ? { path, text: opts.scrollToText } : null;
+    if (opts?.scrollToText) setJumpNonce((n) => n + 1);
+    openInTab(path, 'note', opts);
+  }, [openInTab]);
   const handlePreviewAttachment = useCallback((path: string) => openInTab(path, 'attachment'), [openInTab]);
 
   const handleActivateTab = useCallback((path: string) => { setActivePath(path); }, []);
@@ -873,7 +953,7 @@ export function NotesPage() {
         (reported in sharedFileTouches). Cmd+K jump opens in a NEW tab (or
         activates the existing one).
       */}
-      <CommandPalette onNavigate={(p) => handleSelect(p, { newTab: true })} onCreate={handleQuickCreate} onPreviewAttachment={handlePreviewAttachment} />
+      <CommandPalette onNavigate={(p, opts) => handleSelect(p, { newTab: true, ...opts })} onCreate={handleQuickCreate} onPreviewAttachment={handlePreviewAttachment} />
     </div>
   );
 }

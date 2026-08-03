@@ -21273,6 +21273,29 @@ td.usage-share-col {
   max-width: 100%;
 }
 
+/* Folder path of a search hit ("housing/6383-mckay") — the disambiguator between
+   same-named notes. Slightly dimmer than the snippet so title > path > snippet. */
+.notes-search-path {
+  font-size: 10px;
+  color: var(--fg-muted);
+  opacity: 0.75;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* Jump-to-match flash: applied to the element holding the matched search text
+   after a search-result click scrolls it into view, removed ~1.6s later. */
+.notes-jump-flash {
+  animation: notes-jump-flash-kf 1.6s ease-out;
+  border-radius: 3px;
+}
+@keyframes notes-jump-flash-kf {
+  0% { background-color: color-mix(in srgb, var(--accent) 28%, transparent); }
+  100% { background-color: transparent; }
+}
+
 /* Folder hits sit above the note rows; the accent left-edge + weight separates
    "this is a place" from "this is a note". */
 .notes-search-folder {
