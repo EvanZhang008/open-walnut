@@ -74,11 +74,17 @@ async function loadTaskDetails(task: Task, budget: number): Promise<string> {
   return truncateToTokenBudget(content, budget);
 }
 
+/**
+ * Legacy project store (memory/projects/<cat>/<proj>/MEMORY.md). The 2026-07
+ * skills migration superseded it but left the existing files in place, so this
+ * still returns real content for pre-migration projects and nothing for newer
+ * ones. Kept read-only; new project knowledge belongs in a skill.
+ */
 async function loadProjectMemory(task: Task, budget: number): Promise<string> {
   const { getProjectMemory } = await import('../core/project-memory.js');
   const projectPath = `${task.category.toLowerCase()}/${task.project.toLowerCase()}`;
   const result = getProjectMemory(projectPath);
-  if (!result) return '(no project memory yet)';
+  if (!result) return '(no legacy project memory for this project)';
   return truncateToTokenBudget(result.content, budget);
 }
 
@@ -160,8 +166,9 @@ async function loadJournalRecent(budget: number): Promise<string> {
   const path = await import('node:path');
   const { NOTES_DIR } = await import('../constants.js');
 
-  // "Dairy" is the actual folder name in the user's Obsidian vault (not a typo for "Diary")
-  const diaryDir = path.join(NOTES_DIR, 'Areas', 'Journal', 'Dairy');
+  // "Dairy" is the actual folder name in the user's Obsidian vault (not a typo for "Diary").
+  // Vault went topic-first 2026-08 (PARA retired): journal/ is now top-level.
+  const diaryDir = path.join(NOTES_DIR, 'journal', 'Dairy');
   let files: string[];
   try {
     files = fs.readdirSync(diaryDir)

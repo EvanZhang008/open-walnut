@@ -52,7 +52,7 @@ Narrow results to files whose collection-relative path starts with the prefix:
   "search walnut project history" → sources: [memory_skill], path: "walnut/overview/history/"
   "anything about tax in finance skills" → sources: [memory_skill], path: "finance/"
   "daily logs from June 2026" → sources: [memory_daily], path: "2026-06"
-  "notes under Areas/Health" → sources: [note_vault], path: "Areas/Health/"
+  "notes under health/" → sources: [note_vault], path: "health/"
 
 ## How to write good queries
 

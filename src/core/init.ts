@@ -65,10 +65,9 @@ export async function initDirectories(): Promise<void> {
   await ensureDir(REPOS_MEMORY_DIR);
   await ensureDir(COMPACTION_DIR);
   await ensureDir(NOTES_DIR);
-  await ensureDir(path.join(NOTES_DIR, 'Areas'));
-  await ensureDir(path.join(NOTES_DIR, 'Projects'));
-  await ensureDir(path.join(NOTES_DIR, 'Resources'));
-  await ensureDir(path.join(NOTES_DIR, 'Archive'));
+  // PARA scaffolding (Areas/Projects/Resources/Archive) retired 2026-08 — the
+  // vault is topic-first now (see notes/CLAUDE.md routing table). Recreating
+  // them here resurrected empty PARA dirs on every boot after the migration.
   await ensureDir(REPOSITORIES_DIR);
   await ensureDir(TIMELINE_DIR);
   await ensureDir(RECORDINGS_DIR);
