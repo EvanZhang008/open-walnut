@@ -180,6 +180,7 @@ export async function syncAllQmdNotes(
   }
 
   const pruned = pruneStaleQmdDocuments(store, COLLECTION, new Set(paths));
+  const legacyPruned = pruneLegacyCollections(store);
   await embedQmdStore(store, 'notes', {
     ...(options.force ? { force: true } : {}),
     model: process.env.QMD_EMBED_MODEL || DEFAULT_QMD_MODEL,
@@ -191,5 +192,38 @@ export async function syncAllQmdNotes(
     retitled,
     unchanged,
     pruned,
+    legacyPruned,
   });
+}
+
+/**
+ * Deactivate documents in collections OTHER than `vault`. Earlier index layouts
+ * stored notes in per-PARA-folder collections (areas/archive/projects/resources);
+ * those docs were left active after the vault-collection migration. They compete
+ * in RRF top-k ranking and are only post-filtered afterward (memory-search.ts
+ * filters on collection AFTER the store query), so every legacy hit crowds a
+ * real result out of the fused window — recall loss, plus stale duplicates.
+ *
+ * Enumerates DISTINCT collection names from the documents table directly: the
+ * legacy collections are exactly the ones no longer REGISTERED in
+ * store_collections, so the registration-based listing APIs cannot see them.
+ */
+function pruneLegacyCollections(store: QMDStore): number {
+  let deactivated = 0;
+  try {
+    const rows = store.internal.db
+      .prepare(`SELECT DISTINCT collection FROM documents WHERE active = 1 AND collection != ?`)
+      .all(COLLECTION) as Array<{ collection: string }>;
+    for (const row of rows) {
+      for (const stalePath of store.internal.getActiveDocumentPaths(row.collection)) {
+        store.internal.deactivateDocument(row.collection, stalePath);
+        deactivated++;
+      }
+    }
+  } catch (error) {
+    log.memory.warn('QMD legacy collection prune failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return deactivated;
 }

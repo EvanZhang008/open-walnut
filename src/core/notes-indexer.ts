@@ -32,6 +32,8 @@ import {
   reresolveAllEdges,
   setIndexMeta,
   clearAll,
+  listNoteSyncMeta,
+  touchNoteStat,
   type NoteRow,
   type LinkEdge,
   type TagEdge,
@@ -102,6 +104,23 @@ function extractTags(data: Record<string, unknown>, body: string): TagEdge[] {
 function firstH1(body: string): string | null {
   const m = body.match(/^#\s+(.+)$/m)
   return m ? m[1].trim() : null
+}
+
+/**
+ * All section headings (## and deeper — the H1 is already the title), newline-
+ * joined for the heading search leg. Author-written section labels are the only
+ * findable handle for grab-bag notes ("Gov document" holding an `## SIN` section)
+ * whose title/body would otherwise never surface them. Fenced code is stripped
+ * so a `# comment` inside a code block isn't a heading.
+ */
+function sectionHeadings(body: string): string {
+  const noCode = body.replace(/```[\s\S]*?```/g, '')
+  const out: string[] = []
+  for (const m of noCode.matchAll(/^#{2,6}\s+(.+)$/gm)) {
+    const h = m[1].replace(/[*_`~]+/g, '').trim()
+    if (h) out.push(h)
+  }
+  return out.join('\n')
 }
 
 /** Extract + resolve outgoing wiki-link edges to target ids (Obsidian-native §2.2/§4.3). */
@@ -217,7 +236,14 @@ async function reconcileNoteInternal(
   }
 
   const fileHash = computeContentHash(bytes)
-  if (getNoteHash(relPath) === fileHash) return null // hash-skip (unchanged)
+  if (getNoteHash(relPath) === fileHash) {
+    // Unchanged content — but refresh the stat columns so an mtime-only touch
+    // doesn't keep re-flagging this note in every boot's drift scan.
+    await withFileLock(NOTES_INDEX_PATH, async () => {
+      touchNoteStat(relPath, stat.mtime.toISOString(), stat.size)
+    })
+    return null
+  }
 
   let { data, body, raw } = parseFrontmatter(bytes)
   let id = readId(data)
@@ -242,6 +268,9 @@ async function reconcileNoteInternal(
       data = reparsed.data
       body = reparsed.body
       raw = reparsed.raw
+      // Re-stat: the back-write changed mtime+size; storing the PRE-stamp stat
+      // would make the boot drift scan flag this note forever.
+      try { stat = await fsp.stat(abs) } catch { /* keep the pre-stamp stat */ }
       // The back-write changed the on-disk bytes (and hash) outside any editor
       // save path. Without an event, open editors keep a stale contentHash and
       // their NEXT save 409s for no visible reason — emit the same contract as
@@ -288,6 +317,7 @@ async function reconcileNoteInternal(
     created,
     modified: stat.mtime.toISOString(),
     size: stat.size,
+    headings: sectionHeadings(body),
   }
 
   await withFileLock(NOTES_INDEX_PATH, async () => {
@@ -508,8 +538,89 @@ export function rebuildIndex(options: RebuildIndexOptions = {}): Promise<void> {
 }
 
 /**
+ * Drift scan: reconcile changes made while the server was NOT running.
+ *
+ * The fs.watch pipeline only sees changes while the process is alive — notes
+ * edited by Obsidian/agents/git during downtime silently diverged from the
+ * index until the next full rebuild. This scan closes that gap at boot:
+ * stat-compare every vault file against the index's (mtime, size) columns and
+ * reconcile only new/changed/deleted paths through the NORMAL per-note path
+ * (hash-skip still guards against mtime-only touches). Cost is one stat per
+ * note (~tens of ms per thousand files) — no file contents are read for
+ * unchanged notes.
+ */
+/**
+ * Max continuous event-loop occupancy per slice. The scan yields a full
+ * macrotask whenever it has held the loop this long, so HTTP handlers, timers
+ * and IO callbacks always run first — REGARDLESS of vault size or how busy the
+ * process is when the scan happens to run. This bounds impact structurally
+ * instead of hoping a start-delay lands in a quiet moment.
+ */
+const DRIFT_SLICE_MS = 5
+
+export async function scanForDrift(): Promise<{ changed: number; deleted: number }> {
+  const startedAt = Date.now()
+  const indexed = new Map(listNoteSyncMeta().map((r) => [r.path, r]))
+  const onDisk = await collectIndexableNotePaths()
+  const onDiskSet = new Set(onDisk)
+
+  let changed = 0
+  let deleted = 0
+  let sliceStart = Date.now()
+  const yieldIfSliceSpent = async () => {
+    if (Date.now() - sliceStart < DRIFT_SLICE_MS) return
+    await new Promise((r) => setImmediate(r))
+    sliceStart = Date.now()
+  }
+  for (const relPath of onDisk) {
+    if (stopped || rebuilding) return { changed, deleted } // a rebuild supersedes the scan
+    await yieldIfSliceSpent()
+    const row = indexed.get(relPath)
+    if (row) {
+      try {
+        const stat = await fsp.stat(path.join(NOTES_DIR, relPath))
+        if (stat.mtime.toISOString() === row.modified && stat.size === row.size) continue
+      } catch {
+        continue // vanished mid-scan — the deletion branch below handles it next boot
+      }
+    }
+    // New file or stat drift → normal reconcile. A hash-skip (mtime-only touch)
+    // returns null and refreshes the stat columns — not counted as a change.
+    try {
+      const id = await reconcileNote(relPath)
+      if (id) changed++
+    } catch (err) {
+      log.memory.debug('notes-indexer: drift reconcile failed', {
+        path: relPath,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+  // Deletions: indexed but no longer on disk.
+  for (const relPath of indexed.keys()) {
+    if (onDiskSet.has(relPath)) continue
+    if (stopped || rebuilding) break
+    await yieldIfSliceSpent()
+    try {
+      await reconcileNote(relPath) // ENOENT branch removes from both indexes
+      deleted++
+    } catch { /* logged inside */ }
+  }
+  if (changed > 0 || deleted > 0) {
+    log.memory.info('notes-index: drift scan reconciled offline changes', {
+      changed,
+      deleted,
+      ms: Date.now() - startedAt,
+    })
+  }
+  return { changed, deleted }
+}
+
+/**
  * Initialize the structural sidecar at server boot. If the DB is empty (fresh /
  * schema bump), kick off a chunked off-loop rebuild WITHOUT blocking boot.
+ * Otherwise run the drift scan so changes made while the server was down
+ * (Obsidian edits, agent writes, git pulls) are picked up without a rebuild.
  */
 export async function initNotesIndex(): Promise<void> {
   const { getNotesIndexDb, readSchemaVersion, NOTES_INDEX_SCHEMA_VERSION, docCount } =
@@ -525,5 +636,19 @@ export async function initNotesIndex(): Promise<void> {
         error: err instanceof Error ? err.message : String(err),
       })
     })
+  } else {
+    // Deferred, off-loop drift scan. Boot never waits on it. The delay is a
+    // COURTESY (skip the startup burst), not the safety mechanism — safety is
+    // the time-budget yield inside the scan itself, which caps continuous loop
+    // occupancy at DRIFT_SLICE_MS whenever it runs, busy or not.
+    const timer = setTimeout(() => {
+      if (stopped) return
+      void scanForDrift().catch((err) => {
+        log.memory.warn('notes-index: drift scan failed', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      })
+    }, 30_000)
+    timer.unref?.() // never keep the process alive for a maintenance scan
   }
 }

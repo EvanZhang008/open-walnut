@@ -21,7 +21,7 @@ import { log } from '../logging/index.js'
 export const NOTES_INDEX_PATH = path.join(WALNUT_HOME, 'notes-index.sqlite')
 
 /** Bump to force a full rebuild on next open (schema/semantics change). */
-export const NOTES_INDEX_SCHEMA_VERSION = 1
+export const NOTES_INDEX_SCHEMA_VERSION = 2
 
 export type LinkStatus = 'resolved' | 'unresolved' | 'ambiguous'
 
@@ -35,6 +35,8 @@ export interface NoteRow {
   created: string | null
   modified: string
   size: number
+  /** Newline-joined section headings (## and deeper) for the heading search leg. */
+  headings: string
 }
 
 /** A link edge as extracted + resolved by the reconciler. */
@@ -64,7 +66,8 @@ CREATE TABLE IF NOT EXISTS notes (
   frontmatter  TEXT,
   created      TEXT,
   modified     TEXT NOT NULL,
-  size         INTEGER NOT NULL
+  size         INTEGER NOT NULL,
+  headings     TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_notes_path  ON notes(path);
 CREATE INDEX IF NOT EXISTS idx_notes_title ON notes(title COLLATE NOCASE);
@@ -128,6 +131,12 @@ export function getNotesIndexDb(): DatabaseType | null {
     handle.pragma('busy_timeout = 5000')
     handle.pragma('synchronous = NORMAL')
     handle.exec(SCHEMA_SQL)
+    // v1→v2: section-heading search leg needs a headings column on pre-existing
+    // DBs (CREATE TABLE IF NOT EXISTS won't add it). Content is backfilled by the
+    // schema-version rebuild that initNotesIndex triggers.
+    const hasHeadings = (handle.prepare(`PRAGMA table_info(notes)`).all() as Array<{ name: string }>)
+      .some((c) => c.name === 'headings')
+    if (!hasHeadings) handle.exec(`ALTER TABLE notes ADD COLUMN headings TEXT NOT NULL DEFAULT ''`)
     setMeta(handle, 'schema_version', String(NOTES_INDEX_SCHEMA_VERSION))
     db = handle
     return db
@@ -213,12 +222,12 @@ export function upsertNote(note: NoteRow, links: LinkEdge[], tags: TagEdge[]): v
       d.prepare(`UPDATE links SET dst_id=NULL, status='unresolved' WHERE dst_id=?`).run(stale.id)
     }
     d.prepare(
-      `INSERT INTO notes (id, path, title, content_hash, body, frontmatter, created, modified, size)
-       VALUES (@id, @path, @title, @content_hash, @body, @frontmatter, @created, @modified, @size)
+      `INSERT INTO notes (id, path, title, content_hash, body, frontmatter, created, modified, size, headings)
+       VALUES (@id, @path, @title, @content_hash, @body, @frontmatter, @created, @modified, @size, @headings)
        ON CONFLICT(id) DO UPDATE SET
          path=excluded.path, title=excluded.title, content_hash=excluded.content_hash,
          body=excluded.body, frontmatter=excluded.frontmatter, created=excluded.created,
-         modified=excluded.modified, size=excluded.size`,
+         modified=excluded.modified, size=excluded.size, headings=excluded.headings`,
     ).run(note)
 
     // Replace outgoing edges for this source note.
@@ -422,6 +431,27 @@ export function getNoteByPath(relPath: string): NoteRow | undefined {
     | undefined
 }
 
+export interface NoteSyncMeta {
+  path: string
+  modified: string
+  size: number
+}
+
+/** (path, mtime, size) for every indexed note — the drift scan's comparison set. */
+export function listNoteSyncMeta(): NoteSyncMeta[] {
+  const d = getNotesIndexDb()
+  if (!d) return []
+  return d.prepare(`SELECT path, modified, size FROM notes`).all() as NoteSyncMeta[]
+}
+
+/** Refresh the stat columns on a hash-skip so an mtime-only touch (id back-write,
+ * `touch`, git checkout) doesn't re-appear in every boot's drift scan. */
+export function touchNoteStat(relPath: string, modified: string, size: number): void {
+  const d = getNotesIndexDb()
+  if (!d) return
+  d.prepare(`UPDATE notes SET modified=?, size=? WHERE path=?`).run(modified, size, relPath)
+}
+
 export function getNoteHash(relPath: string): string | undefined {
   const d = getNotesIndexDb()
   if (!d) return undefined
@@ -486,9 +516,12 @@ export interface StringHit {
    * Relevance in a banded [0,1] scale so the route can rank string hits
    * meaningfully (was hardcoded 1 → every exact hit tied). Bands are disjoint
    * and ordered so a title match ALWAYS outranks a body match:
-   *   title-exact 1.0 · title-prefix .96 · title-word .93 · title-substr .90
-   *   FOLDER-name match .86–.89 · body FTS .50–.85 (by bm25)
-   *   LIKE mid-token body-only fallback .10–.25
+   *   title/basename exact 1.0 · prefix .96 · word .93 · CJK/long-substr .90
+   *   FOLDER-name match .88–.89 · section HEADING word match .87 · tag .86
+   *   body FTS .50–.85 (by bm25) · title mid-token substr .30
+   *   LIKE body fallback: CJK .50 · word .25 · mid-token .10
+   * Title mid-token substrings ("sin" in "Business") were 0.90 — above every
+   * body band — so 3-letter queries drowned true hits under coincidences.
    */
   stringScore: number
   /**
@@ -498,6 +531,21 @@ export interface StringHit {
    * of an undifferentiated list of date-named notes.
    */
   folderMatch?: string
+  /** Set when the hit matched a SECTION HEADING (`## SIN`) — shown in the UI row. */
+  headingMatch?: string
+  /** Set when the hit matched one of the note's tags. */
+  matchedTags?: string[]
+}
+
+/** True when the string contains CJK — no word boundaries exist, so substring IS the match unit. */
+function hasCjk(s: string): boolean {
+  return /[㐀-鿿豈-﫿぀-ヿ가-힯]/u.test(s)
+}
+
+/** Query → tag-slug form, mirroring notes-indexer's normalizeTag (kept local:
+ * the indexer imports from this file, so importing back would be a cycle). */
+function normalizeTagSlug(raw: string): string {
+  return raw.trim().replace(/^#+/, '').toLowerCase().replace(/\s+/g, '-')
 }
 
 /**
@@ -513,7 +561,17 @@ function titleScore(title: string, q: string): number | null {
   if (t.startsWith(ql)) return 0.96
   // word-boundary occurrence (whole word, not mid-token like "accidental")
   if (new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRegExp(ql)}([^\\p{L}\\p{N}]|$)`, 'u').test(t)) return 0.93
-  if (t.includes(ql)) return 0.9
+  // word-PREFIX occurrence ("datapoint" in "Datapoints", "achieve" in "achievements")
+  if (new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRegExp(ql)}`, 'u').test(t)) return 0.92
+  if (t.includes(ql)) {
+    // CJK has no word boundaries — a substring hit IS the word hit. Same for
+    // long Latin queries (≥5 chars), where a coincidental mid-token embedding
+    // is unlikely ("pollo" in "Apollo"). But SHORT Latin substrings are almost
+    // always noise ("sin" in "Business"/"using"/"missing") — those buried real
+    // matches under a wall of 0.90s. Park them BELOW every body band.
+    if (hasCjk(ql) || ql.length >= 5) return 0.9
+    return 0.3
+  }
   // Multi-word query whose words are all in the title but not adjacent
   // ("work datapoint" → title "Work Achievement Datapoints"). Each token must
   // appear as a word-prefix; score just below a contiguous substring (.90) so a
@@ -524,6 +582,44 @@ function titleScore(title: string, q: string): number | null {
       new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRegExp(tok)}`, 'u').test(t),
     )
     if (allInTitle) return 0.88
+  }
+  return null
+}
+
+/**
+ * Title-band score across BOTH the display title and the filename basename,
+ * whichever is stronger. A note whose FILE is literally `SIN number.md` must
+ * rank as a title hit for "sin" even when its display title (first H1, e.g.
+ * "Social Insurance Number Application Completed") never says "SIN" — users
+ * name files by what they'll search for; ignoring the basename threw that
+ * signal away.
+ */
+function nameScore(title: string, relPath: string, q: string): number | null {
+  const fromTitle = titleScore(title, q)
+  const base = relPath.split('/').pop()?.replace(/\.md$/i, '') ?? ''
+  const fromBase = base && base !== title ? titleScore(base, q) : null
+  if (fromTitle == null) return fromBase
+  if (fromBase == null) return fromTitle
+  return Math.max(fromTitle, fromBase)
+}
+
+/**
+ * Word-boundary match against the note's SECTION HEADINGS (newline-joined
+ * `##`+ lines captured at reconcile time). Sits between the folder bands
+ * (.88–.89) and the best body-FTS band (.85): `## SIN` is a deliberate,
+ * author-written label — stronger evidence than any body mention, weaker than
+ * the note being titled/named that. Returns the matched heading for the UI.
+ */
+function headingScore(headings: string, q: string): { band: number; heading: string } | null {
+  if (!headings) return null
+  const ql = q.toLowerCase().trim()
+  if (!ql) return null
+  const cjk = hasCjk(ql)
+  for (const h of headings.split('\n')) {
+    const hl = h.toLowerCase()
+    if (cjk ? hl.includes(ql) : new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRegExp(ql)}`, 'u').test(hl)) {
+      return { band: 0.87, heading: h }
+    }
   }
   return null
 }
@@ -547,20 +643,24 @@ function folderScore(segments: string[], q: string): number | null {
     const s = seg.toLowerCase()
     let band: number | null = null
     if (s === ql) band = 0.89
-    else if (s.startsWith(ql)) band = 0.88
-    else if (new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRegExp(ql)}`, 'u').test(s)) band = 0.87
-    else if (s.includes(ql)) band = 0.86
+    else if (s.startsWith(ql)) band = 0.888
+    else if (new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRegExp(ql)}`, 'u').test(s)) band = 0.885
+    // Mid-token folder substring: only meaningful for CJK / long queries (same
+    // rationale as titleScore — "sin" inside "Business/" is noise, not a folder).
+    else if ((hasCjk(ql) || ql.length >= 5) && s.includes(ql)) band = 0.88
     if (band != null && (best == null || band > best)) best = band
   }
   return best
 }
 
-/** The deepest folder path whose segment matched — the group label for the UI. */
+/** The deepest folder path whose segment matched — the group label for the UI.
+ * Uses the same match rule as folderScore so a noise substring ("sin" inside a
+ * "Business/" segment) can't be promoted into a folder group. */
 function matchedFolderPath(segments: string[], q: string): string | undefined {
   const ql = q.toLowerCase().trim()
   if (!ql) return undefined
   for (let i = segments.length - 1; i >= 0; i--) {
-    if (segments[i].toLowerCase().includes(ql)) return segments.slice(0, i + 1).join('/')
+    if (folderScore([segments[i]], q) != null) return segments.slice(0, i + 1).join('/')
   }
   return undefined
 }
@@ -592,29 +692,80 @@ export function stringSearch(q: string, limit: number): StringHit[] {
   const seen = new Set<string>()
   const out: StringHit[] = []
 
-  type RawHit = { id: string; path: string; title: string; body: string; rank?: number }
+  type RawHit = { id: string; path: string; title: string; body: string; headings?: string; rank?: number }
 
-  // Title-first leg: pull notes whose TITLE matches, scored by titleScore, BEFORE
-  // the FTS body leg. The FTS leg is `ORDER BY bm25 LIMIT n` — ranked purely by
-  // body relevance — so a note with a perfect title but a short/sparse body (e.g.
-  // a 300-byte "Achievement.md") would get a weak bm25 and be truncated out of the
-  // window entirely, never reaching the JS re-rank. Capturing title matches up
-  // front guarantees they're in the result set and rank at their title band.
+  // Name-first leg: pull notes whose TITLE or FILENAME matches, scored by
+  // nameScore, BEFORE the FTS body leg. The FTS leg is `ORDER BY bm25 LIMIT n` —
+  // ranked purely by body relevance — so a note with a perfect title but a
+  // short/sparse body (e.g. a 300-byte "Achievement.md") would get a weak bm25
+  // and be truncated out of the window entirely, never reaching the JS re-rank.
+  // Capturing name matches up front guarantees they're in the result set and
+  // rank at their title band. Matching `path` catches basename-only hits
+  // (file `SIN number.md` whose display title never says "SIN").
   const titleLike = `%${q.replace(/[\\%_]/g, (m) => '\\' + m)}%`
   const firstTok = q.trim().split(/\s+/)[0] ?? ''
+  const firstTokLike = `%${firstTok.replace(/[\\%_]/g, (m) => '\\' + m)}%`
   const titleRows = d
     .prepare(
       `SELECT id, path, title, body FROM notes
-       WHERE title LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\'
+       WHERE title LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\'
        LIMIT ?`,
     )
-    .all(titleLike, `%${firstTok.replace(/[\\%_]/g, (m) => '\\' + m)}%`, limit) as RawHit[]
+    .all(titleLike, firstTokLike, titleLike, limit * 2) as RawHit[]
+  // Mid-token substring hits (band ≤0.30) are collected but NOT marked seen and
+  // only appended AFTER the strong legs: a later leg (heading/FTS body) may score
+  // the same note higher, and they must never crowd word matches out of `out`.
+  const weakNameHits: StringHit[] = []
   for (const r of titleRows) {
-    const band = titleScore(r.title, q)
-    if (band == null) continue // matched a token but not as a scorable title hit
+    const band = nameScore(r.title, r.path, q)
+    if (band == null) continue // matched a token but not as a scorable name hit
     if (seen.has(r.id)) continue
+    const hit = { id: r.id, path: r.path, title: r.title, body: r.body, stringScore: band }
+    if (band <= 0.3) {
+      weakNameHits.push(hit)
+    } else {
+      seen.add(r.id)
+      out.push(hit)
+    }
+  }
+
+  // Heading leg: notes whose SECTION HEADINGS contain the query as a word
+  // ("## SIN" in a grab-bag "Gov document" note). An author-written label —
+  // outranks any body mention (band .87), sits below name/folder bands.
+  const headingRows = d
+    .prepare(
+      `SELECT id, path, title, body, headings FROM notes
+       WHERE headings LIKE ? ESCAPE '\\'
+       LIMIT ?`,
+    )
+    .all(titleLike, limit * 2) as RawHit[]
+  for (const r of headingRows) {
+    if (seen.has(r.id)) continue
+    const hs = headingScore(r.headings ?? '', q)
+    if (!hs) continue
     seen.add(r.id)
-    out.push({ id: r.id, path: r.path, title: r.title, body: r.body, stringScore: band })
+    out.push({
+      id: r.id, path: r.path, title: r.title, body: r.body,
+      stringScore: hs.band, headingMatch: hs.heading,
+    })
+  }
+
+  // Tag leg: notes tagged with the query (normalized slug form). Tags are
+  // deliberate curation — band .86, just under headings.
+  const tagSlug = normalizeTagSlug(q)
+  if (tagSlug) {
+    const tagRows = d
+      .prepare(
+        `SELECT n.id, n.path, n.title, n.body FROM tags t JOIN notes n ON n.id = t.note_id
+         WHERE t.tag = ? OR t.tag LIKE ? ESCAPE '\\'
+         LIMIT ?`,
+      )
+      .all(tagSlug, tagSlug.replace(/[\\%_]/g, (m) => '\\' + m) + '/%', limit) as RawHit[]
+    for (const r of tagRows) {
+      if (seen.has(r.id)) continue
+      seen.add(r.id)
+      out.push({ id: r.id, path: r.path, title: r.title, body: r.body, stringScore: 0.86, matchedTags: [tagSlug] })
+    }
   }
 
   // Folder leg: a query matching a FOLDER NAME in the path must return that
@@ -671,10 +822,10 @@ export function stringSearch(q: string, limit: number): StringHit[] {
       const span = worst - best
       for (const r of rows) {
         if (seen.has(r.id)) continue
-        const titleBand = titleScore(r.title, q)
+        const nameBand = nameScore(r.title, r.path, q)
         let score: number
-        if (titleBand != null) {
-          score = titleBand
+        if (nameBand != null && nameBand > 0.3) {
+          score = nameBand
         } else {
           const norm = span > 0 ? (worst - (r.rank ?? 0)) / span : 1 // 1=best
           score = 0.5 + 0.35 * norm
@@ -691,10 +842,12 @@ export function stringSearch(q: string, limit: number): StringHit[] {
   }
 
   // Capped LIKE fallback for mid-token substring FTS5 can't match (e.g. 'pollo'
-  // in 'Apollo') AND for CJK (no word tokens). Title matches here still get the
-  // title band; body-only mid-token matches get the lowest band so noise like
-  // "accidental" for query "dental" sorts below every true word match.
-  if (out.length < limit) {
+  // in 'Apollo') AND for CJK. FTS5's unicode61 tokenizer treats a CJK run as ONE
+  // token, so Chinese/Japanese body text essentially never FTS-matches — for CJK
+  // queries this leg is the PRIMARY body path, must always run, and scores at
+  // the FTS body floor (0.5) instead of the noise band.
+  const cjkQuery = hasCjk(q)
+  if (out.length < limit || cjkQuery) {
     const like = `%${q.replace(/[\\%_]/g, (m) => '\\' + m)}%`
     const rows = d
       .prepare(
@@ -704,22 +857,32 @@ export function stringSearch(q: string, limit: number): StringHit[] {
       )
       .all(like, like, limit) as RawHit[]
     for (const r of rows) {
-      if (out.length >= limit) break
       if (seen.has(r.id)) continue
-      const titleBand = titleScore(r.title, q)
-      // Body-only LIKE hit: lowest band, nudged by whether it's a word-boundary
-      // hit (0.25) vs a raw mid-token substring (0.10).
-      const bodyBand = new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRegExp(q.toLowerCase())}`, 'u').test(r.body.toLowerCase())
-        ? 0.25
-        : 0.1
+      const nameBand = nameScore(r.title, r.path, q)
+      // Body-only LIKE hit: CJK gets the FTS-floor band (this IS its body leg);
+      // Latin word-boundary hits 0.25; raw mid-token substrings 0.10 so noise
+      // like "accidental" for query "dental" sorts below every true word match.
+      const bodyBand = cjkQuery
+        ? 0.5
+        : new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRegExp(q.toLowerCase())}`, 'u').test(r.body.toLowerCase())
+          ? 0.25
+          : 0.1
       seen.add(r.id)
-      out.push({ id: r.id, path: r.path, title: r.title, body: r.body, stringScore: titleBand ?? bodyBand })
+      out.push({ id: r.id, path: r.path, title: r.title, body: r.body, stringScore: nameBand ?? bodyBand })
     }
+  }
+
+  // Weak name hits (mid-token title substrings) join only now, after every
+  // stronger leg had its chance to claim the same note at a better band.
+  for (const w of weakNameHits) {
+    if (seen.has(w.id)) continue
+    seen.add(w.id)
+    out.push(w)
   }
 
   // Highest relevance first within the string leg.
   out.sort((a, b) => b.stringScore - a.stringScore)
-  return out
+  return out.slice(0, Math.max(limit, 1) * 2)
 }
 
 /**

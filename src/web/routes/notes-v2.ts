@@ -692,6 +692,8 @@ interface SearchResultRow {
   matchedTags?: string[]
   /** Folder whose NAME matched the query (query "dairy" → "Areas/Journal/Dairy"). */
   folderMatch?: string
+  /** Section heading that matched the query (query "sin" → "SIN"). */
+  headingMatch?: string
 }
 
 /** A folder whose name matched, with how many of its notes are in this result set. */
@@ -842,15 +844,20 @@ notesV2Router.get('/search', async (req: Request, res: Response, next: NextFunct
 
     if (stringSettled.status === 'fulfilled') {
       for (const h of stringSettled.value) {
+        // A heading hit's best snippet is the heading's own section, not the
+        // first body occurrence (which may be an unrelated word elsewhere).
+        const snippetSource = h.headingMatch ?? q
         byId.set(h.id, {
           id: h.id,
           path: h.path,
           title: h.title,
-          snippet: makeSnippet(h.body, q),
+          snippet: makeSnippet(h.body, snippetSource),
           matchType: 'exact',
           score: 0,
-          stringScore: h.stringScore, // real banded relevance (title > folder > body > LIKE)
+          stringScore: h.stringScore, // real banded relevance (title > folder > heading > tag > body > LIKE)
           ...(h.folderMatch ? { folderMatch: h.folderMatch } : {}),
+          ...(h.headingMatch ? { headingMatch: h.headingMatch } : {}),
+          ...(h.matchedTags ? { matchedTags: h.matchedTags } : {}),
         })
       }
     }

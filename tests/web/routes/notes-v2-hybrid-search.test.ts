@@ -71,7 +71,7 @@ import { notesV2Router, resetIndexBootstrap } from '../../../src/web/routes/note
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
 import { closeNotesIndexDb, getNoteIdByPath } from '../../../src/core/notes-index.js';
-import { rebuildIndex, stopNotesIndexer, resetNotesIndexer } from '../../../src/core/notes-indexer.js';
+import { rebuildIndex, stopNotesIndexer, resetNotesIndexer, scanForDrift } from '../../../src/core/notes-indexer.js';
 
 const NOTES_DIR = path.join(WALNUT_HOME, 'notes');
 
@@ -364,6 +364,149 @@ describe('hybrid search: degraded semantic leg', () => {
     expect(res.status).toBe(200);
     expect(res.body.results.some((r: any) => r.path === 'a.md')).toBe(true);
     expect(res.body.degraded).toBeUndefined(); // semantic leg never ran
+  });
+});
+
+// ─── Short-query noise + name/heading/tag recall (the "sin" bug class) ───────
+
+describe('search: short-query substring noise stays below real matches', () => {
+  it('mid-token title substrings ("sin" in "Business") rank below a basename word match', async () => {
+    // The reported bug: query "sin" ranked "Business Idea", "using", "missing"
+    // titles at 0.90 while the actual `SIN number.md` note (whose display title
+    // is the H1 "Social Insurance Number Application Completed") sat below them.
+    await writeNote('Business Idea.md', '# Business Idea\n\nStartup thoughts.');
+    await writeNote('Deployment Tests.md', '# Deployment Safety Missing Tests\n\nRegional config.');
+    await writeNote('SIN number.md', '# Social Insurance Number Application Completed\n\nApply within three days.');
+    await syncIndex();
+
+    const app = createApp();
+    const res = await request(app).get('/api/notes-v2/search?q=sin&mode=string');
+
+    expect(res.status).toBe(200);
+    const order = res.body.results.map((r: any) => r.path);
+    expect(order[0]).toBe('SIN number.md'); // basename word match wins
+    const sinRow = res.body.results[0];
+    for (const noisy of ['Business Idea.md', 'Deployment Tests.md']) {
+      const row = res.body.results.find((r: any) => r.path === noisy);
+      if (row) expect(row.stringScore).toBeLessThan(sinRow.stringScore);
+    }
+  });
+
+  it('a SECTION HEADING match outranks body-only mentions and substring noise', async () => {
+    // Grab-bag note: title says nothing, but an author-written `## SIN` section
+    // holds the payload (the Gov document.md shape).
+    await writeNote('Gov document.md', '# Gov document\n\n## US Visa\n\nphoto\n\n## SIN\n\nold 000000001\nNew 000000002');
+    await writeNote('Business Idea.md', '# Business Idea\n\nStartup thoughts.');
+    await syncIndex();
+
+    const app = createApp();
+    const res = await request(app).get('/api/notes-v2/search?q=sin&mode=string');
+
+    expect(res.status).toBe(200);
+    const gov = res.body.results.find((r: any) => r.path === 'Gov document.md');
+    expect(gov).toBeDefined();
+    expect(gov.headingMatch).toBe('SIN');
+    expect(gov.stringScore).toBeCloseTo(0.87, 2);
+    const noise = res.body.results.find((r: any) => r.path === 'Business Idea.md');
+    if (noise) expect(noise.stringScore).toBeLessThan(gov.stringScore);
+    // Snippet anchors on the heading's section, not a random body position.
+    expect(gov.snippet.toLowerCase()).toContain('sin');
+  });
+
+  it('long mid-token substrings still match ("pollo" in "Apollo") at the title band', async () => {
+    await writeNote('apollo.md', '# Apollo\n\nLaunch sequence.');
+    await syncIndex();
+
+    const app = createApp();
+    const res = await request(app).get('/api/notes-v2/search?q=pollo&mode=string');
+
+    expect(res.status).toBe(200);
+    const row = res.body.results.find((r: any) => r.path === 'apollo.md');
+    expect(row).toBeDefined();
+    expect(row.stringScore).toBeCloseTo(0.9, 2);
+  });
+
+  it('a TAG match surfaces notes the query never appears in as text', async () => {
+    await writeNote('immigration-log.md', '---\ntags: [perm, immigration]\n---\n# Timeline\n\nFiled I-140.');
+    await syncIndex();
+
+    const app = createApp();
+    const res = await request(app).get('/api/notes-v2/search?q=perm&mode=string');
+
+    expect(res.status).toBe(200);
+    const row = res.body.results.find((r: any) => r.path === 'immigration-log.md');
+    expect(row).toBeDefined();
+    expect(row.matchedTags).toEqual(['perm']);
+  });
+});
+
+describe('search: CJK queries', () => {
+  it('finds CJK body text (FTS5 cannot tokenize it) at the body band, not noise band', async () => {
+    await writeNote('tax-notes.md', '# Tax 2025\n\n投机与空置税需要每年申报。');
+    await writeNote('unrelated.md', '# Other\n\nNothing here.');
+    await syncIndex();
+
+    const app = createApp();
+    const res = await request(app).get('/api/notes-v2/search?q=%E7%A9%BA%E7%BD%AE%E7%A8%8E&mode=string'); // 空置税
+
+    expect(res.status).toBe(200);
+    const row = res.body.results.find((r: any) => r.path === 'tax-notes.md');
+    expect(row).toBeDefined();
+    expect(row.stringScore).toBeGreaterThanOrEqual(0.5); // body band, not 0.1 noise
+    expect(res.body.results.map((r: any) => r.path)).not.toContain('unrelated.md');
+  });
+
+  it('matches a CJK substring of a title at the title band', async () => {
+    await writeNote('身份记录.md', '# 身份证 生日记录\n\n家人生日。');
+    await syncIndex();
+
+    const app = createApp();
+    const res = await request(app).get('/api/notes-v2/search?q=%E8%BA%AB%E4%BB%BD%E8%AF%81&mode=string'); // 身份证
+
+    expect(res.status).toBe(200);
+    const row = res.body.results.find((r: any) => r.path === '身份记录.md');
+    expect(row).toBeDefined();
+    expect(row.stringScore).toBeGreaterThanOrEqual(0.9);
+  });
+});
+
+// ─── Boot drift scan (offline edits reconciled without a rebuild) ────────────
+
+describe('drift scan: offline changes reconciled at boot', () => {
+  it('picks up files created, edited, and deleted while the watcher was down', async () => {
+    await writeNote('stays.md', '# Stays\n\nUnchanged content.');
+    await writeNote('edited.md', '# Edited\n\nOriginal words here.');
+    await writeNote('doomed.md', '# Doomed\n\nWill be deleted offline.');
+    await syncIndex();
+
+    // Simulate downtime: stop the watcher-driven reconciler, then mutate the
+    // vault directly on disk (what Obsidian / an agent / git pull does).
+    stopNotesIndexer();
+    await writeNote('edited.md', '# Edited\n\nCompletely new searchable zebra.');
+    await writeNote('born-offline.md', '# Born Offline\n\nCreated with no server.');
+    await fs.rm(path.join(NOTES_DIR, 'doomed.md'));
+    resetNotesIndexer();
+
+    const { changed, deleted } = await scanForDrift();
+    expect(changed).toBeGreaterThanOrEqual(2); // edited + born-offline
+    expect(deleted).toBe(1); // doomed
+
+    const app = createApp();
+    const zebra = await request(app).get('/api/notes-v2/search?q=zebra&mode=string');
+    expect(zebra.body.results.map((r: any) => r.path)).toContain('edited.md');
+    const born = await request(app).get('/api/notes-v2/search?q=born&mode=string');
+    expect(born.body.results.map((r: any) => r.path)).toContain('born-offline.md');
+    const doomed = await request(app).get('/api/notes-v2/search?q=doomed&mode=string');
+    expect(doomed.body.results.map((r: any) => r.path)).not.toContain('doomed.md');
+  });
+
+  it('is a no-op when nothing changed offline', async () => {
+    await writeNote('calm.md', '# Calm\n\nNothing happens to this note.');
+    await syncIndex();
+
+    const { changed, deleted } = await scanForDrift();
+    expect(changed).toBe(0);
+    expect(deleted).toBe(0);
   });
 });
 
