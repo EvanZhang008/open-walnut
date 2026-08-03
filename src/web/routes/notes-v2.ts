@@ -20,6 +20,7 @@ import { bus, EventNames } from '../../core/event-bus.js'
 import { log } from '../../logging/index.js'
 import { memoryNotesSearch } from '../../core/memory-search.js'
 import { isQmdBackgroundIndexRunning } from '../../core/qmd-background-indexer.js'
+import { getConfig } from '../../core/config-manager.js'
 import {
   parseFrontmatter,
   readId,
@@ -39,6 +40,8 @@ import {
 import {
   stringSearch,
   attachmentSearch,
+  normalizeExcludeFolders,
+  isPathExcluded,
   backlinksForId,
   ambiguousBacklinksForId,
   forwardLinksForId,
@@ -606,6 +609,90 @@ notesV2Router.delete('/content/*path', async (req: Request, res: Response, next:
   }
 })
 
+// DELETE /api/notes-v2/attachment/*path — delete a binary attachment. The
+// note-delete route force-appends .md, so attachments need their own route.
+notesV2Router.delete('/attachment/*path', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const relPath = getWildcardPath(req)
+    if (!relPath) { res.status(400).json({ error: 'path required' }); return }
+    const fullPath = resolveSafePath(relPath)
+    if (!fullPath || fullPath.endsWith('.md')) { res.status(400).json({ error: 'invalid path' }); return }
+    try {
+      await fsp.unlink(fullPath)
+    } catch (err: any) {
+      if (err.code === 'ENOENT') { res.status(404).json({ error: 'Attachment not found' }); return }
+      throw err
+    }
+    try {
+      const { deleteAttachmentText } = await import('../../core/notes-index.js')
+      deleteAttachmentText(toRelPath(fullPath))
+    } catch { /* best-effort */ }
+    log.memory.info('Attachment deleted', { path: relPath })
+    res.json({ ok: true })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// DELETE /api/notes-v2/folder/*path — recursively delete a folder (notes,
+// attachments, subfolders). Destructive: FE gates it behind a typed-confirm
+// dialog. Index rows for every contained note are reconciled away; extracted
+// attachment text rows are dropped.
+notesV2Router.delete('/folder/*path', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    ensureIndexBootstrap()
+    const folderPath = getWildcardPath(req)
+    if (!folderPath) { res.status(400).json({ error: 'path required' }); return }
+
+    const fullPath = resolveSafePath(folderPath)
+    // Root guard: resolveSafePath('') maps to NOTES_DIR itself — never rm that.
+    if (!fullPath || path.resolve(fullPath) === path.resolve(NOTES_DIR)) {
+      res.status(400).json({ error: 'invalid path' })
+      return
+    }
+
+    let stat
+    try {
+      stat = await fsp.stat(fullPath)
+    } catch (err: any) {
+      if (err.code === 'ENOENT') { res.status(404).json({ error: 'Folder not found' }); return }
+      throw err
+    }
+    if (!stat.isDirectory()) { res.status(400).json({ error: 'not a folder' }); return }
+
+    // Snapshot contained notes BEFORE rm so we can reconcile their index rows
+    // (the post-delete reconcile hits the ENOENT branch per note).
+    const relPrefix = toRelPath(fullPath).replace(/\/+$/, '') + '/'
+    const containedNotes: string[] = []
+    const collect = async (dir: string): Promise<void> => {
+      let entries
+      try { entries = await fsp.readdir(dir, { withFileTypes: true }) } catch { return }
+      for (const e of entries) {
+        const full = path.join(dir, e.name)
+        if (e.isDirectory()) await collect(full)
+        else if (e.name.endsWith('.md')) containedNotes.push(toRelPath(full))
+      }
+    }
+    await collect(fullPath)
+
+    await fsp.rm(fullPath, { recursive: true })
+
+    for (const rel of containedNotes) scheduleNotesIndexUpdate(rel)
+    // Drop extracted-text rows for attachments that lived under the folder.
+    try {
+      const { listAttachmentMeta, deleteAttachmentText } = await import('../../core/notes-index.js')
+      for (const row of listAttachmentMeta()) {
+        if (row.path.startsWith(relPrefix)) deleteAttachmentText(row.path)
+      }
+    } catch { /* best-effort */ }
+
+    log.memory.info('Folder deleted', { path: folderPath, notes: containedNotes.length })
+    res.json({ ok: true, deletedNotes: containedNotes.length })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // ─── Move / Rename ───────────────────────────────────────────────────────
 
 // POST /api/notes-v2/move — rename/move only. updateWikiLinksInAll REMOVED:
@@ -822,6 +909,19 @@ notesV2Router.get('/search', async (req: Request, res: Response, next: NextFunct
 
     await ensureNotesDir()
 
+    // User-configured folder exclusion (settings → search.excluded_folders,
+    // e.g. ['archive']). Query-time view filter — the index keeps everything,
+    // so toggling the setting needs no reindex. `all=1` searches everything
+    // (the UI's "include excluded folders" escape hatch).
+    const includeAll = req.query.all === '1' || req.query.all === 'true'
+    let excludeFolders: string[] = []
+    if (!includeAll) {
+      try {
+        const cfg = await getConfig()
+        excludeFolders = normalizeExcludeFolders(cfg.search?.excluded_folders)
+      } catch { /* config unreadable → no exclusion */ }
+    }
+
     // Run both legs; allSettled so one failing never zeroes the other.
     // Cloud companion has no QMD store — the semantic leg would lazily init
     // the embedding model (hundreds of MB, pins the small instance). String/FTS
@@ -830,7 +930,7 @@ notesV2Router.get('/search', async (req: Request, res: Response, next: NextFunct
     const wantSemantic = !CLOUD_MODE && (mode === 'hybrid' || mode === 'semantic')
 
     const [stringSettled, semanticSettled] = await Promise.allSettled([
-      wantString ? Promise.resolve(stringSearch(q, limit * 2)) : Promise.resolve([]),
+      wantString ? Promise.resolve(stringSearch(q, limit * 2, { excludeFolders })) : Promise.resolve([]),
       // rerank:false + overfetch 1 — see SEMANTIC_RRF_FLOOR. This is the
       // difference between a ~60ms and a ~8s notes search.
       wantSemantic
@@ -845,6 +945,11 @@ notesV2Router.get('/search', async (req: Request, res: Response, next: NextFunct
 
     if (stringSettled.status === 'fulfilled') {
       for (const h of stringSettled.value) {
+        // Defense-in-depth: the SQL-level exclusion uses LIKE (ASCII-only case
+        // folding), the JS mirror full-Unicode toLowerCase. Re-filter here so a
+        // non-ASCII-cased folder name (Été/ vs été) can never leak through the
+        // string leg while the semantic leg filters it — one view, one rule.
+        if (isPathExcluded(h.path, excludeFolders)) continue
         // A heading hit's best snippet is the heading's own section, not the
         // first body occurrence (which may be an unrelated word elsewhere).
         const snippetSource = h.headingMatch ?? q
@@ -866,6 +971,10 @@ notesV2Router.get('/search', async (req: Request, res: Response, next: NextFunct
     let degraded: 'semantic-unavailable' | undefined
     if (semanticSettled.status === 'fulfilled') {
       for (const h of semanticSettled.value) {
+        // Folder exclusion for the semantic leg: QMD returns absolute paths,
+        // so filter on the vault-relative form (JS mirror of the SQL filter).
+        const relForFilter = path.relative(NOTES_DIR, h.filepath).replace(/\\/g, '/')
+        if (isPathExcluded(relForFilter, excludeFolders)) continue
         const id = idFromQmdPath(h.filepath)
         const existing = byId.get(id)
         if (existing) {
@@ -899,7 +1008,8 @@ notesV2Router.get('/search', async (req: Request, res: Response, next: NextFunct
     // above semantic guesses, below any authored-note text match.
     if (wantString) {
       try {
-        for (const a of attachmentSearch(q, Math.min(limit, 10))) {
+        for (const a of attachmentSearch(q, Math.min(limit, 10), { excludeFolders })) {
+          if (isPathExcluded(a.path, excludeFolders)) continue // see string-leg note
           const key = `attachment:${a.path}`
           byId.set(key, {
             id: key,

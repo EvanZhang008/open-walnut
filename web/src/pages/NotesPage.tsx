@@ -139,7 +139,7 @@ function hydrateTabs(searchParams: URLSearchParams): PersistedTabs {
 
 export function NotesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { tree, loading: treeLoading, error: treeError, refresh: refreshTree, addFolder, removeNote, renameNote } = useNotesTree();
+  const { tree, loading: treeLoading, error: treeError, refresh: refreshTree, addFolder, removeNote, removeFolder, removeAttachment, renameNote } = useNotesTree();
   const { favoriteNotes, toggleFavoriteNote, isNoteFavorite } = useFavorites();
 
   // ── Open-tabs model (replaces the old single selectedPath + attachmentPath) ──
@@ -591,6 +591,12 @@ export function NotesPage() {
   // matches close: if the deleted tab was active, activate a neighbor / empty.
   const handleDeleteNote = useCallback(
     async (notePath: string) => {
+      // Cancel any pending debounced save targeting the doomed note — an
+      // in-flight PUT after the rm would re-create it (same resurrection bug
+      // markMovedAway kills for the move path).
+      if (notePath === activeNotePath) {
+        await markMovedAway(notePath);
+      }
       await removeNote(notePath);
       setTabs((prev) => {
         const idx = prev.findIndex((t) => t.path === notePath);
@@ -605,7 +611,53 @@ export function NotesPage() {
         return next;
       });
     },
-    [removeNote],
+    [removeNote, activeNotePath, markMovedAway],
+  );
+
+  // Deleted attachment open in a preview tab → same tab-drop rule as notes.
+  const handleDeleteAttachment = useCallback(
+    async (attachmentPath: string) => {
+      await removeAttachment(attachmentPath);
+      setTabs((prev) => {
+        const idx = prev.findIndex((t) => t.path === attachmentPath);
+        if (idx === -1) return prev;
+        const next = prev.filter((t) => t.path !== attachmentPath);
+        setActivePath((cur) => {
+          if (cur !== attachmentPath) return cur;
+          if (next.length === 0) return null;
+          const neighbor = next[idx] ?? next[idx - 1] ?? next[0];
+          return neighbor ? neighbor.path : null;
+        });
+        return next;
+      });
+    },
+    [removeAttachment],
+  );
+
+  // Deleted folder → drop EVERY tab living under it (notes and attachments alike).
+  const handleDeleteFolder = useCallback(
+    async (folderPath: string) => {
+      const prefix = folderPath.replace(/\/+$/, '') + '/';
+      // Kill any pending save for an active note inside the doomed folder —
+      // an in-flight PUT after the rm would re-create the note AND its parents.
+      if (activeNotePath && activeNotePath.startsWith(prefix)) {
+        await markMovedAway(activeNotePath);
+      }
+      await removeFolder(folderPath);
+      setTabs((prev) => {
+        const idx = prev.findIndex((t) => t.path.startsWith(prefix));
+        if (idx === -1) return prev;
+        const next = prev.filter((t) => !t.path.startsWith(prefix));
+        setActivePath((cur) => {
+          if (!cur || !cur.startsWith(prefix)) return cur;
+          if (next.length === 0) return null;
+          const neighbor = next[idx] ?? next[idx - 1] ?? next[0];
+          return neighbor ? neighbor.path : null;
+        });
+        return next;
+      });
+    },
+    [removeFolder, activeNotePath, markMovedAway],
   );
 
   // Renamed/moved note open in a tab → rewrite its path IN PLACE (preserve
@@ -660,6 +712,8 @@ export function NotesPage() {
           onCreateNote={handleCreateNote}
           onCreateFolder={addFolder}
           onDeleteNote={handleDeleteNote}
+          onDeleteFolder={handleDeleteFolder}
+          onDeleteAttachment={handleDeleteAttachment}
           onRenameNote={handleRenameNote}
           onRefresh={refreshTree}
           favoriteNotes={favoriteNotes}
@@ -819,7 +873,7 @@ export function NotesPage() {
         (reported in sharedFileTouches). Cmd+K jump opens in a NEW tab (or
         activates the existing one).
       */}
-      <CommandPalette onNavigate={(p) => handleSelect(p, { newTab: true })} onCreate={handleQuickCreate} />
+      <CommandPalette onNavigate={(p) => handleSelect(p, { newTab: true })} onCreate={handleQuickCreate} onPreviewAttachment={handlePreviewAttachment} />
     </div>
   );
 }

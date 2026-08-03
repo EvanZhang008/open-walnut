@@ -62,8 +62,8 @@ export interface NoteListItem {
   title?: string;
 }
 
-/** ● exact / ○ semantic / ◐ both — the hybrid-search match label (§1.2). */
-export type MatchType = 'exact' | 'semantic' | 'both';
+/** ● exact / ○ semantic / ◐ both / ▣ attachment — the hybrid-search match label (§1.2). */
+export type MatchType = 'exact' | 'semantic' | 'both' | 'attachment';
 /** Link edge resolution state (§1.2). */
 export type LinkStatus = 'resolved' | 'unresolved' | 'ambiguous';
 
@@ -151,6 +151,25 @@ export async function saveNoteContent(notePath: string, content: string, expecte
 
 export async function deleteNote(notePath: string): Promise<void> {
   await apiDelete(`/api/notes-v2/content/${notePath}`);
+}
+
+/**
+ * Encode a vault-relative path for use INSIDE a URL path (per-segment, keeping
+ * the `/` separators). Without this, a folder named `Q1#drafts` truncates at
+ * `#` (fragment) and the DELETE lands on sibling `Q1` — recursive data loss.
+ */
+function encodePathForUrl(p: string): string {
+  return p.split('/').map(encodeURIComponent).join('/');
+}
+
+/** Delete a binary attachment (png/pdf/docx/…) — the note route force-appends .md. */
+export async function deleteAttachment(attachmentPath: string): Promise<void> {
+  await apiDelete(`/api/notes-v2/attachment/${encodePathForUrl(attachmentPath)}`);
+}
+
+/** Recursively delete a folder (notes + attachments + subfolders). Destructive. */
+export async function deleteFolder(folderPath: string): Promise<void> {
+  await apiDelete(`/api/notes-v2/folder/${encodePathForUrl(folderPath)}`);
 }
 
 export async function moveNote(from: string, to: string): Promise<void> {

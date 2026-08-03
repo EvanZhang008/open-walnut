@@ -7,6 +7,11 @@ export interface EmbeddingConfig {
   qmd_model?: string;
   /** RRF alpha (BM25 weight). Default: 0.4. Range: 0-1. */
   rrf_alpha?: number;
+  /** Vault-relative folder prefixes excluded from notes search results
+   *  (e.g. ['archive']). Matching is per path segment, case-insensitive.
+   *  Content stays indexed — exclusion is applied at query time, so toggling
+   *  the setting needs no reindex. */
+  excluded_folders?: string[];
 
   // ── Legacy (Ollama-era, unused) ──
   /** @deprecated Ollama model name. */

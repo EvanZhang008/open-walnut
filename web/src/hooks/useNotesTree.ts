@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { fetchNotesTree, createFolder, deleteNote, moveNote } from '@/api/notes-v2';
+import { fetchNotesTree, createFolder, deleteNote, deleteFolder, deleteAttachment, moveNote } from '@/api/notes-v2';
 import type { NoteTreeNode } from '@/api/notes-v2';
 import { useEvent } from '@/hooks/useWebSocket';
 
@@ -38,10 +38,20 @@ export function useNotesTree() {
     await refresh();
   }, [refresh]);
 
+  const removeFolder = useCallback(async (folderPath: string) => {
+    await deleteFolder(folderPath);
+    await refresh();
+  }, [refresh]);
+
+  const removeAttachment = useCallback(async (attachmentPath: string) => {
+    await deleteAttachment(attachmentPath);
+    await refresh();
+  }, [refresh]);
+
   const renameNote = useCallback(async (from: string, to: string) => {
     await moveNote(from, to);
     await refresh();
   }, [refresh]);
 
-  return { tree, loading, error, refresh, addFolder, removeNote, renameNote };
+  return { tree, loading, error, refresh, addFolder, removeNote, removeFolder, removeAttachment, renameNote };
 }

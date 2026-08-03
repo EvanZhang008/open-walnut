@@ -523,11 +523,13 @@ export interface AttachmentHit {
  * text is machine-extracted, noisier than authored notes, so authored content
  * always outranks it; but a receipt/letter/screenshot becomes findable at all.
  */
-export function attachmentSearch(q: string, limit: number): AttachmentHit[] {
+export function attachmentSearch(q: string, limit: number, options: StringSearchOptions = {}): AttachmentHit[] {
   const d = getNotesIndexDb()
   if (!d) return []
   const out: AttachmentHit[] = []
   const seen = new Set<string>()
+  const exclA = exclusionSql('a.path', options.excludeFolders ?? [])
+  const excl = exclusionSql('path', options.excludeFolders ?? [])
   const ftsQuery = escapeFts(q)
   if (ftsQuery) {
     try {
@@ -535,9 +537,9 @@ export function attachmentSearch(q: string, limit: number): AttachmentHit[] {
         .prepare(
           `SELECT a.path, a.text FROM attachment_fts f
            JOIN attachment_text a ON a.rowid = f.rowid
-           WHERE attachment_fts MATCH ? ORDER BY bm25(attachment_fts) LIMIT ?`,
+           WHERE attachment_fts MATCH ?${exclA.sql} ORDER BY bm25(attachment_fts) LIMIT ?`,
         )
-        .all(ftsQuery, limit) as Array<{ path: string; text: string }>
+        .all(ftsQuery, ...exclA.params, limit) as Array<{ path: string; text: string }>
       for (const r of rows) {
         seen.add(r.path)
         out.push({ path: r.path, text: r.text, stringScore: 0.45 })
@@ -547,8 +549,8 @@ export function attachmentSearch(q: string, limit: number): AttachmentHit[] {
   if (out.length < limit) {
     const like = `%${q.replace(/[\\%_]/g, (m) => '\\' + m)}%`
     const rows = d
-      .prepare(`SELECT path, text FROM attachment_text WHERE text LIKE ? ESCAPE '\\' LIMIT ?`)
-      .all(like, limit) as Array<{ path: string; text: string }>
+      .prepare(`SELECT path, text FROM attachment_text WHERE text LIKE ? ESCAPE '\\'${excl.sql} LIMIT ?`)
+      .all(like, ...excl.params, limit) as Array<{ path: string; text: string }>
     for (const r of rows) {
       if (seen.has(r.path)) continue
       out.push({ path: r.path, text: r.text, stringScore: hasCjk(q) ? 0.45 : 0.4 })
@@ -660,6 +662,8 @@ export interface StringHit {
   folderMatch?: string
   /** Set when the hit matched a SECTION HEADING (`## SIN`) — shown in the UI row. */
   headingMatch?: string
+  /** Note's last-modified ISO timestamp — feeds the recency tiebreak. */
+  modified?: string
   /** Set when the hit matched one of the note's tags. */
   matchedTags?: string[]
 }
@@ -673,6 +677,43 @@ function hasCjk(s: string): boolean {
  * the indexer imports from this file, so importing back would be a cycle). */
 function normalizeTagSlug(raw: string): string {
   return raw.trim().replace(/^#+/, '').toLowerCase().replace(/\s+/g, '-')
+}
+
+// ── Folder exclusion (user-configured, query-time) ──────────────────────────
+
+export interface StringSearchOptions {
+  /** Vault-relative folder prefixes to exclude (e.g. ['archive']). Applied in
+   *  SQL so excluded rows never consume the LIMIT window. Content stays
+   *  indexed — this is a view filter, not an index filter. */
+  excludeFolders?: string[]
+}
+
+/** Normalize exclusion entries: trim slashes/whitespace, drop empties. */
+export function normalizeExcludeFolders(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map((e) => String(e).trim().replace(/^\/+|\/+$/g, ''))
+    .filter(Boolean)
+}
+
+function likeEscape(s: string): string {
+  return s.replace(/[\\%_]/g, (m) => '\\' + m)
+}
+
+/** SQL fragment excluding paths under any of the folders. SQLite LIKE is
+ *  case-insensitive for ASCII, matching how users type folder names. */
+function exclusionSql(col: string, excludes: string[]): { sql: string; params: string[] } {
+  if (excludes.length === 0) return { sql: '', params: [] }
+  const conds = excludes.map(() => `${col} LIKE ? ESCAPE '\\'`).join(' OR ')
+  return { sql: ` AND NOT (${conds})`, params: excludes.map((e) => likeEscape(e) + '/%') }
+}
+
+/** JS-side mirror of exclusionSql for post-filtering non-SQL result sets
+ *  (the semantic leg's absolute→relative paths). */
+export function isPathExcluded(relPath: string, excludes: string[]): boolean {
+  if (excludes.length === 0) return false
+  const p = relPath.toLowerCase()
+  return excludes.some((e) => p.startsWith(e.toLowerCase() + '/'))
 }
 
 /**
@@ -813,13 +854,14 @@ export function escapeFts(q: string): string {
  * FTS5 first (sublinear token/prefix match), then a capped LIKE fallback for
  * mid-token substrings FTS5 cannot match (e.g. 'pollo' in 'Apollo').
  */
-export function stringSearch(q: string, limit: number): StringHit[] {
+export function stringSearch(q: string, limit: number, options: StringSearchOptions = {}): StringHit[] {
   const d = getNotesIndexDb()
   if (!d) return []
   const seen = new Set<string>()
   const out: StringHit[] = []
+  const excl = exclusionSql('path', options.excludeFolders ?? [])
 
-  type RawHit = { id: string; path: string; title: string; body: string; headings?: string; rank?: number }
+  type RawHit = { id: string; path: string; title: string; body: string; headings?: string; rank?: number; modified?: string }
 
   // Name-first leg: pull notes whose TITLE or FILENAME matches, scored by
   // nameScore, BEFORE the FTS body leg. The FTS leg is `ORDER BY bm25 LIMIT n` —
@@ -834,11 +876,11 @@ export function stringSearch(q: string, limit: number): StringHit[] {
   const firstTokLike = `%${firstTok.replace(/[\\%_]/g, (m) => '\\' + m)}%`
   const titleRows = d
     .prepare(
-      `SELECT id, path, title, body FROM notes
-       WHERE title LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\'
+      `SELECT id, path, title, body, modified FROM notes
+       WHERE (title LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\')${excl.sql}
        LIMIT ?`,
     )
-    .all(titleLike, firstTokLike, titleLike, limit * 2) as RawHit[]
+    .all(titleLike, firstTokLike, titleLike, ...excl.params, limit * 2) as RawHit[]
   // Mid-token substring hits (band ≤0.30) are collected but NOT marked seen and
   // only appended AFTER the strong legs: a later leg (heading/FTS body) may score
   // the same note higher, and they must never crowd word matches out of `out`.
@@ -847,7 +889,7 @@ export function stringSearch(q: string, limit: number): StringHit[] {
     const band = nameScore(r.title, r.path, q)
     if (band == null) continue // matched a token but not as a scorable name hit
     if (seen.has(r.id)) continue
-    const hit = { id: r.id, path: r.path, title: r.title, body: r.body, stringScore: band }
+    const hit = { id: r.id, path: r.path, title: r.title, body: r.body, stringScore: band, modified: r.modified }
     if (band <= 0.3) {
       weakNameHits.push(hit)
     } else {
@@ -861,11 +903,11 @@ export function stringSearch(q: string, limit: number): StringHit[] {
   // outranks any body mention (band .87), sits below name/folder bands.
   const headingRows = d
     .prepare(
-      `SELECT id, path, title, body, headings FROM notes
-       WHERE headings LIKE ? ESCAPE '\\'
+      `SELECT id, path, title, body, headings, modified FROM notes
+       WHERE headings LIKE ? ESCAPE '\\'${excl.sql}
        LIMIT ?`,
     )
-    .all(titleLike, limit * 2) as RawHit[]
+    .all(titleLike, ...excl.params, limit * 2) as RawHit[]
   for (const r of headingRows) {
     if (seen.has(r.id)) continue
     const hs = headingScore(r.headings ?? '', q)
@@ -873,7 +915,7 @@ export function stringSearch(q: string, limit: number): StringHit[] {
     seen.add(r.id)
     out.push({
       id: r.id, path: r.path, title: r.title, body: r.body,
-      stringScore: hs.band, headingMatch: hs.heading,
+      stringScore: hs.band, headingMatch: hs.heading, modified: r.modified,
     })
   }
 
@@ -881,17 +923,18 @@ export function stringSearch(q: string, limit: number): StringHit[] {
   // deliberate curation — band .86, just under headings.
   const tagSlug = normalizeTagSlug(q)
   if (tagSlug) {
+    const tagExcl = exclusionSql('n.path', options.excludeFolders ?? [])
     const tagRows = d
       .prepare(
-        `SELECT n.id, n.path, n.title, n.body FROM tags t JOIN notes n ON n.id = t.note_id
-         WHERE t.tag = ? OR t.tag LIKE ? ESCAPE '\\'
+        `SELECT n.id, n.path, n.title, n.body, n.modified FROM tags t JOIN notes n ON n.id = t.note_id
+         WHERE (t.tag = ? OR t.tag LIKE ? ESCAPE '\\')${tagExcl.sql}
          LIMIT ?`,
       )
-      .all(tagSlug, tagSlug.replace(/[\\%_]/g, (m) => '\\' + m) + '/%', limit) as RawHit[]
+      .all(tagSlug, tagSlug.replace(/[\\%_]/g, (m) => '\\' + m) + '/%', ...tagExcl.params, limit) as RawHit[]
     for (const r of tagRows) {
       if (seen.has(r.id)) continue
       seen.add(r.id)
-      out.push({ id: r.id, path: r.path, title: r.title, body: r.body, stringScore: 0.86, matchedTags: [tagSlug] })
+      out.push({ id: r.id, path: r.path, title: r.title, body: r.body, stringScore: 0.86, matchedTags: [tagSlug], modified: r.modified })
     }
   }
 
@@ -903,12 +946,12 @@ export function stringSearch(q: string, limit: number): StringHit[] {
   // query can't accidentally match a mid-path substring of the filename.
   const folderRows = d
     .prepare(
-      `SELECT id, path, title, body FROM notes
-       WHERE path LIKE ? ESCAPE '\\'
+      `SELECT id, path, title, body, modified FROM notes
+       WHERE path LIKE ? ESCAPE '\\'${excl.sql}
        ORDER BY path
        LIMIT ?`,
     )
-    .all(`%${q.replace(/[\\%_]/g, (m) => '\\' + m)}%`, limit * 4) as RawHit[]
+    .all(`%${q.replace(/[\\%_]/g, (m) => '\\' + m)}%`, ...excl.params, limit * 4) as RawHit[]
   for (const r of folderRows) {
     const segments = r.path.split('/').slice(0, -1) // folders only, drop the filename
     const band = folderScore(segments, q)
@@ -922,6 +965,7 @@ export function stringSearch(q: string, limit: number): StringHit[] {
       body: r.body,
       stringScore: band,
       folderMatch: matchedFolderPath(segments, q),
+      modified: r.modified,
     })
   }
 
@@ -931,15 +975,16 @@ export function stringSearch(q: string, limit: number): StringHit[] {
       // bm25() returns a score where MORE NEGATIVE = more relevant. We pull it
       // (as `rank`) so we can map body relevance into a real band instead of
       // discarding it (the old code ordered by rank then threw the number away).
+      const ftsExcl = exclusionSql('n.path', options.excludeFolders ?? [])
       const rows = d
         .prepare(
-          `SELECT n.id, n.path, n.title, n.body, bm25(notes_fts) AS rank
+          `SELECT n.id, n.path, n.title, n.body, n.modified, bm25(notes_fts) AS rank
            FROM notes_fts f JOIN notes n ON n.rowid = f.rowid
-           WHERE notes_fts MATCH ?
+           WHERE notes_fts MATCH ?${ftsExcl.sql}
            ORDER BY rank
            LIMIT ?`,
         )
-        .all(ftsQuery, limit) as RawHit[]
+        .all(ftsQuery, ...ftsExcl.params, limit) as RawHit[]
       // Normalize bm25 across this result set: best (most-negative) → 0.85,
       // worst → 0.50, so FTS body matches occupy [0.50, 0.85], always below
       // title bands (≥0.90) and above the LIKE fallback (≤0.25).
@@ -958,7 +1003,7 @@ export function stringSearch(q: string, limit: number): StringHit[] {
           score = 0.5 + 0.35 * norm
         }
         seen.add(r.id)
-        out.push({ id: r.id, path: r.path, title: r.title, body: r.body, stringScore: score })
+        out.push({ id: r.id, path: r.path, title: r.title, body: r.body, stringScore: score, modified: r.modified })
       }
     } catch (err) {
       // Malformed MATCH shouldn't happen after escapeFts, but never throw.
@@ -978,11 +1023,11 @@ export function stringSearch(q: string, limit: number): StringHit[] {
     const like = `%${q.replace(/[\\%_]/g, (m) => '\\' + m)}%`
     const rows = d
       .prepare(
-        `SELECT id, path, title, body FROM notes
-         WHERE (title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\')
+        `SELECT id, path, title, body, modified FROM notes
+         WHERE (title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\')${excl.sql}
          LIMIT ?`,
       )
-      .all(like, like, limit) as RawHit[]
+      .all(like, like, ...excl.params, limit) as RawHit[]
     for (const r of rows) {
       if (seen.has(r.id)) continue
       const nameBand = nameScore(r.title, r.path, q)
@@ -995,7 +1040,7 @@ export function stringSearch(q: string, limit: number): StringHit[] {
           ? 0.25
           : 0.1
       seen.add(r.id)
-      out.push({ id: r.id, path: r.path, title: r.title, body: r.body, stringScore: nameBand ?? bodyBand })
+      out.push({ id: r.id, path: r.path, title: r.title, body: r.body, stringScore: nameBand ?? bodyBand, modified: r.modified })
     }
   }
 
@@ -1007,8 +1052,13 @@ export function stringSearch(q: string, limit: number): StringHit[] {
     out.push(w)
   }
 
-  // Highest relevance first within the string leg.
-  out.sort((a, b) => b.stringScore - a.stringScore)
+  // Highest relevance first; EQUAL bands break by recency (newest first).
+  // Title-word queries routinely tie a whole family of notes at one band
+  // (a street name → 8 notes at .93) — without this, order degrades to SQL
+  // row order and the note touched yesterday sorts below years-old ones.
+  out.sort(
+    (a, b) => b.stringScore - a.stringScore || (b.modified ?? '').localeCompare(a.modified ?? ''),
+  )
   return out.slice(0, Math.max(limit, 1) * 2)
 }
 

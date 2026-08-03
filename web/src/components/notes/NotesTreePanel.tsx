@@ -71,6 +71,10 @@ interface NotesTreePanelProps {
   onCreateNote: (path: string) => void;
   onCreateFolder: (path: string) => void;
   onDeleteNote: (path: string) => void;
+  /** Recursively delete a folder (notes + attachments). Gated behind a danger confirm. */
+  onDeleteFolder: (path: string) => void | Promise<void>;
+  /** Delete a binary attachment (png/pdf/docx/…). */
+  onDeleteAttachment: (path: string) => void | Promise<void>;
   onRenameNote: (from: string, to: string) => void | Promise<void>;
   onRefresh: () => void;
   /** Vault-relative paths (WITH .md) of bookmarked notes — drives the Bookmarks group. */
@@ -119,6 +123,8 @@ export const NotesTreePanel = memo(function NotesTreePanel({
   onCreateNote,
   onCreateFolder,
   onDeleteNote,
+  onDeleteFolder,
+  onDeleteAttachment,
   onRenameNote,
   onRefresh,
   favoriteNotes,
@@ -138,6 +144,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
   const [newItemName, setNewItemName] = useState('');
   const [newItemType, setNewItemType] = useState<'file' | 'folder'>('file');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: NoteTreeNode } | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   // Drag-to-move (#5): the path being dragged + the current drop-target folder
@@ -227,6 +234,30 @@ export const NotesTreePanel = memo(function NotesTreePanel({
     const handler = () => setContextMenu(null);
     window.addEventListener('click', handler);
     return () => window.removeEventListener('click', handler);
+  }, [contextMenu]);
+
+  // Clamp the context menu into the viewport. A right-click near the bottom
+  // edge rendered the menu's tail (incl. Delete) off-screen and unclickable —
+  // measure after render and shift up/left as needed.
+  useEffect(() => {
+    if (!contextMenu) return;
+    const el = contextMenuRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const overBottom = rect.bottom - window.innerHeight + 8;
+    const overRight = rect.right - window.innerWidth + 8;
+    if (overBottom > 0 || overRight > 0) {
+      setContextMenu((cm) => {
+        if (!cm) return cm;
+        const y = overBottom > 0 ? Math.max(8, cm.y - overBottom) : cm.y;
+        const x = overRight > 0 ? Math.max(8, cm.x - overRight) : cm.x;
+        // Fixed point: a menu taller than the viewport pins at 8 and can't be
+        // clamped further — returning the SAME object stops the effect re-firing
+        // (else this loops forever on very short windows).
+        if (x === cm.x && y === cm.y) return cm;
+        return { ...cm, x, y };
+      });
+    }
   }, [contextMenu]);
 
   // Cleanup search debounce timer on unmount
@@ -362,10 +393,41 @@ export const NotesTreePanel = memo(function NotesTreePanel({
     if (!contextMenu) return;
     const { node } = contextMenu;
     setContextMenu(null);
-    if (await confirm({ title: `Delete “${node.name}”?`, confirmLabel: 'Delete', danger: true })) {
-      onDeleteNote(node.path);
+
+    if (node.type === 'folder') {
+      // Recursive delete — spell out exactly how much is going away.
+      const files = collectFilePaths(node.children ?? []);
+      const notes = collectNotePaths(node.children ?? []);
+      const attachments = files.size - notes.size;
+      const parts = [
+        notes.size ? `${notes.size} ${notes.size === 1 ? 'note' : 'notes'}` : '',
+        attachments ? `${attachments} ${attachments === 1 ? 'attachment' : 'attachments'}` : '',
+      ].filter(Boolean).join(' and ');
+      const ok = await confirm({
+        title: `Delete folder “${node.name}”?`,
+        message: parts
+          ? `This permanently deletes the folder and everything inside it (${parts}). This cannot be undone.`
+          : 'This permanently deletes the folder and everything inside it. This cannot be undone.',
+        confirmLabel: 'Delete folder',
+        danger: true,
+      });
+      if (!ok) return;
+      try {
+        await onDeleteFolder(node.path);
+      } catch (e) {
+        await alert({ title: 'Delete failed', message: e instanceof Error ? e.message : 'Could not delete the folder.' });
+      }
+      return;
     }
-  }, [contextMenu, onDeleteNote, confirm]);
+
+    if (!(await confirm({ title: `Delete “${node.name}”?`, confirmLabel: 'Delete', danger: true }))) return;
+    try {
+      if (node.kind === 'attachment') await onDeleteAttachment(node.path);
+      else await onDeleteNote(node.path);
+    } catch (e) {
+      await alert({ title: 'Delete failed', message: e instanceof Error ? e.message : 'Could not delete the file.' });
+    }
+  }, [contextMenu, onDeleteNote, onDeleteFolder, onDeleteAttachment, confirm, alert]);
 
   // Local-machine actions (context menu): Finder / default app / VS Code /
   // Copy path. Failures (cloud mode 400, clipboard denial) surface via alert —
@@ -704,7 +766,14 @@ export const NotesTreePanel = memo(function NotesTreePanel({
                 <div
                   key={r.path}
                   className={`notes-tree-item notes-tree-file notes-search-result ${selectedPath === r.path ? 'selected' : ''}`}
-                  onClick={() => { onSelect(r.path); setSearchQuery(''); setSearchResults(null); }}
+                  onClick={() => {
+                    // Attachment hits (OCR/PDF text) open in the preview pane —
+                    // the note loader .md-suffixes the path and 404s on binaries.
+                    if (r.matchType === 'attachment') onPreviewAttachment(r.path);
+                    else onSelect(r.path);
+                    setSearchQuery('');
+                    setSearchResults(null);
+                  }}
                 >
                   <FileIcon />
                   <div className="notes-search-result-content">
@@ -741,6 +810,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
       {/* Context menu */}
       {contextMenu && (
         <div
+          ref={contextMenuRef}
           className="notes-context-menu"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
@@ -754,9 +824,9 @@ export const NotesTreePanel = memo(function NotesTreePanel({
               </button>
             </>
           )}
-          {/* Notes get Open-in-new-tab + bookmark toggle + Rename + Delete. Attachments
-              are drag-movable + local-open only: Rename/Delete stay note-only because
-              those routes speak the .md-suffix convention, which binary files don't. */}
+          {/* Notes get Open-in-new-tab + bookmark toggle + Rename. Rename stays
+              note-only because the rename route speaks the .md-suffix convention,
+              which binary files don't; Delete has dedicated routes per node type. */}
           {contextMenu.node.type === 'file' && contextMenu.node.kind !== 'attachment' && (
             <>
               <button onClick={() => { const p = contextMenu.node.path; setContextMenu(null); onSelect(p, { newTab: true }); }}>
@@ -789,9 +859,11 @@ export const NotesTreePanel = memo(function NotesTreePanel({
           <button onClick={() => handleReveal(contextMenu.node.path, 'finder')}>Reveal in Finder</button>
           <button onClick={() => handleCopyPath(contextMenu.node.path)}>Copy path</button>
           <button onClick={() => handleReveal(contextMenu.node.path, 'vscode')}>Open in VS Code</button>
-          {contextMenu.node.type === 'file' && contextMenu.node.kind !== 'attachment' && (
-            <button className="danger" onClick={handleDeleteFromMenu}>Delete</button>
-          )}
+          {/* Delete — every node type. Notes/attachments get a plain confirm; folders a
+              recursive-delete confirm with the contained note/attachment count. */}
+          <button className="danger" onClick={handleDeleteFromMenu}>
+            {contextMenu.node.type === 'folder' ? 'Delete folder' : 'Delete'}
+          </button>
         </div>
       )}
     </div>

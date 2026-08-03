@@ -22,6 +22,25 @@ const MODEL_PRESETS = [
 // Server default is defined in src/core/qmd-model.ts - keep in sync.
 const DEFAULT_MODEL = MODEL_PRESETS[0].value;
 
+/**
+ * Parse the excluded-folders input (comma/newline separated) into normalized
+ * vault-relative prefixes: trimmed, slashes stripped from both ends, deduped
+ * case-insensitively. Mirrors the server's normalizeExcludeFolders.
+ */
+function parseExcludedFolders(text: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of text.split(/[,\n]/)) {
+    const f = raw.trim().replace(/^\/+|\/+$/g, '');
+    if (!f) continue;
+    const key = f.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(f);
+  }
+  return out;
+}
+
 // ── Types for API responses ──
 
 interface QmdModelInfo {
@@ -85,6 +104,8 @@ export function SearchSection({ config, onSave }: Props) {
     return isPreset ? '' : saved;
   });
   const [customUrlError, setCustomUrlError] = useState<string | null>(null);
+  // Excluded-folders editor: raw text (comma/newline separated), parsed on save.
+  const [excludedText, setExcludedText] = useState(() => (search.excluded_folders ?? []).join('\n'));
 
   // QMD status from server
   const [qmdStatus, setQmdStatus] = useState<QmdStatus | null>(null);
@@ -107,6 +128,7 @@ export function SearchSection({ config, onSave }: Props) {
     const isPreset = MODEL_PRESETS.some((p) => p.value === saved);
     setSelectedModel(isPreset ? saved : 'custom');
     setCustomUrl(isPreset ? '' : saved);
+    setExcludedText((s.excluded_folders ?? []).join('\n'));
   }, [config]);
 
   // ── Fetch status (CRITICAL-1: AbortController) ──
@@ -197,10 +219,12 @@ export function SearchSection({ config, onSave }: Props) {
       }
     }
     const modelValue = selectedModel === 'custom' ? customUrl.trim() : selectedModel;
+    const excluded = parseExcludedFolders(excludedText);
     await onSave({
       search: {
         ...config.search,
         qmd_model: modelValue || undefined,
+        excluded_folders: excluded.length > 0 ? excluded : undefined,
       },
     });
     await fetchStatus();
@@ -216,8 +240,14 @@ export function SearchSection({ config, onSave }: Props) {
   const customValid = selectedModel !== 'custom' || (!!customUrl.trim() && customUrl.trim().startsWith('hf:'));
   useAutoSave({
     enabled: customValid,
-    current: JSON.stringify({ qmd_model: effectiveModel || undefined }),
-    baseline: JSON.stringify({ qmd_model: (config.search?.qmd_model ?? DEFAULT_MODEL) || undefined }),
+    current: JSON.stringify({
+      qmd_model: effectiveModel || undefined,
+      excluded_folders: parseExcludedFolders(excludedText),
+    }),
+    baseline: JSON.stringify({
+      qmd_model: (config.search?.qmd_model ?? DEFAULT_MODEL) || undefined,
+      excluded_folders: config.search?.excluded_folders ?? [],
+    }),
     save: handleSave,
   });
 
@@ -370,6 +400,27 @@ export function SearchSection({ config, onSave }: Props) {
         {/* HIGH-1: Warning that model change requires restart / re-download */}
         <p className="text-sm" style={{ marginTop: 2, color: 'var(--warning, #e8a838)' }}>
           Model change takes effect after clicking Download Model to fetch and apply the new model.
+        </p>
+      </div>
+
+      {/* ── Excluded Folders ── */}
+      <div className="form-group">
+        <label htmlFor="search-excluded-folders">Excluded Folders</label>
+        <textarea
+          id="search-excluded-folders"
+          value={excludedText}
+          onChange={(e) => {
+            setExcludedText(e.target.value);
+            userEditedRef.current = true;
+          }}
+          placeholder={'archive\nArchive/old-stuff'}
+          rows={3}
+          spellCheck={false}
+          style={{ resize: 'vertical', fontFamily: 'var(--font-mono, monospace)', fontSize: 13 }}
+          data-testid="search-excluded-folders-input"
+        />
+        <p className="text-sm text-muted" style={{ marginTop: 4 }}>
+          Vault folders hidden from search results — one per line (or comma-separated), e.g. <code>archive</code>. Matching is case-insensitive and covers all subfolders. Content stays indexed, so removing an entry restores it instantly (no re-index).
         </p>
       </div>
     </SectionCard>

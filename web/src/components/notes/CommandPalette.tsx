@@ -36,6 +36,11 @@ interface CommandPaletteProps {
    * palette can navigate to it.
    */
   onCreate: (title: string) => void;
+  /**
+   * Preview a binary attachment hit (matchType 'attachment'). Attachments must
+   * NOT go through onNavigate — the note loader force-appends .md and 404s.
+   */
+  onPreviewAttachment?: (path: string) => void;
 }
 
 /** A unified palette row — either a jump-to-note target or a hybrid search hit. */
@@ -82,6 +87,7 @@ function matchBadge(t: MatchType | undefined): { glyph: string; label: string; c
   if (t === 'exact') return { glyph: '●', label: 'exact match', cls: 'exact' };   // ●
   if (t === 'both') return { glyph: '◐', label: 'exact + related', cls: 'both' };   // ◐
   if (t === 'semantic') return { glyph: '○', label: 'related', cls: 'semantic' };   // ○
+  if (t === 'attachment') return { glyph: '▣', label: 'in attachment', cls: 'attachment' };   // ▣ (OCR/PDF text hit)
   return null;
 }
 
@@ -102,7 +108,7 @@ export function pushRecent(path: string): void {
   } catch { /* ignore quota / disabled storage */ }
 }
 
-export function CommandPalette({ onNavigate, onCreate }: CommandPaletteProps) {
+export function CommandPalette({ onNavigate, onCreate, onPreviewAttachment }: CommandPaletteProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [notes, setNotes] = useState<NoteListItem[]>([]);
@@ -244,12 +250,18 @@ export function CommandPalette({ onNavigate, onCreate }: CommandPaletteProps) {
     if (row.kind === 'create' || row.kind === 'create-blank') {
       onCreate(row.kind === 'create-blank' ? '' : row.title);
     } else if (row.path) {
-      pushRecent(row.path);
-      onNavigate(row.path);
+      // Attachment hits (OCR/PDF text) open in the PREVIEW pane, never the note
+      // loader (which .md-suffixes the path → 404 tab), and never enter recents.
+      if (row.matchType === 'attachment' && onPreviewAttachment) {
+        onPreviewAttachment(row.path);
+      } else {
+        pushRecent(row.path);
+        onNavigate(row.path);
+      }
     }
     setOpen(false);
     setQuery('');
-  }, [onCreate, onNavigate]);
+  }, [onCreate, onNavigate, onPreviewAttachment]);
 
   const onInputKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (composingRef.current || e.nativeEvent.isComposing || (e.nativeEvent as KeyboardEvent).keyCode === 229) return;
