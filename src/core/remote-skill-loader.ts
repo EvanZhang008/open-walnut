@@ -19,6 +19,7 @@ import { parseFrontmatter } from '../utils/frontmatter.js';
 import {
   discoverPluginSkills,
   parseSkillMeta,
+  mapLimit,
   type SkillFs,
   type PluginSkillMeta,
 } from './plugin-skill-loader.js';
@@ -78,25 +79,26 @@ function daemonSkillFs(conn: DaemonConnection): SkillFs {
   };
 }
 
-/** Scan the remote flat ~/.claude/skills/ dir (remote equivalent of listAvailableSkills). */
+/** Scan the remote flat ~/.claude/skills/ dir (remote equivalent of listAvailableSkills).
+ *  Reads are pipelined (each is a daemon RTT) — sequential awaits over a big
+ *  skills dir were the bulk of the 12-22s /api/slash-commands?host= scans. */
 async function listRemoteFlatSkills(fs: SkillFs): Promise<PluginSkillMeta[]> {
   const entries = await fs.list(REMOTE_FLAT_SKILLS_DIR);
   if (entries === null) return [];
-  const out: PluginSkillMeta[] = [];
-  for (const entry of entries) {
+  const metas = await mapLimit(entries, 16, async (entry) => {
     const file = fs.join(REMOTE_FLAT_SKILLS_DIR, entry, 'SKILL.md');
     const raw = await fs.readText(file);
-    if (raw === null) continue;
+    if (raw === null) return null;
     const meta = parseSkillMeta(raw);
-    out.push({
+    return {
       dirName: entry,
       name: meta.name ?? entry,
       description: meta.description ?? '',
       location: file,
       plugin: '__flat__',
-    });
-  }
-  return out;
+    };
+  });
+  return metas.filter((m): m is PluginSkillMeta => m !== null);
 }
 
 /**
@@ -146,27 +148,27 @@ export async function listRemoteProjectCommands(
   const entries = await fs.list(dir);
   if (entries === null) return [];
 
-  const out: RemoteCommandMeta[] = [];
-  for (const entry of entries) {
+  // Pipelined like the skill scans — each read/list is a daemon RTT.
+  const perEntry = await mapLimit(entries, 16, async (entry): Promise<RemoteCommandMeta[]> => {
     if (entry.endsWith('.md')) {
       const name = entry.slice(0, -3);
-      if (!name) continue;
+      if (!name) return [];
       const raw = await fs.readText(fs.join(dir, entry));
-      out.push({ name, description: descOf(raw) });
-      continue;
+      return [{ name, description: descOf(raw) }];
     }
     // Possible subcommand directory (dir/sub.md → "dir:sub").
     const subFiles = await fs.list(fs.join(dir, entry));
-    if (subFiles === null) continue;
-    for (const subFile of subFiles) {
-      if (!subFile.endsWith('.md')) continue;
+    if (subFiles === null) return [];
+    const subs = await mapLimit(subFiles, 8, async (subFile) => {
+      if (!subFile.endsWith('.md')) return null;
       const subName = subFile.slice(0, -3);
-      if (!subName) continue;
+      if (!subName) return null;
       const raw = await fs.readText(fs.join(dir, entry, subFile));
-      out.push({ name: `${entry}:${subName}`, description: descOf(raw) });
-    }
-  }
-  return out;
+      return { name: `${entry}:${subName}`, description: descOf(raw) };
+    });
+    return subs.filter((s): s is RemoteCommandMeta => s !== null);
+  });
+  return perEntry.flat();
 }
 
 function descOf(raw: string | null): string {

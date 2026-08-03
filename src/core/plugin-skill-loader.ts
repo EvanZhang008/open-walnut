@@ -73,6 +73,34 @@ export interface PluginDiscoveryConfig {
 
 // ─── reader-agnostic discovery core ─────────────────────────────────
 
+/**
+ * Bounded-concurrency map that preserves input order in the result.
+ * The discovery core runs over a SkillFs whose remote implementation pays a
+ * full daemon round-trip per read — sequential awaits made a ~200-skill host
+ * take 12-22s per /api/slash-commands call (long enough to saturate the
+ * browser's 6-per-origin connection pool). Pipelining the RTTs is the fix;
+ * the bound keeps us from flooding one WS with hundreds of in-flight reads.
+ */
+export async function mapLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+/** In-flight read bound per discovery pass (per-host WS stays responsive). */
+const SKILL_READ_CONCURRENCY = 16;
+
 /** Read enabled plugin ids ("<plugin>@<marketplace>": true) from settings.json. */
 async function readEnabledPlugins(fs: SkillFs, settingsFile: string): Promise<string[]> {
   const raw = await fs.readText(settingsFile);
@@ -158,21 +186,20 @@ async function scanPluginSkills(
   const entries = await fs.list(skillsDir);
   if (entries === null) return [];
 
-  const out: PluginSkillMeta[] = [];
-  for (const entry of entries) {
+  const metas = await mapLimit(entries, SKILL_READ_CONCURRENCY, async (entry) => {
     const file = fs.join(skillsDir, entry, 'SKILL.md');
     const raw = await fs.readText(file);
-    if (raw === null) continue; // not a skill dir
+    if (raw === null) return null; // not a skill dir
     const meta = parseSkillMeta(raw);
-    out.push({
+    return {
       dirName: entry,
       name: meta.name ?? entry,
       description: meta.description ?? '',
       location: file,
       plugin: pluginId,
-    });
-  }
-  return out;
+    };
+  });
+  return metas.filter((m): m is PluginSkillMeta => m !== null);
 }
 
 /**
@@ -188,16 +215,15 @@ export async function discoverPluginSkills(
     readMarketplaceRoots(fs, cfg.pluginsDir),
   ]);
 
-  const seen = new Set<string>();
-  const skills: PluginSkillMeta[] = [];
-
-  for (const pluginId of enabled) {
+  // Scan plugins concurrently (mapLimit preserves order), then dedup
+  // sequentially so "first writer wins" still follows enabledPlugins order.
+  const perPlugin = await mapLimit(enabled, 4, async (pluginId): Promise<PluginSkillMeta[]> => {
     const at = pluginId.lastIndexOf('@');
-    if (at < 0) continue;
+    if (at < 0) return [];
     const pluginName = pluginId.slice(0, at);
     const marketplace = pluginId.slice(at + 1);
     const root = roots.get(marketplace);
-    if (!root) continue;
+    if (!root) return [];
 
     const pluginDir = await resolvePluginDir(fs, pluginName, root);
     if (!pluginDir) {
@@ -206,14 +232,17 @@ export async function discoverPluginSkills(
         marketplace,
         root,
       });
-      continue;
+      return [];
     }
+    return scanPluginSkills(fs, pluginDir, pluginId);
+  });
 
-    for (const skill of await scanPluginSkills(fs, pluginDir, pluginId)) {
-      if (seen.has(skill.dirName)) continue;
-      seen.add(skill.dirName);
-      skills.push(skill);
-    }
+  const seen = new Set<string>();
+  const skills: PluginSkillMeta[] = [];
+  for (const skill of perPlugin.flat()) {
+    if (seen.has(skill.dirName)) continue;
+    seen.add(skill.dirName);
+    skills.push(skill);
   }
 
   return skills;

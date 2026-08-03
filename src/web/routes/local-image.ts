@@ -3,8 +3,17 @@
  *
  * GET /api/local-image?path=/absolute/path/to/file.png[&host=clouddev]
  *
- * When `host` is provided and the file doesn't exist locally, the daemon
- * fetches it from the remote host and caches it under REMOTE_IMAGES_DIR.
+ * When `host` is provided and the file doesn't exist locally, the bytes come
+ * from the remote host via the daemon and are cached in the REMOTE_IMAGES_DIR
+ * mirror (with a .src.json sidecar recording their origin). Mirror hits are
+ * revalidated against the remote mtime/size before serving, so an image the
+ * session regenerated on the remote host shows its NEW bytes — the old
+ * download-once behavior served the first version forever.
+ *
+ * Freshness: responses carry `Cache-Control: no-cache` + a strong ETag. The
+ * browser revalidates each render and gets a bodyless 304 unless the bytes
+ * actually changed — the previous `max-age=3600` made the BROWSER pin stale
+ * bytes for an hour even after the server had fresh ones.
  *
  * Security:
  * - Extension whitelist (png, jpg, jpeg, gif, webp) — no SVG (XSS risk)
@@ -16,10 +25,16 @@
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
+import crypto from 'node:crypto'
 import path from 'node:path'
 import fsp from 'node:fs/promises'
-import fs from 'node:fs'
 import { REMOTE_IMAGES_DIR } from '../../constants.js'
+import {
+  isMirrorPath,
+  revalidateMirror,
+  downloadToMirror,
+  readMirrorSidecar,
+} from '../../core/remote-image-mirror.js'
 
 export const localImageRouter = Router()
 
@@ -43,19 +58,26 @@ async function resolveSessionHost(sessionId: string): Promise<string | null> {
   } catch { return null }
 }
 
-async function fetchFromRemote(host: string, remotePath: string): Promise<Buffer | null> {
-  try {
-    const { getDaemonConnection } = await import('../../providers/daemon-connection.js')
-    const { getConfig } = await import('../../core/config-manager.js')
-    const config = await getConfig()
-    const hostDef = config.hosts?.[host]
-    if (!hostDef?.hostname) return null
-    const sshTarget = { hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port }
-    const conn = await getDaemonConnection(host, sshTarget)
-    const result = await conn.send('fs.read', { path: remotePath, encoding: 'base64' })
-    if (!result.ok || !result.data) return null
-    return Buffer.from(result.data as string, 'base64')
-  } catch { return null }
+/** Mirror slot for an explicit host= fetch — hash-keyed by the FULL source path
+ *  (same scheme as media-v1) so two dirs' chart.png can't collide. */
+function hostCachePath(host: string, filePath: string): string {
+  const hash = crypto.createHash('sha256').update(filePath).digest('hex').slice(0, 16)
+  return path.join(REMOTE_IMAGES_DIR, host, `${hash}-${path.basename(filePath)}`)
+}
+
+/** Send the buffer with a strong ETag; answers If-None-Match with a 304. */
+function sendImage(req: Request, res: Response, buffer: Buffer, mime: string): void {
+  const etag = `"${crypto.createHash('sha1').update(buffer).digest('base64url')}"`
+  res.setHeader('ETag', etag)
+  // no-cache = cached but ALWAYS revalidated — the 304 path keeps it cheap.
+  res.setHeader('Cache-Control', 'no-cache')
+  if (req.headers['if-none-match'] === etag) {
+    res.status(304).end()
+    return
+  }
+  res.setHeader('Content-Type', mime)
+  res.setHeader('Content-Length', buffer.length)
+  res.send(buffer)
 }
 
 localImageRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
@@ -91,20 +113,27 @@ localImageRouter.get('/', async (req: Request, res: Response, next: NextFunction
     try {
       const stat = await fsp.stat(filePath)
       if (stat.isFile() && stat.size <= MAX_FILE_SIZE) {
-        buffer = await fsp.readFile(filePath)
+        // Mirror files carry a .src.json sidecar — check the remote source
+        // before serving so a regenerated image doesn't stay stale forever.
+        // Best-effort: any failure serves the cached bytes.
+        if (isMirrorPath(filePath)) {
+          buffer = await revalidateMirror(filePath)
+        }
+        if (!buffer) buffer = await fsp.readFile(filePath)
       }
     } catch {
       // File not found locally — try remote fallback
     }
 
-    // Remote fallback: fetch via daemon and cache locally
+    // Remote fallback: serve from the host mirror (revalidated), else download.
     if (!buffer && host && typeof host === 'string') {
-      buffer = await fetchFromRemote(host, filePath)
-      if (buffer) {
-        const cachePath = path.join(REMOTE_IMAGES_DIR, host, path.basename(filePath))
-        fs.mkdirSync(path.dirname(cachePath), { recursive: true })
-        fs.writeFileSync(cachePath, buffer)
+      const cachePath = hostCachePath(host, filePath)
+      const hasCache = await fsp.stat(cachePath).then((s) => s.isFile()).catch(() => false)
+      if (hasCache && (await readMirrorSidecar(cachePath))) {
+        buffer = await revalidateMirror(cachePath)
+        if (!buffer) buffer = await fsp.readFile(cachePath).catch(() => null)
       }
+      if (!buffer) buffer = await downloadToMirror(host, filePath, cachePath)
     }
 
     // Auto-detect remote session images: /tmp/open-walnut/images/remote/<sessionId>/file.png
@@ -116,11 +145,7 @@ localImageRouter.get('/', async (req: Request, res: Response, next: NextFunction
         const sessionId = relToRemote.slice(0, slashIdx)
         const remoteHost = await resolveSessionHost(sessionId)
         if (remoteHost) {
-          buffer = await fetchFromRemote(remoteHost, filePath)
-          if (buffer) {
-            fs.mkdirSync(path.dirname(filePath), { recursive: true })
-            fs.writeFileSync(filePath, buffer)
-          }
+          buffer = await downloadToMirror(remoteHost, filePath, filePath)
         }
       }
     }
@@ -135,11 +160,7 @@ localImageRouter.get('/', async (req: Request, res: Response, next: NextFunction
       return
     }
 
-    const contentType = EXT_TO_MIME[ext]!
-    res.setHeader('Content-Type', contentType)
-    res.setHeader('Cache-Control', 'public, max-age=3600')
-    res.setHeader('Content-Length', buffer.length)
-    res.send(buffer)
+    sendImage(req, res, buffer, EXT_TO_MIME[ext]!)
   } catch (err) {
     next(err)
   }

@@ -618,6 +618,20 @@ const RELATIVE_IMAGE_RE = new RegExp(
   'gi',
 )
 
+/** Options for the image path finders. */
+export interface FindImagePathOpts {
+  /**
+   * Drop matches that touch the very start or end of the text. Used for
+   * STREAMING DELTAS: a path split across two deltas ("…/docs/we" |
+   * "ekly-trend.png…") makes the fragment at the chunk edge look like a
+   * complete standalone path/filename, and rewriting it permanently corrupts
+   * the text (observed: "…/week" + "/tmp/open-walnut/images/remote/<sid>/ly-trend.png").
+   * Edge matches are left untouched — the turn-end full-text rewrite and the
+   * history-replay rewrite (which see complete text) handle them correctly.
+   */
+  excludeEdges?: boolean
+}
+
 /**
  * Find absolute image paths in text, handling both spaced and non-spaced paths.
  *
@@ -627,19 +641,26 @@ const RELATIVE_IMAGE_RE = new RegExp(
  *
  * Returns deduplicated list of paths (without surrounding quotes).
  */
-export function findImagePaths(text: string): string[] {
+export function findImagePaths(text: string, opts?: FindImagePathOpts): string[] {
   const found = new Set<string>()
+  const excludeEdges = opts?.excludeEdges === true
 
   // Pass 1: paths inside backticks, double quotes, or single quotes (may have spaces)
   let m: RegExpExecArray | null
   QUOTED_IMAGE_RE.lastIndex = 0
   while ((m = QUOTED_IMAGE_RE.exec(text)) !== null) {
+    // The match includes both quotes — quote-enclosed paths are complete by
+    // construction, but a match flush against the text edges can still be a
+    // split-in-half quoted span, so treat whole-match edges as unsafe too.
+    if (excludeEdges && (m.index === 0 || m.index + m[0].length === text.length)) continue
     found.add(m[1])
   }
 
   // Pass 2: unquoted paths (no spaces)
   UNQUOTED_IMAGE_RE.lastIndex = 0
   while ((m = UNQUOTED_IMAGE_RE.exec(text)) !== null) {
+    const start = m.index + m[0].indexOf(m[1])
+    if (excludeEdges && (start === 0 || start + m[1].length === text.length)) continue
     found.add(m[1])
   }
 
@@ -650,13 +671,18 @@ export function findImagePaths(text: string): string[] {
  * Find relative image filenames in text (e.g. `screenshot.png`, `subdir/img.jpg`).
  * Only returns names that do NOT start with `/` (absolute paths handled separately).
  */
-export function findRelativeImageNames(text: string): string[] {
+export function findRelativeImageNames(text: string, opts?: FindImagePathOpts): string[] {
   const found = new Set<string>()
+  const excludeEdges = opts?.excludeEdges === true
   let m: RegExpExecArray | null
   RELATIVE_IMAGE_RE.lastIndex = 0
   while ((m = RELATIVE_IMAGE_RE.exec(text)) !== null) {
     const p = m[1]
-    if (!p.startsWith('/')) found.add(p)
+    if (p.startsWith('/')) continue
+    // m[0] includes the consumed boundary char (or nothing when anchored at ^).
+    const start = m.index + (m[0].length - p.length)
+    if (excludeEdges && (start === 0 || start + p.length === text.length)) continue
+    found.add(p)
   }
   return [...found]
 }

@@ -24,7 +24,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 // Isolate all file I/O to a temp directory
 vi.mock('../../src/constants.js', () => createMockConstants())
 
-import { findImagePaths, findRemoteImagePaths } from '../../src/providers/session-io.js'
+import { findImagePaths, findRemoteImagePaths, findRelativeImageNames } from '../../src/providers/session-io.js'
 import { RemoteSessionManager } from '../../src/providers/remote-session-manager.js'
 import { WALNUT_HOME, SESSION_STREAMS_DIR, REMOTE_IMAGES_DIR } from '../../src/constants.js'
 import type { SshTarget } from '../../src/providers/session-io.js'
@@ -335,5 +335,114 @@ describe('findImagePaths (space-aware path detection)', () => {
 
   it('returns empty for text without image paths', () => {
     expect(findImagePaths('Hello world')).toHaveLength(0)
+  })
+})
+
+describe('excludeEdges (streaming-delta split-path guard)', () => {
+  // A path split across two streaming deltas leaves fragments at the chunk
+  // edges. Each fragment matches as a complete path/filename on its own, and
+  // rewriting it corrupts the text permanently (observed in production:
+  // "weekly-trend.png" split into "…week" + "ly-trend.png" produced
+  // "…week/tmp/open-walnut/images/remote/<sid>/ly-trend.png").
+
+  it('drops an unquoted absolute path that ends exactly at text end', () => {
+    expect(findImagePaths('see /tmp/charts/weekly-trend.png', { excludeEdges: true })).toHaveLength(0)
+  })
+
+  it('drops an absolute path that starts at text start', () => {
+    expect(findImagePaths('/tmp/charts/img.png is ready', { excludeEdges: true })).toHaveLength(0)
+  })
+
+  it('keeps an absolute path fully interior to the chunk', () => {
+    const paths = findImagePaths('see /tmp/charts/img.png here', { excludeEdges: true })
+    expect(paths).toEqual(['/tmp/charts/img.png'])
+  })
+
+  it('drops a relative filename touching either edge', () => {
+    // "ly-trend.png…" — the tail fragment of a split "weekly-trend.png"
+    expect(findRelativeImageNames('ly-trend.png shows the data', { excludeEdges: true })).toHaveLength(0)
+    expect(findRelativeImageNames('the chart is in weekly-trend.png', { excludeEdges: true })).toHaveLength(0)
+  })
+
+  it('keeps a relative filename fully interior to the chunk', () => {
+    const names = findRelativeImageNames('open weekly-trend.png to see it', { excludeEdges: true })
+    expect(names).toEqual(['weekly-trend.png'])
+  })
+
+  it('default (no opts) still matches edge paths — full-text rewrites need them', () => {
+    expect(findImagePaths('see /tmp/charts/weekly-trend.png')).toHaveLength(1)
+    expect(findRelativeImageNames('see weekly-trend.png')).toHaveLength(1)
+  })
+})
+
+describe('processInbound streaming mode (split-path corruption repro)', () => {
+  it('does NOT rewrite the tail fragment of a path split across deltas', async () => {
+    const mgr = new RemoteSessionManager('sid-split', 'remotehost', REMOTE_TARGET)
+    injectConn(mgr, makeConn())
+
+    // Delta 1 ends mid-path; delta 2 starts with the remainder. In streaming
+    // mode neither fragment may be rewritten.
+    const d1 = mgr.processInbound('The chart is at /workspace/docs/week', 'sess-split', '/workspace', { streaming: true })
+    const d2 = mgr.processInbound('ly-trend.png and shows the data', 'sess-split', '/workspace', { streaming: true })
+    expect(d1).toBe('The chart is at /workspace/docs/week')
+    expect(d2).toBe('ly-trend.png and shows the data')
+    expect(d1 + d2).toContain('/workspace/docs/weekly-trend.png')
+  })
+
+  it('still rewrites interior paths in streaming mode', () => {
+    const mgr = new RemoteSessionManager('sid-split2', 'remotehost', REMOTE_TARGET)
+    injectConn(mgr, makeConn())
+
+    const out = mgr.processInbound('saved /tmp/full-img.png just now', 'sess-int', undefined, { streaming: true })
+    expect(out).toContain(path.join(REMOTE_IMAGES_DIR, 'sess-int', 'full-img.png'))
+  })
+
+  it('non-streaming call (turn-end / history) still rewrites edge paths', () => {
+    const mgr = new RemoteSessionManager('sid-split3', 'remotehost', REMOTE_TARGET)
+    injectConn(mgr, makeConn())
+
+    const out = mgr.processInbound('saved to /tmp/edge-img.png', 'sess-edge')
+    expect(out).toContain(path.join(REMOTE_IMAGES_DIR, 'sess-edge', 'edge-img.png'))
+  })
+})
+
+describe('mirror sidecars (stale-image revalidation bookkeeping)', () => {
+  it('downloadRemoteFile records a .src.json sidecar with host + remotePath', async () => {
+    const mgr = new RemoteSessionManager('sid-sidecar', 'remotehost', REMOTE_TARGET)
+    const conn = makeConn(async (cmd) => {
+      if (cmd === 'fs.read') return { ok: true, data: Buffer.from('bytes-v1').toString('base64') }
+      if (cmd === 'fs.stat') return { ok: true, exists: true, mtimeMs: 1234, size: 8 }
+      return { ok: false }
+    })
+    injectConn(mgr, conn)
+
+    mgr.processInbound('see /tmp/chart.png', 'sess-sc')
+    await settle()
+
+    const mirror = path.join(REMOTE_IMAGES_DIR, 'sess-sc', 'chart.png')
+    const sidecar = JSON.parse(fs.readFileSync(mirror + '.src.json', 'utf-8'))
+    expect(sidecar).toMatchObject({
+      host: 'remotehost',
+      remotePath: '/tmp/chart.png',
+      remoteMtimeMs: 1234,
+      remoteSize: 8,
+    })
+  })
+
+  it('backfills a sidecar for a pre-existing mirror file (legacy download-once)', async () => {
+    const mgr = new RemoteSessionManager('sid-backfill', 'remotehost', REMOTE_TARGET)
+    injectConn(mgr, makeConn())
+
+    // Simulate an old mirror file downloaded before sidecars existed.
+    const mirror = path.join(REMOTE_IMAGES_DIR, 'sess-bf', 'old.png')
+    fs.mkdirSync(path.dirname(mirror), { recursive: true })
+    fs.writeFileSync(mirror, 'stale-bytes')
+
+    mgr.processInbound('see /tmp/old.png', 'sess-bf')
+    await settle()
+
+    const sidecar = JSON.parse(fs.readFileSync(mirror + '.src.json', 'utf-8'))
+    // Backfill marks size -1 (unknown) so the first revalidation re-downloads.
+    expect(sidecar).toMatchObject({ host: 'remotehost', remotePath: '/tmp/old.png', remoteSize: -1 })
   })
 })

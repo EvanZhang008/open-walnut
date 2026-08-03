@@ -45,6 +45,7 @@ import {
 } from '../core/session-message-queue.js'
 import type { QueuedMessage } from '../core/session-message-queue.js'
 import { registerEchoClaims, revokeEchoClaims } from '../core/echo-claims.js'
+import { matchesRetryExhaustion } from '../core/session-auto-continue.js'
 // Image transfer for remote sessions: RemoteSessionManager.prepareOutbound() uploads
 // local images via daemon and rewrites paths inside start() and writeMessage().
 import type { SshTarget } from './session-io.js'
@@ -2650,11 +2651,16 @@ export class ClaudeCodeSession {
   /**
    * Rewrite remote image paths in text to local paths for remote sessions.
    * No-op for local sessions. Uses transport.processInbound() for remote.
+   *
+   * Pass `streaming: true` for PARTIAL text (per-delta rewrites): paths that
+   * touch the chunk edges are skipped — a path split across two deltas would
+   * otherwise be rewritten as two bogus standalone paths, permanently
+   * corrupting fullText/history.
    */
-  private rewriteRemoteImages(text: string): string {
+  private rewriteRemoteImages(text: string, opts?: { streaming?: boolean }): string {
     if (!this._transport?.isRemote) return text
     const sessionId = this.claudeSessionId ?? 'unknown'
-    return this._transport.processInbound(text, sessionId, this._cwd ?? undefined)
+    return this._transport.processInbound(text, sessionId, this._cwd ?? undefined, opts)
   }
 
   /**
@@ -3436,8 +3442,10 @@ export class ClaudeCodeSession {
             if (this._emittedStreamKeys.has(dedupKey)) continue
             this._emittedStreamKeys.add(dedupKey)
 
-            // Rewrite remote image paths to local paths (no-op for local sessions)
-            const rewrittenDelta = this.rewriteRemoteImages(deltaText)
+            // Rewrite remote image paths to local paths (no-op for local
+            // sessions). This is a PARTIAL delta — edge-touching paths are
+            // skipped so a path split across deltas isn't mangled.
+            const rewrittenDelta = this.rewriteRemoteImages(deltaText, { streaming: true })
             // Subagent text must not leak into fullText — it becomes the turn's
             // result fallback, which should be the MAIN conversation only.
             if (!parentToolUseId && this.fullText.length < MAX_FULL_TEXT) {
@@ -4243,10 +4251,11 @@ export class ClaudeCodeSession {
           this.emitStatusChanged('AGENT_COMPLETE')
           log.session.info('session result emitted', { sessionId: this.claudeSessionId, taskId: this.taskId, resultLength: resultText?.length ?? 0 })
           // retryExhausted: terminal upstream retry-exhaustion signature. Text match
-          // covers the CLI's "Request timed out" result; the api_timeout debug marker
-          // covers turns whose final error text is generic. Feeds session-auto-continue.
+          // (shared with session-auto-continue — keep ONE signature list) covers the
+          // CLI's timeout result texts; the api_timeout debug marker covers turns
+          // whose final error text is generic. Feeds session-auto-continue.
           const retryExhausted = !!effectiveIsError && (
-            /request timed out/i.test(resultText ?? '')
+            matchesRetryExhaustion(resultText)
             || this._sawApiTimeoutThisTurn
           )
           bus.emit(EventNames.SESSION_RESULT, {
@@ -4561,7 +4570,8 @@ export class ClaudeCodeSession {
             const previousText = this._lastEmittedText.get(trackingKey) ?? ''
             this._lastEmittedText.set(trackingKey, previousText + text)
 
-            const rewritten = this.rewriteRemoteImages(text)
+            // PARTIAL delta — skip edge-touching paths (split-path guard).
+            const rewritten = this.rewriteRemoteImages(text, { streaming: true })
             if (this.fullText.length < MAX_FULL_TEXT) {
               this.fullText += rewritten
             }

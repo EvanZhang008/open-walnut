@@ -18,9 +18,11 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { REMOTE_IMAGES_DIR } from '../constants.js'
+import { writeMirrorSidecar, backfillMirrorSidecar } from '../core/remote-image-mirror.js'
 import { log } from '../logging/index.js'
 import { getDaemonConnection, getDirectDaemonConnection, DaemonConnection, type DaemonEvent, type DaemonTaskState, type DaemonGetStateResult } from './daemon-connection.js'
 import {
+  findImagePaths,
   findLocalImagePaths,
   findRemoteImagePaths,
   findRelativeImageNames,
@@ -854,12 +856,20 @@ export class RemoteSessionManager implements SessionManager {
     })
   }
 
-  processInbound(text: string, sessionId: string, cwd?: string): string {
+  processInbound(text: string, sessionId: string, cwd?: string, opts?: { streaming?: boolean }): string {
     // Local daemon: same filesystem — no path rewriting needed
     if (!this.isRemote) return text
 
+    // Streaming deltas are partial text: a path split across two deltas leaves
+    // fragments at the chunk edges that match as complete paths/filenames and
+    // would be rewritten into garbage (observed: "weekly-trend.png" split into
+    // "…week" + "ly-trend.png" → "…week/tmp/…/<sid>/ly-trend.png"). Skip edge
+    // matches; the turn-end full-text and history-replay rewrites (complete
+    // text) cover them.
+    const findOpts = opts?.streaming ? { excludeEdges: true } : undefined
+
     // Download remote images and rewrite paths to local
-    const remotePaths = findRemoteImagePaths(text)
+    const remotePaths = findImagePaths(text, findOpts)
     let rewritten = text
     const localHome = process.env.HOME || '/root'
 
@@ -875,6 +885,9 @@ export class RemoteSessionManager implements SessionManager {
         if (!fs.existsSync(localPath)) {
           // Download via daemon fs.read (fire-and-forget)
           this.downloadRemoteFile(remotePath, localPath).catch(() => {})
+        } else {
+          // Pre-sidecar mirror file — record origin so it can be revalidated.
+          backfillMirrorSidecar(localPath, this.hostKey, remotePath)
         }
       }
       rewritten = rewritten.split(remotePath).join(localPath)
@@ -882,7 +895,7 @@ export class RemoteSessionManager implements SessionManager {
 
     // Handle relative image names
     if (cwd) {
-      const relNames = findRelativeImageNames(rewritten)
+      const relNames = findRelativeImageNames(rewritten, findOpts)
       for (const relName of relNames) {
         const basename = path.basename(relName)
         const cwdPath = `${cwd.replace(/\/$/, '')}/${relName}`
@@ -896,6 +909,8 @@ export class RemoteSessionManager implements SessionManager {
 
           if (!fs.existsSync(localPath)) {
             this.downloadRemoteFile(cwdPath, localPath).catch(() => {})
+          } else {
+            backfillMirrorSidecar(localPath, this.hostKey, cwdPath)
           }
         }
 
@@ -1053,7 +1068,9 @@ export class RemoteSessionManager implements SessionManager {
   }
 
   /**
-   * Download a file from the remote host via daemon fs.read.
+   * Download a file from the remote host via daemon fs.read. Records a
+   * .src.json sidecar so /api/local-image can later revalidate the mirror
+   * against the remote source (regenerated charts must not stay stale).
    */
   private async downloadRemoteFile(remotePath: string, localPath: string): Promise<void> {
     if (!this.conn?.connected) return
@@ -1066,6 +1083,13 @@ export class RemoteSessionManager implements SessionManager {
       if (result.ok && result.data) {
         const buf = Buffer.from(result.data as string, 'base64')
         fs.writeFileSync(localPath, buf)
+        const st = await this.conn.send('fs.stat', { path: remotePath }).catch(() => null)
+        writeMirrorSidecar(localPath, {
+          host: this.hostKey,
+          remotePath,
+          remoteMtimeMs: st?.ok && st.exists ? (st.mtimeMs as number) : 0,
+          remoteSize: st?.ok && st.exists ? (st.size as number) : buf.length,
+        })
       }
     } catch (err) {
       log.session.warn('RemoteSessionManager: file download failed', {

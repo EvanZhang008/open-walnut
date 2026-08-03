@@ -30,6 +30,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { findImagePaths, findRelativeImageNames } from '../providers/session-io.js';
 import { REMOTE_IMAGES_DIR } from '../constants.js';
+import { backfillMirrorSidecar } from './remote-image-mirror.js';
 
 /** Cached homedir — avoids repeated syscall on each history request */
 const LOCAL_HOME = os.homedir();
@@ -1206,9 +1207,10 @@ async function tryIncrementalHistoryRead(
     cacheSet(sessionId, { mtimeMs: newMtimeMs, messages, approxChars, inc }, host);
 
     // Keep the restart-survival disk cache fresh (same as the full-read path).
+    // mtime included so the post-restart mtime fast-path can validate it.
     if (messages.length > 0) {
       import('./history-disk-cache.js').then(({ writeHistoryCache }) => {
-        writeHistoryCache(sessionId, messages);
+        writeHistoryCache(sessionId, messages, newMtimeMs);
       }).catch(() => {});
     }
     return messages;
@@ -1481,6 +1483,30 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
             // now, so cached messages don't include childMessages; no mutation concern).
             return cached.messages;
           }
+          // In-memory miss (e.g. server just restarted) but the DISK cache may
+          // still be current: validate its stored mtime against the live stat.
+          // Without this, every restart triggered a full re-fetch of EVERY open
+          // session's JSONL (observed: 383 reads / 1.8 GB in the hour after a
+          // restart storm), saturating the daemon RPC path for minutes.
+          if (!cached) {
+            try {
+              const { readHistoryCache } = await import('./history-disk-cache.js');
+              const disk = await readHistoryCache(sessionId);
+              if (disk?.mtimeMs !== undefined && disk.mtimeMs === mtimeMs) {
+                log.session.info('history disk cache hit (mtime match) — skipping full read', {
+                  sessionId, host: host ?? '__local__', messages: disk.messages.length,
+                });
+                // Seed the in-memory cache (no incremental state — that needs a
+                // real parse pass; the next mtime change does one full read and
+                // re-seeds it, same as any inc-state hazard).
+                cacheSet(sessionId, {
+                  mtimeMs, messages: disk.messages,
+                  approxChars: statResult.size,
+                }, host);
+                return disk.messages;
+              }
+            } catch { /* disk cache unusable — fall through to full read */ }
+          }
           // mtime CHANGED but incremental state exists and the file only grew:
           // read + parse just the appended bytes instead of the whole file.
           if (cached?.inc && options?.skipSubagents && statResult.size >= cached.inc.parsedBytes) {
@@ -1647,10 +1673,12 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
   }
 
   // Persist to disk cache (fire-and-forget) so history survives app restarts
-  // and is available when remote JSONL is temporarily unreachable.
+  // and is available when remote JSONL is temporarily unreachable. mtime (when
+  // the stat succeeded) lets the post-restart fast-path validate this entry
+  // with one stat instead of a full JSONL re-fetch.
   if (messages.length > 0) {
     import('./history-disk-cache.js').then(({ writeHistoryCache }) => {
-      writeHistoryCache(sessionId, messages);
+      writeHistoryCache(sessionId, messages, mtimeMs);
     }).catch(() => {});
   }
 
@@ -2134,22 +2162,12 @@ export async function readSessionHistoryPaginated(
 /**
  * Download a single file from a remote host via the daemon's fs.read command.
  * Returns true on success, false on failure (graceful degradation).
+ * Writes a .src.json sidecar so /api/local-image can revalidate the mirror.
  */
 async function downloadImageViaDaemon(host: string, remotePath: string, localPath: string): Promise<boolean> {
   try {
-    const { getDaemonConnection } = await import('../providers/daemon-connection.js')
-    const { getConfig } = await import('./config-manager.js')
-    const config = await getConfig()
-    const hostDef = config.hosts?.[host]
-    if (!hostDef?.hostname) return false
-    const sshTarget = { hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port }
-    const conn = await getDaemonConnection(host, sshTarget)
-    const result = await conn.send('fs.read', { path: remotePath, encoding: 'base64' })
-    if (!result.ok || !result.data) return false
-    const fs = await import('node:fs')
-    fs.mkdirSync(path.dirname(localPath), { recursive: true })
-    fs.writeFileSync(localPath, Buffer.from(result.data as string, 'base64'))
-    return true
+    const { downloadToMirror } = await import('./remote-image-mirror.js')
+    return (await downloadToMirror(host, remotePath, localPath)) !== null
   } catch { return false }
 }
 
@@ -2217,6 +2235,10 @@ export async function rewriteHistoryRemoteImages(
 
         if (!fs.existsSync(localPath)) {
           downloadImageViaDaemon(host, remotePath, localPath).catch(() => {})
+        } else {
+          // Pre-sidecar mirror file: record its origin so /api/local-image can
+          // revalidate it (the download-once mirror otherwise stays stale forever).
+          backfillMirrorSidecar(localPath, host, remotePath)
         }
       }
       rewritten = rewritten.split(remotePath).join(localPath)
@@ -2249,6 +2271,10 @@ export async function rewriteHistoryRemoteImages(
                 if (ok) return
               }
             })().catch(() => {})
+          } else {
+            // Same backfill as the absolute-path branch: best origin guess is
+            // the first candidate (tool-input hints beat cwd/tmp fallbacks).
+            if (candidates[0]) backfillMirrorSidecar(localPath, host, candidates[0])
           }
         }
         const escaped = relName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')

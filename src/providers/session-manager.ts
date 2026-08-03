@@ -257,8 +257,12 @@ export interface SessionManager {
    * Process inbound text from the Claude response.
    * For remote sessions: download remote images, rewrite paths to local.
    * For local sessions: no-op (returns text unchanged).
+   *
+   * `streaming: true` marks the text as a PARTIAL delta: image paths touching
+   * the chunk edges are skipped (they may be split mid-path across deltas and
+   * rewriting the fragment corrupts the text permanently).
    */
-  processInbound(text: string, sessionId: string, cwd?: string): string
+  processInbound(text: string, sessionId: string, cwd?: string, opts?: { streaming?: boolean }): string
 
   // ── Streaming Control ──
 
