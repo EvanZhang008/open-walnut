@@ -114,9 +114,22 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     // Retry mode: reuse existing task, archive error sessions.
     // Note: footer taskMeta picks (starred/needs_attention/priority/pinTier) are
     // intentionally IGNORED on retry — we preserve the original task's metadata.
-    updatedTask = await getTask(existingTaskId);
-    if (!updatedTask) {
-      throw new QuickStartError(`Task "${existingTaskId}" not found`, 404);
+    // getTask THROWS on an unknown id (it never returns null) and is a PREFIX
+    // matcher with three failure modes: no match, ambiguous prefix, and a
+    // store read failure. Only "no match" is the caller's 404; ambiguity is
+    // their 400 (the task exists — they must be more specific), and anything
+    // else is a real 500 that must not be dressed up as "task not found".
+    try {
+      updatedTask = await getTask(existingTaskId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('No task found matching')) {
+        throw new QuickStartError(`Task "${existingTaskId}" not found`, 404);
+      }
+      if (msg.includes('Ambiguous ID prefix')) {
+        throw new QuickStartError(msg, 400);
+      }
+      throw err;
     }
     // Archive all error/stopped sessions under this task to free the slot
     const existingSessions = await getSessionsForTask(updatedTask.id);
