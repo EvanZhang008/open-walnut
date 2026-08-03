@@ -24573,3 +24573,788 @@ a.file-link:hover {
     backdrop-filter: var(--glass-g4-blur);
   }
 }
+
+/* ==========================================================================
+   Calendar (cal-*) — /calendar page + homepage day-agenda side panel.
+   Big static surfaces stay opaque; glass (G4 recipe via ::before) is used
+   ONLY on the sticky chrome that content scrolls under.
+   ========================================================================== */
+
+.cal-page {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 32px);
+  min-height: 0;
+  padding: 0 4px;
+}
+
+/* --- toolbar -------------------------------------------------------------- */
+.cal-toolbar {
+  position: relative;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.cal-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.cal-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cal-today-btn,
+.cal-nav-btns button,
+.cal-rail-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card-bg);
+  color: var(--fg);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.cal-nav-btns {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.cal-nav-btns button,
+.cal-rail-toggle {
+  width: 28px;
+  padding: 0;
+}
+
+.cal-nav-btns svg,
+.cal-rail-toggle svg {
+  width: 14px;
+  height: 14px;
+}
+
+.cal-rail-toggle.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.cal-today-btn:hover,
+.cal-nav-btns button:hover,
+.cal-rail-toggle:hover {
+  background: var(--bg-secondary);
+}
+
+.cal-view-switch {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--bg-secondary);
+}
+
+.cal-view-btn {
+  height: 26px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.cal-view-btn.active {
+  background: var(--card-bg);
+  color: var(--fg);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+/* --- layout ---------------------------------------------------------------- */
+.cal-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.cal-view {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* --- unscheduled-task rail -------------------------------------------------- */
+.cal-rail {
+  display: flex;
+  flex-direction: column;
+  width: 240px;
+  flex-shrink: 0;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+}
+
+.cal-rail-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 10px 8px;
+}
+
+.cal-rail-title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--fg-muted);
+}
+
+.cal-rail-search {
+  width: 100%;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-secondary);
+  color: var(--fg);
+  font-size: 12px;
+}
+
+.cal-rail-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 8px 8px;
+}
+
+.cal-rail-group-label {
+  padding: 8px 2px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+
+.cal-rail-row {
+  cursor: grab;
+  touch-action: none;
+  border-radius: 8px;
+}
+
+.cal-rail-row.dragging {
+  opacity: 0.35;
+}
+
+.cal-rail-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  margin-bottom: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card-bg);
+  font-size: 12.5px;
+  line-height: 1.3;
+}
+
+.cal-rail-chip-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.cal-rail-chip-overlay {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+  background: var(--card-bg);
+  cursor: grabbing;
+}
+
+.cal-rail-empty,
+.cal-rail-hint {
+  padding: 10px;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+}
+
+.cal-rail-hint {
+  border-top: 1px solid var(--border);
+}
+
+/* --- month view -------------------------------------------------------------- */
+.cal-month {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.cal-month-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  border-bottom: 1px solid var(--border);
+}
+
+.cal-month-weekday {
+  padding: 6px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  text-align: right;
+}
+
+.cal-month-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+
+.cal-month-cell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 4px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.cal-month-cell:nth-child(7n) {
+  border-right: none;
+}
+
+.cal-month-cell-outside {
+  background: var(--bg-secondary);
+}
+
+.cal-month-cell-outside .cal-month-daynum {
+  color: var(--fg-muted);
+}
+
+.cal-month-cell-dropover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.cal-month-daynum {
+  align-self: flex-end;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 4px;
+  border: none;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.cal-month-daynum:hover {
+  background: var(--bg-secondary);
+}
+
+.cal-month-cell-today .cal-month-daynum {
+  background: var(--error);
+  color: #fff;
+  font-weight: 700;
+}
+
+.cal-month-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-height: 0;
+}
+
+.cal-month-more {
+  align-self: flex-start;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 1px 4px;
+}
+
+.cal-month-more:hover {
+  color: var(--fg);
+}
+
+/* --- chips ---------------------------------------------------------------- */
+.cal-chip {
+  --cal-chip-tint: var(--accent);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border-radius: 6px;
+  padding: 2px 6px;
+  background: color-mix(in srgb, var(--cal-chip-tint) 16%, var(--card-bg));
+  border-left: 3px solid var(--cal-chip-tint);
+  color: var(--fg);
+  font-size: 11.5px;
+  line-height: 1.25;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+  overflow: hidden;
+}
+
+.cal-chip:active {
+  cursor: grabbing;
+}
+
+.cal-chip-body {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.cal-chip-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cal-chip-time {
+  flex-shrink: 0;
+  font-weight: 600;
+  font-size: 10.5px;
+  color: color-mix(in srgb, var(--cal-chip-tint) 80%, var(--fg));
+}
+
+.cal-chip-compact {
+  flex-direction: row;
+  align-items: center;
+}
+
+/* task-due deadline marker — dashed edge + flag glyph */
+.cal-chip-task-due {
+  --cal-chip-tint: var(--error);
+  border-left-style: dashed;
+  background: color-mix(in srgb, var(--error) 9%, var(--card-bg));
+}
+
+.cal-chip-flag {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  color: var(--error);
+}
+
+.cal-chip-event {
+  cursor: default;
+}
+
+.cal-chip-readonly {
+  cursor: default;
+  opacity: 0.9;
+}
+
+.cal-chip-ghosted {
+  opacity: 0.35;
+}
+
+.cal-chip-location {
+  font-size: 10px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cal-chip-resize-handle {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -2px;
+  height: 7px;
+  cursor: ns-resize;
+}
+
+/* Time-grid chips are absolutely positioned by the layout pass */
+.cal-day-col .cal-chip {
+  position: absolute;
+  z-index: 1;
+}
+
+/* --- time grid ---------------------------------------------------------------- */
+.cal-grid {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.cal-grid-header {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+}
+
+.cal-grid-gutter {
+  width: 52px;
+  flex-shrink: 0;
+}
+
+.cal-grid-dayheads {
+  display: flex;
+  flex: 1;
+}
+
+.cal-grid-dayhead {
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.cal-grid-dayhead .cal-grid-daynum {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.cal-grid-dayhead.today .cal-grid-daynum {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 4px;
+  border-radius: 12px;
+  background: var(--error);
+  color: #fff;
+}
+
+.cal-grid-allday {
+  display: flex;
+  min-height: 26px;
+  max-height: 74px;
+  overflow-y: auto;
+  border-bottom: 2px solid var(--border);
+}
+
+.cal-allday-label {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 6px;
+  font-size: 10px;
+  color: var(--fg-muted);
+}
+
+.cal-allday-cells {
+  display: flex;
+  flex: 1;
+}
+
+.cal-allday-cell {
+  flex: 1;
+  min-width: 0;
+  padding: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-left: 1px solid var(--border);
+}
+
+.cal-dropover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.cal-grid-scroll {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.cal-grid-ruler {
+  width: 52px;
+  flex-shrink: 0;
+}
+
+.cal-grid-hour {
+  position: relative;
+}
+
+.cal-grid-hourlabel {
+  position: absolute;
+  top: -6px;
+  right: 6px;
+  font-size: 10px;
+  color: var(--fg-muted);
+}
+
+.cal-grid-cols {
+  position: relative;
+  display: flex;
+  flex: 1;
+  /* hour + half-hour lines without 48 divs per column */
+  background-image:
+    repeating-linear-gradient(
+      to bottom,
+      var(--border) 0,
+      var(--border) 1px,
+      transparent 1px,
+      transparent 48px
+    ),
+    repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent 24px,
+      color-mix(in srgb, var(--border) 45%, transparent) 24px,
+      color-mix(in srgb, var(--border) 45%, transparent) 25px,
+      transparent 25px,
+      transparent 48px
+    );
+}
+
+.cal-day-col {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  border-left: 1px solid var(--border);
+}
+
+.cal-day-col-today {
+  background: color-mix(in srgb, var(--accent) 3%, transparent);
+}
+
+.cal-day-col.cal-dropover {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+/* --- overlays (drop preview, ghost, selection, now-line) ---------------------- */
+.cal-grid-overlay {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.cal-drop-line {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  height: 0;
+  border-top: 2px solid var(--accent);
+}
+
+.cal-drop-time {
+  position: absolute;
+  top: -18px;
+  left: 0;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.cal-move-ghost {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  border-radius: 6px;
+  border: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.cal-create-sel {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  border-radius: 6px;
+  border: 1.5px dashed var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.cal-now-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 2px solid var(--error);
+  z-index: 4;
+}
+
+.cal-now-dot {
+  position: absolute;
+  left: -4px;
+  top: -5px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--error);
+}
+
+/* --- popovers (overflow, quick create) — floating layers get menu glass ------- */
+.cal-popover-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+}
+
+.cal-overflow-popover,
+.cal-create-popover {
+  position: fixed;
+  z-index: 1000;
+  min-width: 240px;
+  max-width: 340px;
+  padding: 8px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+}
+
+.cal-overflow-popover {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.cal-overflow-title {
+  padding: 2px 4px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+
+.cal-create-popover {
+  padding: 0;
+  /* useMenuPlacement caps height — scroll internally so the footer buttons
+     never land outside the viewport */
+  overflow-y: auto;
+}
+
+.cal-create-popover .quick-task-composer {
+  position: static;
+  width: 340px;
+  max-width: 80vw;
+  box-shadow: none;
+  border: none;
+}
+
+/* --- homepage day-agenda side panel ------------------------------------------- */
+.cal-side-panel {
+  width: 320px;
+  min-width: 280px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.cal-side-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.cal-side-title {
+  flex: 1;
+  font-size: 13.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cal-side-nav {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.cal-side-nav button {
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card-bg);
+  color: var(--fg);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.cal-side-today {
+  font-size: 11.5px;
+}
+
+.cal-side-expand {
+  display: inline-flex;
+  align-items: center;
+  color: var(--fg-muted);
+}
+
+.cal-side-expand:hover {
+  color: var(--accent);
+}
+
+.cal-side-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.cal-side-panel .cal-grid-gutter,
+.cal-side-panel .cal-grid-ruler {
+  width: 44px;
+}
+
+/* --- G4 milky glass on the sticky chrome (page toolbar only; ::before layer so
+   backdrop-filter doesn't become a containing block for fixed descendants) ----- */
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) and
+  (background: color-mix(in srgb, red 50%, blue)) {
+  .cal-toolbar {
+    position: sticky;
+    top: 0;
+  }
+
+  .cal-toolbar::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: var(--glass-g4-bg);
+    -webkit-backdrop-filter: var(--glass-g4-blur);
+    backdrop-filter: var(--glass-g4-blur);
+  }
+}

@@ -9,6 +9,12 @@ interface Props {
   open: boolean;
   onClose: () => void;
   projectOptions: Record<string, string[]>;
+  /**
+   * Pre-seeded dates (e.g. the calendar slot the user clicked). Merged into
+   * the confirm draft ONLY where the AI parse didn't produce a date — typing
+   * "call mom tomorrow 3pm" beats the clicked slot. Never badged as AI.
+   */
+  initialDates?: { start?: string; due?: string };
   onCreate: (input: {
     title: string;
     priority: string;
@@ -59,7 +65,17 @@ function fallbackDraft(rawText: string): ConfirmDraft {
   return { title: rawText, starred: false, aiFields: new Set() };
 }
 
-export function QuickTaskComposer({ open, onClose, onCreate, projectOptions }: Props) {
+/** Fill empty date fields from the caller's seed (calendar slot). AI wins. */
+function applyInitialDates(draft: ConfirmDraft, seed?: { start?: string; due?: string }): ConfirmDraft {
+  if (!seed) return draft;
+  return {
+    ...draft,
+    start: draft.start ?? seed.start,
+    due: draft.due ?? seed.due,
+  };
+}
+
+export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, initialDates }: Props) {
   const [stage, setStage] = useState<Stage>('input');
   const [text, setText] = useState('');
   const [parse, setParse] = useState<QuickTaskParse | null>(null);
@@ -84,6 +100,10 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions }: P
   stageRef.current = stage;
   draftRef.current = draft;
   submittingRef.current = submitting;
+  // Ref, not dep: the memoized callbacks below must see the latest seed
+  // without re-creating on every render.
+  const initialDatesRef = useRef(initialDates);
+  initialDatesRef.current = initialDates;
 
   const reset = useCallback(() => {
     requestNonceRef.current += 1;
@@ -159,7 +179,7 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions }: P
           parseRef.current = result;
           setParse(result);
           if (stageRef.current === 'confirm' && draftRef.current === null) {
-            const seeded = draftFromParse(result, requestedText);
+            const seeded = applyInitialDates(draftFromParse(result, requestedText), initialDatesRef.current);
             draftRef.current = seeded;
             setDraft(seeded);
             setTimeout(() => popoverRef.current?.querySelector<HTMLInputElement>('.qtc-confirm-title')?.focus(), 0);
@@ -183,7 +203,7 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions }: P
     if (stage !== 'confirm' || draft !== null) return;
     const timer = setTimeout(() => {
       if (stageRef.current !== 'confirm' || draftRef.current !== null) return;
-      const fallback = fallbackDraft(textRef.current.trim());
+      const fallback = applyInitialDates(fallbackDraft(textRef.current.trim()), initialDatesRef.current);
       draftRef.current = fallback;
       setDraft(fallback);
     }, 12_000);
@@ -193,7 +213,9 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions }: P
   const enterConfirm = useCallback(() => {
     const rawText = textRef.current.trim();
     if (!rawText || submittingRef.current) return;
-    const seeded = parseRef.current ? draftFromParse(parseRef.current, rawText) : null;
+    const seeded = parseRef.current
+      ? applyInitialDates(draftFromParse(parseRef.current, rawText), initialDatesRef.current)
+      : null;
     stageRef.current = 'confirm';
     draftRef.current = seeded;
     setStage('confirm');
@@ -339,7 +361,7 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions }: P
             onChange={handleDraftChange}
             onCreate={() => { if (draftRef.current) create(draftRef.current); }}
             onBack={goBack}
-            onCreateWithoutAi={() => create(fallbackDraft(textRef.current.trim()))}
+            onCreateWithoutAi={() => create(applyInitialDates(fallbackDraft(textRef.current.trim()), initialDatesRef.current))}
           />
         </div>
       )}

@@ -22,6 +22,7 @@ import { ChatInput } from '@/components/chat/ChatInput';
 import { TodoPanel } from '@/components/tasks/TodoPanel';
 import { QuickTaskComposer } from '@/components/tasks/QuickTaskComposer';
 import { RoutinesView } from '@/components/routines/RoutinesView';
+import { CalendarSidePanel } from '@/components/calendar/CalendarSidePanel';
 import { TaskDetailModal } from '@/components/tasks/TaskDetailModal';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { PendingSessionPanel } from '@/components/sessions/PendingSessionPanel';
@@ -132,6 +133,7 @@ const SS_TODO_SCROLL_KEY = 'walnut-home-todo-scroll';
 const SS_CHAT_VISIBLE_KEY = 'open-walnut-home-chat-visible';
 const SS_TODO_VISIBLE_KEY = 'open-walnut-home-todo-visible';
 const SS_ROUTINES_VISIBLE_KEY = 'open-walnut-home-routines-visible';
+const SS_CALENDAR_VISIBLE_KEY = 'open-walnut-home-calendar-visible';
 
 // Legacy key for migration
 const SS_SESSION_KEY_LEGACY = 'open-walnut-home-session-panel';
@@ -335,6 +337,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Routines panel visibility — hidden by default, toggle via Sidebar
   const [routinesVisible, setRoutinesVisible] = useState<boolean>(
     () => sessionStorage.getItem(SS_ROUTINES_VISIBLE_KEY) === 'true'
+  );
+
+  // Calendar day-agenda panel — hidden by default, toggle via Sidebar
+  const [calendarVisible, setCalendarVisible] = useState<boolean>(
+    () => sessionStorage.getItem(SS_CALENDAR_VISIBLE_KEY) === 'true'
   );
 
   // Session columns state — up to 2 sessions displayed side by side
@@ -690,6 +697,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     window.dispatchEvent(new CustomEvent('main:routines-visible', { detail: { visible: routinesVisible } }));
   }, [routinesVisible]);
 
+  useEffect(() => {
+    sessionStorage.setItem(SS_CALENDAR_VISIBLE_KEY, String(calendarVisible));
+    window.dispatchEvent(new CustomEvent('main:calendar-visible', { detail: { visible: calendarVisible } }));
+  }, [calendarVisible]);
+
   // ── Listen for FocusDock events ──
   useEffect(() => {
     const handleDockTask = (e: Event) => {
@@ -716,6 +728,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     };
     const handleToggleTodo = () => setTodoVisible(prev => !prev);
     const handleToggleRoutines = () => setRoutinesVisible(prev => !prev);
+    const handleToggleCalendar = () => setCalendarVisible(prev => !prev);
     // openSessionOnHome (utils/open-session.ts) — deep links (e.g. notification
     // cards) open the session as a home-page column instead of /sessions.
     const handleOpenSession = (e: Event) => {
@@ -728,6 +741,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     window.addEventListener('task-composer:open', handleTaskComposer);
     window.addEventListener('sidebar:toggle-todo', handleToggleTodo);
     window.addEventListener('sidebar:toggle-routines', handleToggleRoutines);
+    window.addEventListener('sidebar:toggle-calendar', handleToggleCalendar);
     window.addEventListener('main:open-session', handleOpenSession);
     return () => {
       window.removeEventListener('dock:activate-task', handleDockTask);
@@ -736,6 +750,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       window.removeEventListener('task-composer:open', handleTaskComposer);
       window.removeEventListener('sidebar:toggle-todo', handleToggleTodo);
       window.removeEventListener('sidebar:toggle-routines', handleToggleRoutines);
+      window.removeEventListener('sidebar:toggle-calendar', handleToggleCalendar);
       window.removeEventListener('main:open-session', handleOpenSession);
     };
   }, []);
@@ -1632,6 +1647,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
       {/* Todo Resize Handle — only shown when todo is visible */}
       {todoVisible && <div className="todo-resize-handle" {...todoPanel.handleProps} />}
+
+      {/* Calendar day-agenda panel (slide-out, toggled via Sidebar) */}
+      {calendarVisible && <CalendarSidePanel onClose={() => setCalendarVisible(false)} />}
 
       {/* Routines Panel (slide-out, toggled via Sidebar) */}
       {routinesVisible && (

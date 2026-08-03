@@ -9,6 +9,7 @@ import { subscribeVoiceStatus, getVoiceStatus, type VoiceStatus } from '@/utils/
 
 const SS_CHAT_VISIBLE_KEY = 'open-walnut-home-chat-visible';
 const SS_TODO_VISIBLE_KEY = 'open-walnut-home-todo-visible';
+const SS_CALENDAR_VISIBLE_KEY = 'open-walnut-home-calendar-visible';
 const LS_OTHER_OPEN_KEY = 'open-walnut-sidebar-other-open';
 
 /** Secondary pages tucked into the collapsible "Other" group. */
@@ -79,6 +80,9 @@ export function Sidebar({
   const [todoVisible, setTodoVisible] = useState<boolean>(
     () => sessionStorage.getItem(SS_TODO_VISIBLE_KEY) !== 'false'
   );
+  const [calendarPanelVisible, setCalendarPanelVisible] = useState<boolean>(
+    () => sessionStorage.getItem(SS_CALENDAR_VISIBLE_KEY) === 'true'
+  );
 
   useEffect(() => {
     const handleChatVisible = (e: Event) => {
@@ -87,14 +91,19 @@ export function Sidebar({
     const handleTodoVisible = (e: Event) => {
       setTodoVisible((e as CustomEvent).detail?.visible ?? true);
     };
+    const handleCalendarVisible = (e: Event) => {
+      setCalendarPanelVisible((e as CustomEvent).detail?.visible ?? false);
+    };
     // Clicking a persistent toast's body opens the notification center.
     const handleOpenCenter = () => setNotifOpen(true);
     window.addEventListener('main:chat-visible', handleChatVisible);
     window.addEventListener('main:todo-visible', handleTodoVisible);
+    window.addEventListener('main:calendar-visible', handleCalendarVisible);
     window.addEventListener('notification:open-center', handleOpenCenter);
     return () => {
       window.removeEventListener('main:chat-visible', handleChatVisible);
       window.removeEventListener('main:todo-visible', handleTodoVisible);
+      window.removeEventListener('main:calendar-visible', handleCalendarVisible);
       window.removeEventListener('notification:open-center', handleOpenCenter);
     };
   }, []);
@@ -104,6 +113,9 @@ export function Sidebar({
   };
   const handleToggleTodo = () => {
     window.dispatchEvent(new CustomEvent('sidebar:toggle-todo'));
+  };
+  const handleToggleCalendarPanel = () => {
+    window.dispatchEvent(new CustomEvent('sidebar:toggle-calendar'));
   };
   const handleNavClick = (event: React.MouseEvent<HTMLElement>) => {
     if ((event.target as Element).closest('a[href]')) onNavigate();
@@ -151,6 +163,15 @@ export function Sidebar({
           <TodoListIcon />
           <span className="sidebar-label">Todo</span>
         </button>
+        <button
+          className={`sidebar-link sidebar-panel-toggle${calendarPanelVisible ? ' active' : ''}`}
+          onClick={handleToggleCalendarPanel}
+          title={collapsed ? 'Day agenda' : undefined}
+          data-testid="sidebar-toggle-calendar"
+        >
+          <CalendarIcon />
+          <span className="sidebar-label">Agenda</span>
+        </button>
         <div className="sidebar-nav-divider" />
         <NavLink to="/" end className={navLinkClass} title={collapsed ? 'Home' : undefined}>
           <HomeIcon />
@@ -159,6 +180,10 @@ export function Sidebar({
         <NavLink to="/notes" className={navLinkClass} title={collapsed ? 'Notes' : undefined}>
           <NotesIcon />
           <span className="sidebar-label">Notes</span>
+        </NavLink>
+        <NavLink to="/calendar" className={navLinkClass} title={collapsed ? 'Calendar' : undefined}>
+          <CalendarIcon />
+          <span className="sidebar-label">Calendar</span>
         </NavLink>
 
         <NavLink to="/routines" className={navLinkClass} title={collapsed ? 'Routines' : undefined}>
@@ -360,6 +385,17 @@ function NotesIcon() {
       <line x1="16" y1="13" x2="8" y2="13" />
       <line x1="16" y1="17" x2="8" y2="17" />
       <polyline points="10 9 9 9 8 9" />
+    </svg>
+  );
+}
+
+function CalendarIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+      <line x1="16" y1="2" x2="16" y2="6" />
+      <line x1="8" y1="2" x2="8" y2="6" />
+      <line x1="3" y1="10" x2="21" y2="10" />
     </svg>
   );
 }

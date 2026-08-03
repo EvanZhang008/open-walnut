@@ -17,6 +17,7 @@ import { SkillsPage } from './pages/SkillsPage';
 
 import { MemoryPage } from './pages/MemoryPage';
 import { NotesPage } from './pages/NotesPage';
+import { CalendarPage } from './pages/CalendarPage';
 
 import { PopoutRoot } from './popout/PopoutRoot';
 
@@ -84,6 +85,7 @@ export function App() {
         <Route path="/sessions" element={<SessionsRedirect />} />
         <Route path="/memory" element={<MemoryPage />} />
         <Route path="/notes" element={<NotesPage />} />
+        <Route path="/calendar" element={<CalendarPage />} />
         <Route path="/routines" element={<RoutinesPage />} />
         <Route path="/cron" element={<Navigate to="/routines" replace />} />
         <Route path="/usage" element={<Navigate to="/settings#usage" replace />} />
