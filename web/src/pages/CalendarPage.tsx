@@ -29,7 +29,8 @@ import {
   snapMinutes,
   viewRange,
 } from '@/utils/calendar-date';
-import { tasksToCalendarItems, useFrozenWhile } from '@/components/calendar/calendar-items';
+import { eventsToCalendarItems, tasksToCalendarItems, useFrozenWhile } from '@/components/calendar/calendar-items';
+import { useCalendarEvents } from '@/hooks/useCalendarEvents';
 import { CalendarToolbar, type CalendarViewKind } from '@/components/calendar/CalendarToolbar';
 import { CalendarTaskList, TaskListChip } from '@/components/calendar/CalendarTaskList';
 import { MonthView } from '@/components/calendar/MonthView';
@@ -87,7 +88,11 @@ export function CalendarPage() {
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const [chipDragging, setChipDragging] = useState(false);
 
-  const liveItems = useMemo(() => tasksToCalendarItems(tasks, from, to), [tasks, from, to]);
+  const calendar = useCalendarEvents(from, to);
+  const liveItems = useMemo(
+    () => [...tasksToCalendarItems(tasks, from, to), ...eventsToCalendarItems(calendar.events)],
+    [tasks, from, to, calendar.events]
+  );
   const items = useFrozenWhile(liveItems, activeTask !== null || chipDragging);
 
   // ----- quick create -----------------------------------------------------
@@ -174,12 +179,44 @@ export function CalendarPage() {
   // ----- chip interactions (shared by views) -------------------------------
   const moveItem = useCallback(
     (itemId: string, newWhen: string) => {
-      const [kind, taskId] = itemId.split(':');
-      if (kind === 'task-start') update(taskId, { start_date: newWhen });
-      else if (kind === 'task-due') update(taskId, { due_date: newWhen });
-      // kind === 'event' → Phase 2 (PATCH /api/calendar/events/:id)
+      // Event ids may themselves contain ':' — split on the FIRST colon only.
+      const sep = itemId.indexOf(':');
+      const kind = itemId.slice(0, sep);
+      const rest = itemId.slice(sep + 1);
+      if (kind === 'task-start') update(rest, { start_date: newWhen });
+      else if (kind === 'task-due') update(rest, { due_date: newWhen });
+      else if (kind === 'event') {
+        const ev = calendar.events.find((e) => e.id === rest);
+        if (!ev) return;
+        if (!newWhen.includes('T')) {
+          // dropped in the all-day row / a month cell with a date-only value
+          calendar.moveEvent(rest, { start: newWhen, end: newWhen });
+          return;
+        }
+        // Moving keeps the duration.
+        const durMs = Math.max(
+          15 * 60_000,
+          parseDateLocal(ev.end || ev.start).getTime() - parseDateLocal(ev.start).getTime()
+        );
+        const newStart = parseDateLocal(newWhen);
+        const newEnd = new Date(newStart.getTime() + durMs);
+        const pad = (n: number) => String(n).padStart(2, '0');
+        const fmt = (d: Date) =>
+          `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
+        calendar.moveEvent(rest, { start: newWhen, end: fmt(newEnd) });
+      }
     },
-    [update]
+    [update, calendar]
+  );
+
+  const resizeEvent = useCallback(
+    (itemId: string, newEnd: string) => {
+      const rest = itemId.slice(itemId.indexOf(':') + 1);
+      const ev = calendar.events.find((e) => e.id === rest);
+      if (!ev) return;
+      calendar.moveEvent(rest, { start: ev.start, end: newEnd });
+    },
+    [calendar]
   );
 
   const openCreate = useCallback((seed: CreateSeed) => setCreateSeed(seed), []);
@@ -223,6 +260,7 @@ export function CalendarPage() {
                 dropPreview={dropPreview}
                 metricsRef={gridMetricsRef}
                 onMoveItem={moveItem}
+                onResizeEvent={resizeEvent}
                 onChipDragging={setChipDragging}
                 onCreate={openCreate}
               />
@@ -238,6 +276,7 @@ export function CalendarPage() {
           seed={createSeed}
           onClose={() => setCreateSeed(null)}
           onCreateTask={create}
+          onCreateEvent={calendar.sources.some((s) => s.available && s.enabled) ? calendar.createEvent : undefined}
         />
       )}
     </div>

@@ -37,6 +37,8 @@ import type { CreateSeed } from './QuickCreatePopover';
 export const SLOT_PX = 24; // 30-min row height → 48px/hour, 1152px/day
 const CLICK_TOLERANCE_PX = 4;
 const MIN_EVENT_PX = 20;
+/** Resize can't shrink an event below this. */
+const SNAP_MINUTES_MIN = 15;
 
 export interface DropPreview {
   day: string;
@@ -340,7 +342,7 @@ export const TimeGrid = memo(function TimeGrid({
 
   const handleChipPointerDown = useCallback(
     (e: ReactPointerEvent, item: CalendarItem) => {
-      if (item.kind === 'event' && !onResizeEvent) return; // events read-only until Phase 2 wiring
+      if (item.kind === 'event' && item.event.readonly) return;
       publishMetrics();
       const grabMin = item.allDay ? 0 : minAtY(item.day, e.clientY) - item.startMin;
       dragRef.current = { item, grabOffsetMin: Math.max(0, grabMin), overDay: null, previewMin: null, moved: false };
@@ -357,6 +359,40 @@ export const TimeGrid = memo(function TimeGrid({
     }
     if (item.kind !== 'event') window.open(`/tasks/${item.task.id}`, '_self');
   }, []);
+
+  // ---- event resize gesture (bottom edge; events only) -------------------------
+  const resizeRef = useRef<{ item: CalendarItem; endMin: number } | null>(null);
+  const [resizeGhost, setResizeGhost] = useState<{ itemId: string; day: string; startMin: number; endMin: number } | null>(null);
+
+  const resizeGesture = useDragGesture({
+    cursor: 'ns-resize',
+    onMove: (m) => {
+      const rs = resizeRef.current;
+      if (!rs) return;
+      const raw = minAtY(rs.item.day, m.y);
+      rs.endMin = Math.max(rs.item.startMin + SNAP_MINUTES_MIN, raw);
+      setResizeGhost({ itemId: rs.item.id, day: rs.item.day, startMin: rs.item.startMin, endMin: rs.endMin });
+    },
+    onEnd: ({ canceled }) => {
+      const rs = resizeRef.current;
+      resizeRef.current = null;
+      setResizeGhost(null);
+      if (!rs || canceled || !onResizeEvent) return;
+      if (rs.endMin === rs.item.endMin) return;
+      const end = `${rs.item.day}T${String(Math.floor(rs.endMin / 60)).padStart(2, '0')}:${String(rs.endMin % 60).padStart(2, '0')}:00`;
+      onResizeEvent(rs.item.id, end);
+    },
+  });
+
+  const handleResizePointerDown = useCallback(
+    (e: ReactPointerEvent, item: CalendarItem) => {
+      if (item.kind !== 'event' || item.event.readonly) return;
+      publishMetrics();
+      resizeRef.current = { item, endMin: item.endMin };
+      resizeGesture.onPointerDown(e);
+    },
+    [resizeGesture, publishMetrics]
+  );
 
   // ---- drag-to-create gesture --------------------------------------------------
   const createRef = useRef<CreateDrag | null>(null);
@@ -467,6 +503,7 @@ export const TimeGrid = memo(function TimeGrid({
               items={timedByDay.get(d) ?? []}
               ghostItemId={moveGhost?.itemId ?? null}
               onChipPointerDown={handleChipPointerDown}
+              onResizePointerDown={onResizeEvent ? handleResizePointerDown : undefined}
               onChipClick={handleChipClick}
               onEmptyPointerDown={handleEmptyPointerDown}
             />
@@ -492,6 +529,23 @@ export const TimeGrid = memo(function TimeGrid({
                 }}
               >
                 <span className="cal-drop-time">{minsToLabel(moveGhost.startMin)}</span>
+              </div>
+            </GridOverlay>
+          )}
+
+          {/* event resize ghost */}
+          {resizeGhost && (
+            <GridOverlay day={resizeGhost.day} dayList={dayList}>
+              <div
+                className="cal-move-ghost"
+                style={{
+                  top: (resizeGhost.startMin / SLOT_MINUTES) * SLOT_PX,
+                  height: Math.max(((resizeGhost.endMin - resizeGhost.startMin) / SLOT_MINUTES) * SLOT_PX, MIN_EVENT_PX),
+                }}
+              >
+                <span className="cal-drop-time" style={{ top: 'auto', bottom: -18 }}>
+                  {minsToLabel(resizeGhost.endMin)}
+                </span>
               </div>
             </GridOverlay>
           )}

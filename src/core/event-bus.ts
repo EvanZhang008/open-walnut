@@ -25,6 +25,9 @@ export const EventNames = {
   TASK_UNBLOCKED: 'task:unblocked',
   TASK_GROUPS_CHANGED: 'task:groups-changed',
 
+  // Calendar (external calendar events cache refreshed / event written)
+  CALENDAR_UPDATED: 'calendar:updated',
+
   // Inline subagent streaming
   AGENT_SUBAGENT_STREAM: 'agent:subagent-stream',
 

@@ -232,6 +232,99 @@ test.describe('Calendar view', () => {
     expect(await popover.locator('.cal-chip').count()).toBeGreaterThanOrEqual(5)
   })
 
+  // ── Phase 2: external calendar events (mock EventKit source in test-server) ──
+
+  async function getEventViaApi(id: string): Promise<{ start: string; end: string } | undefined> {
+    const today = localDay(0)
+    const res = await fetch(`${API}/api/calendar/events?from=${today}&to=${today}`)
+    if (!res.ok) throw new Error(`GET events failed: ${res.status}`)
+    const body = (await res.json()) as { events: Array<{ id: string; start: string; end: string }> }
+    return body.events.find((e) => e.id === id)
+  }
+
+  test('event chips render: timed chip on the grid, readonly all-day chip in the all-day row', async ({ page }) => {
+    await openCalendar(page)
+    const chip = page.locator('.cal-day-col .cal-chip[data-item-id="event:ev-e2e-brief"]')
+    await chip.scrollIntoViewIfNeeded()
+    await expect(chip).toBeVisible()
+    await expect(chip).toContainText('Morning brief')
+    // readonly holiday renders in the all-day row
+    await expect(page.locator('.cal-grid-allday .cal-chip[data-item-id="event:ev-e2e-holiday"]')).toBeVisible()
+  })
+
+  test('drag event chip moves it and persists through PATCH (duration kept)', async ({ page }) => {
+    await openCalendar(page)
+    const chip = page.locator('.cal-day-col .cal-chip[data-item-id="event:ev-e2e-brief"]')
+    await chip.scrollIntoViewIfNeeded()
+    const box = await chip.boundingBox()
+    if (!box) throw new Error('event chip not visible')
+
+    // down 2 hours (96px): 06:00 → 08:00, 30-min duration preserved
+    await page.mouse.move(box.x + box.width / 2, box.y + 4)
+    await page.mouse.down()
+    await page.mouse.move(box.x + box.width / 2, box.y + 4 + 96, { steps: 10 })
+    await page.mouse.up()
+
+    const today = localDay(0)
+    await expect
+      .poll(async () => (await getEventViaApi('ev-e2e-brief'))?.start, { timeout: 5000 })
+      .toBe(`${today}T08:00:00`)
+    expect((await getEventViaApi('ev-e2e-brief'))?.end).toBe(`${today}T08:30:00`)
+  })
+
+  test('resize event chip bottom edge extends its end', async ({ page }) => {
+    await openCalendar(page)
+    // Own fixture event (ev-e2e-review, 03:00–03:30) — the move spec mutates
+    // ev-e2e-brief in parallel.
+    const chip = page.locator('.cal-day-col .cal-chip[data-item-id="event:ev-e2e-review"]')
+    await chip.scrollIntoViewIfNeeded()
+    await expect(chip).toBeVisible()
+    const handle = chip.locator('.cal-chip-resize-handle')
+    const hbox = await handle.boundingBox()
+    if (!hbox) throw new Error('resize handle not visible')
+
+    // pull the bottom edge down one hour (48px): 03:30 → ~04:30
+    await page.mouse.move(hbox.x + hbox.width / 2, hbox.y + hbox.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(hbox.x + hbox.width / 2, hbox.y + hbox.height / 2 + 48, { steps: 8 })
+    await page.mouse.up()
+
+    await expect
+      .poll(async () => (await getEventViaApi('ev-e2e-review'))?.end, { timeout: 5000 })
+      .toBe(`${localDay(0)}T04:30:00`)
+    // start untouched by a resize
+    expect((await getEventViaApi('ev-e2e-review'))?.start).toBe(`${localDay(0)}T03:00:00`)
+  })
+
+  test('Event tab in quick-create posts a new event to a writable calendar', async ({ page }) => {
+    await openCalendar(page)
+    const today = localDay(0)
+    const point = await columnPoint(page, today, 15)
+    await page.mouse.click(point.x, point.y)
+
+    const popover = page.locator('.cal-create-popover')
+    await expect(popover).toBeVisible()
+    await popover.locator('.cal-create-tabs button:has-text("Event")').click()
+
+    const title = `CalEvtCreate ${Date.now()}`
+    const input = popover.locator('.cal-event-form-title')
+    await input.fill(title)
+    // writable-calendar select is populated from /api/calendar/sources
+    await expect(popover.locator('select')).toBeEnabled()
+    await popover.locator('.cal-event-form-create').click()
+
+    await expect
+      .poll(async () => {
+        const res = await fetch(`${API}/api/calendar/events?from=${today}&to=${today}`)
+        const body = (await res.json()) as { events: Array<{ title: string; start: string }> }
+        return body.events.find((e) => e.title === title)?.start
+      }, { timeout: 10_000 })
+      .toBe(`${today}T15:00:00`)
+
+    // the new chip appears live (calendar:updated push, no reload)
+    await expect(page.locator(`.cal-chip:has-text("${title}")`).first()).toBeVisible()
+  })
+
   test('homepage day-agenda side panel renders and creates', async ({ page }) => {
     const today = localDay(0)
     const task = await createTaskViaApi('CalAgenda', { start_date: `${today}T10:00:00` })

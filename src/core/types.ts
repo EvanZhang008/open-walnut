@@ -720,6 +720,15 @@ export interface Config {
   };
   /** Plugin configurations. Keys are plugin IDs (e.g. 'ms-todo'). Each plugin defines its own config schema. */
   plugins?: Record<string, Record<string, unknown> & { enabled?: boolean }>;
+  /** External calendar display (EventKit — all macOS system-account calendars). */
+  calendar?: {
+    /** Master toggle. Default: true (source still reports unavailable off-macOS). */
+    enabled?: boolean;
+    /** Calendar ids the user hid in Settings → Calendar. */
+    hidden_calendar_ids?: string[];
+    /** Cache TTL / periodic refresh interval. Default: 15. */
+    refresh_minutes?: number;
+  };
   /** Git repos to install plugins from ("plugin store"). Each repo is cloned under
    *  ~/.open-walnut/plugin-stores/ and scanned for plugin dirs (manifest.json). */
   plugin_sources?: Array<{ url: string; ref?: string; enabled?: boolean }>;

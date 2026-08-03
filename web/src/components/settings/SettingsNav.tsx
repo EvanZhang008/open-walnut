@@ -9,6 +9,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'general', label: 'General' },
   { id: 'sessions', label: 'Tasks & Sessions' },
   { id: 'integrations', label: 'Integrations' },
+  { id: 'calendar', label: 'Calendar' },
   { id: 'plugin-store', label: 'Plugin Store' },
   { id: 'search', label: 'Search & Embeddings' },
   { id: 'memory', label: 'Memory' },

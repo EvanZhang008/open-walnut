@@ -32,6 +32,7 @@ export const log = {
   audio: createSubsystemLogger('audio'),
   stt: createSubsystemLogger('stt'),
   obs: createSubsystemLogger('obs'),
+  calendar: createSubsystemLogger('calendar'),
 };
 
 // ── Initialization ──

@@ -39,6 +39,8 @@ import { usageRouter } from './routes/usage.js'
 import { imagesRouter } from './routes/images.js'
 import { localImageRouter } from './routes/local-image.js'
 import { fileContentRouter } from './routes/file-content.js'
+import { calendarRouter } from './routes/calendar.js'
+import { getCalendarService } from '../core/calendar/index.js'
 import { filesRouter } from './routes/files.js'
 import { createCronRouter, setCronService } from './routes/cron.js'
 import { createAgentsRouter } from './routes/agents.js'
@@ -780,6 +782,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/images', imagesRouter)
   app.use('/api/local-image', localImageRouter)
   app.use('/api/file-content', fileContentRouter)
+  app.use('/api/calendar', calendarRouter)
   app.use('/api/files', filesRouter)
   app.use('/api/agents', createAgentsRouter())
   // Conversations share the /api/agents prefix. Registered AFTER the agents
@@ -2658,6 +2661,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // -- Start generic plugin sync polling --
   startPluginSyncPolling()
   startupPhase('plugin sync polling started')
+
+  // -- Calendar service (EventKit cache + periodic refresh; no-op off-macOS/cloud) --
+  getCalendarService()
+    .init()
+    .catch((err) => log.web.warn('calendar service init failed', { error: String(err).slice(0, 200) }))
 
   // Soft-reload for the plugin store: after a source is added/updated, load any
   // NEW plugins without a restart (loadPlugins skips already-registered ids),

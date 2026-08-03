@@ -969,6 +969,65 @@ await fs.writeFile(
 // Now import server (it reads WALNUT_HOME from constants.ts which checks env var)
 const { startServer, stopServer } = await import('../../../src/web/server.js')
 
+// Swap the calendar service onto a mock source BEFORE startServer runs
+// getCalendarService().init(). Not just test convenience: on this Mac the real
+// EventKit source is `available`, so the first /api/calendar/events request
+// from a spec would compile the Swift helper and read the user's REAL
+// calendars (TCC prompt on the node process). Fixture events are stable and
+// writable, so event-chip specs can drag/resize/create against them.
+{
+  const { CalendarService, _setCalendarServiceForTest } = await import('../../../src/core/calendar/index.js')
+  const { createMockCalendarSource, fixtureCalendars } = await import('../../helpers/mock-calendar-source.js')
+  // Events anchor to TODAY (specs navigate by local date, not a fixed one).
+  const pad2 = (n: number) => String(n).padStart(2, '0')
+  const now = new Date()
+  const today = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`
+  _setCalendarServiceForTest(new CalendarService(createMockCalendarSource({
+    events: [
+      {
+        id: 'ev-e2e-brief',
+        source: 'eventkit',
+        calendarId: 'cal-work',
+        calendarName: 'Work',
+        accountName: 'Google',
+        title: 'Morning brief',
+        start: `${today}T06:00:00`,
+        end: `${today}T06:30:00`,
+        allDay: false,
+        color: '#4285f4',
+      },
+      {
+        // Separate event for the resize spec — fullyParallel would race the
+        // move spec if both touched ev-e2e-brief.
+        id: 'ev-e2e-review',
+        source: 'eventkit',
+        calendarId: 'cal-work',
+        calendarName: 'Work',
+        accountName: 'Google',
+        title: 'Design review',
+        start: `${today}T03:00:00`,
+        end: `${today}T03:30:00`,
+        allDay: false,
+        color: '#4285f4',
+      },
+      {
+        id: 'ev-e2e-holiday',
+        source: 'eventkit',
+        calendarId: 'cal-holidays',
+        calendarName: 'Holidays',
+        accountName: 'iCloud',
+        title: 'Fixture Holiday',
+        start: today,
+        end: today,
+        allDay: true,
+        color: '#ff9500',
+        readonly: true,
+      },
+    ],
+    calendars: fixtureCalendars(),
+  }).source))
+}
+
 // Wire local sessions through a MockDaemon spawning the mock Claude CLI, so
 // real-pipeline specs can create LIVE sessions (session:start RPC → mock CLI →
 // real WS stream events → real JSONL history). Additive: existing route-mocked

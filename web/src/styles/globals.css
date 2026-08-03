@@ -25358,3 +25358,120 @@ a.file-link:hover {
     backdrop-filter: var(--glass-g4-blur);
   }
 }
+
+/* --- quick-create Task|Event tabs + event form ------------------------------- */
+.cal-create-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 6px 6px 0;
+}
+
+.cal-create-tabs button {
+  flex: 1;
+  height: 26px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.cal-create-tabs button.active {
+  background: var(--bg-secondary);
+  color: var(--fg);
+}
+
+.cal-event-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  width: 340px;
+  max-width: 80vw;
+}
+
+.cal-event-form-title {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 13px;
+}
+
+.cal-event-form-when {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.cal-event-form select {
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12.5px;
+  padding: 0 6px;
+}
+
+.cal-event-form-error {
+  font-size: 12px;
+  color: var(--error);
+}
+
+.cal-event-form-footer {
+  display: flex;
+  gap: 8px;
+}
+
+.cal-event-form-footer button {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card-bg);
+  color: var(--fg);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.cal-event-form-create {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+  color: #fff !important;
+}
+
+.cal-event-form-create:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* --- Settings → Calendar ------------------------------------------------------ */
+.cal-settings-account {
+  margin-top: 10px;
+}
+
+.cal-settings-account-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  margin-bottom: 4px;
+}
+
+.cal-settings-cal-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+.cal-settings-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}

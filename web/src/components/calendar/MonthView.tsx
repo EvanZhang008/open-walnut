@@ -204,7 +204,7 @@ export const MonthView = memo(function MonthView({
 
   const handleChipPointerDown = useCallback(
     (e: ReactPointerEvent, item: CalendarItem) => {
-      if (item.kind === 'event') return; // Phase 2
+      if (item.kind === 'event' && item.event.readonly) return;
       const grid = gridRef.current;
       if (!grid) return;
       cellRectsRef.current = Array.from(grid.querySelectorAll<HTMLElement>('.cal-month-cell')).map((el) => ({

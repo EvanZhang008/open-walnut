@@ -30,6 +30,7 @@ import { ProvidersSection } from '@/components/settings/sections/ProvidersSectio
 import { GeneralSection } from '@/components/settings/sections/GeneralSection';
 import { SessionsSection } from '@/components/settings/sections/SessionsSection';
 import { IntegrationsSection } from '@/components/settings/sections/IntegrationsSection';
+import { CalendarSection } from '@/components/settings/sections/CalendarSection';
 import { PluginStoreSection } from '@/components/settings/sections/PluginStoreSection';
 import { SearchSection } from '@/components/settings/sections/SearchSection';
 import { MemorySection } from '@/components/settings/sections/MemorySection';
@@ -47,7 +48,7 @@ import { BugReportSection } from '@/components/settings/sections/BugReportSectio
 
 const SECTION_IDS = [
   'providers', 'general', 'sessions',
-  'integrations', 'plugin-store', 'search', 'memory', 'stt', 'audio-capture', 'heartbeat', 'remote-hosts', 'devices', 'advanced',
+  'integrations', 'calendar', 'plugin-store', 'search', 'memory', 'stt', 'audio-capture', 'heartbeat', 'remote-hosts', 'devices', 'advanced',
   'repositories', 'hooks', 'usage', 'timeline', 'bug-report',
 ];
 
@@ -127,6 +128,7 @@ export function SettingsPage() {
           <SectionErrorBoundary name="General"><GeneralSection config={config} onSave={saveSection} /></SectionErrorBoundary>
           <SectionErrorBoundary name="Tasks & Sessions"><SessionsSection config={config} onSave={saveSection} /></SectionErrorBoundary>
           <SectionErrorBoundary name="Integrations"><IntegrationsSection config={config} onSave={saveSection} /></SectionErrorBoundary>
+          <SectionErrorBoundary name="Calendar"><CalendarSection /></SectionErrorBoundary>
           <SectionErrorBoundary name="Plugin Store"><PluginStoreSection /></SectionErrorBoundary>
           <SectionErrorBoundary name="Search"><SearchSection config={config} onSave={saveSection} /></SectionErrorBoundary>
           <SectionErrorBoundary name="Memory"><MemorySection /></SectionErrorBoundary>
