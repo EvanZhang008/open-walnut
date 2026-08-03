@@ -67,6 +67,8 @@ interface Props {
   onResizeEvent?: (itemId: string, newEnd: string) => void;
   onChipDragging: (dragging: boolean) => void;
   onCreate: (seed: CreateSeed) => void;
+  /** Right-click on a chip or empty slot → calendar context menu. */
+  onContextMenu?: (point: { x: number; y: number }, target: { item?: CalendarItem; seed?: CreateSeed }) => void;
 }
 
 interface ChipDrag {
@@ -110,14 +112,18 @@ const AllDayCell = memo(function AllDayCell({
   highlight,
   onChipPointerDown,
   onChipClick,
+  onChipContextMenu,
   onEmptyClick,
+  onEmptyContextMenu,
 }: {
   day: string;
   items: CalendarItem[];
   highlight: boolean;
   onChipPointerDown: (e: ReactPointerEvent, item: CalendarItem) => void;
   onChipClick: (item: CalendarItem, el: HTMLElement) => void;
+  onChipContextMenu?: (point: { x: number; y: number }, item: CalendarItem) => void;
   onEmptyClick: (day: string, el: HTMLElement) => void;
+  onEmptyContextMenu?: (e: React.MouseEvent, day: string) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `allday:${day}` });
   return (
@@ -128,9 +134,19 @@ const AllDayCell = memo(function AllDayCell({
       onClick={(e) => {
         if (e.target === e.currentTarget) onEmptyClick(day, e.currentTarget);
       }}
+      onContextMenu={(e) => {
+        if (e.target === e.currentTarget) onEmptyContextMenu?.(e, day);
+      }}
     >
       {items.map((it) => (
-        <CalendarChip key={it.id} item={it} compact onMovePointerDown={onChipPointerDown} onClick={onChipClick} />
+        <CalendarChip
+          key={it.id}
+          item={it}
+          compact
+          onMovePointerDown={onChipPointerDown}
+          onClick={onChipClick}
+          onContextMenu={onChipContextMenu}
+        />
       ))}
     </div>
   );
@@ -144,7 +160,9 @@ const DayColumn = memo(function DayColumn({
   onChipPointerDown,
   onResizePointerDown,
   onChipClick,
+  onChipContextMenu,
   onEmptyPointerDown,
+  onEmptyContextMenu,
 }: {
   day: string;
   isToday: boolean;
@@ -153,7 +171,9 @@ const DayColumn = memo(function DayColumn({
   onChipPointerDown: (e: ReactPointerEvent, item: CalendarItem) => void;
   onResizePointerDown?: (e: ReactPointerEvent, item: CalendarItem) => void;
   onChipClick: (item: CalendarItem, el: HTMLElement) => void;
+  onChipContextMenu?: (point: { x: number; y: number }, item: CalendarItem) => void;
   onEmptyPointerDown: (e: ReactPointerEvent, day: string) => void;
+  onEmptyContextMenu?: (e: React.MouseEvent, day: string) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `col:${day}` });
 
@@ -169,7 +189,11 @@ const DayColumn = memo(function DayColumn({
       data-day={day}
       onPointerDown={(e) => {
         // Empty-space only: chips call stopPropagation in their handler below.
-        if (e.target === e.currentTarget) onEmptyPointerDown(e, day);
+        // Ignore non-primary buttons — right-click must not start a create drag.
+        if (e.target === e.currentTarget && e.button === 0) onEmptyPointerDown(e, day);
+      }}
+      onContextMenu={(e) => {
+        if (e.target === e.currentTarget) onEmptyContextMenu?.(e, day);
       }}
     >
       {items.map((it) => {
@@ -194,6 +218,7 @@ const DayColumn = memo(function DayColumn({
             }}
             onResizePointerDown={onResizePointerDown}
             onClick={onChipClick}
+            onContextMenu={onChipContextMenu}
           />
         );
       })}
@@ -211,6 +236,7 @@ export const TimeGrid = memo(function TimeGrid({
   onResizeEvent,
   onChipDragging,
   onCreate,
+  onContextMenu,
 }: Props) {
   const dayList = useMemo(() => {
     const base = days === 7 ? weekRange(anchor) : [anchor];
@@ -450,6 +476,38 @@ export const TimeGrid = memo(function TimeGrid({
     [onCreate]
   );
 
+  // ---- right-click → calendar context menu --------------------------------------
+  const handleChipContextMenu = useCallback(
+    (point: { x: number; y: number }, item: CalendarItem) => onContextMenu?.(point, { item }),
+    [onContextMenu]
+  );
+
+  const handleColContextMenu = useCallback(
+    (e: React.MouseEvent, day: string) => {
+      if (!onContextMenu) return;
+      e.preventDefault();
+      publishMetrics();
+      const mins = snapMinutes(minAtY(day, e.clientY), SLOT_MINUTES);
+      onContextMenu(
+        { x: e.clientX, y: e.clientY },
+        { seed: { start: slotToLocalIso(day, Math.floor(mins / SLOT_MINUTES)), anchorPoint: { x: e.clientX, y: e.clientY } } }
+      );
+    },
+    [onContextMenu, minAtY, publishMetrics]
+  );
+
+  const handleAllDayContextMenu = useCallback(
+    (e: React.MouseEvent, day: string) => {
+      if (!onContextMenu) return;
+      e.preventDefault();
+      onContextMenu(
+        { x: e.clientX, y: e.clientY },
+        { seed: { start: day, anchorPoint: { x: e.clientX, y: e.clientY } } }
+      );
+    },
+    [onContextMenu]
+  );
+
   const dayHeader = (dayStr: string) => {
     const d = new Date(Number(dayStr.slice(0, 4)), Number(dayStr.slice(5, 7)) - 1, Number(dayStr.slice(8, 10)));
     const isToday = dayStr === todayStr;
@@ -481,7 +539,9 @@ export const TimeGrid = memo(function TimeGrid({
               }
               onChipPointerDown={handleChipPointerDown}
               onChipClick={handleChipClick}
+              onChipContextMenu={onContextMenu ? handleChipContextMenu : undefined}
               onEmptyClick={handleAllDayEmptyClick}
+              onEmptyContextMenu={onContextMenu ? handleAllDayContextMenu : undefined}
             />
           ))}
         </div>
@@ -505,7 +565,9 @@ export const TimeGrid = memo(function TimeGrid({
               onChipPointerDown={handleChipPointerDown}
               onResizePointerDown={onResizeEvent ? handleResizePointerDown : undefined}
               onChipClick={handleChipClick}
+              onChipContextMenu={onContextMenu ? handleChipContextMenu : undefined}
               onEmptyPointerDown={handleEmptyPointerDown}
+              onEmptyContextMenu={onContextMenu ? handleColContextMenu : undefined}
             />
           ))}
 

@@ -67,7 +67,7 @@ export class CalendarService {
   private lastError: { reason: CalendarSourceStatus['reason']; message: string } | null = null;
 
   constructor(source?: CalendarSource) {
-    this.source = source ?? createEventKitSource({ hiddenCalendarIds: () => this.hiddenIds });
+    this.source = source ?? createEventKitSource();
   }
 
   /** Load config + start the periodic refresh loop. Call once at boot. */
@@ -93,9 +93,17 @@ export class CalendarService {
   async reloadConfig(): Promise<void> {
     const config = (await getConfig()) as { calendar?: CalendarConfigShape };
     const cal = config.calendar ?? {};
+    const prevEnabled = this.enabled;
+    const prevHidden = this.hiddenIds;
     this.enabled = cal.enabled !== false;
     this.hiddenIds = new Set(cal.hidden_calendar_ids ?? []);
     this.refreshMinutes = Math.max(1, cal.refresh_minutes ?? DEFAULT_REFRESH_MINUTES);
+    // Visibility is applied at read time (cache keeps everything), so a toggle
+    // never changes the cache hash — announce it explicitly or the UI would
+    // only notice on its next unrelated refetch.
+    const hiddenChanged =
+      prevHidden.size !== this.hiddenIds.size || [...this.hiddenIds].some((id) => !prevHidden.has(id));
+    if (prevEnabled !== this.enabled || hiddenChanged) this.emitUpdated();
   }
 
   status(): CalendarSourceStatus {
@@ -129,17 +137,23 @@ export class CalendarService {
 
   async listCalendars(): Promise<CalendarInfo[]> {
     this.assertUsable();
-    return this.trackErrors(() => this.source.listCalendars());
+    // The service owns the hidden set (config) — overlay it here so every
+    // source (incl. test mocks) reports visibility consistently.
+    const cals = await this.trackErrors(() => this.source.listCalendars());
+    return cals.map((c) => ({ ...c, hidden: this.hiddenIds.has(c.id) }));
   }
 
-  /** Events within [from, to] (inclusive day strings), served from cache. */
+  /** Events within [from, to] (inclusive day strings), served from cache.
+   *  Hidden-calendar filtering happens HERE, not in the source: the cache
+   *  keeps everything, so toggling visibility applies on the next read with
+   *  no refetch. */
   async getEvents(from: string, to: string, opts?: { force?: boolean }): Promise<CalendarEvent[]> {
     if (!this.enabled || !this.source.available().ok) return [];
     const key = windowKey(from, to);
     const cached = this.cache.get(key);
     const ttlMs = this.refreshMinutes * 60_000;
     if (!opts?.force && cached && Date.now() - cached.fetchedAt < ttlMs) {
-      return filterRange(cached.events, from, to);
+      return this.visible(filterRange(cached.events, from, to));
     }
     const window = windowRange(from, to);
     const events = await this.trackErrors(() => this.source.listEvents(window.from, window.to));
@@ -148,7 +162,12 @@ export class CalendarService {
     this.cache.set(key, { events, fetchedAt: Date.now(), hash });
     this.lastRefresh = new Date().toISOString();
     if (changed && cached) this.emitUpdated();
-    return filterRange(events, from, to);
+    return this.visible(filterRange(events, from, to));
+  }
+
+  private visible(events: CalendarEvent[]): CalendarEvent[] {
+    if (this.hiddenIds.size === 0) return events;
+    return events.filter((e) => !this.hiddenIds.has(e.calendarId));
   }
 
   /** Re-fetch every cached window (periodic refresh / manual refresh). */

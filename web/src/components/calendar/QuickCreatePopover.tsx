@@ -26,6 +26,8 @@ export interface CreateSeed {
    * at the column's bottom, far from the clicked slot (and off screen).
    */
   anchorPoint?: { x: number; y: number };
+  /** Open on this tab (context menu's "New event…" goes straight to Event). */
+  tab?: 'task' | 'event';
 }
 
 interface Props {
@@ -43,7 +45,7 @@ export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent 
   const placement = useMenuPlacement(true, anchorRef, menuRef, {
     anchorPoint: seed.anchorPoint ?? null,
   });
-  const [tab, setTab] = useState<'task' | 'event'>('task');
+  const [tab, setTab] = useState<'task' | 'event'>(seed.tab && onCreateEvent ? seed.tab : 'task');
 
   const projectOptions = useMemo(() => {
     const options = new Map<string, Set<string>>();

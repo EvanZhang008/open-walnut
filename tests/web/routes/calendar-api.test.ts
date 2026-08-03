@@ -247,4 +247,51 @@ describe('PUT /api/calendar/sources/eventkit', () => {
     });
     expect(res.status).toBe(400);
   });
+
+  it('hiding a calendar filters its events from reads without a refetch, and unhiding restores them', async () => {
+    // Prime the cache, then hide — the filter must apply to the CACHED window.
+    await fetch(apiUrl('/api/calendar/events?from=2026-08-03&to=2026-08-09'));
+    const put = await fetch(apiUrl('/api/calendar/sources/eventkit'), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hidden_calendar_ids: ['cal-work'] }),
+    });
+    expect(put.status).toBe(200);
+
+    const hidden = await fetch(apiUrl('/api/calendar/events?from=2026-08-03&to=2026-08-09'));
+    const hiddenBody = await hidden.json() as { events: EventShape[] };
+    expect(hiddenBody.events.some((e) => e.calendarId === 'cal-work')).toBe(false);
+    expect(hiddenBody.events.some((e) => e.calendarId === 'cal-home')).toBe(true);
+
+    // /sources reflects the hidden flag
+    const sources = await fetch(apiUrl('/api/calendar/sources'));
+    const sourcesBody = await sources.json() as { calendars: { id: string; hidden: boolean }[] };
+    expect(sourcesBody.calendars.find((c) => c.id === 'cal-work')?.hidden).toBe(true);
+
+    // unhide → events come back (cache kept them)
+    await fetch(apiUrl('/api/calendar/sources/eventkit'), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hidden_calendar_ids: [] }),
+    });
+    const restored = await fetch(apiUrl('/api/calendar/events?from=2026-08-03&to=2026-08-09'));
+    const restoredBody = await restored.json() as { events: EventShape[] };
+    expect(restoredBody.events.some((e) => e.calendarId === 'cal-work')).toBe(true);
+  });
+
+  it('emits calendar:updated when visibility changes so open views refresh', async () => {
+    await fetch(apiUrl('/api/calendar/sources/eventkit'), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hidden_calendar_ids: ['cal-home'] }),
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(busEvents.some((e) => e.name === EventNames.CALENDAR_UPDATED)).toBe(true);
+    // restore
+    await fetch(apiUrl('/api/calendar/sources/eventkit'), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hidden_calendar_ids: [] }),
+    });
+  });
 });

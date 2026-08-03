@@ -1023,8 +1023,26 @@ const { startServer, stopServer } = await import('../../../src/web/server.js')
         color: '#ff9500',
         readonly: true,
       },
+      {
+        // Dedicated to the visibility-toggle spec: hiding cal-personal must
+        // not disturb the other specs' cal-work/cal-holidays assertions
+        // (fullyParallel runs them concurrently against this shared server).
+        id: 'ev-e2e-errand',
+        source: 'eventkit',
+        calendarId: 'cal-personal',
+        calendarName: 'Personal',
+        accountName: 'iCloud',
+        title: 'Errand',
+        start: `${today}T01:00:00`,
+        end: `${today}T01:30:00`,
+        allDay: false,
+        color: '#af52de',
+      },
     ],
-    calendars: fixtureCalendars(),
+    calendars: [
+      ...fixtureCalendars(),
+      { id: 'cal-personal', title: 'Personal', account: 'iCloud', color: '#af52de', readonly: false, hidden: false },
+    ],
   }).source))
 }
 

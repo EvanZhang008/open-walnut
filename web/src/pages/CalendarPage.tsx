@@ -29,13 +29,15 @@ import {
   snapMinutes,
   viewRange,
 } from '@/utils/calendar-date';
-import { eventsToCalendarItems, tasksToCalendarItems, useFrozenWhile } from '@/components/calendar/calendar-items';
+import { eventsToCalendarItems, tasksToCalendarItems, useFrozenWhile, type CalendarItem } from '@/components/calendar/calendar-items';
 import { useCalendarEvents } from '@/hooks/useCalendarEvents';
 import { CalendarToolbar, type CalendarViewKind } from '@/components/calendar/CalendarToolbar';
 import { CalendarTaskList, TaskListChip } from '@/components/calendar/CalendarTaskList';
 import { MonthView } from '@/components/calendar/MonthView';
 import { TimeGrid, type DropPreview, type GridMetrics } from '@/components/calendar/TimeGrid';
 import { QuickCreatePopover, type CreateSeed } from '@/components/calendar/QuickCreatePopover';
+import { CalendarsPopover } from '@/components/calendar/CalendarsPopover';
+import { CalendarContextMenu, type CalendarContextTarget } from '@/components/calendar/CalendarContextMenu';
 
 const VALID_VIEWS = new Set<CalendarViewKind>(['day', 'week', 'month']);
 const LS_RAIL_KEY = 'open-walnut-calendar-rail-open';
@@ -97,6 +99,10 @@ export function CalendarPage() {
 
   // ----- quick create -----------------------------------------------------
   const [createSeed, setCreateSeed] = useState<CreateSeed | null>(null);
+
+  // ----- calendars visibility popover + right-click menu -------------------
+  const [calsAnchor, setCalsAnchor] = useState<HTMLElement | null>(null);
+  const [ctxTarget, setCtxTarget] = useState<CalendarContextTarget | null>(null);
 
   // ----- dnd-kit: rail task → calendar ------------------------------------
   // Stable sensor options (inline objects per render destabilize dnd-kit's
@@ -221,6 +227,32 @@ export function CalendarPage() {
 
   const openCreate = useCallback((seed: CreateSeed) => setCreateSeed(seed), []);
 
+  const canCreateEvent = calendar.sources.some((s) => s.available && s.enabled);
+
+  const openContextMenu = useCallback(
+    (point: { x: number; y: number }, target: { item?: CalendarItem; seed?: CreateSeed }) =>
+      setCtxTarget({ point, ...target }),
+    []
+  );
+
+  const unscheduleTask = useCallback(
+    (item: CalendarItem) => {
+      if (item.kind === 'event') return;
+      // '' clears the date through the web update path.
+      if (item.kind === 'task-due') update(item.task.id, { due_date: '' });
+      else update(item.task.id, { start_date: '' });
+    },
+    [update]
+  );
+
+  const deleteEventItem = useCallback(
+    (item: CalendarItem) => {
+      if (item.kind !== 'event') return;
+      calendar.removeEvent(item.event.id);
+    },
+    [calendar]
+  );
+
   return (
     <div className="cal-page" data-view={view}>
       <DndContext
@@ -238,6 +270,7 @@ export function CalendarPage() {
           onAnchorChange={(d) => setParam({ d })}
           railOpen={railOpen}
           onToggleRail={toggleRail}
+          onOpenCalendars={setCalsAnchor}
         />
         <div className="cal-body">
           {railOpen && <CalendarTaskList tasks={tasks} />}
@@ -251,6 +284,7 @@ export function CalendarPage() {
                 onChipDragging={setChipDragging}
                 onCreate={openCreate}
                 onNavigateDay={(d) => setParam({ view: 'day', d })}
+                onContextMenu={openContextMenu}
               />
             ) : (
               <TimeGrid
@@ -263,6 +297,7 @@ export function CalendarPage() {
                 onResizeEvent={resizeEvent}
                 onChipDragging={setChipDragging}
                 onCreate={openCreate}
+                onContextMenu={openContextMenu}
               />
             )}
           </div>
@@ -276,7 +311,18 @@ export function CalendarPage() {
           seed={createSeed}
           onClose={() => setCreateSeed(null)}
           onCreateTask={create}
-          onCreateEvent={calendar.sources.some((s) => s.available && s.enabled) ? calendar.createEvent : undefined}
+          onCreateEvent={canCreateEvent ? calendar.createEvent : undefined}
+        />
+      )}
+      {calsAnchor && <CalendarsPopover anchorEl={calsAnchor} onClose={() => setCalsAnchor(null)} />}
+      {ctxTarget && (
+        <CalendarContextMenu
+          target={ctxTarget}
+          onClose={() => setCtxTarget(null)}
+          onUnscheduleTask={unscheduleTask}
+          onDeleteEvent={deleteEventItem}
+          onCreate={(seed, tab) => setCreateSeed({ ...seed, tab })}
+          canCreateEvent={canCreateEvent}
         />
       )}
     </div>

@@ -166,7 +166,7 @@ function toEvent(raw: RawEvent, colorByCalendar: Map<string, string>): CalendarE
   };
 }
 
-export function createEventKitSource(opts: { hiddenCalendarIds: () => Set<string> }): CalendarSource {
+export function createEventKitSource(): CalendarSource {
   // Calendar colors change rarely; cache the calendar list per process and
   // refresh it on every listCalendars() call (Settings) or list() miss.
   let calendarCache: RawCalendar[] | null = null;
@@ -195,22 +195,23 @@ export function createEventKitSource(opts: { hiddenCalendarIds: () => Set<string
     },
 
     async listCalendars(): Promise<CalendarInfo[]> {
-      const hidden = opts.hiddenCalendarIds();
+      // `hidden` is overlaid by CalendarService (it owns the config).
       return (await fetchCalendars()).map((c) => ({
         id: c.id,
         title: c.title,
         account: c.account,
         color: c.color,
         readonly: c.readonly,
-        hidden: hidden.has(c.id),
+        hidden: false,
       }));
     },
 
     async listEvents(from: string, to: string): Promise<CalendarEvent[]> {
+      // No hidden-calendar filtering here — CalendarService filters at read
+      // time so its cache stays complete (unhiding needs no refetch).
       const raw = await runHelper<RawEvent[]>(['list', from, to]);
       const colors = await colorMap();
-      const hidden = opts.hiddenCalendarIds();
-      return raw.filter((e) => !hidden.has(e.calendarId)).map((e) => toEvent(e, colors));
+      return raw.map((e) => toEvent(e, colors));
     },
 
     async updateEvent(id: string, patch: CalendarEventPatch): Promise<CalendarEvent> {

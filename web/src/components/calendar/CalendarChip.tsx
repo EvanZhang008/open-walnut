@@ -28,6 +28,8 @@ export interface CalendarChipProps {
   /** Bottom-edge resize (events only). */
   onResizePointerDown?: (e: ReactPointerEvent, item: CalendarItem) => void;
   onClick?: (item: CalendarItem, el: HTMLElement) => void;
+  /** Right-click → calendar context menu (replaces the browser menu). */
+  onContextMenu?: (point: { x: number; y: number }, item: CalendarItem) => void;
 }
 
 export const CalendarChip = memo(function CalendarChip({
@@ -38,6 +40,7 @@ export const CalendarChip = memo(function CalendarChip({
   onMovePointerDown,
   onResizePointerDown,
   onClick,
+  onContextMenu,
 }: CalendarChipProps) {
   const isEvent = item.kind === 'event';
   const isDue = item.kind === 'task-due';
@@ -63,8 +66,20 @@ export const CalendarChip = memo(function CalendarChip({
       data-item-id={item.id}
       data-day={item.day}
       title={title}
-      onPointerDown={readonly ? undefined : (e) => onMovePointerDown?.(e, item)}
+      onPointerDown={readonly ? undefined : (e) => {
+        if (e.button !== 0) return; // right/middle button must not arm a drag
+        onMovePointerDown?.(e, item);
+      }}
       onClick={(e) => onClick?.(item, e.currentTarget)}
+      onContextMenu={
+        onContextMenu
+          ? (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onContextMenu({ x: e.clientX, y: e.clientY }, item);
+            }
+          : undefined
+      }
     >
       <span className="cal-chip-body">
         {isDue && (

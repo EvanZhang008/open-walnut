@@ -11,6 +11,8 @@ interface Props {
   /** Rail visibility toggle (week/day views' unscheduled-task list). */
   railOpen: boolean;
   onToggleRail: () => void;
+  /** Opens the in-view calendar visibility popover, anchored to the button. */
+  onOpenCalendars?: (anchorEl: HTMLElement) => void;
 }
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -37,6 +39,7 @@ export const CalendarToolbar = memo(function CalendarToolbar({
   onAnchorChange,
   railOpen,
   onToggleRail,
+  onOpenCalendars,
 }: Props) {
   const step = (dir: 1 | -1) => {
     const next =
@@ -75,18 +78,39 @@ export const CalendarToolbar = memo(function CalendarToolbar({
         </div>
         <h2 className="cal-title">{title(view, anchor)}</h2>
       </div>
-      <div className="cal-view-switch" role="tablist" aria-label="Calendar view">
-        {(['day', 'week', 'month'] as const).map((v) => (
+      <div className="cal-toolbar-right">
+        {onOpenCalendars && (
           <button
-            key={v}
-            role="tab"
-            aria-selected={view === v}
-            className={`cal-view-btn${view === v ? ' active' : ''}`}
-            onClick={() => onViewChange(v)}
+            className="cal-cals-btn"
+            onClick={(e) => onOpenCalendars(e.currentTarget)}
+            title="Choose which calendars to show"
+            data-testid="cal-cals-btn"
           >
-            {v[0].toUpperCase() + v.slice(1)}
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="4" width="18" height="17" rx="2" />
+              <line x1="3" y1="9" x2="21" y2="9" />
+              <line x1="8" y1="2" x2="8" y2="6" />
+              <line x1="16" y1="2" x2="16" y2="6" />
+              <circle cx="8.5" cy="14" r="1.4" fill="currentColor" stroke="none" />
+              <circle cx="12" cy="14" r="1.4" fill="currentColor" stroke="none" />
+              <circle cx="15.5" cy="14" r="1.4" fill="currentColor" stroke="none" />
+            </svg>
+            Calendars
           </button>
-        ))}
+        )}
+        <div className="cal-view-switch" role="tablist" aria-label="Calendar view">
+          {(['day', 'week', 'month'] as const).map((v) => (
+            <button
+              key={v}
+              role="tab"
+              aria-selected={view === v}
+              className={`cal-view-btn${view === v ? ' active' : ''}`}
+              onClick={() => onViewChange(v)}
+            >
+              {v[0].toUpperCase() + v.slice(1)}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );

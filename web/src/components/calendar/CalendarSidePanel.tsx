@@ -12,9 +12,10 @@ import { Link } from 'react-router-dom';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { parseDateLocal } from '@/components/common/DatePicker';
 import { addDays, formatDateOnly } from '@/utils/calendar-date';
-import { tasksToCalendarItems, useFrozenWhile } from './calendar-items';
+import { tasksToCalendarItems, useFrozenWhile, type CalendarItem } from './calendar-items';
 import { TimeGrid, type GridMetrics } from './TimeGrid';
 import { QuickCreatePopover, type CreateSeed } from './QuickCreatePopover';
+import { CalendarContextMenu, type CalendarContextTarget } from './CalendarContextMenu';
 
 interface Props {
   onClose: () => void;
@@ -27,6 +28,7 @@ export function CalendarSidePanel({ onClose }: Props) {
 
   const [chipDragging, setChipDragging] = useState(false);
   const [createSeed, setCreateSeed] = useState<CreateSeed | null>(null);
+  const [ctxTarget, setCtxTarget] = useState<CalendarContextTarget | null>(null);
   const metricsRef = useRef<GridMetrics | null>(null);
 
   const liveItems = useMemo(() => tasksToCalendarItems(tasks, day, day), [tasks, day]);
@@ -37,6 +39,15 @@ export function CalendarSidePanel({ onClose }: Props) {
       const [kind, taskId] = itemId.split(':');
       if (kind === 'task-start') update(taskId, { start_date: newWhen });
       else if (kind === 'task-due') update(taskId, { due_date: newWhen });
+    },
+    [update]
+  );
+
+  const unscheduleTask = useCallback(
+    (item: CalendarItem) => {
+      if (item.kind === 'event') return;
+      if (item.kind === 'task-due') update(item.task.id, { due_date: '' });
+      else update(item.task.id, { start_date: '' });
     },
     [update]
   );
@@ -79,11 +90,20 @@ export function CalendarSidePanel({ onClose }: Props) {
             onMoveItem={moveItem}
             onChipDragging={setChipDragging}
             onCreate={setCreateSeed}
+            onContextMenu={(point, target) => setCtxTarget({ point, ...target })}
           />
         </DndContext>
       </div>
       {createSeed && (
         <QuickCreatePopover seed={createSeed} onClose={() => setCreateSeed(null)} onCreateTask={create} />
+      )}
+      {ctxTarget && (
+        <CalendarContextMenu
+          target={ctxTarget}
+          onClose={() => setCtxTarget(null)}
+          onUnscheduleTask={unscheduleTask}
+          onCreate={(seed) => setCreateSeed(seed)}
+        />
       )}
     </div>
   );

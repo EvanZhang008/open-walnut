@@ -325,6 +325,98 @@ test.describe('Calendar view', () => {
     await expect(page.locator(`.cal-chip:has-text("${title}")`).first()).toBeVisible()
   })
 
+  test('toolbar Calendars popover toggles per-calendar visibility live', async ({ page }) => {
+    await openCalendar(page)
+    // ev-e2e-errand rides the dedicated "Personal" calendar so this toggle
+    // can't break parallel specs asserting on cal-work chips.
+    const chip = page.locator('.cal-day-col .cal-chip[data-item-id="event:ev-e2e-errand"]')
+    await chip.scrollIntoViewIfNeeded()
+    await expect(chip).toBeVisible()
+
+    await page.click('[data-testid="cal-cals-btn"]')
+    const popover = page.locator('[data-testid="cal-cals-popover"]')
+    await expect(popover).toBeVisible()
+
+    const row = popover.locator('.cal-cals-row', { hasText: 'Personal' })
+    await row.locator('input[type="checkbox"]').uncheck()
+    await expect(chip).toHaveCount(0, { timeout: 5000 })
+
+    // Re-check → chips come back (no reload, cache kept the events)
+    await row.locator('input[type="checkbox"]').check()
+    await expect(page.locator('.cal-day-col .cal-chip[data-item-id="event:ev-e2e-errand"]')).toBeVisible({ timeout: 5000 })
+    await page.locator('.cal-popover-backdrop').click()
+  })
+
+  test('right-click on a task chip offers Unschedule (clears start_date)', async ({ page }) => {
+    const today = localDay(0)
+    const task = await createTaskViaApi('CalCtxUnschedule', { start_date: `${today}T02:00:00` })
+    await openCalendar(page)
+
+    const chip = page.locator(`.cal-chip[data-item-id="task-start:${task.id}"]`)
+    await chip.scrollIntoViewIfNeeded()
+    await expect(chip).toBeVisible()
+    await chip.click({ button: 'right' })
+
+    const menu = page.locator('[data-testid="cal-ctx-menu"]')
+    await expect(menu).toBeVisible()
+    await menu.locator('button:has-text("Unschedule")').click()
+
+    await expect
+      .poll(async () => (await getTaskViaApi(task.id)).start_date ?? null, { timeout: 5000 })
+      .toBeNull()
+    await expect(chip).toHaveCount(0)
+  })
+
+  test('right-click on an empty slot offers New task / New event', async ({ page }) => {
+    await openCalendar(page)
+    const today = localDay(0)
+    const point = await columnPoint(page, today, 22)
+    await page.mouse.click(point.x, point.y, { button: 'right' })
+
+    const menu = page.locator('[data-testid="cal-ctx-menu"]')
+    await expect(menu).toBeVisible()
+    await expect(menu.locator('button:has-text("New task…")')).toBeVisible()
+    // Writable mock source is connected → event creation offered
+    await menu.locator('button:has-text("New event…")').click()
+
+    // Straight to the Event tab of the quick-create popover
+    const form = page.locator('.cal-create-popover .cal-event-form')
+    await expect(form).toBeVisible()
+    await expect(form.locator('.cal-event-form-when')).toContainText('22:00')
+    await page.keyboard.press('Escape')
+  })
+
+  test('right-click on a writable event chip offers Delete event', async ({ page }) => {
+    // Create a throwaway event via API so deleting it doesn't race other specs
+    const today = localDay(0)
+    const created = await fetch(`${API}/api/calendar/events`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        calendarId: 'cal-work',
+        title: `CalCtxDelete ${Date.now()}`,
+        start: `${today}T23:00:00`,
+        end: `${today}T23:30:00`,
+      }),
+    })
+    const { event } = (await created.json()) as { event: { id: string } }
+
+    await openCalendar(page)
+    const chip = page.locator(`.cal-day-col .cal-chip[data-item-id="event:${event.id}"]`)
+    await chip.scrollIntoViewIfNeeded()
+    await expect(chip).toBeVisible()
+    await chip.click({ button: 'right' })
+
+    const menu = page.locator('[data-testid="cal-ctx-menu"]')
+    await expect(menu).toBeVisible()
+    await menu.locator('button:has-text("Delete event")').click()
+
+    await expect
+      .poll(async () => (await getEventViaApi(event.id)) === undefined, { timeout: 5000 })
+      .toBe(true)
+    await expect(chip).toHaveCount(0)
+  })
+
   test('homepage day-agenda side panel renders and creates', async ({ page }) => {
     const today = localDay(0)
     const task = await createTaskViaApi('CalAgenda', { start_date: `${today}T10:00:00` })

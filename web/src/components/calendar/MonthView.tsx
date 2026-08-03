@@ -28,6 +28,8 @@ interface Props {
   onChipDragging: (dragging: boolean) => void;
   onCreate: (seed: CreateSeed) => void;
   onNavigateDay: (day: string) => void;
+  /** Right-click on a chip or empty cell → calendar context menu. */
+  onContextMenu?: (point: { x: number; y: number }, target: { item?: CalendarItem; seed?: CreateSeed }) => void;
 }
 
 interface ChipDrag {
@@ -46,7 +48,9 @@ const MonthDayCell = memo(function MonthDayCell({
   draggedItemId,
   onChipPointerDown,
   onChipClick,
+  onChipContextMenu,
   onEmptyClick,
+  onEmptyContextMenu,
   onNavigateDay,
   onShowOverflow,
 }: {
@@ -58,7 +62,9 @@ const MonthDayCell = memo(function MonthDayCell({
   draggedItemId: string | null;
   onChipPointerDown: (e: ReactPointerEvent, item: CalendarItem) => void;
   onChipClick: (item: CalendarItem, el: HTMLElement) => void;
+  onChipContextMenu?: (point: { x: number; y: number }, item: CalendarItem) => void;
   onEmptyClick: (day: string, el: HTMLElement) => void;
+  onEmptyContextMenu?: (e: React.MouseEvent, day: string) => void;
   onNavigateDay: (day: string) => void;
   onShowOverflow: (day: string, el: HTMLElement) => void;
 }) {
@@ -85,6 +91,11 @@ const MonthDayCell = memo(function MonthDayCell({
           onEmptyClick(dayStr, e.currentTarget);
         }
       }}
+      onContextMenu={(e) => {
+        if (e.target === e.currentTarget || (e.target as HTMLElement).classList.contains('cal-month-chips')) {
+          onEmptyContextMenu?.(e, dayStr);
+        }
+      }}
     >
       <button
         className="cal-month-daynum"
@@ -104,6 +115,7 @@ const MonthDayCell = memo(function MonthDayCell({
             ghosted={draggedItemId === it.id}
             onMovePointerDown={onChipPointerDown}
             onClick={onChipClick}
+            onContextMenu={onChipContextMenu}
           />
         ))}
         {overflow > 0 && (
@@ -130,6 +142,7 @@ export const MonthView = memo(function MonthView({
   onChipDragging,
   onCreate,
   onNavigateDay,
+  onContextMenu,
 }: Props) {
   const weeks = useMemo(() => monthGridRange(anchor), [anchor]);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -235,6 +248,23 @@ export const MonthView = memo(function MonthView({
     [onCreate]
   );
 
+  const handleChipContextMenu = useCallback(
+    (point: { x: number; y: number }, item: CalendarItem) => onContextMenu?.(point, { item }),
+    [onContextMenu]
+  );
+
+  const handleEmptyContextMenu = useCallback(
+    (e: React.MouseEvent, day: string) => {
+      if (!onContextMenu) return;
+      e.preventDefault();
+      onContextMenu(
+        { x: e.clientX, y: e.clientY },
+        { seed: { start: day, anchorPoint: { x: e.clientX, y: e.clientY } } }
+      );
+    },
+    [onContextMenu]
+  );
+
   const overflowItems = overflowDay ? byDay.get(overflowDay) ?? [] : [];
 
   return (
@@ -260,7 +290,9 @@ export const MonthView = memo(function MonthView({
               draggedItemId={preview?.itemId ?? null}
               onChipPointerDown={handleChipPointerDown}
               onChipClick={handleChipClick}
+              onChipContextMenu={onContextMenu ? handleChipContextMenu : undefined}
               onEmptyClick={handleEmptyClick}
+              onEmptyContextMenu={onContextMenu ? handleEmptyContextMenu : undefined}
               onNavigateDay={onNavigateDay}
               onShowOverflow={showOverflow}
             />
@@ -283,6 +315,14 @@ export const MonthView = memo(function MonthView({
                     handleChipPointerDown(e, item);
                   }}
                   onClick={handleChipClick}
+                  onContextMenu={
+                    onContextMenu
+                      ? (point, item) => {
+                          setOverflowDay(null);
+                          handleChipContextMenu(point, item);
+                        }
+                      : undefined
+                  }
                 />
               ))}
             </div>
