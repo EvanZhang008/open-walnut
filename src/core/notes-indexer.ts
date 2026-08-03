@@ -651,4 +651,8 @@ export async function initNotesIndex(): Promise<void> {
     }, 30_000)
     timer.unref?.() // never keep the process alive for a maintenance scan
   }
+  // Attachment OCR backfill: further deferred (60s), serial, hash-resumable.
+  import('./attachment-text.js')
+    .then(({ startAttachmentBackfill }) => startAttachmentBackfill())
+    .catch(() => {})
 }

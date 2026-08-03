@@ -470,6 +470,59 @@ describe('search: CJK queries', () => {
   });
 });
 
+// ─── Attachment text search (OCR/PDF sidecar rows) ────────────────────────────
+
+describe('search: extracted attachment text', () => {
+  it('surfaces an attachment whose OCR text matches, below authored notes', async () => {
+    await writeNote('taxes.md', '# Taxes\n\nThe assessment letter arrived.');
+    await syncIndex();
+
+    const { upsertAttachmentText } = await import('../../../src/core/notes-index.js');
+    upsertAttachmentText({
+      path: 'finance/_attachment/notice.png',
+      content_hash: 'h1',
+      text: 'Notice of Assessment — Speculation and Vacancy Tax. Account SPT-0000-0000.',
+      method: 'ocr',
+      status: 'ok',
+      mtime: new Date().toISOString(),
+      size: 1234,
+    });
+
+    const app = createApp();
+    const res = await request(app).get('/api/notes-v2/search?q=assessment&mode=string');
+
+    expect(res.status).toBe(200);
+    const attach = res.body.results.find((r: any) => r.matchType === 'attachment');
+    expect(attach).toBeDefined();
+    expect(attach.path).toBe('finance/_attachment/notice.png');
+    expect(attach.snippet.toLowerCase()).toContain('assessment');
+    // Authored note text outranks machine-extracted text.
+    const note = res.body.results.find((r: any) => r.path === 'taxes.md');
+    expect(note.stringScore).toBeGreaterThan(attach.stringScore);
+  });
+
+  it('finds CJK text inside attachments via the LIKE fallback', async () => {
+    const { upsertAttachmentText } = await import('../../../src/core/notes-index.js');
+    upsertAttachmentText({
+      path: 'records/_attachment/idcard.jpg',
+      content_hash: 'h2',
+      text: '身份证号码 000000000000000000 签发机关',
+      method: 'ocr',
+      status: 'ok',
+      mtime: new Date().toISOString(),
+      size: 999,
+    });
+
+    const app = createApp();
+    const res = await request(app).get('/api/notes-v2/search?q=%E8%BA%AB%E4%BB%BD%E8%AF%81&mode=string'); // 身份证
+
+    expect(res.status).toBe(200);
+    const hit = res.body.results.find((r: any) => r.path === 'records/_attachment/idcard.jpg');
+    expect(hit).toBeDefined();
+    expect(hit.matchType).toBe('attachment');
+  });
+});
+
 // ─── Boot drift scan (offline edits reconciled without a rebuild) ────────────
 
 describe('drift scan: offline changes reconciled at boot', () => {

@@ -68,8 +68,15 @@ export function startQmdWatcher(): { stop: () => void } {
       // O(vault) store.update() on the save path). The reconciler has its own
       // per-path coalescing queue + debounce, so we hand it the changed path.
       watchers.push(fs.watch(NOTES_DIR, { recursive: true }, (_event, filename) => {
-        if (filename && filename.endsWith('.md')) {
+        if (!filename) return;
+        if (filename.endsWith('.md')) {
           scheduleNotesIndexUpdate(filename);
+        } else {
+          // Binary attachments (PDF/images) → serial out-of-process text
+          // extraction. isExtractableAttachment gates extensions inside.
+          import('./attachment-text.js')
+            .then(({ scheduleAttachmentExtract }) => { void scheduleAttachmentExtract(filename); })
+            .catch(() => {});
         }
       }));
     }

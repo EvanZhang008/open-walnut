@@ -20,7 +20,10 @@ import { log } from '../logging/index.js'
 
 export const NOTES_INDEX_PATH = path.join(WALNUT_HOME, 'notes-index.sqlite')
 
-/** Bump to force a full rebuild on next open (schema/semantics change). */
+/** Bump to force a full rebuild on next open (schema/semantics change).
+ * The attachment_text tables need no bump — SCHEMA_SQL's IF NOT EXISTS adds
+ * them on open, and a rebuild clears notes/links/tags only (attachment_text
+ * SURVIVES: OCR is expensive and its rows are keyed by content hash). */
 export const NOTES_INDEX_SCHEMA_VERSION = 2
 
 export type LinkStatus = 'resolved' | 'unresolved' | 'ambiguous'
@@ -113,6 +116,36 @@ CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes BEGIN
 END;
 
 CREATE TABLE IF NOT EXISTS index_meta (key TEXT PRIMARY KEY, value TEXT);
+
+-- Extracted text of binary attachments (PDF text layer / Vision OCR). Keyed by
+-- vault-relative path; content_hash lets us skip unchanged files and never
+-- re-run a failed/succeeded extraction for the same bytes.
+CREATE TABLE IF NOT EXISTS attachment_text (
+  path         TEXT PRIMARY KEY,
+  content_hash TEXT NOT NULL,
+  text         TEXT NOT NULL DEFAULT '',
+  method       TEXT NOT NULL,
+  status       TEXT NOT NULL,
+  mtime        TEXT NOT NULL,
+  size         INTEGER NOT NULL,
+  extracted_at TEXT NOT NULL
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS attachment_fts USING fts5(
+  text,
+  content = 'attachment_text', content_rowid = 'rowid',
+  tokenize = 'unicode61 remove_diacritics 2'
+);
+CREATE TRIGGER IF NOT EXISTS attach_ai AFTER INSERT ON attachment_text BEGIN
+  INSERT INTO attachment_fts(rowid, text) VALUES (new.rowid, new.text);
+END;
+CREATE TRIGGER IF NOT EXISTS attach_ad AFTER DELETE ON attachment_text BEGIN
+  INSERT INTO attachment_fts(attachment_fts, rowid, text) VALUES('delete', old.rowid, old.text);
+END;
+CREATE TRIGGER IF NOT EXISTS attach_au AFTER UPDATE ON attachment_text BEGIN
+  INSERT INTO attachment_fts(attachment_fts, rowid, text) VALUES('delete', old.rowid, old.text);
+  INSERT INTO attachment_fts(rowid, text) VALUES (new.rowid, new.text);
+END;
 `
 
 /**
@@ -429,6 +462,100 @@ export function getNoteByPath(relPath: string): NoteRow | undefined {
   return d.prepare(`SELECT * FROM notes WHERE path=?`).get(relPath) as
     | NoteRow
     | undefined
+}
+
+// ── Attachment text (PDF/OCR sidecar rows) ──────────────────────────────────
+
+export interface AttachmentTextRow {
+  path: string
+  content_hash: string
+  text: string
+  method: string
+  status: string
+  mtime: string
+  size: number
+}
+
+export function getAttachmentMeta(relPath: string): Pick<AttachmentTextRow, 'content_hash' | 'status'> | undefined {
+  const d = getNotesIndexDb()
+  if (!d) return undefined
+  return d.prepare(`SELECT content_hash, status FROM attachment_text WHERE path=?`).get(relPath) as
+    | Pick<AttachmentTextRow, 'content_hash' | 'status'>
+    | undefined
+}
+
+export function listAttachmentMeta(): Array<Pick<AttachmentTextRow, 'path' | 'mtime' | 'size' | 'status'>> {
+  const d = getNotesIndexDb()
+  if (!d) return []
+  return d.prepare(`SELECT path, mtime, size, status FROM attachment_text`).all() as Array<
+    Pick<AttachmentTextRow, 'path' | 'mtime' | 'size' | 'status'>
+  >
+}
+
+export function upsertAttachmentText(row: Omit<AttachmentTextRow, 'extracted_at'>): void {
+  const d = getNotesIndexDb()
+  if (!d) return
+  d.prepare(
+    `INSERT INTO attachment_text (path, content_hash, text, method, status, mtime, size, extracted_at)
+     VALUES (@path, @content_hash, @text, @method, @status, @mtime, @size, datetime('now'))
+     ON CONFLICT(path) DO UPDATE SET
+       content_hash=excluded.content_hash, text=excluded.text, method=excluded.method,
+       status=excluded.status, mtime=excluded.mtime, size=excluded.size,
+       extracted_at=excluded.extracted_at`,
+  ).run(row)
+}
+
+export function deleteAttachmentText(relPath: string): void {
+  const d = getNotesIndexDb()
+  if (!d) return
+  d.prepare(`DELETE FROM attachment_text WHERE path=?`).run(relPath)
+}
+
+export interface AttachmentHit {
+  path: string
+  text: string
+  stringScore: number
+}
+
+/**
+ * Search extracted attachment text (FTS + CJK/substring LIKE fallback).
+ * Attachment hits carry the LOW body band (0.45 word / 0.40 substring) — the
+ * text is machine-extracted, noisier than authored notes, so authored content
+ * always outranks it; but a receipt/letter/screenshot becomes findable at all.
+ */
+export function attachmentSearch(q: string, limit: number): AttachmentHit[] {
+  const d = getNotesIndexDb()
+  if (!d) return []
+  const out: AttachmentHit[] = []
+  const seen = new Set<string>()
+  const ftsQuery = escapeFts(q)
+  if (ftsQuery) {
+    try {
+      const rows = d
+        .prepare(
+          `SELECT a.path, a.text FROM attachment_fts f
+           JOIN attachment_text a ON a.rowid = f.rowid
+           WHERE attachment_fts MATCH ? ORDER BY bm25(attachment_fts) LIMIT ?`,
+        )
+        .all(ftsQuery, limit) as Array<{ path: string; text: string }>
+      for (const r of rows) {
+        seen.add(r.path)
+        out.push({ path: r.path, text: r.text, stringScore: 0.45 })
+      }
+    } catch { /* malformed MATCH — LIKE below still runs */ }
+  }
+  if (out.length < limit) {
+    const like = `%${q.replace(/[\\%_]/g, (m) => '\\' + m)}%`
+    const rows = d
+      .prepare(`SELECT path, text FROM attachment_text WHERE text LIKE ? ESCAPE '\\' LIMIT ?`)
+      .all(like, limit) as Array<{ path: string; text: string }>
+    for (const r of rows) {
+      if (seen.has(r.path)) continue
+      out.push({ path: r.path, text: r.text, stringScore: hasCjk(q) ? 0.45 : 0.4 })
+      if (out.length >= limit) break
+    }
+  }
+  return out
 }
 
 export interface NoteSyncMeta {

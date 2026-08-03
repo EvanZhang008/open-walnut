@@ -38,6 +38,7 @@ import {
 } from '../../core/notes-indexer.js'
 import {
   stringSearch,
+  attachmentSearch,
   backlinksForId,
   ambiguousBacklinksForId,
   forwardLinksForId,
@@ -678,7 +679,7 @@ notesV2Router.post('/move', async (req: Request, res: Response, next: NextFuncti
 
 // ─── Search (hybrid) ───────────────────────────────────────────────────────
 
-type MatchType = 'exact' | 'semantic' | 'both'
+type MatchType = 'exact' | 'semantic' | 'both' | 'attachment'
 
 interface SearchResultRow {
   id: string
@@ -890,6 +891,27 @@ notesV2Router.get('/search', async (req: Request, res: Response, next: NextFunct
       }
     } else if (wantSemantic) {
       degraded = 'semantic-unavailable'
+    }
+
+    // Attachment leg: OCR/PDF-extracted text of binary files. Their paths never
+    // collide with note ids (different namespace), so no dedupe against notes.
+    // They rank in tier 1 (real string evidence) at their low 0.40–0.45 band —
+    // above semantic guesses, below any authored-note text match.
+    if (wantString) {
+      try {
+        for (const a of attachmentSearch(q, Math.min(limit, 10))) {
+          const key = `attachment:${a.path}`
+          byId.set(key, {
+            id: key,
+            path: a.path,
+            title: path.basename(a.path),
+            snippet: makeSnippet(a.text, q),
+            matchType: 'attachment',
+            score: 0,
+            stringScore: a.stringScore,
+          })
+        }
+      } catch { /* attachment leg is best-effort */ }
     }
 
     // FROZEN ranking: exact/both NEVER below purely-semantic.
