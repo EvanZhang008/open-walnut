@@ -25628,3 +25628,177 @@ a.file-link:hover {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* --- solid drag ghost (chip-in-hand feedback) ----------------------------------- */
+.cal-move-ghost-solid {
+  --cal-chip-tint: var(--accent);
+  border: none;
+  border-left: 3px solid var(--cal-chip-tint);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--cal-chip-tint) 32%, var(--bg-primary));
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+  padding: 2px 6px;
+  overflow: hidden;
+}
+
+.cal-move-ghost-title {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* month view: floating chip clone at the pointer */
+.cal-drag-cursor-chip {
+  --cal-chip-tint: var(--accent);
+  position: fixed;
+  z-index: 10001;
+  pointer-events: none;
+  max-width: 220px;
+  padding: 3px 8px;
+  border-left: 3px solid var(--cal-chip-tint);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--cal-chip-tint) 28%, var(--bg-primary));
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --- item edit popover (click a chip) ------------------------------------------- */
+.cal-item-popover {
+  position: fixed;
+  z-index: 10000;
+  width: 300px;
+  max-width: 86vw;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.26);
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+
+.cal-item-title {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 14.5px;
+  font-weight: 600;
+}
+
+.cal-item-title-static {
+  border: none;
+  padding: 2px 0;
+  background: transparent;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cal-item-sub {
+  font-size: 11.5px;
+  color: var(--fg-muted);
+}
+
+.cal-item-location {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.cal-item-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cal-item-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cal-item-row input[type='date'],
+.cal-item-row input[type='time'] {
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12.5px;
+}
+
+.cal-item-dash {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.cal-item-allday {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--fg);
+}
+
+.cal-item-error {
+  font-size: 12px;
+  color: var(--error);
+}
+
+.cal-item-footer {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.cal-item-footer button {
+  height: 27px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card-bg);
+  color: var(--fg);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.cal-item-footer button:hover {
+  background: var(--bg-hover);
+}
+
+.cal-item-save {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+  color: #fff !important;
+}
+
+.cal-item-save:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.cal-item-danger {
+  color: var(--error) !important;
+}
+
+.cal-item-open {
+  margin-left: auto;
+}

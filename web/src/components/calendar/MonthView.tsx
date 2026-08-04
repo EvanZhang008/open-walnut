@@ -30,6 +30,8 @@ interface Props {
   onNavigateDay: (day: string) => void;
   /** Right-click on a chip or empty cell → calendar context menu. */
   onContextMenu?: (point: { x: number; y: number }, target: { item?: CalendarItem; seed?: CreateSeed }) => void;
+  /** Click on any chip → the item edit popover (macOS-Calendar-style). */
+  onItemClick?: (item: CalendarItem, el: HTMLElement) => void;
 }
 
 interface ChipDrag {
@@ -143,6 +145,7 @@ export const MonthView = memo(function MonthView({
   onCreate,
   onNavigateDay,
   onContextMenu,
+  onItemClick,
 }: Props) {
   const weeks = useMemo(() => monthGridRange(anchor), [anchor]);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -180,6 +183,9 @@ export const MonthView = memo(function MonthView({
   // (body is locked by useDragGesture's user-select/none + short drags).
   const cellRectsRef = useRef<{ day: string; rect: DOMRect }[]>([]);
   const [preview, setPreview] = useState<{ itemId: string; overDay: string } | null>(null);
+  // Floating chip clone under the cursor — the "in my hand" feedback the cell
+  // highlight alone doesn't give.
+  const [dragPointer, setDragPointer] = useState<{ x: number; y: number; title: string; tint?: string } | null>(null);
 
   const dayAtPoint = useCallback((x: number, y: number): string | null => {
     for (const { day, rect } of cellRectsRef.current) {
@@ -193,6 +199,14 @@ export const MonthView = memo(function MonthView({
       const drag = dragRef.current;
       if (!drag) return;
       if (Math.abs(m.dx) + Math.abs(m.dy) > CLICK_TOLERANCE_PX) drag.moved = true;
+      if (drag.moved) {
+        setDragPointer({
+          x: m.x,
+          y: m.y,
+          title: drag.item.kind === 'event' ? drag.item.event.title : drag.item.task.title,
+          tint: drag.item.kind === 'event' ? drag.item.event.color : undefined,
+        });
+      }
       const overDay = dayAtPoint(m.x, m.y);
       if (overDay !== drag.overDay) {
         drag.overDay = overDay;
@@ -205,6 +219,7 @@ export const MonthView = memo(function MonthView({
       dragRef.current = null;
       justDraggedRef.current = !!drag?.moved;
       setPreview(null);
+      setDragPointer(null);
       onChipDragging(false);
       if (!drag || canceled || !drag.moved || !drag.overDay || drag.overDay === drag.item.day) return;
       // Day-to-day move preserves time-of-day when the value had one.
@@ -231,17 +246,18 @@ export const MonthView = memo(function MonthView({
     [gesture, onChipDragging]
   );
 
-  const handleChipClick = useCallback((item: CalendarItem, _el: HTMLElement) => {
-    // A drag that traveled suppresses its trailing click; a plain click opens
-    // the task detail page in the tasks surface.
-    if (justDraggedRef.current) {
-      justDraggedRef.current = false;
-      return;
-    }
-    if (item.kind !== 'event') {
-      window.open(`/tasks/${item.task.id}`, '_self');
-    }
-  }, []);
+  const handleChipClick = useCallback(
+    (item: CalendarItem, el: HTMLElement) => {
+      // A drag that traveled suppresses its trailing click; a plain click opens
+      // the in-place item popover (page-level).
+      if (justDraggedRef.current) {
+        justDraggedRef.current = false;
+        return;
+      }
+      onItemClick?.(item, el);
+    },
+    [onItemClick]
+  );
 
   const handleEmptyClick = useCallback(
     (day: string, el: HTMLElement) => onCreate({ start: day, anchorEl: el }),
@@ -299,6 +315,20 @@ export const MonthView = memo(function MonthView({
           );
         })}
       </div>
+      {dragPointer &&
+        createPortal(
+          <div
+            className="cal-drag-cursor-chip"
+            style={{
+              left: dragPointer.x + 10,
+              top: dragPointer.y + 12,
+              ...(dragPointer.tint ? ({ '--cal-chip-tint': dragPointer.tint } as React.CSSProperties) : {}),
+            }}
+          >
+            {dragPointer.title}
+          </div>,
+          document.body
+        )}
       {overflowDay &&
         createPortal(
           <>

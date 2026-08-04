@@ -69,6 +69,8 @@ interface Props {
   onCreate: (seed: CreateSeed) => void;
   /** Right-click on a chip or empty slot → calendar context menu. */
   onContextMenu?: (point: { x: number; y: number }, target: { item?: CalendarItem; seed?: CreateSeed }) => void;
+  /** Click on any chip → the item edit popover (macOS-Calendar-style). */
+  onItemClick?: (item: CalendarItem, el: HTMLElement) => void;
 }
 
 interface ChipDrag {
@@ -237,6 +239,7 @@ export const TimeGrid = memo(function TimeGrid({
   onChipDragging,
   onCreate,
   onContextMenu,
+  onItemClick,
 }: Props) {
   const dayList = useMemo(() => {
     const base = days === 7 ? weekRange(anchor) : [anchor];
@@ -329,7 +332,14 @@ export const TimeGrid = memo(function TimeGrid({
   // element under capture). dragRef is nulled in onEnd — before that click —
   // so the "was this a drag?" answer must outlive it.
   const justDraggedRef = useRef(false);
-  const [moveGhost, setMoveGhost] = useState<{ itemId: string; day: string; startMin: number | null; lengthMin: number } | null>(null);
+  const [moveGhost, setMoveGhost] = useState<{
+    itemId: string;
+    day: string;
+    startMin: number | null;
+    lengthMin: number;
+    title: string;
+    tint?: string;
+  } | null>(null);
 
   const moveGesture = useDragGesture({
     onMove: (m) => {
@@ -349,6 +359,8 @@ export const TimeGrid = memo(function TimeGrid({
         day: overDay,
         startMin: previewMin,
         lengthMin: drag.item.endMin - drag.item.startMin,
+        title: drag.item.kind === 'event' ? drag.item.event.title : drag.item.task.title,
+        tint: drag.item.kind === 'event' ? drag.item.event.color : undefined,
       });
     },
     onEnd: ({ canceled }) => {
@@ -378,13 +390,16 @@ export const TimeGrid = memo(function TimeGrid({
     [moveGesture, minAtY, onChipDragging, onResizeEvent, publishMetrics]
   );
 
-  const handleChipClick = useCallback((item: CalendarItem, _el: HTMLElement) => {
-    if (justDraggedRef.current) {
-      justDraggedRef.current = false;
-      return;
-    }
-    if (item.kind !== 'event') window.open(`/tasks/${item.task.id}`, '_self');
-  }, []);
+  const handleChipClick = useCallback(
+    (item: CalendarItem, el: HTMLElement) => {
+      if (justDraggedRef.current) {
+        justDraggedRef.current = false;
+        return;
+      }
+      onItemClick?.(item, el);
+    },
+    [onItemClick]
+  );
 
   // ---- event resize gesture (bottom edge; events only) -------------------------
   const resizeRef = useRef<{ item: CalendarItem; endMin: number } | null>(null);
@@ -580,16 +595,19 @@ export const TimeGrid = memo(function TimeGrid({
             </GridOverlay>
           )}
 
-          {/* chip-move ghost */}
+          {/* chip-move ghost — a solid chip look-alike (title + live time), so
+              the drag reads as "the chip is in my hand", not a hollow outline */}
           {moveGhost && moveGhost.startMin !== null && (
             <GridOverlay day={moveGhost.day} dayList={dayList}>
               <div
-                className="cal-move-ghost"
+                className="cal-move-ghost cal-move-ghost-solid"
                 style={{
                   top: (moveGhost.startMin / SLOT_MINUTES) * SLOT_PX,
                   height: Math.max((moveGhost.lengthMin / SLOT_MINUTES) * SLOT_PX, MIN_EVENT_PX),
+                  ...(moveGhost.tint ? ({ '--cal-chip-tint': moveGhost.tint } as React.CSSProperties) : {}),
                 }}
               >
+                <span className="cal-move-ghost-title">{moveGhost.title}</span>
                 <span className="cal-drop-time">{minsToLabel(moveGhost.startMin)}</span>
               </div>
             </GridOverlay>

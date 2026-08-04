@@ -141,6 +141,9 @@ test.describe('Calendar view', () => {
     await page.mouse.move(box.x + box.width / 2, box.y + 4)
     await page.mouse.down()
     await page.mouse.move(box.x + box.width / 2, box.y + 4 + 96, { steps: 10 })
+    // Mid-drag: the solid ghost tracks the pointer and carries the title
+    await expect(page.locator('.cal-move-ghost-solid')).toBeVisible()
+    await expect(page.locator('.cal-move-ghost-solid .cal-move-ghost-title')).toContainText('CalChipMove')
     await page.mouse.up()
 
     await expect
@@ -384,6 +387,67 @@ test.describe('Calendar view', () => {
     await expect(form).toBeVisible()
     await expect(form.locator('.cal-event-form-when')).toContainText('22:00')
     await page.keyboard.press('Escape')
+  })
+
+  test('clicking a task chip opens the item popover (not the task page) and can retime it', async ({ page }) => {
+    const today = localDay(0)
+    const task = await createTaskViaApi('CalItemPopover', { start_date: `${today}T04:00:00` })
+    await openCalendar(page)
+
+    const chip = page.locator(`.cal-chip[data-item-id="task-start:${task.id}"]`)
+    await chip.scrollIntoViewIfNeeded()
+    await chip.click()
+
+    // Still on /calendar — the click opens the popover instead of navigating
+    await expect(page).toHaveURL(/\/calendar/)
+    const popover = page.locator('[data-testid="cal-item-popover"]')
+    await expect(popover).toBeVisible()
+    await expect(popover).toContainText('CalItemPopover')
+    await expect(popover.locator('button:has-text("Open task")')).toBeVisible()
+
+    // Change the time to 06:30 and save
+    await popover.locator('input[type="time"]').fill('06:30')
+    await popover.locator('.cal-item-save').click()
+    await expect
+      .poll(async () => (await getTaskViaApi(task.id)).start_date, { timeout: 5000 })
+      .toBe(`${today}T06:30:00`)
+  })
+
+  test('clicking an event chip opens an editable popover; saving PATCHes the event', async ({ page }) => {
+    // Own throwaway event — parallel specs must not see this one move
+    const today = localDay(0)
+    const created = await fetch(`${API}/api/calendar/events`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        calendarId: 'cal-home',
+        title: `CalEvtPopover ${Date.now()}`,
+        start: `${today}T20:00:00`,
+        end: `${today}T20:30:00`,
+      }),
+    })
+    const { event } = (await created.json()) as { event: { id: string } }
+
+    await openCalendar(page)
+    const chip = page.locator(`.cal-day-col .cal-chip[data-item-id="event:${event.id}"]`)
+    await chip.scrollIntoViewIfNeeded()
+    await chip.click()
+
+    const popover = page.locator('[data-testid="cal-item-popover"]')
+    await expect(popover).toBeVisible()
+    await expect(popover).toContainText('Home · iCloud')
+
+    // Rename + retime end to 21:15
+    await popover.locator('.cal-item-title').fill('Renamed by popover')
+    await popover.locator('input[type="time"]').nth(1).fill('21:15')
+    await popover.locator('.cal-item-save').click()
+
+    await expect
+      .poll(async () => (await getEventViaApi(event.id))?.end, { timeout: 5000 })
+      .toBe(`${today}T21:15:00`)
+    const evAfter = await fetch(`${API}/api/calendar/events?from=${today}&to=${today}`)
+    const body = (await evAfter.json()) as { events: Array<{ id: string; title: string }> }
+    expect(body.events.find((e) => e.id === event.id)?.title).toBe('Renamed by popover')
   })
 
   test('right-click on a writable event chip offers Delete event', async ({ page }) => {

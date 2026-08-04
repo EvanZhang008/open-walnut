@@ -38,6 +38,7 @@ import { TimeGrid, type DropPreview, type GridMetrics } from '@/components/calen
 import { QuickCreatePopover, type CreateSeed } from '@/components/calendar/QuickCreatePopover';
 import { CalendarsPopover } from '@/components/calendar/CalendarsPopover';
 import { CalendarContextMenu, type CalendarContextTarget } from '@/components/calendar/CalendarContextMenu';
+import { CalendarItemPopover } from '@/components/calendar/CalendarItemPopover';
 
 const VALID_VIEWS = new Set<CalendarViewKind>(['day', 'week', 'month']);
 const LS_RAIL_KEY = 'open-walnut-calendar-rail-open';
@@ -100,9 +101,10 @@ export function CalendarPage() {
   // ----- quick create -----------------------------------------------------
   const [createSeed, setCreateSeed] = useState<CreateSeed | null>(null);
 
-  // ----- calendars visibility popover + right-click menu -------------------
+  // ----- calendars visibility popover + right-click menu + item popover -----
   const [calsAnchor, setCalsAnchor] = useState<HTMLElement | null>(null);
   const [ctxTarget, setCtxTarget] = useState<CalendarContextTarget | null>(null);
+  const [openItem, setOpenItem] = useState<{ item: CalendarItem; anchorEl: HTMLElement } | null>(null);
 
   // ----- dnd-kit: rail task → calendar ------------------------------------
   // Stable sensor options (inline objects per render destabilize dnd-kit's
@@ -253,6 +255,21 @@ export function CalendarPage() {
     [calendar]
   );
 
+  const openItemPopover = useCallback(
+    (item: CalendarItem, anchorEl: HTMLElement) => setOpenItem({ item, anchorEl }),
+    []
+  );
+
+  /** Item-popover save for tasks: newWhen '' clears the chip's date. */
+  const saveTaskWhen = useCallback(
+    (item: CalendarItem, newWhen: string) => {
+      if (item.kind === 'event') return;
+      if (item.kind === 'task-due') update(item.task.id, { due_date: newWhen });
+      else update(item.task.id, { start_date: newWhen });
+    },
+    [update]
+  );
+
   return (
     <div className="cal-page" data-view={view}>
       <DndContext
@@ -285,6 +302,7 @@ export function CalendarPage() {
                 onCreate={openCreate}
                 onNavigateDay={(d) => setParam({ view: 'day', d })}
                 onContextMenu={openContextMenu}
+                onItemClick={openItemPopover}
               />
             ) : (
               <TimeGrid
@@ -298,6 +316,7 @@ export function CalendarPage() {
                 onChipDragging={setChipDragging}
                 onCreate={openCreate}
                 onContextMenu={openContextMenu}
+                onItemClick={openItemPopover}
               />
             )}
           </div>
@@ -323,6 +342,16 @@ export function CalendarPage() {
           onDeleteEvent={deleteEventItem}
           onCreate={(seed, tab) => setCreateSeed({ ...seed, tab })}
           canCreateEvent={canCreateEvent}
+        />
+      )}
+      {openItem && (
+        <CalendarItemPopover
+          item={openItem.item}
+          anchorEl={openItem.anchorEl}
+          onClose={() => setOpenItem(null)}
+          onSaveEvent={(ev, patch) => calendar.moveEvent(ev.id, patch)}
+          onDeleteEvent={(ev) => calendar.removeEvent(ev.id)}
+          onSaveTaskWhen={saveTaskWhen}
         />
       )}
     </div>

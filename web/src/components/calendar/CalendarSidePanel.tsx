@@ -16,6 +16,7 @@ import { tasksToCalendarItems, useFrozenWhile, type CalendarItem } from './calen
 import { TimeGrid, type GridMetrics } from './TimeGrid';
 import { QuickCreatePopover, type CreateSeed } from './QuickCreatePopover';
 import { CalendarContextMenu, type CalendarContextTarget } from './CalendarContextMenu';
+import { CalendarItemPopover } from './CalendarItemPopover';
 
 interface Props {
   onClose: () => void;
@@ -29,6 +30,7 @@ export function CalendarSidePanel({ onClose }: Props) {
   const [chipDragging, setChipDragging] = useState(false);
   const [createSeed, setCreateSeed] = useState<CreateSeed | null>(null);
   const [ctxTarget, setCtxTarget] = useState<CalendarContextTarget | null>(null);
+  const [openItem, setOpenItem] = useState<{ item: CalendarItem; anchorEl: HTMLElement } | null>(null);
   const metricsRef = useRef<GridMetrics | null>(null);
 
   const liveItems = useMemo(() => tasksToCalendarItems(tasks, day, day), [tasks, day]);
@@ -48,6 +50,15 @@ export function CalendarSidePanel({ onClose }: Props) {
       if (item.kind === 'event') return;
       if (item.kind === 'task-due') update(item.task.id, { due_date: '' });
       else update(item.task.id, { start_date: '' });
+    },
+    [update]
+  );
+
+  const saveTaskWhen = useCallback(
+    (item: CalendarItem, newWhen: string) => {
+      if (item.kind === 'event') return;
+      if (item.kind === 'task-due') update(item.task.id, { due_date: newWhen });
+      else update(item.task.id, { start_date: newWhen });
     },
     [update]
   );
@@ -91,6 +102,7 @@ export function CalendarSidePanel({ onClose }: Props) {
             onChipDragging={setChipDragging}
             onCreate={setCreateSeed}
             onContextMenu={(point, target) => setCtxTarget({ point, ...target })}
+            onItemClick={(item, anchorEl) => setOpenItem({ item, anchorEl })}
           />
         </DndContext>
       </div>
@@ -103,6 +115,14 @@ export function CalendarSidePanel({ onClose }: Props) {
           onClose={() => setCtxTarget(null)}
           onUnscheduleTask={unscheduleTask}
           onCreate={(seed) => setCreateSeed(seed)}
+        />
+      )}
+      {openItem && (
+        <CalendarItemPopover
+          item={openItem.item}
+          anchorEl={openItem.anchorEl}
+          onClose={() => setOpenItem(null)}
+          onSaveTaskWhen={saveTaskWhen}
         />
       )}
     </div>
