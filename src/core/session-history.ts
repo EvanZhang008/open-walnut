@@ -30,7 +30,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { findImagePaths, findRelativeImageNames } from '../providers/session-io.js';
 import { REMOTE_IMAGES_DIR } from '../constants.js';
-import { backfillMirrorSidecar } from './remote-image-mirror.js';
+import { backfillMirrorSidecar, resolveSessionMirrorPath } from './remote-image-mirror.js';
 
 /** Cached homedir — avoids repeated syscall on each history request */
 const LOCAL_HOME = os.homedir();
@@ -2230,7 +2230,10 @@ export async function rewriteHistoryRemoteImages(
 
       let localPath = cache.get(remotePath)
       if (!localPath) {
-        localPath = path.join(REMOTE_IMAGES_DIR, sessionId, path.basename(remotePath))
+        // Hash-keyed slot (falls back to a legacy bare-basename mirror only when
+        // its sidecar proves the same origin) — two dirs' same-named chart.png
+        // must not share one slot.
+        localPath = resolveSessionMirrorPath(sessionId, remotePath)
         cache.set(remotePath, localPath)
 
         if (!fs.existsSync(localPath)) {
@@ -2260,7 +2263,10 @@ export async function rewriteHistoryRemoteImages(
 
         let localPath = cache.get(`rel:${relName}`)
         if (!localPath) {
-          localPath = path.join(REMOTE_IMAGES_DIR, sessionId, basename)
+          // Slot keyed by the cwd-resolved path (deterministic even though the
+          // download races several candidates); any candidate's sidecar may
+          // claim a legacy bare-basename mirror.
+          localPath = resolveSessionMirrorPath(sessionId, cwdPath, candidates)
           cache.set(`rel:${relName}`, localPath)
 
           if (!fs.existsSync(localPath)) {

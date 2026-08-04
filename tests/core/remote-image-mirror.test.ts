@@ -28,6 +28,8 @@ import {
   revalidateMirror,
   downloadToMirror,
   isMirrorPath,
+  sessionMirrorPath,
+  resolveSessionMirrorPath,
 } from '../../src/core/remote-image-mirror.js'
 
 const mirrorPath = () => path.join(REMOTE_IMAGES_DIR, 'sess-1', `chart-${Math.random().toString(36).slice(2)}.png`)
@@ -137,6 +139,64 @@ describe('backfillMirrorSidecar', () => {
     seedMirror(p, 'x', { mtimeMs: 42, size: 1 })
     backfillMirrorSidecar(p, 'otherhost', '/other/path.png')
     expect(await readMirrorSidecar(p)).toMatchObject({ host: 'remotehost', remoteMtimeMs: 42 })
+  })
+})
+
+describe('sessionMirrorPath / resolveSessionMirrorPath (basename-collision fix)', () => {
+  it('gives two same-named files from different dirs distinct slots', () => {
+    const a = sessionMirrorPath('sess-1', '/tmp/a/chart.png')
+    const b = sessionMirrorPath('sess-1', '/workspace/b/chart.png')
+    expect(a).not.toBe(b)
+    expect(path.basename(a)).toMatch(/chart\.png$/)
+  })
+
+  it('prefers an existing hash slot', () => {
+    const hashed = sessionMirrorPath('sess-r', '/tmp/x/img.png')
+    fs.mkdirSync(path.dirname(hashed), { recursive: true })
+    fs.writeFileSync(hashed, 'hashed-bytes')
+    expect(resolveSessionMirrorPath('sess-r', '/tmp/x/img.png')).toBe(hashed)
+  })
+
+  it('reuses a legacy bare-basename mirror whose sidecar proves the same origin', () => {
+    const legacy = path.join(REMOTE_IMAGES_DIR, 'sess-l', 'img.png')
+    fs.mkdirSync(path.dirname(legacy), { recursive: true })
+    fs.writeFileSync(legacy, 'legacy-bytes')
+    writeMirrorSidecar(legacy, {
+      host: 'remotehost', remotePath: '/tmp/x/img.png', remoteMtimeMs: 1, remoteSize: 12,
+    })
+    expect(resolveSessionMirrorPath('sess-l', '/tmp/x/img.png')).toBe(legacy)
+  })
+
+  it('does NOT reuse a legacy mirror claimed by a DIFFERENT origin (the collision)', () => {
+    const legacy = path.join(REMOTE_IMAGES_DIR, 'sess-c', 'chart.png')
+    fs.mkdirSync(path.dirname(legacy), { recursive: true })
+    fs.writeFileSync(legacy, 'first-dirs-bytes')
+    writeMirrorSidecar(legacy, {
+      host: 'remotehost', remotePath: '/tmp/a/chart.png', remoteMtimeMs: 1, remoteSize: 16,
+    })
+    const resolved = resolveSessionMirrorPath('sess-c', '/workspace/b/chart.png')
+    expect(resolved).toBe(sessionMirrorPath('sess-c', '/workspace/b/chart.png'))
+    expect(resolved).not.toBe(legacy)
+  })
+
+  it('reuses a sidecar-less legacy mirror (pre-sidecar era; backfill self-heals it)', () => {
+    const legacy = path.join(REMOTE_IMAGES_DIR, 'sess-p', 'old.png')
+    fs.mkdirSync(path.dirname(legacy), { recursive: true })
+    fs.writeFileSync(legacy, 'pre-sidecar-bytes')
+    expect(resolveSessionMirrorPath('sess-p', '/tmp/old.png')).toBe(legacy)
+  })
+
+  it('accepts any origin from acceptOrigins (relative-name candidate race)', () => {
+    const legacy = path.join(REMOTE_IMAGES_DIR, 'sess-o', 'shot.png')
+    fs.mkdirSync(path.dirname(legacy), { recursive: true })
+    fs.writeFileSync(legacy, 'won-by-tmp-candidate')
+    writeMirrorSidecar(legacy, {
+      host: 'remotehost', remotePath: '/tmp/shot.png', remoteMtimeMs: 1, remoteSize: 20,
+    })
+    const resolved = resolveSessionMirrorPath('sess-o', '/workspace/shot.png', [
+      '/workspace/shot.png', '/tmp/shot.png',
+    ])
+    expect(resolved).toBe(legacy)
   })
 })
 

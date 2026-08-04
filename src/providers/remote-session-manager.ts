@@ -18,7 +18,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { REMOTE_IMAGES_DIR } from '../constants.js'
-import { writeMirrorSidecar, backfillMirrorSidecar } from '../core/remote-image-mirror.js'
+import { writeMirrorSidecar, backfillMirrorSidecar, resolveSessionMirrorPath } from '../core/remote-image-mirror.js'
 import { log } from '../logging/index.js'
 import { getDaemonConnection, getDirectDaemonConnection, DaemonConnection, type DaemonEvent, type DaemonTaskState, type DaemonGetStateResult } from './daemon-connection.js'
 import {
@@ -879,7 +879,10 @@ export class RemoteSessionManager implements SessionManager {
 
       let localPath = this._imageCache.get(remotePath)
       if (!localPath) {
-        localPath = path.join(REMOTE_IMAGES_DIR, sessionId, path.basename(remotePath))
+        // Hash-keyed slot (falls back to a legacy bare-basename mirror only when
+        // its sidecar proves the same origin) — two dirs' same-named chart.png
+        // must not share one slot.
+        localPath = resolveSessionMirrorPath(sessionId, remotePath)
         this._imageCache.set(remotePath, localPath)
 
         if (!fs.existsSync(localPath)) {
@@ -897,14 +900,15 @@ export class RemoteSessionManager implements SessionManager {
     if (cwd) {
       const relNames = findRelativeImageNames(rewritten, findOpts)
       for (const relName of relNames) {
-        const basename = path.basename(relName)
         const cwdPath = `${cwd.replace(/\/$/, '')}/${relName}`
 
         if (this._imageCache.has(cwdPath)) continue
 
         let localPath = this._imageCache.get(`rel:${relName}`)
         if (!localPath) {
-          localPath = path.join(REMOTE_IMAGES_DIR, sessionId, basename)
+          // Slot keyed by the cwd-resolved source path — see the absolute-path
+          // branch above for why bare basenames collide.
+          localPath = resolveSessionMirrorPath(sessionId, cwdPath)
           this._imageCache.set(`rel:${relName}`, localPath)
 
           if (!fs.existsSync(localPath)) {

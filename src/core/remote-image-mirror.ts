@@ -16,6 +16,7 @@
 import fsp from 'node:fs/promises'
 import fs from 'node:fs'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import { REMOTE_IMAGES_DIR } from '../constants.js'
 import { log } from '../logging/index.js'
 
@@ -39,6 +40,57 @@ const lastRevalidatedAt = new Map<string, number>()
 
 export function sidecarPathFor(mirrorPath: string): string {
   return mirrorPath + SIDECAR_SUFFIX
+}
+
+/**
+ * Mirror slot for a session-referenced remote image — hash-keyed by the FULL
+ * source path (same scheme as media-v1's cachePathFor), NOT the bare basename.
+ * A session can reference /tmp/a/chart.png and /workspace/b/chart.png in one
+ * transcript; a basename key makes the second silently serve the first's bytes
+ * (and its sidecar then revalidates against the WRONG remote source forever).
+ *
+ * Bare-basename legacy slots (pre-hash mirrors + the EKS-MCP "identical path on
+ * both hosts" convention in local-image.ts) still resolve — this is only for
+ * NEW slots minted by the rewrite paths.
+ */
+export function sessionMirrorPath(sessionId: string, remotePath: string): string {
+  const hash = crypto.createHash('sha256').update(remotePath).digest('hex').slice(0, 16)
+  return path.join(REMOTE_IMAGES_DIR, sessionId, `${hash}-${path.basename(remotePath)}`)
+}
+
+/**
+ * Resolve the mirror slot for a session image. Prefers the hash-keyed slot; a
+ * legacy bare-basename mirror is reused only when it's compatible:
+ *
+ * - sidecar names an accepted origin → same source, reuse;
+ * - no sidecar (pre-sidecar mirror) → reuse; the caller backfills one with
+ *   size -1, which makes the next revalidation re-download from the claimed
+ *   origin — so even a mis-attributed legacy file converges to correct bytes;
+ * - sidecar names a DIFFERENT origin → proven basename collision (the exact
+ *   bug this scheme replaces) → mint the hash slot instead.
+ *
+ * `acceptOrigins` covers the relative-name rewrite, where the download races
+ * several candidate paths and the sidecar records whichever candidate won.
+ */
+export function resolveSessionMirrorPath(
+  sessionId: string,
+  remotePath: string,
+  acceptOrigins?: string[],
+): string {
+  const hashed = sessionMirrorPath(sessionId, remotePath)
+  if (fs.existsSync(hashed)) return hashed
+  const legacy = path.join(REMOTE_IMAGES_DIR, sessionId, path.basename(remotePath))
+  if (fs.existsSync(legacy)) {
+    try {
+      const sc = JSON.parse(fs.readFileSync(sidecarPathFor(legacy), 'utf-8')) as Partial<MirrorSidecar>
+      const origins = acceptOrigins ?? [remotePath]
+      if (typeof sc.remotePath === 'string' && origins.includes(sc.remotePath)) return legacy
+      // different origin recorded — collision; fall through to the hash slot
+    } catch {
+      return legacy // pre-sidecar mirror — reuse; caller's backfill self-heals it
+    }
+  }
+  return hashed
 }
 
 /** True when a path lives inside the remote-images mirror tree. */

@@ -26,6 +26,7 @@ vi.mock('../../src/constants.js', () => createMockConstants())
 
 import { findImagePaths, findRemoteImagePaths, findRelativeImageNames } from '../../src/providers/session-io.js'
 import { RemoteSessionManager } from '../../src/providers/remote-session-manager.js'
+import { sessionMirrorPath } from '../../src/core/remote-image-mirror.js'
 import { WALNUT_HOME, SESSION_STREAMS_DIR, REMOTE_IMAGES_DIR } from '../../src/constants.js'
 import type { SshTarget } from '../../src/providers/session-io.js'
 
@@ -114,7 +115,7 @@ describe('RemoteSessionManager download (daemon fs.read)', () => {
     expect(readPaths(conn)).toEqual(['/tmp/open-walnut-images/abc/screenshot.png'])
     expect(conn.send.mock.calls[0][1]).toMatchObject({ encoding: 'base64' })
 
-    const localPath = path.join(REMOTE_IMAGES_DIR, 'session-abc', 'screenshot.png')
+    const localPath = sessionMirrorPath('session-abc', '/tmp/open-walnut-images/abc/screenshot.png')
     expect(fs.readFileSync(localPath, 'utf-8')).toBe('remote-png-bytes')
   })
 
@@ -139,10 +140,10 @@ describe('RemoteSessionManager download (daemon fs.read)', () => {
     // downstream events never leak a remote path, and /api/local-image
     // re-fetches on demand if the background read lost the race.
     const result = mgr.processInbound('See /tmp/broken.png', 'session-fail')
-    expect(result).toContain(path.join(REMOTE_IMAGES_DIR, 'session-fail', 'broken.png'))
+    expect(result).toContain(sessionMirrorPath('session-fail', '/tmp/broken.png'))
 
     await expect(settle()).resolves.toBeUndefined()
-    expect(fs.existsSync(path.join(REMOTE_IMAGES_DIR, 'session-fail', 'broken.png'))).toBe(false)
+    expect(fs.existsSync(sessionMirrorPath('session-fail', '/tmp/broken.png'))).toBe(false)
   })
 
   it('writes nothing when the daemon replies ok:false', async () => {
@@ -152,7 +153,7 @@ describe('RemoteSessionManager download (daemon fs.read)', () => {
     mgr.processInbound('See /tmp/missing.png', 'session-notok')
     await settle()
 
-    expect(fs.existsSync(path.join(REMOTE_IMAGES_DIR, 'session-notok', 'missing.png'))).toBe(false)
+    expect(fs.existsSync(sessionMirrorPath('session-notok', '/tmp/missing.png'))).toBe(false)
   })
 })
 
@@ -166,7 +167,7 @@ describe('RemoteSessionManager.processInbound (remote → local path rewrite)', 
       'session-abc',
     )
 
-    expect(result).toContain(path.join('images', 'remote', 'session-abc', 'screenshot.png'))
+    expect(result).toContain(sessionMirrorPath('session-abc', '/tmp/open-walnut-images/abc123/screenshot.png'))
     expect(result).not.toContain('/tmp/open-walnut-images/')
   })
 
@@ -202,8 +203,8 @@ describe('RemoteSessionManager.processInbound (remote → local path rewrite)', 
 
     expect(result).not.toContain('/tmp/a.png')
     expect(result).not.toContain('/tmp/b.jpg')
-    expect(result).toContain(path.join('images', 'remote', 'session-multi', 'a.png'))
-    expect(result).toContain(path.join('images', 'remote', 'session-multi', 'b.jpg'))
+    expect(result).toContain(sessionMirrorPath('session-multi', '/tmp/a.png'))
+    expect(result).toContain(sessionMirrorPath('session-multi', '/tmp/b.jpg'))
     expect(mgr.imageCache.size).toBe(2)
   })
 
@@ -232,7 +233,7 @@ describe('RemoteSessionManager.processInbound (remote → local path rewrite)', 
     )
 
     expect(result).not.toContain('/workplace/user/Screenshot 2026-02-17 at 11.12.47 PM.png')
-    expect(result).toContain(path.join('images', 'remote', 'sess-space', 'Screenshot 2026-02-17 at 11.12.47 PM.png'))
+    expect(result).toContain(sessionMirrorPath('sess-space', '/workplace/user/Screenshot 2026-02-17 at 11.12.47 PM.png'))
     expect(mgr.imageCache.size).toBe(1)
   })
 
@@ -243,7 +244,7 @@ describe('RemoteSessionManager.processInbound (remote → local path rewrite)', 
     const result = mgr.processInbound('File at "/tmp/open-walnut-images/abc/My Screenshot.png" saved', 'sess-dq')
 
     expect(result).not.toContain('/tmp/open-walnut-images/abc/My Screenshot.png')
-    expect(result).toContain(path.join('images', 'remote', 'sess-dq', 'My Screenshot.png'))
+    expect(result).toContain(sessionMirrorPath('sess-dq', '/tmp/open-walnut-images/abc/My Screenshot.png'))
   })
 
   it('leaves already-local cache paths alone (no download loop)', async () => {
@@ -394,7 +395,7 @@ describe('processInbound streaming mode (split-path corruption repro)', () => {
     injectConn(mgr, makeConn())
 
     const out = mgr.processInbound('saved /tmp/full-img.png just now', 'sess-int', undefined, { streaming: true })
-    expect(out).toContain(path.join(REMOTE_IMAGES_DIR, 'sess-int', 'full-img.png'))
+    expect(out).toContain(sessionMirrorPath('sess-int', '/tmp/full-img.png'))
   })
 
   it('non-streaming call (turn-end / history) still rewrites edge paths', () => {
@@ -402,7 +403,7 @@ describe('processInbound streaming mode (split-path corruption repro)', () => {
     injectConn(mgr, makeConn())
 
     const out = mgr.processInbound('saved to /tmp/edge-img.png', 'sess-edge')
-    expect(out).toContain(path.join(REMOTE_IMAGES_DIR, 'sess-edge', 'edge-img.png'))
+    expect(out).toContain(sessionMirrorPath('sess-edge', '/tmp/edge-img.png'))
   })
 })
 
@@ -419,7 +420,7 @@ describe('mirror sidecars (stale-image revalidation bookkeeping)', () => {
     mgr.processInbound('see /tmp/chart.png', 'sess-sc')
     await settle()
 
-    const mirror = path.join(REMOTE_IMAGES_DIR, 'sess-sc', 'chart.png')
+    const mirror = sessionMirrorPath('sess-sc', '/tmp/chart.png')
     const sidecar = JSON.parse(fs.readFileSync(mirror + '.src.json', 'utf-8'))
     expect(sidecar).toMatchObject({
       host: 'remotehost',
