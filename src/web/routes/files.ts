@@ -158,8 +158,17 @@ filesRouter.get('/resolve-path', async (req: Request, res: Response, next: NextF
         res.json({ path: fallback, resolved: false })
         return
       }
+      // Total time budget across the walk-up stats + the downward find: the
+      // loop is up to 2 serial RPCs per ancestor level (~18 on a deep path),
+      // and per-RPC timeouts alone don't bound the SUM. Expiring falls back to
+      // the naive cwd-joined path — a click still does something.
+      const resolveDeadline = Date.now() + 10_000
       let remoteRepoRoot: string | null = null
       for (const base of bases) {
+        if (Date.now() >= resolveDeadline) {
+          res.json({ path: fallback, resolved: false })
+          return
+        }
         const candidate = path.posix.join(base, cleanRel)
         const st = await conn.send('fs.stat', { path: candidate })
         if (st.ok && st.exists) {
@@ -169,6 +178,10 @@ filesRouter.get('/resolve-path', async (req: Request, res: Response, next: NextF
         // Stop at the repo root (one .git up), remember it for downward search.
         const git = await conn.send('fs.stat', { path: path.posix.join(base, '.git') })
         if (git.ok && git.exists) { remoteRepoRoot = base; break }
+      }
+      if (Date.now() >= resolveDeadline) {
+        res.json({ path: fallback, resolved: false })
+        return
       }
       // Downward: one fs.find RPC by basename under the repo root, then keep the
       // first hit whose full path ends with the requested rel (server-side walk

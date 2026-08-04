@@ -20,7 +20,7 @@ import { CLOUD_MODE, LOG_DIR } from '../../constants.js';
 import { redactSensitiveText } from '../../logging/index.js';
 import { redactConfig } from '../config-redact.js';
 import { getVersion } from '../version.js';
-import { recentLogFiles, lineTimeMs, tailFile } from './bundle.js';
+import { recentLogFiles, lineTimeMs, tailFile, grepFileLines } from './bundle.js';
 
 const DEFAULT_WINDOW_MINS = 30;
 /** Caps per section — keep the whole artifact pasteable. */
@@ -70,15 +70,15 @@ export async function buildBugReportText(opts?: BugReportOpts): Promise<string> 
     await add('system health', () => systemHealthSection(opts?.systemHealth));
     await add('process health', () => processHealthSection());
     await add('config (secrets masked)', () => configSection());
-    await add('recent server log', () =>
-      capLines(scanDatedLogs(recent, cutoffMs, () => true), SERVER_LOG_MAX_LINES, SERVER_LOG_MAX_BYTES));
-    await add('recent warnings/errors', () =>
+    await add('recent server log', async () =>
+      capLines(await scanDatedLogs(recent, cutoffMs, () => true), SERVER_LOG_MAX_LINES, SERVER_LOG_MAX_BYTES));
+    await add('recent warnings/errors', async () =>
       capLines(
-        scanDatedLogs(recent, cutoffMs, l => l.includes('"level":"warn"') || l.includes('"level":"error"')),
+        await scanDatedLogs(recent, cutoffMs, l => l.includes('"level":"warn"') || l.includes('"level":"error"')),
         FILTERED_MAX_LINES,
       ));
-    await add('browser console (forwarded)', () =>
-      capLines(scanDatedLogs(recent, cutoffMs, l => l.includes('"subsystem":"browser"')), FILTERED_MAX_LINES));
+    await add('browser console (forwarded)', async () =>
+      capLines(await scanDatedLogs(recent, cutoffMs, l => l.includes('"subsystem":"browser"')), FILTERED_MAX_LINES));
     await add('ios client logs (tail)', () => iosLogsSection());
     await add('recent incidents', () => incidentsSection());
   } catch (err) {
@@ -232,22 +232,18 @@ async function incidentsSection(): Promise<string> {
 
 // ── log scanning (grepDatedLogs without the sessionId filter) ──
 
-function scanDatedLogs(files: string[], cutoffMs: number, keep: (line: string) => boolean): string {
+// Streamed (grepFileLines) — the dated logs run 40-60MB and a readFileSync
+// here froze the event loop (and every in-flight request) for the whole read.
+async function scanDatedLogs(files: string[], cutoffMs: number, keep: (line: string) => boolean): Promise<string> {
   const out: string[] = [];
   for (const file of files) {
-    let content: string;
-    try {
-      content = fs.readFileSync(file, 'utf-8');
-    } catch {
-      continue;
-    }
-    for (const line of content.split('\n')) {
-      if (line.length === 0 || !keep(line)) continue;
+    const hits = await grepFileLines(file, (line) => {
+      if (line.length === 0 || !keep(line)) return false;
       // A line whose time we can't parse is KEPT (don't drop evidence).
       const t = lineTimeMs(line);
-      if (t !== null && t < cutoffMs) continue;
-      out.push(line);
-    }
+      return !(t !== null && t < cutoffMs);
+    });
+    out.push(...hits);
   }
   return out.join('\n');
 }

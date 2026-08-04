@@ -15,8 +15,33 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import readline from 'node:readline';
 import { CLAUDE_HOME, LOG_DIR, SESSION_STREAMS_DIR } from '../../constants.js';
 import { log } from '../../logging/index.js';
+
+/**
+ * Stream a file line-by-line, collecting the lines `keep` accepts.
+ * The dated server logs run 40-60MB by end of day; the old readFileSync here
+ * blocked the WHOLE event loop for the entire read+split (every in-flight HTTP
+ * request stalled, not just this one). Streaming yields between chunks, so a
+ * bundle capture is now invisible to concurrent requests. Missing/unreadable
+ * file → empty array, matching the old catch-and-skip semantics.
+ */
+export async function grepFileLines(file: string, keep: (line: string) => boolean): Promise<string[]> {
+  const out: string[] = [];
+  try {
+    const rl = readline.createInterface({
+      input: fs.createReadStream(file, { encoding: 'utf-8' }),
+      crlfDelay: Infinity,
+    });
+    for await (const line of rl) {
+      if (keep(line)) out.push(line);
+    }
+  } catch {
+    return out; // partial results are fine — bundle capture is best-effort
+  }
+  return out;
+}
 
 /** Default look-back window for server/turn log lines. */
 const DEFAULT_WINDOW_MINS = 60;
@@ -81,7 +106,7 @@ export async function captureBundle(
     //    active across UTC-midnight is split over two files — scan both.)
     writeArtifact(
       'server.log.txt',
-      grepDatedLogs(recent, sessionId, cutoffMs, () => true),
+      await grepDatedLogs(recent, sessionId, cutoffMs, () => true),
       `server.log.txt: no lines mention ${sessionId} in the last ${windowMins}min (scanned ${recent.length} dated logs)`,
     );
 
@@ -96,12 +121,12 @@ export async function captureBundle(
     );
 
     // 4. daemon.log.txt — sid-mentioning lines across every daemon-d-*.log.
-    writeArtifact('daemon.log.txt', captureDaemonLogs(sessionId), `daemon.log.txt: no daemon-d-*.log mentions ${sessionId}`);
+    writeArtifact('daemon.log.txt', await captureDaemonLogs(sessionId), `daemon.log.txt: no daemon-d-*.log mentions ${sessionId}`);
 
     // 5. turn-events.txt — the wide `obs` "turn" records for this sid.
     writeArtifact(
       'turn-events.txt',
-      grepDatedLogs(recent, sessionId, cutoffMs, isObsTurnLine),
+      await grepDatedLogs(recent, sessionId, cutoffMs, isObsTurnLine),
       `turn-events.txt: no obs turn events for ${sessionId} in the last ${windowMins}min`,
     );
 
@@ -186,27 +211,21 @@ function safeMtime(file: string): number {
  * we can't parse is KEPT (don't drop evidence over a parse miss); a line older
  * than the cutoff is dropped. Returns them oldest-first across files.
  */
-function grepDatedLogs(
+async function grepDatedLogs(
   files: string[],
   sessionId: string,
   cutoffMs: number,
   extra: (line: string) => boolean,
-): string {
+): Promise<string> {
   const out: string[] = [];
   for (const file of files) {
-    let content: string;
-    try {
-      content = fs.readFileSync(file, 'utf-8');
-    } catch {
-      continue;
-    }
-    for (const line of content.split('\n')) {
-      if (!line.includes(sessionId)) continue;
-      if (!extra(line)) continue;
+    const hits = await grepFileLines(file, (line) => {
+      if (!line.includes(sessionId)) return false;
+      if (!extra(line)) return false;
       const t = lineTimeMs(line);
-      if (t !== null && t < cutoffMs) continue; // older than window
-      out.push(line);
-    }
+      return !(t !== null && t < cutoffMs); // older than window → drop
+    });
+    out.push(...hits);
   }
   return out.join('\n');
 }
@@ -255,7 +274,7 @@ function streamDirs(): string[] {
 }
 
 /** Concatenate sid-mentioning lines from every daemon-d-*.log, labelled by file. */
-function captureDaemonLogs(sessionId: string): string {
+async function captureDaemonLogs(sessionId: string): Promise<string> {
   let files: string[];
   try {
     files = fs
@@ -267,13 +286,7 @@ function captureDaemonLogs(sessionId: string): string {
   }
   const blocks: string[] = [];
   for (const file of files) {
-    let content: string;
-    try {
-      content = fs.readFileSync(file, 'utf-8');
-    } catch {
-      continue;
-    }
-    const hits = content.split('\n').filter(l => l.includes(sessionId));
+    const hits = await grepFileLines(file, l => l.includes(sessionId));
     if (hits.length > 0) blocks.push(`### ${file}`, hits.join('\n'));
   }
   return blocks.join('\n');
@@ -308,7 +321,7 @@ async function captureHostConnectivity(sessionId: string, recent: string[], cuto
   // Connection lifecycle lines mention the host, not the sid — grep by host.
   if (host) {
     const needle = `"host":"${host}"`;
-    const hits = grepDatedLogs(recent, needle, cutoffMs, l =>
+    const hits = await grepDatedLogs(recent, needle, cutoffMs, l =>
       l.includes('DaemonConnection') || l.includes('EBADF') || l.includes('EMFILE'));
     if (hits.trim().length > 0) parts.push(`### DaemonConnection lines for host=${host} (window)`, hits);
   }
@@ -334,16 +347,39 @@ function fileExists(p: string): boolean {
   }
 }
 
-/** Last `n` lines of a file, or '' if missing/unreadable. */
+/** Bytes read from the end of a file per tail attempt. Generous for 200 log
+ *  lines (~64KB typical); doubles once if the window held too few lines. */
+const TAIL_WINDOW_BYTES = 1024 * 1024;
+
+/**
+ * Last `n` lines of a file, or '' if missing/unreadable.
+ * Reads only a bounded window from the END of the file — session JSONL streams
+ * run to 100MB+ and the old whole-file readFileSync blocked the event loop for
+ * the full read just to keep 200 lines.
+ */
 export function tailFile(file: string, n: number): string {
-  let content: string;
   try {
-    content = fs.readFileSync(file, 'utf-8');
+    const size = fs.statSync(file).size;
+    if (size === 0) return '';
+    let window = Math.min(size, TAIL_WINDOW_BYTES);
+    for (;;) {
+      const buf = Buffer.alloc(window);
+      const fd = fs.openSync(file, 'r');
+      try {
+        fs.readSync(fd, buf, 0, window, size - window);
+      } finally {
+        fs.closeSync(fd);
+      }
+      const lines = buf.toString('utf-8').split('\n');
+      // Drop a trailing empty line from the final newline so the tail isn't blank-padded.
+      if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+      // First line of a mid-file window is almost certainly partial — drop it
+      // (unless the window covers the whole file, where it's a real line).
+      if (window < size && lines.length > 0) lines.shift();
+      if (lines.length >= n || window >= size) return lines.slice(-n).join('\n');
+      window = Math.min(size, window * 2); // rare: huge lines — widen once and retry
+    }
   } catch {
     return '';
   }
-  const lines = content.split('\n');
-  // Drop a trailing empty line from the final newline so the tail isn't blank-padded.
-  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
-  return lines.slice(-n).join('\n');
 }

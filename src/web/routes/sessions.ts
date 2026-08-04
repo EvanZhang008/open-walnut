@@ -69,6 +69,26 @@ function logMessageOrdering(phase: string, sessionId: string, messages: SessionH
   })
 }
 
+/** Route-level ceiling on one liveness probe. A remote probe rides
+ *  conn.send('status') whose own timeout is 30s — a wedged daemon would hold
+ *  the sessions-list response (and one of the browser's 6 connections) that
+ *  whole time, on one of the hottest endpoints in the app. Local PID checks
+ *  are a sync syscall and never hit this. Timing out resolves `true`
+ *  ("assume alive"): remote corrections are skipped anyway (transport
+ *  uncertainty ≠ death), and the health monitor owns authoritative
+ *  reconciliation on its own 30s cycle. */
+const LIVENESS_PROBE_TIMEOUT_MS = 2_500
+
+function probeWithDeadline(p: Promise<boolean>): Promise<boolean> {
+  return Promise.race([
+    p,
+    new Promise<boolean>((resolve) => {
+      const t = setTimeout(() => resolve(true), LIVENESS_PROBE_TIMEOUT_MS)
+      t.unref?.()
+    }),
+  ])
+}
+
 /** Recompute process_status live via PID check (for GET responses).
  *  Runs all PID checks in parallel to avoid blocking the event loop. */
 async function enrichWithLiveStatus(sessions: SessionRecord[]): Promise<SessionRecord[]> {
@@ -84,7 +104,7 @@ async function enrichWithLiveStatus(sessions: SessionRecord[]): Promise<SessionR
 
   if (needsCheck.length > 0) {
     const results = await Promise.allSettled(
-      needsCheck.map(i => isSessionProcessAlive(sessions[i]))
+      needsCheck.map(i => probeWithDeadline(isSessionProcessAlive(sessions[i])))
     )
     const corrections: Promise<void>[] = []
     for (let j = 0; j < needsCheck.length; j++) {

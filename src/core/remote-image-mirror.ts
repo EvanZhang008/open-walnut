@@ -35,6 +35,12 @@ const SIDECAR_SUFFIX = '.src.json'
 const REVALIDATE_INTERVAL_MS = 5_000
 /** Hard cap on one revalidation attempt (stat + optional re-download). */
 const REVALIDATE_TIMEOUT_MS = 4_000
+/** Hard cap on a first-time mirror download. <img> renders aren't bound by the
+ *  API client's 15s timeout (browser image loads wait minutes), so without
+ *  this an unreachable host's cold daemon connect (~40s worst case) held one
+ *  of the browser's 6 connections per image. Warm-path downloads finish in
+ *  <2s; a timeout just fails this render and the next one retries. */
+const DOWNLOAD_TIMEOUT_MS = 10_000
 
 const lastRevalidatedAt = new Map<string, number>()
 
@@ -231,7 +237,11 @@ export async function downloadToMirror(
   remotePath: string,
   mirrorPath: string,
 ): Promise<Buffer | null> {
-  const buf = await fetchRemoteBytes(host, remotePath).catch(() => null)
+  const buf = await withTimeout(
+    fetchRemoteBytes(host, remotePath).catch(() => null),
+    DOWNLOAD_TIMEOUT_MS,
+    null,
+  )
   if (!buf) return null
   try {
     fs.mkdirSync(path.dirname(mirrorPath), { recursive: true })
@@ -239,7 +249,10 @@ export async function downloadToMirror(
   } catch {
     return null
   }
-  const remote = await statRemote(host, remotePath).catch(() => null)
+  // Connection is warm here (bytes just arrived on it), but this still sits on
+  // the request path — bound it so a daemon that wedged mid-request can't hold
+  // the response. mtime 0 = "unknown" → first revalidation re-establishes it.
+  const remote = await withTimeout(statRemote(host, remotePath).catch(() => null), REVALIDATE_TIMEOUT_MS, null)
   writeMirrorSidecar(mirrorPath, {
     host,
     remotePath,

@@ -17,6 +17,14 @@ import path from 'node:path'
 
 export const DIR_LIST_MAX_ENTRIES = 500
 
+/** Wall-clock budget for the remote BFS. Each level is one fs.ls RPC per dir
+ *  (~65ms warm); a wide tree at depth 3-4 can queue hundreds of serial RPCs,
+ *  and the entry cap alone doesn't bound TIME when directories are slow to
+ *  answer. On expiry we return what we have — the path selector degrades to
+ *  shallower results instead of holding the HTTP request (and one of the
+ *  browser's 6 connections) for tens of seconds. */
+export const REMOTE_BFS_BUDGET_MS = 8_000
+
 export interface DirListing {
   dirs: string[]
   parent: string
@@ -74,6 +82,7 @@ export interface DaemonLsConnection {
 export async function listRemoteDirs(conn: DaemonLsConnection, dir: string, depth: number): Promise<DirListing> {
   const entries: string[] = []
   let resolvedDir = dir
+  const deadline = Date.now() + REMOTE_BFS_BUDGET_MS
 
   const rootResult = await conn.send('fs.ls', { path: dir })
   if (!rootResult.ok) {
@@ -103,10 +112,10 @@ export async function listRemoteDirs(conn: DaemonLsConnection, dir: string, dept
     }
   }
 
-  while (queue.length > 0 && entries.length < DIR_LIST_MAX_ENTRIES) {
+  while (queue.length > 0 && entries.length < DIR_LIST_MAX_ENTRIES && Date.now() < deadline) {
     const batch = queue.splice(0, queue.length)
     for (const item of batch) {
-      if (entries.length >= DIR_LIST_MAX_ENTRIES) break
+      if (entries.length >= DIR_LIST_MAX_ENTRIES || Date.now() >= deadline) break
       try {
         const result = await conn.send('fs.ls', { path: item.dirPath })
         if (!result.ok) continue

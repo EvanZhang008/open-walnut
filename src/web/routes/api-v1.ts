@@ -830,10 +830,22 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
     }
     let transcript = await readSessionTranscript(sessionId)
     if (!transcript && !CLOUD_MODE) {
-      // Primary box: the sweep may simply not have run yet — run one inline
-      // (throttled internally) and retry the read.
-      await exportSessionTranscripts().catch(() => { /* serve 404 below */ })
-      transcript = await readSessionTranscript(sessionId)
+      // Primary box: the sweep may simply not have run yet. Build just THIS
+      // session inline (one read) and kick the full sweep in the background —
+      // awaiting the sweep here meant one iOS poll waited out N serial daemon
+      // reads (one per alive session, tens of seconds with several remotes).
+      // Gated on an ALIVE tracker record (the sweep's own predicate):
+      // buildSessionTranscript returns an EMPTY transcript (not an error) for
+      // ids it can't read, but the v1 contract keeps unknown ids AND dead
+      // sessions without an exported file at 404.
+      const { getSessionByClaudeId } = await import('../../core/session-tracker.js')
+      const record = await getSessionByClaudeId(sessionId)
+      if (record && (record.process_status === 'running' || record.process_status === 'idle')) {
+        try {
+          transcript = await buildSessionTranscript(sessionId)
+        } catch { /* unreachable session — serve 404 below */ }
+      }
+      exportSessionTranscripts().catch(() => { /* background; throttled internally */ })
     }
     if (!transcript) {
       sendError(res, 404, 'not_found', `No transcript for session: ${sessionId}`)
