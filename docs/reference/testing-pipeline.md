@@ -4,7 +4,7 @@ Four layers, chosen so the one you run most often is the one that costs least. R
 
 | Layer | Command | Scope | Time | When |
 |---|---|---|---|---|
-| **L1 quick** | `npm run test:quick` | 306 pure-logic files | **51 s** (4 workers) / 93 s (2 workers) | every code change |
+| **L1 quick** | `npm run test:quick` | 306 pure-logic files | ~3 min (1 worker, machine-wide default) | every code change |
 | **L2 focus** | `npm run test:focus <path>` | whatever you name | 0.3–30 s | while working on one module |
 | **L3 pre-commit** | `npm run test:pre-commit` | the tiers your diff can break | 1–6 min | before a larger commit |
 | **L4 CI** | GitHub Actions, automatic | everything + lint + build | ~6 min wall-clock, free | every push and PR |

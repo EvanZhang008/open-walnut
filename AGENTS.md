@@ -200,7 +200,7 @@ Full details: [Testing pipeline](./docs/reference/testing-pipeline.md).
 
 **CI failed?** `scripts/ci-status.sh brief` distils the run into the few real error lines; fix locally (free) rather than running an AI inside CI (paid).
 
-⚠️ **Never raise the local worker budget** (`tests/setup/worker-budget.ts`, 2 workers). Uncapped test fan-out hard-crashed this Mac twice in July 2026. Want faster? Use L1 or L2.
+⚠️ **Never raise the local worker budget** (`tests/setup/worker-budget.ts`, **1 worker**). Test fan-out hard-crashed this Mac twice in July 2026 AND again 2026-08-05 at 2 workers (concurrent agent sessions + real spawned servers/daemons live outside the V8 heap cap). Want faster? Use L1 or L2.
 
 ## E2E-First Development
 
